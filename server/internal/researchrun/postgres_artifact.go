@@ -24,6 +24,7 @@ type registerArtifactPassportInput struct {
 	AccessLevel            ArtifactAccessLevel
 	HashOrigin             ArtifactHashOrigin
 	ContentHash            string
+	ProducedByTaskID       string
 	ProducedByAttemptID    string
 }
 
@@ -154,14 +155,14 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 			INSERT INTO research_artifact_version (
 				workspace_id, session_id, artifact_id, version, schema_name, schema_version,
 				canonicalization_version, content_hash, access_level, goal_version, plan_version,
-				hash_origin, produced_by_attempt_id
+				hash_origin, produced_by_task_id, produced_by_attempt_id
 			) VALUES (
 				$1::uuid, $2::uuid, $3::uuid, 1, $4, $5,
-				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid
+				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, NULLIF($13, '')::uuid
 			)
 		`, in.WorkspaceID, in.SessionID, in.EntityID, in.SchemaName, in.SchemaVersion,
 			ArtifactCanonicalizationVersion, contentHash, string(in.AccessLevel),
-			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByAttemptID); err != nil {
+			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByTaskID, in.ProducedByAttemptID); err != nil {
 			return err
 		}
 	}

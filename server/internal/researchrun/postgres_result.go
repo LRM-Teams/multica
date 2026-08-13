@@ -180,7 +180,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	}
 	if artifactPassportEnabled {
 		resultID, persistErr := persistAcceptedResultArtifactTx(
-			ctx, tx, state.workspaceID, in.SessionID, in.AttemptID,
+			ctx, tx, state.workspaceID, in.SessionID, state.task.ID, in.AttemptID,
 			state.run.OrchestratorVersion, in.Result, resultJSON, in.Hash, acceptancePolicyWatermark, state.outputAccess,
 		)
 		if persistErr != nil {
@@ -436,6 +436,9 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 	}
 	if attemptStatus == AttemptStatusSucceeded {
 		if existingRequestID == in.Result.ClientRequestID && existingHash == in.Hash {
+			if err = verifyAcceptedResultReplayLineageTx(ctx, tx, state, in); err != nil {
+				return acceptedResultState{}, nil, err
+			}
 			return state, &AcceptResultOutcome{Replayed: true, TaskID: state.task.ID, TaskKind: state.task.Kind, GoalVersion: state.task.GoalVersion, PlanVersion: state.task.PlanVersion}, nil
 		}
 		return acceptedResultState{}, nil, ErrResultConflict
@@ -447,6 +450,118 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 		return acceptedResultState{}, nil, fmt.Errorf("%w: run is %s", ErrInvalidTransition, runStatus)
 	}
 	return state, nil, nil
+}
+
+func verifyAcceptedResultReplayLineageTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	state acceptedResultState,
+	in AcceptResultInput,
+) error {
+	resultJSON, err := json.Marshal(in.Result)
+	if err != nil {
+		return err
+	}
+	var (
+		manifestID, storedManifestHash, currentManifestHash, storedInputSetHash string
+		resultHash, requestID, orchestratorVersion, schemaVersion               string
+		resultTaskID, resultAttemptID, manifestTaskID                           string
+		acceptanceWatermark, manifestWatermark, currentWatermark                int64
+		exactInputSet, resultMatches                                            bool
+	)
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(result.manifest_id::text,''), result.manifest_hash,
+		       manifest.manifest_hash, result.input_version_set_hash,
+		       result.content_hash, result.client_request_id, result.orchestrator_version,
+		       result.result_schema_version,
+		       COALESCE(version.produced_by_task_id::text,''),
+		       COALESCE(version.produced_by_attempt_id::text,''), manifest.task_id::text,
+		       COALESCE(result.acceptance_policy_watermark,-1), manifest.policy_watermark,
+		       policy.watermark,
+		       result.result=$5::jsonb,
+		       NOT EXISTS (
+		         (SELECT entry.artifact_version_id
+		          FROM research_artifact_context_entry entry
+		          WHERE entry.workspace_id=result.workspace_id
+		            AND entry.session_id=result.session_id
+		            AND entry.manifest_id=result.manifest_id)
+		         EXCEPT
+		         (SELECT reference.input_version_id
+		          FROM research_artifact_input_reference reference
+		          WHERE reference.workspace_id=result.workspace_id
+		            AND reference.session_id=result.session_id
+		            AND reference.consumer_version_id=version.id
+		            AND reference.relation='acceptance_input'
+		            AND reference.manifest_id=result.manifest_id)
+		       )
+		       AND NOT EXISTS (
+		         (SELECT reference.input_version_id
+		          FROM research_artifact_input_reference reference
+		          WHERE reference.workspace_id=result.workspace_id
+		            AND reference.session_id=result.session_id
+		            AND reference.consumer_version_id=version.id
+		            AND reference.relation='acceptance_input')
+		         EXCEPT
+		         (SELECT entry.artifact_version_id
+		          FROM research_artifact_context_entry entry
+		          WHERE entry.workspace_id=result.workspace_id
+		            AND entry.session_id=result.session_id
+		            AND entry.manifest_id=result.manifest_id)
+		       )
+		FROM research_result_artifact result
+		JOIN research_artifact_passport passport
+		  ON (passport.workspace_id,passport.session_id,passport.id)=
+		     (result.workspace_id,result.session_id,result.id)
+		JOIN research_artifact_version version
+		  ON (version.workspace_id,version.session_id,version.artifact_id,version.version)=
+		     (passport.workspace_id,passport.session_id,passport.id,passport.current_version)
+		JOIN research_artifact_context_manifest manifest
+		  ON (manifest.workspace_id,manifest.session_id,manifest.id,manifest.attempt_id)=
+		     (result.workspace_id,result.session_id,result.manifest_id,result.attempt_id)
+		JOIN research_artifact_policy_state policy
+		  ON (policy.workspace_id,policy.session_id)=(result.workspace_id,result.session_id)
+		WHERE result.workspace_id=$1::uuid AND result.session_id=$2::uuid
+		  AND result.attempt_id=$3::uuid AND result.id=passport.id
+		  AND result.attempt_id=$4::uuid
+	`, state.workspaceID, state.run.SessionID, in.AttemptID, state.attemptID, resultJSON).Scan(
+		&manifestID, &storedManifestHash, &currentManifestHash, &storedInputSetHash,
+		&resultHash, &requestID, &orchestratorVersion, &schemaVersion,
+		&resultTaskID, &resultAttemptID, &manifestTaskID,
+		&acceptanceWatermark, &manifestWatermark, &currentWatermark,
+		&resultMatches, &exactInputSet,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var passportEnabled bool
+		if loadErr := tx.QueryRow(ctx, `
+			SELECT artifact_passport_enabled FROM research_session
+			WHERE workspace_id=$1::uuid AND id=$2::uuid
+		`, state.workspaceID, state.run.SessionID).Scan(&passportEnabled); loadErr != nil {
+			return loadErr
+		}
+		if !passportEnabled {
+			return nil
+		}
+		return fmt.Errorf("%w: accepted Result lineage is missing", ErrResultConflict)
+	}
+	if err != nil {
+		return err
+	}
+	inputSetHash, err := manifestInputVersionSetHashTx(ctx, tx, state.workspaceID, state.run.SessionID, manifestID)
+	if err != nil {
+		return err
+	}
+	if manifestID == "" || storedManifestHash == "" || storedInputSetHash == "" ||
+		storedManifestHash != currentManifestHash || storedInputSetHash != inputSetHash ||
+		!exactInputSet || !resultMatches || resultHash != in.Hash || requestID != in.Result.ClientRequestID ||
+		orchestratorVersion != state.run.OrchestratorVersion || schemaVersion != fmt.Sprintf("%d", in.Result.SchemaVersion) ||
+		(resultTaskID != "" && resultTaskID != state.task.ID) || resultAttemptID != in.AttemptID || manifestTaskID != state.task.ID ||
+		acceptanceWatermark <= manifestWatermark || acceptanceWatermark > currentWatermark {
+		return fmt.Errorf("%w: accepted Result replay lineage changed", ErrResultConflict)
+	}
+	if err = verifyAcceptanceManifestHashTx(ctx, tx, state.workspaceID, state.run.SessionID, in.AttemptID); err != nil {
+		return fmt.Errorf("%w: accepted Result manifest changed: %v", ErrResultConflict, err)
+	}
+	return nil
 }
 
 func prepareReplan(ctx context.Context, tx pgx.Tx, state acceptedResultState) error {

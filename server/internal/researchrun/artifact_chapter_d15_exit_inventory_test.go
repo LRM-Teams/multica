@@ -35,7 +35,7 @@ var chapterD15Coverage = map[int]string{
 	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state after rollback
 	19: "partial", // unrelated watermark advance after rolled-back accept
 	20: "partial", // result lock-order concurrency + normalized manifest locks
-	21: "partial", // accept replay hash/lineage conflict
+	21: "covered", // payload + manifest ID/hash + exact input-version set + producer/watermark lineage replay
 	22: "partial", // result accept transaction recovery matrix
 	23: "partial", // cross-workspace 404 + Fleet principal/header binding; full surface matrix open
 	24: "partial", // withdrawal/acceptance ledger + revoked frozen-read denial/history preservation

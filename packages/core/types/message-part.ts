@@ -108,6 +108,16 @@ export type MessagePart =
       choice_id: string;
       option_id: string;
       label: string;
+    }
+  | {
+      /** Collapsible note snapshot (Note Worker 「按这篇做」). */
+      type: "note_brief";
+      /** note_page id */
+      ref_id: string;
+      /** Note title at dispatch time */
+      label?: string;
+      /** Note body snapshot at dispatch time */
+      text?: string;
     };
 
 /**

@@ -16,6 +16,10 @@ const (
 	MessagePartTypeVoice       = "voice"
 	MessagePartTypeChoice      = "choice"
 	MessagePartTypeChoiceReply = "choice_reply"
+	// MessagePartTypeNoteBrief is a collapsible note snapshot embedded in a
+	// Messages timeline (e.g. Note Worker 「按这篇做」). RefID is the note page
+	// id, Label is the title, Text is the note body at dispatch time.
+	MessagePartTypeNoteBrief = "note_brief"
 	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
 	// L1). A pure confirmation carries no new information, no @-directive and no
 	// action, and must not wake any agent.

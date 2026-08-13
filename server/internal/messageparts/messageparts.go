@@ -270,6 +270,12 @@ func FallbackContent(parts []protocol.MessagePart) string {
 				label = "[Choice reply]"
 			}
 			values = append(values, "选择："+label)
+		case protocol.MessagePartTypeNoteBrief:
+			title := strings.TrimSpace(part.Label)
+			if title == "" {
+				title = "Untitled"
+			}
+			values = append(values, "笔记「"+title+"」")
 		case protocol.MessagePartTypeAttachment:
 			// Attachment-only messages may have empty content. Do not invent
 			// markdown URLs or synthetic labels from attachment metadata.
@@ -455,6 +461,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		return normalizeChoicePart(part)
 	case protocol.MessagePartTypeChoiceReply:
 		return normalizeChoiceReplyPart(part)
+	case protocol.MessagePartTypeNoteBrief:
+		return normalizeNoteBriefPart(part)
 	case protocol.MessagePartTypeVoice:
 		if part.DurationMS < 0 || part.DurationMS > 60_000 {
 			return protocol.MessagePart{}, fmt.Errorf("duration_ms must be between 0 and 60000")
@@ -598,6 +606,43 @@ func normalizeChoiceReplyPart(part protocol.MessagePart) (protocol.MessagePart, 
 	return part, nil
 }
 
+// noteBriefBodyMaxRunes caps the snapshot embedded in a Messages part so a
+// huge note page cannot blow up channel_message.parts JSON.
+const noteBriefBodyMaxRunes = 32_000
+
+func normalizeNoteBriefPart(part protocol.MessagePart) (protocol.MessagePart, error) {
+	part.RefID = strings.TrimSpace(part.RefID)
+	part.Label = strings.TrimSpace(part.Label)
+	if part.RefID == "" {
+		return protocol.MessagePart{}, fmt.Errorf("ref_id is required")
+	}
+	if part.Label == "" {
+		part.Label = "Untitled"
+	}
+	if utf8.RuneCountInString(part.Text) > noteBriefBodyMaxRunes {
+		runes := []rune(part.Text)
+		part.Text = string(runes[:noteBriefBodyMaxRunes]) + "…"
+	}
+	part.RefType = ""
+	part.RefSubType = ""
+	part.Event = ""
+	part.EventParams = nil
+	part.Params = nil
+	part.ContentStartUTF16 = nil
+	part.ContentEndUTF16 = nil
+	part.PackID = ""
+	part.StickerID = ""
+	part.Alt = ""
+	part.AttachmentID = ""
+	part.Filename = ""
+	part.ContentType = ""
+	part.SizeBytes = 0
+	part.DurationMS = 0
+	part.TranscriptionStatus = ""
+	part.SynthesisStatus = ""
+	return part, nil
+}
+
 func clearNonChoiceFields(part *protocol.MessagePart) {
 	part.Text = ""
 	part.RefType = ""
@@ -632,6 +677,17 @@ func scrubForeignPartFields(part protocol.MessagePart) protocol.MessagePart {
 		part.ExpiresAt = ""
 		part.SelectedOptionID = ""
 		part.SelectCount = 0
+	case protocol.MessagePartTypeNoteBrief:
+		part.ChoiceID = ""
+		part.Prompt = ""
+		part.Layout = ""
+		part.Options = nil
+		part.AllowDismiss = nil
+		part.ExpiresAt = ""
+		part.SelectedOptionID = ""
+		part.SelectCount = 0
+		part.OptionID = ""
+		// Keep Text (body), Label (title), RefID (page id).
 	default:
 		part.ChoiceID = ""
 		part.Prompt = ""

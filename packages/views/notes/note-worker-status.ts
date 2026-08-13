@@ -25,7 +25,22 @@ export function noteWorkerStatusMessageKey(
   }
 }
 
-/** Deep-link to the agent panel, optionally focused on the Worker task/run. */
+/** Deep-link target for Worker progress: prefer Messages channel id. */
+export function noteWorkerChatTarget(job: {
+  agent_id?: string | null;
+  channel_id?: string | null;
+  chat_session_id?: string | null;
+  task_id?: string | null;
+}): { agentId: string; channelId: string | null; chatSessionId: string | null; taskId: string | null } {
+  return {
+    agentId: (job.agent_id ?? "").trim(),
+    channelId: job.channel_id?.trim() || null,
+    chatSessionId: job.chat_session_id?.trim() || null,
+    taskId: job.task_id?.trim() || null,
+  };
+}
+
+/** @deprecated Prefer opening chat via openNoteWorkerChat; kept for href tests. */
 export function noteWorkerRunHref(
   agentId: string,
   taskId: string | null | undefined,

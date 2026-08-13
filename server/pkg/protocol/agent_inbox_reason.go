@@ -29,6 +29,10 @@ const (
 	// review verdict changes the executable frontier.
 	AgentInboxReasonGoalGraphDelta = "goal_graph_delta"
 
+	// AgentInboxReasonNoteWorker is notes 「按这篇做」/ Worker dispatch into a
+	// Messages channel or agent DM. Product reason (not residual channel chat).
+	AgentInboxReasonNoteWorker = "note_worker"
+
 	// Residual channel dual-write reasons (no longer written for ordinary
 	// channel traffic; still recognized so residual rows are suppressed).
 	AgentInboxReasonChannelMention  = "mention"

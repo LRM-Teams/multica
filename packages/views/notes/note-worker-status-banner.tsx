@@ -3,11 +3,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bot, Loader2, X } from "lucide-react";
 import { noteWorkerJobOptions } from "@multica/core/notes/queries";
-import { appendQueryParams, useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
-import { AppLink } from "../navigation";
 import { useT } from "../i18n/use-t";
-import { isNoteWorkerJobActive, noteWorkerRunHref, noteWorkerStatusMessageKey } from "./note-worker-status";
+import { isNoteWorkerJobActive, noteWorkerStatusMessageKey } from "./note-worker-status";
+import { useOpenNoteWorkerChat } from "./use-open-note-worker-chat";
 
 export function NoteWorkerStatusBanner({
   jobId,
@@ -17,7 +16,7 @@ export function NoteWorkerStatusBanner({
   onDismiss?: () => void;
 }) {
   const { t } = useT("layout");
-  const paths = useWorkspacePaths();
+  const { openNoteWorkerChat } = useOpenNoteWorkerChat();
   const { data: job } = useQuery(noteWorkerJobOptions(jobId));
   if (!job?.id) return null;
 
@@ -38,7 +37,6 @@ export function NoteWorkerStatusBanner({
                 : t(($) => $.notes_page.worker_status_unknown);
 
   const active = isNoteWorkerJobActive(job.status);
-  const href = noteWorkerRunHref(job.agent_id, job.task_id, paths, appendQueryParams);
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2 text-sm" data-testid="note-worker-status-banner">
@@ -53,7 +51,7 @@ export function NoteWorkerStatusBanner({
           {job.failure_reason ? <span className="text-muted-foreground"> — {job.failure_reason}</span> : null}
         </span>
       </div>
-      <Button variant="outline" size="sm" render={<AppLink href={href} />}>
+      <Button variant="outline" size="sm" onClick={() => void openNoteWorkerChat(job)}>
         {t(($) => $.notes_page.worker_open_run)}
       </Button>
       {onDismiss ? (

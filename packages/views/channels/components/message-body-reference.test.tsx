@@ -107,4 +107,23 @@ describe("MessageBody reference-only messages", () => {
 
     expect(screen.queryByText("[agent:create proposal] 全栈开发")).toBeNull();
   });
+
+  it("keeps instruction content when parts only carry a note_brief snapshot", () => {
+    render(
+      <MessageBody
+        content="ship it"
+        parts={[
+          {
+            type: "note_brief",
+            ref_id: "page-1",
+            label: "Launch",
+            text: "Verify DM reply path.",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId("markdown-body").textContent).toContain("ship it");
+    expect(screen.getByTestId("message-parts-body")).toBeInTheDocument();
+  });
 });

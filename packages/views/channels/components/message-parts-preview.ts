@@ -53,6 +53,10 @@ export function formatMessagePartsPreview(parts?: MessagePart[] | null): string 
       const label = normalizeText(part.label);
       return [`选择：${label || "?"}`];
     }
+    if (part.type === "note_brief") {
+      const title = normalizeText(part.label ?? "");
+      return title ? [`笔记「${title}」`] : ["笔记"];
+    }
     return [];
   });
   return chunks.length > 0 ? chunks.join(" ") : null;

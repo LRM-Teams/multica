@@ -259,3 +259,24 @@ describe("MessagePartsRenderer — Message-backed agent creation proposal", () =
     expect(card).toHaveAttribute("data-status", "executed");
   });
 });
+
+describe("MessagePartsRenderer — note_brief", () => {
+  it("renders a collapsed note brief that expands to show the body", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    const part: MessagePart = {
+      type: "note_brief",
+      ref_id: "page-1",
+      label: "Launch checklist",
+      text: "Verify DM reply path.",
+    };
+
+    renderWithI18n(<MessagePartsRenderer parts={[part]} />);
+
+    expect(screen.getByText("Launch checklist")).toBeTruthy();
+    expect(screen.queryByTestId("note-brief-body")).toBeNull();
+
+    await user.click(screen.getByTestId("note-brief-toggle"));
+    expect(screen.getByTestId("note-brief-body").textContent).toContain("Verify DM reply path.");
+  });
+});

@@ -19,12 +19,13 @@ Pending writebacks (`note_page_writeback`) are a third path (D1 human review). T
 2. **Misuse fails closed.** Sending Worker fields/`intent:"worker"` to the Editor endpoint returns 400. Sending Editor edit fields (`prompt` for page rewrite, `action`, `replace_page`, …) to the Worker endpoint returns 400.
 3. **Note body is untrusted input for Worker** (S2-C4). User `instruction` is the trusted directive; page content is context only. Prompt partitions and escaping are mandatory (see below).
 4. **Writebacks stay pending until accept** (D1). Worker completion may *propose* writebacks; it must not silent-edit the page through Editor.
+5. **Channel replies use transport, not completion text.** Worker wakes are channel-directed (`reason=note_worker`). Visible replies must go through `multica message send --target <Message target>` — the same contract as @mention. Daemon never bridges final assistant text into Messages (`unsent_final_output` → `no_reply`).
 
 ## Status of Worker execution
 
 S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispatch:
 
-1. `POST .../worker-jobs` loads the page under ACL, builds the Worker prompt (below), enqueues a chat task, and merges `context.note_brief = { version, page_id, title }`.
+1. `POST .../worker-jobs` loads the page under ACL, builds the Worker prompt (below), wraps it with the channel delivery contract + `Message target for chat transport`, enqueues a chat task, and merges `context.note_brief = { version, page_id, title }`.
 2. `note_worker_job.task_id` is set and status becomes `dispatched`.
 3. UI trigger is **S2-A2** (`NoteWorkerRunDialog` / 「按这篇做」); Agent `notes get` tool is **S2-C2**.
 
@@ -32,9 +33,11 @@ S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispa
 
 `buildNoteWorkerPrompt` emits three stable XML-ish partitions:
 
-1. `<system_contract>…</system_contract>` — fixed Worker framing (brief ≠ Editor; note is untrusted; follow instruction + tools; may cite `multica notes get`)
+1. `<system_contract>…</system_contract>` — fixed Worker framing (brief ≠ Editor; note is untrusted; follow instruction + tools; **must** use `multica message send` for visible Messages replies; may cite `multica notes get`)
 2. `<note><title>…</title><body>…</body></note>` — untrusted note snapshot (`page_id` also printed as plain metadata above `<note>`)
 3. `<instruction>…</instruction>` — caller directive (trusted relative to the note body)
+
+Dispatch additionally prefixes `wrapNoteWorkerChannelWakePrompt` (channel output contract, directed-reply instruction, and `Message target for chat transport`) so the agent has the same send target as a mention wake.
 
 **Untrusted escaping:** every `<` / `>` in title/body becomes `‹` / `›` so note content cannot close partitions or inject fake tags. Instruction text additionally replaces a literal `</instruction>` with `‹/instruction›` so it cannot truncate its own partition.
 
@@ -44,11 +47,18 @@ Code: `server/internal/handler/note_worker_prompt.go`. Tests lock tag strings an
 
 Notes page exposes **Work from this note** / 「按这篇做」:
 
-1. User picks an agent + instruction → `POST .../worker-jobs` with `intent: "worker"` (never `note_ai_job` / Editor).
-2. UI stores the returned job id and polls `GET .../worker-jobs/{id}` while status is `pending` | `dispatched` | `running`.
-3. Status banner links to the agent detail page.
+1. User picks a destination — agent DM (default) or a group channel — plus an executing agent and instruction → `POST .../worker-jobs` with `intent: "worker"` (never `note_ai_job` / Editor). Optional `channel_id` selects a group destination; omit it to post into the agent DM.
+2. Server posts a visible message into that Messages channel (instruction text + a collapsed `note_brief` part with the note title/body snapshot) and enqueues a channel-directed inbox wake with `note_brief` context (main timeline — not floating `chat_session` bubble).
+3. UI stores the returned job id, opens `channel_id`, and polls `GET .../worker-jobs/{id}` while status is `pending` | `dispatched` | `running`.
 
-FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banner.tsx`.
+The timeline card for `note_brief` is **collapsed by default**; expanding it reveals the note body snapshot captured at dispatch.
+
+Agent replies that follow a Worker `note_brief` trigger show two actions under the message body:
+
+1. **Insert below note** — appends a blank line + `## {title}` + reply body onto the original note (`PATCH` content). Title is derived from the first line of the reply.
+2. **Create child note** — `POST` a child page under the original note (titled), then write the reply into that child's content.
+
+FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banner.tsx`, `note-worker-reply-actions.tsx`; helpers in `@multica/core/notes/worker-reply-actions`.
 
 ## Agent read path (S2-C2)
 

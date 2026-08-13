@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestCreateNoteWorkerJobRejectsEditorFields(t *testing.T) {
@@ -90,6 +91,33 @@ UPDATE note_page SET content = $1 WHERE id = $2`, "Brief body for worker", noteI
 	if resp.TaskID == nil || *resp.TaskID == "" {
 		t.Fatal("expected dispatched task_id")
 	}
+	if resp.ChannelID == nil || *resp.ChannelID == "" {
+		t.Fatal("expected channel_id for Messages timeline destination")
+	}
+	if resp.ChannelMessageID == nil || *resp.ChannelMessageID == "" {
+		t.Fatal("expected channel_message_id")
+	}
+
+	var channelKind string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT kind FROM channel WHERE id = $1`, *resp.ChannelID).Scan(&channelKind); err != nil {
+		t.Fatalf("load channel: %v", err)
+	}
+	if channelKind != "dm" {
+		t.Fatalf("default destination kind = %q, want dm", channelKind)
+	}
+
+	var taskReason string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT reason FROM agent_inbox_event WHERE id = $1`, *resp.TaskID).Scan(&taskReason); err != nil {
+		t.Fatalf("load task reason: %v", err)
+	}
+	if taskReason != "note_worker" {
+		t.Fatalf("task reason = %q, want note_worker (residual dm/mention would be suppressed on drain)", taskReason)
+	}
+	if protocol.IsResidualChannelChatInboxReason(taskReason) {
+		t.Fatal("note_worker must not be classified as residual channel chat")
+	}
 
 	var aiJobs int
 	if err := testPool.QueryRow(context.Background(), `
@@ -101,12 +129,12 @@ SELECT count(*) FROM note_ai_job WHERE page_id = $1`, noteID).Scan(&aiJobs); err
 	}
 
 	var contextRaw []byte
-	var chatContent string
+	var visibleContent string
 	if err := testPool.QueryRow(context.Background(), `
 SELECT e.context, m.content
 FROM agent_inbox_event e
-JOIN chat_message m ON m.task_id = e.id AND m.role = 'user'
-WHERE e.id = $1`, *resp.TaskID).Scan(&contextRaw, &chatContent); err != nil {
+JOIN channel_message m ON m.id = $2
+WHERE e.id = $1`, *resp.TaskID, *resp.ChannelMessageID).Scan(&contextRaw, &visibleContent); err != nil {
 		t.Fatalf("load task context/message: %v", err)
 	}
 	brief, ok, err := service.NoteBriefFromContext(contextRaw)
@@ -116,11 +144,65 @@ WHERE e.id = $1`, *resp.TaskID).Scan(&contextRaw, &chatContent); err != nil {
 	if brief.PageID != noteID {
 		t.Fatalf("brief.page_id = %q, want %s", brief.PageID, noteID)
 	}
-	if !strings.Contains(chatContent, "<note>") || !strings.Contains(chatContent, "untrusted") || !strings.Contains(chatContent, "Brief body for worker") {
-		t.Fatalf("chat prompt missing untrusted note wrap: %s", chatContent)
+	if !strings.Contains(visibleContent, "Turn this brief into an Issue") {
+		t.Fatalf("visible channel message missing instruction: %s", visibleContent)
 	}
-	if !strings.Contains(chatContent, "<instruction>") || !strings.Contains(chatContent, "Turn this brief into an Issue") {
-		t.Fatalf("chat prompt missing instruction: %s", chatContent)
+	if strings.Contains(visibleContent, "按笔记") {
+		t.Fatalf("visible channel message must not include 按笔记 prefix: %s", visibleContent)
+	}
+	var partsRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT parts FROM channel_message WHERE id = $1`, *resp.ChannelMessageID).Scan(&partsRaw); err != nil {
+		t.Fatalf("load channel message parts: %v", err)
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(partsRaw, &parts); err != nil {
+		t.Fatalf("unmarshal parts: %v raw=%s", err, partsRaw)
+	}
+	foundBrief := false
+	for _, part := range parts {
+		if part["type"] != "note_brief" {
+			continue
+		}
+		foundBrief = true
+		if part["ref_id"] != noteID {
+			t.Fatalf("note_brief ref_id = %v, want %s", part["ref_id"], noteID)
+		}
+		if part["text"] != "Brief body for worker" {
+			t.Fatalf("note_brief text = %v, want note body", part["text"])
+		}
+		if label, _ := part["label"].(string); !strings.Contains(label, "Worker note") {
+			t.Fatalf("note_brief label = %v", part["label"])
+		}
+	}
+	if !foundBrief {
+		t.Fatalf("expected note_brief part in channel message parts: %s", partsRaw)
+	}
+	var wakePrompt string
+	var wake map[string]any
+	if err := json.Unmarshal(contextRaw, &wake); err != nil {
+		t.Fatalf("unmarshal wake context: %v", err)
+	}
+	if p, _ := wake["prompt"].(string); p != "" {
+		wakePrompt = p
+	}
+	if !strings.Contains(wakePrompt, "<note>") || !strings.Contains(wakePrompt, "untrusted") || !strings.Contains(wakePrompt, "Brief body for worker") {
+		t.Fatalf("wake prompt missing untrusted note wrap: %s", wakePrompt)
+	}
+	if !strings.Contains(wakePrompt, "<instruction>") || !strings.Contains(wakePrompt, "Turn this brief into an Issue") {
+		t.Fatalf("wake prompt missing instruction: %s", wakePrompt)
+	}
+	if !strings.Contains(wakePrompt, "Message target for chat transport:") {
+		t.Fatalf("wake prompt missing Message target (agents need this for multica message send): %s", wakePrompt)
+	}
+	if !strings.Contains(wakePrompt, channelDirectedReplyInstruction) {
+		t.Fatalf("wake prompt missing directed reply instruction: %s", wakePrompt)
+	}
+	if !strings.Contains(wakePrompt, noteWorkerChannelDeliveryInstruction) {
+		t.Fatalf("wake prompt missing note-worker delivery instruction: %s", wakePrompt)
+	}
+	if !strings.Contains(wakePrompt, "multica message send") {
+		t.Fatalf("wake prompt must require multica message send: %s", wakePrompt)
 	}
 
 	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/worker-jobs/"+resp.ID, nil), "jobId", resp.ID)

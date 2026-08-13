@@ -16,6 +16,12 @@ vi.mock("@multica/core/api", () => ({
   api: {
     createNoteWorkerJob: (...args: unknown[]) => createNoteWorkerJob(...args),
     createNoteAIJob: (...args: unknown[]) => createNoteAIJob(...args),
+    listChannels: vi.fn(async () => [
+      { id: "ch-1", name: "general", kind: "group", workspace_id: "ws-1" },
+    ]),
+    listChannelMembers: vi.fn(async () => [
+      { member_type: "agent", member_id: "agent-1", name: "Deepseek" },
+    ]),
   },
 }));
 
@@ -23,20 +29,13 @@ vi.mock("@multica/core/identity", () => ({
   resolveActorDisplayName: (actor: { name?: string }, fallback: string) => actor.name || fallback,
 }));
 
-vi.mock("@multica/core/paths", () => ({
-  appendQueryParams: (href: string, params: Record<string, string>) => {
-    const qs = Object.entries(params)
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-      .join("&");
-    return href.includes("?") ? `${href}&${qs}` : `${href}?${qs}`;
-  },
-  useWorkspacePaths: () => ({
-    agentDetail: (id: string) => `/acme/members?member=agent%3A${id}`,
-  }),
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
 }));
 
-vi.mock("../navigation", () => ({
-  useNavigation: () => ({ push: vi.fn() }),
+const openNoteWorkerChat = vi.fn();
+vi.mock("./use-open-note-worker-chat", () => ({
+  useOpenNoteWorkerChat: () => ({ openNoteWorkerChat }),
 }));
 
 const agents: Agent[] = [
@@ -64,6 +63,9 @@ function dispatchedJob(overrides: Partial<NoteWorkerJob> = {}): NoteWorkerJob {
     status: "dispatched",
     intent: "worker",
     task_id: "task-1",
+    channel_id: "dm-1",
+    channel_message_id: "msg-1",
+    chat_session_id: null,
     failure_reason: null,
     created_at: "2026-08-12T00:00:00Z",
     updated_at: "2026-08-12T00:00:00Z",
@@ -96,10 +98,11 @@ describe("NoteWorkerRunDialog", () => {
   beforeEach(() => {
     createNoteWorkerJob.mockReset();
     createNoteAIJob.mockReset();
+    openNoteWorkerChat.mockReset();
     createNoteWorkerJob.mockResolvedValue(dispatchedJob());
   });
 
-  it("dispatches a Worker job and never creates an Editor ai-job", async () => {
+  it("dispatches a Worker job to the agent DM by default", async () => {
     const user = userEvent.setup();
     const { onDispatched } = renderDialog();
 
@@ -118,5 +121,52 @@ describe("NoteWorkerRunDialog", () => {
     });
     expect(createNoteAIJob).not.toHaveBeenCalled();
     expect(onDispatched).toHaveBeenCalledWith(expect.objectContaining({ id: "job-1", intent: "worker" }));
+    expect(openNoteWorkerChat).toHaveBeenCalledWith(expect.objectContaining({ channel_id: "dm-1" }));
+  });
+
+  it("dispatches into a selected channel with its agent", async () => {
+    const user = userEvent.setup();
+    createNoteWorkerJob.mockResolvedValue(dispatchedJob({ channel_id: "ch-1" }));
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: /Channel|频道/i }));
+    await waitFor(() => {
+      expect(screen.getByText("general")).toBeTruthy();
+    });
+    await user.click(screen.getByText("general"));
+    await user.type(
+      screen.getByPlaceholderText(/Create issues from this brief/i),
+      "Summarize for the channel",
+    );
+    await user.click(screen.getByRole("button", { name: /Start|开始/i }));
+
+    await waitFor(() => {
+      expect(createNoteWorkerJob).toHaveBeenCalledWith("page-1", {
+        agent_id: "agent-1",
+        instruction: "Summarize for the channel",
+        intent: "worker",
+        channel_id: "ch-1",
+      });
+    });
+  });
+
+  it("submits on Enter and keeps Shift+Enter as a newline", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    const input = screen.getByPlaceholderText(/Create issues from this brief/i);
+
+    await user.type(input, "Line one");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    await user.type(input, "Line two");
+    expect(createNoteWorkerJob).not.toHaveBeenCalled();
+
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(createNoteWorkerJob).toHaveBeenCalledWith("page-1", {
+        agent_id: "agent-1",
+        instruction: "Line one\nLine two",
+        intent: "worker",
+      });
+    });
   });
 });

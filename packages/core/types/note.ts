@@ -98,6 +98,11 @@ export interface CreateNoteWorkerJobRequest {
   /** Trusted user directive. Note body is loaded under ACL at dispatch (S2-C1). */
   instruction: string;
   intent?: NoteIntent;
+  /**
+   * Optional group channel destination. When omitted, the Worker posts into
+   * the caller's 1:1 agent DM (Messages timeline).
+   */
+  channel_id?: string;
 }
 
 export interface NoteWorkerJob {
@@ -109,6 +114,11 @@ export interface NoteWorkerJob {
   status: NoteWorkerJobStatus | string;
   intent: NoteIntent | string;
   task_id?: string | null;
+  /** Messages channel where the Worker run was posted. */
+  channel_id?: string | null;
+  channel_message_id?: string | null;
+  /** Legacy chat_session id when present (channel-only wakes usually omit this). */
+  chat_session_id?: string | null;
   failure_reason?: string | null;
   created_at: string;
   updated_at: string;

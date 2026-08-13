@@ -48,6 +48,7 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageInlineEditor } from "./message-inline-editor";
 import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
+import { NoteWorkerReplyActions } from "../../notes/note-worker-reply-actions";
 import { useMessageContentExpanded } from "../hooks/use-message-content-expanded";
 import { ThreadReplyPreview } from "./thread-reply-preview";
 import { MessageQuoteCard } from "./message-quote";
@@ -296,6 +297,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   /** Slack-style continuation: no avatar/name row; gutter shows HH:mm on hover. */
   compact = false,
   groupEnd = true,
+  noteWorkerPageId = null,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -339,6 +341,11 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
    * Defaults to true so a standalone bubble renders a fully enclosed shell.
    */
   groupEnd?: boolean;
+  /**
+   * Note Worker page id from a preceding `note_brief` part. When set on an
+   * agent reply, show insert-below / create-child note actions.
+   */
+  noteWorkerPageId?: string | null;
 // LRM-268 adds contentExpanded/contentOverflows; mobileOverlay already uses a
 // union instead of three booleans (#568). Full useReducer consolidation is a
 // separate refactor of this ~1100-line component — suppress to unblock CI.
@@ -1177,6 +1184,9 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 </button>
               </div>
             )}
+            {isAgent && noteWorkerPageId ? (
+              <NoteWorkerReplyActions message={message} pageId={noteWorkerPageId} />
+            ) : null}
           </div>
         )}
         {!isEditing && mobileActionsOpen && (

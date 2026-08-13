@@ -534,6 +534,33 @@ func TestNormalizeAgentCreateProposalReference(t *testing.T) {
 	}
 }
 
+func TestNormalizeNoteBriefPart(t *testing.T) {
+	content, parts, err := Normalize("run this brief", []protocol.MessagePart{{
+		Type:  protocol.MessagePartTypeNoteBrief,
+		RefID: "11111111-1111-1111-1111-111111111111",
+		Label: " Weekly plan ",
+		Text:  "Ship the bridge",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "run this brief" {
+		t.Fatalf("content = %q", content)
+	}
+	if len(parts) != 1 || parts[0].Type != protocol.MessagePartTypeNoteBrief {
+		t.Fatalf("parts=%+v", parts)
+	}
+	if parts[0].RefID != "11111111-1111-1111-1111-111111111111" || parts[0].Label != "Weekly plan" || parts[0].Text != "Ship the bridge" {
+		t.Fatalf("note_brief fields = %+v", parts[0])
+	}
+	if _, _, err := Normalize("x", []protocol.MessagePart{{
+		Type: protocol.MessagePartTypeNoteBrief,
+		Text: "missing page id",
+	}}); err == nil {
+		t.Fatal("expected missing ref_id rejection")
+	}
+}
+
 func TestUnwrapStructuredMessageSendLeavesNoteAIEditJSONAlone(t *testing.T) {
 	for _, raw := range []string{
 		`{"action":"insert","markdown":"hi","target":null,"title":null,"rationale":"x"}`,

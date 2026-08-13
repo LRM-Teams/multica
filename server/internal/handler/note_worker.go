@@ -12,8 +12,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // noteWorkerJobCreateRequest is the Worker contract create body (S2-C3).
@@ -22,27 +24,31 @@ type noteWorkerJobCreateRequest struct {
 	AgentID     string `json:"agent_id"`
 	Instruction string `json:"instruction"`
 	Intent      string `json:"intent"`
+	// Optional group channel destination. When empty, the Worker posts into
+	// the caller's 1:1 agent DM (main Messages timeline — not chat_session bubble).
+	ChannelID string `json:"channel_id"`
 	// Editor-only fields — presence is misuse and must 400.
 	Prompt string `json:"prompt"`
 	Action string `json:"action"`
 }
 
-// NoteWorkerJobResponse is the durable Worker job record. After S2-C1 dispatch,
-// status is dispatched (or later running/completed) and task_id is set.
-// Status is projected from the linked agent_inbox_event when present so the
-// notes UI can show progress without a separate lifecycle writer.
+// NoteWorkerJobResponse is the durable Worker job record. After dispatch,
+// status is projected from the linked agent_inbox_event when present.
 type NoteWorkerJobResponse struct {
-	ID            string  `json:"id"`
-	WorkspaceID   string  `json:"workspace_id"`
-	PageID        string  `json:"page_id"`
-	AgentID       string  `json:"agent_id"`
-	Instruction   string  `json:"instruction"`
-	Status        string  `json:"status"`
-	Intent        string  `json:"intent"`
-	TaskID        *string `json:"task_id,omitempty"`
-	FailureReason *string `json:"failure_reason,omitempty"`
-	CreatedAt     string  `json:"created_at"`
-	UpdatedAt     string  `json:"updated_at"`
+	ID               string  `json:"id"`
+	WorkspaceID      string  `json:"workspace_id"`
+	PageID           string  `json:"page_id"`
+	AgentID          string  `json:"agent_id"`
+	Instruction      string  `json:"instruction"`
+	Status           string  `json:"status"`
+	Intent           string  `json:"intent"`
+	TaskID           *string `json:"task_id,omitempty"`
+	ChannelID        *string `json:"channel_id,omitempty"`
+	ChannelMessageID *string `json:"channel_message_id,omitempty"`
+	ChatSessionID    *string `json:"chat_session_id,omitempty"`
+	FailureReason    *string `json:"failure_reason,omitempty"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        string  `json:"updated_at"`
 }
 
 // noteWorkerStatusFromTask maps agent_inbox_event lifecycle onto Worker job
@@ -85,6 +91,9 @@ func (h *Handler) noteWorkerJobResponse(ctx context.Context, workspaceID, userID
 		resp                NoteWorkerJobResponse
 		id, wsID, pageID    pgtype.UUID
 		agentID, taskID     pgtype.UUID
+		channelID           pgtype.UUID
+		channelMessageID    pgtype.UUID
+		chatSessionID       pgtype.UUID
 		instruction, status string
 		failure             *string
 		createdAt           pgtype.Timestamptz
@@ -96,13 +105,15 @@ func (h *Handler) noteWorkerJobResponse(ctx context.Context, workspaceID, userID
 	)
 	err := h.DB.QueryRow(ctx, `
 SELECT
-  j.id, j.workspace_id, j.page_id, j.agent_id, j.instruction, j.status, j.task_id, j.failure_reason, j.created_at, j.updated_at,
-  e.status, e.terminal_outcome, e.started_at, e.failure_reason
+  j.id, j.workspace_id, j.page_id, j.agent_id, j.instruction, j.status, j.task_id,
+  j.channel_id, j.channel_message_id, j.failure_reason, j.created_at, j.updated_at,
+  e.status, e.terminal_outcome, e.started_at, e.failure_reason, e.chat_session_id
 FROM note_worker_job j
 LEFT JOIN agent_inbox_event e ON e.id = j.task_id
 WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspaceID, userID).Scan(
-		&id, &wsID, &pageID, &agentID, &instruction, &status, &taskID, &failure, &createdAt, &updatedAt,
-		&taskStatus, &terminalOutcome, &startedAt, &taskFailure,
+		&id, &wsID, &pageID, &agentID, &instruction, &status, &taskID,
+		&channelID, &channelMessageID, &failure, &createdAt, &updatedAt,
+		&taskStatus, &terminalOutcome, &startedAt, &taskFailure, &chatSessionID,
 	)
 	if err != nil {
 		return resp, err
@@ -142,12 +153,24 @@ WHERE id = $3`, projected, taskFailure, id)
 		s := uuidToString(taskID)
 		resp.TaskID = &s
 	}
+	if channelID.Valid {
+		s := uuidToString(channelID)
+		resp.ChannelID = &s
+	}
+	if channelMessageID.Valid {
+		s := uuidToString(channelMessageID)
+		resp.ChannelMessageID = &s
+	}
+	if chatSessionID.Valid {
+		s := uuidToString(chatSessionID)
+		resp.ChatSessionID = &s
+	}
 	return resp, nil
 }
 
-// CreateNoteWorkerJob records a Worker job and dispatches a chat task with the
-// note mounted as an untrusted brief (S2-C1). It must not create note_ai_job
-// rows or apply Editor replace_page actions.
+// CreateNoteWorkerJob records a Worker job and posts into a Messages channel
+// (agent DM or group) so progress and replies appear in the main conversation
+// timeline — not the retired floating chat_session bubble.
 func (h *Handler) CreateNoteWorkerJob(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, userIDString, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
@@ -180,52 +203,68 @@ func (h *Handler) CreateNoteWorkerJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	if h.TaskService == nil {
-		writeError(w, http.StatusInternalServerError, "task service unavailable")
+	if h.TxStarter == nil {
+		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
+		return
+	}
+
+	ch, ok := h.resolveNoteWorkerChannel(w, r, page.WorkspaceID, userIDString, agent, strings.TrimSpace(req.ChannelID))
+	if !ok {
 		return
 	}
 
 	jobID := uuid.New()
 	jobUUID := parseUUID(jobID.String())
 	if _, err := h.DB.Exec(r.Context(), `
-INSERT INTO note_worker_job (id, workspace_id, page_id, creator_id, agent_id, instruction, status)
-VALUES ($1, $2, $3, $4, $5, $6, 'pending')`,
-		jobUUID, page.WorkspaceID, page.ID, userID, agentID, instruction); err != nil {
+INSERT INTO note_worker_job (id, workspace_id, page_id, creator_id, agent_id, instruction, status, channel_id)
+VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
+		jobUUID, page.WorkspaceID, page.ID, userID, agentID, instruction, parseUUID(ch.ID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create note Worker job")
 		return
 	}
 
-	session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
+	visibleContent, parts, err := h.buildNoteWorkerChannelMessage(r.Context(), ch, agent, page, instruction)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authorName := h.channelAuthorName(r.Context(), userIDString)
+	threadID := uuid.NewString()
+	result, err := h.createUserChannelMessageWithIdempotency(r.Context(), channelMessageInsertInput{
+		ChannelID:   parseUUID(ch.ID),
 		WorkspaceID: page.WorkspaceID,
-		AgentID:     agentID,
-		CreatorID:   userID,
-		Title:       normalizeNoteWorkerJobTitle(page.Title),
-	})
+		AuthorID:    userID,
+		AuthorName:  authorName,
+		Content:     visibleContent,
+		Parts:       parts,
+		ThreadID:    &threadID,
+	}, nil)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create note Worker job")
+		writeError(w, http.StatusInternalServerError, "failed to post note Worker message")
 		return
 	}
-	prompt := buildNoteWorkerPrompt(instruction, uuidToString(page.ID), page.Title, page.Content)
-	msg, err := h.Queries.CreateChatMessage(r.Context(), db.CreateChatMessageParams{
-		ChatSessionID: session.ID,
-		Role:          "user",
-		Content:       prompt,
-		Parts:         []byte("[]"),
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create note Worker job")
-		return
+	msg := result.Message
+	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(ch.ID))
+	if ch.Kind == "dm" {
+		h.clearDMHiddenForChannelMembers(r.Context(), uuidToString(page.WorkspaceID), parseUUID(ch.ID))
 	}
-	task, err := h.TaskService.EnqueueChatTask(r.Context(), session, parseUUID(userIDString))
+	// Publish to humans only — skip scheduleCanonicalMessageDelivery so the
+	// directed inbox wake below is the sole agent wake (no Message double-fire).
+	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(r.Context(), uuidToString(page.WorkspaceID), ch.ID))
+	h.publishToUsers(protocol.EventChannelMessage, uuidToString(page.WorkspaceID), "member", userIDString, recipientIDs, msg)
+
+	workerPrompt := wrapNoteWorkerChannelWakePrompt(
+		buildNoteWorkerPrompt(instruction, uuidToString(page.ID), page.Title, page.Content),
+		h.agentMessageTargetForPrompt(r.Context(), ch, msg),
+	)
+	task, err := h.enqueueChannelAgentPrompt(
+		r.Context(), ch, agent, msg, userID, workerPrompt,
+		"note worker", true, protocol.AgentInboxReasonNoteWorker, channelDirectedWakePriority,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to enqueue note Worker job: "+err.Error())
 		return
 	}
-	if err := h.Queries.LinkChatMessageToTask(r.Context(), db.LinkChatMessageToTaskParams{ID: msg.ID, TaskID: task.ID}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to link note Worker job")
-		return
-	}
-
 	mergedContext, err := service.WithNoteBrief(task.Context, service.NoteBrief{
 		Version: 1,
 		PageID:  uuidToString(page.ID),
@@ -242,12 +281,11 @@ UPDATE agent_inbox_event SET context = $1::jsonb WHERE id = $2`, mergedContext, 
 	}
 	if _, err := h.DB.Exec(r.Context(), `
 UPDATE note_worker_job
-SET task_id = $1, status = 'dispatched', updated_at = now()
-WHERE id = $2`, task.ID, jobUUID); err != nil {
+SET task_id = $1, channel_message_id = $2, status = 'dispatched', updated_at = now()
+WHERE id = $3`, task.ID, parseUUID(msg.ID), jobUUID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to link note Worker task")
 		return
 	}
-	_, _ = h.Queries.UpdateChatSessionStatus(r.Context(), db.UpdateChatSessionStatusParams{ID: session.ID, Status: "archived"})
 
 	resp, err := h.noteWorkerJobResponse(r.Context(), page.WorkspaceID, userID, jobUUID)
 	if err != nil {
@@ -255,6 +293,95 @@ WHERE id = $2`, task.ID, jobUUID); err != nil {
 		return
 	}
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (h *Handler) resolveNoteWorkerChannel(
+	w http.ResponseWriter,
+	r *http.Request,
+	workspaceID pgtype.UUID,
+	userID string,
+	agent db.Agent,
+	channelID string,
+) (ChannelResponse, bool) {
+	ws := uuidToString(workspaceID)
+	if channelID == "" {
+		return h.ensureNoteWorkerAgentDM(w, r.Context(), ws, userID, agent)
+	}
+	chID, ok := parseUUIDOrBadRequest(w, channelID, "channel_id")
+	if !ok {
+		return ChannelResponse{}, false
+	}
+	ch, found := h.getChannel(r.Context(), ws, chID)
+	if !found || ch.Kind != "group" {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return ChannelResponse{}, false
+	}
+	if !h.requireChannelUserMember(w, r.Context(), ws, chID, parseUUID(userID)) {
+		return ChannelResponse{}, false
+	}
+	if !h.channelHasAgentMember(r.Context(), workspaceID, chID, agent.ID) {
+		writeError(w, http.StatusBadRequest, "agent is not a member of this channel")
+		return ChannelResponse{}, false
+	}
+	return ch, true
+}
+
+func (h *Handler) ensureNoteWorkerAgentDM(
+	w http.ResponseWriter,
+	ctx context.Context,
+	workspaceID, userID string,
+	agent db.Agent,
+) (ChannelResponse, bool) {
+	canonical := dmCanonicalName("user", userID, "agent", uuidToString(agent.ID))
+	if ch, found := h.findDMChannel(ctx, workspaceID, canonical); found {
+		h.clearDMPeerHidden(ctx, workspaceID, userID, dmPeerRef{Type: "agent", ID: agent.ID})
+		return ch, true
+	}
+	ch, created := h.createDMChannel(ctx, w, workspaceID, userID, canonical, []dmMember{
+		{memberType: "user", memberID: parseUUID(userID)},
+		{memberType: "agent", memberID: agent.ID},
+	})
+	if !created {
+		return ChannelResponse{}, false
+	}
+	h.clearDMPeerHidden(ctx, workspaceID, userID, dmPeerRef{Type: "agent", ID: agent.ID})
+	return ch, true
+}
+
+func (h *Handler) buildNoteWorkerChannelMessage(
+	ctx context.Context,
+	ch ChannelResponse,
+	agent db.Agent,
+	page notePageRow,
+	instruction string,
+) (string, []protocol.MessagePart, error) {
+	title := strings.TrimSpace(page.Title)
+	if title == "" {
+		title = "Untitled"
+	}
+	body := strings.TrimSpace(instruction)
+	if ch.Kind == "group" {
+		handle := strings.TrimSpace(agent.Name)
+		if handle == "" {
+			handle = uuidToString(agent.ID)
+		}
+		body = "@" + handle + " " + body
+	}
+	brief := protocol.MessagePart{
+		Type:  protocol.MessagePartTypeNoteBrief,
+		RefID: uuidToString(page.ID),
+		Label: title,
+		Text:  page.Content,
+	}
+	content, parts, err := messageparts.Normalize(body, []protocol.MessagePart{brief})
+	if err != nil {
+		return "", nil, err
+	}
+	content, parts, err = h.enrichChannelMessageMentions(ctx, ch, content, parts)
+	if err != nil {
+		return "", nil, err
+	}
+	return content, parts, nil
 }
 
 func normalizeNoteWorkerJobTitle(noteTitle string) string {

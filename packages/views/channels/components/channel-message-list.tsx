@@ -31,6 +31,7 @@ import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
 import { useBottomSettleScroll } from "../hooks/use-bottom-settle-scroll";
 import { buildMessageGroupCompactMap, buildMessageGroupEndMap } from "./message-group-compact";
+import { buildNoteWorkerPageIdByMessageId } from "@multica/core/notes/worker-reply-actions";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary. Pill is OK for *dates*; system event rows must not reuse this
@@ -277,6 +278,10 @@ function MessageViewport({
   const messageGroupEnd = useMemo(
     () => buildMessageGroupEndMap(messages, messageGroupCompact, { foldedIds: foldedIssueIds }),
     [messages, messageGroupCompact, foldedIssueIds],
+  );
+  const noteWorkerPageIdByMessageId = useMemo(
+    () => buildNoteWorkerPageIdByMessageId(messages),
+    [messages],
   );
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
@@ -536,6 +541,7 @@ function MessageViewport({
             searchQuery={searchHighlighted ? searchQuery : undefined}
             compact={compact}
             groupEnd={groupEnd}
+            noteWorkerPageId={noteWorkerPageIdByMessageId.get(msg.id) ?? null}
           />
         </div>
       </Fragment>

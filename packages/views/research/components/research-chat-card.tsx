@@ -16,6 +16,7 @@ import {
   type ClarificationResolution,
 } from "../lib/clarification-question";
 import { speakerMemberForMessage } from "../lib/research-chat-speaker";
+import { productRoundCardFromProcessMessage } from "../lib/product-round-process-card";
 import { ResearchClarificationCard } from "./research-clarification-card";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 
@@ -25,42 +26,9 @@ function metaString(meta: unknown, key: string): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function metaNumber(meta: unknown, key: string): number | null {
-  if (!meta || typeof meta !== "object") return null;
-  const value = (meta as Record<string, unknown>)[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function metaBool(meta: unknown, key: string): boolean {
   if (!meta || typeof meta !== "object") return false;
   return (meta as Record<string, unknown>)[key] === true;
-}
-
-function cardFromProcessMeta(message: ResearchMessage): ResearchProductRoundCard | null {
-  const op = metaString(message.meta, "op");
-  if (op !== "product_round_judgment") return null;
-  const round = metaNumber(message.meta, "round") ?? 1;
-  const decision = metaString(message.meta, "decision") ?? "continue";
-  const gaps =
-    message.meta && typeof message.meta === "object"
-      ? (message.meta as Record<string, unknown>).coverage_gaps
-      : [];
-  return {
-    id: `process-${message.id}`,
-    session_id: message.session_id,
-    round_number: round,
-    decision,
-    coverage_gaps: gaps ?? [],
-    confidence_note: message.body || "",
-    budget_used: metaNumber(message.meta, "budget_used") ?? round,
-    budget_remaining: metaNumber(message.meta, "budget_remaining") ?? 0,
-    goal_patch_proposal: metaBool(message.meta, "has_goal_patch")
-      ? metaString(message.meta, "goal_patch_proposal")
-      : metaString(message.meta, "goal_patch_proposal"),
-    next_round_focus: metaString(message.meta, "next_round_focus"),
-    decided_by_agent_id: message.sender_id,
-    created_at: message.created_at,
-  };
 }
 
 function formatTime(iso: string): string {
@@ -131,7 +99,7 @@ export function ResearchChatCard({
     isUser && message.target_agent_id
       ? target?.display_name || target?.name || t(($) => $.chat.to_lead)
       : null;
-  const roundCard = isProcess ? cardFromProcessMeta(message) : null;
+  const roundCard = isProcess ? productRoundCardFromProcessMessage(message) : null;
   const clarification = !isUser ? parseClarificationQuestion(message) : null;
   const clarificationResolution: ClarificationResolution = clarification
     ? resolveClarificationResolution(clarification, messages ?? [message])

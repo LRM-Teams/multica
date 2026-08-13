@@ -12,8 +12,7 @@ export type ResearchSessionUiAction =
   | { type: "setCreateChannel"; value: boolean }
   | { type: "setDeliveryOpen"; value: boolean }
   | { type: "setFamily"; family: string | null }
-  | { type: "clearBody" }
-  | { type: "resetSession" };
+  | { type: "clearBody" };
 
 export const INITIAL_RESEARCH_SESSION_UI_STATE: ResearchSessionUiState = {
   body: "",
@@ -40,8 +39,6 @@ export function researchSessionUiReducer(
       return { ...state, selectedFamily: action.family };
     case "clearBody":
       return { ...state, body: "" };
-    case "resetSession":
-      return { ...INITIAL_RESEARCH_SESSION_UI_STATE };
     default:
       return state;
   }

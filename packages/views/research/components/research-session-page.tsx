@@ -105,6 +105,7 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchServerErrorPage } from "./research-server-error-page";
+import { ResearchSessionBoundary } from "./research-session-boundary";
 import {
   ResearchSessionInterruptBanner,
   type InterruptBannerPhase,
@@ -120,6 +121,14 @@ function mutationErrorToast(fallback: string, err: unknown) {
 }
 
 export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
+  return (
+    <ResearchSessionBoundary sessionId={sessionId}>
+      <ResearchSessionPageContent sessionId={sessionId} />
+    </ResearchSessionBoundary>
+  );
+}
+
+function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
   const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
@@ -190,7 +199,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
   useEffect(() => {
-    dispatch({ type: "resetSession" });
     clearCanvasSelection();
     clearCanvasFilter();
   }, [sessionId, clearCanvasFilter, clearCanvasSelection]);
@@ -232,10 +240,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const reportControllerRef = useRef<{ open: () => void } | null>(null);
-  useEffect(() => {
-    setAgentDock(null);
-    reportControllerRef.current = null;
-  }, [sessionId]);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
@@ -612,7 +616,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       {/* LRM-1112: S1–S4 timeline lives inside the single header surface (L2). */}
       <div className="relative flex min-h-0 flex-1">
         <ResearchConstellationWorkspace
-          key={sessionId}
           className="min-h-0 flex-1"
           typedGraph={typedGraph}
           typedLoading={typedGraphLoading}

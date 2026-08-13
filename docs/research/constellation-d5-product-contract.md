@@ -137,7 +137,7 @@ research state. Refresh must reconstruct the same terminal graph.
   for reduced motion, background resume, and resync.
 - Each frontend change runs relevant Vitest, typecheck, and `pnpm react:doctor`.
 
-## 9. Implementation status at `dev@602ed7336`
+## 9. Implementation status at `dev@fc2671ed7`
 
 Status in this table means code already present on `dev`. Open pull requests are
 tracked separately in §11 and are not counted as integrated until merged.
@@ -177,7 +177,7 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 
 | Contract surface | Current evidence | Delivery state |
 | --- | --- | --- |
-| Target D5 shell and shared Web/Desktop composition | `dev@602ed7336`, PR #2907 | Integrated |
+| Target D5 shell and shared Web/Desktop composition | `dev@fc2671ed7`, PR #2907 | Integrated |
 | Canonical conversation change receipts | `2edba39a`, PR #2908 | Integrated |
 | Dispute and trajectory/Insight detail registration | `cee8dc2a`, `4cac759b`, PRs #2909–#2910 | Integrated |
 | Capability-gated V6 adapter in the existing D5 shell | `a0963726`, PR #2911 | Integrated; server capability absent |
@@ -207,9 +207,10 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 | Custom control and responsive Lens accessibility | `08aa6f3d8`, PR #3021 | Integrated; semantic focus rings plus active Lens announcement/state |
 | Long unbroken node-card copy containment | `cb8fa3b50`, PR #3022 | Integrated; registered and generic node cards retain bounded two-line density |
 | Shared Research frontend typecheck baseline | `612034aea`, PR #3024 | Integrated; V6 Dispute panel uses a type-only `ReactNode` import |
-| Strict V6 Delta/resume HTTP success boundary | PR #3030 | Awaiting merge; explicit JSON `null` alone means no Delta, while malformed non-null success is an interface error |
+| Strict V6 Delta/resume HTTP success boundary | `21ba93fad`, PR #3030 | Integrated; explicit JSON `null` alone means no Delta, while malformed non-null success is an interface error |
+| V6 reconnect Delta recovery | `fc2671ed7`, PR #3031 | Integrated; a successful resume verdict is applied through the same identity/order/gap/resync pipeline instead of being discarded |
 | V6 WS Delta routing envelope | Existing V5 `research_session:graph_updated` payloads plus a direct-Delta V6 listener | Protocol decision required: a workspace event must identify `run_id`, including mutation-free Delta frames |
-| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@602ed7336` | Backend blocked; explicit V5/D5 fallback required |
+| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@fc2671ed7` | Backend blocked; explicit V5/D5 fallback required |
 | Runtime visual/performance/accessibility matrix | No current deployed-session artifacts for this revision | Unverified; required before completion |
 
 ### Completion evidence rule

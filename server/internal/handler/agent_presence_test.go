@@ -25,12 +25,28 @@ func (f fakeRunnerPresenceSource) IsCurrentWorkspaceRunner(daemonID, workspaceID
 	return f.current[daemonID+"/"+workspaceID+"/"+daemonInstanceID]
 }
 
+func TestProjectRunnerLaunchPresenceKeepsAcceptedCurrentRunnerOnline(t *testing.T) {
+	h := Handler{RunnerPresenceSource: fakeRunnerPresenceSource{current: map[string]bool{
+		"computer-1/workspace-1/instance-1": true,
+	}}}
+
+	got := h.projectRunnerLaunchPresence("workspace-1", &runnerLaunchPresence{
+		daemonID:         "computer-1",
+		daemonInstanceID: "instance-1",
+		status:           "accepted",
+	})
+	if got != AgentPresenceOnline {
+		t.Fatalf("accepted current Runner Presence = %q, want online", got)
+	}
+}
+
 func TestGetAgentPresenceReturnsFullWorkspaceRosterFromRunnerManagementTruth(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 	activeID := createHandlerTestAgent(t, "presence-active-"+uuid.NewString()[:8], nil)
+	acceptedID := createHandlerTestAgent(t, "presence-accepted-"+uuid.NewString()[:8], nil)
 	inactiveID := createHandlerTestAgent(t, "presence-inactive-"+uuid.NewString()[:8], nil)
 	missingID := createHandlerTestAgent(t, "presence-missing-"+uuid.NewString()[:8], nil)
 	archivedID := createHandlerTestAgent(t, "presence-archived-"+uuid.NewString()[:8], nil)
@@ -54,9 +70,10 @@ func TestGetAgentPresenceReturnsFullWorkspaceRosterFromRunnerManagementTruth(t *
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
 		VALUES
-			($1, $2, $4, 'daemon-1', 'instance-1', 'launch-active', 'active'),
-			($1, $3, $4, 'daemon-1', 'instance-1', 'launch-inactive', 'inactive')`,
-		testWorkspaceID, activeID, inactiveID, runtimeID); err != nil {
+			($1, $2, $5, 'daemon-1', 'instance-1', 'launch-active', 'active'),
+			($1, $3, $5, 'daemon-1', 'instance-1', 'launch-accepted', 'accepted'),
+			($1, $4, $5, 'daemon-1', 'instance-1', 'launch-inactive', 'inactive')`,
+		testWorkspaceID, activeID, acceptedID, inactiveID, runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, archivedID); err != nil {
@@ -87,6 +104,9 @@ func TestGetAgentPresenceReturnsFullWorkspaceRosterFromRunnerManagementTruth(t *
 	}
 	if byAgent[activeID] != AgentPresenceOnline {
 		t.Fatalf("active current launch = %q, want online", byAgent[activeID])
+	}
+	if byAgent[acceptedID] != AgentPresenceOnline {
+		t.Fatalf("accepted current launch = %q, want online", byAgent[acceptedID])
 	}
 	if byAgent[inactiveID] != AgentPresenceOffline || byAgent[missingID] != AgentPresenceOffline {
 		t.Fatalf("inactive=%q missing=%q, want offline/offline", byAgent[inactiveID], byAgent[missingID])
@@ -199,6 +219,12 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "runner-launch-"+uuid.NewString()[:8], nil)
 	h := *testHandler
+	bus := events.New()
+	var presencePayloads []AgentPresenceRealtimePayload
+	bus.Subscribe(protocol.EventAgentPresence, func(event events.Event) {
+		presencePayloads = append(presencePayloads, event.Payload.(AgentPresenceRealtimePayload))
+	})
+	h.Bus = bus
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
@@ -216,6 +242,9 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	}
 	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
 		t.Fatalf("persist Runner start acknowledgement: %v", err)
+	}
+	if len(presencePayloads) != 1 || presencePayloads[0].AgentID != agentID || presencePayloads[0].Presence != AgentPresenceOnline {
+		t.Fatalf("start acknowledgement Presence payloads = %+v, want one online transition", presencePayloads)
 	}
 	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID, ProviderSessionID: "provider-session-1", TurnID: "turn-1", RuntimeGeneration: 3}
 	raw, err = json.Marshal(session)

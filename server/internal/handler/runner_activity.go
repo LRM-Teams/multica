@@ -441,6 +441,11 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 		if err != nil {
 			return err
 		}
+		beforeLaunch, err := h.loadRunnerLaunchPresence(ctx, workspaceID, agentID)
+		if err != nil {
+			return err
+		}
+		before := h.projectRunnerLaunchPresence(identity.WorkspaceID, beforeLaunch)
 		var desiredLaunchID, desiredStartDispatchID string
 		if err := h.DB.QueryRow(ctx, `
 			SELECT launch_id::text, start_dispatch_id::text FROM agent_runner_launch_projection
@@ -475,6 +480,12 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 		if command.RowsAffected() != 1 {
 			return errors.New("stale Workspace Runner start acknowledgement")
 		}
+		after := h.projectRunnerLaunchPresence(identity.WorkspaceID, &runnerLaunchPresence{
+			daemonID:         identity.DaemonID,
+			daemonInstanceID: daemonInstanceID,
+			status:           "accepted",
+		})
+		h.publishAgentPresenceChange(identity.WorkspaceID, acknowledgement.AgentID, before, after)
 		return nil
 	})
 }

@@ -34,7 +34,7 @@ var chapterD15Coverage = map[int]string{
 	17: "partial", // frozen gate snapshot on TaskContextForAttempt
 	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state after rollback
 	19: "partial", // unrelated watermark advance after rolled-back accept
-	20: "partial", // result lock-order concurrency + normalized manifest locks
+	20: "covered", // opposite payload order + shared manifest targets + canonical locks + unique Result/terminal Attempt
 	21: "partial", // accept replay hash/lineage conflict
 	22: "partial", // result accept transaction recovery matrix
 	23: "partial", // cross-workspace 404 + Fleet principal/header binding; full surface matrix open

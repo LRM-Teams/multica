@@ -42,7 +42,6 @@ export function extractRunIdsFromNoteMarkdown(content: string): string[] {
 }
 
 async function syncRefs<TCreate>(
-  pageId: string,
   desired: Set<string>,
   listedIds: string[],
   createOne: (id: string) => Promise<TCreate>,
@@ -85,7 +84,6 @@ export async function syncNotePageIssueRefsFromContent(
   const desired = new Set(extractIssueIdsFromNoteMarkdown(content));
   const listed = await api.listNotePageIssueRefs(pageId);
   return syncRefs(
-    pageId,
     desired,
     listed.refs.map((ref) => ref.id || ref.issue_id || ""),
     (issueId) => api.createNotePageIssueRef(pageId, { issue_id: issueId }),
@@ -101,7 +99,6 @@ export async function syncNotePageAgentRefsFromContent(
   const desired = new Set(extractAgentIdsFromNoteMarkdown(content));
   const listed = await api.listNotePageAgentRefs(pageId);
   return syncRefs(
-    pageId,
     desired,
     listed.refs.map((ref) => ref.id || ""),
     (agentId) => api.createNotePageAgentRef(pageId, { agent_id: agentId }),
@@ -117,7 +114,6 @@ export async function syncNotePageRunRefsFromContent(
   const desired = new Set(extractRunIdsFromNoteMarkdown(content));
   const listed = await api.listNotePageRunRefs(pageId);
   return syncRefs(
-    pageId,
     desired,
     listed.refs.map((ref) => ref.id || ""),
     (runId) => api.createNotePageRunRef(pageId, { run_id: runId }),

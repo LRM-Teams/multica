@@ -42,6 +42,8 @@ import type {
   SandboxNodeDockerImagesResponse,
   SandboxNodeTemplatesResponse,
   SandboxSnapshot,
+  SendChatMessageResponse,
+  ChatPendingTask,
   WebPushPublicKeyResponse,
   WebPushSubscriptionResponse,
   WebPushTestResponse,
@@ -63,6 +65,8 @@ import type {
   NotePageIssueRefListResponse,
   NoteWriteback,
   NoteWritebackListResponse,
+  IssueNoteRef,
+  IssueNoteRefListResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
@@ -1850,6 +1854,18 @@ export const ChildIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
 }).loose();
 
+export const IssueNoteRefSchema: z.ZodType<IssueNoteRef> = z.object({
+  id: z.string(),
+  title: z.string(),
+  created_at: z.string(),
+}).loose();
+
+export const IssueNoteRefListResponseSchema: z.ZodType<IssueNoteRefListResponse> = z.object({
+  notes: z.array(IssueNoteRefSchema).default([]),
+}).loose();
+
+export const EMPTY_ISSUE_NOTE_REF_LIST: IssueNoteRefListResponse = { notes: [] };
+
 export const CloudRuntimeNodeSchema = z.object({
   id: z.string(),
   owner_id: z.string(),
@@ -2244,6 +2260,45 @@ export const CancelTaskResponseSchema = AgentTaskResponseSchema.extend({
   cancelled_chat_message: CancelledChatMessageSchema.nullish()
     .transform((value) => value ?? undefined),
 }).loose();
+
+// POST /api/chat/sessions/:id/messages — greeting vs Raft standalone wake.
+// Older servers omit pending/delivery_id; missing pending must not look like
+// a completed greeting after the inbox cut.
+export const SendChatMessageResponseSchema: z.ZodType<SendChatMessageResponse> = z.object({
+  message_id: z.string().default(""),
+  delivery_id: z.string().optional().default(""),
+  pending: z.boolean().optional(),
+  created_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_SEND_CHAT_MESSAGE_RESPONSE: SendChatMessageResponse = {
+  message_id: "",
+  delivery_id: "",
+  created_at: "",
+};
+
+export const ChatPendingTaskSchema: z.ZodType<ChatPendingTask> = z.object({
+  pending: z.boolean().optional(),
+  delivery_id: z.string().optional(),
+  status: z.string().optional(),
+  created_at: z.string().optional(),
+}).loose();
+
+export const EMPTY_CHAT_PENDING_TASK: ChatPendingTask = {};
+
+export const PendingChatTaskItemSchema = z.object({
+  chat_session_id: z.string().default(""),
+  pending: z.boolean().optional(),
+  status: z.string().optional(),
+  delivery_id: z.string().optional(),
+  created_at: z.string().optional(),
+}).loose();
+
+export const PendingChatTasksResponseSchema = z.object({
+  tasks: z.array(PendingChatTaskItemSchema).default([]),
+}).loose();
+
+export const EMPTY_PENDING_CHAT_TASKS_RESPONSE = { tasks: [] };
 
 export const EMPTY_CANCEL_TASK_RESPONSE: CancelTaskResponse = {
   id: "",

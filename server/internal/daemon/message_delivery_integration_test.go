@@ -170,6 +170,10 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch", StartDispatchID: "acceptance-launch" + "-dispatch"}); err != nil {
 		t.Fatalf("accept test APM launch: %v", err)
 	}
+	// Start() only admits the launch into Starting. Provider handoff and the
+	// no-ACK rejection path both require Running; otherwise Accept buffers
+	// and ACKs before the fake runtime is ever asked.
+	markTestLaunchRunning(t, runner, agentID)
 	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
@@ -574,6 +578,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch", StartDispatchID: "acceptance-launch" + "-dispatch"}); err != nil {
 			t.Fatalf("accept test APM launch: %v", err)
 		}
+		markTestLaunchRunning(t, runner, agentID)
 		acks = make(chan protocol.AgentDeliverAckPayload, 2)
 		hub.SetAgentDeliveryAckHandler(func(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 			acks <- ack

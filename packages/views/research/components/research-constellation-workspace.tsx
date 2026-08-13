@@ -50,12 +50,13 @@ import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
 import { StarGraphCanvas } from "../star-graph";
+import { TrajectoryExplorer } from "../trajectory-explorer";
 import { STAR_GRAPH_DOM_BUDGET, STAR_GRAPH_MOBILE_DOM_BUDGET, selectVisibleEntityIds } from "../star-graph/lib/star-graph-visible-budget";
 import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
 import { ResearchCanvasProjectionMismatch } from "./research-canvas-projection-mismatch";
-import { ResearchD5Rail } from "./research-d5-rail";
+import { ResearchD5MobileRail, ResearchD5Rail } from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
 import "./research-d5-layout.css";
 
@@ -68,6 +69,7 @@ export function ResearchConstellationWorkspace({
   typedGraph,
   typedLoading,
   typedError,
+  projectionErrorReason,
   projectionMismatch = false,
   onRetryTypedGraph,
   retryTypedGraphPending = false,
@@ -81,6 +83,8 @@ export function ResearchConstellationWorkspace({
   onOpenAgentPanel,
   canvasMode,
   activeLens,
+  onActiveLensChange,
+  sessionStatus,
   sources,
   run,
   members,
@@ -101,6 +105,7 @@ export function ResearchConstellationWorkspace({
   typedGraph: TypedGraphResponse | undefined;
   typedLoading: boolean;
   typedError: boolean;
+  projectionErrorReason?: string | null;
   projectionMismatch?: boolean;
   onRetryTypedGraph?: () => void;
   retryTypedGraphPending?: boolean;
@@ -117,6 +122,8 @@ export function ResearchConstellationWorkspace({
   onOpenAgentPanel: OpenAgentPanelFn;
   canvasMode: CanvasBodyMode;
   activeLens: ResearchD5Lens;
+  onActiveLensChange?: (lens: ResearchD5Lens) => void;
+  sessionStatus?: string;
   sources: ResearchSource[];
   run?: ResearchRunSnapshot;
   members: ResearchFleetMember[];
@@ -156,12 +163,13 @@ export function ResearchConstellationWorkspace({
   const reportController = useMemo<ResearchReportController>(
     () => ({
       open: () => {
+        if (isMobile) setRailOpen(false);
         setInspectorAgentId(null);
         setReportOpen(true);
       },
       close: () => setReportOpen(false),
     }),
-    [],
+    [isMobile, setRailOpen],
   );
 
   useEffect(() => {
@@ -444,12 +452,14 @@ export function ResearchConstellationWorkspace({
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
+        if (isMobile) setRailOpen(false);
         setInspectorAgentId(typedNode.actor_agent_id);
         setReportOpen(false);
         return;
       }
       setInspectorAgentId(null);
       if (level === "l" || level === "xl" || level === "xxl") {
+        if (isMobile) setRailOpen(false);
         setReportOpen(true);
       }
     },
@@ -484,7 +494,7 @@ export function ResearchConstellationWorkspace({
       className={cn("d5-workspace", className)}
       data-testid="research-constellation-workspace"
       data-d5-lens={activeLens}
-      data-d5-rail-open={showDesktopRail ? "true" : "false"}
+      data-d5-rail-open={railOpen ? "true" : "false"}
     >
       <section
         ref={hostRef}
@@ -500,9 +510,25 @@ export function ResearchConstellationWorkspace({
         {typedError && !canvasModel && !projectionMismatch ? (
           <div
             role="alert"
-            className="grid h-full place-items-center px-6 text-center text-sm text-destructive"
+            data-testid="research-typed-graph-error"
+            className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
           >
-            {t(($) => $.d5.canvas.error)}
+            <p className="max-w-md text-sm text-destructive">
+              {projectionErrorReason || t(($) => $.d5.canvas.error)}
+            </p>
+            {onRetryTypedGraph ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={retryTypedGraphPending}
+                onClick={onRetryTypedGraph}
+              >
+                {retryTypedGraphPending
+                  ? t(($) => $.interrupt.retrying)
+                  : t(($) => $.session_page.retry)}
+              </Button>
+            ) : null}
           </div>
         ) : null}
         {projectionMismatch ? (
@@ -515,9 +541,34 @@ export function ResearchConstellationWorkspace({
             retryPending={retryTypedGraphPending}
           />
         ) : null}
-        {canvasModel && !projectionMismatch ? (
+        {canvasModel && !projectionMismatch && activeLens === "lineage" ? (
+          <TrajectoryExplorer
+            nodes={canvasNodes}
+            edges={(typedGraph?.edges ?? []).map((edge) => ({
+              id: edge.id,
+              session_id: edge.session_id,
+              from_node_id: edge.from_node_id,
+              to_node_id: edge.to_node_id,
+              edge_type: edge.edge_type,
+              created_at: edge.created_at,
+            }))}
+            sessionStatus={sessionStatus}
+            selectedId={selectedNode?.id ?? null}
+            onSelect={(nodeId) => {
+              if (nodeId) handleCanvasSelect(nodeId);
+              else onSelectNode(null);
+            }}
+            onOpenNodeDetail={handleCanvasSelect}
+            onJumpToCanvas={(nodeId) => {
+              onActiveLensChange?.("relations");
+              handleCanvasSelect(nodeId);
+            }}
+          />
+        ) : null}
+        {canvasModel && !projectionMismatch && activeLens !== "lineage" ? (
           <StarGraphCanvas
             model={canvasModel}
+            cameraSessionId={typedGraphSessionId}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasSelect}
             onOpenNode={handleCanvasSelect}
@@ -606,14 +657,14 @@ export function ResearchConstellationWorkspace({
       ) : null}
 
       {isMobile ? (
-        <ResearchD5Rail
+        <ResearchD5MobileRail
+          open={railOpen}
+          onOpenChange={setRailOpen}
           mode={railMode}
           onModeChange={setRailMode}
           chatPanel={chatPanel}
           detailPanel={detailPanel}
           composer={composer}
-          className={!railOpen ? "d5-rail-collapsed" : undefined}
-          {...(backgroundInert ? { inert: true } : {})}
         />
       ) : null}
 
@@ -624,6 +675,7 @@ export function ResearchConstellationWorkspace({
         sources={sources}
         run={run}
         members={members}
+        typedNodes={typedGraph?.nodes}
         onClose={() => setReportOpen(false)}
         onSelectLineageNode={handleLineageSelect}
       />

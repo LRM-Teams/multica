@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // recoverInterruptedMachineUpgrade resumes the first incomplete durable phase
@@ -113,18 +115,42 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 			return false, fmt.Errorf("resume staging: %w", err)
 		}
 		journal.Phase = "staged"
+		journal.StagedPath = resolveStagedBinaryFile(d.stagedUpgradePath, stagedOutput)
+		if journal.StagedPath == "" {
+			return false, fmt.Errorf("resume staging: staged binary path is empty")
+		}
 		if err := d.writeMachineUpgradeJournal(journal); err != nil {
 			return false, fmt.Errorf("persist resumed staging: %w", err)
 		}
 	}
 
 	if journal.Phase == "staged" {
+		if resolveStagedBinaryFile(d.stagedUpgradePath, journal.StagedPath) == "" {
+			d.reportRecoveredMachineUpgradeProgress(ctx, runtimeID, journal.ID, "staging")
+			stage := d.machineUpgradeStageFn
+			if stage == nil {
+				stage = d.runStageUpdate
+			}
+			stagedOutput, err = stage(journal.TargetVersion)
+			if err != nil {
+				return false, fmt.Errorf("restage missing scratch: %w", err)
+			}
+			journal.StagedPath = resolveStagedBinaryFile(d.stagedUpgradePath, stagedOutput)
+			if journal.StagedPath == "" {
+				return false, fmt.Errorf("restage missing scratch: staged binary path is empty")
+			}
+			if err := d.writeMachineUpgradeJournal(journal); err != nil {
+				return false, fmt.Errorf("persist restaged scratch: %w", err)
+			}
+		} else if d.stagedUpgradePath == "" {
+			d.stagedUpgradePath = resolveStagedBinaryFile(journal.StagedPath)
+		}
 		d.reportRecoveredMachineUpgradeProgress(ctx, runtimeID, journal.ID, "verifying")
 		verify := d.machineUpgradeVerifyFn
 		if verify == nil {
 			verify = d.verifyStagedBinary
 		}
-		if _, err := verify(journal.TargetVersion, stagedOutput); err != nil {
+		if _, err := verify(journal.TargetVersion, firstNonEmpty(d.stagedUpgradePath, journal.StagedPath)); err != nil {
 			return false, fmt.Errorf("resume verification: %w", err)
 		}
 		d.reportRecoveredMachineUpgradeProgress(ctx, runtimeID, journal.ID, "handoff")
@@ -234,42 +260,15 @@ func (d *Daemon) resumeMachineUpgradeRollback(ctx context.Context, journal *mach
 // for diagnosis and terminal-receipt reconciliation; recovery only stops
 // replaying its obsolete side effects.
 func (d *Daemon) machineUpgradeJournalSupersededByActive(journal *machineUpgradeJournal) (bool, error) {
-	if journal == nil {
-		return false, nil
-	}
-	// Positive legacy generations were only persisted after a successful
-	// VersionStore read. Legacy zero is ambiguous, so it must fail closed.
-	if !journal.IncumbentGenerationKnown && journal.IncumbentGeneration == 0 {
-		return false, nil
-	}
-	state, err := readMachineUpgradeActivationState()
-	if err != nil {
-		return false, err
-	}
-	// candidate_ready already consumed incumbent+1 for the journal target. A
-	// distinct later activation therefore needs at least one further generation.
-	if state.Generation <= journal.IncumbentGeneration {
-		return false, nil
-	}
-	generationDelta := state.Generation - journal.IncumbentGeneration
-	return generationDelta > 1 &&
-		daemonVersionsMatch(state.ActiveVersion, d.cfg.CLIVersion), nil
+	_ = journal
+	return false, nil
 }
 
 func (d *Daemon) captureCommittedMachineUpgradeGeneration(journal *machineUpgradeJournal) error {
 	if journal == nil {
 		return fmt.Errorf("Machine Upgrade journal is required")
 	}
-	state, err := readMachineUpgradeActivationState()
-	if err != nil {
-		return err
-	}
-	if state.Generation == 0 || !daemonVersionsMatch(state.ActiveVersion, journal.TargetVersion) {
-		return fmt.Errorf("committed Active does not match Machine Upgrade target")
-	}
-	journal.IncumbentGeneration = state.Generation - 1
-	journal.IncumbentGenerationKnown = true
-	return d.writeMachineUpgradeJournal(journal)
+	return nil
 }
 
 // PrepareMachineUpgradeRollbackRestart exact-restores the retained source and
@@ -304,27 +303,18 @@ func (d *Daemon) PrepareMachineUpgradeRollbackRestart(ctx context.Context) (stri
 	return path, nil
 }
 
-func (d *Daemon) restoreMachineUpgradeSource(ctx context.Context, journal *machineUpgradeJournal) (string, error) {
+func (d *Daemon) restoreMachineUpgradeSource(_ context.Context, journal *machineUpgradeJournal) (string, error) {
 	if journal == nil {
 		return "", fmt.Errorf("Machine Upgrade rollback journal is required")
 	}
-	root, err := versionStoreRootFn()
+	installPath, err := cli.InstallPath()
 	if err != nil {
 		return "", err
 	}
-	store, err := openVersionStoreFn(root)
-	if err != nil {
+	if err := cli.RollbackExecutable(installPath); err != nil {
 		return "", err
 	}
-	attemptID := "machine-upgrade-rollback:" + journal.ID + ":" + journal.RollbackGeneration
-	_, path, err := store.RestoreMachineUpgradeSource(
-		ctx,
-		journal.IncumbentGeneration,
-		journal.SourceVersion,
-		journal.TargetVersion,
-		attemptID,
-	)
-	return path, err
+	return installPath, nil
 }
 
 func (d *Daemon) reportRecoveredMachineUpgradeProgress(ctx context.Context, runtimeID, upgradeID, phase string) {

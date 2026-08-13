@@ -33,7 +33,7 @@
 - 备选（BE 权衡）：server 侧对象存储镜像/同步——成本高，v0 不推荐；`agent_memory` 表保持现状（结构化记忆记录），与文件 workspace 并存，后续再议统一。
 
 ## 3. 读写流（动作合约）
-- **agent 写**：run 中 agent 直接在自己的持久 AgentRoot 工作；平台不规定其 Git/worktree 或文件组织方式。
+- **agent 写**：run 中 agent 直接在自己的持久 AgentRoot 工作。代码 checkout 也放在这个 workspace 里；先选其中的项目目录或 worktree，再跑 git。平台不代为 clone，也不把 repository URL 写入 runtime brief。
 - **agent 读附件**：附件是否落盘由 Agent 自己决定，落盘目标始终在 AgentRoot 内。
 - **分享出去**：`Share as attachment`（upload→attachment_id→parts）或 `Share workspace file`（workspace_file_ref → 浏览视图）。裸 host path 不能当聊天链接（#188 已锁）。
 - **human 浏览**：agent 档案页 **Workspace tab**（对齐 Raft）：目录树/文件预览/下载/复制 workspace_file_ref。

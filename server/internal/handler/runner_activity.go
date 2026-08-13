@@ -79,6 +79,9 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.redeliverUnacknowledgedComputerAgentMessages(ctx, identity); err != nil {
 			return err
 		}
+		if err := h.redeliverUnacknowledgedStandaloneChat(ctx, identity); err != nil {
+			return err
+		}
 		return h.dispatchPendingRunnerStops(ctx, identity)
 	case protocol.EventAgentStatus:
 		var status protocol.AgentStatusPayload
@@ -97,7 +100,13 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := json.Unmarshal(raw, &acknowledgement); err != nil {
 			return fmt.Errorf("decode Runner start acknowledgement: %w", err)
 		}
-		return h.recordRunnerStartAcknowledgement(ctx, identity, daemonInstanceID, acknowledgement)
+		if err := h.recordRunnerStartAcknowledgement(ctx, identity, daemonInstanceID, acknowledgement); err != nil {
+			return err
+		}
+		// A live launch can now accept. Offer unacked standalone lines that
+		// were rejected_no_process while the Agent was down — same ledger
+		// as Runner ready, not a fake ACK.
+		return h.redeliverUnacknowledgedStandaloneChat(ctx, identity)
 	case protocol.EventAgentSession:
 		var session protocol.AgentSessionPayload
 		if err := json.Unmarshal(raw, &session); err != nil {

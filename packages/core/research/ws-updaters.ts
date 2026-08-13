@@ -14,6 +14,39 @@ function sessionIdFromPayload(payload: Record<string, unknown>): string | null {
   return session?.id ?? null;
 }
 
+function conflictsWithSession(value: unknown, sessionId: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const embedded = (value as Record<string, unknown>).session_id;
+  return typeof embedded === "string" && embedded !== "" && embedded !== sessionId;
+}
+
+function hasStringField(value: unknown, field: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const fieldValue = (value as Record<string, unknown>)[field];
+  return typeof fieldValue === "string" && fieldValue !== "";
+}
+
+function isGraphNodePatch(value: unknown): boolean {
+  return hasStringField(value, "id") && hasStringField(value, "node_type");
+}
+
+function isGraphEdgePatch(value: unknown): boolean {
+  return (
+    hasStringField(value, "id") &&
+    hasStringField(value, "from_node_id") &&
+    hasStringField(value, "to_node_id") &&
+    hasStringField(value, "edge_type")
+  );
+}
+
+function invalidateSessionSnapshot(
+  qc: QueryClient,
+  wsId: string,
+  sessionId: string,
+) {
+  void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+}
+
 function patchSnapshot(
   qc: QueryClient,
   wsId: string,
@@ -49,6 +82,25 @@ export function applyResearchWSEvent(
         typeof payload.graph_version === "number" && Number.isFinite(payload.graph_version)
           ? payload.graph_version
           : undefined;
+      if (
+        (node !== undefined && !isGraphNodePatch(node)) ||
+        (edge != null && !isGraphEdgePatch(edge)) ||
+        (Array.isArray(edges) &&
+          edges.some((incoming) => !isGraphEdgePatch(incoming))) ||
+        conflictsWithSession(node, sessionId) ||
+        conflictsWithSession(edge, sessionId) ||
+        (Array.isArray(edges) &&
+          edges.some((incoming) => conflictsWithSession(incoming, sessionId)))
+      ) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        void qc.invalidateQueries({
+          queryKey: researchKeys.graphTypedInfinite(wsId, sessionId),
+        });
+        void qc.invalidateQueries({
+          queryKey: ["research", wsId, "graph-typed", sessionId],
+        });
+        break;
+      }
       patchSnapshot(qc, wsId, sessionId, (prev) => {
         const nodes = node
           ? [...prev.nodes.filter((n) => n.id !== node.id), node]
@@ -83,6 +135,14 @@ export function applyResearchWSEvent(
     case "research_session:sources_updated": {
       const source = payload.source as ResearchSessionSnapshot["sources"][number] | undefined;
       if (!source) break;
+      if (!hasStringField(source, "id")) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
+      if (conflictsWithSession(source, sessionId)) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       patchSnapshot(qc, wsId, sessionId, (prev) => ({
         ...prev,
         sources: [...prev.sources.filter((s) => s.id !== source.id), source],
@@ -91,12 +151,28 @@ export function applyResearchWSEvent(
     }
     case "research_session:report_updated": {
       const report = payload.report as ResearchSessionSnapshot["report"];
+      if (report !== null && !hasStringField(report, "id")) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
+      if (conflictsWithSession(report, sessionId)) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       patchSnapshot(qc, wsId, sessionId, (prev) => ({ ...prev, report }));
       break;
     }
     case "research_session:message": {
       const msg = payload.message as ResearchSessionSnapshot["messages"][number] | undefined;
       if (!msg) break;
+      if (!hasStringField(msg, "id")) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
+      if (conflictsWithSession(msg, sessionId)) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       // Upsert by id so streaming/stop mirrors can grow body in place (LRM-820)
       // without remounting the whole feed as a new card.
       patchSnapshot(qc, wsId, sessionId, (prev) => {
@@ -111,6 +187,14 @@ export function applyResearchWSEvent(
     case "research_session:stage_eval": {
       const ev = payload.eval as ResearchSessionSnapshot["evals"][number] | undefined;
       if (!ev) break;
+      if (!hasStringField(ev, "id")) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
+      if (conflictsWithSession(ev, sessionId)) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       patchSnapshot(qc, wsId, sessionId, (prev) => ({
         ...prev,
         evals: [ev, ...prev.evals.filter((e) => e.id !== ev.id)],
@@ -120,6 +204,12 @@ export function applyResearchWSEvent(
     case "research_session:product_round": {
       const parsed = ResearchProductRoundCardSchema.safeParse(payload.card);
       if (!parsed.success) break;
+      if (conflictsWithSession(parsed.data, sessionId)) {
+        void qc.invalidateQueries({
+          queryKey: researchKeys.productRounds(wsId, sessionId),
+        });
+        break;
+      }
       const card = {
         ...parsed.data,
         session_id: parsed.data.session_id || sessionId,
@@ -140,10 +230,28 @@ export function applyResearchWSEvent(
     case "research_session:status_changed": {
       if (payload.deleted === true) {
         qc.removeQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+        qc.removeQueries({
+          queryKey: researchKeys.graphTypedInfinite(wsId, sessionId),
+        });
+        qc.removeQueries({
+          queryKey: ["research", wsId, "graph-typed", sessionId],
+        });
+        qc.removeQueries({ queryKey: researchKeys.presence(wsId, sessionId) });
+        qc.removeQueries({
+          queryKey: researchKeys.productRounds(wsId, sessionId),
+        });
         void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
         break;
       }
       const session = payload.session as ResearchSessionSnapshot["session"] | undefined;
+      if (
+        (session !== undefined && !hasStringField(session, "id")) ||
+        conflictsWithSession(session, sessionId) ||
+        (session?.id && session.id !== sessionId)
+      ) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       if (session) {
         patchSnapshot(qc, wsId, sessionId, (prev) => ({ ...prev, session }));
       }

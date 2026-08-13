@@ -96,8 +96,10 @@ describe("star-graph-canvas-utils", () => {
     expect(relationEdgeClass("decompose", "leads_to")).toBe("sg-edge-decompose");
     expect(relationEdgeClass("support", "supports")).toBe("sg-edge-support");
     expect(relationEdgeClass("challenge", "contradicts")).toBe("sg-edge-challenge");
-    expect(relationEdgeClass("newdir", "discussed_by")).toBe("sg-edge-newdir");
+    expect(relationEdgeClass("newdir", "restart_of")).toBe("sg-edge-newdir");
     expect(relationEdgeClass("support", "merged_from")).toBe("sg-edge-merge");
+    expect(relationEdgeClass("support", "future_relation")).toBe("sg-edge-neutral");
+    expect(relationEdgeClass("support", "discussed_by")).toBe("sg-edge-neutral");
   });
 
   it("builds a curved edge path", () => {

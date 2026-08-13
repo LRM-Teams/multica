@@ -73,17 +73,19 @@ var workspaceSwitchCmd = &cobra.Command{
 }
 
 // workspaceInfoCmd is the member-usable overview of a workspace (agents +
-// computers/runtimes with status and sticky error text). Composed from
-// existing member-scoped list APIs — no admin-only endpoints.
+// computers/runtimes with status and sticky error text, plus projects and
+// their bound resources). Composed from existing member-scoped list APIs —
+// no admin-only endpoints.
 var workspaceInfoCmd = &cobra.Command{
 	Use:   "info [workspace-id|slug|prefix]",
-	Short: "Show workspace agents and computers with status and errors",
+	Short: "Show workspace agents, computers, and projects with resources",
 	Long: "Prints a member-usable overview of the current (or specified) workspace: " +
-		"agents and computers (runtimes), including live status and sticky " +
-		"error text when the latest outcome is a failure (e.g. provider quota).\n\n" +
+		"agents, computers (runtimes), and projects (including bound resources). " +
+		"Agents include live status and sticky error text when the latest outcome " +
+		"is a failure (e.g. provider quota).\n\n" +
 		"Aligned with `raft server info` list flags:\n" +
-		"  --agents / --computers  list only that section (default: both)\n" +
-		"  --query                 filter rows by visible text (name, status, error)\n" +
+		"  --agents / --computers / --projects  list only those sections (default: all)\n" +
+		"  --query                 filter rows by visible text (name, status, error, resource)\n" +
 		"  --limit / --offset      page list output (0 = unlimited, default; set limit to page)\n\n" +
 		"Accepts a full UUID, slug, or short UUID prefix; omit to use the default workspace.",
 	Args: cobra.MaximumNArgs(1),
@@ -106,6 +108,7 @@ func init() {
 	workspaceInfoCmd.Flags().Bool("include-archived", false, "Include archived agents")
 	workspaceInfoCmd.Flags().Bool("agents", false, "List agents only (like raft server info --agents)")
 	workspaceInfoCmd.Flags().Bool("computers", false, "List computers/runtimes only (like raft server info narrow lists)")
+	workspaceInfoCmd.Flags().Bool("projects", false, "List projects and their bound resources")
 	workspaceInfoCmd.Flags().String("query", "", "Filter agents/computers by visible text")
 	workspaceInfoCmd.Flags().Int("limit", 0, "Maximum rows per list section (0 = unlimited; raft default is 50 when paging)")
 	workspaceInfoCmd.Flags().Int("offset", 0, "Rows to skip per list section")
@@ -562,11 +565,29 @@ type workspaceInfoComputerRow struct {
 	ComputerConnected *bool  `json:"computer_connected,omitempty"`
 }
 
+// workspaceInfoResourceRow is one bound resource on a project.
+type workspaceInfoResourceRow struct {
+	ID           string `json:"id"`
+	ResourceType string `json:"resource_type"`
+	Ref          string `json:"ref,omitempty"`
+	Label        string `json:"label,omitempty"`
+}
+
+// workspaceInfoProjectRow is one project plus its bound resources.
+type workspaceInfoProjectRow struct {
+	ID          string                     `json:"id"`
+	Title       string                     `json:"title"`
+	Status      string                     `json:"status,omitempty"`
+	Description string                     `json:"description,omitempty"`
+	Resources   []workspaceInfoResourceRow `json:"resources"`
+}
+
 // workspaceInfoPayload is the structured --output json body.
 type workspaceInfoPayload struct {
 	Workspace map[string]any             `json:"workspace"`
 	Agents    []workspaceInfoAgentRow    `json:"agents"`
 	Computers []workspaceInfoComputerRow `json:"computers"`
+	Projects  []workspaceInfoProjectRow  `json:"projects"`
 }
 
 func runWorkspaceInfo(cmd *cobra.Command, args []string) error {
@@ -679,9 +700,10 @@ func runWorkspaceInfo(cmd *cobra.Command, args []string) error {
 
 	wantAgents, _ := cmd.Flags().GetBool("agents")
 	wantComputers, _ := cmd.Flags().GetBool("computers")
-	// Default: both sections. If either narrow flag is set, only those.
-	if !wantAgents && !wantComputers {
-		wantAgents, wantComputers = true, true
+	wantProjects, _ := cmd.Flags().GetBool("projects")
+	// Default: all sections. If any narrow flag is set, only those.
+	if !wantAgents && !wantComputers && !wantProjects {
+		wantAgents, wantComputers, wantProjects = true, true, true
 	}
 	query, _ := cmd.Flags().GetString("query")
 	limit, _ := cmd.Flags().GetInt("limit")
@@ -706,10 +728,21 @@ func runWorkspaceInfo(cmd *cobra.Command, args []string) error {
 		computerRows = nil
 	}
 
+	var projectRows []workspaceInfoProjectRow
+	if wantProjects {
+		projectRows, err = loadWorkspaceInfoProjects(ctx, client, cmd)
+		if err != nil {
+			return err
+		}
+		projectRows = filterWorkspaceInfoProjects(projectRows, query)
+		projectRows = pageWorkspaceInfoSlice(projectRows, offset, limit)
+	}
+
 	payload := workspaceInfoPayload{
 		Workspace: ws,
 		Agents:    agentRows,
 		Computers: computerRows,
+		Projects:  projectRows,
 	}
 
 	output, _ := cmd.Flags().GetString("output")
@@ -731,6 +764,81 @@ func filterWorkspaceInfoAgents(rows []workspaceInfoAgentRow, query string) []wor
 			r.Name, r.DisplayName, r.Status, r.RuntimeName, r.RuntimeStatus,
 			r.RuntimeDisplayStatus, r.Error, r.FailureReason, r.ID,
 		}, " "))
+		if strings.Contains(hay, q) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func loadWorkspaceInfoProjects(ctx context.Context, client *cli.APIClient, cmd *cobra.Command) ([]workspaceInfoProjectRow, error) {
+	params := url.Values{}
+	if client.WorkspaceID != "" {
+		params.Set("workspace_id", client.WorkspaceID)
+	}
+	params.Set("include_resources", "true")
+	path := "/api/projects?" + params.Encode()
+	if isAgentAPIToken(cmd) {
+		path = "/api/agent/projects?" + params.Encode()
+	}
+	var result map[string]any
+	if err := client.GetJSON(ctx, path, &result); err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	projectsRaw, _ := result["projects"].([]any)
+	rows := make([]workspaceInfoProjectRow, 0, len(projectsRaw))
+	for _, raw := range projectsRaw {
+		p, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		row := workspaceInfoProjectRow{
+			ID:          strVal(p, "id"),
+			Title:       strVal(p, "title"),
+			Status:      strVal(p, "status"),
+			Description: strVal(p, "description"),
+			Resources:   workspaceInfoResourcesFromAny(p["resources"]),
+		}
+		rows = append(rows, row)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return strings.ToLower(rows[i].Title) < strings.ToLower(rows[j].Title)
+	})
+	return rows, nil
+}
+
+func workspaceInfoResourcesFromAny(raw any) []workspaceInfoResourceRow {
+	list, ok := raw.([]any)
+	if !ok {
+		return []workspaceInfoResourceRow{}
+	}
+	out := make([]workspaceInfoResourceRow, 0, len(list))
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, workspaceInfoResourceRow{
+			ID:           strVal(m, "id"),
+			ResourceType: strVal(m, "resource_type"),
+			Ref:          summarizeResourceRef(m["resource_ref"]),
+			Label:        strVal(m, "label"),
+		})
+	}
+	return out
+}
+
+func filterWorkspaceInfoProjects(rows []workspaceInfoProjectRow, query string) []workspaceInfoProjectRow {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return rows
+	}
+	out := make([]workspaceInfoProjectRow, 0, len(rows))
+	for _, r := range rows {
+		hay := strings.ToLower(strings.Join([]string{r.Title, r.Status, r.Description, r.ID}, " "))
+		for _, res := range r.Resources {
+			hay += " " + strings.ToLower(strings.Join([]string{res.ResourceType, res.Ref, res.Label}, " "))
+		}
 		if strings.Contains(hay, q) {
 			out = append(out, r)
 		}
@@ -969,6 +1077,39 @@ func printWorkspaceInfoTable(w io.Writer, p workspaceInfoPayload) {
 				label = fmt.Sprintf("%s [%s]", label, prov)
 			}
 			fmt.Fprintf(w, "  - %s — %s\n", label, formatComputerStatusLine(c))
+		}
+	}
+
+	fmt.Fprintf(w, "\n## Projects (%d)\n", len(p.Projects))
+	if len(p.Projects) == 0 {
+		fmt.Fprintln(w, "  (none)")
+		return
+	}
+	for _, proj := range p.Projects {
+		title := proj.Title
+		if title == "" {
+			title = proj.ID
+		}
+		status := proj.Status
+		if status != "" {
+			fmt.Fprintf(w, "  - %s [%s]  %s\n", title, status, proj.ID)
+		} else {
+			fmt.Fprintf(w, "  - %s  %s\n", title, proj.ID)
+		}
+		if len(proj.Resources) == 0 {
+			fmt.Fprintln(w, "      resources: (none)")
+			continue
+		}
+		for _, res := range proj.Resources {
+			label := res.ResourceType
+			if res.Label != "" {
+				label = res.Label + " (" + res.ResourceType + ")"
+			}
+			if res.Ref != "" {
+				fmt.Fprintf(w, "      - %s  %s\n", label, res.Ref)
+			} else {
+				fmt.Fprintf(w, "      - %s\n", label)
+			}
 		}
 	}
 }

@@ -32,10 +32,10 @@ type ProjectResponse struct {
 	IssueCount  int64   `json:"issue_count"`
 	DoneCount   int64   `json:"done_count"`
 	// ResourceCount is a breadcrumb pointing at the sub-collection at
-	// /api/projects/{id}/resources. Resources themselves stay out of this
-	// payload to keep parent metadata and child collections separate; clients
-	// that need the list call ListProjectResources directly.
-	ResourceCount int64 `json:"resource_count"`
+	// /api/projects/{id}/resources. The resource objects themselves stay out
+	// of the default list payload; pass include_resources=true to nest them.
+	ResourceCount int64                     `json:"resource_count"`
+	Resources     []ProjectResourceResponse `json:"resources,omitempty"`
 }
 
 func projectToResponse(p db.Project) ProjectResponse {
@@ -128,11 +128,11 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	// Batch-fetch issue stats and resource counts for all projects
 	statsMap := make(map[string]db.GetProjectIssueStatsRow)
 	resourceCountMap := make(map[string]int64)
+	projectIDs := make([]pgtype.UUID, len(projects))
+	for i, p := range projects {
+		projectIDs[i] = p.ID
+	}
 	if len(projects) > 0 {
-		projectIDs := make([]pgtype.UUID, len(projects))
-		for i, p := range projects {
-			projectIDs[i] = p.ID
-		}
 		stats, err := h.Queries.GetProjectIssueStats(r.Context(), projectIDs)
 		if err == nil {
 			for _, s := range stats {
@@ -155,6 +155,25 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 			resp[i].DoneCount = s.DoneCount
 		}
 		resp[i].ResourceCount = resourceCountMap[resp[i].ID]
+	}
+	if r.URL.Query().Get("include_resources") == "true" && len(projectIDs) > 0 {
+		rows, err := h.Queries.ListProjectResourcesForProjects(r.Context(), projectIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list project resources")
+			return
+		}
+		byProject := make(map[string][]ProjectResourceResponse, len(projectIDs))
+		for _, row := range rows {
+			id := uuidToString(row.ProjectID)
+			byProject[id] = append(byProject[id], projectResourceToResponse(row))
+		}
+		for i := range resp {
+			if attached := byProject[resp[i].ID]; len(attached) > 0 {
+				resp[i].Resources = attached
+			} else {
+				resp[i].Resources = []ProjectResourceResponse{}
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": resp, "total": len(resp)})
 }

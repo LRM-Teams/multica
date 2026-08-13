@@ -4,6 +4,7 @@ export * from "./graph-typed";
 export * from "./mocks";
 export * from "./queries";
 export * from "./report-structured";
+export * from "./session-cache";
 export * from "./semantic-aggregation";
 export * from "./semantic-aggregation-visible-window";
 export * from "./schemas";

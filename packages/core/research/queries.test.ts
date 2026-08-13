@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeResearchPresenceMap } from "./queries";
+import type { TypedGraphResponse } from "./graph-typed";
+import {
+  normalizeResearchPresenceMap,
+  requireConsistentTypedGraphPages,
+} from "./queries";
 
 describe("normalizeResearchPresenceMap", () => {
   it("keeps the full v2 roster including idle workers and location fields", () => {
@@ -32,5 +36,27 @@ describe("normalizeResearchPresenceMap", () => {
     expect(normalizeResearchPresenceMap({ worker: { phase: "future" } }).worker).toEqual(
       expect.objectContaining({ phase: "idle", activity: "", updatedAt: 42, nodeId: null }),
     );
+  });
+});
+
+describe("requireConsistentTypedGraphPages", () => {
+  const page = (version: number) =>
+    ({ graph_version: version }) as TypedGraphResponse;
+
+  it("preserves pages from one canonical graph version", () => {
+    const data = {
+      pages: [page(7), page(7)],
+      pageParams: [0, 500],
+    };
+    expect(requireConsistentTypedGraphPages(data)).toBe(data);
+  });
+
+  it("rejects offset pages from mixed graph versions", () => {
+    expect(() =>
+      requireConsistentTypedGraphPages({
+        pages: [page(7), page(8)],
+        pageParams: [0, 500],
+      }),
+    ).toThrow("returned mixed graph versions");
   });
 });

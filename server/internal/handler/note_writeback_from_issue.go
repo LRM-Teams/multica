@@ -10,26 +10,30 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// maybeProposeNoteWritebacksOnIssueDone creates pending note writebacks for
-// every note linked to the issue (S1-W3). Best-effort: failures are logged and
-// never fail the issue update.
-func (h *Handler) maybeProposeNoteWritebacksOnIssueDone(
+// maybeProposeNoteWritebacksOnIssueTransition creates pending note writebacks
+// for every note linked to the issue when a whitelisted terminal status is
+// newly entered (S1-W3 + S3-W1/S3-W2).
+//
+// Subscription = note_page_issue_ref row ("linked means subscribed"). Best-
+// effort: failures are logged and never fail the issue update.
+func (h *Handler) maybeProposeNoteWritebacksOnIssueTransition(
 	ctx context.Context,
 	prev db.Issue,
 	issue db.Issue,
 	actorType, actorID, prefix string,
 ) {
-	if prev.Status == "done" || issue.Status != "done" {
+	event, ok := classifyNoteWritebackIssueTransition(prev.Status, issue.Status)
+	if !ok {
 		return
 	}
 	pageIDs, err := h.listNotePageIDsForIssue(ctx, issue.ID)
 	if err != nil {
-		slog.Warn("note writeback on done: list linked notes failed",
-			"issue_id", uuidToString(issue.ID), "error", err)
+		slog.Warn("note writeback on issue event: list linked notes failed",
+			"issue_id", uuidToString(issue.ID), "event", string(event), "error", err)
 		return
 	}
 	if len(pageIDs) == 0 {
@@ -37,10 +41,10 @@ func (h *Handler) maybeProposeNoteWritebacksOnIssueDone(
 	}
 
 	identifier := fmt.Sprintf("%s-%d", prefix, issue.Number)
-	evidence, err := h.buildIssueDoneWritebackEvidence(ctx, issue, identifier)
+	evidence, err := h.buildIssueTerminalWritebackEvidence(ctx, issue, identifier)
 	if err != nil {
-		slog.Warn("note writeback on done: build evidence failed",
-			"issue_id", uuidToString(issue.ID), "error", err)
+		slog.Warn("note writeback on issue event: build evidence failed",
+			"issue_id", uuidToString(issue.ID), "event", string(event), "error", err)
 		return
 	}
 	var runID, agentID string
@@ -56,11 +60,11 @@ func (h *Handler) maybeProposeNoteWritebacksOnIssueDone(
 			}
 		}
 	}
-	content := buildIssueDoneWritebackContent(issue, identifier, runID, agentID)
+	content := buildIssueTerminalWritebackContent(event, issue, identifier, runID, agentID)
 	evidenceJSON, err := json.Marshal(evidence)
 	if err != nil {
-		slog.Warn("note writeback on done: encode evidence failed",
-			"issue_id", uuidToString(issue.ID), "error", err)
+		slog.Warn("note writeback on issue event: encode evidence failed",
+			"issue_id", uuidToString(issue.ID), "event", string(event), "error", err)
 		return
 	}
 
@@ -78,13 +82,25 @@ func (h *Handler) maybeProposeNoteWritebacksOnIssueDone(
 	}
 
 	for _, pageID := range pageIDs {
-		if err := h.insertIssueDoneWritebackIfNeeded(ctx, issue, pageID, content, evidenceJSON, creatorType, creatorID); err != nil {
-			slog.Warn("note writeback on done: insert failed",
+		if err := h.insertIssueTerminalWritebackIfNeeded(ctx, issue, pageID, content, evidenceJSON, creatorType, creatorID); err != nil {
+			slog.Warn("note writeback on issue event: insert failed",
 				"issue_id", uuidToString(issue.ID),
 				"page_id", uuidToString(pageID),
+				"event", string(event),
 				"error", err)
 		}
 	}
+}
+
+// maybeProposeNoteWritebacksOnIssueDone is kept as a thin alias for call sites
+// and older tests that still name the done-only path.
+func (h *Handler) maybeProposeNoteWritebacksOnIssueDone(
+	ctx context.Context,
+	prev db.Issue,
+	issue db.Issue,
+	actorType, actorID, prefix string,
+) {
+	h.maybeProposeNoteWritebacksOnIssueTransition(ctx, prev, issue, actorType, actorID, prefix)
 }
 
 func (h *Handler) listNotePageIDsForIssue(ctx context.Context, issueID pgtype.UUID) ([]pgtype.UUID, error) {
@@ -107,19 +123,31 @@ WHERE issue_id = $1`, issueID)
 	return out, rows.Err()
 }
 
-func buildIssueDoneWritebackContent(issue db.Issue, identifier string, runID, agentID string) string {
+func buildIssueTerminalWritebackContent(
+	event noteWritebackIssueEvent,
+	issue db.Issue,
+	identifier string,
+	runID, agentID string,
+) string {
 	title := strings.TrimSpace(issue.Title)
 	if title == "" {
 		title = "Untitled"
 	}
 	mention := fmt.Sprintf("[%s](mention://issue/%s)", identifier, uuidToString(issue.ID))
+	heading := "### Done: "
+	statusLine := "- Status moved to **done**.\n"
+	if event == noteWritebackIssueCancelled {
+		heading = "### Cancelled: "
+		statusLine = "- Status moved to **cancelled**.\n"
+	}
+
 	var b strings.Builder
-	b.WriteString("### Done: ")
+	b.WriteString(heading)
 	b.WriteString(mention)
 	b.WriteString(" — ")
 	b.WriteString(title)
 	b.WriteString("\n\n")
-	b.WriteString("- Status moved to **done**.\n")
+	b.WriteString(statusLine)
 	if runID != "" {
 		b.WriteString("- Run: ")
 		b.WriteString(fmt.Sprintf("[run](mention://run/%s)", runID))
@@ -146,11 +174,16 @@ func buildIssueDoneWritebackContent(issue db.Issue, identifier string, runID, ag
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// buildIssueDoneWritebackContent kept for existing unit tests.
+func buildIssueDoneWritebackContent(issue db.Issue, identifier string, runID, agentID string) string {
+	return buildIssueTerminalWritebackContent(noteWritebackIssueDone, issue, identifier, runID, agentID)
+}
+
 func collapseWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-func (h *Handler) buildIssueDoneWritebackEvidence(ctx context.Context, issue db.Issue, identifier string) ([]noteWritebackEvidence, error) {
+func (h *Handler) buildIssueTerminalWritebackEvidence(ctx context.Context, issue db.Issue, identifier string) ([]noteWritebackEvidence, error) {
 	label := identifier
 	evidence := []noteWritebackEvidence{{
 		Type:  "issue",
@@ -186,7 +219,7 @@ LIMIT 1`, issue.ID).Scan(&taskID, &agentID)
 	return evidence, nil
 }
 
-func (h *Handler) insertIssueDoneWritebackIfNeeded(
+func (h *Handler) insertIssueTerminalWritebackIfNeeded(
 	ctx context.Context,
 	issue db.Issue,
 	pageID pgtype.UUID,

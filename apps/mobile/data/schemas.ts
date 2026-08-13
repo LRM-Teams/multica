@@ -283,7 +283,8 @@ export const EMPTY_CHAT_PENDING_TASK: ChatPendingTask = {};
 
 export const SendChatMessageResponseSchema: z.ZodType<SendChatMessageResponse> = z.object({
   message_id: z.string(),
-  task_id: z.string(),
+  delivery_id: z.string().optional(),
+  pending: z.boolean().optional(),
   created_at: z.string().default(""),
 }).loose();
 

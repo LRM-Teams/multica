@@ -29,7 +29,7 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
-import { chatTranscriptOptions, isTaskMessageTaskId } from "@multica/core/chat/queries";
+import { chatTranscriptOptions, isStandaloneSessionOutstanding, isTaskMessageTaskId } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
@@ -176,28 +176,13 @@ export function ChatMessageList({
   const fadeStyle = useScrollFade(scrollRef);
   const { t } = useT("chat");
 
-  const pendingTaskId = pendingTask?.task_id ?? null;
-
-  // Once the assistant message for this pending task has landed in the
-  // messages list, AssistantMessage owns its rendering — suppress the live
-  // timeline (and pill) to avoid rendering the same content in two places
-  // during the invalidate → refetch window.
-  const pendingAlreadyPersisted = !!pendingTaskId && messages.some(
-    (m) => m.role === "assistant" && m.task_id === pendingTaskId,
-  );
-
-  // Live timeline for the in-flight task. useRealtimeSync keeps this cache
-  // current via setQueryData on task:message events.
-  const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
-  const canFetchLiveTimeline =
-    !!sessionId && isTaskMessageTaskId(pendingTaskId) && !pendingAlreadyPersisted;
-  const { data: liveTaskMessages } = useQuery({
-    ...chatTranscriptOptions(sessionId, pendingTaskId ?? ""),
-    enabled: canFetchLiveTimeline,
-  });
-  const liveTimeline: ChatTimelineItem[] = buildTimeline(liveTaskMessages ?? []);
-  const hasLive = showLiveTimeline && liveTimeline.length > 0;
-  const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask;
+  const turnOutstanding = isStandaloneSessionOutstanding(pendingTask);
+  const lastMessage = messages[messages.length - 1];
+  const pendingAlreadyPersisted = turnOutstanding && lastMessage?.role === "assistant";
+  const liveTaskMessages: TaskMessagePayload[] = [];
+  const liveTimeline: ChatTimelineItem[] = [];
+  const hasLive = false;
+  const showStatusPill = turnOutstanding && !pendingAlreadyPersisted && !!pendingTask;
 
   const totalCount = messages.length + (hasLive || showStatusPill ? 1 : 0);
   const firstIndex = totalCount > 0 ? firstItemIndex : 0;
@@ -251,7 +236,7 @@ export function ChatMessageList({
       liveTaskMessages: liveTaskMessages ?? [],
       availability,
       loadingOlderLabel: t(($) => $.message_list.loading_older),
-      liveFoldKey: pendingTaskId ? `task:${pendingTaskId}` : undefined,
+      liveFoldKey: undefined,
     }),
     [
       isFetchingOlderMessages,
@@ -263,7 +248,6 @@ export function ChatMessageList({
       liveTaskMessages,
       availability,
       t,
-      pendingTaskId,
     ],
   );
 
@@ -302,7 +286,7 @@ export function ChatMessageList({
                 <MessageBubble
                   sessionId={sessionId}
                   message={msg}
-                  isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
+                  isPending={false}
                   enhanced={isDmBubble}
                 />
               </div>

@@ -21,6 +21,25 @@ Pending writebacks (`note_page_writeback`) are a third path (D1 human review). T
 4. **Writebacks stay pending until accept** (D1). Worker completion may *propose* writebacks; it must not silent-edit the page through Editor.
 5. **Channel replies use transport, not completion text.** Worker wakes are channel-directed (`reason=note_worker`). Visible replies must go through `multica message send --target <Message target>` — the same contract as @mention. Daemon never bridges final assistant text into Messages (`unsent_final_output` → `no_reply`).
 
+## Issue → note writeback subscription (S3-W1 / S3-W2)
+
+- **Subscription = link.** A `note_page_issue_ref` row is an implicit subscription. No separate subscribe table; delete the ref to opt out.
+- **Whitelist only.** Pending proposals are created only when issue status newly enters `done` or `cancelled`. Transitions like `todo → in_progress`, `blocked`, title edits, and ordinary comments produce **zero** proposals (key-comment writebacks deferred).
+- Code: `note_writeback_events.go` + `maybeProposeNoteWritebacksOnIssueTransition`.
+
+## Product note writeback ≠ Agent Daily (S3-W3)
+
+Two stores stay **parallel**. Do not merge them in code, migrations, or product copy.
+
+| Store | Where | Audience | Write path |
+|-------|--------|----------|------------|
+| **Product notes + pending writeback** | Workspace `note_page` / `note_page_writeback` | Humans (and ACL’d agents reading notes) | D1 pending → human accept; Editor jobs; Worker proposals |
+| **Agent Daily** | Agent private `memory/daily/YYYY-MM-DD.md` | That agent’s own recall | Hot-path append / L1 Daily Recorder — see `docs/agent-memory-model.md` |
+
+**Allowed:** cross-links (note cites a run/issue; Daily cites a note URL or issue id).
+
+**Forbidden:** dumping Daily into `note_page.content`; using `note_page_writeback` as a Daily substitute; unifying schemas so one table serves both; silent “sync” that copies either side into the other without an explicit product feature.
+
 ## Status of Worker execution
 
 S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispatch:
@@ -43,9 +62,9 @@ Dispatch additionally prefixes `wrapNoteWorkerChannelWakePrompt` (channel output
 
 Code: `server/internal/handler/note_worker_prompt.go`. Tests lock tag strings and breakout cases.
 
-## UI trigger (S2-A2)
+## UI trigger (S2-A2 / S3-A4)
 
-Notes page exposes **Work from this note** / 「按这篇做」:
+Notes page exposes a single **Use this note** / 「用这篇…」 menu (S3-A4) that routes to Editor / Worker / Create Issue. Worker path:
 
 1. User picks a destination — agent DM (default) or a group channel — plus an executing agent and instruction → `POST .../worker-jobs` with `intent: "worker"` (never `note_ai_job` / Editor). Optional `channel_id` selects a group destination; omit it to post into the agent DM.
 2. Server posts a visible message into that Messages channel (instruction text + a collapsed `note_brief` part with the note title/body snapshot) and enqueues a channel-directed inbox wake with `note_brief` context (main timeline — not floating `chat_session` bubble).
@@ -75,4 +94,4 @@ FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banne
 - Note brief context helper: `server/internal/service/note_brief.go`
 - Shared intent constants: `server/internal/handler/note_intent.go`
 - FE types: `packages/core/types/note.ts` (`NoteIntent`, `CreateNoteWorkerJobRequest`, …)
-- Product todo: `todo.md` Slice 2
+- Product todo: `todo.md` Slice 2–3

@@ -145,13 +145,13 @@ tracked separately in §11 and are not counted as integrated until merged.
 | Area | Status | Next production work |
 | --- | --- | --- |
 | Shared Web/Desktop routes | Integrated | Keep parity gate |
-| Top command bar and goal history | Integrated | Visual polish against target |
+| Top command bar and goal history | Integrated | Canonical product-round metadata awaiting PR #3009 |
 | Five-tier star graph, camera, clusters, relations | Integrated | Improve fact density and edge degradation |
-| Context rail, chat, node detail | Integrated | Validate the deployed responsive matrix |
+| Context rail, chat, node detail | Integrated | NodeCommand and node-open/deep-link visibility fixes awaiting PRs #3006–#3007 and #3010–#3011 |
 | Agent inspector and shared Agent panel | Integrated | Validate the deployed responsive matrix |
 | Local node report | Integrated | Project quality/citation review decisions; canonical contributor, Attempt, evidence, and lineage sections are integrated |
 | Typed graph pagination/filter/lens/DOM budget | Integrated | Add viewport slice gateway when backend exists |
-| V6 schema, API, adapter | Integrated behind capability detection | Validate against a real server route when available |
+| V6 schema, API, adapter | Integrated behind capability detection | Explicit classic-fallback disclosure awaiting PR #3008; validate against a real server route when available |
 | V6 ordered live client | Implemented but not wired into the D5 shell | Resolve the WS event/envelope decision below before production wiring |
 | 30-kind cards, Insight, Dispute, trajectory | Integrated in D5 detail/lens surfaces | Complete visual evidence and remaining copy parity |
 | V6 server snapshot/delta/resume | Not present on current dev | Backend dependency; explicit V5/D5 fallback remains required |
@@ -196,6 +196,12 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 | Session-isolated camera, selection, and inspector restoration | `fa389f8f`, `4d21b75ea`, `4707ce9d5`, PRs #2934, #2998–#2999 | Integrated |
 | 25% overview and DOM/card/node/edge budgets | `e8dd9b46`, `792ef4ac8`, `3dc864714`, PRs #2923, #2996–#2997 | Integrated; runtime evidence still required |
 | Session-isolated canvas filter restoration | PR #3002 | Awaiting merge; not integrated |
+| Canonical node commands (`continue | fork | retry | reassign`) | PRs #3006–#3007 | Awaiting merge; replaces chat-text command fallback and aligns task-only recovery eligibility |
+| D5 command-bar product round | PR #3009 | Awaiting merge; reads only canonical session round/budget facts |
+| Node detail opening and deep-link restoration | PRs #3010–#3011 | Awaiting merge; includes poll-safe one-time node-link restoration |
+| Capability fallback and localized recovery disclosure | PRs #3008, #3014–#3015 | Awaiting merge; raw diagnostics remain collapsed and malformed V6 success remains an interface error |
+| Recovery-action focus retention | PRs #3007, #3012–#3013 | Awaiting merge; pending actions remain focusable and suppress duplicate activation |
+| Canonical V6 edge-family registration | PR #3005 | Awaiting merge; not integrated |
 | V6 WS Delta routing envelope | Existing V5 `research_session:graph_updated` payloads plus a direct-Delta V6 listener | Protocol decision required: a workspace event must identify `run_id`, including mutation-free Delta frames |
 | Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@52a5388b4` | Backend blocked; explicit V5/D5 fallback required |
 | Runtime visual/performance/accessibility matrix | No current deployed-session artifacts for this revision | Unverified; required before completion |

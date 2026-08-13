@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-accept-2 证据：无关 policy watermark 在 Dispatch 后推进时，Result acceptance 会从
+当前水位 CAS 预留新的最终 acceptance watermark，重新锁定并授权 Manifest 的完整输入集合，
+再为 Result Version 写入与 Manifest entry 一一对应的 `acceptance_input` lineage；Result
+Artifact 记录的 acceptance watermark 与最终 session policy watermark 精确相等。受影响的
+eligibility revision 仍由独立负例 fail closed。§15.19 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

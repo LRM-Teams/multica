@@ -229,6 +229,13 @@
   .d5-chrome-controls {
     order: 11;
     flex: 1 1 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .d5-chrome-actions {
+    flex: 1 1 100%;
+    min-width: 0;
     justify-content: flex-end;
   }
   .d5-rail {

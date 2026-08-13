@@ -63,6 +63,8 @@ import type {
   NotePageIssueRefListResponse,
   NoteWriteback,
   NoteWritebackListResponse,
+  IssueNoteRef,
+  IssueNoteRefListResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
@@ -1849,6 +1851,18 @@ export const SubscribersListSchema = z.array(SubscriberSchema);
 export const ChildIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
 }).loose();
+
+export const IssueNoteRefSchema: z.ZodType<IssueNoteRef> = z.object({
+  id: z.string(),
+  title: z.string(),
+  created_at: z.string(),
+}).loose();
+
+export const IssueNoteRefListResponseSchema: z.ZodType<IssueNoteRefListResponse> = z.object({
+  notes: z.array(IssueNoteRefSchema).default([]),
+}).loose();
+
+export const EMPTY_ISSUE_NOTE_REF_LIST: IssueNoteRefListResponse = { notes: [] };
 
 export const CloudRuntimeNodeSchema = z.object({
   id: z.string(),

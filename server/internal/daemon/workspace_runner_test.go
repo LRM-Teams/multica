@@ -171,7 +171,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		var accepted protocol.AgentStartAckPayload
-		for responses := 0; responses < 3; {
+		// ack + active status + session + Raft Starting… Activity
+		for responses := 0; responses < 4; {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -236,7 +237,12 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()
 	var ready, ack, status, inactive, session protocol.Message
-	for i := 0; i < 5; i++ {
+	var sawStartingActivity bool
+	deadline := time.Now().Add(2 * time.Second)
+	for ready.Type == "" || ack.Type == "" || status.Type == "" || session.Type == "" || inactive.Type == "" {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for Runner frames")
+		}
 		select {
 		case msg := <-frames:
 			switch msg.Type {
@@ -257,11 +263,22 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			case protocol.EventAgentSession:
 				session = msg
 			case protocol.EventAgentActivity:
-				t.Fatalf("managed start/stop invented lifecycle Activity: %+v", msg)
+				// Raft 1.0.16 (#2929): managed spawn publishes working/starting.
+				var activity protocol.AgentActivityPayload
+				if err := json.Unmarshal(msg.Payload, &activity); err != nil {
+					t.Fatal(err)
+				}
+				if activity.Snapshot.ActivityKind != protocol.ActivityKindWorking || activity.Snapshot.DetailKind != "starting" {
+					t.Fatalf("managed start/stop invented unexpected Activity: %+v", activity)
+				}
+				sawStartingActivity = true
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for Runner frames")
 		}
+	}
+	if !sawStartingActivity {
+		t.Fatal("managed start did not emit Raft Starting… Activity")
 	}
 	if ready.Type != protocol.EventWorkspaceRunnerReady {
 		t.Fatalf("ready frame = %+v", ready)

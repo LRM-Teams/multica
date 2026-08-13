@@ -1016,6 +1016,7 @@ surface 矩阵仍未完成。
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
+  - [x] F3a：`ComputeCorpusDedupDecisions` 对 canonical URL 与 content hash 建立确定性闭包，输出稳定 duplicate cluster、canonical candidate、effective independence family、disposition、rule 和 reason。跨 URL 同内容按 mirror 合并且不能冒充独立支持；同 URL 不同 hash fail closed 为 review；同 family 的不同内容保留但继续共享 family。持久 Screening Decision 接线和跨历史批次查询仍属于 F3b。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
 
 退出条件：报告中的每个来源可反向追到查询和筛选；重复镜像不能冒充独立支持；失败查询可被定向改写。

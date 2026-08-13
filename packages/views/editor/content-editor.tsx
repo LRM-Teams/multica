@@ -128,8 +128,10 @@ interface ContentEditorProps {
    * the pill in issue/comment/description editors.
    */
   mentionVariant?: import("../common/mention-token").MentionTokenVariant;
-  /** Enable a channel reference `#` inline picker. */
+  /** Enable a channel reference `#` inline picker. Ignored when issue `#` is on. */
   enableChannelReferences?: boolean;
+  /** Enable an issue reference `#` inline picker (Notes). Mutually exclusive with channel `#`. */
+  enableIssueReferences?: boolean;
   /** Restrict the @ picker's member/agent candidates to these actor ids
    *  (e.g. a channel's members). Omit for the full workspace. */
   mentionAllowedActorIds?: ReadonlySet<string> | null;
@@ -198,6 +200,11 @@ interface ContentEditorRef {
   insertBlankLineAtStart: () => void;
   /** Focus the editor and open the issue reference `#` picker. */
   openIssueReferences: () => void;
+  /** Selected plain text, or empty string when the selection is empty. */
+  getSelectedText: () => string;
+  /** Insert or replace the selection with an issueReference chip. */
+  insertIssueReference: (attrs: { id: string; label: string }) => void;
+  insertRunReference: (attrs: { id: string; label: string; agentId?: string | null }) => void;
   /**
    * LRM-695 — append Markdown at the end of the document, parsing it through
    * the same `@tiptap/markdown` pipeline as paste so block syntax (e.g. a `>`
@@ -236,6 +243,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       mentionContextItems,
       mentionVariant = "soft-bg",
       enableChannelReferences = false,
+      enableIssueReferences = false,
       mentionAllowedActorIds,
       scopedMentionAgents,
       mentionChannelMemberIds,
@@ -402,6 +410,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           getMentionScopedAgents: () => scopedMentionAgentsRef.current,
           getMentionChannelMemberIds: () => mentionChannelMemberIdsRef.current,
           enableChannelReferences,
+          enableIssueReferences,
           enableSlashCommands,
         slashCommandMode,
       }),
@@ -608,6 +617,48 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       openIssueReferences: () => {
         if (!editor) return;
         editor.chain().focus().insertContent("#").run();
+      },
+      getSelectedText: () => {
+        if (!editor) return "";
+        const { from, to } = editor.state.selection;
+        if (from === to) return "";
+        return editor.state.doc.textBetween(from, to, "\n", "\n").trim();
+      },
+      insertIssueReference: (attrs) => {
+        if (!editor) return;
+        const { from, to } = editor.state.selection;
+        const content = [
+          {
+            type: "issueReference",
+            attrs: { id: attrs.id, label: attrs.label, title: null },
+          },
+          { type: "text", text: " " },
+        ];
+        if (from === to) {
+          editor.chain().focus().insertContent(content).run();
+          return;
+        }
+        editor.chain().focus().insertContentAt({ from, to }, content).run();
+      },
+      insertRunReference: (attrs) => {
+        if (!editor) return;
+        const { from, to } = editor.state.selection;
+        const content = [
+          {
+            type: "runReference",
+            attrs: {
+              id: attrs.id,
+              label: attrs.label,
+              agentId: attrs.agentId ?? null,
+            },
+          },
+          { type: "text", text: " " },
+        ];
+        if (from === to) {
+          editor.chain().focus().insertContent(content).run();
+          return;
+        }
+        editor.chain().focus().insertContentAt({ from, to }, content).run();
       },
       insertMarkdown: (md: string) => {
         if (!editor) return;

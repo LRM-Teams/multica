@@ -232,6 +232,18 @@ import type {
   UpdateNotePageSharesRequest,
   CreateNoteAIJobRequest,
   NoteAIJob,
+  CreateNoteWorkerJobRequest,
+  NoteWorkerJob,
+  NotePageIssueRef,
+  NotePageIssueRefListResponse,
+  CreateNotePageIssueRefRequest,
+  CreateNotePageAgentRefRequest,
+  CreateNotePageRunRefRequest,
+  CreateNotePageIssueRequest,
+  CreateNotePageIssueResponse,
+  NoteWriteback,
+  NoteWritebackListResponse,
+  CreateNoteWritebackRequest,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -432,6 +444,17 @@ import {
   EMPTY_NOTE_PAGE_LIST,
   NoteAIJobSchema,
   EMPTY_NOTE_AI_JOB,
+  NoteWorkerJobSchema,
+  EMPTY_NOTE_WORKER_JOB,
+  NotePageIssueRefSchema,
+  NotePageIssueRefListResponseSchema,
+  EMPTY_NOTE_PAGE_ISSUE_REF,
+  EMPTY_NOTE_PAGE_ISSUE_REF_LIST,
+  CreateNotePageIssueResponseSchema,
+  NoteWritebackSchema,
+  NoteWritebackListResponseSchema,
+  EMPTY_NOTE_WRITEBACK,
+  EMPTY_NOTE_WRITEBACK_LIST,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1071,6 +1094,177 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/notes/ai-jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
     return parseWithFallback(raw, NoteAIJobSchema, EMPTY_NOTE_AI_JOB, {
       endpoint: "POST /api/notes/ai-jobs/{id}/cancel",
+    });
+  }
+
+  async createNoteWorkerJob(
+    pageId: string,
+    data: CreateNoteWorkerJobRequest,
+    init?: { signal?: AbortSignal },
+  ): Promise<NoteWorkerJob> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/worker-jobs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      signal: init?.signal,
+    });
+    return parseWithFallback(raw, NoteWorkerJobSchema, EMPTY_NOTE_WORKER_JOB, {
+      endpoint: "POST /api/notes/pages/{id}/worker-jobs",
+    });
+  }
+
+  async getNoteWorkerJob(jobId: string, init?: { signal?: AbortSignal }): Promise<NoteWorkerJob> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/worker-jobs/${encodeURIComponent(jobId)}`,
+      init?.signal ? { signal: init.signal } : undefined,
+    );
+    return parseWithFallback(raw, NoteWorkerJobSchema, EMPTY_NOTE_WORKER_JOB, {
+      endpoint: "GET /api/notes/worker-jobs/{id}",
+    });
+  }
+
+  async listNotePageIssueRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs`);
+    return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/issue-refs",
+    });
+  }
+
+  async createNotePageIssueRef(pageId: string, data: CreateNotePageIssueRefRequest): Promise<NotePageIssueRef> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageIssueRefSchema, EMPTY_NOTE_PAGE_ISSUE_REF, {
+      endpoint: "POST /api/notes/pages/{id}/issue-refs",
+    });
+  }
+
+  async deleteNotePageIssueRef(pageId: string, issueId: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs/${encodeURIComponent(issueId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listNotePageAgentRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/agent-refs`);
+    return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/agent-refs",
+    });
+  }
+
+  async createNotePageAgentRef(pageId: string, data: CreateNotePageAgentRefRequest): Promise<NotePageIssueRef> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/agent-refs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageIssueRefSchema, EMPTY_NOTE_PAGE_ISSUE_REF, {
+      endpoint: "POST /api/notes/pages/{id}/agent-refs",
+    });
+  }
+
+  async deleteNotePageAgentRef(pageId: string, agentId: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/agent-refs/${encodeURIComponent(agentId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listNotePageRunRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/run-refs`);
+    return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/run-refs",
+    });
+  }
+
+  async createNotePageRunRef(pageId: string, data: CreateNotePageRunRefRequest): Promise<NotePageIssueRef> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/run-refs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageIssueRefSchema, EMPTY_NOTE_PAGE_ISSUE_REF, {
+      endpoint: "POST /api/notes/pages/{id}/run-refs",
+    });
+  }
+
+  async deleteNotePageRunRef(pageId: string, runId: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/run-refs/${encodeURIComponent(runId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async createNotePageIssue(pageId: string, data: CreateNotePageIssueRequest = {}): Promise<CreateNotePageIssueResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issues`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      CreateNotePageIssueResponseSchema,
+      {
+        issue: {
+          id: "",
+          workspace_id: "",
+          number: 0,
+          identifier: "",
+          title: "",
+          description: null,
+          status: "todo",
+          priority: "none",
+          assignee_type: null,
+          assignee_id: null,
+          creator_type: "member",
+          creator_id: "",
+          parent_issue_id: null,
+          project_id: null,
+          position: 0,
+          start_date: null,
+          due_date: null,
+          metadata: {},
+          created_at: "",
+          updated_at: "",
+        },
+        ref: EMPTY_NOTE_PAGE_ISSUE_REF,
+      },
+      { endpoint: "POST /api/notes/pages/{id}/issues" },
+    );
+  }
+
+  async listNotePageWritebacks(pageId: string, status?: string): Promise<NoteWritebackListResponse> {
+    const query = status ? `?status=${encodeURIComponent(status)}` : "";
+    const raw = await this.fetch<unknown>(
+      `/api/notes/pages/${encodeURIComponent(pageId)}/writebacks${query}`,
+    );
+    return parseWithFallback(raw, NoteWritebackListResponseSchema, EMPTY_NOTE_WRITEBACK_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/writebacks",
+    });
+  }
+
+  async createNotePageWriteback(pageId: string, data: CreateNoteWritebackRequest): Promise<NoteWriteback> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/writebacks`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NoteWritebackSchema, EMPTY_NOTE_WRITEBACK, {
+      endpoint: "POST /api/notes/pages/{id}/writebacks",
+    });
+  }
+
+  async acceptNotePageWriteback(writebackId: string): Promise<NoteWriteback> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/writebacks/${encodeURIComponent(writebackId)}/accept`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, NoteWritebackSchema, EMPTY_NOTE_WRITEBACK, {
+      endpoint: "POST /api/notes/writebacks/{id}/accept",
+    });
+  }
+
+  async rejectNotePageWriteback(writebackId: string): Promise<NoteWriteback> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/writebacks/${encodeURIComponent(writebackId)}/reject`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, NoteWritebackSchema, EMPTY_NOTE_WRITEBACK, {
+      endpoint: "POST /api/notes/writebacks/{id}/reject",
     });
   }
 

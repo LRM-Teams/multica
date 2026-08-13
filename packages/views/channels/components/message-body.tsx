@@ -85,7 +85,7 @@ function MessageBodyInner({
       // A sticker-bearing message renders its parts (image + any text) height-
       // capped; sticker-free content stays a clamped text preview so a long agent
       // message never expands the parent header.
-      if (presentedParts?.some((part) => part.type === "sticker" || part.type === "choice")) {
+      if (presentedParts?.some((part) => part.type === "sticker" || part.type === "choice" || part.type === "note_brief")) {
         return (
           <div className="max-h-40 overflow-hidden">
             <MessagePartsRenderer parts={presentedParts} choiceContext={choiceContext} />
@@ -135,13 +135,15 @@ function MessageBodyInner({
       // carry its full text in `content` (e.g. agent @mentions). Treat that
       // as body content so it renders through InlineReferenceContent below instead
       // of collapsing to an empty bubble.
+      const hasNoteBrief = bodyParts.some((part) => part.type === "note_brief");
       const hasBodyContent =
         bodyParts.some(
           (part) =>
             (part.type === "text" && part.text.trim()) ||
             part.type === "sticker" ||
             part.type === "choice" ||
-            part.type === "choice_reply",
+            part.type === "choice_reply" ||
+            part.type === "note_brief",
         ) || (hasReferenceParts && content.trim() !== "" && !suppressHiringProtocolFallback);
       if (!hasBodyContent && !hasHiringProposal) return null;
       // Structured mention / issue-ref parts (#463): the canonical `content` now
@@ -156,6 +158,7 @@ function MessageBodyInner({
             part.type === "sticker" ||
             part.type === "choice" ||
             part.type === "choice_reply" ||
+            part.type === "note_brief" ||
             (part.type === "reference" && part.ref_type === "agent:create"),
         );
         return (
@@ -172,6 +175,29 @@ function MessageBodyInner({
             {stickerChoiceAndCardParts.length > 0 && (
               <MessagePartsRenderer parts={stickerChoiceAndCardParts} choiceContext={choiceContext} />
             )}
+          </>
+        );
+      }
+      // note_brief-only parts keep instruction text in `content` (no text part).
+      if (hasNoteBrief && !bodyParts.some((part) => part.type === "text" || part.type === "sticker" || part.type === "choice" || part.type === "choice_reply")) {
+        return (
+          <>
+            {content.trim() ? (
+              <MemoizedMarkdown
+                attachments={attachments}
+                highlightQuery={highlightQuery}
+                enableStickerShortcodes={false}
+                sourceMessageId={sourceMessageId}
+                mentionVariant="plain"
+              >
+                {content}
+              </MemoizedMarkdown>
+            ) : null}
+            <MessagePartsRenderer
+              parts={bodyParts.filter((part) => part.type === "note_brief")}
+              highlightQuery={highlightQuery}
+              choiceContext={choiceContext}
+            />
           </>
         );
       }

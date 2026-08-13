@@ -2,9 +2,11 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ChevronRight, FileText } from "lucide-react";
 import { stickerCatalogOptions } from "@multica/core/stickers";
 import { api } from "@multica/core/api";
 import type { AgentCreationProposal, MessagePart, StickerAsset, StickerCatalogResponse } from "@multica/core/types";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multica/ui/components/ui/collapsible";
 import { cn } from "@multica/ui/lib/utils";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
@@ -62,6 +64,9 @@ export function MessagePartsRenderer({
         if (part.type === "choice_reply") {
           return <ChoiceReplyPart key={key} part={part} />;
         }
+        if (part.type === "note_brief") {
+          return <NoteBriefPart key={key} part={part} />;
+        }
         if (part.type === "reference") {
           if (part.ref_type === "agent:create" && choiceContext?.messageId) {
             return (
@@ -76,6 +81,42 @@ export function MessagePartsRenderer({
         return null;
       })}
     </div>
+  );
+}
+
+function NoteBriefPart({ part }: { part: Extract<MessagePart, { type: "note_brief" }> }) {
+  const { t } = useT("channels");
+  const title = part.label?.trim() || t(($) => $.message.note_brief_untitled);
+  const body = part.text?.trim() || t(($) => $.message.note_brief_empty);
+
+  return (
+    <Collapsible defaultOpen={false} className="mt-1 overflow-hidden rounded-md border bg-muted/20">
+      <CollapsibleTrigger
+        render={
+          <button
+            type="button"
+            data-testid="note-brief-toggle"
+            aria-label={t(($) => $.message.note_brief_toggle_aria, { title })}
+            className="group/note-brief flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[13px] hover:bg-muted/40"
+          />
+        }
+      >
+        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[panel-open]/note-brief:rotate-90" />
+        <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">{title}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          {t(($) => $.message.note_brief_collapsed_hint)}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div
+          data-testid="note-brief-body"
+          className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words border-t px-2.5 py-2 text-[13px] leading-5 text-muted-foreground"
+        >
+          {body}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -152,6 +193,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `choice-${part.choice_id}-${part.selected_option_id ?? "open"}`;
   } else if (part.type === "choice_reply") {
     base = `choice-reply-${part.choice_id}-${part.option_id}`;
+  } else if (part.type === "note_brief") {
+    base = `note-brief-${part.ref_id}-${hashString(part.label ?? "")}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }

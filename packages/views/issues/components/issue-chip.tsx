@@ -44,8 +44,13 @@ export function useResolvedIssue(key: string): Issue | undefined {
  */
 export interface IssueChipProps {
   issueId: string;
-  /** Shown when the issue can't be resolved (deleted, other workspace, …). */
+  /** Shown while the issue is still resolving (identifier is fine). */
   fallbackLabel?: string;
+  /**
+   * Shown when the issue cannot be resolved (deleted / no access).
+   * Must not include a previously cached title — S1-R2 inaccessible degrade.
+   */
+  unresolvedLabel?: string;
   /** Extra classes — callers layer interaction hints here
    *  (e.g. `hover:bg-accent cursor-pointer` for navigable variants). */
   className?: string;
@@ -54,11 +59,35 @@ export interface IssueChipProps {
 const BASE_CLASS =
   "issue-mention inline-flex items-center gap-1.5 rounded-md border mx-0.5 px-2 py-0.5 text-xs max-w-72";
 
-export function IssueChip({ issueId, fallbackLabel, className }: IssueChipProps) {
-  const issue = useResolvedIssue(issueId);
+export function IssueChip({ issueId, fallbackLabel, unresolvedLabel, className }: IssueChipProps) {
+  const wsId = useWorkspaceId();
+  const { data: issues = [] } = useQuery(issueListOptions(wsId));
+  const listIssue = issues.find((i) => i.id === issueId || i.identifier === issueId);
+  const {
+    data: detailIssue,
+    isLoading: detailLoading,
+    isFetching: detailFetching,
+  } = useQuery({
+    ...issueDetailOptions(wsId, issueId),
+    enabled: !listIssue && !!issueId,
+  });
+  const issue = listIssue ?? detailIssue;
   const cls = className ? `${BASE_CLASS} ${className}` : BASE_CLASS;
 
-  if (!issue) {
+  if (issue) {
+    return (
+      <span className={cls}>
+        <StatusIcon status={issue.status} className="h-3.5 w-3.5 shrink-0" />
+        <span className="font-medium text-muted-foreground shrink-0">
+          {issue.identifier}
+        </span>
+        <span className="text-foreground truncate">{issue.title}</span>
+      </span>
+    );
+  }
+
+  const stillLoading = !listIssue && (detailLoading || detailFetching);
+  if (stillLoading) {
     return (
       <span className={cls}>
         <span className="font-medium text-muted-foreground">
@@ -68,13 +97,12 @@ export function IssueChip({ issueId, fallbackLabel, className }: IssueChipProps)
     );
   }
 
+  // Unresolved / inaccessible: never surface a title from attrs or stale cache.
   return (
-    <span className={cls}>
-      <StatusIcon status={issue.status} className="h-3.5 w-3.5 shrink-0" />
-      <span className="font-medium text-muted-foreground shrink-0">
-        {issue.identifier}
+    <span className={cls} data-issue-unresolved="true">
+      <span className="font-medium text-muted-foreground">
+        {unresolvedLabel ?? fallbackLabel ?? issueId.slice(0, 8)}
       </span>
-      <span className="text-foreground truncate">{issue.title}</span>
     </span>
   );
 }

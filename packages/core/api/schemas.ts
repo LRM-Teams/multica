@@ -58,10 +58,85 @@ import type {
   NotePage,
   NotePageListResponse,
   NoteAIJob,
+  NoteWorkerJob,
+  NotePageIssueRef,
+  NotePageIssueRefListResponse,
+  NoteWriteback,
+  NoteWritebackListResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 import type { ConversationHandleLookup } from "../conversations/types";
+
+export const NotePageIssueRefSchema: z.ZodType<NotePageIssueRef> = z.object({
+  type: z.enum(["issue", "agent", "run"]).catch("issue"),
+  id: z.string().default(""),
+  label: z.string().nullable().optional(),
+  accessible: z.boolean().default(false),
+  page_id: z.string().optional(),
+  issue_id: z.string().optional(),
+  agent_id: z.string().optional(),
+  workspace_id: z.string().optional(),
+  identifier: z.string().optional(),
+  title: z.string().optional(),
+  number: z.number().optional(),
+  created_at: z.string().optional(),
+}).loose();
+
+export const NotePageIssueRefListResponseSchema: z.ZodType<NotePageIssueRefListResponse> = z.object({
+  refs: z.array(NotePageIssueRefSchema).default([]),
+}).loose();
+
+export const EMPTY_NOTE_PAGE_ISSUE_REF: NotePageIssueRef = {
+  type: "issue",
+  id: "",
+  accessible: false,
+};
+
+export const EMPTY_NOTE_PAGE_ISSUE_REF_LIST: NotePageIssueRefListResponse = { refs: [] };
+
+export const NoteWritebackEvidenceSchema = z.object({
+  type: z.string().default(""),
+  id: z.string().default(""),
+  label: z.string().nullable().optional(),
+}).loose();
+
+export const NoteWritebackSchema: z.ZodType<NoteWriteback> = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  page_id: z.string().default(""),
+  action: z.string().default("append"),
+  content: z.string().default(""),
+  target: z.string().nullable().optional(),
+  evidence: z.array(NoteWritebackEvidenceSchema).default([]),
+  status: z.string().default("pending"),
+  created_by_type: z.string().default("member"),
+  created_by_id: z.string().default(""),
+  resolved_by: z.string().nullable().optional(),
+  resolved_at: z.string().nullable().optional(),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const NoteWritebackListResponseSchema: z.ZodType<NoteWritebackListResponse> = z.object({
+  writebacks: z.array(NoteWritebackSchema).default([]),
+}).loose();
+
+export const EMPTY_NOTE_WRITEBACK: NoteWriteback = {
+  id: "",
+  workspace_id: "",
+  page_id: "",
+  action: "append",
+  content: "",
+  evidence: [],
+  status: "pending",
+  created_by_type: "member",
+  created_by_id: "",
+  created_at: "",
+  updated_at: "",
+};
+
+export const EMPTY_NOTE_WRITEBACK_LIST: NoteWritebackListResponse = { writebacks: [] };
 
 export const NotePageSchema: z.ZodType<NotePage> = z.object({
   id: z.string().default(""),
@@ -76,6 +151,7 @@ export const NotePageSchema: z.ZodType<NotePage> = z.object({
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
   deleted_at: z.string().nullable().default(null),
+  refs: z.array(NotePageIssueRefSchema).optional(),
 }).loose();
 
 export const NotePageListResponseSchema: z.ZodType<NotePageListResponse> = z.object({
@@ -95,6 +171,7 @@ export const EMPTY_NOTE_PAGE: NotePage = {
   created_at: "",
   updated_at: "",
   deleted_at: null,
+  refs: [],
 };
 
 export const EMPTY_NOTE_PAGE_LIST: NotePageListResponse = { pages: [] };
@@ -135,6 +212,40 @@ export const EMPTY_NOTE_AI_JOB: NoteAIJob = {
   failure_reason: null,
   failure_code: null,
   repair_code: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const NoteWorkerJobSchema: z.ZodType<NoteWorkerJob> = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  page_id: z.string().default(""),
+  agent_id: z.string().default(""),
+  instruction: z.string().default(""),
+  status: z.enum(["pending", "dispatched", "running", "completed", "failed", "cancelled"]).catch("pending"),
+  intent: z.string().default("worker"),
+  task_id: z.string().nullable().optional(),
+  channel_id: z.string().nullable().optional(),
+  channel_message_id: z.string().nullable().optional(),
+  chat_session_id: z.string().nullable().optional(),
+  failure_reason: z.string().nullable().optional(),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_NOTE_WORKER_JOB: NoteWorkerJob = {
+  id: "",
+  workspace_id: "",
+  page_id: "",
+  agent_id: "",
+  instruction: "",
+  status: "pending",
+  intent: "worker",
+  task_id: null,
+  channel_id: null,
+  channel_message_id: null,
+  chat_session_id: null,
+  failure_reason: null,
   created_at: "",
   updated_at: "",
 };
@@ -1676,6 +1787,11 @@ export const IssueSchema = z.object({
   labels: z.array(z.unknown()).optional(),
   created_at: z.string(),
   updated_at: z.string(),
+}).loose();
+
+export const CreateNotePageIssueResponseSchema = z.object({
+  issue: IssueSchema,
+  ref: NotePageIssueRefSchema,
 }).loose();
 
 export const ListIssuesResponseSchema = z.object({

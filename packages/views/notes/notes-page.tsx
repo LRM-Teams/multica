@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Check, ChevronDown, ChevronRight, Copy, Download, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Copy, Download, FilePlus, FileText, Loader2, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -11,6 +11,7 @@ import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { noteAIJobOptions, noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
 import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
+import { syncNotePageRefsFromContent } from "@multica/core/notes/issue-refs";
 import { agentListOptions, memberListOptions, workspaceListOptions } from "@multica/core/workspace/queries";
 import type { Agent, MemberWithUser, NoteAIEditResult, NoteAIJobStatus, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -26,6 +27,9 @@ import { useNavigation } from "../navigation";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 import { NoteShareSummary } from "./note-share-summary";
+import { NoteWritebackReview } from "./note-writeback-review";
+import { NoteWorkerRunDialog } from "./note-worker-run-dialog";
+import { NoteWorkerStatusBanner } from "./note-worker-status-banner";
 import { waitForNoteAIJobResult } from "./note-ai-job-wait";
 import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
 
@@ -42,6 +46,8 @@ type NotesPageUiState = {
   sharePage: NotePage | null;
   exportOpen: boolean;
   aiAgentOpen: boolean;
+  workerOpen: boolean;
+  workerJobId: string | null;
   showTrash: boolean;
 };
 
@@ -803,8 +809,12 @@ function NoteEditor({
   currentUserId,
   ownerName,
   shareNames,
+  agents,
+  workerJobId,
+  onDismissWorkerJob,
   onOpenPage,
   onOpenShare,
+  onOpenWorker,
   onOptimizeSelection,
   onEditPageWithAI,
 }: {
@@ -813,8 +823,12 @@ function NoteEditor({
   currentUserId?: string;
   ownerName: string;
   shareNames: string[];
+  agents: Agent[];
+  workerJobId: string | null;
+  onDismissWorkerJob: () => void;
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
+  onOpenWorker: () => void;
   onOptimizeSelection: (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
   onEditPageWithAI: (request: PageEditAIRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
 }) {
@@ -825,6 +839,7 @@ function NoteEditor({
   const { uploadWithToast, uploading } = useFileUpload(api, (error) => {
     showErrorToast(error.message || t(($) => $.notes_page.image_paste_failed));
   });
+  const [creatingIssue, setCreatingIssue] = useState(false);
   const [draft, setDraft] = useState(() => ({
     title: selected.title,
     content: selected.content,
@@ -902,6 +917,16 @@ function NoteEditor({
             return { ...current, serverTitle, serverContent };
           });
           setSaveState("saved");
+          // Best-effort: sync note→issue refs after content lands. Failures
+          // must not roll back the note body save (S1-R2).
+          try {
+            const sync = await syncNotePageRefsFromContent(selected.id, page.content);
+            if (sync.errors.length > 0 && active) {
+              showErrorToast(t(($) => $.notes_page.issue_refs_sync_failed));
+            }
+          } catch {
+            if (active) showErrorToast(t(($) => $.notes_page.issue_refs_sync_failed));
+          }
         } catch (error: unknown) {
           if (!active) return;
           setSaveState("error");
@@ -959,7 +984,62 @@ function NoteEditor({
             {t(($) => $.notes_page.share_action)}
           </Button>
         )}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={creatingIssue}
+          onClick={() => {
+            void (async () => {
+              if (creatingIssue) return;
+              setCreatingIssue(true);
+              try {
+                const selection = editorRef.current?.getSelectedText()?.trim() ?? "";
+                const titleFromSelection = selection.replace(/\s+/g, " ").slice(0, 200);
+                const title = titleFromSelection || draft.title.trim() || "Untitled";
+                const description = selection
+                  || (draft.content.trim() ? draft.content.trim().slice(0, 4000) : undefined);
+                const result = await api.createNotePageIssue(selected.id, {
+                  title,
+                  description,
+                });
+                const label = result.issue.identifier || result.ref.label || result.issue.title;
+                editorRef.current?.insertIssueReference({
+                  id: result.issue.id,
+                  label,
+                });
+                toast.success(t(($) => $.notes_page.create_issue_success, { identifier: label }));
+              } catch (error: unknown) {
+                showErrorToast(
+                  error instanceof Error && error.message
+                    ? error.message
+                    : t(($) => $.notes_page.create_issue_failed),
+                );
+              } finally {
+                setCreatingIssue(false);
+              }
+            })();
+          }}
+        >
+          {creatingIssue ? <Loader2 className="size-4 animate-spin" /> : <FilePlus className="size-4" />}
+          {t(($) => $.notes_page.create_issue_action)}
+        </Button>
+        <Button variant="outline" size="sm" onClick={onOpenWorker}>
+          <Bot className="size-4" />
+          {t(($) => $.notes_page.worker_action)}
+        </Button>
       </div>
+      {workerJobId ? <NoteWorkerStatusBanner jobId={workerJobId} onDismiss={onDismissWorkerJob} /> : null}
+      <NoteWritebackReview
+        page={selected}
+        currentContent={draft.content}
+        onAppliedContent={(content) => {
+          setDraft((current) => ({
+            ...current,
+            content,
+            serverContent: content,
+          }));
+        }}
+      />
       <textarea
         ref={titleTextareaRef}
         rows={1}
@@ -1004,7 +1084,10 @@ function NoteEditor({
         showEmptyLinePlaceholder
         className="mt-6 min-h-[55vh] px-0 pb-[45vh] pt-2"
         debounceMs={150}
-        disableMentions
+        disableMentions={false}
+        mentionAllowedActorIds={new Set(agents.map((agent) => agent.id))}
+        scopedMentionAgents={agents}
+        enableIssueReferences
         enableSlashCommands
         slashCommandMode="block"
         showBubbleMenu
@@ -1033,7 +1116,23 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const selectedId = pageId ?? selectedFromList?.id;
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
   const selected = detailPage?.id ? detailPage : selectedFromList;
-  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, showTrash: false }));
+  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({
+    sharePage: null,
+    exportOpen: false,
+    aiAgentOpen: false,
+    workerOpen: false,
+    workerJobId: null,
+    showTrash: false,
+  }));
+  // Clear the Worker status banner when the selected note changes — during render
+  // (prev-id comparison), not an effect, so we never paint a stale job for the new page.
+  const prevSelectedIdRef = useRef(selected?.id);
+  if (selected?.id !== prevSelectedIdRef.current) {
+    prevSelectedIdRef.current = selected?.id;
+    if (uiState.workerJobId !== null) {
+      setUiState((current) => ({ ...current, workerJobId: null }));
+    }
+  }
   const [noteExpansionOverrides, setNoteExpansionOverrides] = useState<NoteExpansionOverrides>(() => ({ selectionId: null, expanded: readNoteExpandedIds(wsId), collapsed: new Set() }));
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
   const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
@@ -1085,7 +1184,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const [dragState, setDragState] = useState<NoteDragState>({ draggingId: null, dropTarget: null });
   const [aiAgentConfig, setAiAgentConfig] = useState<NoteAiAgentConfig>(() => ({ workspaceId: null, agentId: null }));
   const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
-  const { sharePage, exportOpen, aiAgentOpen, showTrash } = uiState;
+  const { sharePage, exportOpen, aiAgentOpen, workerOpen, workerJobId, showTrash } = uiState;
   const { draggingId: draggingNoteId } = dragState;
 
   useEffect(() => {
@@ -1323,6 +1422,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                 <Sparkles className="size-3.5" />
                 {t(($) => $.notes_page.ai_agent_action)}
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, workerOpen: true }))}>
+                <Bot className="size-3.5" />
+                {t(($) => $.notes_page.worker_action)}
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, exportOpen: true }))}>
                 <Download className="size-3.5" />
                 {t(($) => $.notes_page.export_action)}
@@ -1431,8 +1534,12 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               currentUserId={currentUserId}
               ownerName={selectedOwnerName}
               shareNames={selectedShareNames}
+              agents={agents}
+              workerJobId={workerJobId}
+              onDismissWorkerJob={() => setUiState((current) => ({ ...current, workerJobId: null }))}
               onOpenPage={openPage}
               onOpenShare={() => setUiState((current) => ({ ...current, sharePage: selected }))}
+              onOpenWorker={() => setUiState((current) => ({ ...current, workerOpen: true }))}
               onOptimizeSelection={optimizeSelectedNoteText}
               onEditPageWithAI={editNotePageWithAI}
             />
@@ -1443,6 +1550,16 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         if (!open) setUiState((current) => ({ ...current, sharePage: null }));
       }} />
       <NoteAiAgentDialog agents={agents} selectedAgentId={configuredAiAgentId} open={aiAgentOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, aiAgentOpen: open }))} onSelect={saveConfiguredAiAgent} />
+      {selected ? (
+        <NoteWorkerRunDialog
+          pageId={selected.id}
+          agents={agents}
+          defaultAgentId={configuredAiAgentId}
+          open={workerOpen}
+          onOpenChange={(open) => setUiState((current) => ({ ...current, workerOpen: open }))}
+          onDispatched={(job) => setUiState((current) => ({ ...current, workerJobId: job.id }))}
+        />
+      ) : null}
       <ExportDialog page={selected} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />
     </div>
   );

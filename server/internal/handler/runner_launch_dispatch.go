@@ -27,7 +27,10 @@ func (h *Handler) dispatchPendingRunnerStops(ctx context.Context, identity daemo
 	if h == nil || h.DB == nil || h.DaemonHub == nil || !h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
 		return nil
 	}
-	allowed := runnerAttachmentRuntimeScope(identity)
+	allowed, err := h.runnerAttachmentRuntimeScope(ctx, identity)
+	if err != nil {
+		return err
+	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT launch.agent_id::text, launch.runtime_id::text, launch.launch_id
 		FROM agent_activity_launch launch

@@ -227,5 +227,12 @@
     "status_failed": "失败",
     "status_cancelled": "已取消",
     "empty_result": "智能体返回了空的编辑结果。"
+  },
+  "issue_reference": {
+    "unavailable": "不可见"
+  },
+  "run_reference": {
+    "open": "打开 Run",
+    "fallback_label": "run"
   }
 }

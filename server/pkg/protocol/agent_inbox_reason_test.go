@@ -18,6 +18,7 @@ func TestIsResidualChannelChatInboxReason(t *testing.T) {
 		{AgentInboxReasonCollaborationTurn, false},
 		{AgentInboxReasonChannelOnboarding, false},
 		{AgentInboxReasonGoalGraphDelta, false},
+		{AgentInboxReasonNoteWorker, false},
 		{"issue", false},
 		{"quick_create", false},
 	}

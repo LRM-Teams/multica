@@ -227,5 +227,12 @@
     "status_failed": "Failed",
     "status_cancelled": "Cancelled",
     "empty_result": "The agent returned an empty edit."
+  },
+  "issue_reference": {
+    "unavailable": "Unavailable"
+  },
+  "run_reference": {
+    "open": "Open run",
+    "fallback_label": "run"
   }
 }

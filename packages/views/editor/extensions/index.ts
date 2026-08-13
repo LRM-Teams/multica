@@ -67,13 +67,16 @@ import { TaskList } from "@tiptap/extension-list";
 import { Markdown } from "@tiptap/markdown";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import type { AnyExtension } from "@tiptap/core";
+import { PluginKey } from "@tiptap/pm/state";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { escapeMarkdownLabel } from "../utils/escape-markdown-label";
 import { BaseMentionExtension } from "./mention-extension";
 import { createMentionSuggestion, type MentionAgentCandidate, type MentionItem } from "./mention-suggestion";
 import { IssueReferenceExtension } from "./issue-reference";
+import { createIssueReferenceSuggestion } from "./issue-reference-suggestion";
 import { ChannelReferenceExtension } from "./channel-reference";
 import { createChannelReferenceSuggestion } from "./channel-reference-suggestion";
+import { RunReferenceExtension } from "./run-reference";
 import { SlashCommandExtension } from "./slash-command-extension";
 import { createSlashCommandSuggestion, createBuiltinCommandSuggestion, createBlockCommandSuggestion } from "./slash-command-suggestion";
 import { CodeBlockView } from "./code-block-view";
@@ -206,16 +209,20 @@ export interface EditorExtensionsOptions {
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
   /**
+   * When true, attach an issue reference `#` picker (search issues, insert a
+   * clickable chip). Default false.
+   *
+   * Mutually exclusive with `enableChannelReferences` — both use `#`. When
+   * both are requested, issue references win and channel `#` stays off.
+   */
+  enableIssueReferences?: boolean;
+  /**
    * When true, attach a channel reference `#` picker (search channels,
    * insert as a clickable chip). Default false.
    *
-   * The `#` trigger previously belonged to an issue-reference picker
-   * (issue-reference-suggestion.tsx) — removed 2026-07-31 per Frank: it
-   * never actually surfaced anything when tested live, and `#` is now
-   * spoken for by channel references instead. `IssueReferenceExtension`
-   * stays registered below (unconfigured, suggestion permanently disabled)
-   * so any historical `mention://issue/` content still parses; only the
-   * picker itself is gone.
+   * Ignored when `enableIssueReferences` is true (same `#` trigger).
+   * `IssueReferenceExtension` always stays registered so historical
+   * `mention://issue/` content still parses.
    */
   enableChannelReferences?: boolean;
   /**
@@ -353,13 +360,26 @@ export function createEditorExtensions(
           ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds, getScopedAgents: options.getMentionScopedAgents, getChannelMemberIds: options.getMentionChannelMemberIds }) }
           : {}),
     }),
-    // Bare, unconfigured — parsing-only, see enableChannelReferences above.
-    IssueReferenceExtension,
-    ChannelReferenceExtension.configure({
-      suggestion: options.enableChannelReferences && options.queryClient
-        ? createChannelReferenceSuggestion(options.queryClient)
-        : { char: "#", allow: () => false },
+    // Issue `#` and channel `#` share one trigger — enable at most one.
+    IssueReferenceExtension.configure({
+      suggestion:
+        options.enableIssueReferences && options.queryClient
+          ? createIssueReferenceSuggestion(options.queryClient)
+          : {
+              char: "#",
+              allow: () => false,
+              pluginKey: new PluginKey("issueReferenceSuggestionDisabled"),
+            },
     }),
+    ChannelReferenceExtension.configure({
+      suggestion:
+        !options.enableIssueReferences &&
+        options.enableChannelReferences &&
+        options.queryClient
+          ? createChannelReferenceSuggestion(options.queryClient)
+          : { char: "#", allow: () => false },
+    }),
+    RunReferenceExtension,
     SlashCommandExtension.configure({
       HTMLAttributes: { class: "slash-command" },
       suggestion: !options.enableSlashCommands

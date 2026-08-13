@@ -19,18 +19,19 @@ import (
 )
 
 type NotePageResponse struct {
-	ID              string   `json:"id"`
-	WorkspaceID     string   `json:"workspace_id"`
-	ParentID        *string  `json:"parent_id"`
-	OwnerUserID     string   `json:"owner_user_id"`
-	Title           string   `json:"title"`
-	Content         string   `json:"content"`
-	SortKey         string   `json:"sort_key"`
-	ShareUserIDs    []string `json:"share_user_ids"`
-	CanManageShares bool     `json:"can_manage_shares"`
-	CreatedAt       string   `json:"created_at"`
-	UpdatedAt       string   `json:"updated_at"`
-	DeletedAt       *string  `json:"deleted_at"`
+	ID              string                     `json:"id"`
+	WorkspaceID     string                     `json:"workspace_id"`
+	ParentID        *string                    `json:"parent_id"`
+	OwnerUserID     string                     `json:"owner_user_id"`
+	Title           string                     `json:"title"`
+	Content         string                     `json:"content"`
+	SortKey         string                     `json:"sort_key"`
+	ShareUserIDs    []string                   `json:"share_user_ids"`
+	CanManageShares bool                       `json:"can_manage_shares"`
+	CreatedAt       string                     `json:"created_at"`
+	UpdatedAt       string                     `json:"updated_at"`
+	DeletedAt       *string                    `json:"deleted_at"`
+	Refs            []NotePageIssueRefResponse `json:"refs,omitempty"`
 }
 
 type notePageRow struct {
@@ -69,10 +70,16 @@ type noteDuplicateRequest struct {
 	Title *string `json:"title"`
 }
 
+// noteAIJobCreateRequest is the Editor contract create body (S2-C3).
+// Worker intent / Worker-only fields must be rejected — see note_intent.go.
 type noteAIJobCreateRequest struct {
 	AgentID string `json:"agent_id"`
 	Prompt  string `json:"prompt"`
 	Title   string `json:"title"`
+	Intent  string `json:"intent"`
+	// Worker-only fields — presence is misuse and must 400.
+	Instruction string `json:"instruction"`
+	Action      string `json:"action"`
 }
 
 type NoteAIEditResult struct {
@@ -156,7 +163,10 @@ func scanNotePage(row pgx.Row) (notePageRow, error) {
 	return p, err
 }
 
-func notePageToResponse(p notePageRow, currentUserID pgtype.UUID, shareUserIDs []string) NotePageResponse {
+func notePageToResponse(p notePageRow, currentUserID pgtype.UUID, shareUserIDs []string, refs []NotePageIssueRefResponse) NotePageResponse {
+	if refs == nil {
+		refs = []NotePageIssueRefResponse{}
+	}
 	return NotePageResponse{
 		ID:              uuidToString(p.ID),
 		WorkspaceID:     uuidToString(p.WorkspaceID),
@@ -170,6 +180,7 @@ func notePageToResponse(p notePageRow, currentUserID pgtype.UUID, shareUserIDs [
 		CreatedAt:       timestampToString(p.CreatedAt),
 		UpdatedAt:       timestampToString(p.UpdatedAt),
 		DeletedAt:       timestampToPtr(p.DeletedAt),
+		Refs:            refs,
 	}
 }
 
@@ -298,7 +309,7 @@ ORDER BY parent_id NULLS FIRST, sort_key, created_at`, workspaceID, userID)
 			writeError(w, http.StatusInternalServerError, "failed to list notes")
 			return
 		}
-		pages = append(pages, notePageToResponse(p, userID, shares))
+		pages = append(pages, notePageToResponse(p, userID, shares, nil))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pages": pages})
 }
@@ -341,7 +352,7 @@ ORDER BY p.deleted_at DESC, p.updated_at DESC`, userID)
 			writeError(w, http.StatusInternalServerError, "failed to list deleted notes")
 			return
 		}
-		pages = append(pages, notePageToResponse(p, userID, shares))
+		pages = append(pages, notePageToResponse(p, userID, shares, nil))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pages": pages})
 }
@@ -374,7 +385,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		writeError(w, http.StatusInternalServerError, "failed to create note page")
 		return
 	}
-	writeJSON(w, http.StatusCreated, notePageToResponse(page, userID, []string{}))
+	writeJSON(w, http.StatusCreated, notePageToResponse(page, userID, []string{}, nil))
 }
 
 func (h *Handler) GetNotePage(w http.ResponseWriter, r *http.Request) {
@@ -391,7 +402,12 @@ func (h *Handler) GetNotePage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load note page")
 		return
 	}
-	writeJSON(w, http.StatusOK, notePageToResponse(page, userID, shares))
+	refs, err := h.loadNotePageRefs(r.Context(), page.ID, page.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load note page refs")
+		return
+	}
+	writeJSON(w, http.StatusOK, notePageToResponse(page, userID, shares, refs))
 }
 
 func (h *Handler) UpdateNotePage(w http.ResponseWriter, r *http.Request) {
@@ -430,7 +446,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		writeError(w, http.StatusInternalServerError, "failed to update note page")
 		return
 	}
-	writeJSON(w, http.StatusOK, notePageToResponse(updated, userID, shares))
+	writeJSON(w, http.StatusOK, notePageToResponse(updated, userID, shares, nil))
 }
 
 func (h *Handler) MoveNotePage(w http.ResponseWriter, r *http.Request) {
@@ -517,7 +533,7 @@ WHERE id = $1`, page.ID, userID, pageWorkspaceID, parentID, normalizeNoteSortKey
 		writeError(w, http.StatusInternalServerError, "failed to move note page")
 		return
 	}
-	writeJSON(w, http.StatusOK, notePageToResponse(updated, userID, shares))
+	writeJSON(w, http.StatusOK, notePageToResponse(updated, userID, shares, nil))
 }
 
 func (h *Handler) DeleteNotePage(w http.ResponseWriter, r *http.Request) {
@@ -648,7 +664,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 			return
 		}
 		newIDs[uuidToString(source.ID)] = inserted.ID
-		copied = append(copied, notePageToResponse(inserted, userID, []string{}))
+		copied = append(copied, notePageToResponse(inserted, userID, []string{}, nil))
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
@@ -726,7 +742,7 @@ WHERE id = $1 AND workspace_id = $2`, page.ID, page.WorkspaceID))
 		writeError(w, http.StatusInternalServerError, "failed to restore note page")
 		return
 	}
-	writeJSON(w, http.StatusOK, notePageToResponse(restored, userID, shares))
+	writeJSON(w, http.StatusOK, notePageToResponse(restored, userID, shares, nil))
 }
 
 func (h *Handler) UpdateNotePageShares(w http.ResponseWriter, r *http.Request) {
@@ -787,7 +803,7 @@ func (h *Handler) UpdateNotePageShares(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update shares")
 		return
 	}
-	writeJSON(w, http.StatusOK, notePageToResponse(page, userID, shares))
+	writeJSON(w, http.StatusOK, notePageToResponse(page, userID, shares, nil))
 }
 
 func normalizeNoteAIJobTitle(title, noteTitle string) string {
@@ -1249,6 +1265,10 @@ func (h *Handler) CreateNoteAIJob(w http.ResponseWriter, r *http.Request) {
 	var req noteAIJobCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if reason := editorCreateMisuseReason(strings.TrimSpace(req.Intent), strings.TrimSpace(req.Instruction), strings.TrimSpace(req.Action)); reason != "" {
+		writeError(w, http.StatusBadRequest, reason)
 		return
 	}
 	prompt := strings.TrimSpace(req.Prompt)

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -25,7 +27,10 @@ func (h *Handler) replayAgentAttachmentCommands(ctx context.Context, identity da
 	if !h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
 		return errors.New("Workspace Runner does not support Attachment replay")
 	}
-	allowed := runnerAttachmentRuntimeScope(identity)
+	allowed, err := h.runnerAttachmentRuntimeScope(ctx, identity)
+	if err != nil {
+		return err
+	}
 	if len(payload.RuntimeCursors) != len(allowed) {
 		return errors.New("Attachment replay request omitted a Runner Runtime cursor")
 	}
@@ -102,7 +107,11 @@ func (h *Handler) acknowledgeAgentAttachmentCommand(ctx context.Context, identit
 	if err := payload.Validate(); err != nil {
 		return fmt.Errorf("validate Attachment receipt: %w", err)
 	}
-	if _, ok := runnerAttachmentRuntimeScope(identity)[payload.RuntimeID]; !ok {
+	allowed, err := h.runnerAttachmentRuntimeScope(ctx, identity)
+	if err != nil {
+		return err
+	}
+	if _, ok := allowed[payload.RuntimeID]; !ok {
 		return errors.New("Attachment receipt Runtime outside Runner scope")
 	}
 	wantEvent, wantReceipt := "attach", "attached"
@@ -110,7 +119,7 @@ func (h *Handler) acknowledgeAgentAttachmentCommand(ctx context.Context, identit
 		wantEvent, wantReceipt = "detach", "detached"
 	}
 	var shadowCorrelationID string
-	err := h.DB.QueryRow(ctx, `
+	err = h.DB.QueryRow(ctx, `
 		SELECT correlation_id::text
 		FROM agent_attachment_projection_event
 		WHERE lifecycle_seq = $1
@@ -148,7 +157,10 @@ func (h *Handler) acknowledgeAgentAttachmentReplay(ctx context.Context, identity
 	if err := payload.Validate(); err != nil {
 		return fmt.Errorf("validate Attachment replay acknowledgement: %w", err)
 	}
-	allowed := runnerAttachmentRuntimeScope(identity)
+	allowed, err := h.runnerAttachmentRuntimeScope(ctx, identity)
+	if err != nil {
+		return err
+	}
 	for runtimeID, seq := range payload.RuntimeCursors {
 		if _, ok := allowed[runtimeID]; !ok {
 			return errors.New("Attachment replay acknowledgement Runtime outside Runner scope")
@@ -192,12 +204,40 @@ func (h *Handler) acknowledgeAgentAttachmentReplay(ctx context.Context, identity
 	return nil
 }
 
-func runnerAttachmentRuntimeScope(identity daemonws.ClientIdentity) map[string]struct{} {
+// runnerAttachmentRuntimeScope is the set of Runtimes a Workspace Runner may
+// act on. Legacy multiplexed wake sockets publish RuntimeIDs on the connection
+// identity; pure Workspace Runner sockets intentionally omit them (runtimes=0)
+// and must resolve the Computer's current Runtime rows for the Workspace.
+func (h *Handler) runnerAttachmentRuntimeScope(ctx context.Context, identity daemonws.ClientIdentity) (map[string]struct{}, error) {
 	allowed := make(map[string]struct{}, len(identity.RuntimeIDs))
 	for _, runtimeID := range identity.RuntimeIDs {
 		if runtimeID = strings.TrimSpace(runtimeID); runtimeID != "" {
 			allowed[runtimeID] = struct{}{}
 		}
 	}
-	return allowed
+	if len(allowed) > 0 {
+		return allowed, nil
+	}
+	daemonID := strings.TrimSpace(identity.DaemonID)
+	workspaceID := strings.TrimSpace(identity.WorkspaceID)
+	if h == nil || h.Queries == nil || daemonID == "" || workspaceID == "" {
+		return allowed, nil
+	}
+	workspaceUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Runner workspace identity: %w", err)
+	}
+	runtimes, err := h.Queries.ListAgentRuntimesByDaemonID(ctx, db.ListAgentRuntimesByDaemonIDParams{
+		WorkspaceID: workspaceUUID,
+		DaemonID:    daemonID,
+		RuntimeMode: "",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list Runner Attachment Runtimes: %w", err)
+	}
+	allowed = make(map[string]struct{}, len(runtimes))
+	for _, runtime := range runtimes {
+		allowed[util.UUIDToString(runtime.ID)] = struct{}{}
+	}
+	return allowed, nil
 }

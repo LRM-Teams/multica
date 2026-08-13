@@ -4,6 +4,10 @@ import type {
   ResearchV6Snapshot,
 } from "../../types/research-v6";
 import { ResearchV6ProjectionClient } from "../research-v6/projection-client";
+import {
+  isResearchV6DeltaForRun,
+  isResearchV6SnapshotForRun,
+} from "../research-v6/projection-identity";
 import type {
   LiveConnectionStatus,
   LiveSourceDisconnect,
@@ -93,6 +97,20 @@ export class ResearchV6LiveProjectionController {
   /** The underlying projection client (data state). */
   getClient(): ResearchV6ProjectionClient {
     return this.client;
+  }
+
+  /** Seed the ordered cache without allowing a cross-run snapshot to enter it. */
+  seedSnapshot(snapshot: ResearchV6Snapshot): boolean {
+    if (!isResearchV6SnapshotForRun(snapshot, this.runId)) {
+      this.client.requestResync();
+      this.notifyChange();
+      this.observeResync();
+      return false;
+    }
+    this.client.applySnapshot(snapshot);
+    this.client.ackResyncCompleted();
+    this.notifyChange();
+    return true;
   }
 
   onStatusChange(handler: (s: LiveConnectionStatus) => void): () => void {
@@ -203,8 +221,18 @@ export class ResearchV6LiveProjectionController {
 
   /* ------------------------------------------------------------------ */
 
-  /** Apply a streaming delta to the data cache (client handles ordering/idempotency). */
-  private applyDelta(delta: ResearchV6Delta): void {
+  /**
+   * Apply a run-validated delta from live or an explicit transport path.
+   * Keeping this public prevents callers from bypassing identity, ordering,
+   * resync observation, and store notification through the raw client.
+   */
+  applyDelta(delta: ResearchV6Delta): void {
+    if (!isResearchV6DeltaForRun(delta, this.runId)) {
+      this.client.requestResync();
+      this.notifyChange();
+      this.observeResync();
+      return;
+    }
     const result = this.client.applyDelta(delta);
     if (result.kind === "buffered") {
       // A delta arrived out of order → a sequence gap is open. Arm our own gap
@@ -242,6 +270,9 @@ export class ResearchV6LiveProjectionController {
     this.resyncInFlight = true;
     try {
       const snapshot = await this.transport.loadSnapshot(this.runId);
+      if (!isResearchV6SnapshotForRun(snapshot, this.runId)) {
+        throw new Error("Research V6 snapshot run identity mismatch");
+      }
       this.client.applySnapshot(snapshot);
       this.client.ackResyncCompleted();
       for (const listener of this.snapshotListeners) listener(snapshot);

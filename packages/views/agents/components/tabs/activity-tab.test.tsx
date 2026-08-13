@@ -8,6 +8,7 @@ import enCommon from "../../../locales/en/common.json";
 
 const runnerActivity = vi.fn();
 const listChannels = vi.hoisted(() => vi.fn());
+const lookupConversationHandle = vi.hoisted(() => vi.fn());
 vi.mock("@multica/core/agents", () => ({ useRunnerActivity: (...args: unknown[]) => runnerActivity(...args) }));
 vi.mock("@multica/ui/lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../../../common/use-viewing-timezone", () => ({ useViewingTimezone: () => "UTC" }));
@@ -15,7 +16,11 @@ vi.mock("@multica/core/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/api")>();
   return {
     ...actual,
-    api: { ...actual.api, listChannels: (...args: unknown[]) => listChannels(...args) },
+    api: {
+      ...actual.api,
+      listChannels: (...args: unknown[]) => listChannels(...args),
+      lookupConversationHandle: (...args: unknown[]) => lookupConversationHandle(...args),
+    },
   };
 });
 
@@ -41,6 +46,7 @@ function renderActivityTab() {
 describe("ActivityTab", () => {
   beforeEach(() => {
     listChannels.mockResolvedValue([]);
+    lookupConversationHandle.mockResolvedValue({ available: false });
   });
 
   it("renders the server-projected rows in the previous chronological timeline UI", () => {
@@ -183,6 +189,33 @@ describe("ActivityTab", () => {
     const link = await screen.findByRole("link", { name: "#general" });
     expect(link).toHaveAttribute("href", "/acme/channels/chan-1");
     expect(screen.getByTestId("runner-activity-subtext").textContent).toContain("target: #general");
+  });
+
+  it("turns a #channel:shortId target into the authorized message deep link", async () => {
+    lookupConversationHandle.mockResolvedValue({
+      available: true,
+      href: "/acme/channels/chan-9?thread=root-1&message=msg-1",
+    });
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Updating reminder...", tone: "warning", visibility: "visible" },
+        timeline: [{
+          id: "row-thread",
+          occurred_at: "2026-08-13T02:01:50Z",
+          title: "Updating reminder",
+          subtext: "target: #raft-research:a291584b",
+          tone: "warning",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    const link = await screen.findByRole("link", { name: "#raft-research:a291584b" });
+    expect(link).toHaveAttribute("href", "/acme/channels/chan-9?thread=root-1&message=msg-1");
+    expect(lookupConversationHandle).toHaveBeenCalledWith("#raft-research:a291584b");
   });
 
   it("does not invent a summary when the server withholds it", () => {

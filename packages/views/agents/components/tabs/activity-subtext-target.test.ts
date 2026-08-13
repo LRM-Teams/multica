@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseActivityHandle,
   parseActivitySubtext,
   resolveActivityHandleHref,
 } from "./activity-subtext-target";
@@ -57,5 +58,30 @@ describe("resolveActivityHandleHref", () => {
     expect(
       resolveActivityHandleHref("#raft-research:a291584b", channels, channelDetail),
     ).toBeNull();
+  });
+
+  it("uses an authorized lookup href for a #channel:shortId handle", () => {
+    expect(
+      resolveActivityHandleHref("#raft-research:a291584b", channels, channelDetail, {
+        available: true,
+        href: "/acme/channels/chan-9?message=msg-1",
+      }),
+    ).toBe("/acme/channels/chan-9?message=msg-1");
+  });
+});
+
+describe("parseActivityHandle", () => {
+  it("reads a channel name", () => {
+    expect(parseActivityHandle("#general")).toEqual({
+      channelName: "general",
+      messagePrefix: null,
+    });
+  });
+
+  it("reads a CLI #channel:threadShortId target", () => {
+    expect(parseActivityHandle("#raft-research:a291584b")).toEqual({
+      channelName: "raft-research",
+      messagePrefix: "a291584b",
+    });
   });
 });

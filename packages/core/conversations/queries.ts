@@ -1,5 +1,6 @@
 import {
   infiniteQueryOptions,
+  queryOptions,
   QueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
@@ -22,7 +23,19 @@ import type { ConversationListItem, ConversationListResponse } from "./types";
 export const conversationKeys = {
   all: (wsId: string) => ["conversations", wsId] as const,
   list: (wsId: string) => [...conversationKeys.all(wsId), "list"] as const,
+  lookup: (wsId: string, handle: string) =>
+    [...conversationKeys.all(wsId), "lookup", handle] as const,
 };
+
+export function conversationHandleLookupOptions(wsId: string, handle: string) {
+  return queryOptions({
+    queryKey: conversationKeys.lookup(wsId, handle),
+    queryFn: () => api.lookupConversationHandle(handle),
+    enabled: Boolean(wsId) && Boolean(handle),
+    staleTime: Infinity,
+    networkMode: "always" as const,
+  });
+}
 
 export function conversationsOptions(wsId: string, pageSize = 50) {
   return infiniteQueryOptions({

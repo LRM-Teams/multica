@@ -1,6 +1,10 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import {
+  conversationHandleLookupOptions,
+  parseConversationHandle,
+} from "@multica/core/conversations";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import { channelsOptions } from "@multica/core/channels/queries";
 import type { Channel } from "@multica/core/types";
@@ -21,38 +25,66 @@ export function ActivitySubtext({ text, workspaceId }: { text: string; workspace
     enabled: Boolean(workspaceId),
   });
   const channelDetail = slug ? paths.workspace(slug).channelDetail : undefined;
-  const navigation = useOptionalNavigation();
   const parts = parseActivitySubtext(text);
+  let offset = 0;
 
   return (
     <span
       data-testid="runner-activity-subtext"
       className="mt-0.5 block whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted-foreground"
     >
-      {parts.map((part, index) => {
-        if (part.kind === "text") return <span key={index}>{part.value}</span>;
-        const href =
-          channelDetail && channels
-            ? resolveActivityHandleHref(part.value, channels as Channel[], channelDetail)
-            : null;
-        if (!href) {
-          return (
-            <span key={index} className={HANDLE_CLASS}>
-              {part.value}
-            </span>
-          );
-        }
-        const className = `${HANDLE_CLASS} text-primary hover:underline`;
-        return navigation ? (
-          <AppLink key={index} href={href} className={className} title={part.value}>
-            {part.value}
-          </AppLink>
-        ) : (
-          <a key={index} href={href} className={className} title={part.value}>
-            {part.value}
-          </a>
+      {parts.map((part) => {
+        const key = `${offset}-${part.kind}`;
+        offset += part.value.length;
+        if (part.kind === "text") return <span key={key}>{part.value}</span>;
+        return (
+          <ActivityHandle
+            key={key}
+            handle={part.value}
+            workspaceId={workspaceId}
+            channels={channels as Channel[] | undefined}
+            channelDetail={channelDetail}
+          />
         );
       })}
     </span>
+  );
+}
+
+function ActivityHandle({
+  handle,
+  workspaceId,
+  channels,
+  channelDetail,
+}: {
+  handle: string;
+  workspaceId: string;
+  channels: Channel[] | undefined;
+  channelDetail: ((id: string) => string) | undefined;
+}) {
+  const parsed = parseConversationHandle(handle);
+  const { data: lookup } = useQuery({
+    ...conversationHandleLookupOptions(workspaceId, handle),
+    enabled:
+      Boolean(workspaceId) && parsed?.kind === "channel" && parsed.messagePrefix != null,
+  });
+  const navigation = useOptionalNavigation();
+  const href = parsed?.messagePrefix
+    ? resolveActivityHandleHref(handle, [], () => "", lookup)
+    : channelDetail && channels
+      ? resolveActivityHandleHref(handle, channels, channelDetail)
+      : null;
+  if (!href) {
+    return <span className={HANDLE_CLASS}>{handle}</span>;
+  }
+  const className = `${HANDLE_CLASS} text-primary hover:underline`;
+  return navigation ? (
+    <AppLink href={href} className={className} title={handle}>
+      {handle}
+    </AppLink>
+  ) : (
+    <a href={href} className={className} title={handle}>
+      {handle}
+    </a>
   );
 }

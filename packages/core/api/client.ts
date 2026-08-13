@@ -235,7 +235,7 @@ import type {
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
-import type { ConversationListResponse } from "../conversations/types";
+import type { ConversationHandleLookup, ConversationListResponse } from "../conversations/types";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
@@ -293,7 +293,9 @@ import {
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
+  ConversationHandleLookupSchema,
   EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE,
+  EMPTY_CONVERSATION_HANDLE_LOOKUP,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_STICKER_CATALOG_RESPONSE,
@@ -3346,6 +3348,17 @@ export class ApiClient {
     if (options?.cursor) params.set("cursor", options.cursor);
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return this.fetch(`/api/conversations${suffix}`);
+  }
+
+  async lookupConversationHandle(handle: string): Promise<ConversationHandleLookup> {
+    const params = new URLSearchParams({ handle });
+    const raw = await this.fetch<unknown>(`/api/conversations/lookup?${params.toString()}`);
+    return parseWithFallback(
+      raw,
+      ConversationHandleLookupSchema,
+      EMPTY_CONVERSATION_HANDLE_LOOKUP,
+      { endpoint: "GET /api/conversations/lookup" },
+    );
   }
 
   async createChannel(data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }): Promise<Channel> {

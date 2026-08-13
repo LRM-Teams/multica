@@ -1,37 +1,39 @@
+import {
+  parseConversationHandle,
+  splitTextWithConversationHandles,
+} from "@multica/core/conversations";
+import type { ConversationHandleLookup } from "@multica/core/conversations";
+
 export type ActivitySubtextPart =
   | { kind: "text"; value: string }
   | { kind: "handle"; value: string };
 
-const HANDLE = /#[^\s]+/g;
-
-/** Split Activity subtext so `target: #channel` / bare `#channel` can become links. */
+/** Split Activity subtext so `target: #channel` / `#channel:shortId` can become links. */
 export function parseActivitySubtext(subtext: string): ActivitySubtextPart[] {
-  const parts: ActivitySubtextPart[] = [];
-  const pushText = (value: string) => {
-    if (value) parts.push({ kind: "text", value });
-  };
+  return splitTextWithConversationHandles(subtext);
+}
 
-  let cursor = 0;
-  HANDLE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = HANDLE.exec(subtext)) !== null) {
-    pushText(subtext.slice(cursor, match.index));
-    parts.push({ kind: "handle", value: match[0] });
-    cursor = match.index + match[0].length;
-  }
-  pushText(subtext.slice(cursor));
-  return parts.length > 0 ? parts : [{ kind: "text", value: subtext }];
+export function parseActivityHandle(
+  handle: string,
+): { channelName: string; messagePrefix: string | null } | null {
+  const parsed = parseConversationHandle(handle);
+  if (!parsed || parsed.kind !== "channel") return null;
+  return { channelName: parsed.name, messagePrefix: parsed.messagePrefix };
 }
 
 export function resolveActivityHandleHref(
   handle: string,
   channels: readonly { id: string; name: string; kind?: string }[],
   channelDetail: (id: string) => string,
+  lookup?: ConversationHandleLookup | null,
 ): string | null {
-  const body = handle.trim().replace(/^#/, "");
-  if (!body || body.includes(":")) return null;
+  const parsed = parseActivityHandle(handle);
+  if (!parsed) return null;
+  if (parsed.messagePrefix) {
+    return lookup?.available === true && lookup.href ? lookup.href : null;
+  }
   const channel = channels.find(
-    (candidate) => candidate.kind !== "dm" && candidate.name === body,
+    (candidate) => candidate.kind !== "dm" && candidate.name === parsed.channelName,
   );
   return channel ? channelDetail(channel.id) : null;
 }

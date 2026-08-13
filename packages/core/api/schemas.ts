@@ -61,6 +61,7 @@ import type {
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
+import type { ConversationHandleLookup } from "../conversations/types";
 
 export const NotePageSchema: z.ZodType<NotePage> = z.object({
   id: z.string().default(""),
@@ -2288,6 +2289,17 @@ export interface ChannelCreateErrorBody {
   code: "channel_name_taken";
   error?: string;
 }
+
+// GET /api/conversations/lookup — authorized href for a CLI/Activity/chat
+// handle. Fail closed: a malformed payload is not a clickable link.
+export const ConversationHandleLookupSchema: z.ZodType<ConversationHandleLookup> = z.object({
+  available: z.boolean(),
+  href: z.string().optional().nullable(),
+}).loose();
+
+export const EMPTY_CONVERSATION_HANDLE_LOOKUP: ConversationHandleLookup = {
+  available: false,
+};
 
 
 // ---------------------------------------------------------------------------

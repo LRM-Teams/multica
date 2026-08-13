@@ -216,7 +216,14 @@ function renderReferenceToken({
     if (!interactive) {
       return <span className="text-brand">{`#${stripLeadingHash(reference.label ?? reference.ref_id)}`}</span>;
     }
-    return <ChannelRefLink channelId={reference.ref_id} label={reference.label ?? text} />;
+    return (
+      <ChannelRefLink
+        channelId={reference.ref_id}
+        label={reference.label ?? text}
+        messageId={reference.params?.message_id}
+        threadId={reference.params?.thread_id}
+      />
+    );
   }
 
   // Block agent:create Proposals render in MessagePartsRenderer, not as

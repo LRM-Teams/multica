@@ -85,6 +85,12 @@
 - **#521 已见失败与修复**：真实消息 `a9d90909` 的第三个 `LRM-126` 紧邻前一个引用（`LRM-126。LRM-126`）而未锚定；旧 RE2 模式把 `。` 一并消费，非重叠匹配无法把它再用作下一个引用的左边界。#637 改为 identifier-only match + 独立 boundary 校验，保留精确 UTF-16 span。
 - **物**：#624 mention 契约回归；#637（已合并）`TestFindBareIssueIdentifiersFindsAdjacentRepeatedOccurrences`（N>2、相邻）与 `TestChannelBareIssueReferencesBecomeStructuredMessageParts`（真实写入链、顺序和精确 UTF-16 span）；FE `data-ref-source` 断言（§2.4）。
 
+### 1.2.1 Conversation handle 语法（`#channel:shortId`）— `可执行`（⑤）
+- **口径（2026-08-13）**：CLI / Activity / 频道正文共用一套 handle 语法，对齐 Raft：`#channel`、`#channel:<6–8 hex>`、`dm:@peer`、`dm:@peer:<6–8 hex>`。hex 是 message UUID 去掉连字符后的前缀（Raft `shortMessageId = id.slice(0, 8)`）。禁止从 raw short id 猜 href。
+- **写路径**：`#channel:shortId` 必须先于裸 `#name` 占住完整 span，并在前缀唯一时把 `message_id` / `thread_id` 写进 `channel-ref.params`；前缀未知或不唯一则退回 `#name` chip。
+- **读路径**：Activity / 任意前端深链走 `GET /api/conversations/lookup`（成员可见才返回 href）。频道 chip 只消费已验证的 part params。
+- **物**：`packages/core/conversations/handle.ts` 与 `server/pkg/conversationhandle`；`TestChannelBareConversationHandleBecomesStructuredMessagePart`；`ConversationHandleLookupSchema` 畸形响应 fail-closed。
+
 ### 1.3 写读不拆部署 / reader-first 删除 — `仅文档`（门禁尚未落地）
 - 格式迁移三端（写边界/读渲染/输入端）同批上；删字段先停读后删写（#622→#507 顺序），**永不反向**。
 - 迁移 forward-only、不留兼容层（precedent：migration 178/179）；**兼容的是路径，不是外观**（§2.3）。

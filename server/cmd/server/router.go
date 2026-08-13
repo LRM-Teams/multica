@@ -882,6 +882,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Notes
 			r.Route("/api/notes", func(r chi.Router) {
+				r.Post("/retrospectives", h.CreateNoteRetrospective)
 				r.Route("/pages", func(r chi.Router) {
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)

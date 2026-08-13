@@ -244,6 +244,8 @@ import type {
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteWritebackRequest,
+  CreateNoteRetrospectiveRequest,
+  CreateNoteRetrospectiveResponse,
   IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
@@ -464,6 +466,8 @@ import {
   NoteWritebackListResponseSchema,
   EMPTY_NOTE_WRITEBACK,
   EMPTY_NOTE_WRITEBACK_LIST,
+  CreateNoteRetrospectiveResponseSchema,
+  EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1235,6 +1239,16 @@ export class ApiClient {
       },
       { endpoint: "POST /api/notes/pages/{id}/issues" },
     );
+  }
+
+  async createNoteRetrospective(data: CreateNoteRetrospectiveRequest): Promise<CreateNoteRetrospectiveResponse> {
+    const raw = await this.fetch<unknown>("/api/notes/retrospectives", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreateNoteRetrospectiveResponseSchema, EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE, {
+      endpoint: "POST /api/notes/retrospectives",
+    });
   }
 
   async listNotePageWritebacks(pageId: string, status?: string): Promise<NoteWritebackListResponse> {

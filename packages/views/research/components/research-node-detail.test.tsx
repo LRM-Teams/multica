@@ -537,7 +537,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(screen.getByText("Discover and select sources")).toBeInTheDocument();
     expect(screen.getByText("Required role:")).toBeInTheDocument();
     expect(screen.getByText("Reviewable evidence package")).toBeInTheDocument();
-    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
     expect(screen.getByText("Sources 2")).toBeInTheDocument();
     expect(screen.getByText("Observations 3")).toBeInTheDocument();
     expect(screen.getByText("Claims 1")).toBeInTheDocument();

@@ -237,7 +237,7 @@ describe("research node-detail evidence a11y static contract (LRM-1206)", () => 
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAccessibleName("Explicitly linked");
     expect(links[0]).toHaveAttribute("href", "https://docs.example/linked");
-    expect(links[0]).toHaveAttribute("rel", "noreferrer");
+    expect(links[0]).toHaveAttribute("rel", "noreferrer noopener");
     expect(screen.queryByText("Session source A (high weight)")).toBeNull();
     expect(screen.queryByText("No evidence")).toBeNull();
   });

@@ -133,10 +133,27 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
     const onRetry = vi.fn();
     render(
       <ResearchConstellationWorkspace
-        typedGraph={undefined}
+        typedGraph={{
+          session_id: "s1",
+          graph_version: 0,
+          total_node_count: 0,
+          nodes: [],
+          edges: [],
+          clusters: [],
+          lineage: {
+            derived: {},
+            merged: {},
+            superseded: {},
+            restarted: {},
+            invalidated: {},
+            supersedes: {},
+          },
+        }}
         typedLoading={false}
-        typedError
-        projectionErrorReason="V6 interface error"
+        typedError={false}
+        projectionMismatch
+        snapshotNodeCount={3}
+        typedGraphSessionId="s1"
         onRetryTypedGraph={onRetry}
         retryTypedGraphPending
         snapshotNodes={snapshotNodes}

@@ -38,6 +38,7 @@ import {
   type CanvasNodeA11yCopy,
 } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
+import { resolveAgentInspectorRow } from "../lib/resolve-agent-inspector-row";
 import {
   mergeResearchCanvasNodes,
   resolveResearchCanvasNode,
@@ -449,14 +450,13 @@ export function ResearchConstellationWorkspace({
     [mobileNeighborhoodIdList],
   );
 
-  const inspectorRow =
-    inspectorAgentId != null
-      ? executionRows.find((row) => row.id === inspectorAgentId) ?? null
-      : null;
-
   const selectedTypedNode =
     selectedNode && typedGraph
       ? typedGraph.nodes.find((node) => node.id === selectedNode.id) ?? null
+      : null;
+  const inspectorRow =
+    inspectorAgentId != null && selectedTypedNode?.actor_agent_id === inspectorAgentId
+      ? resolveAgentInspectorRow(executionRows, selectedTypedNode)
       : null;
 
   const handleCanvasSelect = useCallback(

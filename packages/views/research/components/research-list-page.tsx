@@ -759,12 +759,22 @@ export function ResearchListPage() {
                 </div>
               </div>
               <Button
+                type="button"
                 variant="outline"
                 size="sm"
-                className="w-full shrink-0 md:w-auto"
-                onClick={retryBootstrap}
+                aria-disabled={bootstrapFetching || undefined}
+                className={cn(
+                  "w-full shrink-0 md:w-auto",
+                  bootstrapFetching && "cursor-not-allowed opacity-50",
+                )}
+                onClick={() => {
+                  if (bootstrapFetching) return;
+                  retryBootstrap();
+                }}
               >
-                {t(($) => $.list.retry)}
+                {t(($) =>
+                  bootstrapFetching ? $.connectivity.retrying : $.list.retry,
+                )}
               </Button>
             </div>
           ) : sessions.length === 0 ? (

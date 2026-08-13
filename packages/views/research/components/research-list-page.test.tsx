@@ -195,6 +195,27 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the list retry focused and suppresses repeat activation while fetching", () => {
+    const refetch = vi.fn();
+    setQuery({
+      isError: true,
+      isFetching: true,
+      error: new Error("boom"),
+      refetch,
+    });
+    render(<ResearchListPage />);
+
+    const retry = screen.getByRole("button", {
+      name: enResearch.connectivity.retrying,
+    }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(false);
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    retry.focus();
+    fireEvent.click(retry);
+    expect(document.activeElement).toBe(retry);
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
   it("LRM-833: 5xx with no cache shows server error page + retry", async () => {
     const refetch = vi.fn();
     const err = Object.assign(new Error("502 Bad Gateway"), { status: 502 });

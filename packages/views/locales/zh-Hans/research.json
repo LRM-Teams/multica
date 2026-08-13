@@ -182,6 +182,7 @@
     "handoff_project": "建立开发项目",
     "handoff_channel": "建立开发群",
     "handoff": "交接并创建",
+    "handoff_submitting": "正在交接…",
     "presence": "正在工作",
     "weight": "权重",
     "fleet_badge": {

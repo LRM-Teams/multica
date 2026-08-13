@@ -638,7 +638,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onReject={(reason) =>
           rejectConfirm.mutate(formatStageGateRejectReply(reason))
         }
-        onHandoff={() => handoff.mutate()}
+        onHandoff={() => handoff.mutateAsync().then(() => undefined)}
         confirmPending={confirm.isPending}
         rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}

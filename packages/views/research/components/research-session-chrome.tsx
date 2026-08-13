@@ -86,7 +86,7 @@ export function ResearchSessionChrome({
   onConfirm: () => void;
   /** LRM-840 — reject with optional feedback; parent posts tip + resumes. */
   onReject?: (reason: string) => void;
-  onHandoff: () => void;
+  onHandoff: () => void | Promise<void>;
   confirmPending?: boolean;
   rejectPending?: boolean;
   handoffPending?: boolean;

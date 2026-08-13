@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ResearchSession } from "@multica/core/types";
 import { ResearchSessionChrome } from "./research-session-chrome";
 
@@ -51,6 +51,7 @@ vi.mock("../../i18n/use-t", () => ({
           handoff_project: "Create development project",
           handoff_channel: "Create development channel",
           handoff: "Handoff",
+          handoff_submitting: "Handing off…",
           session_tools: "Session tools",
           fleet: "Fleet",
           sources: "Sources",
@@ -322,13 +323,72 @@ describe("ResearchSessionChrome", () => {
     expect(screen.getByText("Create development channel")).toBeTruthy();
   });
 
-  it("handoff confirm fires onHandoff and closes the popover", () => {
-    const onHandoff = vi.fn();
+  it("handoff closes only after the canonical mutation succeeds", async () => {
+    const onHandoff = vi.fn().mockResolvedValue(undefined);
     renderChrome(makeSession({ status: "completed" }), { onHandoff });
     fireEvent.click(screen.getByText("Handoff delivery"));
     fireEvent.click(screen.getByText("Handoff", { selector: "button" }));
     expect(onHandoff).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Create development project")).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByText("Create development project")).toBeNull(),
+    );
+  });
+
+  it("keeps handoff targets and focus while the mutation is pending", () => {
+    let resolveHandoff: (() => void) | undefined;
+    const onHandoff = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveHandoff = resolve;
+        }),
+    );
+    const session = makeSession({ status: "completed" });
+    const { rerender } = renderChrome(session, { onHandoff });
+    fireEvent.click(screen.getByText("Handoff delivery"));
+    const submit = screen.getByTestId("research-session-handoff-submit");
+    submit.focus();
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(onHandoff).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ResearchSessionChrome
+        session={session}
+        canConfirm
+        canHandoff
+        createProject
+        createChannel
+        onCreateProjectChange={() => {}}
+        onCreateChannelChange={() => {}}
+        onConfirm={() => {}}
+        onHandoff={onHandoff}
+        onOpenDelivery={() => {}}
+        handoffPending
+      />,
+    );
+
+    const pendingSubmit = screen.getByTestId(
+      "research-session-handoff-submit",
+    ) as HTMLButtonElement;
+    expect(screen.getByText("Create development project")).toBeTruthy();
+    expect(pendingSubmit.disabled).toBe(false);
+    expect(pendingSubmit).toHaveAttribute("aria-disabled", "true");
+    expect(pendingSubmit).toHaveAttribute("aria-busy", "true");
+    expect(document.activeElement).toBe(pendingSubmit);
+    fireEvent.click(pendingSubmit);
+    expect(onHandoff).toHaveBeenCalledTimes(1);
+    resolveHandoff?.();
+  });
+
+  it("keeps handoff recovery open when the mutation fails", async () => {
+    const onHandoff = vi.fn().mockRejectedValue(new Error("handoff failed"));
+    renderChrome(makeSession({ status: "completed" }), { onHandoff });
+    fireEvent.click(screen.getByText("Handoff delivery"));
+    fireEvent.click(screen.getByTestId("research-session-handoff-submit"));
+
+    await waitFor(() => expect(onHandoff).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Create development project")).toBeTruthy();
+    expect(screen.getByText("Create development channel")).toBeTruthy();
   });
 
   it("handoff confirm is disabled when both targets are unchecked", () => {

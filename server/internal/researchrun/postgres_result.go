@@ -314,6 +314,7 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 	if err != nil {
 		return err
 	}
+	rationale := truncateBytes(method.MethodRationale, 8192)
 	var decisionID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
@@ -323,11 +324,38 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 		          $4, $5, $6, $7, $8)
 		RETURNING id::text
 	`, state.workspaceID, state.run.SessionID, agentID, state.run.GoalVersion,
-		state.targetPlan, inputs, outcome, truncateBytes(method.MethodRationale, 8192)).Scan(&decisionID)
+		state.targetPlan, inputs, outcome, rationale).Scan(&decisionID)
 	if err != nil {
 		return err
 	}
-	return ensureDomainArtifactPassportWithAccessTx(ctx, tx, artifactKindForDecision("research_method"), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess)
+	kind := artifactKindForDecision("research_method")
+	contentHash, err := ArtifactContentHash(kind, map[string]any{
+		"decision_kind": "research_method",
+		"actor_type":    "agent",
+		"actor_id":      agentID,
+		"goal_version":  state.run.GoalVersion,
+		"plan_version":  state.targetPlan,
+		"inputs":        json.RawMessage(inputs),
+		"outcome":       json.RawMessage(outcome),
+		"rationale":     rationale,
+	})
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID:            state.workspaceID,
+		SessionID:              state.run.SessionID,
+		EntityID:               decisionID,
+		Kind:                   kind,
+		SourceCreatedAt:        timePtr(time.Now()),
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            int32Ptr(int32(state.run.GoalVersion)),
+		PlanVersion:            int32Ptr(int32(state.targetPlan)),
+		AccessLevel:            state.outputAccess,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
+		ProducedByAttemptID:    state.attemptID,
+	})
 }
 
 func isEvidenceTask(kind TaskKind) bool {

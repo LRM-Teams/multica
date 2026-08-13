@@ -996,6 +996,11 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-race-4 证据：`AcceptResult` 在事务内锁住最新 Run/Task 后重新执行严格 decoder，
+以锁定的 orchestrator version、run config、Task kind/expected-result/acceptance criteria
+重新计算 canonical hash；dispatch 后改变 Run 协议或 Task Result 合约会拒绝旧的预验证对象，
+且不会留下 Result Artifact 或 terminal Attempt。§15.18 的其余 domain/upsert-target 竞态仍待收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

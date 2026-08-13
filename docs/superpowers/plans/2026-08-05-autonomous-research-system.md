@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-access-4 证据：同一真实 PostgreSQL Run 中，evaluated subject 的 Attempt Context 和
+Passport projection 均不含 evaluation-private 工件，grader 只获得 manifest 冻结时存在的
+私有版本；撤销 grader 的 evaluation grant 后其整个冻结读取立即 fail closed，但冻结私有
+历史不被删除，且无关 subject 的 normal grant 与正向 Passport projection 保持可读。
+human/Agent HTTP principal 与独立 projector 的完整组合仍由 §15.23 后续切片收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

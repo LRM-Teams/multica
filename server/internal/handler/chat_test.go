@@ -854,6 +854,68 @@ func TestGetPendingChatTaskStandaloneHasNoTaskID(t *testing.T) {
 	}
 }
 
+func TestListPendingChatTasksAttachesUnackedDeliveryIDs(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	daemonID := "daemon-list-pending-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "list pending deliveries")
+	agentID := createHandlerTestAgentOnRuntime(t, "list-pending-"+uuid.NewString()[:8], runtimeID)
+	firstSession := createHandlerTestChatSession(t, agentID)
+	secondSession := createHandlerTestChatSession(t, agentID)
+
+	notifier := &capturedAgentDeliveryNotifier{}
+	previous := testHandler.AgentDeliveryNotifier
+	testHandler.AgentDeliveryNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previous })
+
+	want := map[string]string{}
+	for _, sessionID := range []string{firstSession, secondSession} {
+		req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+			"content": "keep this session outstanding",
+		})
+		req = withURLParam(req, "sessionId", sessionID)
+		req = withChatTestWorkspaceCtx(t, req)
+		w := httptest.NewRecorder()
+		testHandler.SendChatMessage(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("send %s: expected 201, got %d: %s", sessionID, w.Code, w.Body.String())
+		}
+		var sendResp SendChatMessageResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &sendResp); err != nil {
+			t.Fatalf("decode send %s: %v", sessionID, err)
+		}
+		if sendResp.DeliveryID == "" {
+			t.Fatalf("send %s missing delivery_id", sessionID)
+		}
+		want[sessionID] = sendResp.DeliveryID
+	}
+
+	listReq := newRequest(http.MethodGet, "/api/chat/pending-tasks", nil)
+	listReq = withChatTestWorkspaceCtx(t, listReq)
+	listW := httptest.NewRecorder()
+	testHandler.ListPendingChatTasks(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("list pending: expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+	var list PendingChatTasksResponse
+	if err := json.Unmarshal(listW.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	got := map[string]string{}
+	for _, item := range list.Tasks {
+		if _, ok := want[item.ChatSessionID]; !ok {
+			continue
+		}
+		got[item.ChatSessionID] = item.DeliveryID
+	}
+	for sessionID, deliveryID := range want {
+		if got[sessionID] != deliveryID {
+			t.Fatalf("session %s delivery_id = %q, want %q", sessionID, got[sessionID], deliveryID)
+		}
+	}
+}
+
 func TestCancelStandaloneChatClearsPending(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

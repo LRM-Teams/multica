@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -181,7 +182,11 @@ func (s *MixedRLFreezeService) ReapMixedRLQuiescence(ctx context.Context, now ti
 		result, err := s.Freeze(ctx, candidate.RunID, decision.TimedOut)
 		if err != nil {
 			// Freeze owns the row-level race. A losing scheduler is harmless and
-			// must not prevent independent due runs in this same sweep.
+			// must not prevent independent due runs in this same sweep, but a
+			// persistent failure (for example an invariant violation) retries on
+			// every tick, so it must be visible in the logs.
+			slog.Warn("mixed-RL freeze failed; will retry on next sweep",
+				"run_id", candidate.RunID, "timed_out", decision.TimedOut, "error", err)
 			continue
 		}
 		results = append(results, result)
@@ -189,6 +194,20 @@ func (s *MixedRLFreezeService) ReapMixedRLQuiescence(ctx context.Context, now ti
 	return results, nil
 }
 
+// canonicalMixedRLManifest builds the frozen snapshot's integrity manifest and
+// its SHA-256 hash. The hash binds only the structural identity of the frozen
+// DAG: provider call IDs, segment IDs, segment↔call association triples, edge
+// IDs, and capture-gap markers. It deliberately excludes payloads, token-level
+// data, eligibility flags, and rewards — those are fetched from the referenced
+// rows at export time and are guarded by their own invariants, not by this
+// hash. Two consequences to keep in mind:
+//
+//  1. The hash proves "this snapshot still references the same structure", not
+//     "the run's rewards/eligibility are unchanged".
+//  2. Edge IDs are random UUIDs minted at capture time, so replaying the same
+//     recorded provider events produces a different manifest hash. The hash is
+//     a tamper-evidence seal for one frozen snapshot, not a reproducible-build
+//     digest across re-runs.
 func canonicalMixedRLManifest(calls []db.PiProviderCall, segments []db.InteractionDagRunSegment, associations []db.InteractionDagSegmentProviderCall, edges []db.InteractionDagCausalEdge, auditEvents []db.EnvDispatchRunAuditEvent) ([]byte, string, error) {
 	callIDs := make([]string, 0, len(calls))
 	for _, call := range calls {

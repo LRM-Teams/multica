@@ -217,6 +217,19 @@ func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity
 	if !authorized {
 		return errors.New("mixed-run activity transition scope mismatch")
 	}
+	// A terminal run's counters were settled authoritatively by the freeze.
+	// Late activity transitions must be acknowledged and dropped: rejecting
+	// them would leave a poison entry in the daemon outbox that replays on
+	// every reconnect, while applying them would corrupt the frozen run's
+	// quiescence bookkeeping.
+	var runStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT status FROM env_dispatch_run WHERE run_id = $1`, runID).Scan(&runStatus); err != nil {
+		return fmt.Errorf("load mixed-run status for activity transition: %w", err)
+	}
+	if runStatus == "completed" || runStatus == "failed_timeout" {
+		return tx.Commit(ctx)
+	}
 	var inserted bool
 	err = tx.QueryRow(ctx, `
 		INSERT INTO env_dispatch_activity_transition AS transition (

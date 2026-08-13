@@ -77,6 +77,68 @@ func TestNormalizeOfflineCall_ExcludesUnsupportedSemantics(t *testing.T) {
 	assert.Equal(t, OfflineNormalizationVersion, line.Details["normalization_version"])
 }
 
+func TestNormalizeOfflineCall_ExcludesUnrepresentableBlockFields(t *testing.T) {
+	baseRequest := []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"q"}]}]}`)
+	cases := []struct {
+		name         string
+		rawRequest   []byte
+		final        []byte
+		semanticType string
+	}{
+		{
+			name:         "thinking signature is model-significant",
+			rawRequest:   baseRequest,
+			final:        []byte(`{"role":"assistant","blocks":[{"type":"thinking","thinking":"r","signature":"sig-1"}]}`),
+			semanticType: "thinking.signature",
+		},
+		{
+			name:         "text citations cannot round-trip",
+			rawRequest:   []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"q","citations":[{"title":"t"}]}]}]}`),
+			final:        []byte(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}]}`),
+			semanticType: "text.citations",
+		},
+		{
+			name:         "tool result error flag changes model input",
+			rawRequest:   []byte(`{"model":"m","messages":[{"role":"tool","content":[{"type":"toolResult","tool_call_id":"t1","is_error":true,"content":"boom"}]}]}`),
+			final:        []byte(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}]}`),
+			semanticType: "toolResult.is_error",
+		},
+		{
+			name:         "tool call extra provider field is lossy",
+			rawRequest:   baseRequest,
+			final:        []byte(`{"role":"assistant","blocks":[{"type":"toolCall","id":"t1","name":"act","arguments":{},"provider_trace":"xyz"}]}`),
+			semanticType: "toolCall.provider_trace",
+		},
+		{
+			name:         "openai message-level tool_calls cannot be dropped",
+			rawRequest:   []byte(`{"model":"m","messages":[{"role":"assistant","content":"text","tool_calls":[{"id":"t1"}]}]}`),
+			final:        []byte(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}]}`),
+			semanticType: "message.tool_calls",
+		},
+		{
+			name:         "nested function wrapper fields cannot round-trip",
+			rawRequest:   baseRequest,
+			final:        []byte(`{"role":"assistant","blocks":[{"type":"toolCall","function":{"name":"act","arguments":{},"strict":true}}]}`),
+			semanticType: "toolCall.function.strict",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := OfflineCallSource{
+				CallID: "C-field", TrainingMode: "offline_rl",
+				Provider: "synthetic", Model: "m", APIKind: "messages",
+				RawProviderRequest: tc.rawRequest, FinalAssistantMessage: tc.final,
+				Status: "completed", StopReason: "stop", ResponseComplete: true, TrainingEligible: true,
+				RequestHash: offlinePayloadHash(tc.rawRequest), ResponseHash: offlinePayloadHash(tc.final),
+			}
+			line := NormalizeOfflineCall(src)
+			assert.Equal(t, "excluded", line.Status)
+			assert.Equal(t, OfflineReasonNormalizationUnsupported, line.Reason)
+			assert.Equal(t, tc.semanticType, line.Details["semantic_type"])
+		})
+	}
+}
+
 func TestNormalizeOfflineCall_DetailedEligibilityAndModeReasons(t *testing.T) {
 	base := OfflineCallSource{
 		CallID: "Cx", TrainingMode: "offline_rl",

@@ -532,6 +532,23 @@ func normalizeInputMessages(raw any) ([]NormalizedMessage, string, error) {
 }
 
 func normalizeMessageBlocks(msg map[string]any) ([]NormalizedBlock, string, error) {
+	// Message-level fields outside role/blocks/content (for example OpenAI
+	// "tool_calls" or "name") may have affected model input and cannot be
+	// represented by normalization v1; exclude rather than silently drop.
+	// stopReason/stop_reason are response metadata that never re-enter model
+	// input, so they are safe to omit from the normalized form.
+	extra := make([]string, 0)
+	for key := range msg {
+		switch key {
+		case "role", "blocks", "content", "stopReason", "stop_reason":
+		default:
+			extra = append(extra, key)
+		}
+	}
+	if len(extra) > 0 {
+		sort.Strings(extra)
+		return nil, "message." + extra[0], nil
+	}
 	if blocksRaw, ok := msg["blocks"]; ok {
 		arr, ok := blocksRaw.([]any)
 		if !ok {
@@ -664,6 +681,44 @@ func normalizeAssistantOutput(raw []byte) (NormalizedMessage, string, error) {
 	return NormalizedMessage{Role: role, Blocks: blocks}, "", nil
 }
 
+// normalizedBlockAllowedKeys lists the fields each recognized block type can
+// represent losslessly. Any other field on a known block (for example an
+// Anthropic thinking "signature", a text "citations" entry, or a tool-result
+// "is_error" flag) may have affected model input and cannot be round-tripped,
+// so normalization must exclude the call instead of silently dropping it.
+var normalizedBlockAllowedKeys = map[string]map[string]struct{}{
+	"text":          {"type": {}, "text": {}},
+	"thinking":      {"type": {}, "thinking": {}, "text": {}},
+	"toolCall":      {"type": {}, "id": {}, "tool_call_id": {}, "name": {}, "arguments": {}, "input": {}, "function": {}},
+	"tool_use":      {"type": {}, "id": {}, "tool_call_id": {}, "name": {}, "arguments": {}, "input": {}, "function": {}},
+	"functionCall":  {"type": {}, "id": {}, "tool_call_id": {}, "name": {}, "arguments": {}, "input": {}, "function": {}},
+	"function_call": {"type": {}, "id": {}, "tool_call_id": {}, "name": {}, "arguments": {}, "input": {}, "function": {}},
+	"toolResult":    {"type": {}, "tool_call_id": {}, "tool_use_id": {}, "toolCallId": {}, "content": {}},
+	"tool_result":   {"type": {}, "tool_call_id": {}, "tool_use_id": {}, "toolCallId": {}, "content": {}},
+}
+
+// unsupportedBlockField returns "type.field" for the first block field that
+// normalization v1 cannot represent losslessly, or "" when the block is
+// representable. Unknown block types return "" here; the caller's type switch
+// rejects them with the bare type name.
+func unsupportedBlockField(blockType string, blockMap map[string]any) string {
+	allowed, ok := normalizedBlockAllowedKeys[blockType]
+	if !ok {
+		return ""
+	}
+	keys := make([]string, 0, len(blockMap))
+	for key := range blockMap {
+		if _, ok := allowed[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	return blockType + "." + keys[0]
+}
+
 func normalizeBlocks(raw []any, insideToolResult bool) ([]NormalizedBlock, string, error) {
 	out := make([]NormalizedBlock, 0, len(raw))
 	for _, item := range raw {
@@ -672,6 +727,9 @@ func normalizeBlocks(raw []any, insideToolResult bool) ([]NormalizedBlock, strin
 			return nil, "", errors.New("content block must be an object")
 		}
 		blockType, _ := blockMap["type"].(string)
+		if unsupported := unsupportedBlockField(blockType, blockMap); unsupported != "" {
+			return nil, unsupported, nil
+		}
 		switch blockType {
 		case "text":
 			text, _ := blockMap["text"].(string)
@@ -683,6 +741,18 @@ func normalizeBlocks(raw []any, insideToolResult bool) ([]NormalizedBlock, strin
 			}
 			out = append(out, NormalizedBlock{Type: "thinking", Thinking: thinking})
 		case "toolCall", "tool_use", "functionCall", "function_call":
+			if fn, ok := blockMap["function"].(map[string]any); ok {
+				fnKeys := make([]string, 0, len(fn))
+				for key := range fn {
+					if key != "name" && key != "arguments" {
+						fnKeys = append(fnKeys, key)
+					}
+				}
+				if len(fnKeys) > 0 {
+					sort.Strings(fnKeys)
+					return nil, blockType + ".function." + fnKeys[0], nil
+				}
+			}
 			id, _ := blockMap["id"].(string)
 			if id == "" {
 				id, _ = blockMap["tool_call_id"].(string)

@@ -346,16 +346,28 @@
     - 写入私有 `回顾/` 子页，正文含 Issue mention；同步 `note_page_issue_ref`
     - UI：笔记顶栏「生成回顾」+ `NoteRetrospectiveDialog`
     - 测试：窗口/markdown 单测、handler 聚合/关源测、FE schema fallback
+    - **Agent runs（续）**：`agent_inbox_event` 短摘要（initiator 或 owner Agent）；归「委派 Agent」；同步 `note_page_run_ref`；无 thinking/result
 
-- [ ] **S4-S2 归属打标**
+- [x] **S4-S2 归属打标**
   - **目标**：亲手 / 委派 Agent / 仅相关 分开展示。
   - **依赖**：S4-S1
   - **完成标准**：三类不会混成单一「我做了」。
+  - **已落地（2026-08-13）**：
+    - Issue Facts 扩展：本人活动 + 我相关 Issue 上他人/Agent 活动
+    - 分类：亲手（本人非委派）/ 委派（本人 assign→agent 或 Agent 执行）/ 仅相关（他人）
+    - Markdown 固定三节；笔记更新归「亲手」
+    - 测试：分类单测、markdown 分栏、handler 三桶集成测
 
-- [ ] **S4-S3 长窗口分层汇总**
+- [x] **S4-S3 长窗口分层汇总**
   - **目标**：周/月 = 日汇总再汇总，禁止一次性灌一个月原始事件。
   - **依赖**：S4-S1
   - **完成标准**：月回顾输入是日/周摘要而非全量 raw。
+  - **已落地（2026-08-13）**：
+    - 新增 `month` 窗口；周/月 `composition=layered_summaries`
+    - 优先复用 `回顾/` 下已有日/周回顾笔记；缺省日内存合成日摘要（计数 + 代表 Issue/笔记）
+    - 月回顾：有周回顾则跳过该周内日摘要；否则用日摘要填洞
+    - UI：月选项 + 文案说明分层；响应含 `layers_used` / `child_pages_used`
+    - 测试：窗口/分层合成单测、周 handler 分层与复用测、FE schema
 
 - [ ] **S4-S4 定时生成（可选）**
   - **目标**：复用 reminder 的 daily/weekly cadence，产出笔记或待审草稿。

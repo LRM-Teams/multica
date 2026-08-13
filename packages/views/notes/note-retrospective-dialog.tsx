@@ -3,7 +3,7 @@
  */
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { CalendarDays, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
@@ -30,19 +30,6 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 
 const SOURCE_OPTIONS: NoteRetrospectiveSource[] = ["issue_activity", "touched_notes", "agent_runs"];
 
-function todayInTimezone(tz: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date());
-  } catch {
-    return new Date().toISOString().slice(0, 10);
-  }
-}
-
 export function NoteRetrospectiveDialog({
   open,
   onOpenChange,
@@ -54,8 +41,20 @@ export function NoteRetrospectiveDialog({
 }) {
   const { t } = useT("layout");
   const timezone = useViewingTimezone();
+  const today = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  }, [timezone]);
   const [windowKind, setWindowKind] = useState<NoteRetrospectiveWindow>("day");
-  const [date, setDate] = useState(() => todayInTimezone(timezone));
+  const [date, setDate] = useState(today);
   const [sources, setSources] = useState<NoteRetrospectiveSource[]>(["issue_activity", "touched_notes"]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -83,7 +82,10 @@ export function NoteRetrospectiveDialog({
         throw new Error(t(($) => $.notes_page.retrospective_failed));
       }
       toast.success(
-        `${result.page.title || result.window.label} · ${result.fact_count ?? 0}`,
+        t(($) => $.notes_page.retrospective_created, {
+          title: result.page.title || result.window.label || "回顾",
+          count: result.fact_count ?? 0,
+        }),
       );
       onOpenChange(false);
       onCreated(result);
@@ -124,6 +126,14 @@ export function NoteRetrospectiveDialog({
                 onClick={() => setWindowKind("week")}
               >
                 {t(($) => $.notes_page.retrospective_window_week)}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={windowKind === "month" ? "default" : "outline"}
+                onClick={() => setWindowKind("month")}
+              >
+                {t(($) => $.notes_page.retrospective_window_month)}
               </Button>
             </div>
           </div>

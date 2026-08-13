@@ -190,10 +190,13 @@ export const CreateNoteRetrospectiveResponseSchema: z.ZodType<CreateNoteRetrospe
     end: z.string().default(""),
     label: z.string().default(""),
   }).loose(),
-  sources_used: z.array(z.string()).default([]),
-  sources_empty: z.array(z.string()).default([]),
-  sources_skipped: z.array(z.string()).default([]),
+  sources_used: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_empty: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_skipped: z.array(z.string()).nullish().transform((v) => v ?? []),
   fact_count: z.number().default(0),
+  composition: z.string().default(""),
+  layers_used: z.array(z.string()).nullish().transform((v) => v ?? []),
+  child_pages_used: z.array(z.string()).nullish().transform((v) => v ?? []),
 }).loose();
 
 export const EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE: CreateNoteRetrospectiveResponse = {
@@ -203,6 +206,9 @@ export const EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE: CreateNoteRetrospectiveRe
   sources_empty: [],
   sources_skipped: [],
   fact_count: 0,
+  composition: "",
+  layers_used: [],
+  child_pages_used: [],
 };
 
 export const NoteAIEditResultSchema = z.object({

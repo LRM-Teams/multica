@@ -245,6 +245,10 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	authorized.NormalGrantRevision = plan.NormalGrantRevision
 	authorized.PolicyWatermark = plan.PolicyWatermark
 	plan = authorized
+	if err = freezeEvidenceRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
+		return dispatchManifestPlan{}, err
+	}
+	plan.ManifestHash = hashManifestEntries(plan.Entries)
 
 	if err := registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            in.WorkspaceID,

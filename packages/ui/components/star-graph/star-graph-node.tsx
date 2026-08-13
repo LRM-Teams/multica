@@ -35,6 +35,8 @@ export interface StarGraphNodeMetrics {
 }
 
 export interface StarGraphNodeProps {
+  /** Stable renderer id used by the canvas roving-focus controller. */
+  nodeId?: string;
   /** Tier — determines size + ring + glow surface. */
   tier: StarGraphTier;
   /** Visual state. Defaults to `default`. */
@@ -67,6 +69,7 @@ export interface StarGraphNodeProps {
   /** Grid position on the canvas (left/top in % or px). Optional. */
   style?: React.CSSProperties;
   onOpen?: () => void;
+  tabIndex?: number;
   className?: string;
 }
 
@@ -75,6 +78,7 @@ export interface StarGraphNodeProps {
  * default (never throw), mirroring the GenericNode degradation rule.
  */
 export function StarGraphNode({
+  nodeId,
   tier,
   state = "default",
   title,
@@ -89,6 +93,7 @@ export function StarGraphNode({
   tabIndex,
   style,
   onOpen,
+  tabIndex,
   className,
 }: StarGraphNodeProps) {
   const token = starGraphTierToken(tier);
@@ -118,6 +123,8 @@ export function StarGraphNode({
   return (
     <button
       type="button"
+      data-node-id={nodeId}
+      tabIndex={tabIndex}
       aria-label={readable}
       data-node-id={nodeId}
       tabIndex={tabIndex}

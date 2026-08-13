@@ -1008,6 +1008,7 @@ surface 矩阵仍未完成。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
+  - [x] E5a：`ComputeSteeringImpact` 冻结最小结构失效闭包：Branch 子树与 `decomposes/refines` 顺向传播，`depends_on` 按依赖者反向传播；命中受影响 Inquiry target 的 Task 及其下游 Task 递归失效。`tests/explains/competes_with/invalidates/motivates` 只保留为语义事实，不自动授权破坏性扩大；输出同时列出 retained Tasks。E5b 在 Task target binding 合并后把该闭包接入 V6 steering 事务。
 
 退出条件：新证据能加强、削弱或推翻假设，创建/终止分支，并让后续任务引用这些持久对象。
 

@@ -613,7 +613,7 @@ func (p *canonicalAgentRuntimePool) ensureResidentProcess(ctx context.Context, a
 	starter, ok := backend.(agent.ResidentRuntimeStarter)
 	slot.mu.Unlock()
 	if !ok {
-		return nil
+		return errors.New("canonical resident runtime cannot start a provider process")
 	}
 	if ctx == nil {
 		ctx = context.Background()

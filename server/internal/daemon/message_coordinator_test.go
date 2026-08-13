@@ -1869,7 +1869,7 @@ func TestDaemonAcceptsIdleDeliveryThroughProviderBeforeAcknowledgement(t *testin
 	}
 	runtimePool := newCanonicalAgentRuntimePool()
 	runtimePool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		backend: &canonicalRuntimeTestBackend{},
+		backend: &residentProcessStartProbe{},
 	}
 	daemon := &Daemon{canonicalRuntimes: runtimePool}
 	completeCoordinatorRecovery(t, coordinator)

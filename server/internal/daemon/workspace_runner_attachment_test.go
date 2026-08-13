@@ -250,6 +250,42 @@ func TestWorkspaceRunnerDoesNotEmitStartingBeforeProcessAdmission(t *testing.T) 
 	}
 }
 
+func TestWorkspaceRunnerDoesNotRepaintStartingAfterRunning(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	var activities []protocol.AgentActivityPayload
+	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}); err != nil {
+		t.Fatalf("managed start: %v", err)
+	}
+	starting := 0
+	for _, payload := range activities {
+		if payload.Snapshot.ActivityKind == protocol.ActivityKindWorking && payload.Snapshot.DetailKind == "starting" {
+			starting++
+		}
+	}
+	if starting != 1 {
+		t.Fatalf("Starting Activity after admit = %d, want 1", starting)
+	}
+	runner.observeMessageLifecycle(agentID, runtimeID)
+	starting = 0
+	for _, payload := range activities {
+		if payload.Snapshot.ActivityKind == protocol.ActivityKindWorking && payload.Snapshot.DetailKind == "starting" {
+			starting++
+		}
+	}
+	if starting != 1 {
+		t.Fatalf("Starting Activity after Running handoff = %d, want still 1", starting)
+	}
+}
+
 func TestWorkspaceRunnerManagedStartMarksLaunchRunningAfterProviderSpawn(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"

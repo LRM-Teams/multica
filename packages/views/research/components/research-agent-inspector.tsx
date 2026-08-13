@@ -2,6 +2,10 @@
 
 import type { TypedGraphNode } from "@multica/core/research";
 import type { ExecutionRow } from "../execution-overlay";
+import {
+  formatClock,
+  formatElapsedDuration,
+} from "../execution-overlay/execution-overlay-row";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Sheet,
@@ -89,6 +93,25 @@ function ResearchAgentInspectorBody({
     payloadObjective ||
     row.action ||
     t(($) => $.d5.inspector.no_task);
+  const executionFacts = [
+    row.taskId,
+    row.attemptId,
+    row.branchId,
+    row.startedAt,
+    row.updatedAt,
+    row.elapsedMs,
+    row.reason,
+  ].some((value) => value != null && value !== "");
+  const clock = (value: number) =>
+    formatClock(value, (time) => t(($) => $.panel.execution.clock_time, { time }));
+  const elapsed =
+    row.elapsedMs == null
+      ? null
+      : formatElapsedDuration(row.elapsedMs, {
+          sec: (count) => t(($) => $.panel.execution.elapsed_sec, { count }),
+          min: (count) => t(($) => $.panel.execution.elapsed_min, { count }),
+          hour: (count) => t(($) => $.panel.execution.elapsed_hour, { count }),
+        });
 
   return (
     <>
@@ -125,6 +148,29 @@ function ResearchAgentInspectorBody({
             {t(($) => $.d5.inspector.phase, { phase: row.stage })}
           </p>
         ) : null}
+        {executionFacts ? (
+          <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/50 bg-background/30 p-3 text-[11px]">
+            {row.taskId ? (
+              <ExecutionFact label={t(($) => $.panel.execution.task)} value={row.taskId} />
+            ) : null}
+            {row.attemptId ? (
+              <ExecutionFact label={t(($) => $.panel.execution.attempt)} value={row.attemptId} />
+            ) : null}
+            {row.branchId ? (
+              <ExecutionFact label={t(($) => $.d5.inspector.branch)} value={row.branchId} />
+            ) : null}
+            {row.startedAt != null ? (
+              <ExecutionFact label={t(($) => $.panel.execution.started)} value={clock(row.startedAt)} />
+            ) : null}
+            <ExecutionFact label={t(($) => $.panel.execution.updated)} value={clock(row.updatedAt)} />
+            {elapsed ? (
+              <ExecutionFact label={t(($) => $.panel.execution.duration)} value={elapsed} />
+            ) : null}
+            {row.reason ? (
+              <ExecutionFact label={t(($) => $.d5.inspector.reason)} value={row.reason} />
+            ) : null}
+          </dl>
+        ) : null}
         {row.recentResult ? (
           <section className="work-block">
             <h4>{t(($) => $.d5.inspector.completed)}</h4>
@@ -145,6 +191,15 @@ function ResearchAgentInspectorBody({
           </Button>
         ) : null}
       </footer>
+    </>
+  );
+}
+
+function ExecutionFact({ label, value }: { label: string; value: string }) {
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words font-mono text-foreground">{value}</dd>
     </>
   );
 }

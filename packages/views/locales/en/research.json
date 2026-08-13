@@ -1025,6 +1025,8 @@
       "objective": "Current objective",
       "no_task": "No active task",
       "phase": "Phase · {{phase}}",
+      "branch": "Branch",
+      "reason": "Reason",
       "completed": "Completed",
       "current": "In progress",
       "open_agent": "Open agent settings"

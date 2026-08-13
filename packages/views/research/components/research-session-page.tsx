@@ -491,6 +491,18 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   ];
 
   const postUser = (body: string) => send.mutate(body);
+  const postUserCommitted = (body: string) =>
+    send.mutateAsync(body).then(() => undefined);
+  const stopAndPostUser = async (body: string) => {
+    const stopRequest = api.stopResearchSession(sessionId).catch((error: unknown) => {
+      showErrorToast(error instanceof Error ? error.message : String(error));
+      throw error;
+    });
+    await Promise.all([stopRequest, postUserCommitted(body)]);
+    void qc.invalidateQueries({
+      queryKey: researchKeys.snapshot(wsId, sessionId),
+    });
+  };
 
   // Plain derivation after data-gated early returns — do not use hooks here
   // (rules-of-hooks). goal history is cheap and only needed on the success path.
@@ -734,33 +746,28 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   compact
                   pending={send.isPending}
                   onAgree={() =>
-                    postUser(
+                    postUserCommitted(
                       `同意罗纳尔多产品轮 Round ${latestRound.round_number} 裁定：${latestRound.decision}`,
                     )
                   }
-                  onRejectContinue={() => {
-                    void api.stopResearchSession(sessionId).then(() => {
-                      void qc.invalidateQueries({
-                        queryKey: researchKeys.snapshot(wsId, sessionId),
-                      });
-                    });
-                    postUser(
+                  onRejectContinue={async () => {
+                    await stopAndPostUser(
                       `驳回 continue：请停止调研（Round ${latestRound.round_number}）。`,
                     );
                   }}
                   onRejectStop={() =>
-                    postUser(
+                    postUserCommitted(
                       `驳回 stop：请在预算内再开一轮加深（Round ${latestRound.round_number}，剩余 ${latestRound.budget_remaining}）。`,
                     )
                   }
                   onConfirmGoalPatch={(text) =>
-                    postUser(`确认将调研最终目标更新为：${text}`)
+                    postUserCommitted(`确认将调研最终目标更新为：${text}`)
                   }
                   onEditGoalPatch={(text) =>
-                    postUser(`请按以下文本更新调研最终目标：${text}`)
+                    postUserCommitted(`请按以下文本更新调研最终目标：${text}`)
                   }
                   onRejectGoalPatch={() =>
-                    postUser(
+                    postUserCommitted(
                       `拒绝本轮目标回灌提案（Round ${latestRound.round_number}），保持当前目标不变。`,
                     )
                   }
@@ -853,33 +860,28 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                             onClarificationForm={onClarificationForm}
                             onClarificationSkip={onClarificationSkip}
                             onRoundAgree={(card) =>
-                              postUser(
+                              postUserCommitted(
                                 `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
                               )
                             }
-                            onRoundRejectContinue={(card) => {
-                              void api.stopResearchSession(sessionId).then(() => {
-                                void qc.invalidateQueries({
-                                  queryKey: researchKeys.snapshot(wsId, sessionId),
-                                });
-                              });
-                              postUser(
+                            onRoundRejectContinue={async (card) => {
+                              await stopAndPostUser(
                                 `驳回 continue：请停止调研（Round ${card.round_number}）。`,
                               );
                             }}
                             onRoundRejectStop={(card) =>
-                              postUser(
+                              postUserCommitted(
                                 `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
                               )
                             }
                             onConfirmGoalPatch={(_card, text) =>
-                              postUser(`确认将调研最终目标更新为：${text}`)
+                              postUserCommitted(`确认将调研最终目标更新为：${text}`)
                             }
                             onEditGoalPatch={(_card, text) =>
-                              postUser(`请按以下文本更新调研最终目标：${text}`)
+                              postUserCommitted(`请按以下文本更新调研最终目标：${text}`)
                             }
                             onRejectGoalPatch={(card) =>
-                              postUser(
+                              postUserCommitted(
                                 `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
                               )
                             }

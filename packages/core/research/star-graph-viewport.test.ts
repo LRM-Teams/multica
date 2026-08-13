@@ -49,6 +49,9 @@ describe("LRM-1514 D5 viewport occlusion (AC: core nodes never occluded)", () =>
       [1920, 1080, 0, "1920x1080 chat-closed"],
       [1280, 720, 300, "narrow 1280x720 chat-open"],
       [1024, 768, 260, "narrow 1024x768"],
+      [448, 900, 0, "tablet 768x900 with 320 sibling rail already excluded"],
+      [360, 800, 0, "mobile 360x800 sheet-closed"],
+      [720, 450, 0, "1440x900 at 200% browser zoom"],
     ];
     for (const [w, h, panel, label] of cases) {
       const fitted = translateLayoutInto(layout, { width: w, height: h }, { rightPanelWidth: panel });

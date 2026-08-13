@@ -25,8 +25,9 @@ unscoped live-session read is rejected:
 multica research session get <session-id> --attempt-id <attempt-id> --output json
 ```
 
-The snapshot's `run.contract`, `run.method`, `run.sources`,
-`run.observations`, and `run.claims` are the canonical read model for contract
+The snapshot's Run, Contract, Method, Questions, Tasks, Sources, Observations,
+and Claims are reconstructed from the dispatched frozen representations; live
+session changes are not mixed into that Attempt. They are the read model for contract
 constraints, method, synthesis, verification, and audit. Source text is
 represented by a bounded excerpt plus content hash; exact Observation quotes
 were already checked against the immutable full snapshot at ingestion. V3–V5

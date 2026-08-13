@@ -476,7 +476,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := h.Queries.CreateResearchMessage(r.Context(), db.CreateResearchMessageParams{
+	msg, err := h.createResearchMessageWithPassport(r.Context(), db.CreateResearchMessageParams{
 		WorkspaceID:   wsUUID,
 		SessionID:     session.ID,
 		SenderType:    senderType,

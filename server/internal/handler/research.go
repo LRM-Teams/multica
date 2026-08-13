@@ -401,6 +401,10 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	if !agentAttemptScoped && strings.TrimSpace(r.URL.Query().Get("attempt_id")) != "" {
+		writeError(w, http.StatusBadRequest, "attempt_id is only available on the Agent research route")
+		return
+	}
 	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{
 		ID:          sessionID,
 		WorkspaceID: wsUUID,

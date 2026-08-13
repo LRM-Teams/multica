@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -158,7 +159,7 @@ func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotWithoutAttemptID(
 	}
 }
 
-func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotForAttemptWhenAttemptIDPresent(t *testing.T) {
+func TestSnapshotPassportHumanSnapshotRejectsAttemptScopedRead(t *testing.T) {
 	sessionID := seedInitializedResearchSessionForSnapshotTest(t)
 	attemptID := uuid.NewString()
 
@@ -171,22 +172,16 @@ func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotForAttemptWhenAtt
 	recorder := httptest.NewRecorder()
 	testHandler.GetResearchSessionSnapshot(recorder, req)
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s want 400", recorder.Code, recorder.Body.String())
 	}
-	if !engine.snapshotForAttemptCalled {
-		t.Fatal("expected SnapshotForAttempt to be called when attempt_id is present")
+	if strings.Contains(recorder.Body.String(), attemptID) {
+		t.Fatalf("rejected human read leaked attempt id in body=%q", recorder.Body.String())
+	}
+	if engine.snapshotForAttemptCalled {
+		t.Fatal("human route must not call SnapshotForAttempt")
 	}
 	if engine.snapshotCalled {
-		t.Fatal("Snapshot must not be called when attempt_id is present")
-	}
-	if engine.snapshotSessionID != uuidToString(sessionID) {
-		t.Fatalf("snapshot session id=%q, want %q", engine.snapshotSessionID, uuidToString(sessionID))
-	}
-	if engine.snapshotWorkspaceID != testWorkspaceID {
-		t.Fatalf("snapshot workspace id=%q, want %q", engine.snapshotWorkspaceID, testWorkspaceID)
-	}
-	if engine.snapshotAttemptID != attemptID {
-		t.Fatalf("snapshot attempt id=%q, want %q", engine.snapshotAttemptID, attemptID)
+		t.Fatal("rejected human attempt-scoped read must not load a live snapshot")
 	}
 }

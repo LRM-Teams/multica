@@ -203,14 +203,15 @@ function headerForTier(tier: StarGraphTier): string | undefined {
 }
 
 function subLabelForTier(
-  tier: StarGraphTier,
   node: StarGraphNodeInput,
 ): string | undefined {
-  if (tier === "s") {
-    // S-tier short label is the real summary/type, not fabricated.
-    return node.summary ?? undefined;
-  }
-  return undefined;
+  // The prototype's larger result nodes carry a concise explanatory line.
+  // Keep that information density in production only when the projection
+  // supplied the fact; an absent summary remains absent rather than being
+  // reconstructed from the title or node kind.
+  return typeof node.summary === "string" && node.summary.trim()
+    ? node.summary.trim()
+    : undefined;
 }
 
 /* ------------------------------------------------------------------ *
@@ -238,7 +239,7 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
       tierSource: source,
       state,
       title: node.title,
-      subLabel: subLabelForTier(tier, node),
+      subLabel: subLabelForTier(node),
       agentBadge:
         typeof node.actor_agent_id === "string" && node.actor_agent_id
           ? shortAgent(node.actor_agent_id)
@@ -254,7 +255,7 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
     state,
     title: node.title,
     headerLabel: headerForTier(tier),
-    subLabel: subLabelForTier(tier, node),
+    subLabel: subLabelForTier(node),
     metrics,
   };
 }

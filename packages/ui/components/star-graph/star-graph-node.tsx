@@ -94,6 +94,11 @@ export function StarGraphNode({
     (metrics?.documentCount != null ||
       metrics?.confidence != null ||
       metrics?.conclusionCount != null);
+  const documentCount = metrics?.documentCount;
+  const showDocumentBadge =
+    (token.tier === "xxl" || token.tier === "xl" || token.tier === "l") &&
+    documentCount != null;
+  const metricSummary = metricsText(metrics, showDocumentBadge);
 
   return (
     <button
@@ -139,22 +144,30 @@ export function StarGraphNode({
             >
               {title}
             </span>
-            {showMetrics && (
+            {subLabel && (
               <span
-                data-testid="star-graph-metrics"
-                className="sg-sub mt-0.5 block w-full"
+                data-testid="star-graph-sub"
+                className="sg-sub sg-summary block w-full"
               >
-                {metricsText(metrics)}
+                {subLabel}
               </span>
             )}
-            {subLabel && (
-              <span data-testid="star-graph-sub" className="sg-sub block w-full">
-                {subLabel}
+            {showMetrics && metricSummary && (
+              <span
+                data-testid="star-graph-metrics"
+                className="sg-sub sg-metrics mt-0.5 block w-full"
+              >
+                {metricSummary}
               </span>
             )}
           </>
         )}
       </span>
+      {showDocumentBadge && (
+        <span data-testid="star-graph-document-badge" className="sg-document-badge">
+          DOC · {documentCount}
+        </span>
+      )}
       {stateToken.glyph !== "none" && (
         <span
           data-testid="star-graph-glyph"
@@ -196,11 +209,16 @@ function SNodeContent({
   );
 }
 
-function metricsText(metrics: StarGraphNodeMetrics | undefined): string {
+function metricsText(
+  metrics: StarGraphNodeMetrics | undefined,
+  omitDocumentCount = false,
+): string {
   if (!metrics) return "";
   const parts: string[] = [];
   if (metrics.round) parts.push(`R${metrics.round}`);
-  if (metrics.documentCount != null) parts.push(`${metrics.documentCount} 文档`);
+  if (!omitDocumentCount && metrics.documentCount != null) {
+    parts.push(`${metrics.documentCount} 文档`);
+  }
   if (metrics.confidence != null) parts.push(`置信 ${metrics.confidence}%`);
   if (metrics.conclusionCount != null) parts.push(`${metrics.conclusionCount} 结论`);
   return parts.join(" · ");

@@ -163,6 +163,41 @@
   color: var(--muted-foreground);
 }
 
+.sg-node .sg-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.sg-node.sg-tier-m .sg-summary {
+  -webkit-line-clamp: 1;
+}
+
+.sg-node .sg-metrics {
+  font-variant-numeric: tabular-nums;
+}
+
+.sg-document-badge {
+  position: absolute;
+  top: 8%;
+  right: -4%;
+  z-index: 2;
+  max-width: 44%;
+  overflow: hidden;
+  padding: 0.28rem 0.38rem;
+  border: 1px solid color-mix(in oklab, var(--sg-accent-stable) 70%, var(--border));
+  border-radius: 0.45rem;
+  background: color-mix(in oklab, var(--sg-accent-stable) 14%, var(--sg-panel-solid));
+  color: color-mix(in oklab, var(--sg-accent-stable) 72%, white);
+  font: 800 0.5rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Status glyph mark (non-colour cue shared with the Map Key dots). */
 .sg-glyph {
   display: inline-grid;

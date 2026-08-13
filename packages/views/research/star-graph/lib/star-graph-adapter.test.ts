@@ -115,6 +115,22 @@ describe("toStarGraphNodeView — full view", () => {
     expect(v.headerLabel).toBe("稳定结论");
   });
 
+  it("shows a projection summary on result tiers without inventing one", () => {
+    const withSummary = toStarGraphNodeView(
+      node({
+        node_kind: "insight",
+        importance: 3,
+        summary: "专业自治与阶段质量门共同降低同步成本",
+      }),
+    );
+    const withoutSummary = toStarGraphNodeView(
+      node({ node_kind: "insight", importance: 3 }),
+    );
+
+    expect(withSummary.subLabel).toBe("专业自治与阶段质量门共同降低同步成本");
+    expect(withoutSummary.subLabel).toBeUndefined();
+  });
+
   it("omits agent badge when the projection carries no agent id", () => {
     const v = toStarGraphNodeView(node({ node_kind: "attempt", actor_agent_id: null }));
     expect(v.agentBadge).toBeUndefined();

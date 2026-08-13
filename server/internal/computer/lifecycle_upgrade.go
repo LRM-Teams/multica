@@ -51,7 +51,7 @@ type UpgradeResult struct {
 // Upgrade implements Raft-style service-first routing behind the Computer
 // lifecycle seam. A live resident is the sole mutation owner. Only a proven
 // absent resident permits a locked offline install; an unreachable live owner
-// fails closed without touching VersionStore Active.
+// fails closed without swapping the on-PATH Computer.
 func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (UpgradeResult, error) {
 	requestedTarget, err := normalizeUpgradeTarget(options.TargetVersion)
 	if err != nil {
@@ -69,10 +69,6 @@ func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (Upgrad
 		return UpgradeResult{}, err
 	}
 
-	store, err := cli.OpenVersionStore("")
-	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("open version store: %w", err)
-	}
 	downloadTimeout := options.DownloadTimeout
 	if downloadTimeout <= 0 {
 		downloadTimeout = cli.DefaultUpdateDownloadTimeout
@@ -80,7 +76,7 @@ func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (Upgrad
 
 	var result UpgradeResult
 	var ownerBecameLive bool
-	err = store.WithMachineMutationLock(ctx, func() error {
+	err = cli.WithMachineMutationLock(ctx, func() error {
 		startLease, err := acquireStartLease(ctx, RootDir(""))
 		if err != nil {
 			return fmt.Errorf("serialize Computer start with offline upgrade: %w", err)
@@ -103,7 +99,7 @@ func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (Upgrad
 		}
 		defer residentLease.Close()
 
-		result, err = installOfflineUpgrade(ctx, store, requestID, requestedTarget, downloadTimeout)
+		result, err = installOfflineUpgrade(ctx, requestID, requestedTarget, downloadTimeout)
 		return err
 	})
 	if err != nil {
@@ -234,21 +230,11 @@ func (l *Lifecycle) requestLiveUpgrade(
 
 func installOfflineUpgrade(
 	ctx context.Context,
-	store *cli.VersionStore,
 	requestID, requestedTarget string,
 	downloadTimeout time.Duration,
 ) (UpgradeResult, error) {
-	state, err := store.ReadActivationState()
-	if err != nil {
-		return UpgradeResult{}, err
-	}
-	if state.Generation == 0 && cli.IsReleaseVersion(cli.ClientVersion) {
-		state, err = store.BootstrapActiveFromExecutable(ctx, cli.ClientVersion)
-		if err != nil {
-			return UpgradeResult{}, fmt.Errorf("bootstrap current Active release: %w", err)
-		}
-	}
-
+	_ = ctx
+	_ = requestID
 	targetVersion := requestedTarget
 	if targetVersion == "latest" {
 		cfg, err := cli.LoadCLIConfigForProfile("")
@@ -266,39 +252,33 @@ func installOfflineUpgrade(
 		targetVersion = cli.NormalizeReleaseTag(release.TagName)
 	}
 
-	if state.ActiveVersion == targetVersion {
-		current, path, err := store.OfflineActivateStaged(ctx, targetVersion, "computer-upgrade-"+requestID)
-		if err != nil {
-			return UpgradeResult{}, fmt.Errorf("verify current Active release: %w", err)
-		}
-		return offlineUpgradeResult(requestedTarget, targetVersion, current, path, true), nil
+	installPath, err := cli.InstallPath()
+	if err != nil {
+		return UpgradeResult{}, err
+	}
+	if cli.IsReleaseVersion(cli.ClientVersion) && cli.NormalizeReleaseTag(cli.ClientVersion) == targetVersion {
+		return UpgradeResult{
+			Route:           UpgradeRouteOffline,
+			RequestedTarget: requestedTarget,
+			ResolvedTarget:  targetVersion,
+			ActiveVersion:   targetVersion,
+			BinaryPath:      installPath,
+			AlreadyCurrent:  true,
+		}, nil
 	}
 
-	staged, err := cli.DownloadAndStageRelease(ctx, store, targetVersion, downloadTimeout, "")
+	staged, err := cli.StageReleaseScratch(targetVersion, downloadTimeout, "")
 	if err != nil {
 		return UpgradeResult{}, fmt.Errorf("stage release: %w", err)
 	}
-	active, path, err := store.OfflineActivateStaged(ctx, staged.Staged.Version, "computer-upgrade-"+requestID)
-	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("activate staged release: %w", err)
+	if err := cli.SwapExecutable(installPath, staged); err != nil {
+		return UpgradeResult{}, fmt.Errorf("swap PATH computer: %w", err)
 	}
-	return offlineUpgradeResult(requestedTarget, targetVersion, active, path, false), nil
-}
-
-func offlineUpgradeResult(
-	requestedTarget, resolvedTarget string,
-	state cli.ActivationState,
-	path string,
-	alreadyCurrent bool,
-) UpgradeResult {
 	return UpgradeResult{
 		Route:           UpgradeRouteOffline,
 		RequestedTarget: requestedTarget,
-		ResolvedTarget:  resolvedTarget,
-		ActiveVersion:   state.ActiveVersion,
-		PreviousVersion: state.PreviousVersion,
-		Generation:      state.Generation,
-		BinaryPath:      path,
-		AlreadyCurrent:  alreadyCurrent,
-	}
+		ResolvedTarget:  targetVersion,
+		ActiveVersion:   targetVersion,
+		BinaryPath:      installPath,
+	}, nil
 }

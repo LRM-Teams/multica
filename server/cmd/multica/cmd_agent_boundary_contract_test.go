@@ -1390,6 +1390,7 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"issue pull-requests", []string{"/api/agent/issues/", "/pull-requests"}},
 		{"task run messages", []string{"/api/agent/tasks/", "/messages"}},
 		{"task self-cancel", []string{"/api/agent/tasks/", "/cancel"}},
+		{"project list", []string{"/api/agent/projects"}},
 		{"project resource read", []string{"/api/agent/projects/"}},
 		{"attachment view", []string{"/api/agent/attachments"}},
 		{"attachment upload session", []string{"/api/agent/attachment-upload-sessions"}},

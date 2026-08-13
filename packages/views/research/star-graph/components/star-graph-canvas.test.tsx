@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { TypedGraphEdge, TypedGraphNode } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
 import enResearch from "../../../locales/en/research.json";
@@ -152,7 +152,10 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(screen.getByText("Support")).toBeTruthy();
     expect(screen.getByText("IMPORTANT RESULT")).toBeTruthy();
     expect(screen.getByTestId("star-graph-summary").textContent).toContain("调研星图");
-    expect(screen.getByTestId("star-graph-document-badge").textContent).toBe("DOC · 12");
+    expect(
+      within(screen.getByRole("button", { name: /Stable A/ })).getByTestId("star-graph-document-badge")
+        .textContent,
+    ).toBe("DOC · 12");
     expect(screen.getByRole("button", { name: /Stable A/ }).textContent).not.toContain(
       "12 文档",
     );

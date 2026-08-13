@@ -113,6 +113,9 @@
     "canvas_empty_home": "返回调研主页",
     "canvas_empty_create": "开始新调研",
     "canvas_empty_creating": "正在创建…",
+    "canvas_empty_create_failed": "无法开始新的调研会话",
+    "canvas_empty_create_failed_hint": "当前画布没有发生变化，请检查网络后重试。",
+    "canvas_empty_retry": "重试",
     "canvas_empty_create_goal": "接下来想探索什么？",
     "confirm_failed": "确认调研失败",
     "confirm_done": "已批准确认",
@@ -399,6 +402,8 @@
     "outcome": "执行结果",
     "task_type": "任务类型",
     "attempt": "执行尝试",
+    "attempt_history": "执行历史",
+    "contributors": "贡献者",
     "executor_role": "实际角色：",
     "required_role": "要求角色：",
     "expected_result": "预期产出：",
@@ -971,6 +976,8 @@
       "lineage": "轮次谱系"
     },
     "rail": {
+      "mobile_title": "调研上下文",
+      "mobile_description": "查看调研团对话与当前选中节点详情。",
       "chat_tab": "与调研主理人聊天",
       "detail_tab": "节点详情",
       "hide": "收起面板",
@@ -1076,6 +1083,8 @@
       "objective": "本次小目标",
       "no_task": "暂无进行中的任务",
       "phase": "阶段 · {{phase}}",
+      "branch": "分支",
+      "reason": "原因",
       "completed": "已经完成",
       "current": "当前正在做",
       "open_agent": "打开 Agent 配置"
@@ -1083,17 +1092,32 @@
     "report": {
       "title": "节点报告",
       "empty_summary": "该节点还没有可展示的报告摘要。",
-      "lineage_title": "融合输入",
+      "lineage_title": "演进关系",
+      "lineage": {
+        "derived_from": "派生自",
+        "merged_from": "融合输入",
+        "parent": "上级方向",
+        "children": "下级方向",
+        "used_by": "被用于",
+        "restart_of": "重启自",
+        "superseded_by": "被替代为",
+        "invalidated_by": "被否定于"
+      },
       "goal_version": "目标版本 {{version}}"
     },
     "change_receipt": {
       "title": "画布变更 · {{label}}",
+      "input_count": "融合 {{count}} 个输入节点",
+      "conclusion_count": "{{count}} 条结论",
+      "graph_version": "星图 v{{version}}",
       "ops": {
         "goal_steered": "目标已更新",
         "goal_modified": "目标版本影响",
         "integration_formed": "结果已融合",
         "node_retired": "方向已废弃",
         "task_restarted": "任务已重启",
+        "frontier_created": "已创建新方向",
+        "agent_reassigned": "Agent 已重新分配",
         "run_completed": "运行已完成"
       }
     }

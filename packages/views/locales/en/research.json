@@ -113,6 +113,9 @@
     "canvas_empty_home": "Back to research home",
     "canvas_empty_create": "Start a new research",
     "canvas_empty_creating": "Starting…",
+    "canvas_empty_create_failed": "Couldn't start a new research session",
+    "canvas_empty_create_failed_hint": "The current canvas is unchanged. Check your connection and try again.",
+    "canvas_empty_retry": "Try again",
     "canvas_empty_create_goal": "What should we explore next?",
     "confirm_failed": "Could not confirm research",
     "confirm_done": "Research confirmed",
@@ -399,6 +402,8 @@
     "outcome": "Outcome",
     "task_type": "Task type",
     "attempt": "Attempt",
+    "attempt_history": "Execution history",
+    "contributors": "Contributors",
     "executor_role": "Actual role:",
     "required_role": "Required role:",
     "expected_result": "Expected output:",
@@ -971,6 +976,8 @@
       "lineage": "Lineage"
     },
     "rail": {
+      "mobile_title": "Research context",
+      "mobile_description": "Fleet conversation and selected research node details.",
       "chat_tab": "Chat with director",
       "detail_tab": "Node detail",
       "hide": "Hide panel",
@@ -1076,6 +1083,8 @@
       "objective": "Current objective",
       "no_task": "No active task",
       "phase": "Phase · {{phase}}",
+      "branch": "Branch",
+      "reason": "Reason",
       "completed": "Completed",
       "current": "In progress",
       "open_agent": "Open agent settings"
@@ -1083,17 +1092,32 @@
     "report": {
       "title": "Node report",
       "empty_summary": "No report summary is available for this node yet.",
-      "lineage_title": "Merged inputs",
+      "lineage_title": "Lineage",
+      "lineage": {
+        "derived_from": "Derived from",
+        "merged_from": "Merged inputs",
+        "parent": "Parent direction",
+        "children": "Child directions",
+        "used_by": "Used by",
+        "restart_of": "Restart of",
+        "superseded_by": "Superseded by",
+        "invalidated_by": "Invalidated by"
+      },
       "goal_version": "Goal version {{version}}"
     },
     "change_receipt": {
       "title": "Canvas update · {{label}}",
+      "input_count": "Merged {{count}} input nodes",
+      "conclusion_count": "{{count}} conclusions",
+      "graph_version": "Graph v{{version}}",
       "ops": {
         "goal_steered": "Goal updated",
         "goal_modified": "Goal version impact",
         "integration_formed": "Results merged",
         "node_retired": "Direction retired",
         "task_restarted": "Task restarted",
+        "frontier_created": "New direction created",
+        "agent_reassigned": "Agent reassigned",
         "run_completed": "Run completed"
       }
     }

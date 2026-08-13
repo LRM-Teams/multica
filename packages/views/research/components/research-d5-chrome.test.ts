@@ -11,4 +11,14 @@ describe("ResearchD5Chrome", () => {
     expect(src).not.toMatch(/<ResearchSessionChrome[\s/>]/);
     expect(src).toContain("ResearchSessionChromeActions");
   });
+
+  it("wires the selected lens as the sole tab stop and handles tab keys", () => {
+    const src = readFileSync(
+      join(import.meta.dirname, "research-d5-chrome.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("tabIndex={activeLens === lens ? 0 : -1}");
+    expect(src).toContain("onKeyDown={handleLensKeyDown}");
+    expect(src).toContain("resolveD5LensNavigationIndex");
+  });
 });

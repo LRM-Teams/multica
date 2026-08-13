@@ -1,6 +1,11 @@
 "use client";
 
-import { useMemo, type ComponentProps } from "react";
+import {
+  useCallback,
+  useMemo,
+  type ComponentProps,
+  type KeyboardEvent,
+} from "react";
 import { ChevronDown } from "lucide-react";
 import type { TypedGraphNode } from "@multica/core/research";
 import {
@@ -18,6 +23,7 @@ import {
 } from "../lib/research-d5-lens";
 import { buildD5FilterOptions } from "../lib/research-d5-filter-options";
 import type { GoalVersionEntry } from "../lib/research-d5-goal-history";
+import { resolveD5LensNavigationIndex } from "../lib/research-d5-lens-keyboard";
 import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
 type ChromeProps = ComponentProps<typeof ResearchSessionChromeActions>;
@@ -50,6 +56,27 @@ export function ResearchD5Chrome({
   const filterOptions = useMemo(
     () => buildD5FilterOptions(typedGraphNodes),
     [typedGraphNodes],
+  );
+  const handleLensKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>) => {
+      const lens = event.currentTarget.dataset.lens as ResearchD5Lens | undefined;
+      if (!lens) return;
+      const currentIndex = RESEARCH_D5_LENSES.indexOf(lens);
+      const nextIndex = resolveD5LensNavigationIndex(
+        event.key,
+        currentIndex,
+        RESEARCH_D5_LENSES.length,
+      );
+      if (nextIndex == null) return;
+
+      event.preventDefault();
+      const nextLens = RESEARCH_D5_LENSES[nextIndex];
+      if (!nextLens) return;
+      onLensChange(nextLens);
+      const nextTab = event.currentTarget.parentElement?.children.item(nextIndex);
+      if (nextTab instanceof HTMLElement) nextTab.focus();
+    },
+    [onLensChange],
   );
 
   return (
@@ -92,9 +119,12 @@ export function ResearchD5Chrome({
                 type="button"
                 role="tab"
                 aria-selected={activeLens === lens}
+                tabIndex={activeLens === lens ? 0 : -1}
+                data-lens={lens}
                 data-testid={`research-d5-lens-${lens}`}
                 className={cn("d5-lens-btn", activeLens === lens && "d5-lens-btn-active")}
                 onClick={() => onLensChange(lens)}
+                onKeyDown={handleLensKeyDown}
               >
                 {t(($) => $.d5.lens[lens])}
               </button>

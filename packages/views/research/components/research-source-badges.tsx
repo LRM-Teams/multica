@@ -69,12 +69,18 @@ export function ResearchSourceBadges({
             !embedded && "pointer-events-auto max-w-[160px]",
             embedded && "max-w-full",
           )}
-          title={`${s.title || s.url} (${(s.credibility_weight ?? 0).toFixed(2)})`}
+          title={
+            typeof s.credibility_weight === "number"
+              ? `${s.title || s.url} (${s.credibility_weight.toFixed(2)})`
+              : s.title || s.url
+          }
         >
           <span className="truncate">{s.title || hostOf(s.url)}</span>
-          <span className="ml-1 text-muted-foreground">
-            {(s.credibility_weight ?? 0).toFixed(1)}
-          </span>
+          {typeof s.credibility_weight === "number" ? (
+            <span className="ml-1 text-muted-foreground">
+              {s.credibility_weight.toFixed(1)}
+            </span>
+          ) : null}
         </Badge>
       ))}
       {truncated ? (

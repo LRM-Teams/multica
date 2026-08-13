@@ -41,6 +41,11 @@ func TestBuildIssueDoneWritebackContent(t *testing.T) {
 	if !strings.Contains(withRun, "mention://agent/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb") {
 		t.Fatalf("missing agent mention: %q", withRun)
 	}
+
+	cancelled := buildIssueTerminalWritebackContent(noteWritebackIssueCancelled, issue, "MUL-9", "", "")
+	if !strings.Contains(cancelled, "### Cancelled:") || !strings.Contains(cancelled, "Status moved to **cancelled**") {
+		t.Fatalf("cancelled content = %q", cancelled)
+	}
 }
 
 func TestIssueDoneCreatesPendingNoteWritebackAndAcceptApplies(t *testing.T) {
@@ -145,3 +150,89 @@ func TestIssueDoneWithoutNoteLinkCreatesNoWriteback(t *testing.T) {
 		t.Fatalf("expected no writebacks, got %#v", listed.Writebacks)
 	}
 }
+
+func TestIssueCancelledCreatesPendingNoteWriteback(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	noteID := createNotePageForAITest(t, "Cancelled writeback note "+uuid.NewString())
+	issueID, _ := createIssueForNoteRefTest(t, testWorkspaceID, "Cancel linked work "+uuid.NewString())
+
+	linkRec := httptest.NewRecorder()
+	testHandler.CreateNotePageIssueRef(linkRec, withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/issue-refs", map[string]any{
+		"issue_id": issueID,
+	}), "id", noteID))
+	if linkRec.Code != http.StatusCreated {
+		t.Fatalf("link: expected 201, got %d: %s", linkRec.Code, linkRec.Body.String())
+	}
+
+	cancelRec := httptest.NewRecorder()
+	testHandler.UpdateIssue(cancelRec, withURLParam(newRequest(http.MethodPut, "/api/issues/"+issueID, map[string]any{
+		"status": "cancelled",
+	}), "id", issueID))
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue cancelled: expected 200, got %d: %s", cancelRec.Code, cancelRec.Body.String())
+	}
+
+	listRec := httptest.NewRecorder()
+	testHandler.ListNotePageWritebacks(listRec, withURLParam(newRequest(http.MethodGet, "/api/notes/pages/"+noteID+"/writebacks?status=pending", nil), "id", noteID))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list writebacks: %d %s", listRec.Code, listRec.Body.String())
+	}
+	var listed NoteWritebackListResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed.Writebacks) != 1 {
+		t.Fatalf("pending writebacks = %#v, want 1", listed.Writebacks)
+	}
+	wb := listed.Writebacks[0]
+	if wb.Action != "append" || wb.Status != "pending" {
+		t.Fatalf("writeback = %#v", wb)
+	}
+	if !strings.Contains(wb.Content, "### Cancelled:") || !strings.Contains(wb.Content, "Status moved to **cancelled**") {
+		t.Fatalf("writeback content = %q", wb.Content)
+	}
+}
+
+func TestIssueInProgressNoiseCreatesNoNoteWriteback(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	noteID := createNotePageForAITest(t, "Noise writeback note "+uuid.NewString())
+	issueID, _ := createIssueForNoteRefTest(t, testWorkspaceID, "Noise linked work "+uuid.NewString())
+
+	linkRec := httptest.NewRecorder()
+	testHandler.CreateNotePageIssueRef(linkRec, withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/issue-refs", map[string]any{
+		"issue_id": issueID,
+	}), "id", noteID))
+	if linkRec.Code != http.StatusCreated {
+		t.Fatalf("link: expected 201, got %d: %s", linkRec.Code, linkRec.Body.String())
+	}
+
+	for _, status := range []string{"in_progress", "blocked", "in_review"} {
+		rec := httptest.NewRecorder()
+		testHandler.UpdateIssue(rec, withURLParam(newRequest(http.MethodPut, "/api/issues/"+issueID, map[string]any{
+			"status": status,
+		}), "id", issueID))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("UpdateIssue %s: expected 200, got %d: %s", status, rec.Code, rec.Body.String())
+		}
+	}
+
+	listRec := httptest.NewRecorder()
+	testHandler.ListNotePageWritebacks(listRec, withURLParam(newRequest(http.MethodGet, "/api/notes/pages/"+noteID+"/writebacks?status=pending", nil), "id", noteID))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", listRec.Code, listRec.Body.String())
+	}
+	var listed NoteWritebackListResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(listed.Writebacks) != 0 {
+		t.Fatalf("expected no writebacks for noise statuses, got %#v", listed.Writebacks)
+	}
+}
+

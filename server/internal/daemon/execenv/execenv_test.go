@@ -84,6 +84,7 @@ func TestPrepareWithProjectContext(t *testing.T) {
 	defer cleanupTestEnvironment(env)
 
 	// CLAUDE.md should mention the project context block.
+	taskCtx.AgentRoot = env.AgentRoot
 	if _, err := InjectRuntimeConfig(env.AgentRoot, "claude", taskCtx); err != nil {
 		t.Fatalf("InjectRuntimeConfig: %v", err)
 	}
@@ -95,6 +96,9 @@ func TestPrepareWithProjectContext(t *testing.T) {
 	for _, want := range []string{
 		"## Project Context",
 		"Agent UX 2026",
+		"This workspace is also where code checkouts live",
+		"first choose the specific project directory or worktree inside this workspace",
+		"multica workspace info --projects --output json",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("CLAUDE.md missing %q", want)

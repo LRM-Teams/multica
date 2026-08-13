@@ -65,6 +65,8 @@ export const issueKeys = {
     [...issueKeys.all(wsId), "detail", id] as const,
   children: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "children", id] as const,
+  noteRefs: (wsId: string, id: string) =>
+    [...issueKeys.all(wsId), "note-refs", id] as const,
   /** Prefix for invalidating all batched-children queries in a workspace. */
   childrenByParentsAll: (wsId: string) =>
     [...issueKeys.all(wsId), "children-by-parents"] as const,
@@ -447,6 +449,15 @@ export function childIssuesOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.children(wsId, id),
     queryFn: () => api.listChildIssues(id).then((r) => r.issues),
+  });
+}
+
+/** Linked notes for an issue detail panel (S3-R5b). */
+export function issueNoteRefsOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: issueKeys.noteRefs(wsId, id),
+    queryFn: () => api.listIssueNoteRefs(id).then((r) => r.notes),
+    enabled: !!wsId && !!id,
   });
 }
 

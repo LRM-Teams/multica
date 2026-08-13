@@ -73,6 +73,22 @@ describe("WSClient", () => {
     expect(url.searchParams.has("client_os")).toBe(false);
   });
 
+  it("reports the authenticated socket lifecycle", () => {
+    const ws = new WSClient("ws://example.test/ws", { cookieAuth: true });
+    const statuses: string[] = [];
+    ws.onConnectionStatus((status) => statuses.push(status));
+
+    ws.connect();
+    expect(ws.getConnectionStatus()).toBe("connecting");
+    FakeWebSocket.lastInstance!.onopen?.();
+    expect(ws.getConnectionStatus()).toBe("connected");
+    FakeWebSocket.lastInstance!.onclose?.();
+    expect(ws.getConnectionStatus()).toBe("disconnected");
+    ws.disconnect();
+
+    expect(statuses).toEqual(["connecting", "connected", "disconnected", "idle"]);
+  });
+
   it("truncates the logged payload when an unparseable frame is large", () => {
     const logger = {
       debug: vi.fn(),

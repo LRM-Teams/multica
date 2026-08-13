@@ -126,20 +126,12 @@ func TestSendChatMessage_LinksAttachments(t *testing.T) {
 	if sendResp.MessageID == "" {
 		t.Fatal("expected non-empty message_id in send response")
 	}
-	if sendResp.TaskID == "" {
-		t.Fatal("expected non-empty task_id in send response")
+	var attachRaw map[string]any
+	if err := json.Unmarshal(sendW.Body.Bytes(), &attachRaw); err != nil {
+		t.Fatalf("decode send raw: %v", err)
 	}
-
-	var messageTaskID string
-	if err := testPool.QueryRow(
-		context.Background(),
-		`SELECT COALESCE(task_id::text, '') FROM chat_message WHERE id = $1`,
-		sendResp.MessageID,
-	).Scan(&messageTaskID); err != nil {
-		t.Fatalf("query chat message task id: %v", err)
-	}
-	if messageTaskID != sendResp.TaskID {
-		t.Fatalf("chat message task_id mismatch: want %s, got %s", sendResp.TaskID, messageTaskID)
+	if _, ok := attachRaw["task_id"]; ok {
+		t.Fatal("standalone send must not include task_id")
 	}
 
 	// 3. Verify the attachment row now points at the new message.
@@ -156,6 +148,116 @@ func TestSendChatMessage_LinksAttachments(t *testing.T) {
 	}
 	if *dbMessageID != sendResp.MessageID {
 		t.Fatalf("chat_message_id mismatch: want %s, got %s", sendResp.MessageID, *dbMessageID)
+	}
+}
+
+func TestSendChatMessageUsesRaftDeliveryWithoutInbox(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	daemonID := "daemon-standalone-chat-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "standalone chat delivery")
+	agentID := createHandlerTestAgentOnRuntime(t, "standalone-chat-"+uuid.NewString()[:8], runtimeID)
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	notifier := &capturedAgentDeliveryNotifier{}
+	previous := testHandler.AgentDeliveryNotifier
+	testHandler.AgentDeliveryNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previous })
+
+	req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "please reply in the bubble",
+	})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.SendChatMessage(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("SendChatMessage: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var sendResp SendChatMessageResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &sendResp); err != nil {
+		t.Fatalf("decode send: %v", err)
+	}
+	var sendRaw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &sendRaw); err != nil {
+		t.Fatalf("decode send raw: %v", err)
+	}
+	if _, ok := sendRaw["task_id"]; ok {
+		t.Fatal("task_id must not be present on standalone send")
+	}
+	if !sendResp.Pending {
+		t.Fatal("pending = false, want true so the bubble does not take the greeting path")
+	}
+	if sendResp.DeliveryID == "" {
+		t.Fatal("delivery_id empty, want chat:<message>:agent:<agent>")
+	}
+
+	var inboxCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM agent_inbox_event
+		WHERE chat_session_id = $1 AND reason = 'chat_session'
+	`, sessionID).Scan(&inboxCount); err != nil {
+		t.Fatalf("count inbox: %v", err)
+	}
+	if inboxCount != 0 {
+		t.Fatalf("inbox events = %d, want 0", inboxCount)
+	}
+
+	var deliveryCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM agent_chat_delivery
+		WHERE chat_session_id = $1 AND message_id = $2
+	`, sessionID, sendResp.MessageID).Scan(&deliveryCount); err != nil {
+		t.Fatalf("count chat delivery: %v", err)
+	}
+	if deliveryCount != 1 {
+		t.Fatalf("agent_chat_delivery rows = %d, want 1", deliveryCount)
+	}
+	if notifier.payload.AgentID != agentID || notifier.daemonID != daemonID {
+		t.Fatalf("delivery notify agent=%q daemon=%q, want agent=%q daemon=%q", notifier.payload.AgentID, notifier.daemonID, agentID, daemonID)
+	}
+	if notifier.payload.Target != "chat:"+sessionID {
+		t.Fatalf("delivery target = %q, want chat:%s", notifier.payload.Target, sessionID)
+	}
+	if notifier.payload.DeliveryID != "chat:"+sendResp.MessageID+":agent:"+agentID {
+		t.Fatalf("delivery id = %q", notifier.payload.DeliveryID)
+	}
+}
+
+func TestSendChatMessageGreetingLeavesPendingFalse(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "standalone-greet-"+uuid.NewString()[:8], []byte("[]"))
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	req := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "hi",
+	})
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.SendChatMessage(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("SendChatMessage: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var sendResp SendChatMessageResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &sendResp); err != nil {
+		t.Fatalf("decode send: %v", err)
+	}
+	if sendResp.Pending {
+		t.Fatal("pending = true, want false on the greeting sticker path")
+	}
+	var greetRaw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &greetRaw); err != nil {
+		t.Fatalf("decode greeting raw: %v", err)
+	}
+	if _, ok := greetRaw["task_id"]; ok {
+		t.Fatal("task_id must not be present on greeting send")
+	}
+	if sendResp.DeliveryID != "" {
+		t.Fatalf("delivery_id = %q, want empty on greeting", sendResp.DeliveryID)
 	}
 }
 
@@ -661,44 +763,145 @@ func TestListChatMessagesPage_RejectsInvalidLimit(t *testing.T) {
 	}
 }
 
-func TestGetPendingChatTaskIncludesInboxEventID(t *testing.T) {
+func TestGetPendingChatTaskStandaloneHasNoTaskID(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "pending-chat-inbox-"+uuid.NewString(), []byte(`{}`))
+	daemonID := "daemon-pending-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "standalone pending")
+	agentID := createHandlerTestAgentOnRuntime(t, "standalone-pending-"+uuid.NewString()[:8], runtimeID)
 	sessionID := createHandlerTestChatSession(t, agentID)
 
-	var eventID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (
-			workspace_id, agent_id, chat_session_id, reason, requires_wake, status,
-			priority, seq_from, seq_to, started_at
-		)
-		VALUES ($1, $2, $3, 'dm', true, 'draining', 100, 1, 1, now())
-		RETURNING id
-	`, testWorkspaceID, agentID, sessionID).Scan(&eventID); err != nil {
-		t.Fatalf("insert inbox event: %v", err)
+	notifier := &capturedAgentDeliveryNotifier{}
+	previous := testHandler.AgentDeliveryNotifier
+	testHandler.AgentDeliveryNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previous })
+
+	sendReq := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "please keep thinking",
+	})
+	sendReq = withURLParam(sendReq, "sessionId", sessionID)
+	sendReq = withChatTestWorkspaceCtx(t, sendReq)
+	sendW := httptest.NewRecorder()
+	testHandler.SendChatMessage(sendW, sendReq)
+	if sendW.Code != http.StatusCreated {
+		t.Fatalf("send: expected 201, got %d: %s", sendW.Code, sendW.Body.String())
 	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID) })
 
 	req := newRequest(http.MethodGet, "/api/chat/sessions/"+sessionID+"/pending-task", nil)
-	req = withRouteParams(req, "sessionId", sessionID)
+	req = withURLParam(req, "sessionId", sessionID)
 	req = withChatTestWorkspaceCtx(t, req)
 	w := httptest.NewRecorder()
-
 	testHandler.GetPendingChatTask(w, req)
-
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var resp PendingChatTaskResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode pending: %v", err)
 	}
-	if resp.TaskID != eventID || resp.Status != "running" || resp.InboxEventID == nil || *resp.InboxEventID != eventID {
-		t.Fatalf("pending task response = %+v, want canonical task/inbox %s", resp, eventID)
+	if !resp.Pending {
+		t.Fatal("pending = false after Raft send")
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if _, ok := raw["task_id"]; ok {
+		t.Fatal("pending snapshot must not invent task_id")
+	}
+	if _, ok := raw["inbox_event_id"]; ok {
+		t.Fatal("pending snapshot must not report inbox_event_id")
+	}
+
+	listReq := newRequest(http.MethodGet, "/api/chat/pending-tasks", nil)
+	listReq = withChatTestWorkspaceCtx(t, listReq)
+	listW := httptest.NewRecorder()
+	testHandler.ListPendingChatTasks(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("list pending: expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+	var list PendingChatTasksResponse
+	if err := json.Unmarshal(listW.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	found := false
+	for _, item := range list.Tasks {
+		if item.ChatSessionID != sessionID {
+			continue
+		}
+		found = true
+		if !item.Pending {
+			t.Fatal("list item pending = false")
+		}
+	}
+	if !found {
+		t.Fatal("list pending missing this session")
+	}
+	var listRaw map[string]any
+	if err := json.Unmarshal(listW.Body.Bytes(), &listRaw); err != nil {
+		t.Fatalf("decode list raw: %v", err)
+	}
+	tasks, _ := listRaw["tasks"].([]any)
+	for _, row := range tasks {
+		obj, _ := row.(map[string]any)
+		if obj["chat_session_id"] != sessionID {
+			continue
+		}
+		if _, ok := obj["task_id"]; ok {
+			t.Fatal("list item must not include task_id")
+		}
+	}
+}
+
+func TestCancelStandaloneChatClearsPending(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	daemonID := "daemon-cancel-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "standalone cancel")
+	agentID := createHandlerTestAgentOnRuntime(t, "standalone-cancel-"+uuid.NewString()[:8], runtimeID)
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	notifier := &capturedAgentDeliveryNotifier{}
+	previous := testHandler.AgentDeliveryNotifier
+	testHandler.AgentDeliveryNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previous })
+
+	sendReq := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "stop me",
+	})
+	sendReq = withURLParam(sendReq, "sessionId", sessionID)
+	sendReq = withChatTestWorkspaceCtx(t, sendReq)
+	sendW := httptest.NewRecorder()
+	testHandler.SendChatMessage(sendW, sendReq)
+	if sendW.Code != http.StatusCreated {
+		t.Fatalf("send: expected 201, got %d: %s", sendW.Code, sendW.Body.String())
+	}
+
+	cancelReq := newRequest(http.MethodPost, "/api/chat/sessions/"+sessionID+"/cancel", nil)
+	cancelReq = withURLParam(cancelReq, "sessionId", sessionID)
+	cancelReq = withChatTestWorkspaceCtx(t, cancelReq)
+	cancelW := httptest.NewRecorder()
+	testHandler.CancelStandaloneChat(cancelW, cancelReq)
+	if cancelW.Code != http.StatusOK {
+		t.Fatalf("cancel: expected 200, got %d: %s", cancelW.Code, cancelW.Body.String())
+	}
+
+	req := newRequest(http.MethodGet, "/api/chat/sessions/"+sessionID+"/pending-task", nil)
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.GetPendingChatTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("pending after cancel: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp PendingChatTaskResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode pending: %v", err)
+	}
+	if resp.Pending {
+		t.Fatal("pending still true after standalone cancel")
 	}
 }
 

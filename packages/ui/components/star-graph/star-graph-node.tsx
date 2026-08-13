@@ -58,6 +58,10 @@ export interface StarGraphNodeProps {
   };
   /** Override the computed accessible name (D5 keyboard/SR contract). */
   accessibleName?: string;
+  /** Opaque graph id used by the canvas focus manager. */
+  nodeId?: string;
+  /** Canvas uses roving tabindex so a large graph contributes one tab stop. */
+  tabIndex?: number;
   /** Explicitly busy (spinner/pulse). */
   busy?: boolean;
   /** Grid position on the canvas (left/top in % or px). Optional. */
@@ -81,6 +85,8 @@ export function StarGraphNode({
   metricText,
   busy,
   accessibleName,
+  nodeId,
+  tabIndex,
   style,
   onOpen,
   className,
@@ -97,21 +103,24 @@ export function StarGraphNode({
 
   const size = `${token.sizePx}px`;
 
+  const documentCount = metrics?.documentCount;
+  const hasDocuments = documentCount != null && documentCount > 0;
   const showMetrics =
     token.tier !== "s" &&
-    (metrics?.documentCount != null ||
+    (hasDocuments ||
       metrics?.confidence != null ||
       metrics?.conclusionCount != null);
-  const documentCount = metrics?.documentCount;
   const showDocumentBadge =
     (token.tier === "xxl" || token.tier === "xl" || token.tier === "l") &&
-    documentCount != null;
+    hasDocuments;
   const metricSummary = metricsSummaryText(metrics, metricText, showDocumentBadge);
 
   return (
     <button
       type="button"
       aria-label={readable}
+      data-node-id={nodeId}
+      tabIndex={tabIndex}
       onClick={onOpen}
       data-tier={tier}
       data-state={state}
@@ -225,7 +234,7 @@ function metricsSummaryText(
   if (!metrics) return "";
   const parts: string[] = [];
   if (metrics.round) parts.push(`R${metrics.round}`);
-  if (!omitDocumentCount && metrics.documentCount != null) {
+  if (!omitDocumentCount && metrics.documentCount != null && metrics.documentCount > 0) {
     parts.push(localized?.documentCount ?? `DOC · ${metrics.documentCount}`);
   }
   if (metrics.confidence != null) {

@@ -142,9 +142,6 @@
 .d5-workspace[data-d5-rail-open="false"] .research-agent-inspector-sheet {
   background: var(--card);
 }
-.research-agent-inspector {
-  right: 24px;
-}
 .d5-lens-btn {
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -159,10 +156,14 @@
   background: var(--accent);
 }
 .d5-workspace {
+  --d5-inspector-right: 24px;
   position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
+}
+.d5-workspace[data-d5-rail-open="true"] {
+  --d5-inspector-right: 376px;
 }
 .d5-canvas-host {
   position: relative;
@@ -228,6 +229,13 @@
   .d5-chrome-controls {
     order: 11;
     flex: 1 1 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .d5-chrome-actions {
+    flex: 1 1 100%;
+    min-width: 0;
     justify-content: flex-end;
   }
   .d5-rail {
@@ -276,6 +284,9 @@
   .d5-chrome-controls {
     margin-left: 0;
   }
+  .d5-workspace[data-d5-rail-open="true"] {
+    --d5-inspector-right: 336px;
+  }
   .d5-rail {
     width: 320px;
   }
@@ -289,7 +300,7 @@
 
 .research-agent-inspector {
   position: absolute;
-  right: 376px;
+  right: var(--d5-inspector-right);
   top: 118px;
   z-index: 55;
   width: 310px;

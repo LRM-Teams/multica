@@ -7,6 +7,7 @@ import type {
 } from "@multica/core/research";
 import { sliceTrajectoryLaneLayout } from "@multica/core/research";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 import { GIT_BRANCH_COLORS } from "../lib/git-topology";
 import { TrajectoryCommitCard } from "./trajectory-commit-card";
 
@@ -37,6 +38,7 @@ export function TrajectoryGraph({
   onOpenDetail: (id: string) => void;
   className?: string;
 }) {
+  const { t } = useT("research");
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(400);
 
@@ -61,7 +63,7 @@ export function TrajectoryGraph({
       data-window-rows={`${win.commits.length}/${layout.rowCount}`}
       className={cn("relative overflow-y-auto outline-none", className)}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-      aria-label="Exploration trajectory graph"
+      aria-label={t((s) => s.trajectory_explorer.graph_label)}
     >
       <div style={{ height: totalHeight, position: "relative" }}>
         <TrajectorySegmentLayer layout={win} />

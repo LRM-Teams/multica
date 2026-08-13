@@ -511,7 +511,23 @@
     "generic_owner": "Owner: ",
     "importance_sr": "Importance {{level}}/3",
     "row_label_sr": "{{label}}: ",
-    "no_progress": "No new progress"
+    "no_progress": "No new progress",
+    "owner": "Owner",
+    "objective": "Objective",
+    "current_action": "Current action",
+    "resolved": "Resolved",
+    "progress": "New progress",
+    "risk": "Risk",
+    "states": {
+      "default": "Ready",
+      "selected": "Selected",
+      "loading": "Loading",
+      "running": "Running",
+      "failed": "Failed",
+      "stale": "Stale",
+      "unknown": "Unknown status",
+      "terminal": "Completed"
+    }
   },
   "logic": {
     "label": "Research logic",
@@ -896,6 +912,8 @@
   "trajectory_explorer": {
     "title": "Trajectory explorer",
     "loading": "Loading trajectory",
+    "graph_label": "Exploration trajectory graph",
+    "overview_label": "Trajectory overview",
     "empty": "No exploration trajectory yet",
     "empty_hint": "Start a new research or wait for results to appear.",
     "error": "Failed to load trajectory",
@@ -1123,6 +1141,10 @@
           "newdir": {
             "label": "New direction",
             "description": "A new exploration direction branches from existing work."
+          },
+          "neutral": {
+            "label": "Other relation",
+            "description": "An unclassified or newer relation. Keep the original type; do not treat it as support or challenge."
           }
         }
       }

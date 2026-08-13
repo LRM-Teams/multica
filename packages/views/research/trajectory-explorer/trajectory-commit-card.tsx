@@ -13,14 +13,6 @@ import { GIT_BRANCH_COLORS } from "../lib/git-topology";
  * always double-encoded: a semantic badge/color *plus* a text label, so merge/
  * branch/fail is never conveyed by color alone (LRM-1394 T04–T07).
  */
-const STATUS_LABEL: Record<string, string> = {
-  ok: "ok",
-  run: "running",
-  fail: "failed",
-  wait: "waiting",
-  mute: "muted",
-};
-
 const STATUS_BADGE: Record<string, string> = {
   ok: "border-success/35 bg-success/10 text-success-strong",
   run: "border-brand/35 bg-brand/10 text-brand",
@@ -47,6 +39,23 @@ export function TrajectoryCommitCard({
   const color = GIT_BRANCH_COLORS[commit.colorSlot % GIT_BRANCH_COLORS.length];
   const isMerge = layout.junctions.some((j) => j.commitId === commit.id);
   const badge = STATUS_BADGE[commit.status] ?? STATUS_BADGE.wait;
+  const statusLabel = (() => {
+    switch (commit.status) {
+      case "ok":
+        return t((s) => s.trajectory_explorer.status_ok);
+      case "run":
+        return t((s) => s.trajectory_explorer.status_run);
+      case "fail":
+        return t((s) => s.trajectory_explorer.status_fail);
+      case "wait":
+        return t((s) => s.trajectory_explorer.status_wait);
+      case "mute":
+        return t((s) => s.trajectory_explorer.status_mute);
+      default:
+        return commit.status;
+    }
+  })();
+  const mergeLabel = t((s) => s.trajectory_explorer.merge);
 
   return (
     <button
@@ -57,9 +66,9 @@ export function TrajectoryCommitCard({
       data-branch={commit.branchKey}
       data-status={commit.status}
       data-selected={selected ? "true" : "false"}
-      aria-label={`${commit.label.text}, ${STATUS_LABEL[commit.status] ?? commit.status}${
+      aria-label={`${commit.label.text}, ${statusLabel}${
         lane ? `, ${lane.accessibleLabel}` : ""
-      }${isMerge ? ", merge" : ""}`}
+      }${isMerge ? `, ${mergeLabel}` : ""}`}
       aria-pressed={selected}
       className={cn(
         "group flex min-h-0 w-full cursor-pointer flex-col gap-1 rounded-md border bg-card p-2 text-left transition-colors",
@@ -84,7 +93,7 @@ export function TrajectoryCommitCard({
             badge,
           )}
         >
-          {STATUS_LABEL[commit.status] ?? commit.status}
+          {statusLabel}
         </span>
       </div>
       <div className="flex items-center gap-1.5">
@@ -105,7 +114,7 @@ export function TrajectoryCommitCard({
             className="ml-auto shrink-0 rounded border border-border/60 px-1 text-[10px] leading-4 text-foreground"
             data-testid="trajectory-commit-merge"
           >
-            {t((s) => s.trajectory_explorer.merge)}
+            {mergeLabel}
           </span>
         ) : null}
       </div>

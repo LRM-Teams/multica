@@ -2,6 +2,7 @@
 
 import type { TrajectoryLaneLayout } from "@multica/core/research";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 import { GIT_BRANCH_COLORS } from "../lib/git-topology";
 import { TRAJECTORY_ROW_HEIGHT } from "./trajectory-graph";
 
@@ -29,6 +30,7 @@ export function TrajectoryMinimap({
   viewportHeight?: number;
   className?: string;
 }) {
+  const { t } = useT("research");
   const total = layout.rowCount;
   const height = 120;
   const scale = total > 0 ? height / (total * TRAJECTORY_ROW_HEIGHT) : 1;
@@ -50,7 +52,7 @@ export function TrajectoryMinimap({
         height={height}
         className="block h-full w-full"
         role="img"
-        aria-label="Trajectory overview"
+        aria-label={t((s) => s.trajectory_explorer.overview_label)}
       >
         {layout.segments.map((seg) => {
           const color = laneColor(layout, seg.to.lane);

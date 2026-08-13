@@ -170,6 +170,24 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(onSelectNode).toHaveBeenCalledWith("stable-a");
   });
 
+  it("dispatches one open command when select and open handlers are both provided", () => {
+    const onSelectNode = vi.fn();
+    const onOpenNode = vi.fn();
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        onSelectNode={onSelectNode}
+        onOpenNode={onOpenNode}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Stable A/ }));
+
+    expect(onOpenNode).toHaveBeenCalledOnce();
+    expect(onOpenNode).toHaveBeenCalledWith("stable-a");
+    expect(onSelectNode).not.toHaveBeenCalled();
+  });
+
   it("degrades safely for an empty graph", () => {
     render(
       <StarGraphCanvas
@@ -263,7 +281,6 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
       />,
     );
 
-    const canvas = screen.getByTestId("star-graph-canvas");
     const selected = screen.getByRole("button", { name: /Stable A/ });
     expect(selected).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("button", { name: /Master goal/ })).toHaveAttribute(

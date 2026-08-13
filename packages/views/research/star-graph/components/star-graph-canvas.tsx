@@ -194,6 +194,12 @@ export function StarGraphCanvas({
             ($) => $.d5.star_graph.map_key.relations.newdir.description,
           ),
         },
+        neutral: {
+          label: t(($) => $.d5.star_graph.map_key.relations.neutral.label),
+          description: t(
+            ($) => $.d5.star_graph.map_key.relations.neutral.description,
+          ),
+        },
       },
     }),
     [t],

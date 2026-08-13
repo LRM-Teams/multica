@@ -162,7 +162,6 @@ func TestArtifactPolicyEvaluationPrivateKinds(t *testing.T) {
 		t.Fatal("ordinary claim must not be evaluation-private")
 	}
 }
-
 func TestManifestPurposeForTaskKind(t *testing.T) {
 	if got := manifestPurposeForTaskKind(TaskKindQualityGate); got != ArtifactPurposeEvaluation {
 		t.Fatalf("quality gate purpose=%q", got)
@@ -172,5 +171,30 @@ func TestManifestPurposeForTaskKind(t *testing.T) {
 	}
 	if got := manifestPurposeForTaskKind(TaskKindDiscover); got != ArtifactPurposeTaskExecution {
 		t.Fatalf("discover purpose=%q", got)
+	}
+}
+
+func TestAcceptanceManifestGrantShapeAllowed(t *testing.T) {
+	tests := []struct {
+		name       string
+		purpose    string
+		normal     string
+		evaluation string
+		want       bool
+	}{
+		{name: "task execution normal only", purpose: "task_execution", normal: "normal", want: true},
+		{name: "task execution missing normal", purpose: "task_execution", want: false},
+		{name: "task execution cannot carry evaluation", purpose: "task_execution", normal: "normal", evaluation: "evaluation", want: false},
+		{name: "evaluation requires both", purpose: "evaluation", normal: "normal", evaluation: "evaluation", want: true},
+		{name: "evaluation missing private grant", purpose: "evaluation", normal: "normal", want: false},
+		{name: "unknown purpose fails closed", purpose: "synthesis", normal: "normal", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := acceptanceManifestGrantShapeAllowed(tt.purpose, tt.normal, tt.evaluation); got != tt.want {
+				t.Fatalf("acceptanceManifestGrantShapeAllowed(%q, %q, %q)=%v, want %v",
+					tt.purpose, tt.normal, tt.evaluation, got, tt.want)
+			}
+		})
 	}
 }

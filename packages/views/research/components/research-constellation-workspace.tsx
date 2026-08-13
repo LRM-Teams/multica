@@ -493,7 +493,6 @@ export function ResearchConstellationWorkspace({
       });
       onSelectNode(resolved);
       setRailMode("detail");
-      if (isMobile) setRailOpen(true);
 
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
@@ -502,11 +501,13 @@ export function ResearchConstellationWorkspace({
         openAgentInspector(typedNode.actor_agent_id);
         return;
       }
-      closeOverlay();
       if (level === "l" || level === "xl" || level === "xxl") {
         if (isMobile) setRailOpen(false);
         openReport();
+        return;
       }
+      setRailOpen(true);
+      closeOverlay();
     },
     [
       closeOverlay,

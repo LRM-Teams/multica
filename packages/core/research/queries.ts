@@ -85,6 +85,29 @@ export type ResearchGraphTypedPagination = {
 };
 
 /**
+ * Resolve the next offset without assuming every compatible server already
+ * emits `total_node_count`. A full page means another page may exist; a short
+ * page is the terminal signal for older servers.
+ */
+export function nextTypedGraphPageOffset(
+  lastPage: TypedGraphResponse,
+  allPages: readonly TypedGraphResponse[],
+  pageLimit = RESEARCH_TYPED_GRAPH_PAGE_LIMIT,
+): number | undefined {
+  const loaded = allPages.reduce(
+    (count, page) => count + (page.nodes?.length ?? 0),
+    0,
+  );
+  const latestKnownTotal = [...allPages]
+    .reverse()
+    .find((page) => page.total_node_count != null)?.total_node_count;
+  if (latestKnownTotal != null) {
+    return loaded < latestKnownTotal ? loaded : undefined;
+  }
+  return (lastPage.nodes?.length ?? 0) >= pageLimit ? loaded : undefined;
+}
+
+/**
  * Offset pages are one logical snapshot. Mixing graph versions can invent a
  * topology that never existed, so fail the query and let the session retry all
  * pages through its existing projection-error recovery.
@@ -222,12 +245,8 @@ export function researchGraphTypedInfiniteOptions(wsId: string, sessionId: strin
         offset: pageParam,
       }),
     initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages) => {
-      const loaded = allPages.reduce((count, page) => count + (page.nodes?.length ?? 0), 0);
-      const total = lastPage.total_node_count;
-      if (total != null && loaded < total) return loaded;
-      return undefined;
-    },
+    getNextPageParam: (lastPage, allPages) =>
+      nextTypedGraphPageOffset(lastPage, allPages),
     select: requireConsistentTypedGraphPages,
     enabled: !!wsId && !!sessionId,
   });

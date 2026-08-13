@@ -11,6 +11,19 @@ export const STAR_GRAPH_SEMANTIC_NODE_BUDGET = 180;
 /** D5 narrow viewport hard DOM budget (viewport-performance §3). */
 export const STAR_GRAPH_MOBILE_DOM_BUDGET = 48;
 
+/** D5 relation-edge hard budgets (viewport-performance §3). */
+export const STAR_GRAPH_EDGE_BUDGETS = {
+  desktop: 420,
+  mid: 220,
+  narrow: 96,
+} as const;
+
+export function edgeBudgetForViewport(width: number): number {
+  if (width >= 1200) return STAR_GRAPH_EDGE_BUDGETS.desktop;
+  if (width >= 768) return STAR_GRAPH_EDGE_BUDGETS.mid;
+  return STAR_GRAPH_EDGE_BUDGETS.narrow;
+}
+
 /** Below this zoom, non-protected nodes collapse to one representative per cluster. */
 export const LOW_ZOOM_CLUSTER_COLLAPSE = 0.55;
 
@@ -201,10 +214,57 @@ export function filterEntitiesForCanvasDisplay(
 
 export function filterRelationsToVisibleEntities<
   T extends { fromNodeId: string; toNodeId: string },
->(relations: readonly T[], visibleEntityIds: ReadonlySet<string>): T[] {
-  return relations.filter(
+>(
+  relations: readonly T[],
+  visibleEntityIds: ReadonlySet<string>,
+  options: {
+    budget?: number;
+    focusNodeId?: string | null;
+    relatedNodeIds?: ReadonlySet<string>;
+  } = {},
+): T[] {
+  const visibleRelations = relations.filter(
     (relation) =>
       visibleEntityIds.has(relation.fromNodeId) &&
       visibleEntityIds.has(relation.toNodeId),
   );
+
+  const budget = Math.max(
+    0,
+    Math.floor(options.budget ?? Number.POSITIVE_INFINITY),
+  );
+  if (visibleRelations.length <= budget) return visibleRelations;
+
+  const priority = (relation: T): number => {
+    if (
+      options.focusNodeId &&
+      (relation.fromNodeId === options.focusNodeId ||
+        relation.toNodeId === options.focusNodeId)
+    ) {
+      return 0;
+    }
+    if (
+      options.relatedNodeIds?.has(relation.fromNodeId) &&
+      options.relatedNodeIds.has(relation.toNodeId)
+    ) {
+      return 1;
+    }
+    if (
+      options.relatedNodeIds?.has(relation.fromNodeId) ||
+      options.relatedNodeIds?.has(relation.toNodeId)
+    ) {
+      return 2;
+    }
+    return 3;
+  };
+
+  return visibleRelations
+    .map((relation, index) => ({ relation, index }))
+    .sort(
+      (left, right) =>
+        priority(left.relation) - priority(right.relation) ||
+        left.index - right.index,
+    )
+    .slice(0, budget)
+    .map(({ relation }) => relation);
 }

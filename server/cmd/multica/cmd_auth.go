@@ -521,6 +521,10 @@ func runAuthStatus(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+var stopComputerForLogout = func() computer.StopResult {
+	return (&computer.Lifecycle{}).Stop()
+}
+
 func runAuthLogout(cmd *cobra.Command, _ []string) error {
 	// Cloud auth is one machine-wide session. A legacy --profile flag must not
 	// redirect logout to a different credential file.
@@ -536,7 +540,7 @@ func runAuthLogout(cmd *cobra.Command, _ []string) error {
 
 	// #2488: logout stops the resident Computer but retains Computer Identity,
 	// Bindings, and Agent Roots — only the user session is cleared.
-	if res := (&computer.Lifecycle{}).Stop(); res.Err != nil && res.Running {
+	if res := stopComputerForLogout(); res.Err != nil && res.Running {
 		return fmt.Errorf("cleared session but could not stop the Computer: %w", res.Err)
 	}
 

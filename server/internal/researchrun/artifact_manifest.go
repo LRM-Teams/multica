@@ -752,6 +752,7 @@ func loadManifestEntryCandidatesForAttemptTx(
 		SELECT
 		  v.id::text,
 		  v.artifact_id::text,
+		  p.entity_kind,
 		  v.version,
 		  e.eligibility_revision,
 		  v.content_hash,
@@ -766,6 +767,10 @@ func loadManifestEntryCandidatesForAttemptTx(
 		  ON v.workspace_id = e.workspace_id
 		 AND v.session_id = e.session_id
 		 AND v.id = e.artifact_version_id
+		JOIN research_artifact_passport p
+		  ON p.workspace_id = v.workspace_id
+		 AND p.session_id = v.session_id
+		 AND p.id = v.artifact_id
 		WHERE m.workspace_id = $1::uuid
 		  AND m.session_id = $2::uuid
 		  AND m.attempt_id = $3::uuid
@@ -779,10 +784,15 @@ func loadManifestEntryCandidatesForAttemptTx(
 	var entries []artifactVersionCandidate
 	for rows.Next() {
 		var entry artifactVersionCandidate
+		var kindRaw string
 		if err = rows.Scan(
-			&entry.VersionRowID, &entry.ArtifactID, &entry.Version, &entry.EligibilityRevision,
+			&entry.VersionRowID, &entry.ArtifactID, &kindRaw, &entry.Version, &entry.EligibilityRevision,
 			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
 		); err != nil {
+			return nil, dispatchManifestHashInput{}, "", err
+		}
+		entry.Kind, err = ParseArtifactEntityKind(kindRaw)
+		if err != nil {
 			return nil, dispatchManifestHashInput{}, "", err
 		}
 		entries = append(entries, entry)

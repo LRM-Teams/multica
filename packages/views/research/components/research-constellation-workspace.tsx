@@ -195,9 +195,6 @@ export function ResearchConstellationWorkspace({
   );
   const motion = useSemanticTransition();
 
-  const railWidthBase = viewport.width >= 1200 ? 360 : 320;
-  const effectiveRailWidth =
-    isMobile || !railOpen ? 0 : railWidthBase;
   const showDesktopRail = !isMobile && railOpen;
   const contextRailId = "research-d5-context-rail";
   const backgroundInert = reportOpen;
@@ -290,10 +287,13 @@ export function ResearchConstellationWorkspace({
   const canvasBuild = useMemo(
     () =>
       buildD5SessionCanvasModel(typedGraph, viewport, {
-        rightPanelWidth: effectiveRailWidth,
+        // hostRef observes the canvas flex child, whose content box already
+        // excludes the sibling context rail. Reserving the rail again would
+        // double-shrink and left-shift the graph, especially at 768px.
+        rightPanelWidth: 0,
         previousLayout: previousLayoutRef.current,
       }),
-    [typedGraph, viewport, effectiveRailWidth],
+    [typedGraph, viewport],
   );
   const canvasModel = canvasBuild?.model ?? null;
 
@@ -673,7 +673,7 @@ export function ResearchConstellationWorkspace({
             lensHints={lensHints}
             motionDirectives={motionDirectives}
             showMapKey
-            rightPanelWidth={effectiveRailWidth}
+            rightPanelWidth={0}
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}

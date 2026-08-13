@@ -65,15 +65,28 @@ ORDER BY r.created_at ASC, r.page_id ASC`, issueID, workspaceID)
 	}
 	defer rows.Close()
 
-	out := make([]IssueNoteRefResponse, 0)
+	type candidate struct {
+		pageID    pgtype.UUID
+		title     string
+		createdAt pgtype.Timestamptz
+	}
+	// Buffer all rows before noteAccess — that helper acquires its own pool
+	// connection; calling it while the Query cursor is open trips cursordeadlock.
+	candidates := make([]candidate, 0)
 	for rows.Next() {
-		var pageID pgtype.UUID
-		var title string
-		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&pageID, &title, &createdAt); err != nil {
+		var c candidate
+		if err := rows.Scan(&c.pageID, &c.title, &c.createdAt); err != nil {
 			return nil, err
 		}
-		accessible, _, err := h.noteAccess(ctx, pageID, workspaceID, userID)
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]IssueNoteRefResponse, 0, len(candidates))
+	for _, c := range candidates {
+		accessible, _, err := h.noteAccess(ctx, c.pageID, workspaceID, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -81,10 +94,10 @@ ORDER BY r.created_at ASC, r.page_id ASC`, issueID, workspaceID)
 			continue
 		}
 		out = append(out, IssueNoteRefResponse{
-			ID:        uuidToString(pageID),
-			Title:     title,
-			CreatedAt: timestampToString(createdAt),
+			ID:        uuidToString(c.pageID),
+			Title:     c.title,
+			CreatedAt: timestampToString(c.createdAt),
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }

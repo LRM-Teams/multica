@@ -124,7 +124,10 @@ function ResearchAgentInspectorBody({
         });
 
   return (
-    <>
+    <div
+      data-testid="research-agent-inspector-content"
+      className="min-w-0 [overflow-wrap:anywhere]"
+    >
       <header className="agent-head">
         <button
           ref={closeButtonRef}
@@ -204,7 +207,7 @@ function ResearchAgentInspectorBody({
           </Button>
         ) : null}
       </footer>
-    </>
+    </div>
   );
 }
 

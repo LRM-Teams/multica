@@ -33,7 +33,10 @@ import {
 } from "../lib/build-typed-graph-motion-events";
 import { diffTypedGraphLayout, scopeMotionEventsToLayoutDiff } from "../lib/diff-typed-graph-layout";
 import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
-import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
+import {
+  buildNodeAccessibleName,
+  type CanvasNodeA11yCopy,
+} from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
 import {
   mergeResearchCanvasNodes,
@@ -364,13 +367,55 @@ export function ResearchConstellationWorkspace({
       ? t(($) => $.d5.filter.hidden_count, { count: filterHiddenCount })
       : undefined;
 
+  const canvasNodeA11yCopy = useMemo<CanvasNodeA11yCopy>(
+    () => ({
+      statuses: {
+        completed: t(($) => $.d5.canvas_a11y.status.completed),
+        failed: t(($) => $.d5.canvas_a11y.status.failed),
+        conflict: t(($) => $.d5.canvas_a11y.status.conflict),
+        refuted: t(($) => $.d5.canvas_a11y.status.refuted),
+        deadEnd: t(($) => $.d5.canvas_a11y.status.dead_end),
+        abandoned: t(($) => $.d5.canvas_a11y.status.abandoned),
+        cancelled: t(($) => $.d5.canvas_a11y.status.cancelled),
+        running: t(($) => $.d5.canvas_a11y.status.running),
+        waiting: t(($) => $.d5.canvas_a11y.status.waiting),
+        blocked: t(($) => $.d5.canvas_a11y.status.blocked),
+        queued: t(($) => $.d5.canvas_a11y.status.queued),
+      },
+      lanes: {
+        orchestrate: t(($) => $.logic.lane.orchestrate),
+        source: t(($) => $.logic.lane.source),
+        deep_read: t(($) => $.logic.lane.deep_read),
+        validate: t(($) => $.logic.lane.validate),
+        draft: t(($) => $.logic.lane.draft),
+      },
+      unknownStatus: t(($) => $.d5.canvas_a11y.unknown_status),
+      lowConfidence: t(($) => $.d5.canvas_a11y.low_confidence),
+      separator: t(($) => $.d5.canvas_a11y.separator),
+      faceLabels: {
+        goal: t(($) => $.content_faces.goal),
+        operation_approach: t(($) => $.content_faces.operation_approach),
+        research_approach: t(($) => $.content_faces.research_approach),
+        result: t(($) => $.content_faces.result),
+      },
+      faceCopy: {
+        missing: t(($) => $.content_faces.missing),
+        resultPending: t(($) => $.content_faces.result_pending),
+        resultFailed: t(($) => $.content_faces.result_failed),
+      },
+      multipleUpdates: (count) =>
+        t(($) => $.d5.canvas_a11y.updated_nodes, { count }),
+    }),
+    [t],
+  );
+
   const nodeAccessibleNames = useMemo(() => {
     const map = new Map<string, string>();
     for (const node of canvasNodes) {
-      map.set(node.id, buildNodeAccessibleName(node));
+      map.set(node.id, buildNodeAccessibleName(node, canvasNodeA11yCopy));
     }
     return map;
-  }, [canvasNodes]);
+  }, [canvasNodeA11yCopy, canvasNodes]);
 
   const mobileNeighborhoodIdList = useMemo((): string[] | undefined => {
     if (!isMobile || !typedGraph) return undefined;

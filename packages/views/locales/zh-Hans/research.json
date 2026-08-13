@@ -1020,6 +1020,25 @@
       "hidden_count": "筛选隐藏 {{count}} 个"
     },
     "new_frontier_label": "全新方向",
+    "canvas_a11y": {
+      "status": {
+        "completed": "已完成",
+        "failed": "已失败",
+        "conflict": "冲突",
+        "refuted": "已否定",
+        "dead_end": "死胡同",
+        "abandoned": "已废弃",
+        "cancelled": "已取消",
+        "running": "运行中",
+        "waiting": "等待中",
+        "blocked": "阻塞",
+        "queued": "排队中"
+      },
+      "unknown_status": "未知状态",
+      "low_confidence": "低置信",
+      "separator": "，",
+      "updated_nodes": "{{count}} 个节点更新"
+    },
     "star_graph": {
       "canvas_label": "调研星图画布",
       "tier_headers": {

@@ -487,7 +487,11 @@ export function StarGraphCanvas({
         case "moveFocus": {
           onSelectNode?.(action.nodeId);
           const node = keyboardNav?.nodes.find((candidate) => candidate.id === action.nodeId);
-          if (node) setLiveText(buildNodeAccessibleName(node));
+          if (node) {
+            setLiveText(
+              nodeAccessibleNames?.get(node.id) ?? buildNodeAccessibleName(node),
+            );
+          }
           focusNodeButton(action.nodeId);
           return;
         }
@@ -517,6 +521,7 @@ export function StarGraphCanvas({
       handleZoomIn,
       handleZoomOut,
       keyboardNav,
+      nodeAccessibleNames,
       onOpenNode,
       onSelectNode,
     ],
@@ -530,7 +535,11 @@ export function StarGraphCanvas({
         event.preventDefault();
         focusSelectedEntity(focusId);
         const node = keyboardNav.nodes.find((candidate) => candidate.id === focusId);
-        if (node) setLiveText(buildNodeAccessibleName(node));
+        if (node) {
+          setLiveText(
+            nodeAccessibleNames?.get(node.id) ?? buildNodeAccessibleName(node),
+          );
+        }
         return;
       }
       const action = resolveCanvasKeyEvent(event, {
@@ -543,7 +552,13 @@ export function StarGraphCanvas({
       event.preventDefault();
       applyKeyboardAction(action, focusId);
     },
-    [applyKeyboardAction, focusSelectedEntity, keyboardNav, selectedNodeId],
+    [
+      applyKeyboardAction,
+      focusSelectedEntity,
+      keyboardNav,
+      nodeAccessibleNames,
+      selectedNodeId,
+    ],
   );
 
   const worldSize = useMemo(() => {

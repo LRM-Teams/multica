@@ -1020,6 +1020,25 @@
       "hidden_count": "{{count}} hidden by filter"
     },
     "new_frontier_label": "NEW FRONTIERS",
+    "canvas_a11y": {
+      "status": {
+        "completed": "Completed",
+        "failed": "Failed",
+        "conflict": "Conflict",
+        "refuted": "Refuted",
+        "dead_end": "Dead end",
+        "abandoned": "Abandoned",
+        "cancelled": "Cancelled",
+        "running": "Running",
+        "waiting": "Waiting",
+        "blocked": "Blocked",
+        "queued": "Queued"
+      },
+      "unknown_status": "Unknown status",
+      "low_confidence": "Low confidence",
+      "separator": ", ",
+      "updated_nodes": "{{count}} nodes updated"
+    },
     "star_graph": {
       "canvas_label": "Research constellation canvas",
       "tier_headers": {

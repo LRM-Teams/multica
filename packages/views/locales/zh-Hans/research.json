@@ -100,6 +100,7 @@
     "close": "关闭",
     "retry": "重试",
     "confirm_substantive": "确认换题（substantive）",
+    "confirming_substantive": "正在确认换题…",
     "collapse_icon": "收起为图标",
     "expand_card": "展开卡片"
   },

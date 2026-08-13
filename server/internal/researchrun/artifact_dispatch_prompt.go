@@ -2,11 +2,63 @@ package researchrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
 )
+
+type manifestPrincipalMember struct {
+	AgentID string `json:"agent_id"`
+	Role    string `json:"role"`
+	Status  string `json:"status"`
+	IsLead  bool   `json:"is_lead"`
+}
+
+func encodeManifestPrincipalHeader(members []FleetMember) ([]byte, error) {
+	frozen := make([]manifestPrincipalMember, 0, len(members))
+	for _, member := range members {
+		frozen = append(frozen, manifestPrincipalMember{AgentID: member.AgentID, Role: member.Role, Status: member.Status, IsLead: member.IsLead})
+	}
+	return json.Marshal(frozen)
+}
+
+func decodeManifestPrincipalHeader(raw []byte) ([]FleetMember, error) {
+	var frozen []manifestPrincipalMember
+	if err := json.Unmarshal(raw, &frozen); err != nil {
+		return nil, err
+	}
+	members := make([]FleetMember, 0, len(frozen))
+	for _, member := range frozen {
+		members = append(members, FleetMember{AgentID: member.AgentID, Role: member.Role, Status: member.Status, IsLead: member.IsLead})
+	}
+	return members, nil
+}
+
+func loadManifestPrincipalHeaderTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, manifestID string) ([]FleetMember, error) {
+	var raw []byte
+	var storedHash string
+	if err := tx.QueryRow(ctx, `SELECT principal_header_bytes, principal_header_hash FROM research_artifact_context_manifest WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspaceID, sessionID, manifestID).Scan(&raw, &storedHash); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || contentHashFromPayload(raw) != storedHash {
+		return nil, fmt.Errorf("%w: manifest principal header missing or invalid", ErrInvalidTransition)
+	}
+	return decodeManifestPrincipalHeader(raw)
+}
+
+func loadManifestPrincipalHeaderPool(ctx context.Context, store *PostgresStore, workspaceID, sessionID, attemptID string) ([]FleetMember, error) {
+	var raw []byte
+	var storedHash string
+	if err := store.pool.QueryRow(ctx, `SELECT principal_header_bytes, principal_header_hash FROM research_artifact_context_manifest WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid`, workspaceID, sessionID, attemptID).Scan(&raw, &storedHash); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || contentHashFromPayload(raw) != storedHash {
+		return nil, fmt.Errorf("%w: manifest principal header missing or invalid", ErrInvalidTransition)
+	}
+	return decodeManifestPrincipalHeader(raw)
+}
 
 func rebindDispatchPromptForManifestTx(
 	ctx context.Context,
@@ -28,7 +80,7 @@ func rebindDispatchPromptForManifestTx(
 		return DispatchRequest{}, err
 	}
 	filtered := filterRunSnapshotByManifest(liveSnapshot, manifestSet.ArtifactIDs)
-	members, err := listFleetMembersTx(ctx, tx, in.SessionID, workspaceID)
+	members, err := loadManifestPrincipalHeaderTx(ctx, tx, workspaceID, in.SessionID, manifestID)
 	if err != nil {
 		return DispatchRequest{}, err
 	}
@@ -132,7 +184,7 @@ func replayDispatchPromptFromManifest(
 	if task.ID == "" {
 		return "", ErrRunNotFound
 	}
-	members, err := store.ListFleetMembers(ctx, snapshot.Run.SessionID, workspaceID)
+	members, err := loadManifestPrincipalHeaderPool(ctx, store, workspaceID, snapshot.Run.SessionID, attemptID)
 	if err != nil {
 		return "", err
 	}

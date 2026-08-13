@@ -90,7 +90,10 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	nodeIDs := make(map[string]string, len(legacyNodes))
 	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
 	for _, n := range legacyNodes {
-		mapped := mapResearchV6Node(runID, n)
+		mapped, mapErr := mapResearchV6NodeStrict(runID, n)
+		if mapErr != nil {
+			return researchV6Snapshot{}, mapErr
+		}
 		nodeIDs[n.ID] = mapped.ID
 		nodes = append(nodes, mapped)
 	}
@@ -115,25 +118,55 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 }
 
 func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6ProjectionNode {
+	mapped, err := mapResearchV6NodeStrict(runID, node)
+	if err == nil {
+		return mapped
+	}
+	// Compatibility helper used by legacy callers/tests. Production Snapshot
+	// and live V6 paths call the strict mapper directly and never publish this
+	// degradation for malformed known identities.
+	created, updated := node.CreatedAt, node.UpdatedAt
+	return researchV6ProjectionNode{ID: runID + ":generic:" + node.ID, RunID: runID, EntityKind: "generic", EntityID: node.ID, NodeKind: "generic", NodeSubtype: node.NodeType, SchemaVersion: 1, Title: node.Title, Summary: node.Summary, Status: node.Status, Importance: 0.5, ActorAgentID: node.ActorAgentID, CreatedAt: &created, UpdatedAt: &updated, Detail: map[string]any{}}
+}
+
+// mapResearchV6NodeStrict binds identity according to entity_kind. Related
+// lineage IDs may coexist in detail, so choosing the first ID-shaped field is
+// incorrect (for example a Claim produced by a Task is still a Claim node).
+func mapResearchV6NodeStrict(runID string, node ResearchGraphNodeResp) (researchV6ProjectionNode, error) {
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(node.ID) == "" {
+		return researchV6ProjectionNode{}, fmt.Errorf("research V6 node requires run and source identity")
+	}
 	kind := "generic"
 	entityID := node.ID
 	var detail map[string]any
-	_ = json.Unmarshal(node.Payload, &detail)
+	if len(node.Payload) == 0 || json.Unmarshal(node.Payload, &detail) != nil || detail == nil {
+		return researchV6ProjectionNode{}, fmt.Errorf("research V6 source node %q has malformed payload", node.ID)
+	}
 	if raw, ok := detail["kind"].(string); ok && raw != "" {
 		kind = normalizeResearchV6EntityKind(raw)
 	}
-	if kind != "generic" {
-		for _, key := range []string{"task_id", "attempt_id", "question_id", "claim_id"} {
-			if raw, ok := detail[key].(string); ok && raw != "" {
-				entityID = raw
-				break
-			}
+	identityKey := map[string]string{
+		runGraphKindQuestion: "question_id",
+		runGraphKindTask:     "task_id",
+		runGraphKindAttempt:  "attempt_id",
+		runGraphKindClaim:    "claim_id",
+	}[kind]
+	if identityKey != "" {
+		raw, ok := detail[identityKey].(string)
+		entityID = strings.TrimSpace(raw)
+		if !ok || entityID == "" {
+			return researchV6ProjectionNode{}, fmt.Errorf("research V6 %s node %q lacks %s", kind, node.ID, identityKey)
+		}
+	} else if kind != "generic" {
+		raw, ok := detail["entity_id"].(string)
+		if ok && strings.TrimSpace(raw) != "" {
+			entityID = strings.TrimSpace(raw)
 		}
 	}
 	id := runID + ":" + kind + ":" + entityID
 	created := node.CreatedAt
 	updated := node.UpdatedAt
-	return researchV6ProjectionNode{ID: id, RunID: runID, EntityKind: kind, EntityID: entityID, NodeKind: kind, NodeSubtype: node.NodeType, SchemaVersion: 1, Title: node.Title, Summary: node.Summary, Status: node.Status, Importance: 0.5, ActorAgentID: node.ActorAgentID, CreatedAt: &created, UpdatedAt: &updated, Detail: detail}
+	return researchV6ProjectionNode{ID: id, RunID: runID, EntityKind: kind, EntityID: entityID, NodeKind: kind, NodeSubtype: node.NodeType, SchemaVersion: 1, Title: node.Title, Summary: node.Summary, Status: node.Status, Importance: 0.5, ActorAgentID: node.ActorAgentID, CreatedAt: &created, UpdatedAt: &updated, Detail: detail}, nil
 }
 
 func normalizeResearchV6EntityKind(raw string) string {

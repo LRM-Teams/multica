@@ -1095,6 +1095,7 @@ surface 矩阵仍未完成。
 - [ ] 为历史 V1–V5 Run 建立只读投影和可恢复路径；不伪造历史 Inquiry/Search/Dispute 数据。
 - [ ] 更新 Run Snapshot，使前端能展示 Question、Hypothesis、Branch、Integration、Dispute、Search 和修订详情。
 - [ ] 实现稳定 Graph Projection Node/Edge schema、Snapshot/Delta、完整节点详情和重建 hash 测试。
+  - [x] N-node-identity-1：V6 mapper 按 canonical `entity_kind` 选择身份字段，而不是从 payload 中取第一个看似 ID 的字段；Question/Task/Attempt/Claim 分别只接受 `question_id/task_id/attempt_id/claim_id`，其他已注册 V6 kind 可使用显式 `entity_id`，未知 kind 仍按 source node ID 降级为 generic。已知 kind 缺少自身 ID 或 payload malformed 时 Snapshot 和 V6 live frame fail closed，避免生产 Task lineage 把 Claim 错命名为 Task ID；V5 广播保持兼容。
 - [ ] 实现固定 Snapshot 分页、Projection Slice、详情按需读取、WebSocket event sequence 续传和缺口 resync。
 - [ ] 实现前端 Delta 幂等消费、乱序暂存、融合/扩散/冲突/失效 transition 映射、视口裁剪和显示分组；显示分组不得写回 canonical Graph。
 - [ ] 使用至少一万节点 fixture 验证分页、Slice、重连、重复/乱序 Delta、缺口重建和浏览器不全量载入。

@@ -45,3 +45,37 @@ func TestResearchV6RootIDsUsesGoalSubtypeForCompatibilityRoot(t *testing.T) {
 		t.Fatalf("roots=%v", roots)
 	}
 }
+
+func TestMapResearchV6NodeStrictUsesKindSpecificIdentity(t *testing.T) {
+	claim := ResearchGraphNodeResp{ID: "display-claim", Payload: json.RawMessage(`{"kind":"claim","claim_id":"claim-1","task_id":"producer-task"}`)}
+	mapped, err := mapResearchV6NodeStrict("run-1", claim)
+	if err != nil || mapped.EntityKind != "claim" || mapped.EntityID != "claim-1" || mapped.ID != "run-1:claim:claim-1" {
+		t.Fatalf("mapped=%+v err=%v", mapped, err)
+	}
+	attempt := ResearchGraphNodeResp{ID: "display-attempt", Payload: json.RawMessage(`{"kind":"attempt","attempt_id":"attempt-1","task_id":"task-1"}`)}
+	mapped, err = mapResearchV6NodeStrict("run-1", attempt)
+	if err != nil || mapped.EntityID != "attempt-1" {
+		t.Fatalf("mapped=%+v err=%v", mapped, err)
+	}
+}
+
+func TestMapResearchV6NodeStrictRejectsUnprovableCanonicalIdentity(t *testing.T) {
+	tests := []ResearchGraphNodeResp{
+		{ID: "task", Payload: json.RawMessage(`{"kind":"task","claim_id":"wrong-kind"}`)},
+		{ID: "claim", Payload: json.RawMessage(`{"kind":"claim","task_id":"producer-only"}`)},
+		{ID: "broken", Payload: json.RawMessage(`{"kind":`)},
+	}
+	for _, node := range tests {
+		if _, err := mapResearchV6NodeStrict("run-1", node); err == nil {
+			t.Fatalf("node=%+v unexpectedly accepted", node)
+		}
+	}
+}
+
+func TestMapResearchV6NodeStrictUsesExplicitFutureEntityIdentity(t *testing.T) {
+	node := ResearchGraphNodeResp{ID: "display-future", Payload: json.RawMessage(`{"kind":"monitoring_cycle","entity_id":"cycle-1","task_id":"related-task"}`)}
+	mapped, err := mapResearchV6NodeStrict("run-1", node)
+	if err != nil || mapped.EntityID != "cycle-1" || mapped.ID != "run-1:monitoring_cycle:cycle-1" {
+		t.Fatalf("mapped=%+v err=%v", mapped, err)
+	}
+}

@@ -111,6 +111,7 @@ export function StarGraphCanvas({
 }: StarGraphCanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const initialCameraRef = useRef(false);
+  const pendingKeyboardFocusRef = useRef<string | null>(null);
   const storedViewport = useResearchCanvasStore((s) => s.viewport);
   const setStoredViewport = useResearchCanvasStore((s) => s.setViewport);
   const canvasFilter = useResearchCanvasStore((s) => s.filter);
@@ -350,10 +351,10 @@ export function StarGraphCanvas({
     (action: CanvasKeyboardAction, focusId: string | null) => {
       switch (action.type) {
         case "moveFocus": {
+          pendingKeyboardFocusRef.current = action.nodeId;
           onSelectNode?.(action.nodeId);
           const node = keyboardNav?.nodes.find((candidate) => candidate.id === action.nodeId);
           if (node) setLiveText(buildNodeAccessibleName(node));
-          rootRef.current?.focus();
           return;
         }
         case "openDetail":
@@ -402,6 +403,18 @@ export function StarGraphCanvas({
     },
     [applyKeyboardAction, focusSelectedEntity, keyboardNav, selectedNodeId],
   );
+
+  useEffect(() => {
+    const pendingId = pendingKeyboardFocusRef.current;
+    if (!pendingId || pendingId !== selectedNodeId) return;
+    pendingKeyboardFocusRef.current = null;
+    const target = Array.from(
+      rootRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="star-graph-node"]',
+      ) ?? [],
+    ).find((node) => node.dataset.nodeId === pendingId);
+    target?.focus();
+  }, [selectedNodeId, visibleEntityIds]);
 
   const worldSize = useMemo(() => {
     if (!bounds) {

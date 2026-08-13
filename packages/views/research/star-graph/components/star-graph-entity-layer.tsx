@@ -27,6 +27,7 @@ export function StarGraphEntityLayer({
     <div data-testid="star-graph-entities" className="absolute inset-0">
       {entities.map((entity) => {
         const selected = entity.id === selectedNodeId;
+        const focusable = selected || (!selectedNodeId && entity === entities[0]);
         const state = resolveStarGraphState(
           selected ? [entity.view.state, "selected"] : [entity.view.state],
         );
@@ -38,6 +39,8 @@ export function StarGraphEntityLayer({
         return (
           <StarGraphNode
             key={entity.id}
+            nodeId={entity.id}
+            tabIndex={focusable ? 0 : -1}
             tier={entity.view.tier}
             state={state}
             title={entity.view.title}

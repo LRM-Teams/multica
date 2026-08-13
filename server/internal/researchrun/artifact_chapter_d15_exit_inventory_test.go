@@ -38,7 +38,7 @@ var chapterD15Coverage = map[int]string{
 	21: "partial", // accept replay hash/lineage conflict
 	22: "partial", // result accept transaction recovery matrix
 	23: "partial", // cross-workspace 404 + Fleet principal/header binding; full surface matrix open
-	24: "partial", // withdrawal/acceptance ledger + revoked frozen-read denial/history preservation
+	24: "covered", // revocation read/accept denial + ledger and frozen-history append-only preservation
 	25: "covered", // stable passport-ID/hash projection + frozen Attempt scope + enum/FE fallback
 	26: "covered", // transaction structural guard tests
 }

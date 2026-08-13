@@ -334,12 +334,18 @@
 **前置：** Slice 1–2 完成；建议 Slice 3 的写回/反向发现已可用。  
 **本 Slice 完成标准（S1 最小）：** 按需生成回顾笔记；每条有 evidence；标明数据源；缺源诚实降级；归属分栏（亲手/委派/相关）。
 
-- [ ] **S4-S1 按需日/周回顾笔记**
+- [x] **S4-S1 按需日/周回顾笔记**
   - **目标**：用已有 Facts（Issue 变更、touched 笔记、可选 run 摘要）生成一篇私有回顾笔记或待审草稿。
   - **要做**：选时间窗（用户时区）；聚合 → 分层摘要 → 写入笔记树（如 `回顾/YYYY-MM-DD`）；每条带 evidence。
   - **不要做**：无引用长文；直接灌 raw thinking；假装有未接入的数据源。
   - **依赖**：Slice 1 引用与写回；Slice 2 run 摘要更佳
   - **完成标准**：生成结果可点回 issue/note；UI 列出所用源；关闭某源后内容变化符合预期。
+  - **已落地（2026-08-13）**：
+    - `POST /api/notes/retrospectives`：day/week + timezone + sources 开关
+    - Facts：`activity_log`（当前用户）+ owner 笔记 `updated_at`；`agent_runs` 诚实空降级
+    - 写入私有 `回顾/` 子页，正文含 Issue mention；同步 `note_page_issue_ref`
+    - UI：笔记顶栏「生成回顾」+ `NoteRetrospectiveDialog`
+    - 测试：窗口/markdown 单测、handler 聚合/关源测、FE schema fallback
 
 - [ ] **S4-S2 归属打标**
   - **目标**：亲手 / 委派 Agent / 仅相关 分开展示。
@@ -376,4 +382,4 @@
 | 3 | Slice 2 完成 → `S3-*` |
 | 4 | 管子稳定后 → `S4-S1` 起验证 |
 
-**当前首期范围：** Slice 1 + Slice 2 已完成（见 PR）；Slice 3 已完成（S3-A3 Research 延期；其余项已勾）。
+**当前首期范围：** Slice 1–3 已完成；Slice 4 进行中（S4-S1 已勾）。

@@ -209,3 +209,31 @@ export interface CreateNoteWritebackRequest {
   target?: string;
   evidence: NoteWritebackEvidence[];
 }
+
+/** S4-S1 on-demand day/week retrospective. */
+export type NoteRetrospectiveWindow = "day" | "week";
+export type NoteRetrospectiveSource = "issue_activity" | "touched_notes" | "agent_runs";
+
+export interface CreateNoteRetrospectiveRequest {
+  window: NoteRetrospectiveWindow;
+  date?: string;
+  timezone?: string;
+  sources?: NoteRetrospectiveSource[];
+}
+
+export interface NoteRetrospectiveWindowInfo {
+  kind: string;
+  timezone: string;
+  start: string;
+  end: string;
+  label: string;
+}
+
+export interface CreateNoteRetrospectiveResponse {
+  page: NotePage;
+  window: NoteRetrospectiveWindowInfo;
+  sources_used: string[];
+  sources_empty: string[];
+  sources_skipped: string[];
+  fact_count: number;
+}

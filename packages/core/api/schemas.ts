@@ -65,6 +65,7 @@ import type {
   NotePageIssueRefListResponse,
   NoteWriteback,
   NoteWritebackListResponse,
+  CreateNoteRetrospectiveResponse,
   IssueNoteRef,
   IssueNoteRefListResponse,
 } from "../types";
@@ -179,6 +180,30 @@ export const EMPTY_NOTE_PAGE: NotePage = {
 };
 
 export const EMPTY_NOTE_PAGE_LIST: NotePageListResponse = { pages: [] };
+
+export const CreateNoteRetrospectiveResponseSchema: z.ZodType<CreateNoteRetrospectiveResponse> = z.object({
+  page: NotePageSchema,
+  window: z.object({
+    kind: z.string().default(""),
+    timezone: z.string().default(""),
+    start: z.string().default(""),
+    end: z.string().default(""),
+    label: z.string().default(""),
+  }).loose(),
+  sources_used: z.array(z.string()).default([]),
+  sources_empty: z.array(z.string()).default([]),
+  sources_skipped: z.array(z.string()).default([]),
+  fact_count: z.number().default(0),
+}).loose();
+
+export const EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE: CreateNoteRetrospectiveResponse = {
+  page: EMPTY_NOTE_PAGE,
+  window: { kind: "", timezone: "", start: "", end: "", label: "" },
+  sources_used: [],
+  sources_empty: [],
+  sources_skipped: [],
+  fact_count: 0,
+};
 
 export const NoteAIEditResultSchema = z.object({
   action: z.enum(["insert", "replace_selection", "replace_page", "patch"]),

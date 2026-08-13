@@ -1084,6 +1084,7 @@ surface 矩阵仍未完成。
 
 - [ ] 生成不含跨租户私有内容的 Research Episode。
 - [ ] 实现评测任务、环境、grader、重复运行和对照报告。
+  - [x] M2c：评测 Run 在冻结 Contract `source_policy.evaluation_subject` 中绑定 `research-eval-subject-v1`、sealed subject hash 和受控 Document allowlist。Result acceptance 预检与锁住 Run 后的 PostgreSQL 事务都执行同一 fail-closed fence：每个 Source metadata 必须只含匹配的 subject hash/Document ID，每个 Observation datum 必须只含非空 fact key/value，未知字段（包括 Oracle）、跨 Subject/Document、重复/空 allowlist 和 schema/hash 漂移全部拒绝。普通 source policy 没有 `evaluation_subject` 时行为不变；事务内复检防止 steering 在 decode 与 materialize 之间更换 Contract。
 - [ ] 实现 Strategy Candidate、Promotion Decision、新 Run 固定版本和回退。
 - [ ] 建立线上质量/成本越界监测；禁止运行中自改 Prompt 或策略。
 

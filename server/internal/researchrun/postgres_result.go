@@ -46,6 +46,20 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	state.outputAccess = ArtifactAccessRaw
+	var lockedSourcePolicy json.RawMessage
+	if err = tx.QueryRow(ctx, `
+		SELECT source_policy
+		FROM research_contract_revision
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND goal_version=$3
+	`, state.workspaceID, in.SessionID, state.run.GoalVersion).Scan(&lockedSourcePolicy); err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	// The handler preflight improves diagnostics, but this locked check is the
+	// authorization boundary. Steering cannot swap the subject/document set
+	// between decode and materialization.
+	if err = validateEvaluationSubjectResult(lockedSourcePolicy, in.Result); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 
 	artifactPassportEnabled, err := sessionArtifactPassportEnabled(ctx, tx, in.SessionID, state.workspaceID)
 	if err != nil {

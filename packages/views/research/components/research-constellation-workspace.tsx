@@ -148,6 +148,7 @@ export function ResearchConstellationWorkspace({
   const effectiveRailWidth =
     isMobile || !railOpen ? 0 : railWidthBase;
   const showDesktopRail = !isMobile && railOpen;
+  const contextRailId = "research-d5-context-rail";
   const backgroundInert = reportOpen;
 
   const reportController = useMemo<ResearchReportController>(
@@ -543,6 +544,8 @@ export function ResearchConstellationWorkspace({
           isMobile ? "d5-rail-toggle" : "d5-rail-toggle-desktop",
         )}
         data-testid="research-d5-rail-toggle"
+        aria-expanded={railOpen}
+        aria-controls={contextRailId}
         onClick={() => setRailOpen(!railOpen)}
       >
         {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
@@ -550,6 +553,7 @@ export function ResearchConstellationWorkspace({
 
       {showDesktopRail ? (
         <ResearchD5Rail
+          id={contextRailId}
           mode={railMode}
           onModeChange={setRailMode}
           chatPanel={chatPanel}
@@ -562,13 +566,15 @@ export function ResearchConstellationWorkspace({
 
       {isMobile ? (
         <ResearchD5Rail
+          id={contextRailId}
           mode={railMode}
           onModeChange={setRailMode}
           chatPanel={chatPanel}
           detailPanel={detailPanel}
           composer={composer}
           className={!railOpen ? "d5-rail-collapsed" : undefined}
-          {...(backgroundInert ? { inert: true } : {})}
+          aria-hidden={!railOpen || undefined}
+          {...(!railOpen || backgroundInert ? { inert: true } : {})}
         />
       ) : null}
 

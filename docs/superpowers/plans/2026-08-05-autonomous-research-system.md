@@ -996,6 +996,7 @@ Manifest 不再仅依赖进程内硬编码 clearance。D 章尚未完成，最�
   - E1：`docs/contracts/research-run-v6.schema.json` 以独立四 envelope 和固定 SHA-256 冻结；`docs/research-run-v6-contract.md` 记录跨对象事务不变量与启用门。回归明确要求默认仍为 V5、V6 仍返回 unsupported；不能用共享 optional 字段放宽 V1–V5 strict decoder。
 - [ ] 增加 Hypothesis、Branch、Insight、Inquiry Edge schema、状态机和迁移。
   - [x] E2a：migration 348 建立四类 canonical Inquiry 表、tenant/session scoped FK、状态约束、frontier 索引，并把四类实体加入 Artifact Passport fail-closed kind registry；V6 默认值保持关闭。写入命令、完整多态端点守卫、环检测和状态转换仍待 E2b。
+  - [x] E2b-guard：migration 350 与 `inquiryModule` 冻结 Hypothesis/Branch/Insight 合法状态迁移，要求 Branch 终止理由，逐类验证多态端点，并禁止 `decomposes | depends_on | refines` 形成有向环；`dispute` 在 H 章实体落库前保持不可写。生产批量写命令、Artifact Passport 原子注册与 Run Event 仍待 E2b-write。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。

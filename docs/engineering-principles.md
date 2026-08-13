@@ -199,6 +199,10 @@
 - **契约**：workspace 导航 = `bg-sidebar`；会话列表 = `bg-background`。LRM-551 lock A（两列同走 sidebar chrome）已否——同色会把导航和会话列表糊成一块。
 - **物**：`conversation-sidebar-styles.ts` 的 `CONVERSATION_LIST_PANE_BG` / 行选中 `bg-muted` / hover `bg-accent`；`channels-page-list-bg.test.ts` + `conversation-sidebar-styles.test.ts`。规范源：`docs/design-product-surfaces.md`。
 
+### 2.10 群聊 @ 候选不含发送者本人 — `可执行`（⑤）
+- **契约**：群聊 composer 的 @ picker 不列出当前登录用户。@自己不是有效的 notify/wake 目标，排在列表里是噪声。Issue 评论、agent 候选、以及 DM 的 peer-only allowlist 不走这条。
+- **物**：`buildGroupMentionAllowedActorIds({ viewerUserId })` 从本地 allowlist 删除 viewer；`ListChannelMentionCandidates` 从 in-channel 页删除 viewer（服务端列表会盖过本地 sync）；`channels-page` fetch 映射再滤一层；`mention-scope.test.ts` + `mention-suggestion.test.tsx` + `channel_mention_candidates_test.go` 锁住。
+
 ## 3. 属性显示（跨面）
 
 ### 3.1 本家属性语法 — `可执行`（task #518）

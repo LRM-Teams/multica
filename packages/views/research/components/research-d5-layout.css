@@ -2,21 +2,32 @@
   color-scheme: dark;
   --background: #07111b;
   --foreground: #edf4fb;
+  --canvas-bg: #07111b;
+  --ink: #edf4fb;
+  --ink-2: #8293a7;
   --muted-foreground: #8293a7;
+  --muted: #111d29;
   --border: #26384c;
   --line: #26384c;
   --line-strong: #34516a;
   --primary: #48d3e4;
   --primary-foreground: #041018;
+  --brand: #48d3e4;
+  --brand-foreground: #041018;
+  --brand-soft: #102a33;
   --secondary: #101b28;
   --secondary-foreground: #d7f8fb;
   --accent: #102a33;
   --accent-foreground: #c9f8fb;
   --card: #0d1723;
+  --surface: #0d1723;
+  --hover: #132230;
   --card-foreground: #edf4fb;
   --popover: #0d1723;
   --popover-foreground: #edf4fb;
   --destructive: #ff6674;
+  --danger: #ff6674;
+  --destructive-strong: #ff7c87;
   --destructive-foreground: #fff1f2;
   --input: #34516a;
   --ring: #48d3e4;
@@ -34,6 +45,10 @@
   background: var(--background);
   container-name: research-d5;
   container-type: inline-size;
+}
+.research-d5-theme ::selection {
+  background: rgb(72 211 228 / 28%);
+  color: #f4fbff;
 }
 
 .d5-chrome-shell {

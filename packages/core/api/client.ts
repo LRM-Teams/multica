@@ -244,6 +244,7 @@ import type {
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteWritebackRequest,
+  IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -283,6 +284,8 @@ import {
   AttachmentResponseSchema,
   CancelTaskResponseSchema,
   ChildIssuesResponseSchema,
+  IssueNoteRefListResponseSchema,
+  EMPTY_ISSUE_NOTE_REF_LIST,
   CommentsListSchema,
   CommentTriggerPreviewSchema,
   CloudRuntimeNodeListSchema,
@@ -1319,6 +1322,14 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/issues/${id}/children`);
     return parseWithFallback(raw, ChildIssuesResponseSchema, { issues: [] }, {
       endpoint: "GET /api/issues/:id/children",
+    });
+  }
+
+  /** Notes linked to this issue (S3-R5b). ACL-filtered — inaccessible notes omitted. */
+  async listIssueNoteRefs(id: string): Promise<IssueNoteRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(id)}/note-refs`);
+    return parseWithFallback(raw, IssueNoteRefListResponseSchema, EMPTY_ISSUE_NOTE_REF_LIST, {
+      endpoint: "GET /api/issues/:id/note-refs",
     });
   }
 

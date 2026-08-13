@@ -287,11 +287,15 @@
     - `classifyNoteWritebackIssueTransition` + `TestClassifyNoteWritebackIssueTransitionWhitelist`
     - 噪声测：`TestIssueInProgressNoiseCreatesNoNoteWriteback`
 
-- [ ] **S3-R5b Issue → 笔记反向发现**
+- [x] **S3-R5b Issue → 笔记反向发现**
   - **目标**：落实 D4——Issue 侧列出关联笔记（ACL 过滤）。
   - **要做**：Issue 详情 API/UI 展示关联笔记；无权限笔记不出现或降级。
   - **依赖**：S1-R1
   - **完成标准**：双边都能发现同一关联；无权不可见。
+  - **已落地（2026-08-13）**：
+    - `GET /api/issues/{id}/note-refs`：仅返回当前用户可访问的笔记（无权省略，不泄 UUID）
+    - Issue 详情在子 issue 与 Activity 之间展示「关联笔记」列表，跳转 `paths.noteDetail`
+    - 测试：`TestListIssueNoteRefs*`、`note-refs-schema.test.ts`
 
 - [ ] **S3-A4 笔记内统一意图入口**
   - **目标**：落实 D3——一个入口路由到 Editor / Worker / 创建 Issue。

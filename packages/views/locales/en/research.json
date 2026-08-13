@@ -1025,6 +1025,10 @@
   "d5": {
     "brand_title": "Research Constellation · D5",
     "brand_subtitle": "XXL / XL / L / M results · S agent work nodes",
+    "projection": {
+      "classic": "Classic",
+      "classic_hint": "Classic projection view; live V6 projection is not available for this session"
+    },
     "lens_group": "Display lenses",
     "lens": {
       "relations": "Relations",

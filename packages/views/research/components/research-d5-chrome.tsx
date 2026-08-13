@@ -35,6 +35,7 @@ export function ResearchD5Chrome({
   goalHistory = [],
   goalImpact = null,
   typedGraphNodes = [],
+  projectionSource = null,
   className,
   session,
   pendingSubstantiveGoal,
@@ -50,6 +51,7 @@ export function ResearchD5Chrome({
   goalHistory?: readonly GoalVersionEntry[];
   goalImpact?: { labeledNodes: number; totalNodes: number } | null;
   typedGraphNodes?: readonly TypedGraphNode[];
+  projectionSource?: "v5" | "v6" | null;
   className?: string;
 }) {
   const { t } = useT("research");
@@ -87,7 +89,19 @@ export function ResearchD5Chrome({
             M
           </span>
           <div className="min-w-0">
-            <b>{t(($) => $.d5.brand_title)}</b>
+            <div className="flex min-w-0 items-center gap-2">
+              <b>{t(($) => $.d5.brand_title)}</b>
+              {projectionSource === "v5" ? (
+                <span
+                  role="status"
+                  data-testid="research-d5-classic-projection"
+                  aria-label={t(($) => $.d5.projection.classic_hint)}
+                  className="shrink-0 rounded-full border border-border/70 bg-muted/60 px-1.5 py-0.5 font-medium text-muted-foreground"
+                >
+                  {t(($) => $.d5.projection.classic)}
+                </span>
+              ) : null}
+            </div>
             <span>{t(($) => $.d5.brand_subtitle)}</span>
           </div>
         </div>

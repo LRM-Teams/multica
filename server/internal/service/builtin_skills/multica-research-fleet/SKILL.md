@@ -18,8 +18,9 @@ If the prompt contains `## Durable Research Run task`, follow its task ID,
 attempt ID, versions, objective, acceptance criteria, and result contract.
 
 1. Read the attempt-bound snapshot before work. Agent data-plane reads require
-the dispatched Attempt ID so the server returns only the frozen manifest; an
-unscoped live-session read is rejected:
+the dispatched Attempt ID so the server returns only the frozen manifest. An
+active Fleet member without an Attempt may read only a bounded session/Fleet
+overview; it contains no goal, Run, artifact, message, report, hash, or grant data:
 
 ```bash
 multica research session get <session-id> --attempt-id <attempt-id> --output json

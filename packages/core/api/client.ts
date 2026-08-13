@@ -4802,13 +4802,12 @@ export class ApiClient {
   ): Promise<import("../research/queries").ResearchPresenceResponse> {
     const { ResearchPresenceResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/presence`);
-    const result = ResearchPresenceResponseSchema.safeParse(raw);
-    if (!result.success) {
-      throw new Error(
-        "GET /api/research/sessions/:id/presence response failed schema validation",
-      );
-    }
-    const parsed = result.data;
+    const parsed = parseWithFallback(
+      raw,
+      ResearchPresenceResponseSchema,
+      { session_id: id, presence: {} },
+      { endpoint: "GET /api/research/sessions/:id/presence" },
+    );
     if (parsed.session_id !== "" && parsed.session_id !== id) {
       throw new Error(
         "GET /api/research/sessions/:id/presence response failed session validation",

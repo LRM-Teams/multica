@@ -62,6 +62,10 @@ type researchV6Delta struct {
 	AffectedRootNodeIDs   []string                   `json:"affected_root_node_ids"`
 	TransitionKind        *string                    `json:"transition_kind"`
 }
+type researchV6DeltaEnvelope struct {
+	RunID string          `json:"run_id"`
+	Delta researchV6Delta `json:"delta"`
+}
 type researchV6Snapshot struct {
 	SnapshotID           string                     `json:"snapshot_id"`
 	RunID                string                     `json:"run_id"`
@@ -87,24 +91,7 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if err = h.DB.QueryRow(r.Context(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err != nil {
 		return researchV6Snapshot{}, err
 	}
-	nodeIDs := make(map[string]string, len(legacyNodes))
-	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
-	for _, n := range legacyNodes {
-		mapped := mapResearchV6Node(runID, n)
-		nodeIDs[n.ID] = mapped.ID
-		nodes = append(nodes, mapped)
-	}
-	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
-	for _, e := range legacyEdges {
-		from, fromOK := nodeIDs[e.FromNodeID]
-		to, toOK := nodeIDs[e.ToNodeID]
-		if !fromOK || !toOK {
-			continue
-		}
-		edges = append(edges, researchV6ProjectionEdge{ID: runID + ":edge:" + e.ID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: e.EdgeType})
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	nodes, edges := mapResearchV6Graph(runID, legacyNodes, legacyEdges)
 	nodeBytes, _ := json.Marshal(nodes)
 	edgeBytes, _ := json.Marshal(edges)
 	nh := sha256.Sum256(nodeBytes)
@@ -112,6 +99,34 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	snapshotSeed := fmt.Sprintf("%s:%d:%x:%x", runID, sequence, nh, eh)
 	sh := sha256.Sum256([]byte(snapshotSeed))
 	return researchV6Snapshot{SnapshotID: "sha256:" + hex.EncodeToString(sh[:]), RunID: runID, ThroughEventSequence: sequence, GraphContentHash: map[string]string{"nodes": "sha256:" + hex.EncodeToString(nh[:]), "edges": "sha256:" + hex.EncodeToString(eh[:])}, Nodes: nodes, Edges: edges, NextCursor: nil}, nil
+}
+
+// mapResearchV6Graph is the single V5/run-v2 to V6 identity boundary used by
+// both HTTP snapshots and realtime deltas. Keeping it shared prevents a live
+// frame from naming a node or edge differently from the subsequent resync.
+func mapResearchV6Graph(runID string, legacyNodes []ResearchGraphNodeResp, legacyEdges []ResearchGraphEdgeResp) ([]researchV6ProjectionNode, []researchV6ProjectionEdge) {
+	nodeIDs := make(map[string]string, len(legacyNodes))
+	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
+	for _, node := range legacyNodes {
+		mapped := mapResearchV6Node(runID, node)
+		nodeIDs[node.ID] = mapped.ID
+		nodes = append(nodes, mapped)
+	}
+	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
+	for _, edge := range legacyEdges {
+		from, fromOK := nodeIDs[edge.FromNodeID]
+		to, toOK := nodeIDs[edge.ToNodeID]
+		if !fromOK || !toOK {
+			continue
+		}
+		edges = append(edges, researchV6ProjectionEdge{
+			ID: runID + ":edge:" + edge.ID, RunID: runID,
+			FromNodeID: from, ToNodeID: to, EdgeType: edge.EdgeType,
+		})
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges
 }
 
 func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6ProjectionNode {

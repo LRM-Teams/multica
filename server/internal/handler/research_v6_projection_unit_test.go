@@ -45,3 +45,64 @@ func TestResearchV6RootIDsUsesGoalSubtypeForCompatibilityRoot(t *testing.T) {
 		t.Fatalf("roots=%v", roots)
 	}
 }
+
+func TestMapResearchV6GraphUsesSnapshotIdentitiesForRealtimeEdges(t *testing.T) {
+	nodes := []ResearchGraphNodeResp{
+		{ID: "legacy-task", NodeType: "probe", Payload: json.RawMessage(`{"kind":"task","task_id":"task-1"}`)},
+		{ID: "legacy-attempt", NodeType: "agent_activity", Payload: json.RawMessage(`{"kind":"attempt","attempt_id":"attempt-1"}`)},
+	}
+	edges := []ResearchGraphEdgeResp{{ID: "legacy-edge", FromNodeID: "legacy-task", ToNodeID: "legacy-attempt", EdgeType: "attempted_by"}}
+
+	gotNodes, gotEdges := mapResearchV6Graph("run-1", nodes, edges)
+	if len(gotNodes) != 2 || len(gotEdges) != 1 {
+		t.Fatalf("nodes=%+v edges=%+v", gotNodes, gotEdges)
+	}
+	if gotEdges[0].ID != "run-1:edge:legacy-edge" || gotEdges[0].RunID != "run-1" {
+		t.Fatalf("unexpected edge identity: %+v", gotEdges[0])
+	}
+	if gotEdges[0].FromNodeID != "run-1:task:task-1" || gotEdges[0].ToNodeID != "run-1:attempt:attempt-1" {
+		t.Fatalf("edge endpoints do not use V6 node identities: %+v", gotEdges[0])
+	}
+}
+
+func TestResearchV6TransitionKindForCommittedRunEvent(t *testing.T) {
+	tests := map[string]string{
+		"task_dispatched":      "task_dispatched",
+		"task_result_accepted": "result_accepted",
+		"dispute_opened":       "dispute_opened",
+		"report_revised":       "report_revised",
+	}
+	for eventType, want := range tests {
+		got := researchV6TransitionKindForEvent(eventType)
+		if got == nil || *got != want {
+			t.Fatalf("event=%q transition=%v want=%q", eventType, got, want)
+		}
+	}
+	if got := researchV6TransitionKindForEvent("run_started"); got != nil {
+		t.Fatalf("non-animated event transition=%q, want nil", *got)
+	}
+}
+
+func TestBuildResearchV6ProjectedGraphEnvelopeFramesCommittedEvent(t *testing.T) {
+	nodes := []ResearchGraphNodeResp{{
+		ID: "goal", NodeType: "goal", Payload: json.RawMessage(`{"kind":"root"}`),
+	}}
+	edges := []ResearchGraphEdgeResp{}
+
+	got := buildResearchV6ProjectedGraphEnvelope("run-1", "task_dispatched", 7, nodes, edges)
+	if got.RunID != "run-1" || got.Delta.FromSequenceExclusive != 6 || got.Delta.ThroughSequence != 7 {
+		t.Fatalf("unexpected envelope framing: %+v", got)
+	}
+	if len(got.Delta.NodeUpserts) != 1 || got.Delta.NodeUpserts[0].RunID != "run-1" {
+		t.Fatalf("unexpected node upserts: %+v", got.Delta.NodeUpserts)
+	}
+	if len(got.Delta.EdgeUpserts) != 0 || got.Delta.EdgeUpserts == nil || got.Delta.NodeTombstones == nil || got.Delta.EdgeTombstones == nil {
+		t.Fatalf("delta collections must be explicit arrays: %+v", got.Delta)
+	}
+	if len(got.Delta.AffectedRootNodeIDs) != 1 || got.Delta.AffectedRootNodeIDs[0] != got.Delta.NodeUpserts[0].ID {
+		t.Fatalf("affected roots=%v nodes=%+v", got.Delta.AffectedRootNodeIDs, got.Delta.NodeUpserts)
+	}
+	if got.Delta.TransitionKind == nil || *got.Delta.TransitionKind != "task_dispatched" {
+		t.Fatalf("transition=%v", got.Delta.TransitionKind)
+	}
+}

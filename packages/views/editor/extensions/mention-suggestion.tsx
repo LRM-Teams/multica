@@ -54,6 +54,7 @@ import {
 } from "@multica/core/identity";
 import { matchesPinyin } from "./pinyin-match";
 import { createSuggestionPopupRender } from "./suggestion-popup";
+import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -163,7 +164,11 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
 // MentionList — the popup rendered inside the editor
 // ---------------------------------------------------------------------------
 
-const MAX_ITEMS = 20;
+const MENTION_ROW_PX = 40;
+const MENTION_GROUP_HEADER_PX = 32;
+const MENTION_LIST_MAX_PX = 300;
+/** First paint for the virtualized outsider list — same idea as channel files. */
+const MENTION_INITIAL_COUNT = 20;
 const SERVER_CONTEXT_SEARCH_LIMIT = 8;
 const SERVER_SEARCH_DEBOUNCE_MS = 150;
 
@@ -174,11 +179,15 @@ function sortActorItems(
   recency: ReturnType<typeof getRecencyMap>,
   query: string,
 ): MentionItem[] {
-  return sortUserItemsByRecency(items, recency).toSorted(
-    (a, b) =>
+  return sortUserItemsByRecency(items, recency).toSorted((a, b) => {
+    const groupRank =
+      (a.group === "in_channel" ? 0 : 1) - (b.group === "in_channel" ? 0 : 1);
+    if (groupRank !== 0) return groupRank;
+    return (
       actorHandleSearchRank(a.handle ?? "", query) -
-      actorHandleSearchRank(b.handle ?? "", query),
-  );
+      actorHandleSearchRank(b.handle ?? "", query)
+    );
+  });
 }
 
 function mentionItemKey(item: MentionItem): string {
@@ -212,6 +221,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
     const [isSearching, setIsSearching] = useState(false);
     const [searchedQuery, setSearchedQuery] = useState("");
     const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+    const virtuosoRef = useRef<GroupedVirtuosoHandle>(null);
     const normalizedQuery = query.trim();
 
     useEffect(() => {
@@ -288,7 +298,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     const displayItems = useMemo(() => {
       const currentServerItems = searchedQuery === normalizedQuery ? serverItems : [];
-      return mergeMentionItems(items, currentServerItems).slice(0, MAX_ITEMS);
+      return mergeMentionItems(items, currentServerItems);
     }, [items, normalizedQuery, searchedQuery, serverItems]);
 
     // Selection / keyboard indices must follow the *rendered* group order
@@ -300,12 +310,20 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       () => groups.flatMap((group) => group.items),
       [groups],
     );
+    const groupCounts = useMemo(
+      () => groups.map((group) => group.items.length),
+      [groups],
+    );
 
     useEffect(() => {
       setSelectedIndex(0);
-    }, [visibleItems]);
+    }, [normalizedQuery]);
 
     useEffect(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: selectedIndex,
+        align: "center",
+      });
       itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
     }, [selectedIndex]);
 
@@ -433,19 +451,51 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       );
     }
 
+    const listHeight = Math.min(
+      MENTION_LIST_MAX_PX,
+      groups.length * MENTION_GROUP_HEADER_PX +
+        visibleItems.length * MENTION_ROW_PX,
+    );
+
     return (
-      <div className="w-72 max-h-[300px] overflow-y-auto rounded-md border bg-popover py-1 shadow-md">
-        {groups.map((group) => (
-          <div key={group.label}>
-            {group.label !== "Broadcast" && (
-              <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-                {groupLabel(group.label)}
-              </div>
-            )}
-            {renderRows(group)}
-          </div>
-        ))}
-      </div>
+      <GroupedVirtuoso
+        ref={virtuosoRef}
+        className="w-72 rounded-md border bg-popover py-1 shadow-md"
+        style={{ height: Math.max(MENTION_ROW_PX, listHeight) }}
+        groupCounts={groupCounts}
+        initialItemCount={Math.min(visibleItems.length, MENTION_INITIAL_COUNT)}
+        increaseViewportBy={{ top: 80, bottom: 160 }}
+        groupContent={(groupIndex) => {
+          const label = groups[groupIndex]?.label;
+          if (!label || label === "Broadcast") {
+            return <div className="h-0" />;
+          }
+          return (
+            <div className="bg-popover px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+              {groupLabel(label)}
+            </div>
+          );
+        }}
+        itemContent={(index) => {
+          const item = visibleItems[index];
+          if (!item) return null;
+          const duplicateLabel = duplicateActorLabels.has(
+            item.label.trim().toLowerCase(),
+          );
+          const showSecondary =
+            item.type === "agent" ||
+            duplicateLabel ||
+            actorHandleSearchRank(item.handle ?? "", normalizedQuery) < 3;
+          return (
+            <MentionRow
+              item={item}
+              showSecondary={showSecondary}
+              selected={index === selectedIndex}
+              onSelect={() => selectItem(index)}
+            />
+          );
+        }}
+      />
     );
   },
 );
@@ -465,7 +515,7 @@ function MentionRow({
   showSecondary: boolean;
   selected: boolean;
   onSelect: () => void;
-  buttonRef: (el: HTMLButtonElement | null) => void;
+  buttonRef?: (el: HTMLButtonElement | null) => void;
 }) {
   const { t } = useT("editor");
   if (item.type === "channel") {

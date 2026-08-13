@@ -63,6 +63,39 @@ vi.mock("../../common/actor-profile-popover", () => ({
   },
 }));
 
+// Same convention as channel-files / message-list tests: render every row so
+// we assert picker membership, not react-virtuoso's own windowing.
+vi.mock("react-virtuoso", () => {
+  const MockGroupedVirtuoso = ({
+    groupCounts = [],
+    groupContent,
+    itemContent,
+  }: {
+    groupCounts?: number[];
+    groupContent?: (index: number) => ReactNode;
+    itemContent?: (index: number) => ReactNode;
+  }) => {
+    const total = groupCounts.reduce((sum, count) => sum + count, 0);
+    return (
+      <div data-testid="mention-virtuoso">
+        {groupCounts.map((count, groupIndex) => (
+          <div key={groupIndex}>
+            {groupContent?.(groupIndex)}
+            {Array.from({ length: count }, (_, offset) => {
+              const index =
+                groupCounts.slice(0, groupIndex).reduce((sum, n) => sum + n, 0) +
+                offset;
+              return <div key={index}>{itemContent?.(index)}</div>;
+            })}
+          </div>
+        ))}
+        <span data-testid="mention-virtuoso-total">{total}</span>
+      </div>
+    );
+  };
+  return { GroupedVirtuoso: MockGroupedVirtuoso };
+});
+
 import {
   createMentionSuggestion,
   MentionList,
@@ -765,5 +798,81 @@ describe("createMentionSuggestion", () => {
     expect(command).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a-in", group: "in_channel" }),
     );
+  });
+
+  it("keeps in-channel actors when the workspace roster exceeds the first page", () => {
+    // Channel members with CJK display names sort after ASCII outsiders.
+    // They must stay in the picker; Virtuoso windows DOM, it does not drop data.
+    const outsiders = Array.from({ length: 25 }, (_, i) => ({
+      id: `a-out-${i}`,
+      label: `Agent ${String(i).padStart(2, "0")}`,
+      type: "agent" as const,
+      handle: `agent-${i}`,
+      group: "not_in_channel" as const,
+    }));
+
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[
+            ...outsiders,
+            {
+              id: "li-wei",
+              label: "里维",
+              type: "agent",
+              handle: "li-wei",
+              group: "in_channel",
+            },
+            {
+              id: "a-tai",
+              label: "阿泰",
+              type: "agent",
+              handle: "a-tai",
+              group: "in_channel",
+            },
+          ]}
+          query=""
+          command={() => {}}
+        />
+      </I18nWrapper>,
+    );
+
+    expect(screen.getByText("In this channel")).toBeInTheDocument();
+    expect(screen.getByText("里维")).toBeInTheDocument();
+    expect(screen.getByText("阿泰")).toBeInTheDocument();
+    expect(screen.getByText("Agent 00")).toBeInTheDocument();
+    expect(screen.getByText("Agent 24")).toBeInTheDocument();
+  });
+
+  it("keeps a first portion of not-in-channel actors when the channel roster is large", () => {
+    const inChannel = Array.from({ length: 18 }, (_, i) => ({
+      id: `u-in-${i}`,
+      label: `Member ${String(i).padStart(2, "0")}`,
+      type: "member" as const,
+      handle: `member-${i}`,
+      group: "in_channel" as const,
+    }));
+    const outsiders = Array.from({ length: 25 }, (_, i) => ({
+      id: `a-out-${i}`,
+      label: `Agent ${String(i).padStart(2, "0")}`,
+      type: "agent" as const,
+      handle: `agent-${i}`,
+      group: "not_in_channel" as const,
+    }));
+
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[...inChannel, ...outsiders]}
+          query=""
+          command={() => {}}
+        />
+      </I18nWrapper>,
+    );
+
+    expect(screen.getByText("Member 00")).toBeInTheDocument();
+    expect(screen.getByText("Member 17")).toBeInTheDocument();
+    expect(screen.getByText("Agent 00")).toBeInTheDocument();
+    expect(screen.getByText("Agent 24")).toBeInTheDocument();
   });
 });

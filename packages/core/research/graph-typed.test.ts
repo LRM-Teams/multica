@@ -5,6 +5,7 @@ import {
   TypedGraphResponseSchema,
   indexTypedGraphNodes,
   mergeTypedGraphPages,
+  selectTypedGraphRootCandidateId,
 } from "./graph-typed";
 import type { TypedGraphResponse } from "./graph-typed";
 
@@ -214,7 +215,9 @@ describe("mergeTypedGraphPages", () => {
       nodeBudget: 1000,
     });
     expect(merged.nodes.length).toBeLessThanOrEqual(1000);
-    expect(merged.nodes.some((node) => node.id === "n0")).toBe(false);
+    // The same root candidate used by layout stays mounted across page eviction.
+    expect(merged.nodes.some((node) => node.id === "n0")).toBe(true);
+    expect(merged.nodes.some((node) => node.id === "n1")).toBe(false);
     expect(merged.nodes.some((node) => node.id === "n1599")).toBe(true);
     expect(merged.total_node_count).toBe(1600);
   });
@@ -247,6 +250,64 @@ describe("mergeTypedGraphPages", () => {
     });
     expect(merged.nodes.map((node) => node.id)).toContain("n0");
     expect(merged.nodes.length).toBeLessThanOrEqual(2);
+  });
+
+  it("never lets protected ids exceed the hard cache budget", () => {
+    const page = {
+      session_id: "s1",
+      graph_version: 1,
+      total_node_count: 5,
+      nodes: Array.from({ length: 5 }, (_, i) => ({
+        id: `n${i}`,
+        title: `N${i}`,
+        level: "s",
+      })),
+      edges: [],
+      clusters: [],
+      lineage: EMPTY_TYPED_GRAPH.lineage,
+    } as unknown as TypedGraphResponse;
+
+    const merged = mergeTypedGraphPages([page], {
+      nodeBudget: 2,
+      pinNodeIds: ["n1", "n2", "n3"],
+    });
+    expect(merged.nodes.map((node) => node.id)).toEqual(["n0", "n1"]);
+  });
+});
+
+describe("selectTypedGraphRootCandidateId", () => {
+  it("uses the same XXL-first precedence as the star layout", () => {
+    const nodes = [
+      {
+        id: "a",
+        level: "m",
+        cluster_id: null,
+        parent_id: null,
+        derived_from: null,
+      },
+      { id: "z", level: "xxl", cluster_id: "c1", parent_id: "a" },
+    ] as unknown as TypedGraphResponse["nodes"];
+    expect(selectTypedGraphRootCandidateId(nodes)).toBe("z");
+  });
+
+  it("falls back to an ungrouped structural root, then stable id order", () => {
+    const structural = [
+      { id: "b", level: "m", cluster_id: "c1", parent_id: "a" },
+      {
+        id: "a",
+        level: "m",
+        cluster_id: null,
+        parent_id: null,
+        derived_from: null,
+      },
+    ] as unknown as TypedGraphResponse["nodes"];
+    expect(selectTypedGraphRootCandidateId(structural)).toBe("a");
+
+    const cyclic = [
+      { id: "z", level: "m", cluster_id: "c1", parent_id: "a" },
+      { id: "a", level: "m", cluster_id: "c1", parent_id: "z" },
+    ] as unknown as TypedGraphResponse["nodes"];
+    expect(selectTypedGraphRootCandidateId(cyclic)).toBe("a");
   });
 });
 

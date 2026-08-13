@@ -272,12 +272,30 @@ export function mergeTypedGraphPages(
   const budget = options?.nodeBudget ?? RESEARCH_TYPED_GRAPH_CACHE_NODE_BUDGET;
   if (merged.nodes.length <= budget) return merged;
 
+  const rootId = selectTypedGraphRootCandidateId(merged.nodes);
   const keepIds = selectTypedGraphNodeIdsWithinBudget(
     orderedNodeIds,
     budget,
-    options?.pinNodeIds ?? [],
+    [rootId, ...(options?.pinNodeIds ?? [])],
   );
   return filterTypedGraphToNodeIds(merged, keepIds);
+}
+
+/** Mirrors the deterministic layout root precedence before cache trimming. */
+export function selectTypedGraphRootCandidateId(
+  nodes: readonly TypedGraphNode[],
+): string {
+  const ordered = [...nodes]
+    .filter((node) => node.id)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return (
+    ordered.find((node) => (node.level || "").trim().toLowerCase() === "xxl") ??
+    ordered.find(
+      (node) =>
+        !node.cluster_id && !node.parent_id && !node.derived_from,
+    ) ??
+    ordered[0]
+  )?.id ?? "";
 }
 
 function selectTypedGraphNodeIdsWithinBudget(
@@ -285,12 +303,14 @@ function selectTypedGraphNodeIdsWithinBudget(
   budget: number,
   pinNodeIds: readonly string[],
 ): Set<string> {
-  const keep = new Set(pinNodeIds.filter(Boolean));
-  for (let i = orderedNodeIds.length - 1; i >= 0 && keep.size < budget; i -= 1) {
-    keep.add(orderedNodeIds[i]!);
-  }
+  const limit = Math.max(0, Math.floor(budget));
+  const keep = new Set<string>();
   for (const pin of pinNodeIds) {
+    if (keep.size >= limit) break;
     if (pin) keep.add(pin);
+  }
+  for (let i = orderedNodeIds.length - 1; i >= 0 && keep.size < limit; i -= 1) {
+    keep.add(orderedNodeIds[i]!);
   }
   return keep;
 }

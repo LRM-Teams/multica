@@ -72,6 +72,23 @@ type researchV6Snapshot struct {
 	NextCursor           *string                    `json:"next_cursor"`
 }
 
+type researchV6ResumeCursor struct {
+	SnapshotID            string
+	LastConfirmedSequence int64
+}
+
+func researchV6ResumeRequiresResync(cursor researchV6ResumeCursor, current researchV6Snapshot, firstRetainedSequence int64) bool {
+	if cursor.LastConfirmedSequence < 0 || cursor.LastConfirmedSequence > current.ThroughEventSequence {
+		return true
+	}
+	if cursor.SnapshotID != "" && cursor.SnapshotID != current.SnapshotID {
+		return true
+	}
+	// The first needed event is cursor+1 and must still exist in the retained
+	// event window. A zero first sequence means the Run has no events.
+	return firstRetainedSequence > 0 && firstRetainedSequence > cursor.LastConfirmedSequence+1
+}
+
 func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, error) {
 	runID := strings.TrimSpace(chi.URLParam(r, "runId"))
 	workspaceID := h.resolveWorkspaceID(r)
@@ -187,7 +204,8 @@ func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.R
 }
 func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		LastConfirmedSequence int64 `json:"last_confirmed_sequence"`
+		SnapshotID            string `json:"snapshot_id,omitempty"`
+		LastConfirmedSequence int64  `json:"last_confirmed_sequence"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LastConfirmedSequence < 0 {
 		writeError(w, 400, "last_confirmed_sequence must be a non-negative integer")
@@ -198,7 +216,16 @@ func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.
 		writeResearchV6Error(w, err)
 		return
 	}
-	if req.LastConfirmedSequence > snap.ThroughEventSequence {
+	var firstRetainedSequence int64
+	if err = h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(min(sequence), 0)
+		FROM research_run_event
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+	`, h.resolveWorkspaceID(r), strings.TrimSpace(chi.URLParam(r, "runId"))).Scan(&firstRetainedSequence); err != nil {
+		writeResearchV6Error(w, err)
+		return
+	}
+	if researchV6ResumeRequiresResync(researchV6ResumeCursor{SnapshotID: req.SnapshotID, LastConfirmedSequence: req.LastConfirmedSequence}, snap, firstRetainedSequence) {
 		writeJSON(w, 200, map[string]any{"ok": false, "resync_required": true})
 		return
 	}

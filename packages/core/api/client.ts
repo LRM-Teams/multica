@@ -4670,28 +4670,42 @@ export class ApiClient {
 
   async createResearchSession(
     data: import("../types/research").CreateResearchSessionRequest,
+    expectedWorkspaceId?: string,
   ): Promise<import("../types/research").CreateResearchSessionResponse> {
-    const {
-      CreateResearchSessionResponseSchema,
-      EMPTY_RESEARCH_SNAPSHOT,
-      EMPTY_RESEARCH_FLEET,
-    } = await import("../research/schemas");
+    const { CreateResearchSessionResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch("/api/research/sessions", {
       method: "POST",
       body: JSON.stringify(data),
     });
-    return parseWithFallback(
-      raw,
-      CreateResearchSessionResponseSchema,
-      {
-        session: EMPTY_RESEARCH_SNAPSHOT.session,
-        fleet: EMPTY_RESEARCH_FLEET,
-        nodes: [],
-        edges: [],
-        messages: [],
-      },
-      { endpoint: "POST /api/research/sessions" },
-    );
+    const parsed = CreateResearchSessionResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("POST /api/research/sessions response failed schema validation");
+    }
+    const response = parsed.data;
+    const sessionId = response.session.id;
+    const workspaceId = response.session.workspace_id;
+    const scopedEntities = [
+      ...(response.nodes ?? []),
+      ...(response.edges ?? []),
+      ...(response.messages ?? []),
+    ];
+    if (
+      !sessionId ||
+      !workspaceId ||
+      (expectedWorkspaceId != null && workspaceId !== expectedWorkspaceId) ||
+      !response.fleet.id ||
+      response.fleet.workspace_id !== workspaceId ||
+      (response.session.fleet_id !== "" &&
+        response.session.fleet_id !== response.fleet.id) ||
+      scopedEntities.some((entity) => entity.session_id !== sessionId) ||
+      (response.run?.run.session_id != null &&
+        response.run.run.session_id !== sessionId) ||
+      (response.run?.run.workspace_id != null &&
+        response.run.run.workspace_id !== workspaceId)
+    ) {
+      throw new Error("POST /api/research/sessions response failed identity validation");
+    }
+    return response;
   }
 
   async getResearchSessionSnapshot(

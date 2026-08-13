@@ -174,18 +174,21 @@ export function ResearchListPage() {
   const create = useMutation({
     mutationFn: (params: ReturnType<typeof normalizeCreateParams>) => {
       const language = i18n?.language;
-      return api.createResearchSession({
-        goal: buildCreateGoal(
-          selectedTemplate,
-          goal,
-          language,
-          selectedTemplate ? appliedTemplatePrompt : null,
-        ),
-        depth_tier: params.depth_tier,
-        language: params.language,
-        source_weights: params.source_weights,
-        ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
-      });
+      return api.createResearchSession(
+        {
+          goal: buildCreateGoal(
+            selectedTemplate,
+            goal,
+            language,
+            selectedTemplate ? appliedTemplatePrompt : null,
+          ),
+          depth_tier: params.depth_tier,
+          language: params.language,
+          source_weights: params.source_weights,
+          ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
+        },
+        wsId,
+      );
     },
     onSuccess: (res) => {
       // Seed snapshot from kickoff payload so the session page paints a busy graph

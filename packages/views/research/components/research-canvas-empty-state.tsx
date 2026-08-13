@@ -70,9 +70,12 @@ export function ResearchCanvasEmptyState() {
 
   const create = useMutation({
     mutationFn: () =>
-      api.createResearchSession({
-        goal: t(($) => $.session_page.canvas_empty_create_goal),
-      }),
+      api.createResearchSession(
+        {
+          goal: t(($) => $.session_page.canvas_empty_create_goal),
+        },
+        wsId,
+      ),
     onSuccess: (res) => {
       qc.setQueryData(researchKeys.snapshot(wsId, res.session.id), {
         session: res.session,
@@ -83,6 +86,7 @@ export function ResearchCanvasEmptyState() {
         report: null,
         evals: [],
         messages: res.messages ?? [],
+        run: res.run,
       });
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
       nav.push(paths.researchDetail(res.session.id));

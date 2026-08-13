@@ -139,6 +139,12 @@
   color: var(--secondary-foreground);
   border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
 }
+.d5-rail-close:focus-visible,
+.d5-rail-tab:focus-visible,
+.d5-lens-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .d5-workspace[data-d5-rail-open="false"] .research-agent-inspector-sheet {
   background: var(--card);
 }

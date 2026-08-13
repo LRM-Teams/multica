@@ -2,8 +2,8 @@
 
 import { useEffect } from "react";
 import { AlertCircle } from "lucide-react";
-import { Button } from "@multica/ui/components/ui/button";
 import { useT } from "../../i18n/use-t";
+import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 
 export function ResearchCanvasProjectionMismatch({
   sessionId,
@@ -53,17 +53,12 @@ export function ResearchCanvasProjectionMismatch({
           typedCount: typedNodeCount,
         })}
       </p>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={retryPending}
-        onClick={onRetry}
-      >
-        {retryPending
-          ? t(($) => $.interrupt.retrying)
-          : t(($) => $.session_page.retry)}
-      </Button>
+      <ResearchPendingRetryButton
+        label={t(($) => $.session_page.retry)}
+        pendingLabel={t(($) => $.interrupt.retrying)}
+        pending={retryPending}
+        onRetry={onRetry}
+      />
     </div>
   );
 }

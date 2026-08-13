@@ -2,7 +2,6 @@
 
 import type { ReactNode } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
-import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type {
@@ -11,6 +10,7 @@ import type {
   SourceStrategyModel,
 } from "../lib/m2-visibility";
 import { resolveSourceStrategyMode } from "../lib/m2-visibility";
+import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 
 /** 360px drawer → one column; wider sheets can dual-column via auto-fit. */
 const CARD_GRID =
@@ -269,15 +269,12 @@ export function SourceStrategyStrip({
           ) : null}
         </p>
         {onRetry ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={retryPending}
-            onClick={onRetry}
-          >
-            {t(($) => $.session_page.retry)}
-          </Button>
+          <ResearchPendingRetryButton
+            label={t(($) => $.session_page.retry)}
+            pendingLabel={t(($) => $.connectivity.retrying)}
+            pending={retryPending}
+            onRetry={onRetry}
+          />
         ) : null}
       </div>,
     );

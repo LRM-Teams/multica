@@ -85,12 +85,12 @@ type Config struct {
 	BindingsRoot       string // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
 	ComputerGeneration int64  // monotonic machine-wide resident generation; server fences older generations
 	// DetachedMachineUpgradeCandidate gates the standalone takeover: the
-	// candidate proves local identity first, waits for the incumbent-authorized
-	// generation CAS, and only then starts server preflight and registration.
+	// candidate proves local identity first, waits for the incumbent's local
+	// PID+version proof, and only then starts server preflight and registration.
 	DetachedMachineUpgradeCandidate bool
 	// MachineUpgradeTakeoverProtocol is set by a v2-aware launcher. An empty
 	// value means the candidate was spawned by an older launcher and must keep
-	// the legacy loopback handshake shape until the generation CAS commits.
+	// the legacy loopback handshake shape until that local proof commits.
 	MachineUpgradeTakeoverProtocol MachineUpgradeTakeoverProtocol
 	Agents                         map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
 	WorkspacesRoot                 string                // base path containing workspace directories (default: ~/.multica/workspaces)

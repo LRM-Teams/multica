@@ -539,6 +539,10 @@
 - **诚实边界**：这一刀的 OS child 是 lifetime/crash 边界（`computer __runner`）。Delivery / APM 仍在 host 进程内；把 coordinator 搬进 child 是下一刀，不是本刀的完成条件。
 - **物**：`computer.RunnerRecord` / `BindingRunner`；`workspace_runner.go` 的 reconcile/supervise；`TestRunnerSpawnGenerationStaysMonotonicAcrossExit`；`TestWorkspaceRunnerStaleObserveDoesNotMutateNextGeneration`；`TestWorkspaceRunnerOSChildCrashLeavesHostAliveThenDegrades`。完整判断见 [`ADR-0015`](adr/0015-computer-host-supervises-binding-runner.md)。
 
+### 4.19.5 Machine Upgrade 本机证明即完成，不做云端 generation CAS — `可执行`（①CAS 不存在 + ⑤ local-proof / receipt tests）
+- **口径（2026-08-13）**：对齐 Raft Computer：successor 本机 PID+version+control 证明即完成 handoff。云端 `CommitTakeover` generation CAS 删除。`/takeover` 只给旧 Computer 当 receipt，不得改 `computer_generation`。generation 由 successor 上线后的 heartbeat/register claim；Attest 只通知升级完成。
+- **物**：`machine_upgrade_takeover.go` 本机 proof 不再调用 cloud CAS；`PostgresMachineUpgradeStore.CommitTakeover` 不存在；`TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof`；`TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration`。判断见 [`ADR-0016`](adr/0016-local-upgrade-proof-no-cloud-cas.md)。
+
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。
 - **物**：`CreateSandboxInstance` 写入 `metadata.docker_container_name` / job `docker_container_name`；`sandboxd` 使用该字段作为 `--name`，旧 payload 只回退到 instance-id 名称。

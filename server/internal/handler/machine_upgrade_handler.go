@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -54,11 +53,10 @@ type commitComputerMachineUpgradeTakeoverRequest struct {
 	WorkspaceIDs                  []string `json:"workspace_ids"`
 }
 
-// CommitComputerMachineUpgradeTakeover atomically replaces the incumbent
-// Computer generation after exact local candidate proof. It intentionally
-// does not use requireCurrentComputerGeneration: the authenticated caller is
-// the not-yet-active candidate, and this endpoint itself owns the one legal
-// predecessor-to-candidate transition.
+// CommitComputerMachineUpgradeTakeover is a compatibility receipt for older
+// Computers that still POST after local PID+version proof. It does not CAS
+// computer_generation. Raft Computer completes replacement locally; heartbeat
+// and register claim the new generation when the successor comes online.
 func (h *Handler) CommitComputerMachineUpgradeTakeover(w http.ResponseWriter, r *http.Request) {
 	if h.MachineUpgradeStore == nil {
 		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
@@ -70,14 +68,8 @@ func (h *Handler) CommitComputerMachineUpgradeTakeover(w http.ResponseWriter, r 
 		return
 	}
 	req.ComputerID = strings.TrimSpace(req.ComputerID)
-	if req.ComputerID == "" || strings.TrimSpace(req.GenerationID) == "" || strings.TrimSpace(req.CLIVersion) == "" ||
-		req.PredecessorComputerGeneration < 1 || req.CandidateComputerGeneration != req.PredecessorComputerGeneration+1 {
-		writeError(w, http.StatusBadRequest, "complete takeover identity is required")
-		return
-	}
-	headerGeneration, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-Computer-Generation")), 10, 64)
-	if err != nil || headerGeneration != req.CandidateComputerGeneration {
-		writeCodedError(w, http.StatusConflict, "stale_computer_generation", "takeover credential does not match candidate Computer generation")
+	if req.ComputerID == "" {
+		writeError(w, http.StatusBadRequest, "daemon_id is required")
 		return
 	}
 	if credentialComputerID := middleware.DaemonIDFromContext(r.Context()); credentialComputerID != "" && !strings.EqualFold(credentialComputerID, req.ComputerID) {
@@ -92,18 +84,13 @@ func (h *Handler) CommitComputerMachineUpgradeTakeover(w http.ResponseWriter, r 
 		}
 		return
 	}
-	for field, ids := range map[string][]string{"workspace_ids": req.WorkspaceIDs} {
-		for _, id := range ids {
-			if _, err := util.ParseUUID(id); err != nil {
-				writeError(w, http.StatusBadRequest, field+" must contain immutable UUIDs")
-				return
-			}
-		}
-	}
-	op, err := h.MachineUpgradeStore.CommitTakeover(r.Context(), req.ComputerID, chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion,
-		req.PredecessorComputerGeneration, req.CandidateComputerGeneration, req.WorkspaceIDs)
+	op, err := h.MachineUpgradeStore.Get(r.Context(), req.ComputerID, chi.URLParam(r, "upgradeId"))
 	if err != nil {
 		h.writeMachineUpgradeDaemonError(w, err)
+		return
+	}
+	if op == nil {
+		writeError(w, http.StatusNotFound, "machine upgrade not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, op)

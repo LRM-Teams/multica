@@ -163,10 +163,10 @@ func acceptReadyDetachedCandidate(
 }
 
 // commitDetachedSuccessorTakeoverVerified closes the ambiguous-response
-// window around the server generation CAS. A timeout does not prove that the
-// commit failed: the candidate may already have durably recorded the result
-// while the loopback response was lost. Retry the idempotent command and
-// accept only an exact committed proof published by that same child.
+// window around the local PID+version proof. A timeout does not prove that
+// the commit failed: the candidate may already have durably recorded the
+// result while the loopback response was lost. Retry the idempotent command
+// and accept only an exact committed proof published by that same child.
 func commitDetachedSuccessorTakeoverVerified(profile string, expected daemon.MachineUpgradeTakeoverProof) (daemon.MachineUpgradeTakeoverProof, error) {
 	deadline := time.Now().Add(detachedSuccessorCommitRetryTimeout)
 	var lastErr error

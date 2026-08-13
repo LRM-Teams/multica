@@ -687,16 +687,6 @@ func (c *Client) AttestComputerUpgrade(ctx context.Context, daemonID, upgradeID,
 	}, nil)
 }
 
-func (c *Client) CommitComputerUpgradeTakeover(ctx context.Context, computerID, upgradeID, generationID, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, workspaceIDs []string) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/takeover", upgradeID), map[string]any{
-		// daemon_id is the installed-client compatibility spelling of Computer ID.
-		"daemon_id": computerID, "generation_id": generationID, "cli_version": cliVersion,
-		"predecessor_computer_generation": predecessorComputerGeneration,
-		"candidate_computer_generation":   candidateComputerGeneration,
-		"workspace_ids":                   workspaceIDs,
-	}, nil)
-}
-
 // MachineUpgradeControlOperation is the minimal canonical operation receipt
 // needed by the owner-only local control surface. It intentionally does not
 // duplicate handler types across the daemon package boundary.

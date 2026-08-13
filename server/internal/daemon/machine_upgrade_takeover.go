@@ -14,10 +14,10 @@ import (
 )
 
 // machineUpgradeTakeover owns the complete detached-candidate coordination
-// boundary. Daemon startup sees one deep-module operation: prepare locally,
-// then wait until the incumbent commits the server generation handoff. The
-// candidate cannot reach heartbeat, registration, or WebSocket startup while
-// that wait is closed.
+// boundary. Daemon startup prepares locally, then waits until the incumbent
+// accepts the local PID+version proof. Cloud generation CAS is not part of
+// this wait. The candidate cannot reach heartbeat, registration, or WebSocket
+// startup while that local wait is closed.
 type machineUpgradeTakeover struct {
 	mu        sync.Mutex
 	ready     atomic.Bool
@@ -84,7 +84,7 @@ func (t *machineUpgradeTakeover) prepare(d *Daemon) error {
 	}
 	t.ready.Store(true)
 	if d.logger != nil {
-		d.logger.Info("detached Machine Upgrade candidate is locally verified; waiting for generation takeover",
+		d.logger.Info("detached Machine Upgrade candidate is locally verified; waiting for incumbent local proof",
 			"upgrade_id", journal.ID,
 			"predecessor_computer_generation", journal.PredecessorComputerGeneration,
 			"candidate_computer_generation", d.cfg.ComputerGeneration,
@@ -234,11 +234,10 @@ func ValidateMachineUpgradeTakeoverProof(expected, actual MachineUpgradeTakeover
 	return nil
 }
 
-// localMachineUpgradeTakeoverHandler commits the one remote ownership change.
-// The candidate has proved its binary and local configuration but has not yet
-// contacted server registration endpoints. Only the incumbent, holding the
-// profile control token and exact child identity, can authorize the atomic
-// predecessor-to-candidate Computer generation CAS.
+// localMachineUpgradeTakeoverHandler finishes the local handoff. Raft Computer
+// completes replacement on PID+version+control proof; the incumbent, holding
+// the profile control token and exact child identity, authorizes that proof.
+// Computer generation is claimed later by heartbeat/register, not by a cloud CAS.
 func (d *Daemon) localMachineUpgradeTakeoverHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -266,8 +265,8 @@ func (d *Daemon) localMachineUpgradeTakeoverHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		// Replays after the server CAS are local and idempotent. The candidate
-		// resumes normal startup from the durable takeover_committed marker.
+		// Replays after the local proof are idempotent. The candidate resumes
+		// normal startup from the durable takeover_committed marker.
 		if actual.Phase == "takeover_committed" || actual.Phase == "candidate_ready" {
 			expected.Phase = actual.Phase
 			if err := ValidateMachineUpgradeTakeoverProof(expected, actual); err != nil {
@@ -288,24 +287,9 @@ func (d *Daemon) localMachineUpgradeTakeoverHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		if d.client == nil {
-			http.Error(w, "machine upgrade client is unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		if err := d.client.CommitComputerUpgradeTakeover(r.Context(), actual.ComputerID, actual.UpgradeID, actual.Generation, actual.TargetVersion,
-			actual.PredecessorComputerGeneration, actual.CandidateComputerGeneration, actual.WorkspaceIDs); err != nil {
-			http.Error(w, "server takeover commit failed: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		if d.logger != nil {
-			d.logger.Info("server committed detached Machine Upgrade generation takeover",
-				"upgrade_id", actual.UpgradeID,
-				"predecessor_computer_generation", actual.PredecessorComputerGeneration,
-				"candidate_computer_generation", actual.CandidateComputerGeneration)
-		}
 		journal, err := d.currentMachineUpgradeJournal()
 		if err != nil || journal == nil || journal.Phase != "handoff" {
-			http.Error(w, "reload takeover journal after server commit", http.StatusInternalServerError)
+			http.Error(w, "reload takeover journal after local proof", http.StatusInternalServerError)
 			return
 		}
 		journal.Phase = "takeover_committed"

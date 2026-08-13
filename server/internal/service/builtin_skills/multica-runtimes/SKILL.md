@@ -40,22 +40,23 @@ not create runtime-owned update state. Startup keeps incomplete local upgrade
 journals fail-closed; only a proven later Active generation may supersede a
 retained `candidate_ready` marker, and the marker remains available for diagnosis.
 For standalone upgrades, the target first proves its exact local binary,
-PID, Computer generation, and accepted Workspace binding set. The server
-then atomically changes the Computer generation from predecessor to candidate;
-only after that CAS may the target heartbeat, register runtimes, connect its
-WebSocket, or claim work. Runtime registration is post-takeover recovery and
-convergence evidence; Runtime cardinality is not Computer takeover identity. A
-candidate rejected before the CAS cannot fence the incumbent and requires no
-remote rollback.
+PID, Computer generation, and accepted Workspace binding set. That local
+proof completes the handoff. The successor then heartbeats, registers
+runtimes, connects its WebSocket, and notifies the server that the upgrade
+completed. Heartbeat and register claim the new Computer generation. There
+is no predecessor-to-candidate cloud CAS. Runtime registration is recovery
+and convergence evidence; Runtime cardinality is not Computer takeover
+identity. A candidate rejected before the local proof cannot fence the
+incumbent and requires no remote rollback.
 
 Standalone takeover also carries a candidate-generation-bound local protocol
 marker from launcher to candidate. A v2 launcher waits for the explicit
 `takeover_ready` state. When a
 new candidate is spawned by a pre-v2 launcher, it projects the historical
 `running`/`handoff` loopback shape from the durable receipt so that launcher can
-authorize the same generation CAS. This compatibility projection does not
+authorize the same local proof. This compatibility projection does not
 start preflight, register runtimes, connect WebSocket, or claim work; those
-remain blocked until the CAS commits.
+remain blocked until the local proof commits.
 
 ## CLI
 

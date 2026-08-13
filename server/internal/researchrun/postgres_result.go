@@ -1327,6 +1327,7 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	if err != nil {
 		return err
 	}
+	rationale := truncateBytes(strings.Join(evaluation.Findings, "\n"), 8192)
 	var decisionID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
@@ -1336,11 +1337,45 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 		RETURNING id::text
 	`, state.workspaceID, state.run.SessionID, state.task.Kind, state.task.AssignedAgentID,
 		state.run.GoalVersion, state.targetPlan, inputs, outcome,
-		truncateBytes(strings.Join(evaluation.Findings, "\n"), 8192)).Scan(&decisionID)
+		rationale).Scan(&decisionID)
 	if err != nil {
 		return err
 	}
-	return ensureDomainArtifactPassportWithAccessTx(ctx, tx, artifactKindForDecision(string(state.task.Kind)), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess)
+	kind := artifactKindForDecision(string(state.task.Kind))
+	contentHash, err := ArtifactContentHash(kind, evaluationDecisionArtifactContent(
+		state.task.Kind, state.task.AssignedAgentID, state.run.GoalVersion,
+		state.targetPlan, inputs, outcome, rationale,
+	))
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: decisionID,
+		Kind: kind, SourceCreatedAt: timePtr(time.Now()),
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            int32Ptr(int32(state.run.GoalVersion)), PlanVersion: int32Ptr(int32(state.targetPlan)),
+		AccessLevel: state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash, ProducedByAttemptID: state.attemptID,
+	})
+}
+
+func evaluationDecisionArtifactContent(
+	decisionKind TaskKind,
+	actorID string,
+	goalVersion, planVersion int,
+	inputs, outcome []byte,
+	rationale string,
+) map[string]any {
+	return map[string]any{
+		"decision_kind": string(decisionKind),
+		"actor_type":    "agent",
+		"actor_id":      actorID,
+		"goal_version":  goalVersion,
+		"plan_version":  planVersion,
+		"inputs":        json.RawMessage(inputs),
+		"outcome":       json.RawMessage(outcome),
+		"rationale":     rationale,
+	}
 }
 
 func loadReportClaimKeys(ctx context.Context, tx pgx.Tx, reportID string) ([]string, error) {

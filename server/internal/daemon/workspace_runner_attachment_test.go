@@ -229,6 +229,27 @@ func TestWorkspaceRunnerManagedStartEmitsStartingActivity(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerDoesNotEmitStartingBeforeProcessAdmission(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	var activities []protocol.AgentActivityPayload
+	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
+	if _, err := runner.registerManagedAgentStart(protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}); err != nil {
+		t.Fatalf("register start: %v", err)
+	}
+	runner.observeRuntimeStarting(agentID, runtimeID, "Managed start")
+	runner.observeMessageLifecycle(agentID, runtimeID)
+	if len(activities) != 0 {
+		t.Fatalf("Starting Activity before process admission = %+v, want none", activities)
+	}
+}
+
 func TestWorkspaceRunnerManagedStartMarksLaunchRunningAfterProviderSpawn(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"

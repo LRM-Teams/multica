@@ -163,6 +163,12 @@ func (e *agentLifecycleExecutor) commitCommand(request agentLifecycleExecutionRe
 }
 
 func (e *agentLifecycleExecutor) stopRuntime(ctx context.Context, request agentLifecycleExecutionRequest) error {
+	// Raft hasStarting: a start still in flight has no live process. Killing
+	// the factory slot there makes the spawn callback stale and leaves
+	// Starting with nothing to recover.
+	if e.runtimes != nil && !e.runtimes.hasLiveLease(request.AgentID, request.RuntimeID) && !e.runtimes.residentProcessAlive(request.AgentID, request.RuntimeID) {
+		return nil
+	}
 	if err := e.forceInvalidateRuntime(request); err != nil {
 		return err
 	}

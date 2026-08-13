@@ -639,6 +639,33 @@ func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string
 	return slot.backend != nil
 }
 
+func (p *canonicalAgentRuntimePool) residentProcessAlive(agentID, runtimeID string) bool {
+	if p == nil {
+		return false
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil || slot.backend == nil {
+		if slot != nil {
+			slot.mu.Unlock()
+		}
+		return false
+	}
+	backend := slot.backend
+	slot.mu.Unlock()
+	checker, ok := backend.(agent.ResidentRuntimeLivenessChecker)
+	if !ok {
+		return false
+	}
+	alive, known := checker.RuntimeAlive()
+	return known && alive
+}
+
 func (p *canonicalAgentRuntimePool) bindResidentPiRunIdentity(ctx context.Context, agentID, runtimeID string, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
 	if p == nil {
 		return agent.PiRunBinding{}, errors.New("canonical agent runtime pool is nil")
@@ -868,7 +895,7 @@ func (p *canonicalAgentRuntimePool) failResidentMessageInputAttempt(slot *canoni
 	}
 	freed := slot.backend != nil
 	slot.closeBackend()
-	
+
 	return freed
 }
 
@@ -938,7 +965,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 			if slot.invalidateAfterInput {
 				freed = slot.backend != nil
 				slot.closeBackend()
-				
+
 			}
 		}
 		slot.mu.Unlock()
@@ -1114,7 +1141,7 @@ func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAg
 			slot.idleSince = time.Now()
 			freed = slot.backend != nil
 			slot.closeBackend()
-			
+
 			completed = true
 		} else if slot.piRunIdentity != nil {
 			if backend, ok := slot.backend.(agent.PiRPCBackend); ok {
@@ -1151,7 +1178,7 @@ func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAg
 			if slot.invalidateAfterInput {
 				freed = slot.backend != nil
 				slot.closeBackend()
-				
+
 			}
 			completed = true
 		}

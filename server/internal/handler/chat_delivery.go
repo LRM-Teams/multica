@@ -163,31 +163,69 @@ func (h *Handler) listStandaloneChatOutstanding(ctx context.Context, sessionIDs 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []standaloneChatOutstanding
+	// Drain the list cursor before the delivery lookup so nested QueryRow
+	// cannot hold two pool connections (cursordeadlock / #1803).
+	type pendingSession struct {
+		id        pgtype.UUID
+		createdAt time.Time
+	}
+	pending := make([]pendingSession, 0)
 	for rows.Next() {
 		var sessionID pgtype.UUID
 		var role string
 		var createdAt time.Time
 		if err := rows.Scan(&sessionID, &role, &createdAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		if !standaloneChatOutstandingFromLastRole(role) {
 			continue
 		}
-		item := standaloneChatOutstanding{SessionID: uuidToString(sessionID), CreatedAt: createdAt.UTC().Format(time.RFC3339Nano)}
-		var agentID, messageID pgtype.UUID
-		if qerr := h.DB.QueryRow(ctx, `
-			SELECT agent_id, message_id
-			FROM agent_chat_delivery
-			WHERE chat_session_id = $1 AND acked_at IS NULL
-			ORDER BY seq DESC, message_id DESC
-			LIMIT 1`, sessionID).Scan(&agentID, &messageID); qerr == nil {
-			item.DeliveryID = standaloneChatDeliveryID(uuidToString(messageID), uuidToString(agentID))
-		}
-		out = append(out, item)
+		pending = append(pending, pendingSession{id: sessionID, createdAt: createdAt})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(pending) == 0 {
+		return nil, nil
+	}
+
+	pendingIDs := make([]pgtype.UUID, len(pending))
+	indexBySession := make(map[string]int, len(pending))
+	out := make([]standaloneChatOutstanding, len(pending))
+	for i, item := range pending {
+		sid := uuidToString(item.id)
+		pendingIDs[i] = item.id
+		indexBySession[sid] = i
+		out[i] = standaloneChatOutstanding{
+			SessionID: sid,
+			CreatedAt: item.createdAt.UTC().Format(time.RFC3339Nano),
+		}
+	}
+
+	deliveryRows, err := h.DB.Query(ctx, `
+		SELECT DISTINCT ON (chat_session_id) chat_session_id, agent_id, message_id
+		FROM agent_chat_delivery
+		WHERE chat_session_id = ANY($1) AND acked_at IS NULL
+		ORDER BY chat_session_id, seq DESC, message_id DESC`, pendingIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer deliveryRows.Close()
+	for deliveryRows.Next() {
+		var sessionID, agentID, messageID pgtype.UUID
+		if err := deliveryRows.Scan(&sessionID, &agentID, &messageID); err != nil {
+			return nil, err
+		}
+		idx, ok := indexBySession[uuidToString(sessionID)]
+		if !ok {
+			continue
+		}
+		out[idx].DeliveryID = standaloneChatDeliveryID(uuidToString(messageID), uuidToString(agentID))
+	}
+	return out, deliveryRows.Err()
 }
 
 func (h *Handler) insertStandaloneAssistantReply(ctx context.Context, session db.ChatSession, content string, parts []protocol.MessagePart) (db.ChatMessage, error) {

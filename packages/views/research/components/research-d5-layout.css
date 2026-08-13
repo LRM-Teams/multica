@@ -32,6 +32,8 @@
   --research-lane-3: #74d7e4;
   color: var(--foreground);
   background: var(--background);
+  container-name: research-d5;
+  container-type: inline-size;
 }
 
 .d5-chrome-shell {
@@ -378,6 +380,38 @@
   }
   .d5-rail {
     width: 320px;
+  }
+  .d5-lens-group {
+    display: none;
+  }
+  .d5-lens-overflow-trigger {
+    display: inline-flex;
+  }
+}
+
+/* The dashboard sidebar reduces the actual workbench width without changing
+   the browser viewport. Container queries keep D5 chrome responsive to the
+   space it really owns on both Web and Desktop. */
+@container research-d5 (max-width: 1200px) {
+  .d5-chrome-top {
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .d5-brand {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .d5-goal-slot {
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    max-width: none;
+    padding: 0;
+  }
+  .d5-chrome-controls {
+    margin-left: 0;
   }
   .d5-lens-group {
     display: none;

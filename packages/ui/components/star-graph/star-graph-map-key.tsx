@@ -15,7 +15,7 @@
 
 import { cn } from "@multica/ui/lib/utils";
 
-import { STAR_GRAPH_RELATIONS } from "./relations";
+import { STAR_GRAPH_RELATIONS, type StarGraphRelationKey } from "./relations";
 import {
   STAR_GRAPH_TIERS_LARGE_TO_SMALL,
   starGraphTierToken,
@@ -25,31 +25,40 @@ import {
 export interface StarGraphMapKeyProps {
   /** Optional callback to re-open the on-boarding guide (help entry). */
   onHelp?: () => void;
-  /** Override tier label (e.g. "Agent" instead of "S"). */
-  tierSOverridesLabel?: string;
+  labels: {
+    ariaLabel: string;
+    mapKey: string;
+    agentTier: string;
+    help: string;
+    tierDescriptions: Record<StarGraphTier, string>;
+    relations: Record<
+      StarGraphRelationKey,
+      { label: string; description: string }
+    >;
+  };
   className?: string;
 }
 
 export function StarGraphMapKey({
   onHelp,
-  tierSOverridesLabel,
+  labels,
   className,
 }: StarGraphMapKeyProps) {
   const tierDots = STAR_GRAPH_TIERS_LARGE_TO_SMALL.map((tier) => ({
     tier,
     dot: tierDotClass(tier),
-    label: tier === "s" ? tierSOverridesLabel ?? "Agent" : starGraphTierToken(tier).label,
+    label: tier === "s" ? labels.agentTier : starGraphTierToken(tier).label,
   }));
 
   return (
     <section
       data-testid="star-graph-map-key"
-      aria-label="星图图例"
+      aria-label={labels.ariaLabel}
       className={cn("sg-map-key", className)}
     >
-      <span className="sr-only">Map Key</span>
+      <span className="sr-only">{labels.mapKey}</span>
       {tierDots.map(({ tier, dot, label }) => {
-        const desc = starGraphTierToken(tier).description;
+        const desc = labels.tierDescriptions[tier];
         return (
           <button
             key={tier}
@@ -75,11 +84,11 @@ export function StarGraphMapKey({
           data-relation={rel.key}
           data-testid={`map-key-relation-${rel.key}`}
           className="sg-item"
-          title={rel.description}
-          aria-label={`${rel.label}：${rel.description}`}
+          title={labels.relations[rel.key].description}
+          aria-label={`${labels.relations[rel.key].label}: ${labels.relations[rel.key].description}`}
         >
           <i className={cn(rel.demoClass)} aria-hidden="true" />
-          {rel.label}
+          {labels.relations[rel.key].label}
         </button>
       ))}
 
@@ -89,7 +98,7 @@ export function StarGraphMapKey({
           data-testid="map-key-help"
           className="sg-item sg-menu-btn"
           onClick={onHelp}
-          aria-label="重新打开星图引导"
+          aria-label={labels.help}
         >
           ?
         </button>

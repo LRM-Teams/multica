@@ -70,6 +70,14 @@ describe("report-source-degrade (LRM-834)", () => {
     ).toBe("http");
   });
 
+  it("classifies non-web protocols as invalid source URLs", () => {
+    expect(
+      resolveSourceFailureReasonCode(
+        source({ id: "unsafe", url: "javascript:alert(document.domain)" }),
+      ),
+    ).toBe("invalid_url");
+  });
+
   it("strips excluded citation tokens from Findings prose", () => {
     const md = "Milvus recall higher.[^1] Also [^2].";
     const excluded: ResearchReportCitation[] = [

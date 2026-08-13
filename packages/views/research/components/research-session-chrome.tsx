@@ -85,7 +85,7 @@ export function ResearchSessionChrome({
   onCreateChannelChange: (v: boolean) => void;
   onConfirm: () => void;
   /** LRM-840 — reject with optional feedback; parent posts tip + resumes. */
-  onReject?: (reason: string) => void;
+  onReject?: (reason: string) => void | Promise<void>;
   onHandoff: () => void | Promise<void>;
   confirmPending?: boolean;
   rejectPending?: boolean;

@@ -113,6 +113,9 @@
     "canvas_empty_home": "返回调研主页",
     "canvas_empty_create": "开始新调研",
     "canvas_empty_creating": "正在创建…",
+    "canvas_empty_create_failed": "无法开始新的调研会话",
+    "canvas_empty_create_failed_hint": "当前画布没有发生变化，请检查网络后重试。",
+    "canvas_empty_retry": "重试",
     "canvas_empty_create_goal": "接下来想探索什么？",
     "confirm_failed": "确认调研失败",
     "confirm_done": "已批准确认",
@@ -1018,9 +1021,83 @@
       "hidden_count": "筛选隐藏 {{count}} 个"
     },
     "new_frontier_label": "全新方向",
+    "canvas_a11y": {
+      "status": {
+        "completed": "已完成",
+        "failed": "已失败",
+        "conflict": "冲突",
+        "refuted": "已否定",
+        "dead_end": "死胡同",
+        "abandoned": "已废弃",
+        "cancelled": "已取消",
+        "running": "运行中",
+        "waiting": "等待中",
+        "blocked": "阻塞",
+        "queued": "排队中"
+      },
+      "unknown_status": "未知状态",
+      "low_confidence": "低置信",
+      "separator": "，",
+      "updated_nodes": "{{count}} 个节点更新"
+    },
+    "star_graph": {
+      "canvas_label": "调研星图画布",
+      "tier_headers": {
+        "xxl": "最终综合",
+        "xl": "稳定结论",
+        "l": "重要成果",
+        "m": "中间成果"
+      },
+      "metrics": {
+        "documents": "{{count}} 文档",
+        "confidence": "置信 {{value}}%",
+        "conclusions": "{{count}} 结论",
+        "document_badge": "文档 · {{count}}"
+      },
+      "zoom": {
+        "out": "缩小",
+        "in": "放大",
+        "fit": "适应内容"
+      },
+      "map_key": {
+        "aria_label": "星图图例",
+        "title": "图例",
+        "agent_tier": "Agent",
+        "help": "重新打开星图引导",
+        "tiers": {
+          "xxl": "最终综合成果，覆盖范围最大并具有最强视觉强调。",
+          "xl": "带有证据与结论的稳定融合成果。",
+          "l": "展示已有轮次与指标的重要成果。",
+          "m": "中间成果或范围明确的调研方向。",
+          "s": "展示当前执行状态的 Agent 工作节点。"
+        },
+        "relations": {
+          "decompose": {
+            "label": "分解",
+            "description": "一个目标或方向分解为多个子方向或任务。"
+          },
+          "support": {
+            "label": "支持",
+            "description": "一个成果支持另一个成果或结论。"
+          },
+          "challenge": {
+            "label": "挑战",
+            "description": "一个成果挑战或反驳另一个结论。"
+          },
+          "newdir": {
+            "label": "新方向",
+            "description": "新的探索方向从既有工作中分支出来。"
+          }
+        }
+      }
+    },
     "canvas": {
       "loading": "正在加载调研星图…",
       "error": "无法加载 typed 调研图。",
+      "stale_title": "星图可能不是最新状态。",
+      "stale_body": "刷新暂不可用，继续保留上次已加载的可信图。",
+      "stale_announcement": "星图刷新失败，当前继续显示上次已加载的图。",
+      "recovered_announcement": "星图已恢复刷新并同步至最新状态。",
       "projection_mismatch_title": "星图投影暂不可用",
       "projection_mismatch_body": "会话快照已有图节点，但 typed 星图投影尚未就绪。请重试或等待下一次同步。",
       "projection_mismatch_diagnostics": "快照节点：{{snapshotCount}} · Typed 节点：{{typedCount}}"

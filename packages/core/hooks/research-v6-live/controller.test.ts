@@ -234,6 +234,25 @@ describe("ResearchV6LiveProjectionController", () => {
     expect(c.getClient().getState().lastConfirmedSequence).toBe(1);
   });
 
+  it("never applies a delta carrying another run's canonical facts", () => {
+    const live = makeLiveSource();
+    const { transport } = makeTransport();
+    const c = new ResearchV6LiveProjectionController("run-1", transport, live.source, {
+      autoConnect: true,
+      scheduleReconnect: () => ({ cancel: () => {} }),
+    });
+    c.connect();
+    c.getClient().applySnapshot(makeSnapshot(0, ["seed"]));
+
+    const foreign = makeDelta(0, 1, ["foreign"]);
+    foreign.node_upserts[0]!.run_id = "run-2";
+    live.pushDelta(foreign);
+
+    expect(c.getClient().hasNode("foreign")).toBe(false);
+    expect(c.getClient().getState().lastConfirmedSequence).toBe(0);
+    expect(c.getClient().getState().resyncRequestedCount).toBe(1);
+  });
+
   it("stays connecting until the live source reports an authenticated connection", () => {
     const live = makeLiveSource({ emitConnectedOnConnect: false });
     const { transport } = makeTransport();

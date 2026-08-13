@@ -174,15 +174,13 @@ export function useResearchV6LiveProjection({
   // Seed the projection cache from the fresh server snapshot (idempotent).
   useEffect(() => {
     if (!snapshot || isPending || !controller) return;
-    const client = controller.getClient();
-    client.applySnapshot(snapshot);
-    hydrate(runId, client);
+    controller.seedSnapshot(snapshot);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, isPending, controller, runId]);
 
   const applyDelta = useCallback(
     (delta: import("../../types/research-v6").ResearchV6Delta) => {
-      controller?.getClient().applyDelta(delta);
+      controller?.applyDelta(delta);
     },
     [controller],
   );

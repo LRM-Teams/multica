@@ -1,5 +1,6 @@
 import type { ResearchReport, ResearchReportCitation, ResearchReportStructuredV1 } from "@multica/core/types";
 import { normalizeReportStructured } from "@multica/core/research";
+import { safeSourceUrl } from "./safe-source-url";
 
 /**
  * LRM-831 — serialize a report to a complete Markdown document.
@@ -37,8 +38,9 @@ export function buildReportMarkdown(report: ResearchReport | null | undefined): 
 function formatCitationFootnote(citation: ResearchReportCitation, structured: ResearchReportStructuredV1): string {
   const source = structured.sources.find((s) => s.source_id === citation.source_id);
   const label = citation.label || `[${citation.index}]`;
-  const url = source?.url?.trim();
-  const title = source?.title?.trim() || url || "Source";
+  const rawUrl = source?.url?.trim();
+  const url = safeSourceUrl(rawUrl);
+  const title = source?.title?.trim() || rawUrl || "Source";
   const line = url ? `${label} [${title}](${url})` : `${label} ${title}`;
   return citation.quote?.trim() ? `${line}\n> ${citation.quote.trim()}` : line;
 }

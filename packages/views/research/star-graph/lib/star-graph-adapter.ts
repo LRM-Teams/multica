@@ -193,25 +193,6 @@ export function mapMetrics(
   return Object.keys(metrics).length ? metrics : undefined;
 }
 
-/* ------------------------------------------------------------------ *
- * Header / agent labels (real values or omitted).
- * ------------------------------------------------------------------ */
-
-function headerForTier(tier: StarGraphTier): string | undefined {
-  switch (tier) {
-    case "xxl":
-      return "最终综合";
-    case "xl":
-      return "稳定结论";
-    case "l":
-      return "重要成果";
-    case "m":
-      return "中间成果";
-    case "s":
-      return undefined; // S-tier renders its own layout
-  }
-}
-
 function subLabelForTier(
   node: StarGraphNodeInput,
 ): string | undefined {
@@ -271,7 +252,6 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
     tierSource: source,
     state,
     title: node.title,
-    headerLabel: headerForTier(tier),
     subLabel: subLabelForTier(node),
     metrics,
   };

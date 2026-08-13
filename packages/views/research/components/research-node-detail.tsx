@@ -34,6 +34,7 @@ import {
   TurnDetailSection,
 } from "../dispute";
 import { isAbandonedStatus, readAbandonReason } from "../lib/abandon-reason";
+import { safeSourceUrl } from "../report/safe-source-url";
 import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
 import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
@@ -1088,20 +1089,30 @@ export function ResearchNodeDetailBody({
             <p className="text-xs text-muted-foreground">{t(($) => $.node.evidence_empty)}</p>
           ) : (
             <ul className="space-y-2">
-              {evidenceList.map((s) => (
+              {evidenceList.map((s) => {
+                const href = safeSourceUrl(s.url);
+                return (
                 <li key={s.id} className="rounded-md border bg-muted/20 px-2.5 py-2">
                   <div className="flex items-start justify-between gap-2">
-                    <a
-                      href={s.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="min-w-0 truncate text-xs font-medium text-primary underline-offset-2 hover:underline"
-                    >
-                      {s.title || s.url}
-                    </a>
-                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                      {(s.credibility_weight ?? 0).toFixed(2)}
-                    </span>
+                    {href ? (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="min-w-0 truncate text-xs font-medium text-primary underline-offset-2 hover:underline"
+                      >
+                        {s.title || s.url}
+                      </a>
+                    ) : (
+                      <span className="min-w-0 truncate text-xs font-medium text-muted-foreground">
+                        {s.title || s.url}
+                      </span>
+                    )}
+                    {typeof s.credibility_weight === "number" ? (
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        {s.credibility_weight.toFixed(2)}
+                      </span>
+                    ) : null}
                   </div>
                   {s.excerpt ? (
                     <p className="mt-1 line-clamp-3 text-[11px] text-muted-foreground">
@@ -1109,7 +1120,8 @@ export function ResearchNodeDetailBody({
                     </p>
                   ) : null}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </section>

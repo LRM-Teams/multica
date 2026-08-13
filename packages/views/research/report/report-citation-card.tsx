@@ -9,6 +9,7 @@ import type {
 } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import { safeSourceUrl, sourceHost } from "./safe-source-url";
 import {
   type CitationCardSource,
   EMPTY_REPORT_SOURCE_REFS,
@@ -19,11 +20,7 @@ import {
 import { weightTier } from "./report-weight";
 
 function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
+  return sourceHost(url);
 }
 
 /** Smooth scroll + ~1s highlight fade on the citation's own card (LRM-824). */
@@ -77,7 +74,7 @@ export function ReportCitationCard({
     (source && "excerpt" in source ? source.excerpt : "") ||
     citation.quote ||
     "";
-  const href = !degraded && source?.url ? source.url : null;
+  const href = !degraded ? safeSourceUrl(source?.url) : null;
 
   return (
     <article
@@ -191,7 +188,7 @@ export function InlineFootnoteCard({
   const { t } = useT("research");
   const label = citation.label || `[${citation.index}]`;
   const degraded = isCitationSourceDegraded(source);
-  const href = !degraded && source?.url ? source.url : null;
+  const href = !degraded ? safeSourceUrl(source?.url) : null;
 
   return (
     <div

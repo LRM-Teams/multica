@@ -36,9 +36,15 @@ describe("ResearchServerErrorPage (LRM-833)", () => {
     expect(screen.getByText("502 Bad Gateway")).toBeTruthy();
   });
 
-  it("disables retry while retrying", () => {
-    render(<ResearchServerErrorPage onRetry={() => {}} retrying />);
-    const btn = screen.getByTestId("research-server-error-retry");
-    expect((btn as HTMLButtonElement).disabled).toBe(true);
+  it("keeps retry focused but suppresses repeat activation while retrying", () => {
+    const onRetry = vi.fn();
+    render(<ResearchServerErrorPage onRetry={onRetry} retrying />);
+    const btn = screen.getByTestId("research-server-error-retry") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    expect(btn).toHaveAttribute("aria-disabled", "true");
+    btn.focus();
+    fireEvent.click(btn);
+    expect(document.activeElement).toBe(btn);
+    expect(onRetry).not.toHaveBeenCalled();
   });
 });

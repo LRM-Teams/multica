@@ -35,6 +35,8 @@ export interface StarGraphNodeMetrics {
 }
 
 export interface StarGraphNodeProps {
+  /** Stable renderer id used by the canvas roving-focus controller. */
+  nodeId?: string;
   /** Tier — determines size + ring + glow surface. */
   tier: StarGraphTier;
   /** Visual state. Defaults to `default`. */
@@ -49,6 +51,13 @@ export interface StarGraphNodeProps {
   agentBadge?: string;
   /** Live metrics for XL/XXL/L. */
   metrics?: StarGraphNodeMetrics;
+  /** Fully formatted localized metric strings supplied by the product layer. */
+  metricText?: {
+    documentCount?: string;
+    confidence?: string;
+    conclusionCount?: string;
+    documentBadge?: string;
+  };
   /** Override the computed accessible name (D5 keyboard/SR contract). */
   accessibleName?: string;
   /** Opaque graph id used by the canvas focus manager. */
@@ -60,6 +69,7 @@ export interface StarGraphNodeProps {
   /** Grid position on the canvas (left/top in % or px). Optional. */
   style?: React.CSSProperties;
   onOpen?: () => void;
+  tabIndex?: number;
   className?: string;
 }
 
@@ -68,6 +78,7 @@ export interface StarGraphNodeProps {
  * default (never throw), mirroring the GenericNode degradation rule.
  */
 export function StarGraphNode({
+  nodeId,
   tier,
   state = "default",
   title,
@@ -75,12 +86,14 @@ export function StarGraphNode({
   headerLabel,
   agentBadge,
   metrics,
+  metricText,
   busy,
   accessibleName,
   nodeId,
   tabIndex,
   style,
   onOpen,
+  tabIndex,
   className,
 }: StarGraphNodeProps) {
   const token = starGraphTierToken(tier);
@@ -105,11 +118,13 @@ export function StarGraphNode({
   const showDocumentBadge =
     (token.tier === "xxl" || token.tier === "xl" || token.tier === "l") &&
     hasDocuments;
-  const metricSummary = metricsText(metrics, showDocumentBadge);
+  const metricSummary = metricsSummaryText(metrics, metricText, showDocumentBadge);
 
   return (
     <button
       type="button"
+      data-node-id={nodeId}
+      tabIndex={tabIndex}
       aria-label={readable}
       data-node-id={nodeId}
       tabIndex={tabIndex}
@@ -174,7 +189,7 @@ export function StarGraphNode({
       </span>
       {showDocumentBadge && (
         <span data-testid="star-graph-document-badge" className="sg-document-badge">
-          DOC · {documentCount}
+          {metricText?.documentBadge ?? `DOC · ${documentCount}`}
         </span>
       )}
       {stateToken.glyph !== "none" && (
@@ -218,18 +233,23 @@ function SNodeContent({
   );
 }
 
-function metricsText(
+function metricsSummaryText(
   metrics: StarGraphNodeMetrics | undefined,
+  localized: StarGraphNodeProps["metricText"],
   omitDocumentCount = false,
 ): string {
   if (!metrics) return "";
   const parts: string[] = [];
   if (metrics.round) parts.push(`R${metrics.round}`);
   if (!omitDocumentCount && metrics.documentCount != null && metrics.documentCount > 0) {
-    parts.push(`${metrics.documentCount} 文档`);
+    parts.push(localized?.documentCount ?? `DOC · ${metrics.documentCount}`);
   }
-  if (metrics.confidence != null) parts.push(`置信 ${metrics.confidence}%`);
-  if (metrics.conclusionCount != null) parts.push(`${metrics.conclusionCount} 结论`);
+  if (metrics.confidence != null) {
+    parts.push(localized?.confidence ?? `${metrics.confidence}%`);
+  }
+  if (metrics.conclusionCount != null) {
+    parts.push(localized?.conclusionCount ?? `Σ · ${metrics.conclusionCount}`);
+  }
   return parts.join(" · ");
 }
 

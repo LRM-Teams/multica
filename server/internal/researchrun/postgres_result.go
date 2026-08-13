@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -651,17 +652,30 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			criteria, proposal.Priority, state.run.GoalVersion, state.targetPlan,
 			maxAttempts, timeout).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
-			var existingKind TaskKind
-			var existingObjective, existingCapability, existingResult string
+			var matches bool
 			err = tx.QueryRow(ctx, `
-				SELECT id::text, kind, objective, required_capability, expected_result
+				SELECT id::text,
+				       COALESCE(question_id::text, '') = $5
+				       AND COALESCE(parent_task_id::text, '') = $6
+				       AND kind = $7
+				       AND objective = $8
+				       AND required_capability = $9
+				       AND expected_result = $10
+				       AND acceptance_criteria = $11::jsonb
+				       AND priority = $12::double precision
+				       AND max_attempts = $13
+				       AND timeout_seconds = $14
 				FROM research_task
 				WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND client_key = $4
-			`, state.run.SessionID, state.run.GoalVersion, state.targetPlan, proposal.ClientKey).Scan(
-				&id, &existingKind, &existingObjective, &existingCapability, &existingResult,
-			)
-			if err == nil && (existingKind != proposal.Kind || existingObjective != strings.TrimSpace(proposal.Objective) || existingCapability != strings.TrimSpace(proposal.RequiredCapability) || existingResult != strings.TrimSpace(proposal.ExpectedResult)) {
+			`, state.run.SessionID, state.run.GoalVersion, state.targetPlan, proposal.ClientKey,
+				questionID, state.task.ID, proposal.Kind, strings.TrimSpace(proposal.Objective),
+				strings.TrimSpace(proposal.RequiredCapability), strings.TrimSpace(proposal.ExpectedResult),
+				criteria, proposal.Priority, maxAttempts, timeout).Scan(&id, &matches)
+			if err == nil && !matches {
 				return 0, fmt.Errorf("%w: task key %q was reused for different content", ErrResultConflict, proposal.ClientKey)
+			}
+			if err == nil {
+				taskIDs[proposal.ClientKey] = id
 			}
 		} else if err == nil {
 			created++
@@ -688,6 +702,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			}
 		}
 	}
+	if err = validateDeclaredTaskDependencies(ctx, tx, state.workspaceID, state.run.SessionID, proposals, taskIDs); err != nil {
+		return 0, err
+	}
 	if usesEvidenceFitnessContract(state.run.OrchestratorVersion) {
 		for _, proposal := range result.ProposedTasks {
 			if _, err = tx.Exec(ctx, `
@@ -709,6 +726,59 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 		return 0, fmt.Errorf("%w: persisted task dependency graph contains a cycle", ErrInvalidResult)
 	}
 	return created, nil
+}
+
+func validateDeclaredTaskDependencies(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	proposals []TaskProposal,
+	taskIDs map[string]string,
+) error {
+	for _, proposal := range proposals {
+		expected := make([]string, 0, len(proposal.DependsOn))
+		for _, dependencyKey := range proposal.DependsOn {
+			dependencyID, ok := taskIDs[dependencyKey]
+			if !ok {
+				return fmt.Errorf("%w: task %q references unknown dependency %q", ErrInvalidResult, proposal.ClientKey, dependencyKey)
+			}
+			expected = append(expected, dependencyID)
+		}
+		sort.Strings(expected)
+
+		rows, err := tx.Query(ctx, `
+			SELECT depends_on_task_id::text
+			FROM research_task_dependency
+			WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND task_id = $3::uuid
+			ORDER BY depends_on_task_id
+		`, workspaceID, sessionID, taskIDs[proposal.ClientKey])
+		if err != nil {
+			return err
+		}
+		actual := make([]string, 0, len(expected))
+		for rows.Next() {
+			var dependencyID string
+			if err = rows.Scan(&dependencyID); err != nil {
+				rows.Close()
+				return err
+			}
+			actual = append(actual, dependencyID)
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if len(actual) != len(expected) {
+			return fmt.Errorf("%w: task key %q was reused with different dependencies", ErrResultConflict, proposal.ClientKey)
+		}
+		for i := range expected {
+			if actual[i] != expected[i] {
+				return fmt.Errorf("%w: task key %q was reused with different dependencies", ErrResultConflict, proposal.ClientKey)
+			}
+		}
+	}
+	return nil
 }
 
 func attachV4ProposedWorkToDelivery(ctx context.Context, tx pgx.Tx, state acceptedResultState, proposals []TaskProposal, taskIDs map[string]string) error {

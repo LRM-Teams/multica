@@ -2,7 +2,6 @@
 
 import type { ReactNode } from "react";
 import { AlertCircle, Bot, Loader2, UserRound } from "lucide-react";
-import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type {
@@ -10,6 +9,7 @@ import type {
   HumanBoundaryModel,
 } from "../lib/m2-visibility";
 import { resolveHumanBoundaryMode } from "../lib/m2-visibility";
+import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 
 function BoundaryHeader({
   title,
@@ -275,15 +275,12 @@ export function HumanBoundaryCard({
           ) : null}
         </p>
         {onRetry ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={retryPending}
-            onClick={onRetry}
-          >
-            {t(($) => $.session_page.retry)}
-          </Button>
+          <ResearchPendingRetryButton
+            label={t(($) => $.session_page.retry)}
+            pendingLabel={t(($) => $.connectivity.retrying)}
+            pending={retryPending}
+            onRetry={onRetry}
+          />
         ) : null}
       </div>,
     );

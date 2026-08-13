@@ -1027,6 +1027,7 @@ surface 矩阵仍未完成。
 - [ ] 实现每 Result 的 Assimilation Check、peer_synthesis、原 Agent Integration Contribution 和离线/退出参与者处理。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。
 - [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。
+  - [x] G5b-stop：`integration_convergence.go` 以版本化 Policy 和 canonical state hash 冻结递归整合决定。未同化 Result、待建 Derivation、stale Insight 和变化中的 Frontier 必须继续；当前可做的同化不会因上游争议/问题被丢弃。稳定 Frontier 只有在连续低边际增益窗口完整且无阻断争议、无必答问题时才能收敛；轮次、深度或成本上限遇到未完成工作只能升级，不能伪装成成功。把决定接入持久 Round/Director/Gate 仍待后续切片。
 - [ ] 后续任务 Context 读取跨 Agent 的最新 Integration Snapshot。
 
 退出条件：两个以上 Agent 的结果会产生可引用的多层 Insight、更新 Frontier 并生成组合后的新工作；输入失效会使祖先 Insight 过期；Integrator prose 不能绕过服务端状态转换。

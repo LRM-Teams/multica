@@ -20,6 +20,25 @@ function conflictsWithSession(value: unknown, sessionId: string): boolean {
   return typeof embedded === "string" && embedded !== "" && embedded !== sessionId;
 }
 
+function hasStringField(value: unknown, field: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const fieldValue = (value as Record<string, unknown>)[field];
+  return typeof fieldValue === "string" && fieldValue !== "";
+}
+
+function isGraphNodePatch(value: unknown): boolean {
+  return hasStringField(value, "id") && hasStringField(value, "node_type");
+}
+
+function isGraphEdgePatch(value: unknown): boolean {
+  return (
+    hasStringField(value, "id") &&
+    hasStringField(value, "from_node_id") &&
+    hasStringField(value, "to_node_id") &&
+    hasStringField(value, "edge_type")
+  );
+}
+
 function invalidateSessionSnapshot(
   qc: QueryClient,
   wsId: string,
@@ -64,6 +83,10 @@ export function applyResearchWSEvent(
           ? payload.graph_version
           : undefined;
       if (
+        (node !== undefined && !isGraphNodePatch(node)) ||
+        (edge != null && !isGraphEdgePatch(edge)) ||
+        (Array.isArray(edges) &&
+          edges.some((incoming) => !isGraphEdgePatch(incoming))) ||
         conflictsWithSession(node, sessionId) ||
         conflictsWithSession(edge, sessionId) ||
         (Array.isArray(edges) &&
@@ -112,6 +135,10 @@ export function applyResearchWSEvent(
     case "research_session:sources_updated": {
       const source = payload.source as ResearchSessionSnapshot["sources"][number] | undefined;
       if (!source) break;
+      if (!hasStringField(source, "id")) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       if (conflictsWithSession(source, sessionId)) {
         invalidateSessionSnapshot(qc, wsId, sessionId);
         break;
@@ -124,6 +151,10 @@ export function applyResearchWSEvent(
     }
     case "research_session:report_updated": {
       const report = payload.report as ResearchSessionSnapshot["report"];
+      if (report !== null && !hasStringField(report, "id")) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       if (conflictsWithSession(report, sessionId)) {
         invalidateSessionSnapshot(qc, wsId, sessionId);
         break;
@@ -134,6 +165,10 @@ export function applyResearchWSEvent(
     case "research_session:message": {
       const msg = payload.message as ResearchSessionSnapshot["messages"][number] | undefined;
       if (!msg) break;
+      if (!hasStringField(msg, "id")) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       if (conflictsWithSession(msg, sessionId)) {
         invalidateSessionSnapshot(qc, wsId, sessionId);
         break;
@@ -152,6 +187,10 @@ export function applyResearchWSEvent(
     case "research_session:stage_eval": {
       const ev = payload.eval as ResearchSessionSnapshot["evals"][number] | undefined;
       if (!ev) break;
+      if (!hasStringField(ev, "id")) {
+        invalidateSessionSnapshot(qc, wsId, sessionId);
+        break;
+      }
       if (conflictsWithSession(ev, sessionId)) {
         invalidateSessionSnapshot(qc, wsId, sessionId);
         break;
@@ -206,6 +245,7 @@ export function applyResearchWSEvent(
       }
       const session = payload.session as ResearchSessionSnapshot["session"] | undefined;
       if (
+        (session !== undefined && !hasStringField(session, "id")) ||
         conflictsWithSession(session, sessionId) ||
         (session?.id && session.id !== sessionId)
       ) {

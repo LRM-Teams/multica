@@ -165,6 +165,30 @@ describe("applyResearchWSEvent", () => {
     });
   });
 
+  it("does not write malformed graph and message payloads into the snapshot", () => {
+    const qc = makeQc({
+      ...EMPTY_RESEARCH_SNAPSHOT,
+      session: { ...EMPTY_RESEARCH_SNAPSHOT.session, id: "s1" },
+      nodes: [],
+      messages: [],
+    });
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:graph_updated",
+      payload: { session_id: "s1", node: { id: "missing-kind" } },
+    });
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:message",
+      payload: { session_id: "s1", message: { body: "missing id" } },
+    });
+
+    const data = qc.getData() as typeof EMPTY_RESEARCH_SNAPSHOT;
+    expect(data.nodes).toEqual([]);
+    expect(data.messages).toEqual([]);
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.snapshot("ws", "s1"),
+    });
+  });
+
   it("removes snapshot cache when session is deleted", () => {
     const qc = makeQc({
       ...EMPTY_RESEARCH_SNAPSHOT,

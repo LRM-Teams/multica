@@ -2,8 +2,35 @@ package handler
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
+	"time"
+
+	"github.com/multica-ai/multica/server/internal/researchrun"
 )
+
+func TestResearchV6DeltaCarriesThroughSequenceSnapshotHash(t *testing.T) {
+	run := researchrun.RunSnapshot{
+		Run:      researchrun.Run{SessionID: "run-1", Goal: "goal", Status: researchrun.RunStatusRunning, StateVersion: 3, LastProgressAt: time.Unix(1_700_000_000, 0).UTC()},
+		Contract: researchrun.ResearchContract{Goal: "goal"},
+		Tasks:    []researchrun.Task{{ID: "task-1", Objective: "verify", Kind: researchrun.TaskKindVerify, Status: researchrun.TaskStatusReady}},
+	}
+	snapshot := buildResearchV6Snapshot("run-1", 7, run)
+	delta := researchV6DeltaForSnapshot(snapshot, 4)
+	if delta.FromSequenceExclusive != 4 || delta.ThroughSequence != 7 {
+		t.Fatalf("delta sequence = %d..%d", delta.FromSequenceExclusive, delta.ThroughSequence)
+	}
+	if !reflect.DeepEqual(delta.GraphContentHash, snapshot.GraphContentHash) {
+		t.Fatalf("delta hash = %v, snapshot hash = %v", delta.GraphContentHash, snapshot.GraphContentHash)
+	}
+	if delta.GraphContentHash["nodes"] == "" || delta.GraphContentHash["edges"] == "" {
+		t.Fatalf("delta hash is incomplete: %v", delta.GraphContentHash)
+	}
+	rebuilt := buildResearchV6Snapshot("run-1", 7, run)
+	if !reflect.DeepEqual(rebuilt.GraphContentHash, snapshot.GraphContentHash) {
+		t.Fatalf("same state rebuilt hash = %v, want %v", rebuilt.GraphContentHash, snapshot.GraphContentHash)
+	}
+}
 
 func TestMapResearchV6NodeBindsRunAndCanonicalEntity(t *testing.T) {
 	actor := "agent-1"

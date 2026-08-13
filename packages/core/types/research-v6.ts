@@ -165,6 +165,8 @@ export interface ResearchV6Delta {
   /** The previous contiguous sequence the client must already have. */
   from_sequence_exclusive: number;
   through_sequence: number;
+  /** Server hash of the complete projection after this delta is applied. */
+  graph_content_hash?: ResearchV6GraphContentHash | null;
   node_upserts: ResearchV6ProjectionNode[];
   edge_upserts: ResearchV6ProjectionEdge[];
   /** Visibility tombstones (removed node/edge ids). */

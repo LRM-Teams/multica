@@ -390,7 +390,7 @@ Projection Module 提供全量 Snapshot 和按 event sequence 的增量 Delta。
 
 Snapshot 必须包含 `snapshot_id`、`through_event_sequence`、`graph_content_hash` 和稳定分页游标。一次逻辑 Snapshot 的所有分页必须固定在相同 `snapshot_id` 与 event sequence；分页期间到达的新事件只能进入后续 Delta，不能让前后页来自不同状态。
 
-Delta 必须包含 `from_sequence_exclusive`、`through_sequence`、Node/Edge upsert、可见性 tombstone、受影响根节点和由 canonical Event 推导的 `transition_kind`。客户端按稳定 ID 幂等应用；重复 Delta 不产生重复节点，乱序 Delta 暂存到缺口补齐，缺口超时或服务端已清除所需历史时重新获取 Snapshot。WebSocket 重连必须携带最后成功应用的 event sequence，服务端只能连续续传或明确要求 resync，不能静默跳过事件。
+Delta 必须包含 `from_sequence_exclusive`、`through_sequence`、`graph_content_hash`、Node/Edge upsert、可见性 tombstone、受影响根节点和由 canonical Event 推导的 `transition_kind`；这里的 hash 是完整 Projection 应用到 `through_sequence` 后的服务端内容 hash，不是 Delta 子集 hash，也不是前端布局/展示 hash。客户端按稳定 ID 幂等应用；重复 Delta 不产生重复节点，乱序 Delta 暂存到缺口补齐，缺口超时或服务端已清除所需历史时重新获取 Snapshot。WebSocket 重连必须携带最后成功应用的 event sequence，服务端只能连续续传或明确要求 resync，不能静默跳过事件。旧服务端缺少 Delta hash 时客户端必须把服务端 hash 标记为未知，不能继续沿用旧 Snapshot hash。
 
 `transition_kind` 至少覆盖：`branch_spawned | task_dispatched | result_accepted | integration_formed | insight_staled | dispute_opened | deliberation_progressed | lead_escalated | team_membership_changed | report_revised`。它只表达已经提交的语义变化和关联实体，不包含坐标、动画时长或视觉样式。前端据此表现扩散、融合、冲突、升级、失效和修订，但不能用动画事件推进研究状态。
 

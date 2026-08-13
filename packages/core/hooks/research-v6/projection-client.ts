@@ -210,6 +210,9 @@ export class ResearchV6ProjectionClient {
       this.tombstonedEdgeIds.add(id);
     }
     this.lastConfirmedSequence = delta.through_sequence;
+    // Older servers omit the post-delta hash. In that case the prior Snapshot
+    // hash is stale and must become unknown instead of being misreported.
+    this.graphContentHash = delta.graph_content_hash ?? null;
     this.cancelGapTimer();
   }
 

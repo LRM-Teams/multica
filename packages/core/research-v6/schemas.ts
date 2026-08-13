@@ -78,6 +78,14 @@ export const ResearchV6DeltaSchema = z
   .object({
     from_sequence_exclusive: z.number(),
     through_sequence: z.number(),
+    graph_content_hash: z
+      .object({
+        nodes: z.string(),
+        edges: z.string(),
+      })
+      .nullable()
+      .optional()
+      .default(null),
     node_upserts: z.array(ResearchV6ProjectionNodeSchema).optional().default([]),
     edge_upserts: z.array(ResearchV6ProjectionEdgeSchema).optional().default([]),
     node_tombstones: z.array(z.string()).optional().default([]),

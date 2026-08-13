@@ -55,6 +55,7 @@ type researchV6ProjectionEdge struct {
 type researchV6Delta struct {
 	FromSequenceExclusive int64                      `json:"from_sequence_exclusive"`
 	ThroughSequence       int64                      `json:"through_sequence"`
+	GraphContentHash      map[string]string          `json:"graph_content_hash"`
 	NodeUpserts           []researchV6ProjectionNode `json:"node_upserts"`
 	EdgeUpserts           []researchV6ProjectionEdge `json:"edge_upserts"`
 	NodeTombstones        []string                   `json:"node_tombstones"`
@@ -82,11 +83,15 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if err != nil {
 		return researchV6Snapshot{}, err
 	}
-	legacyNodes, legacyEdges := projectRunV2Graph(snap)
 	var sequence int64
 	if err = h.DB.QueryRow(r.Context(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err != nil {
 		return researchV6Snapshot{}, err
 	}
+	return buildResearchV6Snapshot(runID, sequence, snap), nil
+}
+
+func buildResearchV6Snapshot(runID string, sequence int64, snap researchrun.RunSnapshot) researchV6Snapshot {
+	legacyNodes, legacyEdges := projectRunV2Graph(snap)
 	nodeIDs := make(map[string]string, len(legacyNodes))
 	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
 	for _, n := range legacyNodes {
@@ -111,7 +116,11 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	eh := sha256.Sum256(edgeBytes)
 	snapshotSeed := fmt.Sprintf("%s:%d:%x:%x", runID, sequence, nh, eh)
 	sh := sha256.Sum256([]byte(snapshotSeed))
-	return researchV6Snapshot{SnapshotID: "sha256:" + hex.EncodeToString(sh[:]), RunID: runID, ThroughEventSequence: sequence, GraphContentHash: map[string]string{"nodes": "sha256:" + hex.EncodeToString(nh[:]), "edges": "sha256:" + hex.EncodeToString(eh[:])}, Nodes: nodes, Edges: edges, NextCursor: nil}, nil
+	return researchV6Snapshot{SnapshotID: "sha256:" + hex.EncodeToString(sh[:]), RunID: runID, ThroughEventSequence: sequence, GraphContentHash: map[string]string{"nodes": "sha256:" + hex.EncodeToString(nh[:]), "edges": "sha256:" + hex.EncodeToString(eh[:])}, Nodes: nodes, Edges: edges, NextCursor: nil}
+}
+
+func researchV6DeltaForSnapshot(snapshot researchV6Snapshot, from int64) researchV6Delta {
+	return researchV6Delta{FromSequenceExclusive: from, ThroughSequence: snapshot.ThroughEventSequence, GraphContentHash: snapshot.GraphContentHash, NodeUpserts: snapshot.Nodes, EdgeUpserts: snapshot.Edges, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: researchV6RootIDs(snapshot.Nodes)}
 }
 
 func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6ProjectionNode {
@@ -183,7 +192,7 @@ func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.R
 		writeJSON(w, 200, nil)
 		return
 	}
-	writeJSON(w, 200, researchV6Delta{FromSequenceExclusive: from, ThroughSequence: snap.ThroughEventSequence, NodeUpserts: snap.Nodes, EdgeUpserts: snap.Edges, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: researchV6RootIDs(snap.Nodes)})
+	writeJSON(w, 200, researchV6DeltaForSnapshot(snap, from))
 }
 func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -202,7 +211,10 @@ func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.
 		writeJSON(w, 200, map[string]any{"ok": false, "resync_required": true})
 		return
 	}
-	delta := researchV6Delta{FromSequenceExclusive: req.LastConfirmedSequence, ThroughSequence: snap.ThroughEventSequence, NodeUpserts: []researchV6ProjectionNode{}, EdgeUpserts: []researchV6ProjectionEdge{}, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: []string{}}
+	delta := researchV6DeltaForSnapshot(snap, req.LastConfirmedSequence)
+	delta.NodeUpserts = []researchV6ProjectionNode{}
+	delta.EdgeUpserts = []researchV6ProjectionEdge{}
+	delta.AffectedRootNodeIDs = []string{}
 	if req.LastConfirmedSequence < snap.ThroughEventSequence {
 		delta.NodeUpserts = snap.Nodes
 		delta.EdgeUpserts = snap.Edges

@@ -257,6 +257,25 @@
   }
 }
 @media (min-width: 768px) and (max-width: 1199px) {
+  .d5-chrome-top {
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .d5-brand {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .d5-goal-slot {
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    padding: 0;
+  }
+  .d5-chrome-controls {
+    margin-left: 0;
+  }
   .d5-rail {
     width: 320px;
   }

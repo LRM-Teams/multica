@@ -990,7 +990,23 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		ids[claim.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindClaim, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
+			claimContent := map[string]any{
+				"client_key":            claim.ClientKey,
+				"evidence_standard_key": claim.EvidenceStandardKey,
+				"claim_text":            strings.TrimSpace(claim.Text),
+				"significance":          claim.Significance,
+				"confidence":            claim.Confidence,
+				"status":                string(status),
+				"goal_version":          state.task.GoalVersion,
+				"plan_version":          state.targetPlan,
+				"resolution":            truncateBytes(claim.Resolution, 8192),
+				"produced_by_task_id":   state.task.ID,
+			}
+			if err = ensureProducedDomainArtifactPassportWithAccessTx(
+				ctx, tx, ArtifactKindClaim, state.workspaceID, state.run.SessionID, id,
+				state.attemptID, time.Now(), int32Ptr(int32(state.task.GoalVersion)),
+				int32Ptr(int32(state.targetPlan)), state.outputAccess, claimContent,
+			); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -1027,7 +1043,22 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				truncateBytes(evidence.Rationale, 4096), usesEvidenceFitnessContract(state.run.OrchestratorVersion)).Scan(&evidenceID); err != nil {
 				return nil, 0, err
 			}
-			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID, evidenceID, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
+			evidenceContent := map[string]any{
+				"claim_id":            id,
+				"observation_id":      observationID,
+				"relation":            evidence.Relation,
+				"strength":            evidence.Strength,
+				"directness":          evidence.Directness,
+				"method_fit":          evidence.MethodFit,
+				"verification_status": verificationStatus,
+				"verified_by_task_id": verifiedBy,
+				"rationale":           truncateBytes(evidence.Rationale, 4096),
+			}
+			if err = ensureProducedDomainArtifactPassportWithAccessTx(
+				ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID,
+				evidenceID, state.attemptID, time.Now(), int32Ptr(int32(state.task.GoalVersion)),
+				int32Ptr(int32(state.targetPlan)), state.outputAccess, evidenceContent,
+			); err != nil {
 				return nil, 0, err
 			}
 			if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, evidenceID); err != nil {

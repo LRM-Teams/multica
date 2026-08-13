@@ -332,3 +332,38 @@ func ensureDomainArtifactPassportWithAccessTx(
 		AccessLevel:     accessLevel,
 	})
 }
+
+// ensureProducedDomainArtifactPassportWithAccessTx registers a domain artifact
+// created by result acceptance from its canonical semantic content. Unlike the
+// migration fallback, new production writes must never receive an ID-derived
+// placeholder hash: the version must prove both the accepted bytes and the
+// Attempt that produced them.
+func ensureProducedDomainArtifactPassportWithAccessTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind ArtifactEntityKind,
+	workspaceID, sessionID, entityID, producedByAttemptID string,
+	sourceCreatedAt time.Time,
+	goalVersion, planVersion *int32,
+	accessLevel ArtifactAccessLevel,
+	content map[string]any,
+) error {
+	contentHash, err := ArtifactContentHash(kind, content)
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID:            workspaceID,
+		SessionID:              sessionID,
+		EntityID:               entityID,
+		Kind:                   kind,
+		SourceCreatedAt:        &sourceCreatedAt,
+		GoalVersion:            goalVersion,
+		PlanVersion:            planVersion,
+		AccessLevel:            accessLevel,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
+		ProducedByAttemptID:    producedByAttemptID,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+	})
+}

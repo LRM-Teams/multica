@@ -33,7 +33,7 @@ import {
   filterEntitiesForCanvasDisplay,
   filterRelationsToVisibleEntities,
   selectVisibleEntityIds,
-  STAR_GRAPH_DOM_BUDGET,
+  STAR_GRAPH_SEMANTIC_NODE_BUDGET,
 } from "../lib/star-graph-visible-budget";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import {
@@ -109,7 +109,7 @@ export function StarGraphCanvas({
   nodeAccessibleNames,
   relatedNodeIds,
   initialFitEntityIdList,
-  entityBudget = STAR_GRAPH_DOM_BUDGET,
+  entityBudget = STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   hiddenCountLabel,
   loadMoreLabel,
   onLoadMore,

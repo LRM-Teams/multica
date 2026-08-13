@@ -205,6 +205,26 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     );
   });
 
+  it("wraps unbroken projection text inside narrow detail surfaces", () => {
+    render(
+      <ResearchNodeDetail
+        node={{
+          ...node,
+          title: `https://example.test/${"segment".repeat(80)}`,
+          summary: "散列".repeat(200),
+        }}
+        sources={sources}
+        open
+        placement="inline"
+      />,
+    );
+
+    expect(screen.getByTestId("research-node-detail-body")).toHaveClass(
+      "min-w-0",
+      "[overflow-wrap:anywhere]",
+    );
+  });
+
   it("shows dead-end reason when node is blocked", () => {
     const dead: ResearchGraphNode = {
       ...node,

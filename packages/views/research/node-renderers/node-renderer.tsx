@@ -13,6 +13,7 @@
  */
 
 import type {
+  ResearchV6NodeKind,
   ResearchV6ProjectionNode,
   ResearchV6UnknownKindDiagnostic,
 } from "@multica/core/types/research-v6";
@@ -25,6 +26,7 @@ import type { NodeCardState } from "./node-state-matrix";
 import { resolveCardState } from "./node-state-matrix";
 import { nodeCardFacts } from "./node-detail-fields";
 import { importanceToStars } from "./node-importance";
+import { useT } from "../../i18n/use-t";
 
 /** Shared stable empty array for the optional diagnostics prop (no re-alloc per render). */
 const NO_DIAGNOSTICS: ResearchV6UnknownKindDiagnostic[] = [];
@@ -69,6 +71,7 @@ export function NodeRenderer({
   onOpen,
   showMeta,
 }: NodeRendererProps) {
+  const { t } = useT("research");
   const surface = classifyNodeFamily(
     { id: node.id, node_kind: node.node_kind, run_id: node.run_id },
     diagnostics,
@@ -93,8 +96,16 @@ export function NodeRenderer({
     overriddenState ?? resolveCardState(statesFromStatus(node.status));
   const family = surface.family as NodeKindFamily;
   const stars = importanceToStars(node.importance);
-  const meta = renderMeta(node, showMeta !== false);
-  const legend = node.actor_agent_id ? `Agent ${node.actor_agent_id.slice(0, 6)}` : undefined;
+  const meta = renderMeta(
+    node,
+    showMeta !== false,
+    t(($) => $.node_card.task_meta),
+  );
+  const legend = node.actor_agent_id
+    ? t(($) => $.node_card.agent_legend, {
+        id: node.actor_agent_id.slice(0, 6),
+      })
+    : undefined;
   const facts = nodeCardFacts({
     actorAgentId: node.actor_agent_id,
     detail: node.detail,
@@ -105,7 +116,9 @@ export function NodeRenderer({
       family={family}
       state={state}
       title={node.title}
-      typeLabel={surface.label}
+      typeLabel={t(
+        ($) => $.node_card.kinds[surface.kind as ResearchV6NodeKind],
+      )}
       summary={node.summary}
       importance={stars}
       owner={facts.owner}
@@ -122,11 +135,15 @@ export function NodeRenderer({
   );
 }
 
-function renderMeta(node: ResearchV6ProjectionNode, show: boolean) {
+function renderMeta(
+  node: ResearchV6ProjectionNode,
+  show: boolean,
+  taskLabel: string,
+) {
   if (!show) return undefined;
   const parts: string[] = [];
   if (node.attempt_id) parts.push(`#${node.attempt_id.replace(/^.*?:/, "")}`);
-  if (node.task_id) parts.push("任务");
+  if (node.task_id) parts.push(taskLabel);
   return (
     <>
       {parts.length > 0 && (

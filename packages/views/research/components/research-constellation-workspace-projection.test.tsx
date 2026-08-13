@@ -193,13 +193,14 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("disables retry while typed graph recovery is pending", () => {
+  it("keeps retry focused and suppresses reactivation while recovery is pending", async () => {
+    const onRetry = vi.fn();
     render(
       <ResearchConstellationWorkspace
         typedGraph={undefined}
         typedLoading={false}
         typedError
-        onRetryTypedGraph={() => {}}
+        onRetryTypedGraph={onRetry}
         retryTypedGraphPending
         snapshotNodes={[]}
         selectedNode={null}
@@ -216,7 +217,13 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+    const retry = screen.getByRole("button", { name: "Retrying…" });
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    expect(retry).not.toBeDisabled();
+    retry.focus();
+    await userEvent.click(retry);
+    expect(retry).toHaveFocus();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 });
 

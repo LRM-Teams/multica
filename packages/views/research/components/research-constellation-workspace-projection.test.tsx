@@ -172,11 +172,10 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
     );
 
     const retry = screen.getByRole("button", { name: "Retrying…" });
-    expect(screen.getByText("Could not load the typed research graph.")).toBeTruthy();
-    expect(screen.getByText("Technical details")).toBeTruthy();
-    const diagnostics = screen.getByTestId("research-projection-error-diagnostics");
-    expect(diagnostics).not.toHaveAttribute("open");
-    expect(diagnostics).toHaveTextContent("V6 interface error");
+    expect(screen.getByTestId("research-projection-mismatch")).toBeTruthy();
+    expect(screen.getByText(enResearch.d5.canvas.projection_mismatch_title)).toBeTruthy();
+    const diagnostics = screen.getByTestId("research-projection-mismatch-diagnostics");
+    expect(diagnostics).toHaveTextContent("Snapshot nodes: 3 · Typed nodes: 0");
     expect(retry).toHaveAttribute("aria-disabled", "true");
     expect(retry).not.toBeDisabled();
     retry.focus();

@@ -40,7 +40,7 @@ describe("LRM-1250 S4 send pending a11y", () => {
   it("onSuccess focuses composer synchronously before clearBody (not onSettled)", () => {
     const sendMutation = src.slice(
       src.indexOf("const send = useMutation"),
-      src.indexOf("const stop = useMutation"),
+      src.indexOf("const nodeCommand = useMutation"),
     );
     expect(sendMutation).toContain("composerRef.current?.focus()");
     const focusIdx = sendMutation.indexOf("composerRef.current?.focus()");

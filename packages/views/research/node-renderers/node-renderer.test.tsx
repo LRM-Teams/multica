@@ -3,11 +3,12 @@
  * degrades unknown kinds to GenericNodeCard without crashing.
  */
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import type { ResearchV6UnknownKindDiagnostic } from "@multica/core/types/research-v6";
 import { NodeRenderer } from "./node-renderer";
 import type { ResearchV6ProjectionNode } from "@multica/core/types/research-v6";
 import { RESEARCH_V6_NODE_KINDS } from "@multica/core/research-v6/registry";
+import { renderWithI18n } from "../../test/i18n";
 import enResearch from "../../locales/en/research.json";
 import zhResearch from "../../locales/zh-Hans/research.json";
 
@@ -54,21 +55,21 @@ describe("NodeRenderer — 8 states (AC2)", () => {
   ];
 
   it.each(cases)("renders %s card from status=%s with data-state=%s", (_label, status, expected) => {
-    const { container } = render(<NodeRenderer node={node(status)} />);
+    const { container } = renderWithI18n(<NodeRenderer node={node(status)} />);
     const card = container.querySelector('[data-testid="node-card"]');
     expect(card).toBeTruthy();
     expect(card?.getAttribute("data-state")).toBe(expected);
   });
 
   it("selected state surfaces the ring highlight", () => {
-    const { container } = render(<NodeRenderer node={node("idle")} overriddenState="selected" />);
+    const { container } = renderWithI18n(<NodeRenderer node={node("idle")} overriddenState="selected" />);
     const card = container.querySelector('[data-testid="node-card"]');
     expect(card?.getAttribute("data-state")).toBe("selected");
   });
 
   it("unknown state renders through the generic degradation card", () => {
     const diagnostics: ResearchV6UnknownKindDiagnostic[] = [];
-    const { container } = render(
+    const { container } = renderWithI18n(
       <NodeRenderer node={node("pending", { node_kind: "future_type" })} diagnostics={diagnostics} />,
     );
     const generic = container.querySelector('[data-testid="generic-node-card"]');
@@ -77,9 +78,9 @@ describe("NodeRenderer — 8 states (AC2)", () => {
   });
 
   it("loading/running mark the node busy (aria-busy)", () => {
-    const { container } = render(<NodeRenderer node={node("pending")} />);
+    const { container } = renderWithI18n(<NodeRenderer node={node("pending")} />);
     expect(container.querySelector('[aria-busy="true"]')).toBeTruthy();
-    const b2 = render(<NodeRenderer node={node("running")} />).container;
+    const b2 = renderWithI18n(<NodeRenderer node={node("running")} />).container;
     expect(b2.querySelector('[aria-busy="true"]')).toBeTruthy();
   });
 });
@@ -93,7 +94,7 @@ describe("NodeRenderer — localized V6 kind contract", () => {
   });
 
   it("renders the active locale label instead of the core registry copy", () => {
-    render(<NodeRenderer node={node("idle", { node_kind: "task" })} />);
+    renderWithI18n(<NodeRenderer node={node("idle", { node_kind: "task" })} />);
     expect(screen.getByText("Task")).toBeTruthy();
     expect(screen.queryByText("任务")).toBeNull();
   });
@@ -102,7 +103,7 @@ describe("NodeRenderer — localized V6 kind contract", () => {
 describe("NodeRenderer — generic degradation (AC1)", () => {
   it("unknown kind renders GenericNodeCard without throwing", () => {
     const diagnostics: ResearchV6UnknownKindDiagnostic[] = [];
-    const { container } = render(
+    const { container } = renderWithI18n(
       <NodeRenderer node={node("pending", { node_kind: "some_future_kind", title: "未来的节点" })} diagnostics={diagnostics} />,
     );
     expect(screen.getByTestId("generic-node-card")).toBeTruthy();
@@ -113,7 +114,7 @@ describe("NodeRenderer — generic degradation (AC1)", () => {
   it("generic card is a keyboard-activatable native button when onOpen is provided", () => {
     const diagnostics: ResearchV6UnknownKindDiagnostic[] = [];
     const onOpen = vi.fn();
-    const { container } = render(
+    const { container } = renderWithI18n(
       <NodeRenderer
         node={node("pending", { node_kind: "some_future_kind" })}
         diagnostics={diagnostics}
@@ -130,7 +131,7 @@ describe("NodeRenderer — generic degradation (AC1)", () => {
 
 describe("NodeRenderer — footer meta", () => {
   it("shows attempt chip and evidence count when present", () => {
-    render(
+    renderWithI18n(
       <NodeRenderer
         node={node("done", {
           attempt_id: "attempt:3",
@@ -144,13 +145,13 @@ describe("NodeRenderer — footer meta", () => {
   });
 
   it("localizes the task footer marker", () => {
-    render(<NodeRenderer node={node("running", { task_id: "task:1" })} />);
+    renderWithI18n(<NodeRenderer node={node("running", { task_id: "task:1" })} />);
     expect(screen.getAllByText("Task").length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText("任务")).toBeNull();
   });
 
   it("shows 'no evidence' muted style for zero evidence", () => {
-    render(<NodeRenderer node={node("done", { detail: { evidence_count: 0 } })} />);
+    renderWithI18n(<NodeRenderer node={node("done", { detail: { evidence_count: 0 } })} />);
     const el = screen.getByTestId("node-evidence-count");
     expect(el.classList.contains("opacity-60")).toBe(true);
   });

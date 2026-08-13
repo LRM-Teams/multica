@@ -80,61 +80,55 @@ func TestArtifactPolicyLegacyAdmissionMatrix(t *testing.T) {
 
 func TestArtifactPolicyAccessMatrix(t *testing.T) {
 	policy := ArtifactPolicy{}
-	tests := []struct {
+	clearances := []ArtifactClearance{
+		ArtifactClearanceVerifiedOnly, ArtifactClearanceRedacted, ArtifactClearanceRaw,
+	}
+	levels := []ArtifactAccessLevel{
+		ArtifactAccessVerifiedOnly, ArtifactAccessRedacted, ArtifactAccessRaw,
+	}
+	purposes := []ArtifactPurpose{ArtifactPurposeTaskExecution, ArtifactPurposeEvaluation}
+	for clearanceRank, clearance := range clearances {
+		for levelRank, level := range levels {
+			for _, purpose := range purposes {
+				for _, private := range []bool{false, true} {
+					name := string(clearance) + "/" + string(level) + "/" + string(purpose)
+					if private {
+						name += "/private"
+					}
+					t.Run(name, func(t *testing.T) {
+						wantOK := clearanceRank >= levelRank && (!private || purpose == ArtifactPurposeEvaluation)
+						wantDeny := ArtifactDenyReason("")
+						if private && purpose != ArtifactPurposeEvaluation {
+							wantDeny = ArtifactDenyEvaluationCompartment
+						} else if clearanceRank < levelRank {
+							wantDeny = ArtifactDenyInsufficientClearance
+						}
+						ok, deny := policy.CanReadNormal(clearance, level, purpose, private)
+						if ok != wantOK || deny != wantDeny {
+							t.Fatalf("ok=%v deny=%q want ok=%v deny=%q", ok, deny, wantOK, wantDeny)
+						}
+					})
+				}
+			}
+		}
+	}
+
+	invalid := []struct {
 		name      string
 		clearance ArtifactClearance
 		level     ArtifactAccessLevel
 		purpose   ArtifactPurpose
-		private   bool
-		wantOK    bool
 		wantDeny  ArtifactDenyReason
 	}{
-		{
-			name: "raw reads raw", clearance: ArtifactClearanceRaw,
-			level: ArtifactAccessRaw, purpose: ArtifactPurposeTaskExecution,
-			wantOK: true,
-		},
-		{
-			name: "verified_only reads verified_only", clearance: ArtifactClearanceVerifiedOnly,
-			level: ArtifactAccessVerifiedOnly, purpose: ArtifactPurposeTaskExecution,
-			wantOK: true,
-		},
-		{
-			name: "verified_only cannot read raw", clearance: ArtifactClearanceVerifiedOnly,
-			level: ArtifactAccessRaw, purpose: ArtifactPurposeTaskExecution,
-			wantOK: false, wantDeny: ArtifactDenyInsufficientClearance,
-		},
-		{
-			name: "redacted reads redacted", clearance: ArtifactClearanceRedacted,
-			level: ArtifactAccessRedacted, purpose: ArtifactPurposeTaskExecution,
-			wantOK: true,
-		},
-		{
-			name: "redacted cannot read raw", clearance: ArtifactClearanceRedacted,
-			level: ArtifactAccessRaw, purpose: ArtifactPurposeTaskExecution,
-			wantOK: false, wantDeny: ArtifactDenyInsufficientClearance,
-		},
-		{
-			name: "unknown access denied", clearance: ArtifactClearanceRaw,
-			level: ArtifactAccessLevel("classified"), purpose: ArtifactPurposeTaskExecution,
-			wantOK: false, wantDeny: ArtifactDenyUnknownAccess,
-		},
-		{
-			name: "evaluation compartment blocks task execution", clearance: ArtifactClearanceRaw,
-			level: ArtifactAccessRaw, purpose: ArtifactPurposeTaskExecution, private: true,
-			wantOK: false, wantDeny: ArtifactDenyEvaluationCompartment,
-		},
-		{
-			name: "evaluation compartment allows evaluation purpose", clearance: ArtifactClearanceRaw,
-			level: ArtifactAccessRaw, purpose: ArtifactPurposeEvaluation, private: true,
-			wantOK: true,
-		},
+		{name: "unknown clearance", clearance: "secret", level: ArtifactAccessVerifiedOnly, purpose: ArtifactPurposeTaskExecution, wantDeny: ArtifactDenyInsufficientClearance},
+		{name: "unknown access", clearance: ArtifactClearanceRaw, level: "classified", purpose: ArtifactPurposeTaskExecution, wantDeny: ArtifactDenyUnknownAccess},
+		{name: "unknown purpose", clearance: ArtifactClearanceRaw, level: ArtifactAccessVerifiedOnly, purpose: "synthesis", wantDeny: ArtifactDenyUnknownPurpose},
 	}
-	for _, tc := range tests {
+	for _, tc := range invalid {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, deny := policy.CanReadNormal(tc.clearance, tc.level, tc.purpose, tc.private)
-			if ok != tc.wantOK || deny != tc.wantDeny {
-				t.Fatalf("ok=%v deny=%q want ok=%v deny=%q", ok, deny, tc.wantOK, tc.wantDeny)
+			ok, deny := policy.CanReadNormal(tc.clearance, tc.level, tc.purpose, false)
+			if ok || deny != tc.wantDeny {
+				t.Fatalf("ok=%v deny=%q want denied with %q", ok, deny, tc.wantDeny)
 			}
 		})
 	}

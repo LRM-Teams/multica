@@ -217,13 +217,21 @@ runtime saw it or that a second canonical Message copy was persisted locally.
 
 ### Delivery Acknowledgement
 
-The Computer's receipt that its Agent Process Manager accepted responsibility
-for one exact Delivery. It correlates the Agent, Delivery identity, and target
-sequence. It ends Server redelivery responsibility but does not mean the Agent
-read the Message, the Provider completed a turn, or the Context Boundary
+The Computer's receipt that it still owns one exact Delivery: the coordinator
+holds it as Pending, the target is already context-covered, or an Idle Snapshot
+restore of the original launch is in flight. It correlates the Agent, Delivery
+identity, and target sequence. It ends Server redelivery but does not mean the
+Agent read the Message, a provider process is alive, or the Context Boundary
 advanced.
-_Avoid_: Read receipt, Message completion, Context Boundary, recovery cursor
+_Avoid_: Process liveness, read receipt, Message completion, Context Boundary, recovery cursor
 _Avoid_: Inbox lease, task claim, execution
+
+### Idle Snapshot
+
+A machine-local record that one Agent recently had a runnable launch, enough to
+restore that same launch after the process is gone. It is not a Message, a
+Pending body, or a Context Boundary.
+_Avoid_: APM launch, consumed-seqs, Message Draft, second message ledger
 
 ### Pending Message
 

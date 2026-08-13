@@ -93,6 +93,15 @@ const (
 	messageDeliveryDeduplicated     messageDeliveryAcceptanceOutcome = "deduplicated"
 )
 
+var (
+	errDeliveryRejectedNoProcess       = errors.New("delivery rejected_no_process")
+	errDeliveryRejectedNoInbox         = errors.New("delivery rejected_no_inbox")
+	errDeliveryInboxRuntimeMismatch    = errors.New("delivery rejected_inbox_runtime_mismatch")
+	errDeliveryIdleRestoreFailed       = errors.New("delivery idle_restore_failed")
+	errDeliveryResidentIdentityInvalid = errors.New("delivery resident_identity_invalid")
+	errDeliveryProviderRejected        = errors.New("delivery provider_rejected")
+)
+
 type messageDeliveryAcceptance struct {
 	ack     protocol.AgentDeliverAckPayload
 	outcome messageDeliveryAcceptanceOutcome
@@ -113,7 +122,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 	}
 	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
 	if !ok || runtimeID != launch.RuntimeID {
-		return messageDeliveryAcceptance{}, fmt.Errorf("APM Agent %q has no Inbox for Runtime %q", delivery.AgentID, launch.RuntimeID)
+		return messageDeliveryAcceptance{}, fmt.Errorf("%w: agent %s runtime %s", errDeliveryInboxRuntimeMismatch, delivery.AgentID, launch.RuntimeID)
 	}
 	delivery.Message.RunID = delivery.RunID
 	delivery.Message.RunAgentID = delivery.RunAgentID
@@ -140,7 +149,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "failed", canonicalMessageFailureReason(identityErr),
 		))
-		return messageDeliveryAcceptance{}, identityErr
+		return messageDeliveryAcceptance{}, fmt.Errorf("%w: %v", errDeliveryResidentIdentityInvalid, identityErr)
 	}
 	if err := runner.ensureResidentRuntime(ctx, delivery.AgentID, runtimeID, runIdentity); err != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
@@ -168,7 +177,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		if deferred {
 			return result, nil
 		}
-		return messageDeliveryAcceptance{}, err
+		return messageDeliveryAcceptance{}, fmt.Errorf("%w: %v", errDeliveryProviderRejected, err)
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
@@ -220,7 +229,7 @@ func (runner *WorkspaceRunner) acceptDeliveryWithoutLiveProcess(ctx context.Cont
 		}
 		if err := runner.restartFromIdleSnapshot(delivery.AgentID, res); err != nil {
 			runner.residency.endRestart(delivery.AgentID)
-			return messageDeliveryAcceptance{}, fmt.Errorf("restore idle Agent %q: %w", delivery.AgentID, err)
+			return messageDeliveryAcceptance{}, fmt.Errorf("%w: agent %s: %v", errDeliveryIdleRestoreFailed, delivery.AgentID, err)
 		}
 		acceptance, err := runner.bufferAcceptedDelivery(ctx, delivery)
 		if err != nil {
@@ -234,14 +243,14 @@ func (runner *WorkspaceRunner) acceptDeliveryWithoutLiveProcess(ctx context.Cont
 		return acceptance, nil
 	default:
 		runner.reportProcessUnavailable(delivery.AgentID)
-		return messageDeliveryAcceptance{}, fmt.Errorf("Agent %q has not been accepted by APM", delivery.AgentID)
+		return messageDeliveryAcceptance{}, fmt.Errorf("%w: agent %s", errDeliveryRejectedNoProcess, delivery.AgentID)
 	}
 }
 
 func (runner *WorkspaceRunner) bufferAcceptedDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
 	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
 	if !ok {
-		return messageDeliveryAcceptance{}, fmt.Errorf("Agent %q has not been accepted by APM", delivery.AgentID)
+		return messageDeliveryAcceptance{}, fmt.Errorf("%w: agent %s", errDeliveryRejectedNoInbox, delivery.AgentID)
 	}
 	delivery.Message.RunID = delivery.RunID
 	delivery.Message.RunAgentID = delivery.RunAgentID

@@ -185,6 +185,9 @@ func TestWorkspaceRunnerUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.
 	if acknowledgements != 0 || handoffs != 0 {
 		t.Fatalf("unaccepted delivery acknowledgements=%d handoffs=%d, want 0/0", acknowledgements, handoffs)
 	}
+	if _, err := runner.acceptMessageDelivery(context.Background(), delivery); !errors.Is(err, errDeliveryRejectedNoProcess) {
+		t.Fatalf("unaccepted error = %v, want rejected_no_process", err)
+	}
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "launch-1" + "-dispatch"}); err != nil {
 		t.Fatalf("accept managed start: %v", err)
 	}

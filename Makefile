@@ -310,6 +310,9 @@ test: ## Run Go tests after ensuring the target DB exists and migrations are app
 	# Database-backed packages share the configured test database.
 	cd server && go test -p 1 ./...
 
+test-agent-delivery-route: ## Raft 1.0.16 accept-table tests; required when changing acceptMessageDelivery
+	cd server && go test ./internal/daemon/ -count=1 -run 'TestWorkspaceRunnerConsumedDelivery|TestWorkspaceRunnerStartingLaunch|TestWorkspaceRunnerQueuedAPM|TestWorkspaceRunnerTerminalFailure|TestWorkspaceRunnerIdleSnapshot|TestWorkspaceRunnerSpawnCooldown|TestWorkspaceRunnerMissingProcess|TestWorkspaceRunnerUnacceptedDelivery|TestWorkspaceRunnerIdleDeliveryAcknowledges|TestWorkspaceRunnerDeliveryAcknowledgesBusy|TestWorkspaceRunnerDeliveryDoesNotAcknowledge|TestAcceptMessageDeliveryForbids|TestDeliveryRouteRequiredCases'
+
 check-cursor-deadlock: ## Static check for the #1803 pool-deadlock shape (task #91)
 	cd server && go run ./tools/cursordeadlock ./internal ./cmd ./pkg
 

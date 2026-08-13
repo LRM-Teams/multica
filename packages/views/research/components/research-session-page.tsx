@@ -182,7 +182,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const selectSessionCanvasNode = useResearchCanvasStore(
     (s) => s.selectSessionNode,
   );
-  const clearCanvasFilter = useResearchCanvasStore((s) => s.clearFilter);
   const typedGraph = useMemo(
     () =>
       typedGraphPages?.pages.length
@@ -266,9 +265,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchSessionUiReducer,
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
-  useEffect(() => {
-    clearCanvasFilter();
-  }, [sessionId, clearCanvasFilter]);
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
       selectSessionCanvasNode(sessionId, node?.id ?? null);

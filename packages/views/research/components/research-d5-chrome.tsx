@@ -110,7 +110,7 @@ export function ResearchD5Chrome({
         </div>
 
         <div className="d5-chrome-controls">
-          <ResearchD5CanvasFilter options={filterOptions} />
+          <ResearchD5CanvasFilter sessionId={session.id} options={filterOptions} />
 
           <div className="d5-lens-group" role="tablist" aria-label={t(($) => $.d5.lens_group)}>
             {RESEARCH_D5_LENSES.map((lens) => (

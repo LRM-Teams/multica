@@ -3,6 +3,7 @@
 import { Filter } from "lucide-react";
 import type { ResearchCanvasFilter } from "@multica/core/research";
 import {
+  emptyCanvasFilter,
   isBlankFilter,
   useResearchCanvasStore,
 } from "@multica/core/research";
@@ -57,19 +58,26 @@ function FilterField({
 }
 
 export function ResearchD5CanvasFilter({
+  sessionId,
   options,
   className,
 }: {
+  sessionId: string;
   options: D5FilterOptions;
   className?: string;
 }) {
   const { t } = useT("research");
-  const filter = useResearchCanvasStore((s) => s.filter);
-  const setFilter = useResearchCanvasStore((s) => s.setFilter);
-  const clearFilter = useResearchCanvasStore((s) => s.clearFilter);
+  const filter = useResearchCanvasStore(
+    (s) => s.filterBySession[sessionId] ?? emptyCanvasFilter(),
+  );
+  const setSessionFilter = useResearchCanvasStore((s) => s.setSessionFilter);
+  const clearSessionFilter = useResearchCanvasStore(
+    (s) => s.clearSessionFilter,
+  );
   const active = !isBlankFilter(filter);
 
-  const patch = (partial: Partial<ResearchCanvasFilter>) => setFilter(partial);
+  const patch = (partial: Partial<ResearchCanvasFilter>) =>
+    setSessionFilter(sessionId, partial);
 
   return (
     <Popover>
@@ -143,7 +151,7 @@ export function ResearchD5CanvasFilter({
             variant="ghost"
             data-testid="research-d5-filter-clear"
             disabled={!active}
-            onClick={() => clearFilter()}
+            onClick={() => clearSessionFilter(sessionId)}
           >
             {t(($) => $.d5.filter.clear)}
           </Button>

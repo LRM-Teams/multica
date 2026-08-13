@@ -102,8 +102,13 @@ export function StarGraphEntityLayer({
               ...motion?.style,
             }}
             onOpen={() => {
-              onSelectNode?.(entity.id);
-              onOpenNode?.(entity.id);
+              // Opening is a single semantic command. The open owner also
+              // writes selection before presenting detail; calling both here
+              // duplicates store writes when the session uses one handler for
+              // select + open. Selection remains the fallback for consumers
+              // that only need a clickable graph.
+              if (onOpenNode) onOpenNode(entity.id);
+              else onSelectNode?.(entity.id);
             }}
           />
         );

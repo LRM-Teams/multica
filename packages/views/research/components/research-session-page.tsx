@@ -396,18 +396,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       });
   }, [sessionInterrupt, sessionId, qc, wsId, t]);
 
-  // LRM-799: never keep a permanent skeleton on failure — only while loading.
-  // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
-  // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
-  if (isLoading || (isFetching && !data) || (!data && !online)) {
-    return (
-      <ResearchConnectivityShell>
-        <ResearchSessionPageSkeleton />
-      </ResearchConnectivityShell>
-    );
-  }
-
-  // LRM-833 — 5xx with no cache: dedicated error page + retry.
+  // LRM-833 — 5xx with no cache: dedicated error page + retry. This must stay
+  // ahead of the fetching skeleton so a background retry does not unmount the
+  // focused retry control and erase the visible error context.
   if (!data && isError && isServerError(error)) {
     return (
       <ResearchConnectivityShell>
@@ -422,9 +413,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     );
   }
 
-  // Keep successful snapshot on refetch failure so Delivery can show its error
-  // surface (LRM-993) instead of blanking the whole session shell.
-  if (!data) {
+  // Keep the generic load failure mounted while its refetch is pending for the
+  // same focus/restoration contract as the dedicated 5xx surface. Offline wins
+  // below so the connectivity shell can retain its offline-first skeleton.
+  if (!data && isError && online) {
     return (
       <ResearchConnectivityShell>
         <div
@@ -442,15 +434,38 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             type="button"
             variant="outline"
             size="sm"
+            aria-disabled={isFetching || undefined}
+            className={isFetching ? "cursor-not-allowed opacity-50" : undefined}
             onClick={() => {
+              if (isFetching) return;
               void refetch();
             }}
           >
-            {t(($) => $.session_page.retry)}
+            {t(($) =>
+              isFetching ? $.connectivity.retrying : $.session_page.retry,
+            )}
           </Button>
         </div>
       </ResearchConnectivityShell>
     );
+  }
+
+  // LRM-799: never keep a permanent skeleton on failure — only while loading.
+  // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
+  // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
+  if (isLoading || (isFetching && !data) || (!data && !online)) {
+    return (
+      <ResearchConnectivityShell>
+        <ResearchSessionPageSkeleton />
+      </ResearchConnectivityShell>
+    );
+  }
+
+  // Keep successful snapshot on refetch failure so Delivery can show its error
+  // surface (LRM-993) instead of blanking the whole session shell. The remaining
+  // no-data case is offline and is handled by the skeleton branch above.
+  if (!data) {
+    return null;
   }
 
   const { session, messages, report, sources } = data;

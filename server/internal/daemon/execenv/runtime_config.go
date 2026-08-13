@@ -730,6 +730,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("You are running in one durable workspace owned by this Agent ID. It is both your canonical root and your current working directory. Memory, skills, notes, project context, and other agent-owned state stay below it as ordinary relative paths; Multica does not expose a separate environment variable for every subdirectory. Live Multica agent instructions remain authoritative; managed memory supplements them and does not override task policy or user instructions.\n\n")
 		fmt.Fprintf(&b, "- Agent workspace (`MULTICA_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
 		b.WriteString("- Relative layout: `memory/`, `skills/`, `notes/`, `users/`, `projects/`, and `channels/`.\n")
+		b.WriteString("\nThis workspace is also where code checkouts live. Use it for memory, notes, artifacts, and git clones as ordinary relative paths; treat the layout as flexible rather than a fixed schema.\n")
+		b.WriteString("When working in a repository, first choose the specific project directory or worktree inside this workspace, then run git or package-manager commands there. Do not run git against the workspace root. Do not check out repositories outside this workspace.\n")
 		b.WriteString("\nWhen asked where your memory or skills live, resolve those relative paths below `MULTICA_AGENT_ROOT`. Do not use provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
 		b.WriteString("### Harness boundary (kernel vs shell)\n\n")
 		b.WriteString("- **Multica kernel (not swappable with the coding harness):** Issue status machine, Goal, channel permissions, group manager, daemon claim/inbox, audit.\n")
@@ -1151,6 +1153,12 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 			fmt.Fprintf(b, "This task is associated with **%s**.\n\n", ctx.ProjectTitle)
 		}
 	}
+	projectID := sanitizeInlineCodeForBrief(ctx.ProjectID)
+	if projectID == "" {
+		return
+	}
+	fmt.Fprintf(b, "Project id: `%s`.\n", projectID)
+	fmt.Fprintf(b, "Inspect live project bindings with `multica workspace info --projects --output json` (filter with `--query` if needed). For this project (`%s`), clone each `github_repo` into this workspace if it is not already present, then work inside that checkout. Re-run the command when the binding may have changed — this runtime file is not updated when project resources change.\n\n", projectID)
 }
 
 func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasSkills bool) {

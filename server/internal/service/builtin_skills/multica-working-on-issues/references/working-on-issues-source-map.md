@@ -1,5 +1,12 @@
 # working-on-issues source map
 
+Checkout location: keep clones inside the Agent workspace and discover a
+project-bound `github_repo` via `multica workspace info --projects` (live,
+because resident AGENTS.md is not rewritten when resources change). Runtime
+brief contract: `server/internal/daemon/execenv/runtime_config.go`
+(`renderProjectContext`, Agent Memory Scope) and
+`TestAgentWorkspaceHoldsCodeCheckouts`.
+
 Evidence layer for `SKILL.md`. Every contract the skill states is traced to a
 current `file:line` here. Lines were re-derived against `feat/builtin-skills`
 after the latest `main` merge; the prior skill cited pre-merge lines that have

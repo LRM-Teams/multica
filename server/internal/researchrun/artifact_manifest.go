@@ -722,15 +722,20 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 	return nil
 }
 
+type manifestEntryQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
 func loadManifestEntryCandidatesForAttemptTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	queryer manifestEntryQuerier,
 	workspaceID, sessionID, attemptID string,
 ) ([]artifactVersionCandidate, dispatchManifestHashInput, string, error) {
 	var hashInput dispatchManifestHashInput
 	var purposeRaw string
 	var storedHash string
-	err := tx.QueryRow(ctx, `
+	err := queryer.QueryRow(ctx, `
 		SELECT workspace_id::text, session_id::text, attempt_id::text, task_id::text,
 		       purpose, policy_version, policy_watermark, through_state_version,
 		       manifest_hash
@@ -748,16 +753,22 @@ func loadManifestEntryCandidatesForAttemptTx(
 	}
 	hashInput.Purpose = ArtifactPurpose(purposeRaw)
 
-	rows, err := tx.Query(ctx, `
+	rows, err := queryer.Query(ctx, `
 		SELECT
 		  v.id::text,
 		  v.artifact_id::text,
 		  p.entity_kind,
 		  v.version,
 		  e.eligibility_revision,
+		  v.access_level,
 		  v.content_hash,
 		  e.representation,
-		  e.representation_hash
+		  e.representation_hash,
+		  e.selection_lifecycle_status,
+		  e.selection_provenance_completeness,
+		  e.selection_version_count,
+		  e.selection_input_reference_count,
+		  e.selection_output_reference_count
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m
 		  ON m.workspace_id = e.workspace_id
@@ -784,10 +795,13 @@ func loadManifestEntryCandidatesForAttemptTx(
 	var entries []artifactVersionCandidate
 	for rows.Next() {
 		var entry artifactVersionCandidate
-		var kindRaw string
+		var kindRaw, accessRaw string
+		var lifecycleRaw, provenanceRaw *string
+		var versionCount, inputCount, outputCount *int
 		if err = rows.Scan(
 			&entry.VersionRowID, &entry.ArtifactID, &kindRaw, &entry.Version, &entry.EligibilityRevision,
-			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
+			&accessRaw, &entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
+			&lifecycleRaw, &provenanceRaw, &versionCount, &inputCount, &outputCount,
 		); err != nil {
 			return nil, dispatchManifestHashInput{}, "", err
 		}
@@ -795,6 +809,15 @@ func loadManifestEntryCandidatesForAttemptTx(
 		if err != nil {
 			return nil, dispatchManifestHashInput{}, "", err
 		}
+		if lifecycleRaw == nil || provenanceRaw == nil || versionCount == nil || inputCount == nil || outputCount == nil {
+			return nil, dispatchManifestHashInput{}, "", fmt.Errorf("%w: manifest entry lacks frozen projection metadata", ErrInvalidTransition)
+		}
+		entry.AccessLevel = ArtifactAccessLevel(accessRaw)
+		entry.Lifecycle = ArtifactLifecycleStatus(*lifecycleRaw)
+		entry.Provenance = ArtifactProvenanceCompleteness(*provenanceRaw)
+		entry.VersionCount = *versionCount
+		entry.InputReferenceCount = *inputCount
+		entry.OutputReferenceCount = *outputCount
 		entries = append(entries, entry)
 	}
 	if err = rows.Err(); err != nil {
@@ -802,6 +825,17 @@ func loadManifestEntryCandidatesForAttemptTx(
 	}
 	hashInput.Entries = entries
 	return entries, hashInput, storedHash, nil
+}
+
+func verifyAttemptManifestHashPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) error {
+	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttemptTx(ctx, pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(storedHash) == "" || hashDispatchManifest(hashInput) != storedHash {
+		return fmt.Errorf("%w: task-bound manifest hash mismatch", ErrInvalidTransition)
+	}
+	return nil
 }
 
 func verifyAcceptanceManifestHashTx(

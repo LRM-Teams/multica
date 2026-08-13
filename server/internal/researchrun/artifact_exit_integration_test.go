@@ -322,6 +322,96 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	}
 }
 
+func TestTaskBoundArtifactProjectionUsesSelectionTimeMetadata(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Frozen projection metadata", Title: "Frozen projection",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	claimID := uuid.NewString()
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "projection-claim", "freeze projection metadata")
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	before, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil || before.ArtifactProjection == nil {
+		t.Fatalf("TaskContextForAttempt before: projection=%+v err=%v", before.ArtifactProjection, err)
+	}
+	beforeItem := artifactProjectionItemByEntityID(t, before.ArtifactProjection.Items, claimID)
+	if beforeItem.LifecycleStatus != string(ArtifactLifecycleRegistered) {
+		t.Fatalf("before item=%+v", beforeItem)
+	}
+	_, newRevision, _ := withdrawIntegrationArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID)
+	after, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil || after.ArtifactProjection == nil {
+		t.Fatalf("TaskContextForAttempt after: projection=%+v err=%v", after.ArtifactProjection, err)
+	}
+	afterItem := artifactProjectionItemByEntityID(t, after.ArtifactProjection.Items, claimID)
+	if after.ArtifactProjection.ProjectionHash != before.ArtifactProjection.ProjectionHash ||
+		afterItem.LifecycleStatus != beforeItem.LifecycleStatus ||
+		afterItem.EligibilityRevision != beforeItem.EligibilityRevision ||
+		afterItem.VersionCount != beforeItem.VersionCount ||
+		afterItem.InputReferenceCount != beforeItem.InputReferenceCount ||
+		afterItem.OutputReferenceCount != beforeItem.OutputReferenceCount {
+		t.Fatalf("task-bound projection drifted before=%+v after=%+v", beforeItem, afterItem)
+	}
+	human, err := newEngine(store, nil, nil).Snapshot(ctx, run.SessionID, fixture.workspaceID)
+	if err != nil || human.ArtifactProjection == nil {
+		t.Fatalf("human Snapshot: projection=%+v err=%v", human.ArtifactProjection, err)
+	}
+	humanItem := artifactProjectionItemByEntityID(t, human.ArtifactProjection.Items, claimID)
+	if humanItem.LifecycleStatus != string(ArtifactLifecycleWithdrawn) || humanItem.EligibilityRevision != newRevision || human.ArtifactProjection.ProjectionHash == before.ArtifactProjection.ProjectionHash {
+		t.Fatalf("human projection did not advance: item=%+v", humanItem)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_context_entry e
+		SET selection_input_reference_count = selection_input_reference_count + 1
+		FROM research_artifact_version v
+		WHERE e.artifact_version_id=v.id AND e.workspace_id=v.workspace_id AND e.session_id=v.session_id
+		  AND e.manifest_id=$1::uuid AND v.artifact_id=$2::uuid
+	`, before.AttemptContext.ManifestID, claimID); err != nil {
+		t.Fatalf("tamper frozen projection metadata: %v", err)
+	}
+	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("tampered task-bound projection err=%v", err)
+	}
+}
+
+func artifactProjectionItemByEntityID(t *testing.T, items []ArtifactProjectionItem, entityID string) ArtifactProjectionItem {
+	t.Helper()
+	for _, item := range items {
+		if item.EntityID == entityID {
+			return item
+		}
+	}
+	t.Fatalf("artifact projection entity %s not found", entityID)
+	return ArtifactProjectionItem{}
+}
+
 func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {

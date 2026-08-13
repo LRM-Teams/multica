@@ -709,6 +709,9 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 	if !ok {
 		return RunSnapshot{}, fmt.Errorf("%w: attempt has no frozen artifact manifest", ErrInvalidTransition)
 	}
+	if err = verifyAttemptManifestHashPool(ctx, s.pool, workspaceID, sessionID, attemptID); err != nil {
+		return RunSnapshot{}, err
+	}
 	filtered := filterRunSnapshotByManifest(snapshot, allowed)
 	privateEvaluations, err := loadFrozenEvaluationPrivatePool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
@@ -735,12 +738,7 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		PolicyWatermark:  policyWatermark,
 		ManifestFiltered: true,
 	}
-	if manifestID != "" {
-		allowed[manifestID] = struct{}{}
-	}
-	projection, projectionErr := (artifactProjectionModule{store: s}).Load(ctx, workspaceID, sessionID, artifactProjectionScope{
-		AllowedArtifactIDs: allowed, IncludeEvaluationPrivate: true,
-	})
+	projection, projectionErr := (artifactProjectionModule{store: s}).LoadManifest(ctx, workspaceID, sessionID, manifestID)
 	if projectionErr != nil {
 		return RunSnapshot{}, projectionErr
 	}

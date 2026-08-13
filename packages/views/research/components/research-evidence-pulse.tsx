@@ -1,10 +1,10 @@
 "use client";
 
 import { AlertCircle, Loader2 } from "lucide-react";
-import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type { EvidenceOverviewMode } from "../lib/m2-visibility";
+import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 
 /**
  * LRM-1329 — drawer-level evidence overview bar.
@@ -94,7 +94,7 @@ export function ResearchEvidencePulse({
           <div className="flex min-w-0 items-center gap-1.5">
             {mode === "loading" ? (
               <Loader2
-                className="size-3.5 shrink-0 animate-spin text-brand"
+                className="size-3.5 shrink-0 animate-spin text-brand motion-reduce:animate-none"
                 aria-hidden
               />
             ) : mode === "error" || mode === "permission" ? (
@@ -159,15 +159,12 @@ export function ResearchEvidencePulse({
 
       {mode === "error" && onRetry ? (
         <div className="relative mt-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={retryPending}
-            onClick={onRetry}
-          >
-            {t(($) => $.session_page.retry)}
-          </Button>
+          <ResearchPendingRetryButton
+            label={t(($) => $.session_page.retry)}
+            pendingLabel={t(($) => $.connectivity.retrying)}
+            pending={retryPending}
+            onRetry={onRetry}
+          />
         </div>
       ) : null}
     </section>

@@ -57,10 +57,9 @@ their copy-ready command so the Computer package is locked to that deployment.
 There are no root channel files. A missing or malformed `metainfo.json` is a
 release-feed failure; clients do not fall back to another mutable pointer.
 
-The installer activates the verified binary through the same VersionStore as
-`multica computer upgrade`: the public launcher path stays stable, immutable
-Active/Previous versions are retained, and a failed activation does not become
-the running Computer version.
+The installer writes the verified binary to `$HOME/.local/bin/multica`.
+`multica computer upgrade` replaces that same file and keeps a `.prev`
+sibling for rollback. The Computer process is that PATH binary.
 
 Then verify:
 
@@ -191,9 +190,9 @@ Run in PowerShell (no admin required):
 irm https://cdn.leagent.me/computer/install.ps1 | iex
 ```
 
-This downloads the latest Windows binary from the release feed, verifies and
-activates it through VersionStore at `%USERPROFILE%\.multica\bin\`, and adds
-that stable launcher to your user PATH.
+This downloads the latest Windows binary from the release feed, verifies it,
+and installs it to `%USERPROFILE%\AppData\Local\multica\multica.exe`, then
+adds that directory to your user PATH.
 
 Use the same `-Version` parameter for the release recommended by test or an
 exact immutable release:

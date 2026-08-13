@@ -44,7 +44,15 @@ export function deriveTrajectoryCommits(
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const parentByChild = new Map<string, string[]>();
-  const allowed = new Set(["leads_to", "derives_from", "integrates"]);
+  const allowed = new Set([
+    "leads_to",
+    "derived_from",
+    "derives_from",
+    "integrates",
+    "merged_from",
+    "refines",
+    "restart_of",
+  ]);
   for (const e of edges) {
     if (!allowed.has(e.edge_type)) continue;
     if (!byId.has(e.from_node_id) || !byId.has(e.to_node_id)) continue;

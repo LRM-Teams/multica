@@ -105,6 +105,10 @@ research state. Refresh must reconstruct the same terminal graph.
   this shell incrementally; it does not create a second Research session page.
 - V6 404/501 means capability unavailable and may fall back to V5/D5. A 200
   response that fails schema parsing is an interface error, not a fallback.
+- Node-report review history may only render from projected review decisions.
+  The current `ResearchRunSnapshot` exposes tasks, Attempts, evidence, Claims,
+  and gate findings, but not the complete quality/citation decision history;
+  the frontend must not reconstruct passing reviews from task status.
 
 ## 7. Interaction contract
 
@@ -145,7 +149,7 @@ tracked separately in §11 and are not counted as integrated until merged.
 | Five-tier star graph, camera, clusters, relations | Integrated | Improve fact density and edge degradation |
 | Context rail, chat, node detail | Integrated | Add canonical change receipts |
 | Agent inspector and shared Agent panel | Integrated | Complete Attempt/lease fact coverage |
-| Local node report | Integrated | Align structured evidence/lineage sections |
+| Local node report | Integrated | Project quality/citation review decisions; canonical contributor, Attempt, evidence, and lineage sections are integrated |
 | Typed graph pagination/filter/lens/DOM budget | Integrated | Add viewport slice gateway when backend exists |
 | V6 schema, API, adapter, ordered live client | Built, not wired to session page | Capability-gated production integration |
 | 30-kind cards, Insight, Dispute, trajectory | Built as isolated modules | Register in D5 detail/lens surfaces |
@@ -164,7 +168,6 @@ tracked separately in §11 and are not counted as integrated until merged.
    routes are real, retaining the existing D5 shell and explicit fallback.
 5. Run the full visual/performance/accessibility matrix and remove obsolete
    documents or mark them superseded.
-
 ## 11. Delivery ledger
 
 This ledger is the merge checklist for the production target. A linked open PR

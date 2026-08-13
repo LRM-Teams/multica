@@ -118,16 +118,13 @@ func TestComputerUpgradeSubprocessAbsentResidentInstallsForNextStart(t *testing.
 		t.Fatalf("offline output = %q, want precise next-start/no-successor wording", output)
 	}
 
-	store, err := cli.OpenVersionStore(filepath.Join(home, ".local", "share", "multica"))
+	installed := filepath.Join(home, ".local", "bin", "multica")
+	got, err := os.ReadFile(installed)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("PATH computer after upgrade: %v\n%s", err, output)
 	}
-	state, err := store.ReadActivationState()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.ActiveVersion != "v1.2.3" || state.Generation != 1 {
-		t.Fatalf("offline Active = %+v, want v1.2.3 generation 1", state)
+	if !strings.Contains(string(got), "multica v1.2.3") {
+		t.Fatalf("PATH computer = %q, want released v1.2.3 bytes", got)
 	}
 }
 

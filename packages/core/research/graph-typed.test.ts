@@ -5,6 +5,7 @@ import {
   TypedGraphResponseSchema,
   indexTypedGraphNodes,
   mergeTypedGraphPages,
+  selectTypedGraphRootCandidateId,
 } from "./graph-typed";
 import type { TypedGraphResponse } from "./graph-typed";
 
@@ -104,16 +105,29 @@ describe("typed graph schema (LRM-1497 · fed by LRM-1505)", () => {
 
   it("defaults absent optional fields without fabricating values", () => {
     const parsed = parseWithFallback(
-      { session_id: "s1", graph_version: 0, nodes: [], edges: [], clusters: [], lineage: {} },
+      {
+        session_id: "s1",
+        graph_version: 0,
+        nodes: [{ id: "n-without-metrics", title: "事实尚未提供" }],
+        edges: [],
+        clusters: [],
+        lineage: {},
+      },
       TypedGraphResponseSchema,
       EMPTY_TYPED_GRAPH,
       { endpoint: "test" },
     ) as TypedGraphResponse;
 
-    expect(parsed.nodes).toEqual([]);
+    expect(parsed.nodes).toHaveLength(1);
     expect(parsed.lineage.derived).toEqual({});
-    // Defaults are inert, not invented confidence/rounds.
-    expect(parsed.nodes).toHaveLength(0);
+    expect(parsed.nodes[0]).toMatchObject({
+      id: "n-without-metrics",
+      title: "事实尚未提供",
+      confidence: null,
+    });
+    expect(parsed.nodes[0]).not.toHaveProperty("round");
+    expect(parsed.nodes[0]).not.toHaveProperty("document_count");
+    expect(parsed.nodes[0]).not.toHaveProperty("conclusion_count");
   });
 
   it("parses total_node_count when the graph is paginated", () => {
@@ -185,6 +199,19 @@ describe("mergeTypedGraphPages", () => {
     expect(merged.lineage.merged.n3).toEqual(["n2"]);
   });
 
+  it("uses the latest explicit total while retaining the last known value", () => {
+    const page = (total: number | null): TypedGraphResponse =>
+      ({
+        ...EMPTY_TYPED_GRAPH,
+        session_id: "s1",
+        total_node_count: total,
+        nodes: [{ id: `n-${total}`, level: "m" }],
+      }) as unknown as TypedGraphResponse;
+
+    expect(mergeTypedGraphPages([page(10), page(12)]).total_node_count).toBe(12);
+    expect(mergeTypedGraphPages([page(10), page(null)]).total_node_count).toBe(10);
+  });
+
   it("evicts oldest page nodes when merged cache exceeds the node budget", () => {
     // Partial fixtures for merge/budget behavior only — cast via unknown so
     // strict tsc does not require a full TypedGraphNode for every stub row.
@@ -214,7 +241,9 @@ describe("mergeTypedGraphPages", () => {
       nodeBudget: 1000,
     });
     expect(merged.nodes.length).toBeLessThanOrEqual(1000);
-    expect(merged.nodes.some((node) => node.id === "n0")).toBe(false);
+    // The same root candidate used by layout stays mounted across page eviction.
+    expect(merged.nodes.some((node) => node.id === "n0")).toBe(true);
+    expect(merged.nodes.some((node) => node.id === "n1")).toBe(false);
     expect(merged.nodes.some((node) => node.id === "n1599")).toBe(true);
     expect(merged.total_node_count).toBe(1600);
   });
@@ -247,6 +276,64 @@ describe("mergeTypedGraphPages", () => {
     });
     expect(merged.nodes.map((node) => node.id)).toContain("n0");
     expect(merged.nodes.length).toBeLessThanOrEqual(2);
+  });
+
+  it("never lets protected ids exceed the hard cache budget", () => {
+    const page = {
+      session_id: "s1",
+      graph_version: 1,
+      total_node_count: 5,
+      nodes: Array.from({ length: 5 }, (_, i) => ({
+        id: `n${i}`,
+        title: `N${i}`,
+        level: "s",
+      })),
+      edges: [],
+      clusters: [],
+      lineage: EMPTY_TYPED_GRAPH.lineage,
+    } as unknown as TypedGraphResponse;
+
+    const merged = mergeTypedGraphPages([page], {
+      nodeBudget: 2,
+      pinNodeIds: ["n1", "n2", "n3"],
+    });
+    expect(merged.nodes.map((node) => node.id)).toEqual(["n0", "n1"]);
+  });
+});
+
+describe("selectTypedGraphRootCandidateId", () => {
+  it("uses the same XXL-first precedence as the star layout", () => {
+    const nodes = [
+      {
+        id: "a",
+        level: "m",
+        cluster_id: null,
+        parent_id: null,
+        derived_from: null,
+      },
+      { id: "z", level: "xxl", cluster_id: "c1", parent_id: "a" },
+    ] as unknown as TypedGraphResponse["nodes"];
+    expect(selectTypedGraphRootCandidateId(nodes)).toBe("z");
+  });
+
+  it("falls back to an ungrouped structural root, then stable id order", () => {
+    const structural = [
+      { id: "b", level: "m", cluster_id: "c1", parent_id: "a" },
+      {
+        id: "a",
+        level: "m",
+        cluster_id: null,
+        parent_id: null,
+        derived_from: null,
+      },
+    ] as unknown as TypedGraphResponse["nodes"];
+    expect(selectTypedGraphRootCandidateId(structural)).toBe("a");
+
+    const cyclic = [
+      { id: "z", level: "m", cluster_id: "c1", parent_id: "a" },
+      { id: "a", level: "m", cluster_id: "c1", parent_id: "z" },
+    ] as unknown as TypedGraphResponse["nodes"];
+    expect(selectTypedGraphRootCandidateId(cyclic)).toBe("a");
   });
 });
 

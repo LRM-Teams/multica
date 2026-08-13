@@ -108,22 +108,40 @@ export function centerCameraOnPoint(
   };
 }
 
-export function relationEdgeClass(kind: string, edgeType: string): string {
+export function relationEdgeClass(_kind: string, edgeType: string): string {
   if (edgeType === "merged_from" || edgeType === "integration_formed") {
     return "sg-edge-merge";
   }
-  switch (kind) {
-    case "decompose":
-      return "sg-edge-decompose";
-    case "challenge":
-      return "sg-edge-challenge";
-    case "newdir":
-      return "sg-edge-newdir";
-    case "support":
-    default:
-      return "sg-edge-support";
-  }
+  if (DECOMPOSITION_EDGE_TYPES.has(edgeType)) return "sg-edge-decompose";
+  if (SUPPORT_EDGE_TYPES.has(edgeType)) return "sg-edge-support";
+  if (CHALLENGE_EDGE_TYPES.has(edgeType)) return "sg-edge-challenge";
+  if (NEW_DIRECTION_EDGE_TYPES.has(edgeType)) return "sg-edge-newdir";
+  // The layout engine still needs a known geometry kind, but visual semantics
+  // come from the canonical edge type. Unknown/future relations must not look
+  // like supporting evidence merely because layout conservatively used
+  // `support` geometry.
+  return "sg-edge-neutral";
 }
+
+const DECOMPOSITION_EDGE_TYPES = new Set([
+  "leads_to",
+  "refines",
+  "escalated_to",
+  "decompose",
+  "derived_from",
+  "deepens",
+]);
+const SUPPORT_EDGE_TYPES = new Set(["supports", "resolved_by"]);
+const CHALLENGE_EDGE_TYPES = new Set([
+  "challenged_by",
+  "contradicts",
+  "invalidates",
+  "supersedes",
+  "superseded_by",
+  "invalidated_by",
+  "abandons",
+]);
+const NEW_DIRECTION_EDGE_TYPES = new Set(["restart_of"]);
 
 export function quadraticEdgePath(
   from: { x: number; y: number },

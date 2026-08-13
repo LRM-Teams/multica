@@ -1,6 +1,13 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 import { CHAT_MESSAGE_GC_TIME_MS } from "./evict-inactive-caches";
+export {
+  isStandaloneListItemOutstanding,
+  isStandaloneSendOutstanding,
+  isStandaloneSessionOutstanding,
+  shouldClearChatPendingOnDone,
+  standaloneStopRequiresInbox,
+} from "./standalone-pending";
 
 // NOTE on workspace scoping:
 // `wsId` is used only as part of queryKey for cache isolation per workspace.

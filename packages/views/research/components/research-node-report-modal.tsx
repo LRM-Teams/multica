@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import type {
   ResearchFleetMember,
   ResearchGraphNode,
@@ -15,19 +16,10 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { useT } from "../../i18n/use-t";
+import { buildNodeReportLineage } from "../lib/research-node-report-lineage";
 import { ResearchNodeDetailBody } from "./research-node-detail";
 
-function lineageInputs(
-  node: TypedGraphNode | undefined,
-  snapshotNode: ResearchGraphNode | null,
-): string[] {
-  const merged = node?.merged_from?.length
-    ? node.merged_from
-    : Array.isArray((snapshotNode?.payload as { merged_from?: string[] } | null)?.merged_from)
-      ? ((snapshotNode?.payload as { merged_from?: string[] }).merged_from ?? [])
-      : [];
-  return merged.filter(Boolean);
-}
+const EMPTY_TYPED_NODES: readonly TypedGraphNode[] = [];
 
 export function ResearchNodeReportModal({
   open,
@@ -36,6 +28,7 @@ export function ResearchNodeReportModal({
   sources,
   run,
   members,
+  typedNodes = EMPTY_TYPED_NODES,
   onClose,
   onSelectLineageNode,
 }: {
@@ -45,11 +38,16 @@ export function ResearchNodeReportModal({
   sources: ResearchSource[];
   run?: ResearchRunSnapshot;
   members?: ResearchFleetMember[];
+  typedNodes?: readonly TypedGraphNode[];
   onClose: () => void;
   onSelectLineageNode?: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
-  const mergedFrom = lineageInputs(typedNode ?? undefined, node);
+  const lineage = buildNodeReportLineage(typedNode, node);
+  const lineageTitles = useMemo(
+    () => new Map(typedNodes.map((item) => [item.id, item.title])),
+    [typedNodes],
+  );
   const confidence =
     typedNode?.confidence ??
     (typeof (node?.payload as { confidence?: number } | null)?.confidence === "number"
@@ -91,28 +89,41 @@ export function ResearchNodeReportModal({
           </div>
         </DialogHeader>
 
-        {mergedFrom.length > 0 ? (
+        {lineage.length > 0 ? (
           <section className="border-b px-5 py-3">
             <h3 className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
               {t(($) => $.d5.report.lineage_title)}
             </h3>
-            <ul className="space-y-1 text-[12px] text-muted-foreground">
-              {mergedFrom.map((id) => (
-                <li key={id} data-testid={`research-node-report-lineage-${id}`}>
-                  {onSelectLineageNode ? (
-                    <button
-                      type="button"
-                      className="text-left text-primary underline-offset-2 hover:underline"
-                      onClick={() => onSelectLineageNode(id)}
-                    >
-                      {id}
-                    </button>
-                  ) : (
-                    id
-                  )}
-                </li>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {lineage.map((group) => (
+                <section key={group.relation} data-lineage-relation={group.relation}>
+                  <h4 className="text-[10px] font-semibold uppercase text-muted-foreground">
+                    {t(($) => $.d5.report.lineage[group.relation])}
+                  </h4>
+                  <ul className="mt-1 space-y-1 text-[12px] text-muted-foreground">
+                    {group.nodeIds.map((id) => {
+                      const title = lineageTitles.get(id)?.trim() || id;
+                      return (
+                        <li key={id} data-testid={`research-node-report-lineage-${id}`}>
+                          {onSelectLineageNode ? (
+                            <button
+                              type="button"
+                              className="max-w-full truncate text-left text-primary underline-offset-2 hover:underline"
+                              title={title !== id ? id : undefined}
+                              onClick={() => onSelectLineageNode(id)}
+                            >
+                              {title}
+                            </button>
+                          ) : (
+                            title
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
               ))}
-            </ul>
+            </div>
           </section>
         ) : null}
 

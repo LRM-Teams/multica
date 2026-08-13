@@ -188,6 +188,13 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		if turnErr == nil && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
 			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			d.reportAgentMemoryWrites(reportCtx, memoryTask)
+			if sessionID, ok := standaloneChatSessionIDFromMessages(preparedMessages); ok {
+				if reply := standaloneAssistantTextFromCapture(capture); reply != "" {
+					if err := d.client.ReportStandaloneChatReply(reportCtx, sessionID, reply); err != nil && d.logger != nil {
+						d.logger.Warn("standalone chat reply writeback failed", "session_id", sessionID, "error", err)
+					}
+				}
+			}
 			cancel()
 		}
 		// Raft-aligned turn end: never auto body-handoff Pending solely because
@@ -380,12 +387,14 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
 		memories, _ := prepareExecutionMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
+		chatSessionID, _ := standaloneChatSessionID(message.Target)
 		message.RuntimeContext = execenv.RenderTurnContext(execenv.TaskContextForEnv{
 			MessageDelivery: true,
 			AgentID:         agentID,
 			AgentRoot:       agentRoot,
 			AgentMemories:   memories,
 			ChannelID:       message.ChannelID,
+			ChatSessionID:   chatSessionID,
 			ProjectID:       message.ProjectID,
 			InitiatorType:   message.InitiatorType,
 			InitiatorID:     message.InitiatorID,
@@ -422,7 +431,70 @@ func residentMessageMemoryTask(workspaceID, agentID, runtimeID string, messages 
 	if strings.EqualFold(task.ChannelKind, "group") && len(messages) > 0 {
 		task.ChatSessionID = messages[0].Target
 	}
+	if sessionID, ok := standaloneChatSessionIDFromMessages(messages); ok {
+		task.ChatSessionID = sessionID
+	}
 	return task
+}
+
+func standaloneChatSessionID(target string) (string, bool) {
+	const prefix = "chat:"
+	if !strings.HasPrefix(target, prefix) {
+		return "", false
+	}
+	sessionID := strings.TrimSpace(strings.TrimPrefix(target, prefix))
+	return sessionID, sessionID != ""
+}
+
+func standaloneChatSessionIDFromMessages(messages []protocol.AgentMessageProjection) (string, bool) {
+	for _, message := range messages {
+		if sessionID, ok := standaloneChatSessionID(message.Target); ok {
+			return sessionID, true
+		}
+	}
+	return "", false
+}
+
+func standaloneAssistantTextFromCapture(capture *agent.ResidentTurnCapture) string {
+	if capture == nil {
+		return ""
+	}
+	for i := len(capture.ProviderCalls) - 1; i >= 0; i-- {
+		if text := standaloneAssistantTextFromJSON(capture.ProviderCalls[i].FinalAssistantMessage); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func standaloneAssistantTextFromJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return strings.TrimSpace(asString)
+	}
+	var payload struct {
+		Text   string `json:"text"`
+		Blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"blocks"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	if text := strings.TrimSpace(payload.Text); text != "" {
+		return text
+	}
+	var parts []string
+	for _, block := range payload.Blocks {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, strings.TrimSpace(block.Text))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func convertResidentMessageMemoriesForEnv(memories []protocol.AgentMessageMemoryProjection) []execenv.MemoryContextForEnv {

@@ -215,45 +215,23 @@ Test 页面优先展示从 canonical metainfo 解析出的精确版本，让复�
 
 ## 8. 升级契约
 
-### VersionStore 是什么
+### 本机只有一份 Computer
 
-`version_store.go` 管的是**这台电脑本地怎么安全保存和切换 Computer 版本**。它既不决定连 Production 还是 Test，也不保存 Workspace connection。大白话说，它是一个“小型本机版本仓库 + 原子换班器”：
+`$HOME/.local/bin/multica` 既是 CLI 也是 Computer。start、supervise 和 `computer upgrade` 都用这一份文件。升级先把校验过的候选写到 ephemeral scratch，再把它换到 PATH 上，旧文件留成 `multica.prev`。失败或 rollback 把 `.prev` 换回去。
 
-```text
-~/.local/share/multica/
-├── versions/
-│   ├── v0.4.23/
-│   │   ├── multica
-│   │   └── version.json       # 记录这份 binary 的 SHA-256
-│   └── v0.4.24-alpha.3/
-│       ├── multica
-│       └── version.json
-├── activation.json            # Active、Previous、generation
-└── activation.lock            # 防止两个升级同时切到一半
-```
+没有 `versions/<tag>` catalog，也没有 `activation.json` Active 指针。generation 仍是 resident 的任期号：新进程接班后，服务端拒绝旧任期的迟到心跳和结果。
 
-稳定的 launcher 路径不变，真正的版本放在 `versions/`。切换时使用 CAS 更新 `Active`，保留 `Previous`，所以安装新版本失败不会把原来能工作的 launcher 覆盖掉。
-
-升级不是覆盖一个文件，而是“验货 → 入库 → 接班 → 可回退”：
+升级步骤：
 
 1. 按环境解析包源，或使用排障指定的精确版本。
 2. 校验压缩包 SHA-256 和候选 binary SHA-256。
-3. 将不可变版本 stage 到 VersionStore。
-4. 激活新的 `Active` 并保留 `Previous`。
-5. 用更大的 generation 启动 successor resident。
-6. 验证目标版本、successor 和全部 runtime 收敛；失败时切回 `Previous`。
+3. 把候选写到 scratch，再原子换到 PATH，保留 `.prev`。
+4. 用更大的 Computer generation 启动 successor resident。
+5. 验证目标版本、successor 和全部 runtime 收敛；失败时从 `.prev` 恢复。
 
-generation 是 resident 的任期号。新进程接班后，服务端会拒绝旧任期的迟到心跳和结果。
+### Raft 对齐
 
-### s144 为什么会报 `staged binary integrity mismatch`
-
-当时 `versions/v0.4.23/version.json` 记录的是正式 `v0.4.23` 的 SHA-256，但一次本机热修复直接覆盖了同名目录里的 `multica` binary，实际 SHA 已经不同。也就是说，“版本目录发布后不可变”这个前提被破坏了；VersionStore 拒绝拿一份身份写着 `v0.4.23`、内容却不是正式 `v0.4.23` 的文件当回滚点，这是正确的保护。
-
-现在的恢复路径是：只有新下载候选已经完整通过 archive 和 binary 校验时，安装器才能越过这份历史脏 Active；旧 `v0.4.23` 会被标记为不可回滚，新版本成为 Active。普通在线升级仍然失败关闭，不能把任何校验错误吞掉。
-
-### Raft 有没有 VersionStore
-
-Raft 没有同名的 `version_store.go` 或完全相同的目录模型，但它也有持久升级标记、程序替换、新进程接班证明和失败 rollback。两边解决的是同一个问题：**升级不能切一半，旧进程和新进程不能同时冒充 Active**。Multica 把这组职责集中成 VersionStore；Raft 把它分散在升级交接流程里。
+Raft Computer 也是一份 PATH 二进制：`upgrade` 把 `process.execPath` rename 成 `.prev`，再把新文件放到同一路径。Multica 现在用同一模型。
 
 ## 9. 部署轨道
 
@@ -312,7 +290,7 @@ multica computer logs
 | CDN manifest + checksum | 用户能下载到哪份公开字节。 |
 | Deploy workflow + image tag | 哪份服务镜像被部署。 |
 | 公网 `/health` / 页面内容 | 外部用户实际访问到什么。 |
-| 本机 `type -a multica`、VersionStore、进程和 health | 某台电脑真正运行的是哪个版本和环境。 |
+| 本机 `type -a multica`、PATH 二进制、进程和 health | 某台电脑真正运行的是哪个版本和环境。 |
 
 所以“CDN 有 alpha 包”不能证明腾讯 Test 已部署，“Web 已部署”也不能证明某台 Computer 已升级。[#2497](https://github.com/LRM-Teams/multica/issues/2497) 按这些层次逐项记录真实验收证据，父 [#2484](https://github.com/LRM-Teams/multica/issues/2484) 最后关闭。
 

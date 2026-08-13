@@ -153,11 +153,12 @@ type Daemon struct {
 	reregisterNextAttempt     map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
 	reregisterLastCompletedAt map[string]time.Time // workspace_id -> wall-clock at which the last SUCCESSFUL re-register call returned (failures intentionally not stamped — see recordRegisterCompletion)
 
-	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
-	rootCtx       context.Context    // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
-	restartBinary string             // non-empty after a successful update; path to the new binary
-	updating      atomic.Bool        // prevents concurrent update attempts
-	activeTasks   atomic.Int64       // number of tasks currently in handleTask; exposed via /health
+	cancelFunc        context.CancelFunc // set by Run(); called by triggerRestart
+	rootCtx           context.Context    // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
+	restartBinary     string             // non-empty after a successful update; path to the new binary
+	stagedUpgradePath string             // ephemeral download; Computer never executes this path
+	updating          atomic.Bool        // prevents concurrent update attempts
+	activeTasks       atomic.Int64       // number of tasks currently in handleTask; exposed via /health
 	// machineUpgradeTaskCancels contains only task contexts created by this
 	// daemon. A Machine Upgrade may ask those managed turns to stop; it must
 	// never infer ownership of, or signal, an arbitrary local process.
@@ -2479,36 +2480,25 @@ func (d *Daemon) restartBinaryPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// A staged Active version takes priority over the currently running
-	// binary's own path (task #41): d.restartBinary is normally already set
-	// from the staged path by the time triggerRestart runs, so this is only
-	// reached when triggerRestart fires without a prior update — still worth
-	// consulting the VersionStore for the same reason the manual `daemon
-	// restart` path does (resolveDaemonLaunchBinary). Brew installs manage
-	// their own binary outside the VersionStore and skip this lookup.
-	if !isBrewInstall() {
-		if store, storeErr := cli.OpenVersionStore(""); storeErr == nil {
-			if activePath, ok, activeErr := store.ActiveBinaryPath(); activeErr == nil && ok {
-				return activePath, nil
-			}
-		}
-	}
-	// On Linux, os.Executable() reads /proc/self/exe, which the kernel resolves
-	// to the Cellar path. brew cleanup deletes that path after upgrade, so we
-	// must use the stable <brew-prefix>/bin/multica symlink instead.
+	// Homebrew owns its prefix. On Linux, os.Executable() is the Cellar
+	// path that brew cleanup may delete, so restart through the stable
+	// <prefix>/bin/multica symlink instead of the PATH install file.
 	if isBrewInstall() {
 		if brewPrefix := getBrewPrefix(); brewPrefix != "" {
-			newBin = filepath.Join(brewPrefix, "bin", "multica")
-		} else if prefix := matchKnownBrewPrefix(newBin); prefix != "" {
-			newBin = filepath.Join(prefix, "bin", "multica")
-		} else {
-			d.logger.Warn("brew install detected but prefix could not be resolved; restart may fail",
-				"executable", newBin)
+			return filepath.Join(brewPrefix, "bin", "multica"), nil
 		}
-	} else {
-		if resolved, err := filepath.EvalSymlinks(newBin); err == nil {
-			newBin = resolved
+		if prefix := matchKnownBrewPrefix(newBin); prefix != "" {
+			return filepath.Join(prefix, "bin", "multica"), nil
 		}
+		d.logger.Warn("brew install detected but prefix could not be resolved; restart may fail",
+			"executable", newBin)
+		return newBin, nil
+	}
+	if path, err := computer.LaunchBinary(); err == nil && path != "" {
+		return path, nil
+	}
+	if resolved, err := filepath.EvalSymlinks(newBin); err == nil {
+		return resolved, nil
 	}
 	return newBin, nil
 }

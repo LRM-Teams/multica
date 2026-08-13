@@ -70,9 +70,12 @@ export function ResearchCanvasEmptyState() {
 
   const create = useMutation({
     mutationFn: () =>
-      api.createResearchSession({
-        goal: t(($) => $.session_page.canvas_empty_create_goal),
-      }),
+      api.createResearchSession(
+        {
+          goal: t(($) => $.session_page.canvas_empty_create_goal),
+        },
+        wsId,
+      ),
     onSuccess: (res) => {
       qc.setQueryData(researchKeys.snapshot(wsId, res.session.id), {
         session: res.session,
@@ -83,6 +86,7 @@ export function ResearchCanvasEmptyState() {
         report: null,
         evals: [],
         messages: res.messages ?? [],
+        run: res.run,
       });
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
       nav.push(paths.researchDetail(res.session.id));
@@ -106,6 +110,21 @@ export function ResearchCanvasEmptyState() {
         <p className="mt-1.5 max-w-[22rem] text-[12.5px] leading-relaxed text-muted-foreground">
           {t(($) => $.session_page.canvas_empty_body)}
         </p>
+        {create.isError ? (
+          <div
+            id="research-canvas-empty-create-error"
+            data-testid="research-canvas-empty-create-error"
+            role="alert"
+            className="mt-3 w-full max-w-xs rounded-lg border border-destructive/35 bg-destructive/5 px-3 py-2 text-left"
+          >
+            <p className="text-xs font-medium text-destructive">
+              {t(($) => $.session_page.canvas_empty_create_failed)}
+            </p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              {t(($) => $.session_page.canvas_empty_create_failed_hint)}
+            </p>
+          </div>
+        ) : null}
         <div className="mt-4 flex w-full max-w-xs flex-col gap-2 sm:flex-row sm:justify-center">
           <Button
             type="button"
@@ -123,16 +142,22 @@ export function ResearchCanvasEmptyState() {
               create.isPending && "opacity-50 cursor-not-allowed",
             )}
             data-testid="research-canvas-empty-create"
+            aria-describedby={
+              create.isError ? "research-canvas-empty-create-error" : undefined
+            }
             // LRM-1241 — pending must stay focusable (same root cause as LRM-1213/1236).
             aria-disabled={create.isPending || undefined}
             onClick={() => {
               if (create.isPending) return;
+              if (create.isError) create.reset();
               create.mutate();
             }}
           >
             {create.isPending
               ? t(($) => $.session_page.canvas_empty_creating)
-              : t(($) => $.session_page.canvas_empty_create)}
+              : create.isError
+                ? t(($) => $.session_page.canvas_empty_retry)
+                : t(($) => $.session_page.canvas_empty_create)}
           </Button>
         </div>
       </section>

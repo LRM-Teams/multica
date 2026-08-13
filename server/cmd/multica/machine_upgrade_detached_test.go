@@ -60,7 +60,6 @@ func TestDetachedSuccessorProofRejectsEveryTakeoverIdentityMismatch(t *testing.T
 		"handoff generation":            func(p *daemon.MachineUpgradeTakeoverProof) { p.Generation = "generation-stale" },
 		"Computer":                      func(p *daemon.MachineUpgradeTakeoverProof) { p.ComputerID = "computer-stale" },
 		"predecessor Computer":          func(p *daemon.MachineUpgradeTakeoverProof) { p.PredecessorComputerGeneration = 10 },
-		"predecessor VersionStore":      func(p *daemon.MachineUpgradeTakeoverProof) { p.PredecessorVersionStoreGeneration = 6 },
 		"candidate Computer generation": func(p *daemon.MachineUpgradeTakeoverProof) { p.CandidateComputerGeneration = 13 },
 		"candidate pid":                 func(p *daemon.MachineUpgradeTakeoverProof) { p.CandidatePID = 9999 },
 		"target version":                func(p *daemon.MachineUpgradeTakeoverProof) { p.TargetVersion = "v10.0.1" },

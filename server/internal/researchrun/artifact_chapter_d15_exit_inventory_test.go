@@ -29,7 +29,7 @@ var chapterD15Coverage = map[int]string{
 	12: "partial", // dispatch normalized locks + concurrent shared-candidate test
 	13: "partial", // eligibility + representation CAS
 	14: "covered", // replay/prompt/outbox binding tests
-	15: "partial", // dispatch transaction recovery matrix
+	15: "covered", // after-begin/before-commit/after-commit dispatch artifact recovery matrix
 	16: "covered", // historical live vs frozen manifest tests
 	17: "partial", // frozen gate snapshot on TaskContextForAttempt
 	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state after rollback

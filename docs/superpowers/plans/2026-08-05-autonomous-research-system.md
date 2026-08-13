@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-recovery-2 证据：真实 `CreateDispatchIntent` 工件恢复矩阵覆盖 `after_begin`、
+`before_commit` 和 `after_commit`。前两点证明 Attempt、Passport/Version、Manifest、
+entry/omission、grant/mutation、input reference、Outbox、Task transition 与 Event 全部零写入，
+相同请求可成功重试；commit outcome unknown 后相同请求重放保持一个完整绑定写集，不重复
+Attempt、Manifest、Outbox 或 Event。§15.15 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

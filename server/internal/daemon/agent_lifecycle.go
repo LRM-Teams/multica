@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
+
+const agentLifecycleLeaseReleaseTimeout = 5 * time.Second
 
 type agentLifecycleActionKind string
 
@@ -35,6 +38,9 @@ type agentLifecycleExecutor struct {
 	workspacesRoot string
 	runtimes       *canonicalAgentRuntimePool
 	sessionReset   agentLifecycleSessionResetter
+	sessions       *agentRuntimeSessionStore
+	commands       *agentLifecycleCommandLedger
+	starter        agentLifecycleStarter
 	logger         *slog.Logger
 }
 
@@ -49,9 +55,10 @@ func (e *agentLifecycleExecutionError) Error() string {
 
 func (e *agentLifecycleExecutionError) Unwrap() error { return e.Err }
 
-// Execute performs only the D1/D2/D4 lifecycle mutation after D5/D6 has
-// acquired the per-agent claim barrier. It owns no queue state and advertises
-// no capability by itself.
+// Execute performs one restart command: stop (force if busy) → optional
+// session invalidate → optional workspace reset → start. A start against a
+// still-running process is refused (not a silent rebind). Destructive steps
+// are idempotent on the same command id.
 func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifecycleExecutionRequest) error {
 	if err := validateAgentLifecycleExecutionRequest(request); err != nil {
 		return lifecycleStepError("validate", err)
@@ -62,33 +69,43 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	if err := e.validateDependencies(request); err != nil {
 		return lifecycleStepError("validate", err)
 	}
+	replay, err := e.beginCommand(request)
+	if err != nil {
+		return lifecycleStepError("validate", err)
+	}
+	if replay {
+		return nil
+	}
+
 	// #112 / #62: all lifecycle restart kinds force-interrupt a busy turn.
-	// hasActiveTurn permanently true is the stuck-agent case. Never refuse
-	// with ErrCanonicalAgentRuntimeBusy — that recreated "scheduled forever"
-	// hangs for reset_session/full_reset (阿泰 2026-08-03).
+	if err := e.stopRuntime(ctx, request); err != nil {
+		return err
+	}
 
 	switch request.ActionKind {
 	case agentLifecycleActionRestart:
-		return e.forceInvalidateRuntime(request)
 	case agentLifecycleActionResetSessionRestart:
-		if err := e.forceInvalidateRuntime(request); err != nil {
-			return err
-		}
 		if err := e.resetSession(ctx, request); err != nil {
 			return err
 		}
-		return nil
 	case agentLifecycleActionFullResetRestart:
-		if err := e.forceInvalidateRuntime(request); err != nil {
-			return err
-		}
 		if err := e.resetSession(ctx, request); err != nil {
 			return err
 		}
-		return e.resetWorkspace(request)
+		if err := e.resetWorkspace(request); err != nil {
+			return err
+		}
 	default:
 		return lifecycleStepError("validate", fmt.Errorf("unsupported action_kind %q", request.ActionKind))
 	}
+
+	if err := e.startAfterStop(ctx, request); err != nil {
+		return err
+	}
+	if err := e.commitCommand(request); err != nil {
+		return lifecycleStepError("validate", err)
+	}
+	return nil
 }
 
 func (e *agentLifecycleExecutor) validateDependencies(request agentLifecycleExecutionRequest) error {
@@ -97,7 +114,7 @@ func (e *agentLifecycleExecutor) validateDependencies(request agentLifecycleExec
 	}
 	switch request.ActionKind {
 	case agentLifecycleActionResetSessionRestart, agentLifecycleActionFullResetRestart:
-		if e.sessionReset == nil {
+		if e.sessions == nil && e.sessionReset == nil {
 			return errors.New("session reset client is not configured")
 		}
 	}
@@ -112,13 +129,103 @@ func (e *agentLifecycleExecutor) validateDependencies(request agentLifecycleExec
 }
 
 func (e *agentLifecycleExecutor) resetSession(ctx context.Context, request agentLifecycleExecutionRequest) error {
-	if e.sessionReset == nil {
+	if e.sessions == nil && e.sessionReset == nil {
 		return lifecycleStepError("reset_session", errors.New("session reset client is not configured"))
+	}
+	if e.sessions != nil {
+		if err := e.sessions.Invalidate(request.OperationID, request.AgentID, request.RuntimeID); err != nil {
+			return lifecycleStepError("reset_session", err)
+		}
+	}
+	if e.sessionReset == nil {
+		return nil
 	}
 	if err := e.sessionReset.ResetAgentRuntimeSession(
 		ctx, request.OperationID, request.AgentID, request.RuntimeID,
 	); err != nil {
 		return lifecycleStepError("reset_session", err)
+	}
+	return nil
+}
+
+func (e *agentLifecycleExecutor) beginCommand(request agentLifecycleExecutionRequest) (bool, error) {
+	if e == nil || e.commands == nil {
+		return false, nil
+	}
+	return e.commands.Begin(request.OperationID, string(request.ActionKind))
+}
+
+func (e *agentLifecycleExecutor) commitCommand(request agentLifecycleExecutionRequest) error {
+	if e == nil || e.commands == nil {
+		return nil
+	}
+	return e.commands.Commit(request.OperationID, string(request.ActionKind))
+}
+
+func (e *agentLifecycleExecutor) stopRuntime(ctx context.Context, request agentLifecycleExecutionRequest) error {
+	if err := e.forceInvalidateRuntime(request); err != nil {
+		return err
+	}
+	if err := e.waitForLeaseRelease(ctx, request); err != nil {
+		return err
+	}
+	if e.runtimes == nil {
+		return nil
+	}
+	if err := e.runtimes.invalidateSession(request.AgentID, request.RuntimeID); err != nil && !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		return lifecycleStepError("restart_runtime", err)
+	}
+	return nil
+}
+
+func (e *agentLifecycleExecutor) waitForLeaseRelease(ctx context.Context, request agentLifecycleExecutionRequest) error {
+	if e == nil || e.runtimes == nil || !e.runtimes.hasLiveLease(request.AgentID, request.RuntimeID) {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline := time.Now().Add(agentLifecycleLeaseReleaseTimeout)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if !e.runtimes.hasLiveLease(request.AgentID, request.RuntimeID) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return lifecycleStepError("restart_runtime", errors.New("provider lease still held after stop"))
+		}
+		select {
+		case <-ctx.Done():
+			return lifecycleStepError("restart_runtime", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *agentLifecycleExecutor) startAfterStop(ctx context.Context, request agentLifecycleExecutionRequest) error {
+	if e.runtimes != nil && e.runtimes.hasLiveLease(request.AgentID, request.RuntimeID) {
+		return lifecycleStepError("start", errors.New("refusing start while process still held"))
+	}
+	if e.starter == nil {
+		return nil
+	}
+	sessionID := ""
+	if e.sessions != nil {
+		got, err := e.sessions.Get(request.AgentID, request.RuntimeID)
+		if err != nil {
+			return lifecycleStepError("start", err)
+		}
+		sessionID = got
+	}
+	if err := e.starter.Start(ctx, agentLifecycleStartRequest{
+		CommandID:   request.OperationID,
+		WorkspaceID: request.WorkspaceID,
+		AgentID:     request.AgentID,
+		RuntimeID:   request.RuntimeID,
+		SessionID:   sessionID,
+	}); err != nil {
+		return lifecycleStepError("start", err)
 	}
 	return nil
 }
@@ -148,6 +255,9 @@ func (e *agentLifecycleExecutor) forceInvalidateRuntime(request agentLifecycleEx
 }
 
 func (e *agentLifecycleExecutor) resetWorkspace(request agentLifecycleExecutionRequest) error {
+	if e.runtimes != nil && e.runtimes.hasLiveLease(request.AgentID, request.RuntimeID) {
+		return lifecycleStepError("remove_workspace", errors.New("refusing workspace removal while provider lease is held"))
+	}
 	layout, err := execenv.ResolveAgentWorkspaceLayout(
 		e.workspacesRoot, request.WorkspaceID, request.AgentID,
 	)
@@ -190,6 +300,48 @@ func validateAgentLifecycleExecutionRequest(request agentLifecycleExecutionReque
 	default:
 		return fmt.Errorf("unsupported action_kind %q", strings.TrimSpace(string(request.ActionKind)))
 	}
+}
+
+// agentLifecycleResumeStarter is the production start step: after stop it
+// refuses a still-held process (that would be a silent rebind) and otherwise
+// leaves the stored session identity for the next acquire.
+type agentLifecycleResumeStarter struct {
+	runtimes *canonicalAgentRuntimePool
+	sessions *agentRuntimeSessionStore
+	start    func(ctx context.Context, req agentLifecycleStartRequest) error
+}
+
+func (d *Daemon) recordProviderSession(agentID, runtimeID, sessionID string) {
+	if d == nil || d.agentLifecycleExecutor == nil || d.agentLifecycleExecutor.sessions == nil {
+		return
+	}
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	sessionID = strings.TrimSpace(sessionID)
+	if agentID == "" || runtimeID == "" || sessionID == "" {
+		return
+	}
+	if err := d.agentLifecycleExecutor.sessions.Put(agentID, runtimeID, sessionID); err != nil && d.logger != nil {
+		d.logger.Warn("record provider session failed", "agent_id", agentID, "error", err)
+	}
+}
+
+func (s agentLifecycleResumeStarter) Start(ctx context.Context, req agentLifecycleStartRequest) error {
+	if s.runtimes != nil && s.runtimes.hasLiveLease(req.AgentID, req.RuntimeID) {
+		return errors.New("refusing start while process still held")
+	}
+	if s.sessions != nil {
+		if err := s.sessions.Put(req.AgentID, req.RuntimeID, req.SessionID); err != nil {
+			return err
+		}
+	}
+	if s.runtimes != nil {
+		s.runtimes.setNextResumeSession(req.AgentID, req.RuntimeID, req.SessionID)
+	}
+	if s.start != nil {
+		return s.start(ctx, req)
+	}
+	return nil
 }
 
 func lifecycleStepError(step string, err error) error {

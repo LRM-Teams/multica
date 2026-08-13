@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
@@ -163,11 +164,12 @@ func TestAgentLifecycleExecutorResetSessionKillsBeforeClearingServerState(t *tes
 	if err != nil {
 		t.Fatalf("newCanonicalAgentRuntimeIdentity: %v", err)
 	}
-	if _, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
 		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
 	backend := probe.backends[0]
@@ -183,14 +185,25 @@ func TestAgentLifecycleExecutorResetSessionKillsBeforeClearingServerState(t *tes
 		runtimes:       pool,
 		sessionReset:   resetter,
 	}
-	execErr := executor.Execute(context.Background(), agentLifecycleExecutionRequest{
-		OperationID: uuid.NewString(),
-		WorkspaceID: uuid.NewString(),
-		AgentID:     agentID,
-		RuntimeID:   runtimeID,
-		ActionKind:  agentLifecycleActionResetSessionRestart,
-	})
-	if execErr != nil {
+	done := make(chan error, 1)
+	go func() {
+		done <- executor.Execute(context.Background(), agentLifecycleExecutionRequest{
+			OperationID: uuid.NewString(),
+			WorkspaceID: uuid.NewString(),
+			AgentID:     agentID,
+			RuntimeID:   runtimeID,
+			ActionKind:  agentLifecycleActionResetSessionRestart,
+		})
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for backend.forceKillCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("ForceKill was never called")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	lease.release(false)
+	if execErr := <-done; execErr != nil {
 		t.Fatalf("reset session restart should interrupt, not fail: %v", execErr)
 	}
 	if got := backend.forceKillCount(); got != 1 {

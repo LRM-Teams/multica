@@ -837,49 +837,50 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                       >
                         {isCanvasChangeProcessMessage(item.message) ? (
                           <ResearchCanvasChangeCard message={item.message} />
-                        ) : null}
-                        <ResearchChatCard
-                          message={item.message}
-                          members={fleet.members}
-                          messages={messages}
-                          currentGoal={session.goal}
-                          roundPending={send.isPending}
-                          clarificationPending={send.isPending}
-                          onClarificationOption={onClarificationOption}
-                          onClarificationForm={onClarificationForm}
-                          onClarificationSkip={onClarificationSkip}
-                          onRoundAgree={(card) =>
-                            postUser(
-                              `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
-                            )
-                          }
-                          onRoundRejectContinue={(card) => {
-                            void api.stopResearchSession(sessionId).then(() => {
-                              void qc.invalidateQueries({
-                                queryKey: researchKeys.snapshot(wsId, sessionId),
+                        ) : (
+                          <ResearchChatCard
+                            message={item.message}
+                            members={fleet.members}
+                            messages={messages}
+                            currentGoal={session.goal}
+                            roundPending={send.isPending}
+                            clarificationPending={send.isPending}
+                            onClarificationOption={onClarificationOption}
+                            onClarificationForm={onClarificationForm}
+                            onClarificationSkip={onClarificationSkip}
+                            onRoundAgree={(card) =>
+                              postUser(
+                                `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
+                              )
+                            }
+                            onRoundRejectContinue={(card) => {
+                              void api.stopResearchSession(sessionId).then(() => {
+                                void qc.invalidateQueries({
+                                  queryKey: researchKeys.snapshot(wsId, sessionId),
+                                });
                               });
-                            });
-                            postUser(
-                              `驳回 continue：请停止调研（Round ${card.round_number}）。`,
-                            );
-                          }}
-                          onRoundRejectStop={(card) =>
-                            postUser(
-                              `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
-                            )
-                          }
-                          onConfirmGoalPatch={(_card, text) =>
-                            postUser(`确认将调研最终目标更新为：${text}`)
-                          }
-                          onEditGoalPatch={(_card, text) =>
-                            postUser(`请按以下文本更新调研最终目标：${text}`)
-                          }
-                          onRejectGoalPatch={(card) =>
-                            postUser(
-                              `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
-                            )
-                          }
-                        />
+                              postUser(
+                                `驳回 continue：请停止调研（Round ${card.round_number}）。`,
+                              );
+                            }}
+                            onRoundRejectStop={(card) =>
+                              postUser(
+                                `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
+                              )
+                            }
+                            onConfirmGoalPatch={(_card, text) =>
+                              postUser(`确认将调研最终目标更新为：${text}`)
+                            }
+                            onEditGoalPatch={(_card, text) =>
+                              postUser(`请按以下文本更新调研最终目标：${text}`)
+                            }
+                            onRejectGoalPatch={(card) =>
+                              postUser(
+                                `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
+                              )
+                            }
+                          />
+                        )}
                       </div>
                     ) : (
                       <ResearchFleetStepCard

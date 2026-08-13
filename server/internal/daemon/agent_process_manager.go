@@ -185,6 +185,42 @@ func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.
 	return m.rememberAcceptanceLocked(request, m.acceptanceLocked(managed, managed.queueState)), nil
 }
 
+// RestoreIdle re-creates a managed launch after the process is gone without a
+// new server startDispatchId. This is Computer-local idle auto-restart, not a
+// wire agent:start command.
+func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, launchID string) error {
+	if m == nil {
+		return errors.New("agent process manager is not configured")
+	}
+	if err := validateAgentProcessStartRequest(agentProcessStartRequest{
+		AgentID: agentID, RuntimeID: runtimeID, LaunchID: launchID, StartDispatchID: launchID,
+	}); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing := m.agents[agentID]; existing != nil && existing.managed {
+		if existing.runtimeID != runtimeID {
+			return errors.New("managed Agent must stop its current Runtime before starting another")
+		}
+		return nil
+	}
+	managed := &managedAgentProcess{
+		agentID: agentID, runtimeID: runtimeID, launchID: launchID, managed: true,
+		readinessPolicy: agentRuntimeReadinessFirstEvent,
+		admitted:        make(chan struct{}), transitions: make(map[string]*openLifecycleTransition),
+	}
+	m.agents[agentID] = managed
+	if !m.acquireLocked(managed) {
+		managed.queueState = protocol.AgentStartQueueQueued
+		m.queued = append(m.queued, managed.agentID)
+		m.enterLocked(managed, "process_residency", "queued")
+		return nil
+	}
+	m.beginProcessLocked(managed)
+	return nil
+}
+
 // WaitForAdmission blocks until the exact managed launch is selected by the
 // Computer-local process policy. A queued start is already accepted by APM and
 // may buffer Messages, but provider startup and active status wait for this

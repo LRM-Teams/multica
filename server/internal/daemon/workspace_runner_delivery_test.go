@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
@@ -29,6 +30,7 @@ func TestWorkspaceRunnerIdleDeliveryAcknowledgesAfterRuntimeAcceptance(t *testin
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	markTestLaunchRunning(t, runner, "agent-1")
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		mode:    canonicalRuntimeResident,
 		backend: &idleMessageFakeRuntime{},
@@ -67,6 +69,7 @@ func TestWorkspaceRunnerDeliveryWriterFailureRetainsDurableConsumedBoundary(t *t
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	markTestLaunchRunning(t, runner, "agent-1")
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	delivery := protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
@@ -106,6 +109,7 @@ func TestWorkspaceRunnerAckWriterFailureDoesNotRepeatProviderAcceptance(t *testi
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	markTestLaunchRunning(t, runner, "agent-1")
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		mode:    canonicalRuntimeResident,
 		backend: &idleMessageFakeRuntime{},
@@ -184,11 +188,208 @@ func TestWorkspaceRunnerUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "launch-1" + "-dispatch"}); err != nil {
 		t.Fatalf("accept managed start: %v", err)
 	}
+	markTestLaunchRunning(t, runner, "agent-1")
 	if err := runner.handleMessageDelivery(context.Background(), delivery, write); err != nil {
 		t.Fatal(err)
 	}
 	if acknowledgements != 1 || handoffs != 1 {
 		t.Fatalf("retry acknowledgements=%d handoffs=%d, want 1/1", acknowledgements, handoffs)
+	}
+}
+
+func TestWorkspaceRunnerConsumedDeliveryAcknowledgesWithoutProcess(t *testing.T) {
+	var handoffs int
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	if err := coordinator.MarkRead("channel:one", 1); err != nil {
+		t.Fatalf("cover seq 1: %v", err)
+	}
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "test-launch-agent-1"}); err != nil {
+		t.Fatalf("remove managed launch: %v", err)
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+	var acknowledgements int
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledgements != 1 || handoffs != 0 {
+		t.Fatalf("consumed delivery acknowledgements=%d handoffs=%d, want 1/0", acknowledgements, handoffs)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 0 {
+		t.Fatalf("consumed delivery left Pending %+v", pending)
+	}
+}
+
+func TestWorkspaceRunnerTerminalFailureDeliveryAcknowledgesAndKeepsPending(t *testing.T) {
+	var handoffs int
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	var activities []protocol.AgentActivityPayload
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
+	runner.failManagedRuntime("agent-1", "runtime-1", "test-launch-agent-1", managedRuntimeFailureRuntime, "provider_turn_failed", time.Now().UTC())
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
+	}
+	var acknowledgements int
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledgements != 1 || handoffs != 0 {
+		t.Fatalf("terminal failure delivery acknowledgements=%d handoffs=%d, want 1/0", acknowledgements, handoffs)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 1 || pending[0].ID != "message-1" {
+		t.Fatalf("Pending after terminal failure = %+v, want message-1", pending)
+	}
+	if len(activities) == 0 || activities[len(activities)-1].Snapshot.ActivityKind != protocol.ActivityKindError {
+		t.Fatalf("terminal failure Activity = %+v, want error", activities)
+	}
+}
+
+func TestWorkspaceRunnerIdleSnapshotDeliveryRestartsAndAcknowledges(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	providerStarts := 0
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		providerStarts++
+		return nil
+	}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}); err != nil {
+		t.Fatalf("start managed Agent: %v", err)
+	}
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}); err != nil {
+		t.Fatalf("drop live process: %v", err)
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
+	}
+	var acknowledgements int
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledgements != 1 {
+		t.Fatalf("idle snapshot acknowledgements=%d, want 1", acknowledgements)
+	}
+	launch, managed := runner.processes.Snapshot("agent-1")
+	if !managed {
+		t.Fatal("idle snapshot delivery did not restart APM launch")
+	}
+	if launch.LaunchID != "launch-1" {
+		t.Fatalf("idle restore launch = %q, want original launch-1", launch.LaunchID)
+	}
+}
+
+func TestWorkspaceRunnerIdleSnapshotCompleteRespectsCancel(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	providerStarts := 0
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		providerStarts++
+		return nil
+	}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}); err != nil {
+		t.Fatalf("start managed Agent: %v", err)
+	}
+	starts := providerStarts
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runner.completeIdleSnapshotStart(ctx, "agent-1", agentResidency{
+		runtimeID: "runtime-1", launchID: "launch-1", startDispatchID: "dispatch-1",
+	})
+	if providerStarts != starts {
+		t.Fatalf("cancelled idle complete started provider %d times, want %d", providerStarts, starts)
+	}
+}
+
+func TestWorkspaceRunnerSpawnCooldownDeliveryAcknowledgesWithoutRestart(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	providerStarts := 0
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		providerStarts++
+		return fmt.Errorf("spawn cursor: executable unavailable")
+	}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}); err == nil {
+		t.Fatal("spawn failure was accepted")
+	}
+	startsAfterFailure := providerStarts
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
+	}
+	var acknowledgements int
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledgements != 1 || providerStarts != startsAfterFailure {
+		t.Fatalf("cooldown delivery acknowledgements=%d provider_starts=%d, want 1/%d", acknowledgements, providerStarts, startsAfterFailure)
 	}
 }
 
@@ -236,6 +437,103 @@ func TestWorkspaceRunnerQueuedAPMAcceptsDeliveryWithoutStartingProvider(t *testi
 	}
 }
 
+func TestWorkspaceRunnerStartingLaunchBuffersDeliveryWithoutHandoff(t *testing.T) {
+	var handoffs int
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return errors.New("provider not ready")
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	launch, ok := runner.processes.Snapshot("agent-1")
+	if !ok || launch.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("starting launch = %+v exists=%v", launch, ok)
+	}
+	providerStarts := 0
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		providerStarts++
+		return errors.New("provider still starting")
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
+	}
+	var acknowledgements int
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledgements != 1 || handoffs != 0 || providerStarts != 0 {
+		t.Fatalf("starting delivery acknowledgements=%d handoffs=%d provider_starts=%d, want 1/0/0", acknowledgements, handoffs, providerStarts)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 1 || pending[0].ID != "message-1" {
+		t.Fatalf("Pending while starting = %+v, want message-1", pending)
+	}
+}
+
+func TestWorkspaceRunnerMissingProcessReportsRestartRequired(t *testing.T) {
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		t.Fatal("missing process must not hand off")
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	var statuses []protocol.AgentStatusPayload
+	var activities []protocol.AgentActivityPayload
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, payload any) error {
+		switch eventType {
+		case protocol.EventAgentStatus:
+			statuses = append(statuses, payload.(protocol.AgentStatusPayload))
+		case protocol.EventAgentActivity:
+			activities = append(activities, payload.(protocol.AgentActivityPayload))
+		}
+		return nil
+	})
+	registerTestRunnerInbox(t, runner, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "test-launch-agent-1"}); err != nil {
+		t.Fatalf("remove managed launch: %v", err)
+	}
+	if err := runner.handleMessageDelivery(context.Background(), protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
+	}, func(string, any) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) == 0 || statuses[len(statuses)-1].Status != protocol.AgentStatusInactive {
+		t.Fatalf("missing-process status = %+v, want inactive", statuses)
+	}
+	if len(activities) == 0 {
+		t.Fatal("missing-process Activity was not published")
+	}
+	last := activities[len(activities)-1].Snapshot
+	if last.ActivityKind != protocol.ActivityKindOffline || last.DetailKind != "runtime_unavailable" {
+		t.Fatalf("missing-process Activity = %+v, want offline/runtime_unavailable", last)
+	}
+	if statuses[len(statuses)-1].LaunchID != "test-launch-agent-1" || last.LaunchID != "test-launch-agent-1" {
+		t.Fatalf("missing-process launch IDs status=%q activity=%q, want test-launch-agent-1", statuses[len(statuses)-1].LaunchID, last.LaunchID)
+	}
+}
+
 func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -249,6 +547,7 @@ func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	markTestLaunchRunning(t, runner, "agent-1")
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		mode:    canonicalRuntimeResident,
 		backend: &idleMessageFakeRuntime{},
@@ -297,6 +596,7 @@ func TestWorkspaceRunnerDeliveryDoesNotAcknowledgeProviderRejection(t *testing.T
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	markTestLaunchRunning(t, runner, "agent-1")
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: &idleMessageFakeRuntime{}}
 	delivery := protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: "dm:one", Seq: 1, DeliveryID: "delivery-1",

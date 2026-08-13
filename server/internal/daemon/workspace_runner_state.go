@@ -83,6 +83,10 @@ type WorkspaceRunner struct {
 	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
 	removeDetachedReminderAgent func(string) error
 
+	residency *agentResidencyStore
+	life      context.Context
+	lifeStop  context.CancelFunc
+
 	connectionMu sync.Mutex
 	connection   *workspaceRunnerConnection
 }
@@ -122,6 +126,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 	if err != nil {
 		return nil, err
 	}
+	life, lifeStop := context.WithCancel(context.Background())
 	return &WorkspaceRunner{
 		config:         config,
 		client:         dependencies.client,
@@ -146,7 +151,22 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		requestReminderSnapshot:     dependencies.requestReminderSnapshot,
 		handleReminderInput:         dependencies.handleReminderInput,
 		removeDetachedReminderAgent: dependencies.removeDetachedReminderAgent,
+		residency:                   newAgentResidencyStore(now),
+		life:                        life,
+		lifeStop:                    lifeStop,
 	}, nil
+}
+
+func (runner *WorkspaceRunner) Close() {
+	if runner == nil {
+		return
+	}
+	if runner.lifeStop != nil {
+		runner.lifeStop()
+	}
+	if runner.residency != nil {
+		runner.residency.close()
+	}
 }
 
 func (runner *WorkspaceRunner) Run(ctx context.Context) {
@@ -154,6 +174,7 @@ func (runner *WorkspaceRunner) Run(ctx context.Context) {
 		return
 	}
 	defer func() {
+		runner.Close()
 		runner.inboxes.Close()
 		runner.processes.Close()
 		runner.activity.Close()

@@ -71,6 +71,7 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 	t.Cleanup(func() {
 		d.detachWorkspaceRunner(runner)
 		runner.releaseConnection(connection)
+		runner.Close()
 		runner.inboxes.Close()
 	})
 	return runner, connection
@@ -96,6 +97,21 @@ func installTestRunnerActivity(t *testing.T, d *Daemon, workspaceID string, prod
 	return runner
 }
 
+func markTestLaunchRunning(t *testing.T, runner *WorkspaceRunner, agentID string) {
+	t.Helper()
+	launch, ok := runner.processes.Snapshot(agentID)
+	if !ok {
+		t.Fatalf("APM launch for %q is missing", agentID)
+	}
+	callback := agentProcessCallback{AgentID: agentID, LaunchID: launch.LaunchID, ProcessInstanceID: "test-process-" + agentID}
+	if err := runner.processes.ProcessSpawned(callback); err != nil {
+		t.Fatalf("ProcessSpawned(%s): %v", agentID, err)
+	}
+	if err := runner.processes.RuntimeReady(callback); err != nil {
+		t.Fatalf("RuntimeReady(%s): %v", agentID, err)
+	}
+}
+
 func registerTestRunnerInbox(t *testing.T, runner *WorkspaceRunner, key InboxKey, runtimeID string, coordinator *MessageCoordinator) {
 	t.Helper()
 	if runner == nil || runner.inboxes == nil {
@@ -113,6 +129,9 @@ func registerTestRunnerInbox(t *testing.T, runner *WorkspaceRunner, key InboxKey
 	if runner.processes != nil {
 		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: key.AgentID, RuntimeID: runtimeID, LaunchID: "test-launch-" + key.AgentID, StartDispatchID: "test-launch-" + key.AgentID + "-dispatch"}); err != nil {
 			t.Fatalf("register test APM launch: %v", err)
+		}
+		if runner.residency != nil {
+			runner.residency.rememberLaunch(key.AgentID, runtimeID, "test-launch-"+key.AgentID, "test-launch-"+key.AgentID+"-dispatch")
 		}
 	}
 }

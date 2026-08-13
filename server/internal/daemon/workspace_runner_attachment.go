@@ -92,6 +92,9 @@ func (runner *WorkspaceRunner) registerManagedAgentStart(payload protocol.Worksp
 		_ = runner.processes.Stop(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
 		return protocol.AgentStartAckPayload{}, fmt.Errorf("prepare managed Agent Inbox: %w", err)
 	}
+	if runner.residency != nil {
+		runner.residency.rememberLaunch(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
+	}
 	return ack, nil
 }
 
@@ -120,6 +123,9 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	if err := runner.activity.SetManaged(status, session); err != nil {
 		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("record managed start: %w", err)
 	}
+	if runner.residency != nil {
+		runner.residency.rememberIdle(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
+	}
 	if coordinator, runtimeID, ok := runner.messageCoordinator(payload.AgentID); ok && runtimeID == payload.RuntimeID {
 		if _, err := coordinator.flushWithResult(ctx, true); err != nil {
 			if runner.logger != nil {
@@ -146,6 +152,9 @@ func (runner *WorkspaceRunner) stopManagedAgent(payload protocol.WorkspaceRunner
 	}
 	if err := runner.processes.Stop(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}); err != nil {
 		return protocol.AgentStatusPayload{}, err
+	}
+	if runner.residency != nil {
+		runner.residency.clear(payload.AgentID)
 	}
 	runner.inboxes.Remove(payload.AgentID, launch.RuntimeID)
 	if runner.activity != nil {

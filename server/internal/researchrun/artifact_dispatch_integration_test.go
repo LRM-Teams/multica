@@ -226,11 +226,12 @@ func TestDispatchFailsWhenPassportLifecycleWithdrawnBeforeDispatch(t *testing.T)
 	}
 	claimID := uuid.NewString()
 	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "withdraw-dispatch-claim", "withdrawn before dispatch")
-	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
-		UPDATE research_artifact_passport
-		SET lifecycle_status = 'withdrawn'
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, claimID)
+	if _, err = (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: uuid.NewString(), WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: claimID, Kind: artifactLifecycleWithdraw, Reason: "withdrawn before dispatch",
+	}); err != nil {
+		t.Fatalf("withdraw before dispatch: %v", err)
+	}
 
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
 	attempt, _, err := store.CreateDispatchIntent(ctx, input)
@@ -257,5 +258,21 @@ func TestDispatchFailsWhenPassportLifecycleWithdrawnBeforeDispatch(t *testing.T)
 	}
 	if included {
 		t.Fatal("withdrawn claim must not appear in manifest entries")
+	}
+	var versions, lifecycleEvents, mutations int
+	if err = pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_version
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_lifecycle_event
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_policy_mutation
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid
+		     AND mutation_kind='lifecycle')
+	`, fixture.workspaceID, run.SessionID, claimID).Scan(&versions, &lifecycleEvents, &mutations); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 1 || lifecycleEvents != 1 || mutations != 1 {
+		t.Fatalf("withdrawal audit versions=%d events=%d mutations=%d want 1/1/1", versions, lifecycleEvents, mutations)
 	}
 }

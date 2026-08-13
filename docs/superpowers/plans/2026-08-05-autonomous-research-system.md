@@ -996,6 +996,13 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-lifecycle-1 证据：`artifactLifecycleModule.Change` 成为 withdrawal/supersession 唯一生产
+seam，调用方只提交带 Operation ID 的意图；PostgreSQL Adapter 在 Run→Passport UUID 顺序
+锁内完成 eligibility CAS、watermark、reciprocal policy mutation 与 lifecycle event 或
+supersession edge。相同 Operation 幂等重放，before/after commit recovery 不重复 ledger；
+新 Context 排除撤回/被替代工件，在途 Result acceptance fail closed，而 Passport Version、
+Decision、event、edge 与 policy history 均保留。§15.24 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

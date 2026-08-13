@@ -367,11 +367,12 @@ func TestAcceptResultRejectsWhenManifestEntryArtifactWithdrawn(t *testing.T) {
 	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
-	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
-		UPDATE research_artifact_passport
-		SET lifecycle_status = 'withdrawn'
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, claimID)
+	if _, err = (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: uuid.NewString(), WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: claimID, Kind: artifactLifecycleWithdraw, Reason: "withdrawn before acceptance",
+	}); err != nil {
+		t.Fatalf("withdraw before acceptance: %v", err)
+	}
 
 	raw, err := json.Marshal(upgradeResultToV5(validV4PlanResult(t)))
 	if err != nil {

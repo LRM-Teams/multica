@@ -133,6 +133,11 @@ verified answer coverage, verification, independent evidence, counterevidence,
 resolution, and diminishing graph novelty. Do not inflate it by minting new
 keys for duplicate content or by self-reporting coverage.
 
+An Inbox delivery that expires before any worker claims it is terminal only for
+that delivery. The server preserves the Research Task's bounded attempt budget
+and re-resolves an available execution target; do not duplicate the Task or
+change its method to recover from this delivery failure.
+
 Every `required_capability` in a proposed task must exactly match an active
 fleet role. When a real specialty is missing, the lead must hire it, optimize
 its instructions, activate it, and only then submit or retry the task graph.

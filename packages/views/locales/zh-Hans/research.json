@@ -1047,6 +1047,8 @@
     "goal_panel": {
       "title": "目标版本",
       "version": "v{{version}}",
+      "round": "第 {{round}} 轮",
+      "round_with_budget": "第 {{round}} / {{budget}} 轮",
       "current": "当前",
       "impact": "{{totalNodes}} 个节点中有 {{labeledNodes}} 个已标注目标版本"
     },

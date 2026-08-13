@@ -325,9 +325,6 @@ func loadAttemptManifestSummaryPool(
 }
 
 func filterRunSnapshotByManifest(snapshot RunSnapshot, allowed map[string]struct{}) RunSnapshot {
-	if len(allowed) == 0 {
-		return snapshot
-	}
 	filtered := snapshot
 	filtered.Sources = filterSourcesByManifest(snapshot.Sources, allowed)
 	filtered.Observations = filterObservationsByManifest(snapshot.Observations, allowed)
@@ -495,7 +492,6 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 		    AND (
 		      e.eligibility_revision <> p.eligibility_revision
 		      OR p.lifecycle_status NOT IN ('registered', 'accepted')
-		      OR v.content_hash <> convert_from(e.representation_bytes, 'UTF8')
 		    )
 		)
 	`, workspaceID, sessionID, attemptID).Scan(&stale)
@@ -504,6 +500,31 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 	}
 	if stale {
 		return fmt.Errorf("%w: acceptance manifest entry stale", ErrInvalidTransition)
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT e.representation_bytes, e.representation_hash
+		FROM research_artifact_context_entry e
+		JOIN research_artifact_context_manifest m
+		  ON (m.workspace_id, m.session_id, m.id) = (e.workspace_id, e.session_id, e.manifest_id)
+		WHERE m.workspace_id = $1::uuid AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var representation []byte
+		var storedHash string
+		if err = rows.Scan(&representation, &storedHash); err != nil {
+			return err
+		}
+		if contentHashFromPayload(representation) != storedHash {
+			return fmt.Errorf("%w: acceptance manifest representation hash mismatch", ErrInvalidTransition)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
 	}
 	return nil
 }

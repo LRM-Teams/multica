@@ -285,6 +285,9 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	authorized.NormalGrantRevision = plan.NormalGrantRevision
 	authorized.PolicyWatermark = plan.PolicyWatermark
 	plan = authorized
+	if err = freezeEvidenceRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
+		return dispatchManifestPlan{}, err
+	}
 	plan.ManifestHash = hashDispatchManifest(dispatchManifestHashInput{
 		WorkspaceID:         in.WorkspaceID,
 		SessionID:           in.SessionID,

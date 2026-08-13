@@ -97,11 +97,10 @@ type ResidentMessageInput interface {
 	AcceptMessageBatch(context.Context, []ResidentMessage) (ResidentMessageAcceptance, error)
 }
 
-// ResidentMessagePreparation is an optional pre-input gate for resident
-// backends that must finish provider maintenance, such as context compaction,
-// before native Message acceptance may begin. The daemon calls this with the
-// parent handoff context before adding its bounded native-acceptance timeout.
-// emit reports normalized runtime lifecycle events while the gate is active.
+// ResidentMessagePreparation is an optional pre-input hook on the parent
+// handoff context, before the daemon adds its bounded native-acceptance
+// timeout. It must not run context compaction: compaction belongs after a
+// completed turn, never on the Message delivery path.
 type ResidentMessagePreparation interface {
 	PrepareMessageInput(context.Context, func(Message)) error
 }
@@ -372,13 +371,14 @@ type TokenUsage struct {
 
 // Result is the final outcome after an agent session completes.
 type Result struct {
-	Status       string // "completed", "failed", "aborted", "timeout", "cancelled"
-	Output       string // accumulated text output
-	Error        string // error message if failed
-	DurationMs   int64
-	SessionID    string
-	Usage        map[string]TokenUsage // keyed by model name
-	RuntimeStats *RuntimeTokenStats    // provider-native current-session telemetry when available
+	Status          string // "completed", "failed", "aborted", "timeout", "cancelled"
+	Output          string // accumulated text output
+	Error           string // error message if failed
+	DurationMs      int64
+	SessionID       string
+	Usage           map[string]TokenUsage // keyed by model name
+	RuntimeStats    *RuntimeTokenStats    // provider-native current-session telemetry when available
+	HadSemanticWork bool                  // thinking, tools, or visible text — not compaction-only
 }
 
 // RuntimeTokenStats is provider-native token/cost/context telemetry for the

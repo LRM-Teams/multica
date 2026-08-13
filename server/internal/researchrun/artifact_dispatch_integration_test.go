@@ -2,6 +2,7 @@ package researchrun
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"sort"
 	"testing"
@@ -107,7 +108,7 @@ func TestManifestEntryOrdinalFollowsCanonicalKindAndIDOrder(t *testing.T) {
 	}
 }
 
-func TestManifestEntryRepresentationBytesMatchContentHash(t *testing.T) {
+func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -143,7 +144,7 @@ func TestManifestEntryRepresentationBytesMatchContentHash(t *testing.T) {
 	}
 
 	rows, err := pool.Query(ctx, `
-		SELECT encode(e.representation_bytes, 'escape'), v.content_hash, e.representation_hash
+		SELECT e.representation_bytes, v.content_hash, e.representation_hash, p.entity_kind
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m
 		  ON m.workspace_id = e.workspace_id
@@ -153,6 +154,10 @@ func TestManifestEntryRepresentationBytesMatchContentHash(t *testing.T) {
 		  ON v.workspace_id = e.workspace_id
 		 AND v.session_id = e.session_id
 		 AND v.id = e.artifact_version_id
+		JOIN research_artifact_passport p
+		  ON p.workspace_id = v.workspace_id
+		 AND p.session_id = v.session_id
+		 AND p.id = v.artifact_id
 		WHERE m.workspace_id = $1::uuid
 		  AND m.session_id = $2::uuid
 		  AND m.attempt_id = $3::uuid
@@ -165,14 +170,20 @@ func TestManifestEntryRepresentationBytesMatchContentHash(t *testing.T) {
 	found := false
 	for rows.Next() {
 		found = true
-		var reprBytes, contentHash, reprHash string
-		if err = rows.Scan(&reprBytes, &contentHash, &reprHash); err != nil {
+		var reprBytes []byte
+		var contentHash, reprHash, kind string
+		if err = rows.Scan(&reprBytes, &contentHash, &reprHash, &kind); err != nil {
 			t.Fatal(err)
 		}
-		if reprBytes != contentHash {
-			t.Fatalf("representation_bytes=%q content_hash=%q", reprBytes, contentHash)
+		if kind == string(ArtifactKindSourceSnapshot) || kind == string(ArtifactKindObservation) || kind == string(ArtifactKindClaim) {
+			var decoded map[string]any
+			if err = json.Unmarshal(reprBytes, &decoded); err != nil || decoded["id"] == "" {
+				t.Fatalf("%s representation is not frozen wire JSON: %q err=%v", kind, reprBytes, err)
+			}
+		} else if string(reprBytes) != contentHash {
+			t.Fatalf("legacy %s representation_bytes=%q content_hash=%q", kind, reprBytes, contentHash)
 		}
-		wantHash := contentHashFromPayload([]byte(contentHash))
+		wantHash := contentHashFromPayload(reprBytes)
 		if reprHash != wantHash {
 			t.Fatalf("representation_hash=%q want=%q", reprHash, wantHash)
 		}

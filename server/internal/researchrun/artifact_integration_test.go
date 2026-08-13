@@ -177,6 +177,18 @@ func TestFilterRunSnapshotByManifest(t *testing.T) {
 	}
 }
 
+func TestFilterRunSnapshotByEmptyManifestFailsClosed(t *testing.T) {
+	snapshot := RunSnapshot{
+		Sources:      []SourceSnapshotView{{ID: "source"}},
+		Observations: []Observation{{ID: "observation"}},
+		Claims:       []Claim{{ID: "claim"}},
+	}
+	filtered := filterRunSnapshotByManifest(snapshot, map[string]struct{}{})
+	if len(filtered.Sources) != 0 || len(filtered.Observations) != 0 || len(filtered.Claims) != 0 {
+		t.Fatalf("empty manifest exposed evidence: %+v", filtered)
+	}
+}
+
 func TestCompareShadowManifestError(t *testing.T) {
 	live := map[string]struct{}{"a": {}, "b": {}}
 	manifest := manifestArtifactSet{

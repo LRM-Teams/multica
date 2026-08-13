@@ -1028,6 +1028,7 @@ surface 矩阵仍未完成。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。
 - [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。
 - [ ] 后续任务 Context 读取跨 Agent 的最新 Integration Snapshot。
+  - [x] G6a-context：`integration_context.go` 冻结 `research-integration-context-v1` 选择边界；只在当前 workspace/session、Goal/Plan 和 Manifest Event/State 水位内选择最新跨 Agent Snapshot 精确 Artifact Version，并把 Passport、content/input/canonical-state hash 与贡献 Agent 集合纳入审计指纹。最新 Snapshot stale、superseded、无权或 evaluation-private 时整体 omission，禁止回退到较旧结论；同一最新位置出现多个身份则 fail closed。持久表查询、representation 冻结与 `TaskContextForAttempt` 接线仍待 G6b。
 
 退出条件：两个以上 Agent 的结果会产生可引用的多层 Insight、更新 Frontier 并生成组合后的新工作；输入失效会使祖先 Insight 过期；Integrator prose 不能绕过服务端状态转换。
 

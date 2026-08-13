@@ -175,10 +175,16 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 		if err = rows.Scan(&reprBytes, &contentHash, &reprHash, &kind); err != nil {
 			t.Fatal(err)
 		}
-		if kind == string(ArtifactKindSourceSnapshot) || kind == string(ArtifactKindObservation) || kind == string(ArtifactKindClaim) {
+		if kind == string(ArtifactKindRunSession) || kind == string(ArtifactKindSourceSnapshot) || kind == string(ArtifactKindObservation) || kind == string(ArtifactKindClaim) {
 			var decoded map[string]any
-			if err = json.Unmarshal(reprBytes, &decoded); err != nil || decoded["id"] == "" {
+			if err = json.Unmarshal(reprBytes, &decoded); err != nil {
 				t.Fatalf("%s representation is not frozen wire JSON: %q err=%v", kind, reprBytes, err)
+			}
+			if kind == string(ArtifactKindRunSession) && decoded["session_id"] != run.SessionID {
+				t.Fatalf("run session representation session_id=%v want=%s", decoded["session_id"], run.SessionID)
+			}
+			if kind != string(ArtifactKindRunSession) && decoded["id"] == "" {
+				t.Fatalf("%s representation has no id: %q", kind, reprBytes)
 			}
 		} else if string(reprBytes) != contentHash {
 			t.Fatalf("legacy %s representation_bytes=%q content_hash=%q", kind, reprBytes, contentHash)
@@ -193,6 +199,23 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected manifest entries with representation bytes")
+	}
+
+	if _, err = pool.Exec(ctx, `UPDATE research_session SET title='live-mutated-title', goal='live-mutated-goal' WHERE workspace_id=$1::uuid AND id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_fleet_member SET status='archived' WHERE workspace_id=$1::uuid AND fleet_id=$2::uuid AND agent_id=$3::uuid`, fixture.workspaceID, fixture.fleetID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt: %v", err)
+	}
+	if frozen.Run.Title != "Representation bytes" || frozen.Run.Goal != "Representation bytes" {
+		t.Fatalf("task-bound Run used live mutation: title=%q goal=%q", frozen.Run.Title, frozen.Run.Goal)
+	}
+	if len(frozen.PrincipalHeader) == 0 || frozen.PrincipalHeader[0].Status == "archived" {
+		t.Fatalf("task-bound principal header used live roster: %+v", frozen.PrincipalHeader)
 	}
 }
 

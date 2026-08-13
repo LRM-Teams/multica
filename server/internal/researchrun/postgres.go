@@ -710,6 +710,15 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		return RunSnapshot{}, fmt.Errorf("%w: attempt has no frozen artifact manifest", ErrInvalidTransition)
 	}
 	filtered := filterRunSnapshotByManifest(snapshot, allowed)
+	frozenRun, err := loadFrozenRunRepresentationPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.Run = frozenRun
+	filtered.PrincipalHeader, err = loadManifestPrincipalHeaderPool(ctx, s, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
 	privateEvaluations, err := loadFrozenEvaluationPrivatePool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return RunSnapshot{}, err

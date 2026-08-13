@@ -1,5 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeResearchPresenceMap } from "./queries";
+import type { TypedGraphResponse } from "./graph-typed";
+import {
+  nextTypedGraphPageOffset,
+  normalizeResearchPresenceMap,
+} from "./queries";
+
+function graphPage(
+  count: number,
+  totalNodeCount: number | null,
+): TypedGraphResponse {
+  return {
+    session_id: "s1",
+    graph_version: 1,
+    total_node_count: totalNodeCount,
+    nodes: Array.from({ length: count }, (_, index) => ({
+      id: `n-${index}`,
+    })) as TypedGraphResponse["nodes"],
+    edges: [],
+    clusters: [],
+    lineage: {
+      derived: {},
+      merged: {},
+      superseded: {},
+      restarted: {},
+      invalidated: {},
+      supersedes: {},
+    },
+  };
+}
 
 describe("normalizeResearchPresenceMap", () => {
   it("keeps the full v2 roster including idle workers and location fields", () => {
@@ -32,5 +60,38 @@ describe("normalizeResearchPresenceMap", () => {
     expect(normalizeResearchPresenceMap({ worker: { phase: "future" } }).worker).toEqual(
       expect.objectContaining({ phase: "idle", activity: "", updatedAt: 42, nodeId: null }),
     );
+  });
+});
+
+describe("nextTypedGraphPageOffset", () => {
+  it("uses the canonical total when the server provides it", () => {
+    const first = graphPage(500, 750);
+    expect(nextTypedGraphPageOffset(first, [first])).toBe(500);
+
+    const second = graphPage(250, 750);
+    expect(nextTypedGraphPageOffset(second, [first, second])).toBeUndefined();
+  });
+
+  it("continues after a full compatibility page without a total", () => {
+    const full = graphPage(500, null);
+    expect(nextTypedGraphPageOffset(full, [full])).toBe(500);
+  });
+
+  it("stops after a short compatibility page without a total", () => {
+    const full = graphPage(500, null);
+    const short = graphPage(37, null);
+    expect(nextTypedGraphPageOffset(short, [full, short])).toBeUndefined();
+  });
+
+  it("retains a known total when a later page omits it", () => {
+    const first = graphPage(500, 1200);
+    const second = graphPage(500, null);
+    expect(nextTypedGraphPageOffset(second, [first, second])).toBe(1000);
+  });
+
+  it("uses the latest known total when the graph shrinks", () => {
+    const first = graphPage(500, 1200);
+    const second = graphPage(300, 800);
+    expect(nextTypedGraphPageOffset(second, [first, second])).toBeUndefined();
   });
 });

@@ -1,5 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import type { TypedGraphResponse } from "./graph-typed";
 
 export type ResearchPresencePhase =
   | "idle"
@@ -81,6 +82,29 @@ export type ResearchGraphTypedPagination = {
   limit?: number;
   offset?: number;
 };
+
+/**
+ * Resolve the next offset without assuming every compatible server already
+ * emits `total_node_count`. A full page means another page may exist; a short
+ * page is the terminal signal for older servers.
+ */
+export function nextTypedGraphPageOffset(
+  lastPage: TypedGraphResponse,
+  allPages: readonly TypedGraphResponse[],
+  pageLimit = RESEARCH_TYPED_GRAPH_PAGE_LIMIT,
+): number | undefined {
+  const loaded = allPages.reduce(
+    (count, page) => count + (page.nodes?.length ?? 0),
+    0,
+  );
+  const latestKnownTotal = [...allPages]
+    .reverse()
+    .find((page) => page.total_node_count != null)?.total_node_count;
+  if (latestKnownTotal != null) {
+    return loaded < latestKnownTotal ? loaded : undefined;
+  }
+  return (lastPage.nodes?.length ?? 0) >= pageLimit ? loaded : undefined;
+}
 
 /** Normalize GET /presence wire map (snake updated_at) → ResearchPresenceMap. */
 export function normalizeResearchPresenceMap(
@@ -203,12 +227,8 @@ export function researchGraphTypedInfiniteOptions(wsId: string, sessionId: strin
         offset: pageParam,
       }),
     initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages) => {
-      const loaded = allPages.reduce((count, page) => count + (page.nodes?.length ?? 0), 0);
-      const total = lastPage.total_node_count;
-      if (total != null && loaded < total) return loaded;
-      return undefined;
-    },
+    getNextPageParam: (lastPage, allPages) =>
+      nextTypedGraphPageOffset(lastPage, allPages),
     enabled: !!wsId && !!sessionId,
   });
 }

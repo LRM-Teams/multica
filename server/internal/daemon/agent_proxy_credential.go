@@ -19,8 +19,12 @@ import (
 )
 
 const (
-	AgentProxyURLEnv              = "MULTICA_AGENT_PROXY_URL"
-	AgentProxyTokenFileEnv        = "MULTICA_AGENT_PROXY_TOKEN_FILE"
+	AgentProxyURLEnv       = "MULTICA_AGENT_PROXY_URL"
+	AgentProxyTokenFileEnv = "MULTICA_AGENT_PROXY_TOKEN_FILE"
+	// AgentProxyCLIWrapperEnv carries only the launch-pinned wrapper path, not
+	// credentials. The real CLI uses it to recover when a login shell rebuilds
+	// PATH and would otherwise bypass the authenticated wrapper.
+	AgentProxyCLIWrapperEnv       = "MULTICA_AGENT_CLI_WRAPPER"
 	AgentProxyTokenHeader         = "X-Multica-Agent-Proxy-Token"
 	agentProxyCredentialTokenName = "token"
 )
@@ -193,6 +197,7 @@ type agentProxyCLIWrapperConfig struct {
 func agentProxyCLIWrapperBody(config agentProxyCLIWrapperConfig) string {
 	if runtime.GOOS == "windows" {
 		return "@echo off\r\n" +
+			"set \"" + AgentProxyCLIWrapperEnv + "=\"\r\n" +
 			"set \"MULTICA_AGENT_ID=" + config.AgentID + "\"\r\n" +
 			"set \"MULTICA_WORKSPACE_ID=" + config.WorkspaceID + "\"\r\n" +
 			"set \"" + AgentProxyURLEnv + "=" + config.ProxyURL + "\"\r\n" +
@@ -201,6 +206,7 @@ func agentProxyCLIWrapperBody(config agentProxyCLIWrapperConfig) string {
 			"exit /b %ERRORLEVEL%\r\n"
 	}
 	return "#!/bin/sh\n" +
+		"unset " + AgentProxyCLIWrapperEnv + "\n" +
 		"export MULTICA_AGENT_ID=" + shellQuote(config.AgentID) + "\n" +
 		"export MULTICA_WORKSPACE_ID=" + shellQuote(config.WorkspaceID) + "\n" +
 		"export " + AgentProxyURLEnv + "=" + shellQuote(config.ProxyURL) + "\n" +

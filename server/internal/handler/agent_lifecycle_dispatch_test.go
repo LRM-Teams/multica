@@ -92,6 +92,45 @@ func TestInMemoryAgentLifecycleDispatchStore_PopAllPendingDeliversEveryAgentOnTh
 	}
 }
 
+// A heartbeat response is not a delivery acknowledgement: the server can
+// claim the dispatch and then lose the HTTP/WS response before the daemon sees
+// it. Keep offering the same operation after a short lease until the daemon's
+// terminal result explicitly completes the dispatch.
+func TestInMemoryAgentLifecycleDispatchStore_RedeliversClaimLostWithHeartbeatResponse(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryAgentLifecycleDispatchStore(nil)
+
+	if _, err := store.Create(ctx, "op-lost", "agent-a", "runtime-a", "workspace-a", "restart"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	first, err := store.PopAllPending(ctx, "runtime-a")
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first PopAllPending = %+v, %v; want one dispatch", first, err)
+	}
+
+	store.mu.Lock()
+	old := time.Now().Add(-(agentLifecycleDispatchDeliveryLease + time.Second))
+	store.dispatches["op-lost"].DeliveredAt = &old
+	store.mu.Unlock()
+
+	has, err := store.HasPending(ctx, "runtime-a")
+	if err != nil || !has {
+		t.Fatalf("HasPending after expired delivery lease = %v, %v; want true", has, err)
+	}
+	redelivered, err := store.PopAllPending(ctx, "runtime-a")
+	if err != nil || len(redelivered) != 1 || redelivered[0].OperationID != "op-lost" {
+		t.Fatalf("redelivery = %+v, %v; want op-lost", redelivered, err)
+	}
+
+	if err := store.Complete(ctx, "op-lost", "runtime-a"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	has, err = store.HasPending(ctx, "runtime-a")
+	if err != nil || has {
+		t.Fatalf("HasPending after Complete = %v, %v; want false", has, err)
+	}
+}
+
 func TestInMemoryAgentLifecycleDispatchStore_PendingTimesOut(t *testing.T) {
 	ctx := context.Background()
 	store := NewInMemoryAgentLifecycleDispatchStore(nil)
@@ -113,18 +152,13 @@ func TestInMemoryAgentLifecycleDispatchStore_PendingTimesOut(t *testing.T) {
 }
 
 // TestAgentLifecycleDispatchTimeoutFailsTheOperation pins the fix Parker/Alice
-// asked for in #52 review: a dispatch that never gets claimed (the daemon
-// never heartbeats, or the runtime dies in the window between the create-time
-// online check and the next heartbeat) must not leave its
+// asked for in #52 review: a dispatch whose claimed heartbeat response is
+// lost, followed by a daemon that never returns, must not leave its
 // agent_lifecycle_operation row stuck at "running" forever — that permanently
 // overlays the agent's health as "restarting" with no way out.
 //
-// Deliberately never calls HasPending/PopAllPending for this dispatch's
-// runtime — that's exactly the production failure mode Alice's review round
-// caught: those two only evaluate a runtime's own dispatches when that
-// runtime's own daemon heartbeats, so a daemon that dies and never comes
-// back would never have its stuck dispatch evaluated at all. Only
-// SweepTimedOut (the heartbeat-independent trigger) is exercised here.
+// After the first claim, only SweepTimedOut (the heartbeat-independent
+// trigger) is exercised: the runtime can disappear before any later heartbeat.
 func TestAgentLifecycleDispatchTimeoutFailsTheOperation(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -148,6 +182,11 @@ func TestAgentLifecycleDispatchTimeoutFailsTheOperation(t *testing.T) {
 	ctx := context.Background()
 	if _, err := store.Create(ctx, operation.ID, agentID, runtimeID, testWorkspaceID, string(agentLifecycleRestart)); err != nil {
 		t.Fatalf("create dispatch: %v", err)
+	}
+	// Claim once to model the exact lost-heartbeat-response window: the server
+	// prepared the dispatch in an ack, but the daemon never received it.
+	if claimed, err := store.PopAllPending(ctx, runtimeID); err != nil || len(claimed) != 1 {
+		t.Fatalf("initial claim = %+v, %v; want one delivered dispatch", claimed, err)
 	}
 	store.mu.Lock()
 	store.dispatches[operation.ID].CreatedAt = time.Now().Add(-(agentLifecycleDispatchPendingTimeout + time.Second))

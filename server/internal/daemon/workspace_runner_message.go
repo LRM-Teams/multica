@@ -172,7 +172,11 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
 		))
 		if runner.logger != nil {
-			runner.logger.Warn("Workspace Runner Agent Message handoff incomplete before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+			if deferred {
+				runner.logger.Debug("Workspace Runner Agent Message handoff deferred before delivery acknowledgement", "reason", "runtime_busy", "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+			} else {
+				runner.logger.Warn("Workspace Runner Agent Message handoff incomplete before delivery acknowledgement", "error", err, "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+			}
 		}
 		if deferred {
 			return result, nil
@@ -290,9 +294,13 @@ func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, ag
 		AgentID: agentID, RuntimeID: res.runtimeID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
 	}
 	ack := protocol.AgentStartAckPayload{AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID}
-	if _, _, err := runner.completeManagedAgentStart(ctx, start, ack); err != nil && runner.logger != nil && ctx.Err() == nil {
-		runner.logger.Warn("Workspace Runner idle snapshot start failed", "agent_id", agentID, "runtime_id", res.runtimeID, "launch_id", res.launchID, "error", err)
+	if _, _, err := runner.completeManagedAgentStart(ctx, start, ack); err != nil {
+		if runner.logger != nil && ctx.Err() == nil {
+			runner.logger.Warn("Workspace Runner idle snapshot start failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "provider_start_failed", "failed", err)...)
+		}
+		return
 	}
+	runner.publishManagedAgentStartActivity(agentID, res.runtimeID)
 }
 
 func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {

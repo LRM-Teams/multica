@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -359,6 +360,46 @@ func TestWorkspaceRunnerIdleSnapshotCompleteRespectsCancel(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerIdleSnapshotFailureLogsLifecycleIdentity(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := New(Config{DaemonID: "computer-1", WorkspacesRoot: t.TempDir()}, logger)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}); err != nil {
+		t.Fatalf("seed managed Agent: %v", err)
+	}
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}); err != nil {
+		t.Fatalf("stop seed launch: %v", err)
+	}
+	res := agentResidency{runtimeID: "runtime-1", launchID: "launch-1", startDispatchID: "dispatch-1"}
+	if err := runner.restartFromIdleSnapshot("agent-1", res); err != nil {
+		t.Fatalf("restore idle snapshot: %v", err)
+	}
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		return errors.New("provider unavailable")
+	}
+	logs.Reset()
+
+	runner.completeIdleSnapshotStart(context.Background(), "agent-1", res)
+
+	got := logs.String()
+	for _, want := range []string{
+		"computer_id=computer-1", "workspace_id=workspace-1", "agent_id=agent-1",
+		"runtime_id=runtime-1", "launch_id=launch-1", "start_dispatch_id=dispatch-1",
+		"queue_state=starting", "reason=provider_start_failed", "outcome=failed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("idle snapshot failure log missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestWorkspaceRunnerSpawnCooldownDeliveryAcknowledgesWithoutRestart(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	d.mu.Lock()
@@ -569,7 +610,9 @@ func TestWorkspaceRunnerMissingProcessReportsRestartRequired(t *testing.T) {
 }
 
 func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
-	d := New(Config{}, nil)
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := New(Config{}, logger)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
 	}, nil)
@@ -608,6 +651,9 @@ func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	coordinator.mu.Unlock()
 	if len(pending) != 1 || pending[0].ID != "message-1" {
 		t.Fatalf("Pending after busy Runtime = %+v, want exactly message-1", pending)
+	}
+	if got := logs.String(); strings.Contains(got, "level=WARN") || !strings.Contains(got, "level=DEBUG") || !strings.Contains(got, "outcome=deferred") {
+		t.Fatalf("expected busy delivery to be a deferred debug event, got logs: %s", got)
 	}
 }
 

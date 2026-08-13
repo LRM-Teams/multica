@@ -120,6 +120,9 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	}
 	wrapperDir := strings.Split(config.Env["PATH"], string(os.PathListSeparator))[0]
 	wrapperPath := filepath.Join(wrapperDir, turntransport.CliWrapperFilename())
+	if got := config.Env[AgentProxyCLIWrapperEnv]; got != wrapperPath {
+		t.Fatalf("resident Agent Proxy wrapper forward path = %q, want %q", got, wrapperPath)
+	}
 	wrapper, err := os.ReadFile(wrapperPath)
 	if err != nil {
 		t.Fatalf("read resident Agent Proxy wrapper: %v", err)
@@ -171,6 +174,49 @@ func (p *residentProcessStartProbe) EnsureResidentProcess(context.Context) error
 
 func (p *residentProcessStartProbe) RuntimeAlive() (bool, bool) {
 	return p.err == nil && p.starts > 0, true
+}
+
+type busyResidentProcessStartProbe struct {
+	residentProcessStartProbe
+	done chan error
+}
+
+func (p *busyResidentProcessStartProbe) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	messages := make(chan agent.Message)
+	close(messages)
+	return agent.ResidentMessageAcceptance{Done: p.done, Messages: messages}, nil
+}
+
+func TestEnsureResidentMessageRuntimeSpawnFailureRetiresBusyBackend(t *testing.T) {
+	const agentID, runtimeID = "agent-1", "runtime-1"
+	backend := &busyResidentProcessStartProbe{
+		residentProcessStartProbe: residentProcessStartProbe{err: errors.New("codex app-server did not start")},
+		done:                      make(chan error, 1),
+	}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
+	d := &Daemon{canonicalRuntimes: pool}
+
+	if err := pool.handoffIdleMessages(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
+		ID: "message-1", Target: "dm:one", Seq: 1, Content: "hello",
+	}}, nil, nil, nil, nil); err != nil {
+		t.Fatalf("start resident turn: %v", err)
+	}
+	if err := d.ensureResidentMessageRuntime(context.Background(), agentID, runtimeID, nil); err == nil {
+		t.Fatal("spawn failure was accepted while the prior resident turn was active")
+	}
+	if got := backend.forceKillCount(); got != 1 {
+		t.Fatalf("failed resident cleanup force-kill calls = %d, want 1", got)
+	}
+
+	backend.done <- errors.New(agent.AgentForceKilledMarker)
+	deadline := time.Now().Add(time.Second)
+	for pool.hasResidentBackend(agentID, runtimeID) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if pool.hasResidentBackend(agentID, runtimeID) {
+		t.Fatal("failed resident backend remained registered after the active turn drained")
+	}
 }
 
 func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
@@ -418,6 +464,10 @@ func TestWorkspaceRunnerStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	}
 	if starting != 1 {
 		t.Fatalf("Starting Activity = %d, want 1 after admission", starting)
+	}
+	last := activities[len(activities)-1].Snapshot
+	if last.ActivityKind != protocol.ActivityKindOnline || last.DetailKind != "idle" {
+		t.Fatalf("Activity after resident readiness = %q/%q, want online/idle", last.ActivityKind, last.DetailKind)
 	}
 }
 

@@ -5,20 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// Redis-backed implementation of AgentLifecycleDispatchStore. Same wire
-// layout and claim discipline as AgentRestartStore/RedisLocalSkillImportStore's
-// PopPendingBatch: namespaced keys, a ZSET-backed pending queue per runtime,
-// atomic per-item claim via the shared claimPendingScript.
+// Redis-backed implementation of AgentLifecycleDispatchStore. It uses
+// namespaced records plus a ZSET-backed delivery schedule per runtime. Unlike
+// one-shot request queues, a heartbeat claim only leases a lifecycle dispatch;
+// the daemon's terminal result is the acknowledgement that removes it.
 //
 // Key layout:
 //
 //	mul:agent_lifecycle_dispatch:req:<operation_id>     → JSON-encoded AgentLifecycleDispatch, TTL = retention
-//	mul:agent_lifecycle_dispatch:pending:<runtime_id>   → ZSET { member = operation_id, score = created_at UnixNano }
+//	mul:agent_lifecycle_dispatch:pending:<runtime_id>   → ZSET { member = operation_id, score = next_delivery_at UnixNano }
 const (
 	agentLifecycleDispatchKeyPrefix     = "mul:agent_lifecycle_dispatch:req:"
 	agentLifecycleDispatchPendingPrefix = "mul:agent_lifecycle_dispatch:pending:"
@@ -27,6 +28,41 @@ const (
 	// realistically share one runtime.
 	agentLifecycleDispatchBatchLimit = 50
 )
+
+// leaseAgentLifecycleDispatchScript atomically moves one due dispatch's score
+// to its next delivery lease while persisting the delivered attempt. Keeping
+// the member in the ZSET is intentional: a heartbeat response is not an ack.
+var leaseAgentLifecycleDispatchScript = redis.NewScript(`
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if not score or tonumber(score) > tonumber(ARGV[4]) then
+    return 0
+end
+if redis.call('EXISTS', KEYS[2]) == 0 then
+    redis.call('ZREM', KEYS[1], ARGV[1])
+    return 0
+end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', tonumber(ARGV[3]))
+redis.call('ZADD', KEYS[1], tonumber(ARGV[5]), ARGV[1])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[6]))
+return 1
+`)
+
+var completeAgentLifecycleDispatchScript = redis.NewScript(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+    redis.call('ZREM', KEYS[2], ARGV[1])
+    return 0
+end
+local dispatch = cjson.decode(raw)
+if dispatch.runtime_id ~= ARGV[2] then
+    return -1
+end
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], ARGV[1])
+return 1
+`)
+
+func redisScore(at time.Time) float64 { return float64(at.UnixNano()) }
 
 func agentLifecycleDispatchKey(operationID string) string {
 	return agentLifecycleDispatchKeyPrefix + operationID
@@ -69,7 +105,7 @@ func (s *RedisAgentLifecycleDispatchStore) Create(ctx context.Context, operation
 	pipe := s.rdb.TxPipeline()
 	pipe.Set(ctx, agentLifecycleDispatchKey(operationID), data, agentLifecycleDispatchStoreRetention)
 	pipe.ZAdd(ctx, agentLifecycleDispatchPendingKey(runtimeID), redis.Z{
-		Score:  float64(now.UnixNano()),
+		Score:  redisScore(now),
 		Member: operationID,
 	})
 	pipe.Expire(ctx, agentLifecycleDispatchPendingKey(runtimeID), agentLifecycleDispatchStoreRetention*2)
@@ -111,12 +147,11 @@ func (s *RedisAgentLifecycleDispatchStore) persistDispatch(ctx context.Context, 
 	return nil
 }
 
-// HasPending is a cheap read-only ZCARD probe used by the heartbeat hot path
-// to decide whether to invoke the side-effecting PopAllPending.
+// HasPending counts only attempts whose delivery lease is due.
 func (s *RedisAgentLifecycleDispatchStore) HasPending(ctx context.Context, runtimeID string) (bool, error) {
-	cnt, err := s.rdb.ZCard(ctx, agentLifecycleDispatchPendingKey(runtimeID)).Result()
+	cnt, err := s.rdb.ZCount(ctx, agentLifecycleDispatchPendingKey(runtimeID), "-inf", strconv.FormatInt(time.Now().UnixNano(), 10)).Result()
 	if err != nil {
-		return false, fmt.Errorf("zcard pending: %w", err)
+		return false, fmt.Errorf("zcount pending: %w", err)
 	}
 	return cnt > 0, nil
 }
@@ -124,9 +159,12 @@ func (s *RedisAgentLifecycleDispatchStore) HasPending(ctx context.Context, runti
 func (s *RedisAgentLifecycleDispatchStore) PopAllPending(ctx context.Context, runtimeID string) ([]*AgentLifecycleDispatch, error) {
 	pendingKey := agentLifecycleDispatchPendingKey(runtimeID)
 
-	ids, err := s.rdb.ZRange(ctx, pendingKey, 0, agentLifecycleDispatchBatchLimit-1).Result()
+	now := time.Now()
+	ids, err := s.rdb.ZRangeByScore(ctx, pendingKey, &redis.ZRangeBy{
+		Min: "-inf", Max: strconv.FormatInt(now.UnixNano(), 10), Count: agentLifecycleDispatchBatchLimit,
+	}).Result()
 	if err != nil {
-		return nil, fmt.Errorf("zrange pending: %w", err)
+		return nil, fmt.Errorf("zrange due pending: %w", err)
 	}
 	if len(ids) == 0 {
 		return nil, nil
@@ -142,12 +180,12 @@ func (s *RedisAgentLifecycleDispatchStore) PopAllPending(ctx context.Context, ru
 			s.rdb.ZRem(ctx, pendingKey, id)
 			continue
 		}
-		if d.Status != AgentLifecycleDispatchPending {
+		if !agentLifecycleDispatchReady(d, now) {
 			s.rdb.ZRem(ctx, pendingKey, id)
 			continue
 		}
 
-		now := time.Now()
+		now = time.Now()
 		d.Status = AgentLifecycleDispatchDelivered
 		d.DeliveredAt = &now
 		d.UpdatedAt = now
@@ -156,10 +194,12 @@ func (s *RedisAgentLifecycleDispatchStore) PopAllPending(ctx context.Context, ru
 			return claimed, fmt.Errorf("marshal agent lifecycle dispatch: %w", err)
 		}
 
-		result, err := claimPendingScript.Run(
+		result, err := leaseAgentLifecycleDispatchScript.Run(
 			ctx, s.rdb,
 			[]string{pendingKey, agentLifecycleDispatchKey(id)},
 			id, data, int(agentLifecycleDispatchStoreRetention.Seconds()),
+			now.UnixNano(), now.Add(agentLifecycleDispatchDeliveryLease).UnixNano(),
+			int((agentLifecycleDispatchStoreRetention * 2).Seconds()),
 		).Int64()
 		if err != nil {
 			return claimed, fmt.Errorf("claim pending: %w", err)
@@ -169,6 +209,21 @@ func (s *RedisAgentLifecycleDispatchStore) PopAllPending(ctx context.Context, ru
 		}
 	}
 	return claimed, nil
+}
+
+func (s *RedisAgentLifecycleDispatchStore) Complete(ctx context.Context, operationID, runtimeID string) error {
+	result, err := completeAgentLifecycleDispatchScript.Run(
+		ctx, s.rdb,
+		[]string{agentLifecycleDispatchKey(operationID), agentLifecycleDispatchPendingKey(runtimeID)},
+		operationID, runtimeID,
+	).Int64()
+	if err != nil {
+		return fmt.Errorf("complete agent lifecycle dispatch: %w", err)
+	}
+	if result == -1 {
+		return fmt.Errorf("agent lifecycle dispatch runtime mismatch: got %s", runtimeID)
+	}
+	return nil
 }
 
 // SweepTimedOut scans every runtime's pending set, not just one runtime's —

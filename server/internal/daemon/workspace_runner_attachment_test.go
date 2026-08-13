@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,7 +198,7 @@ func TestWorkspaceRunnerProviderSpawnFailureReportsInactiveAndOffline(t *testing
 	}
 }
 
-func TestWorkspaceRunnerManagedStartEmitsStartingActivity(t *testing.T) {
+func TestWorkspaceRunnerManagedStartSettlesOnlineAfterStartingActivity(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
 	d.mu.Lock()
@@ -210,22 +212,63 @@ func TestWorkspaceRunnerManagedStartEmitsStartingActivity(t *testing.T) {
 	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
 		t.Fatalf("managed start: %v", err)
 	}
-	if len(activities) == 0 {
-		t.Fatal("managed start produced no Activity")
+	if len(activities) != 2 {
+		t.Fatalf("managed start Activity count = %d, want Starting then Online", len(activities))
 	}
-	got := activities[len(activities)-1]
-	if got.Snapshot.ActivityKind != protocol.ActivityKindWorking || got.Snapshot.DetailKind != "starting" {
-		t.Fatalf("spawn Activity = kind=%q detail=%q, want working/starting", got.Snapshot.ActivityKind, got.Snapshot.DetailKind)
+	starting := activities[0]
+	if starting.Snapshot.ActivityKind != protocol.ActivityKindWorking || starting.Snapshot.DetailKind != "starting" {
+		t.Fatalf("spawn Activity = kind=%q detail=%q, want working/starting", starting.Snapshot.ActivityKind, starting.Snapshot.DetailKind)
 	}
-	if len(got.Entries) != 1 {
-		t.Fatalf("starting entries = %d, want 1", len(got.Entries))
+	if len(starting.Entries) != 1 {
+		t.Fatalf("starting entries = %d, want 1", len(starting.Entries))
 	}
 	var body protocol.AgentActivityNarrativeBody
-	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
+	if err := json.Unmarshal(starting.Entries[0].Body, &body); err != nil {
 		t.Fatalf("decode starting narrative: %v", err)
 	}
 	if body.Text != "Starting…" {
 		t.Fatalf("starting text = %q, want %q", body.Text, "Starting…")
+	}
+	ready := activities[1].Snapshot
+	if ready.ActivityKind != protocol.ActivityKindOnline || ready.DetailKind != "idle" {
+		t.Fatalf("ready Activity = kind=%q detail=%q, want online/idle", ready.ActivityKind, ready.DetailKind)
+	}
+}
+
+func TestWorkspaceRunnerManagedStartTreatsBusyBufferedFlushAsDeferred(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := New(Config{WorkspacesRoot: t.TempDir()}, logger)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return ErrCanonicalAgentRuntimeBusy
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, runtimeID, coordinator)
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: agentID, LaunchID: "test-launch-" + agentID}); err != nil {
+		t.Fatalf("stop fixture launch: %v", err)
+	}
+	if _, err := coordinator.Accept(context.Background(), protocol.AgentDeliverPayload{
+		AgentID: agentID, Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"},
+	}); err != nil {
+		t.Fatalf("seed pending Message: %v", err)
+	}
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-2", StartDispatchID: "dispatch-2",
+	}); err != nil {
+		t.Fatalf("managed start: %v", err)
+	}
+	if got := logs.String(); strings.Contains(got, "level=WARN") || !strings.Contains(got, "level=DEBUG") || !strings.Contains(got, "outcome=deferred") {
+		t.Fatalf("expected busy startup flush to be a deferred debug event, got logs: %s", got)
 	}
 }
 

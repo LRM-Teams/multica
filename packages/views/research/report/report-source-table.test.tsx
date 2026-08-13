@@ -81,6 +81,16 @@ describe("ReportSourceTable", () => {
     expect(screen.queryByText(/\|/)).not.toBeInTheDocument();
   });
 
+  it("renders an unknown marker instead of a fabricated zero weight", () => {
+    render(
+      <ReportSourceTable
+        sources={[source({ id: "unknown", credibility_weight: undefined })]}
+      />,
+    );
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByText("0.00")).not.toBeInTheDocument();
+  });
+
   it("LRM-834: annotates failed rows with a readable reason (no raw ETIMEDOUT)", () => {
     render(
       <ReportSourceTable

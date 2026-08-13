@@ -9,9 +9,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { TypedGraphResponse, StarGraphLayoutResult } from "@multica/core/research";
+import type {
+  ResearchCanvasFilter,
+  TypedGraphResponse,
+  StarGraphLayoutResult,
+} from "@multica/core/research";
 import {
   countHiddenByFilter,
+  emptyCanvasFilter,
   isBlankFilter,
   useResearchCanvasStore,
   useResearchUiStore,
@@ -65,12 +70,15 @@ import { ResearchCanvasProjectionMismatch } from "./research-canvas-projection-m
 import { ResearchCanvasStaleNotice } from "./research-canvas-stale-notice";
 import { ResearchD5MobileRail, ResearchD5Rail } from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
+import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 import "./research-d5-layout.css";
 
 export type ResearchReportController = {
   open: () => void;
   close: () => void;
 };
+
+const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
 
 export function ResearchConstellationWorkspace({
   typedGraph,
@@ -151,7 +159,11 @@ export function ResearchConstellationWorkspace({
   const setRailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const railMode = useResearchUiStore((s) => s.d5RailMode);
   const setRailMode = useResearchUiStore((s) => s.setD5RailMode);
-  const canvasFilter = useResearchCanvasStore((s) => s.filter);
+  const filterSessionId = typedGraphSessionId ?? typedGraph?.session_id ?? null;
+  const storedCanvasFilter = useResearchCanvasStore((s) =>
+    filterSessionId ? s.filterBySession?.[filterSessionId] : undefined,
+  );
+  const canvasFilter = storedCanvasFilter ?? EMPTY_CANVAS_FILTER;
   const hostRef = useRef<HTMLDivElement>(null);
   const railToggleRef = useRef<HTMLButtonElement>(null);
   const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
@@ -183,9 +195,6 @@ export function ResearchConstellationWorkspace({
   );
   const motion = useSemanticTransition();
 
-  const railWidthBase = viewport.width >= 1200 ? 360 : 320;
-  const effectiveRailWidth =
-    isMobile || !railOpen ? 0 : railWidthBase;
   const showDesktopRail = !isMobile && railOpen;
   const contextRailId = "research-d5-context-rail";
   const backgroundInert = reportOpen;
@@ -278,10 +287,13 @@ export function ResearchConstellationWorkspace({
   const canvasBuild = useMemo(
     () =>
       buildD5SessionCanvasModel(typedGraph, viewport, {
-        rightPanelWidth: effectiveRailWidth,
+        // hostRef observes the canvas flex child, whose content box already
+        // excludes the sibling context rail. Reserving the rail again would
+        // double-shrink and left-shift the graph, especially at 768px.
+        rightPanelWidth: 0,
         previousLayout: previousLayoutRef.current,
       }),
-    [typedGraph, viewport, effectiveRailWidth],
+    [typedGraph, viewport],
   );
   const canvasModel = canvasBuild?.model ?? null;
 
@@ -493,7 +505,6 @@ export function ResearchConstellationWorkspace({
       });
       onSelectNode(resolved);
       setRailMode("detail");
-      if (isMobile) setRailOpen(true);
 
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
@@ -502,11 +513,13 @@ export function ResearchConstellationWorkspace({
         openAgentInspector(typedNode.actor_agent_id);
         return;
       }
-      closeOverlay();
       if (level === "l" || level === "xl" || level === "xxl") {
         if (isMobile) setRailOpen(false);
         openReport();
+        return;
       }
+      setRailOpen(true);
+      closeOverlay();
     },
     [
       closeOverlay,
@@ -586,20 +599,32 @@ export function ResearchConstellationWorkspace({
             className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
           >
             <p className="max-w-md text-sm text-destructive">
-              {projectionErrorReason || t(($) => $.d5.canvas.error)}
+              {t(($) => $.d5.canvas.error)}
             </p>
-            {onRetryTypedGraph ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={retryTypedGraphPending}
-                onClick={onRetryTypedGraph}
+            {projectionErrorReason ? (
+              <details
+                data-testid="research-projection-error-diagnostics"
+                className="max-w-md text-left text-xs text-muted-foreground"
               >
-                {retryTypedGraphPending
-                  ? t(($) => $.interrupt.retrying)
-                  : t(($) => $.session_page.retry)}
-              </Button>
+                <summary className="cursor-pointer text-center">
+                  {t(($) => $.d5.canvas.interface_error_details)}
+                </summary>
+                <code
+                  lang="en"
+                  dir="ltr"
+                  className="mt-2 block max-h-24 overflow-auto rounded-md bg-muted/60 p-2 whitespace-pre-wrap break-words"
+                >
+                  {projectionErrorReason}
+                </code>
+              </details>
+            ) : null}
+            {onRetryTypedGraph ? (
+              <ResearchPendingRetryButton
+                label={t(($) => $.session_page.retry)}
+                pendingLabel={t(($) => $.interrupt.retrying)}
+                pending={retryTypedGraphPending}
+                onRetry={onRetryTypedGraph}
+              />
             ) : null}
           </div>
         ) : null}
@@ -648,12 +673,13 @@ export function ResearchConstellationWorkspace({
             lensHints={lensHints}
             motionDirectives={motionDirectives}
             showMapKey
-            rightPanelWidth={effectiveRailWidth}
+            rightPanelWidth={0}
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}
+            canvasFilter={canvasFilter}
             hiddenCountLabel={(count) => t(($) => $.d5.cluster_hidden, { count })}
             loadMoreLabel={loadMoreLabel}
             onLoadMore={onLoadMoreTypedGraph}
@@ -703,21 +729,23 @@ export function ResearchConstellationWorkspace({
         />
       </section>
 
-      <Button
-        ref={railToggleRef}
-        type="button"
-        size="sm"
-        variant="secondary"
-        className={cn(
-          isMobile ? "d5-rail-toggle" : "d5-rail-toggle-desktop",
-        )}
-        data-testid="research-d5-rail-toggle"
-        aria-expanded={railOpen}
-        aria-controls={contextRailId}
-        onClick={() => setRailOpen(!railOpen)}
-      >
-        {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
-      </Button>
+      {isMobile || !railOpen ? (
+        <Button
+          ref={railToggleRef}
+          type="button"
+          size="sm"
+          variant="secondary"
+          className={cn(
+            isMobile ? "d5-rail-toggle" : "d5-rail-toggle-desktop",
+          )}
+          data-testid="research-d5-rail-toggle"
+          aria-expanded={railOpen}
+          aria-controls={contextRailId}
+          onClick={() => setRailOpen(!railOpen)}
+        >
+          {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
+        </Button>
+      ) : null}
 
       {showDesktopRail ? (
         <ResearchD5Rail

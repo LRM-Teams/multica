@@ -28,8 +28,16 @@ describe("ResearchCanvasStaleNotice", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("prevents duplicate retries while recovery is pending", () => {
-    render(<ResearchCanvasStaleNotice onRetry={() => {}} retryPending />);
-    expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+  it("keeps focus and prevents duplicate retries while recovery is pending", () => {
+    const onRetry = vi.fn();
+    render(<ResearchCanvasStaleNotice onRetry={onRetry} retryPending />);
+    const retry = screen.getByRole("button", { name: "Retrying…" });
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    expect(retry).toHaveAttribute("aria-busy", "true");
+    expect(retry).not.toBeDisabled();
+    retry.focus();
+    fireEvent.click(retry);
+    expect(retry).toHaveFocus();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 });

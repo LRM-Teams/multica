@@ -19,7 +19,6 @@ function readSrc(...parts: string[]) {
 }
 
 const SESSION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const TASK_UUID = "11111111-1111-4111-8111-111111111111";
 const BODY_CLASS = "text-[13px] leading-relaxed text-foreground/90";
 
 vi.mock("../../i18n/use-t", () => ({
@@ -91,7 +90,8 @@ function mockStreamState(opts: {
 
   useQueriesMock.mockReturnValue([
     {
-      data: opts.generating ? { task_id: TASK_UUID } : undefined,
+      // Wake path is Raft delivery pending flag (no inbox-event transcript yet).
+      data: opts.generating ? { pending: true } : undefined,
     },
   ] as unknown as ReturnType<typeof useQueries>);
 }
@@ -114,58 +114,37 @@ describe("ResearchLiveStream (LRM-1341)", () => {
     expect(src).toMatch(/aria-busy=\{isGenerating\s*\|\|\s*undefined\}/);
   });
 
-  it("AC1–4: generating keeps body class stable; shimmer on status; link not under shimmer", () => {
+  it("AC1–4: generating keeps busy + status shimmer; wait copy (no md body until transcript returns)", () => {
     mockStreamState({
       generating: true,
-      text: "出处见 来源 3",
+      text: "",
     });
-    const { rerender } = render(<ResearchLiveStream sessionId={SESSION_ID} />);
+    render(<ResearchLiveStream sessionId={SESSION_ID} />);
     const root = screen.getByTestId("research-live-stream");
     expect(root.getAttribute("aria-live")).toBeNull();
     expect(root.getAttribute("aria-busy")).toBe("true");
 
-    const body = Array.from(root.querySelectorAll("div")).find(
-      (el) => el.className === BODY_CLASS,
-    );
-    expect(body, "body container with exact className").toBeTruthy();
-    expect(body!.className).toBe(BODY_CLASS);
-    expect(body!.className).not.toContain("animate-chat-text-shimmer");
+    // Wake-via-Raft stub: no inbox transcript yet → wait line, not StreamingMarkdown.
+    expect(root.querySelector(`[class="${BODY_CLASS}"]`)).toBeNull();
+    expect(screen.getByText("Generating…")).toBeTruthy();
 
     const statusShimmer = root.querySelector(".animate-chat-text-shimmer");
     expect(statusShimmer).toBeTruthy();
     expect(statusShimmer!.closest("[data-testid='mock-streaming-md']")).toBeNull();
     expect(statusShimmer!.textContent).toContain("Streaming");
-
-    const link = root.querySelector("a.text-brand.underline");
-    expect(link).toBeTruthy();
-    expect(link!.closest(".animate-chat-text-shimmer")).toBeNull();
-
-    // AC2: settled body className identical
-    mockStreamState({
-      generating: false,
-      text: "出处见 来源 3",
-    });
-    rerender(<ResearchLiveStream sessionId={SESSION_ID} />);
-    const settledRoot = screen.getByTestId("research-live-stream");
-    const settledBody = Array.from(settledRoot.querySelectorAll("div")).find(
-      (el) => el.className === BODY_CLASS,
-    );
-    expect(settledBody!.className).toBe(BODY_CLASS);
+    expect(root.querySelector(".animate-pulse")).toBeTruthy();
   });
 
-  it("AC5: empty returns null; settled has no shimmer / pulse / aria-busy", () => {
+  it("AC5: empty / settled-without-transcript returns null", () => {
     mockStreamState({ generating: false, text: "" });
     const { container, rerender } = render(
       <ResearchLiveStream sessionId={SESSION_ID} />,
     );
     expect(container.querySelector("[data-testid='research-live-stream']")).toBeNull();
 
+    // Settled text cannot render until a transcript source is rewired; card stays null.
     mockStreamState({ generating: false, text: "settled body" });
     rerender(<ResearchLiveStream sessionId={SESSION_ID} />);
-    const root = screen.getByTestId("research-live-stream");
-    expect(root.getAttribute("aria-busy")).toBeNull();
-    expect(root.querySelector(".animate-chat-text-shimmer")).toBeNull();
-    expect(root.querySelector(".animate-pulse")).toBeNull();
-    expect(screen.getByText("Done")).toBeTruthy();
+    expect(container.querySelector("[data-testid='research-live-stream']")).toBeNull();
   });
 });

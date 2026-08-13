@@ -9,6 +9,7 @@ vi.mock("../../i18n/use-t", () => ({
         connectivity: {
           server_error_title: "Server error",
           server_error_hint: "The research service returned an error. You can retry.",
+          technical_details: "Technical details",
           retry: "Retry",
           retrying: "Retrying…",
         },
@@ -29,11 +30,16 @@ describe("ResearchServerErrorPage (LRM-833)", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("prefers a concrete API message when provided", () => {
+  it("keeps the API message in collapsed technical details", () => {
     render(
       <ResearchServerErrorPage onRetry={() => {}} message="502 Bad Gateway" />,
     );
-    expect(screen.getByText("502 Bad Gateway")).toBeTruthy();
+    expect(
+      screen.getByText("The research service returned an error. You can retry."),
+    ).toBeTruthy();
+    const diagnostics = screen.getByTestId("research-server-error-diagnostics");
+    expect(diagnostics).not.toHaveAttribute("open");
+    expect(diagnostics).toHaveTextContent("502 Bad Gateway");
   });
 
   it("keeps retry focused but suppresses repeat activation while retrying", () => {

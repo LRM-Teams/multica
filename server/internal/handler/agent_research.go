@@ -1,6 +1,11 @@
 package handler
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+)
 
 // Agent research data-plane (LRM-904 / #801).
 //
@@ -48,7 +53,37 @@ func (h *Handler) GetAgentResearchSessionSnapshot(w http.ResponseWriter, r *http
 	if _, active := h.requireActiveFleetMember(w, r, workspaceID); !active {
 		return
 	}
-	h.GetResearchSessionSnapshot(w, r)
+	attemptID := strings.TrimSpace(r.URL.Query().Get("attempt_id"))
+	if attemptID == "" {
+		writeError(w, http.StatusBadRequest, "attempt_id is required")
+		return
+	}
+	if _, valid = parseUUIDOrBadRequest(w, attemptID, "attempt_id"); !valid {
+		return
+	}
+	sessionID := strings.TrimSpace(chi.URLParam(r, "id"))
+	if _, valid = parseUUIDOrBadRequest(w, sessionID, "id"); !valid {
+		return
+	}
+	var authorized bool
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM research_task_attempt
+		  WHERE workspace_id = $1::uuid
+		    AND session_id = $2::uuid
+		    AND id = $3::uuid
+		    AND assigned_agent_id = $4::uuid
+		)
+	`, principal.WorkspaceID, sessionID, attemptID, principal.AgentID).Scan(&authorized); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to authorize research attempt")
+		return
+	}
+	if !authorized {
+		writeError(w, http.StatusNotFound, "research attempt not found")
+		return
+	}
+	h.getResearchSessionSnapshot(w, r, true)
 }
 
 func (h *Handler) AppendAgentResearchGraphNode(w http.ResponseWriter, r *http.Request) {

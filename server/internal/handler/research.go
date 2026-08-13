@@ -388,6 +388,10 @@ func truncateRunes(s string, n int) string {
 }
 
 func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Request) {
+	h.getResearchSessionSnapshot(w, r, false)
+}
+
+func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Request, agentAttemptScoped bool) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
 	if !ok {
@@ -467,17 +471,33 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		graphNodes, graphEdges = projectRunV2Graph(*loadedRun)
 	}
 
+	mappedSources := mapSources(sources)
+	mappedEvals := mapEvals(evals)
+	mappedMessages := mapMessages(messages)
+	mappedProductRounds := mapProductRoundCards(productRounds)
+	mappedThoughtStrategies := mapThoughtStrategies(nodes)
+	if agentAttemptScoped {
+		// Durable Agent reads consume only the manifest-filtered canonical Run.
+		// Legacy presentation rows are session-wide and are not authorized inputs.
+		mappedSources = []ResearchSourceResp{}
+		mappedEvals = []ResearchStageEvalResp{}
+		mappedMessages = []ResearchMessageResp{}
+		mappedProductRounds = []ResearchProductRoundCardResp{}
+		mappedThoughtStrategies = []ResearchThoughtStrategyResp{}
+		report = nil
+	}
+
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
 		Session:           researchSessionToResponse(session),
 		Fleet:             h.researchFleetToResponse(r.Context(), fleet, members),
 		Nodes:             graphNodes,
 		Edges:             graphEdges,
-		Sources:           mapSources(sources),
+		Sources:           mappedSources,
 		Report:            report,
-		Evals:             mapEvals(evals),
-		Messages:          mapMessages(messages),
-		ProductRounds:     mapProductRoundCards(productRounds),
-		ThoughtStrategies: mapThoughtStrategies(nodes),
+		Evals:             mappedEvals,
+		Messages:          mappedMessages,
+		ProductRounds:     mappedProductRounds,
+		ThoughtStrategies: mappedThoughtStrategies,
 		Run:               loadedRun,
 	})
 }

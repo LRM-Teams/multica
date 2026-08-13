@@ -62,6 +62,13 @@ func freezeEvidenceRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID
 				return fmt.Errorf("read claim evidence: %w", evidenceErr)
 			}
 			value = item
+		case ArtifactKindStageEvaluation:
+			var item EvaluationPrivateContext
+			err := tx.QueryRow(ctx, `SELECT id::text, stage, passed, score, findings, remediation, created_at FROM research_stage_eval WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspaceID, sessionID, entries[i].ArtifactID).Scan(&item.ID, &item.Stage, &item.Passed, &item.Score, &item.Findings, &item.Remediation, &item.CreatedAt)
+			if err != nil {
+				return fmt.Errorf("freeze evaluation-private representation: %w", err)
+			}
+			value = item
 		default:
 			continue
 		}
@@ -74,6 +81,70 @@ func freezeEvidenceRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID
 		entries[i].RepresentationHash = contentHashFromPayload(encoded)
 	}
 	return nil
+}
+
+func loadFrozenEvaluationPrivatePool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]EvaluationPrivateContext, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT e.representation_bytes
+		FROM research_artifact_context_entry e
+		JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
+		JOIN research_artifact_policy_grant g ON (g.workspace_id,g.session_id,g.id)=(m.workspace_id,m.session_id,m.evaluation_grant_id)
+		JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
+		JOIN research_artifact_passport p ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id)
+		WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.attempt_id=$3::uuid
+		  AND m.purpose='evaluation' AND g.status='active' AND g.revision=m.evaluation_grant_revision
+		  AND g.evaluation_private=true AND p.entity_kind='stage_evaluation'
+		ORDER BY e.ordinal
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []EvaluationPrivateContext{}
+	for rows.Next() {
+		var encoded []byte
+		if err = rows.Scan(&encoded); err != nil {
+			return nil, err
+		}
+		var item EvaluationPrivateContext
+		if err = json.Unmarshal(encoded, &item); err != nil {
+			return nil, fmt.Errorf("decode evaluation-private representation: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func loadFrozenEvaluationPrivateTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, manifestID string) ([]EvaluationPrivateContext, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT e.representation_bytes
+		FROM research_artifact_context_entry e
+		JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
+		JOIN research_artifact_policy_grant g ON (g.workspace_id,g.session_id,g.id)=(m.workspace_id,m.session_id,m.evaluation_grant_id)
+		JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
+		JOIN research_artifact_passport p ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id)
+		WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.id=$3::uuid
+		  AND m.purpose='evaluation' AND g.status='active' AND g.revision=m.evaluation_grant_revision
+		  AND g.evaluation_private=true AND p.entity_kind='stage_evaluation'
+		ORDER BY e.ordinal
+	`, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []EvaluationPrivateContext{}
+	for rows.Next() {
+		var encoded []byte
+		if err = rows.Scan(&encoded); err != nil {
+			return nil, err
+		}
+		var item EvaluationPrivateContext
+		if err = json.Unmarshal(encoded, &item); err != nil {
+			return nil, fmt.Errorf("decode evaluation-private representation: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func loadFrozenEvidenceRepresentationsPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]SourceSnapshotView, []Observation, []Claim, error) {

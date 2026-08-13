@@ -80,6 +80,10 @@ func rebindDispatchPromptForManifestTx(
 		return DispatchRequest{}, err
 	}
 	filtered := filterRunSnapshotByManifest(liveSnapshot, manifestSet.ArtifactIDs)
+	filtered.EvaluationPrivate, err = loadFrozenEvaluationPrivateTx(ctx, tx, workspaceID, in.SessionID, manifestID)
+	if err != nil {
+		return DispatchRequest{}, err
+	}
 	members, err := loadManifestPrincipalHeaderTx(ctx, tx, workspaceID, in.SessionID, manifestID)
 	if err != nil {
 		return DispatchRequest{}, err
@@ -205,7 +209,8 @@ func verifyManifestPromptShadow(
 	}
 	if len(liveSnapshot.Sources) != len(filtered.Sources) ||
 		len(liveSnapshot.Observations) != len(filtered.Observations) ||
-		len(liveSnapshot.Claims) != len(filtered.Claims) {
+		len(liveSnapshot.Claims) != len(filtered.Claims) ||
+		len(filtered.EvaluationPrivate) > 0 {
 		return nil
 	}
 	return fmt.Errorf("%w: manifest prompt shadow mismatch", ErrInvalidTransition)

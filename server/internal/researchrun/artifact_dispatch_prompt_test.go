@@ -2,8 +2,36 @@ package researchrun
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestEvaluationPrivatePromptOnlyForGraderTasks(t *testing.T) {
+	run := Run{SessionID: "session", Goal: "goal", DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV1, GoalVersion: 1, PlanVersion: 1}
+	attempt := Attempt{ID: "attempt", DispatchKey: "dispatch"}
+	snapshot := RunSnapshot{
+		Contract: ResearchContract{Language: "English"},
+		EvaluationPrivate: []EvaluationPrivateContext{{
+			ID: "eval-1", Stage: "delivery", Findings: json.RawMessage(`[{"code":"hidden-rubric"}]`),
+		}},
+	}
+	graderTask := Task{ID: "grader", Kind: TaskKindQualityGate, GoalVersion: 1, PlanVersion: 1}
+	graderPrompt, err := buildTaskPrompt(run, graderTask, attempt, snapshot, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(graderPrompt, "hidden-rubric") || !strings.Contains(graderPrompt, "Evaluation-private grader context") {
+		t.Fatal("grader prompt missing private context")
+	}
+	subjectTask := Task{ID: "subject", Kind: TaskKindDiscover, GoalVersion: 1, PlanVersion: 1}
+	subjectPrompt, err := buildTaskPrompt(run, subjectTask, attempt, snapshot, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(subjectPrompt, "hidden-rubric") {
+		t.Fatal("evaluated subject prompt leaked private context")
+	}
+}
 
 func TestManifestPrincipalHeaderRoundTrip(t *testing.T) {
 	members := []FleetMember{

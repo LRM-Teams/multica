@@ -162,3 +162,15 @@ func TestArtifactPolicyEvaluationPrivateKinds(t *testing.T) {
 		t.Fatal("ordinary claim must not be evaluation-private")
 	}
 }
+
+func TestManifestPurposeForTaskKind(t *testing.T) {
+	if got := manifestPurposeForTaskKind(TaskKindQualityGate); got != ArtifactPurposeEvaluation {
+		t.Fatalf("quality gate purpose=%q", got)
+	}
+	if got := manifestPurposeForTaskKind(TaskKindCitationAudit); got != ArtifactPurposeEvaluation {
+		t.Fatalf("citation audit purpose=%q", got)
+	}
+	if got := manifestPurposeForTaskKind(TaskKindDiscover); got != ArtifactPurposeTaskExecution {
+		t.Fatalf("discover purpose=%q", got)
+	}
+}

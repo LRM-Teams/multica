@@ -14,7 +14,7 @@ export function ResearchRunGateBlockers({ blockers, degraded, onLocate, title, d
 }) {
   if (!degraded && blockers.length === 0) return null;
   return (
-    <aside className="pointer-events-auto absolute left-3 top-14 z-20 w-[min(360px,calc(100%-24px))] rounded-lg border bg-card/95 p-2 shadow-sm backdrop-blur-md" aria-label="Research delivery blockers" data-testid="research-run-gates">
+    <aside className="pointer-events-auto absolute left-3 top-14 z-20 w-[min(360px,calc(100%-24px))] rounded-lg border bg-card/95 p-2 shadow-sm backdrop-blur-md" aria-label={degraded ? degradedTitle : title} data-testid="research-run-gates">
       <div className="flex items-center gap-2 px-1 py-1 text-xs font-semibold text-foreground">
         <AlertTriangle className="size-3.5 text-warning" aria-hidden />
         {degraded ? degradedTitle : title}

@@ -6,7 +6,7 @@
  *    (final view not blocked by animation), coalescing bounded.
  *  - Coalescing (spec §5.3), cap enforcement, budget truncation.
  *  - Interrupt (new same-lane event coalesces/cancels the pending one).
- *  - Background restore (Rule ⑥: collapse to ≤ STAGGER_CAP live).
+ *  - Background restore (Rule ⑥: settle immediately without replay).
  *  - Reduced motion (Rule ④: immediate settlement, no playback queue).
  *  - Low-performance (Rule ⑤: halved budget, still settles).
  *
@@ -23,7 +23,7 @@ import {
   type TransitionQueue,
 } from "./transition-queue";
 import { hundredDeltaBurst, ALL_TRANSITION_KINDS } from "./fixture";
-import { MOTION_QUEUE_CAP, MOTION_STAGGER_CAP } from "./tokens";
+import { MOTION_QUEUE_CAP } from "./tokens";
 
 /** Drive a burst and return peak live queue size plus the final queue. */
 function runBurst(
@@ -157,7 +157,7 @@ describe("Interrupt — spec §4.3", () => {
 });
 
 describe("Background restore — Rule ⑥", () => {
-  it("collapse leaves at most STAGGER_CAP live and the rest settle", () => {
+  it("settles the complete hidden-period backlog without replay", () => {
     let state = createTransitionQueue({ nowMs: 0 });
     for (let i = 0; i < 60; i += 1) {
       const kind = ALL_TRANSITION_KINDS[i % ALL_TRANSITION_KINDS.length]!;
@@ -173,7 +173,8 @@ describe("Background restore — Rule ⑥", () => {
     }
     state = transitionQueueReducer(state, { type: "set-hidden", hidden: true, nowMs: 1000 });
     state = transitionQueueReducer(state, { type: "set-hidden", hidden: false, nowMs: 1001 });
-    expect(liveQueueSize(state)).toBeLessThanOrEqual(MOTION_STAGGER_CAP);
+    expect(liveQueueSize(state)).toBe(0);
+    expect(state.queued.size).toBe(0);
   });
 
   it("does not advance the clock while hidden (no RAF scheduling)", () => {

@@ -24,6 +24,22 @@ export function TrajectoryDetail({
   onOpenNodeDetail: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
+  const statusLabel = (() => {
+    switch (statusTone) {
+      case "ok":
+        return t((s) => s.trajectory_explorer.status_ok);
+      case "running":
+        return t((s) => s.trajectory_explorer.status_run);
+      case "failed":
+        return t((s) => s.trajectory_explorer.status_fail);
+      case "waiting":
+        return t((s) => s.trajectory_explorer.status_wait);
+      case "abandoned":
+        return t((s) => s.trajectory_explorer.status_abandoned);
+      default:
+        return statusTone;
+    }
+  })();
 
   if (!node) {
     return (
@@ -46,9 +62,9 @@ export function TrajectoryDetail({
           <h4 className="line-clamp-1 text-sm font-medium text-foreground">
             {node.title || node.id}
           </h4>
-          {statusTone ? (
+          {statusLabel ? (
             <span className="mt-0.5 inline-block rounded border border-border/50 px-1 text-[10px] leading-4 text-muted-foreground">
-              {statusTone}
+              {statusLabel}
             </span>
           ) : null}
           {node.summary ? (

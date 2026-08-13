@@ -20,8 +20,7 @@
  *  - Cap: the queue never exceeds MOTION_QUEUE_CAP; oldest non-started entries
  *    are force-settled and dropped rather than played.
  *  - Background: while hidden, events are recorded but never scheduled for
- *    RAF; on restore the backlog collapses to at most MOTION_STAGGER_CAP live
- *    animations and the rest settle directly.
+ *    RAF; on restore the complete backlog settles without replay.
  */
 
 import type { SemanticTransitionKind } from "./semantic-mapping";
@@ -353,63 +352,17 @@ function oldestLiveEntry(
 }
 
 /**
- * Background restore (Rule ⑥): collapse the hidden-period backlog — coalesce
- * per lane, keep the first MOTION_STAGGER_CAP live, settle the rest to
- * terminal instantly. Never replays historical paths.
+ * Background restore (Rule ⑥): the final projection is already authoritative,
+ * so every hidden-period animation settles immediately. Replaying even a
+ * capped historical batch after resume makes the canvas move for changes the
+ * user did not witness and violates the D5 background-resume contract.
  */
 function restoreBacklog(
   state: TransitionQueue,
   nowMs: number,
 ): TransitionQueue {
-  const flat: QueuedEntry[] = [];
-  for (const [, entries] of state.queued) {
-    for (const e of entries) {
-      if (e.state !== "settled") flat.push(e);
-    }
-  }
-  flat.sort((a, b) => a.enqueuedMs - b.enqueuedMs);
-
-  // Coalesce same-lane siblings that share the same anchor/kind.
-  const seenLanes = new Map<string, QueuedEntry>();
-  for (const entry of flat) {
-    const prior = seenLanes.get(entry.laneKey);
-    if (prior) {
-      prior.coalesced = true;
-      prior.state = "settled";
-      prior.plannedEndMs = nowMs;
-    }
-    seenLanes.set(entry.laneKey, entry);
-  }
-
-  const survivors = [...seenLanes.values()].sort(
-    (a, b) => a.enqueuedMs - b.enqueuedMs,
-  );
-  const capped = survivors.slice(0, MOTION_STAGGER_CAP);
-  const toSettle = survivors.slice(MOTION_STAGGER_CAP);
-
-  for (const entry of toSettle) {
-    entry.state = "settled";
-    entry.plannedEndMs = nowMs;
-    entry.truncated = true;
-  }
-
-  // Re-schedule the surviving cap as a fresh, immediate batch.
-  capped.forEach((entry, index) => {
-    entry.state = "queued";
-    entry.plannedStartMs = batchStartMs(index, state.profile) + nowMs;
-    entry.plannedEndMs =
-      entry.plannedStartMs + verbDurationMs(entry.verb, state.profile);
-  });
-
-  const nextQueued = new Map<string, QueuedEntry[]>();
-  for (const entry of [...capped, ...toSettle]) {
-    if (entry.state === "settled") continue;
-    const lane = nextQueued.get(entry.laneKey) ?? [];
-    lane.push(entry);
-    nextQueued.set(entry.laneKey, lane);
-  }
-
-  return { ...state, queued: nextQueued };
+  settleAll(state.queued, nowMs);
+  return { ...state, queued: pruneSettled(state.queued) };
 }
 
 // ─── Read helpers for consumers/hook ─────────────────────────────────────────

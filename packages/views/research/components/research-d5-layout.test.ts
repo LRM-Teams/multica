@@ -15,4 +15,15 @@ describe("research-d5-layout local theme", () => {
     expect(css).toMatch(/\.d5-lens-btn[\s\S]*color:\s*var\(--muted-foreground\)/);
     expect(css).toMatch(/\.research-agent-inspector[\s\S]*color:\s*var\(--foreground\)/);
   });
+
+  it("lets the star graph stretch to the canvas host height", () => {
+    const css = readFileSync(
+      join(import.meta.dirname, "research-d5-layout.css"),
+      "utf8",
+    );
+
+    expect(css).toMatch(
+      /\.d5-canvas-host\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s,
+    );
+  });
 });

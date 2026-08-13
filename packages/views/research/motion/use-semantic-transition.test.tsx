@@ -79,6 +79,36 @@ describe("useSemanticTransition — settleNow", () => {
     expect(result.current.queueSize).toBe(0);
     expect(result.current.directiveFor("branch-1")).toBeNull();
   });
+
+  it("settles live animation immediately when the page resumes", () => {
+    let hidden = false;
+    const hiddenSpy = vi
+      .spyOn(document, "hidden", "get")
+      .mockImplementation(() => hidden);
+    try {
+      const { result } = renderHook(() => useSemanticTransition());
+      act(() => {
+        result.current.enqueue({
+          transition_kind: "branch_spawned",
+          related_ids: ["hidden-branch"],
+          anchor_id: null,
+        });
+      });
+      expect(result.current.queueSize).toBeGreaterThan(0);
+
+      act(() => {
+        hidden = true;
+        document.dispatchEvent(new Event("visibilitychange"));
+        hidden = false;
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+
+      expect(result.current.queueSize).toBe(0);
+      expect(result.current.directiveFor("hidden-branch")).toBeNull();
+    } finally {
+      hiddenSpy.mockRestore();
+    }
+  });
 });
 
 describe("useSemanticTransition — profiles", () => {

@@ -690,6 +690,7 @@
     "citation_fetch_failed_hint": "This source could not be fetched. The citation stays as a placeholder until a good URL is available.",
     "citation_summary_empty": "No summary for this source yet.",
     "citation_anchor": "Locate citation {{label}}",
+    "citations_label": "Citations",
     "source_failed_badge": "Fetch failed",
     "source_failed_purpose": "Excluded from citation numbering",
     "source_fail_fetch": "Source fetch failed",
@@ -937,6 +938,7 @@
     "status_run": "running",
     "status_fail": "failed",
     "status_wait": "waiting",
+    "status_abandoned": "abandoned",
     "status_mute": "muted"
   },
   "canvas_plugins": {

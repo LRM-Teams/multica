@@ -25,12 +25,14 @@ export function TrajectoryCommitCard({
   layout,
   commit,
   selected,
+  tabIndex,
   onSelect,
   onOpenDetail,
 }: {
   layout: TrajectoryLaneLayout;
   commit: TrajectoryLayoutCommit;
   selected: boolean;
+  tabIndex: 0 | -1;
   onSelect: (id: string) => void;
   onOpenDetail: (id: string) => void;
 }) {
@@ -70,6 +72,7 @@ export function TrajectoryCommitCard({
         lane ? `, ${lane.accessibleLabel}` : ""
       }${isMerge ? `, ${mergeLabel}` : ""}`}
       aria-pressed={selected}
+      tabIndex={tabIndex}
       className={cn(
         "group flex min-h-0 w-full cursor-pointer flex-col gap-1 rounded-md border bg-card p-2 text-left transition-colors",
         selected

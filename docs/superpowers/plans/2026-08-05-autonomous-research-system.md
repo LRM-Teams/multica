@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-replay-1 证据：D-enabled Result Artifact 在同一 acceptance 事务内持久封存 Manifest
+ID/hash、已解析输入 Version 集合及完整 Input Reference lineage；成功 Attempt 的 replay
+除了 `client_request_id + result_hash`，还会重新核对四项服务端事实。Manifest hash、输入
+集合或 lineage 发生变化均返回 `ErrResultConflict`，封存 binding 本身由数据库 trigger
+禁止改写；历史无 Manifest Result 保持原 replay 语义。§15.21 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

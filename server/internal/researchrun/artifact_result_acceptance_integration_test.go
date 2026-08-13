@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -250,6 +251,89 @@ func TestAcceptResultReplayRequiresMatchingHash(t *testing.T) {
 	})
 	if !errors.Is(err, ErrResultConflict) {
 		t.Fatalf("changed replay err=%v want ErrResultConflict", err)
+	}
+
+	var resultArtifactID, manifestID, manifestHash string
+	var resolvedVersions, lineage []byte
+	if err = pool.QueryRow(ctx, `
+		SELECT id::text, acceptance_manifest_id::text, acceptance_manifest_hash,
+		       resolved_input_versions, acceptance_lineage
+		FROM research_result_artifact
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&resultArtifactID, &manifestID, &manifestHash, &resolvedVersions, &lineage,
+	); err != nil {
+		t.Fatalf("load accepted replay binding: %v", err)
+	}
+	if manifestID == "" || manifestHash == "" || string(resolvedVersions) == "null" || string(lineage) == "null" {
+		t.Fatalf("incomplete replay binding manifest=%q hash=%q versions=%s lineage=%s", manifestID, manifestHash, resolvedVersions, lineage)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_result_artifact
+		SET acceptance_manifest_id = $4::uuid,
+		    acceptance_manifest_hash = 'sha256:forbidden-binding-rewrite'
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, resultArtifactID, uuid.NewString()); err == nil ||
+		!strings.Contains(err.Error(), "research_result_artifact_replay_binding_immutable_guard") {
+		t.Fatalf("replay binding rewrite err=%v want immutable guard", err)
+	}
+
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_context_manifest
+		SET manifest_hash = 'sha256:changed-after-acceptance'
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, manifestID); err != nil {
+		t.Fatalf("mutate accepted manifest hash: %v", err)
+	}
+	if _, err = store.AcceptResult(ctx, input); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("manifest-bound replay err=%v want ErrResultConflict", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_context_manifest SET manifest_hash = $4
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, manifestID, manifestHash); err != nil {
+		t.Fatalf("restore accepted manifest hash: %v", err)
+	}
+
+	var referenceID string
+	if err = pool.QueryRow(ctx, `
+		SELECT reference.id::text
+		FROM research_artifact_input_reference reference
+		JOIN research_artifact_version version
+		  ON version.workspace_id = reference.workspace_id
+		 AND version.session_id = reference.session_id
+		 AND version.id = reference.consumer_version_id
+		WHERE version.workspace_id = $1::uuid
+		  AND version.session_id = $2::uuid
+		  AND version.artifact_id = $3::uuid
+		ORDER BY reference.ordinal, reference.id
+		LIMIT 1
+	`, fixture.workspaceID, run.SessionID, resultArtifactID).Scan(&referenceID); err != nil {
+		t.Fatalf("load accepted input reference: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_input_reference SET explicitly_used = false
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, referenceID); err != nil {
+		t.Fatalf("mutate accepted lineage: %v", err)
+	}
+	if _, err = store.AcceptResult(ctx, input); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("lineage-bound replay err=%v want ErrResultConflict", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_input_reference SET explicitly_used = true
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, referenceID); err != nil {
+		t.Fatalf("restore accepted lineage: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		DELETE FROM research_artifact_input_reference
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, referenceID); err != nil {
+		t.Fatalf("remove accepted input version: %v", err)
+	}
+	if _, err = store.AcceptResult(ctx, input); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("version-set-bound replay err=%v want ErrResultConflict", err)
 	}
 }
 

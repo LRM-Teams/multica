@@ -177,6 +177,132 @@ func persistResultArtifactInputReferencesTx(
 	return err
 }
 
+func sealResultArtifactReplayBindingTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID, resultArtifactID string,
+) error {
+	tag, err := tx.Exec(ctx, `
+		WITH manifest AS (
+		  SELECT id, manifest_hash
+		  FROM research_artifact_context_manifest
+		  WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+		), result_version AS (
+		  SELECT id
+		  FROM research_artifact_version
+		  WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $4::uuid
+		    AND version = 1
+		), resolved_versions AS (
+		  SELECT COALESCE(jsonb_agg(version_id ORDER BY version_id), '[]'::jsonb) AS value
+		  FROM (
+		    SELECT DISTINCT reference.input_version_id::text AS version_id
+		    FROM research_artifact_input_reference reference
+		    JOIN result_version ON result_version.id = reference.consumer_version_id
+		    WHERE reference.workspace_id = $1::uuid AND reference.session_id = $2::uuid
+		  ) versions
+		), lineage AS (
+		  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+		    'input_version_id', reference.input_version_id::text,
+		    'relation', reference.relation,
+		    'manifest_id', COALESCE(reference.manifest_id::text, ''),
+		    'explicitly_used', reference.explicitly_used,
+		    'purpose', reference.purpose,
+		    'ordinal', reference.ordinal
+		  ) ORDER BY reference.ordinal, reference.input_version_id::text, reference.relation), '[]'::jsonb) AS value
+		  FROM research_artifact_input_reference reference
+		  JOIN result_version ON result_version.id = reference.consumer_version_id
+		  WHERE reference.workspace_id = $1::uuid AND reference.session_id = $2::uuid
+		)
+		UPDATE research_result_artifact result
+		SET acceptance_manifest_id = manifest.id,
+		    acceptance_manifest_hash = manifest.manifest_hash,
+		    resolved_input_versions = resolved_versions.value,
+		    acceptance_lineage = lineage.value
+		FROM manifest, resolved_versions, lineage
+		WHERE result.workspace_id = $1::uuid
+		  AND result.session_id = $2::uuid
+		  AND result.attempt_id = $3::uuid
+		  AND result.id = $4::uuid
+		  AND result.acceptance_manifest_id IS NULL
+	`, workspaceID, sessionID, attemptID, resultArtifactID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("%w: result replay binding was not sealed", ErrInvalidTransition)
+	}
+	return nil
+}
+
+func verifyAcceptedResultReplayBindingTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var resultExists, manifestExists, bindingComplete, bindingMatches bool
+	err := tx.QueryRow(ctx, `
+		WITH result AS (
+		  SELECT id, acceptance_manifest_id, acceptance_manifest_hash,
+		         resolved_input_versions, acceptance_lineage
+		  FROM research_result_artifact
+		  WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+		), manifest AS (
+		  SELECT id, manifest_hash
+		  FROM research_artifact_context_manifest
+		  WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+		), result_version AS (
+		  SELECT version.id
+		  FROM research_artifact_version version
+		  JOIN result ON result.id = version.artifact_id
+		  WHERE version.workspace_id = $1::uuid AND version.session_id = $2::uuid AND version.version = 1
+		), resolved_versions AS (
+		  SELECT COALESCE(jsonb_agg(version_id ORDER BY version_id), '[]'::jsonb) AS value
+		  FROM (
+		    SELECT DISTINCT reference.input_version_id::text AS version_id
+		    FROM research_artifact_input_reference reference
+		    JOIN result_version ON result_version.id = reference.consumer_version_id
+		    WHERE reference.workspace_id = $1::uuid AND reference.session_id = $2::uuid
+		  ) versions
+		), lineage AS (
+		  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+		    'input_version_id', reference.input_version_id::text,
+		    'relation', reference.relation,
+		    'manifest_id', COALESCE(reference.manifest_id::text, ''),
+		    'explicitly_used', reference.explicitly_used,
+		    'purpose', reference.purpose,
+		    'ordinal', reference.ordinal
+		  ) ORDER BY reference.ordinal, reference.input_version_id::text, reference.relation), '[]'::jsonb) AS value
+		  FROM research_artifact_input_reference reference
+		  JOIN result_version ON result_version.id = reference.consumer_version_id
+		  WHERE reference.workspace_id = $1::uuid AND reference.session_id = $2::uuid
+		)
+		SELECT
+		  EXISTS (SELECT 1 FROM result),
+		  EXISTS (SELECT 1 FROM manifest),
+		  COALESCE((SELECT acceptance_manifest_id IS NOT NULL FROM result), false),
+		  COALESCE((
+		    SELECT result.acceptance_manifest_id = manifest.id
+		       AND result.acceptance_manifest_hash = manifest.manifest_hash
+		       AND result.resolved_input_versions = resolved_versions.value
+		       AND result.acceptance_lineage = lineage.value
+		    FROM result, manifest, resolved_versions, lineage
+		  ), false)
+	`, workspaceID, sessionID, attemptID).Scan(&resultExists, &manifestExists, &bindingComplete, &bindingMatches)
+	if err != nil {
+		return err
+	}
+	if !resultExists {
+		return nil
+	}
+	if !manifestExists && !bindingComplete {
+		return nil
+	}
+	if !bindingComplete || !bindingMatches {
+		return fmt.Errorf("%w: accepted result replay binding changed", ErrResultConflict)
+	}
+	return nil
+}
+
 type manifestArtifactSet struct {
 	ArtifactIDs map[string]struct{}
 	Hash        string

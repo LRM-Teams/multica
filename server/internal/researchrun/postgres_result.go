@@ -193,6 +193,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		if err = persistResultArtifactInputReferencesTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID, resultVersionRowID); err != nil {
 			return AcceptResultOutcome{}, classifyResultConstraint(err)
 		}
+		if err = sealResultArtifactReplayBindingTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID, resultID); err != nil {
+			return AcceptResultOutcome{}, classifyResultConstraint(err)
+		}
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task
@@ -436,6 +439,9 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 	}
 	if attemptStatus == AttemptStatusSucceeded {
 		if existingRequestID == in.Result.ClientRequestID && existingHash == in.Hash {
+			if err := verifyAcceptedResultReplayBindingTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID); err != nil {
+				return acceptedResultState{}, nil, err
+			}
 			return state, &AcceptResultOutcome{Replayed: true, TaskID: state.task.ID, TaskKind: state.task.Kind, GoalVersion: state.task.GoalVersion, PlanVersion: state.task.PlanVersion}, nil
 		}
 		return acceptedResultState{}, nil, ErrResultConflict

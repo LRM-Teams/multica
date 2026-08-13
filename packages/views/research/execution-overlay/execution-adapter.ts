@@ -163,8 +163,9 @@ function deriveStatus(
   presence: PresenceLike,
   attempts: ResearchRunAttempt[] | undefined,
   now: number,
+  presenceAvailable: boolean,
 ): ExecutionStatus {
-  if (!presence) return "offline";
+  if (!presence) return presenceAvailable ? "offline" : "unknown";
   const phase = presence.phase;
   if (phase === "stale") return "stale";
   // Cancellation in flight wins over a stale classification only when the
@@ -239,11 +240,14 @@ function lastAcceptedResult(
 export function buildExecutionOverlayRows(input: {
   members: readonly ResearchFleetMember[];
   presence: ResearchPresenceMap;
+  /** False only when no successful presence projection is available. */
+  presenceAvailable?: boolean;
   nodes: readonly ResearchGraphNode[];
   run?: ResearchRunSnapshot | null;
   now?: number;
 }): ExecutionRow[] {
   const now = input.now ?? Date.now();
+  const presenceAvailable = input.presenceAvailable ?? true;
   const nodesById = new Map((input.nodes ?? []).map((n) => [n.id, n]));
   const attempts = attemptsByAgent(input.run ?? undefined);
   // Map agent → their current canvas task node (from presence.nodeId, else the
@@ -259,7 +263,12 @@ export function buildExecutionOverlayRows(input: {
     .filter((member) => member.status !== "archived")
     .map((member) => {
       const signal = input.presence[member.agent_id];
-      const status = deriveStatus(signal, attempts.get(member.agent_id), now);
+      const status = deriveStatus(
+        signal,
+        attempts.get(member.agent_id),
+        now,
+        presenceAvailable,
+      );
       const name = member.display_name || member.name || member.role || "Agent";
       const node = signal?.nodeId
         ? nodesById.get(signal.nodeId)

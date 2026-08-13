@@ -159,6 +159,18 @@ describe("buildExecutionOverlayRows — state derivation (contract PR #2415)", (
     expect(rows.some((r) => r.status === "running")).toBe(false);
   });
 
+  it("reports unknown when the presence projection is unavailable", () => {
+    const rows = buildExecutionOverlayRows({
+      members,
+      presence: {},
+      presenceAvailable: false,
+      nodes: [],
+      now: NOW,
+    });
+    expect(rows).toHaveLength(members.length);
+    for (const row of rows) expect(row.status).toBe("unknown");
+  });
+
   it("maps failed without a retry to failed, and unknown phase to unknown", () => {
     const rows = buildExecutionOverlayRows({
       members,

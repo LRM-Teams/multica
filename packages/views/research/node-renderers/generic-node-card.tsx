@@ -18,7 +18,6 @@ import type { ResearchV6UnknownKindDiagnostic } from "@multica/core/types/resear
 import { HelpCircle } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
-import { stateVisualFor } from "./node-state-matrix";
 
 export interface GenericNodeCardProps {
   nodeId: string;
@@ -45,7 +44,6 @@ export function GenericNodeCard({
   const { t } = useT("research");
   const compact = zoom <= 0.4;
   const interactive = Boolean(onOpen);
-  const state = stateVisualFor("unknown");
 
   const base = cn(
     "group/node relative w-52 overflow-hidden rounded-lg border border-border bg-muted/50 text-left",
@@ -54,7 +52,7 @@ export function GenericNodeCard({
 
   const cardInner = (
     <>
-      <div data-testid="generic-accent-bar" className={cn("h-1 w-full", state.accentBarClass)} />
+      <div data-testid="generic-accent-bar" className="h-1 w-full bg-muted-foreground/50" />
       <div className="space-y-1 p-2.5">
         <header className="flex items-center gap-1.5">
           <HelpCircle
@@ -87,7 +85,7 @@ export function GenericNodeCard({
             data-testid="generic-state"
             className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
           >
-            {status || state.label}
+            {status || t(($) => $.node_card.states.unknown)}
           </span>
         </div>
         {!compact && diagnostic && (

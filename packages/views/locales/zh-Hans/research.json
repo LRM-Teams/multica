@@ -511,7 +511,23 @@
     "generic_owner": "归属: ",
     "importance_sr": "重要性 {{level}}/3",
     "row_label_sr": "{{label}}：",
-    "no_progress": "暂无新进展"
+    "no_progress": "暂无新进展",
+    "owner": "负责人",
+    "objective": "目标",
+    "current_action": "当前动作",
+    "resolved": "已解决",
+    "progress": "新进展",
+    "risk": "风险",
+    "states": {
+      "default": "就绪",
+      "selected": "已选中",
+      "loading": "加载中",
+      "running": "运行中",
+      "failed": "失败",
+      "stale": "过期",
+      "unknown": "未知状态",
+      "terminal": "已完成"
+    }
   },
   "logic": {
     "label": "调研逻辑",

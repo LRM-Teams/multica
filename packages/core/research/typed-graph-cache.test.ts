@@ -61,6 +61,16 @@ describe("typed-graph-cache", () => {
     expect(node?.payload).toEqual({ details: { result: "evidence-backed" } });
   });
 
+  it("rejects malformed partial fields instead of replacing them with defaults", () => {
+    expect(
+      normalizeWsGraphNode({
+        id: "n1",
+        title: "Finding",
+        confidence: "not-a-number",
+      }),
+    ).toBeNull();
+  });
+
   it("upserts nodes without duplicating ids", () => {
     const data = makeInfinite([
       makePage({
@@ -78,6 +88,99 @@ describe("typed-graph-cache", () => {
     expect(result.data?.pages[0]?.nodes).toHaveLength(1);
     expect(result.data?.pages[0]?.nodes[0]?.title).toBe("New");
     expect(result.data?.pages[0]?.graph_version).toBe(4);
+  });
+
+  it("preserves canonical fields omitted by a legacy partial patch", () => {
+    const data = makeInfinite([
+      makePage({
+        session_id: "s1",
+        graph_version: 3,
+        nodes: [
+          {
+            id: "n1",
+            title: "Old",
+            status: "completed",
+            level: "xl",
+            confidence: 88,
+            child_ids: ["child"],
+          },
+        ],
+      }),
+    ]);
+    const result = patchTypedGraphInfiniteData(data, {
+      node: { id: "n1", title: "Renamed" },
+      graphVersion: 4,
+    });
+
+    expect(result.data?.pages[0]?.nodes[0]).toMatchObject({
+      title: "Renamed",
+      status: "completed",
+      level: "xl",
+      confidence: 88,
+      child_ids: ["child"],
+    });
+  });
+
+  it("applies explicit empty and null values from a canonical patch", () => {
+    const data = makeInfinite([
+      makePage({
+        session_id: "s1",
+        graph_version: 3,
+        nodes: [
+          {
+            id: "n1",
+            title: "Node",
+            confidence: 88,
+            child_ids: ["child"],
+            merged_from: ["input"],
+          },
+        ],
+      }),
+    ]);
+    const result = patchTypedGraphInfiniteData(data, {
+      node: {
+        id: "n1",
+        confidence: null,
+        child_ids: [],
+        merged_from: [],
+      },
+      graphVersion: 4,
+    });
+
+    expect(result.data?.pages[0]?.nodes[0]).toMatchObject({
+      confidence: null,
+      child_ids: [],
+      merged_from: [],
+    });
+  });
+
+  it("updates fields on an existing edge instead of ignoring the patch", () => {
+    const data = makeInfinite([
+      makePage({
+        session_id: "s1",
+        graph_version: 3,
+        edges: [
+          {
+            id: "e1",
+            from_node_id: "n1",
+            to_node_id: "n2",
+            edge_type: "supports",
+          },
+        ],
+      }),
+    ]);
+    const result = patchTypedGraphInfiniteData(data, {
+      edge: {
+        id: "e1",
+        from_node_id: "n1",
+        to_node_id: "n2",
+        edge_type: "contradicts",
+      },
+      graphVersion: 4,
+    });
+
+    expect(result.data?.pages[0]?.edges).toHaveLength(1);
+    expect(result.data?.pages[0]?.edges[0]?.edge_type).toBe("contradicts");
   });
 
   it("signals resync when graph_version skips a frame", () => {

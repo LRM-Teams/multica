@@ -31,26 +31,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 /** Normalize a WS graph node into the typed graph node shape (never invent fields). */
 export function normalizeWsGraphNode(raw: unknown): TypedGraphNode | null {
   const typed = TypedGraphNodeSchema.safeParse(raw);
-  if (typed.success) return typed.data;
-
-  const record = asRecord(raw);
-  if (typeof record.id !== "string" || record.id === "") return null;
-
-  const parsed = TypedGraphNodeSchema.safeParse({
-    id: record.id,
-    session_id: record.session_id,
-    node_type: record.node_type,
-    title: record.title,
-    summary: record.summary,
-    status: record.status,
-    actor_agent_id: record.actor_agent_id,
-    payload: record.payload,
-    parent_id: record.parent_id,
-    child_ids: record.child_ids,
-    created_at: record.created_at,
-    updated_at: record.updated_at,
-  });
-  return parsed.success ? parsed.data : null;
+  return typed.success ? typed.data : null;
 }
 
 function normalizeWsGraphEdge(raw: unknown): TypedGraphEdge | null {
@@ -73,35 +54,101 @@ function normalizeWsGraphEdge(raw: unknown): TypedGraphEdge | null {
   return parsed.success ? parsed.data : null;
 }
 
-function mergeTypedNodes(existing: TypedGraphNode, incoming: TypedGraphNode): TypedGraphNode {
-  return {
-    ...existing,
-    ...incoming,
-    payload: {
-      ...asRecord(existing.payload),
-      ...asRecord(incoming.payload),
-    },
-    child_ids: incoming.child_ids?.length ? incoming.child_ids : existing.child_ids,
-    merged_from: incoming.merged_from?.length ? incoming.merged_from : existing.merged_from,
-  };
+const PATCHABLE_NODE_FIELDS = [
+  "session_id",
+  "node_type",
+  "title",
+  "summary",
+  "status",
+  "actor_agent_id",
+  "level",
+  "round",
+  "cluster_id",
+  "confidence",
+  "document_count",
+  "conclusion_count",
+  "goal_version_id",
+  "derived_from",
+  "merged_from",
+  "superseded_by",
+  "restart_of",
+  "invalidated_by",
+  "superseded_at",
+  "invalidated_at",
+  "parent_id",
+  "child_ids",
+  "children_of",
+  "created_at",
+  "updated_at",
+] as const satisfies readonly (keyof TypedGraphNode)[];
+
+function mergeTypedNodes(
+  existing: TypedGraphNode,
+  incoming: TypedGraphNode,
+  raw: unknown,
+): TypedGraphNode {
+  const patch = asRecord(raw);
+  const merged = { ...existing };
+  for (const field of PATCHABLE_NODE_FIELDS) {
+    if (patch[field] !== undefined) {
+      Object.assign(merged, { [field]: incoming[field] });
+    }
+  }
+  if (patch.payload !== undefined) {
+    merged.payload =
+      patch.payload === null
+        ? null
+        : {
+            ...asRecord(existing.payload),
+            ...asRecord(incoming.payload),
+          };
+  }
+  return merged;
 }
 
-function upsertNodeInPage(page: TypedGraphResponse, node: TypedGraphNode): TypedGraphResponse {
+function upsertNodeInPage(
+  page: TypedGraphResponse,
+  node: TypedGraphNode,
+  raw: unknown,
+): TypedGraphResponse {
   const idx = page.nodes.findIndex((entry) => entry.id === node.id);
   if (idx >= 0) {
     const nodes = page.nodes.slice();
-    nodes[idx] = mergeTypedNodes(page.nodes[idx]!, node);
+    nodes[idx] = mergeTypedNodes(page.nodes[idx]!, node, raw);
     return { ...page, nodes };
   }
   return { ...page, nodes: [...page.nodes, node] };
 }
 
-function upsertEdgeInPage(page: TypedGraphResponse, edge: TypedGraphEdge): TypedGraphResponse {
+function upsertEdgeInPage(
+  page: TypedGraphResponse,
+  edge: TypedGraphEdge,
+  raw: unknown,
+): TypedGraphResponse {
   const key = edge.id || `${edge.from_node_id}:${edge.to_node_id}:${edge.edge_type ?? ""}`;
-  const exists = page.edges.some(
+  const index = page.edges.findIndex(
     (entry) => (entry.id || `${entry.from_node_id}:${entry.to_node_id}:${entry.edge_type ?? ""}`) === key,
   );
-  if (exists) return page;
+  if (index >= 0) {
+    const patch = asRecord(raw);
+    const existing = page.edges[index]!;
+    const edges = page.edges.slice();
+    edges[index] = {
+      ...existing,
+      ...(patch.session_id !== undefined ? { session_id: edge.session_id } : {}),
+      ...(patch.from_node_id !== undefined || patch.from !== undefined
+        ? { from_node_id: edge.from_node_id }
+        : {}),
+      ...(patch.to_node_id !== undefined || patch.to !== undefined
+        ? { to_node_id: edge.to_node_id }
+        : {}),
+      ...(patch.edge_type !== undefined || patch.relation !== undefined
+        ? { edge_type: edge.edge_type }
+        : {}),
+      ...(patch.created_at !== undefined ? { created_at: edge.created_at } : {}),
+    };
+    return { ...page, edges };
+  }
   return { ...page, edges: [...page.edges, edge] };
 }
 
@@ -114,19 +161,19 @@ export function patchTypedGraphInfiniteData(
   }
 
   const node = patch.node != null ? normalizeWsGraphNode(patch.node) : null;
-  const edgeList: TypedGraphEdge[] = [];
+  const edgePatches: Array<{ edge: TypedGraphEdge; raw: unknown }> = [];
   if (patch.edge != null) {
     const edge = normalizeWsGraphEdge(patch.edge);
-    if (edge) edgeList.push(edge);
+    if (edge) edgePatches.push({ edge, raw: patch.edge });
   }
   if (Array.isArray(patch.edges)) {
     for (const raw of patch.edges) {
       const edge = normalizeWsGraphEdge(raw);
-      if (edge) edgeList.push(edge);
+      if (edge) edgePatches.push({ edge, raw });
     }
   }
 
-  if (!node && edgeList.length === 0) {
+  if (!node && edgePatches.length === 0) {
     return { patched: false, needsResync: false };
   }
 
@@ -144,11 +191,11 @@ export function patchTypedGraphInfiniteData(
     if (node) {
       const onPage = page.nodes.some((entry) => entry.id === node.id);
       if (onPage || index === 0) {
-        next = upsertNodeInPage(next, node);
+        next = upsertNodeInPage(next, node, patch.node);
       }
     }
-    for (const edge of edgeList) {
-      next = upsertEdgeInPage(next, edge);
+    for (const { edge, raw } of edgePatches) {
+      next = upsertEdgeInPage(next, edge, raw);
     }
     if (patch.graphVersion != null && Number.isFinite(patch.graphVersion)) {
       next = { ...next, graph_version: Math.max(next.graph_version ?? 0, patch.graphVersion) };

@@ -21,6 +21,12 @@ Pending writebacks (`note_page_writeback`) are a third path (D1 human review). T
 4. **Writebacks stay pending until accept** (D1). Worker completion may *propose* writebacks; it must not silent-edit the page through Editor.
 5. **Channel replies use transport, not completion text.** Worker wakes are channel-directed (`reason=note_worker`). Visible replies must go through `multica message send --target <Message target>` — the same contract as @mention. Daemon never bridges final assistant text into Messages (`unsent_final_output` → `no_reply`).
 
+## Issue → note writeback subscription (S3-W1 / S3-W2)
+
+- **Subscription = link.** A `note_page_issue_ref` row is an implicit subscription. No separate subscribe table; delete the ref to opt out.
+- **Whitelist only.** Pending proposals are created only when issue status newly enters `done` or `cancelled`. Transitions like `todo → in_progress`, `blocked`, title edits, and ordinary comments produce **zero** proposals (key-comment writebacks deferred).
+- Code: `note_writeback_events.go` + `maybeProposeNoteWritebacksOnIssueTransition`.
+
 ## Status of Worker execution
 
 S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispatch:

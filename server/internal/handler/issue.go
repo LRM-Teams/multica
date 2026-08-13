@@ -2706,7 +2706,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
 	}
 	if statusChanged {
-		h.maybeProposeNoteWritebacksOnIssueDone(r.Context(), prevIssue, issue, actorType, actorID, prefix)
+		h.maybeProposeNoteWritebacksOnIssueTransition(r.Context(), prevIssue, issue, actorType, actorID, prefix)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -3169,7 +3169,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
 		}
 		if statusChanged {
-			h.maybeProposeNoteWritebacksOnIssueDone(r.Context(), prevIssue, issue, actorType, actorID, prefix)
+			h.maybeProposeNoteWritebacksOnIssueTransition(r.Context(), prevIssue, issue, actorType, actorID, prefix)
 		}
 		updated++
 	}

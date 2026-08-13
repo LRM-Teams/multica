@@ -266,18 +266,26 @@
 
 **本 Slice 完成标准：** 关联对象状态变化可产生待审写回；Issue 页能看到关联笔记；笔记内意图入口统一；Research 仍可再往后。
 
-- [ ] **S3-W1 订阅式写回**
+- [x] **S3-W1 订阅式写回**
   - **目标**：笔记可订阅已关联 Issue 的状态变化；变化 → 待审提案（D1）。
   - **要做**：订阅关系或「有关联即订阅」策略二选一（实现时写进代码注释）；触发 S1 写回管道。
   - **不要做**：thinking / 诊断洪水写入笔记。
   - **依赖**：Slice 1 写回管道、Slice 2（若要含 run 事件）
   - **完成标准**：完成/失败能出提案；噪声事件不出提案（白名单测例）。
+  - **已落地（2026-08-13）**：
+    - 策略：「有关联即订阅」——`note_page_issue_ref` 即订阅；注释写在 `note_writeback_events.go` / 合同文档
+    - 触发：`maybeProposeNoteWritebacksOnIssueTransition`（done + cancelled）
+    - 测试：`TestIssueCancelledCreatesPendingNoteWriteback`、既有 done 测例
 
-- [ ] **S3-W2 回写事件白名单**
+- [x] **S3-W2 回写事件白名单**
   - **目标**：只允许完成、失败、关键评论等。
   - **要做**：明确枚举 + 测试。
   - **依赖**：S3-W1
   - **完成标准**：白名单外事件零提案。
+  - **已落地（2026-08-13）**：
+    - 白名单：`done` / `cancelled`（关键评论写回延期）
+    - `classifyNoteWritebackIssueTransition` + `TestClassifyNoteWritebackIssueTransitionWhitelist`
+    - 噪声测：`TestIssueInProgressNoiseCreatesNoNoteWriteback`
 
 - [ ] **S3-R5b Issue → 笔记反向发现**
   - **目标**：落实 D4——Issue 侧列出关联笔记（ACL 过滤）。
@@ -354,4 +362,4 @@
 | 3 | Slice 2 完成 → `S3-*` |
 | 4 | 管子稳定后 → `S4-S1` 起验证 |
 
-**当前首期范围：** 仅 Slice 1 + Slice 2。
+**当前首期范围：** Slice 1 + Slice 2 已完成（见 PR）；Slice 3 进行中（S3-W1/W2 已勾）。

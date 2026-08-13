@@ -1,6 +1,9 @@
 package computer
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Health is the replaceable local liveness/readiness seam. Callers use this
 // instead of knowing the Computer's singleton port or probing it directly.
@@ -20,6 +23,9 @@ func (l *Lifecycle) Restart(options StartOptions) (RestartResult, error) {
 	result := RestartResult{Stop: l.Stop()}
 	if result.Stop.Err != nil {
 		return result, result.Stop.Err
+	}
+	if result.Stop.Running && !result.Stop.Stopped {
+		return result, fmt.Errorf("Computer did not stop; refusing to start a successor")
 	}
 	started, err := l.StartBackground(options)
 	result.Start = started

@@ -231,6 +231,31 @@ func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 	}
 }
 
+func TestRestartDoesNotStartSuccessorUntilResidentStopIsProven(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, int) map[string]any {
+		return map[string]any{"status": "running", "pid": float64(os.Getpid())}
+	}
+	lc.Sleep = func(time.Duration) {}
+	restoreShutdown := setRequestShutdown(func(int) error { return nil })
+	defer restoreShutdown()
+	spawnCalls := 0
+	restoreSpawn := setSpawnResident(func(string, []string, *os.File) (procHandle, error) {
+		spawnCalls++
+		return &fakeProc{pid: 7777}, nil
+	})
+	defer restoreSpawn()
+
+	result, err := lc.Restart(StartOptions{})
+	if err == nil || !strings.Contains(err.Error(), "did not stop") {
+		t.Fatalf("Restart result=%+v err=%v, want unproven-stop error", result, err)
+	}
+	if spawnCalls != 0 {
+		t.Fatalf("Restart spawned %d successors before stop proof", spawnCalls)
+	}
+}
+
 func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if err := os.MkdirAll(filepath.Dir(PIDPath("")), 0o755); err != nil {

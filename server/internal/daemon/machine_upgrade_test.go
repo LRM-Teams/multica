@@ -243,6 +243,147 @@ func TestInterruptedMachineUpgradeRecoveryResumesOnlyIncompletePhases(t *testing
 	}
 }
 
+func TestInterruptedMachineUpgradeRecoveryClearsAcceptedJournalAfterMatchingServerFailure(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	generation := "generation-a"
+	targetVersion := "v10.0.0"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/runtimes/runtime-1/machine-upgrades/upgrade-1" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(MachineUpgradeReceipt{
+			ID:                   "upgrade-1",
+			Phase:                "failed",
+			ResolvedTarget:       &targetVersion,
+			AcceptedGeneration:   &generation,
+			AcceptedRuntimeIDs:   []string{"runtime-1"},
+			AcceptedWorkspaceIDs: []string{"workspace-1"},
+		})
+	}))
+	defer server.Close()
+
+	d := &Daemon{
+		cfg:    Config{CLIVersion: targetVersion},
+		client: NewClient(server.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces: map[string]*workspaceState{
+			"workspace-1": newWorkspaceState("workspace-1", []string{"runtime-1"}),
+		},
+	}
+	d.client.SetToken("test-token")
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: generation, SourceVersion: "v9.9.9", TargetVersion: targetVersion,
+		RuntimeIDs: []string{"runtime-1"}, WorkspaceIDs: []string{"workspace-1"}, Phase: "accepted",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := d.recoverInterruptedMachineUpgrade(context.Background())
+	if err != nil || restarted {
+		t.Fatalf("failed-operation recovery restarted=%v err=%v", restarted, err)
+	}
+	if retained, err := d.currentMachineUpgradeJournal(); err != nil || retained != nil {
+		t.Fatalf("matching failed operation retained journal=%+v err=%v", retained, err)
+	}
+}
+
+func TestMachineUpgradeFailureAcknowledgementClearsPreActivationJournal(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/daemon/runtimes/runtime-1/machine-upgrades/upgrade-1/progress" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	d := &Daemon{client: NewClient(server.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d.client.SetToken("test-token")
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-1"}, Phase: "staged",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	d.failMachineUpgrade(context.Background(), "runtime-1", journal.ID, "verification_failed", fmt.Errorf("invalid staged binary"))
+	if retained, err := d.currentMachineUpgradeJournal(); err != nil || retained != nil {
+		t.Fatalf("acknowledged pre-activation failure retained journal=%+v err=%v", retained, err)
+	}
+}
+
+func TestInterruptedMachineUpgradeRecoveryRetainsJournalWithoutMatchingFailureProof(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		receipt MachineUpgradeReceipt
+	}{
+		{name: "non-terminal receipt", receipt: MachineUpgradeReceipt{ID: "upgrade-1", Phase: "staging"}},
+		{name: "wrong generation", receipt: MachineUpgradeReceipt{ID: "upgrade-1", Phase: "failed", AcceptedGeneration: stringPtr("generation-b"), ResolvedTarget: stringPtr("v10.0.0"), AcceptedRuntimeIDs: []string{"runtime-1"}, AcceptedWorkspaceIDs: []string{"workspace-1"}}},
+		{name: "wrong target", receipt: MachineUpgradeReceipt{ID: "upgrade-1", Phase: "failed", AcceptedGeneration: stringPtr("generation-a"), ResolvedTarget: stringPtr("v11.0.0"), AcceptedRuntimeIDs: []string{"runtime-1"}, AcceptedWorkspaceIDs: []string{"workspace-1"}}},
+		{name: "wrong runtime set", receipt: MachineUpgradeReceipt{ID: "upgrade-1", Phase: "failed", AcceptedGeneration: stringPtr("generation-a"), ResolvedTarget: stringPtr("v10.0.0"), AcceptedRuntimeIDs: []string{"runtime-2"}, AcceptedWorkspaceIDs: []string{"workspace-1"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			previousRoot := versionStoreRootFn
+			versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+			t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(tc.receipt)
+			}))
+			defer server.Close()
+			d := &Daemon{cfg: Config{CLIVersion: "v10.0.0"}, client: NewClient(server.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			d.client.SetToken("test-token")
+			journal := &machineUpgradeJournal{
+				ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+				RuntimeIDs: []string{"runtime-1"}, WorkspaceIDs: []string{"workspace-1"}, Phase: "accepted",
+			}
+			if err := d.writeMachineUpgradeJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+
+			if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
+				t.Fatalf("unproven failure recovery restarted=%v err=%v", restarted, err)
+			}
+			if retained, err := d.currentMachineUpgradeJournal(); err != nil || retained == nil {
+				t.Fatalf("unproven failure removed journal=%+v err=%v", retained, err)
+			}
+		})
+	}
+}
+
+func TestMachineUpgradeFailureReportErrorRetainsPreActivationJournal(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	d := &Daemon{client: NewClient(server.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	d.client.SetToken("test-token")
+	journal := &machineUpgradeJournal{ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0", RuntimeIDs: []string{"runtime-1"}, Phase: "accepted"}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	d.failMachineUpgrade(context.Background(), "runtime-1", journal.ID, "stage_failed", fmt.Errorf("download failed"))
+	if retained, err := d.currentMachineUpgradeJournal(); err != nil || retained == nil {
+		t.Fatalf("unacknowledged failure removed journal=%+v err=%v", retained, err)
+	}
+}
+
 func TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplicitActivation(t *testing.T) {
 	configureMachineUpgradeRecoveryVersionStore(t, "v9.9.9", "v10.0.0", "v11.0.0")
 

@@ -17,6 +17,11 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 	if err != nil || journal == nil {
 		return false, err
 	}
+	if cleared, err := d.reconcileFailedPreActivationMachineUpgrade(ctx, journal); err != nil {
+		return false, err
+	} else if cleared {
+		return false, nil
+	}
 
 	runningSource := daemonVersionsMatch(d.cfg.CLIVersion, journal.SourceVersion)
 	runningTarget := daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion)
@@ -154,6 +159,40 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 	d.mu.Unlock()
 	d.triggerRestart()
 	return true, nil
+}
+
+// reconcileFailedPreActivationMachineUpgrade settles an operation that the
+// server has already rejected before Active could be mutated. Later phases
+// retain their marker because they require successor or rollback proof.
+func (d *Daemon) reconcileFailedPreActivationMachineUpgrade(ctx context.Context, journal *machineUpgradeJournal) (bool, error) {
+	if journal == nil || (journal.Phase != "accepted" && journal.Phase != "staged") {
+		return false, nil
+	}
+	if d.client == nil || len(journal.RuntimeIDs) == 0 {
+		return false, nil
+	}
+	receipt, err := d.client.GetMachineUpgradeReceipt(ctx, strings.TrimSpace(journal.RuntimeIDs[0]), journal.ID)
+	if err != nil {
+		return false, fmt.Errorf("read pre-activation failure receipt: %w", err)
+	}
+	if receipt == nil || receipt.Phase != "failed" {
+		return false, nil
+	}
+	if !machineUpgradeFailureReceiptMatchesJournal(receipt, journal) {
+		return false, fmt.Errorf("failed terminal receipt does not match pre-activation journal")
+	}
+	if err := d.compareAndClearMachineUpgradeJournal(journal); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func machineUpgradeFailureReceiptMatchesJournal(receipt *MachineUpgradeReceipt, journal *machineUpgradeJournal) bool {
+	return receipt != nil && journal != nil && receipt.ID == journal.ID &&
+		receipt.AcceptedGeneration != nil && *receipt.AcceptedGeneration == journal.Generation &&
+		receipt.ResolvedTarget != nil && daemonVersionsMatch(*receipt.ResolvedTarget, journal.TargetVersion) &&
+		sameStringSet(receipt.AcceptedRuntimeIDs, journal.RuntimeIDs) &&
+		sameStringSet(receipt.AcceptedWorkspaceIDs, journal.WorkspaceIDs)
 }
 
 // resumeMachineUpgradeRollback repairs the crash window where the local source

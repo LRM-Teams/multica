@@ -1015,6 +1015,7 @@ surface 矩阵仍未完成。
 
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
+  - [x] F2b-url：共享 `CanonicalURL` 边界拒绝所有 URL userinfo，包括 percent-encoded 用户名和密码，阻止 Agent 来源、Corpus identity 与未来 Retrieval Adapter 把嵌入式凭据持久化、用于去重或转发。provider 认证仍须走独立凭据通道；具体 Adapter、DNS/redirect transport fence 与持久 Corpus 接线仍待后续 F2b/F2c。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
 

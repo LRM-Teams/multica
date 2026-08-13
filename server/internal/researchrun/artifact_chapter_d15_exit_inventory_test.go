@@ -24,7 +24,7 @@ var chapterD15Coverage = map[int]string{
 	7:  "partial", // artifact_policy legacy admission matrix
 	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered
 	9:  "covered", // closed normal-clearance/purpose/evaluation matrix + output taint permutations
-	10: "partial", // evaluation compartment integration + researcheval SubjectInput
+	10: "covered", // structural subject isolation + real subject/grader frozen-manifest dispatch
 	11: "partial", // dispatch race: eligibility/state/hash/lifecycle after rolled-back intent
 	12: "partial", // dispatch normalized locks + concurrent shared-candidate test
 	13: "partial", // eligibility + representation CAS
@@ -39,7 +39,7 @@ var chapterD15Coverage = map[int]string{
 	22: "partial", // result accept transaction recovery matrix
 	23: "partial", // cross-workspace 404 + Fleet principal/header binding; full surface matrix open
 	24: "partial", // withdrawal omission + in-flight accept block
-	25: "partial", // attempt_context stable metadata + FE schema fallback
+	25: "covered", // stable passport-ID/hash projection + frozen Attempt scope + enum/FE fallback
 	26: "covered", // transaction structural guard tests
 }
 

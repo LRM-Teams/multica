@@ -979,6 +979,8 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [ ] 所有 Task Context 只从护照选择可见工件；Prompt 不能读取无权数据。
 - [ ] evaluation-private 与被评对象隔离。
   - [x] D-eval-1：Quality Gate/Citation Audit dispatch 使用 `evaluation` purpose，同时冻结同一 grader Agent 的 normal 与 evaluation-private 持久 grant；Stage Evaluation 私有 representation 只在 active evaluation grant、assigned Attempt 路径解码并进入 grader Prompt，普通任务继续 omission/fail-closed。完整 principal/revocation 矩阵仍由 §15.10/§15.23 退出测试收口。
+  - [x] D-eval-2：Prompt 入口在进入任一 V1–V5 builder 前结构性剥离 `EvaluationPrivate`，只在 Quality Gate/Citation Audit 普通 Prompt 完成后追加授权 grader context；真实 subject/grader dispatch 对照证明 subject 序列化不含私有 ID、passport hash、metadata 或 content，grader 获得 manifest 冻结版本且不会吸收 dispatch 后新增的私有工件。§15.10 已收口；完整 principal/revocation 矩阵仍由 §15.23 收口。
+  - [x] D-projection-1：Run Snapshot 通过内部 `artifactProjectionModule` 输出以 Passport ID 为实体 ID 的 bounded 投影；排序与 projection hash 稳定，未知 kind/access/lifecycle/provenance 降级且不暴露 content hash、representation、grant 或 omission。Human Snapshot 读取当前同 scope 投影，Attempt Snapshot 只投影冻结 Manifest 允许的 Passport（含 Manifest 自身），后续 live 工件不会进入旧 Attempt 投影。客户端 malformed 投影只降级为空投影，不丢弃整个 Run。§15.25 已收口；V6 全图以 Passport 权威替换兼容 `projectRunV2Graph` 仍属于 N。
 
 当前实现状态：migration 318–335 已落地 Passport、不可变 Version、Result Artifact、
 Context Manifest、Input Reference、Policy mutation ledger、canonicalization registry、
@@ -987,6 +989,12 @@ scoped FK、生命周期/验证/失效守卫和生产 dispatch/result 路径。m
 Manifest 不再仅依赖进程内硬编码 clearance。D 章尚未完成，最终状态以
 `artifact_chapter_d15_exit_inventory_test.go` 的 26 项退出清单为准，不能以 migration
 数量或 fixture 正例替代完整验收。
+
+D-access-2 证据：human Session snapshot 拒绝 `attempt_id`，在读取 Session、Fleet、
+legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-private context
+只能经 Agent 专用路由的 principal、active Fleet membership 和 assigned Attempt 校验读取。
+无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
+surface 矩阵仍未完成。
 
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 

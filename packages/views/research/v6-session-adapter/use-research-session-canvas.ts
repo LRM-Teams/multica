@@ -29,6 +29,7 @@ import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import type { ResearchV6Snapshot } from "@multica/core/types/research-v6";
 import {
   emptyCanvasSnapshot,
+  capabilityFromThrownError,
   sourceOfVerdict,
   type CapabilityVerdict,
   type ResearchSource,
@@ -137,22 +138,11 @@ export function useResearchSessionCanvas({
         if (error instanceof Error && error.name === "AbortError") {
           throw error;
         }
-        const maybe = error as { status?: unknown };
-        if (typeof maybe.status === "number") {
-          return {
-            verdict:
-              maybe.status === 404 || maybe.status === 501
-                ? { kind: "fallback-v5", source: "v5" }
-                : {
-                    kind: "interface-error",
-                    reason: `V6 probe failed with HTTP ${maybe.status}`,
-                  },
-          };
-        }
+        const verdict = capabilityFromThrownError(error);
         return {
-          verdict: {
+          verdict: verdict ?? {
             kind: "interface-error",
-            reason: error instanceof Error ? error.message : "V6 probe failed",
+            reason: "V6 probe was cancelled without a capability verdict",
           },
         };
       }
@@ -275,4 +265,3 @@ const inertSliceGateway: ProjectionSliceGateway = {
     Promise.reject(new Error("inert slice gateway: no V6 slice source configured")),
   observe: () => () => {},
 };
-

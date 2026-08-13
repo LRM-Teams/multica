@@ -4835,9 +4835,9 @@ export class ApiClient {
   async getResearchV6ProjectionSnapshot(
     runId: string,
   ): Promise<import("../types/research-v6").ResearchV6Snapshot> {
-    const { parseResearchV6Snapshot } = await import("../research-v6/schemas");
+    const { parseResearchV6SnapshotStrict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/snapshot`);
-    return parseResearchV6Snapshot(raw);
+    return parseResearchV6SnapshotStrict(raw);
   }
 
   async getResearchV6ProjectionDeltaPage(

@@ -65,6 +65,7 @@ export function ResearchConstellationWorkspace({
   typedGraph,
   typedLoading,
   typedError,
+  projectionErrorReason,
   projectionMismatch = false,
   onRetryTypedGraph,
   retryTypedGraphPending = false,
@@ -98,6 +99,7 @@ export function ResearchConstellationWorkspace({
   typedGraph: TypedGraphResponse | undefined;
   typedLoading: boolean;
   typedError: boolean;
+  projectionErrorReason?: string | null;
   projectionMismatch?: boolean;
   onRetryTypedGraph?: () => void;
   retryTypedGraphPending?: boolean;
@@ -455,9 +457,22 @@ export function ResearchConstellationWorkspace({
         {typedError && !canvasModel && !projectionMismatch ? (
           <div
             role="alert"
-            className="grid h-full place-items-center px-6 text-center text-sm text-destructive"
+            className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-destructive"
           >
-            {t(($) => $.d5.canvas.error)}
+            <span>{projectionErrorReason || t(($) => $.d5.canvas.error)}</span>
+            {onRetryTypedGraph ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={retryTypedGraphPending}
+                onClick={onRetryTypedGraph}
+              >
+                {retryTypedGraphPending
+                  ? t(($) => $.interrupt.retrying)
+                  : t(($) => $.session_page.retry)}
+              </Button>
+            ) : null}
           </div>
         ) : null}
         {projectionMismatch ? (

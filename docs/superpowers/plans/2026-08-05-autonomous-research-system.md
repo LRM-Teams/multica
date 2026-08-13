@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-cas-2 证据：包内测试 seam 在 `CreateDispatchIntent` 的 authoritative Manifest plan
+完成、持久化开始前分别推进 selected Passport eligibility revision 和改写 selected Version
+content hash；生产事务的 Passport/Version CAS 均返回 `ErrInvalidTransition`，并证明
+Attempt、Attempt/Manifest Passport、Manifest entry/omission、policy grant、Outbox、Task
+transition 与 dispatch Event 全部零写入。§15.13 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

@@ -284,6 +284,7 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 			Plan:              manifestPlan,
 			ExpectedWatermark: expectedWatermark,
 			Purpose:           purpose,
+			PlannedHook:       s.dispatchManifestPlannedHook,
 		})
 		if err != nil {
 			return Attempt{}, RunEvent{}, err

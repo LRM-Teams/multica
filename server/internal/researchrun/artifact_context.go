@@ -266,6 +266,7 @@ type persistDispatchManifestInput struct {
 	Plan              dispatchManifestPlan
 	ExpectedWatermark int64
 	Purpose           ArtifactPurpose
+	PlannedHook       func(context.Context, dispatchManifestPlan) error
 }
 
 func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) (dispatchManifestPlan, error) {
@@ -309,6 +310,11 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	plan = authorized
 	if err = freezeEvidenceRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
+	}
+	if in.PlannedHook != nil {
+		if err = in.PlannedHook(ctx, plan); err != nil {
+			return dispatchManifestPlan{}, err
+		}
 	}
 	plan.ManifestHash = hashDispatchManifest(dispatchManifestHashInput{
 		WorkspaceID:         in.WorkspaceID,

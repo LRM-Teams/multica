@@ -1,6 +1,11 @@
 package researchrun
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
+)
 
 type InquiryEntityKind string
 type InquiryRelation string
@@ -35,6 +40,19 @@ type inquiryEdgeCommand struct {
 	Rationale string
 }
 
+type inquiryStatusEvidenceRef struct {
+	Kind string
+	ID   string
+}
+
+type inquiryStatusUpdateCommand struct {
+	Target       inquiryEndpoint
+	Before       string
+	After        string
+	Reason       string
+	EvidenceRefs []inquiryStatusEvidenceRef
+}
+
 // inquiryModule is the internal seam for Inquiry Graph invariants. Callers
 // submit intent; endpoint resolution, lifecycle rules and DAG rules remain
 // implementation details shared by production persistence and tests.
@@ -51,6 +69,45 @@ func (inquiryModule) ValidateTransition(kind InquiryEntityKind, from, to string)
 	allowed := inquiryTransitions[kind][from][to]
 	if !allowed {
 		return fmt.Errorf("%w: invalid %s status transition %s -> %s", ErrInvalidTransition, kind, from, to)
+	}
+	return nil
+}
+
+// ValidateStatusUpdate is the interface for evidence-driven Inquiry lifecycle
+// changes. The persistence adapter supplies resolved, same-session UUIDs; this
+// module owns transition vocabulary and the minimum auditable explanation.
+func (m inquiryModule) ValidateStatusUpdate(command inquiryStatusUpdateCommand) error {
+	if command.Target.Kind != InquiryKindQuestion && command.Target.Kind != InquiryKindHypothesis &&
+		command.Target.Kind != InquiryKindBranch && command.Target.Kind != InquiryKindInsight {
+		return fmt.Errorf("%w: unsupported inquiry status target %q", ErrInvalidContract, command.Target.Kind)
+	}
+	if _, err := uuid.Parse(command.Target.ID); err != nil {
+		return fmt.Errorf("%w: inquiry status target is not resolved", ErrInvalidContract)
+	}
+	if command.Before == command.After {
+		return fmt.Errorf("%w: inquiry status update is a no-op", ErrInvalidTransition)
+	}
+	if err := m.ValidateTransition(command.Target.Kind, command.Before, command.After); err != nil {
+		return err
+	}
+	if strings.TrimSpace(command.Reason) == "" || len(command.Reason) > 32768 {
+		return fmt.Errorf("%w: inquiry status update requires a substantive reason", ErrInvalidContract)
+	}
+	if len(command.EvidenceRefs) == 0 || len(command.EvidenceRefs) > 128 {
+		return fmt.Errorf("%w: inquiry status update requires bounded evidence", ErrInvalidContract)
+	}
+	seen := make(map[inquiryStatusEvidenceRef]struct{}, len(command.EvidenceRefs))
+	for _, ref := range command.EvidenceRefs {
+		if !inquiryStatusEvidenceKinds[ref.Kind] {
+			return fmt.Errorf("%w: unknown status evidence kind %q", ErrInvalidContract, ref.Kind)
+		}
+		if _, err := uuid.Parse(ref.ID); err != nil {
+			return fmt.Errorf("%w: status evidence reference is not resolved", ErrInvalidContract)
+		}
+		if _, duplicate := seen[ref]; duplicate {
+			return fmt.Errorf("%w: duplicate status evidence reference", ErrInvalidContract)
+		}
+		seen[ref] = struct{}{}
 	}
 	return nil
 }
@@ -93,6 +150,9 @@ var inquiryRelations = map[InquiryRelation]bool{
 }
 
 var inquiryStatuses = map[InquiryEntityKind]map[string]bool{
+	InquiryKindQuestion: {
+		"open": true, "in_progress": true, "answered": true, "unresolved": true, "obsolete": true,
+	},
 	InquiryKindHypothesis: {
 		"proposed": true, "investigating": true, "supported": true, "weakened": true,
 		"refuted": true, "conditional": true, "obsolete": true,
@@ -107,6 +167,12 @@ var inquiryStatuses = map[InquiryEntityKind]map[string]bool{
 }
 
 var inquiryTransitions = map[InquiryEntityKind]map[string]map[string]bool{
+	InquiryKindQuestion: {
+		"open":        {"in_progress": true, "answered": true, "unresolved": true, "obsolete": true},
+		"in_progress": {"answered": true, "unresolved": true, "obsolete": true},
+		"answered":    {"in_progress": true, "unresolved": true, "obsolete": true},
+		"unresolved":  {"in_progress": true, "answered": true, "obsolete": true},
+	},
 	InquiryKindHypothesis: {
 		"proposed":      {"investigating": true, "obsolete": true},
 		"investigating": {"supported": true, "weakened": true, "refuted": true, "conditional": true, "obsolete": true},
@@ -128,4 +194,9 @@ var inquiryTransitions = map[InquiryEntityKind]map[string]map[string]bool{
 		"stale":      {"accepted": true, "superseded": true, "obsolete": true},
 		"superseded": {"obsolete": true},
 	},
+}
+
+var inquiryStatusEvidenceKinds = map[string]bool{
+	"question": true, "hypothesis": true, "branch": true, "claim": true,
+	"insight": true, "task": true, "source": true,
 }

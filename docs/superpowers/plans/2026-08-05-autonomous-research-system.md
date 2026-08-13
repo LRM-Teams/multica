@@ -1038,6 +1038,7 @@ surface 矩阵仍未完成。
 - [ ] 实现盲复核、Methodologist、区分任务和 Adjudicator 输入隔离。
 - [ ] 实现 Research Deliberation Turn、进展水位、轮次/成本限制、deadlock 和 Research Director 自动升级。
 - [ ] Gate 阻止未处理的阻断级争议，报告展示条件化和不可消解争议。
+  - [x] H5a-delivery-obligation：`dispute_delivery_gate.go` 对一个不可变 Report Revision 聚合验收完整 Dispute 集。blocking `open | investigating`、待确认 human gate、缺少当前修订披露或披露与 canonical condition/residual uncertainty/impact 不一致都会产生稳定 finding 并阻断；输入顺序不改变审计指纹。该切片只完成 Gate 决策合同；Dispute/Report 持久读取、现有 deliveryGateModule 接线和 finding 补救路由仍待后续切片。
 
 退出条件：固定冲突语料中能建立、讨论、deadlock 升级、调查、分类、裁决并在报告中追溯；不同范围的表面冲突不会被错误二选一，Research Director 不能无证据覆盖立场。
 

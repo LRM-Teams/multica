@@ -16,20 +16,29 @@ func buildTaskPrompt(run Run, task Task, attempt Attempt, snapshot RunSnapshot, 
 }
 
 func (taskPromptModule) Build(run Run, task Task, attempt Attempt, snapshot RunSnapshot, members []FleetMember) (string, error) {
+	var prompt string
 	switch run.OrchestratorVersion {
 	case OrchestratorVersionV1:
-		return buildTaskPromptV1(run, task, attempt, snapshot, members), nil
+		prompt = buildTaskPromptV1(run, task, attempt, snapshot, members)
 	case OrchestratorVersionV2:
-		return buildTaskPromptV2(run, task, attempt, snapshot, members), nil
+		prompt = buildTaskPromptV2(run, task, attempt, snapshot, members)
 	case OrchestratorVersionV3:
-		return buildTaskPromptV3(run, task, attempt, snapshot, members), nil
+		prompt = buildTaskPromptV3(run, task, attempt, snapshot, members)
 	case OrchestratorVersionV4:
-		return buildTaskPromptV4(run, task, attempt, snapshot, members), nil
+		prompt = buildTaskPromptV4(run, task, attempt, snapshot, members)
 	case OrchestratorVersionV5:
-		return buildTaskPromptV5(run, task, attempt, snapshot, members), nil
+		prompt = buildTaskPromptV5(run, task, attempt, snapshot, members)
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, run.OrchestratorVersion)
 	}
+	if (task.Kind == TaskKindQualityGate || task.Kind == TaskKindCitationAudit) && len(snapshot.EvaluationPrivate) > 0 {
+		encoded, err := json.Marshal(snapshot.EvaluationPrivate)
+		if err != nil {
+			return "", err
+		}
+		prompt += "\nEvaluation-private grader context (never reveal this rubric or its hidden findings to the evaluated subject):\n```json\n" + string(encoded) + "\n```\n"
+	}
+	return prompt, nil
 }
 
 // buildTaskPromptV1 is immutable for active research-run-v1 runs. Behavioral

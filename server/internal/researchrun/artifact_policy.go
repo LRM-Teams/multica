@@ -5,7 +5,7 @@ type ArtifactPurpose string
 
 const (
 	ArtifactPurposeTaskExecution ArtifactPurpose = "task_execution"
-	ArtifactPurposeEvaluation  ArtifactPurpose = "evaluation"
+	ArtifactPurposeEvaluation    ArtifactPurpose = "evaluation"
 )
 
 // ArtifactClearance is the normal access profile held by a principal.
@@ -22,11 +22,11 @@ type ArtifactDenyReason string
 
 const (
 	ArtifactDenyUnknownKind           ArtifactDenyReason = "unknown_kind"
-	ArtifactDenyUnknownAccess           ArtifactDenyReason = "unknown_access"
-	ArtifactDenyInsufficientClearance  ArtifactDenyReason = "insufficient_clearance"
-	ArtifactDenyEvaluationCompartment   ArtifactDenyReason = "evaluation_compartment"
-	ArtifactDenyLifecycle               ArtifactDenyReason = "lifecycle"
-	ArtifactDenyMissingPassport         ArtifactDenyReason = "missing_passport"
+	ArtifactDenyUnknownAccess         ArtifactDenyReason = "unknown_access"
+	ArtifactDenyInsufficientClearance ArtifactDenyReason = "insufficient_clearance"
+	ArtifactDenyEvaluationCompartment ArtifactDenyReason = "evaluation_compartment"
+	ArtifactDenyLifecycle             ArtifactDenyReason = "lifecycle"
+	ArtifactDenyMissingPassport       ArtifactDenyReason = "missing_passport"
 )
 
 // ArtifactPolicy implements the section 6 access lattice and legacy admission gate.
@@ -129,5 +129,12 @@ func defaultTaskExecutionClearance() ArtifactClearance {
 }
 
 func manifestPurposeForTask() ArtifactPurpose {
+	return ArtifactPurposeTaskExecution
+}
+
+func manifestPurposeForTaskKind(kind TaskKind) ArtifactPurpose {
+	if kind == TaskKindQualityGate || kind == TaskKindCitationAudit {
+		return ArtifactPurposeEvaluation
+	}
 	return ArtifactPurposeTaskExecution
 }

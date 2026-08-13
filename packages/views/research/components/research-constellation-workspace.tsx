@@ -703,21 +703,23 @@ export function ResearchConstellationWorkspace({
         />
       </section>
 
-      <Button
-        ref={railToggleRef}
-        type="button"
-        size="sm"
-        variant="secondary"
-        className={cn(
-          isMobile ? "d5-rail-toggle" : "d5-rail-toggle-desktop",
-        )}
-        data-testid="research-d5-rail-toggle"
-        aria-expanded={railOpen}
-        aria-controls={contextRailId}
-        onClick={() => setRailOpen(!railOpen)}
-      >
-        {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
-      </Button>
+      {isMobile || !railOpen ? (
+        <Button
+          ref={railToggleRef}
+          type="button"
+          size="sm"
+          variant="secondary"
+          className={cn(
+            isMobile ? "d5-rail-toggle" : "d5-rail-toggle-desktop",
+          )}
+          data-testid="research-d5-rail-toggle"
+          aria-expanded={railOpen}
+          aria-controls={contextRailId}
+          onClick={() => setRailOpen(!railOpen)}
+        >
+          {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
+        </Button>
+      ) : null}
 
       {showDesktopRail ? (
         <ResearchD5Rail

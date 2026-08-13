@@ -327,7 +327,11 @@ export class ResearchV6LiveProjectionController {
         this.client.getState().lastConfirmedSequence,
       );
       if (verdict.ok) {
-        // Contiguous from our position — nothing to replay; deltas flow live.
+        // The resume verdict carries every committed change since our last
+        // confirmed sequence. Feed it through the same run-identity,
+        // ordering, gap, store, and resync path as a live frame; acknowledging
+        // the socket without applying it would silently lose offline work.
+        this.applyDelta(verdict.delta);
         this.setStatus("connected");
       } else {
         // Server cleared history / cannot resume contiguously → full resync.

@@ -37,19 +37,26 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return errors.New("resident Message runtime is not configured")
 	}
 	if d.canonicalRuntimes.hasResidentBackend(agentID, runtimeID) {
-		if runIdentity == nil {
+		if runIdentity != nil {
+			if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err == nil {
+				if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
+					return fmt.Errorf("start resident provider process: %w", err)
+				}
+				return nil
+			} else if !errors.Is(err, agent.ErrPiRPCRunIdentityRequiresFreshSession) {
+				return fmt.Errorf("bind resident Pi run identity: %w", err)
+			}
+			// A run-scoped Pi session cannot inherit an unbound or differently
+			// bound resident. Replace it only through the pool's idle invalidation
+			// boundary; an active prior turn remains busy and is never torn down.
+			if err := d.canonicalRuntimes.invalidateSession(agentID, runtimeID); err != nil {
+				return fmt.Errorf("rotate resident Pi run identity: %w", err)
+			}
+		} else {
+			if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
+				return fmt.Errorf("start resident provider process: %w", err)
+			}
 			return nil
-		}
-		if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err == nil {
-			return nil
-		} else if !errors.Is(err, agent.ErrPiRPCRunIdentityRequiresFreshSession) {
-			return fmt.Errorf("bind resident Pi run identity: %w", err)
-		}
-		// A run-scoped Pi session cannot inherit an unbound or differently
-		// bound resident. Replace it only through the pool's idle invalidation
-		// boundary; an active prior turn remains busy and is never torn down.
-		if err := d.canonicalRuntimes.invalidateSession(agentID, runtimeID); err != nil {
-			return fmt.Errorf("rotate resident Pi run identity: %w", err)
 		}
 	}
 	if d.client == nil {
@@ -225,8 +232,13 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	lease.release(true)
 	if runIdentity != nil {
 		if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err != nil {
+			_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 			return fmt.Errorf("bind resident Pi run identity: %w", err)
 		}
+	}
+	if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
+		_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
+		return fmt.Errorf("start resident provider process: %w", err)
 	}
 	return nil
 }

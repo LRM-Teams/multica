@@ -243,9 +243,11 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 					failConnection(err)
 					return
 				}
-				if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, session); err != nil {
-					failConnection(err)
-					return
+				if session.ProviderSessionID != "" {
+					if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, session); err != nil {
+						failConnection(err)
+						return
+					}
 				}
 			}()
 		case protocol.EventDaemonAgentStop:

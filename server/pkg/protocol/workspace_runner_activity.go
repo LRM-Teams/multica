@@ -90,7 +90,7 @@ type WorkspaceRunnerAgentStopPayload struct {
 }
 
 // AgentStatusPayload is lifecycle management state, not a user Activity
-// label. active includes an idle, no-process but wakeable managed launch.
+// label. active is reported only after a live provider process exists.
 type AgentStatusPayload struct {
 	AgentID  string `json:"agentId"`
 	LaunchID string `json:"launchId"`

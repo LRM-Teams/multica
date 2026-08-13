@@ -56,6 +56,24 @@ type ResidentRuntimeLivenessChecker interface {
 	RuntimeAlive() (alive bool, known bool)
 }
 
+// ResidentRuntimeStarter starts the long-lived provider child without a turn.
+// Raft only treats an Agent as running after this spawn; constructing the
+// adapter is not residency.
+type ResidentRuntimeStarter interface {
+	EnsureResidentProcess(ctx context.Context) error
+}
+
+var (
+	_ ResidentRuntimeStarter = (*codexAppServerBackend)(nil)
+	_ ResidentRuntimeStarter = (*piRPCBackend)(nil)
+	_ ResidentRuntimeStarter = (*cursorACPBackend)(nil)
+	_ ResidentRuntimeStarter = (*grokACPBackend)(nil)
+	_ ResidentRuntimeStarter = (*kiroACPBackend)(nil)
+	_ ResidentRuntimeStarter = (*claudeACPBackend)(nil)
+	_ ResidentRuntimeStarter = (*claudeStreamJSONBackend)(nil)
+	_ ResidentRuntimeStarter = (*opencodeServeBackend)(nil)
+)
+
 // ResidentRuntimeForceKillable is an optional contract for backends that keep
 // a long-lived provider child process alive across turns (task #62). ForceKill
 // terminates the underlying process immediately, even while a turn is

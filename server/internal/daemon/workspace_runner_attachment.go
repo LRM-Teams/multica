@@ -112,6 +112,10 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 		status := runner.failManagedRuntime(payload.AgentID, payload.RuntimeID, payload.LaunchID, managedRuntimeFailureSpawn, "provider_spawn_failed", runner.activity.now().UTC())
 		return status, protocol.AgentSessionPayload{}, fmt.Errorf("start managed Agent provider: %w", err)
 	}
+	if err := runner.admitManagedProviderProcess(payload); err != nil {
+		status := runner.failManagedRuntime(payload.AgentID, payload.RuntimeID, payload.LaunchID, managedRuntimeFailureSpawn, "provider_spawn_failed", runner.activity.now().UTC())
+		return status, protocol.AgentSessionPayload{}, fmt.Errorf("admit managed Agent process: %w", err)
+	}
 	if current, ok := runner.processes.Snapshot(payload.AgentID); !ok || current.LaunchID != payload.LaunchID {
 		if !ok || current.RuntimeID != payload.RuntimeID {
 			_ = runner.runtimes.forceInvalidateSession(payload.AgentID, payload.RuntimeID)
@@ -135,6 +139,34 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 		}
 	}
 	return status, session, nil
+}
+
+// admitManagedProviderProcess is Raft's this.agents.set after spawn: the
+// launch is Running only once the provider process exists. Starting Activity
+// is a separate frame and does not mean the process is missing.
+func (runner *WorkspaceRunner) admitManagedProviderProcess(payload protocol.WorkspaceRunnerAgentStartPayload) error {
+	if runner == nil || runner.processes == nil {
+		return errors.New("Workspace Runner process manager is unavailable")
+	}
+	current, ok := runner.processes.Snapshot(payload.AgentID)
+	if !ok || current.LaunchID != payload.LaunchID {
+		return errors.New("managed start was superseded before process admission")
+	}
+	if current.QueueState == protocol.AgentStartQueueRunning {
+		return nil
+	}
+	if current.QueueState != protocol.AgentStartQueueStarting {
+		return fmt.Errorf("managed start is not admitted for process spawn: %s", current.QueueState)
+	}
+	callback := agentProcessCallback{
+		AgentID:           payload.AgentID,
+		LaunchID:          payload.LaunchID,
+		ProcessInstanceID: "resident-" + payload.LaunchID,
+	}
+	if err := runner.processes.ProcessSpawned(callback); err != nil {
+		return err
+	}
+	return runner.processes.RuntimeReady(callback)
 }
 
 func (runner *WorkspaceRunner) stopManagedAgent(payload protocol.WorkspaceRunnerAgentStopPayload) (protocol.AgentStatusPayload, error) {

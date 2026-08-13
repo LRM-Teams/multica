@@ -105,6 +105,11 @@ func (b *claudeACPBackend) RuntimeAlive() (bool, bool) {
 	return b.runtimeAlive()
 }
 
+func (b *claudeACPBackend) EnsureResidentProcess(ctx context.Context) error {
+	_, err := b.ensureProcess(ctx, b.cfg.ResidentOptions)
+	return err
+}
+
 func (b *claudeACPBackend) runtimeAlive() (bool, bool) {
 	p := b.process.Load()
 	if p == nil {

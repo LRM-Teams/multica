@@ -103,6 +103,102 @@ func TestAcceptResultAcceptsAfterUnrelatedPolicyWatermarkAdvance(t *testing.T) {
 	}
 }
 
+func TestAcceptResultRejectsWhenDispatchAuthorizationIsNoLongerActive(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(context.Context, *testing.T, *pgxpool.Pool, researchRunFixture, Run, Attempt)
+	}{
+		{
+			name: "fleet membership archived",
+			mutate: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fixture researchRunFixture, run Run, _ Attempt) {
+				t.Helper()
+				if _, err := pool.Exec(ctx, `
+					UPDATE research_fleet_member SET status = 'archived', updated_at = now()
+					WHERE workspace_id = $1::uuid AND fleet_id = $2::uuid AND agent_id = $3::uuid
+				`, fixture.workspaceID, fixture.fleetID, fixture.agentID); err != nil {
+					t.Fatalf("archive fleet membership: %v", err)
+				}
+			},
+		},
+		{
+			name: "manifest grant revoked",
+			mutate: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fixture researchRunFixture, run Run, attempt Attempt) {
+				t.Helper()
+				tx, err := pool.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback(ctx)
+				var grantID string
+				var oldRevision, watermark int64
+				if err = tx.QueryRow(ctx, `
+					SELECT normal_grant_id::text, normal_grant_revision
+					FROM research_artifact_context_manifest
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+				`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&grantID, &oldRevision); err != nil {
+					t.Fatalf("load manifest grant: %v", err)
+				}
+				if err = tx.QueryRow(ctx, `
+					UPDATE research_artifact_policy_state
+					SET watermark = watermark + 1, updated_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+					RETURNING watermark
+				`, fixture.workspaceID, run.SessionID).Scan(&watermark); err != nil {
+					t.Fatalf("reserve revocation watermark: %v", err)
+				}
+				if _, err = tx.Exec(ctx, `
+					UPDATE research_artifact_policy_grant
+					SET status = 'revoked', revision = revision + 1, revoked_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fixture.workspaceID, run.SessionID, grantID); err != nil {
+					t.Fatalf("revoke grant: %v", err)
+				}
+				if _, err = tx.Exec(ctx, `
+					INSERT INTO research_artifact_policy_mutation (
+					  workspace_id, session_id, watermark, mutation_kind, policy_grant_id,
+					  old_grant_revision, new_grant_revision, old_grant_status, new_grant_status
+					) VALUES ($1::uuid, $2::uuid, $3, 'grant_revoke', $4::uuid, $5, $6, 'active', 'revoked')
+				`, fixture.workspaceID, run.SessionID, watermark, grantID, oldRevision, oldRevision+1); err != nil {
+					t.Fatalf("record grant revocation: %v", err)
+				}
+				if err = tx.Commit(ctx); err != nil {
+					t.Fatalf("commit grant revocation: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			pool, err := pgxpool.New(ctx, databaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			fixture := seedResearchRunFixture(t, ctx, pool)
+			defer cleanupResearchRunFixture(pool, fixture)
+			store := NewPostgresStore(pool)
+			attempt, inboxID, raw, run, task := setupRunningPlanAttempt(t, ctx, store, fixture)
+			tc.mutate(ctx, t, pool, fixture, run, attempt)
+			result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, run.Config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = store.AcceptResult(ctx, AcceptResultInput{
+				SessionID: run.SessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
+				InboxTaskID: inboxID, Raw: raw, Result: result, Hash: hash,
+			})
+			if !errors.Is(err, ErrInvalidTransition) {
+				t.Fatalf("AcceptResult err=%v want ErrInvalidTransition", err)
+			}
+		})
+	}
+}
+
 func TestAcceptResultReplayRequiresMatchingHash(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {

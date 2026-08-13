@@ -52,7 +52,12 @@ multica research task-result <session-id> <task-id> <attempt-id> \
 The same request ID and exact payload may be retried after a transport failure;
 the server replays it idempotently. Reusing a request ID with different content
 is rejected. Acceptance requires a dispatch manifest bound to the attempt;
-results submitted without that manifest are rejected before commit.
+results submitted without that manifest are rejected before commit. The
+assigned Agent must still be an active member of the session Fleet, and every
+manifest-bound policy grant must still be active at its exact revision,
+principal, purpose, policy version, and compartment when the result is
+accepted. A grant or membership change after dispatch therefore requires a new
+authorized attempt; the stale result fails closed.
 
 4. Do not call `graph-append`, `source-upsert`, `report-patch`,
 `product-rounds/judgment`, or `stage-eval` for an assigned durable task. Those

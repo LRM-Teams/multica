@@ -8,6 +8,7 @@ describe("useResearchUiStore", () => {
       d5RailOpen: true,
       d5RailMode: "chat",
       d5Lens: "relations",
+      d5Overlay: null,
     });
   });
 
@@ -20,6 +21,30 @@ describe("useResearchUiStore", () => {
     expect(useResearchUiStore.getState().chatDrawerOpen).toBe(true);
     useResearchUiStore.getState().setChatDrawerOpen(false);
     expect(useResearchUiStore.getState().chatDrawerOpen).toBe(false);
+  });
+
+  it("owns a session-scoped transient D5 inspector surface", () => {
+    useResearchUiStore.getState().setD5Overlay({
+      sessionId: "session-a",
+      kind: "agent",
+      agentId: "agent-1",
+    });
+    expect(useResearchUiStore.getState().d5Overlay).toEqual({
+      sessionId: "session-a",
+      kind: "agent",
+      agentId: "agent-1",
+    });
+
+    useResearchUiStore.getState().setD5Overlay({
+      sessionId: "session-b",
+      kind: "report",
+    });
+    expect(useResearchUiStore.getState().d5Overlay).toEqual({
+      sessionId: "session-b",
+      kind: "report",
+    });
+    useResearchUiStore.getState().setD5Overlay(null);
+    expect(useResearchUiStore.getState().d5Overlay).toBeNull();
   });
 
   it("persists D5 rail chrome defaults", () => {

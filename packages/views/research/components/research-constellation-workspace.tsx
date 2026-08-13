@@ -662,7 +662,7 @@ export function ResearchConstellationWorkspace({
         {canvasModel && !projectionMismatch && activeLens !== "lineage" ? (
           <StarGraphCanvas
             model={canvasModel}
-            cameraSessionId={typedGraphSessionId}
+            cameraSessionId={`${overlaySessionId}:d5-visual-v2`}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasSelect}
             onOpenNode={handleCanvasSelect}

@@ -3,20 +3,28 @@
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  background-color: var(--background);
-  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
-  background-size: 22px 22px;
+  isolation: isolate;
+  background-color: #07111b;
+  background-image:
+    radial-gradient(circle at 54% 18%, rgb(35 108 112 / 13%), transparent 28%),
+    radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+  background-repeat: no-repeat, repeat;
+  background-size: 100% 100%, 22px 22px;
+  cursor: grab;
+  touch-action: none;
 }
+.sg-canvas-root:active { cursor: grabbing; }
 .sg-canvas-root::after {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
   background: radial-gradient(
-    circle at 50% 50%,
-    transparent 20%,
-    color-mix(in oklab, var(--foreground) 8%, transparent) 95%
+    circle at 50% 45%,
+    transparent 18%,
+    rgb(1 7 13 / 44%) 100%
   );
+  z-index: 7;
 }
 .sg-canvas-world {
   position: absolute;
@@ -36,6 +44,8 @@
 }
 .sg-edge-layer {
   z-index: 1;
+  overflow: visible;
+  filter: drop-shadow(0 0 4px rgb(72 211 228 / 12%));
 }
 .sg-edge-decompose,
 .sg-edge-support,
@@ -45,7 +55,18 @@
 .sg-edge-neutral {
   fill: none;
   stroke-width: 1.5;
-  opacity: 0.68;
+  opacity: 0.78;
+  vector-effect: non-scaling-stroke;
+}
+.sg-edge-label {
+  fill: color-mix(in oklab, var(--muted-foreground) 78%, transparent);
+  font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+  paint-order: stroke;
+  stroke: #07111b;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
 .sg-edge-decompose {
   stroke: var(--research-stage-define);
@@ -72,11 +93,11 @@
 }
 .sg-cluster-boundary {
   position: absolute;
-  border: 1px dashed var(--line-strong);
+  border: 1px dashed rgb(67 113 146 / 62%);
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    color-mix(in oklab, var(--primary) 8%, transparent),
+    rgb(32 100 118 / 8%),
     transparent 70%
   );
   z-index: 0;
@@ -142,7 +163,8 @@
   padding: 5px;
   border: 1px solid var(--border);
   border-radius: 11px;
-  background: color-mix(in oklab, var(--card) 88%, transparent);
+  background: rgb(11 22 34 / 88%);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 24%);
   backdrop-filter: blur(8px);
 }
 .sg-zoom-controls button {
@@ -174,9 +196,9 @@
   padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: 11px;
-  background: color-mix(in oklab, var(--card) 88%, transparent);
+  background: rgb(11 22 34 / 88%);
   backdrop-filter: blur(10px);
-  box-shadow: 0 8px 24px color-mix(in oklab, var(--foreground) 14%, transparent);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 28%);
 }
 .sg-summary-label b {
   display: block;

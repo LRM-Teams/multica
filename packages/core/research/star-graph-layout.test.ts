@@ -78,6 +78,21 @@ describe("LRM-1514 star-graph layout — D5 baseline from algorithm", () => {
       expect(n.y).toBeCloseTo(m.y, 6);
     }
   });
+
+  it("spreads a sparse pair across the horizontal field", () => {
+    const layout = layoutStarGraph([
+      { id: "goal", tier: "xxl", clusterId: "main" },
+      { id: "left", tier: "xl", clusterId: "result" },
+      { id: "right", tier: "xl", clusterId: "result" },
+    ]);
+    const left = layout.nodes.find((node) => node.id === "left")!;
+    const right = layout.nodes.find((node) => node.id === "right")!;
+
+    expect(Math.sign(left.x)).not.toBe(Math.sign(right.x));
+    expect(Math.abs(left.x - right.x)).toBeGreaterThan(
+      Math.abs(left.y - right.y),
+    );
+  });
 });
 
 describe("LRM-1514 quantitative hard gates", () => {

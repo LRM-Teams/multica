@@ -1,45 +1,37 @@
 .research-d5-theme {
-  --background: var(--canvas-bg);
-  --foreground: var(--ink);
-  --muted-foreground: var(--ink-2);
-  --border: var(--line);
-  --primary: var(--brand);
-  --primary-foreground: var(--brand-foreground);
-  --secondary: var(--hover);
-  --secondary-foreground: var(--ink);
-  --accent: var(--brand-soft);
-  --accent-foreground: var(--ink);
-  --card: var(--surface);
-  --card-foreground: var(--ink);
-  --popover: var(--surface);
-  --popover-foreground: var(--ink);
-  --destructive: var(--danger);
-  --destructive-foreground: var(--brand-foreground);
-  --input: var(--line-strong);
-  --ring: var(--brand);
-  color: var(--foreground);
-  background: var(--background);
-}
-
-.dark .research-d5-theme {
-  --background: #08121d;
-  --foreground: #e8f1f7;
-  --muted-foreground: #8fa0b3;
-  --border: #29394b;
+  color-scheme: dark;
+  --background: #07111b;
+  --foreground: #edf4fb;
+  --muted-foreground: #8293a7;
+  --border: #26384c;
+  --line: #26384c;
+  --line-strong: #34516a;
   --primary: #48d3e4;
   --primary-foreground: #041018;
-  --secondary: #111b27;
-  --secondary-foreground: #c2f1f6;
-  --accent: #10252c;
-  --accent-foreground: #c6f6fb;
+  --secondary: #101b28;
+  --secondary-foreground: #d7f8fb;
+  --accent: #102a33;
+  --accent-foreground: #c9f8fb;
   --card: #0d1723;
-  --card-foreground: #e8f1f7;
+  --card-foreground: #edf4fb;
   --popover: #0d1723;
-  --popover-foreground: #e8f1f7;
-  --destructive: #f87171;
+  --popover-foreground: #edf4fb;
+  --destructive: #ff6674;
   --destructive-foreground: #fff1f2;
-  --input: #29394b;
+  --input: #34516a;
   --ring: #48d3e4;
+  --success: #58d69a;
+  --success-strong: #68e7a9;
+  --warning: #f3bd54;
+  --running: #48d3e4;
+  --canvas-dot: #17344b;
+  --research-stage-define: #48d3e4;
+  --research-stage-explore: #8c77ed;
+  --research-lane-1: #48d3e4;
+  --research-lane-2: #58d69a;
+  --research-lane-3: #74d7e4;
+  color: var(--foreground);
+  background: var(--background);
 }
 
 .d5-chrome-shell {
@@ -47,7 +39,8 @@
   z-index: 2;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
-  background: var(--background);
+  background: #090f17;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 18%);
 }
 .d5-chrome-top {
   display: flex;
@@ -187,7 +180,7 @@
   width: 360px;
   flex-shrink: 0;
   border-left: 1px solid var(--border);
-  background: var(--card);
+  background: #0a131e;
   color: var(--foreground);
   min-height: 0;
 }

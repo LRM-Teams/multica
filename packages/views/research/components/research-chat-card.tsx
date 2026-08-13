@@ -60,12 +60,12 @@ export function ResearchChatCard({
   /** Full feed — used to resolve clarification answered/skipped state (LRM-822). */
   messages?: ResearchMessage[];
   currentGoal?: string;
-  onRoundAgree?: (card: ResearchProductRoundCard) => void;
-  onRoundRejectContinue?: (card: ResearchProductRoundCard) => void;
-  onRoundRejectStop?: (card: ResearchProductRoundCard) => void;
-  onConfirmGoalPatch?: (card: ResearchProductRoundCard, text: string) => void;
-  onRejectGoalPatch?: (card: ResearchProductRoundCard) => void;
-  onEditGoalPatch?: (card: ResearchProductRoundCard, text: string) => void;
+  onRoundAgree?: (card: ResearchProductRoundCard) => void | Promise<void>;
+  onRoundRejectContinue?: (card: ResearchProductRoundCard) => void | Promise<void>;
+  onRoundRejectStop?: (card: ResearchProductRoundCard) => void | Promise<void>;
+  onConfirmGoalPatch?: (card: ResearchProductRoundCard, text: string) => void | Promise<void>;
+  onRejectGoalPatch?: (card: ResearchProductRoundCard) => void | Promise<void>;
+  onEditGoalPatch?: (card: ResearchProductRoundCard, text: string) => void | Promise<void>;
   onClarificationOption?: (
     question: ResearchClarificationQuestion,
     optionId: string,

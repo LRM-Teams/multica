@@ -104,6 +104,34 @@ describe("buildReportMarkdown (LRM-831)", () => {
     expect(md).toContain("[3] Unknown");
   });
 
+  it("serializes unsupported source protocols as plain text", () => {
+    const report: ResearchReport = {
+      ...baseReport,
+      content_md: "",
+      structured: {
+        schema_version: 1,
+        title: "T",
+        outline: [],
+        sections: [
+          { id: "s1", title: "S", level: 1, markdown: "x", citation_ids: ["c1"] },
+        ],
+        citations: [{ id: "c1", index: 1, source_id: "src1", label: "[1]" }],
+        sources: [
+          {
+            source_id: "src1",
+            title: "Unsafe source",
+            url: "javascript:alert(1)",
+            credibility_weight: 0.5,
+            source_class: "other",
+          },
+        ],
+      },
+    };
+    const md = buildReportMarkdown(report);
+    expect(md).toContain("[1] Unsafe source");
+    expect(md).not.toContain("](javascript:");
+  });
+
   it("returns empty string for missing/legacy payload", () => {
     expect(buildReportMarkdown(null)).toBe("");
     expect(buildReportMarkdown({ ...baseReport, content_md: "", structured: {} })).toBe("");

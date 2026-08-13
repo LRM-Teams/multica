@@ -58,6 +58,9 @@ vi.mock("../../i18n/use-t", () => ({
           canvas_empty_home: "Home",
           canvas_empty_create: "Create session",
           canvas_empty_creating: "Creating…",
+          canvas_empty_create_failed: "Creation failed",
+          canvas_empty_create_failed_hint: "Nothing changed. Try again.",
+          canvas_empty_retry: "Try again",
           canvas_empty_create_goal: "Explore the empty canvas",
         },
       }),
@@ -102,6 +105,29 @@ describe("ResearchCanvasEmptyState pending a11y (LRM-1241)", () => {
     expect(document.activeElement === pending || pending.tabIndex >= 0).toBe(true);
     fireEvent.click(pending);
     fireEvent.keyDown(pending, { key: "Enter" });
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces failure and retries from the stable create control", () => {
+    const mutate = vi.fn();
+    const reset = vi.fn();
+    mutationRef.current = {
+      ...mutationRef.current,
+      mutate,
+      reset,
+      isError: true,
+      error: new Error("private server detail"),
+    };
+    render(<ResearchCanvasEmptyState />);
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Creation failed");
+    expect(alert.textContent).not.toContain("private server detail");
+    const retry = screen.getByRole("button", { name: "Try again" });
+    expect(retry.getAttribute("aria-describedby")).toBe(alert.id);
+
+    fireEvent.click(retry);
+    expect(reset).toHaveBeenCalledTimes(1);
     expect(mutate).toHaveBeenCalledTimes(1);
   });
 });

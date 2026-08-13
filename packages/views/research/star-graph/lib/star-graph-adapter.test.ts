@@ -61,9 +61,11 @@ describe("mapNodeState — real status strings", () => {
   it("maps pending_review to pending-review", () => {
     expect(mapNodeState("pending_review")).toBe("pending-review");
   });
-  it("maps done/terminal to stable", () => {
+  it("maps every canonical successful projection status to stable", () => {
     expect(mapNodeState("done")).toBe("stable");
     expect(mapNodeState("terminal")).toBe("stable");
+    expect(mapNodeState("succeeded")).toBe("stable");
+    expect(mapNodeState("resolved")).toBe("stable");
   });
   it("maps failed to failed", () => {
     expect(mapNodeState("failed")).toBe("failed");
@@ -85,10 +87,16 @@ describe("mapMetrics — never synthesised", () => {
     });
   });
 
-  it("clamps confidence to a percent and ignores invalid counts", () => {
+  it("converts canonical 0..1 confidence to percent and ignores invalid counts", () => {
     expect(mapMetrics({ confidence: 0.87, document_count: -1 })).toEqual({
-      confidence: 1,
+      confidence: 87,
     });
+  });
+
+  it("preserves an already-percent confidence and omits null or invalid values", () => {
+    expect(mapMetrics({ confidence: 84 })).toEqual({ confidence: 84 });
+    expect(mapMetrics({ confidence: null })).toBeUndefined();
+    expect(mapMetrics({ confidence: Number.NaN })).toBeUndefined();
   });
 });
 
@@ -109,10 +117,19 @@ describe("toStarGraphNodeView — full view", () => {
     expect(v.headerLabel).toBeUndefined();
   });
 
-  it("emits an accessible header label for non-S tiers", () => {
+  it("renders an active S-tier execution node as running without pulsing results", () => {
+    expect(
+      toStarGraphNodeView(node({ node_kind: "attempt", status: "active" })).state,
+    ).toBe("run");
+    expect(
+      toStarGraphNodeView(node({ node_kind: "claim", status: "active" })).state,
+    ).toBe("default");
+  });
+
+  it("leaves localized tier headers to the rendering boundary", () => {
     const v = toStarGraphNodeView(node({ node_kind: "claim", importance: 3 }));
     expect(v.tier).toBe("xl");
-    expect(v.headerLabel).toBe("稳定结论");
+    expect(v.headerLabel).toBeUndefined();
   });
 
   it("shows a projection summary on result tiers without inventing one", () => {

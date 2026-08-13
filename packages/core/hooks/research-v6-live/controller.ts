@@ -13,6 +13,7 @@ import type {
   LiveSourceDisconnect,
   ResearchV6LiveProjectionControllerOptions,
   ResearchV6LiveSource,
+  ProjectionSyncStatus,
 } from "./types";
 
 /**
@@ -54,8 +55,9 @@ export class ResearchV6LiveProjectionController {
   private status: LiveConnectionStatus = "idle";
   private destroyed = false;
   private reconnectAttempts = 0;
-  private lastSyncedResyncCount = -1;
   private resyncInFlight = false;
+  private syncStatus: ProjectionSyncStatus = "idle";
+  private malformedFrameCount = 0;
 
   private readonly statusListeners = new Set<(s: LiveConnectionStatus) => void>();
   private readonly snapshotListeners = new Set<(snapshot: ResearchV6Snapshot) => void>();
@@ -92,6 +94,14 @@ export class ResearchV6LiveProjectionController {
   /** Number of reconnect attempts since the last stable connection. */
   getReconnectAttempts(): number {
     return this.reconnectAttempts;
+  }
+
+  getSyncStatus(): ProjectionSyncStatus {
+    return this.syncStatus;
+  }
+
+  getMalformedFrameCount(): number {
+    return this.malformedFrameCount;
   }
 
   /** The underlying projection client (data state). */
@@ -157,12 +167,18 @@ export class ResearchV6LiveProjectionController {
 
     this.reconnectRemover = this.live.onReconnect(() => this.scheduleServerResume());
 
-    this.liveHandle = this.live.connect((delta) => {
-      this.applyDelta(delta);
-    });
+    this.liveHandle = this.live.connect(
+      (delta) => this.applyDelta(delta),
+      () => {
+        this.malformedFrameCount += 1;
+        this.client.requestResync();
+        this.notifyChange();
+        this.observeResync();
+      },
+    );
 
-    // If the source is already connected when we attach, surface that.
-    this.setStatus("connected");
+    // Connection truth comes only from `onStatusChange`. Registering a delta
+    // callback is not evidence that the authenticated socket is delivering.
     this.observeResync();
   }
 
@@ -255,9 +271,7 @@ export class ResearchV6LiveProjectionController {
     if (this.destroyed) return;
     const count = this.client.getState().resyncRequestedCount;
     if (count <= 0) return;
-    if (count === this.lastSyncedResyncCount) return; // already handling
     if (this.resyncInFlight) return;
-    this.lastSyncedResyncCount = count;
     void this.doResync();
   }
 
@@ -268,6 +282,8 @@ export class ResearchV6LiveProjectionController {
   private async doResync(): Promise<void> {
     if (this.resyncInFlight) return;
     this.resyncInFlight = true;
+    this.syncStatus = "resyncing";
+    this.notifyChange();
     try {
       const snapshot = await this.transport.loadSnapshot(this.runId);
       if (!isResearchV6SnapshotForRun(snapshot, this.runId)) {
@@ -275,14 +291,16 @@ export class ResearchV6LiveProjectionController {
       }
       this.client.applySnapshot(snapshot);
       this.client.ackResyncCompleted();
+      this.syncStatus = "idle";
       for (const listener of this.snapshotListeners) listener(snapshot);
       this.notifyChange();
     } catch {
-      // Backend not ready — keep current cache; clear the flag so a later
-      // request/gap can still be observed instead of getting stuck.
-      this.client.ackResyncCompleted();
+      // Keep the current cache and the pending resync request. A later frame,
+      // explicit refresh, or reconnect can retry; failure is not an ack.
+      this.syncStatus = "failed";
     } finally {
       this.resyncInFlight = false;
+      this.notifyChange();
     }
   }
 

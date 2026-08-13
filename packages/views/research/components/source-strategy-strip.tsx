@@ -2,7 +2,6 @@
 
 import type { ReactNode } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
-import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type {
@@ -11,6 +10,8 @@ import type {
   SourceStrategyModel,
 } from "../lib/m2-visibility";
 import { resolveSourceStrategyMode } from "../lib/m2-visibility";
+import { safeSourceUrl } from "../report/safe-source-url";
+import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 
 /** 360px drawer → one column; wider sheets can dual-column via auto-fit. */
 const CARD_GRID =
@@ -164,22 +165,25 @@ function StrategyCard({
       ) : null}
       {chip.samples.length > 0 ? (
         <ul className="mt-2 space-y-1 border-t border-border/50 pt-2">
-          {chip.samples.map((s) => (
-            <li key={s.id} className="min-w-0 truncate text-[11px]">
-              {s.url ? (
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="font-medium text-brand underline-offset-2 hover:underline"
-                >
-                  {s.title}
-                </a>
-              ) : (
-                <span className="text-muted-foreground">{s.title}</span>
-              )}
-            </li>
-          ))}
+          {chip.samples.map((s) => {
+            const href = safeSourceUrl(s.url);
+            return (
+              <li key={s.id} className="min-w-0 truncate text-[11px]">
+                {href ? (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="font-medium text-brand underline-offset-2 hover:underline"
+                  >
+                    {s.title}
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground">{s.title}</span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </article>
@@ -269,15 +273,12 @@ export function SourceStrategyStrip({
           ) : null}
         </p>
         {onRetry ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={retryPending}
-            onClick={onRetry}
-          >
-            {t(($) => $.session_page.retry)}
-          </Button>
+          <ResearchPendingRetryButton
+            label={t(($) => $.session_page.retry)}
+            pendingLabel={t(($) => $.connectivity.retrying)}
+            pending={retryPending}
+            onRetry={onRetry}
+          />
         ) : null}
       </div>,
     );
@@ -287,7 +288,7 @@ export function SourceStrategyStrip({
     return frame(
       <div data-testid="source-strategy-loading" className="flex flex-col gap-2">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
+          <Loader2 className="size-3.5 animate-spin text-brand motion-reduce:animate-none" aria-hidden />
           <span>{t(($) => $.m2.strategy_loading)}</span>
         </div>
         <ExpectedOutcomes items={expected} />

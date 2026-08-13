@@ -55,8 +55,8 @@ export type ExecutionRow = {
 
   /** Absolute start time (unix ms) of the current work, when known. */
   startedAt?: number;
-  /** Last update (unix ms). Always present from presence.updatedAt. */
-  updatedAt: number;
+  /** Last canonical update (unix ms); absent when the projection omitted it. */
+  updatedAt?: number;
   /** Elapsed (ms) since start; only meaningful when running/waiting/retrying. */
   elapsedMs?: number;
 
@@ -90,7 +90,7 @@ function initials(name: string): string {
 
 function toUnixMs(value: number | string | null | undefined): number | undefined {
   if (value == null) return undefined;
-  if (typeof value === "number") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : undefined;
 }
@@ -163,8 +163,10 @@ function deriveStatus(
   presence: PresenceLike,
   attempts: ResearchRunAttempt[] | undefined,
   now: number,
+  presenceAvailable: boolean,
 ): ExecutionStatus {
-  if (!presence) return "offline";
+  if (!presence) return presenceAvailable ? "offline" : "unknown";
+  if (presence.updatedAt == null) return "unknown";
   const phase = presence.phase;
   if (phase === "stale") return "stale";
   // Cancellation in flight wins over a stale classification only when the
@@ -239,11 +241,14 @@ function lastAcceptedResult(
 export function buildExecutionOverlayRows(input: {
   members: readonly ResearchFleetMember[];
   presence: ResearchPresenceMap;
+  /** False only when no successful presence projection is available. */
+  presenceAvailable?: boolean;
   nodes: readonly ResearchGraphNode[];
   run?: ResearchRunSnapshot | null;
   now?: number;
 }): ExecutionRow[] {
   const now = input.now ?? Date.now();
+  const presenceAvailable = input.presenceAvailable ?? true;
   const nodesById = new Map((input.nodes ?? []).map((n) => [n.id, n]));
   const attempts = attemptsByAgent(input.run ?? undefined);
   // Map agent → their current canvas task node (from presence.nodeId, else the
@@ -259,7 +264,12 @@ export function buildExecutionOverlayRows(input: {
     .filter((member) => member.status !== "archived")
     .map((member) => {
       const signal = input.presence[member.agent_id];
-      const status = deriveStatus(signal, attempts.get(member.agent_id), now);
+      const status = deriveStatus(
+        signal,
+        attempts.get(member.agent_id),
+        now,
+        presenceAvailable,
+      );
       const name = member.display_name || member.name || member.role || "Agent";
       const node = signal?.nodeId
         ? nodesById.get(signal.nodeId)
@@ -295,7 +305,7 @@ export function buildExecutionOverlayRows(input: {
         failureReasonKey: status === "failed" ? "failed" : undefined,
         reason: failureReason ?? waitingReason ?? signal?.staleReason ?? undefined,
         startedAt,
-        updatedAt: toUnixMs(signal?.updatedAt) ?? now,
+        updatedAt: toUnixMs(signal?.updatedAt),
         elapsedMs,
         taskObjective: task?.objective ?? task?.expected_result ?? undefined,
         recentResult,

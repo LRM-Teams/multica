@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type {
   ResearchFleetMember,
   ResearchRunContract,
@@ -82,7 +82,7 @@ export function ResearchSessionChromeActions({
   onCreateProjectChange: (v: boolean) => void;
   onCreateChannelChange: (v: boolean) => void;
   onConfirm: () => void;
-  onReject?: (reason: string) => void;
+  onReject?: (reason: string) => void | Promise<void>;
   onHandoff: () => void;
   confirmPending?: boolean;
   rejectPending?: boolean;
@@ -104,6 +104,7 @@ export function ResearchSessionChromeActions({
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const rejectSubmittingRef = useRef(false);
 
   const status = session.status;
   const tone = STATUS_TONES[status] ?? DEFAULT_TONE;
@@ -137,7 +138,7 @@ export function ResearchSessionChromeActions({
             className={cn(
               "size-1.5 rounded-full",
               tone.dot,
-              status === "running" && "animate-pulse",
+              status === "running" && "animate-pulse motion-reduce:animate-none",
             )}
           />
           {statusLabel}
@@ -204,23 +205,42 @@ export function ResearchSessionChromeActions({
             </PopoverHeader>
             <Textarea
               value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
+              onChange={(e) => {
+                if (rejectPending) return;
+                setRejectReason(e.target.value);
+              }}
               placeholder={t(($) => $.panel.gate_reject_placeholder)}
               rows={3}
-              disabled={rejectPending}
-              className="min-h-[4.5rem] w-full resize-y text-sm"
+              aria-disabled={rejectPending || undefined}
+              className={cn(
+                "min-h-[4.5rem] w-full resize-y text-sm",
+                rejectPending && "cursor-not-allowed opacity-50",
+              )}
               data-testid="research-session-gate-reject-reason"
             />
             <Button
               size="sm"
               variant="destructive"
-              className="w-full"
-              disabled={rejectPending}
+              aria-disabled={rejectPending || undefined}
+              aria-busy={rejectPending || undefined}
+              className={cn(
+                "w-full",
+                rejectPending && "cursor-not-allowed opacity-50",
+              )}
               data-testid="research-session-gate-reject-submit"
-              onClick={() => {
-                onReject?.(rejectReason);
-                setRejectOpen(false);
-                setRejectReason("");
+              onClick={async () => {
+                if (rejectPending || rejectSubmittingRef.current) return;
+                rejectSubmittingRef.current = true;
+                try {
+                  await onReject?.(rejectReason);
+                  setRejectOpen(false);
+                  setRejectReason("");
+                } catch {
+                  // The mutation owner presents the API error. Keep the popover
+                  // and exact user feedback intact so recovery is lossless.
+                } finally {
+                  rejectSubmittingRef.current = false;
+                }
               }}
             >
               {rejectPending

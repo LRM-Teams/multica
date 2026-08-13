@@ -276,7 +276,7 @@ export function ResearchNodeActionRing({
       tabIndex={-1}
       aria-label={t(($) => $.ring.title)}
         aria-busy={!!pendingAction || undefined}
-      className="relative z-20 grid animate-in fade-in zoom-in-95 grid-cols-3 gap-x-1.5 gap-y-2 rounded-[14px] border bg-card/95 p-2.5 shadow-lg backdrop-blur-md duration-150"
+      className="relative z-20 grid motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 grid-cols-3 gap-x-1.5 gap-y-2 rounded-[14px] border bg-card/95 p-2.5 shadow-lg backdrop-blur-md motion-safe:duration-150"
       style={{
         // NodeToolbar owns placement; size stays fixed 2×3 grid.
         width: 3 * 52 + 2 * 6 + 20,

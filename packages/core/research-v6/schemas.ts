@@ -130,6 +130,11 @@ export function parseResearchV6Snapshot(raw: unknown): ResearchV6Snapshot {
   return result.success ? (result.data as ResearchV6Snapshot) : EMPTY_RESEARCH_V6_SNAPSHOT;
 }
 
+/** Strict production boundary used by capability probes. */
+export function parseResearchV6SnapshotStrict(raw: unknown): ResearchV6Snapshot {
+  return ResearchV6SnapshotSchema.parse(raw) as ResearchV6Snapshot;
+}
+
 export function parseResearchV6ResumeVerdict(raw: unknown): ResearchV6ResumeVerdict {
   const result = ResearchV6ResumeVerdictSchema.safeParse(raw);
   return result.success

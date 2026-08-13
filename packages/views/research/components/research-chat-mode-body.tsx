@@ -82,13 +82,13 @@ export function ResearchChatModeBody({
         aria-busy
       >
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
+          <Loader2 className="size-3.5 animate-spin text-brand motion-reduce:animate-none" aria-hidden />
           <span>{t(($) => $.chat.loading_body)}</span>
         </div>
         {[0, 1].map((i) => (
           <div
             key={i}
-            className="animate-pulse rounded-xl border border-border/50 bg-card/70 p-3"
+            className="animate-pulse rounded-xl border border-border/50 bg-card/70 p-3 motion-reduce:animate-none"
             style={{ animationDelay: `${i * 80}ms` }}
           >
             <div className="mb-2 flex items-center gap-2">

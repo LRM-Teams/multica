@@ -32,6 +32,9 @@ represented by a bounded excerpt plus content hash; exact Observation quotes
 were already checked against the immutable full snapshot at ingestion. V3–V5
 non-plan tasks inherit the accepted Method for the current goal/plan version.
 V4/V5 also expose the accepted Claim-level evidence standards.
+Contract, Method, Question, Task, and Attempt rows are the exact ordered values
+frozen when this Attempt was dispatched. Later replans, retries, assignment
+changes, runtime transitions, or terminal diagnostics do not rewrite this view.
 
 2. Perform the assigned investigation according to `run.method`. Explore
 beyond the first plausible answer. For V4/V5, each Claim references an accepted

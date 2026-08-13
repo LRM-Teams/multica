@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -175,13 +176,24 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 		if err = rows.Scan(&reprBytes, &contentHash, &reprHash, &kind); err != nil {
 			t.Fatal(err)
 		}
-		if kind == string(ArtifactKindSourceSnapshot) || kind == string(ArtifactKindObservation) || kind == string(ArtifactKindClaim) {
+		switch ArtifactEntityKind(kind) {
+		case ArtifactKindContractRevision, ArtifactKindMethodDecision, ArtifactKindQuestion, ArtifactKindTask, ArtifactKindAttempt:
+			var decoded struct {
+				Order int            `json:"order"`
+				Value map[string]any `json:"value"`
+			}
+			if err = json.Unmarshal(reprBytes, &decoded); err != nil || len(decoded.Value) == 0 {
+				t.Fatalf("%s representation is not frozen ordered JSON: %q err=%v", kind, reprBytes, err)
+			}
+		case ArtifactKindSourceSnapshot, ArtifactKindObservation, ArtifactKindClaim:
 			var decoded map[string]any
 			if err = json.Unmarshal(reprBytes, &decoded); err != nil || decoded["id"] == "" {
 				t.Fatalf("%s representation is not frozen wire JSON: %q err=%v", kind, reprBytes, err)
 			}
-		} else if string(reprBytes) != contentHash {
-			t.Fatalf("legacy %s representation_bytes=%q content_hash=%q", kind, reprBytes, contentHash)
+		default:
+			if string(reprBytes) != contentHash {
+				t.Fatalf("legacy %s representation_bytes=%q content_hash=%q", kind, reprBytes, contentHash)
+			}
 		}
 		wantHash := contentHashFromPayload(reprBytes)
 		if reprHash != wantHash {
@@ -193,6 +205,35 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected manifest entries with representation bytes")
+	}
+
+	before, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt before mutation: %v", err)
+	}
+	if len(before.Questions) == 0 || len(before.Tasks) == 0 || len(before.Attempts) == 0 {
+		t.Fatalf("incomplete frozen durable context: questions=%d tasks=%d attempts=%d", len(before.Questions), len(before.Tasks), len(before.Attempts))
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_contract_revision SET goal='live-mutated-contract' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_question SET question='live-mutated-question' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task SET objective='live-mutated-task' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET diagnostics='live-mutated-attempt' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt after mutation: %v", err)
+	}
+	if !reflect.DeepEqual(before.Contract, after.Contract) || !reflect.DeepEqual(before.Method, after.Method) ||
+		!reflect.DeepEqual(before.Questions, after.Questions) || !reflect.DeepEqual(before.Tasks, after.Tasks) ||
+		!reflect.DeepEqual(before.Attempts, after.Attempts) {
+		t.Fatalf("task-bound durable context changed after live mutation\nbefore=%+v\nafter=%+v", before, after)
 	}
 }
 

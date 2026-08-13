@@ -1,0 +1,9 @@
+DROP TRIGGER IF EXISTS research_artifact_context_manifest_grant_guard
+  ON research_artifact_context_manifest;
+DROP FUNCTION IF EXISTS research_artifact_context_manifest_grant_guard_fn();
+
+ALTER TABLE research_artifact_context_manifest
+  DROP CONSTRAINT IF EXISTS research_artifact_context_manifest_evaluation_grant_fkey,
+  DROP CONSTRAINT IF EXISTS research_artifact_context_manifest_normal_grant_fkey,
+  DROP CONSTRAINT IF EXISTS research_artifact_context_manifest_evaluation_grant_pair_check,
+  DROP CONSTRAINT IF EXISTS research_artifact_context_manifest_normal_grant_pair_check;

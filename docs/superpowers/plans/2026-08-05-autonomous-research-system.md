@@ -1,6 +1,6 @@
 # 自主调研系统：目标架构与严格实现路径
 
-状态：实现中；A–B 已完成，C–N 待实现
+状态：实现中；A–C 已完成，D 已部分实现并按 §15 退出清单闭合中，E–N 待实现
 
 日期：2026-08-05
 
@@ -978,6 +978,14 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [ ] 实现统一工件护照、输入引用、schema/hash、版本和 data access level。
 - [ ] 所有 Task Context 只从护照选择可见工件；Prompt 不能读取无权数据。
 - [ ] evaluation-private 与被评对象隔离。
+
+当前实现状态：migration 318–335 已落地 Passport、不可变 Version、Result Artifact、
+Context Manifest、Input Reference、Policy mutation ledger、canonicalization registry、
+scoped FK、生命周期/验证/失效守卫和生产 dispatch/result 路径。migration 346 起，
+每个新 task-execution Manifest 还会绑定一个持久、带 revision 的 Agent normal grant；
+Manifest 不再仅依赖进程内硬编码 clearance。D 章尚未完成，最终状态以
+`artifact_chapter_d15_exit_inventory_test.go` 的 26 项退出清单为准，不能以 migration
+数量或 fixture 正例替代完整验收。
 
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 

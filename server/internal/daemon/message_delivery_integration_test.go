@@ -485,6 +485,22 @@ func (r *recordingResidentMessage) AcceptMessageBatch(ctx context.Context, messa
 	return r.Backend.(agent.ResidentMessageInput).AcceptMessageBatch(ctx, messages)
 }
 
+func (r *recordingResidentMessage) EnsureResidentProcess(ctx context.Context) error {
+	starter, ok := r.Backend.(agent.ResidentRuntimeStarter)
+	if !ok {
+		return errors.New("recorded runtime does not support resident process start")
+	}
+	return starter.EnsureResidentProcess(ctx)
+}
+
+func (r *recordingResidentMessage) RuntimeAlive() (bool, bool) {
+	liveness, ok := r.Backend.(agent.ResidentRuntimeLivenessChecker)
+	if !ok {
+		return false, false
+	}
+	return liveness.RuntimeAlive()
+}
+
 func (r *recordingResidentMessage) snapshot() [][]agent.ResidentMessage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -497,6 +513,14 @@ type failingResidentMessageRuntime struct{}
 
 func (failingResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
 	return nil, nil
+}
+
+func (failingResidentMessageRuntime) EnsureResidentProcess(context.Context) error {
+	return nil
+}
+
+func (failingResidentMessageRuntime) RuntimeAlive() (bool, bool) {
+	return true, true
 }
 
 func (failingResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {

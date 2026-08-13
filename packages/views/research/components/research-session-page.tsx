@@ -27,6 +27,7 @@ import {
 import type {
   ResearchClarificationQuestion,
   ResearchGraphNode,
+  ResearchNodeCommandAction,
   ResearchProductRoundCard,
 } from "@multica/core/types";
 import { createSafeId } from "@multica/core/utils";
@@ -361,9 +362,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const reportControllerRef = useRef<{ open: () => void } | null>(null);
-  const continueRequestRef = useRef<{
+  const nodeCommandRequestRef = useRef<{
     sessionId: string;
     nodeId: string;
+    action: ResearchNodeCommandAction;
     requestId: string;
   } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
@@ -382,22 +384,38 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     onError: (err) => mutationErrorToast(t(($) => $.session_page.send_failed), err),
   });
 
-  const continueNode = useMutation({
-    mutationFn: (node: ResearchGraphNode) => {
-      const current = continueRequestRef.current;
+  const nodeCommand = useMutation({
+    mutationFn: ({
+      node,
+      action,
+    }: {
+      node: ResearchGraphNode;
+      action: ResearchNodeCommandAction;
+    }) => {
+      const current = nodeCommandRequestRef.current;
       const requestId =
-        current?.sessionId === sessionId && current.nodeId === node.id
+        current?.sessionId === sessionId &&
+        current.nodeId === node.id &&
+        current.action === action
           ? current.requestId
           : createSafeId();
-      continueRequestRef.current = { sessionId, nodeId: node.id, requestId };
+      nodeCommandRequestRef.current = {
+        sessionId,
+        nodeId: node.id,
+        action,
+        requestId,
+      };
       return api.postResearchNodeCommand(sessionId, node.id, {
-        action: "continue",
+        action,
         client_request_id: requestId,
       });
     },
-    onSuccess: (_response, node) => {
-      if (continueRequestRef.current?.nodeId === node.id) {
-        continueRequestRef.current = null;
+    onSuccess: (_response, variables) => {
+      if (
+        nodeCommandRequestRef.current?.nodeId === variables.node.id &&
+        nodeCommandRequestRef.current.action === variables.action
+      ) {
+        nodeCommandRequestRef.current = null;
       }
     },
     onError: (error) => {
@@ -434,7 +452,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           showErrorToast(t(($) => $.d5.detail.no_eligible_member));
           break;
         default:
-          showErrorToast(t(($) => $.d5.detail.continue_failed));
+          showErrorToast(t(($) => $.d5.detail.command_failed));
       }
     },
     onSettled: () => {
@@ -941,9 +959,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 placement="inline"
                 onClose={() => handleSelectCanvasNode(null)}
                 onOpenReport={() => reportControllerRef.current?.open()}
-                onContinueDeepening={() => continueNode.mutate(selectedNode)}
-                continueDeepeningPending={
-                  continueNode.isPending
+                onNodeCommand={(action) =>
+                  nodeCommand.mutate({ node: selectedNode, action })
+                }
+                pendingNodeCommand={
+                  nodeCommand.isPending ? nodeCommand.variables?.action : null
                 }
               />
             ) : (

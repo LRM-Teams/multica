@@ -1048,9 +1048,8 @@
     },
     "detail": {
       "open_report": "Open full report",
-      "continue_deepening": "Continue deepening",
-      "continue_pending": "Queuing…",
-      "continue_failed": "Could not continue this path. Refresh and try again.",
+      "command_pending": "Applying…",
+      "command_failed": "Could not apply this node action. Refresh and try again.",
       "permission_denied": "You do not have permission to continue this path.",
       "session_terminal": "This research session is already finished.",
       "node_stale": "This node changed. The canvas has been refreshed; try again.",

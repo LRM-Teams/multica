@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -154,8 +155,28 @@ export function ResearchConstellationWorkspace({
   const projectionWasStaleRef = useRef(false);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [graphLiveMessage, setGraphLiveMessage] = useState("");
-  const [inspectorAgentId, setInspectorAgentId] = useState<string | null>(null);
-  const [reportOpen, setReportOpen] = useState(false);
+  const d5Overlay = useResearchUiStore((s) => s.d5Overlay);
+  const setD5Overlay = useResearchUiStore((s) => s.setD5Overlay);
+  const generatedOverlaySessionId = useId();
+  const overlaySessionId =
+    typedGraphSessionId ?? typedGraph?.session_id ?? generatedOverlaySessionId;
+  const activeOverlay =
+    d5Overlay?.sessionId === overlaySessionId ? d5Overlay : null;
+  const inspectorAgentId =
+    activeOverlay?.kind === "agent" ? activeOverlay.agentId : null;
+  const reportOpen = activeOverlay?.kind === "report" && selectedNode != null;
+  const closeOverlay = useCallback(() => {
+    if (d5Overlay?.sessionId === overlaySessionId) setD5Overlay(null);
+  }, [d5Overlay?.sessionId, overlaySessionId, setD5Overlay]);
+  const openReport = useCallback(
+    () => setD5Overlay({ sessionId: overlaySessionId, kind: "report" }),
+    [overlaySessionId, setD5Overlay],
+  );
+  const openAgentInspector = useCallback(
+    (agentId: string) =>
+      setD5Overlay({ sessionId: overlaySessionId, kind: "agent", agentId }),
+    [overlaySessionId, setD5Overlay],
+  );
   const motion = useSemanticTransition();
 
   const railWidthBase = viewport.width >= 1200 ? 360 : 320;
@@ -173,12 +194,11 @@ export function ResearchConstellationWorkspace({
     () => ({
       open: () => {
         if (isMobile) setRailOpen(false);
-        setInspectorAgentId(null);
-        setReportOpen(true);
+        openReport();
       },
-      close: () => setReportOpen(false),
+      close: closeOverlay,
     }),
-    [isMobile, setRailOpen],
+    [closeOverlay, isMobile, openReport, setRailOpen],
   );
 
   useEffect(() => {
@@ -473,23 +493,31 @@ export function ResearchConstellationWorkspace({
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
         if (isMobile) setRailOpen(false);
-        setInspectorAgentId(typedNode.actor_agent_id);
-        setReportOpen(false);
+        openAgentInspector(typedNode.actor_agent_id);
         return;
       }
-      setInspectorAgentId(null);
+      closeOverlay();
       if (level === "l" || level === "xl" || level === "xxl") {
         if (isMobile) setRailOpen(false);
-        setReportOpen(true);
+        openReport();
       }
     },
-    [isMobile, onSelectNode, snapshotNodes, typedGraph],
+    [
+      closeOverlay,
+      isMobile,
+      onSelectNode,
+      openAgentInspector,
+      openReport,
+      setRailMode,
+      setRailOpen,
+      snapshotNodes,
+      typedGraph,
+    ],
   );
 
   const handleTrajectorySelect = useCallback(
     (nodeId: string | null) => {
-      setInspectorAgentId(null);
-      setReportOpen(false);
+      closeOverlay();
       if (!nodeId) {
         onSelectNode(null);
         return;
@@ -501,7 +529,7 @@ export function ResearchConstellationWorkspace({
         }),
       );
     },
-    [onSelectNode, snapshotNodes, typedGraph],
+    [closeOverlay, onSelectNode, snapshotNodes, typedGraph],
   );
 
   const graphRemainingCount =
@@ -518,9 +546,9 @@ export function ResearchConstellationWorkspace({
   const handleLineageSelect = useCallback(
     (nodeId: string) => {
       handleCanvasSelect(nodeId);
-      setReportOpen(false);
+      closeOverlay();
     },
-    [handleCanvasSelect],
+    [closeOverlay, handleCanvasSelect],
   );
 
   const showEmpty = canvasMode === "empty" && !canvasModel;
@@ -632,10 +660,7 @@ export function ResearchConstellationWorkspace({
                 edge_type: edge.edge_type,
               })),
               overlay: reportOpen || inspectorRow ? "detail" : null,
-              onCloseOverlay: () => {
-                if (reportOpen) setReportOpen(false);
-                if (inspectorRow) setInspectorAgentId(null);
-              },
+              onCloseOverlay: closeOverlay,
             }}
           />
         ) : null}
@@ -660,12 +685,12 @@ export function ResearchConstellationWorkspace({
           row={inspectorRow}
           typedNode={selectedTypedNode}
           open={Boolean(inspectorRow) && !reportOpen}
-          onClose={() => setInspectorAgentId(null)}
+          onClose={closeOverlay}
           onOpenAgentConfig={
             inspectorRow
               ? () => {
                   onOpenAgentPanel(inspectorRow.id, undefined);
-                  setInspectorAgentId(null);
+                  closeOverlay();
                 }
               : undefined
           }
@@ -721,7 +746,7 @@ export function ResearchConstellationWorkspace({
         run={run}
         members={members}
         typedNodes={typedGraph?.nodes}
-        onClose={() => setReportOpen(false)}
+        onClose={closeOverlay}
         onSelectLineageNode={handleLineageSelect}
       />
       <span className="sr-only" aria-live="polite" data-testid="research-d5-graph-live">

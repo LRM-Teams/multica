@@ -108,6 +108,20 @@ func TestMessageSendHoldPresentationContract(t *testing.T) {
 	}
 }
 
+func TestMessageSendDraftSentPresentationContract(t *testing.T) {
+	if got := messageSendDraftSentTitle(); got != "Send draft sent" {
+		t.Fatalf("messageSendDraftSentTitle=%q", got)
+	}
+	want := "target: #raft-research:a291584b\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent"
+	if got := messageSendDraftSentSubtext("#raft-research:a291584b", false); got != want {
+		t.Fatalf("messageSendDraftSentSubtext=%q, want %q", got, want)
+	}
+	anywayWant := "target: #raft-research:a291584b\nfreshness updates: not checked (--anyway)\ndecision: saved draft sent with explicit freshness override"
+	if got := messageSendDraftSentSubtext("#raft-research:a291584b", true); got != anywayWant {
+		t.Fatalf("messageSendDraftSentSubtext(anyway)=%q, want %q", got, anywayWant)
+	}
+}
+
 // TestObserveMessageSendHoldPublishesSystemActivityEntry verifies that observing
 // a held send projects a fail-soft "system" activity entry (which the runner
 // activity projection renders as a warning row with title/subtext) for the held
@@ -162,6 +176,43 @@ func TestObserveMessageSendHoldIsFailSoftWhenAgentNotManaged(t *testing.T) {
 	runner := installTestRunnerActivity(t, d, "workspace-unknown", newAgentActivityProducer("daemon-instance-1", time.Now, nil))
 	// No managed launch exists for the Agent; observe must not panic.
 	runner.observeMessageSendHold("agent-unknown", "#general", 0, "freshness_unknown")
+}
+
+func TestObserveMessageSendDraftSentPublishesSystemActivityEntry(t *testing.T) {
+	now := time.Date(2026, time.August, 13, 0, 0, 0, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-instance-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	installActivityProducerAgent(t, producer)
+
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-instance-1"
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	runner.processes.newID = func() string { return "launch-a" }
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch"}); err != nil {
+		t.Fatal(err)
+	}
+
+	runner.observeMessageSendDraftSent("agent-a", "#raft-research:a291584b", false)
+	if len(sent) != 1 {
+		t.Fatalf("sent payloads=%d, want 1", len(sent))
+	}
+	if len(sent[0].Entries) != 1 {
+		t.Fatalf("entries=%d, want 1 system entry", len(sent[0].Entries))
+	}
+	entry := sent[0].Entries[0]
+	if entry.Kind != "system" {
+		t.Fatalf("entry kind=%q, want system", entry.Kind)
+	}
+	var body protocol.AgentActivitySystemBody
+	if err := json.Unmarshal(entry.Body, &body); err != nil {
+		t.Fatalf("decode system entry body: %v", err)
+	}
+	if body.Title != "Send draft sent" {
+		t.Fatalf("entry title=%q", body.Title)
+	}
+	if body.Text != messageSendDraftSentSubtext("#raft-research:a291584b", false) {
+		t.Fatalf("entry text=%q", body.Text)
+	}
 }
 
 // newDraftReuseTestDaemon builds a Daemon whose Credential Proxy is backed by a

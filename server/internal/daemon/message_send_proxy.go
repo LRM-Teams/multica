@@ -169,6 +169,9 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 				return
 			}
 			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_accepted", "accepted", "")
+			if request.SendDraft && runner != nil {
+				runner.observeMessageSendDraftSent(request.AgentID, draft.Target, request.Anyway)
+			}
 		}
 		sanitizeCredentialProxyMessageSendResponse(response)
 		if localCoverageReceipt != "" {

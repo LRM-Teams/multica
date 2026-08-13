@@ -486,6 +486,24 @@ export function ResearchConstellationWorkspace({
     [isMobile, onSelectNode, snapshotNodes, typedGraph],
   );
 
+  const handleTrajectorySelect = useCallback(
+    (nodeId: string | null) => {
+      setInspectorAgentId(null);
+      setReportOpen(false);
+      if (!nodeId) {
+        onSelectNode(null);
+        return;
+      }
+      onSelectNode(
+        resolveResearchCanvasNode(nodeId, {
+          snapshotNodes,
+          typedGraph,
+        }),
+      );
+    },
+    [onSelectNode, snapshotNodes, typedGraph],
+  );
+
   const graphRemainingCount =
     typedGraph?.total_node_count != null
       ? Math.max(0, typedGraph.total_node_count - (typedGraph.nodes?.length ?? 0))
@@ -574,10 +592,7 @@ export function ResearchConstellationWorkspace({
             }))}
             sessionStatus={sessionStatus}
             selectedId={selectedNode?.id ?? null}
-            onSelect={(nodeId) => {
-              if (nodeId) handleCanvasSelect(nodeId);
-              else onSelectNode(null);
-            }}
+            onSelect={handleTrajectorySelect}
             onOpenNodeDetail={handleCanvasSelect}
             onJumpToCanvas={(nodeId) => {
               onActiveLensChange?.("relations");

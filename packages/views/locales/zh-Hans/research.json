@@ -106,6 +106,8 @@
   },
   "session_page": {
     "load_failed": "会话加载失败",
+    "load_failed_hint": "当前会话响应无法使用，请重试以加载最新调研状态。",
+    "technical_details": "技术详情",
     "retry": "重试",
     "canvas_forming_title": "画布组建中",
     "canvas_forming_hint": "调研团正在落子，节点会出现在这里。",

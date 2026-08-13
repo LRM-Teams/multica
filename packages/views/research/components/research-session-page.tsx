@@ -608,11 +608,31 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           className="flex h-full flex-col items-center justify-center gap-3 px-6 py-12 text-center"
         >
           <AlertCircle className="size-6 text-destructive" aria-hidden />
-          <p className="text-sm text-destructive">
-            {error instanceof Error && error.message
-              ? error.message
-              : t(($) => $.session_page.load_failed)}
-          </p>
+          <div className="max-w-md space-y-1.5">
+            <h2 className="text-sm font-medium text-destructive">
+              {t(($) => $.session_page.load_failed)}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {t(($) => $.session_page.load_failed_hint)}
+            </p>
+            {error instanceof Error && error.message ? (
+              <details
+                data-testid="research-session-load-error-diagnostics"
+                className="pt-1 text-left text-xs text-muted-foreground"
+              >
+                <summary className="cursor-pointer text-center">
+                  {t(($) => $.session_page.technical_details)}
+                </summary>
+                <code
+                  lang="en"
+                  dir="ltr"
+                  className="mt-2 block max-h-24 overflow-auto rounded-md bg-muted/60 p-2 whitespace-pre-wrap break-words"
+                >
+                  {error.message}
+                </code>
+              </details>
+            ) : null}
+          </div>
           <Button
             type="button"
             variant="outline"

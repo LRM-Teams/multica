@@ -231,6 +231,8 @@ func addComputerResidentFlags(cmd *cobra.Command) {
 	_ = f.MarkHidden("machine-upgrade-detached-candidate")
 	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
 	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
+	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
+	_ = f.MarkHidden("machine-attestation-source-pid")
 }
 
 func requireComputerStoppedForIdentityChange() error {

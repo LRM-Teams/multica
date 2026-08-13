@@ -81,6 +81,8 @@ func init() {
 	_ = f.MarkHidden("machine-upgrade-detached-candidate")
 	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
 	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
+	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
+	_ = f.MarkHidden("machine-attestation-source-pid")
 
 	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
 	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
@@ -296,6 +298,7 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	cfg.MachineUpgradeTakeoverProtocol = machineUpgradeTakeoverProtocolForGeneration(
 		takeoverProtocol, cfg.ComputerGeneration,
 	)
+	cfg.MachineAttestationSourcePID, _ = cmd.Flags().GetInt("machine-attestation-source-pid")
 	controlToken, err := computer.EnsureControlToken(profile)
 	if err != nil {
 		return err

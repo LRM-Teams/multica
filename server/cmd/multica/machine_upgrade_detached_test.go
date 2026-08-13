@@ -8,8 +8,79 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon"
 )
+
+func TestAcceptReadyDetachedCandidateAcceptsMatchingControlPIDAndVersion(t *testing.T) {
+	if os.Getenv("MULTICA_TEST_DETACHED_CANDIDATE_SLEEPER") == "1" {
+		time.Sleep(time.Minute)
+		return
+	}
+	child := exec.Command(os.Args[0], "-test.run=TestAcceptReadyDetachedCandidateAcceptsMatchingControlPIDAndVersion")
+	child.Env = append(os.Environ(), "MULTICA_TEST_DETACHED_CANDIDATE_SLEEPER=1")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+
+	expected := daemon.MachineUpgradeTakeoverProof{
+		UpgradeID: "upgrade-1", Generation: "generation-a", ComputerID: "daemon-1",
+		PredecessorComputerGeneration: 11, CandidateComputerGeneration: 12,
+		CandidatePID: child.Process.Pid, TargetVersion: "v10.0.0",
+		WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
+	}
+	originalProbe := probeDetachedSuccessorAttestation
+	originalRequest := requestDetachedSuccessorTakeover
+	t.Cleanup(func() {
+		probeDetachedSuccessorAttestation = originalProbe
+		requestDetachedSuccessorTakeover = originalRequest
+	})
+	probeDetachedSuccessorAttestation = func(string) (computer.MachineAttestation, error) {
+		return computer.MachineAttestation{ServicePID: child.Process.Pid, ComputerVersion: "v10.0.0", SourceServicePID: os.Getpid()}, nil
+	}
+	requestDetachedSuccessorTakeover = func(string, daemon.MachineUpgradeTakeoverProof) (daemon.MachineUpgradeTakeoverProof, error) {
+		committed := expected
+		committed.Phase = "takeover_committed"
+		return committed, nil
+	}
+	if err := acceptReadyDetachedCandidate(child, "", "v10.0.0", &expected, expected, map[string]any{"cli_version": "v10.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAcceptReadyDetachedCandidateRejectsWrongControlPIDOrVersion(t *testing.T) {
+	if os.Getenv("MULTICA_TEST_DETACHED_CANDIDATE_SLEEPER") == "1" {
+		time.Sleep(time.Minute)
+		return
+	}
+	child := exec.Command(os.Args[0], "-test.run=TestAcceptReadyDetachedCandidateRejectsWrongControlPIDOrVersion")
+	child.Env = append(os.Environ(), "MULTICA_TEST_DETACHED_CANDIDATE_SLEEPER=1")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	expected := daemon.MachineUpgradeTakeoverProof{
+		UpgradeID: "upgrade-1", TargetVersion: "v10.0.0", CandidatePID: child.Process.Pid,
+		WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
+	}
+	originalProbe := probeDetachedSuccessorAttestation
+	t.Cleanup(func() { probeDetachedSuccessorAttestation = originalProbe })
+
+	probeDetachedSuccessorAttestation = func(string) (computer.MachineAttestation, error) {
+		return computer.MachineAttestation{ServicePID: child.Process.Pid + 1, ComputerVersion: "v10.0.0"}, nil
+	}
+	if err := acceptReadyDetachedCandidate(child, "", "v10.0.0", &expected, expected, map[string]any{"cli_version": "v10.0.0"}); err == nil {
+		t.Fatal("wrong control pid was accepted")
+	}
+
+	probeDetachedSuccessorAttestation = func(string) (computer.MachineAttestation, error) {
+		return computer.MachineAttestation{ServicePID: child.Process.Pid, ComputerVersion: "v9.9.9"}, nil
+	}
+	if err := acceptReadyDetachedCandidate(child, "", "v10.0.0", &expected, expected, map[string]any{"cli_version": "v10.0.0"}); err == nil {
+		t.Fatal("wrong control version was accepted")
+	}
+}
 
 func TestDetachedTakeoverLostResponseUsesExactDurableCandidateProof(t *testing.T) {
 	expected := daemon.MachineUpgradeTakeoverProof{

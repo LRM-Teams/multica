@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -77,6 +78,69 @@ func TestHealthHandlerReportsCLIVersionAndActiveTaskCount(t *testing.T) {
 	}
 	if resp.ActiveTaskCount != 3 {
 		t.Errorf("ActiveTaskCount: got %d, want 3", resp.ActiveTaskCount)
+	}
+}
+
+func TestLocalControlAnswersPIDVersionWithoutChangingHealth(t *testing.T) {
+	d := New(Config{
+		CLIVersion:         "v10.0.0",
+		DaemonID:           "computer-1",
+		WorkspaceID:        "11111111-1111-1111-1111-111111111111",
+		ComputerGeneration: 12,
+	}, slog.Default())
+	d.runnerInstanceID = "service-generation-1"
+	d.ready.Store(true)
+	started := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", d.healthHandler(started))
+	mux.HandleFunc(computer.MachineAttestationPath, d.machineAttestationHandler(started))
+
+	attestRec := httptest.NewRecorder()
+	mux.ServeHTTP(attestRec, httptest.NewRequest(http.MethodGet, computer.MachineAttestationPath, nil))
+	if attestRec.Code != http.StatusOK {
+		t.Fatalf("control ask status=%d body=%s", attestRec.Code, attestRec.Body.String())
+	}
+	var attestation computer.MachineAttestation
+	if err := json.Unmarshal(attestRec.Body.Bytes(), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	if attestation.ServicePID != os.Getpid() {
+		t.Fatalf("control service_pid=%d, want %d", attestation.ServicePID, os.Getpid())
+	}
+	if attestation.ComputerVersion != "v10.0.0" {
+		t.Fatalf("control computer_version=%q", attestation.ComputerVersion)
+	}
+
+	healthRec := httptest.NewRecorder()
+	mux.ServeHTTP(healthRec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("health status=%d", healthRec.Code)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(healthRec.Body.Bytes(), &health); err != nil {
+		t.Fatal(err)
+	}
+	if health["status"] != "running" || health["cli_version"] != "v10.0.0" {
+		t.Fatalf("health contract drifted: %+v", health)
+	}
+	if _, ok := health["machine_attestation"]; ok {
+		t.Fatal("health JSON must not carry machine_attestation")
+	}
+	var typed HealthResponse
+	if err := json.Unmarshal(healthRec.Body.Bytes(), &typed); err != nil {
+		t.Fatal(err)
+	}
+	if typed.Status != "running" || typed.CLIVersion != "v10.0.0" || typed.PID == 0 {
+		t.Fatalf("typed health = %+v", typed)
+	}
+
+	if dir := os.Getenv("MULTICA_ATTEST_EVIDENCE_DIR"); dir != "" {
+		if err := os.WriteFile(filepath.Join(dir, "control-ask.json"), attestRec.Body.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "health.json"), healthRec.Body.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -27,6 +27,11 @@ var probeDetachedSuccessorHealth = func(profile string) map[string]any {
 	defer cancel()
 	return computer.ProbeHealth(ctx, computer.HealthPort(profile))
 }
+var probeDetachedSuccessorAttestation = func(profile string) (computer.MachineAttestation, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return computer.ProbeMachineAttestation(ctx, computer.HealthPort(profile))
+}
 
 // startDetachedDaemonBinary launches the committed target as the next Computer
 // generation only after the machine-wide loopback control port is no longer
@@ -66,6 +71,7 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string, take
 		args = append(args,
 			"--machine-upgrade-detached-candidate",
 			"--machine-upgrade-takeover-protocol", machineUpgradeTakeoverProtocolValue(generation),
+			"--machine-attestation-source-pid", fmt.Sprintf("%d", os.Getpid()),
 		)
 	}
 	child := exec.Command(binaryPath, args...)
@@ -140,14 +146,27 @@ func acceptReadyDetachedCandidate(
 	if takeoverExpectation == nil {
 		return child.Process.Release()
 	}
-	observed, ok := detachedTakeoverProofFromHealth(health)
-	if !ok {
-		terminateDetachedCandidate(child)
-		return fmt.Errorf("detached successor did not publish takeover proof")
-	}
-	if err := validateDetachedSuccessorProof(expectedTakeover, observed); err != nil {
-		terminateDetachedCandidate(child)
-		return err
+	// Ask the existing local control (not /health). A matching PID+version
+	// accepts. A wrong answer rejects. No answer (older successor) falls
+	// back to takeover proof.
+	if att, err := probeDetachedSuccessorAttestation(profile); err == nil {
+		if valErr := computer.ValidateSuccessorPIDVersion(computer.SuccessorPIDVersion{
+			ServicePID:      child.Process.Pid,
+			ComputerVersion: expectedVersion,
+		}, att); valErr != nil {
+			terminateDetachedCandidate(child)
+			return valErr
+		}
+	} else {
+		observed, ok := detachedTakeoverProofFromHealth(health)
+		if !ok {
+			terminateDetachedCandidate(child)
+			return fmt.Errorf("detached successor did not answer local control attestation: %w", err)
+		}
+		if proofErr := validateDetachedSuccessorProof(expectedTakeover, observed); proofErr != nil {
+			terminateDetachedCandidate(child)
+			return proofErr
+		}
 	}
 	committed, err := commitDetachedSuccessorTakeoverVerified(profile, expectedTakeover)
 	if err != nil {

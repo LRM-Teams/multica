@@ -73,14 +73,6 @@ func (t *machineUpgradeTakeover) prepare(d *Daemon) error {
 	if !daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion) {
 		return fmt.Errorf("detached candidate version %s does not match target %s", d.cfg.CLIVersion, journal.TargetVersion)
 	}
-	state, err := readMachineUpgradeActivationState()
-	if err != nil {
-		return fmt.Errorf("read committed Active: %w", err)
-	}
-	if !journal.IncumbentGenerationKnown || state.Generation != journal.IncumbentGeneration+1 ||
-		!daemonVersionsMatch(state.ActiveVersion, journal.TargetVersion) {
-		return fmt.Errorf("detached candidate is not the exact committed Active generation")
-	}
 	bindings, err := d.configuredWorkspaceBindings()
 	if err != nil {
 		return err
@@ -110,10 +102,13 @@ func (t *machineUpgradeTakeover) prepare(d *Daemon) error {
 // accepted Workspace set comes from the durable operation receipt; the
 // candidate values come from the process that owns the local control port.
 type MachineUpgradeTakeoverProof struct {
-	UpgradeID                         string `json:"upgrade_id"`
-	Generation                        string `json:"generation"`
-	ComputerID                        string `json:"daemon_id"` // Legacy wire spelling; domain identity is Computer.
-	PredecessorComputerGeneration     int64  `json:"predecessor_computer_generation"`
+	UpgradeID                     string `json:"upgrade_id"`
+	Generation                    string `json:"generation"`
+	ComputerID                    string `json:"daemon_id"` // Legacy wire spelling; domain identity is Computer.
+	PredecessorComputerGeneration int64  `json:"predecessor_computer_generation"`
+	// PredecessorVersionStoreGeneration is unused wire residue from the
+	// retired VersionStore. Older launchers may still send it; it is not
+	// takeover identity.
 	PredecessorVersionStoreGeneration uint64 `json:"predecessor_version_store_generation"`
 	CandidateComputerGeneration       int64  `json:"candidate_computer_generation"`
 	CandidatePID                      int    `json:"candidate_pid"`
@@ -217,9 +212,6 @@ func ValidateMachineUpgradeTakeoverProof(expected, actual MachineUpgradeTakeover
 	}
 	if expected.PredecessorComputerGeneration != actual.PredecessorComputerGeneration {
 		return fmt.Errorf("predecessor Computer generation mismatch")
-	}
-	if expected.PredecessorVersionStoreGeneration != actual.PredecessorVersionStoreGeneration {
-		return fmt.Errorf("predecessor VersionStore generation mismatch")
 	}
 	if expected.CandidateComputerGeneration != actual.CandidateComputerGeneration {
 		return fmt.Errorf("candidate Computer generation mismatch")

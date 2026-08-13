@@ -1,17 +1,12 @@
 package computer
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/multica-ai/multica/server/internal/cli"
 )
 
-func TestLaunchBinaryNoActiveVersionFallsBackToExecutable(t *testing.T) {
+func TestLaunchBinaryFallsBackToExecutableWhenInstallPathMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	got, err := LaunchBinary()
@@ -27,32 +22,14 @@ func TestLaunchBinaryNoActiveVersionFallsBackToExecutable(t *testing.T) {
 	}
 }
 
-func TestLaunchBinaryKeepsStableLauncherWhenVersionStoreIsActive(t *testing.T) {
+func TestLaunchBinaryUsesInstallPathNotVersionStore(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-
-	storeRoot := filepath.Join(home, ".local", "share", "multica")
-	store, err := cli.NewVersionStore(storeRoot, "linux", func(context.Context, string, string) error { return nil })
-	if err != nil {
-		t.Fatalf("NewVersionStore: %v", err)
-	}
-	data := []byte("multica-v0.3.88")
-	sum := sha256.Sum256(data)
-	staged, err := store.StageBinary(context.Background(), "v0.3.88", data, hex.EncodeToString(sum[:]), 0o755)
-	if err != nil {
-		t.Fatalf("StageBinary: %v", err)
-	}
-	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.88"); err != nil {
-		t.Fatalf("CompareAndSwapActivation: %v", err)
-	}
 	launcher := filepath.Join(home, ".local", "bin", "multica")
 	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(launcher, []byte("stable-launcher"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RememberLauncherPath(launcher); err != nil {
+	if err := os.WriteFile(launcher, []byte("path-computer"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -61,6 +38,6 @@ func TestLaunchBinaryKeepsStableLauncherWhenVersionStoreIsActive(t *testing.T) {
 		t.Fatalf("LaunchBinary: %v", err)
 	}
 	if got != launcher {
-		t.Fatalf("LaunchBinary = %q, want stable launcher %q (active was %q)", got, launcher, staged.BinaryPath)
+		t.Fatalf("LaunchBinary = %q, want install path %q", got, launcher)
 	}
 }

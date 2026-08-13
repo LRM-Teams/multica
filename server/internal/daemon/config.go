@@ -494,11 +494,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		}
 		pinnedVersion = v
 	}
-	versionStoreRoot, err := cli.DefaultVersionStoreRoot()
+	machineStateRoot, err := cli.MachineStateRoot()
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve daemon update observation path: %w", err)
 	}
-	updateObservationPath := filepath.Join(versionStoreRoot, "daemon-update-status.json")
+	updateObservationPath := filepath.Join(machineStateRoot, "daemon-update-status.json")
 
 	// Empty means "resolve per provider" in shared_skills.go (pi → ~/.pi/share/skills).
 	sharedSkillsDir := strings.TrimSpace(os.Getenv("MULTICA_SHARED_SKILLS_DIR"))

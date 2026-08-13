@@ -215,6 +215,16 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       typedGraph,
     ],
   );
+  const canvasUsesV5 = projectionGateway.status === "v5";
+  const canvasLoading =
+    projectionGateway.status === "probing" ||
+    (canvasUsesV5 && typedGraphLoading);
+  const canvasError =
+    projectionGateway.status === "error" ||
+    (canvasUsesV5 && typedGraphError);
+  const canvasRetryPending =
+    projectionGateway.isFetching ||
+    (canvasUsesV5 && typedGraphFetching && !typedGraphFetchingNextPage);
   const detailGraphNodes = useMemo(
     () => mergeResearchCanvasNodes(data?.nodes ?? [], displayTypedGraph),
     [data?.nodes, displayTypedGraph],
@@ -263,11 +273,15 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     (nodeId: string) => {
       const node = resolveResearchCanvasNode(nodeId, {
         snapshotNodes: data?.nodes,
-        typedGraph,
+        typedGraph: displayTypedGraph,
       });
-      if (node) handleSelectCanvasNode(enrichResearchNodeForDetail(node, typedGraph));
+      if (node) {
+        handleSelectCanvasNode(
+          enrichResearchNodeForDetail(node, displayTypedGraph),
+        );
+      }
     },
-    [data?.nodes, handleSelectCanvasNode, typedGraph],
+    [data?.nodes, displayTypedGraph, handleSelectCanvasNode],
   );
   useEffect(() => {
     if (!data) return;
@@ -275,11 +289,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     if (!linkedNodeId) return;
     const resolved = resolveResearchCanvasNode(linkedNodeId, {
       snapshotNodes: data.nodes,
-      typedGraph,
+      typedGraph: displayTypedGraph,
     });
     if (!resolved) return;
     selectCanvasNode(linkedNodeId);
-  }, [data, nav.searchParams, selectCanvasNode, typedGraph]);
+  }, [data, displayTypedGraph, nav.searchParams, selectCanvasNode]);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
     agentId: string;
@@ -509,9 +523,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const selectedNode = (() => {
     const base = resolveResearchCanvasNode(selectedNodeId ?? linkedNodeId, {
       snapshotNodes: data.nodes,
-      typedGraph,
+      typedGraph: displayTypedGraph,
     });
-    return base ? enrichResearchNodeForDetail(base, typedGraph) : null;
+    return base ? enrichResearchNodeForDetail(base, displayTypedGraph) : null;
   })();
   const executionRows = buildExecutionOverlayRows({
     members: fleet.members,
@@ -566,10 +580,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     : null;
   const projectionMismatch =
     canvasMode === "ready" &&
-    projectionGateway.status !== "probing" &&
-    projectionGateway.status !== "error" &&
-    !typedGraphLoading &&
-    !typedGraphError &&
+    !canvasLoading &&
+    !canvasError &&
     (!displayTypedGraph || displayTypedGraph.nodes.length === 0);
 
   const onClarificationOption = (
@@ -663,7 +675,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         goalVersion={goalVersion}
         goalHistory={goalHistory}
         goalImpact={goalImpact}
-        typedGraphNodes={typedGraph?.nodes ?? []}
+        typedGraphNodes={displayTypedGraph?.nodes ?? []}
         session={session}
         contract={data.run?.contract}
         canConfirm={canConfirm}
@@ -711,25 +723,24 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         <ResearchConstellationWorkspace
           className="min-h-0 flex-1"
           typedGraph={displayTypedGraph}
-          typedLoading={typedGraphLoading || projectionGateway.status === "probing"}
-          typedError={typedGraphError || projectionGateway.status === "error"}
+          typedLoading={canvasLoading}
+          typedError={canvasError}
           projectionErrorReason={projectionGateway.error?.reason}
           projectionMismatch={projectionMismatch}
           onRetryTypedGraph={() => {
             void refetchTypedGraph();
             projectionGateway.refetch();
           }}
-          retryTypedGraphPending={
-            projectionGateway.isFetching ||
-            (typedGraphFetching && !typedGraphFetchingNextPage)
-          }
+          retryTypedGraphPending={canvasRetryPending}
           snapshotNodeCount={data.nodes.length}
           typedGraphSessionId={sessionId}
           typedGraphVersion={displayTypedGraph?.graph_version ?? null}
-          typedGraphHasNextPage={typedGraphHasNextPage === true}
-          typedGraphLoadMorePending={typedGraphFetchingNextPage}
+          typedGraphHasNextPage={canvasUsesV5 && typedGraphHasNextPage === true}
+          typedGraphLoadMorePending={canvasUsesV5 && typedGraphFetchingNextPage}
           onLoadMoreTypedGraph={
-            typedGraphHasNextPage ? () => void fetchNextTypedGraphPage() : undefined
+            canvasUsesV5 && typedGraphHasNextPage
+              ? () => void fetchNextTypedGraphPage()
+              : undefined
           }
           snapshotNodes={data.nodes}
           selectedNode={selectedNode}

@@ -5,7 +5,7 @@
  *
  * A stateless presentation component in `@multica/ui`. It renders the compact
  * bottom tool-area legend: the five tier dots (XXL/XL/L/M/S) and the four
- * relation line-semantics (分解 / 支持 / 挑战 / 新方向), plus an optional help
+ * relation line-semantics (分解 / 支持 / 挑战 / 新方向 / 其他关系), plus an optional help
  * button that re-opens the on-boarding guide.
  *
  * Every dot / line has a plain-language `title`/`aria-label` explaining what

@@ -173,7 +173,9 @@ function ResearchAgentInspectorBody({
             {row.startedAt != null ? (
               <ExecutionFact label={t(($) => $.panel.execution.started)} value={clock(row.startedAt)} />
             ) : null}
-            <ExecutionFact label={t(($) => $.panel.execution.updated)} value={clock(row.updatedAt)} />
+            {row.updatedAt != null ? (
+              <ExecutionFact label={t(($) => $.panel.execution.updated)} value={clock(row.updatedAt)} />
+            ) : null}
             {elapsed ? (
               <ExecutionFact label={t(($) => $.panel.execution.duration)} value={elapsed} />
             ) : null}

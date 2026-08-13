@@ -263,7 +263,6 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
       />,
     );
 
-    const canvas = screen.getByTestId("star-graph-canvas");
     const selected = screen.getByRole("button", { name: /Stable A/ });
     expect(selected).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("button", { name: /Master goal/ })).toHaveAttribute(

@@ -32,7 +32,7 @@ describe("buildNodeReportLineage", () => {
   it("uses the legacy snapshot merge fact only when typed merge inputs are absent", () => {
     expect(
       buildNodeReportLineage(
-        { id: "result", merged_from: [] } as TypedGraphNode,
+        { id: "result", merged_from: [] } as unknown as TypedGraphNode,
         {
           id: "result",
           payload: { merged_from: ["legacy-a", "legacy-a", "result", 3] },

@@ -1123,6 +1123,10 @@
           "newdir": {
             "label": "New direction",
             "description": "A new exploration direction branches from existing work."
+          },
+          "neutral": {
+            "label": "Other relation",
+            "description": "An unclassified or newer relation. Keep the original type; do not treat it as support or challenge."
           }
         }
       }

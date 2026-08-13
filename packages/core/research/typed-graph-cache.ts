@@ -182,8 +182,8 @@ export function patchTypedGraphInfiniteData(
   if (patch.sessionId) {
     const crossSessionNode =
       node?.session_id && node.session_id !== patch.sessionId;
-    const crossSessionEdge = edgeList.some(
-      (edge) => edge.session_id && edge.session_id !== patch.sessionId,
+    const crossSessionEdge = edgePatches.some(
+      ({ edge }) => edge.session_id && edge.session_id !== patch.sessionId,
     );
     if (crossSessionNode || crossSessionEdge) {
       return { patched: false, needsResync: true };

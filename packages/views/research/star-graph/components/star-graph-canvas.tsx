@@ -30,6 +30,7 @@ import type { MotionDirective } from "../../motion/directives";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import {
   computeClusterHiddenCounts,
+  edgeBudgetForViewport,
   filterEntitiesForCanvasDisplay,
   filterRelationsToVisibleEntities,
   selectVisibleEntityIds,
@@ -284,8 +285,20 @@ export function StarGraphCanvas({
   );
 
   const visibleRelations = useMemo(
-    () => filterRelationsToVisibleEntities(model.relations, visibleEntityIds),
-    [model.relations, visibleEntityIds],
+    () =>
+      filterRelationsToVisibleEntities(model.relations, visibleEntityIds, {
+        budget: edgeBudgetForViewport(viewport.width),
+        focusNodeId: selectedNodeId ?? model.rootId,
+        relatedNodeIds,
+      }),
+    [
+      model.relations,
+      model.rootId,
+      relatedNodeIds,
+      selectedNodeId,
+      viewport.width,
+      visibleEntityIds,
+    ],
   );
   const focusedLensHints = useMemo(
     () =>

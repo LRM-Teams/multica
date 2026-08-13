@@ -90,14 +90,37 @@ export interface ViewportBudget {
   softLimit: number;
   /** Hard canonical-card limit; beyond it no direct fan-out, only groups. */
   hardLimit: number;
+  /** Hard SVG relation-edge limit for this viewport. */
+  edgeHardLimit: number;
   /** Total rendered DOM ceiling (canonical cards + groups + gutter/anchor). */
   domBudget: number;
 }
 
 export const VIEWPORT_BUDGETS: ViewportBudget[] = [
-  { key: "desktop", minWidth: 1200, softLimit: 120, hardLimit: 180, domBudget: 220 },
-  { key: "mid", minWidth: 768, softLimit: 72, hardLimit: 96, domBudget: 220 },
-  { key: "narrow", minWidth: 0, softLimit: 32, hardLimit: 48, domBudget: 220 },
+  {
+    key: "desktop",
+    minWidth: 1200,
+    softLimit: 120,
+    hardLimit: 180,
+    edgeHardLimit: 420,
+    domBudget: 220,
+  },
+  {
+    key: "mid",
+    minWidth: 768,
+    softLimit: 72,
+    hardLimit: 96,
+    edgeHardLimit: 220,
+    domBudget: 220,
+  },
+  {
+    key: "narrow",
+    minWidth: 0,
+    softLimit: 32,
+    hardLimit: 48,
+    edgeHardLimit: 96,
+    domBudget: 220,
+  },
 ];
 
 /** Motion intent backpressure cap (motion-direction §1 `queue-peak ≤64`). */

@@ -5,6 +5,7 @@ import {
   STAR_GRAPH_DOM_BUDGET,
   OVERVIEW_LANDMARK_BUDGET,
   computeClusterHiddenCounts,
+  edgeBudgetForViewport,
   effectiveEntityBudget,
   filterEntitiesForCanvasDisplay,
   filterRelationsToVisibleEntities,
@@ -204,5 +205,29 @@ describe("filterRelationsToVisibleEntities", () => {
     expect(filterRelationsToVisibleEntities(relations, visible)).toEqual([
       relations[0],
     ]);
+  });
+
+  it("uses the contract edge budget for each viewport", () => {
+    expect(edgeBudgetForViewport(1200)).toBe(420);
+    expect(edgeBudgetForViewport(1199)).toBe(220);
+    expect(edgeBudgetForViewport(768)).toBe(220);
+    expect(edgeBudgetForViewport(767)).toBe(96);
+  });
+
+  it("caps visible edges while retaining focus and related context first", () => {
+    const visible = new Set(["focus", "related-a", "related-b", "other"]);
+    const relations = [
+      { id: "ordinary", fromNodeId: "other", toNodeId: "related-a" },
+      { id: "related", fromNodeId: "related-a", toNodeId: "related-b" },
+      { id: "focused", fromNodeId: "focus", toNodeId: "other" },
+    ];
+
+    expect(
+      filterRelationsToVisibleEntities(relations, visible, {
+        budget: 2,
+        focusNodeId: "focus",
+        relatedNodeIds: new Set(["related-a", "related-b"]),
+      }).map((relation) => relation.id),
+    ).toEqual(["focused", "related"]);
   });
 });

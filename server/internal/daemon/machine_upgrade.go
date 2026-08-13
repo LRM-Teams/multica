@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 const machineUpgradeGracefulDrain = 10 * time.Second
@@ -35,13 +36,14 @@ type machineUpgradeJournal struct {
 	IncumbentGenerationKnown bool `json:"incumbent_generation_known,omitempty"`
 	// PredecessorComputerGeneration identifies the exact resident process
 	// generation that committed the handoff.
-	PredecessorComputerGeneration int64    `json:"predecessor_computer_generation"`
-	RollbackGeneration            string   `json:"rollback_generation,omitempty"`
-	TargetRestartAttempts         int      `json:"target_restart_attempts,omitempty"`
-	RollbackRestartAttempts       int      `json:"rollback_restart_attempts,omitempty"`
-	RuntimeIDs                    []string `json:"runtime_ids"`
-	WorkspaceIDs                  []string `json:"workspace_ids"`
-	Phase                         string   `json:"phase"`
+	PredecessorComputerGeneration int64             `json:"predecessor_computer_generation"`
+	RollbackGeneration            string            `json:"rollback_generation,omitempty"`
+	TargetRestartAttempts         int               `json:"target_restart_attempts,omitempty"`
+	RollbackRestartAttempts       int               `json:"rollback_restart_attempts,omitempty"`
+	RuntimeIDs                    []string          `json:"runtime_ids"`
+	RuntimeProviders              map[string]string `json:"runtime_providers,omitempty"`
+	WorkspaceIDs                  []string          `json:"workspace_ids"`
+	Phase                         string            `json:"phase"`
 	// StagedPath is the ephemeral scratch file for this operation. Recovery
 	// verifies this regular file; the stage status string is not a path.
 	StagedPath string `json:"staged_path,omitempty"`
@@ -465,8 +467,8 @@ func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs 
 	}
 	runtimeIDs := d.allRuntimeIDs()
 	sort.Strings(runtimeIDs)
-	if !sameStringSet(journal.RuntimeIDs, runtimeIDs) {
-		return fmt.Errorf("successor Runtime set does not match accepted complete set")
+	if missing := agent.MissingRequiredRuntimeIDs(journal.RuntimeIDs, runtimeIDs, d.providerOfAcceptedRuntime(journal), false); len(missing) > 0 {
+		return fmt.Errorf("successor Runtime set missing shipped runtimes %s", strings.Join(missing, ","))
 	}
 	// A detached candidate attests only after the incumbent accepted the local
 	// PID+version proof. Before that point Run is blocked in the takeover
@@ -479,6 +481,42 @@ func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs 
 	}
 	journal.Phase = "candidate_ready"
 	return d.writeMachineUpgradeJournal(journal)
+}
+
+func (d *Daemon) runtimeProvidersByID() map[string]string {
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.runtimeIndex) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(d.runtimeIndex))
+	for id, rt := range d.runtimeIndex {
+		if strings.TrimSpace(rt.Provider) == "" {
+			continue
+		}
+		out[id] = rt.Provider
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (d *Daemon) providerOfAcceptedRuntime(journal *machineUpgradeJournal) func(string) string {
+	return func(id string) string {
+		if journal != nil && journal.RuntimeProviders != nil {
+			if provider := strings.TrimSpace(journal.RuntimeProviders[id]); provider != "" {
+				return provider
+			}
+		}
+		if rt := d.findRuntime(id); rt != nil {
+			return rt.Provider
+		}
+		return ""
+	}
 }
 
 func sameStringSet(left, right []string) bool {
@@ -553,7 +591,12 @@ func (d *Daemon) createMachineUpgradeJournal(receipt *MachineUpgradeReceipt, sou
 	if receipt == nil || strings.TrimSpace(receipt.ID) == "" || receipt.AcceptedGeneration == nil || strings.TrimSpace(*receipt.AcceptedGeneration) == "" {
 		return nil, fmt.Errorf("machine upgrade acceptance receipt is incomplete")
 	}
-	journal := &machineUpgradeJournal{ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target, IncumbentGeneration: 0, IncumbentGenerationKnown: true, PredecessorComputerGeneration: d.cfg.ComputerGeneration, RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...), Phase: "accepted"}
+	journal := &machineUpgradeJournal{
+		ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target,
+		IncumbentGeneration: 0, IncumbentGenerationKnown: true, PredecessorComputerGeneration: d.cfg.ComputerGeneration,
+		RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), RuntimeProviders: d.runtimeProvidersByID(),
+		WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...), Phase: "accepted",
+	}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		return nil, err
 	}

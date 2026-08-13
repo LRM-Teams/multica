@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 // MachineUpgradePhase is intentionally broader than ticket #2377's queued
@@ -538,7 +539,9 @@ func (s *PostgresMachineUpgradeStore) Attest(ctx context.Context, daemonID, id, 
 // AttestComputer is the Computer-level successor proof. Unlike runtime
 // attestation it includes every explicit Workspace connection, including
 // zero-Agent Workspaces, and therefore owns completion for generation-aware
-// Computer upgrades.
+// Computer upgrades. The live Runtime set must cover every accepted Runtime
+// whose provider is still shipped; accepted IDs for retired providers may be
+// absent. Extra live Runtimes (new providers) are allowed.
 func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error) {
 	op, err := s.Get(ctx, daemonID, id)
 	if err != nil || op == nil {
@@ -547,16 +550,22 @@ func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemon
 	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
 	workspaceIDs = normalizedMachineRuntimeIDs(workspaceIDs)
 	if op.Phase == MachineUpgradeCompleted && op.AcceptedGeneration != nil && *op.AcceptedGeneration == strings.TrimSpace(generation) &&
-		sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) && sameMachineRuntimeSet(op.AttestedRuntimeIDs, runtimeIDs) &&
+		sameMachineRuntimeSet(op.AttestedRuntimeIDs, runtimeIDs) &&
 		sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) && sameMachineRuntimeSet(op.AttestedWorkspaceIDs, workspaceIDs) &&
 		op.ResolvedTarget != nil && versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
 		return op, nil
 	}
 	if (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) ||
 		op.AcceptedGeneration == nil || *op.AcceptedGeneration != strings.TrimSpace(generation) ||
-		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) ||
 		!sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) ||
 		op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
+		return nil, errMachineUpgradeAttestationRejected
+	}
+	providers, err := s.providersForRuntimeIDs(ctx, op.AcceptedRuntimeIDs)
+	if err != nil {
+		return nil, err
+	}
+	if missing := agent.MissingRequiredRuntimeIDs(op.AcceptedRuntimeIDs, runtimeIDs, func(id string) string { return providers[id] }, true); len(missing) > 0 {
 		return nil, errMachineUpgradeAttestationRejected
 	}
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
@@ -740,6 +749,29 @@ func normalizedMachineRuntimeIDs(ids []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func (s *PostgresMachineUpgradeStore) providersForRuntimeIDs(ctx context.Context, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	if s == nil || s.db == nil || len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT id::text, provider FROM agent_runtime WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load runtime providers for Machine Upgrade attestation: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, provider string
+		if err := rows.Scan(&id, &provider); err != nil {
+			return nil, fmt.Errorf("scan runtime providers for Machine Upgrade attestation: %w", err)
+		}
+		out[id] = provider
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read runtime providers for Machine Upgrade attestation: %w", err)
+	}
+	return out, nil
 }
 
 func sameMachineRuntimeSet(left, right []string) bool {

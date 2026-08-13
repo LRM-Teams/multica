@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 // recoverInterruptedMachineUpgrade resumes the first incomplete durable phase
@@ -345,7 +346,9 @@ func (d *Daemon) reconcileMachineUpgradeTerminalJournal(ctx context.Context) err
 	if err != nil {
 		return err
 	}
-	if receipt == nil || receipt.ID != journal.ID || !sameStringSet(receipt.AcceptedRuntimeIDs, journal.RuntimeIDs) || !sameStringSet(d.allRuntimeIDs(), journal.RuntimeIDs) {
+	liveIDs := d.allRuntimeIDs()
+	if receipt == nil || receipt.ID != journal.ID || !sameStringSet(receipt.AcceptedRuntimeIDs, journal.RuntimeIDs) ||
+		len(agent.MissingRequiredRuntimeIDs(journal.RuntimeIDs, liveIDs, d.providerOfAcceptedRuntime(journal), false)) > 0 {
 		return fmt.Errorf("terminal receipt operation or live runtime set mismatch")
 	}
 	switch receipt.Phase {
@@ -353,7 +356,7 @@ func (d *Daemon) reconcileMachineUpgradeTerminalJournal(ctx context.Context) err
 		if journal.Phase != "candidate_ready" || receipt.AcceptedGeneration == nil || *receipt.AcceptedGeneration != journal.Generation ||
 			receipt.ResolvedTarget == nil || !daemonVersionsMatch(*receipt.ResolvedTarget, journal.TargetVersion) ||
 			!daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion) || d.cfg.ComputerGeneration <= journal.PredecessorComputerGeneration ||
-			!sameStringSet(receipt.AttestedRuntimeIDs, journal.RuntimeIDs) || !sameStringSet(receipt.AcceptedWorkspaceIDs, journal.WorkspaceIDs) ||
+			!sameStringSet(receipt.AttestedRuntimeIDs, liveIDs) || !sameStringSet(receipt.AcceptedWorkspaceIDs, journal.WorkspaceIDs) ||
 			!sameStringSet(receipt.AttestedWorkspaceIDs, journal.WorkspaceIDs) {
 			return fmt.Errorf("completed terminal receipt does not match live successor proof")
 		}

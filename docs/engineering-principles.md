@@ -545,6 +545,12 @@
 - **口径（2026-08-13）**：对齐 Raft Computer：successor 本机 PID+version+control 证明即完成 handoff。云端 `CommitTakeover` generation CAS 删除。`/takeover` 只给旧 Computer 当 receipt，不得改 `computer_generation`。generation 由 successor 上线后的 heartbeat/register claim；Attest 只通知升级完成。
 - **物**：`machine_upgrade_takeover.go` 本机 proof 不再调用 cloud CAS；`PostgresMachineUpgradeStore.CommitTakeover` 不存在；`TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof`；`TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration`。判断见 [`ADR-0016`](adr/0016-local-upgrade-proof-no-cloud-cas.md)。
 
+### 4.19.6 Machine Upgrade 后继校对允许退役 provider — `可执行`（⑤ attest 回归）
+- Workspace 连接集合仍必须与 accept 快照完全一致。
+- Runtime 校对要求后继覆盖**当前仍在产品目录里**的 accepted runtime。目录里已经没有的 provider（例如删掉的 Antigravity）缺号算退役，不能把 Computer 卡在启动失败。
+- 后继多出来的 runtime（新 provider）允许。禁止手改 `accepted_runtime_ids` 来过关。
+- **物**：`agent.MissingRequiredRuntimeIDs`；`attestComputerMachineUpgrade`；`PostgresMachineUpgradeStore.AttestComputer`；`TestMissingRequiredRuntimeIDsRetiresUnknownCatalog`；`TestAttestComputerMachineUpgradeAllowsRetiredProviderGap`；`TestMachineUpgrade_ComputerAttestationAllowsRetiredProviderGap`。
+
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。
 - **物**：`CreateSandboxInstance` 写入 `metadata.docker_container_name` / job `docker_container_name`；`sandboxd` 使用该字段作为 `--name`，旧 payload 只回退到 instance-id 名称。

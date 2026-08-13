@@ -13,6 +13,16 @@ import type {
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -22,7 +32,7 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useT } from "../../i18n/use-t";
 import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
 import {
@@ -1190,6 +1200,7 @@ export function ResearchNodeDetail({
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
+  const [confirmReassign, setConfirmReassign] = useState(false);
   const mode = placement ?? (isMobile ? "sheet" : "overlay-card");
   const { bindPanel } = useOverlayPanelA11y({
     active: Boolean(open && mode === "overlay-card" && onClose),
@@ -1219,11 +1230,12 @@ export function ResearchNodeDetail({
       }
     };
     return (
-      <div
-        data-testid="research-node-detail"
-        data-placement="inline"
-        className="flex min-h-0 flex-1 flex-col overflow-hidden"
-      >
+      <>
+        <div
+          data-testid="research-node-detail"
+          data-placement="inline"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
         <ResearchNodeDetailBody
           node={node}
           sources={sources}
@@ -1259,10 +1271,8 @@ export function ResearchNodeDetail({
                 }
                 onClick={() => {
                   if (pendingNodeCommand !== null) return;
-                  if (
-                    action.id === "reassign" &&
-                    !window.confirm(t(($) => $.ring.reassign_confirm))
-                  ) {
+                  if (action.id === "reassign") {
+                    setConfirmReassign(true);
                     return;
                   }
                   onNodeCommand?.(action.id);
@@ -1275,7 +1285,30 @@ export function ResearchNodeDetail({
             ))}
           </footer>
         ) : null}
-      </div>
+        </div>
+        <AlertDialog open={confirmReassign} onOpenChange={setConfirmReassign}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t(($) => $.ring.reassign)}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t(($) => $.ring.reassign_confirm)}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t(($) => $.actions.cancel)}</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="research-node-reassign-confirm"
+                onClick={() => {
+                  setConfirmReassign(false);
+                  onNodeCommand?.("reassign");
+                }}
+              >
+                {t(($) => $.ring.reassign)}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
     );
   }
 

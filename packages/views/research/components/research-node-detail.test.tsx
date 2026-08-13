@@ -15,6 +15,7 @@ vi.mock("../../i18n/use-t", () => ({
       fn({
         overlay: { detail_close: "Close detail" },
         panel: { weight: "Weight" },
+        actions: { cancel: "Cancel" },
         ring: {
           continue: "Continue research",
           fork: "Fork",
@@ -258,6 +259,30 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     fireEvent.click(button);
     expect(button).toHaveFocus();
     expect(onNodeCommand).not.toHaveBeenCalled();
+  });
+
+  it("confirms reassign through an accessible dialog", () => {
+    const onNodeCommand = vi.fn();
+    render(
+      <ResearchNodeDetail
+        node={{
+          ...node,
+          node_type: "task",
+          status: "running",
+          payload: { task_id: "task-1" },
+        }}
+        sources={sources}
+        open
+        placement="inline"
+        onNodeCommand={onNodeCommand}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Confirm reassign?");
+    expect(onNodeCommand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("research-node-reassign-confirm"));
+    expect(onNodeCommand).toHaveBeenCalledWith("reassign");
   });
 
   it("shows dead-end reason when node is blocked", () => {

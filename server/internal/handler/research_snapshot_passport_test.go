@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -155,6 +156,54 @@ func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotWithoutAttemptID(
 	}
 	if engine.snapshotForAttemptCalled {
 		t.Fatal("SnapshotForAttempt must not be called without attempt_id")
+	}
+}
+
+func TestResearchFleetMembershipUsesAgentPrincipalInsteadOfSpoofedHeader(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	activeAgentID := ensureMergableFleetMember(t)
+	unboundAgentID := createHandlerTestAgent(t, "unbound-research-"+uuid.NewString()[:8], nil)
+
+	request := newRequest(http.MethodGet, "/api/agent/research/session", nil)
+	request = withAgentPrincipal(request, unboundAgentID, testWorkspaceID, testUserID)
+	request.Header.Set("X-Agent-ID", activeAgentID)
+	recorder := httptest.NewRecorder()
+	if _, ok := testHandler.requireActiveFleetMember(recorder, request, parseUUID(testWorkspaceID)); ok {
+		t.Fatal("unbound AgentPrincipal borrowed active Fleet membership from X-Agent-ID")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s want 403", recorder.Code, recorder.Body.String())
+	}
+	for _, deniedID := range []string{unboundAgentID, activeAgentID} {
+		if strings.Contains(recorder.Body.String(), deniedID) {
+			t.Fatalf("Fleet denial leaked Agent ID %q in body=%q", deniedID, recorder.Body.String())
+		}
+	}
+	leadRecorder := httptest.NewRecorder()
+	if _, ok := testHandler.requireResearchLeadActor(leadRecorder, request, parseUUID(testWorkspaceID)); ok {
+		t.Fatal("unbound AgentPrincipal borrowed research Lead identity from X-Agent-ID")
+	}
+	if leadRecorder.Code != http.StatusForbidden {
+		t.Fatalf("lead status=%d body=%s want 403", leadRecorder.Code, leadRecorder.Body.String())
+	}
+
+	positive := newRequest(http.MethodGet, "/api/agent/research/session", nil)
+	positive = withAgentPrincipal(positive, activeAgentID, testWorkspaceID, testUserID)
+	positive.Header.Set("X-Agent-ID", unboundAgentID)
+	positiveRecorder := httptest.NewRecorder()
+	member, ok := testHandler.requireActiveFleetMember(positiveRecorder, positive, parseUUID(testWorkspaceID))
+	if !ok {
+		t.Fatalf("active AgentPrincipal rejected through spoofed header: status=%d body=%s", positiveRecorder.Code, positiveRecorder.Body.String())
+	}
+	if uuidToString(member.AgentID) != activeAgentID {
+		t.Fatalf("authorized member=%s want principal=%s", uuidToString(member.AgentID), activeAgentID)
+	}
+	positiveLeadRecorder := httptest.NewRecorder()
+	lead, ok := testHandler.requireResearchLeadActor(positiveLeadRecorder, positive, parseUUID(testWorkspaceID))
+	if !ok || uuidToString(lead.AgentID) != activeAgentID {
+		t.Fatalf("active Lead principal rejected: ok=%v member=%s status=%d body=%s", ok, uuidToString(lead.AgentID), positiveLeadRecorder.Code, positiveLeadRecorder.Body.String())
 	}
 }
 

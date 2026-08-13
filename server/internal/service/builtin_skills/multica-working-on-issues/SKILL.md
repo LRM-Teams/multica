@@ -142,8 +142,8 @@ and work in that project directory or worktree. If the issue's project binds a
 `github_repo` and no checkout exists yet, list it with
 `multica workspace info --projects --output json` and clone it here first. The default handoff
 is then to open or update a PR before posting the final Multica issue comment,
-unless the user explicitly asked for a local-only change or no PR. This is a
-default, not an unconditional command: if no code changed, say no PR is needed;
+unless the user explicitly asked for a local-only change or no PR. This is a default, not
+an unconditional command: if no code changed, say no PR is needed;
 if PR creation is blocked by auth, failing tests, or missing remote state,
 report that blocker instead of pretending the run is complete.
 

@@ -25,8 +25,9 @@ When the current task is bound to a project, inspect live bindings with
 `multica workspace info --projects --output json`. Clone a `github_repo` into
 this Agent workspace if it is not already present, then work inside that
 checkout. Re-run the command when the binding may have changed — the runtime
-brief is not updated when project resources change. Development conventions in
-a checked-out repo's own `AGENTS.md` or `CLAUDE.md` still apply after the
+brief is not updated when project resources change. Repository locations do
+not belong in Agent memory or the runtime brief. Development conventions in a
+checked-out repo's own `AGENTS.md` or `CLAUDE.md` still apply after the
 checkout exists.
 
 More source-backed details: `references/projects-source-map.md`.

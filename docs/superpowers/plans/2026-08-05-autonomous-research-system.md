@@ -1015,6 +1015,7 @@ surface 矩阵仍未完成。
 
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
+  - [x] F2b-recovery：`retrieval_recovery.go` 冻结 `research-retrieval-recovery-v1` 服务端恢复矩阵；根据结构化失败只许可原请求退避重试、过期游标重启、not-found 查询改写、受支持的 Adapter 切换、unsafe-target 范围严格收窄或单候选排除。新请求除目标字段外必须保持冻结范围，失败事实与决定生成稳定 recovery key；相同 key 重放冲突，同类失败与总执行次数达到预算时服务端直接停止，不依赖 Planner 再提交 proposal。接入 Query Execution 持久事务仍待 F2c。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func backfillArtifactPassportTx(
@@ -27,4 +28,31 @@ func ensureGraphNodePassportTx(ctx context.Context, tx pgx.Tx, workspaceID, sess
 
 func ensureGraphEdgePassportTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, edgeID pgtype.UUID) error {
 	return backfillArtifactPassportTx(ctx, tx, workspaceID, sessionID, edgeID, "graph_edge")
+}
+
+func ensureResearchMessagePassportTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, messageID pgtype.UUID) error {
+	return backfillArtifactPassportTx(ctx, tx, workspaceID, sessionID, messageID, "research_message")
+}
+
+func (h *Handler) createResearchMessageWithPassport(
+	ctx context.Context,
+	params db.CreateResearchMessageParams,
+) (db.ResearchMessage, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.ResearchMessage{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	msg, err := h.Queries.WithTx(tx).CreateResearchMessage(ctx, params)
+	if err != nil {
+		return db.ResearchMessage{}, err
+	}
+	if err = ensureResearchMessagePassportTx(ctx, tx, params.WorkspaceID, params.SessionID, msg.ID); err != nil {
+		return db.ResearchMessage{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return db.ResearchMessage{}, err
+	}
+	return msg, nil
 }

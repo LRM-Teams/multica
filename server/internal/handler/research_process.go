@@ -54,7 +54,7 @@ func (h *Handler) emitResearchProcessCard(
 	if body == "" {
 		body = ev.Title
 	}
-	msg, err := h.Queries.CreateResearchMessage(ctx, db.CreateResearchMessageParams{
+	msg, err := h.createResearchMessageWithPassport(ctx, db.CreateResearchMessageParams{
 		WorkspaceID:   wsUUID,
 		SessionID:     sessionID,
 		SenderType:    "system",

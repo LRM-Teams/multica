@@ -1,4 +1,27 @@
 .research-d5-theme {
+  --background: var(--canvas-bg);
+  --foreground: var(--ink);
+  --muted-foreground: var(--ink-2);
+  --border: var(--line);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-foreground);
+  --secondary: var(--hover);
+  --secondary-foreground: var(--ink);
+  --accent: var(--brand-soft);
+  --accent-foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --destructive: var(--danger);
+  --destructive-foreground: var(--brand-foreground);
+  --input: var(--line-strong);
+  --ring: var(--brand);
+  color: var(--foreground);
+  background: var(--background);
+}
+
+.dark .research-d5-theme {
   --background: #08121d;
   --foreground: #e8f1f7;
   --muted-foreground: #8fa0b3;
@@ -17,8 +40,6 @@
   --destructive-foreground: #fff1f2;
   --input: #29394b;
   --ring: #48d3e4;
-  color: var(--foreground);
-  background: var(--background);
 }
 
 .d5-chrome-shell {
@@ -217,7 +238,7 @@
     max-height: min(72dvh, 560px);
     border-left: 0;
     border-top: 1px solid var(--border);
-    box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 -18px 50px color-mix(in oklab, var(--foreground) 24%, transparent);
   }
   .d5-mobile-rail-sheet .d5-rail {
     position: static;
@@ -257,7 +278,7 @@
   border-radius: 17px;
   background: var(--card);
   color: var(--foreground);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 24px 70px color-mix(in oklab, var(--foreground) 24%, transparent);
   overflow: hidden;
   display: none;
 }
@@ -346,7 +367,7 @@
   position: relative;
 }
 .research-agent-inspector .work-item.done::before {
-  background: #58d69a;
+  background: var(--success);
 }
 .research-agent-inspector .work-item.live::before {
   background: var(--primary);

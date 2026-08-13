@@ -13,24 +13,24 @@
 :root {
   /* Tier nanocosms (sizes are applied via inline style from tier.ts; these
      are the shared surface accents). */
-  --sg-accent-synthesis: #58d69a;
-  --sg-accent-stable: #4ba778;
-  --sg-accent-result: #48d3e4;
-  --sg-accent-agent: #7a9cc6;
-  --sg-line: #26384c;
-  --sg-line-strong: #32485e;
-  --sg-panel: rgba(11, 20, 30, 0.9);
-  --sg-panel-solid: #0d1723;
-  --sg-ring-inset: #4f9871;
+  --sg-accent-synthesis: var(--success);
+  --sg-accent-stable: var(--success-strong, var(--success));
+  --sg-accent-result: var(--research-stage-define);
+  --sg-accent-agent: var(--research-lane-3);
+  --sg-line: var(--line);
+  --sg-line-strong: var(--line-strong);
+  --sg-panel: color-mix(in oklab, var(--card) 90%, transparent);
+  --sg-panel-solid: var(--card);
+  --sg-ring-inset: var(--success);
   /* State surfaces (map-key dots / badge accents) — semantic, not the only
      cue. */
-  --sg-state-run: #74c7f2;
-  --sg-state-stable: #78ddb4;
-  --sg-state-review: #e3b970;
-  --sg-state-conflict: #ff9ab7;
-  --sg-state-abandoned: #c9bdb2;
-  --sg-state-restart: #f4c66d;
-  --sg-state-failed: #ff9ab7;
+  --sg-state-run: var(--research-stage-define);
+  --sg-state-stable: var(--success);
+  --sg-state-review: var(--warning);
+  --sg-state-conflict: var(--destructive);
+  --sg-state-abandoned: var(--muted-foreground);
+  --sg-state-restart: var(--running);
+  --sg-state-failed: var(--destructive);
 }
 
 /* ---- Tiered circular node ---- */
@@ -97,7 +97,7 @@
     repeating-radial-gradient(
       circle,
       transparent 0 88%,
-      rgba(79, 152, 113, 0.55) 88% 91%
+      color-mix(in oklab, var(--sg-ring-inset) 55%, transparent) 88% 91%
     );
 }
 .sg-node.sg-ring-3 {
@@ -110,30 +110,30 @@
     repeating-radial-gradient(
       circle,
       transparent 0 86%,
-      rgba(79, 152, 113, 0.55) 86% 89%
+      color-mix(in oklab, var(--sg-ring-inset) 55%, transparent) 86% 89%
     ),
     repeating-radial-gradient(
       circle,
       transparent 0 93%,
-      rgba(79, 152, 113, 0.4) 93% 95%
+      color-mix(in oklab, var(--sg-ring-inset) 40%, transparent) 93% 95%
     );
 }
 
 /* Soft outer glow via layered box-shadows (glow token). */
 .sg-node.sg-glow-1 {
-  box-shadow: 0 0 18px rgba(88, 214, 154, 0.12);
+  box-shadow: 0 0 18px color-mix(in oklab, var(--sg-accent-synthesis) 12%, transparent);
 }
 .sg-node.sg-glow-2 {
   box-shadow:
-    0 0 0 10px rgba(88, 214, 154, 0.05),
-    0 0 45px rgba(88, 214, 154, 0.2);
+    0 0 0 10px color-mix(in oklab, var(--sg-accent-synthesis) 5%, transparent),
+    0 0 45px color-mix(in oklab, var(--sg-accent-synthesis) 20%, transparent);
 }
 .sg-node.sg-glow-3 {
   box-shadow:
-    0 0 0 10px rgba(88, 214, 154, 0.07),
-    0 0 0 22px rgba(88, 214, 154, 0.05),
-    0 0 0 38px rgba(88, 214, 154, 0.03),
-    0 0 90px rgba(88, 214, 154, 0.26);
+    0 0 0 10px color-mix(in oklab, var(--sg-accent-synthesis) 7%, transparent),
+    0 0 0 22px color-mix(in oklab, var(--sg-accent-synthesis) 5%, transparent),
+    0 0 0 38px color-mix(in oklab, var(--sg-accent-synthesis) 3%, transparent),
+    0 0 90px color-mix(in oklab, var(--sg-accent-synthesis) 26%, transparent);
 }
 
 .sg-node .sg-core {
@@ -308,7 +308,7 @@
   border: 1px solid var(--border);
   border-radius: 0.8rem;
   background: var(--sg-panel-solid);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 20px 50px color-mix(in oklab, var(--foreground) 28%, transparent);
 }
 .sg-guide .sg-step {
   min-height: 3.5rem;

@@ -460,7 +460,31 @@ func TestResearchArtifactAppendOnlyCascadeGuards335RoundTrips(t *testing.T) {
 	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
 	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
 	up335, down335 := readMigrationPair(t, "335_research_artifact_append_only_cascade_guards")
-	for _, upSQL := range []string{up318, up319, up320, up335} {
+	for _, upSQL := range []string{up318, up319} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision,
+		  old_lifecycle_status, new_lifecycle_status, eligibility_reason
+		) VALUES (
+		  $1::uuid, $2::uuid, 1, 'lifecycle', $3::uuid,
+		  1, 2, 'registered', 'accepted', 'append-only fixture'
+		);
+		INSERT INTO research_artifact_lifecycle_event (
+		  workspace_id, session_id, artifact_id, old_status, new_status,
+		  old_eligibility_revision, new_eligibility_revision, policy_watermark, reason
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'registered', 'accepted',
+		  1, 2, 1, 'append-only fixture'
+		);
+	`, workspaceID, sessionID, attemptID); err != nil {
+		t.Fatalf("seed append-only ledgers: %v", err)
+	}
+	for _, upSQL := range []string{up320, up335} {
 		if _, err = conn.Exec(ctx, upSQL); err != nil {
 			t.Fatalf("apply migration: %v", err)
 		}
@@ -497,6 +521,32 @@ func TestResearchArtifactAppendOnlyCascadeGuards335RoundTrips(t *testing.T) {
 	if _, err = conn.Exec(ctx, `DELETE FROM research_artifact_version WHERE session_id = $1::uuid`, sessionID); err == nil {
 		t.Fatal("expected direct version delete to remain rejected")
 	}
+	appendOnlyMutations := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "policy mutation update",
+			sql:  `UPDATE research_artifact_policy_mutation SET eligibility_reason = 'tampered' WHERE session_id = $1::uuid`,
+		},
+		{
+			name: "policy mutation delete",
+			sql:  `DELETE FROM research_artifact_policy_mutation WHERE session_id = $1::uuid`,
+		},
+		{
+			name: "lifecycle event update",
+			sql:  `UPDATE research_artifact_lifecycle_event SET reason = 'tampered' WHERE session_id = $1::uuid`,
+		},
+		{
+			name: "lifecycle event delete",
+			sql:  `DELETE FROM research_artifact_lifecycle_event WHERE session_id = $1::uuid`,
+		},
+	}
+	for _, mutation := range appendOnlyMutations {
+		if _, err = conn.Exec(ctx, mutation.sql, sessionID); err == nil {
+			t.Fatalf("expected direct %s to be rejected", mutation.name)
+		}
+	}
 	directDeleteTx, err := conn.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin direct producer delete: %v", err)
@@ -509,9 +559,18 @@ func TestResearchArtifactAppendOnlyCascadeGuards335RoundTrips(t *testing.T) {
 	if _, err = conn.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, workspaceID); err != nil {
 		t.Fatalf("workspace cascade delete: %v", err)
 	}
-	var remainingVersions int
-	if err = conn.QueryRow(ctx, `SELECT count(*)::int FROM research_artifact_version`).Scan(&remainingVersions); err != nil || remainingVersions != 0 {
-		t.Fatalf("versions after cascade=%d err=%v", remainingVersions, err)
+	var remainingVersions, remainingMutations, remainingLifecycleEvents int
+	if err = conn.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_version),
+		  (SELECT count(*)::int FROM research_artifact_policy_mutation),
+		  (SELECT count(*)::int FROM research_artifact_lifecycle_event)
+	`).Scan(&remainingVersions, &remainingMutations, &remainingLifecycleEvents); err != nil {
+		t.Fatalf("count append-only rows after workspace cascade: %v", err)
+	}
+	if remainingVersions != 0 || remainingMutations != 0 || remainingLifecycleEvents != 0 {
+		t.Fatalf("append-only rows after cascade: versions=%d mutations=%d lifecycle_events=%d",
+			remainingVersions, remainingMutations, remainingLifecycleEvents)
 	}
 
 	if _, err = conn.Exec(ctx, down335); err != nil {

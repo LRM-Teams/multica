@@ -5,19 +5,20 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * LRM-551 — Messages list chrome plane (lock A from LRM-545).
- * Source contract so listPane / search stay on sidebar tokens without
- * regressing to muted/20 or transparent search on chrome.
+ * Messages list pane must stay on the product surface so it does not merge
+ * with app-sidebar chrome. Search stays an explicit field on that plane.
  */
 const here = dirname(fileURLToPath(import.meta.url));
 
-describe("channels-page listPane bg (LRM-551)", () => {
+describe("channels-page listPane bg", () => {
   const src = readFileSync(resolve(here, "./channels-page.tsx"), "utf8");
 
-  it("listPane uses bg-sidebar + border-border, not muted/20", () => {
+  it("listPane uses CONVERSATION_LIST_PANE_BG + border-border, not sidebar chrome", () => {
     expect(src).toMatch(
-      /flex flex-1 min-h-0 flex-col bg-sidebar[\s\S]*?border-r border-border/,
+      /flex flex-1 min-h-0 flex-col",\s*CONVERSATION_LIST_PANE_BG,/,
     );
+    expect(src).toContain("border-r border-border");
+    expect(src).not.toMatch(/flex flex-1 min-h-0 flex-col bg-sidebar/);
     expect(src).not.toMatch(/flex flex-1 min-h-0 flex-col bg-muted\/20/);
   });
 

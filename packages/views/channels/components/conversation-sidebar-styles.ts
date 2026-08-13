@@ -1,19 +1,22 @@
 /**
- * LRM-354 / LRM-551 — shared Messages sidebar (desktop + mobile list) surface
- * tokens on the `bg-sidebar` chrome plane.
+ * Messages conversation list (desktop + mobile list) lives on the product
+ * surface (`bg-background`), not the app-sidebar chrome plane. The two left
+ * columns must stay distinct so nav + list don't read as one slab.
  *
- * Selected: light = --sidebar-accent → surface; dark = --sidebar-accent lift
- * (never a washed white block / primary opacity wash).
- * Idle hover: sidebar-accent (not accent — accent is eaten by sidebar bg).
+ * Selected: muted (page-bg) — visible on surface. Never primary opacity wash.
+ * Idle hover: accent (--hover) — the frozen row-hover token.
  * Collapsed-section unread: brand + brand-foreground (≥4.5:1).
  * Section headers stay on callers as text-muted-foreground.
  */
 
-/** Active channel / DM row fill. */
-export const CONVERSATION_SIDEBAR_ROW_ACTIVE = "bg-sidebar-accent";
+/** Conversation list column — surface plane, distinct from app sidebar. */
+export const CONVERSATION_LIST_PANE_BG = "bg-background";
 
-/** Idle row hover — must stay readable on bg-sidebar (LRM-551 / lock A). */
-export const CONVERSATION_SIDEBAR_ROW_IDLE = "hover:bg-sidebar-accent";
+/** Active channel / DM row fill. */
+export const CONVERSATION_SIDEBAR_ROW_ACTIVE = "bg-muted";
+
+/** Idle row hover — readable on the surface list plane. */
+export const CONVERSATION_SIDEBAR_ROW_IDLE = "hover:bg-accent";
 
 /** Collapsed PINNED / DMs / CHANNELS aggregate unread pill. */
 export const CONVERSATION_SIDEBAR_UNREAD_BADGE =

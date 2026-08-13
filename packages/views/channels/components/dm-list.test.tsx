@@ -540,7 +540,7 @@ describe("DmList sidebar contrast (LRM-354)", () => {
     mockQueryData.members = [];
   });
 
-  it("marks the active DM row with sidebar-accent (not primary wash)", () => {
+  it("marks the active DM row with the shared selected token (not primary wash)", () => {
     mockQueryData.dms = [
       makeDm({
         id: "dm-active",

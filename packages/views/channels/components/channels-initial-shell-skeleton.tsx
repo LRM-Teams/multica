@@ -1,7 +1,9 @@
 "use client";
 
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { cn } from "@multica/ui/lib/utils";
 import { ChannelListSkeleton } from "./channel-list-skeleton";
+import { CONVERSATION_LIST_PANE_BG } from "./conversation-sidebar-styles";
 import { DmListSkeleton } from "./dm-list-skeleton";
 
 /**
@@ -15,14 +17,18 @@ export function InitialChannelsShellSkeleton() {
       data-testid="channels-initial-shell-skeleton"
       aria-busy="true"
     >
-      {/* LRM-551: match live listPane chrome (bg-sidebar + column border). */}
-      <aside className="flex w-full min-h-0 flex-col bg-sidebar md:w-72 md:shrink-0 md:border-r md:border-border">
+      {/* Match live listPane: surface plane + column border. */}
+      <aside
+        className={cn(
+          "flex w-full min-h-0 flex-col md:w-72 md:shrink-0 md:border-r md:border-border",
+          CONVERSATION_LIST_PANE_BG,
+        )}
+      >
         <div className="flex items-center gap-2 px-4 pb-1 pt-4">
           <Skeleton className="h-6 w-28" />
         </div>
         <div className="px-3 pb-2">
-          {/* Search field placeholder — inset on sidebar like live Input bg-background */}
-          <Skeleton className="h-9 w-full rounded-md bg-background" />
+          <Skeleton className="h-9 w-full rounded-md" />
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-hidden px-2 pb-2">
           <div className="space-y-1">

@@ -74,6 +74,8 @@
 
 对照图：打开 [`visual-tokens-compare.html`](./assets/design/visual-tokens-compare.html) 或同目录 PNG。
 
+**Messages 两列不得同色**：workspace 导航吃 `--sidebar`（`bg-sidebar` / page-bg）；会话列表吃 `--surface`（`bg-background`）。选中行用 `bg-muted`，hover 用 `bg-accent`（`--hover`）。禁止把列表再锁回 sidebar chrome，否则两列糊成一块。契约在 `conversation-sidebar-styles.ts`。
+
 **本期不做**：整站换肤、暗色模式、换品牌主色、侧栏导航批发重画、营销页。
 
 ---

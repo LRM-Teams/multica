@@ -1014,9 +1014,11 @@ surface 矩阵仍未完成。
 ### F. Search 与 Corpus 谱系
 
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
+  - [x] F1a：建立 frozen V6 envelope 解码后的 Corpus Module 原子批次验证边界，固定 Search Plan 目标/策略/预算、Query rewrite 谱系、查询时间/游标/outcome/structured cost/safety、Source Candidate content hash、版本绑定 Screening Decision 和唯一筛选结果；wire 内嵌 screening 在 Adapter 边界规范化为独立 Decision。相同 canonical identity 必须保留在同一 duplicate cluster 与 independence family，不能静默删除，也不能冒充独立来源。表迁移与事务 Adapter 仍待 F1b。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
+  - [x] F4a：冻结 Source admission 二选一契约：检索来源必须同时引用 resolved Candidate、`include` Screening Decision；直接来源必须使用 `user_document | workspace_artifact | agent_observation | tool_output` ingestion kind，禁止两条路径混用。生产 Snapshot 写路径守卫仍待 F4b。
 
 退出条件：报告中的每个来源可反向追到查询和筛选；重复镜像不能冒充独立支持；失败查询可被定向改写。
 

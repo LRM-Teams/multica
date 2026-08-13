@@ -690,6 +690,7 @@
     "citation_fetch_failed_hint": "该来源未能抓取。在可用链接恢复前，此处显示降级占位卡。",
     "citation_summary_empty": "暂无摘要。",
     "citation_anchor": "定位引用 {{label}}",
+    "citations_label": "引用列表",
     "source_failed_badge": "抓取失败",
     "source_failed_purpose": "未纳入引用编号序列",
     "source_fail_fetch": "来源抓取失败",

@@ -250,12 +250,13 @@ export function ReportCitationList({
   structuredSources?: ResearchReportSourceRef[];
   onLocate?: (citationId: string) => void;
 }) {
+  const { t } = useT("research");
   if (citations.length === 0) return null;
   return (
     <div
       data-testid="research-citation-list"
       className="mt-3 space-y-2"
-      aria-label="Citations"
+      aria-label={t(($) => $.reader.citations_label)}
     >
       {citations.map((citation) => (
         <ReportCitationCard

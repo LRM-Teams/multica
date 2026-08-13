@@ -54,7 +54,6 @@ import {
 } from "@multica/core/identity";
 import { matchesPinyin } from "./pinyin-match";
 import { createSuggestionPopupRender } from "./suggestion-popup";
-import { GroupedVirtuoso, type GroupedVirtuosoHandle } from "react-virtuoso";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,6 +79,19 @@ export interface MentionItem {
   projectStatus?: ProjectStatus;
 }
 
+export interface MentionCandidatesPage {
+  in_channel: MentionItem[];
+  not_in_channel: MentionItem[];
+  has_more: boolean;
+  next_offset: number | null;
+}
+
+export type MentionCandidatesFetch = (
+  query: string,
+  offset: number,
+  signal: AbortSignal,
+) => Promise<MentionCandidatesPage>;
+
 interface MentionListProps {
   items: MentionItem[];
   query: string;
@@ -89,6 +101,7 @@ interface MentionListProps {
     signal: AbortSignal,
   ) => Promise<{ issues: Array<Pick<Issue, "id" | "identifier" | "title" | "status">> }>;
   includeProjectSearch?: boolean;
+  fetchMentionCandidates?: MentionCandidatesFetch;
 }
 
 export interface MentionListRef {
@@ -164,11 +177,6 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
 // MentionList — the popup rendered inside the editor
 // ---------------------------------------------------------------------------
 
-const MENTION_ROW_PX = 40;
-const MENTION_GROUP_HEADER_PX = 32;
-const MENTION_LIST_MAX_PX = 300;
-/** First paint for the virtualized outsider list — same idea as channel files. */
-const MENTION_INITIAL_COUNT = 20;
 const SERVER_CONTEXT_SEARCH_LIMIT = 8;
 const SERVER_SEARCH_DEBOUNCE_MS = 150;
 
@@ -214,14 +222,31 @@ function mergeMentionItems(
 }
 
 export const MentionList = forwardRef<MentionListRef, MentionListProps>(
-  function MentionList({ items, query, command, searchIssues, includeProjectSearch = false }, ref) {
+  function MentionList(
+    {
+      items,
+      query,
+      command,
+      searchIssues,
+      includeProjectSearch = false,
+      fetchMentionCandidates,
+    },
+    ref,
+  ) {
     const { t } = useT("editor");
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [serverItems, setServerItems] = useState<MentionItem[]>([]);
     const [isSearching, setIsSearching] = useState(false);
     const [searchedQuery, setSearchedQuery] = useState("");
+    const [pagedMentions, setPagedMentions] = useState<{
+      inChannel: MentionItem[] | null;
+      outsiders: MentionItem[];
+      hasMore: boolean;
+      offset: number;
+      loading: boolean;
+    }>({ inChannel: null, outsiders: [], hasMore: false, offset: 0, loading: false });
     const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-    const virtuosoRef = useRef<GroupedVirtuosoHandle>(null);
+    const loadingOutsidersRef = useRef(false);
     const normalizedQuery = query.trim();
 
     useEffect(() => {
@@ -296,10 +321,81 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       };
     }, [includeProjectSearch, normalizedQuery, searchIssues]);
 
+    useEffect(() => {
+      if (!fetchMentionCandidates) {
+        setPagedMentions({ inChannel: null, outsiders: [], hasMore: false, offset: 0, loading: false });
+        return;
+      }
+      let cancelled = false;
+      const controller = new AbortController();
+      loadingOutsidersRef.current = true;
+      setPagedMentions({ inChannel: null, outsiders: [], hasMore: false, offset: 0, loading: true });
+      void (async () => {
+        try {
+          const page = await fetchMentionCandidates(normalizedQuery, 0, controller.signal);
+          if (cancelled || controller.signal.aborted) return;
+          setPagedMentions({
+            inChannel: page.in_channel,
+            outsiders: page.not_in_channel,
+            hasMore: page.has_more,
+            offset: page.next_offset ?? page.not_in_channel.length,
+            loading: false,
+          });
+        } catch {
+          if (!cancelled) {
+            setPagedMentions({ inChannel: null, outsiders: [], hasMore: false, offset: 0, loading: false });
+          }
+        } finally {
+          loadingOutsidersRef.current = false;
+        }
+      })();
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }, [fetchMentionCandidates, normalizedQuery]);
+
+    const loadMoreOutsiders = useCallback(() => {
+      if (!fetchMentionCandidates || !pagedMentions.hasMore || loadingOutsidersRef.current) return;
+      loadingOutsidersRef.current = true;
+      setPagedMentions((prev) => ({ ...prev, loading: true }));
+      void (async () => {
+        try {
+          const page = await fetchMentionCandidates(normalizedQuery, pagedMentions.offset, new AbortController().signal);
+          setPagedMentions((prev) => ({
+            inChannel: page.in_channel,
+            outsiders: mergeMentionItems(prev.outsiders, page.not_in_channel),
+            hasMore: page.has_more,
+            offset: page.next_offset ?? prev.offset + page.not_in_channel.length,
+            loading: false,
+          }));
+        } catch {
+          setPagedMentions((prev) => ({ ...prev, hasMore: false, loading: false }));
+        } finally {
+          loadingOutsidersRef.current = false;
+        }
+      })();
+    }, [fetchMentionCandidates, normalizedQuery, pagedMentions.hasMore, pagedMentions.offset]);
+
     const displayItems = useMemo(() => {
       const currentServerItems = searchedQuery === normalizedQuery ? serverItems : [];
-      return mergeMentionItems(items, currentServerItems);
-    }, [items, normalizedQuery, searchedQuery, serverItems]);
+      const syncInChannel = fetchMentionCandidates
+        ? items.filter((item) => item.group === "in_channel")
+        : items;
+      return mergeMentionItems(
+        pagedMentions.inChannel ?? syncInChannel,
+        pagedMentions.outsiders,
+        currentServerItems,
+      );
+    }, [
+      fetchMentionCandidates,
+      items,
+      normalizedQuery,
+      pagedMentions.inChannel,
+      pagedMentions.outsiders,
+      searchedQuery,
+      serverItems,
+    ]);
 
     // Selection / keyboard indices must follow the *rendered* group order
     // (InChannel before NotInChannel, etc.), not the raw candidate array order.
@@ -310,20 +406,12 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       () => groups.flatMap((group) => group.items),
       [groups],
     );
-    const groupCounts = useMemo(
-      () => groups.map((group) => group.items.length),
-      [groups],
-    );
 
     useEffect(() => {
       setSelectedIndex(0);
     }, [normalizedQuery]);
 
     useEffect(() => {
-      virtuosoRef.current?.scrollToIndex({
-        index: selectedIndex,
-        align: "center",
-      });
       itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
     }, [selectedIndex]);
 
@@ -451,51 +539,32 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       );
     }
 
-    const listHeight = Math.min(
-      MENTION_LIST_MAX_PX,
-      groups.length * MENTION_GROUP_HEADER_PX +
-        visibleItems.length * MENTION_ROW_PX,
-    );
-
     return (
-      <GroupedVirtuoso
-        ref={virtuosoRef}
-        className="w-72 rounded-md border bg-popover py-1 shadow-md"
-        style={{ height: Math.max(MENTION_ROW_PX, listHeight) }}
-        groupCounts={groupCounts}
-        initialItemCount={Math.min(visibleItems.length, MENTION_INITIAL_COUNT)}
-        increaseViewportBy={{ top: 80, bottom: 160 }}
-        groupContent={(groupIndex) => {
-          const label = groups[groupIndex]?.label;
-          if (!label || label === "Broadcast") {
-            return <div className="h-0" />;
+      <div
+        className="w-72 max-h-[300px] overflow-y-auto rounded-md border bg-popover py-1 shadow-md"
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          if (el.scrollHeight - el.scrollTop - el.clientHeight <= 48) {
+            loadMoreOutsiders();
           }
-          return (
-            <div className="bg-popover px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
-              {groupLabel(label)}
-            </div>
-          );
         }}
-        itemContent={(index) => {
-          const item = visibleItems[index];
-          if (!item) return null;
-          const duplicateLabel = duplicateActorLabels.has(
-            item.label.trim().toLowerCase(),
-          );
-          const showSecondary =
-            item.type === "agent" ||
-            duplicateLabel ||
-            actorHandleSearchRank(item.handle ?? "", normalizedQuery) < 3;
-          return (
-            <MentionRow
-              item={item}
-              showSecondary={showSecondary}
-              selected={index === selectedIndex}
-              onSelect={() => selectItem(index)}
-            />
-          );
-        }}
-      />
+      >
+        {groups.map((group) => (
+          <div key={group.label}>
+            {group.label !== "Broadcast" && (
+              <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                {groupLabel(group.label)}
+              </div>
+            )}
+            {renderRows(group)}
+          </div>
+        ))}
+        {pagedMentions.loading && pagedMentions.outsiders.length > 0 && (
+          <div className="px-3 py-2 text-[11px] text-muted-foreground">
+            {t(($) => $.mention.searching)}
+          </div>
+        )}
+      </div>
     );
   },
 );
@@ -733,6 +802,8 @@ interface MentionSuggestionOptions {
    * still owns who is mentionable (group = workspace; DM/private = members).
    */
   getChannelMemberIds?: () => ReadonlySet<string> | null | undefined;
+  /** Group @ picker: server pages people who are not in the channel. */
+  getMentionCandidates?: () => MentionCandidatesFetch | null | undefined;
 }
 
 export function createMentionSuggestion(
@@ -787,6 +858,7 @@ export function createMentionSuggestion(
     const allow = options.getAllowedActorIds?.();
     // #35: membership set for IN / NOT IN sections only — does not filter the pool.
     const channelMemberIds = options.getChannelMemberIds?.() ?? null;
+    const pageOutsiders = typeof options.getMentionCandidates?.() === "function";
     const membershipGroup = (
       actorId: string,
     ): "in_channel" | "not_in_channel" | undefined => {
@@ -808,7 +880,8 @@ export function createMentionSuggestion(
             query,
             identitySearchOptions,
           ) &&
-          (!allow || allow.has(m.user_id)),
+          (!allow || allow.has(m.user_id)) &&
+          (!pageOutsiders || channelMemberIds?.has(m.user_id) === true),
       )
       .map((m) => {
         const presentation = resolveActorIdentityPresentation(m, m.name);
@@ -856,6 +929,7 @@ export function createMentionSuggestion(
             identitySearchOptions,
           ) ||
           (allow && !allow.has(a.id)) ||
+          (pageOutsiders && channelMemberIds?.has(a.id) !== true) ||
           (!channelScoped &&
             !canAssignAgentToIssue(a as Agent, { userId, role: myRole }).allowed)
         ) {
@@ -930,6 +1004,7 @@ export function createMentionSuggestion(
         items: props.items,
         query: props.query,
         command: props.command,
+        fetchMentionCandidates: options.getMentionCandidates?.() ?? undefined,
         // `@` summons a person — it never searches issues/projects (task #57;
         // Parker's rule). Issue/project references go through the `#` picker.
       }),

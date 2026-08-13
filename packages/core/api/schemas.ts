@@ -27,6 +27,7 @@ import type {
   GroupedIssuesResponse,
   ProjectGroupedIssuesResponse,
   ChannelMessageSearchResponse,
+  ChannelMentionCandidatesResponse,
   ChannelMessagesPage,
   ChannelThreadMessagesPage,
   AgentHealthResponse,
@@ -2968,5 +2969,26 @@ export const EMPTY_REMINDER_PAGE: RawReminderPage = {
   definitions: [],
   occurrences: [],
   limit: 0,
+  has_more: false,
+};
+
+export const ChannelMentionCandidateSchema = z.object({
+  type: z.enum(["member", "agent"]).catch("member"),
+  id: z.string().catch(""),
+  handle: z.string().catch(""),
+  label: z.string().catch(""),
+  avatar_url: z.string().nullish(),
+}).loose();
+
+export const ChannelMentionCandidatesResponseSchema = z.object({
+  in_channel: z.array(ChannelMentionCandidateSchema).catch([]),
+  not_in_channel: z.array(ChannelMentionCandidateSchema).catch([]),
+  has_more: z.boolean().catch(false),
+  next_offset: z.number().nullish(),
+}).loose();
+
+export const EMPTY_CHANNEL_MENTION_CANDIDATES: ChannelMentionCandidatesResponse = {
+  in_channel: [],
+  not_in_channel: [],
   has_more: false,
 };

@@ -63,39 +63,6 @@ vi.mock("../../common/actor-profile-popover", () => ({
   },
 }));
 
-// Same convention as channel-files / message-list tests: render every row so
-// we assert picker membership, not react-virtuoso's own windowing.
-vi.mock("react-virtuoso", () => {
-  const MockGroupedVirtuoso = ({
-    groupCounts = [],
-    groupContent,
-    itemContent,
-  }: {
-    groupCounts?: number[];
-    groupContent?: (index: number) => ReactNode;
-    itemContent?: (index: number) => ReactNode;
-  }) => {
-    const total = groupCounts.reduce((sum, count) => sum + count, 0);
-    return (
-      <div data-testid="mention-virtuoso">
-        {groupCounts.map((count, groupIndex) => (
-          <div key={groupIndex}>
-            {groupContent?.(groupIndex)}
-            {Array.from({ length: count }, (_, offset) => {
-              const index =
-                groupCounts.slice(0, groupIndex).reduce((sum, n) => sum + n, 0) +
-                offset;
-              return <div key={index}>{itemContent?.(index)}</div>;
-            })}
-          </div>
-        ))}
-        <span data-testid="mention-virtuoso-total">{total}</span>
-      </div>
-    );
-  };
-  return { GroupedVirtuoso: MockGroupedVirtuoso };
-});
-
 import {
   createMentionSuggestion,
   MentionList,
@@ -800,79 +767,89 @@ describe("createMentionSuggestion", () => {
     );
   });
 
-  it("keeps in-channel actors when the workspace roster exceeds the first page", () => {
-    // Channel members with CJK display names sort after ASCII outsiders.
-    // They must stay in the picker; Virtuoso windows DOM, it does not drop data.
-    const outsiders = Array.from({ length: 25 }, (_, i) => ({
-      id: `a-out-${i}`,
-      label: `Agent ${String(i).padStart(2, "0")}`,
-      type: "agent" as const,
-      handle: `agent-${i}`,
-      group: "not_in_channel" as const,
-    }));
+  it("keeps in-channel actors and pages outsiders from mention-candidates", async () => {
+    const fetchMentionCandidates = vi.fn(async (_query: string, offset: number) => {
+      if (offset > 0) {
+        return {
+          in_channel: [
+            { id: "li-wei", label: "里维", type: "agent" as const, handle: "li-wei", group: "in_channel" as const },
+          ],
+          not_in_channel: [
+            { id: "a-out-20", label: "Agent 20", type: "agent" as const, handle: "agent-20", group: "not_in_channel" as const },
+          ],
+          has_more: false,
+          next_offset: null,
+        };
+      }
+      return {
+        in_channel: [
+          { id: "li-wei", label: "里维", type: "agent" as const, handle: "li-wei", group: "in_channel" as const },
+          { id: "a-tai", label: "阿泰", type: "agent" as const, handle: "a-tai", group: "in_channel" as const },
+        ],
+        not_in_channel: [
+          { id: "a-out-0", label: "Agent 00", type: "agent" as const, handle: "agent-0", group: "not_in_channel" as const },
+        ],
+        has_more: true,
+        next_offset: 20,
+      };
+    });
 
     render(
       <I18nWrapper>
         <MentionList
           items={[
-            ...outsiders,
-            {
-              id: "li-wei",
-              label: "里维",
-              type: "agent",
-              handle: "li-wei",
-              group: "in_channel",
-            },
-            {
-              id: "a-tai",
-              label: "阿泰",
-              type: "agent",
-              handle: "a-tai",
-              group: "in_channel",
-            },
+            { id: "li-wei", label: "里维", type: "agent", handle: "li-wei", group: "in_channel" },
           ]}
           query=""
           command={() => {}}
+          fetchMentionCandidates={fetchMentionCandidates}
         />
       </I18nWrapper>,
     );
 
-    expect(screen.getByText("In this channel")).toBeInTheDocument();
-    expect(screen.getByText("里维")).toBeInTheDocument();
+    expect(await screen.findByText("里维")).toBeInTheDocument();
     expect(screen.getByText("阿泰")).toBeInTheDocument();
     expect(screen.getByText("Agent 00")).toBeInTheDocument();
-    expect(screen.getByText("Agent 24")).toBeInTheDocument();
+    expect(screen.queryByText("Agent 20")).toBeNull();
+    expect(fetchMentionCandidates).toHaveBeenCalledWith("", 0, expect.any(AbortSignal));
   });
 
-  it("keeps a first portion of not-in-channel actors when the channel roster is large", () => {
-    const inChannel = Array.from({ length: 18 }, (_, i) => ({
-      id: `u-in-${i}`,
-      label: `Member ${String(i).padStart(2, "0")}`,
-      type: "member" as const,
-      handle: `member-${i}`,
-      group: "in_channel" as const,
-    }));
-    const outsiders = Array.from({ length: 25 }, (_, i) => ({
-      id: `a-out-${i}`,
-      label: `Agent ${String(i).padStart(2, "0")}`,
-      type: "agent" as const,
-      handle: `agent-${i}`,
-      group: "not_in_channel" as const,
-    }));
-
-    render(
-      <I18nWrapper>
-        <MentionList
-          items={[...inChannel, ...outsiders]}
-          query=""
-          command={() => {}}
-        />
-      </I18nWrapper>,
-    );
-
-    expect(screen.getByText("Member 00")).toBeInTheDocument();
-    expect(screen.getByText("Member 17")).toBeInTheDocument();
-    expect(screen.getByText("Agent 00")).toBeInTheDocument();
-    expect(screen.getByText("Agent 24")).toBeInTheDocument();
+  it("does not dump workspace outsiders into the sync pool when mention-candidates is active", () => {
+    const qc = fakeQc({
+      members: [
+        { user_id: "u-in", name: "in-channel", role: "member" },
+        { user_id: "u-out", name: "not-in-channel", role: "member" },
+      ],
+      agents: [
+        {
+          id: "a-in",
+          name: "li-wei",
+          display_name: "里维",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+        {
+          id: "a-out",
+          name: "agentpro",
+          display_name: "AgentPro",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+    });
+    const config = createMentionSuggestion(qc, {
+      getAllowedActorIds: () => new Set(["u-in", "u-out", "a-in", "a-out"]),
+      getChannelMemberIds: () => new Set(["u-in", "a-in"]),
+      getMentionCandidates: () => async () => ({
+        in_channel: [],
+        not_in_channel: [],
+        has_more: false,
+        next_offset: null,
+      }),
+    });
+    const items = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+    expect(items.map((item) => item.id).sort()).toEqual(["a-in", "u-in"]);
   });
 });

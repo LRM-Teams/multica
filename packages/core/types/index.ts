@@ -396,6 +396,8 @@ export type {
   ChannelMemberRole,
   ChannelInviteCandidate,
   ChannelInviteCandidatesResponse,
+  ChannelMentionCandidate,
+  ChannelMentionCandidatesResponse,
   ChannelMemberManagementCapabilityTarget,
   ChannelMemberManagementCapabilities,
   ChannelMemberBrief,

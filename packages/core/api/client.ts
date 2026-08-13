@@ -139,6 +139,7 @@ import type {
   ChannelNotifyLevel,
   ChannelMember,
   ChannelInviteCandidatesResponse,
+  ChannelMentionCandidatesResponse,
   ChannelMemberManagementCapabilities,
   ChannelMessage,
   ChannelMessagesPage,
@@ -341,6 +342,8 @@ import {
   ChannelGoalSubgoalEnvelopeSchema,
   EMPTY_CHANNEL_GOAL_SUBGOAL_LIST,
   ChannelMessageSearchResponseSchema,
+  ChannelMentionCandidatesResponseSchema,
+  EMPTY_CHANNEL_MENTION_CANDIDATES,
   WorkspaceSearchResponseSchema,
   EMPTY_CHANNEL_MESSAGES_PAGE,
   EMPTY_CHANNEL_THREAD_MESSAGES_PAGE,
@@ -3678,6 +3681,25 @@ export class ApiClient {
     if (params?.limit !== undefined) search.set("limit", String(params.limit));
     const suffix = search.size > 0 ? `?${search.toString()}` : "";
     return this.fetch(`/api/channels/${channelId}/invite-candidates${suffix}`);
+  }
+
+  async listChannelMentionCandidates(
+    channelId: string,
+    params?: { q?: string; limit?: number; offset?: number; signal?: AbortSignal },
+  ): Promise<ChannelMentionCandidatesResponse> {
+    const search = new URLSearchParams();
+    const q = params?.q?.trim();
+    if (q) search.set("q", q);
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    if (params?.offset !== undefined) search.set("offset", String(params.offset));
+    const suffix = search.size > 0 ? `?${search.toString()}` : "";
+    const raw = await this.fetch<unknown>(
+      `/api/channels/${channelId}/mention-candidates${suffix}`,
+      abortInit({ signal: params?.signal }),
+    );
+    return parseWithFallback(raw, ChannelMentionCandidatesResponseSchema, EMPTY_CHANNEL_MENTION_CANDIDATES, {
+      endpoint: "GET /api/channels/{id}/mention-candidates",
+    });
   }
 
   // Group-local Tasks projection. The channel is a discussion context, not an

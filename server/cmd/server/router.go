@@ -1554,6 +1554,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/members", h.ListChannelMembers)
 					r.Get("/member-management-capabilities", h.GetChannelMemberManagementCapabilities)
 					r.Get("/invite-candidates", h.ListChannelInviteCandidates)
+					r.Get("/mention-candidates", h.ListChannelMentionCandidates)
 					r.Post("/members", h.AddChannelMember)
 					r.Post("/members/batch", h.AddChannelMembers)
 					r.Delete("/members/{memberType}/{memberId}", h.RemoveChannelMember)

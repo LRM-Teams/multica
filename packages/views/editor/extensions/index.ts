@@ -206,6 +206,7 @@ export interface EditorExtensionsOptions {
   getMentionScopedAgents?: () => readonly MentionAgentCandidate[] | null | undefined;
   /** #35: channel membership ids for IN / NOT IN section headers (not a filter). */
   getMentionChannelMemberIds?: () => ReadonlySet<string> | null | undefined;
+  getMentionCandidates?: () => import("./mention-suggestion").MentionCandidatesFetch | null | undefined;
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
   /**
@@ -357,7 +358,7 @@ export function createEditorExtensions(
       ...(options.disableMentions
         ? { suggestion: { allow: () => false } }
         : options.queryClient
-          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds, getScopedAgents: options.getMentionScopedAgents, getChannelMemberIds: options.getMentionChannelMemberIds }) }
+          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds, getScopedAgents: options.getMentionScopedAgents, getChannelMemberIds: options.getMentionChannelMemberIds, getMentionCandidates: options.getMentionCandidates }) }
           : {}),
     }),
     // Issue `#` and channel `#` share one trigger — enable at most one.

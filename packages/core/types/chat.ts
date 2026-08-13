@@ -38,9 +38,11 @@ export interface ChatSession {
 }
 
 export interface PendingChatTaskItem {
-  task_id: string;
-  status: string;
   chat_session_id: string;
+  pending?: boolean;
+  status?: string;
+  delivery_id?: string;
+  created_at?: string;
 }
 
 export interface PendingChatTasksResponse {
@@ -96,7 +98,16 @@ export interface ChatMessagesPage {
 
 export interface SendChatMessageResponse {
   message_id: string;
-  task_id: string;
+  /**
+   * Raft `agent:deliver` id when the Computer was woken with the user line.
+   * Empty on the greeting sticker fast path and when delivery persist failed.
+   */
+  delivery_id?: string;
+  /**
+   * True while a standalone reply is still outstanding. Greeting is the
+   * only send that returns pending=false.
+   */
+  pending?: boolean;
   /**
    * Server-authoritative task creation time. Optimistic StatusPill seed
    * uses this as its anchor so the timer starts from the real `0s` —
@@ -119,19 +130,11 @@ export interface CancelTaskResponse extends AgentTask {
 
 /**
  * Response from GET /api/chat/sessions/{id}/pending-task.
- * All fields are absent when the session has no in-flight task.
- *
- * `created_at` is the server-authoritative anchor for the chat StatusPill's
- * elapsed-seconds timer — the optimistic seed in chat-window.tsx fills in
- * task_id/status only, then this query catches up with the real created_at
- * so the timer survives refresh / reopen without "resetting to 0s".
- *
- * `inbox_event_id` is the authoritative Stop id for inbox-based chat work;
- * clients should prefer it over task_id when moving Stop to inbox cancel.
+ * Outstanding is `pending: true` for this chat_session_id.
  */
 export interface ChatPendingTask {
-  task_id?: string;
+  pending?: boolean;
+  delivery_id?: string;
   status?: string;
   created_at?: string;
-  inbox_event_id?: string;
 }

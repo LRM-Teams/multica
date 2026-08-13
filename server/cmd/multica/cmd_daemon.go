@@ -262,27 +262,6 @@ func runDaemonForeground(cmd *cobra.Command) error {
 
 	profile := ""
 
-	// Preflight (task #815): every freshly started worker generation checks
-	// whether it's already on the VersionStore's committed Active version.
-	// No task has been claimed yet at this point, so handing off here is
-	// always safe: nothing to drain.
-	if target, err := resolveVersionHandoffTarget(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: version handoff check failed, continuing on running binary: %v\n", err)
-	} else if target != "" {
-		if runningUnderSupervision() {
-			// The external supervisor (task #815) is watching for exactly
-			// this exit code and re-resolves which binary to run next
-			// itself — see buildSuperviseConfig's ResolveWorkerPath. No
-			// task has been claimed yet, so this is always safe: nothing to
-			// drain.
-			os.Exit(daemonHandoffExitCode)
-		}
-		// The stable launcher remains the lifecycle entrypoint; the immutable
-		// Active binary is an internal child and never becomes persisted
-		// Computer/service state.
-		return runActiveComputerBinary(target)
-	}
-
 	// The service environment is an explicit machine choice. Production is
 	// fixed to leagent.me; only test may carry a validated Tencent Cloud
 	// IP/domain origin.

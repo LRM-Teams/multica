@@ -118,14 +118,8 @@ func runDaemonInstallService(cmd *cobra.Command, _ []string) error {
 	}
 	profile := resolveProfile(cmd)
 
-	// Prefer the VersionStore Active binary over the invoking binary's own
-	// path — same reasoning as computer.LaunchBinary: a service pointed
-	// at a specific version's staged path outlives that version being
-	// superseded exactly the way a manually-run daemon does via the
-	// supervisor's own ResolveWorkerPath re-resolution, but the service
-	// definition itself should still point at a real, currently-valid path
-	// rather than the transient path of whichever binary happened to run
-	// this install command.
+	// Point the OS service at the on-PATH Computer. Upgrade replaces that
+	// same file, so the unit must not pin a versions/<tag> path.
 	exePath, err := computer.LaunchBinary()
 	if err != nil {
 		return fmt.Errorf("resolve executable path: %w", err)

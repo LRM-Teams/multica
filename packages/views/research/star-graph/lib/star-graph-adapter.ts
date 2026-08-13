@@ -117,6 +117,9 @@ export function mapNodeState(status: string): StarGraphNodeState {
     case "running":
     case "in_progress":
     case "working":
+    case "dispatching":
+    case "claimed":
+    case "in_flight":
     case "queued":
       return "run";
     case "failed":
@@ -126,10 +129,13 @@ export function mapNodeState(status: string): StarGraphNodeState {
     case "superseded":
     case "abandoned":
     case "deprecated":
+    case "cancelled":
+    case "obsolete":
       return "abandoned";
     case "pending":
     case "pending_review":
     case "review":
+    case "waiting":
       return "pending-review";
     case "conflict":
     case "conflicted":
@@ -142,6 +148,9 @@ export function mapNodeState(status: string): StarGraphNodeState {
     case "completed":
     case "terminal":
     case "accepted":
+    case "succeeded":
+    case "success":
+    case "resolved":
       return "stable";
     case "idle":
     case "ready":
@@ -161,8 +170,9 @@ function safeCount(value: unknown): number | undefined {
 }
 
 function confidencePercent(value: unknown): number | undefined {
-  const n = Number(value);
-  return !Number.isNaN(n) && n >= 0 && n <= 100 ? Math.round(n) : undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (value < 0 || value > 100) return undefined;
+  return Math.round(value <= 1 ? value * 100 : value);
 }
 
 /** Read metrics ONLY from fields that actually exist (typed or detail). */
@@ -231,7 +241,14 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
   // metrics are simply omitted until typed data exists.
   const metrics = mapMetrics(node.typed);
 
-  const state = mapNodeState(node.status);
+  const mappedState = mapNodeState(node.status);
+  // The run projection uses `active` for an execution node that is currently
+  // working, while an active root/result is not necessarily executing. Keep
+  // that distinction at the tier boundary instead of pulsing the whole graph.
+  const state =
+    tier === "s" && node.status.trim().toLowerCase() === "active"
+      ? "run"
+      : mappedState;
   if (tier === "s") {
     return {
       id: node.id,

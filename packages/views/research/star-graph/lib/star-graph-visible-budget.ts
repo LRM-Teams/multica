@@ -11,6 +11,10 @@ export const STAR_GRAPH_MOBILE_DOM_BUDGET = 48;
 /** Below this zoom, non-protected nodes collapse to one representative per cluster. */
 export const LOW_ZOOM_CLUSTER_COLLAPSE = 0.55;
 
+/** Overview zoom contract: at most 12 full Landmark-style cards. */
+export const OVERVIEW_ZOOM_MAX = 0.35;
+export const OVERVIEW_LANDMARK_BUDGET = 12;
+
 const TIER_RANK: Record<string, number> = {
   xxl: 0,
   xl: 1,
@@ -68,6 +72,9 @@ export function effectiveEntityBudget(
   if (zoom >= LOW_ZOOM_CLUSTER_COLLAPSE) {
     return Math.max(40, Math.round(baseBudget * 0.65));
   }
+  if (zoom <= OVERVIEW_ZOOM_MAX) {
+    return Math.min(baseBudget, OVERVIEW_LANDMARK_BUDGET);
+  }
   return Math.max(24, Math.round(baseBudget * 0.45));
 }
 
@@ -107,10 +114,10 @@ export function selectVisibleEntityIds(
   const clustersRepresented = new Set<string>();
 
   for (const entity of ranked) {
-    if (!collapseClusters && visible.size >= budget) break;
-    if (collapseClusters && visible.size >= budget && !isProtectedEntity(entity, options)) {
-      break;
-    }
+    // A hard DOM/overview budget is still hard when many nodes are protected.
+    // The rank ordering guarantees root → selection → neighbors → active /
+    // failure nodes win before ordinary landmarks.
+    if (visible.size >= budget) break;
 
     if (isProtectedEntity(entity, options)) {
       visible.add(entity.id);

@@ -133,6 +133,28 @@ describe("deriveTrajectoryCommits (LRM-1480 / UI-06 adapter)", () => {
       layout.segments.some((s) => s.fromCommitId === "root"),
     ).toBe(false);
   });
+
+  it("keeps canonical typed derivation, merge, refinement, and restart parentage", () => {
+    const nodes = [
+      node({ id: "source", title: "Source" }),
+      node({ id: "derived", title: "Derived" }),
+      node({ id: "merged", title: "Merged" }),
+      node({ id: "refined", title: "Refined" }),
+      node({ id: "retry", title: "Retry" }),
+    ];
+    const edges = [
+      edge("source", "derived", "derived_from"),
+      edge("derived", "merged", "merged_from"),
+      edge("merged", "refined", "refines"),
+      edge("refined", "retry", "restart_of"),
+    ];
+
+    const byId = new Map(deriveTrajectoryCommits(nodes, edges).map((commit) => [commit.id, commit]));
+    expect(byId.get("derived")?.parentIds).toEqual(["source"]);
+    expect(byId.get("merged")?.parentIds).toEqual(["derived"]);
+    expect(byId.get("refined")?.parentIds).toEqual(["merged"]);
+    expect(byId.get("retry")?.parentIds).toEqual(["refined"]);
+  });
 });
 
 describe("filterNodesForTrajectory stable reflow (LRM-1480 / AC3)", () => {

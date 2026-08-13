@@ -108,13 +108,13 @@ export function ResearchFleetStrip({
           aria-busy
         >
           <div className="flex items-center gap-2 px-0.5 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
+            <Loader2 className="size-3.5 animate-spin text-brand motion-reduce:animate-none" aria-hidden />
             <span>{t(($) => $.panel.fleet_loading_body)}</span>
           </div>
           {[0, 1].map((i) => (
             <div
               key={i}
-              className="animate-pulse rounded-xl border border-border/50 bg-card/70 p-2.5"
+              className="animate-pulse rounded-xl border border-border/50 bg-card/70 p-2.5 motion-reduce:animate-none"
               style={{ animationDelay: `${i * 80}ms` }}
             >
               <div className="flex items-center gap-2">

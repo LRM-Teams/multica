@@ -123,6 +123,7 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	if err := runner.activity.SetManaged(status, session); err != nil {
 		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("record managed start: %w", err)
 	}
+	runner.observeRuntimeStarting(payload.AgentID, payload.RuntimeID, "Managed start")
 	if runner.residency != nil {
 		runner.residency.rememberIdle(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
 	}

@@ -240,6 +240,7 @@
 - **Computer 本机模型**：同一 OS 用户只有一个 Computer root/identity/resident；每个环境分别保存登录和 Workspace connection，本地键为 `(environment, workspace_id)`。两边连接可以同时保留，但单个 resident generation 同一时刻只服务当前环境；切换必须 drain、重启、验收，不能并发连接 production/test。
 - **Computer 生命周期所有权**：升级、重启和其他整机 mutation 只由 Computer owner 发起；Workspace owner/admin 只管理自己的 Workspace，不因页面中可见一台 Computer 就取得别人电脑的控制权。Workspace 页面只是发起入口和状态投影；一次 Computer 升级对该环境下全部 active Workspace connections 生效，所有连接必须看到同一 operation、版本和结果，禁止按发起 Workspace 分叉升级 lineage。
 - **Computer 升级只有一个 CLI 入口**：`multica computer upgrade` 先探测本机 resident；live owner 可控时只通过 owner-only loopback control 提交 canonical Machine Upgrade，不自行 stage。只有确认没有 resident owner 时才允许在 machine mutation lock 下离线下载、校验并提交 Active，且结果只表示供下次 Computer start 使用；resident ownership 存在但 control 不可达时必须返回 `upgrade_service_unreachable`，不能离线绕过。顶层 `multica update` 不存在；`--target-version` 是唯一显式包选择，普通升级继续由 production/test 环境固定包源。
+- **Computer 就是 PATH 那一份**：`$HOME/.local/bin/multica` 既是 CLI 也是 Computer。`computer upgrade` 把它换成新文件并留下 `.prev`；start / supervise 跑的也是这份，没有 VersionStore 子进程。
 - **Computer restart 与升级恢复共享单 owner 栅栏**：`computer restart` 只有在旧 resident 的 control port 已证明释放后才能分配并启动 successor；仅成功发送 shutdown 不构成 stop proof。Machine Upgrade 的 `accepted/staged` journal 只可在服务端确认同一 operation、generation、target 及 Runtime/Workspace 集合已 `failed` 后 CAS 清理；上报未 ACK 或身份不匹配必须保留。`handoff/candidate_ready/rollback_pending` 仍要求各自的 successor 或 rollback proof。完整合同与回归见 `docs/machine-upgrade-rollout.md`。
 - **Computer CLI 单测不得触碰机器级 resident**：`HOME=t.TempDir()` 只能隔离文件，不能隔离固定 control port `19514`。任何会 start/stop/restart Computer 的命令测试必须替换 lifecycle seam，验证意图和结果而不访问真实端口或进程；真实进程测试必须使用显式隔离 control port，并独立证明不会命中默认 resident。
 - **包源随环境固定**：production 只用 `metainfo.json.environments.production` 的稳定版本；test 只用 `metainfo.json.environments.test` 的预发布版本。没有独立 `release_channel` 让用户制造“test 连稳定包”或“production 连预发布包”的组合。带版本 archive/checksum/manifest 不可变；不发布根目录 channel JSON，也不做隐式 fallback。
@@ -340,12 +341,12 @@
 - 10 分钟 deadline 到达时，无论当前是否繁忙，都必须在 `claimMu` 下原子设置 claim barrier；从这一刻起拒绝所有新 ClaimTask，只等待 barrier 前已经进入 claim/handoff/active 的工作全部归零。只有 `claims_in_flight=0 && active_tasks=0` 后才能调用 `triggerRestart`；禁止靠提前 cancel root context 强杀活跃 Agent。函数入口、deadline/ticker 分支和 durable ACK 后的 immediate-idle 分支都必须在 restart 前 fail-closed 复查 root context；等待上下文取消只终止等待并释放已持有 barrier，不触发 restart。
 - **物**：migration 217 的 `daemon_runtime_update` 表与 active partial unique index（①②）；`PostgresUpdateStore` 的 create/exclusion/atomic pop/ready/complete/fail/timeout/latest 与 pool replacement 回归；`waitForSafeRestartWithWindow` 的 deadline stop-claim、claim-handoff drain、active-task drain、cancel-no-restart、deadline 前 idle opportunity 回归（⑤）。旧实现“只等全 idle、期间永久继续 claim”会使这些 deadline 回归见红。
 
-### 4.11 Daemon 版本必须先不可变 stage，再由 supervisor 事务激活 — `可执行`（② state/CAS 类型 + ③单一 VersionStore + ⑤并发/损坏回归；owner: @Barry）
-- release binary 只能先发布到 user-owned `~/.local/share/multica/versions/<tag>/multica[.exe]`；stage 的固定顺序是 checksum → temp write/chmod/fsync → 真实 `--version` → immutable directory publish。同一个 tag 的相同 digest 幂等，不同 digest fail closed；坏 checksum、版本不符或半写绝不能留下 final version dir。
-- 激活状态只有一份小型 manifest：`active_version + previous_version + generation`。写入必须在 OS advisory lock 内按 generation CAS，并用平台原子 replace；active/previous 都必须已经 stage。并发 actor 对同一 generation 最多一个 winner，其他 actor 得到显式 conflict，不能 last-write-wins。
-- Phase A 只建立持久版本/激活事实，不允许新旧 caller 双写或悄悄改现有 daemon 行为。后续唯一 supervisor 才能在跨 worker claim barrier 内消费 manifest：新 worker health/version/register commit 前保持 claim-disabled；失败在同一 barrier 下 rollback previous。Windows stable launcher 永不由 worker/version binary 覆盖。
-- **物**：`server/internal/cli/version_store.go`、`version_store_{unix,windows}.go`；`TestVersionStore*` 覆盖 checksum/version fail-before-publish、immutable same-tag conflict、16-way concurrent stage、generation CAS one-winner、unstaged activation；Windows cross-compile gate验证 `LockFileEx + MoveFileEx(REPLACE_EXISTING|WRITE_THROUGH)` adapter。
-- **已见红**：Phase A 测试在实现前因 `VersionStore/BinaryVerifier/ActivationState` 全部不存在而 compile-fail；实现后 focused race suite 与完整 `internal/cli` suite 通过。
+### 4.11 Computer 只有一份 PATH 二进制，升级按 Raft 换文件 — `可执行`（③单一 PATH + ⑤ swap/rollback 回归；owner: @Barry）
+- 产品是 `$HOME/.local/bin/multica`（Windows 为 `%USERPROFILE%\AppData\Local\multica\multica.exe`）。start、supervise、OS service 和 `computer upgrade` 都跑/改这一份文件，没有 `versions/<tag>` catalog，也没有 `activation.json` Active 指针。
+- 升级先把校验过的字节写到 ephemeral scratch，再 `SwapExecutable`：当前文件 rename 成 `.prev`，新文件落到同一 PATH。失败必须把 `.prev` 换回去。回滚只认 `.prev`，不再走 Previous generation CAS。
+- verify / recovery 只能 exec 那个 scratch 文件的 `--version`。`runStageUpdate` 的 status 字符串不是路径；journal `staged_path` 也必须是普通文件，缺失就 restage，不能拿 status 当可执行文件。
+- live resident 是唯一 mutation owner；无 resident 才允许离线 swap。Homebrew prefix 不自替换。
+- **物**：`server/internal/cli/exec_swap.go`、`stage_release.go`、`lifecycle_upgrade.go`；`TestSwapExecutable*`、`TestCommitStagedActivationSwapsInstallPathAndKeepsPrev`、`TestVerifyStagedBinaryUsesScratchPathFromRunStageUpdateStatus`、`TestRecoverStagedJournal*`、offline `computer upgrade` subprocess 证明 PATH + `.prev`。
 
 ### 4.12 Daemon 更新观测必须是单调、持久、可降级的事实 — `可执行`（① PostgreSQL daemon scope + ② typed envelope + ③ daemon 单一 coordinator + ⑤重启/CAS 回归；owner: @Barry）
 - daemon 内只有一个 update-observation coordinator；自动轮询和 server 下发更新都必须通过它写入。每次语义变化先把完整 snapshot 原子持久化到本机，再发布给 HTTP/WS heartbeat；持久化失败时拒绝开始更新、重启或对外宣称新状态。进程重启后创建新 `session_id`，`revision` 从 1 开始；未终结的 `checking|updating` 归一为 `interrupted`，已成功的 `restart_pending` 结果必须重放。
@@ -356,7 +357,7 @@
 ### 4.13 Daemon 每个 profile 只能有一个 supervisor 拥有 worker generation — `可执行`（② typed state + ③单一 supervisor + ⑤真实进程回归；owner: @Barry）
 - supervisor 必须在整个生命周期持有每个 profile 唯一的 OS advisory lock，并且是唯一调用 worker `Start`、`Wait`、终止和重启的进程。锁冲突必须在 worker 启动前 fail closed；不能依赖 stale PID 文件判断唯一性，也不能把 child `Process.Release` 后失去退出事实。
 - worker 正常退出是 terminal clean stop，绝不自动拉起；启动失败或异常退出按 typed exit kind 记录并使用有上限的指数 backoff，稳定运行窗口后重置 backoff。停止必须把终止信号转发给整组 worker 并等待，超时才强杀；停止期间或 backoff 期间收到 context cancel 都不得再启动一代。显式 restart 立即终止当前 worker、清零 crash backoff 并只推进一个 generation；并发重复请求可合并但不能并发启动 worker。
-- Phase B 只提供 dormant supervisor foundation，不接 `daemon start`、setup、updater、VersionStore activation 或 claim barrier。后续 cutover 前必须先在 Phase C 加入跨 generation 的 claim-disabled barrier，以及 health + exact version + register grace 的 commit/rollback；当前 public foreground worker 和 self-successor 路径不得提前双写或并行启用。
+- Phase B 只提供 dormant supervisor foundation，不接 `daemon start`、setup、updater 或 claim barrier。后续 cutover 前必须先在 Phase C 加入跨 generation 的 claim-disabled barrier，以及 health + exact version + register grace 的 commit/rollback；当前 public foreground worker 和 self-successor 路径不得提前双写或并行启用。
 - **物**：`server/internal/daemon/supervisor` 的 `Run/RequestRestart/Snapshot`、Unix `flock + process-group SIGTERM/SIGKILL`、Windows `LockFileEx + CREATE_NEW_PROCESS_GROUP/CTRL_BREAK` adapter；真实 subprocess 回归覆盖 clean-no-restart、real start failure、crash-backoff-cap + stable-run reset、cancel-no-resurrection、explicit generation restart、stopping/backoff duplicate-request coalescing、failed-lock/terminal request rejection、second-instance fail-closed，以及 Unix descendant process-group graceful/forced termination。
 - **已见红**：Phase B 测试在实现前因 supervisor state/API 全部不存在而 compile-fail；实现后 focused/race suite、Go vet、Windows amd64 cross-compile 与 diff-check 必须通过。
 
@@ -492,9 +493,9 @@
 - `WorkspacesRoot` 默认且唯一为 `~/.multica/workspaces`；每个 Agent 的根目录、工作目录和 subprocess cwd 都是 `<WorkspacesRoot>/<workspace_id>/agents/<agent_id>/`。路径拼装只通过 `server/internal/agentworkspace`，禁止 caller 自己拼 `agents`、task ID 或 provider/profile 后缀。
 - 运行时只暴露 `MULTICA_AGENT_ROOT`。`memory/`、`skills/`、`devices/`、provider 私有配置和 Agent 自己创建的代码/worktree 都位于 AgentRoot 下，以相对路径定位；不得为这些子目录增加平行 context 字段或 `MULTICA_*_DIR` 环境变量。
 - 同一 Agent 跨 task、daemon 重启和 provider 切换复用同一目录。硬切不扫描、不迁移、不删除旧 per-task/repo 目录；旧文件留在原处，新运行只认 canonical AgentRoot。
-- Multica 不 clone/pull/reset/branch/worktree，也不提供 `multica repo` 命令。Git 与 worktree 工作方式由 Agent 自己决定。项目资源只保留用户管理的 metadata，不改变 cwd，不写入 daemon claim/register payload，也不把 repository URL 注入 Agent prompt。
+- Multica 不 clone/pull/reset/branch/worktree，也不提供 `multica repo` 命令。Agent 自己把 checkout 放进 AgentRoot；干活时先选 workspace 内的项目目录或 worktree，再跑 git。项目资源仍是用户管理的 metadata：不改变进程 cwd，不写入 daemon claim/register payload，也不把 repository URL 注入 runtime brief（brief 在 resident 复用时不会因资源变更重写）。当前任务绑定了 project 时，Agent 用 `multica workspace info --projects` 读现活的 project 与 resource 绑定。
 - AgentRoot 不参与 task GC，也没有后台 retention/GC；仅用户明确选择 full reset，或在 Computer 存储页确认删除时，才可删除精确 canonical root。full reset 是硬切语义：先强制中断 runtime，然后直接删除并重建，不等待 quiescence。
-- **物**：`server/internal/agentworkspace/path.go`；`agent_runtime_turn.go`；`execenv/agent_workspace.go`；`TestCanonicalAgentWorkspace*`、`TestMulticaAgentRootStableAcrossHarnessSwitch`、`TestMulticaAgentEnvUsesProviderNeutralRoot`。
+- **物**：`server/internal/agentworkspace/path.go`；`agent_runtime_turn.go`；`execenv/agent_workspace.go`；`TestCanonicalAgentWorkspace*`、`TestMulticaAgentRootStableAcrossHarnessSwitch`、`TestMulticaAgentEnvUsesProviderNeutralRoot`、`TestAgentWorkspaceHoldsCodeCheckouts`。
 
 ### 4.19 Agent 消息链路硬切到 Raft 风格 coordinator — `可执行`（Workspace Runner 单一 Inbox + 本地 coverage receipt + MessageDraftStore）
 
@@ -549,7 +550,10 @@
 - 误用 fail closed：Worker 字段/`intent:"worker"` 打到 Editor → 400；Editor 的 `prompt`/`action` 打到 Worker → 400。
 - Worker 派发把 `note_brief={version,page_id,title}` 写入 `agent_inbox_event.context`；prompt 三分区 `<system_contract>` / untrusted `<note>` / `<instruction>`，title/body 转义 `<`/`>`，instruction 防 `</instruction>` 截断（S2-C4）。
 - 待审写回（`note_page_writeback`）是第三条管道（D1），不是第三种 job。
-- **物**：`docs/notes-editor-worker-contract.md`；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` + 误用、dispatch/ACL、prompt breakout 测。
+- **订阅策略（S3-W1）**：「有关联即订阅」——`note_page_issue_ref` 行即隐式订阅；无独立订阅表。
+- **事件白名单（S3-W2）**：仅 issue 状态新进入 `done` / `cancelled` 时出提案；进行中/阻塞/标题编辑/普通评论为零提案。
+- **与 Agent Daily 并行（S3-W3）**：产品笔记/待审写回与 agent 私有 `memory/daily/` 两套存储并行、可互链、禁止合并；交叉声明见合同文档 §「Product note writeback ≠ Agent Daily」与 `docs/agent-memory-model.md` §10。
+- **物**：`docs/notes-editor-worker-contract.md`；`docs/agent-memory-model.md` §10；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` / `note_writeback_events.go` + 误用、dispatch/ACL、prompt breakout、白名单测。
 
 ### 4.23 Context compaction 是可见 Activity，不是 Message acceptance 或进程生命周期 — `可执行`（②统一 lifecycle event + ③单一 gate/投影 + ⑤状态机回归；owner: @Codex）
 - Provider 原生事件先归一成 `MessageCompactionStarted` / `MessageCompactionFinished`；resident runtime 的主动压缩必须在独立 `ResidentMessagePreparation` gate 完成，不能共享 20 秒 native Message acceptance timeout，也不能把压缩超时解释成进程重启。

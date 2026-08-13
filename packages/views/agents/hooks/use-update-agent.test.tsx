@@ -251,7 +251,8 @@ describe("useUpdateAgent — restart after execution-config save (task #33 / A1�
       "restart",
       expect.any(String),
     );
-    expect(mockToastSuccess).toHaveBeenCalledWith("Saved. Restarting…");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Agent updated");
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Saved. Restarting…");
   });
 
   it("A1: runtime_id change also restarts", async () => {

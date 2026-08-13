@@ -61,4 +61,11 @@ describe("ResearchSourceBadges (LRM-800)", () => {
     render(<ResearchSourceBadges sources={[source(0), source(1)]} embedded />);
     expect(screen.queryByTestId("research-sources-expand")).toBeNull();
   });
+
+  it("omits the score when credibility is unknown", () => {
+    const unknown = { ...source(0), credibility_weight: undefined };
+    render(<ResearchSourceBadges sources={[unknown]} embedded />);
+    expect(screen.getByText("Source 0")).toBeTruthy();
+    expect(screen.queryByText("0.0")).toBeNull();
+  });
 });

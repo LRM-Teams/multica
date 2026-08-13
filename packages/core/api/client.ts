@@ -244,6 +244,7 @@ import type {
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteWritebackRequest,
+  IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -283,6 +284,8 @@ import {
   AttachmentResponseSchema,
   CancelTaskResponseSchema,
   ChildIssuesResponseSchema,
+  IssueNoteRefListResponseSchema,
+  EMPTY_ISSUE_NOTE_REF_LIST,
   CommentsListSchema,
   CommentTriggerPreviewSchema,
   CloudRuntimeNodeListSchema,
@@ -376,6 +379,12 @@ import {
   EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
   EMPTY_SANDBOX_SNAPSHOT,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_SEND_CHAT_MESSAGE_RESPONSE,
+  SendChatMessageResponseSchema,
+  ChatPendingTaskSchema,
+  EMPTY_CHAT_PENDING_TASK,
+  PendingChatTasksResponseSchema,
+  EMPTY_PENDING_CHAT_TASKS_RESPONSE,
   EMPTY_EVOLUTION_METRICS,
   EMPTY_EVOLUTION_TRAINING_EXAMPLE_LIST,
   EMPTY_EVOLUTION_MODEL_RUNTIME_CONFIG_LIST,
@@ -1319,6 +1328,14 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/issues/${id}/children`);
     return parseWithFallback(raw, ChildIssuesResponseSchema, { issues: [] }, {
       endpoint: "GET /api/issues/:id/children",
+    });
+  }
+
+  /** Notes linked to this issue (S3-R5b). ACL-filtered — inaccessible notes omitted. */
+  async listIssueNoteRefs(id: string): Promise<IssueNoteRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(id)}/note-refs`);
+    return parseWithFallback(raw, IssueNoteRefListResponseSchema, EMPTY_ISSUE_NOTE_REF_LIST, {
+      endpoint: "GET /api/issues/:id/note-refs",
     });
   }
 
@@ -3444,33 +3461,32 @@ export class ApiClient {
     if (parts && parts.length > 0) {
       body.parts = parts;
     }
-    return this.fetch(`/api/chat/sessions/${sessionId}/messages`, {
+    const raw = await this.fetch(`/api/chat/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
+    return parseWithFallback(raw, SendChatMessageResponseSchema, EMPTY_SEND_CHAT_MESSAGE_RESPONSE, {
+      endpoint: "POST /api/chat/sessions/:id/messages",
+    });
   }
 
   async getPendingChatTask(sessionId: string): Promise<ChatPendingTask> {
-    return this.fetch(`/api/chat/sessions/${sessionId}/pending-task`);
+    const raw = await this.fetch(`/api/chat/sessions/${sessionId}/pending-task`);
+    return parseWithFallback(raw, ChatPendingTaskSchema, EMPTY_CHAT_PENDING_TASK, {
+      endpoint: "GET /api/chat/sessions/:id/pending-task",
+    });
   }
 
-  /**
-   * LRM-581: cancel one chat wake by inbox_event_id (pending-task authority).
-   * Do not use cancelTaskById for chat-window Stop — that path is the old dual track.
-   */
-  async cancelChatInboxEvent(
-    sessionId: string,
-    inboxEventId: string,
-  ): Promise<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }> {
-    return this.fetch(
-      `/api/chat/sessions/${sessionId}/agent-inbox/events/${inboxEventId}/cancel`,
-      { method: "POST" },
-    );
+  async cancelStandaloneChat(sessionId: string): Promise<{ ok: boolean; pending: boolean }> {
+    return this.fetch(`/api/chat/sessions/${sessionId}/cancel`, { method: "POST" });
   }
 
   async listPendingChatTasks(): Promise<PendingChatTasksResponse> {
-    return this.fetch(`/api/chat/pending-tasks`);
+    const raw = await this.fetch(`/api/chat/pending-tasks`);
+    return parseWithFallback(raw, PendingChatTasksResponseSchema, EMPTY_PENDING_CHAT_TASKS_RESPONSE, {
+      endpoint: "GET /api/chat/pending-tasks",
+    });
   }
 
   async markChatSessionRead(sessionId: string): Promise<void> {
@@ -4633,59 +4649,152 @@ export class ApiClient {
   }
 
   // Research Fleet
-  async ensureResearchFleet(): Promise<import("../types/research").ResearchFleet> {
-    const { ResearchFleetSchema, EMPTY_RESEARCH_FLEET } = await import("../research/schemas");
+  async ensureResearchFleet(
+    expectedWorkspaceId?: string,
+  ): Promise<import("../types/research").ResearchFleet> {
+    const { ResearchFleetSchema } = await import("../research/schemas");
     const raw = await this.fetch("/api/research/fleet/ensure", { method: "POST" });
-    return parseWithFallback(raw, ResearchFleetSchema, EMPTY_RESEARCH_FLEET, {
-      endpoint: "POST /api/research/fleet/ensure",
-    });
+    const rawFleet =
+      raw && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : null;
+    if (!rawFleet || !Array.isArray(rawFleet.members)) {
+      throw new Error("POST /api/research/fleet/ensure response failed schema validation");
+    }
+    const parsed = ResearchFleetSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("POST /api/research/fleet/ensure response failed schema validation");
+    }
+    const fleet = parsed.data;
+    const memberIds = fleet.members.map((member) => member.id);
+    const agentIds = fleet.members.map((member) => member.agent_id);
+    if (
+      !fleet.id ||
+      !fleet.workspace_id ||
+      (expectedWorkspaceId != null && fleet.workspace_id !== expectedWorkspaceId) ||
+      fleet.members.some((member) => !member.id || !member.agent_id) ||
+      new Set(memberIds).size !== memberIds.length ||
+      new Set(agentIds).size !== agentIds.length ||
+      (fleet.lead_agent_id != null && !agentIds.includes(fleet.lead_agent_id))
+    ) {
+      throw new Error("POST /api/research/fleet/ensure response failed identity validation");
+    }
+    return fleet;
   }
 
-  async listResearchSessions(): Promise<import("../types/research").ListResearchSessionsResponse> {
-    const {
-      ListResearchSessionsResponseSchema,
-      EMPTY_RESEARCH_SESSIONS,
-    } = await import("../research/schemas");
+  async listResearchSessions(
+    expectedWorkspaceId?: string,
+  ): Promise<import("../types/research").ListResearchSessionsResponse> {
+    const { ListResearchSessionsResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch("/api/research/sessions");
-    return parseWithFallback(raw, ListResearchSessionsResponseSchema, EMPTY_RESEARCH_SESSIONS, {
-      endpoint: "GET /api/research/sessions",
-    });
+    const rawSessions =
+      raw && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>).sessions
+        : null;
+    if (
+      !Array.isArray(rawSessions) ||
+      rawSessions.some((session) => {
+        if (!session || typeof session !== "object" || Array.isArray(session)) return true;
+        const value = session as Record<string, unknown>;
+        return ["id", "workspace_id", "fleet_id", "status", "current_stage"].some(
+          (key) => typeof value[key] !== "string" || value[key] === "",
+        );
+      })
+    ) {
+      throw new Error("GET /api/research/sessions response failed schema validation");
+    }
+    const parsed = ListResearchSessionsResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("GET /api/research/sessions response failed schema validation");
+    }
+    const sessions = parsed.data.sessions;
+    const ids = sessions.map((session) => session.id);
+    if (
+      sessions.some(
+        (session) =>
+          !session.id ||
+          !session.workspace_id ||
+          (expectedWorkspaceId != null && session.workspace_id !== expectedWorkspaceId),
+      ) ||
+      new Set(ids).size !== ids.length
+    ) {
+      throw new Error("GET /api/research/sessions response failed identity validation");
+    }
+    return parsed.data;
   }
 
   async createResearchSession(
     data: import("../types/research").CreateResearchSessionRequest,
+    expectedWorkspaceId?: string,
   ): Promise<import("../types/research").CreateResearchSessionResponse> {
-    const {
-      CreateResearchSessionResponseSchema,
-      EMPTY_RESEARCH_SNAPSHOT,
-      EMPTY_RESEARCH_FLEET,
-    } = await import("../research/schemas");
+    const { CreateResearchSessionResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch("/api/research/sessions", {
       method: "POST",
       body: JSON.stringify(data),
     });
-    return parseWithFallback(
-      raw,
-      CreateResearchSessionResponseSchema,
-      {
-        session: EMPTY_RESEARCH_SNAPSHOT.session,
-        fleet: EMPTY_RESEARCH_FLEET,
-        nodes: [],
-        edges: [],
-        messages: [],
-      },
-      { endpoint: "POST /api/research/sessions" },
-    );
+    const parsed = CreateResearchSessionResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("POST /api/research/sessions response failed schema validation");
+    }
+    const response = parsed.data;
+    const sessionId = response.session.id;
+    const workspaceId = response.session.workspace_id;
+    const scopedEntities = [
+      ...(response.nodes ?? []),
+      ...(response.edges ?? []),
+      ...(response.messages ?? []),
+    ];
+    if (
+      !sessionId ||
+      !workspaceId ||
+      (expectedWorkspaceId != null && workspaceId !== expectedWorkspaceId) ||
+      !response.fleet.id ||
+      response.fleet.workspace_id !== workspaceId ||
+      (response.session.fleet_id !== "" &&
+        response.session.fleet_id !== response.fleet.id) ||
+      scopedEntities.some((entity) => entity.session_id !== sessionId) ||
+      (response.run?.run.session_id != null &&
+        response.run.run.session_id !== sessionId) ||
+      (response.run?.run.workspace_id != null &&
+        response.run.run.workspace_id !== workspaceId)
+    ) {
+      throw new Error("POST /api/research/sessions response failed identity validation");
+    }
+    return response;
   }
 
   async getResearchSessionSnapshot(
     id: string,
   ): Promise<import("../types/research").ResearchSessionSnapshot> {
-    const { ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT } = await import("../research/schemas");
+    const { ResearchSessionSnapshotSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}`);
-    return parseWithFallback(raw, ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT, {
-      endpoint: "GET /api/research/sessions/:id",
-    });
+    const parsed = ResearchSessionSnapshotSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(
+        "GET /api/research/sessions/:id response failed schema validation",
+      );
+    }
+    const data = parsed.data;
+    const sessionScoped = [
+      ...data.nodes,
+      ...data.edges,
+      ...data.sources,
+      ...data.evals,
+      ...data.messages,
+      ...(data.report ? [data.report] : []),
+    ];
+    const hasSessionMismatch =
+      data.session.id !== id ||
+      sessionScoped.some(
+        (entity) => entity.session_id !== "" && entity.session_id !== id,
+      ) ||
+      (data.run?.run.session_id != null && data.run.run.session_id !== id);
+    if (hasSessionMismatch) {
+      throw new Error(
+        "GET /api/research/sessions/:id response failed session validation",
+      );
+    }
+    return data;
   }
 
   async getResearchPresence(
@@ -4693,12 +4802,18 @@ export class ApiClient {
   ): Promise<import("../research/queries").ResearchPresenceResponse> {
     const { ResearchPresenceResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/presence`);
-    const parsed = parseWithFallback(
-      raw,
-      ResearchPresenceResponseSchema,
-      { session_id: id, presence: {} },
-      { endpoint: "GET /api/research/sessions/:id/presence" },
-    );
+    const result = ResearchPresenceResponseSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "GET /api/research/sessions/:id/presence response failed schema validation",
+      );
+    }
+    const parsed = result.data;
+    if (parsed.session_id !== "" && parsed.session_id !== id) {
+      throw new Error(
+        "GET /api/research/sessions/:id/presence response failed session validation",
+      );
+    }
     return { ...parsed, session_id: parsed.session_id || id };
   }
 
@@ -4727,6 +4842,22 @@ export class ApiClient {
       );
     }
     const data = parsed.data;
+    const hasSessionMismatch =
+      (data.session_id !== "" && data.session_id !== id) ||
+      data.nodes.some(
+        (node) => node.session_id !== "" && node.session_id !== id,
+      ) ||
+      data.edges.some(
+        (edge) => edge.session_id !== "" && edge.session_id !== id,
+      ) ||
+      data.clusters.some(
+        (cluster) => cluster.session_id !== "" && cluster.session_id !== id,
+      );
+    if (hasSessionMismatch) {
+      throw new Error(
+        `GET /api/research/sessions/:id/graph/typed response failed session validation`,
+      );
+    }
     return { ...data, ...(data.session_id ? {} : { session_id: id }) };
   }
 
@@ -4749,10 +4880,23 @@ export class ApiClient {
     id: string,
     data: { body: string; target_agent_id?: string },
   ): Promise<import("../types/research").ResearchMessage> {
-    return this.fetch(`/api/research/sessions/${id}/messages`, {
+    const { ResearchMessageSchema } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${id}/messages`, {
       method: "POST",
       body: JSON.stringify(data),
     });
+    const result = ResearchMessageSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "POST /api/research/sessions/:id/messages response failed schema validation",
+      );
+    }
+    if (result.data.session_id !== "" && result.data.session_id !== id) {
+      throw new Error(
+        "POST /api/research/sessions/:id/messages response failed session validation",
+      );
+    }
+    return { ...result.data, session_id: result.data.session_id || id };
   }
 
   async steerResearchRun(
@@ -4774,15 +4918,50 @@ export class ApiClient {
     if (parsed === null) {
       throw new Error("Invalid research steering response");
     }
+    if (parsed.run.session_id !== id) {
+      throw new Error(
+        "POST /api/research/sessions/:id/steer response failed session validation",
+      );
+    }
     return parsed.run;
   }
 
+  private async parseResearchSessionMutationResponse(
+    raw: unknown,
+    id: string,
+    endpoint: string,
+  ): Promise<import("../types/research").ResearchSession> {
+    const { ResearchSessionSchema } = await import("../research/schemas");
+    const result = ResearchSessionSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(`${endpoint} response failed schema validation`);
+    }
+    if (result.data.id !== id) {
+      throw new Error(`${endpoint} response failed session validation`);
+    }
+    return result.data;
+  }
+
   async confirmResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/confirm`, { method: "POST" });
+    const raw = await this.fetch(`/api/research/sessions/${id}/confirm`, {
+      method: "POST",
+    });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/confirm",
+    );
   }
 
   async stopResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/stop`, { method: "POST" });
+    const raw = await this.fetch(`/api/research/sessions/${id}/stop`, {
+      method: "POST",
+    });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/stop",
+    );
   }
 
   async deleteResearchSession(id: string): Promise<void> {
@@ -4793,10 +4972,15 @@ export class ApiClient {
     id: string,
     data: import("../types/research").ResearchHandoffRequest,
   ): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/handoff`, {
+    const raw = await this.fetch(`/api/research/sessions/${id}/handoff`, {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/handoff",
+    );
   }
 
   /** LRM-911 / LRM-913 — list end-of-round judgment cards. */
@@ -4811,15 +4995,33 @@ export class ApiClient {
       const raw = await this.fetch(
         `/api/research/sessions/${sessionId}/product-rounds`,
       );
-      return parseWithFallback(
-        raw,
-        ListResearchProductRoundCardsResponseSchema,
-        EMPTY_RESEARCH_PRODUCT_ROUNDS,
-        { endpoint: "GET /api/research/sessions/:id/product-rounds" },
-      );
-    } catch {
-      // Route absent until LRM-911 merges — FE still renders process/node fallbacks.
-      return EMPTY_RESEARCH_PRODUCT_ROUNDS;
+      const result = ListResearchProductRoundCardsResponseSchema.safeParse(raw);
+      if (!result.success) {
+        throw new Error(
+          "GET /api/research/sessions/:id/product-rounds response failed schema validation",
+        );
+      }
+      if (
+        result.data.rounds.some(
+          (card) => card.session_id !== "" && card.session_id !== sessionId,
+        )
+      ) {
+        throw new Error(
+          "GET /api/research/sessions/:id/product-rounds response failed session validation",
+        );
+      }
+      return {
+        rounds: result.data.rounds.map((card) => ({
+          ...card,
+          session_id: card.session_id || sessionId,
+        })),
+      };
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 404 || error.status === 501)) {
+        // Optional capability is genuinely absent; D5 keeps its process fallback.
+        return EMPTY_RESEARCH_PRODUCT_ROUNDS;
+      }
+      throw error;
     }
   }
 
@@ -4827,7 +5029,25 @@ export class ApiClient {
     sessionId: string,
     round: number,
   ): Promise<import("../types/research").ResearchProductRoundCard> {
-    return this.fetch(`/api/research/sessions/${sessionId}/product-rounds/${round}`);
+    const { ResearchProductRoundCardSchema } = await import("../research/schemas");
+    const raw = await this.fetch(
+      `/api/research/sessions/${sessionId}/product-rounds/${round}`,
+    );
+    const result = ResearchProductRoundCardSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "GET /api/research/sessions/:id/product-rounds/:round response failed schema validation",
+      );
+    }
+    if (result.data.session_id !== "" && result.data.session_id !== sessionId) {
+      throw new Error(
+        "GET /api/research/sessions/:id/product-rounds/:round response failed session validation",
+      );
+    }
+    return {
+      ...result.data,
+      session_id: result.data.session_id || sessionId,
+    };
   }
 
   // ---- Research V6 Graph Projection (design doc 7.1 / 7.2) ----

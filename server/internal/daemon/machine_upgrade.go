@@ -30,13 +30,11 @@ type machineUpgradeJournal struct {
 	SourceVersion       string `json:"source_version"`
 	TargetVersion       string `json:"target_version"`
 	IncumbentGeneration uint64 `json:"incumbent_generation"`
-	// IncumbentGenerationKnown distinguishes a valid first-generation value of
-	// zero from legacy journals that silently persisted zero after VersionStore
-	// evidence could not be read.
+	// IncumbentGenerationKnown is retained on the journal for older readers.
+	// PATH swap no longer has a VersionStore generation.
 	IncumbentGenerationKnown bool `json:"incumbent_generation_known,omitempty"`
 	// PredecessorComputerGeneration identifies the exact resident process
-	// generation that committed the handoff. It is separate from
-	// IncumbentGeneration, which is the VersionStore activation generation.
+	// generation that committed the handoff.
 	PredecessorComputerGeneration int64    `json:"predecessor_computer_generation"`
 	RollbackGeneration            string   `json:"rollback_generation,omitempty"`
 	TargetRestartAttempts         int      `json:"target_restart_attempts,omitempty"`
@@ -44,7 +42,10 @@ type machineUpgradeJournal struct {
 	RuntimeIDs                    []string `json:"runtime_ids"`
 	WorkspaceIDs                  []string `json:"workspace_ids"`
 	Phase                         string   `json:"phase"`
-	UpdatedAt                     string   `json:"updated_at"`
+	// StagedPath is the ephemeral scratch file for this operation. Recovery
+	// verifies this regular file; the stage status string is not a path.
+	StagedPath string `json:"staged_path,omitempty"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 func (d *Daemon) machineUpgradeGenerationID() string {
@@ -134,6 +135,10 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 		return
 	}
 	if daemonVersionsMatch(d.cfg.CLIVersion, targetVersion) {
+		if err := d.refreshStableLauncher(); err != nil {
+			d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "launcher_refresh_failed", err)
+			return
+		}
 		d.appendMachineUpgradeEvent(machineUpgradeEvent{
 			Event:         machineUpgradeEventAlreadyCurrent,
 			UpgradeID:     upgrade.ID,
@@ -178,6 +183,11 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 		return
 	}
 	journal.Phase = "staged"
+	journal.StagedPath = resolveStagedBinaryFile(d.stagedUpgradePath)
+	if journal.StagedPath == "" {
+		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "stage_failed", fmt.Errorf("staged binary path is empty"))
+		return
+	}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "journal_persist_failed", err)
 		return
@@ -543,11 +553,7 @@ func (d *Daemon) createMachineUpgradeJournal(receipt *MachineUpgradeReceipt, sou
 	if receipt == nil || strings.TrimSpace(receipt.ID) == "" || receipt.AcceptedGeneration == nil || strings.TrimSpace(*receipt.AcceptedGeneration) == "" {
 		return nil, fmt.Errorf("machine upgrade acceptance receipt is incomplete")
 	}
-	state, err := readMachineUpgradeActivationState()
-	if err != nil {
-		return nil, fmt.Errorf("capture incumbent Active generation: %w", err)
-	}
-	journal := &machineUpgradeJournal{ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target, IncumbentGeneration: state.Generation, IncumbentGenerationKnown: true, PredecessorComputerGeneration: d.cfg.ComputerGeneration, RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...), Phase: "accepted"}
+	journal := &machineUpgradeJournal{ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target, IncumbentGeneration: 0, IncumbentGenerationKnown: true, PredecessorComputerGeneration: d.cfg.ComputerGeneration, RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...), Phase: "accepted"}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		return nil, err
 	}
@@ -557,21 +563,9 @@ func (d *Daemon) createMachineUpgradeJournal(receipt *MachineUpgradeReceipt, sou
 		Generation:          journal.Generation,
 		SourceVersion:       source,
 		TargetVersion:       target,
-		IncumbentGeneration: state.Generation,
+		IncumbentGeneration: 0,
 	})
 	return journal, nil
-}
-
-func readMachineUpgradeActivationState() (cli.ActivationState, error) {
-	root, err := versionStoreRootFn()
-	if err != nil {
-		return cli.ActivationState{}, err
-	}
-	store, err := openVersionStoreFn(root)
-	if err != nil {
-		return cli.ActivationState{}, err
-	}
-	return store.ReadActivationState()
 }
 
 func (d *Daemon) writeMachineUpgradeJournal(journal *machineUpgradeJournal) error {

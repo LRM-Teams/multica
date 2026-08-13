@@ -85,7 +85,7 @@ export function ResearchSessionChrome({
   onCreateChannelChange: (v: boolean) => void;
   onConfirm: () => void;
   /** LRM-840 — reject with optional feedback; parent posts tip + resumes. */
-  onReject?: (reason: string) => void;
+  onReject?: (reason: string) => void | Promise<void>;
   onHandoff: () => void;
   confirmPending?: boolean;
   rejectPending?: boolean;
@@ -188,7 +188,7 @@ export function ResearchSessionChrome({
             className={cn(
               "size-1.5 rounded-full",
               tone.dot,
-              status === "running" && "animate-pulse",
+              status === "running" && "animate-pulse motion-reduce:animate-none",
             )}
           />
           {statusLabel}

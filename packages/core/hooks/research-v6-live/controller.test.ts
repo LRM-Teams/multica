@@ -77,6 +77,7 @@ function makeDelta(from: number, through: number, nodeIds: string[]): ResearchV6
 /** Controllable fake live source for deterministic tests. */
 function makeLiveSource(config: {
   onConnected?: () => void;
+  emitConnectedOnConnect?: boolean;
 } = {}): {
   source: ResearchV6LiveSource;
   pushDelta: (d: ResearchV6Delta) => void;
@@ -99,7 +100,7 @@ function makeLiveSource(config: {
       connect(onDeltaCb) {
         onDelta = onDeltaCb;
         active = true;
-        emitStatus("connected");
+        if (config.emitConnectedOnConnect !== false) emitStatus("connected");
         return {
           disconnect: () => {
             active = false;
@@ -218,6 +219,20 @@ describe("ResearchV6LiveProjectionController", () => {
     live.pushDelta(d1);
     expect(c.getClient().getState().nodes.has("b")).toBe(true);
     expect(c.getClient().getState().lastConfirmedSequence).toBe(1);
+  });
+
+  it("stays connecting until the live source reports an authenticated connection", () => {
+    const live = makeLiveSource({ emitConnectedOnConnect: false });
+    const { transport } = makeTransport();
+    const c = new ResearchV6LiveProjectionController(
+      "run-1",
+      transport,
+      live.source,
+      { autoConnect: false },
+    );
+
+    c.connect();
+    expect(c.getConnectionStatus()).toBe("connecting");
   });
 
   it("buffers an out-of-order delta and gap-timeout triggers exactly one snapshot resync", async () => {

@@ -1025,8 +1025,10 @@ surface 矩阵仍未完成。
 - [ ] 实现 E 中已冻结的 V6 Integration Result schema 和严格校验，不在 G 中改写协议。
 - [ ] 实现触发策略、固定输入版本、幂等执行和状态变化应用。
 - [ ] 实现每 Result 的 Assimilation Check、peer_synthesis、原 Agent Integration Contribution 和离线/退出参与者处理。
+  - [x] G3a：冻结每个 accepted Result 的 `no_related_artifacts | peer_synthesis | open_dispute` Assimilation Decision 约束，以及 frozen V6 `integration_contribution` 解码后的原作者/真实工件/可见性验证；离线、退出或无权参与者必须带缺席原因且不能伪造 Contribution。Decision 持久化、触发与团队 retiring 联动仍待 G3b。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。
 - [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。
+  - [x] G5a：建立 frozen V6 `insight` 解码后的派生验证：只接收 accepted Claim/Insight，至少跨两个 Task 或 Branch，服务端计算 `1 + max(input level)`，并以排序 input hash、canonical scope 和 relation 生成幂等 identity；拒绝无 semantic value、重复派生、不可见/失效输入。DAG 持久化、递归停止和 stale 祖先传播仍待 G5b。
 - [ ] 后续任务 Context 读取跨 Agent 的最新 Integration Snapshot。
 
 退出条件：两个以上 Agent 的结果会产生可引用的多层 Insight、更新 Frontier 并生成组合后的新工作；输入失效会使祖先 Insight 过期；Integrator prose 不能绕过服务端状态转换。

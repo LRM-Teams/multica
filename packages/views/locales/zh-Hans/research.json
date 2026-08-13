@@ -1048,9 +1048,8 @@
     },
     "detail": {
       "open_report": "打开完整报告",
-      "continue_deepening": "继续深挖",
-      "continue_pending": "正在排队…",
-      "continue_failed": "无法继续此路径，请刷新后重试。",
+      "command_pending": "正在执行…",
+      "command_failed": "无法执行此节点操作，请刷新后重试。",
       "permission_denied": "你没有继续此路径的权限。",
       "session_terminal": "本次调研已经结束。",
       "node_stale": "该节点已变化，画布已刷新，请重试。",

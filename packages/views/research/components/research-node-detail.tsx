@@ -4,6 +4,7 @@ import type {
   ResearchFleetMember,
   ResearchGraphEdge,
   ResearchGraphNode,
+  ResearchNodeCommandAction,
   ResearchRunAttempt,
   ResearchRunSnapshot,
   ResearchRunTask,
@@ -36,6 +37,10 @@ import {
 import { isAbandonedStatus, readAbandonReason } from "../lib/abandon-reason";
 import { safeSourceUrl } from "../report/safe-source-url";
 import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
+import {
+  ringActionsForNode,
+  type NodeRingItem,
+} from "../lib/node-action-ring";
 import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
 const EMPTY_SOURCES: ResearchSource[] = [];
@@ -1164,8 +1169,8 @@ export function ResearchNodeDetail({
   onClose,
   placement,
   onOpenReport,
-  onContinueDeepening,
-  continueDeepeningPending = false,
+  onNodeCommand,
+  pendingNodeCommand = null,
   onFocusNode,
 }: {
   node: ResearchGraphNode;
@@ -1179,8 +1184,8 @@ export function ResearchNodeDetail({
   /** Force placement; default: overlay-card on desktop, sheet on narrow. */
   placement?: "overlay-card" | "sheet" | "inline";
   onOpenReport?: () => void;
-  onContinueDeepening?: () => void;
-  continueDeepeningPending?: boolean;
+  onNodeCommand?: (action: ResearchNodeCommandAction) => void;
+  pendingNodeCommand?: ResearchNodeCommandAction | null;
   onFocusNode?: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
@@ -1194,7 +1199,25 @@ export function ResearchNodeDetail({
   if (!open) return null;
 
   if (mode === "inline") {
-    const showActions = Boolean(onOpenReport || onContinueDeepening);
+    const commandActions = onNodeCommand
+      ? ringActionsForNode(node).filter(
+          (action): action is NodeRingItem & { id: ResearchNodeCommandAction } =>
+            ["continue", "fork", "retry", "reassign"].includes(action.id),
+        )
+      : [];
+    const showActions = Boolean(onOpenReport || commandActions.length);
+    const commandLabel = (action: ResearchNodeCommandAction) => {
+      switch (action) {
+        case "continue":
+          return t(($) => $.ring.continue);
+        case "fork":
+          return t(($) => $.ring.fork);
+        case "retry":
+          return t(($) => $.ring.retry);
+        case "reassign":
+          return t(($) => $.ring.reassign);
+      }
+    };
     return (
       <div
         data-testid="research-node-detail"
@@ -1215,26 +1238,35 @@ export function ResearchNodeDetail({
         {showActions ? (
           <footer
             data-testid="research-node-detail-actions"
-            className="flex shrink-0 gap-2 border-t border-border/70 bg-background/80 p-3"
+            className="flex shrink-0 flex-wrap gap-2 border-t border-border/70 bg-background/80 p-3"
           >
             {onOpenReport ? (
               <Button type="button" size="sm" onClick={onOpenReport}>
                 {t(($) => $.d5.detail.open_report)}
               </Button>
             ) : null}
-            {onContinueDeepening ? (
+            {commandActions.map((action) => (
               <Button
+                key={action.id}
                 type="button"
                 size="sm"
-                variant="outline"
-                disabled={continueDeepeningPending}
-                onClick={onContinueDeepening}
+                variant={action.primary ? "default" : "outline"}
+                disabled={pendingNodeCommand !== null}
+                onClick={() => {
+                  if (
+                    action.id === "reassign" &&
+                    !window.confirm(t(($) => $.ring.reassign_confirm))
+                  ) {
+                    return;
+                  }
+                  onNodeCommand?.(action.id);
+                }}
               >
-                {continueDeepeningPending
-                  ? t(($) => $.d5.detail.continue_pending)
-                  : t(($) => $.d5.detail.continue_deepening)}
+                {pendingNodeCommand === action.id
+                  ? t(($) => $.d5.detail.command_pending)
+                  : commandLabel(action.id)}
               </Button>
-            ) : null}
+            ))}
           </footer>
         ) : null}
       </div>

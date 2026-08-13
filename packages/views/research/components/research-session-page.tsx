@@ -85,6 +85,10 @@ import {
 import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
+import {
+  INITIAL_RESEARCH_SESSION_UI_STATE,
+  researchSessionUiReducer,
+} from "../lib/research-session-ui-state";
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchCanvasChangeCard, isCanvasChangeProcessMessage } from "./research-canvas-change-card";
@@ -110,49 +114,6 @@ import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import {
   ResearchStageChatMarker,
 } from "./research-stage-timeline";
-
-type UiState = {
-  body: string;
-  createProject: boolean;
-  createChannel: boolean;
-  deliveryOpen: boolean;
-  selectedFamily: string | null;
-};
-
-type UiAction =
-  | { type: "setBody"; body: string }
-  | { type: "setCreateProject"; value: boolean }
-  | { type: "setCreateChannel"; value: boolean }
-  | { type: "setDeliveryOpen"; value: boolean }
-  | { type: "setFamily"; family: string | null }
-  | { type: "clearBody" };
-
-const initialUi: UiState = {
-  body: "",
-  createProject: true,
-  createChannel: true,
-  deliveryOpen: false,
-  selectedFamily: null,
-};
-
-function uiReducer(state: UiState, action: UiAction): UiState {
-  switch (action.type) {
-    case "setBody":
-      return { ...state, body: action.body };
-    case "setCreateProject":
-      return { ...state, createProject: action.value };
-    case "setCreateChannel":
-      return { ...state, createChannel: action.value };
-    case "setDeliveryOpen":
-      return { ...state, deliveryOpen: action.value };
-    case "setFamily":
-      return { ...state, selectedFamily: action.family };
-    case "clearBody":
-      return { ...state, body: "" };
-    default:
-      return state;
-  }
-}
 
 function mutationErrorToast(fallback: string, err: unknown) {
   showErrorToast(err instanceof Error && err.message ? err.message : fallback);
@@ -224,8 +185,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     },
     [nav, setD5Lens],
   );
-  const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  const [ui, dispatch] = useReducer(
+    researchSessionUiReducer,
+    INITIAL_RESEARCH_SESSION_UI_STATE,
+  );
   useEffect(() => {
+    dispatch({ type: "resetSession" });
     clearCanvasSelection();
     clearCanvasFilter();
   }, [sessionId, clearCanvasFilter, clearCanvasSelection]);
@@ -267,6 +232,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const reportControllerRef = useRef<{ open: () => void } | null>(null);
+  useEffect(() => {
+    setAgentDock(null);
+    reportControllerRef.current = null;
+  }, [sessionId]);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
@@ -643,6 +612,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       {/* LRM-1112: S1–S4 timeline lives inside the single header surface (L2). */}
       <div className="relative flex min-h-0 flex-1">
         <ResearchConstellationWorkspace
+          key={sessionId}
           className="min-h-0 flex-1"
           typedGraph={typedGraph}
           typedLoading={typedGraphLoading}

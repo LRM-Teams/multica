@@ -18,6 +18,12 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type { D5FilterOptions } from "../lib/research-d5-filter-options";
 
+// Zustand selectors are consumed through useSyncExternalStore. A freshly
+// allocated fallback makes an absent per-session filter look like a changed
+// snapshot on every read and React eventually aborts with update-depth error
+// #185. Keep the empty snapshot referentially stable until the store owns one.
+const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
+
 function FilterField({
   label,
   value,
@@ -68,7 +74,7 @@ export function ResearchD5CanvasFilter({
 }) {
   const { t } = useT("research");
   const filter = useResearchCanvasStore(
-    (s) => s.filterBySession[sessionId] ?? emptyCanvasFilter(),
+    (s) => s.filterBySession[sessionId] ?? EMPTY_CANVAS_FILTER,
   );
   const setSessionFilter = useResearchCanvasStore((s) => s.setSessionFilter);
   const clearSessionFilter = useResearchCanvasStore(

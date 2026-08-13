@@ -1154,6 +1154,7 @@
     "canvas": {
       "loading": "正在加载调研星图…",
       "error": "无法加载 typed 调研图。",
+      "interface_error_details": "技术详情",
       "stale_title": "星图可能不是最新状态。",
       "stale_body": "刷新暂不可用，继续保留上次已加载的可信图。",
       "stale_announcement": "星图刷新失败，当前继续显示上次已加载的图。",

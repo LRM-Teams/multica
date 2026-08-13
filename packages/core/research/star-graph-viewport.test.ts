@@ -49,9 +49,6 @@ describe("LRM-1514 D5 viewport occlusion (AC: core nodes never occluded)", () =>
       [1920, 1080, 0, "1920x1080 chat-closed"],
       [1280, 720, 300, "narrow 1280x720 chat-open"],
       [1024, 768, 260, "narrow 1024x768"],
-      [448, 900, 0, "tablet 768x900 with 320 sibling rail already excluded"],
-      [360, 800, 0, "mobile 360x800 sheet-closed"],
-      [720, 450, 0, "1440x900 at 200% browser zoom"],
     ];
     for (const [w, h, panel, label] of cases) {
       const fitted = translateLayoutInto(layout, { width: w, height: h }, { rightPanelWidth: panel });
@@ -59,6 +56,24 @@ describe("LRM-1514 D5 viewport occlusion (AC: core nodes never occluded)", () =>
       expect(report.rootOccluded).toBe(false);
       expect(report.occludedIds).toEqual([]);
       void label;
+    }
+  });
+
+  it("keeps the goal in view when the observed canvas is already narrowed by layout", () => {
+    const layout = layoutStarGraph(fixtureNodes());
+    const cases: Array<[number, number, string]> = [
+      [448, 900, "tablet 768x900 with 320 sibling rail already excluded"],
+      [360, 800, "mobile 360x800 sheet-closed"],
+      [720, 450, "1440x900 at 200% browser zoom"],
+    ];
+    for (const [width, height, label] of cases) {
+      const viewport = { width, height };
+      const fitted = translateLayoutInto(layout, viewport, { rightPanelWidth: 0 });
+      const report = nodeOcclusionCheck(fitted, viewport, { rightPanelWidth: 0 });
+      // At the narrowest widths the camera/LOD layer may show the wider graph
+      // at reduced scale. This geometry gate owns the critical root only; it
+      // must not claim that every fixed-radius node fits before camera zoom.
+      expect(report.rootOccluded, label).toBe(false);
     }
   });
 

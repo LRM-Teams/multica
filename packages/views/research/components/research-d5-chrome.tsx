@@ -102,6 +102,8 @@ export function ResearchD5Chrome({
             error={goalError}
             onRetry={onGoalRetry}
             goalVersion={goalVersion}
+            productRound={session.product_round ?? null}
+            productRoundBudget={session.product_round_budget ?? null}
             goalHistory={goalHistory}
             goalImpact={goalImpact}
             panelPlacement="below"

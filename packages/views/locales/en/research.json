@@ -1043,6 +1043,8 @@
     "goal_panel": {
       "title": "Goal versions",
       "version": "v{{version}}",
+      "round": "round {{round}}",
+      "round_with_budget": "round {{round}} / {{budget}}",
       "current": "Current",
       "impact": "{{labeledNodes}} of {{totalNodes}} nodes tagged with a goal version"
     },

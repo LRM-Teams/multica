@@ -218,8 +218,14 @@ function executionStatusLabelFor(
 type NodeRunContext = {
   task: ResearchRunTask | undefined;
   attempt: ResearchRunAttempt | undefined;
+  attempts: ResearchRunAttempt[];
   actorID: string | null;
   actor: ResearchFleetMember | undefined;
+  contributors: Array<{
+    agentID: string;
+    label: string;
+    role: string | null;
+  }>;
   objective: string | null;
   genericMethod: string | null;
   result: string | null;
@@ -261,7 +267,11 @@ function buildNodeRunContext(
   const taskID = firstString(records, ["task_id"]);
   const attemptID = firstString(records, ["attempt_id"]);
   const task = taskID ? run?.tasks.find((item) => item.id === taskID) : undefined;
-  const attempts = taskID ? (run?.attempts ?? []).filter((item) => item.task_id === taskID) : [];
+  const attempts = taskID
+    ? (run?.attempts ?? [])
+        .filter((item) => item.task_id === taskID)
+        .toSorted((a, b) => a.attempt_number - b.attempt_number)
+    : [];
   const attempt =
     (attemptID ? attempts.find((item) => item.id === attemptID) : undefined) ??
     attempts.at(-1);
@@ -271,7 +281,22 @@ function buildNodeRunContext(
     task?.assigned_agent_id ||
     attempt?.assigned_agent_id ||
     null;
-  const actor = actorID ? members.find((item) => item.agent_id === actorID) : undefined;
+  const memberByAgentID = new Map(members.map((item) => [item.agent_id, item]));
+  const actor = actorID ? memberByAgentID.get(actorID) : undefined;
+  const contributorIDs = new Set<string>();
+  if (actorID) contributorIDs.add(actorID);
+  if (task?.assigned_agent_id) contributorIDs.add(task.assigned_agent_id);
+  for (const item of attempts) {
+    if (item.assigned_agent_id) contributorIDs.add(item.assigned_agent_id);
+  }
+  const contributors = [...contributorIDs].map((agentID) => {
+    const member = memberByAgentID.get(agentID);
+    return {
+      agentID,
+      label: actorLabel(member, agentID) ?? agentID,
+      role: member?.role ?? null,
+    };
+  });
   const producedSources = taskID
     ? (run?.sources ?? []).filter((item) => item.produced_by_task_id === taskID)
     : [];
@@ -355,8 +380,10 @@ function buildNodeRunContext(
   return {
     task,
     attempt,
+    attempts,
     actorID,
     actor,
+    contributors,
     objective:
       task?.objective || firstString(records, ["objective", "goal", "question", "small_goal"]),
     genericMethod: firstString(records, ["method", "approach", "strategy", "plan"]),
@@ -743,6 +770,72 @@ export function ResearchNodeDetailBody({
                 </div>
               ) : null}
             </div>
+          </section>
+        ) : null}
+
+        {runContext.contributors.length > 0 ? (
+          <section data-testid="node-detail-contributors">
+            <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.contributors)}
+            </h3>
+            <ul className="flex flex-wrap gap-1.5">
+              {runContext.contributors.map((contributor) => (
+                <li key={contributor.agentID}>
+                  <Badge
+                    variant="outline"
+                    className="text-[11px]"
+                    title={contributor.agentID}
+                  >
+                    {contributor.label}
+                    {contributor.role ? ` · ${contributor.role}` : ""}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {runContext.attempts.length > 1 ? (
+          <section data-testid="node-detail-attempt-history">
+            <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.attempt_history)}
+            </h3>
+            <ol className="space-y-1.5">
+              {runContext.attempts.map((attempt) => {
+                const contributor = runContext.contributors.find(
+                  (item) => item.agentID === attempt.assigned_agent_id,
+                );
+                const timestampValue =
+                  attempt.completed_at ??
+                  attempt.result_submitted_at ??
+                  attempt.started_at ??
+                  attempt.dispatched_at ??
+                  null;
+                const timestamp = formatTimestamp(timestampValue);
+                return (
+                  <li
+                    key={attempt.id}
+                    className="flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md border bg-muted/15 px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="font-medium">
+                      {t(($) => $.node.attempt)} {attempt.attempt_number}
+                    </span>
+                    <span>{executionStatusLabelFor(attempt.status, t)}</span>
+                    <span className="text-muted-foreground">
+                      {contributor?.label ?? actorLabel(undefined, attempt.assigned_agent_id)}
+                    </span>
+                    {timestamp ? (
+                      <time
+                        dateTime={timestampValue ?? undefined}
+                        className="ml-auto text-[10px] text-muted-foreground"
+                      >
+                        {timestamp}
+                      </time>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ol>
           </section>
         ) : null}
 

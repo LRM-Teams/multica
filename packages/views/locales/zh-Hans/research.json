@@ -399,6 +399,8 @@
     "outcome": "执行结果",
     "task_type": "任务类型",
     "attempt": "执行尝试",
+    "attempt_history": "执行历史",
+    "contributors": "贡献者",
     "executor_role": "实际角色：",
     "required_role": "要求角色：",
     "expected_result": "预期产出：",

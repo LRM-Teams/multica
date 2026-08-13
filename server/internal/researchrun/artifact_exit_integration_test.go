@@ -69,13 +69,15 @@ func TestPassportEligibilityCASRejectsStaleRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	if err = casPassportEligibilityRevisionTx(
-		ctx, tx, fixture.workspaceID, fixture.sessionID, fixture.sessionID, 1, 1, ArtifactLifecycleRegistered,
+	if err = casPassportSelectionTx(
+		ctx, tx, fixture.workspaceID, fixture.sessionID, fixture.sessionID,
+		ArtifactKindRunSession, 1, 1, ArtifactLifecycleRegistered, ArtifactProvenancePartial,
 	); err != nil {
 		t.Fatalf("valid CAS: %v", err)
 	}
-	if err = casPassportEligibilityRevisionTx(
-		ctx, tx, fixture.workspaceID, fixture.sessionID, fixture.sessionID, 1, 99, ArtifactLifecycleRegistered,
+	if err = casPassportSelectionTx(
+		ctx, tx, fixture.workspaceID, fixture.sessionID, fixture.sessionID,
+		ArtifactKindRunSession, 1, 99, ArtifactLifecycleRegistered, ArtifactProvenancePartial,
 	); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("stale CAS err=%v want ErrInvalidTransition", err)
 	}
@@ -369,9 +371,9 @@ func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 		SET eligibility_revision = eligibility_revision + 1
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, claimID)
-	err = casPassportEligibilityRevisionTx(
+	err = casPassportSelectionTx(
 		ctx, tx, fixture.workspaceID, run.SessionID, claimID,
-		entry.Version, entry.EligibilityRevision, entry.Lifecycle,
+		entry.Kind, entry.Version, entry.EligibilityRevision, entry.Lifecycle, entry.Provenance,
 	)
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("eligibility CAS err=%v want ErrInvalidTransition", err)
@@ -424,12 +426,102 @@ func TestDispatchFailsWhenArtifactVersionContentHashChanges(t *testing.T) {
 		SET content_hash = $4
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, claimID, mutatedHash)
-	err = casArtifactVersionRepresentationTx(
+	err = casArtifactVersionSelectionTx(
 		ctx, tx, fixture.workspaceID, run.SessionID, entry.VersionRowID,
-		entry.ContentHash, entry.RepresentationHash,
+		entry.ContentHash, entry.AccessLevel, entry.RepresentationHash,
 	)
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("representation CAS err=%v want ErrInvalidTransition", err)
+	}
+}
+
+func TestDispatchSelectionCASBindsAllAuthorizationFacts(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	tests := []struct {
+		name       string
+		mutation   string
+		versionCAS bool
+	}{
+		{
+			name: "entity kind",
+			mutation: `UPDATE research_artifact_passport
+				SET entity_kind = 'stage_evaluation'
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid`,
+		},
+		{
+			name: "provenance completeness",
+			mutation: `UPDATE research_artifact_passport
+				SET provenance_completeness = 'unknown'
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid`,
+		},
+		{
+			name: "access level",
+			mutation: `UPDATE research_artifact_version
+				SET access_level = 'verified_only'
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid`,
+			versionCAS: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := seedResearchRunFixture(t, ctx, pool)
+			defer cleanupResearchRunFixture(pool, fixture)
+			store := NewPostgresStore(pool)
+			run, _, createErr := store.CreateRun(ctx, StartInput{
+				WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+				LeadAgentID: fixture.agentID, Goal: "Selection CAS", Title: "Selection CAS",
+				DepthTier: "standard", Language: "English",
+			}, DefaultRunConfig("standard"))
+			if createErr != nil {
+				t.Fatalf("CreateRun: %v", createErr)
+			}
+			claimID := uuid.NewString()
+			seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "selection-cas", "selection fact")
+
+			tx, beginErr := pool.Begin(ctx)
+			if beginErr != nil {
+				t.Fatal(beginErr)
+			}
+			defer tx.Rollback(ctx)
+			plan, planErr := NewArtifactContextModule().PlanDispatchManifest(ctx, tx, fixture.workspaceID, run.SessionID, run.StateVersion)
+			if planErr != nil {
+				t.Fatal(planErr)
+			}
+			entry, ok := manifestEntryForArtifact(plan, claimID)
+			if !ok {
+				t.Fatalf("claim %s missing from manifest plan", claimID)
+			}
+			mutateIntegrationArtifactForCASTest(
+				t, ctx, pool, tc.mutation, fixture.workspaceID, run.SessionID, claimID,
+			)
+
+			if tc.versionCAS {
+				err = casArtifactVersionSelectionTx(
+					ctx, tx, fixture.workspaceID, run.SessionID, entry.VersionRowID,
+					entry.ContentHash, entry.AccessLevel, entry.RepresentationHash,
+				)
+			} else {
+				err = casPassportSelectionTx(
+					ctx, tx, fixture.workspaceID, run.SessionID, claimID,
+					entry.Kind, entry.Version, entry.EligibilityRevision, entry.Lifecycle, entry.Provenance,
+				)
+			}
+			if !errors.Is(err, ErrInvalidTransition) {
+				t.Fatalf("selection CAS err=%v want ErrInvalidTransition", err)
+			}
+		})
 	}
 }
 

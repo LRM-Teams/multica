@@ -978,6 +978,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [ ] 实现统一工件护照、输入引用、schema/hash、版本和 data access level。
 - [ ] 所有 Task Context 只从护照选择可见工件；Prompt 不能读取无权数据。
 - [ ] evaluation-private 与被评对象隔离。
+  - [x] D-cas-1：Manifest 从候选读取的全部授权选择字段在落库前执行 CAS：Passport kind/current Version/eligibility/lifecycle/provenance 与 Version row/content hash/access level 必须仍等于 plan 值。逐字段 trigger-bypass 故障注入证明 private compartment、legacy admission 或 clearance 所依赖的事实不能在 plan→persist 间被替换，§15.13 收口。
   - [x] D-eval-1：Quality Gate/Citation Audit dispatch 使用 `evaluation` purpose，同时冻结同一 grader Agent 的 normal 与 evaluation-private 持久 grant；Stage Evaluation 私有 representation 只在 active evaluation grant、assigned Attempt 路径解码并进入 grader Prompt，普通任务继续 omission/fail-closed。完整 principal/revocation 矩阵仍由 §15.10/§15.23 退出测试收口。
   - [x] D-eval-2：Prompt 入口在进入任一 V1–V5 builder 前结构性剥离 `EvaluationPrivate`，只在 Quality Gate/Citation Audit 普通 Prompt 完成后追加授权 grader context；真实 subject/grader dispatch 对照证明 subject 序列化不含私有 ID、passport hash、metadata 或 content，grader 获得 manifest 冻结版本且不会吸收 dispatch 后新增的私有工件。§15.10 已收口；完整 principal/revocation 矩阵仍由 §15.23 收口。
   - [x] D-projection-1：Run Snapshot 通过内部 `artifactProjectionModule` 输出以 Passport ID 为实体 ID 的 bounded 投影；排序与 projection hash 稳定，未知 kind/access/lifecycle/provenance 降级且不暴露 content hash、representation、grant 或 omission。Human Snapshot 读取当前同 scope 投影，Attempt Snapshot 只投影冻结 Manifest 允许的 Passport（含 Manifest 自身），后续 live 工件不会进入旧 Attempt 投影。客户端 malformed 投影只降级为空投影，不丢弃整个 Run。§15.25 已收口；V6 全图以 Passport 权威替换兼容 `projectRunV2Graph` 仍属于 N。

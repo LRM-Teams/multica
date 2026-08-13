@@ -171,8 +171,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		var accepted protocol.AgentStartAckPayload
-		// ack + active status + session + Raft Starting… Activity
-		for responses := 0; responses < 4; {
+		var sawAck, sawActive, sawSession bool
+		for !sawAck || !sawActive || !sawSession {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -183,14 +183,22 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				t.Error(err)
 				return
 			}
-			if msg.Type == protocol.EventAgentStartAck {
+			switch msg.Type {
+			case protocol.EventAgentStartAck:
 				if err := json.Unmarshal(msg.Payload, &accepted); err != nil {
 					t.Error(err)
 					return
 				}
+				sawAck = true
+			case protocol.EventAgentStatus:
+				var candidate protocol.AgentStatusPayload
+				if json.Unmarshal(msg.Payload, &candidate) == nil && candidate.Status == protocol.AgentStatusActive {
+					sawActive = true
+				}
+			case protocol.EventAgentSession:
+				sawSession = true
 			}
 			frames <- msg
-			responses++
 		}
 		stop, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStop, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStopPayload{AgentID: accepted.AgentID, LaunchID: accepted.LaunchID})})
 		if err := conn.WriteMessage(websocket.TextMessage, stop); err != nil {

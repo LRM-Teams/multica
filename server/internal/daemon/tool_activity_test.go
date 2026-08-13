@@ -7,9 +7,9 @@ import (
 
 func TestCanonicalToolSemantic(t *testing.T) {
 	cases := []struct {
-		raw     string
-		want    string
-		known   bool
+		raw   string
+		want  string
+		known bool
 	}{
 		{"bash", "bash", true},
 		{"Bash", "bash", true},
@@ -210,6 +210,27 @@ func TestToolActivityFact(t *testing.T) {
 			wantNarrative: "#abcdef12",
 		},
 		{
+			name:          "update reminder id prefix from native tool",
+			tool:          "update_reminder",
+			input:         map[string]any{"reminder_id": "a291584bdeadbeef"},
+			wantDetail:    "updating_reminder",
+			wantNarrative: "#a291584b",
+		},
+		{
+			name:          "update reminder id from CLI invocation",
+			tool:          "bash",
+			input:         map[string]any{"command": "multica reminder update --id a291584bdeadbeef --title ping"},
+			wantDetail:    "updating_reminder",
+			wantNarrative: "#a291584b",
+		},
+		{
+			name:          "snooze reminder id from CLI invocation",
+			tool:          "bash",
+			input:         map[string]any{"command": "multica reminder snooze --id a291584bdeadbeef --delay-seconds 600"},
+			wantDetail:    "snoozing_reminder",
+			wantNarrative: "#a291584b",
+		},
+		{
 			name:          "unknown tool is never silent",
 			tool:          "cursor-agent",
 			input:         map[string]any{"prompt": "do things"},
@@ -247,11 +268,11 @@ func TestToolActivityFactBoundsTheCommand(t *testing.T) {
 
 func TestResolveMulticaCLIInvocation(t *testing.T) {
 	cases := []struct {
-		name          string
-		command       string
-		wantSemantic  string
-		wantSummary   string
-		wantOK        bool
+		name         string
+		command      string
+		wantSemantic string
+		wantSummary  string
+		wantOK       bool
 	}{
 		{
 			name:         "message send reclassifies",
@@ -317,19 +338,19 @@ func TestResolveMulticaCLIInvocation(t *testing.T) {
 			wantOK:       true,
 		},
 		{
-			name:   "plain shell command passes through",
+			name:    "plain shell command passes through",
 			command: `ls -la`,
-			wantOK: false,
+			wantOK:  false,
 		},
 		{
-			name:   "bare cli without subcommand passes through",
+			name:    "bare cli without subcommand passes through",
 			command: `multica`,
-			wantOK: false,
+			wantOK:  false,
 		},
 		{
-			name:   "unknown cli subcommand passes through",
+			name:    "unknown cli subcommand passes through",
 			command: `multica workspace list`,
-			wantOK: false,
+			wantOK:  false,
 		},
 	}
 	for _, tc := range cases {

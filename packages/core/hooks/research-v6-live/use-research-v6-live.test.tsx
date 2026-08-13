@@ -84,6 +84,7 @@ function makeHarness(seed: ResearchV6Snapshot) {
   let connectCount = 0;
   let onDelta: ((d: ResearchV6Delta) => void) | null = null;
   let reconnectHandlers: Array<() => void> = [];
+  let statusHandler: Parameters<ResearchV6LiveSource["onStatusChange"]>[0] | null = null;
   let active = false;
 
   const transport: ResearchV6ProjectionTransport = {
@@ -100,6 +101,7 @@ function makeHarness(seed: ResearchV6Snapshot) {
       connectCount += 1;
       onDelta = onDeltaCb;
       active = true;
+      statusHandler?.("connected");
       return {
         disconnect: () => {
           disconnectCount += 1;
@@ -114,8 +116,11 @@ function makeHarness(seed: ResearchV6Snapshot) {
         reconnectHandlers = reconnectHandlers.filter((h) => h !== handler);
       };
     },
-    onStatusChange() {
-      return () => {};
+    onStatusChange(handler) {
+      statusHandler = handler;
+      return () => {
+        statusHandler = null;
+      };
     },
   };
 

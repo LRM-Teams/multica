@@ -618,7 +618,10 @@ export function ResearchNodeDetailBody({
     .slice(0, 12);
 
   return (
-    <>
+    <div
+      data-testid="research-node-detail-body"
+      className="min-w-0 [overflow-wrap:anywhere]"
+    >
       <header className="relative border-b px-4 pt-4 pb-3 text-left">
         {showClose ? (
           <button
@@ -1137,7 +1140,7 @@ export function ResearchNodeDetailBody({
           </a>
         ) : null}
       </div>
-    </>
+    </div>
   );
 }
 

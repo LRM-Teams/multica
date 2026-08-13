@@ -133,7 +133,10 @@ research state. Refresh must reconstruct the same terminal graph.
   for reduced motion, background resume, and resync.
 - Each frontend change runs relevant Vitest, typecheck, and `pnpm react:doctor`.
 
-## 9. Implementation status at `dev@d614cdc52`
+## 9. Implementation status at `dev@1617b8662`
+
+Status in this table means code already present on `dev`. Open pull requests are
+tracked separately in §11 and are not counted as integrated until merged.
 
 | Area | Status | Next production work |
 | --- | --- | --- |
@@ -162,3 +165,40 @@ research state. Refresh must reconstruct the same terminal graph.
 5. Run the full visual/performance/accessibility matrix and remove obsolete
    documents or mark them superseded.
 
+## 11. Delivery ledger
+
+This ledger is the merge checklist for the production target. A linked open PR
+is implementation evidence, not completion evidence. After a PR merges, update
+the corresponding §9 row and replace the PR evidence with the merge SHA.
+
+| Contract surface | Current evidence | Delivery state |
+| --- | --- | --- |
+| Target D5 shell and shared Web/Desktop composition | `dev@ec2082afc`, PR #2907 | Integrated |
+| Canonical conversation change receipts | PR #2908 | Awaiting merge |
+| Dispute and trajectory/Insight detail registration | PRs #2909–#2910 | Awaiting merge |
+| Capability-gated V6 adapter in the existing D5 shell | PR #2911 | Awaiting merge; server capability absent |
+| Canvas keyboard focus and Escape restoration | PR #2912 | Awaiting merge |
+| Agent Attempt/lease facts and inspector focus | PRs #2913, #2919 | Awaiting merge |
+| Unknown relation neutral degradation | PR #2914 | Awaiting merge |
+| Mobile context sheet | PR #2915 | Awaiting merge |
+| Semantic light/dark colour tokens | PR #2916 | Awaiting merge |
+| Reduced-motion settlement | PR #2917 | Awaiting merge |
+| V6 socket truth and ordered resync recovery | PRs #2918, #2920, #2922 | Awaiting merge; server capability absent |
+| Canvas load/stale projection recovery | PRs #2924, #2932 | Awaiting merge |
+| Lens keyboard access and selected neighbourhood focus | PRs #2925, #2933 | Awaiting merge |
+| Node report lineage, contributors, and attempt history | PRs #2926–#2927 | Awaiting merge |
+| Typed status/confidence fidelity | PR #2928 | Awaiting merge |
+| Canvas visual and accessibility localisation | PRs #2930–#2931 | Awaiting merge |
+| Session-isolated camera restoration | PR #2934 | Awaiting merge |
+| 25% overview and DOM/card budgets | PR #2923 plus existing budget modules | Awaiting merge |
+| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@1617b8662` | Backend blocked; explicit V5/D5 fallback required |
+| Runtime visual/performance/accessibility matrix | No current deployed-session artifacts for this revision | Unverified; required before completion |
+
+### Completion evidence rule
+
+The frontend is complete only when all applicable rows above are integrated and
+the §8 matrix has evidence against one deployed revision. Static fixtures,
+isolated modules, open PRs, or the absence of an obvious TODO do not prove the
+session flow complete. V6 server-dependent rows may remain capability-gated,
+but malformed successful responses must surface an interface error and must
+never silently fall back.

@@ -100,16 +100,18 @@ function ActivitySubtext({ text, channelPaths }: { text: string; channelPaths: R
   const lines = text.split("\n");
   const target = lines[0]?.match(/^target: (#([^:\s]+)(?::[^\s]+)?)$/);
   const channelPath = target ? channelPaths.get(target[2] ?? "") : undefined;
-  if (!target || !channelPath) return <>{text}</>;
+  const targetLabel = target?.[1];
+  if (!targetLabel || !channelPath) return <>{text}</>;
+  const targetPrefix = lines[0]?.slice(0, -targetLabel.length);
 
   return (
     <>
-      target:{" "}
+      {targetPrefix}
       <AppLink
         href={channelPath}
         className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {target[1]}
+        {targetLabel}
       </AppLink>
       {lines.length > 1 ? `\n${lines.slice(1).join("\n")}` : null}
     </>

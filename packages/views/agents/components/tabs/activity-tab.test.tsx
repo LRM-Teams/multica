@@ -23,7 +23,14 @@ const TEST_RESOURCES = { en: { agents: enAgents, common: enCommon } };
 
 function renderActivityTab() {
   return render(
-    <NavigationProvider value={{ push: navigationPush, replace: vi.fn(), back: vi.fn(), pathname: "/test/members" }}>
+    <NavigationProvider value={{
+      push: navigationPush,
+      replace: vi.fn(),
+      back: vi.fn(),
+      pathname: "/test/members",
+      searchParams: new URLSearchParams(),
+      getShareableUrl: vi.fn((path: string) => path),
+    }}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <ActivityTab agent={agent} />
       </I18nProvider>

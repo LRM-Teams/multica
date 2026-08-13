@@ -586,6 +586,41 @@ func (p *canonicalAgentRuntimePool) hasLiveLease(agentID, runtimeID string) bool
 	return slot.running
 }
 
+func (p *canonicalAgentRuntimePool) ensureResidentProcess(ctx context.Context, agentID, runtimeID string) error {
+	if p == nil {
+		return errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil || slot.backend == nil {
+		if slot != nil {
+			slot.mu.Unlock()
+		}
+		return errors.New("canonical resident runtime is not registered")
+	}
+	backend := slot.backend
+	if checker, ok := backend.(agent.ResidentRuntimeLivenessChecker); ok {
+		if alive, known := checker.RuntimeAlive(); known && alive {
+			slot.mu.Unlock()
+			return nil
+		}
+	}
+	starter, ok := backend.(agent.ResidentRuntimeStarter)
+	slot.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return starter.EnsureResidentProcess(ctx)
+}
+
 func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string) bool {
 	if p == nil {
 		return false

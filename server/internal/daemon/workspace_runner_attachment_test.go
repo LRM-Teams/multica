@@ -229,6 +229,27 @@ func TestWorkspaceRunnerManagedStartEmitsStartingActivity(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerManagedStartMarksLaunchRunningAfterProviderSpawn(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	if _, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}); err != nil {
+		t.Fatalf("managed start: %v", err)
+	} else if status.Status != protocol.AgentStatusActive {
+		t.Fatalf("status after spawn = %+v, want active", status)
+	}
+	launch, ok := runner.processes.Snapshot(agentID)
+	if !ok || launch.QueueState != protocol.AgentStartQueueRunning {
+		t.Fatalf("after spawn queue=%q managed=%v, want running (Raft process is in this.agents)", launch.QueueState, ok)
+	}
+}
+
 func TestWorkspaceRunnerManagedStartWaitsForCapacityBeforeProvider(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir(), MaxAgentProcesses: 1}, nil)
 	workspaceID := "workspace-1"

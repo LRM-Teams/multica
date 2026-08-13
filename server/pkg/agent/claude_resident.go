@@ -93,6 +93,14 @@ func (b *claudeStreamJSONBackend) ForceKill() error {
 	return nil
 }
 
+func (b *claudeStreamJSONBackend) EnsureResidentProcess(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := b.ensureProcess(b.cfg.ResidentOptions)
+	return err
+}
+
 func (b *claudeStreamJSONBackend) RuntimeAlive() (bool, bool) {
 	p := b.process.Load()
 	if p == nil {

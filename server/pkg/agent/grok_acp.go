@@ -109,6 +109,11 @@ func (b *grokACPBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 
 // RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller
 // poll process liveness between turns, not just during an in-flight one.
+func (b *grokACPBackend) EnsureResidentProcess(ctx context.Context) error {
+	_, err := b.ensureProcess(ctx, b.cfg.ResidentOptions)
+	return err
+}
+
 func (b *grokACPBackend) RuntimeAlive() (bool, bool) {
 	return b.runtimeAlive()
 }

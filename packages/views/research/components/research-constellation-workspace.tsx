@@ -136,6 +136,7 @@ export function ResearchConstellationWorkspace({
   const setRailMode = useResearchUiStore((s) => s.setD5RailMode);
   const canvasFilter = useResearchCanvasStore((s) => s.filter);
   const hostRef = useRef<HTMLDivElement>(null);
+  const railToggleRef = useRef<HTMLButtonElement>(null);
   const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
   const previousLayoutRef = useRef<StarGraphLayoutResult | undefined>(undefined);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
@@ -150,6 +151,10 @@ export function ResearchConstellationWorkspace({
   const showDesktopRail = !isMobile && railOpen;
   const contextRailId = "research-d5-context-rail";
   const backgroundInert = reportOpen;
+  const closeContextRail = useCallback(() => {
+    setRailOpen(false);
+    requestAnimationFrame(() => railToggleRef.current?.focus());
+  }, [setRailOpen]);
 
   const reportController = useMemo<ResearchReportController>(
     () => ({
@@ -537,6 +542,7 @@ export function ResearchConstellationWorkspace({
       </section>
 
       <Button
+        ref={railToggleRef}
         type="button"
         size="sm"
         variant="secondary"
@@ -559,7 +565,7 @@ export function ResearchConstellationWorkspace({
           chatPanel={chatPanel}
           detailPanel={detailPanel}
           composer={composer}
-          onClose={() => setRailOpen(false)}
+          onClose={closeContextRail}
           {...(backgroundInert ? { inert: true } : {})}
         />
       ) : null}

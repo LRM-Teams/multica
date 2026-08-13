@@ -684,6 +684,7 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 		    AND m.attempt_id = $3::uuid
 		    AND (
 		      e.eligibility_revision <> p.eligibility_revision
+		      OR v.version <> p.current_version
 		      OR p.lifecycle_status NOT IN ('registered', 'accepted')
 		    )
 		)

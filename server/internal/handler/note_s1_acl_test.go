@@ -14,10 +14,11 @@ func createWorkspaceMemberForNoteACL(t *testing.T, namePrefix string) string {
 	t.Helper()
 	ctx := context.Background()
 	var userID string
-	email := namePrefix + "-" + uuid.NewString() + "@multica.test"
+	name := namePrefix + "-" + uuid.NewString()
+	email := name + "@multica.test"
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
-	`, namePrefix, email).Scan(&userID); err != nil {
+	`, name, email).Scan(&userID); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 	t.Cleanup(func() {
@@ -113,6 +114,9 @@ func TestNoteWritebackAllowsSharedCollaborator(t *testing.T) {
 		t.Fatalf("set content: %v", err)
 	}
 	collaboratorID := createWorkspaceMemberForNoteACL(t, "note-wb-sharee")
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE note_page SET updated_by = $2 WHERE id = $1`, noteID, testUserID)
+	})
 	shareNoteWithUser(t, noteID, collaboratorID)
 	created := createPendingWritebackForACL(t, noteID)
 

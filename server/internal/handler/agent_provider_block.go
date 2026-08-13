@@ -27,6 +27,9 @@ func (h *Handler) applyAgentProviderQuotaBlock(
 	now := time.Now()
 	until, untilOK := taskfailure.ParseProviderBlockedUntil(errText, now, time.Local)
 	detail := truncateForActivity(errText, 500)
+	if !taskfailure.ProviderLockDetailActive(detail) {
+		return
+	}
 
 	alreadyLocked := false
 	if rows, err := h.Queries.ListAgentProviderBlockByIDs(ctx, []pgtype.UUID{agentID}); err != nil {

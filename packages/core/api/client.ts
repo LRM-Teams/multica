@@ -4837,7 +4837,24 @@ export class ApiClient {
   ): Promise<import("../types/research-v6").ResearchV6Snapshot> {
     const { parseResearchV6SnapshotStrict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/snapshot`);
-    return parseResearchV6SnapshotStrict(raw);
+    const snapshot = parseResearchV6SnapshotStrict(raw);
+    const nodeIds = snapshot.nodes.map((node) => node.id);
+    const edgeIds = snapshot.edges.map((edge) => edge.id);
+    if (
+      !snapshot.snapshot_id ||
+      snapshot.run_id !== runId ||
+      !Number.isInteger(snapshot.through_event_sequence) ||
+      snapshot.through_event_sequence < 0 ||
+      snapshot.nodes.some((node) => !node.id || node.run_id !== runId) ||
+      snapshot.edges.some((edge) => !edge.id || edge.run_id !== runId) ||
+      new Set(nodeIds).size !== nodeIds.length ||
+      new Set(edgeIds).size !== edgeIds.length
+    ) {
+      throw new Error(
+        "GET /api/research/v6/runs/:runId/projection/snapshot response failed run identity validation",
+      );
+    }
+    return snapshot;
   }
 
   async getResearchV6ProjectionDeltaPage(

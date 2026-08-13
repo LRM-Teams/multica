@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { normalizeResearchPresenceMap } from "./queries";
 
 describe("normalizeResearchPresenceMap", () => {
@@ -28,9 +28,19 @@ describe("normalizeResearchPresenceMap", () => {
   });
 
   it("downgrades unknown phases and malformed optional fields safely", () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(42);
     expect(normalizeResearchPresenceMap({ worker: { phase: "future" } }).worker).toEqual(
-      expect.objectContaining({ phase: "idle", activity: "", updatedAt: 42, nodeId: null }),
+      expect.objectContaining({
+        phase: "unknown",
+        activity: "",
+        updatedAt: null,
+        nodeId: null,
+      }),
     );
+  });
+
+  it("does not manufacture a fresh timestamp for an undated presence entry", () => {
+    expect(
+      normalizeResearchPresenceMap({ worker: { phase: "running" } }).worker,
+    ).toEqual(expect.objectContaining({ phase: "running", updatedAt: null }));
   });
 });

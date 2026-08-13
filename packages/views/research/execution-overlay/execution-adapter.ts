@@ -55,8 +55,8 @@ export type ExecutionRow = {
 
   /** Absolute start time (unix ms) of the current work, when known. */
   startedAt?: number;
-  /** Last update (unix ms). Always present from presence.updatedAt. */
-  updatedAt: number;
+  /** Last canonical update (unix ms); absent when the projection omitted it. */
+  updatedAt?: number;
   /** Elapsed (ms) since start; only meaningful when running/waiting/retrying. */
   elapsedMs?: number;
 
@@ -90,7 +90,7 @@ function initials(name: string): string {
 
 function toUnixMs(value: number | string | null | undefined): number | undefined {
   if (value == null) return undefined;
-  if (typeof value === "number") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : undefined;
 }
@@ -166,6 +166,7 @@ function deriveStatus(
   presenceAvailable: boolean,
 ): ExecutionStatus {
   if (!presence) return presenceAvailable ? "offline" : "unknown";
+  if (presence.updatedAt == null) return "unknown";
   const phase = presence.phase;
   if (phase === "stale") return "stale";
   // Cancellation in flight wins over a stale classification only when the
@@ -304,7 +305,7 @@ export function buildExecutionOverlayRows(input: {
         failureReasonKey: status === "failed" ? "failed" : undefined,
         reason: failureReason ?? waitingReason ?? signal?.staleReason ?? undefined,
         startedAt,
-        updatedAt: toUnixMs(signal?.updatedAt) ?? now,
+        updatedAt: toUnixMs(signal?.updatedAt),
         elapsedMs,
         taskObjective: task?.objective ?? task?.expected_result ?? undefined,
         recentResult,

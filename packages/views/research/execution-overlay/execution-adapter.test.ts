@@ -171,6 +171,21 @@ describe("buildExecutionOverlayRows — state derivation (contract PR #2415)", (
     for (const row of rows) expect(row.status).toBe("unknown");
   });
 
+  it("reports an undated presence signal as unknown instead of fresh", () => {
+    const rows = buildExecutionOverlayRows({
+      members,
+      presence: {
+        "agent-0": signal({ phase: "running", updatedAt: null }),
+      },
+      nodes: [],
+      now: NOW,
+    });
+    expect(rows.find((row) => row.id === "agent-0")).toMatchObject({
+      status: "unknown",
+      updatedAt: undefined,
+    });
+  });
+
   it("maps failed without a retry to failed, and unknown phase to unknown", () => {
     const rows = buildExecutionOverlayRows({
       members,

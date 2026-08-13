@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -186,6 +187,63 @@ func stringPtrValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func registerProductionDecisionPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, decisionID, producedByAttemptID string,
+	accessLevel ArtifactAccessLevel,
+) error {
+	var decisionKind, actorType, actorID, rationale string
+	var goalVersion, planVersion int32
+	var inputs, outcome []byte
+	var createdAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT decision_kind, actor_type, COALESCE(actor_id::text, ''),
+		       goal_version, plan_version, inputs, outcome, rationale, created_at
+		FROM research_decision
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, decisionID).Scan(
+		&decisionKind, &actorType, &actorID, &goalVersion, &planVersion,
+		&inputs, &outcome, &rationale, &createdAt,
+	)
+	if err != nil {
+		return err
+	}
+	kind := artifactKindForDecision(decisionKind)
+	contentHash, err := ArtifactContentHash(kind, decisionArtifactContent(
+		decisionKind, actorType, actorID, int(goalVersion), int(planVersion), inputs, outcome, rationale,
+	))
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: decisionID,
+		Kind: kind, SourceCreatedAt: &createdAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            &goalVersion, PlanVersion: &planVersion,
+		AccessLevel: accessLevel, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash, ProducedByAttemptID: producedByAttemptID,
+	})
+}
+
+func decisionArtifactContent(
+	decisionKind, actorType, actorID string,
+	goalVersion, planVersion int,
+	inputs, outcome []byte,
+	rationale string,
+) map[string]any {
+	return map[string]any{
+		"decision_kind": decisionKind,
+		"actor_type":    actorType,
+		"actor_id":      actorID,
+		"goal_version":  goalVersion,
+		"plan_version":  planVersion,
+		"inputs":        json.RawMessage(inputs),
+		"outcome":       json.RawMessage(outcome),
+		"rationale":     rationale,
+	}
 }
 
 func registerRunSessionArtifactTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, sourceCreatedAt time.Time) error {

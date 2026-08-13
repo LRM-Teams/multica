@@ -1193,7 +1193,27 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		state.task.AssignedAgentID).Scan(&reportID); err != nil {
 		return "", err
 	}
-	if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindReportRevision, state.workspaceID, state.run.SessionID, reportID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
+	reportHash, err := ArtifactContentHash(ArtifactKindReportRevision, map[string]any{
+		"revision":               revision,
+		"content_md":             report.ContentMD,
+		"structured":             json.RawMessage(structuredJSON),
+		"goal_version":           state.run.GoalVersion,
+		"plan_version":           state.targetPlan,
+		"produced_by_task_id":    state.task.ID,
+		"produced_by_attempt_id": state.attemptID,
+		"author_agent_id":        state.task.AssignedAgentID,
+	})
+	if err != nil {
+		return "", err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: reportID,
+		Kind: ArtifactKindReportRevision, SourceCreatedAt: timePtr(time.Now()),
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            int32Ptr(int32(state.run.GoalVersion)), PlanVersion: int32Ptr(int32(state.targetPlan)),
+		AccessLevel: state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: reportHash, ProducedByAttemptID: state.attemptID,
+	}); err != nil {
 		return "", err
 	}
 	sections := map[string]reportStructuredSection{}

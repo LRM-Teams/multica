@@ -137,7 +137,7 @@ research state. Refresh must reconstruct the same terminal graph.
   for reduced motion, background resume, and resync.
 - Each frontend change runs relevant Vitest, typecheck, and `pnpm react:doctor`.
 
-## 9. Implementation status at `dev@52a5388b4`
+## 9. Implementation status at `dev@602ed7336`
 
 Status in this table means code already present on `dev`. Open pull requests are
 tracked separately in §11 and are not counted as integrated until merged.
@@ -145,15 +145,15 @@ tracked separately in §11 and are not counted as integrated until merged.
 | Area | Status | Next production work |
 | --- | --- | --- |
 | Shared Web/Desktop routes | Integrated | Keep parity gate |
-| Top command bar and goal history | Integrated | Canonical product-round metadata awaiting PR #3009 |
+| Top command bar and goal history | Integrated | Validate deployed visual density against target |
 | Five-tier star graph, camera, clusters, relations | Integrated | Improve fact density and edge degradation |
-| Context rail, chat, node detail | Integrated | NodeCommand and node-open/deep-link visibility fixes awaiting PRs #3006–#3007 and #3010–#3011 |
+| Context rail, chat, node detail | Integrated | Validate deployed responsive and deep-link flows |
 | Agent inspector and shared Agent panel | Integrated | Validate the deployed responsive matrix |
 | Local node report | Integrated | Project quality/citation review decisions; canonical contributor, Attempt, evidence, and lineage sections are integrated |
 | Typed graph pagination/filter/lens/DOM budget | Integrated | Add viewport slice gateway when backend exists |
-| V6 schema, API, adapter | Integrated behind capability detection | Explicit classic-fallback disclosure awaiting PR #3008; validate against a real server route when available |
+| V6 schema, API, adapter | Integrated behind capability detection | Validate against a real server route when available |
 | V6 ordered live client | Implemented but not wired into the D5 shell | Resolve the WS event/envelope decision below before production wiring |
-| 30-kind cards, Insight, Dispute, trajectory | Integrated in D5 detail/lens surfaces | Complete visual evidence and remaining copy parity |
+| 30-kind cards, Insight, Dispute, trajectory | Integrated in D5 detail/lens surfaces | Complete deployed visual evidence |
 | V6 server snapshot/delta/resume | Not present on current dev | Backend dependency; explicit V5/D5 fallback remains required |
 
 ## 10. Delivery sequence
@@ -177,7 +177,7 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 
 | Contract surface | Current evidence | Delivery state |
 | --- | --- | --- |
-| Target D5 shell and shared Web/Desktop composition | `dev@52a5388b4`, PR #2907 | Integrated |
+| Target D5 shell and shared Web/Desktop composition | `dev@602ed7336`, PR #2907 | Integrated |
 | Canonical conversation change receipts | `2edba39a`, PR #2908 | Integrated |
 | Dispute and trajectory/Insight detail registration | `cee8dc2a`, `4cac759b`, PRs #2909–#2910 | Integrated |
 | Capability-gated V6 adapter in the existing D5 shell | `a0963726`, PR #2911 | Integrated; server capability absent |
@@ -195,15 +195,20 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 | Canvas visual and accessibility localisation | `6b8d4853`, `efe31ec4`, `b3c28a38`, `4d272991`, `2e1dad935`, PRs #2930–#2931, #2974–#2976 | Integrated |
 | Session-isolated camera, selection, and inspector restoration | `fa389f8f`, `4d21b75ea`, `4707ce9d5`, PRs #2934, #2998–#2999 | Integrated |
 | 25% overview and DOM/card/node/edge budgets | `e8dd9b46`, `792ef4ac8`, `3dc864714`, PRs #2923, #2996–#2997 | Integrated; runtime evidence still required |
-| Session-isolated canvas filter restoration | PR #3002 | Awaiting merge; not integrated |
-| Canonical node commands (`continue | fork | retry | reassign`) | PRs #3006–#3007 | Awaiting merge; replaces chat-text command fallback and aligns task-only recovery eligibility |
-| D5 command-bar product round | PR #3009 | Awaiting merge; reads only canonical session round/budget facts |
-| Node detail opening and deep-link restoration | PRs #3010–#3011 | Awaiting merge; includes poll-safe one-time node-link restoration |
-| Capability fallback and localized recovery disclosure | PRs #3008, #3014–#3015 | Awaiting merge; raw diagnostics remain collapsed and malformed V6 success remains an interface error |
-| Recovery-action focus retention | PRs #3007, #3012–#3013 | Awaiting merge; pending actions remain focusable and suppress duplicate activation |
-| Canonical V6 edge-family registration | PR #3005 | Awaiting merge; not integrated |
+| Attempt-bound Agent identity and session-isolated filters | `ebbe40594`, `a437e30a5`, PRs #3001–#3002 | Integrated |
+| Canonical V6 edge-family registration | `dd48ef731`, PR #3005 | Integrated |
+| Canonical node commands (`continue | fork | retry | reassign`) | `2302775c9`, `29af08fa0`, PRs #3006–#3007 | Integrated; replaces chat-text command fallback and aligns task-only recovery eligibility |
+| Capability fallback and localized recovery disclosure | `de0f2f194`, `1c3497112`, `d11b72e9f`, `9e5133c75`, PRs #3008, #3014–#3016 | Integrated; raw diagnostics remain collapsed and malformed V6 success remains an interface error |
+| D5 command-bar product round | `7ee3283ac`, PR #3009 | Integrated; reads only canonical session round/budget facts |
+| Node detail opening and deep-link restoration | `c62653dfc`, `2bb0db0ff`, PRs #3010–#3011 | Integrated; includes poll-safe one-time node-link restoration |
+| Recovery-action focus retention | `29af08fa0`, `aa636fdef`, `7d28aa5ea`, PRs #3007, #3012–#3013 | Integrated; pending actions remain focusable and suppress duplicate activation |
+| Remaining D5/V6 copy localisation | `046acd8e2`, `f2f2344bd`, PRs #3017–#3018 | Integrated; includes all registered V6 node kinds |
+| Context-rail responsive geometry | `0daa942e5`, `0ad395142`, PRs #3019–#3020 | Integrated; flex-child canvas excludes the sibling rail exactly once and duplicate open-rail toggle is hidden |
+| Custom control and responsive Lens accessibility | `08aa6f3d8`, PR #3021 | Integrated; semantic focus rings plus active Lens announcement/state |
+| Long unbroken node-card copy containment | `cb8fa3b50`, PR #3022 | Integrated; registered and generic node cards retain bounded two-line density |
+| Shared Research frontend typecheck baseline | `612034aea`, PR #3024 | Integrated; V6 Dispute panel uses a type-only `ReactNode` import |
 | V6 WS Delta routing envelope | Existing V5 `research_session:graph_updated` payloads plus a direct-Delta V6 listener | Protocol decision required: a workspace event must identify `run_id`, including mutation-free Delta frames |
-| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@52a5388b4` | Backend blocked; explicit V5/D5 fallback required |
+| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@602ed7336` | Backend blocked; explicit V5/D5 fallback required |
 | Runtime visual/performance/accessibility matrix | No current deployed-session artifacts for this revision | Unverified; required before completion |
 
 ### Completion evidence rule

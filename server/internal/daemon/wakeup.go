@@ -978,7 +978,7 @@ func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) bool {
 		}
 		return false
 	}
-	d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{
+	return d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{
 		AgentID:             job.OwnerAgentID,
 		RuntimeID:           attachment.RuntimeID,
 		PlacementGeneration: int64(attachment.AttachmentGeneration),
@@ -986,7 +986,6 @@ func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) bool {
 		Version:             job.Version,
 		FiredAtClient:       time.Now().UTC().Format(time.RFC3339Nano),
 	})
-	return true
 }
 
 func signalTaskWakeup(taskWakeups chan<- taskWakeup, runtimeID string) {

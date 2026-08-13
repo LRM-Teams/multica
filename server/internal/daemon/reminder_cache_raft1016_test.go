@@ -267,3 +267,58 @@ func TestOnReminderTimerDoesNotSendFireAttemptUntilOwnerWakeEnqueued(t *testing.
 		t.Fatalf("post-wake receipts = %+v, want wake enqueued and server unacked", got)
 	}
 }
+
+func TestOnReminderTimerDoesNotMarkWakeWhenWebsocketUnavailable(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	assertUnenqueuedRetry := func(t *testing.T, label string, setup func(*fakeReminderClock, *reminderCache, *Daemon)) {
+		t.Helper()
+		clock := &fakeReminderClock{now: now}
+		mgr := newLocalAgentAttachmentRegistry("", logger)
+		cache := newReminderCache(clock, logger, nil)
+		cache.fireRetryDelay = time.Second
+		var d *Daemon
+		cache.onFireDelivery = func(job protocol.ReminderTimerJob) bool { return d.onReminderTimer(job) }
+		d = &Daemon{
+			logger: logger, agentAttachments: mgr, reminderCache: cache,
+			runtimeIndex: map[string]Runtime{"runtime-x": {ID: "runtime-x", WorkspaceID: "workspace-x"}},
+		}
+		if _, err := mgr.Apply("workspace-x", AgentAttachmentEvent{
+			Kind: AgentAttachmentEventAttach, AgentID: "agent-x", RuntimeID: "runtime-x",
+			AttachmentGeneration: 1, LifecycleSeq: 1,
+		}); err != nil {
+			t.Fatalf("%s Apply: %v", label, err)
+		}
+		setup(clock, cache, d)
+		job := reminderJob("r-ws", "agent-x", 1, now.Add(-time.Minute))
+		if applied, err := cache.applyProjection(reminderProjection(1, "runtime-x", "upsert", job, false)); err != nil || !applied {
+			t.Fatalf("%s apply due job = %v, %v", label, applied, err)
+		}
+		clock.fire(len(clock.timers) - 1)
+		if got := cache.pendingFireReceipts(); len(got) != 1 || got[0].WakeEnqueued || got[0].Job.ReminderID != "r-ws" {
+			t.Fatalf("%s receipts = %+v, want one unenqueued due fact", label, got)
+		}
+		retryTimers := 0
+		for _, timer := range clock.timers {
+			if !timer.stopped {
+				retryTimers++
+			}
+		}
+		if retryTimers == 0 {
+			t.Fatalf("%s dropped the wake retry after a failed enqueue", label)
+		}
+	}
+
+	t.Run("nil writes", func(t *testing.T) {
+		assertUnenqueuedRetry(t, "nil writes", func(*fakeReminderClock, *reminderCache, *Daemon) {})
+	})
+	t.Run("closed writes", func(t *testing.T) {
+		assertUnenqueuedRetry(t, "closed writes", func(clock *fakeReminderClock, cache *reminderCache, d *Daemon) {
+			done := make(chan struct{})
+			close(done)
+			d.setReminderWS(make(chan []byte), done, func() error { return nil })
+			cache.resume()
+		})
+	})
+}

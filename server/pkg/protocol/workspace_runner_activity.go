@@ -32,6 +32,9 @@ const (
 	ActivityKindWorking  = "working"
 	ActivityKindError    = "error"
 	ActivityKindOffline  = "offline"
+
+	ActivityDetailStarting = "starting"
+	ActivityDetailStopped  = "stopped"
 )
 
 const (

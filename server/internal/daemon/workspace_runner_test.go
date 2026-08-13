@@ -138,7 +138,7 @@ func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 
 func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	frames := make(chan protocol.Message, 6)
+	frames := make(chan protocol.Message, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("workspace_id") != "ws-1" || r.Header.Get("Authorization") != "Bearer workspace-token" {
 			http.Error(w, "unexpected runner scope", http.StatusForbidden)
@@ -209,7 +209,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			t.Error(err)
 			return
 		}
-		for i := 0; i < 1; i++ {
+		sawInactive := false
+		for !sawInactive {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -219,6 +220,12 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			if err := json.Unmarshal(raw, &stoppedFrame); err != nil {
 				t.Error(err)
 				return
+			}
+			if stoppedFrame.Type == protocol.EventAgentStatus {
+				var candidate protocol.AgentStatusPayload
+				if json.Unmarshal(stoppedFrame.Payload, &candidate) == nil && candidate.Status == protocol.AgentStatusInactive {
+					sawInactive = true
+				}
 			}
 			frames <- stoppedFrame
 		}
@@ -249,7 +256,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()
 	var ready, ack, status, inactive protocol.Message
-	var sawStartingActivity bool
+	var sawStartingActivity, sawStoppedActivity bool
 	deadline := time.Now().Add(2 * time.Second)
 	for ready.Type == "" || ack.Type == "" || status.Type == "" || inactive.Type == "" {
 		if time.Now().After(deadline) {
@@ -273,15 +280,19 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 					inactive = msg
 				}
 			case protocol.EventAgentActivity:
-				// Raft 1.0.16 (#2929): managed spawn publishes working/starting.
+				// Raft 1.0.16: start is working/starting; commanded stop is offline/stopped.
 				var activity protocol.AgentActivityPayload
 				if err := json.Unmarshal(msg.Payload, &activity); err != nil {
 					t.Fatal(err)
 				}
-				if activity.Snapshot.ActivityKind != protocol.ActivityKindWorking || activity.Snapshot.DetailKind != "starting" {
+				switch {
+				case activity.Snapshot.ActivityKind == protocol.ActivityKindWorking && activity.Snapshot.DetailKind == protocol.ActivityDetailStarting:
+					sawStartingActivity = true
+				case activity.Snapshot.ActivityKind == protocol.ActivityKindOffline && activity.Snapshot.DetailKind == protocol.ActivityDetailStopped:
+					sawStoppedActivity = true
+				default:
 					t.Fatalf("managed start/stop invented unexpected Activity: %+v", activity)
 				}
-				sawStartingActivity = true
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for Runner frames")
@@ -289,6 +300,9 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	}
 	if !sawStartingActivity {
 		t.Fatal("managed start did not emit Raft Starting… Activity")
+	}
+	if !sawStoppedActivity {
+		t.Fatal("managed stop did not emit Raft Stopped Activity")
 	}
 	if ready.Type != protocol.EventWorkspaceRunnerReady {
 		t.Fatalf("ready frame = %+v", ready)

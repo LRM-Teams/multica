@@ -229,6 +229,48 @@ func TestWorkspaceRunnerManagedStartEmitsStartingActivity(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerManagedStopEmitsStoppedActivity(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	var activities []protocol.AgentActivityPayload
+	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
+		t.Fatalf("managed start: %v", err)
+	}
+	status, err := runner.stopManagedAgent(protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: "launch-1"})
+	if err != nil {
+		t.Fatalf("managed stop: %v", err)
+	}
+	if status.Status != protocol.AgentStatusInactive || status.LaunchID != "launch-1" {
+		t.Fatalf("stop status = %+v, want inactive launch-1", status)
+	}
+	var got protocol.AgentActivityPayload
+	for _, activity := range activities {
+		if activity.Snapshot.DetailKind == protocol.ActivityDetailStopped {
+			got = activity
+		}
+	}
+	if got.Snapshot.ActivityKind != protocol.ActivityKindOffline || got.Snapshot.DetailKind != protocol.ActivityDetailStopped {
+		t.Fatalf("stop Activity = %+v, want offline/stopped", activities)
+	}
+	if len(got.Entries) != 1 {
+		t.Fatalf("stopped entries = %d, want 1", len(got.Entries))
+	}
+	var body protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
+		t.Fatalf("decode stopped narrative: %v", err)
+	}
+	if body.Text != "Stopped" {
+		t.Fatalf("stopped text = %q, want %q", body.Text, "Stopped")
+	}
+}
+
 func TestWorkspaceRunnerManagedStartMarksLaunchRunningAfterProviderSpawn(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"

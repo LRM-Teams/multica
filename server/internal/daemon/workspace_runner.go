@@ -233,13 +233,13 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 						runner.logger.Warn("Workspace Runner provider start failed", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "start_dispatch_id", start.StartDispatchID, "reason", "provider_start_failed", "error", err)
 					}
 					if status.AgentID != "" {
-						if writeErr := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); writeErr != nil && runner.logger != nil {
+						if writeErr := runner.sendAgentStatus(status.AgentID, status.Status, status.LaunchID); writeErr != nil && runner.logger != nil {
 							runner.logger.Debug("workspace Runner start-failure status unpublished", "workspace_id", workspaceID, "agent_id", start.AgentID, "error", writeErr)
 						}
 					}
 					return
 				}
-				if err := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); err != nil {
+				if err := runner.sendAgentStatus(status.AgentID, status.Status, status.LaunchID); err != nil {
 					failConnection(err)
 					return
 				}
@@ -263,7 +263,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				failConnection(err)
 				continue
 			}
-			if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
+			if err := runner.sendAgentStatus(status.AgentID, status.Status, status.LaunchID); err != nil {
 				return err
 			}
 		case protocol.EventAgentAttach:

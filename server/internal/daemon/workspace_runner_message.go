@@ -306,9 +306,7 @@ func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
 	if launchID == "" {
 		return
 	}
-	runner.sendAgentFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{
-		AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive,
-	})
+	_ = runner.sendAgentStatus(agentID, protocol.AgentStatusInactive, launchID)
 	now := time.Now().UTC()
 	entry, err := activityNarrativeEntry(protocol.ActivityKindOffline, "runtime_unavailable", "Process unavailable; restart required")
 	if err != nil {

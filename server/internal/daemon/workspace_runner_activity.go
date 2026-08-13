@@ -34,14 +34,8 @@ func (runner *WorkspaceRunner) observeMessageLifecycle(agentID, runtimeID string
 // observeRuntimeStarting is Raft 1.0.16 spawn Activity: working / starting /
 // "Starting…". Called after the provider process is up and Activity is managed.
 func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase string) {
-	launch, found := runner.managedLaunch(agentID, runtimeID)
-	if !found || runner.activity == nil {
-		return
-	}
-	runner.observeActivity(AgentObservation{
-		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting,
-		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
-	}, phase)
+	_ = phase
+	runner.broadcastActivity(agentID, runtimeID, protocol.ActivityDetailStarting)
 }
 
 func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID string, message agent.Message) {
@@ -128,7 +122,7 @@ func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID s
 	}
 	status := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive}
 	_ = runner.activity.SetManaged(status, protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID})
-	runner.sendAgentFrame(protocol.EventAgentStatus, status)
+	_ = runner.sendAgentStatus(agentID, status.Status, launchID)
 	kind := AgentObservationError
 	if stage == managedRuntimeFailureSpawn {
 		kind = AgentObservationOffline

@@ -180,6 +180,11 @@ func (runner *WorkspaceRunner) stopManagedAgent(payload protocol.WorkspaceRunner
 	if !found || launch.LaunchID != payload.LaunchID {
 		return protocol.AgentStatusPayload{}, errors.New("managed stop does not match current launch")
 	}
+	// Raft Stopped is a process-lifecycle word. Publish it while the launch is
+	// still managed; Stop() drops the APM slot that broadcastActivity looks up.
+	if runner.activity != nil {
+		runner.broadcastActivity(payload.AgentID, launch.RuntimeID, protocol.ActivityDetailStopped)
+	}
 	if err := runner.runtimes.forceInvalidateSession(payload.AgentID, launch.RuntimeID); err != nil {
 		return protocol.AgentStatusPayload{}, fmt.Errorf("stop managed Agent provider: %w", err)
 	}

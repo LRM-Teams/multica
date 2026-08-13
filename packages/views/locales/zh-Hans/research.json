@@ -1025,6 +1025,8 @@
       "objective": "本次小目标",
       "no_task": "暂无进行中的任务",
       "phase": "阶段 · {{phase}}",
+      "branch": "分支",
+      "reason": "原因",
       "completed": "已经完成",
       "current": "当前正在做",
       "open_agent": "打开 Agent 配置"

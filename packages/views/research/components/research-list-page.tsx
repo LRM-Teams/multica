@@ -741,12 +741,22 @@ export function ResearchListPage() {
                 </div>
               </div>
               <Button
+                type="button"
                 variant="outline"
                 size="sm"
-                className="w-full shrink-0 md:w-auto"
-                onClick={() => refetch()}
+                aria-disabled={isFetching || undefined}
+                className={cn(
+                  "w-full shrink-0 md:w-auto",
+                  isFetching && "cursor-not-allowed opacity-50",
+                )}
+                onClick={() => {
+                  if (isFetching) return;
+                  void refetch();
+                }}
               >
-                {t(($) => $.list.retry)}
+                {t(($) =>
+                  isFetching ? $.connectivity.retrying : $.list.retry,
+                )}
               </Button>
             </div>
           ) : sessions.length === 0 ? (

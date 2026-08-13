@@ -39,6 +39,10 @@ func TestRegisteredArtifactEntityKindsMatchSpecInventory(t *testing.T) {
 		ArtifactKindRunEvent,
 		ArtifactKindGraphNode,
 		ArtifactKindGraphEdge,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindInquiryEdge,
 	}
 	got := RegisteredArtifactEntityKinds()
 	slices.SortFunc(got, func(a, b ArtifactEntityKind) int {
@@ -65,7 +69,7 @@ func TestRegisteredArtifactEntityKindsMatchSpecInventory(t *testing.T) {
 }
 
 func TestParseArtifactEntityKindRejectsUnknown(t *testing.T) {
-	if _, err := ParseArtifactEntityKind("hypothesis"); err == nil {
+	if _, err := ParseArtifactEntityKind("future_unknown_kind"); err == nil {
 		t.Fatal("expected unknown kind error")
 	}
 }

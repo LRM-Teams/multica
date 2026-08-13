@@ -1084,6 +1084,7 @@ surface 矩阵仍未完成。
 
 - [ ] 生成不含跨租户私有内容的 Research Episode。
 - [ ] 实现评测任务、环境、grader、重复运行和对照报告。
+  - [x] M2b：`BuildArtifactFromCanonicalRun` 将真实 `researchrun.RunSnapshot` 的 Source Snapshot、Observation、Claim/Evidence ledger 转成 A5 grader 使用的同一个 `researcheval.Artifact`。Source 必须在 canonical metadata 中同时绑定受控 Document ID 与 sealed subject hash；Observation datum 必须显式提供 evaluation fact key/value；Claim 只沿 canonical Evidence 引用归集 fact/source，Report Claim membership 由报告表补充输入提供。跨 Subject Source、未知 Document、未键控 Observation、冲突 fact value 和越界 Evidence 全部 fail closed，禁止从 URL、标题、摘要或正文猜评测事实。Dispute/Action/V6 Graph/Projection 仍由各自 canonical owner 加载，不在该 Adapter 中伪造。
 - [ ] 实现 Strategy Candidate、Promotion Decision、新 Run 固定版本和回退。
 - [ ] 建立线上质量/成本越界监测；禁止运行中自改 Prompt 或策略。
 

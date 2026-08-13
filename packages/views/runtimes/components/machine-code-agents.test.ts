@@ -125,19 +125,14 @@ describe("partitionMachineCodeAgents", () => {
 
   it("lists every detected provider as installed, even outside the recommend catalog", () => {
     const { installed, notInstalled } = partitionMachineCodeAgents([
-      runtime({ provider: "kimi", metadata: { version: "9.9.9" } }),
-      runtime({ provider: "openclaw" }),
+      runtime({ provider: "kiro", metadata: { version: "9.9.9" } }),
     ]);
 
-    expect(installed.map((row) => row.id).sort()).toEqual([
-      "kimi",
-      "openclaw",
-    ]);
-    expect(installed.find((row) => row.id === "kimi")?.version).toBe("9.9.9");
-    expect(installed.find((row) => row.id === "kimi")?.label).toBe("kimi");
-    // Recommend catalog still lists all six as not installed.
+    expect(installed.map((row) => row.id)).toEqual(["kiro"]);
+    expect(installed.find((row) => row.id === "kiro")?.version).toBe("9.9.9");
+    expect(installed.find((row) => row.id === "kiro")?.label).toBe("kiro");
     expect(notInstalled).toHaveLength(KNOWN_PROVIDERS.length);
-    expect(notInstalled.map((row) => row.id)).not.toContain("kimi");
+    expect(notInstalled.map((row) => row.id)).not.toContain("kiro");
   });
 
   it("dedupes providers and keeps the first version seen", () => {

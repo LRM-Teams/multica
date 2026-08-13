@@ -32,7 +32,6 @@ func TestWorkspaceRunnerIdleDeliveryAcknowledgesAfterRuntimeAcceptance(t *testin
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	markTestLaunchRunning(t, runner, "agent-1")
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode:    canonicalRuntimeResident,
 		backend: &idleMessageFakeRuntime{},
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -111,7 +110,6 @@ func TestWorkspaceRunnerAckWriterFailureDoesNotRepeatProviderAcceptance(t *testi
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	markTestLaunchRunning(t, runner, "agent-1")
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode:    canonicalRuntimeResident,
 		backend: &idleMessageFakeRuntime{},
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -552,7 +550,6 @@ func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	markTestLaunchRunning(t, runner, "agent-1")
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode:    canonicalRuntimeResident,
 		backend: &idleMessageFakeRuntime{},
 	}
 	delivery := protocol.AgentDeliverPayload{
@@ -600,7 +597,7 @@ func TestWorkspaceRunnerDeliveryDoesNotAcknowledgeProviderRejection(t *testing.T
 	d.mu.Unlock()
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	markTestLaunchRunning(t, runner, "agent-1")
-	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: &idleMessageFakeRuntime{}}
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: &idleMessageFakeRuntime{}}
 	delivery := protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: "dm:one", Seq: 1, DeliveryID: "delivery-1",
 		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "dm:one", Seq: 1, Content: "hi"},

@@ -229,8 +229,6 @@ func (p *canonicalAgentRuntimePool) closeIdleOtherRuntimesLocked(agentID, keepRu
 			slot.closeBackend()
 			closed++
 		}
-		slot.fingerprint = ""
-		slot.mode = ""
 		slot.idleSince = time.Time{}
 		slot.mu.Unlock()
 		delete(p.slots, key)
@@ -259,7 +257,7 @@ func (p *canonicalAgentRuntimePool) evictOldestIdleForCapacityLocked(excludeAgen
 			continue
 		}
 		slot.mu.Lock()
-		eligible := !slot.running && slot.backend != nil && slot.mode == canonicalRuntimeResident
+		eligible := !slot.running && slot.backend != nil
 		idleSince := slot.idleSince
 		slot.mu.Unlock()
 		if !eligible {
@@ -282,8 +280,6 @@ func (p *canonicalAgentRuntimePool) evictOldestIdleForCapacityLocked(excludeAgen
 		return false
 	}
 	bestSlot.closeBackend()
-	bestSlot.fingerprint = ""
-	bestSlot.mode = ""
 	bestSlot.idleSince = time.Time{}
 	bestSlot.mu.Unlock()
 	delete(p.slots, bestKey)

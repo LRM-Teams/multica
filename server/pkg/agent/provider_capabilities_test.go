@@ -33,7 +33,7 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 	}
 
 	// Inline system prompt — was providerNeedsInlineSystemPrompt.
-	for _, name := range []string{"kiro", "kimi"} {
+	for _, name := range []string{"kiro"} {
 		if !Capabilities(name).NeedsInlineSystemPrompt {
 			t.Errorf("%q must NeedInlineSystemPrompt", name)
 		}
@@ -41,17 +41,14 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 	if Capabilities("cursor").NeedsInlineSystemPrompt {
 		t.Error("cursor must not NeedInlineSystemPrompt")
 	}
-	if Capabilities("openclaw").NeedsInlineSystemPrompt {
-		t.Error("openclaw loads AGENTS.md from its pinned workspace and must not duplicate it inline")
-	}
 
 	// Custom model id — Raft handbook allow-list (ex-CustomModelIDSupported switch).
-	for _, name := range []string{"claude", "codex", "cursor", "copilot", "pi"} {
+	for _, name := range []string{"claude", "codex", "cursor", "pi"} {
 		if !Capabilities(name).CustomModelIDSupported {
 			t.Errorf("%q must support custom model IDs", name)
 		}
 	}
-	for _, name := range []string{"opencode", "hermes", "gemini", "grok", "antigravity", "openclaw"} {
+	for _, name := range []string{"opencode", "grok", "kiro"} {
 		if Capabilities(name).CustomModelIDSupported {
 			t.Errorf("%q must not support custom model IDs", name)
 		}
@@ -60,7 +57,7 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 	// Thinking discovery — every provider that injects thinking/effort into
 	// the CLI today (#59). Keep this list in lockstep with backends that
 	// read ExecOptions.ThinkingLevel.
-	for _, name := range []string{"claude", "codex", "codebuddy", "pi", "grok", "opencode"} {
+	for _, name := range []string{"claude", "codex", "pi", "grok", "opencode"} {
 		if !Capabilities(name).ThinkingDiscovery {
 			t.Errorf("%q must advertise ThinkingDiscovery", name)
 		}
@@ -121,6 +118,15 @@ func TestForceRestartDerivedFromResidentForceKillable(t *testing.T) {
 	}
 }
 
+func TestAllKnownProvidersAreCanonicalResident(t *testing.T) {
+	t.Parallel()
+	for _, name := range KnownAgentTypes() {
+		if !Capabilities(name).CanonicalResident {
+			t.Errorf("%q is registered without a resident adapter", name)
+		}
+	}
+}
+
 func TestCapabilitiesUnknownProviderFailClosed(t *testing.T) {
 	t.Parallel()
 	got := Capabilities("not-a-real-provider")
@@ -131,8 +137,8 @@ func TestCapabilitiesUnknownProviderFailClosed(t *testing.T) {
 
 func TestModelSelectionAndCustomIDWrappers(t *testing.T) {
 	t.Parallel()
-	if !ModelSelectionSupported("hermes") {
-		t.Error("hermes wrapper must read ModelSelectionSupported from the table")
+	if !ModelSelectionSupported("kiro") {
+		t.Error("kiro wrapper must read ModelSelectionSupported from the table")
 	}
 	if !CustomModelIDSupported("claude") {
 		t.Error("claude wrapper must read CustomModelIDSupported from the table")

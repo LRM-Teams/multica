@@ -103,18 +103,12 @@ func canonicalRuntimeIdentityForTestWithContext(t *testing.T, model, contextKey 
 		t.Fatalf("splitAgentProcessEnvironment: %v", err)
 	}
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
-		AgentID:      "agent-a",
-		RuntimeID:    "runtime-a",
-		Provider:     "pi",
-		Executable:   "/usr/local/bin/pi",
-		Model:        model,
-		Thinking:     "high",
-		WorkDir:      "/var/lib/multica/agent-a/workspace",
-		SystemPrompt: "stable system prompt",
-		MCP:          `{"servers":[]}`,
-		CustomArgs:   []string{"--flag"},
-		Environment:  stable,
-		WorkspaceID:  "workspace-a",
+		AgentID:     "agent-a",
+		RuntimeID:   "runtime-a",
+		Provider:    "pi",
+		Executable:  "/usr/local/bin/pi",
+		WorkDir:     "/var/lib/multica/agent-a/workspace",
+		Environment: stable,
 	})
 	if err != nil {
 		t.Fatalf("newCanonicalAgentRuntimeIdentity: %v", err)
@@ -146,10 +140,10 @@ func TestCanonicalAgentRuntimeIdentityExcludesCurrentTurnEnvironment(t *testing.
 		"MULTICA_RUN_ID":                  "turn-b",
 		"MULTICA_AGENT_INBOX_DELIVERY_ID": "delivery-b",
 	})
-
-	if first.fingerprint() != second.fingerprint() {
-		t.Fatal("current-turn metadata changed the stable runtime fingerprint")
+	if first.AgentID != second.AgentID || first.RuntimeID != second.RuntimeID {
+		t.Fatal("current-turn metadata changed the slot identity")
 	}
+
 	for _, key := range []string{
 		"MULTICA_TASK_ID",
 		"MULTICA_RUN_ID",
@@ -206,19 +200,13 @@ func TestCanonicalAgentRuntimeIdentitySeparatesTrainingAgentsAndSessionKeys(t *t
 	if first.slotKey() == second.slotKey() {
 		t.Fatal("distinct training agents shared one canonical runtime slot")
 	}
-	if first.fingerprint() == second.fingerprint() {
-		t.Fatal("distinct task-scoped session arguments shared one process fingerprint")
-	}
 }
 
-func TestCanonicalAgentRuntimeIdentityKeyRotationChangesRestartBoundary(t *testing.T) {
+func TestCanonicalAgentRuntimeIdentityKeyRotationKeepsSlot(t *testing.T) {
 	before := trainingCanonicalRuntimeIdentityForTest(t, "training-agent", "synthetic-session-key-before")
 	after := trainingCanonicalRuntimeIdentityForTest(t, "training-agent", "synthetic-session-key-after")
 	if before.slotKey() != after.slotKey() {
 		t.Fatal("same-agent key rotation unexpectedly changed the logical slot")
-	}
-	if before.fingerprint() == after.fingerprint() {
-		t.Fatal("same-agent key rotation did not change the process restart boundary")
 	}
 }
 
@@ -231,7 +219,6 @@ func TestCanonicalAgentRuntimePoolCleansPreparedProcessWhenFactoryFails(t *testi
 	cleanupCalls := 0
 	_, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		PrepareLaunchEnvironment: func(environment map[string]string) (func(), error) {
 			environment["PATH"] = "/launch-scoped/bin:" + environment["PATH"]
 			return func() { cleanupCalls++ }, nil
@@ -265,7 +252,6 @@ func TestCanonicalAgentRuntimePoolReusesAcrossChatSurfaces(t *testing.T) {
 	firstIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-A", env)
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           firstIdentity,
-		Mode:               canonicalRuntimeResident,
 		CanonicalSessionID: "provider-session-A",
 		Factory:            probe.factory,
 	})
@@ -280,7 +266,7 @@ func TestCanonicalAgentRuntimePoolReusesAcrossChatSurfaces(t *testing.T) {
 	}
 	first.release(true)
 
-	// Different chat surface, same agent×runtime fingerprint → reuse backend + keep Prior.
+	// Different chat surface, same agent×runtime slot → reuse backend + keep Prior.
 	envB := map[string]string{
 		"PATH":                 "/usr/bin",
 		"MULTICA_SERVER_URL":   "https://multica.example",
@@ -289,12 +275,8 @@ func TestCanonicalAgentRuntimePoolReusesAcrossChatSurfaces(t *testing.T) {
 		"MULTICA_TASK_ID":      "turn-b",
 	}
 	secondIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-B", envB)
-	if firstIdentity.fingerprint() != secondIdentity.fingerprint() {
-		t.Fatal("chat surface alone must not change process fingerprint")
-	}
 	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           secondIdentity,
-		Mode:               canonicalRuntimeResident,
 		CanonicalSessionID: "provider-session-A",
 		Factory:            probe.factory,
 	})
@@ -339,20 +321,18 @@ func TestCanonicalSessionBackendStaleResumeFallbackClearsWrapper(t *testing.T) {
 	}
 }
 
-func TestCanonicalAgentRuntimePoolRestartsProcessKeepsPriorOnHardFieldDrift(t *testing.T) {
+func TestCanonicalAgentRuntimePoolReusesLiveProcessEvenIfFactoryWouldFail(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}
-	env := map[string]string{
+	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
 		"PATH":                 "/usr/bin",
 		"MULTICA_SERVER_URL":   "https://multica.example",
 		"MULTICA_WORKSPACE_ID": "workspace-a",
 		"MULTICA_AGENT_ID":     "agent-a",
 		"MULTICA_TASK_ID":      "turn-a",
-	}
-	firstIdentity := canonicalRuntimeIdentityForTestWithContext(t, "model-a", "chat-same", env)
+	})
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity:           firstIdentity,
-		Mode:               canonicalRuntimeResident,
+		Identity:           identity,
 		CanonicalSessionID: "provider-session-chat",
 		Factory:            probe.factory,
 	})
@@ -361,31 +341,27 @@ func TestCanonicalAgentRuntimePoolRestartsProcessKeepsPriorOnHardFieldDrift(t *t
 	}
 	first.release(true)
 
-	// Slow field change (AgentInstructions) → fingerprint drift → new process, keep Prior.
-	secondIdentity := firstIdentity
-	secondIdentity.AgentInstructions = "updated-instructions"
-	if firstIdentity.fingerprint() == secondIdentity.fingerprint() {
-		t.Fatal("AgentInstructions change must alter fingerprint")
+	failFactory := func(agent.Config) (agent.Backend, func(), error) {
+		return nil, nil, errors.New("must not create on reuse")
 	}
 	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity:           secondIdentity,
-		Mode:               canonicalRuntimeResident,
+		Identity:           identity,
 		CanonicalSessionID: "provider-session-chat",
-		Factory:            probe.factory,
+		Factory:            failFactory,
 	})
 	if err != nil {
-		t.Fatalf("second acquire: %v", err)
+		t.Fatalf("reuse acquire: %v", err)
 	}
 	defer second.release(true)
 	if _, err := second.backend.Execute(context.Background(), "b", agent.ExecOptions{}); err != nil {
 		t.Fatalf("second Execute: %v", err)
 	}
 	if got := second.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend).lastResumeSessionID(); got != "provider-session-chat" {
-		t.Fatalf("same-chat hard-field restart resume = %q, want provider-session-chat", got)
+		t.Fatalf("reuse resume = %q, want provider-session-chat", got)
 	}
 	created, closed := probe.counts()
-	if created != 2 || closed != 1 {
-		t.Fatalf("factory created=%d closed=%d, want 2/1", created, closed)
+	if created != 1 || closed != 0 {
+		t.Fatalf("factory created=%d closed=%d, want 1/0 (live process reused)", created, closed)
 	}
 }
 
@@ -402,7 +378,6 @@ func TestCanonicalAgentRuntimePoolReusesOneResidentSlotAcrossTurns(t *testing.T)
 
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           firstIdentity,
-		Mode:               canonicalRuntimeResident,
 		CanonicalSessionID: "session-agent-a",
 		Factory:            probe.factory,
 	})
@@ -424,7 +399,6 @@ func TestCanonicalAgentRuntimePoolReusesOneResidentSlotAcrossTurns(t *testing.T)
 	})
 	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           secondIdentity,
-		Mode:               canonicalRuntimeResident,
 		CanonicalSessionID: "session-agent-a",
 		Factory:            probe.factory,
 	})
@@ -448,7 +422,7 @@ func TestCanonicalAgentRuntimePoolReusesOneResidentSlotAcrossTurns(t *testing.T)
 	}
 }
 
-func TestCanonicalAgentRuntimeConfigDriftRestartsSameLogicalSlot(t *testing.T) {
+func TestCanonicalAgentRuntimeLaterAcquireReusesSameLogicalSlot(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}
 	firstIdentity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
@@ -459,7 +433,6 @@ func TestCanonicalAgentRuntimeConfigDriftRestartsSameLogicalSlot(t *testing.T) {
 	})
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: firstIdentity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -468,31 +441,30 @@ func TestCanonicalAgentRuntimeConfigDriftRestartsSameLogicalSlot(t *testing.T) {
 	slot := first.slot
 	first.release(true)
 
-	driftedIdentity := canonicalRuntimeIdentityForTest(t, "model-b", map[string]string{
+	secondIdentity := canonicalRuntimeIdentityForTest(t, "model-b", map[string]string{
 		"MULTICA_SERVER_URL":   "https://multica.example",
 		"MULTICA_WORKSPACE_ID": "workspace-a",
 		"MULTICA_AGENT_ID":     "agent-a",
 		"MULTICA_TASK_ID":      "turn-b",
 	})
 	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: driftedIdentity,
-		Mode:     canonicalRuntimeResident,
+		Identity: secondIdentity,
 		Factory:  probe.factory,
 	})
 	if err != nil {
-		t.Fatalf("drift acquire: %v", err)
+		t.Fatalf("second acquire: %v", err)
 	}
 	defer second.release(true)
 
 	if second.slot != slot {
-		t.Fatal("config drift created a second logical slot")
+		t.Fatal("later acquire created a second logical slot")
 	}
 	if got := pool.slotCount(); got != 1 {
 		t.Fatalf("slot count = %d, want 1", got)
 	}
 	created, closed := probe.counts()
-	if created != 2 || closed != 1 {
-		t.Fatalf("factory counts = created %d closed %d, want 2/1", created, closed)
+	if created != 1 || closed != 0 {
+		t.Fatalf("factory counts = created %d closed %d, want 1/0", created, closed)
 	}
 }
 
@@ -507,17 +479,13 @@ func TestCanonicalAgentRuntimeConfigDriftCannotBypassBusySlot(t *testing.T) {
 	})
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: firstIdentity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
-	driftedIdentity := firstIdentity
-	driftedIdentity.Model = "model-b"
 	_, err = pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: driftedIdentity,
-		Mode:     canonicalRuntimeResident,
+		Identity: firstIdentity,
 		Factory:  probe.factory,
 	})
 	if !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
@@ -528,44 +496,6 @@ func TestCanonicalAgentRuntimeConfigDriftCannotBypassBusySlot(t *testing.T) {
 		t.Fatalf("busy drift touched backend: created %d closed %d", created, closed)
 	}
 	first.release(true)
-}
-
-func TestCanonicalAgentRuntimeOneShotAdapterAlwaysResumesCanonicalSession(t *testing.T) {
-	pool := newCanonicalAgentRuntimePool()
-	probe := &canonicalRuntimeFactoryProbe{}
-	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
-		"MULTICA_SERVER_URL":   "https://multica.example",
-		"MULTICA_WORKSPACE_ID": "workspace-a",
-		"MULTICA_AGENT_ID":     "agent-a",
-		"MULTICA_TASK_ID":      "turn-a",
-	})
-
-	for _, turnID := range []string{"turn-a", "turn-b"} {
-		lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-			Identity:           identity,
-			Mode:               canonicalRuntimeOneShot,
-			CanonicalSessionID: "session-agent-a",
-			Factory:            probe.factory,
-		})
-		if err != nil {
-			t.Fatalf("%s acquire: %v", turnID, err)
-		}
-		if _, err := lease.backend.Execute(context.Background(), turnID, agent.ExecOptions{ResumeSessionID: "legacy-surface-session"}); err != nil {
-			t.Fatalf("%s Execute: %v", turnID, err)
-		}
-		raw := lease.backend.(*canonicalSessionBackend).backend.(*canonicalRuntimeTestBackend)
-		if got := raw.lastResumeSessionID(); got != "session-agent-a" {
-			t.Fatalf("%s resume session = %q, want canonical", turnID, got)
-		}
-		lease.release(true)
-	}
-	created, closed := probe.counts()
-	if created != 2 || closed != 2 {
-		t.Fatalf("factory counts = created %d closed %d, want 2/2", created, closed)
-	}
-	if got := pool.slotCount(); got != 1 {
-		t.Fatalf("slot count = %d, want 1", got)
-	}
 }
 
 func TestCanonicalAgentRuntimePoolRejectsConcurrentTurnInSameSlot(t *testing.T) {
@@ -579,7 +509,6 @@ func TestCanonicalAgentRuntimePoolRejectsConcurrentTurnInSameSlot(t *testing.T) 
 	})
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -589,7 +518,6 @@ func TestCanonicalAgentRuntimePoolRejectsConcurrentTurnInSameSlot(t *testing.T) 
 
 	_, err = pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
@@ -609,7 +537,6 @@ func TestCanonicalAgentRuntimePoolRejectsUnsplitTurnEnvironment(t *testing.T) {
 	identity.Environment["MULTICA_TASK_ID"] = "turn-a"
 	_, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err == nil || !strings.Contains(err.Error(), "current-turn environment") {
@@ -628,7 +555,6 @@ func TestCanonicalAgentRuntimeUnhealthyReleaseDropsResidentBackend(t *testing.T)
 	})
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -638,7 +564,6 @@ func TestCanonicalAgentRuntimeUnhealthyReleaseDropsResidentBackend(t *testing.T)
 
 	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -662,7 +587,6 @@ func TestCanonicalAgentRuntimeCancelledTurnDropsResidentBackend(t *testing.T) {
 	})
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -672,7 +596,6 @@ func TestCanonicalAgentRuntimeCancelledTurnDropsResidentBackend(t *testing.T) {
 
 	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -705,35 +628,32 @@ func TestCanonicalRuntimeResultHealthIsFailClosed(t *testing.T) {
 	}
 }
 
-func TestCanonicalRuntimeModeUsesResidentForCanonicalProviders(t *testing.T) {
+func TestRequireCanonicalResidentProvider(t *testing.T) {
 	for _, tc := range []struct {
 		provider string
 		profile  string
-		want     canonicalRuntimeMode
 		wantErr  bool
 	}{
-		{provider: "pi", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "grok", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "cursor", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "claude", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "codex", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "kiro", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "opencode", profile: executionProfileFull, want: canonicalRuntimeResident},
+		{provider: "pi", profile: executionProfileFull},
+		{provider: "grok", profile: executionProfileFull},
+		{provider: "cursor", profile: executionProfileFull},
+		{provider: "claude", profile: executionProfileFull},
+		{provider: "codex", profile: executionProfileFull},
+		{provider: "kiro", profile: executionProfileFull},
+		{provider: "opencode", profile: executionProfileFull},
 		{provider: "pi", profile: executionProfileProtocolTurn, wantErr: true},
+		{provider: "gemini", profile: executionProfileFull, wantErr: true},
 	} {
 		t.Run(tc.provider+"/"+tc.profile, func(t *testing.T) {
-			got, err := canonicalRuntimeModeFor(tc.provider, tc.profile)
+			err := requireCanonicalResidentProvider(tc.provider, tc.profile)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatal("expected restricted sidecar to stay outside canonical session")
+					t.Fatal("expected provider/profile to stay outside canonical session")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("canonicalRuntimeModeFor: %v", err)
-			}
-			if got != tc.want {
-				t.Fatalf("mode = %q, want %q", got, tc.want)
+				t.Fatalf("requireCanonicalResidentProvider: %v", err)
 			}
 		})
 	}
@@ -741,7 +661,7 @@ func TestCanonicalRuntimeModeUsesResidentForCanonicalProviders(t *testing.T) {
 
 func TestCanonicalRuntimeDefaultFactoriesMatchProviderMode(t *testing.T) {
 	for _, provider := range []string{"pi", "grok", "cursor", "opencode", "kiro", "codex", "claude"} {
-		factory := defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)
+		factory := defaultCanonicalRuntimeFactory(provider)
 		backend, closeBackend, err := factory(agent.Config{ExecutablePath: "/nonexistent/" + provider})
 		if err != nil {
 			t.Fatalf("%s resident factory: %v", provider, err)
@@ -750,15 +670,6 @@ func TestCanonicalRuntimeDefaultFactoriesMatchProviderMode(t *testing.T) {
 			t.Fatalf("%s resident factory returned backend_nil=%v close_nil=%v", provider, backend == nil, closeBackend == nil)
 		}
 		closeBackend()
-	}
-
-	factory := defaultCanonicalRuntimeFactory("claude", canonicalRuntimeOneShot)
-	backend, closeBackend, err := factory(agent.Config{ExecutablePath: "/nonexistent/claude"})
-	if err != nil {
-		t.Fatalf("one-shot factory: %v", err)
-	}
-	if backend == nil || closeBackend != nil {
-		t.Fatalf("one-shot factory returned backend_nil=%v close_nil=%v", backend == nil, closeBackend == nil)
 	}
 }
 
@@ -778,7 +689,6 @@ func TestCanonicalAgentRuntimeDifferentAgentsDoNotShareSlot(t *testing.T) {
 
 	firstLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: first,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -787,7 +697,6 @@ func TestCanonicalAgentRuntimeDifferentAgentsDoNotShareSlot(t *testing.T) {
 	defer firstLease.release(true)
 	secondLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: second,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -811,7 +720,6 @@ func TestCanonicalAgentRuntimeCloseAllRejectsBusySlot(t *testing.T) {
 	})
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -840,7 +748,6 @@ func TestCanonicalAgentRuntimeEvictIdleClosesOnlyExpiredResidentSlot(t *testing.
 	})
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -870,7 +777,6 @@ func TestCanonicalAgentRuntimeSessionResetInvalidatesIdleBackendInSameSlot(t *te
 	})
 	first, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
-		Mode:               canonicalRuntimeResident,
 		CanonicalSessionID: "session-before-reset",
 		Factory:            probe.factory,
 	})
@@ -885,7 +791,6 @@ func TestCanonicalAgentRuntimeSessionResetInvalidatesIdleBackendInSameSlot(t *te
 
 	second, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -912,7 +817,6 @@ func TestCanonicalAgentRuntimeSessionResetRejectsBusySlot(t *testing.T) {
 	})
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -946,7 +850,6 @@ func TestCanonicalAgentRuntimeForceInvalidateSessionKillsBusySlot(t *testing.T) 
 	})
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {
@@ -997,7 +900,6 @@ func TestCanonicalAgentRuntimeForceInvalidateSessionRejectsNonForceKillableBacke
 	})
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  factory,
 	})
 	if err != nil {
@@ -1042,14 +944,13 @@ func TestCanonicalAgentRuntimeLeaseReleaseIsIdempotent(t *testing.T) {
 	})
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeOneShot,
 		Factory:  probe.factory,
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	lease.release(true)
 	lease.release(false)
+	lease.release(true)
 	created, closed := probe.counts()
 	if created != 1 || closed != 1 {
 		t.Fatalf("factory counts = created %d closed %d, want 1/1", created, closed)
@@ -1067,7 +968,6 @@ func TestCanonicalAgentRuntimeSlotIdleTimestampAdvances(t *testing.T) {
 	})
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 		Now:      time.Unix(100, 0),
 	})
@@ -1137,7 +1037,7 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 		t.Fatalf("dead identity: %v", err)
 	}
 	deadLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: deadIdentity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(dead),
+		Identity: deadIdentity, Factory: newLivenessFactory(dead),
 	})
 	if err != nil {
 		t.Fatalf("acquire dead: %v", err)
@@ -1154,7 +1054,7 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 		t.Fatalf("alive identity: %v", err)
 	}
 	aliveLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: aliveIdentity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(alive),
+		Identity: aliveIdentity, Factory: newLivenessFactory(alive),
 	})
 	if err != nil {
 		t.Fatalf("acquire alive: %v", err)
@@ -1171,7 +1071,7 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 		t.Fatalf("unknown identity: %v", err)
 	}
 	unknownLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: unknownIdentity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(unknown),
+		Identity: unknownIdentity, Factory: newLivenessFactory(unknown),
 	})
 	if err != nil {
 		t.Fatalf("acquire unknown: %v", err)
@@ -1189,26 +1089,10 @@ func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *test
 	}
 	// Left running (no release) to simulate an in-flight turn.
 	if _, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: busyIdentity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(busyDead),
+		Identity: busyIdentity, Factory: newLivenessFactory(busyDead),
 	}); err != nil {
 		t.Fatalf("acquire busy: %v", err)
 	}
-
-	oneShotProbe := &canonicalRuntimeFactoryProbe{}
-	oneShotIdentity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
-		AgentID: "agent-oneshot", RuntimeID: "runtime-oneshot", Provider: "claude",
-		Executable: "/usr/local/bin/claude", WorkDir: "/var/lib/multica/agent-oneshot",
-	})
-	if err != nil {
-		t.Fatalf("oneshot identity: %v", err)
-	}
-	oneShotLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: oneShotIdentity, Mode: canonicalRuntimeOneShot, Factory: oneShotProbe.factory,
-	})
-	if err != nil {
-		t.Fatalf("acquire one-shot: %v", err)
-	}
-	oneShotLease.release(true)
 
 	var mu sync.Mutex
 	var received []ResidentRuntimeCrashEvent
@@ -1272,7 +1156,7 @@ func TestCheckResidentLivenessSupportsMultipleSubscribers(t *testing.T) {
 		t.Fatalf("identity: %v", err)
 	}
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: identity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(dead),
+		Identity: identity, Factory: newLivenessFactory(dead),
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -1472,7 +1356,6 @@ func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) 
 	// Acquire a resident lease to establish the slot.
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  factory,
 	})
 	if err != nil {

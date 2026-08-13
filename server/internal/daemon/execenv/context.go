@@ -17,15 +17,11 @@ import (
 //
 // Claude:      skills → {agentRoot}/.claude/skills/{name}/SKILL.md  (native discovery)
 // Codex:       skills → handled separately in the Agent-scoped codex-home
-// Copilot:     skills → {agentRoot}/.github/skills/{name}/SKILL.md  (native project-level discovery)
 // OpenCode:    skills → {agentRoot}/.opencode/skills/{name}/SKILL.md  (native discovery)
-// OpenClaw:    skills → {agentRoot}/skills/{name}/SKILL.md  (native discovery — paired with a Agent-scoped synthesized openclaw-config.json that pins agents.defaults.workspace to agentRoot; see openclaw_config.go)
 // Pi:          skills → {agentRoot}/.pi/skills/{name}/SKILL.md  (native discovery)
 // Cursor:      skills → {agentRoot}/.cursor/skills/{name}/SKILL.md  (native discovery)
-// Kimi:        skills → {agentRoot}/.kimi/skills/{name}/SKILL.md  (native discovery)
 // Kiro:        skills → {agentRoot}/.kiro/skills/{name}/SKILL.md  (native discovery)
-// Antigravity: skills → {agentRoot}/.agents/skills/{name}/SKILL.md  (native discovery — see https://antigravity.google/docs/gcli-migration "Workspace skills")
-// Grok:        skills → {agentRoot}/.grok/skills/{name}/SKILL.md  (native discovery)
+// Grok Build:  skills → {agentRoot}/.grok/skills/{name}/SKILL.md  (native discovery)
 // Default:     skills → {agentRoot}/.agent_context/skills/{name}/SKILL.md
 //
 // manifest, when non-nil, is populated with every file we created and every
@@ -89,15 +85,9 @@ func resolveSkillsDir(agentRoot, provider string, manifest *sidecarManifest) (st
 // it can match the managed skill roots the prior manifest recorded.
 func skillsDirPath(agentRoot, provider string) string {
 	switch provider {
-	case "claude", "codebuddy":
+	case "claude":
 		// Claude Code natively discovers skills from .claude/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".claude", "skills")
-	case "copilot":
-		// GitHub Copilot CLI natively discovers project-level skills from
-		// .github/skills/<name>/SKILL.md (takes precedence over user-level
-		// skills in ~/.copilot/skills/).
-		// See: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
-		return filepath.Join(agentRoot, ".github", "skills")
 	case "opencode":
 		// OpenCode natively discovers project skills from .opencode/skills/ in
 		// the workdir. ConfigPaths.directories() walks up from the discovery
@@ -108,36 +98,18 @@ func skillsDirPath(agentRoot, provider string) string {
 		// without those, OpenCode walks from the daemon's inherited PWD and
 		// misses .opencode/skills + AGENTS.md entirely (MUL-2416).
 		return filepath.Join(agentRoot, ".opencode", "skills")
-	case "openclaw":
-		// OpenClaw's native skill scanner reads <workspaceDir>/skills/. The
-		// daemon pairs this with a Agent-scoped synthesized openclaw-config.json
-		// (see openclaw_config.go) that pins agents.defaults.workspace to
-		// agentRoot, so writing here is what the CLI actually scans. Before
-		// MUL-2219 this used to fall back to .agent_context/skills/, which
-		// no openclaw scan path ever inspected.
-		return filepath.Join(agentRoot, "skills")
 	case "pi":
 		// Pi natively discovers skills from .pi/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".pi", "skills")
 	case "cursor":
 		// Cursor natively discovers skills from .cursor/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".cursor", "skills")
-	case "kimi":
-		// Kimi Code CLI auto-discovers project-level skills from .kimi/skills/
-		// in the workdir. See https://moonshotai.github.io/kimi-cli/en/customization/skills.html
-		return filepath.Join(agentRoot, ".kimi", "skills")
 	case "kiro":
 		// Kiro CLI auto-discovers project-level skills from .kiro/skills/
 		// in the workdir.
 		return filepath.Join(agentRoot, ".kiro", "skills")
-	case "antigravity":
-		// Antigravity (`agy`) auto-discovers workspace-level skills from
-		// .agents/skills/ in the workdir. The CLI inherits Gemini CLI's
-		// workspace skill layout; see https://antigravity.google/docs/gcli-migration
-		// under "Workspace skills".
-		return filepath.Join(agentRoot, ".agents", "skills")
 	case "grok":
-		// Grok CLI discovers project skills from .grok/skills/ (and
+		// Grok Build discovers project skills from .grok/skills/ (and
 		// .grok/commands/) under the workdir.
 		return filepath.Join(agentRoot, ".grok", "skills")
 	default:

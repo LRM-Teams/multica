@@ -94,15 +94,10 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		AgentSkills:       convertSkillsForEnv(config.Agent.Skills),
 		WorkspaceContext:  config.WorkspaceContext,
 	}
-	openclawBin := ""
-	if runtime.Provider == "openclaw" {
-		openclawBin = entry.Path
-	}
 	env := execenv.Reuse(execenv.ReuseParams{
 		AgentRoot:    workspace.AgentRoot,
 		Provider:     runtime.Provider,
 		CodexVersion: d.agentVersion("codex"),
-		OpenclawBin:  openclawBin,
 		McpConfig:    config.Agent.McpConfig,
 		Task:         taskCtx,
 	}, d.logger)
@@ -150,12 +145,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
 	}
-	if env.OpenclawConfigPath != "" {
-		agentEnv["OPENCLAW_CONFIG_PATH"] = env.OpenclawConfigPath
-	}
-	if roots, ok := composeOpenclawIncludeRoots(env.OpenclawIncludeRoot, os.Getenv("OPENCLAW_INCLUDE_ROOTS")); ok {
-		agentEnv["OPENCLAW_INCLUDE_ROOTS"] = roots
-	}
 
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:             config.Agent.ID,
@@ -185,7 +174,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	}
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
-		Mode:               canonicalRuntimeResident,
 		CanonicalSessionID: resumeSessionID,
 		BackendConfig: agent.Config{
 			ExecutablePath: entry.Path,
@@ -241,7 +229,7 @@ func (d *Daemon) canonicalResidentMessageFactory(provider string) canonicalRunti
 	if d != nil && d.canonicalResidentFactoryOverride != nil {
 		return d.canonicalResidentFactoryOverride
 	}
-	return defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)
+	return defaultCanonicalRuntimeFactory(provider)
 }
 
 func newCanonicalGrokResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {

@@ -508,21 +508,31 @@ func writeTestGrokAuth(t *testing.T, home string) {
 	}
 }
 
+func grokEnvLookup(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix), true
+		}
+	}
+	return "", false
+}
+
 func TestBuildGrokEnvSetsHomeAndAutoupdater(t *testing.T) {
 	t.Parallel()
 	env := buildGrokEnv(map[string]string{"FOO": "bar"}, "/tmp/grok-rt")
-	if got, ok := envLookup(env, "GROK_HOME"); !ok || got != "/tmp/grok-rt" {
+	if got, ok := grokEnvLookup(env, "GROK_HOME"); !ok || got != "/tmp/grok-rt" {
 		t.Fatalf("GROK_HOME: got %q ok=%v", got, ok)
 	}
-	if got, ok := envLookup(env, "GROK_DISABLE_AUTOUPDATER"); !ok || got != "1" {
+	if got, ok := grokEnvLookup(env, "GROK_DISABLE_AUTOUPDATER"); !ok || got != "1" {
 		t.Fatalf("GROK_DISABLE_AUTOUPDATER: got %q ok=%v", got, ok)
 	}
-	if got, ok := envLookup(env, "FOO"); !ok || got != "bar" {
+	if got, ok := grokEnvLookup(env, "FOO"); !ok || got != "bar" {
 		t.Fatalf("FOO passthrough: got %q ok=%v", got, ok)
 	}
 	// Explicit GROK_HOME in extra wins.
 	env2 := buildGrokEnv(map[string]string{"GROK_HOME": "/custom"}, "/tmp/grok-rt")
-	if got, ok := envLookup(env2, "GROK_HOME"); !ok || got != "/custom" {
+	if got, ok := grokEnvLookup(env2, "GROK_HOME"); !ok || got != "/custom" {
 		t.Fatalf("explicit GROK_HOME should win, got %q", got)
 	}
 }

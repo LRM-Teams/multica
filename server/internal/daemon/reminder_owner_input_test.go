@@ -87,7 +87,7 @@ func newReminderOwnerInputDaemon(t *testing.T, runtime *reminderOwnerInputFakeRu
 		t.Fatalf("seed Reminder owner Attachment: %v", err)
 	}
 	d.canonicalRuntimes.slots["agent-a\x00runtime-a"] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: runtime,
+		backend: runtime,
 	}
 	return d
 }

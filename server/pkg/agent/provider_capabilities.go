@@ -11,8 +11,9 @@ import "strings"
 // their allow-lists look similar today (Parker/Felix: same name ≠ same
 // meaning; blind merge silently breaks retry paths).
 type ProviderCapabilities struct {
-	// CanonicalResident: can this provider use the shared agent×runtime
-	// canonical resident pool (vs one-shot per-turn backends)?
+	// CanonicalResident: this provider uses the shared agent×runtime
+	// resident pool. Every shipped provider is resident; a new provider
+	// must ship a resident adapter before it can be registered.
 	CanonicalResident bool
 
 	// NeedsInlineSystemPrompt: must the system/brief prompt be inlined into
@@ -67,23 +68,13 @@ func caps(
 // ForceRestart is filled by deriveForceRestart (not by caps).
 var providerCapabilities = map[string]ProviderCapabilities{
 	//                    canonical, inlinePrompt, modelSel, customID, thinking
-	"claude":    caps(true, false, true, true, true), // resident via claude-agent-acp adapter
-	"codebuddy": caps(false, false, true, false, true),
-	"codex":     caps(true, false, true, true, true), // resident app-server; chat full only
-	"copilot":   caps(false, false, true, true, false),
-	// opencode/pi/grok: thinking catalogs + CLI injection already exist;
-	// ThinkingDiscovery must stay true so IsKnownThinkingValue / FE gating
-	// don't silently reject a capability the adapters already honour (#59).
-	"opencode":    caps(true, false, true, false, true),
-	"openclaw":    caps(false, false, true, false, false),
-	"hermes":      caps(false, false, true, false, false),
-	"gemini":      caps(false, false, true, false, false),
-	"pi":          caps(true, false, true, true, true),
-	"cursor":      caps(true, false, true, true, false),
-	"kimi":        caps(false, true, true, false, false),
-	"kiro":        caps(true, true, true, false, false), // resident ACP (session/load); probe s144 2026-08-03
-	"antigravity": caps(false, false, true, false, false),
-	"grok":        caps(true, false, true, false, true),
+	"claude":   caps(true, false, true, true, true),  // resident via claude-agent-acp adapter
+	"codex":    caps(true, false, true, true, true),  // resident app-server; chat full only
+	"opencode": caps(true, false, true, false, true), // thinking catalogs + CLI injection (#59)
+	"pi":       caps(true, false, true, true, true),
+	"cursor":   caps(true, false, true, true, false),
+	"kiro":     caps(true, true, true, false, false), // resident ACP (session/load)
+	"grok":     caps(true, false, true, false, true),
 }
 
 // forceRestartResidentConstructors maps provider → the Backend the daemon

@@ -408,7 +408,6 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	}
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.canonicalRuntimes.slots["agent-a\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode:    canonicalRuntimeResident,
 		backend: failingResidentMessageRuntime{},
 	}
 

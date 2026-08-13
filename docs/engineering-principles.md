@@ -567,6 +567,12 @@
 - `thinking`、`text`、`tool_use` 与无错误 turn end 可推断遗漏的 finish；runtime error/失败 preparation 中断 active compaction 并向被阻塞的 Message turn 传播。compaction active 时 busy Notice 继续留在 Pending/retry，不得跨上下文重写边界注入。
 - **物**：`ResidentMessagePreparation`、`agentActivityCompactionState`、`TestRuntimePoolPreparesResidentInputOutsideNativeAcceptanceTimeout`、`TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput`、`TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary`。
 
+### 4.19 活进程只复用，换进程必须显式 stop — `可执行`（⑤ pool/capability 回归）
+- Raft 两条：槽里有活进程 → 复用，不换 launch、不报新的 active；要换进程 → 显式 restart/reset，或等进程死后再 start。禁止 acquire 时比对 model/MCP/AGENTS 哈希并隐式 stop+start。
+- 产品只注册有 resident adapter 的 runtime。one-shot 寿命不再进入同一槽，因此槽上没有 mode 字段。Grok Build 的 provider id / CLI 是 `grok`。
+- 换 model 要立刻生效，走与 Restart 按钮同一条显式 restart。人没点 restart 时，旧进程可以带着旧 bake-in 再跑一轮——接受，与 Raft rebind 同代价。
+- **物**：`canonicalAgentRuntimePool.acquire`；`TestCanonicalAgentRuntimePoolReusesLiveProcessEvenIfFactoryWouldFail`；`TestAllKnownProvidersAreCanonicalResident`。权威判断见 `docs/adr/0011-resident-process-reuse-no-hash-restart.md`。
+
 ---
 
 ### 4.15 Agent 临时协作空间必须保留人类所有权与幂等来源 — `可执行`（①数据库约束 + ③Agent 专用入口 + ⑤合同测试；owner: @Codex）

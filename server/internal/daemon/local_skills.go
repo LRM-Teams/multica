@@ -45,15 +45,11 @@ type runtimeLocalSkillBundle struct {
 
 // localSkillRootForProvider tracks the user-level skill locations exposed by
 // each runtime/provider. Keep these in sync with upstream docs / conventions:
-//   - GitHub Copilot: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills
 //   - OpenCode: https://opencode.ai/docs/skills
-//   - OpenClaw: https://github.com/openclaw/openclaw/blob/main/docs/tools/skills.md
 //   - Pi: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md
 //   - Cursor: official forum guidance referencing the built-in /create-skill flow
 //     (https://forum.cursor.com/t/cursor-doesnt-know-new-skills-arens-saved/158507)
 //   - Kiro: project and user-level .kiro/skills directories discovered by Kiro CLI
-//   - Antigravity: ~/.gemini/antigravity-cli/skills user-level skill root
-//     (https://antigravity.google/docs/gcli-migration "Global skills")
 //   - Grok: ~/.grok/skills user-level skill root
 //
 // Longer-term this mapping would be better colocated with the provider
@@ -66,7 +62,7 @@ func localSkillRootForProvider(provider string) (string, bool, error) {
 	}
 
 	switch provider {
-	case "claude", "codebuddy":
+	case "claude":
 		return filepath.Join(home, ".claude", "skills"), true, nil
 	case "codex":
 		codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
@@ -74,22 +70,14 @@ func localSkillRootForProvider(provider string) (string, bool, error) {
 			codexHome = filepath.Join(home, ".codex")
 		}
 		return filepath.Join(codexHome, "skills"), true, nil
-	case "copilot":
-		return filepath.Join(home, ".copilot", "skills"), true, nil
 	case "opencode":
 		return filepath.Join(home, ".config", "opencode", "skills"), true, nil
-	case "openclaw":
-		return filepath.Join(home, ".openclaw", "skills"), true, nil
 	case "pi":
 		return filepath.Join(home, ".pi", "agent", "skills"), true, nil
 	case "cursor":
 		return filepath.Join(home, ".cursor", "skills"), true, nil
 	case "kiro":
 		return filepath.Join(home, ".kiro", "skills"), true, nil
-	case "antigravity":
-		// agy inherits Gemini CLI's global skill root; see
-		// https://antigravity.google/docs/gcli-migration ("Global skills").
-		return filepath.Join(home, ".gemini", "antigravity-cli", "skills"), true, nil
 	case "grok":
 		return filepath.Join(home, ".grok", "skills"), true, nil
 	default:

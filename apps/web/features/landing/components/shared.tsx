@@ -76,68 +76,7 @@ export function CodexLogo({ className }: { className?: string }) {
   );
 }
 
-export function OpenClawLogo({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      aria-hidden="true"
-      className={className}
-      fill="none"
-    >
-      <g fill="#3a0a0d">
-        <rect x="1" y="5" width="1" height="3" />
-        <rect x="2" y="4" width="1" height="1" />
-        <rect x="2" y="8" width="1" height="1" />
-        <rect x="3" y="3" width="1" height="1" />
-        <rect x="3" y="9" width="1" height="1" />
-        <rect x="4" y="2" width="1" height="1" />
-        <rect x="4" y="10" width="1" height="1" />
-        <rect x="5" y="2" width="6" height="1" />
-        <rect x="11" y="2" width="1" height="1" />
-        <rect x="12" y="3" width="1" height="1" />
-        <rect x="12" y="9" width="1" height="1" />
-        <rect x="13" y="4" width="1" height="1" />
-        <rect x="13" y="8" width="1" height="1" />
-        <rect x="14" y="5" width="1" height="3" />
-        <rect x="5" y="11" width="6" height="1" />
-        <rect x="4" y="12" width="1" height="1" />
-        <rect x="11" y="12" width="1" height="1" />
-        <rect x="3" y="13" width="1" height="1" />
-        <rect x="12" y="13" width="1" height="1" />
-        <rect x="5" y="14" width="6" height="1" />
-      </g>
-      <g fill="#ff4f40">
-        <rect x="5" y="3" width="6" height="1" />
-        <rect x="4" y="4" width="8" height="1" />
-        <rect x="3" y="5" width="10" height="1" />
-        <rect x="3" y="6" width="10" height="1" />
-        <rect x="3" y="7" width="10" height="1" />
-        <rect x="4" y="8" width="8" height="1" />
-        <rect x="5" y="9" width="6" height="1" />
-        <rect x="5" y="12" width="6" height="1" />
-        <rect x="6" y="13" width="4" height="1" />
-      </g>
-      <g fill="#ff775f">
-        <rect x="1" y="6" width="2" height="1" />
-        <rect x="2" y="5" width="1" height="1" />
-        <rect x="2" y="7" width="1" height="1" />
-        <rect x="13" y="6" width="2" height="1" />
-        <rect x="13" y="5" width="1" height="1" />
-        <rect x="13" y="7" width="1" height="1" />
-      </g>
-      <g fill="#081016">
-        <rect x="6" y="5" width="1" height="1" />
-        <rect x="9" y="5" width="1" height="1" />
-      </g>
-      <g fill="#f5fbff">
-        <rect x="6" y="4" width="1" height="1" />
-        <rect x="9" y="4" width="1" height="1" />
-      </g>
-    </svg>
-  );
-}
-
-export function GeminiCliLogo({ className }: { className?: string }) {
+export function CursorLogo({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -145,7 +84,20 @@ export function GeminiCliLogo({ className }: { className?: string }) {
       className={className}
       fill="currentColor"
     >
-      <path d="M12 0C12 0 12 8 8 12C12 12 12 12 12 24C12 24 12 16 16 12C12 12 12 12 12 0Z" />
+      <path d="M4.2 3.1 19.6 12 4.2 20.9V3.1Zm2.4 4.3v9.2L14.7 12 6.6 7.4Z" />
+    </svg>
+  );
+}
+
+export function GrokLogo({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+    >
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
     </svg>
   );
 }

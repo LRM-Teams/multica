@@ -249,7 +249,7 @@
       "cards": {
         "install_runtime": {
           "title": "连接一个运行时",
-          "subtitle": "安装 Codex 或 Kimi 让 agent 上线。"
+          "subtitle": "安装 Codex 或 Claude Code 让 agent 上线。"
         },
         "create_agent": {
           "title": "创建你的第一个 agent",

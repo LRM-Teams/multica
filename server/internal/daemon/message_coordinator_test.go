@@ -63,7 +63,7 @@ func TestRuntimePoolRestartInterruptsNativeAcceptance(t *testing.T) {
 	backend := &startingResidentMessageRuntime{started: make(chan struct{}), killed: make(chan struct{})}
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	handoffErr := make(chan error, 1)
 	go func() {
@@ -172,7 +172,7 @@ func TestRuntimePoolReportsStartingOnlyAfterAcceptedInputStartsConfirmedRuntime(
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			pool := newCanonicalAgentRuntimePool()
-			pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: test.backend}
+			pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: test.backend}
 			starting := 0
 			err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}}, func() {
 				starting++
@@ -225,7 +225,7 @@ func TestRuntimePoolPreparesResidentInputOutsideNativeAcceptanceTimeout(t *testi
 	backend := &preparingResidentMessageRuntime{}
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	if err := pool.handoffIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
@@ -293,7 +293,7 @@ func TestRuntimePoolCompactThenEmptyTurnDoesNotAcceptDelivery(t *testing.T) {
 	backend := &emptyTurnAfterCompactRuntime{}
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	accepted := false
 	err := pool.handoffIdleMessages(
@@ -315,7 +315,7 @@ func TestRuntimePoolCompactThenEmptyTurnDoesNotAcceptDelivery(t *testing.T) {
 func TestRuntimePoolCompactionPreparationFailureDoesNotRestartResidentProcess(t *testing.T) {
 	backend := &failingCompactionPreparationRuntime{}
 	pool := newCanonicalAgentRuntimePool()
-	slot := &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
+	slot := &canonicalAgentRuntimeSlot{backend: backend}
 	pool.slots["agent-1\x00runtime-1"] = slot
 	var observed []agent.MessageType
 	err := pool.handoffIdleMessages(
@@ -495,7 +495,7 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 	backend := &blockingResidentMessageRuntime{done: make(chan error, 1)}
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"}}
 	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
@@ -525,7 +525,7 @@ func TestRuntimePoolSettlesPiTurnBeforeReopeningMessageAdmission(t *testing.T) {
 	backend := newSettlementBlockingPiRuntime()
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	identity := agent.PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
 	initialBinding, err := pool.bindResidentPiRunIdentity(context.Background(), "agent-1", "runtime-1", identity)
@@ -597,7 +597,7 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 	backend.messages <- agent.Message{Type: agent.MessageThinking}
 	close(backend.messages)
 	pool := newCanonicalAgentRuntimePool()
-	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: backend}
 
 	var mu sync.Mutex
 	var observed []string
@@ -647,7 +647,7 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 func TestRuntimePoolDrainsResidentActivityWithoutObserver(t *testing.T) {
 	backend := &activityResidentMessageRuntime{done: make(chan error, 1), messages: make(chan agent.Message)}
 	pool := newCanonicalAgentRuntimePool()
-	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: backend}
 
 	completed := make(chan struct{})
 	if err := pool.handoffIdleMessages(
@@ -682,7 +682,7 @@ func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testin
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1}}
 	result := make(chan bool, 1)
@@ -725,7 +725,7 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
@@ -799,7 +799,7 @@ func TestResidentMessageTurnErrorDoesNotAutoHandoffPending(t *testing.T) {
 	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
@@ -848,7 +848,7 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 	backend := &pendingNoticeRuntime{}
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend, running: true,
+		backend: backend, running: true,
 	}
 	first := PendingNoticeSnapshot{
 		Notice: agent.ResidentPendingNotice{TotalPending: 2, ChangedTargets: []agent.ResidentPendingTarget{
@@ -1003,7 +1003,7 @@ func TestMessageCoordinatorPendingChangeDuringNoticeRetriesCurrentGeneration(t *
 func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 	backend := &pendingNoticeRuntime{}
 	pool := newCanonicalAgentRuntimePool()
-	slot := &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend, running: true}
+	slot := &canonicalAgentRuntimeSlot{backend: backend, running: true}
 	pool.slots["agent-1\x00runtime-1"] = slot
 	snapshot := PendingNoticeSnapshot{
 		Notice:             agent.ResidentPendingNotice{TotalPending: 1, ChangedTargets: []agent.ResidentPendingTarget{{Target: "dm:one", PendingCount: 1}}},
@@ -1869,7 +1869,6 @@ func TestDaemonAcceptsIdleDeliveryThroughProviderBeforeAcknowledgement(t *testin
 	}
 	runtimePool := newCanonicalAgentRuntimePool()
 	runtimePool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode:    canonicalRuntimeResident,
 		backend: &canonicalRuntimeTestBackend{},
 	}
 	daemon := &Daemon{canonicalRuntimes: runtimePool}

@@ -249,7 +249,7 @@
       "cards": {
         "install_runtime": {
           "title": "Connect a runtime",
-          "subtitle": "Install Codex or Kimi to bring agents online."
+          "subtitle": "Install Codex or Claude Code to bring agents online."
         },
         "create_agent": {
           "title": "Create your first agent",

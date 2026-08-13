@@ -150,12 +150,12 @@ function providerLabel(runtime: AgentRuntime | null): string {
       return "Cursor";
     case "opencode":
       return "OpenCode";
-    case "openclaw":
-      return "OpenClaw";
-    case "hermes":
-      return "Hermes";
     case "pi":
       return "Pi";
+    case "grok":
+      return "Grok Build";
+    case "kiro":
+      return "Kiro";
     default: {
       const { base } = splitRuntimeName(runtime.name);
       return base || runtime.provider;

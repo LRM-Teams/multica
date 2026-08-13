@@ -9,11 +9,12 @@ export type ResearchPresencePhase =
   | "running"
   | "done"
   | "failed"
-  | "stale";
+  | "stale"
+  | "unknown";
 
 export type ResearchPresenceEntry = {
   activity: string;
-  updatedAt: number;
+  updatedAt: number | null;
   phase: ResearchPresencePhase;
   role: string;
   fleetMemberId: string | null;
@@ -137,11 +138,14 @@ export function normalizeResearchPresenceMap(
         ? entry.updated_at
         : typeof entry.updatedAt === "number"
           ? entry.updatedAt
-          : Date.now();
+          : null;
     const phase: ResearchPresencePhase =
       entry.phase === "queued" || entry.phase === "running" ||
       entry.phase === "done" || entry.phase === "failed" || entry.phase === "stale"
-        ? entry.phase : "idle";
+        ? entry.phase
+        : entry.phase === "idle" && updatedAt != null
+          ? "idle"
+          : "unknown";
     out[agentId] = {
       activity, updatedAt, phase,
       role: typeof entry.role === "string" ? entry.role : "",

@@ -160,7 +160,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
   );
-  const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
+  const { data: presenceData } = useQuery(
+    researchPresenceOptions(wsId, sessionId),
+  );
+  const presence = presenceData ?? {};
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const {
     data: typedGraphPages,
@@ -516,6 +519,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const executionRows = buildExecutionOverlayRows({
     members: fleet.members,
     presence,
+    presenceAvailable: presenceData != null,
     nodes: data.nodes,
     run: data.run,
   });

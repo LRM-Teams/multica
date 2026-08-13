@@ -7,6 +7,25 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const agentResearchAttemptAuthorizationQuery = `
+	SELECT EXISTS (
+	  SELECT 1
+	  FROM research_task_attempt a
+	  JOIN research_session s
+	    ON s.workspace_id = a.workspace_id
+	   AND s.id = a.session_id
+	  JOIN research_fleet_member fm
+	    ON fm.workspace_id = s.workspace_id
+	   AND fm.fleet_id = s.fleet_id
+	   AND fm.agent_id = a.assigned_agent_id
+	   AND fm.status = 'active'
+	  WHERE a.workspace_id = $1::uuid
+	    AND a.session_id = $2::uuid
+	    AND a.id = $3::uuid
+	    AND a.assigned_agent_id = $4::uuid
+	)
+`
+
 // Agent research data-plane (LRM-904 / #801).
 //
 // Research Fleet CLI runs under mat_* in daemon tasks. Human /api/research/*
@@ -66,16 +85,10 @@ func (h *Handler) GetAgentResearchSessionSnapshot(w http.ResponseWriter, r *http
 		return
 	}
 	var authorized bool
-	if err := h.DB.QueryRow(r.Context(), `
-		SELECT EXISTS (
-		  SELECT 1
-		  FROM research_task_attempt
-		  WHERE workspace_id = $1::uuid
-		    AND session_id = $2::uuid
-		    AND id = $3::uuid
-		    AND assigned_agent_id = $4::uuid
-		)
-	`, principal.WorkspaceID, sessionID, attemptID, principal.AgentID).Scan(&authorized); err != nil {
+	if err := h.DB.QueryRow(
+		r.Context(), agentResearchAttemptAuthorizationQuery,
+		principal.WorkspaceID, sessionID, attemptID, principal.AgentID,
+	).Scan(&authorized); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to authorize research attempt")
 		return
 	}

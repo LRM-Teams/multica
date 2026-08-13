@@ -13,7 +13,7 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 	}{
 		{"online", "idle", "Online"},
 		{"thinking", "", "Thinking..."},
-		{"working", "starting", "Starting"},
+		{"working", "starting", "Starting…"},
 		{"working", "message_received", "Message received"},
 		{"working", "running_command", "Running command..."},
 		{"working", "checking_messages", "Checking messages..."},

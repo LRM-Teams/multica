@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
@@ -192,6 +193,39 @@ func TestWorkspaceRunnerProviderSpawnFailureReportsInactiveAndOffline(t *testing
 	}
 	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindOffline {
 		t.Fatalf("spawn failure Activity = %+v, want Offline", activities)
+	}
+}
+
+func TestWorkspaceRunnerManagedStartEmitsStartingActivity(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	var activities []protocol.AgentActivityPayload
+	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
+		t.Fatalf("managed start: %v", err)
+	}
+	if len(activities) == 0 {
+		t.Fatal("managed start produced no Activity")
+	}
+	got := activities[len(activities)-1]
+	if got.Snapshot.ActivityKind != protocol.ActivityKindWorking || got.Snapshot.DetailKind != "starting" {
+		t.Fatalf("spawn Activity = kind=%q detail=%q, want working/starting", got.Snapshot.ActivityKind, got.Snapshot.DetailKind)
+	}
+	if len(got.Entries) != 1 {
+		t.Fatalf("starting entries = %d, want 1", len(got.Entries))
+	}
+	var body protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
+		t.Fatalf("decode starting narrative: %v", err)
+	}
+	if body.Text != "Starting…" {
+		t.Fatalf("starting text = %q, want %q", body.Text, "Starting…")
 	}
 }
 

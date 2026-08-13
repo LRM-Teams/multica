@@ -32,6 +32,9 @@ represented by a bounded excerpt plus content hash; exact Observation quotes
 were already checked against the immutable full snapshot at ingestion. V3–V5
 non-plan tasks inherit the accepted Method for the current goal/plan version.
 V4/V5 also expose the accepted Claim-level evidence standards.
+The server verifies the complete frozen manifest and each exact representation
+byte hash before decoding this snapshot. Any mismatch rejects the whole read;
+it never falls back to later live Run data or silently omits the damaged entry.
 
 2. Perform the assigned investigation according to `run.method`. Explore
 beyond the first plausible answer. For V4/V5, each Claim references an accepted

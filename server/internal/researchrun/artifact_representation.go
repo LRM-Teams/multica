@@ -85,7 +85,7 @@ func freezeEvidenceRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID
 
 func loadFrozenEvaluationPrivatePool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]EvaluationPrivateContext, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT e.representation_bytes
+		SELECT e.representation, e.representation_bytes, e.representation_hash
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
 		JOIN research_artifact_policy_grant g ON (g.workspace_id,g.session_id,g.id)=(m.workspace_id,m.session_id,m.evaluation_grant_id)
@@ -102,12 +102,14 @@ func loadFrozenEvaluationPrivatePool(ctx context.Context, pool *pgxpool.Pool, wo
 	defer rows.Close()
 	out := []EvaluationPrivateContext{}
 	for rows.Next() {
+		var representation string
 		var encoded []byte
-		if err = rows.Scan(&encoded); err != nil {
+		var storedHash string
+		if err = rows.Scan(&representation, &encoded, &storedHash); err != nil {
 			return nil, err
 		}
 		var item EvaluationPrivateContext
-		if err = json.Unmarshal(encoded, &item); err != nil {
+		if err = decodeFrozenRepresentation(representation, encoded, storedHash, &item); err != nil {
 			return nil, fmt.Errorf("decode evaluation-private representation: %w", err)
 		}
 		out = append(out, item)
@@ -117,7 +119,7 @@ func loadFrozenEvaluationPrivatePool(ctx context.Context, pool *pgxpool.Pool, wo
 
 func loadFrozenEvaluationPrivateTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, manifestID string) ([]EvaluationPrivateContext, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT e.representation_bytes
+		SELECT e.representation, e.representation_bytes, e.representation_hash
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
 		JOIN research_artifact_policy_grant g ON (g.workspace_id,g.session_id,g.id)=(m.workspace_id,m.session_id,m.evaluation_grant_id)
@@ -134,12 +136,14 @@ func loadFrozenEvaluationPrivateTx(ctx context.Context, tx pgx.Tx, workspaceID, 
 	defer rows.Close()
 	out := []EvaluationPrivateContext{}
 	for rows.Next() {
+		var representation string
 		var encoded []byte
-		if err = rows.Scan(&encoded); err != nil {
+		var storedHash string
+		if err = rows.Scan(&representation, &encoded, &storedHash); err != nil {
 			return nil, err
 		}
 		var item EvaluationPrivateContext
-		if err = json.Unmarshal(encoded, &item); err != nil {
+		if err = decodeFrozenRepresentation(representation, encoded, storedHash, &item); err != nil {
 			return nil, fmt.Errorf("decode evaluation-private representation: %w", err)
 		}
 		out = append(out, item)
@@ -148,7 +152,7 @@ func loadFrozenEvaluationPrivateTx(ctx context.Context, tx pgx.Tx, workspaceID, 
 }
 
 func loadFrozenEvidenceRepresentationsPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]SourceSnapshotView, []Observation, []Claim, error) {
-	rows, err := pool.Query(ctx, `SELECT p.entity_kind, e.representation_bytes FROM research_artifact_context_entry e JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id) JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id) JOIN research_artifact_passport p ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id) WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.attempt_id=$3::uuid AND p.entity_kind IN ('source_snapshot','observation','claim') ORDER BY e.ordinal`, workspaceID, sessionID, attemptID)
+	rows, err := pool.Query(ctx, `SELECT p.entity_kind, e.representation, e.representation_bytes, e.representation_hash FROM research_artifact_context_entry e JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id) JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id) JOIN research_artifact_passport p ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id) WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.attempt_id=$3::uuid AND p.entity_kind IN ('source_snapshot','observation','claim') ORDER BY e.ordinal`, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -158,30 +162,39 @@ func loadFrozenEvidenceRepresentationsPool(ctx context.Context, pool *pgxpool.Po
 	claims := []Claim{}
 	for rows.Next() {
 		var kind string
+		var representation string
 		var encoded []byte
-		if err = rows.Scan(&kind, &encoded); err != nil {
+		var storedHash string
+		if err = rows.Scan(&kind, &representation, &encoded, &storedHash); err != nil {
 			return nil, nil, nil, err
 		}
 		switch ArtifactEntityKind(kind) {
 		case ArtifactKindSourceSnapshot:
 			var item SourceSnapshotView
-			if err = json.Unmarshal(encoded, &item); err != nil {
+			if err = decodeFrozenRepresentation(representation, encoded, storedHash, &item); err != nil {
 				return nil, nil, nil, fmt.Errorf("decode frozen source: %w", err)
 			}
 			sources = append(sources, item)
 		case ArtifactKindObservation:
 			var item Observation
-			if err = json.Unmarshal(encoded, &item); err != nil {
+			if err = decodeFrozenRepresentation(representation, encoded, storedHash, &item); err != nil {
 				return nil, nil, nil, fmt.Errorf("decode frozen observation: %w", err)
 			}
 			observations = append(observations, item)
 		case ArtifactKindClaim:
 			var item Claim
-			if err = json.Unmarshal(encoded, &item); err != nil {
+			if err = decodeFrozenRepresentation(representation, encoded, storedHash, &item); err != nil {
 				return nil, nil, nil, fmt.Errorf("decode frozen claim: %w", err)
 			}
 			claims = append(claims, item)
 		}
 	}
 	return sources, observations, claims, rows.Err()
+}
+
+func decodeFrozenRepresentation(representation string, encoded []byte, storedHash string, target any) error {
+	if representation != "full" || len(encoded) == 0 || contentHashFromPayload(encoded) != storedHash {
+		return fmt.Errorf("%w: frozen artifact representation missing or hash mismatch", ErrInvalidTransition)
+	}
+	return json.Unmarshal(encoded, target)
 }

@@ -996,6 +996,13 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-frozen-read-hash 证据：`TaskContextForAttempt` 在选择任何 Manifest 工件前重算完整
+Manifest Hash，随后每个 Source Snapshot、Observation、Claim 和 evaluation-private
+representation 在 JSON 解码前再次验证 `full` 模式、非空原始字节与精确字节哈希。
+条目字节与条目哈希即使被同时改写，也会因 Manifest Hash 不匹配而拒绝整个 Agent
+snapshot，不会回退到 live Run 或静默跳过损坏工件。单元回归锁定逐条解码守卫，真实
+PostgreSQL 回归锁定 task-bound 读取接缝；§15.17 其余冻结 Gate 矩阵仍未完成。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

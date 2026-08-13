@@ -279,6 +279,9 @@ func loadManifestAuthorizedArtifactIDsPool(
 	if err = verifyAttemptManifestReadGrantPool(ctx, pool, workspaceID, sessionID, attemptID); err != nil {
 		return nil, false, err
 	}
+	if err = verifyAttemptManifestHashPool(ctx, pool, workspaceID, sessionID, attemptID); err != nil {
+		return nil, false, err
+	}
 	rows, err := pool.Query(ctx, `
 		SELECT v.artifact_id::text
 		FROM research_artifact_context_entry e
@@ -722,15 +725,20 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 	return nil
 }
 
-func loadManifestEntryCandidatesForAttemptTx(
+type artifactManifestQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func loadManifestEntryCandidatesForAttempt(
 	ctx context.Context,
-	tx pgx.Tx,
+	querier artifactManifestQuerier,
 	workspaceID, sessionID, attemptID string,
 ) ([]artifactVersionCandidate, dispatchManifestHashInput, string, error) {
 	var hashInput dispatchManifestHashInput
 	var purposeRaw string
 	var storedHash string
-	err := tx.QueryRow(ctx, `
+	err := querier.QueryRow(ctx, `
 		SELECT workspace_id::text, session_id::text, attempt_id::text, task_id::text,
 		       purpose, policy_version, policy_watermark, through_state_version,
 		       manifest_hash
@@ -748,7 +756,7 @@ func loadManifestEntryCandidatesForAttemptTx(
 	}
 	hashInput.Purpose = ArtifactPurpose(purposeRaw)
 
-	rows, err := tx.Query(ctx, `
+	rows, err := querier.Query(ctx, `
 		SELECT
 		  v.id::text,
 		  v.artifact_id::text,
@@ -804,12 +812,30 @@ func loadManifestEntryCandidatesForAttemptTx(
 	return entries, hashInput, storedHash, nil
 }
 
+func verifyAttemptManifestHashPool(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID string,
+) error {
+	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttempt(ctx, pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(storedHash) == "" {
+		return fmt.Errorf("%w: attempt manifest hash missing", ErrInvalidTransition)
+	}
+	if hashDispatchManifest(hashInput) != storedHash {
+		return fmt.Errorf("%w: attempt manifest hash mismatch", ErrInvalidTransition)
+	}
+	return nil
+}
+
 func verifyAcceptanceManifestHashTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, attemptID string,
 ) error {
-	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttemptTx(ctx, tx, workspaceID, sessionID, attemptID)
+	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttempt(ctx, tx, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return err
 	}

@@ -219,8 +219,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		var accepted protocol.AgentStartAckPayload
-		var sawAck, sawActive bool
-		for !sawAck || !sawActive {
+		var sawAck, sawActive, sawStartingActivity, sawOnlineActivity bool
+		for !sawAck || !sawActive || !sawStartingActivity || !sawOnlineActivity {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -249,6 +249,18 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 					t.Error("agent:session without a provider session id")
 					return
 				}
+			case protocol.EventAgentActivity:
+				if !sawActive {
+					t.Error("agent:activity arrived before agent:status active")
+					return
+				}
+				var activity protocol.AgentActivityPayload
+				if err := json.Unmarshal(msg.Payload, &activity); err != nil {
+					t.Error(err)
+					return
+				}
+				sawStartingActivity = sawStartingActivity || activity.Snapshot.ActivityKind == protocol.ActivityKindWorking && activity.Snapshot.DetailKind == "starting"
+				sawOnlineActivity = sawOnlineActivity || activity.Snapshot.ActivityKind == protocol.ActivityKindOnline && activity.Snapshot.DetailKind == "idle"
 			}
 			frames <- msg
 		}
@@ -297,7 +309,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()
 	var ready, ack, status, inactive protocol.Message
-	var sawStartingActivity bool
+	var sawStartingActivity, sawOnlineActivity bool
 	deadline := time.Now().Add(2 * time.Second)
 	for ready.Type == "" || ack.Type == "" || status.Type == "" || inactive.Type == "" {
 		if time.Now().After(deadline) {
@@ -322,14 +334,20 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				}
 			case protocol.EventAgentActivity:
 				// Raft 1.0.16 (#2929): managed spawn publishes working/starting.
+				// Resident runtimes then settle that state from their completed
+				// initialization because no initial turn exists to do it later.
 				var activity protocol.AgentActivityPayload
 				if err := json.Unmarshal(msg.Payload, &activity); err != nil {
 					t.Fatal(err)
 				}
-				if activity.Snapshot.ActivityKind != protocol.ActivityKindWorking || activity.Snapshot.DetailKind != "starting" {
+				switch {
+				case activity.Snapshot.ActivityKind == protocol.ActivityKindWorking && activity.Snapshot.DetailKind == "starting":
+					sawStartingActivity = true
+				case activity.Snapshot.ActivityKind == protocol.ActivityKindOnline && activity.Snapshot.DetailKind == "idle":
+					sawOnlineActivity = true
+				default:
 					t.Fatalf("managed start/stop invented unexpected Activity: %+v", activity)
 				}
-				sawStartingActivity = true
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for Runner frames")
@@ -337,6 +355,9 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	}
 	if !sawStartingActivity {
 		t.Fatal("managed start did not emit Raft Starting… Activity")
+	}
+	if !sawOnlineActivity {
+		t.Fatal("managed resident start did not settle Activity to Online")
 	}
 	if ready.Type != protocol.EventWorkspaceRunnerReady {
 		t.Fatalf("ready frame = %+v", ready)

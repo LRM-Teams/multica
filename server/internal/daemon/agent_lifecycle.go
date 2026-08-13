@@ -34,6 +34,11 @@ type agentLifecycleSessionResetter interface {
 	ResetAgentRuntimeSession(ctx context.Context, operationID, agentID, runtimeID string) error
 }
 
+type agentLifecycleActivityObserver interface {
+	Stopped(request agentLifecycleExecutionRequest, interrupted bool)
+	Started(request agentLifecycleExecutionRequest)
+}
+
 type agentLifecycleExecutor struct {
 	workspacesRoot string
 	runtimes       *canonicalAgentRuntimePool
@@ -41,6 +46,7 @@ type agentLifecycleExecutor struct {
 	sessions       *agentRuntimeSessionStore
 	commands       *agentLifecycleCommandLedger
 	starter        agentLifecycleStarter
+	activity       agentLifecycleActivityObserver
 	logger         *slog.Logger
 }
 
@@ -78,8 +84,12 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	}
 
 	// #112 / #62: all lifecycle restart kinds force-interrupt a busy turn.
+	interrupted := e.runtimes != nil && e.runtimes.hasLiveLease(request.AgentID, request.RuntimeID)
 	if err := e.stopRuntime(ctx, request); err != nil {
 		return err
+	}
+	if e.activity != nil {
+		e.activity.Stopped(request, interrupted)
 	}
 
 	switch request.ActionKind {
@@ -101,6 +111,9 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 
 	if err := e.startAfterStop(ctx, request); err != nil {
 		return err
+	}
+	if e.activity != nil {
+		e.activity.Started(request)
 	}
 	if err := e.commitCommand(request); err != nil {
 		return lifecycleStepError("validate", err)
@@ -315,6 +328,28 @@ type agentLifecycleResumeStarter struct {
 	runtimes *canonicalAgentRuntimePool
 	sessions *agentRuntimeSessionStore
 	start    func(ctx context.Context, req agentLifecycleStartRequest) error
+}
+
+type daemonAgentLifecycleActivityObserver struct {
+	daemon *Daemon
+}
+
+func (o daemonAgentLifecycleActivityObserver) Stopped(request agentLifecycleExecutionRequest, interrupted bool) {
+	if o.daemon == nil {
+		return
+	}
+	if runner := o.daemon.currentWorkspaceRunner(request.WorkspaceID); runner != nil {
+		runner.observeLifecycleStopped(request.AgentID, request.RuntimeID, request.ActionKind, interrupted)
+	}
+}
+
+func (o daemonAgentLifecycleActivityObserver) Started(request agentLifecycleExecutionRequest) {
+	if o.daemon == nil {
+		return
+	}
+	if runner := o.daemon.currentWorkspaceRunner(request.WorkspaceID); runner != nil {
+		runner.observeLifecycleStarted(request.AgentID, request.RuntimeID)
+	}
 }
 
 func (d *Daemon) recordProviderSession(agentID, runtimeID, sessionID string) {

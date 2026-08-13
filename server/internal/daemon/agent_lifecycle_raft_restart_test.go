@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // recordingLifecycleStarter is a narrow I/O stand-in for "start the agent
@@ -212,6 +213,64 @@ func TestRaftRestartModesIsolateSessionAndWorkspace(t *testing.T) {
 			t.Fatalf("full_reset_restart next start session = %q, want empty", got)
 		}
 	})
+}
+
+func TestRaftRestartModesPublishStoppedStartingIdleActivity(t *testing.T) {
+	kinds := []agentLifecycleActionKind{
+		agentLifecycleActionRestart,
+		agentLifecycleActionResetSessionRestart,
+		agentLifecycleActionFullResetRestart,
+	}
+	for _, kind := range kinds {
+		t.Run(string(kind), func(t *testing.T) {
+			root := t.TempDir()
+			workspaceID, agentID, runtimeID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+			d := New(Config{WorkspacesRoot: root}, nil)
+			d.mu.Lock()
+			d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+			d.mu.Unlock()
+			runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+			runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+			if _, err := execenv.ProvisionAgentWorkspace(root, workspaceID, agentID, nil); err != nil {
+				t.Fatalf("provision workspace: %v", err)
+			}
+
+			var activities []protocol.AgentActivityPayload
+			runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) {
+				activities = append(activities, payload)
+			})
+			if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+				AgentID: agentID, RuntimeID: runtimeID, LaunchID: uuid.NewString(), StartDispatchID: uuid.NewString(),
+			}); err != nil {
+				t.Fatalf("seed managed launch: %v", err)
+			}
+			activities = nil
+			d.agentLifecycleExecutor.sessionReset = nil
+			d.agentLifecycleExecutor.starter = &recordingLifecycleStarter{}
+
+			if err := d.agentLifecycleExecutor.Execute(context.Background(), agentLifecycleExecutionRequest{
+				OperationID: uuid.NewString(), WorkspaceID: workspaceID, AgentID: agentID,
+				RuntimeID: runtimeID, ActionKind: kind,
+			}); err != nil {
+				t.Fatalf("%s: %v", kind, err)
+			}
+
+			want := []struct{ activity, detail string }{
+				{protocol.ActivityKindOffline, "stopped"},
+				{protocol.ActivityKindWorking, "starting"},
+				{protocol.ActivityKindOnline, "idle"},
+			}
+			if len(activities) != len(want) {
+				t.Fatalf("%s Activity count = %d, want %d: %+v", kind, len(activities), len(want), activities)
+			}
+			for i, expected := range want {
+				got := activities[i].Snapshot
+				if got.ActivityKind != expected.activity || got.DetailKind != expected.detail {
+					t.Fatalf("%s Activity[%d] = %s/%s, want %s/%s", kind, i, got.ActivityKind, got.DetailKind, expected.activity, expected.detail)
+				}
+			}
+		})
+	}
 }
 
 func TestRaftRestartModesForceInterruptBusyTurn(t *testing.T) {

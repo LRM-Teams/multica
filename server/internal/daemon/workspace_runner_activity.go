@@ -50,6 +50,48 @@ func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase 
 	}, phase)
 }
 
+// observeResidentRuntimeReady closes the resident-only gap after provider
+// initialization. Raft advances Starting from the first runtime event because
+// its spawn always carries an initial turn. A resident provider can initialize
+// and sit idle without a turn, so APM readiness itself is the terminal startup
+// fact and must settle Activity to Online instead of waiting for a Message.
+func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID string) {
+	launch, found := runner.managedLaunch(agentID, runtimeID)
+	if !found || runner.activity == nil || launch.QueueState != protocol.AgentStartQueueRunning || launch.ProcessInstanceID == "" {
+		return
+	}
+	runner.observeActivity(AgentObservation{
+		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeIdle,
+		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
+	}, "Resident runtime ready")
+}
+
+// publishManagedAgentStartActivity runs only after the active status has been
+// written on a Workspace Runner connection. The server fences Activity on an
+// active launch, so publishing these snapshots from completeManagedAgentStart
+// would put them on the wire before the status that authorizes them.
+func (runner *WorkspaceRunner) publishManagedAgentStartActivity(agentID, runtimeID string) {
+	runner.observeRuntimeStarting(agentID, runtimeID, "Managed start")
+	runner.observeResidentRuntimeReady(agentID, runtimeID)
+}
+
+func (runner *WorkspaceRunner) observeLifecycleStopped(agentID, runtimeID string, actionKind agentLifecycleActionKind, interrupted bool) {
+	launch, found := runner.managedLaunch(agentID, runtimeID)
+	if !found || runner.activity == nil {
+		return
+	}
+	runner.activity.InterruptCompactionIfActive(agentID, launch.LaunchID)
+	runner.observeActivity(AgentObservation{
+		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationLifecycleStopped,
+		Data: AgentLifecycleStoppedObservationData{RuntimeID: runtimeID, ActionKind: actionKind, Interrupted: interrupted}, At: time.Now().UTC(),
+	}, "Lifecycle stop")
+}
+
+func (runner *WorkspaceRunner) observeLifecycleStarted(agentID, runtimeID string) {
+	runner.observeRuntimeStarting(agentID, runtimeID, "Lifecycle start")
+	runner.observeResidentRuntimeReady(agentID, runtimeID)
+}
+
 func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID string, message agent.Message) {
 	if message.Type == agent.MessageDiagnostic {
 		runner.observeResidentRuntimeDiagnostic(agentID, runtimeID, message)

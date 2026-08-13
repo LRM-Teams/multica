@@ -112,6 +112,12 @@ func init() {
 }
 
 func main() {
+	if handled, exitCode, err := forwardAgentProxyCLI(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent transport unavailable: %v\n", err)
+		}
+		os.Exit(exitCode)
+	}
 	if err := turntransport.ApplyFromEnvironment(); err != nil {
 		fmt.Fprintf(os.Stderr, "agent transport unavailable: %v\n", err)
 		os.Exit(1)

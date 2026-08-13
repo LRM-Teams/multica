@@ -66,6 +66,9 @@ func (runner *WorkspaceRunner) startManagedAgent(ctx context.Context, payload pr
 		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
 	}
 	status, session, err := runner.completeManagedAgentStart(ctx, payload, ack)
+	if err == nil {
+		runner.publishManagedAgentStartActivity(payload.AgentID, payload.RuntimeID)
+	}
 	return ack, status, session, err
 }
 
@@ -127,18 +130,39 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	if err := runner.activity.SetManaged(status, session); err != nil {
 		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("record managed start: %w", err)
 	}
-	runner.observeRuntimeStarting(payload.AgentID, payload.RuntimeID, "Managed start")
 	if runner.residency != nil {
 		runner.residency.rememberIdle(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
 	}
 	if coordinator, runtimeID, ok := runner.messageCoordinator(payload.AgentID); ok && runtimeID == payload.RuntimeID {
 		if _, err := coordinator.flushWithResult(ctx, true); err != nil {
 			if runner.logger != nil {
-				runner.logger.Warn("Workspace Runner buffered Message flush deferred", "workspace_id", runner.config.WorkspaceID, "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID, "launch_id", payload.LaunchID, "start_dispatch_id", payload.StartDispatchID, "error", err)
+				if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+					runner.logger.Debug("Workspace Runner buffered Message flush deferred", runner.managedStartLogAttrs(payload, ack.QueueState, "runtime_busy", "deferred", err)...)
+				} else {
+					runner.logger.Warn("Workspace Runner buffered Message flush failed", runner.managedStartLogAttrs(payload, ack.QueueState, "message_flush_failed", "failed", err)...)
+				}
 			}
 		}
 	}
 	return status, session, nil
+}
+
+func (runner *WorkspaceRunner) managedStartLogAttrs(payload protocol.WorkspaceRunnerAgentStartPayload, queueState, reason, outcome string, err error) []any {
+	args := []any{
+		"computer_id", runner.config.DaemonID,
+		"workspace_id", runner.config.WorkspaceID,
+		"agent_id", payload.AgentID,
+		"runtime_id", payload.RuntimeID,
+		"launch_id", payload.LaunchID,
+		"start_dispatch_id", payload.StartDispatchID,
+		"queue_state", queueState,
+		"reason", reason,
+		"outcome", outcome,
+	}
+	if err != nil {
+		args = append(args, "error", err)
+	}
+	return args
 }
 
 // admitManagedProviderProcess is Raft's this.agents.set after spawn: the

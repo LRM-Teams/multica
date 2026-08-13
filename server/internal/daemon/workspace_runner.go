@@ -390,7 +390,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				status, session, err := runner.completeManagedAgentStart(startCtx, start, ack)
 				if err != nil {
 					if runner.logger != nil {
-						runner.logger.Warn("Workspace Runner provider start failed", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "start_dispatch_id", start.StartDispatchID, "reason", "provider_start_failed", "error", err)
+						runner.logger.Warn("Workspace Runner provider start failed", runner.managedStartLogAttrs(start, ack.QueueState, "provider_start_failed", "failed", err)...)
 					}
 					if status.AgentID != "" {
 						if writeErr := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); writeErr != nil && runner.logger != nil {
@@ -403,6 +403,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 					failConnection(err)
 					return
 				}
+				runner.publishManagedAgentStartActivity(start.AgentID, start.RuntimeID)
 				if session.ProviderSessionID != "" {
 					if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, session); err != nil {
 						failConnection(err)

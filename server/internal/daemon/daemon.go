@@ -265,6 +265,10 @@ type Daemon struct {
 	// operations (task #52). The daemon client clears server-owned provider
 	// resume pointers before the runtime is recreated.
 	agentLifecycleExecutor *agentLifecycleExecutor
+	// agentLifecycleOperations coalesces at-least-once server delivery while
+	// one operation is executing. Terminal replays remain safe through the
+	// durable command ledger and can re-report a result lost during an outage.
+	agentLifecycleOperations sync.Map
 	// canonicalResidentFactoryOverride is test-only; production uses
 	// defaultCanonicalRuntimeFactory for resident Message adapters.
 	canonicalResidentFactoryOverride canonicalRuntimeBackendFactory
@@ -332,16 +336,11 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 			runtimes: d.canonicalRuntimes,
 			sessions: sessions,
 			start: func(ctx context.Context, req agentLifecycleStartRequest) error {
-				if err := d.ensureResidentMessageRuntime(ctx, req.AgentID, req.RuntimeID, nil); err != nil {
-					return err
-				}
-				if runner := d.currentWorkspaceRunner(req.WorkspaceID); runner != nil {
-					runner.observeRuntimeStarting(req.AgentID, req.RuntimeID, "Lifecycle start")
-				}
-				return nil
+				return d.ensureResidentMessageRuntime(ctx, req.AgentID, req.RuntimeID, nil)
 			},
 		},
-		logger: logger,
+		activity: daemonAgentLifecycleActivityObserver{daemon: d},
+		logger:   logger,
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, nil)

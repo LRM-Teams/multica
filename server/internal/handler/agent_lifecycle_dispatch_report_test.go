@@ -58,7 +58,10 @@ func TestReportAgentLifecycleOperationResultUpdatesOperationStatus(t *testing.T)
 	if got.FinishedAt == nil {
 		t.Fatal("expected finished_at to be set")
 	}
-
+	hasPending, err := testHandler.AgentLifecycleDispatchStore.HasPending(context.Background(), runtimeID)
+	if err != nil || hasPending {
+		t.Fatalf("dispatch still pending after terminal report = %v, %v", hasPending, err)
+	}
 }
 
 // TestReportAgentLifecycleOperationResultFailedClearsHealthOverlay pins

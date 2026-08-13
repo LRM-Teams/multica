@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -66,9 +67,15 @@ const (
 	AgentLifecycleDispatchTimeout   AgentLifecycleDispatchStatus = "timeout"
 )
 
-// agentLifecycleDispatchPendingTimeout mirrors restartPendingTimeout: bounds
-// how long a dispatch waits for a heartbeat to claim it.
+// agentLifecycleDispatchPendingTimeout bounds the whole at-least-once
+// delivery window. A claimed heartbeat response is only a delivery attempt;
+// the dispatch remains retryable until the daemon reports a terminal result.
 const agentLifecycleDispatchPendingTimeout = 120 * time.Second
+
+// agentLifecycleDispatchDeliveryLease prevents every heartbeat from
+// duplicating an in-flight operation while still recovering quickly when the
+// response carrying a claimed dispatch is lost before the daemon sees it.
+const agentLifecycleDispatchDeliveryLease = 5 * time.Second
 
 // agentLifecycleDispatchStoreRetention mirrors restartStoreRetention.
 const agentLifecycleDispatchStoreRetention = 5 * time.Minute
@@ -95,6 +102,7 @@ type AgentLifecycleDispatchStore interface {
 	Create(ctx context.Context, operationID, agentID, runtimeID, workspaceID, actionKind string) (*AgentLifecycleDispatch, error)
 	HasPending(ctx context.Context, runtimeID string) (bool, error)
 	PopAllPending(ctx context.Context, runtimeID string) ([]*AgentLifecycleDispatch, error)
+	Complete(ctx context.Context, operationID, runtimeID string) error
 	// SweepTimedOut evaluates the timeout (applyAgentLifecycleDispatchTimeout,
 	// the same function and the same agentLifecycleDispatchPendingTimeout
 	// HasPending/PopAllPending already use) across every pending dispatch,
@@ -119,7 +127,7 @@ type AgentLifecycleDispatchStore interface {
 type agentLifecycleDispatchTimeoutHook func(ctx context.Context, d *AgentLifecycleDispatch)
 
 func applyAgentLifecycleDispatchTimeout(ctx context.Context, d *AgentLifecycleDispatch, now time.Time, onTimeout agentLifecycleDispatchTimeoutHook) bool {
-	if d.Status == AgentLifecycleDispatchPending && now.Sub(d.CreatedAt) > agentLifecycleDispatchPendingTimeout {
+	if (d.Status == AgentLifecycleDispatchPending || d.Status == AgentLifecycleDispatchDelivered) && now.Sub(d.CreatedAt) > agentLifecycleDispatchPendingTimeout {
 		d.Status = AgentLifecycleDispatchTimeout
 		d.UpdatedAt = now
 		if onTimeout != nil {
@@ -128,6 +136,20 @@ func applyAgentLifecycleDispatchTimeout(ctx context.Context, d *AgentLifecycleDi
 		return true
 	}
 	return false
+}
+
+func agentLifecycleDispatchReady(d *AgentLifecycleDispatch, now time.Time) bool {
+	if d == nil {
+		return false
+	}
+	switch d.Status {
+	case AgentLifecycleDispatchPending:
+		return true
+	case AgentLifecycleDispatchDelivered:
+		return d.DeliveredAt == nil || !now.Before(d.DeliveredAt.Add(agentLifecycleDispatchDeliveryLease))
+	default:
+		return false
+	}
 }
 
 // newAgentLifecycleDispatchTimeoutFailer builds the onTimeout hook that
@@ -199,7 +221,7 @@ func (s *InMemoryAgentLifecycleDispatchStore) HasPending(ctx context.Context, ru
 			continue
 		}
 		applyAgentLifecycleDispatchTimeout(ctx, d, now, s.onTimeout)
-		if d.Status == AgentLifecycleDispatchPending {
+		if agentLifecycleDispatchReady(d, now) {
 			return true, nil
 		}
 	}
@@ -216,7 +238,7 @@ func (s *InMemoryAgentLifecycleDispatchStore) PopAllPending(ctx context.Context,
 			continue
 		}
 		applyAgentLifecycleDispatchTimeout(ctx, d, now, s.onTimeout)
-		if d.Status != AgentLifecycleDispatchPending {
+		if !agentLifecycleDispatchReady(d, now) {
 			continue
 		}
 		d.Status = AgentLifecycleDispatchDelivered
@@ -226,6 +248,20 @@ func (s *InMemoryAgentLifecycleDispatchStore) PopAllPending(ctx context.Context,
 		claimed = append(claimed, &copy)
 	}
 	return claimed, nil
+}
+
+func (s *InMemoryAgentLifecycleDispatchStore) Complete(_ context.Context, operationID, runtimeID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := s.dispatches[operationID]
+	if d == nil {
+		return nil
+	}
+	if d.RuntimeID != runtimeID {
+		return fmt.Errorf("agent lifecycle dispatch runtime mismatch: got %s, want %s", runtimeID, d.RuntimeID)
+	}
+	delete(s.dispatches, operationID)
+	return nil
 }
 
 // SweepTimedOut evaluates every pending dispatch regardless of runtime — see
@@ -311,6 +347,7 @@ func (h *Handler) ReportAgentLifecycleOperationResult(w http.ResponseWriter, r *
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Not an error: the operation may have already timed out or been
 		// reported by a prior (retried) heartbeat delivery. Idempotent no-op.
+		h.completeAgentLifecycleDispatch(r.Context(), uuidToString(operationID), runtimeID)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
 		return
 	}
@@ -318,5 +355,15 @@ func (h *Handler) ReportAgentLifecycleOperationResult(w http.ResponseWriter, r *
 		writeError(w, http.StatusInternalServerError, "failed to record agent lifecycle result")
 		return
 	}
+	h.completeAgentLifecycleDispatch(r.Context(), uuidToString(operationID), runtimeID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
+}
+
+func (h *Handler) completeAgentLifecycleDispatch(ctx context.Context, operationID, runtimeID string) {
+	if h.AgentLifecycleDispatchStore == nil {
+		return
+	}
+	if err := h.AgentLifecycleDispatchStore.Complete(ctx, operationID, runtimeID); err != nil {
+		slog.Warn("failed to complete agent lifecycle dispatch", "operation_id", operationID, "runtime_id", runtimeID, "error", err)
+	}
 }

@@ -849,11 +849,15 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 			}
 		}
 	}
-	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
 	if !compactedThisInput {
 		if onAccepted != nil {
 			onAccepted()
 		}
+		// The Context Boundary receipt is the public acceptance fact. Do not
+		// start draining provider Activity until that fact is published: a
+		// buffered first runtime event can otherwise win the goroutine race and
+		// render Working before Message received/acceptance exists.
+		activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
 		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, onComplete)
 		return nil
 	}
@@ -861,6 +865,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	// wait for the follow-up turn to do real work before the Context Boundary
 	// receipt. An empty/compaction-only turn stays uncommitted so the Message
 	// can be retried.
+	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
 	finished := make(chan error, 1)
 	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, func(turnErr error, gen uint64, capture *agent.ResidentTurnCapture) {
 		finished <- turnErr

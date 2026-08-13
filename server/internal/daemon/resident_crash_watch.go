@@ -79,6 +79,12 @@ func (d *Daemon) handleAgentLifecycleOperation(ctx context.Context, pending prot
 			"operation_id", pending.OperationID, "agent_id", pending.AgentID, "runtime_id", pending.RuntimeID)
 		return
 	}
+	if _, loaded := d.agentLifecycleOperations.LoadOrStore(pending.OperationID, struct{}{}); loaded {
+		d.logger.Debug("agent lifecycle operation already in flight",
+			"operation_id", pending.OperationID, "agent_id", pending.AgentID, "runtime_id", pending.RuntimeID)
+		return
+	}
+	defer d.agentLifecycleOperations.Delete(pending.OperationID)
 	d.logger.Info("agent lifecycle operation requested",
 		"operation_id", pending.OperationID, "agent_id", pending.AgentID,
 		"runtime_id", pending.RuntimeID, "action_kind", pending.ActionKind)

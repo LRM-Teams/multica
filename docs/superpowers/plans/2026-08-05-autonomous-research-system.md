@@ -990,6 +990,11 @@ Manifest 不再仅依赖进程内硬编码 clearance。D 章尚未完成，最�
 `artifact_chapter_d15_exit_inventory_test.go` 的 26 项退出清单为准，不能以 migration
 数量或 fixture 正例替代完整验收。
 
+D-migration-1 证据：migration 318–330 各自具备隔离 schema 的 fresh-up 与 down/up
+roundtrip；319/325/328/329 同时验证回填 reconciliation、精确诊断、D admission 默认关闭
+和 Result Artifact 重建。318 的基线注册表对 Hypothesis/Branch/Insight/Inquiry Edge 全部
+fail closed，并证明不会提前生成任何 E–N Passport 行。§15.1 已收口。
+
 D-access-2 证据：human Session snapshot 拒绝 `attempt_id`，在读取 Session、Fleet、
 legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-private context
 只能经 Agent 专用路由的 principal、active Fleet membership 和 assigned Attempt 校验读取。

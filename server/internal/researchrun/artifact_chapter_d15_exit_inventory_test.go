@@ -15,7 +15,7 @@ const chapterD15EnforceComplete = false
 //   - partial: some but not all required fixtures/matrix rows
 //   - missing: no meaningful executable coverage yet
 var chapterD15Coverage = map[int]string{
-	1:  "partial", // migration 318–330 roundtrip tests
+	1:  "covered", // 318–330 fresh-up/down-up, reconciliation/diagnostics, no fabricated E–N rows
 	2:  "partial", // trigger/constraint name inventory tests
 	3:  "partial", // migration FK negative fixtures
 	4:  "partial", // deferred guard tests in migration suite

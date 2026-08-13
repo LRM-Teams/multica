@@ -141,8 +141,18 @@ func TestResearchArtifactPassportMigration318RoundTrips(t *testing.T) {
 	if err = conn.QueryRow(ctx, `SELECT research_artifact_entity_kind_allowed('task')`).Scan(&entityKindAllowed); err != nil || !entityKindAllowed {
 		t.Fatalf("entity kind registry: allowed=%v err=%v", entityKindAllowed, err)
 	}
-	if err = conn.QueryRow(ctx, `SELECT research_artifact_entity_kind_allowed('hypothesis')`).Scan(&entityKindAllowed); err != nil || entityKindAllowed {
-		t.Fatalf("unknown kind should fail closed: allowed=%v err=%v", entityKindAllowed, err)
+	for _, futureKind := range []string{"hypothesis", "branch", "insight", "inquiry_edge"} {
+		if err = conn.QueryRow(ctx, `SELECT research_artifact_entity_kind_allowed($1)`, futureKind).Scan(&entityKindAllowed); err != nil || entityKindAllowed {
+			t.Fatalf("future kind %q should fail closed: allowed=%v err=%v", futureKind, entityKindAllowed, err)
+		}
+	}
+	var fabricatedFutureRows int
+	if err = conn.QueryRow(ctx, `
+		SELECT count(*)::int
+		FROM research_artifact_passport
+		WHERE entity_kind IN ('hypothesis', 'branch', 'insight', 'inquiry_edge')
+	`).Scan(&fabricatedFutureRows); err != nil || fabricatedFutureRows != 0 {
+		t.Fatalf("fabricated E-N passport rows=%d err=%v", fabricatedFutureRows, err)
 	}
 
 	var passportCount int

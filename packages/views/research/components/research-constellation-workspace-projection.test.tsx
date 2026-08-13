@@ -47,6 +47,25 @@ vi.mock("../../i18n/use-t", () => ({
     t: (selector: (bundle: Record<string, unknown>) => string) =>
       selector({
         d5: {
+          canvas_a11y: {
+            status: {
+              completed: "Completed",
+              failed: "Failed",
+              conflict: "Conflict",
+              refuted: "Refuted",
+              dead_end: "Dead end",
+              abandoned: "Abandoned",
+              cancelled: "Cancelled",
+              running: "Running",
+              waiting: "Waiting",
+              blocked: "Blocked",
+              queued: "Queued",
+            },
+            unknown_status: "Unknown status",
+            low_confidence: "Low confidence",
+            separator: ", ",
+            updated_nodes: "{{count}} nodes updated",
+          },
           canvas: {
             loading: "Loading constellation…",
             error: "Could not load the typed research graph.",
@@ -64,6 +83,24 @@ vi.mock("../../i18n/use-t", () => ({
         },
         session_page: { retry: "Retry" },
         interrupt: { retrying: "Retrying…" },
+        logic: {
+          lane: {
+            orchestrate: "Orchestrate",
+            source: "Sources",
+            deep_read: "Deep read",
+            validate: "Validate",
+            draft: "Draft",
+          },
+        },
+        content_faces: {
+          goal: "Goal",
+          operation_approach: "Operation approach",
+          research_approach: "Research approach",
+          result: "Result",
+          missing: "Not provided",
+          result_pending: "Result in progress",
+          result_failed: "No displayable result",
+        },
       }),
   }),
 }));

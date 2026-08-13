@@ -17,6 +17,7 @@ import type { ResearchGraphNode } from "@multica/core/types";
 import { StarGraphMapKey } from "@multica/ui/components/star-graph";
 import { cn } from "@multica/ui/lib/utils";
 import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
+import { focusD5LensDisplayHints } from "../../lib/research-d5-lens-display";
 import {
   buildNodeAccessibleName,
   resolveCanvasKeyEvent,
@@ -192,6 +193,16 @@ export function StarGraphCanvas({
   const visibleRelations = useMemo(
     () => filterRelationsToVisibleEntities(model.relations, visibleEntityIds),
     [model.relations, visibleEntityIds],
+  );
+  const focusedLensHints = useMemo(
+    () =>
+      focusD5LensDisplayHints(
+        lensHints,
+        model,
+        selectedNodeId,
+        relatedNodeIds,
+      ),
+    [lensHints, model, relatedNodeIds, selectedNodeId],
   );
 
   const hiddenEntityCount = displayEntities.length - visibleEntities.length;
@@ -499,13 +510,13 @@ export function StarGraphCanvas({
           relations={visibleRelations}
           width={worldSize.width}
           height={worldSize.height}
-          lensHints={lensHints}
+          lensHints={focusedLensHints}
         />
         <StarGraphEntityLayer
           entities={visibleEntities}
           selectedNodeId={selectedNodeId}
           nodeAccessibleNames={nodeAccessibleNames}
-          lensHints={lensHints}
+          lensHints={focusedLensHints}
           motionDirectives={motionDirectives}
           onSelectNode={onSelectNode}
           onOpenNode={onOpenNode}

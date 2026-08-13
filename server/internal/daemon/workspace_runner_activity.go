@@ -177,6 +177,23 @@ func (runner *WorkspaceRunner) observeMessageSendHold(agentID, target string, ne
 	}, "Message send hold")
 }
 
+func (runner *WorkspaceRunner) observeMessageSendDraftSent(agentID, target string, anyway bool) {
+	if runner == nil {
+		return
+	}
+	if runner.logger != nil {
+		runner.logger.Info("Credential Proxy saved Draft sent", "agent_id", agentID, "workspace_id", runner.config.WorkspaceID, "target", target, "anyway", anyway)
+	}
+	launch, found := runner.managedLaunch(agentID, "")
+	if !found || runner.activity == nil {
+		return
+	}
+	runner.observeActivity(AgentObservation{
+		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationDraftSent,
+		Data: AgentDraftSentObservationData{RuntimeID: launch.RuntimeID, Target: target, Anyway: anyway}, At: time.Now().UTC(),
+	}, "Draft sent")
+}
+
 func (runner *WorkspaceRunner) observeActivity(observation AgentObservation, phase string) {
 	if runner == nil || runner.activity == nil {
 		return

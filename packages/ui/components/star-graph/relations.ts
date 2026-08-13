@@ -7,7 +7,12 @@
  * shared or tested without importing a React component.
  */
 
-export type StarGraphRelationKey = "decompose" | "support" | "challenge" | "newdir";
+export type StarGraphRelationKey =
+  | "decompose"
+  | "support"
+  | "challenge"
+  | "newdir"
+  | "neutral";
 
 export interface StarGraphRelationToken {
   /** Stable key. */

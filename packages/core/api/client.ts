@@ -379,6 +379,12 @@ import {
   EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
   EMPTY_SANDBOX_SNAPSHOT,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_SEND_CHAT_MESSAGE_RESPONSE,
+  SendChatMessageResponseSchema,
+  ChatPendingTaskSchema,
+  EMPTY_CHAT_PENDING_TASK,
+  PendingChatTasksResponseSchema,
+  EMPTY_PENDING_CHAT_TASKS_RESPONSE,
   EMPTY_EVOLUTION_METRICS,
   EMPTY_EVOLUTION_TRAINING_EXAMPLE_LIST,
   EMPTY_EVOLUTION_MODEL_RUNTIME_CONFIG_LIST,
@@ -3455,33 +3461,32 @@ export class ApiClient {
     if (parts && parts.length > 0) {
       body.parts = parts;
     }
-    return this.fetch(`/api/chat/sessions/${sessionId}/messages`, {
+    const raw = await this.fetch(`/api/chat/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
+    return parseWithFallback(raw, SendChatMessageResponseSchema, EMPTY_SEND_CHAT_MESSAGE_RESPONSE, {
+      endpoint: "POST /api/chat/sessions/:id/messages",
+    });
   }
 
   async getPendingChatTask(sessionId: string): Promise<ChatPendingTask> {
-    return this.fetch(`/api/chat/sessions/${sessionId}/pending-task`);
+    const raw = await this.fetch(`/api/chat/sessions/${sessionId}/pending-task`);
+    return parseWithFallback(raw, ChatPendingTaskSchema, EMPTY_CHAT_PENDING_TASK, {
+      endpoint: "GET /api/chat/sessions/:id/pending-task",
+    });
   }
 
-  /**
-   * LRM-581: cancel one chat wake by inbox_event_id (pending-task authority).
-   * Do not use cancelTaskById for chat-window Stop — that path is the old dual track.
-   */
-  async cancelChatInboxEvent(
-    sessionId: string,
-    inboxEventId: string,
-  ): Promise<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }> {
-    return this.fetch(
-      `/api/chat/sessions/${sessionId}/agent-inbox/events/${inboxEventId}/cancel`,
-      { method: "POST" },
-    );
+  async cancelStandaloneChat(sessionId: string): Promise<{ ok: boolean; pending: boolean }> {
+    return this.fetch(`/api/chat/sessions/${sessionId}/cancel`, { method: "POST" });
   }
 
   async listPendingChatTasks(): Promise<PendingChatTasksResponse> {
-    return this.fetch(`/api/chat/pending-tasks`);
+    const raw = await this.fetch(`/api/chat/pending-tasks`);
+    return parseWithFallback(raw, PendingChatTasksResponseSchema, EMPTY_PENDING_CHAT_TASKS_RESPONSE, {
+      endpoint: "GET /api/chat/pending-tasks",
+    });
   }
 
   async markChatSessionRead(sessionId: string): Promise<void> {

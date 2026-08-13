@@ -43,6 +43,8 @@ import {
   RunnerActivityResponseSchema,
   RunnerActivitySummariesResponseSchema,
   EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
+  SendChatMessageResponseSchema,
+  EMPTY_SEND_CHAT_MESSAGE_RESPONSE,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
 
@@ -433,6 +435,40 @@ describe("EvolutionReviewSubmissionListSchema drift", () => {
       { endpoint: "GET /api/evolution/submissions" },
     );
     expect(parsed).toBe(EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST);
+  });
+});
+
+describe("SendChatMessageResponseSchema", () => {
+  it("keeps Raft pending when task_id is empty", () => {
+    const parsed = SendChatMessageResponseSchema.parse({
+      message_id: "m1",
+      delivery_id: "chat:m1:agent:a1",
+      pending: true,
+      created_at: "2026-08-13T00:00:00Z",
+    });
+    expect(parsed.pending).toBe(true);
+    expect(parsed.delivery_id).toBe("chat:m1:agent:a1");
+    expect("task_id" in parsed).toBe(false);
+  });
+
+  it("treats a greeting-shaped body as not pending", () => {
+    const parsed = SendChatMessageResponseSchema.parse({
+      message_id: "m1",
+      pending: false,
+      created_at: "2026-08-13T00:00:00Z",
+    });
+    expect(parsed.pending).toBe(false);
+  });
+
+  it("falls back when the body is malformed", () => {
+    expect(
+      parseWithFallback(
+        { message_id: 1, pending: "yes" },
+        SendChatMessageResponseSchema,
+        EMPTY_SEND_CHAT_MESSAGE_RESPONSE,
+        { endpoint: "POST /api/chat/sessions/:id/messages" },
+      ),
+    ).toEqual(EMPTY_SEND_CHAT_MESSAGE_RESPONSE);
   });
 });
 

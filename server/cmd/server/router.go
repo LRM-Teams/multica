@@ -598,6 +598,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/agent-inbox/events/{eventId}/messages", h.ReportAgentInboxMessages)
 		r.Post("/agent-inbox/events/{eventId}/complete", h.CompleteAgentInboxEvent)
 		r.Post("/agent-inbox/events/{eventId}/fail", h.FailAgentInboxEvent)
+		r.Post("/chat/sessions/{sessionId}/assistant-replies", h.ReportStandaloneChatAssistantReply)
 
 		r.Post("/runtimes/{runtimeId}/recover-orphans", h.RecoverOrphanedTasks)
 		r.Post("/tasks/{taskId}/session", h.PinTaskSession)
@@ -1358,6 +1359,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/messages", h.ListChatMessages)
 					r.Get("/messages/page", h.ListChatMessagesPage)
 					r.Get("/pending-task", h.GetPendingChatTask)
+					r.Post("/cancel", h.CancelStandaloneChat)
 					r.Post("/agent-inbox/events/{eventId}/cancel", h.CancelChatAgentInboxEvent)
 					r.Get("/agent-inbox-events/{eventId}/timeline", h.ListChatAgentInboxEventTimeline)
 					r.Post("/read", h.MarkChatSessionRead)

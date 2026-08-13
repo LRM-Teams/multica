@@ -1044,6 +1044,7 @@ surface 矩阵仍未完成。
 ### I. Exploration Portfolio
 
 - [ ] 实现候选任务生成器和分项评分策略版本。
+  - [x] I1a-candidate-generation：`exploration_candidate_generation.go` 把 required Question、Evidence Gap、blocking Dispute、Hypothesis change、stale Insight、同质来源和 Method Gap 七类 canonical need signal 映射为有界 `discover | verify | counter_search | synthesize` 候选，携带固定 capability、purpose、分项评分、成本、硬约束和稳定 identity。Evidence Gap 可同时生成核验/反证，来源同质化生成 Divergence probe；输入与硬约束顺序不改变结果指纹，相同 target/purpose/method/source/perspective 不重复开工。该切片只完成生成合同；canonical signal 查询、Candidate Set 持久化、#3143 组合选择 Adapter、Decision/Event 和 Task 创建事务仍待后续接线。
 - [ ] 实现多候选组合选择、重复惩罚、来源/方法多样性和预算预留。
 - [ ] 实现动态分支扩展、终止、饱和探测和停止判断。
 - [ ] 实现 Divergence Pass 隔离上下文、触发器、exploration reserve、异质视角候选和交付门禁。

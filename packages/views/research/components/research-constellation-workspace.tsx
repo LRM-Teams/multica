@@ -9,9 +9,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { TypedGraphResponse, StarGraphLayoutResult } from "@multica/core/research";
+import type {
+  ResearchCanvasFilter,
+  TypedGraphResponse,
+  StarGraphLayoutResult,
+} from "@multica/core/research";
 import {
   countHiddenByFilter,
+  emptyCanvasFilter,
   isBlankFilter,
   useResearchCanvasStore,
   useResearchUiStore,
@@ -71,6 +76,8 @@ export type ResearchReportController = {
   open: () => void;
   close: () => void;
 };
+
+const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
 
 export function ResearchConstellationWorkspace({
   typedGraph,
@@ -151,7 +158,11 @@ export function ResearchConstellationWorkspace({
   const setRailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const railMode = useResearchUiStore((s) => s.d5RailMode);
   const setRailMode = useResearchUiStore((s) => s.setD5RailMode);
-  const canvasFilter = useResearchCanvasStore((s) => s.filter);
+  const filterSessionId = typedGraphSessionId ?? typedGraph?.session_id ?? null;
+  const storedCanvasFilter = useResearchCanvasStore((s) =>
+    filterSessionId ? s.filterBySession?.[filterSessionId] : undefined,
+  );
+  const canvasFilter = storedCanvasFilter ?? EMPTY_CANVAS_FILTER;
   const hostRef = useRef<HTMLDivElement>(null);
   const railToggleRef = useRef<HTMLButtonElement>(null);
   const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
@@ -654,6 +665,7 @@ export function ResearchConstellationWorkspace({
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}
+            canvasFilter={canvasFilter}
             hiddenCountLabel={(count) => t(($) => $.d5.cluster_hidden, { count })}
             loadMoreLabel={loadMoreLabel}
             onLoadMore={onLoadMoreTypedGraph}

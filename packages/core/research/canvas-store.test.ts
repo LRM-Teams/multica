@@ -21,6 +21,7 @@ describe("useResearchCanvasStore (LRM-1497 shared client state)", () => {
       selectedNodeId: null,
       selectedNodeBySession: {},
       filter: emptyCanvasFilter(),
+      filterBySession: {},
     });
   });
 
@@ -104,6 +105,40 @@ describe("useResearchCanvasStore (LRM-1497 shared client state)", () => {
     expect(f.cluster).toBe("alpha");
     useResearchCanvasStore.getState().clearFilter();
     expect(isBlankFilter(useResearchCanvasStore.getState().filter)).toBe(true);
+  });
+
+  it("isolates and restores filters by research session", () => {
+    const store = useResearchCanvasStore.getState();
+    store.setSessionFilter("session-a", { status: "completed" });
+    store.setSessionFilter("session-b", { tier: "xl" });
+    store.setSessionFilter("session-a", { query: "evidence" });
+
+    expect(useResearchCanvasStore.getState().filterBySession).toEqual({
+      "session-b": { ...emptyCanvasFilter(), tier: "xl" },
+      "session-a": {
+        ...emptyCanvasFilter(),
+        status: "completed",
+        query: "evidence",
+      },
+    });
+    store.clearSessionFilter("session-a");
+    expect(
+      isBlankFilter(
+        useResearchCanvasStore.getState().filterBySession["session-a"]!,
+      ),
+    ).toBe(true);
+  });
+
+  it("bounds retained session filters", () => {
+    for (let index = 0; index < 24; index += 1) {
+      useResearchCanvasStore
+        .getState()
+        .setSessionFilter(`session-${index}`, { query: `query-${index}` });
+    }
+    const saved = useResearchCanvasStore.getState().filterBySession;
+    expect(Object.keys(saved)).toHaveLength(20);
+    expect(saved["session-0"]).toBeUndefined();
+    expect(saved["session-23"]?.query).toBe("query-23");
   });
 });
 

@@ -397,18 +397,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       });
   }, [sessionInterrupt, sessionId, qc, wsId, t]);
 
-  // LRM-799: never keep a permanent skeleton on failure — only while loading.
-  // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
-  // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
-  if (isLoading || (isFetching && !data) || (!data && !online)) {
-    return (
-      <ResearchConnectivityShell>
-        <ResearchSessionPageSkeleton />
-      </ResearchConnectivityShell>
-    );
-  }
-
-  // LRM-833 — 5xx with no cache: dedicated error page + retry.
+  // LRM-833 — 5xx with no cache: dedicated error page + retry. This must stay
+  // ahead of the fetching skeleton so a background retry does not unmount the
+  // focused retry control and erase the visible error context.
   if (!data && isError && isServerError(error)) {
     return (
       <ResearchConnectivityShell>
@@ -419,6 +410,17 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           message={error instanceof Error ? error.message : null}
           retrying={isFetching}
         />
+      </ResearchConnectivityShell>
+    );
+  }
+
+  // LRM-799: never keep a permanent skeleton on failure — only while loading.
+  // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
+  // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
+  if (isLoading || (isFetching && !data) || (!data && !online)) {
+    return (
+      <ResearchConnectivityShell>
+        <ResearchSessionPageSkeleton />
       </ResearchConnectivityShell>
     );
   }

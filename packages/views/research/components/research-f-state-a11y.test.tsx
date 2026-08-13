@@ -106,6 +106,19 @@ describe("research F-state a11y static contract (LRM-1192)", () => {
     );
   });
 
+  it("source: session keeps the server error mounted during a background retry", () => {
+    const src = readSrc("research-session-page.tsx");
+    const serverErrorBranch = src.indexOf(
+      "if (!data && isError && isServerError(error))",
+    );
+    const fetchingSkeletonBranch = src.indexOf(
+      "if (isLoading || (isFetching && !data) || (!data && !online))",
+    );
+
+    expect(serverErrorBranch).toBeGreaterThan(-1);
+    expect(fetchingSkeletonBranch).toBeGreaterThan(serverErrorBranch);
+  });
+
   it("source: canvas forming exposes mode-aware aria-busy + aria-live=polite", () => {
     const src = readSrc("research-canvas-forming.tsx");
     expect(src).toMatch(/aria-busy=\{mode === ["']forming["']\}/);

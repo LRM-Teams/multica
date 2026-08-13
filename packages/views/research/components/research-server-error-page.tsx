@@ -45,9 +45,13 @@ export function ResearchServerErrorPage({
         type="button"
         variant="default"
         size="sm"
-        disabled={retrying}
+        aria-disabled={retrying || undefined}
+        className={retrying ? "cursor-not-allowed opacity-50" : undefined}
         data-testid="research-server-error-retry"
-        onClick={onRetry}
+        onClick={() => {
+          if (retrying) return;
+          onRetry();
+        }}
       >
         <RefreshCw
           className={cn("size-3.5", retrying && "animate-spin")}

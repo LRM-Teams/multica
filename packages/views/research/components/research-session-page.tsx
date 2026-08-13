@@ -636,7 +636,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onCreateChannelChange={(value) => dispatch({ type: "setCreateChannel", value })}
         onConfirm={() => confirm.mutate()}
         onReject={(reason) =>
-          rejectConfirm.mutate(formatStageGateRejectReply(reason))
+          rejectConfirm
+            .mutateAsync(formatStageGateRejectReply(reason))
+            .then(() => undefined)
         }
         onHandoff={() => handoff.mutate()}
         confirmPending={confirm.isPending}

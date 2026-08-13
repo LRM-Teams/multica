@@ -1019,10 +1019,32 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindRunEvent, workspaceID, sessionID, event.ID, event.CreatedAt, nil, nil); err != nil {
+	contentHash, err := ArtifactContentHash(ArtifactKindRunEvent, runEventArtifactContent(event))
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: event.ID,
+		Kind: ArtifactKindRunEvent, SourceCreatedAt: &event.CreatedAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
+	}); err != nil {
 		return RunEvent{}, err
 	}
 	return event, nil
+}
+
+func runEventArtifactContent(event RunEvent) map[string]any {
+	return map[string]any{
+		"sequence":        event.Sequence,
+		"event_type":      event.Type,
+		"idempotency_key": event.IdempotencyKey,
+		"actor_type":      event.ActorType,
+		"actor_id":        event.ActorID,
+		"payload":         json.RawMessage(event.Payload),
+	}
 }
 
 func semanticJSONEqual(left, right []byte) bool {

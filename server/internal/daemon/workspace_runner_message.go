@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -99,12 +100,16 @@ type messageDeliveryAcceptance struct {
 
 // acceptMessageDelivery is the Raft-aligned per-Agent acceptance seam. It
 // gives the current launch's durable Pending projection responsibility before
-// attempting provider handoff. That is Raft's APM-accepted boundary: provider
-// startup may still be deferred, while an unknown/stale launch is not ACKed.
+// attempting provider handoff. A missing live launch is not a terminal NACK:
+// already-consumed, terminal, idle-snapshot, and spawn-cooldown deliveries
+// stay locally responsible. Only "no process and no snapshot" rejects.
 func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
 	launch, managed := runner.processes.Snapshot(delivery.AgentID)
 	if !managed {
-		return messageDeliveryAcceptance{}, fmt.Errorf("Agent %q has not been accepted by APM", delivery.AgentID)
+		if acceptance, consumed := runner.acknowledgeConsumedDelivery(delivery); consumed {
+			return acceptance, nil
+		}
+		return runner.acceptDeliveryWithoutLiveProcess(ctx, delivery)
 	}
 	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
 	if !ok || runtimeID != launch.RuntimeID {
@@ -127,7 +132,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
 	))
-	if launch.QueueState == protocol.AgentStartQueueQueued {
+	if launch.QueueState != protocol.AgentStartQueueRunning {
 		return result, nil
 	}
 	runIdentity, identityErr := residentPiRunIdentity(delivery.RunID, delivery.RunAgentID)
@@ -169,6 +174,165 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
 	))
 	return result, nil
+}
+
+func (runner *WorkspaceRunner) acknowledgeConsumedDelivery(delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, bool) {
+	coordinator, _, ok := runner.messageCoordinator(delivery.AgentID)
+	if !ok {
+		return messageDeliveryAcceptance{}, false
+	}
+	seq, known, err := runner.messageContextBoundary(delivery.AgentID, delivery.Target)
+	if err != nil || !known || delivery.Seq > seq {
+		return messageDeliveryAcceptance{}, false
+	}
+	return messageDeliveryAcceptance{
+		ack:     coordinator.Acknowledgement(delivery),
+		outcome: messageDeliveryDeduplicated,
+	}, true
+}
+
+func (runner *WorkspaceRunner) acceptDeliveryWithoutLiveProcess(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
+	res, had := runner.residency.get(delivery.AgentID)
+	now := time.Now()
+	if runner.residency != nil && runner.residency.now != nil {
+		now = runner.residency.now()
+	}
+	switch {
+	case had && res.terminal:
+		acceptance, err := runner.bufferAcceptedDelivery(ctx, delivery)
+		if err == nil {
+			runner.republishTerminalFailure(delivery.AgentID, res)
+		}
+		return acceptance, err
+	case had && res.idle && res.coolingDown(now):
+		return runner.bufferAcceptedDelivery(ctx, delivery)
+	case had && res.idle:
+		if _, managed := runner.processes.Snapshot(delivery.AgentID); managed {
+			return runner.bufferAcceptedDelivery(ctx, delivery)
+		}
+		parent := ctx
+		if runner.life != nil {
+			parent = runner.life
+		}
+		restartCtx, started := runner.residency.beginRestart(parent, delivery.AgentID)
+		if !started {
+			return runner.bufferAcceptedDelivery(ctx, delivery)
+		}
+		if err := runner.restartFromIdleSnapshot(delivery.AgentID, res); err != nil {
+			runner.residency.endRestart(delivery.AgentID)
+			return messageDeliveryAcceptance{}, fmt.Errorf("restore idle Agent %q: %w", delivery.AgentID, err)
+		}
+		acceptance, err := runner.bufferAcceptedDelivery(ctx, delivery)
+		if err != nil {
+			runner.residency.endRestart(delivery.AgentID)
+			return acceptance, err
+		}
+		go func() {
+			defer runner.residency.endRestart(delivery.AgentID)
+			runner.completeIdleSnapshotStart(restartCtx, delivery.AgentID, res)
+		}()
+		return acceptance, nil
+	default:
+		runner.reportProcessUnavailable(delivery.AgentID)
+		return messageDeliveryAcceptance{}, fmt.Errorf("Agent %q has not been accepted by APM", delivery.AgentID)
+	}
+}
+
+func (runner *WorkspaceRunner) bufferAcceptedDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
+	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
+	if !ok {
+		return messageDeliveryAcceptance{}, fmt.Errorf("Agent %q has not been accepted by APM", delivery.AgentID)
+	}
+	delivery.Message.RunID = delivery.RunID
+	delivery.Message.RunAgentID = delivery.RunAgentID
+	delivery.Message.DeliveryID = delivery.DeliveryID
+	accepted, err := coordinator.Accept(ctx, delivery)
+	if err != nil {
+		return messageDeliveryAcceptance{}, err
+	}
+	result := messageDeliveryAcceptance{
+		ack:     coordinator.Acknowledgement(delivery),
+		outcome: messageDeliveryPendingBuffered,
+	}
+	if !accepted {
+		result.outcome = messageDeliveryDeduplicated
+	}
+	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
+	))
+	return result, nil
+}
+
+func (runner *WorkspaceRunner) restartFromIdleSnapshot(agentID string, res agentResidency) error {
+	if runner.processes == nil || res.runtimeID == "" || res.launchID == "" {
+		return fmt.Errorf("idle snapshot for Agent %q is incomplete", agentID)
+	}
+	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID)
+}
+
+func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	start := protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: agentID, RuntimeID: res.runtimeID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
+	}
+	ack := protocol.AgentStartAckPayload{AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID}
+	if _, _, err := runner.completeManagedAgentStart(ctx, start, ack); err != nil && runner.logger != nil && ctx.Err() == nil {
+		runner.logger.Warn("Workspace Runner idle snapshot start failed", "agent_id", agentID, "runtime_id", res.runtimeID, "launch_id", res.launchID, "error", err)
+	}
+}
+
+func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
+	if runner == nil || agentID == "" {
+		return
+	}
+	launchID := ""
+	if res, ok := runner.residency.get(agentID); ok {
+		launchID = res.launchID
+	}
+	if launchID == "" {
+		return
+	}
+	runner.sendAgentFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{
+		AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive,
+	})
+	now := time.Now().UTC()
+	entry, err := activityNarrativeEntry(protocol.ActivityKindOffline, "runtime_unavailable", "Process unavailable; restart required")
+	if err != nil {
+		return
+	}
+	runner.sendAgentFrame(protocol.EventAgentActivity, protocol.AgentActivityPayload{
+		Snapshot: protocol.AgentActivitySnapshot{
+			AgentID:          agentID,
+			LaunchID:         launchID,
+			DaemonInstanceID: runner.config.DaemonInstanceID,
+			ClientSequence:   1,
+			ProducerFactID:   fmt.Sprintf("runtime-unavailable-%s-%d", agentID, now.UnixNano()),
+			ObservedAt:       now,
+			ActivityKind:     protocol.ActivityKindOffline,
+			DetailKind:       "runtime_unavailable",
+		},
+		Entries: []protocol.AgentActivityEntry{entry},
+	})
+}
+
+func (runner *WorkspaceRunner) republishTerminalFailure(agentID string, res agentResidency) {
+	if runner.activity == nil {
+		return
+	}
+	kind := AgentObservationError
+	if res.terminalStage == managedRuntimeFailureSpawn {
+		kind = AgentObservationOffline
+	}
+	runner.observeActivity(AgentObservation{
+		AgentID: agentID, LaunchID: res.launchID, Kind: kind,
+		Data: AgentErrorObservationData{RuntimeID: res.runtimeID, ReasonCode: res.terminalReason},
+		At:   time.Now().UTC(),
+	}, "Runtime failure")
 }
 
 func (runner *WorkspaceRunner) notifyPendingMessagesAfterTurn(agentID string) {

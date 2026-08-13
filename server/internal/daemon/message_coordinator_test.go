@@ -1838,6 +1838,7 @@ func TestDaemonAcceptsIdleDeliveryThroughProviderBeforeAcknowledgement(t *testin
 	daemon.runtimeIndex = map[string]Runtime{"runtime-1": {ID: "runtime-1", WorkspaceID: "workspace-1"}}
 	daemon.mu.Unlock()
 	runner := registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	markTestLaunchRunning(t, runner, "agent-1")
 	acceptance, err := runner.acceptMessageDelivery(context.Background(), delivery)
 	if err != nil {
 		t.Fatalf("acceptIdleAgentDelivery: %v", err)

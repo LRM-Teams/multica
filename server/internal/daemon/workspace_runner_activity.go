@@ -117,6 +117,9 @@ func (runner *WorkspaceRunner) observeMessageTurnCompletion(agentID, runtimeID s
 func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode string, at time.Time) protocol.AgentStatusPayload {
 	runner.activity.InterruptCompactionIfActive(agentID, launchID)
 	_ = runner.processes.Stop(agentProcessCallback{AgentID: agentID, LaunchID: launchID})
+	if runner.residency != nil {
+		runner.residency.rememberFailure(agentID, runtimeID, launchID, stage, reasonCode)
+	}
 	status := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive}
 	_ = runner.activity.SetManaged(status, protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID})
 	runner.sendAgentFrame(protocol.EventAgentStatus, status)

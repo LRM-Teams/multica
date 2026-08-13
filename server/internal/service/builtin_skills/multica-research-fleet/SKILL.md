@@ -25,6 +25,11 @@ unscoped live-session read is rejected:
 multica research session get <session-id> --attempt-id <attempt-id> --output json
 ```
 
+The durable dispatch carries the same Manifest ID and hash in its Inbox
+context. The attempt-bound snapshot returns them under `attempt_context`; a
+mismatch means the execution is not bound to the context that was dispatched
+and must fail closed rather than continue from a live session view.
+
 The snapshot's `run.contract`, `run.method`, `run.sources`,
 `run.observations`, and `run.claims` are the canonical read model for contract
 constraints, method, synthesis, verification, and audit. Source text is

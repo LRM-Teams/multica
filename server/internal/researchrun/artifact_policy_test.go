@@ -50,7 +50,12 @@ func TestArtifactPolicyLegacyAdmissionMatrix(t *testing.T) {
 		{
 			name: "context manifest always denied", kind: ArtifactKindContextManifest,
 			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceComplete,
-			wantOK: true, // kind is valid; manifest omission happens at plan layer
+			wantOK: false, wantReason: ArtifactDenyLegacyIneligible,
+		},
+		{
+			name: "future inquiry artifact denied by legacy policy", kind: ArtifactKindHypothesis,
+			lifecycle: ArtifactLifecycleAccepted, provenance: ArtifactProvenanceComplete,
+			wantOK: false, wantReason: ArtifactDenyLegacyIneligible,
 		},
 		{
 			name: "superseded lifecycle denied", kind: ArtifactKindClaim,
@@ -75,6 +80,22 @@ func TestArtifactPolicyLegacyAdmissionMatrix(t *testing.T) {
 				t.Fatalf("ok=%v reason=%q want ok=%v reason=%q", ok, reason, tc.wantOK, tc.wantReason)
 			}
 		})
+	}
+}
+
+func TestArtifactPolicyLegacyAdmissionDeniesDAndFutureOnlyKinds(t *testing.T) {
+	policy := ArtifactPolicy{}
+	for _, kind := range []ArtifactEntityKind{
+		ArtifactKindContextManifest,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindInquiryEdge,
+	} {
+		ok, reason := policy.LegacyAdmissionAllowed(kind, ArtifactLifecycleAccepted, ArtifactProvenanceComplete)
+		if ok || reason != ArtifactDenyLegacyIneligible {
+			t.Fatalf("kind=%s ok=%v reason=%q want legacy-ineligible denial", kind, ok, reason)
+		}
 	}
 }
 
@@ -144,6 +165,9 @@ func TestArtifactPolicyManifestOmissionReasons(t *testing.T) {
 	}
 	if policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment) != "evaluation_compartment" {
 		t.Fatal("expected evaluation_compartment omission reason")
+	}
+	if policy.ManifestOmissionReason(ArtifactDenyLegacyIneligible) != "policy_denied" {
+		t.Fatal("expected legacy-ineligible policy_denied omission reason")
 	}
 }
 

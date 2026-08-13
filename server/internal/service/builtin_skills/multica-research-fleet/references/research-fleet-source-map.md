@@ -8,6 +8,7 @@
 | Canonical task/progress/evidence/event ledgers | migrations `274_research_run_backend`, `276_research_report_quality`, `284_research_evidence_fitness`; `server/internal/researchrun/postgres*.go` |
 | Current contract and accepted Research Method read model, plus validated steering limits | `server/internal/researchrun/config.go`, `postgres.go`, `postgres_result.go`, `postgres_tasks.go` |
 | Strict structured result envelope, pinned V1–V4 behavior, V4+ Method/evidence-standard and executable delivery-path contract, V5 structured evaluation defects, and Claim-level evidence-fitness Gate | `server/internal/researchrun/result.go`, `result_v2.go`, `result_v3.go`, `result_v4.go`, `result_v5.go`, `result_test.go`, `result_v5_test.go`, `postgres_result.go`, `postgres_gate.go`, `postgres_gate_v4.go` |
+| Independent domain-to-manifest shadow admission and legacy-ineligible Context Manifest/V6 artifact isolation | `server/internal/researchrun/artifact_shadow_domain.go`, `artifact_manifest.go`, `artifact_policy.go` |
 | Inbox dispatch idempotency and event projection | `server/internal/handler/research_run_adapter.go` |
 | Legacy authoritative mutations rejected for initialized runs | `server/internal/handler/research_run_guard.go` plus guarded handlers in `research_ops.go` and `research_product_rounds.go` |
 | Fleet ensure + seed roles | `server/internal/handler/research_fleet.go`, `research_templates.go` |

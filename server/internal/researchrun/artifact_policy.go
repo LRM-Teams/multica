@@ -28,6 +28,7 @@ const (
 	ArtifactDenyEvaluationCompartment ArtifactDenyReason = "evaluation_compartment"
 	ArtifactDenyLifecycle             ArtifactDenyReason = "lifecycle"
 	ArtifactDenyMissingPassport       ArtifactDenyReason = "missing_passport"
+	ArtifactDenyLegacyIneligible      ArtifactDenyReason = "legacy_ineligible"
 )
 
 // ArtifactPolicy implements the section 6 access lattice and legacy admission gate.
@@ -102,6 +103,14 @@ func (ArtifactPolicy) LegacyAdmissionAllowed(
 	if _, err := ParseArtifactEntityKind(string(kind)); err != nil {
 		return false, ArtifactDenyUnknownKind
 	}
+	switch kind {
+	case ArtifactKindContextManifest,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindInquiryEdge:
+		return false, ArtifactDenyLegacyIneligible
+	}
 	switch lifecycle {
 	case ArtifactLifecycleRegistered, ArtifactLifecycleAccepted:
 	default:
@@ -123,6 +132,8 @@ func (ArtifactPolicy) ManifestOmissionReason(deny ArtifactDenyReason) string {
 		return "evaluation_compartment"
 	case ArtifactDenyLifecycle:
 		return "lifecycle"
+	case ArtifactDenyLegacyIneligible:
+		return "policy_denied"
 	default:
 		return "policy_denied"
 	}

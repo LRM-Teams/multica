@@ -279,7 +279,7 @@ func registerRunArtifactsAfterInitializationTx(ctx context.Context, tx pgx.Tx, w
 	`, workspaceID, sessionID).Scan(&stateVersion); err != nil {
 		return err
 	}
-	if err := verifyShadowEquivalenceTx(ctx, tx, workspaceID, sessionID, stateVersion); err != nil {
+	if err := verifyShadowEquivalenceTx(ctx, tx, workspaceID, sessionID, stateVersion, ArtifactPurposeTaskExecution); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `

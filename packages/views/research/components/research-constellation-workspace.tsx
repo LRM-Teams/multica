@@ -66,6 +66,7 @@ export function ResearchConstellationWorkspace({
   typedGraph,
   typedLoading,
   typedError,
+  projectionErrorReason,
   projectionMismatch = false,
   onRetryTypedGraph,
   retryTypedGraphPending = false,
@@ -101,6 +102,7 @@ export function ResearchConstellationWorkspace({
   typedGraph: TypedGraphResponse | undefined;
   typedLoading: boolean;
   typedError: boolean;
+  projectionErrorReason?: string | null;
   projectionMismatch?: boolean;
   onRetryTypedGraph?: () => void;
   retryTypedGraphPending?: boolean;
@@ -467,7 +469,7 @@ export function ResearchConstellationWorkspace({
             className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
           >
             <p className="max-w-md text-sm text-destructive">
-              {t(($) => $.d5.canvas.error)}
+              {projectionErrorReason || t(($) => $.d5.canvas.error)}
             </p>
             {onRetryTypedGraph ? (
               <Button

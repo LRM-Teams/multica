@@ -24,6 +24,7 @@ import type {
   ResearchGraphEdge,
   ResearchGraphNode,
 } from "@multica/core/types";
+import type { TypedGraphResponse } from "@multica/core/research";
 import type { ResearchV6Snapshot } from "@multica/core/types/research-v6";
 import type { ResearchSource } from "./capability";
 import {
@@ -91,6 +92,68 @@ export function adaptV6Session(
         raw: String(n.payload?.node_kind ?? n.payload?.entity_kind ?? ""),
         ownerId: n.id,
       })),
+  };
+}
+
+/**
+ * Shape bridge from the canonical projection to the existing D5 renderer.
+ * Missing V6 fields stay empty: no tier, confidence, cluster, or lineage is
+ * inferred from title/summary text.
+ */
+export function canvasSnapshotToTypedGraph(
+  sessionId: string,
+  snapshot: CanvasSnapshot,
+): TypedGraphResponse {
+  return {
+    session_id: sessionId,
+    graph_version: snapshot.throughEventSequence,
+    total_node_count: snapshot.nodes.length,
+    nodes: snapshot.nodes.map((node) => ({
+      id: node.id,
+      session_id: sessionId,
+      node_type: node.kind,
+      title: node.title,
+      summary: node.summary,
+      status: node.status,
+      actor_agent_id: node.actor ?? null,
+      payload: node.payload,
+      level: "",
+      round: 0,
+      cluster_id: null,
+      confidence: null,
+      document_count: 0,
+      conclusion_count: 0,
+      goal_version_id: node.planVersion ?? null,
+      derived_from: null,
+      merged_from: [],
+      superseded_by: null,
+      restart_of: null,
+      invalidated_by: null,
+      superseded_at: null,
+      invalidated_at: null,
+      parent_id: null,
+      child_ids: [],
+      children_of: [],
+      created_at: node.createdAt ?? "",
+      updated_at: node.updatedAt ?? "",
+    })),
+    edges: snapshot.edges.map((edge) => ({
+      id: edge.id,
+      session_id: sessionId,
+      from_node_id: edge.from,
+      to_node_id: edge.to,
+      edge_type: edge.relation,
+      created_at: typeof edge.createdAt === "string" ? edge.createdAt : "",
+    })),
+    clusters: [],
+    lineage: {
+      derived: {},
+      merged: {},
+      superseded: {},
+      restarted: {},
+      invalidated: {},
+      supersedes: {},
+    },
   };
 }
 

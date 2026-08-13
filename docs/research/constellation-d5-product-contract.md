@@ -207,6 +207,7 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 | Custom control and responsive Lens accessibility | `08aa6f3d8`, PR #3021 | Integrated; semantic focus rings plus active Lens announcement/state |
 | Long unbroken node-card copy containment | `cb8fa3b50`, PR #3022 | Integrated; registered and generic node cards retain bounded two-line density |
 | Shared Research frontend typecheck baseline | `612034aea`, PR #3024 | Integrated; V6 Dispute panel uses a type-only `ReactNode` import |
+| Strict V6 Delta/resume HTTP success boundary | PR #3030 | Awaiting merge; explicit JSON `null` alone means no Delta, while malformed non-null success is an interface error |
 | V6 WS Delta routing envelope | Existing V5 `research_session:graph_updated` payloads plus a direct-Delta V6 listener | Protocol decision required: a workspace event must identify `run_id`, including mutation-free Delta frames |
 | Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@602ed7336` | Backend blocked; explicit V5/D5 fallback required |
 | Runtime visual/performance/accessibility matrix | No current deployed-session artifacts for this revision | Unverified; required before completion |

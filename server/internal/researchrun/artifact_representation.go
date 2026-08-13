@@ -20,6 +20,12 @@ func freezeEvidenceRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID
 	for i := range entries {
 		var value any
 		switch entries[i].Kind {
+		case ArtifactKindAttempt:
+			item, err := scanAttempt(tx.QueryRow(ctx, attemptSelectSQL+` WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.id=$3::uuid`, workspaceID, sessionID, entries[i].ArtifactID))
+			if err != nil {
+				return fmt.Errorf("freeze attempt representation: %w", err)
+			}
+			value = item
 		case ArtifactKindSourceSnapshot:
 			var item SourceSnapshotView
 			err := tx.QueryRow(ctx, `SELECT id::text, COALESCE(produced_by_task_id::text, ''), canonical_url, title, publisher, source_class, evidence_traits, independence_key, retrieved_at, content_hash, left(snapshot_text, $4), metadata, verification_status, created_at FROM research_source_snapshot WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspaceID, sessionID, entries[i].ArtifactID, sourceSnapshotExcerptChars).Scan(&item.ID, &item.ProducedByTaskID, &item.CanonicalURL, &item.Title, &item.Publisher, &item.SourceClass, &item.EvidenceTraits, &item.IndependenceKey, &item.RetrievedAt, &item.ContentHash, &item.SnapshotExcerpt, &item.Metadata, &item.VerificationStatus, &item.CreatedAt)
@@ -81,6 +87,47 @@ func freezeEvidenceRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID
 		entries[i].RepresentationHash = contentHashFromPayload(encoded)
 	}
 	return nil
+}
+
+func loadFrozenAttemptRepresentationsPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (map[string]Attempt, error) {
+	rows, err := pool.Query(ctx, `SELECT e.representation_bytes FROM research_artifact_context_entry e JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id) JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id) JOIN research_artifact_passport p ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id) WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.attempt_id=$3::uuid AND p.entity_kind='attempt' ORDER BY e.ordinal`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Attempt{}
+	for rows.Next() {
+		var encoded []byte
+		if err = rows.Scan(&encoded); err != nil {
+			return nil, err
+		}
+		var item Attempt
+		if err = json.Unmarshal(encoded, &item); err != nil {
+			return nil, fmt.Errorf("decode frozen attempt: %w", err)
+		}
+		if item.ID == "" || out[item.ID].ID != "" {
+			return nil, fmt.Errorf("%w: invalid or duplicate frozen attempt", ErrInvalidTransition)
+		}
+		out[item.ID] = item
+	}
+	return out, rows.Err()
+}
+
+func applyFrozenAttempts(live []Attempt, frozen map[string]Attempt, currentAttemptID string) ([]Attempt, error) {
+	if frozen[currentAttemptID].ID == "" {
+		return nil, fmt.Errorf("%w: current attempt is absent from frozen context", ErrInvalidTransition)
+	}
+	out := make([]Attempt, 0, len(frozen))
+	for _, item := range live {
+		if frozenItem, ok := frozen[item.ID]; ok {
+			out = append(out, frozenItem)
+			delete(frozen, item.ID)
+		}
+	}
+	if len(frozen) != 0 {
+		return nil, fmt.Errorf("%w: frozen attempt ordering source is missing", ErrInvalidTransition)
+	}
+	return out, nil
 }
 
 func loadFrozenEvaluationPrivatePool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]EvaluationPrivateContext, error) {

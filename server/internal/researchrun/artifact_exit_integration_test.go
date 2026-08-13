@@ -258,6 +258,19 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	}
 
 	beforeSnapshot := readSnapshot()
+	var frozenAttemptBefore Attempt
+	for _, candidate := range beforeSnapshot.Attempts {
+		if candidate.ID == attempt.ID {
+			frozenAttemptBefore = candidate
+		}
+	}
+	if frozenAttemptBefore.ID == "" || frozenAttemptBefore.InboxTaskID != "" || frozenAttemptBefore.Status != AttemptStatusDispatching {
+		t.Fatalf("frozen attempt before=%+v", frozenAttemptBefore)
+	}
+	inboxTaskID := uuid.NewString()
+	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxTaskID); err != nil {
+		t.Fatalf("AttachInboxTask: %v", err)
+	}
 	replayedSnapshot := readSnapshot()
 	before, replayed := *beforeSnapshot.AttemptContext, *replayedSnapshot.AttemptContext
 	if before.ManifestID != replayed.ManifestID || before.ManifestHash != replayed.ManifestHash ||
@@ -301,6 +314,15 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 		t.Fatalf("live mutation changed frozen artifact projection before=%q after=%q",
 			beforeSnapshot.ArtifactProjection.ProjectionHash, afterSnapshot.ArtifactProjection.ProjectionHash)
 	}
+	var frozenAttemptAfter Attempt
+	for _, candidate := range afterSnapshot.Attempts {
+		if candidate.ID == attempt.ID {
+			frozenAttemptAfter = candidate
+		}
+	}
+	if frozenAttemptAfter.InboxTaskID != frozenAttemptBefore.InboxTaskID || frozenAttemptAfter.Status != frozenAttemptBefore.Status {
+		t.Fatalf("live runtime mutation changed frozen attempt before=%+v after=%+v", frozenAttemptBefore, frozenAttemptAfter)
+	}
 	for _, item := range afterSnapshot.ArtifactProjection.Items {
 		if item.EntityID == sourceID {
 			t.Fatalf("post-manifest artifact leaked into Attempt projection: %+v", item)
@@ -312,6 +334,15 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	}
 	if human.ArtifactProjection == nil {
 		t.Fatal("expected human artifact projection")
+	}
+	var liveAttempt Attempt
+	for _, candidate := range human.Attempts {
+		if candidate.ID == attempt.ID {
+			liveAttempt = candidate
+		}
+	}
+	if liveAttempt.InboxTaskID != inboxTaskID {
+		t.Fatalf("human attempt inbox=%q want=%q", liveAttempt.InboxTaskID, inboxTaskID)
 	}
 	var humanSawLive bool
 	for _, item := range human.ArtifactProjection.Items {

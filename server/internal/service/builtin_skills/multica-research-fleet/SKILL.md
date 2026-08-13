@@ -33,6 +33,11 @@ were already checked against the immutable full snapshot at ingestion. V3–V5
 non-plan tasks inherit the accepted Method for the current goal/plan version.
 V4/V5 also expose the accepted Claim-level evidence standards.
 
+The snapshot's Attempt list is also frozen at dispatch. Later Inbox attachment,
+runtime heartbeat, cancellation, failure, or Result lifecycle changes are live
+operational facts for the scheduler, but they do not rewrite this Attempt's
+input context.
+
 2. Perform the assigned investigation according to `run.method`. Explore
 beyond the first plausible answer. For V4/V5, each Claim references an accepted
 `evidence_standard_key`; every Source Snapshot records evidence traits and every

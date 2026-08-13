@@ -52,7 +52,11 @@ import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
 import { StarGraphCanvas } from "../star-graph";
 import { TrajectoryExplorer } from "../trajectory-explorer";
-import { STAR_GRAPH_DOM_BUDGET, STAR_GRAPH_MOBILE_DOM_BUDGET, selectVisibleEntityIds } from "../star-graph/lib/star-graph-visible-budget";
+import {
+  STAR_GRAPH_MOBILE_DOM_BUDGET,
+  STAR_GRAPH_SEMANTIC_NODE_BUDGET,
+  selectVisibleEntityIds,
+} from "../star-graph/lib/star-graph-visible-budget";
 import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
@@ -301,7 +305,9 @@ export function ResearchConstellationWorkspace({
       rootId: canvasModel.rootId,
       selectedNodeId: selectedNode?.id ?? null,
       relatedNodeIds,
-      budget: isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : STAR_GRAPH_DOM_BUDGET,
+      budget: isMobile
+        ? STAR_GRAPH_MOBILE_DOM_BUDGET
+        : STAR_GRAPH_SEMANTIC_NODE_BUDGET,
     });
     const map = new Map<
       string,

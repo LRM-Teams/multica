@@ -5,6 +5,9 @@ import { isBlankFilter, matchesResearchCanvasFilter } from "@multica/core/resear
 /** D5 desktop hard DOM budget (viewport-performance §3). */
 export const STAR_GRAPH_DOM_BUDGET = 220;
 
+/** D5 desktop semantic-node hard limit; entity cards must stop here. */
+export const STAR_GRAPH_SEMANTIC_NODE_BUDGET = 180;
+
 /** D5 narrow viewport hard DOM budget (viewport-performance §3). */
 export const STAR_GRAPH_MOBILE_DOM_BUDGET = 48;
 
@@ -93,7 +96,10 @@ export function selectVisibleEntityIds(
     zoom?: number;
   },
 ): Set<string> {
-  const baseBudget = options.budget ?? STAR_GRAPH_DOM_BUDGET;
+  const baseBudget = Math.min(
+    options.budget ?? STAR_GRAPH_SEMANTIC_NODE_BUDGET,
+    STAR_GRAPH_SEMANTIC_NODE_BUDGET,
+  );
   const budget =
     options.zoom != null
       ? effectiveEntityBudget(baseBudget, options.zoom)

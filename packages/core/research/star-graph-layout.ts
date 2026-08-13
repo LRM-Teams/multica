@@ -588,7 +588,9 @@ export function layoutStarGraph(
   const allOrdered = [root, ...nodes.filter((n) => n.id !== rootId)].sort((a, b) =>
     a.id.localeCompare(b.id),
   );
-  const ITERATIONS = 48;
+  // Settle residual overlaps at the 220-node product cap while keeping the
+  // relaxation deterministic and strictly bounded.
+  const ITERATIONS = 64;
   for (let iter = 0; iter < ITERATIONS; iter += 1) {
     for (let i = 0; i < allOrdered.length; i += 1) {
       const a = allOrdered[i]!;

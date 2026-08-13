@@ -66,6 +66,7 @@ export function ResearchSessionChromeActions({
   sources = EMPTY_SOURCES,
   pendingSubstantiveGoal = null,
   onConfirmSubstantiveGoal,
+  confirmSubstantivePending = false,
   goalLoading = false,
   goalError = false,
   onGoalRetry,
@@ -91,7 +92,8 @@ export function ResearchSessionChromeActions({
   members?: ResearchFleetMember[];
   sources?: ResearchSource[];
   pendingSubstantiveGoal?: string | null;
-  onConfirmSubstantiveGoal?: (proposal: string) => void;
+  onConfirmSubstantiveGoal?: (proposal: string) => void | Promise<void>;
+  confirmSubstantivePending?: boolean;
   goalLoading?: boolean;
   goalError?: boolean;
   onGoalRetry?: () => void;
@@ -149,6 +151,7 @@ export function ResearchSessionChromeActions({
           goal={session.goal}
           pendingSubstantive={pendingSubstantiveGoal}
           onConfirmSubstantive={onConfirmSubstantiveGoal}
+          confirmSubstantivePending={confirmSubstantivePending}
           loading={goalLoading}
           error={goalError}
           onRetry={onGoalRetry}

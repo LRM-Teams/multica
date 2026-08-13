@@ -70,6 +70,7 @@ export function ResearchSessionChrome({
   onSelectStage,
   pendingSubstantiveGoal = null,
   onConfirmSubstantiveGoal,
+  confirmSubstantivePending = false,
   goalLoading = false,
   goalError = false,
   onGoalRetry,
@@ -97,7 +98,8 @@ export function ResearchSessionChrome({
   onSelectStage?: (stage: string) => void;
   /** LRM-1008 — pending substantive goal proposal (if any). */
   pendingSubstantiveGoal?: string | null;
-  onConfirmSubstantiveGoal?: (proposal: string) => void;
+  onConfirmSubstantiveGoal?: (proposal: string) => void | Promise<void>;
+  confirmSubstantivePending?: boolean;
   goalLoading?: boolean;
   goalError?: boolean;
   onGoalRetry?: () => void;
@@ -225,6 +227,7 @@ export function ResearchSessionChrome({
           sources={sources}
           pendingSubstantiveGoal={pendingSubstantiveGoal}
           onConfirmSubstantiveGoal={onConfirmSubstantiveGoal}
+          confirmSubstantivePending={confirmSubstantivePending}
           goalLoading={goalLoading}
           goalError={goalError}
           onGoalRetry={onGoalRetry}

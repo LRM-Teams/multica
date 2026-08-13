@@ -54,6 +54,7 @@ export function ResearchSessionGoalCard({
   error = false,
   onRetry,
   onConfirmSubstantive,
+  confirmSubstantivePending = false,
   goalVersion = null,
   goalHistory = [],
   goalImpact = null,
@@ -67,7 +68,8 @@ export function ResearchSessionGoalCard({
   loading?: boolean;
   error?: boolean;
   onRetry?: () => void;
-  onConfirmSubstantive?: (proposal: string) => void;
+  onConfirmSubstantive?: (proposal: string) => void | Promise<void>;
+  confirmSubstantivePending?: boolean;
   goalVersion?: number | null;
   goalHistory?: readonly GoalVersionEntry[];
   goalImpact?: { labeledNodes: number; totalNodes: number } | null;
@@ -87,6 +89,7 @@ export function ResearchSessionGoalCard({
   const [justUpdated, setJustUpdated] = useState(false);
   const lastGoalRef = useRef<string | null>(null);
   const collapsedSessionRef = useRef(sessionId);
+  const confirmSubmittingRef = useRef(false);
 
   // Reset collapse preference when navigating sessions (render-time adjust).
   if (collapsedSessionRef.current !== sessionId) {
@@ -372,12 +375,33 @@ export function ResearchSessionGoalCard({
                   type="button"
                   size="sm"
                   data-testid="research-session-goal-confirm-substantive"
-                  onClick={() => {
-                    onConfirmSubstantive(model.substantiveProposal!);
-                    setOpen(false);
+                  aria-disabled={confirmSubstantivePending || undefined}
+                  aria-busy={confirmSubstantivePending || undefined}
+                  className={cn(
+                    confirmSubstantivePending && "cursor-not-allowed opacity-50",
+                  )}
+                  onClick={async () => {
+                    if (
+                      confirmSubstantivePending ||
+                      confirmSubmittingRef.current
+                    ) return;
+                    confirmSubmittingRef.current = true;
+                    try {
+                      await onConfirmSubstantive(model.substantiveProposal!);
+                      setOpen(false);
+                    } catch {
+                      // The mutation owner reports the API failure. Keep the
+                      // proposal and Goal Card open for lossless recovery.
+                    } finally {
+                      confirmSubmittingRef.current = false;
+                    }
                   }}
                 >
-                  {t(($) => $.goal_card.confirm_substantive)}
+                  {t(($) =>
+                    confirmSubstantivePending
+                      ? $.goal_card.confirming_substantive
+                      : $.goal_card.confirm_substantive,
+                  )}
                 </Button>
               ) : null}
             </div>

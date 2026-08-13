@@ -624,11 +624,14 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             : null
         }
         onConfirmSubstantiveGoal={(proposal) =>
-          steer.mutate({
-            goal: proposal,
-            reason: "user_confirmed_substantive_goal_proposal",
-          })
+          steer
+            .mutateAsync({
+              goal: proposal,
+              reason: "user_confirmed_substantive_goal_proposal",
+            })
+            .then(() => undefined)
         }
+        confirmSubstantivePending={steer.isPending}
       />
 
       {sessionInterrupt ? (

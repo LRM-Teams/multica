@@ -30,6 +30,7 @@ vi.mock("../../i18n/use-t", () => ({
           close: "关闭",
           retry: "重试",
           confirm_substantive: "确认换题（substantive）",
+          confirming_substantive: "正在确认换题…",
           collapse_icon: "收起为图标",
           expand_card: "展开卡片",
         },
@@ -137,6 +138,81 @@ describe("ResearchSessionGoalCard (LRM-1008 / LRM-1010)", () => {
     fireEvent.click(screen.getByTestId("research-session-goal-card"));
     fireEvent.click(screen.getByTestId("research-session-goal-confirm-substantive"));
     expect(onConfirm).toHaveBeenCalledWith("换题提案");
+  });
+
+  it("keeps the proposal and focus while confirmation is pending", async () => {
+    let resolveConfirm: (() => void) | undefined;
+    const onConfirm = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfirm = resolve;
+        }),
+    );
+    const { rerender } = render(
+      <ResearchSessionGoalCard
+        sessionId="s1"
+        goal="当前目标"
+        pendingSubstantive="换题提案"
+        onConfirmSubstantive={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("research-session-goal-card"));
+    const confirm = screen.getByTestId(
+      "research-session-goal-confirm-substantive",
+    );
+    confirm.focus();
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ResearchSessionGoalCard
+        sessionId="s1"
+        goal="当前目标"
+        pendingSubstantive="换题提案"
+        onConfirmSubstantive={onConfirm}
+        confirmSubstantivePending
+      />,
+    );
+    const pendingConfirm = screen.getByTestId(
+      "research-session-goal-confirm-substantive",
+    ) as HTMLButtonElement;
+    expect(screen.getAllByText("换题提案").length).toBeGreaterThan(0);
+    expect(pendingConfirm.disabled).toBe(false);
+    expect(pendingConfirm).toHaveAttribute("aria-disabled", "true");
+    expect(pendingConfirm).toHaveAttribute("aria-busy", "true");
+    expect(document.activeElement).toBe(pendingConfirm);
+    fireEvent.click(pendingConfirm);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveConfirm?.();
+      await Promise.resolve();
+    });
+    expect(
+      screen.queryByTestId("research-session-goal-confirm-substantive"),
+    ).toBeNull();
+  });
+
+  it("keeps the substantive proposal open when confirmation fails", async () => {
+    const onConfirm = vi.fn().mockRejectedValue(new Error("steer failed"));
+    render(
+      <ResearchSessionGoalCard
+        sessionId="s1"
+        goal="当前目标"
+        pendingSubstantive="换题提案"
+        onConfirmSubstantive={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("research-session-goal-card"));
+    fireEvent.click(screen.getByTestId("research-session-goal-confirm-substantive"));
+    await act(async () => Promise.resolve());
+
+    expect(onConfirm).toHaveBeenCalledWith("换题提案");
+    expect(screen.getAllByText("换题提案").length).toBeGreaterThan(0);
+    expect(
+      screen.getByTestId("research-session-goal-confirm-substantive"),
+    ).toBeTruthy();
   });
 
   it("can collapse to icon and expand again from dialog", () => {

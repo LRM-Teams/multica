@@ -13,7 +13,6 @@
  */
 
 import type {
-  ResearchV6NodeKind,
   ResearchV6ProjectionNode,
   ResearchV6UnknownKindDiagnostic,
 } from "@multica/core/types/research-v6";
@@ -117,7 +116,10 @@ export function NodeRenderer({
       state={state}
       title={node.title}
       typeLabel={t(
-        ($) => $.node_card.kinds[surface.kind as ResearchV6NodeKind],
+        ($) =>
+          $.node_card.kinds[
+            surface.kind as keyof typeof $.node_card.kinds
+          ],
       )}
       summary={node.summary}
       importance={stars}

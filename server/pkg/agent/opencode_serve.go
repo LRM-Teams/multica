@@ -246,6 +246,11 @@ func (b *opencodeServeBackend) RuntimeAlive() (bool, bool) {
 	return b.runtimeAlive()
 }
 
+func (b *opencodeServeBackend) EnsureResidentProcess(ctx context.Context) error {
+	_, err := b.ensureServer(ctx, b.cfg.ResidentOptions)
+	return err
+}
+
 // AcceptPendingNotice durably queues a content-free follow-up through
 // OpenCode's v2 Session inbox. Queue delivery is the provider's safe-boundary
 // contract: it is promoted only when the current drain would otherwise idle.

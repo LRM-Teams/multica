@@ -28,14 +28,20 @@ func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentPr
 }
 
 func (runner *WorkspaceRunner) observeMessageLifecycle(agentID, runtimeID string) {
+	launch, found := runner.managedLaunch(agentID, runtimeID)
+	if !found || launch.ProcessInstanceID == "" || launch.QueueState == protocol.AgentStartQueueRunning {
+		// Starting is spawn Activity, not a per-handoff label. After the
+		// process is admitted as Running, later Messages must not repaint it.
+		return
+	}
 	runner.observeRuntimeStarting(agentID, runtimeID, "Message lifecycle")
 }
 
 // observeRuntimeStarting is Raft 1.0.16 spawn Activity: working / starting /
-// "Starting…". Called after the provider process is up and Activity is managed.
+// "Starting…". The process must already be in APM (this.agents.set).
 func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase string) {
 	launch, found := runner.managedLaunch(agentID, runtimeID)
-	if !found || runner.activity == nil {
+	if !found || runner.activity == nil || launch.ProcessInstanceID == "" {
 		return
 	}
 	runner.observeActivity(AgentObservation{

@@ -219,8 +219,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		var accepted protocol.AgentStartAckPayload
-		var sawAck, sawActive, sawSession bool
-		for !sawAck || !sawActive || !sawSession {
+		var sawAck, sawActive bool
+		for !sawAck || !sawActive {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -244,7 +244,11 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 					sawActive = true
 				}
 			case protocol.EventAgentSession:
-				sawSession = true
+				var session protocol.AgentSessionPayload
+				if json.Unmarshal(msg.Payload, &session) == nil && session.ProviderSessionID == "" {
+					t.Error("agent:session without a provider session id")
+					return
+				}
 			}
 			frames <- msg
 		}
@@ -292,10 +296,10 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		runner.inboxes.Close()
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()
-	var ready, ack, status, inactive, session protocol.Message
+	var ready, ack, status, inactive protocol.Message
 	var sawStartingActivity bool
 	deadline := time.Now().Add(2 * time.Second)
-	for ready.Type == "" || ack.Type == "" || status.Type == "" || session.Type == "" || inactive.Type == "" {
+	for ready.Type == "" || ack.Type == "" || status.Type == "" || inactive.Type == "" {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out waiting for Runner frames")
 		}
@@ -316,8 +320,6 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				} else {
 					inactive = msg
 				}
-			case protocol.EventAgentSession:
-				session = msg
 			case protocol.EventAgentActivity:
 				// Raft 1.0.16 (#2929): managed spawn publishes working/starting.
 				var activity protocol.AgentActivityPayload
@@ -347,12 +349,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	if err := json.Unmarshal(status.Payload, &active); err != nil {
 		t.Fatal(err)
 	}
-	var reportedSession protocol.AgentSessionPayload
-	if err := json.Unmarshal(session.Payload, &reportedSession); err != nil {
-		t.Fatal(err)
-	}
-	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive || reportedSession.LaunchID != accepted.LaunchID {
-		t.Fatalf("ack=%+v status=%+v session=%+v", accepted, active, reportedSession)
+	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive {
+		t.Fatalf("ack=%+v status=%+v", accepted, active)
 	}
 	var stopped protocol.AgentStatusPayload
 	if err := json.Unmarshal(inactive.Payload, &stopped); err != nil {

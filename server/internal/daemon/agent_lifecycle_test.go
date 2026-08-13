@@ -208,6 +208,63 @@ func TestAgentLifecycleExecutorResetSessionKillsBeforeClearingServerState(t *tes
 	}
 }
 
+func TestAgentLifecycleExecutorSkipsStopWhenNoLiveProcess(t *testing.T) {
+	agentID := uuid.NewString()
+	runtimeID := uuid.NewString()
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	stable, _, err := splitAgentProcessEnvironment(map[string]string{
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     agentID,
+		"MULTICA_TASK_ID":      "turn-a",
+	})
+	if err != nil {
+		t.Fatalf("splitAgentProcessEnvironment: %v", err)
+	}
+	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID:     agentID,
+		RuntimeID:   runtimeID,
+		Provider:    "pi",
+		Executable:  "/usr/local/bin/pi",
+		WorkDir:     "/var/lib/multica/agent-a/workspace",
+		Environment: stable,
+	})
+	if err != nil {
+		t.Fatalf("newCanonicalAgentRuntimeIdentity: %v", err)
+	}
+	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{Identity: identity, Factory: probe.factory})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	backend := probe.backends[0]
+	lease.release(true)
+	if pool.hasLiveLease(agentID, runtimeID) || pool.residentProcessAlive(agentID, runtimeID) {
+		t.Fatal("fixture still looks live after idle release")
+	}
+	resetter := &lifecycleResetRecorder{}
+	executor := &agentLifecycleExecutor{
+		workspacesRoot: t.TempDir(),
+		runtimes:       pool,
+		sessionReset:   resetter,
+	}
+	if err := executor.Execute(context.Background(), agentLifecycleExecutionRequest{
+		OperationID: uuid.NewString(),
+		WorkspaceID: uuid.NewString(),
+		AgentID:     agentID,
+		RuntimeID:   runtimeID,
+		ActionKind:  agentLifecycleActionResetSessionRestart,
+	}); err != nil {
+		t.Fatalf("restart with no live process: %v", err)
+	}
+	if got := backend.forceKillCount(); got != 0 {
+		t.Fatalf("ForceKill called %d times, want 0 for start-in-flight with no process", got)
+	}
+	if len(resetter.calls) != 1 {
+		t.Fatalf("session reset calls=%d, want 1", len(resetter.calls))
+	}
+}
+
 func TestAgentLifecycleExecutorReportsPartialFailureStep(t *testing.T) {
 	resetter := &lifecycleResetRecorder{err: errors.New("reset unavailable")}
 	executor := &agentLifecycleExecutor{

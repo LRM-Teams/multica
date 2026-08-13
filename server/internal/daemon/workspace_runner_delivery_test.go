@@ -486,6 +486,39 @@ func TestWorkspaceRunnerStartingLaunchBuffersDeliveryWithoutHandoff(t *testing.T
 	}
 }
 
+func TestWorkspaceRunnerDeliveryAfterManagedStartReachesProvider(t *testing.T) {
+	var handoffs int
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "test-launch-agent-1", StartDispatchID: "test-launch-agent-1-dispatch",
+	}); err != nil {
+		t.Fatalf("managed start: %v", err)
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
+	}
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(string, any) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if handoffs != 1 {
+		t.Fatalf("handoffs after managed start = %d, want 1 (Raft delivers once the process exists)", handoffs)
+	}
+}
+
 func TestWorkspaceRunnerMissingProcessReportsRestartRequired(t *testing.T) {
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {

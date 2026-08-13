@@ -92,6 +92,34 @@ func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing
 	}
 }
 
+func TestAgentProcessManagerRestartDuringStartingRebindsWithoutStop(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if first.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("queue = %q, want starting", first.QueueState)
+	}
+	second, err := manager.Restart(
+		agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID},
+		agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-b", StartDispatchID: "dispatch-b"},
+	)
+	if err != nil {
+		t.Fatalf("Restart during starting: %v", err)
+	}
+	if second.QueueState != protocol.AgentStartQueueRebound {
+		t.Fatalf("restart-during-starting queue = %q, want rebound", second.QueueState)
+	}
+	snapshot, ok := manager.Snapshot("agent-a")
+	if !ok || snapshot.LaunchID != "launch-b" || snapshot.ProcessInstanceID != "" {
+		t.Fatalf("rebound snapshot = %+v, exists=%v; want launch-b still starting with no process", snapshot, ok)
+	}
+	if snapshot.QueueState != protocol.AgentStartQueueStarting && snapshot.QueueState != protocol.AgentStartQueueRebound {
+		t.Fatalf("rebound live queue = %q, want starting or rebound", snapshot.QueueState)
+	}
+}
+
 func TestAgentProcessManagerRejectsRevokedCapacityGrant(t *testing.T) {
 	admission := newTestProcessAdmission(1)
 	manager := newAgentProcessManager("workspace-1", admission, time.Now, nil)

@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-race-5 证据：Plan Result 在 rolled-back acceptance 后遇到相同 client key、不同语义的
+Question 或 Task upsert target 时必须返回 `result conflict`；失败重试前后逐项比较 Result
+Artifact、Method、Question、Task、accepted Event、Attempt-produced Passport 与 Input
+Reference，证明没有局部提交。§15.18 的其余 Method/dependency/Evidence/Report/Evaluation
+竞态仍待收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

@@ -24,6 +24,37 @@ type acceptanceRaceFixture struct {
 	input   AcceptResultInput
 }
 
+type acceptanceRaceWriteSet struct {
+	resultArtifacts   int
+	methodDecisions   int
+	questions         int
+	tasks             int
+	acceptedEvents    int
+	producedPassports int
+	inputReferences   int
+}
+
+func loadAcceptanceRaceWriteSet(t *testing.T, ctx context.Context, fx acceptanceRaceFixture) acceptanceRaceWriteSet {
+	t.Helper()
+	var state acceptanceRaceWriteSet
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_result_artifact WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid AND decision_kind = 'research_method'),
+		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND event_type = 'task_result_accepted'),
+		  (SELECT count(*)::int FROM research_artifact_passport WHERE session_id = $1::uuid AND produced_by_attempt_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference WHERE session_id = $1::uuid)
+	`, fx.run.SessionID, fx.attempt.ID).Scan(
+		&state.resultArtifacts, &state.methodDecisions, &state.questions, &state.tasks,
+		&state.acceptedEvents, &state.producedPassports, &state.inputReferences,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
 func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) acceptanceRaceFixture {
 	t.Helper()
 	fixture := seedResearchRunFixture(t, ctx, pool)
@@ -149,7 +180,54 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 	cases := []struct {
 		name   string
 		mutate func(context.Context, acceptanceRaceFixture) error
+		want   error
 	}{
+		{
+			name: "question_upsert_target",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				tx, err := fx.pool.Begin(ctx)
+				if err != nil {
+					return err
+				}
+				defer tx.Rollback(ctx)
+				questionID := uuid.NewString()
+				if _, err = tx.Exec(ctx, `
+					INSERT INTO research_question (
+					  id, workspace_id, session_id, created_by_task_id, client_key, kind,
+					  question, required, status, priority, impact, uncertainty, novelty,
+					  goal_version, plan_version
+					) VALUES (
+					  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'answer-question', 'dimension',
+					  'Conflicting question text', true, 'open', 1, 1, 1, 1, $5, $6
+					)
+				`, questionID, fx.fixture.workspaceID, fx.run.SessionID, fx.task.ID, fx.run.GoalVersion, fx.run.PlanVersion); err != nil {
+					return err
+				}
+				goal, plan := fx.run.GoalVersion, fx.run.PlanVersion
+				backfillIntegrationArtifactPassport(t, ctx, tx, fx.fixture.workspaceID, fx.run.SessionID, questionID, string(ArtifactKindQuestion), &goal, &plan)
+				return tx.Commit(ctx)
+			},
+			want: ErrResultConflict,
+		},
+		{
+			name: "task_upsert_target",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				taskID := uuid.NewString()
+				insertIntegrationTasksWithPassports(t, ctx, fx.pool, fx.fixture.workspaceID, fx.run.SessionID, fx.run.GoalVersion, fx.run.PlanVersion, `
+					INSERT INTO research_task (
+					  id, workspace_id, session_id, parent_task_id, client_key, kind, objective,
+					  required_capability, expected_result, status, goal_version, plan_version,
+					  max_attempts, timeout_seconds
+					) VALUES (
+					  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'verify-1', 'verify',
+					  'Conflicting verification objective', 'validator', 'research_evidence_v5',
+					  'pending', $5, $6, 1, 300
+					)
+				`, []any{taskID, fx.fixture.workspaceID, fx.run.SessionID, fx.task.ID, fx.run.GoalVersion, fx.run.PlanVersion}, []string{taskID})
+				return nil
+			},
+			want: ErrResultConflict,
+		},
 		{
 			name: "eligibility_revision",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
@@ -260,10 +338,18 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 			if err := tc.mutate(ctx, fx); err != nil {
 				t.Fatalf("mutate: %v", err)
 			}
-			if _, err = fx.store.AcceptResult(ctx, fx.input); !errors.Is(err, ErrInvalidTransition) {
-				t.Fatalf("AcceptResult after mutation err=%v want ErrInvalidTransition", err)
+			beforeRetry := loadAcceptanceRaceWriteSet(t, ctx, fx)
+			want := tc.want
+			if want == nil {
+				want = ErrInvalidTransition
+			}
+			if _, err = fx.store.AcceptResult(ctx, fx.input); !errors.Is(err, want) {
+				t.Fatalf("AcceptResult after mutation err=%v want %v", err, want)
 			}
 			assertAcceptanceRolledBack(t, ctx, fx)
+			if afterRetry := loadAcceptanceRaceWriteSet(t, ctx, fx); afterRetry != beforeRetry {
+				t.Fatalf("failed retry changed acceptance write set before=%+v after=%+v", beforeRetry, afterRetry)
+			}
 		})
 	}
 }

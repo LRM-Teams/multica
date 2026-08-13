@@ -996,6 +996,13 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-shadow-content 证据：生产 Claim Evidence read model 现在保留内部 Evidence Link
+Artifact ID，passport dispatch 对 Claim 内嵌 Evidence 逐项按 Manifest 过滤；retained
+Source/Observation/Claim/Evidence representation 以 canonical bytes、hash、kind、ID 和
+parent Claim 做 shadow comparison。嵌套 metadata、Evidence 内容或父子关系变化均
+fail closed；授权 omission 不再因只统计顶层 Claim 而被误判。§15.8 仍需独立全领域
+membership/disposition shadow 合并后才能标记 covered。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

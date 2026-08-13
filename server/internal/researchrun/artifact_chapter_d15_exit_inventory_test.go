@@ -22,7 +22,7 @@ var chapterD15Coverage = map[int]string{
 	5:  "partial", // immutability/watermark CAS tests
 	6:  "partial", // backfill diagnostic tests in migration 319
 	7:  "partial", // artifact_policy legacy admission matrix
-	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered
+	8:  "partial", // bytes/hash/nesting shadow + nested Evidence filtering + tie-order; independent full-domain comparison open
 	9:  "covered", // closed normal-clearance/purpose/evaluation matrix + output taint permutations
 	10: "covered", // structural subject isolation + real subject/grader frozen-manifest dispatch
 	11: "partial", // dispatch race: eligibility/state/hash/lifecycle after rolled-back intent

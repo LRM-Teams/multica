@@ -37,7 +37,9 @@ V4/V5 also expose the accepted Claim-level evidence standards.
 beyond the first plausible answer. For V4/V5, each Claim references an accepted
 `evidence_standard_key`; every Source Snapshot records evidence traits and every
 Evidence Link records directness and method fit. Evaluate those fields against
-the Claim, not a universal source hierarchy. Preserve retrieved source text in
+the Claim, not a universal source hierarchy. Evidence Links are separately
+authorized manifest artifacts even though they appear nested under a Claim;
+the snapshot omits any link the assigned Attempt cannot read. Preserve retrieved source text in
 each source snapshot. Every quoted observation must be an exact substring of
 that snapshot. Execute required counter-search and record uncertainty.
 

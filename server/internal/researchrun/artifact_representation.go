@@ -53,6 +53,7 @@ func freezeEvidenceRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID
 					return fmt.Errorf("scan claim evidence: %w", evidenceErr)
 				}
 				if _, ok := authorized[evidenceID]; ok {
+					evidence.ArtifactID = evidenceID
 					item.Evidence = append(item.Evidence, evidence)
 				}
 			}

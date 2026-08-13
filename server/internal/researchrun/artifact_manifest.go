@@ -412,7 +412,14 @@ func filterClaimsByManifest(claims []Claim, allowed map[string]struct{}) []Claim
 	out := make([]Claim, 0, len(claims))
 	for _, c := range claims {
 		if _, ok := allowed[c.ID]; ok {
-			out = append(out, c)
+			filtered := c
+			filtered.Evidence = make([]ClaimEvidence, 0, len(c.Evidence))
+			for _, evidence := range c.Evidence {
+				if _, evidenceAllowed := allowed[evidence.ArtifactID]; evidenceAllowed {
+					filtered.Evidence = append(filtered.Evidence, evidence)
+				}
+			}
+			out = append(out, filtered)
 		}
 	}
 	return out

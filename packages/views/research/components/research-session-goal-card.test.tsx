@@ -34,6 +34,16 @@ vi.mock("../../i18n/use-t", () => ({
           collapse_icon: "收起为图标",
           expand_card: "展开卡片",
         },
+        d5: {
+          goal_panel: {
+            title: "目标版本",
+            version: "VERSION",
+            round: "ROUND",
+            round_with_budget: "ROUND / BUDGET",
+            current: "当前",
+            impact: "影响",
+          },
+        },
       }),
   }),
 }));
@@ -60,6 +70,21 @@ describe("ResearchSessionGoalCard (LRM-1008 / LRM-1010)", () => {
     expect(card.textContent).toContain("GOAL");
     expect(card.textContent).toMatch(/人员编制/);
     expect(screen.getByTestId("research-session-goal-dot")).toBeTruthy();
+  });
+
+  it("shows canonical goal version and product-round budget in the command bar", () => {
+    render(
+      <ResearchSessionGoalCard
+        sessionId="s1"
+        goal="目标"
+        goalVersion={3}
+        productRound={2}
+        productRoundBudget={5}
+      />,
+    );
+    expect(screen.getByTestId("research-session-goal-card")).toHaveTextContent(
+      "GOAL · VERSION · ROUND / BUDGET",
+    );
   });
 
   it("LRM-1010: uses brand semantic tokens (no hardcoded violet)", () => {

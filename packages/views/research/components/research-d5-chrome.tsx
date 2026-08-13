@@ -35,6 +35,7 @@ export function ResearchD5Chrome({
   goalHistory = [],
   goalImpact = null,
   typedGraphNodes = [],
+  projectionSource = null,
   className,
   session,
   pendingSubstantiveGoal,
@@ -50,6 +51,7 @@ export function ResearchD5Chrome({
   goalHistory?: readonly GoalVersionEntry[];
   goalImpact?: { labeledNodes: number; totalNodes: number } | null;
   typedGraphNodes?: readonly TypedGraphNode[];
+  projectionSource?: "v5" | "v6" | null;
   className?: string;
 }) {
   const { t } = useT("research");
@@ -87,7 +89,19 @@ export function ResearchD5Chrome({
             M
           </span>
           <div className="min-w-0">
-            <b>{t(($) => $.d5.brand_title)}</b>
+            <div className="flex min-w-0 items-center gap-2">
+              <b>{t(($) => $.d5.brand_title)}</b>
+              {projectionSource === "v5" ? (
+                <span
+                  role="status"
+                  data-testid="research-d5-classic-projection"
+                  aria-label={t(($) => $.d5.projection.classic_hint)}
+                  className="shrink-0 rounded-full border border-border/70 bg-muted/60 px-1.5 py-0.5 font-medium text-muted-foreground"
+                >
+                  {t(($) => $.d5.projection.classic)}
+                </span>
+              ) : null}
+            </div>
             <span>{t(($) => $.d5.brand_subtitle)}</span>
           </div>
         </div>
@@ -102,6 +116,8 @@ export function ResearchD5Chrome({
             error={goalError}
             onRetry={onGoalRetry}
             goalVersion={goalVersion}
+            productRound={session.product_round ?? null}
+            productRoundBudget={session.product_round_budget ?? null}
             goalHistory={goalHistory}
             goalImpact={goalImpact}
             panelPlacement="below"
@@ -110,7 +126,7 @@ export function ResearchD5Chrome({
         </div>
 
         <div className="d5-chrome-controls">
-          <ResearchD5CanvasFilter options={filterOptions} />
+          <ResearchD5CanvasFilter sessionId={session.id} options={filterOptions} />
 
           <div className="d5-lens-group" role="tablist" aria-label={t(($) => $.d5.lens_group)}>
             {RESEARCH_D5_LENSES.map((lens) => (
@@ -135,7 +151,7 @@ export function ResearchD5Chrome({
             <PopoverTrigger
               data-testid="research-d5-lens-overflow-trigger"
               className="d5-lens-overflow-trigger d5-lens-btn inline-flex items-center gap-1"
-              aria-label={t(($) => $.d5.lens_group)}
+              aria-label={`${t(($) => $.d5.lens_group)}: ${t(($) => $.d5.lens[activeLens])}`}
             >
               {t(($) => $.d5.lens[activeLens])}
               <ChevronDown className="size-3.5 opacity-70" aria-hidden />
@@ -146,6 +162,7 @@ export function ResearchD5Chrome({
                   key={lens}
                   type="button"
                   data-testid={`research-d5-lens-overflow-${lens}`}
+                  aria-pressed={activeLens === lens}
                   className={cn(
                     "w-full rounded-md px-2 py-1.5 text-left text-[11px]",
                     activeLens === lens

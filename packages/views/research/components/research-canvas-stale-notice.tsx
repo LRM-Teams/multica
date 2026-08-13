@@ -40,9 +40,16 @@ export function ResearchCanvasStaleNotice({
           type="button"
           size="sm"
           variant="outline"
-          className="h-7 shrink-0 px-2 text-xs"
-          disabled={retryPending}
-          onClick={onRetry}
+          className={cn(
+            "h-7 shrink-0 px-2 text-xs",
+            retryPending && "cursor-not-allowed opacity-50",
+          )}
+          aria-disabled={retryPending || undefined}
+          aria-busy={retryPending || undefined}
+          onClick={() => {
+            if (retryPending) return;
+            onRetry();
+          }}
           data-testid="research-canvas-stale-retry"
         >
           <RefreshCw

@@ -36,10 +36,25 @@ export function ResearchServerErrorPage({
           {t(($) => $.connectivity.server_error_title)}
         </h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          {message?.trim()
-            ? message
-            : t(($) => $.connectivity.server_error_hint)}
+          {t(($) => $.connectivity.server_error_hint)}
         </p>
+        {message?.trim() ? (
+          <details
+            data-testid="research-server-error-diagnostics"
+            className="pt-1 text-left text-xs text-muted-foreground"
+          >
+            <summary className="cursor-pointer text-center">
+              {t(($) => $.connectivity.technical_details)}
+            </summary>
+            <code
+              lang="en"
+              dir="ltr"
+              className="mt-2 block max-h-24 overflow-auto rounded-md bg-muted/60 p-2 whitespace-pre-wrap break-words"
+            >
+              {message}
+            </code>
+          </details>
+        ) : null}
       </div>
       <Button
         type="button"

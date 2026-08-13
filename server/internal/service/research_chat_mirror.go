@@ -75,7 +75,18 @@ func (s *TaskService) mirrorResearchChatReply(ctx context.Context, task db.Agent
 		metaBytes = []byte(`{"mirrored_from":"chat","stopped":true}`)
 	}
 
-	row, err := s.Queries.CreateResearchMessage(ctx, db.CreateResearchMessageParams{
+	if s.TxStarter == nil {
+		slog.Warn("research chat mirror: transaction service unavailable", "research_session_id", sessionIDStr)
+		return
+	}
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn("research chat mirror: begin transaction failed", "research_session_id", sessionIDStr, "error", err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	row, err := s.Queries.WithTx(tx).CreateResearchMessage(ctx, db.CreateResearchMessageParams{
 		WorkspaceID:   researchSession.WorkspaceID,
 		SessionID:     researchSession.ID,
 		SenderType:    "agent",
@@ -87,6 +98,24 @@ func (s *TaskService) mirrorResearchChatReply(ctx context.Context, task db.Agent
 	})
 	if err != nil {
 		slog.Warn("research chat mirror: create message failed",
+			"research_session_id", sessionIDStr,
+			"error", err,
+		)
+		return
+	}
+	if _, err = tx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered(
+			$1::uuid, $2::uuid, $3::uuid, 'research_message', now(), NULL, NULL
+		)
+	`, researchSession.WorkspaceID, researchSession.ID, row.ID); err != nil {
+		slog.Warn("research chat mirror: register message passport failed",
+			"research_session_id", sessionIDStr,
+			"error", err,
+		)
+		return
+	}
+	if err = tx.Commit(ctx); err != nil {
+		slog.Warn("research chat mirror: commit message failed",
 			"research_session_id", sessionIDStr,
 			"error", err,
 		)

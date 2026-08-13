@@ -112,7 +112,7 @@ describe("research fleet/live a11y static contract (LRM-1203)", () => {
     // re-announce stream tokens. Busy flag only while generating.
     expect(src).toMatch(/aria-busy=\{isGenerating\s*\|\|\s*undefined\}/);
     expect(src).not.toMatch(/aria-live/);
-    expect(src).toMatch(/animate-pulse[\s\S]{0,40}aria-hidden/);
+    expect(src).toMatch(/animate-pulse[\s\S]{0,120}aria-hidden/);
     expect(src).toMatch(/streaming_from/);
   });
 

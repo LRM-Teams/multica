@@ -65,6 +65,8 @@ var agentDeleteIndexOptionalRelations = map[string]string{
 	"idx_note_ai_job_agent":                                       "note_ai_job",
 	"env_dispatch_delivery_obligation_source_recipient_agent_idx": "env_dispatch_delivery_obligation",
 	"note_worker_job_task_idx":                                    "note_worker_job",
+	"idx_agent_chat_delivery_message":                             "agent_chat_delivery",
+	"idx_agent_chat_delivery_chat_session":                        "agent_chat_delivery",
 }
 
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
@@ -148,6 +150,9 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 		{"idx_memory_curation_watermark_last_run", `CREATE INDEX CONCURRENTLY idx_memory_curation_watermark_last_run ON memory_curation_watermark (last_run_id) WHERE last_run_id IS NOT NULL`},
 		{"idx_work_node_linked_task", `CREATE INDEX CONCURRENTLY idx_work_node_linked_task ON work_node (linked_task_id) WHERE linked_task_id IS NOT NULL`},
 		{"note_worker_job_task_idx", `CREATE INDEX CONCURRENTLY note_worker_job_task_idx ON note_worker_job (task_id) WHERE task_id IS NOT NULL`},
+		// 345_agent_chat_delivery: chat_message / chat_session CASCADE lookups.
+		{"idx_agent_chat_delivery_message", `CREATE INDEX CONCURRENTLY idx_agent_chat_delivery_message ON agent_chat_delivery (message_id)`},
+		{"idx_agent_chat_delivery_chat_session", `CREATE INDEX CONCURRENTLY idx_agent_chat_delivery_chat_session ON agent_chat_delivery (chat_session_id)`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

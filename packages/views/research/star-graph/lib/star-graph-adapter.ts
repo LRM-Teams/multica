@@ -227,7 +227,7 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
   // working, while an active root/result is not necessarily executing. Keep
   // that distinction at the tier boundary instead of pulsing the whole graph.
   const state =
-    tier === "s" && node.status.trim().toLowerCase() === "active"
+    tier === "s" && (node.status ?? "").trim().toLowerCase() === "active"
       ? "run"
       : mappedState;
   if (tier === "s") {

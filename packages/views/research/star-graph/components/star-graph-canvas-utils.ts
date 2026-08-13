@@ -109,7 +109,11 @@ export function centerCameraOnPoint(
 }
 
 export function relationEdgeClass(_kind: string, edgeType: string): string {
-  if (edgeType === "merged_from" || edgeType === "integration_formed") {
+  if (
+    edgeType === "merged_from" ||
+    edgeType === "integrates" ||
+    edgeType === "integration_formed"
+  ) {
     return "sg-edge-merge";
   }
   if (DECOMPOSITION_EDGE_TYPES.has(edgeType)) return "sg-edge-decompose";
@@ -125,6 +129,12 @@ export function relationEdgeClass(_kind: string, edgeType: string): string {
 
 const DECOMPOSITION_EDGE_TYPES = new Set([
   "leads_to",
+  "decomposes",
+  "depends_on",
+  "tests",
+  "triggered",
+  "produced",
+  "consumed",
   "refines",
   "escalated_to",
   "decompose",

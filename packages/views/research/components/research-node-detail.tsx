@@ -4,6 +4,7 @@ import type {
   ResearchFleetMember,
   ResearchGraphEdge,
   ResearchGraphNode,
+  ResearchNodeCommandAction,
   ResearchRunAttempt,
   ResearchRunSnapshot,
   ResearchRunTask,
@@ -11,6 +12,16 @@ import type {
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
 import {
   Sheet,
   SheetContent,
@@ -21,7 +32,7 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useT } from "../../i18n/use-t";
 import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
 import {
@@ -36,6 +47,10 @@ import {
 import { isAbandonedStatus, readAbandonReason } from "../lib/abandon-reason";
 import { safeSourceUrl } from "../report/safe-source-url";
 import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
+import {
+  ringActionsForNode,
+  type NodeRingItem,
+} from "../lib/node-action-ring";
 import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
 const EMPTY_SOURCES: ResearchSource[] = [];
@@ -1164,7 +1179,8 @@ export function ResearchNodeDetail({
   onClose,
   placement,
   onOpenReport,
-  onContinueDeepening,
+  onNodeCommand,
+  pendingNodeCommand = null,
   onFocusNode,
 }: {
   node: ResearchGraphNode;
@@ -1178,11 +1194,13 @@ export function ResearchNodeDetail({
   /** Force placement; default: overlay-card on desktop, sheet on narrow. */
   placement?: "overlay-card" | "sheet" | "inline";
   onOpenReport?: () => void;
-  onContinueDeepening?: () => void;
+  onNodeCommand?: (action: ResearchNodeCommandAction) => void;
+  pendingNodeCommand?: ResearchNodeCommandAction | null;
   onFocusNode?: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
+  const [confirmReassign, setConfirmReassign] = useState(false);
   const mode = placement ?? (isMobile ? "sheet" : "overlay-card");
   const { bindPanel } = useOverlayPanelA11y({
     active: Boolean(open && mode === "overlay-card" && onClose),
@@ -1192,13 +1210,32 @@ export function ResearchNodeDetail({
   if (!open) return null;
 
   if (mode === "inline") {
-    const showActions = Boolean(onOpenReport || onContinueDeepening);
+    const commandActions = onNodeCommand
+      ? ringActionsForNode(node).filter(
+          (action): action is NodeRingItem & { id: ResearchNodeCommandAction } =>
+            ["continue", "fork", "retry", "reassign"].includes(action.id),
+        )
+      : [];
+    const showActions = Boolean(onOpenReport || commandActions.length);
+    const commandLabel = (action: ResearchNodeCommandAction) => {
+      switch (action) {
+        case "continue":
+          return t(($) => $.ring.continue);
+        case "fork":
+          return t(($) => $.ring.fork);
+        case "retry":
+          return t(($) => $.ring.retry);
+        case "reassign":
+          return t(($) => $.ring.reassign);
+      }
+    };
     return (
-      <div
-        data-testid="research-node-detail"
-        data-placement="inline"
-        className="flex min-h-0 flex-1 flex-col overflow-hidden"
-      >
+      <>
+        <div
+          data-testid="research-node-detail"
+          data-placement="inline"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
         <ResearchNodeDetailBody
           node={node}
           sources={sources}
@@ -1213,21 +1250,65 @@ export function ResearchNodeDetail({
         {showActions ? (
           <footer
             data-testid="research-node-detail-actions"
-            className="flex shrink-0 gap-2 border-t border-border/70 bg-background/80 p-3"
+            className="flex shrink-0 flex-wrap gap-2 border-t border-border/70 bg-background/80 p-3"
           >
             {onOpenReport ? (
               <Button type="button" size="sm" onClick={onOpenReport}>
                 {t(($) => $.d5.detail.open_report)}
               </Button>
             ) : null}
-            {onContinueDeepening ? (
-              <Button type="button" size="sm" variant="outline" onClick={onContinueDeepening}>
-                {t(($) => $.d5.detail.continue_deepening)}
+            {commandActions.map((action) => (
+              <Button
+                key={action.id}
+                type="button"
+                size="sm"
+                variant={action.primary ? "default" : "outline"}
+                aria-disabled={pendingNodeCommand !== null || undefined}
+                className={
+                  pendingNodeCommand !== null
+                    ? "cursor-not-allowed opacity-50"
+                    : undefined
+                }
+                onClick={() => {
+                  if (pendingNodeCommand !== null) return;
+                  if (action.id === "reassign") {
+                    setConfirmReassign(true);
+                    return;
+                  }
+                  onNodeCommand?.(action.id);
+                }}
+              >
+                {pendingNodeCommand === action.id
+                  ? t(($) => $.d5.detail.command_pending)
+                  : commandLabel(action.id)}
               </Button>
-            ) : null}
+            ))}
           </footer>
         ) : null}
-      </div>
+        </div>
+        <AlertDialog open={confirmReassign} onOpenChange={setConfirmReassign}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t(($) => $.ring.reassign)}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t(($) => $.ring.reassign_confirm)}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t(($) => $.actions.cancel)}</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="research-node-reassign-confirm"
+                onClick={() => {
+                  setConfirmReassign(false);
+                  onNodeCommand?.("reassign");
+                }}
+              >
+                {t(($) => $.ring.reassign)}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
     );
   }
 

@@ -72,11 +72,17 @@ export function GenericNodeCard({
             {kind}
           </span>
         </header>
-        <h3 data-testid="generic-title" className="line-clamp-2 text-sm font-medium leading-snug">
+        <h3
+          data-testid="generic-title"
+          className="line-clamp-2 [overflow-wrap:anywhere] text-sm font-medium leading-snug"
+        >
           {title || nodeId}
         </h3>
         {summary && !compact && (
-          <p data-testid="generic-summary" className="line-clamp-2 text-xs text-muted-foreground">
+          <p
+            data-testid="generic-summary"
+            className="line-clamp-2 [overflow-wrap:anywhere] text-xs text-muted-foreground"
+          >
             {summary}
           </p>
         )}

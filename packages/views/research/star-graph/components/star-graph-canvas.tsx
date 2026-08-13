@@ -11,8 +11,8 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { useResearchCanvasStore } from "@multica/core/research";
-import type { TypedGraphNode } from "@multica/core/research";
-import { indexTypedGraphNodes } from "@multica/core/research";
+import type { ResearchCanvasFilter, TypedGraphNode } from "@multica/core/research";
+import { emptyCanvasFilter, indexTypedGraphNodes } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
 import { StarGraphMapKey } from "@multica/ui/components/star-graph";
 import { cn } from "@multica/ui/lib/utils";
@@ -86,10 +86,12 @@ export interface StarGraphCanvasProps {
   onLoadMore?: () => void;
   loadMorePending?: boolean;
   typedNodes?: readonly TypedGraphNode[];
+  canvasFilter?: ResearchCanvasFilter;
   className?: string;
 }
 
 const DEFAULT_CAMERA: StarGraphCamera = { x: 0, y: 0, zoom: 1 };
+const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
 
 export function StarGraphCanvas({
   model,
@@ -116,6 +118,7 @@ export function StarGraphCanvas({
   onLoadMore,
   loadMorePending = false,
   typedNodes,
+  canvasFilter = EMPTY_CANVAS_FILTER,
   className,
 }: StarGraphCanvasProps) {
   const { t } = useT("research");
@@ -128,7 +131,6 @@ export function StarGraphCanvas({
   );
   const setStoredViewport = useResearchCanvasStore((s) => s.setViewport);
   const setSessionViewport = useResearchCanvasStore((s) => s.setSessionViewport);
-  const canvasFilter = useResearchCanvasStore((s) => s.filter);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [camera, setCameraState] = useState<StarGraphCamera>(
     () => storedViewport ?? DEFAULT_CAMERA,

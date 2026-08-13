@@ -4704,12 +4704,18 @@ export class ApiClient {
   ): Promise<import("../research/queries").ResearchPresenceResponse> {
     const { ResearchPresenceResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/presence`);
-    const parsed = parseWithFallback(
-      raw,
-      ResearchPresenceResponseSchema,
-      { session_id: id, presence: {} },
-      { endpoint: "GET /api/research/sessions/:id/presence" },
-    );
+    const result = ResearchPresenceResponseSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "GET /api/research/sessions/:id/presence response failed schema validation",
+      );
+    }
+    const parsed = result.data;
+    if (parsed.session_id !== "" && parsed.session_id !== id) {
+      throw new Error(
+        "GET /api/research/sessions/:id/presence response failed session validation",
+      );
+    }
     return { ...parsed, session_id: parsed.session_id || id };
   }
 
@@ -4822,15 +4828,33 @@ export class ApiClient {
       const raw = await this.fetch(
         `/api/research/sessions/${sessionId}/product-rounds`,
       );
-      return parseWithFallback(
-        raw,
-        ListResearchProductRoundCardsResponseSchema,
-        EMPTY_RESEARCH_PRODUCT_ROUNDS,
-        { endpoint: "GET /api/research/sessions/:id/product-rounds" },
-      );
-    } catch {
-      // Route absent until LRM-911 merges — FE still renders process/node fallbacks.
-      return EMPTY_RESEARCH_PRODUCT_ROUNDS;
+      const result = ListResearchProductRoundCardsResponseSchema.safeParse(raw);
+      if (!result.success) {
+        throw new Error(
+          "GET /api/research/sessions/:id/product-rounds response failed schema validation",
+        );
+      }
+      if (
+        result.data.rounds.some(
+          (card) => card.session_id !== "" && card.session_id !== sessionId,
+        )
+      ) {
+        throw new Error(
+          "GET /api/research/sessions/:id/product-rounds response failed session validation",
+        );
+      }
+      return {
+        rounds: result.data.rounds.map((card) => ({
+          ...card,
+          session_id: card.session_id || sessionId,
+        })),
+      };
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 404 || error.status === 501)) {
+        // Optional capability is genuinely absent; D5 keeps its process fallback.
+        return EMPTY_RESEARCH_PRODUCT_ROUNDS;
+      }
+      throw error;
     }
   }
 
@@ -4838,7 +4862,25 @@ export class ApiClient {
     sessionId: string,
     round: number,
   ): Promise<import("../types/research").ResearchProductRoundCard> {
-    return this.fetch(`/api/research/sessions/${sessionId}/product-rounds/${round}`);
+    const { ResearchProductRoundCardSchema } = await import("../research/schemas");
+    const raw = await this.fetch(
+      `/api/research/sessions/${sessionId}/product-rounds/${round}`,
+    );
+    const result = ResearchProductRoundCardSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "GET /api/research/sessions/:id/product-rounds/:round response failed schema validation",
+      );
+    }
+    if (result.data.session_id !== "" && result.data.session_id !== sessionId) {
+      throw new Error(
+        "GET /api/research/sessions/:id/product-rounds/:round response failed session validation",
+      );
+    }
+    return {
+      ...result.data,
+      session_id: result.data.session_id || sessionId,
+    };
   }
 
   // ---- Research V6 Graph Projection (design doc 7.1 / 7.2) ----

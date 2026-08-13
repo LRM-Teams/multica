@@ -488,18 +488,48 @@ type GateResult struct {
 }
 
 type RunSnapshot struct {
-	Run               Run                        `json:"run"`
-	Contract          ResearchContract           `json:"contract"`
-	Method            *ResearchMethod            `json:"method,omitempty"`
-	Questions         []Question                 `json:"questions"`
-	Tasks             []Task                     `json:"tasks"`
-	Attempts          []Attempt                  `json:"attempts"`
-	Sources           []SourceSnapshotView       `json:"sources"`
-	Observations      []Observation              `json:"observations"`
-	Claims            []Claim                    `json:"claims"`
-	EvaluationPrivate []EvaluationPrivateContext `json:"evaluation_private,omitempty"`
-	Gate              GateResult                 `json:"gate"`
-	AttemptContext    *AttemptArtifactContext    `json:"attempt_context,omitempty"`
+	Run                Run                        `json:"run"`
+	Contract           ResearchContract           `json:"contract"`
+	Method             *ResearchMethod            `json:"method,omitempty"`
+	Questions          []Question                 `json:"questions"`
+	Tasks              []Task                     `json:"tasks"`
+	Attempts           []Attempt                  `json:"attempts"`
+	Sources            []SourceSnapshotView       `json:"sources"`
+	Observations       []Observation              `json:"observations"`
+	Claims             []Claim                    `json:"claims"`
+	EvaluationPrivate  []EvaluationPrivateContext `json:"evaluation_private,omitempty"`
+	Gate               GateResult                 `json:"gate"`
+	AttemptContext     *AttemptArtifactContext    `json:"attempt_context,omitempty"`
+	ArtifactProjection *ArtifactProjection        `json:"artifact_projection,omitempty"`
+}
+
+// ArtifactProjection is the bounded, hash-stable passport read model. It never
+// exposes content hashes, representations, locators, grants, or omission data.
+type ArtifactProjection struct {
+	ProjectionHash string                   `json:"projection_hash"`
+	Items          []ArtifactProjectionItem `json:"items"`
+}
+
+type ArtifactProjectionItem struct {
+	ID                     string `json:"id"`
+	RunID                  string `json:"run_id"`
+	EntityKind             string `json:"entity_kind"`
+	EntityID               string `json:"entity_id"`
+	CurrentVersion         *int   `json:"current_version"`
+	EligibilityRevision    int64  `json:"eligibility_revision"`
+	LifecycleStatus        string `json:"lifecycle_status"`
+	ProvenanceCompleteness string `json:"provenance_completeness"`
+	SchemaName             string `json:"schema_name"`
+	SchemaVersion          string `json:"schema_version"`
+	AccessLevel            string `json:"access_level"`
+	GoalVersion            *int   `json:"goal_version"`
+	PlanVersion            *int   `json:"plan_version"`
+	ProducedByTaskID       string `json:"produced_by_task_id,omitempty"`
+	ProducedByAttemptID    string `json:"produced_by_attempt_id,omitempty"`
+	ProducedByAgentID      string `json:"produced_by_agent_id,omitempty"`
+	VersionCount           int    `json:"version_count"`
+	InputReferenceCount    int    `json:"input_reference_count"`
+	OutputReferenceCount   int    `json:"output_reference_count"`
 }
 
 type EvaluationPrivateContext struct {

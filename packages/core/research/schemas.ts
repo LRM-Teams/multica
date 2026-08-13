@@ -337,6 +337,40 @@ const ResearchAttemptArtifactContextSchema = z
   })
   .passthrough();
 
+export const ResearchArtifactProjectionSchema = z
+  .object({
+    projection_hash: z.string(),
+    items: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            run_id: z.string(),
+            entity_kind: z.string(),
+            entity_id: z.string(),
+            current_version: z.number().int().nullable(),
+            eligibility_revision: z.number().int(),
+            lifecycle_status: z.string(),
+            provenance_completeness: z.string(),
+            schema_name: z.string(),
+            schema_version: z.string(),
+            access_level: z.string(),
+            goal_version: z.number().int().nullable(),
+            plan_version: z.number().int().nullable(),
+            produced_by_task_id: z.string().optional(),
+            produced_by_attempt_id: z.string().optional(),
+            produced_by_agent_id: z.string().optional(),
+            version_count: z.number().int().nonnegative(),
+            input_reference_count: z.number().int().nonnegative(),
+            output_reference_count: z.number().int().nonnegative(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+  })
+  .passthrough()
+  .catch({ projection_hash: "", items: [] });
+
 const ResearchRunSnapshotSchema = z
   .object({
     run: ResearchRunSchema,
@@ -499,6 +533,7 @@ const ResearchRunSnapshotSchema = z
       })
       .passthrough(),
     attempt_context: ResearchAttemptArtifactContextSchema.optional(),
+    artifact_projection: ResearchArtifactProjectionSchema.optional(),
   })
   .passthrough();
 

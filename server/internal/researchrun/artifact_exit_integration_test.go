@@ -242,7 +242,7 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
 
-	readContext := func() AttemptArtifactContext {
+	readSnapshot := func() RunSnapshot {
 		t.Helper()
 		snapshot, readErr := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
 		if readErr != nil {
@@ -251,12 +251,17 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 		if snapshot.AttemptContext == nil {
 			t.Fatal("expected attempt_context")
 		}
-		return *snapshot.AttemptContext
+		if snapshot.ArtifactProjection == nil {
+			t.Fatal("expected bounded artifact projection")
+		}
+		return snapshot
 	}
 
-	before := readContext()
-	replayed := readContext()
-	if before.ManifestID != replayed.ManifestID || before.ManifestHash != replayed.ManifestHash {
+	beforeSnapshot := readSnapshot()
+	replayedSnapshot := readSnapshot()
+	before, replayed := *beforeSnapshot.AttemptContext, *replayedSnapshot.AttemptContext
+	if before.ManifestID != replayed.ManifestID || before.ManifestHash != replayed.ManifestHash ||
+		beforeSnapshot.ArtifactProjection.ProjectionHash != replayedSnapshot.ArtifactProjection.ProjectionHash {
 		t.Fatalf("replay drift before=%+v replayed=%+v", before, replayed)
 	}
 
@@ -284,12 +289,36 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 		t.Fatalf("commit live source and passport: %v", err)
 	}
 
-	afterLive := readContext()
+	afterSnapshot := readSnapshot()
+	afterLive := *afterSnapshot.AttemptContext
 	if afterLive.ManifestID != before.ManifestID || afterLive.ManifestHash != before.ManifestHash {
 		t.Fatalf("live mutation changed manifest metadata before=%+v after=%+v", before, afterLive)
 	}
 	if !afterLive.ManifestFiltered {
 		t.Fatal("expected manifest-filtered attempt context after live mutation")
+	}
+	if afterSnapshot.ArtifactProjection.ProjectionHash != beforeSnapshot.ArtifactProjection.ProjectionHash {
+		t.Fatalf("live mutation changed frozen artifact projection before=%q after=%q",
+			beforeSnapshot.ArtifactProjection.ProjectionHash, afterSnapshot.ArtifactProjection.ProjectionHash)
+	}
+	for _, item := range afterSnapshot.ArtifactProjection.Items {
+		if item.EntityID == sourceID {
+			t.Fatalf("post-manifest artifact leaked into Attempt projection: %+v", item)
+		}
+	}
+	human, err := newEngine(store, nil, nil).Snapshot(ctx, run.SessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("human Snapshot: %v", err)
+	}
+	if human.ArtifactProjection == nil {
+		t.Fatal("expected human artifact projection")
+	}
+	var humanSawLive bool
+	for _, item := range human.ArtifactProjection.Items {
+		humanSawLive = humanSawLive || item.EntityID == sourceID
+	}
+	if !humanSawLive {
+		t.Fatal("human live projection must include the post-manifest artifact")
 	}
 }
 

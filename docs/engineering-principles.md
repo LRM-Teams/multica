@@ -492,9 +492,9 @@
 - `WorkspacesRoot` 默认且唯一为 `~/.multica/workspaces`；每个 Agent 的根目录、工作目录和 subprocess cwd 都是 `<WorkspacesRoot>/<workspace_id>/agents/<agent_id>/`。路径拼装只通过 `server/internal/agentworkspace`，禁止 caller 自己拼 `agents`、task ID 或 provider/profile 后缀。
 - 运行时只暴露 `MULTICA_AGENT_ROOT`。`memory/`、`skills/`、`devices/`、provider 私有配置和 Agent 自己创建的代码/worktree 都位于 AgentRoot 下，以相对路径定位；不得为这些子目录增加平行 context 字段或 `MULTICA_*_DIR` 环境变量。
 - 同一 Agent 跨 task、daemon 重启和 provider 切换复用同一目录。硬切不扫描、不迁移、不删除旧 per-task/repo 目录；旧文件留在原处，新运行只认 canonical AgentRoot。
-- Multica 不 clone/pull/reset/branch/worktree，也不提供 `multica repo` 命令。Git 与 worktree 工作方式由 Agent 自己决定。项目资源只保留用户管理的 metadata，不改变 cwd，不写入 daemon claim/register payload，也不把 repository URL 注入 Agent prompt。
+- Multica 不 clone/pull/reset/branch/worktree，也不提供 `multica repo` 命令。Agent 自己把 checkout 放进 AgentRoot；干活时先选 workspace 内的项目目录或 worktree，再跑 git。项目资源仍是用户管理的 metadata：不改变进程 cwd，不写入 daemon claim/register payload，也不把 repository URL 注入 runtime brief（brief 在 resident 复用时不会因资源变更重写）。当前任务绑定了 project 时，Agent 用 `multica workspace info --projects` 读现活的 project 与 resource 绑定。
 - AgentRoot 不参与 task GC，也没有后台 retention/GC；仅用户明确选择 full reset，或在 Computer 存储页确认删除时，才可删除精确 canonical root。full reset 是硬切语义：先强制中断 runtime，然后直接删除并重建，不等待 quiescence。
-- **物**：`server/internal/agentworkspace/path.go`；`agent_runtime_turn.go`；`execenv/agent_workspace.go`；`TestCanonicalAgentWorkspace*`、`TestMulticaAgentRootStableAcrossHarnessSwitch`、`TestMulticaAgentEnvUsesProviderNeutralRoot`。
+- **物**：`server/internal/agentworkspace/path.go`；`agent_runtime_turn.go`；`execenv/agent_workspace.go`；`TestCanonicalAgentWorkspace*`、`TestMulticaAgentRootStableAcrossHarnessSwitch`、`TestMulticaAgentEnvUsesProviderNeutralRoot`、`TestAgentWorkspaceHoldsCodeCheckouts`。
 
 ### 4.19 Agent 消息链路硬切到 Raft 风格 coordinator — `可执行`（Workspace Runner 单一 Inbox + 本地 coverage receipt + MessageDraftStore）
 

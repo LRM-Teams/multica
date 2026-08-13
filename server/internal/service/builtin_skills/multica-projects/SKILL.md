@@ -10,16 +10,23 @@ allowed-tools: Bash(multica *)
 Projects group issues and provide a durable product-level identity.
 
 ```bash
+multica workspace info --projects --output json
 multica project list --output json
 multica project get <project-id> --output json
+multica project resource list <project-id> --output json
 multica project create --title "<title>" --output json
 multica project update <project-id> --title "<title>" --output json
 multica project status <project-id> in_progress --output json
 ```
 
 Project create, update, delete, and status commands mutate workspace state.
-Repository locations and development conventions belong in Agent memory and in
-the checked-out project's `AGENTS.md` or `CLAUDE.md`, not in repeated runtime
-prompt metadata.
+
+When the current task is bound to a project, inspect live bindings with
+`multica workspace info --projects --output json`. Clone a `github_repo` into
+this Agent workspace if it is not already present, then work inside that
+checkout. Re-run the command when the binding may have changed — the runtime
+brief is not updated when project resources change. Development conventions in
+a checked-out repo's own `AGENTS.md` or `CLAUDE.md` still apply after the
+checkout exists.
 
 More source-backed details: `references/projects-source-map.md`.

@@ -136,6 +136,90 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	}
 }
 
+func TestListProjectsIncludeResources(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Include resources project",
+	})
+	testHandler.CreateProject(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateProject: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var project ProjectResponse
+	if err := json.NewDecoder(w.Body).Decode(&project); err != nil {
+		t.Fatalf("decode CreateProject: %v", err)
+	}
+	t.Cleanup(func() {
+		req := newRequest("DELETE", "/api/projects/"+project.ID, nil)
+		req = withURLParam(req, "id", project.ID)
+		testHandler.DeleteProject(httptest.NewRecorder(), req)
+	})
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
+		"resource_type": "github_repo",
+		"resource_ref":  map[string]any{"url": "https://github.com/example/include-resources"},
+	})
+	req = withURLParam(req, "id", project.ID)
+	testHandler.CreateProjectResource(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateProjectResource: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.ListProjects(w, newRequest("GET", "/api/projects?workspace_id="+testWorkspaceID, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListProjects: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var defaultList struct {
+		Projects []ProjectResponse `json:"projects"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&defaultList); err != nil {
+		t.Fatalf("decode default list: %v", err)
+	}
+	var foundDefault *ProjectResponse
+	for i := range defaultList.Projects {
+		if defaultList.Projects[i].ID == project.ID {
+			foundDefault = &defaultList.Projects[i]
+			break
+		}
+	}
+	if foundDefault == nil {
+		t.Fatal("created project missing from default list")
+	}
+	if len(foundDefault.Resources) != 0 {
+		t.Fatalf("default list nested %d resources, want none", len(foundDefault.Resources))
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.ListProjects(w, newRequest("GET", "/api/projects?workspace_id="+testWorkspaceID+"&include_resources=true", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListProjects include_resources: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var expanded struct {
+		Projects []ProjectResponse `json:"projects"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&expanded); err != nil {
+		t.Fatalf("decode expanded list: %v", err)
+	}
+	var foundExpanded *ProjectResponse
+	for i := range expanded.Projects {
+		if expanded.Projects[i].ID == project.ID {
+			foundExpanded = &expanded.Projects[i]
+			break
+		}
+	}
+	if foundExpanded == nil {
+		t.Fatal("created project missing from expanded list")
+	}
+	if len(foundExpanded.Resources) != 1 || foundExpanded.Resources[0].ResourceType != "github_repo" {
+		t.Fatalf("expanded resources = %#v, want one github_repo", foundExpanded.Resources)
+	}
+}
+
 // TestProjectResourceAcceptsSSHRepoURLs covers GitHub issue #2484: SSH and
 // scp-like git URLs must be accepted alongside https URLs, because workspace
 // repos configured with an SSH remote previously got rejected when attached

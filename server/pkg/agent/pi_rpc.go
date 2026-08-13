@@ -52,31 +52,29 @@ type PiRPCBackend interface {
 	RuntimeStats(ctx context.Context) (*RuntimeTokenStats, error)
 }
 
-// PrepareMessageInput runs proactive compaction before the daemon starts its
-// native Message-acceptance timeout. A failed compaction remains a failed gate;
-// callers must not silently inject the Message into an overfull context.
+// PrepareMessageInput is a delivery-path hook only. Compaction runs after a
+// completed turn, not before native Message acceptance.
 func (b *piRPCBackend) PrepareMessageInput(ctx context.Context, emit func(Message)) error {
-	if err := ctx.Err(); err != nil {
-		return err
+	_ = emit
+	return ctx.Err()
+}
+
+func (b *piRPCBackend) maybeCompactAfterTurn(p *piRPCProcess, model string, msgCh chan<- Message) {
+	if p == nil || !shouldProactivelyCompactAt(p.queryRuntimeStats(context.Background(), nil, model), &b.compact) {
+		return
 	}
-	if !b.hasProcess() {
-		return nil
-	}
-	p, err := b.getProcess()
-	if err != nil || !shouldProactivelyCompact(p.queryRuntimeStats(ctx, nil, b.cfg.ResidentOptions.Model)) {
-		return err
-	}
-	if emit != nil {
-		emit(Message{Type: MessageCompactionStarted})
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), postTurnCompactionTimeout)
+	defer cancel()
+	trySend(msgCh, Message{Type: MessageCompactionStarted})
 	compacted, err := b.Compact(ctx, proactiveContextCompactionInstructions)
+	b.compact.recordAttempt(err != nil, p.queryRuntimeStats(context.Background(), nil, model))
 	if err != nil {
-		return err
+		if b.cfg.Logger != nil {
+			b.cfg.Logger.Warn("post-turn runtime context compaction failed; leaving session as-is", "provider", "pi", "error", err)
+		}
+		return
 	}
-	if emit != nil {
-		emit(Message{Type: MessageCompactionFinished, Content: compacted.Summary})
-	}
-	return nil
+	trySend(msgCh, Message{Type: MessageCompactionFinished, Content: compacted.Summary})
 }
 
 // Compact explicitly compacts the Pi session context.
@@ -187,6 +185,7 @@ type piRPCBackend struct {
 	captureExtPath string
 	captureTurns   int64
 	captureCalls   int64
+	compact        compactionAttemptState
 	running        atomic.Bool
 	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
 	// field of the same name for the full explanation.
@@ -684,18 +683,9 @@ func (b *piRPCBackend) runtimeAlive() (bool, bool) {
 }
 
 func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
-	hadResidentProcess := b.hasProcess()
 	p, err := b.ensureProcess(opts)
 	if err != nil {
 		return Result{Status: "failed", Error: err.Error()}
-	}
-	if hadResidentProcess && shouldProactivelyCompact(p.queryRuntimeStats(ctx, nil, opts.Model)) {
-		trySend(msgCh, Message{Type: MessageCompactionStarted})
-		if compacted, err := b.Compact(ctx, proactiveContextCompactionInstructions); err != nil {
-			b.cfg.Logger.Warn("proactive runtime context compaction failed; continuing turn", "provider", "pi", "error", err)
-		} else {
-			trySend(msgCh, Message{Type: MessageCompactionFinished, Content: compacted.Summary})
-		}
 	}
 
 	var output strings.Builder
@@ -753,7 +743,12 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 			return Result{Status: "failed", Error: completionErr.Error()}
 		}
 		usage := piRPCUsage(completed.messages, opts.Model)
-		return Result{Status: "completed", Output: output.String(), SessionID: p.sessionPath, Usage: usage, RuntimeStats: p.queryRuntimeStats(ctx, turn, opts.Model)}
+		stats := p.queryRuntimeStats(ctx, turn, opts.Model)
+		if strings.TrimSpace(output.String()) != "" {
+			b.maybeCompactAfterTurn(p, opts.Model, msgCh)
+			stats = p.queryRuntimeStats(context.Background(), nil, opts.Model)
+		}
+		return Result{Status: "completed", Output: output.String(), SessionID: p.sessionPath, Usage: usage, RuntimeStats: stats}
 	case <-ctx.Done():
 		// A cancelled RPC turn has an unknown queue/agent state. Disposing is
 		// safer than sending abort and guessing whether a later event belongs

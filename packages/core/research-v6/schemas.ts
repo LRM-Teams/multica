@@ -125,6 +125,11 @@ export function parseResearchV6Delta(raw: unknown): ResearchV6Delta | null {
   return result.success ? (result.data as ResearchV6Delta) : null;
 }
 
+/** Strict production HTTP boundary: malformed successful responses must throw. */
+export function parseResearchV6DeltaStrict(raw: unknown): ResearchV6Delta {
+  return ResearchV6DeltaSchema.parse(raw) as ResearchV6Delta;
+}
+
 export function parseResearchV6Snapshot(raw: unknown): ResearchV6Snapshot {
   const result = ResearchV6SnapshotSchema.safeParse(raw);
   return result.success ? (result.data as ResearchV6Snapshot) : EMPTY_RESEARCH_V6_SNAPSHOT;
@@ -140,4 +145,11 @@ export function parseResearchV6ResumeVerdict(raw: unknown): ResearchV6ResumeVerd
   return result.success
     ? (result.data as ResearchV6ResumeVerdict)
     : { ok: false, resync_required: true };
+}
+
+/** Strict production HTTP boundary: an invalid verdict is not a resync verdict. */
+export function parseResearchV6ResumeVerdictStrict(
+  raw: unknown,
+): ResearchV6ResumeVerdict {
+  return ResearchV6ResumeVerdictSchema.parse(raw) as ResearchV6ResumeVerdict;
 }

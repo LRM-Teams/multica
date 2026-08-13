@@ -533,16 +533,37 @@ func loadManifestEntryCandidatesForAttemptTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, attemptID string,
-) ([]artifactVersionCandidate, string, error) {
+) ([]artifactVersionCandidate, dispatchManifestHashInput, string, error) {
+	var hashInput dispatchManifestHashInput
+	var purposeRaw string
+	var storedHash string
+	err := tx.QueryRow(ctx, `
+		SELECT workspace_id::text, session_id::text, attempt_id::text, task_id::text,
+		       purpose, policy_version, policy_watermark, through_state_version,
+		       manifest_hash
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(
+		&hashInput.WorkspaceID, &hashInput.SessionID, &hashInput.AttemptID, &hashInput.TaskID,
+		&purposeRaw, &hashInput.PolicyVersion, &hashInput.PolicyWatermark,
+		&hashInput.ThroughStateVersion, &storedHash,
+	)
+	if err != nil {
+		return nil, dispatchManifestHashInput{}, "", err
+	}
+	hashInput.Purpose = ArtifactPurpose(purposeRaw)
+
 	rows, err := tx.Query(ctx, `
 		SELECT
+		  v.id::text,
 		  v.artifact_id::text,
 		  v.version,
 		  e.eligibility_revision,
 		  v.content_hash,
 		  e.representation,
-		  e.representation_hash,
-		  m.manifest_hash
+		  e.representation_hash
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m
 		  ON m.workspace_id = e.workspace_id
@@ -558,26 +579,26 @@ func loadManifestEntryCandidatesForAttemptTx(
 		ORDER BY e.ordinal
 	`, workspaceID, sessionID, attemptID)
 	if err != nil {
-		return nil, "", err
+		return nil, dispatchManifestHashInput{}, "", err
 	}
 	defer rows.Close()
 
 	var entries []artifactVersionCandidate
-	var storedHash string
 	for rows.Next() {
 		var entry artifactVersionCandidate
 		if err = rows.Scan(
-			&entry.ArtifactID, &entry.Version, &entry.EligibilityRevision,
-			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash, &storedHash,
+			&entry.VersionRowID, &entry.ArtifactID, &entry.Version, &entry.EligibilityRevision,
+			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
 		); err != nil {
-			return nil, "", err
+			return nil, dispatchManifestHashInput{}, "", err
 		}
 		entries = append(entries, entry)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, "", err
+		return nil, dispatchManifestHashInput{}, "", err
 	}
-	return entries, storedHash, nil
+	hashInput.Entries = entries
+	return entries, hashInput, storedHash, nil
 }
 
 func verifyAcceptanceManifestHashTx(
@@ -585,14 +606,14 @@ func verifyAcceptanceManifestHashTx(
 	tx pgx.Tx,
 	workspaceID, sessionID, attemptID string,
 ) error {
-	entries, storedHash, err := loadManifestEntryCandidatesForAttemptTx(ctx, tx, workspaceID, sessionID, attemptID)
+	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttemptTx(ctx, tx, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(storedHash) == "" {
 		return fmt.Errorf("%w: acceptance manifest hash missing", ErrInvalidTransition)
 	}
-	if hashManifestEntries(entries) != storedHash {
+	if hashDispatchManifest(hashInput) != storedHash {
 		return fmt.Errorf("%w: acceptance manifest hash mismatch", ErrInvalidTransition)
 	}
 	return nil

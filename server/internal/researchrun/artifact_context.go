@@ -152,6 +152,46 @@ func hashManifestEntries(entries []artifactVersionCandidate) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+type dispatchManifestHashInput struct {
+	WorkspaceID         string
+	SessionID           string
+	AttemptID           string
+	TaskID              string
+	Purpose             ArtifactPurpose
+	PolicyVersion       string
+	PolicyWatermark     int64
+	ThroughStateVersion int64
+	Entries             []artifactVersionCandidate
+}
+
+// hashDispatchManifest binds the selected representations to the complete
+// authorization and dispatch scope. An entry-only digest is insufficient: the
+// same bytes must not be replayable under another tenant, task, attempt, policy,
+// or Run state watermark.
+func hashDispatchManifest(in dispatchManifestHashInput) string {
+	parts := []string{
+		"workspace=" + in.WorkspaceID,
+		"session=" + in.SessionID,
+		"attempt=" + in.AttemptID,
+		"task=" + in.TaskID,
+		"purpose=" + string(in.Purpose),
+		"policy_version=" + in.PolicyVersion,
+		fmt.Sprintf("policy_watermark=%d", in.PolicyWatermark),
+		fmt.Sprintf("through_state_version=%d", in.ThroughStateVersion),
+	}
+	entries := append([]artifactVersionCandidate(nil), in.Entries...)
+	sortManifestEntryCandidates(entries)
+	for ordinal, entry := range entries {
+		parts = append(parts, fmt.Sprintf(
+			"entry=%d:%s:%s:%d:%d:%s:%s:input",
+			ordinal, entry.VersionRowID, entry.ArtifactID, entry.Version,
+			entry.EligibilityRevision, entry.Representation, entry.RepresentationHash,
+		))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func loadArtifactVersionCandidates(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -248,7 +288,17 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	if err = freezeEvidenceRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
 	}
-	plan.ManifestHash = hashManifestEntries(plan.Entries)
+	plan.ManifestHash = hashDispatchManifest(dispatchManifestHashInput{
+		WorkspaceID:         in.WorkspaceID,
+		SessionID:           in.SessionID,
+		AttemptID:           in.AttemptID,
+		TaskID:              in.TaskID,
+		Purpose:             ArtifactPurposeTaskExecution,
+		PolicyVersion:       LegacyV1V5CompatPolicy,
+		PolicyWatermark:     plan.PolicyWatermark,
+		ThroughStateVersion: plan.ThroughStateVersion,
+		Entries:             plan.Entries,
+	})
 
 	if err := registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            in.WorkspaceID,

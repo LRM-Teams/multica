@@ -39,6 +39,7 @@ type claudeACPBackend struct {
 	process     atomic.Pointer[claudeACPProcess]
 	running     atomic.Bool
 	forceKilled atomic.Bool
+	compact     compactionAttemptState
 }
 
 type claudeACPProcess struct {
@@ -114,21 +115,12 @@ func (b *claudeACPBackend) runtimeAlive() (bool, bool) {
 }
 
 func (b *claudeACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
-	hadResidentProcess := b.process.Load() != nil
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
 		if b.forceKilled.CompareAndSwap(true, false) {
 			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
 		}
 		return Result{Status: "failed", Error: err.Error()}
-	}
-	if hadResidentProcess && shouldProactivelyCompact(p.client.currentRuntimeStats()) {
-		trySend(msgCh, Message{Type: MessageCompactionStarted})
-		if err := b.compactRuntime(ctx, p); err != nil {
-			b.cfg.Logger.Warn("proactive runtime context compaction failed; continuing turn", "provider", "claude", "error", err)
-		} else {
-			trySend(msgCh, Message{Type: MessageCompactionFinished})
-		}
 	}
 
 	var output strings.Builder
@@ -184,7 +176,28 @@ func (b *claudeACPBackend) executeTurn(ctx context.Context, prompt string, opts 
 		}
 		return Result{Status: status, Error: fmt.Sprintf("claude ACP session/prompt: %v", err), SessionID: sessionID}
 	}
+	if strings.TrimSpace(output.String()) != "" {
+		b.maybeCompactAfterTurn(p, msgCh)
+	}
 	return Result{Status: "completed", Output: output.String(), SessionID: p.sessionID}
+}
+
+func (b *claudeACPBackend) maybeCompactAfterTurn(p *claudeACPProcess, msgCh chan<- Message) {
+	if p == nil || !shouldProactivelyCompactAt(p.client.currentRuntimeStats(), &b.compact) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), postTurnCompactionTimeout)
+	defer cancel()
+	trySend(msgCh, Message{Type: MessageCompactionStarted})
+	err := b.compactRuntime(ctx, p)
+	b.compact.recordAttempt(err != nil, p.client.currentRuntimeStats())
+	if err != nil {
+		if b.cfg.Logger != nil {
+			b.cfg.Logger.Warn("post-turn runtime context compaction failed; leaving session as-is", "provider", "claude", "error", err)
+		}
+		return
+	}
+	trySend(msgCh, Message{Type: MessageCompactionFinished})
 }
 
 func (b *claudeACPBackend) compactRuntime(ctx context.Context, p *claudeACPProcess) error {

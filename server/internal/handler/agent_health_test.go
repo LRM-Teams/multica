@@ -466,6 +466,11 @@ func TestAgentRuntimeDisplayStatus_ProviderBlockBeatsIdleWhileOnline(t *testing.
 	if got != agentDisplayStatusIdle {
 		t.Fatalf("expired lock display status = %q, want %q", got, agentDisplayStatusIdle)
 	}
+	// "{}" is a serialization leftover, not quota copy — do not paint Blocked.
+	got = agentRuntimeDisplayStatus("idle", rt, pgtype.Timestamptz{}, "{}", pgtype.Timestamptz{}, now)
+	if got != agentDisplayStatusIdle {
+		t.Fatalf("blank JSON lock detail display status = %q, want %q", got, agentDisplayStatusIdle)
+	}
 }
 
 func TestAgentRuntimeDisplayStatus_WholeMachineOfflineBeatsStaleCrashFact(t *testing.T) {

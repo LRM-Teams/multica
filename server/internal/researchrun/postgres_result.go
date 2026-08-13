@@ -957,13 +957,19 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10)
 			ON CONFLICT (session_id, source_snapshot_id, content_hash)
 			DO UPDATE SET
-			  interpretation = CASE WHEN research_observation.interpretation = '' THEN EXCLUDED.interpretation ELSE research_observation.interpretation END,
 			  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_observation.verification_status END
+			WHERE research_observation.quote = EXCLUDED.quote
+			  AND research_observation.datum = EXCLUDED.datum
+			  AND research_observation.locator = EXCLUDED.locator
+			  AND research_observation.interpretation = EXCLUDED.interpretation
 			RETURNING id::text
 		`, state.workspaceID, state.run.SessionID, sourceID, state.task.ID,
 			observation.Quote, normalizeJSON(observation.Datum, `{}`),
 			truncateBytes(observation.Locator, 1024), truncateBytes(observation.Interpretation, 8192),
 			contentHash, verificationStatus).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, 0, fmt.Errorf("%w: observation key %q resolved to a different canonical observation", ErrResultConflict, observation.ClientKey)
+		}
 		if err != nil {
 			return nil, 0, err
 		}

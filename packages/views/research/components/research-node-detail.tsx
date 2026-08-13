@@ -1251,8 +1251,14 @@ export function ResearchNodeDetail({
                 type="button"
                 size="sm"
                 variant={action.primary ? "default" : "outline"}
-                disabled={pendingNodeCommand !== null}
+                aria-disabled={pendingNodeCommand !== null || undefined}
+                className={
+                  pendingNodeCommand !== null
+                    ? "cursor-not-allowed opacity-50"
+                    : undefined
+                }
                 onClick={() => {
+                  if (pendingNodeCommand !== null) return;
                   if (
                     action.id === "reassign" &&
                     !window.confirm(t(($) => $.ring.reassign_confirm))

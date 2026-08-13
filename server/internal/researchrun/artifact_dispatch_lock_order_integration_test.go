@@ -10,8 +10,100 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestDispatchCandidateLocksNormalizeInverseUUIDOrder(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Inverse dispatch lock order", Title: "Inverse dispatch locks",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	insertLockOrderSharedClaims(t, ctx, pool, fixture.workspaceID, run.SessionID)
+
+	candidates := make([]artifactVersionCandidate, 0, 2)
+	rows, err := pool.Query(ctx, `
+		SELECT passport.id::text, version.id::text, passport.entity_kind
+		FROM research_artifact_passport passport
+		JOIN research_artifact_version version
+		  ON (version.workspace_id,version.session_id,version.artifact_id,version.version)=
+		     (passport.workspace_id,passport.session_id,passport.id,passport.current_version)
+		WHERE passport.workspace_id=$1::uuid AND passport.session_id=$2::uuid
+		  AND passport.id IN ($3::uuid,$4::uuid)
+		ORDER BY passport.id::text
+	`, fixture.workspaceID, run.SessionID, lockOrderClaimLowID, lockOrderClaimHighID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var candidate artifactVersionCandidate
+		var kind string
+		if err = rows.Scan(&candidate.ArtifactID, &candidate.VersionRowID, &kind); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		candidate.Kind = ArtifactEntityKind(kind)
+		candidates = append(candidates, candidate)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	rows.Close()
+	if len(candidates) != 2 || candidates[0].ArtifactID >= candidates[1].ArtifactID {
+		t.Fatalf("candidate fixture=%+v", candidates)
+	}
+	inverse := []artifactVersionCandidate{candidates[1], candidates[0]}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	lock := func(input []artifactVersionCandidate) {
+		tx, beginErr := pool.BeginTx(ctx, pgx.TxOptions{})
+		if beginErr != nil {
+			errs <- beginErr
+			return
+		}
+		defer tx.Rollback(ctx)
+		<-start
+		if lockErr := lockDispatchManifestCandidateRowsTx(ctx, tx, fixture.workspaceID, run.SessionID, input); lockErr != nil {
+			errs <- lockErr
+			return
+		}
+		errs <- tx.Commit(ctx)
+	}
+	go lock(candidates)
+	go lock(inverse)
+	close(start)
+	for range 2 {
+		select {
+		case lockErr := <-errs:
+			if lockErr != nil {
+				t.Fatalf("inverse candidate lock: %v", lockErr)
+			}
+		case <-ctx.Done():
+			t.Fatal("inverse candidate locks did not finish (possible deadlock)")
+		}
+	}
+}
 
 func TestDispatchConcurrentSharedCandidatesNoDeadlock(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")

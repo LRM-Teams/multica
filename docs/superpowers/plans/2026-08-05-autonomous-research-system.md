@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-lock-2 证据：同一组共享 Passport/Version 候选分别以低→高和高→低输入两个真实
+PostgreSQL 事务，`lockDispatchManifestCandidateRowsTx` 均规范化为 Passport UUID、再
+Version UUID 顺序并在 deadline 内完成；生产 `CreateDispatchIntent` 双 worker 竞态继续
+证明无 deadlock，两个持久 Manifest 的 entry ordinal 均符合 `(entity_kind, artifact_id)`
+canonical order。§15.12 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

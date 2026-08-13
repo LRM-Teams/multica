@@ -461,7 +461,144 @@ func verifyAcceptanceManifestPolicyTx(
 	if err != nil {
 		return 0, 0, err
 	}
+	if err = verifyAcceptanceManifestGrantsTx(ctx, tx, workspaceID, sessionID, attemptID); err != nil {
+		return 0, 0, err
+	}
 	return manifestWatermark, reserved, nil
+}
+
+type acceptanceManifestGrantBinding struct {
+	purpose                 string
+	policyVersion           string
+	normalGrantID           string
+	normalGrantRevision     int64
+	evaluationGrantID       string
+	evaluationGrantRevision int64
+	assignedAgentID         string
+	fleetID                 string
+}
+
+func acceptanceManifestGrantShapeAllowed(purpose, normalGrantID, evaluationGrantID string) bool {
+	switch ArtifactPurpose(strings.TrimSpace(purpose)) {
+	case ArtifactPurposeTaskExecution:
+		return normalGrantID != "" && evaluationGrantID == ""
+	case ArtifactPurposeEvaluation:
+		return normalGrantID != "" && evaluationGrantID != ""
+	default:
+		return false
+	}
+}
+
+func verifyAcceptanceManifestGrantsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var binding acceptanceManifestGrantBinding
+	err := tx.QueryRow(ctx, `
+		SELECT m.purpose, m.policy_version,
+		       COALESCE(m.normal_grant_id::text, ''), COALESCE(m.normal_grant_revision, 0),
+		       COALESCE(m.evaluation_grant_id::text, ''), COALESCE(m.evaluation_grant_revision, 0),
+		       COALESCE(a.assigned_agent_id::text, ''), s.fleet_id::text
+		FROM research_artifact_context_manifest m
+		JOIN research_task_attempt a
+		  ON a.workspace_id = m.workspace_id
+		 AND a.session_id = m.session_id
+		 AND a.id = m.attempt_id
+		 AND a.task_id = m.task_id
+		JOIN research_session s
+		  ON s.workspace_id = m.workspace_id
+		 AND s.id = m.session_id
+		WHERE m.workspace_id = $1::uuid
+		  AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(
+		&binding.purpose, &binding.policyVersion,
+		&binding.normalGrantID, &binding.normalGrantRevision,
+		&binding.evaluationGrantID, &binding.evaluationGrantRevision,
+		&binding.assignedAgentID, &binding.fleetID,
+	)
+	if err != nil {
+		return fmt.Errorf("load acceptance manifest grant binding: %w", err)
+	}
+	if binding.assignedAgentID == "" || !acceptanceManifestGrantShapeAllowed(
+		binding.purpose, binding.normalGrantID, binding.evaluationGrantID,
+	) {
+		return fmt.Errorf("%w: acceptance manifest grant binding is invalid", ErrInvalidTransition)
+	}
+	if err = verifyAcceptanceGrantTx(ctx, tx, workspaceID, sessionID,
+		binding.normalGrantID, binding.normalGrantRevision, binding.assignedAgentID,
+		binding.purpose, binding.policyVersion, false,
+	); err != nil {
+		return err
+	}
+	if binding.evaluationGrantID != "" {
+		if err = verifyAcceptanceGrantTx(ctx, tx, workspaceID, sessionID,
+			binding.evaluationGrantID, binding.evaluationGrantRevision, binding.assignedAgentID,
+			binding.purpose, binding.policyVersion, true,
+		); err != nil {
+			return err
+		}
+	}
+
+	var memberID string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text
+		FROM research_fleet_member
+		WHERE workspace_id = $1::uuid
+		  AND fleet_id = $2::uuid
+		  AND agent_id = $3::uuid
+		  AND status = 'active'
+		FOR UPDATE
+	`, workspaceID, binding.fleetID, binding.assignedAgentID).Scan(&memberID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: assigned agent is not an active fleet member", ErrInvalidTransition)
+	}
+	if err != nil {
+		return fmt.Errorf("lock acceptance fleet membership: %w", err)
+	}
+	return nil
+}
+
+func verifyAcceptanceGrantTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, grantID string,
+	expectedRevision int64,
+	expectedPrincipalID, expectedPurpose, expectedPolicyVersion string,
+	expectedEvaluationPrivate bool,
+) error {
+	var principalKind, principalID, purpose, policyVersion, status string
+	var revision int64
+	var evaluationPrivate, clearanceAllowed bool
+	err := tx.QueryRow(ctx, `
+		SELECT principal_kind, principal_id::text, purpose, policy_version,
+		       revision, status, evaluation_private,
+		       normal_clearance IS NOT NULL
+		         AND research_artifact_access_level_allowed(normal_clearance)
+		FROM research_artifact_policy_grant
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		FOR UPDATE
+	`, workspaceID, sessionID, grantID).Scan(
+		&principalKind, &principalID, &purpose, &policyVersion,
+		&revision, &status, &evaluationPrivate, &clearanceAllowed,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: acceptance policy grant is missing", ErrInvalidTransition)
+	}
+	if err != nil {
+		return fmt.Errorf("lock acceptance policy grant: %w", err)
+	}
+	if principalKind != "agent" || principalID != expectedPrincipalID ||
+		purpose != expectedPurpose || policyVersion != expectedPolicyVersion ||
+		revision != expectedRevision || status != "active" ||
+		evaluationPrivate != expectedEvaluationPrivate ||
+		(!expectedEvaluationPrivate && !clearanceAllowed) {
+		return fmt.Errorf("%w: acceptance policy grant no longer authorizes the assigned agent", ErrInvalidTransition)
+	}
+	return nil
 }
 
 func verifyAcceptanceManifestEntryEligibilityTx(

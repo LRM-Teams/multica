@@ -23,6 +23,7 @@ type ArtifactDenyReason string
 const (
 	ArtifactDenyUnknownKind           ArtifactDenyReason = "unknown_kind"
 	ArtifactDenyUnknownAccess         ArtifactDenyReason = "unknown_access"
+	ArtifactDenyUnknownPurpose        ArtifactDenyReason = "unknown_purpose"
 	ArtifactDenyInsufficientClearance ArtifactDenyReason = "insufficient_clearance"
 	ArtifactDenyEvaluationCompartment ArtifactDenyReason = "evaluation_compartment"
 	ArtifactDenyLifecycle             ArtifactDenyReason = "lifecycle"
@@ -65,6 +66,9 @@ func (ArtifactPolicy) CanReadNormal(
 	purpose ArtifactPurpose,
 	evaluationPrivate bool,
 ) (bool, ArtifactDenyReason) {
+	if purpose != ArtifactPurposeTaskExecution && purpose != ArtifactPurposeEvaluation {
+		return false, ArtifactDenyUnknownPurpose
+	}
 	if evaluationPrivate && purpose != ArtifactPurposeEvaluation {
 		return false, ArtifactDenyEvaluationCompartment
 	}

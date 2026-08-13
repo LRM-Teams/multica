@@ -24,19 +24,20 @@ and Test continue to select stable/preview packages respectively; only
 For a standalone resident, candidate verification is local-first. The target
 binds the exclusive control port and proves its exact PID, binary version,
 Computer generation, and accepted Workspace binding
-set without calling heartbeat or registration. The server then performs one atomic
-predecessor-to-candidate Computer generation CAS. Only after that ownership
-change may the candidate run normal authenticated startup and complete the
-accepted Runtime recovery proof. Runtime cardinality is not takeover identity.
-Rejection before the CAS leaves
-the incumbent generation valid and does not enter server rollback.
+set without calling heartbeat or registration. That local proof completes the
+handoff. The successor then starts normally and notifies the server that the
+upgrade completed. Heartbeat and register claim the new Computer generation
+when the successor comes online. There is no predecessor-to-candidate cloud
+CAS. Runtime cardinality is not takeover identity.
+Rejection before the local proof leaves
+the incumbent process valid and does not enter server rollback.
 
 The launcher marks the v2 loopback takeover protocol with the candidate's exact
 Computer generation when spawning it, so an inherited environment value cannot
 change a later candidate's protocol.
 If that marker is absent, the candidate was spawned by a pre-v2 launcher and
 projects the legacy `running`/`handoff` health shape from its durable receipt so
-the launcher can authorize the same CAS. This is only a local compatibility
+the launcher can authorize the same local proof. This is only a local compatibility
 view: preflight, Runtime registration, WebSocket connection, and task claims
 remain blocked until the CAS commits.
 

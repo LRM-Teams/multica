@@ -7,10 +7,10 @@
  * example coordinates and WITHOUT any React / canvas dependency.
  *
  * Spatial semantics implemented (D5 spec):
- *   - Goal (xxl, or the root when no xxl) is the origin.
- *   - Stable tiers (xl/l/m) form a focal field around the goal, grouped into
- *     contiguous angular sectors by `clusterId` so members of the same cluster
- *     sit together and different clusters keep clear space.
+ *   - The canonical goal is the origin; an XXL synthesis remains a distinct
+ *     destination instead of being collapsed into the same visual role.
+ *   - Stable tiers (xxl/xl/l/m) form a directional field to the right of the
+ *     goal, grouped into contiguous angular sectors by `clusterId`.
  *   - S agents orbit their parent result on a small exploration radius.
  *   - New / unrelated directions sit outside existing clusters and only link
  *     back to the goal via `challenge` / `newdir` relation semantics.
@@ -67,6 +67,8 @@ export function defaultLabelBox(tier: StarGraphLayoutTier): StarGraphLabelBox {
 export interface StarGraphLayoutNode {
   id: string;
   tier: StarGraphLayoutTier;
+  /** Canonical backend node type. Used only for spatial semantics. */
+  nodeKind?: string | null;
   /** Cluster (theme/成果) grouping key. Null = unclustered / free direction. */
   clusterId?: string | null;
   /** Parent result id for S-tier exploration orbit. Other tiers ignore this. */
@@ -124,6 +126,16 @@ export interface StarGraphLayoutCluster {
   memberIds: string[];
 }
 
+/** Dashed territory enclosing canonical `newdir` relation targets. */
+export interface StarGraphLayoutFrontier {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  memberIds: string[];
+}
+
 export interface StarGraphLayoutOptions {
   /**
    * Previous layout result for incremental stability. Nodes whose cluster and
@@ -142,6 +154,7 @@ export interface StarGraphLayoutResult {
   nodes: StarGraphLayoutNodePosition[];
   edges: StarGraphLayoutEdge[];
   clusters: StarGraphLayoutCluster[];
+  frontiers?: StarGraphLayoutFrontier[];
   /** Goal (origin) node id, if any. */
   rootId: string | null;
   /** The stable layout version that produced this geometry. */
@@ -355,7 +368,13 @@ interface EngineNode extends StarGraphLayoutNode {
 }
 
 function nodeSignature(node: StarGraphLayoutNode): string {
-  return `${node.id}|${node.tier}|${node.clusterId ?? ""}|${node.parentId ?? ""}`;
+  return [
+    node.id,
+    node.tier,
+    node.clusterId ?? "",
+    node.parentId ?? "",
+    node.nodeKind ?? "",
+  ].join("|");
 }
 
 /**
@@ -389,6 +408,7 @@ export function layoutStarGraph(
       nodes: [],
       edges: [],
       clusters: [],
+      frontiers: [],
       rootId: null,
       version,
       keyByNode: new Map(),
@@ -404,6 +424,7 @@ export function layoutStarGraph(
   const total = nodes.length;
 
   const root =
+    nodes.find((n) => n.nodeKind?.toLowerCase() === "goal") ??
     nodes.find((n) => n.tier === "xxl") ??
     nodes.find((n) => n.clusterId == null && n.parentId == null) ??
     nodes[0]!;
@@ -450,18 +471,22 @@ export function layoutStarGraph(
   const sectorStart = new Map<string | "__free__", number>();
   const sectorSpan = new Map<string | "__free__", number>();
   {
-    const gap = 0.22; // radians of clear space between adjacent groups
-    const usable = 2 * Math.PI - gap * sectorCount;
+    const hasCanonicalOrigin = root.nodeKind?.toLowerCase() === "goal";
+    const gap = hasCanonicalOrigin ? 0.16 : 0.22;
+    // A goal-led graph reads left-to-right like the D5 exploration narrative.
+    // Legacy/non-goal inputs retain the full radial field.
+    const fieldSpan = hasCanonicalOrigin ? Math.PI * 0.78 : 2 * Math.PI;
+    const usable = fieldSpan - gap * Math.max(0, sectorCount - 1);
     const slot = sectorCount > 0 ? usable / sectorCount : 0;
     // Rotate the whole field by a quarter turn. With sparse data this keeps
     // two stable results on the left/right axis and three in a broad triangle
     // instead of collapsing the first impression into a vertical chain.
-    let cursor = -Math.PI / 2;
+    let cursor = hasCanonicalOrigin ? -fieldSpan / 2 : -Math.PI / 2;
     const orderedGroups: (string | "__free__")[] = [...clusterKeys, "__free__"];
     for (const g of orderedGroups) {
       sectorStart.set(g, cursor + gap / 2);
       sectorSpan.set(g, slot);
-      cursor += gap + slot;
+      cursor += slot + gap;
     }
   }
 
@@ -670,7 +695,13 @@ export function layoutStarGraph(
   /* ---- Cluster boundaries (bounding circle around members). ---- */
   const clusters: StarGraphLayoutCluster[] = [];
   for (const key of clusterKeys) {
-    const members = byCluster.get(key)!;
+    const stableMembers = byCluster.get(key)!;
+    const memberIdSet = new Set(stableMembers.map((n) => n.id));
+    const orbitMembers = orbit.filter((n) => {
+      if (n.clusterId === key) return true;
+      return n.parentId != null && memberIdSet.has(n.parentId);
+    });
+    const members = [...stableMembers, ...orbitMembers];
     const memberIds = members.map((n) => n.id).sort();
     let cx = 0;
     let cy = 0;
@@ -694,6 +725,38 @@ export function layoutStarGraph(
       y: Math.round(cy * 100) / 100,
       radius: Math.ceil(maxR),
       memberIds,
+    });
+  }
+
+  /* ---- New-frontier territory from canonical `newdir` relations only. ---- */
+  const frontierTargetIds = new Set(
+    relations
+      .filter((relation) => relation.kind === "newdir")
+      .map((relation) => relation.toNodeId),
+  );
+  const frontierMembers = nodes.filter((node) => frontierTargetIds.has(node.id));
+  const frontiers: StarGraphLayoutFrontier[] = [];
+  if (frontierMembers.length > 0) {
+    const pad = 42;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const member of frontierMembers) {
+      const point = pos.get(member.id)!;
+      const radius = STAR_GRAPH_RADIUS[member.tier];
+      minX = Math.min(minX, point.x - radius - pad);
+      minY = Math.min(minY, point.y - radius - pad);
+      maxX = Math.max(maxX, point.x + radius + pad);
+      maxY = Math.max(maxY, point.y + radius + pad);
+    }
+    frontiers.push({
+      id: "newdir",
+      x: Math.round(minX * 100) / 100,
+      y: Math.round(minY * 100) / 100,
+      width: Math.round((maxX - minX) * 100) / 100,
+      height: Math.round((maxY - minY) * 100) / 100,
+      memberIds: frontierMembers.map((member) => member.id).sort(),
     });
   }
 
@@ -722,6 +785,7 @@ export function layoutStarGraph(
     nodes: nodeResults,
     edges,
     clusters,
+    frontiers,
     rootId,
     version,
     keyByNode: signatureNow,
@@ -734,6 +798,8 @@ function nodeSignatureCompat(
   prev: StarGraphLayoutNodePosition,
   currentSig: string,
 ): boolean {
-  const prevSig = `${prev.id}|${prev.tier}|${prev.clusterId ?? ""}|${prev.parentId ?? ""}`;
-  return prevSig === currentSig;
+  // Older position records do not carry nodeKind. Compare the geometry part;
+  // the full signature still invalidates through keyByNode between versions.
+  const geometrySig = `${prev.id}|${prev.tier}|${prev.clusterId ?? ""}|${prev.parentId ?? ""}`;
+  return currentSig.startsWith(`${geometrySig}|`);
 }

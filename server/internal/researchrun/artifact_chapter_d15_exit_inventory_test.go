@@ -23,7 +23,7 @@ var chapterD15Coverage = map[int]string{
 	6:  "partial", // backfill diagnostic tests in migration 319
 	7:  "partial", // artifact_policy legacy admission matrix
 	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered
-	9:  "partial", // access matrix unit tests
+	9:  "covered", // closed normal-clearance/purpose/evaluation matrix + output taint permutations
 	10: "partial", // evaluation compartment integration + researcheval SubjectInput
 	11: "partial", // dispatch race: eligibility/state/hash/lifecycle after rolled-back intent
 	12: "partial", // dispatch normalized locks + concurrent shared-candidate test

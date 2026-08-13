@@ -188,12 +188,20 @@ export function translateLayoutInto(
     radius: Math.ceil(cluster.radius * scale),
     memberIds: cluster.memberIds,
   }));
+  const frontiers = (layout.frontiers ?? []).map((frontier) => ({
+    ...frontier,
+    x: Math.round((frontier.x * scale + translateX) * 100) / 100,
+    y: Math.round((frontier.y * scale + translateY) * 100) / 100,
+    width: Math.round(frontier.width * scale * 100) / 100,
+    height: Math.round(frontier.height * scale * 100) / 100,
+  }));
 
   return {
     ...layout,
     nodes: nx,
     edges,
     clusters,
+    frontiers,
     stats: { ...layout.stats, reused: layout.stats.total, moved: 0 },
   };
 }

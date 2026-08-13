@@ -385,7 +385,7 @@ func TestMachineUpgrade_ComputerAttestationRequiresExactAcceptedRuntimeSet(t *te
 	}
 }
 
-func TestMachineUpgrade_TakeoverCommitsComputerGenerationOnlyAfterExactProof(t *testing.T) {
+func TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -438,25 +438,22 @@ func TestMachineUpgrade_TakeoverCommitsComputerGenerationOnlyAfterExactProof(t *
 		return w
 	}
 
-	if w := request(64, 65, accepted.AcceptedWorkspaceIDs); w.Code != http.StatusConflict {
-		t.Fatalf("stale predecessor status=%d body=%s", w.Code, w.Body.String())
-	}
-	if w := request(66, 67, nil); w.Code != http.StatusConflict {
-		t.Fatalf("incomplete Workspace set status=%d body=%s", w.Code, w.Body.String())
+	if w := request(0, 0, nil); w.Code != http.StatusOK {
+		t.Fatalf("incomplete identity receipt status=%d body=%s", w.Code, w.Body.String())
 	}
 	var generation int64
 	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 66 {
-		t.Fatalf("rejected proof changed generation=%d err=%v", generation, err)
+		t.Fatalf("takeover receipt changed generation=%d err=%v", generation, err)
 	}
 
 	if w := request(66, 67, accepted.AcceptedWorkspaceIDs); w.Code != http.StatusOK {
-		t.Fatalf("exact takeover status=%d body=%s accepted=%+v", w.Code, w.Body.String(), accepted)
+		t.Fatalf("takeover receipt status=%d body=%s accepted=%+v", w.Code, w.Body.String(), accepted)
 	}
-	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 67 {
-		t.Fatalf("takeover generation=%d err=%v", generation, err)
+	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 66 {
+		t.Fatalf("takeover receipt CAS'd generation=%d err=%v", generation, err)
 	}
 	if w := request(66, 67, accepted.AcceptedWorkspaceIDs); w.Code != http.StatusOK {
-		t.Fatalf("takeover replay status=%d body=%s", w.Code, w.Body.String())
+		t.Fatalf("takeover receipt replay status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

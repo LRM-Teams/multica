@@ -2,8 +2,45 @@ package researchrun
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
+
+func TestDeriveManifestOutputAccessClosedMatrix(t *testing.T) {
+	t.Parallel()
+	levels := []ArtifactAccessLevel{
+		ArtifactAccessVerifiedOnly, ArtifactAccessRedacted, ArtifactAccessRaw,
+	}
+	for length := 1; length <= 3; length++ {
+		var visit func([]ArtifactAccessLevel)
+		visit = func(prefix []ArtifactAccessLevel) {
+			if len(prefix) == length {
+				t.Run(fmt.Sprint(prefix), func(t *testing.T) {
+					want := ArtifactAccessVerifiedOnly
+					for _, level := range prefix {
+						if level == ArtifactAccessRaw {
+							want = ArtifactAccessRaw
+							break
+						}
+						if level == ArtifactAccessRedacted {
+							want = ArtifactAccessRedacted
+						}
+					}
+					got, err := deriveManifestOutputAccess(prefix)
+					if err != nil || got != want {
+						t.Fatalf("deriveManifestOutputAccess(%v)=(%q,%v), want (%q,nil)", prefix, got, err, want)
+					}
+				})
+				return
+			}
+			for _, level := range levels {
+				next := append(append([]ArtifactAccessLevel(nil), prefix...), level)
+				visit(next)
+			}
+		}
+		visit(nil)
+	}
+}
 
 func TestDeriveManifestOutputAccess(t *testing.T) {
 	tests := []struct {

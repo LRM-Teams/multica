@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -80,6 +81,69 @@ func TestHealthHandlerReportsCLIVersionAndActiveTaskCount(t *testing.T) {
 	}
 }
 
+func TestLocalControlAnswersPIDVersionWithoutChangingHealth(t *testing.T) {
+	d := New(Config{
+		CLIVersion:         "v10.0.0",
+		DaemonID:           "computer-1",
+		WorkspaceID:        "11111111-1111-1111-1111-111111111111",
+		ComputerGeneration: 12,
+	}, slog.Default())
+	d.runnerInstanceID = "service-generation-1"
+	d.ready.Store(true)
+	started := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", d.healthHandler(started))
+	mux.HandleFunc(computer.MachineAttestationPath, d.machineAttestationHandler(started))
+
+	attestRec := httptest.NewRecorder()
+	mux.ServeHTTP(attestRec, httptest.NewRequest(http.MethodGet, computer.MachineAttestationPath, nil))
+	if attestRec.Code != http.StatusOK {
+		t.Fatalf("control ask status=%d body=%s", attestRec.Code, attestRec.Body.String())
+	}
+	var attestation computer.MachineAttestation
+	if err := json.Unmarshal(attestRec.Body.Bytes(), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	if attestation.ServicePID != os.Getpid() {
+		t.Fatalf("control service_pid=%d, want %d", attestation.ServicePID, os.Getpid())
+	}
+	if attestation.ComputerVersion != "v10.0.0" {
+		t.Fatalf("control computer_version=%q", attestation.ComputerVersion)
+	}
+
+	healthRec := httptest.NewRecorder()
+	mux.ServeHTTP(healthRec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("health status=%d", healthRec.Code)
+	}
+	var health map[string]any
+	if err := json.Unmarshal(healthRec.Body.Bytes(), &health); err != nil {
+		t.Fatal(err)
+	}
+	if health["status"] != "running" || health["cli_version"] != "v10.0.0" {
+		t.Fatalf("health contract drifted: %+v", health)
+	}
+	if _, ok := health["machine_attestation"]; ok {
+		t.Fatal("health JSON must not carry machine_attestation")
+	}
+	var typed HealthResponse
+	if err := json.Unmarshal(healthRec.Body.Bytes(), &typed); err != nil {
+		t.Fatal(err)
+	}
+	if typed.Status != "running" || typed.CLIVersion != "v10.0.0" || typed.PID == 0 {
+		t.Fatalf("typed health = %+v", typed)
+	}
+
+	if dir := os.Getenv("MULTICA_ATTEST_EVIDENCE_DIR"); dir != "" {
+		if err := os.WriteFile(filepath.Join(dir, "control-ask.json"), attestRec.Body.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "health.json"), healthRec.Body.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestLocalMachineUpgradeControlRequiresProfileSecretAndUsesCanonicalOperation(t *testing.T) {
 	var upstreamRequest map[string]string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,16 +192,9 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
 
 	attestations := 0
-	var upstreamProof map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-1/takeover" {
-			t.Fatalf("upstream path = %s", r.URL.Path)
-		}
 		attestations++
-		if err := json.NewDecoder(r.Body).Decode(&upstreamProof); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"phase": "completed"})
+		t.Fatalf("local proof contacted server: %s", r.URL.Path)
 	}))
 	defer upstream.Close()
 
@@ -229,20 +286,17 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	if rec.Code != http.StatusOK {
 		t.Fatalf("exact takeover status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if attestations != 1 {
-		t.Fatalf("server attestations = %d, want 1", attestations)
+	if attestations != 0 {
+		t.Fatalf("local proof still contacted server: %d requests", attestations)
 	}
 	if !d.pauseClaims {
-		t.Fatal("takeover CAS released claims before normal candidate startup")
-	}
-	if got := stringSetFromAny(upstreamProof["workspace_ids"]); !sameStringSet(got, expected.WorkspaceIDs) {
-		t.Fatalf("upstream Workspace proof = %#v, want %#v", got, expected.WorkspaceIDs)
+		t.Fatal("local proof released claims before normal candidate startup")
 	}
 	stored, err := d.currentMachineUpgradeJournal()
 	if err != nil || stored == nil || stored.Phase != "takeover_committed" {
 		t.Fatalf("durable takeover journal = %+v err=%v", stored, err)
 	}
-	if replay := request(expected, "profile-secret"); replay.Code != http.StatusOK || attestations != 1 {
+	if replay := request(expected, "profile-secret"); replay.Code != http.StatusOK || attestations != 0 {
 		t.Fatalf("takeover replay status=%d attestations=%d body=%s", replay.Code, attestations, replay.Body.String())
 	}
 	if proof := readHealthProof(); proof.Phase != "takeover_committed" {
@@ -258,11 +312,8 @@ func TestDetachedMachineUpgradeHealthProjectsLegacyLauncherHandshakeWithoutRegis
 
 	takeoverRequests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-1/takeover" {
-			t.Fatalf("upstream path = %s", r.URL.Path)
-		}
 		takeoverRequests++
-		_ = json.NewEncoder(w).Encode(map[string]string{"phase": "handoff"})
+		t.Fatalf("legacy launcher commit contacted server: %s", r.URL.Path)
 	}))
 	defer upstream.Close()
 
@@ -309,7 +360,7 @@ func TestDetachedMachineUpgradeHealthProjectsLegacyLauncherHandshakeWithoutRegis
 	}
 	select {
 	case <-d.machineUpgradeTakeover.committed:
-		t.Fatal("legacy health projection released startup before takeover CAS")
+		t.Fatal("legacy health projection released startup before local proof")
 	default:
 	}
 
@@ -328,7 +379,7 @@ func TestDetachedMachineUpgradeHealthProjectsLegacyLauncherHandshakeWithoutRegis
 	if err := json.NewDecoder(committed.Body).Decode(&proof); err != nil {
 		t.Fatal(err)
 	}
-	if proof.Phase != "candidate_ready" || takeoverRequests != 1 {
+	if proof.Phase != "candidate_ready" || takeoverRequests != 0 {
 		t.Fatalf("legacy launcher commit proof = %+v requests=%d", proof, takeoverRequests)
 	}
 	stored, err := d.currentMachineUpgradeJournal()
@@ -343,15 +394,6 @@ func TestDetachedMachineUpgradeHealthProjectsLegacyLauncherHandshakeWithoutRegis
 	default:
 		t.Fatal("legacy launcher commit did not release candidate startup")
 	}
-}
-
-func stringSetFromAny(value any) []string {
-	items, _ := value.([]any)
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		result = append(result, fmt.Sprint(item))
-	}
-	return result
 }
 
 // TestHealthHandlerReportsStartingUntilReady pins the liveness/readiness split:

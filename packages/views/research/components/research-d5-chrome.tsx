@@ -151,7 +151,7 @@ export function ResearchD5Chrome({
             <PopoverTrigger
               data-testid="research-d5-lens-overflow-trigger"
               className="d5-lens-overflow-trigger d5-lens-btn inline-flex items-center gap-1"
-              aria-label={t(($) => $.d5.lens_group)}
+              aria-label={`${t(($) => $.d5.lens_group)}: ${t(($) => $.d5.lens[activeLens])}`}
             >
               {t(($) => $.d5.lens[activeLens])}
               <ChevronDown className="size-3.5 opacity-70" aria-hidden />
@@ -162,6 +162,7 @@ export function ResearchD5Chrome({
                   key={lens}
                   type="button"
                   data-testid={`research-d5-lens-overflow-${lens}`}
+                  aria-pressed={activeLens === lens}
                   className={cn(
                     "w-full rounded-md px-2 py-1.5 text-left text-[11px]",
                     activeLens === lens

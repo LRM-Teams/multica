@@ -42,7 +42,10 @@ type machineUpgradeJournal struct {
 	RuntimeIDs                    []string `json:"runtime_ids"`
 	WorkspaceIDs                  []string `json:"workspace_ids"`
 	Phase                         string   `json:"phase"`
-	UpdatedAt                     string   `json:"updated_at"`
+	// StagedPath is the ephemeral scratch file for this operation. Recovery
+	// verifies this regular file; the stage status string is not a path.
+	StagedPath string `json:"staged_path,omitempty"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 func (d *Daemon) machineUpgradeGenerationID() string {
@@ -180,6 +183,11 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 		return
 	}
 	journal.Phase = "staged"
+	journal.StagedPath = resolveStagedBinaryFile(d.stagedUpgradePath)
+	if journal.StagedPath == "" {
+		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "stage_failed", fmt.Errorf("staged binary path is empty"))
+		return
+	}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "journal_persist_failed", err)
 		return

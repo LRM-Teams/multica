@@ -308,6 +308,194 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	<-errCh
 }
 
+func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T) {
+	// After a Machine Upgrade the successor reconnects, receives agent:start,
+	// then the control socket that delivered that start can die while Codex is
+	// still booting. Raft still starts the process on the Computer lifetime.
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	acked := make(chan struct{})
+	closed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			t.Error(err)
+			return
+		}
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+		})})
+		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
+			t.Error(err)
+			return
+		}
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var frame protocol.Message
+			if json.Unmarshal(raw, &frame) != nil {
+				continue
+			}
+			if frame.Type == protocol.EventAgentStartAck {
+				close(acked)
+				<-closed
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	hold := make(chan struct{})
+	started := make(chan context.Context, 1)
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.ensureResidentRuntime = func(ctx context.Context, _, _ string, _ *agent.PiRunIdentity) error {
+		<-hold
+		started <- ctx
+		return ctx.Err()
+	}
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatalf("attach Agent: %v", err)
+	}
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runner.runConnection(ctx) }()
+	select {
+	case <-acked:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for agent:start acknowledgement")
+	}
+	close(closed)
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("control connection did not close after start acknowledgement")
+	}
+	close(hold)
+	select {
+	case providerCtx := <-started:
+		if err := providerCtx.Err(); err != nil {
+			t.Fatalf("provider start used cancelled control-connection context: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider start did not continue after control connection closed")
+	}
+	launch, ok := runner.processes.Snapshot("agent-1")
+	if !ok || !launch.Managed {
+		t.Fatal("provider start after upgrade reconnect dropped the managed launch")
+	}
+}
+
+func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(t *testing.T) {
+	// An accepted start that never becomes Active must not look like residency.
+	// After upgrade the server keeps the desired launch; inactive is what
+	// lets reconcile send agent:start again.
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	got := make(chan protocol.AgentStatusPayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			t.Error(err)
+			return
+		}
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+		})})
+		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
+			t.Error(err)
+			return
+		}
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var frame protocol.Message
+			if json.Unmarshal(raw, &frame) != nil {
+				continue
+			}
+			if frame.Type != protocol.EventAgentStatus {
+				continue
+			}
+			var status protocol.AgentStatusPayload
+			if json.Unmarshal(frame.Payload, &status) != nil {
+				continue
+			}
+			got <- status
+			return
+		}
+	}))
+	defer server.Close()
+
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		return errors.New("codex app-server did not start")
+	}
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatalf("attach Agent: %v", err)
+	}
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = runner.runConnection(ctx) }()
+	select {
+	case status := <-got:
+		if status.AgentID != "agent-1" || status.LaunchID != "launch-1" || status.Status != protocol.AgentStatusInactive {
+			t.Fatalf("failed start status = %+v, want inactive launch-1", status)
+		}
+	case <-ctx.Done():
+		t.Fatal("failed provider start did not publish inactive status")
+	}
+}
+
 func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesCoordinator(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	started := make(chan struct{}, 1)

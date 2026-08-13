@@ -4,10 +4,11 @@ Status: implemented
 
 ## Evidence boundary
 
-The Raft Computer behavior in this document was verified from the locally
-installed `raft-computer` 1.0.15 artifact. The private Raft Server storage
-implementation was not available, so this document does not claim its table
-shape or retry scheduler as observed fact.
+The no-process / ACK decision table below was verified from the published
+`@botiverse/raft-daemon@1.0.16` `deliverMessage` implementation. Older 1.0.15
+Computer notes still apply to reconnect redelivery and ACK envelope shape. The
+private Raft Server storage implementation was not available, so this document
+does not claim its table shape or retry scheduler as observed fact.
 
 Verified Raft Computer behavior:
 
@@ -17,16 +18,43 @@ Verified Raft Computer behavior:
 - after start succeeds, one buffered non-transient delivery may become the wake
   Message and is acknowledged only after that start succeeds; remaining
   deliveries re-enter the ordinary delivery path;
-- the Computer acknowledges only when `AgentProcessManager.deliverMessage`
-  resolves `accepted=true`;
-- a rejected or failed provider input is not acknowledged; the server retains
-  delivery responsibility and may retry the same `deliveryId` and sequence;
+- the Computer acknowledges only when `deliverMessage` resolves `accepted=true`;
+- `accepted=true` is local responsibility, not process liveness. Already
+  consumed, starting/queued, terminal, idle-snapshot restore, and spawn-cooldown
+  deliveries accept without a live provider process;
+- a rejected or failed provider input on a *running* launch is not acknowledged;
+  the server retains delivery responsibility and may retry the same `deliveryId`
+  and sequence;
 - APM acceptance includes durable local responsibility such as a starting,
   idle, busy, or already-consumed inbox state. It is not provider-turn
   completion, a read receipt, or Context Boundary advancement;
 - the acknowledgement echoes the delivery's `agentId`, `deliveryId`, and
   positive outer `seq` (with an old-message fallback to the nested Message
   sequence).
+
+### Computer accept table (Raft 1.0.16)
+
+| State | ACK | Pending | Side effect |
+|---|---|---|---|
+| already consumed | yes | no | drop |
+| starting or queued | yes | yes | no provider handoff |
+| terminal failure | yes | yes | publish error |
+| idle snapshot | yes | yes | restore original launch |
+| spawn cooldown | yes | yes | do not restart yet |
+| no process, no snapshot | no | no | inactive + `runtime_unavailable` |
+| live + busy | yes | yes | Notice, no body handoff |
+| live + idle | yes | no after handoff | body handoff |
+| live + provider reject | no | yes | Server retries |
+
+### Forbidden
+
+- Do not NACK solely because APM `Snapshot` is missing.
+- Do not ACK unless the coordinator still owns the body (Pending), the target
+  is already context-covered, or an idle restore of the original launch is in
+  flight.
+- Do not invent a `startDispatchId` for idle restore. Restore is Computer-local
+  and reuses the last server launch identity.
+- Do not collapse those outcomes into one `has not been accepted by APM` error.
 
 ## Multica contract
 
@@ -41,8 +69,9 @@ Message sequence. This is independent of `agent:start:ack`: deliveries may
 arrive before or during Agent start, and the Computer/APM owns the corresponding
 local buffer.
 
-The Computer sends `agent:deliver:ack` only after its APM accepts responsibility
-or proves the delivery was already consumed. The Server accepts an ACK only when
+The Computer sends `agent:deliver:ack` only after the accept table above says
+the Computer still owns the Delivery. Missing APM launch is not by itself a
+NACK. The Server accepts an ACK only when
 `workspaceId`, `agentId`, canonical `deliveryId`, and `seq` match the persisted
 row. A matching ACK durably sets `acked_at`; subsequent Runner reconnects do not
 redeliver it.
@@ -93,4 +122,8 @@ module interfaces, or logs.
   later retry;
 - `TestWorkspaceRunnerProviderSpawnFailureReportsInactiveAndOffline` and
   `TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity` enforce the
-  two Raft failure phases.
+  two Raft failure phases;
+- `requiredDeliveryRouteTests` plus
+  `TestAcceptMessageDeliveryForbidsUnmanagedEarlyNack` freeze the 1.0.16 accept
+  table. Changing `acceptMessageDelivery` without those tests is a contract
+  break. Run `make test-agent-delivery-route`.

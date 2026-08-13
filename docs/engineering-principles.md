@@ -64,11 +64,11 @@
 
 ### 0.3 Agent Message ACK 重投协议 — `可执行`（①②⑤，owner: @Codex）
 
-- **口径（2026-08-12）**：普通消息只走 `agent:deliver → APM accepted → agent:deliver:ack`。Server 持久化未 ACK responsibility，Workspace Runner ready 后按原始 `seq` 重投；启动期由 Computer/APM buffer。ACK 不是 read、Provider turn completion 或 Context Boundary advancement。
+- **口径（2026-08-13）**：普通消息只走 `agent:deliver → Computer 仍负责任 → agent:deliver:ack`。负责任包括 Pending、已覆盖、start/queued、terminal、idle snapshot 自拉起、spawn cooldown；**禁止**仅因 APM `Snapshot` 为 false 就 NACK。Server 持久化未 ACK responsibility，Workspace Runner ready 后按原始 `seq` 重投。ACK 不是 read、进程活着、Provider turn completion 或 Context Boundary advancement。
 - **双层安全**：Server `acked_at` 负责“不丢”；Computer 的 `target + seq` / `consumed-seqs.json` 负责 Provider 去重与真实 context coverage。`deliveryId` 与 `seq` 禁止合并或互相替代。
 - **不存在**：普通消息的 `agent:recovery:request/page` 协议、payload、handler 与 coordinator 状态机已删除；Reminder snapshot 不受影响。
-- **命名**：新增接口和日志使用 Computer；既有 `daemon_id` 只视为旧存储/auth adapter。
-- **物**：migration `340_agent_message_delivery_ack`；协议类型不存在性；`TestWorkspaceRunnerReadyRedeliversUnacknowledgedMessagesInSequenceOrder` 与 `TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery`（均先见红）。完整 Raft 1.0.15 证据边界与 Multica 映射见 `docs/agent-message-delivery-contract.md`。
+- **命名**：新增接口和日志使用 Computer；既有 `daemon_id` 只视为旧存储/auth adapter。拒绝码按格子拆：`rejected_no_process` / `rejected_no_inbox` / `rejected_inbox_runtime_mismatch` / `idle_restore_failed` / `provider_rejected`，禁止收回 `has not been accepted by APM`。
+- **物**：migration `340_agent_message_delivery_ack`；`docs/agent-message-delivery-contract.md` 的 1.0.16 accept table；`requiredDeliveryRouteTests`；`TestAcceptMessageDeliveryForbidsUnmanagedEarlyNack`；`make test-agent-delivery-route`。改 `acceptMessageDelivery` 必跑该 target。
 
 ## 1. 消息写入管道（BE）
 
@@ -499,7 +499,7 @@
 ### 4.19 Agent 消息链路硬切到 Raft 风格 coordinator — `可执行`（Workspace Runner 单一 Inbox + 本地 coverage receipt + MessageDraftStore）
 
 - Server canonical `Message` 是唯一通信真相；机器侧 `Delivery/Pending/Context Boundary` 只负责 at-least-once 传输、可重建待处理投影和上下文 freshness，不再引入 Inbox Event、Task、lease 或 `agent_execution` 身份。Notice 无正文、可合并，不推进 boundary，也不产生前端 `Message received` Activity；该文案不是内部 event/enum/trace/wire 名称合同。
-- 机器传输事件名和 envelope 对齐 Raft：Server→machine 使用 `agent:deliver`，machine→Server 使用 `agent:deliver:ack`；ACK 固定携带 `agentId/seq/deliveryId`（可选 `traceparent`），只证明 coordinator 已受理或识别重复 Delivery，不证明 Message 已读、正文已进入 runtime 或 Context Boundary 已推进。
+- 机器传输事件名和 envelope 对齐 Raft：Server→machine 使用 `agent:deliver`，machine→Server 使用 `agent:deliver:ack`；ACK 固定携带 `agentId/seq/deliveryId`（可选 `traceparent`），只证明 Computer 仍负责任，不证明 Message 已读、进程活着、正文已进入 runtime 或 Context Boundary 已推进。无进程时的 accept table 与禁止项见 0.3 与 [`docs/agent-message-delivery-contract.md`](agent-message-delivery-contract.md)。
 - Credential Proxy 拥有内部 `seenUpToSeq` 注入、本地/服务端 held 消费和十分钟本地 Draft；首次发送前生成并随 Draft 保留内部 `idempotencyKey`，显式重放由 Server 返回原 Message 或拒绝不同 payload，不能重复插入。Agent 不控制 cursor/idempotency key，hold 不自动重发。CLI 硬切为 `message send/check/read/search/resolve/react`，参数和行为以 Raft canonical command 为准，不保留 Multica 兼容别名。
 - `message check/read` 与 freshness hold 的 Context Boundary 统一使用 two-phase coverage：coordinator 只 prepare 代表本次具体输出的 machine-local receipt，不先删 Pending/写 boundary；CLI 先剔除内部 receipt 并成功写可见输出，再通过 launch-scoped Agent Proxy credential commit。输出失败不 commit，输出后 commit 失败必须显式报告可能重放。hold 虽最多展示 newest three，receipt 必须覆盖完整 represented Pending range；Draft identity 保留且禁止自动 resend。
 - 首版不为理论上的同 Agent/target 并发发送增加锁、持久队列或新错误码；Proxy 只在实际重叠时写 `agent_message_send_overlap` 结构化 warning，日志不得包含正文、附件名或 credential。是否串行化必须由真实重叠数据和故障证据驱动。

@@ -309,6 +309,12 @@ jobs:
             -c 'CREATE DATABASE multica_research;'
           cd server && DATABASE_URL="$TEST_DATABASE_URL" go run ./cmd/migrate up
 
+      - name: Agent delivery route
+        # Hard gate for the Raft 1.0.16 accept table. The full suite below also
+        # runs these tests; this step keeps the contract visible when
+        # acceptMessageDelivery changes.
+        run: make test-agent-delivery-route
+
       - name: Test
         # Integration packages share this job's Postgres service. Run packages
         # serially so a global scheduler repair cannot mutate another package's

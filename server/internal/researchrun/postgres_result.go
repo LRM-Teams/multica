@@ -823,6 +823,7 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			verificationStatus = "verified"
 		}
 		var id string
+		var persistedRetrievedAt time.Time
 		var existed bool
 		if err = tx.QueryRow(ctx, `
 			SELECT EXISTS (
@@ -847,19 +848,43 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			    ELSE research_source_snapshot.evidence_traits
 			  END,
 			  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_source_snapshot.verification_status END
-			RETURNING id::text
+			RETURNING id::text, retrieved_at
 		`, state.workspaceID, state.run.SessionID, state.task.ID, canonical,
 			truncateBytes(source.Title, 4096), truncateBytes(source.Publisher, 1024),
 			truncateBytes(source.SourceClass, 160), evidenceTraits, truncateBytes(source.IndependenceKey, 160),
 			source.RetrievedAt, source.SnapshotText, contentHash,
-			normalizeJSON(source.Metadata, `{}`), verificationStatus).Scan(&id)
+			normalizeJSON(source.Metadata, `{}`), verificationStatus).Scan(&id, &persistedRetrievedAt)
 		if err != nil {
 			return nil, 0, err
 		}
 		ids[source.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindSourceSnapshot, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil, state.outputAccess); err != nil {
+			metadata := normalizeJSON(source.Metadata, `{}`)
+			versionHash, hashErr := ArtifactContentHash(ArtifactKindSourceSnapshot, map[string]any{
+				"produced_by_task_id": state.task.ID,
+				"canonical_url":       canonical,
+				"title":               truncateBytes(source.Title, 4096),
+				"publisher":           truncateBytes(source.Publisher, 1024),
+				"source_class":        truncateBytes(source.SourceClass, 160),
+				"evidence_traits":     evidenceTraits,
+				"independence_key":    truncateBytes(source.IndependenceKey, 160),
+				"retrieved_at":        persistedRetrievedAt,
+				"snapshot_text":       source.SnapshotText,
+				"content_hash":        contentHash,
+				"metadata":            json.RawMessage(metadata),
+				"verification_status": verificationStatus,
+			})
+			if hashErr != nil {
+				return nil, 0, hashErr
+			}
+			if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+				WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: id,
+				Kind: ArtifactKindSourceSnapshot, SourceCreatedAt: timePtr(time.Now()),
+				ProvenanceCompleteness: ArtifactProvenanceComplete,
+				AccessLevel:            state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+				ContentHash: versionHash, ProducedByAttemptID: state.attemptID,
+			}); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -945,7 +970,27 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 		ids[observation.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindObservation, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil, state.outputAccess); err != nil {
+			datum := normalizeJSON(observation.Datum, `{}`)
+			versionHash, hashErr := ArtifactContentHash(ArtifactKindObservation, map[string]any{
+				"source_snapshot_id":  sourceID,
+				"produced_by_task_id": state.task.ID,
+				"quote":               observation.Quote,
+				"datum":               json.RawMessage(datum),
+				"locator":             truncateBytes(observation.Locator, 1024),
+				"interpretation":      truncateBytes(observation.Interpretation, 8192),
+				"content_hash":        contentHash,
+				"verification_status": verificationStatus,
+			})
+			if hashErr != nil {
+				return nil, 0, hashErr
+			}
+			if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+				WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: id,
+				Kind: ArtifactKindObservation, SourceCreatedAt: timePtr(time.Now()),
+				ProvenanceCompleteness: ArtifactProvenanceComplete,
+				AccessLevel:            state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+				ContentHash: versionHash, ProducedByAttemptID: state.attemptID,
+			}); err != nil {
 				return nil, 0, err
 			}
 		}

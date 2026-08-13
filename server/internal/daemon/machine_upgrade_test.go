@@ -584,8 +584,8 @@ func TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplic
 	}
 
 	restarted, err := d.recoverInterruptedMachineUpgrade(context.Background())
-	if restarted || err == nil || !strings.Contains(err.Error(), "candidate_ready journal requires target") {
-		t.Fatalf("stale candidate_ready recovery restarted=%v err=%v, want fail-closed target mismatch", restarted, err)
+	if restarted || err != nil {
+		t.Fatalf("stale candidate_ready recovery restarted=%v err=%v, want start without replaying the old journal", restarted, err)
 	}
 	if restartCalls != 0 {
 		t.Fatalf("superseded recovery restarted process %d times", restartCalls)
@@ -611,8 +611,8 @@ func TestInterruptedMachineUpgradeRecoveryRejectsUntrackedExecutableReplacement(
 		t.Fatal(err)
 	}
 
-	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
-		t.Fatalf("untracked replacement restarted=%v err=%v", restarted, err)
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err != nil || restarted {
+		t.Fatalf("later PATH Computer restarted=%v err=%v, want start", restarted, err)
 	}
 }
 
@@ -627,8 +627,8 @@ func TestInterruptedMachineUpgradeRecoveryRejectsUnknownIncumbentGeneration(t *t
 		t.Fatal(err)
 	}
 
-	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
-		t.Fatalf("unknown incumbent recovery restarted=%v err=%v", restarted, err)
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err != nil || restarted {
+		t.Fatalf("later PATH Computer restarted=%v err=%v, want start", restarted, err)
 	}
 }
 
@@ -643,14 +643,19 @@ func TestInterruptedMachineUpgradeRecoveryRequiresGenerationAfterTargetActivatio
 		t.Fatal(err)
 	}
 
-	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
-		t.Fatalf("single-generation recovery restarted=%v err=%v", restarted, err)
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err != nil || restarted {
+		t.Fatalf("later PATH Computer restarted=%v err=%v, want start", restarted, err)
 	}
 }
 
-func TestInterruptedMachineUpgradeRecoveryDoesNotSupersedeRollbackPending(t *testing.T) {
+func TestInterruptedMachineUpgradeRecoveryDoesNotBlockNewerPATHWithStaleRollbackPending(t *testing.T) {
 	configureMachineUpgradeRecoveryVersionStore(t, "v10.0.0", "v11.0.0")
-	d := &Daemon{cfg: Config{CLIVersion: "v11.0.0"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	restartCalls := 0
+	d := &Daemon{
+		cfg:        Config{CLIVersion: "v11.0.0"},
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cancelFunc: func() { restartCalls++ },
+	}
 	journal := &machineUpgradeJournal{
 		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
 		IncumbentGenerationKnown: true, RollbackGeneration: "rollback-a", RuntimeIDs: []string{"runtime-1"}, Phase: "rollback_pending",
@@ -659,8 +664,16 @@ func TestInterruptedMachineUpgradeRecoveryDoesNotSupersedeRollbackPending(t *tes
 		t.Fatal(err)
 	}
 
-	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
-		t.Fatalf("rollback_pending recovery restarted=%v err=%v", restarted, err)
+	restarted, err := d.recoverInterruptedMachineUpgrade(context.Background())
+	if restarted || err != nil {
+		t.Fatalf("stale rollback_pending blocked newer PATH: restarted=%v err=%v", restarted, err)
+	}
+	if restartCalls != 0 {
+		t.Fatalf("stale rollback_pending restarted process %d times", restartCalls)
+	}
+	retained, err := d.currentMachineUpgradeJournal()
+	if err != nil || retained == nil || retained.Phase != "rollback_pending" {
+		t.Fatalf("stale journal should stay for diagnosis: %+v err=%v", retained, err)
 	}
 }
 

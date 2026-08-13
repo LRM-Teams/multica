@@ -28,6 +28,21 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 
 	runningSource := daemonVersionsMatch(d.cfg.CLIVersion, journal.SourceVersion)
 	runningTarget := daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion)
+	if machineUpgradeJournalSupersededByRunningPath(journal, d.cfg.CLIVersion) {
+		// Raft: the PATH Computer is the live product. A later explicit
+		// upgrade already swapped that file, so this leftover journal is
+		// diagnosis only. Replaying it would refuse to start the new
+		// binary or bounce back to the old source.
+		if d.logger != nil {
+			d.logger.Warn("ignoring Machine Upgrade journal superseded by running PATH Computer",
+				"journal_phase", journal.Phase,
+				"source_version", journal.SourceVersion,
+				"target_version", journal.TargetVersion,
+				"running_version", d.cfg.CLIVersion,
+			)
+		}
+		return false, nil
+	}
 	switch journal.Phase {
 	case "takeover_committed":
 		if !runningTarget {
@@ -38,24 +53,6 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 		return false, nil
 	case "candidate_ready":
 		if !runningTarget {
-			if !runningSource {
-				superseded, err := d.machineUpgradeJournalSupersededByActive(journal)
-				if err != nil {
-					return false, fmt.Errorf("inspect superseding Active generation: %w", err)
-				}
-				if superseded {
-					if d.logger != nil {
-						d.logger.Warn("retaining Machine Upgrade journal superseded by explicit activation",
-							"journal_phase", journal.Phase,
-							"source_version", journal.SourceVersion,
-							"target_version", journal.TargetVersion,
-							"incumbent_generation", journal.IncumbentGeneration,
-							"running_version", d.cfg.CLIVersion,
-						)
-					}
-					return false, nil
-				}
-			}
 			return false, fmt.Errorf("candidate_ready journal requires target %s, running %s", journal.TargetVersion, d.cfg.CLIVersion)
 		}
 		return false, nil
@@ -254,15 +251,16 @@ func (d *Daemon) resumeMachineUpgradeRollback(ctx context.Context, journal *mach
 	return nil
 }
 
-// machineUpgradeJournalSupersededByActive distinguishes an explicit
-// VersionStore activation from an arbitrary executable replacement. A later
-// Active generation matching this process proves another serialized installer
-// mutation superseded the retained operation. The old journal remains intact
-// for diagnosis and terminal-receipt reconciliation; recovery only stops
-// replaying its obsolete side effects.
-func (d *Daemon) machineUpgradeJournalSupersededByActive(journal *machineUpgradeJournal) (bool, error) {
-	_ = journal
-	return false, nil
+// machineUpgradeJournalSupersededByRunningPath reports that PATH already
+// runs a Computer that is neither this journal's source nor its target.
+// Raft treats that live PATH binary as the product; leftover recovery must
+// not refuse to start it.
+func machineUpgradeJournalSupersededByRunningPath(journal *machineUpgradeJournal, runningVersion string) bool {
+	if journal == nil {
+		return false
+	}
+	return !daemonVersionsMatch(runningVersion, journal.SourceVersion) &&
+		!daemonVersionsMatch(runningVersion, journal.TargetVersion)
 }
 
 func (d *Daemon) captureCommittedMachineUpgradeGeneration(journal *machineUpgradeJournal) error {

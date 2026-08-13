@@ -241,7 +241,7 @@
 - **Computer 生命周期所有权**：升级、重启和其他整机 mutation 只由 Computer owner 发起；Workspace owner/admin 只管理自己的 Workspace，不因页面中可见一台 Computer 就取得别人电脑的控制权。Workspace 页面只是发起入口和状态投影；一次 Computer 升级对该环境下全部 active Workspace connections 生效，所有连接必须看到同一 operation、版本和结果，禁止按发起 Workspace 分叉升级 lineage。
 - **Computer 升级只有一个 CLI 入口**：`multica computer upgrade` 先探测本机 resident；live owner 可控时只通过 owner-only loopback control 提交 canonical Machine Upgrade，不自行 stage。只有确认没有 resident owner 时才允许在 machine mutation lock 下离线下载、校验并提交 Active，且结果只表示供下次 Computer start 使用；resident ownership 存在但 control 不可达时必须返回 `upgrade_service_unreachable`，不能离线绕过。顶层 `multica update` 不存在；`--target-version` 是唯一显式包选择，普通升级继续由 production/test 环境固定包源。
 - **Computer 就是 PATH 那一份**：`$HOME/.local/bin/multica` 既是 CLI 也是 Computer。`computer upgrade` 把它换成新文件并留下 `.prev`；start / supervise 跑的也是这份，没有 VersionStore 子进程。
-- **Computer restart 与升级恢复共享单 owner 栅栏**：`computer restart` 只有在旧 resident 的 control port 已证明释放后才能分配并启动 successor；仅成功发送 shutdown 不构成 stop proof。Machine Upgrade 的 `accepted/staged` journal 只可在服务端确认同一 operation、generation、target 及 Runtime/Workspace 集合已 `failed` 后 CAS 清理；上报未 ACK 或身份不匹配必须保留。`handoff/candidate_ready/rollback_pending` 仍要求各自的 successor 或 rollback proof。完整合同与回归见 `docs/machine-upgrade-rollout.md`。
+- **Computer restart 与升级恢复共享单 owner 栅栏**：`computer restart` 只有在旧 resident 的 control port 已证明释放后才能分配并启动 successor；仅成功发送 shutdown 不构成 stop proof。Machine Upgrade 的 `accepted/staged` journal 只可在服务端确认同一 operation、generation、target 及 Runtime/Workspace 集合已 `failed` 后 CAS 清理；上报未 ACK 或身份不匹配必须保留。当前 PATH 版本已不是该 journal 的 source/target 时，不得用旧 journal 拦住启动。完整合同与回归见 `docs/machine-upgrade-rollout.md`。
 - **Computer CLI 单测不得触碰机器级 resident**：`HOME=t.TempDir()` 只能隔离文件，不能隔离固定 control port `19514`。任何会 start/stop/restart Computer 的命令测试必须替换 lifecycle seam，验证意图和结果而不访问真实端口或进程；真实进程测试必须使用显式隔离 control port，并独立证明不会命中默认 resident。
 - **包源随环境固定**：production 只用 `metainfo.json.environments.production` 的稳定版本；test 只用 `metainfo.json.environments.test` 的预发布版本。没有独立 `release_channel` 让用户制造“test 连稳定包”或“production 连预发布包”的组合。带版本 archive/checksum/manifest 不可变；不发布根目录 channel JSON，也不做隐式 fallback。
 - **页面引导**：Computer 页面用 `/api/config.environment` 决定命令类型，用 `daemon_server_url` 和 `daemon_app_url` 分别填 test API/Web origin。production 显示 `multica setup /<workspace>`；test 显示 `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>`。两个值当前可以相同，但协议不强制同源。页面不能读取本机 `~/.multica`，所以首次连接必须把目标写进命令；完成后本机配置保存 active environment。连接卡只保留平台选择、安装命令、setup 命令和等待状态；一行说明 setup 会激活目标环境、连接 Workspace 并启动 Computer。若 setup 将切换已有 active environment，CLI 必须在任何写入或登录前询问，除非自动化显式传 `--yes`。
@@ -544,6 +544,11 @@
 ### 4.19.5 Machine Upgrade 本机证明即完成，不做云端 generation CAS — `可执行`（①CAS 不存在 + ⑤ local-proof / receipt tests）
 - **口径（2026-08-13）**：对齐 Raft Computer：successor 本机 PID+version+control 证明即完成 handoff。云端 `CommitTakeover` generation CAS 删除。`/takeover` 只给旧 Computer 当 receipt，不得改 `computer_generation`。generation 由 successor 上线后的 heartbeat/register claim；Attest 只通知升级完成。
 - **物**：`machine_upgrade_takeover.go` 本机 proof 不再调用 cloud CAS；`PostgresMachineUpgradeStore.CommitTakeover` 不存在；`TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof`；`TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration`。判断见 [`ADR-0016`](adr/0016-local-upgrade-proof-no-cloud-cas.md)。
+
+### 4.19.7 过期 Machine Upgrade journal 不得拦住新 PATH Computer — `可执行`（⑤ recovery 回归）
+- 对齐 Raft：正在跑的 PATH 二进制就是 Computer。journal 的 source/target 都对不上当前版本时，那是上一次升级留下的诊断记录，启动必须继续，禁止 fail closed，也禁止回滚到旧 source。
+- 当前版本仍是该 journal 的 source 或 target 时，按原相恢复：source 上续 accepted/staged，target 上续 successor，`rollback_pending` 只在这一对版本上才换回 `.prev`。
+- **物**：`machineUpgradeJournalSupersededByRunningPath`；`recoverInterruptedMachineUpgrade`；`TestInterruptedMachineUpgradeRecoveryDoesNotBlockNewerPATHWithStaleRollbackPending`；`TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplicitActivation`。
 
 ### 4.19.6 Machine Upgrade 后继校对允许退役 provider — `可执行`（⑤ attest 回归）
 - Workspace 连接集合仍必须与 accept 快照完全一致。

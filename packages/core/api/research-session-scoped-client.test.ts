@@ -80,4 +80,30 @@ describe("ApiClient session-scoped Research reads", () => {
       "response failed session validation",
     );
   });
+
+  it("validates message mutation identity", async () => {
+    stubResponse({ id: "m1", session_id: "s1", body: "accepted" });
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.postResearchMessage("s1", { body: "hello" }),
+    ).resolves.toMatchObject({ id: "m1", session_id: "s1" });
+
+    stubResponse({ id: "m2", session_id: "s2", body: "foreign" });
+    await expect(
+      client.postResearchMessage("s1", { body: "hello" }),
+    ).rejects.toThrow("response failed session validation");
+  });
+
+  it.each(["confirm", "stop"] as const)(
+    "rejects a cross-session %s mutation response",
+    async (operation) => {
+      stubResponse({ id: "s2", workspace_id: "ws1" });
+      const client = new ApiClient("https://api.example.test");
+      await expect(
+        operation === "confirm"
+          ? client.confirmResearchSession("s1")
+          : client.stopResearchSession("s1"),
+      ).rejects.toThrow("response failed session validation");
+    },
+  );
 });

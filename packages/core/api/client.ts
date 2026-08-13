@@ -4766,10 +4766,23 @@ export class ApiClient {
     id: string,
     data: { body: string; target_agent_id?: string },
   ): Promise<import("../types/research").ResearchMessage> {
-    return this.fetch(`/api/research/sessions/${id}/messages`, {
+    const { ResearchMessageSchema } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${id}/messages`, {
       method: "POST",
       body: JSON.stringify(data),
     });
+    const result = ResearchMessageSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "POST /api/research/sessions/:id/messages response failed schema validation",
+      );
+    }
+    if (result.data.session_id !== "" && result.data.session_id !== id) {
+      throw new Error(
+        "POST /api/research/sessions/:id/messages response failed session validation",
+      );
+    }
+    return { ...result.data, session_id: result.data.session_id || id };
   }
 
   async steerResearchRun(
@@ -4791,15 +4804,50 @@ export class ApiClient {
     if (parsed === null) {
       throw new Error("Invalid research steering response");
     }
+    if (parsed.run.session_id !== id) {
+      throw new Error(
+        "POST /api/research/sessions/:id/steer response failed session validation",
+      );
+    }
     return parsed.run;
   }
 
+  private async parseResearchSessionMutationResponse(
+    raw: unknown,
+    id: string,
+    endpoint: string,
+  ): Promise<import("../types/research").ResearchSession> {
+    const { ResearchSessionSchema } = await import("../research/schemas");
+    const result = ResearchSessionSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(`${endpoint} response failed schema validation`);
+    }
+    if (result.data.id !== id) {
+      throw new Error(`${endpoint} response failed session validation`);
+    }
+    return result.data;
+  }
+
   async confirmResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/confirm`, { method: "POST" });
+    const raw = await this.fetch(`/api/research/sessions/${id}/confirm`, {
+      method: "POST",
+    });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/confirm",
+    );
   }
 
   async stopResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/stop`, { method: "POST" });
+    const raw = await this.fetch(`/api/research/sessions/${id}/stop`, {
+      method: "POST",
+    });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/stop",
+    );
   }
 
   async deleteResearchSession(id: string): Promise<void> {
@@ -4810,10 +4858,15 @@ export class ApiClient {
     id: string,
     data: import("../types/research").ResearchHandoffRequest,
   ): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/handoff`, {
+    const raw = await this.fetch(`/api/research/sessions/${id}/handoff`, {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/handoff",
+    );
   }
 
   /** LRM-911 / LRM-913 — list end-of-round judgment cards. */

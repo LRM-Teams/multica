@@ -40,6 +40,11 @@ Evidence Link records directness and method fit. Evaluate those fields against
 the Claim, not a universal source hierarchy. Preserve retrieved source text in
 each source snapshot. Every quoted observation must be an exact substring of
 that snapshot. Execute required counter-search and record uncertainty.
+Sources submitted in an ordinary assigned Result are recorded explicitly as
+`agent_direct_evidence`. A provider-retrieved Source can be materialized only
+from the server's persisted Search Plan, Query Execution, Source Candidate,
+and accepted Screening Decision lineage; describing a search in prose does not
+create that lineage.
 
 3. Write one JSON result with the fields permitted by the assignment prompt.
 Use stable client keys and a globally unique `client_request_id`. Submit once:

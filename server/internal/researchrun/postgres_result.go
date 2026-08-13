@@ -837,9 +837,9 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			INSERT INTO research_source_snapshot (
 				workspace_id, session_id, produced_by_task_id, canonical_url,
 				title, publisher, source_class, evidence_traits, independence_key, retrieved_at,
-				snapshot_text, content_hash, metadata, verification_status
+				snapshot_text, content_hash, metadata, verification_status, ingestion_kind
 			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::text[], $9, $10,
-			          $11, $12, $13, $14)
+			          $11, $12, $13, $14, 'agent_direct_evidence')
 			ON CONFLICT (session_id, canonical_url, content_hash)
 			DO UPDATE SET
 			  title = CASE WHEN research_source_snapshot.title = '' THEN EXCLUDED.title ELSE research_source_snapshot.title END,

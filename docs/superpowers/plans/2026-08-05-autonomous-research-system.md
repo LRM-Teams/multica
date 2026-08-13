@@ -1014,6 +1014,7 @@ surface 矩阵仍未完成。
 ### F. Search 与 Corpus 谱系
 
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
+  - [x] F1a：migration 353 建立四类 workspace/session scoped canonical 行、稳定 client key/request hash、同 Query 候选/重复指向复合 FK、append-only Execution/Candidate/Decision 和 Artifact Passport 双向守卫；`RecordSearchLineageBatch` 在 Run→Task→Attempt 锁序内原子写入完整批次，精确 replay、异 payload 冲突、before/after commit recovery 与 canonical-state 收录均有装置。Source Snapshot 新增显式 `agent_direct_evidence | screened_retrieval`，检索来源必须引用同 scope accepted Decision 并匹配 URL/已知 content hash。生产 Retrieval Adapter 调用、跨批次 dedup 和 screened Source 物化仍属于 F1b/F2/F3。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。

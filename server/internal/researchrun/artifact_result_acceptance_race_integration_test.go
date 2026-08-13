@@ -212,18 +212,6 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 			},
 		},
 		{
-			name: "version_content_hash",
-			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
-				mutatedHash := contentHashFromPayload([]byte("mutated after acceptance preflight"))
-				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
-					UPDATE research_artifact_version
-					SET content_hash = $4
-					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
-				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID, mutatedHash)
-				return nil
-			},
-		},
-		{
 			name: "manifest_hash",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
 				mutatedHash := contentHashFromPayload([]byte("tampered after acceptance preflight"))

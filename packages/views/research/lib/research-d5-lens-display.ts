@@ -15,6 +15,48 @@ export interface D5LensDisplayOptions {
   filterRound?: string | null;
 }
 
+/**
+ * Selection is the highest-priority display lens: keep the selected node and
+ * its first-order neighborhood prominent, while leaving the rest readable.
+ */
+export function focusD5LensDisplayHints(
+  base: D5LensDisplayHints | undefined,
+  model: StarCanvasViewModel,
+  selectedNodeId: string | null | undefined,
+  relatedNodeIds: ReadonlySet<string> | undefined,
+): D5LensDisplayHints | undefined {
+  if (!selectedNodeId) return base;
+
+  const focusedNodeIds = new Set(relatedNodeIds ?? []);
+  focusedNodeIds.add(selectedNodeId);
+  const emphasizedNodeIds = new Set<string>();
+  const dimmedNodeIds = new Set<string>();
+  for (const entity of model.entities) {
+    if (focusedNodeIds.has(entity.id)) emphasizedNodeIds.add(entity.id);
+    else dimmedNodeIds.add(entity.id);
+  }
+
+  const emphasizedRelationIds = new Set<string>();
+  const dimmedRelationIds = new Set<string>();
+  for (const relation of model.relations) {
+    if (
+      relation.fromNodeId === selectedNodeId ||
+      relation.toNodeId === selectedNodeId
+    ) {
+      emphasizedRelationIds.add(relation.id);
+    } else {
+      dimmedRelationIds.add(relation.id);
+    }
+  }
+
+  return {
+    emphasizedNodeIds,
+    dimmedNodeIds,
+    emphasizedRelationIds,
+    dimmedRelationIds,
+  };
+}
+
 const EMPTY_HINTS: D5LensDisplayHints = {
   dimmedNodeIds: new Set(),
   emphasizedNodeIds: new Set(),

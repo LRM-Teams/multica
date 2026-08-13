@@ -10,6 +10,7 @@ import {
   mergeStatusAnnouncements,
   resolveCanvasKeyAction,
   resolveCanvasKeyEvent,
+  type CanvasNodeA11yCopy,
   type CanvasKeyboardContext,
 } from "./canvas-keyboard-nav";
 
@@ -208,6 +209,44 @@ describe("resolveCanvasKeyAction keyboard map", () => {
 });
 
 describe("accessible name + live region merge", () => {
+  const enCopy: CanvasNodeA11yCopy = {
+    statuses: {
+      completed: "Completed",
+      failed: "Failed",
+      conflict: "Conflict",
+      refuted: "Refuted",
+      deadEnd: "Dead end",
+      abandoned: "Abandoned",
+      cancelled: "Cancelled",
+      running: "Running",
+      waiting: "Waiting",
+      blocked: "Blocked",
+      queued: "Queued",
+    },
+    lanes: {
+      orchestrate: "Orchestrate",
+      source: "Sources",
+      deep_read: "Deep read",
+      validate: "Validate",
+      draft: "Draft",
+    },
+    unknownStatus: "Unknown status",
+    lowConfidence: "Low confidence",
+    separator: ", ",
+    faceLabels: {
+      goal: "Goal",
+      operation_approach: "Operation approach",
+      research_approach: "Research approach",
+      result: "Result",
+    },
+    faceCopy: {
+      missing: "Not provided",
+      resultPending: "Result in progress",
+      resultFailed: "No displayable result",
+    },
+    multipleUpdates: (count) => `${count} nodes updated`,
+  };
+
   it("buildNodeAccessibleName joins title, status, lane; appends 低置信", () => {
     const n = node({
       id: "a",
@@ -221,6 +260,19 @@ describe("accessible name + live region merge", () => {
     );
   });
 
+  it("uses injected locale copy and retains an unknown raw status", () => {
+    const localized = node({
+      id: "a",
+      node_type: "probe",
+      title: "Source scan",
+      status: "future_paused",
+      payload: { logic_lane: "source", low_confidence: true },
+    });
+    expect(buildNodeAccessibleName(localized, enCopy)).toBe(
+      "Source scan, Unknown status: future_paused, Sources, Low confidence, Goal Not provided, Operation approach Not provided, Research approach Not provided, Result Not provided",
+    );
+  });
+
   it("mergeStatusAnnouncements collapses same-tick bursts", () => {
     expect(
       mergeStatusAnnouncements([{ nodeId: "a", title: "探源", status: "done" }]),
@@ -231,5 +283,14 @@ describe("accessible name + live region merge", () => {
         { nodeId: "b", title: "冲突", status: "failed" },
       ]),
     ).toBe("2 个节点更新");
+    expect(
+      mergeStatusAnnouncements(
+        [
+          { nodeId: "a", title: "Source scan", status: "done" },
+          { nodeId: "b", title: "Conflict", status: "failed" },
+        ],
+        enCopy,
+      ),
+    ).toBe("2 nodes updated");
   });
 });

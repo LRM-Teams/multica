@@ -40,7 +40,7 @@ export const ResearchFleetSchema = z
   })
   .passthrough();
 
-const ResearchSessionSchema = z
+export const ResearchSessionSchema = z
   .object({
     id: z.string(),
     workspace_id: z.string(),
@@ -164,9 +164,9 @@ const ResearchSourceSchema = z
     url: z.string().optional().default(""),
     title: z.string().optional().default(""),
     source_class: z.string().optional().default("other"),
-    credibility_weight: z.number().optional().default(0.5),
+    credibility_weight: z.number().nullable().optional(),
     stance: z.string().optional().default(""),
-    relevance: z.number().optional().default(0.5),
+    relevance: z.number().nullable().optional(),
     summary: z.string().optional().default(""),
     excerpt: z.string().optional().default(""),
     payload: z.unknown().optional().default({}),
@@ -219,7 +219,7 @@ const ResearchMatchDecisionSchema = z
   })
   .passthrough();
 
-const ResearchMessageSchema = z
+export const ResearchMessageSchema = z
   .object({
     id: z.string(),
     session_id: z.string().optional().default(""),

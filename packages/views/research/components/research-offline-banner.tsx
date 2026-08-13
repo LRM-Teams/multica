@@ -71,7 +71,7 @@ export function ResearchOfflineBanner({
           )}
         >
           <RefreshCw
-            className={cn("size-3.5", reconnecting && "animate-spin")}
+            className={cn("size-3.5", reconnecting && "animate-spin motion-reduce:animate-none")}
             aria-hidden
           />
           {reconnecting

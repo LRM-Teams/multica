@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { DISPUTE_EDGES, DISPUTE_NODES } from "./__fixtures__/dispute-contract.fixture";
-import { buildDisputeModel, findDisputeRoot } from "./model";
+import {
+  buildDisputeModel,
+  buildDisputeModelForNode,
+  disputeSubgraphForNode,
+  findDisputeRoot,
+} from "./model";
 
 describe("buildDisputeModel (LRM-1472 §9 fixture)", () => {
   const model = buildDisputeModel(DISPUTE_NODES, DISPUTE_EDGES);
@@ -63,5 +68,31 @@ describe("buildDisputeModel (LRM-1472 §9 fixture)", () => {
     );
     expect(invalidating).toBeDefined();
     expect(invalidating?.to_node_id).toBe("decision-1");
+  });
+});
+
+describe("bounded dispute subgraph", () => {
+  const otherRoot = { ...DISPUTE_NODES[0]!, id: "dispute-2", title: "Other dispute" };
+  const otherPosition = { ...DISPUTE_NODES[1]!, id: "other-pos" };
+  const nodes = [...DISPUTE_NODES, otherRoot, otherPosition];
+  const edges = [
+    ...DISPUTE_EDGES,
+    {
+      ...DISPUTE_EDGES[0]!,
+      id: "other-edge",
+      from_node_id: otherPosition.id,
+      to_node_id: otherRoot.id,
+    },
+  ];
+
+  it("resolves a related position to its own dispute without mixing another root", () => {
+    const subgraph = disputeSubgraphForNode(nodes, edges, "pos-1");
+    expect(subgraph?.nodes.some((node) => node.id === "dispute-1")).toBe(true);
+    expect(subgraph?.nodes.some((node) => node.id === "dispute-2")).toBe(false);
+    expect(buildDisputeModelForNode(nodes, edges, "pos-1")?.root?.id).toBe("dispute-1");
+  });
+
+  it("returns null for an unrelated canvas node", () => {
+    expect(buildDisputeModelForNode(nodes, edges, "missing")).toBeNull();
   });
 });

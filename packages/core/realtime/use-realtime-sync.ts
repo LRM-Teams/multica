@@ -52,6 +52,7 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
+import { shouldClearChatPendingOnDone } from "../chat/queries";
 import { noteKeys } from "../notes/queries";
 import {
   channelKeys,
@@ -174,15 +175,7 @@ export function applyChatDoneToCache(
   // newer follow-up turn has already been queued for the same session.
   qc.setQueryData<ChatPendingTask | Record<string, never>>(
     chatKeys.pendingTask(sessionId),
-    (old) => {
-      // Empty task_id = platform fast-path completion (e.g. greeting sticker).
-      // Always clear this session's pending pill.
-      if (!taskId) return {};
-      if (old && "task_id" in old && old.task_id && old.task_id !== taskId) {
-        return old;
-      }
-      return {};
-    },
+    () => (shouldClearChatPendingOnDone() ? {} : {}),
   );
   // Authoritative refetch reconciles redaction / migrations / clients
   // that took the fallback branch above.
@@ -1120,14 +1113,6 @@ export function useRealtimeSync(
       applyTaskStatusToSnapshot(payload.task_id, "queued");
       invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return;
-      qc.setQueryData<ChatPendingTask>(
-        chatKeys.pendingTask(payload.chat_session_id),
-        (old) => ({
-          ...(old ?? {}),
-          task_id: payload.task_id,
-          status: "queued",
-        }),
-      );
       invalidatePendingAggregate();
     });
 
@@ -1142,13 +1127,6 @@ export function useRealtimeSync(
       applyTaskStatusToSnapshot(payload.task_id, "dispatched");
       invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return;
-      qc.setQueryData<ChatPendingTask>(
-        chatKeys.pendingTask(payload.chat_session_id),
-        (old) => {
-          if (!old || old.task_id !== payload.task_id) return old;
-          return { ...old, status: "running" };
-        },
-      );
     });
 
     // task:running confirms the delivery entered the provider run phase.
@@ -1157,13 +1135,6 @@ export function useRealtimeSync(
       applyTaskStatusToSnapshot(payload.task_id, "running");
       invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return;
-      qc.setQueryData<ChatPendingTask>(
-        chatKeys.pendingTask(payload.chat_session_id),
-        (old) => {
-          if (!old || old.task_id !== payload.task_id) return old;
-          return { ...old, status: "running" };
-        },
-      );
     });
 
     // task:cancelled reaches us when:
@@ -1185,12 +1156,7 @@ export function useRealtimeSync(
       });
       qc.setQueryData<ChatPendingTask | Record<string, never>>(
         chatKeys.pendingTask(payload.chat_session_id),
-        (old) => {
-          if (old && "task_id" in old && old.task_id && old.task_id !== payload.task_id) {
-            return old;
-          }
-          return {};
-        },
+        () => ({}),
       );
       invalidateChatMessageQueries(qc, payload.chat_session_id);
       invalidatePendingAggregate();

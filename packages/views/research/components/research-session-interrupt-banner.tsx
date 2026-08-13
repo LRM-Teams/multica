@@ -110,7 +110,7 @@ export function ResearchSessionInterruptBanner({
           )}
         >
           <RefreshCw
-            className={cn("size-3.5", pending && "animate-spin")}
+            className={cn("size-3.5", pending && "animate-spin motion-reduce:animate-none")}
             aria-hidden
           />
           {pending

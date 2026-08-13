@@ -2,6 +2,7 @@
 
 import type {
   ResearchFleetMember,
+  ResearchGraphEdge,
   ResearchGraphNode,
   ResearchRunAttempt,
   ResearchRunSnapshot,
@@ -23,6 +24,15 @@ import { cn } from "@multica/ui/lib/utils";
 import { useMemo } from "react";
 import { useT } from "../../i18n/use-t";
 import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
+import {
+  buildDisputeModelForNode,
+  DecisionDetailSection,
+  DeliberationDetailSection,
+  DisputeDetailSection,
+  isDisputeDomainNodeType,
+  PositionDetailSection,
+  TurnDetailSection,
+} from "../dispute";
 import { isAbandonedStatus, readAbandonReason } from "../lib/abandon-reason";
 import { safeSourceUrl } from "../report/safe-source-url";
 import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
@@ -219,8 +229,14 @@ function executionStatusLabelFor(
 type NodeRunContext = {
   task: ResearchRunTask | undefined;
   attempt: ResearchRunAttempt | undefined;
+  attempts: ResearchRunAttempt[];
   actorID: string | null;
   actor: ResearchFleetMember | undefined;
+  contributors: Array<{
+    agentID: string;
+    label: string;
+    role: string | null;
+  }>;
   objective: string | null;
   genericMethod: string | null;
   result: string | null;
@@ -262,7 +278,11 @@ function buildNodeRunContext(
   const taskID = firstString(records, ["task_id"]);
   const attemptID = firstString(records, ["attempt_id"]);
   const task = taskID ? run?.tasks.find((item) => item.id === taskID) : undefined;
-  const attempts = taskID ? (run?.attempts ?? []).filter((item) => item.task_id === taskID) : [];
+  const attempts = taskID
+    ? (run?.attempts ?? [])
+        .filter((item) => item.task_id === taskID)
+        .toSorted((a, b) => a.attempt_number - b.attempt_number)
+    : [];
   const attempt =
     (attemptID ? attempts.find((item) => item.id === attemptID) : undefined) ??
     attempts.at(-1);
@@ -272,7 +292,22 @@ function buildNodeRunContext(
     task?.assigned_agent_id ||
     attempt?.assigned_agent_id ||
     null;
-  const actor = actorID ? members.find((item) => item.agent_id === actorID) : undefined;
+  const memberByAgentID = new Map(members.map((item) => [item.agent_id, item]));
+  const actor = actorID ? memberByAgentID.get(actorID) : undefined;
+  const contributorIDs = new Set<string>();
+  if (actorID) contributorIDs.add(actorID);
+  if (task?.assigned_agent_id) contributorIDs.add(task.assigned_agent_id);
+  for (const item of attempts) {
+    if (item.assigned_agent_id) contributorIDs.add(item.assigned_agent_id);
+  }
+  const contributors = [...contributorIDs].map((agentID) => {
+    const member = memberByAgentID.get(agentID);
+    return {
+      agentID,
+      label: actorLabel(member, agentID) ?? agentID,
+      role: member?.role ?? null,
+    };
+  });
   const producedSources = taskID
     ? (run?.sources ?? []).filter((item) => item.produced_by_task_id === taskID)
     : [];
@@ -356,8 +391,10 @@ function buildNodeRunContext(
   return {
     task,
     attempt,
+    attempts,
     actorID,
     actor,
+    contributors,
     objective:
       task?.objective || firstString(records, ["objective", "goal", "question", "small_goal"]),
     genericMethod: firstString(records, ["method", "approach", "strategy", "plan"]),
@@ -489,6 +526,9 @@ export function ResearchNodeDetailBody({
   sources,
   run,
   members,
+  graphNodes,
+  graphEdges,
+  onFocusNode,
   onClose,
   showClose,
 }: {
@@ -496,6 +536,9 @@ export function ResearchNodeDetailBody({
   sources: ResearchSource[];
   run?: ResearchRunSnapshot;
   members: ResearchFleetMember[];
+  graphNodes?: readonly ResearchGraphNode[];
+  graphEdges?: readonly ResearchGraphEdge[];
+  onFocusNode?: (nodeId: string) => void;
   onClose?: () => void;
   showClose?: boolean;
 }) {
@@ -555,6 +598,13 @@ export function ResearchNodeDetailBody({
     }
   }
   const nextSteps = nextStepsForNode(node);
+  const disputeModel = useMemo(
+    () =>
+      isDisputeDomainNodeType(node.node_type)
+        ? buildDisputeModelForNode(graphNodes ?? [node], graphEdges ?? [], node.id)
+        : null,
+    [graphEdges, graphNodes, node],
+  );
 
   // Only explicitly associated sources (source_id / source_ids). Never fall
   // back to session-wide sources — that would attribute other nodes' evidence
@@ -658,6 +708,22 @@ export function ResearchNodeDetailBody({
       </header>
 
       <div className="space-y-4 p-4">
+        {disputeModel ? (
+          <section data-testid="research-dispute-node-detail" className="rounded-lg border bg-muted/10 p-3">
+            {node.node_type === "dispute" ? (
+              <DisputeDetailSection model={disputeModel} onFocusNode={onFocusNode} />
+            ) : node.node_type === "dispute_position" ? (
+              <PositionDetailSection node={node} model={disputeModel} onFocusNode={onFocusNode} />
+            ) : node.node_type === "deliberation" ? (
+              <DeliberationDetailSection model={disputeModel} />
+            ) : node.node_type === "deliberation_turn" ? (
+              <TurnDetailSection node={node} />
+            ) : node.node_type === "decision" ? (
+              <DecisionDetailSection model={disputeModel} onFocusNode={onFocusNode} />
+            ) : null}
+          </section>
+        ) : null}
+
         {/* LRM-1332: four content faces before run Objective/Method/Outcome. */}
         <ResearchNodeContentFaces node={node} density="detail" />
 
@@ -744,6 +810,72 @@ export function ResearchNodeDetailBody({
                 </div>
               ) : null}
             </div>
+          </section>
+        ) : null}
+
+        {runContext.contributors.length > 0 ? (
+          <section data-testid="node-detail-contributors">
+            <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.contributors)}
+            </h3>
+            <ul className="flex flex-wrap gap-1.5">
+              {runContext.contributors.map((contributor) => (
+                <li key={contributor.agentID}>
+                  <Badge
+                    variant="outline"
+                    className="text-[11px]"
+                    title={contributor.agentID}
+                  >
+                    {contributor.label}
+                    {contributor.role ? ` · ${contributor.role}` : ""}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {runContext.attempts.length > 1 ? (
+          <section data-testid="node-detail-attempt-history">
+            <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.attempt_history)}
+            </h3>
+            <ol className="space-y-1.5">
+              {runContext.attempts.map((attempt) => {
+                const contributor = runContext.contributors.find(
+                  (item) => item.agentID === attempt.assigned_agent_id,
+                );
+                const timestampValue =
+                  attempt.completed_at ??
+                  attempt.result_submitted_at ??
+                  attempt.started_at ??
+                  attempt.dispatched_at ??
+                  null;
+                const timestamp = formatTimestamp(timestampValue);
+                return (
+                  <li
+                    key={attempt.id}
+                    className="flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md border bg-muted/15 px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="font-medium">
+                      {t(($) => $.node.attempt)} {attempt.attempt_number}
+                    </span>
+                    <span>{executionStatusLabelFor(attempt.status, t)}</span>
+                    <span className="text-muted-foreground">
+                      {contributor?.label ?? actorLabel(undefined, attempt.assigned_agent_id)}
+                    </span>
+                    {timestamp ? (
+                      <time
+                        dateTime={timestampValue ?? undefined}
+                        className="ml-auto text-[10px] text-muted-foreground"
+                      >
+                        {timestamp}
+                      </time>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ol>
           </section>
         ) : null}
 
@@ -976,9 +1108,11 @@ export function ResearchNodeDetailBody({
                         {s.title || s.url}
                       </span>
                     )}
-                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                      {(s.credibility_weight ?? 0).toFixed(2)}
-                    </span>
+                    {typeof s.credibility_weight === "number" ? (
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        {s.credibility_weight.toFixed(2)}
+                      </span>
+                    ) : null}
                   </div>
                   {s.excerpt ? (
                     <p className="mt-1 line-clamp-3 text-[11px] text-muted-foreground">
@@ -1021,22 +1155,28 @@ export function ResearchNodeDetail({
   sources = EMPTY_SOURCES,
   run,
   members = EMPTY_MEMBERS,
+  graphNodes,
+  graphEdges,
   open = true,
   onClose,
   placement,
   onOpenReport,
   onContinueDeepening,
+  onFocusNode,
 }: {
   node: ResearchGraphNode;
   sources?: ResearchSource[];
   run?: ResearchRunSnapshot;
   members?: ResearchFleetMember[];
+  graphNodes?: readonly ResearchGraphNode[];
+  graphEdges?: readonly ResearchGraphEdge[];
   open?: boolean;
   onClose?: () => void;
   /** Force placement; default: overlay-card on desktop, sheet on narrow. */
   placement?: "overlay-card" | "sheet" | "inline";
   onOpenReport?: () => void;
   onContinueDeepening?: () => void;
+  onFocusNode?: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -1061,6 +1201,9 @@ export function ResearchNodeDetail({
           sources={sources}
           run={run}
           members={members}
+          graphNodes={graphNodes}
+          graphEdges={graphEdges}
+          onFocusNode={onFocusNode}
           onClose={onClose}
           showClose={Boolean(onClose)}
         />
@@ -1102,6 +1245,9 @@ export function ResearchNodeDetail({
             sources={sources}
             run={run}
             members={members}
+            graphNodes={graphNodes}
+            graphEdges={graphEdges}
+            onFocusNode={onFocusNode}
             onClose={onClose}
             showClose
           />
@@ -1127,7 +1273,16 @@ export function ResearchNodeDetail({
           <SheetTitle>{node.title}</SheetTitle>
           <SheetDescription>{t(($) => $.node.detail_hint)}</SheetDescription>
         </SheetHeader>
-        <ResearchNodeDetailBody node={node} sources={sources} run={run} members={members} onClose={onClose} />
+        <ResearchNodeDetailBody
+          node={node}
+          sources={sources}
+          run={run}
+          members={members}
+          graphNodes={graphNodes}
+          graphEdges={graphEdges}
+          onFocusNode={onFocusNode}
+          onClose={onClose}
+        />
       </SheetContent>
     </Sheet>
   );

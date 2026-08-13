@@ -49,7 +49,7 @@ export function ResearchFleetAvatarStack({
         aria-busy
       >
         <div className="flex items-center gap-1.5 rounded-xl border border-brand/30 bg-card/95 px-2.5 py-1.5 text-[11px] text-brand shadow-md backdrop-blur-sm">
-          <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
           {t(($) => $.panel.fleet_mode.loading)}
         </div>
       </div>

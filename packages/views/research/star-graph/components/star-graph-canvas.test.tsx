@@ -1,15 +1,27 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { TypedGraphEdge, TypedGraphNode } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
+import enResearch from "../../../locales/en/research.json";
 
 import { buildStarCanvasViewModel } from "../lib/star-canvas-view-model";
 import { StarGraphCanvas } from "./star-graph-canvas";
 import { emptyCanvasFilter } from "@multica/core/research";
 
 const setViewport = vi.fn();
+
+vi.mock("../../../i18n/use-t", () => ({
+  useT: () => ({
+    t: (selector: (bundle: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
+      const raw = selector(enResearch);
+      if (typeof raw !== "string" || !vars) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? ""));
+    },
+  }),
+}));
 
 vi.mock("@multica/core/research", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/research")>();
@@ -137,6 +149,9 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(screen.getByTestId("star-graph-cluster-cluster-a")).toBeTruthy();
     expect(screen.getByTestId("star-graph-map-key")).toBeTruthy();
     expect(screen.getByTestId("star-graph-zoom-controls")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeTruthy();
+    expect(screen.getByText("Support")).toBeTruthy();
+    expect(screen.getByText("IMPORTANT RESULT")).toBeTruthy();
     expect(screen.getByTestId("star-graph-summary").textContent).toContain("调研星图");
     expect(
       within(screen.getByRole("button", { name: /Stable A/ })).getByTestId("star-graph-document-badge")
@@ -249,10 +264,81 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     );
 
     const canvas = screen.getByTestId("star-graph-canvas");
-    canvas.focus();
-    fireEvent.keyDown(canvas, { key: "Home" });
+    const selected = screen.getByRole("button", { name: /Stable A/ });
+    expect(selected).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("button", { name: /Master goal/ })).toHaveAttribute(
+      "tabindex",
+      "-1",
+    );
+    selected.focus();
+    fireEvent.keyDown(selected, { key: "Home" });
     expect(onSelectNode).toHaveBeenCalledWith("goal");
     expect(screen.getByTestId("star-graph-canvas-live").textContent).toContain("Research goal");
+  });
+
+  it("keeps only the first visible node in the tab order before selection", () => {
+    render(<StarGraphCanvas model={fixtureModel()} keyboardNav={{ nodes: [], edges: [] }} />);
+    const nodes = screen.getAllByTestId("star-graph-node");
+    expect(nodes.filter((entry) => entry.getAttribute("tabindex") === "0")).toHaveLength(1);
+    expect(nodes[0]).toHaveAttribute("tabindex", "0");
+  });
+
+  it("moves DOM focus to the node selected by keyboard navigation", () => {
+    const keyboardNodes = [
+      {
+        id: "goal",
+        session_id: "session-1",
+        node_type: "goal",
+        title: "Research goal",
+        summary: "",
+        status: "active",
+        actor_agent_id: null,
+        created_at: "",
+        updated_at: "",
+        payload: null,
+      },
+      {
+        id: "stable-a",
+        session_id: "session-1",
+        node_type: "subquestion",
+        title: "Stable A",
+        summary: "",
+        status: "active",
+        actor_agent_id: null,
+        created_at: "",
+        updated_at: "",
+        payload: null,
+      },
+    ] satisfies ResearchGraphNode[];
+    function Harness() {
+      const [selected, setSelected] = useState("stable-a");
+      return (
+        <StarGraphCanvas
+          model={fixtureModel()}
+          selectedNodeId={selected}
+          onSelectNode={setSelected}
+          keyboardNav={{
+            nodes: keyboardNodes,
+            edges: [
+              {
+                from_node_id: "goal",
+                to_node_id: "stable-a",
+                edge_type: "leads_to",
+              },
+            ],
+          }}
+        />
+      );
+    }
+    render(<Harness />);
+    const stable = screen.getByRole("button", { name: /Stable A/ });
+    stable.focus();
+    fireEvent.keyDown(stable, { key: "Home" });
+
+    const goal = screen.getByRole("button", { name: /Master goal/ });
+    expect(document.activeElement).toBe(goal);
+    expect(goal).toHaveAttribute("tabindex", "0");
+    expect(stable).toHaveAttribute("tabindex", "-1");
   });
 
   it("renders the load-more control when pagination is available", () => {

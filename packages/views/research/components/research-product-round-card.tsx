@@ -72,12 +72,12 @@ export function ResearchProductRoundCardView({
   card: ResearchProductRoundCard;
   currentGoal?: string;
   compact?: boolean;
-  onAgree?: () => void;
-  onRejectContinue?: () => void;
-  onRejectStop?: () => void;
-  onConfirmGoalPatch?: (text: string) => void;
-  onRejectGoalPatch?: () => void;
-  onEditGoalPatch?: (text: string) => void;
+  onAgree?: () => void | Promise<void>;
+  onRejectContinue?: () => void | Promise<void>;
+  onRejectStop?: () => void | Promise<void>;
+  onConfirmGoalPatch?: (text: string) => void | Promise<void>;
+  onRejectGoalPatch?: () => void | Promise<void>;
+  onEditGoalPatch?: (text: string) => void | Promise<void>;
   pending?: boolean;
   /** Override for tests; production default 30. */
   autoAdoptSeconds?: number;
@@ -88,6 +88,7 @@ export function ResearchProductRoundCardView({
   const [goalDraft, setGoalDraft] = useState(card.goal_patch_proposal ?? "");
   const [timer, setTimer] = useState({ left: autoAdoptSeconds, autoAdopted: false });
   const interactedRef = useRef(false);
+  const submittingRef = useRef(false);
   const onAgreeRef = useRef(onAgree);
   onAgreeRef.current = onAgree;
 
@@ -120,8 +121,13 @@ export function ResearchProductRoundCardView({
         window.clearInterval(id);
         // Auto-adopt judgment only — never silent goal_patch write (LRM-898).
         // Keep dialog open so the timeout state is visible (AC + review screenshots).
-        setTimer({ left: 0, autoAdopted: true });
-        onAgreeRef.current?.();
+        submittingRef.current = true;
+        void Promise.resolve(onAgreeRef.current?.()).then(
+          () => setTimer({ left: 0, autoAdopted: true }),
+          () => setTimer({ left: 0, autoAdopted: false }),
+        ).finally(() => {
+          submittingRef.current = false;
+        });
       } else {
         setTimer((prev) => ({ ...prev, left }));
       }
@@ -131,6 +137,24 @@ export function ResearchProductRoundCardView({
 
   const markInteracted = () => {
     interactedRef.current = true;
+  };
+
+  const submitDecision = async (
+    action: (() => void | Promise<void>) | undefined,
+    onSuccess?: () => void,
+  ) => {
+    if (pending || submittingRef.current) return;
+    markInteracted();
+    submittingRef.current = true;
+    try {
+      await action?.();
+      onSuccess?.();
+    } catch {
+      // Mutation owners present the API error. Keep the round card and exact
+      // draft/decision context open so the user can retry without data loss.
+    } finally {
+      submittingRef.current = false;
+    }
   };
 
   // LRM-1339 — summary 行的层级只靠字号/字重/等宽，不靠 alpha 压文字。
@@ -312,7 +336,7 @@ export function ResearchProductRoundCardView({
                     aria-disabled={pending || undefined}
                     onClick={() => {
                       if (pending) return;
-                      onRejectGoalPatch?.();
+                      void submitDecision(onRejectGoalPatch);
                     }}
                     className={cn(pending && "opacity-50 cursor-not-allowed")}
                   >
@@ -336,9 +360,7 @@ export function ResearchProductRoundCardView({
               aria-disabled={pending || undefined}
               onClick={() => {
                 if (pending || autoAdopted) return;
-                markInteracted();
-                onAgree?.();
-                setOpen(false);
+                void submitDecision(onAgree, () => setOpen(false));
               }}
             >
               {t(($) => $.round.agree)}
@@ -360,9 +382,7 @@ export function ResearchProductRoundCardView({
                 aria-disabled={pending || undefined}
                 onClick={() => {
                   if (pending || autoAdopted || card.budget_remaining <= 0) return;
-                  markInteracted();
-                  onRejectContinue?.();
-                  setOpen(false);
+                  void submitDecision(onRejectContinue, () => setOpen(false));
                 }}
               >
                 {t(($) => $.round.reject_continue)}
@@ -385,9 +405,7 @@ export function ResearchProductRoundCardView({
                 aria-disabled={pending || undefined}
                 onClick={() => {
                   if (pending || autoAdopted || card.budget_remaining <= 0) return;
-                  markInteracted();
-                  onRejectStop?.();
-                  setOpen(false);
+                  void submitDecision(onRejectStop, () => setOpen(false));
                 }}
               >
                 {t(($) => $.round.reject_stop)}
@@ -406,7 +424,11 @@ export function ResearchProductRoundCardView({
           <Textarea
             rows={5}
             value={goalDraft}
-            onChange={(e) => setGoalDraft(e.target.value)}
+            aria-disabled={pending || undefined}
+            onChange={(e) => {
+              if (pending) return;
+              setGoalDraft(e.target.value);
+            }}
           />
           <DialogFooter className="gap-2">
             <Button
@@ -417,8 +439,10 @@ export function ResearchProductRoundCardView({
               aria-disabled={pending || undefined}
               onClick={() => {
                 if (pending || !goalDraft.trim()) return;
-                onEditGoalPatch?.(goalDraft.trim());
-                setGoalOpen(false);
+                void submitDecision(
+                  () => onEditGoalPatch?.(goalDraft.trim()),
+                  () => setGoalOpen(false),
+                );
               }}
               className={cn(
                 pending && goalDraft.trim() && "opacity-50 cursor-not-allowed",
@@ -432,8 +456,10 @@ export function ResearchProductRoundCardView({
               aria-disabled={pending || undefined}
               onClick={() => {
                 if (pending || !goalDraft.trim()) return;
-                onConfirmGoalPatch?.(goalDraft.trim());
-                setGoalOpen(false);
+                void submitDecision(
+                  () => onConfirmGoalPatch?.(goalDraft.trim()),
+                  () => setGoalOpen(false),
+                );
               }}
               className={cn(
                 pending && goalDraft.trim() && "opacity-50 cursor-not-allowed",

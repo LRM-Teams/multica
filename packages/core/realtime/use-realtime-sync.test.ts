@@ -71,7 +71,7 @@ describe("applyChatDoneToCache", () => {
     const qc = createQueryClient();
     qc.setQueryData<ChatMessage[]>(messagesKey, [userMessage()]);
     qc.setQueryData<ChatPendingTask>(pendingKey, {
-      task_id: taskId,
+      pending: true,
       status: "running",
     });
 
@@ -109,7 +109,7 @@ describe("applyChatDoneToCache", () => {
     };
     qc.setQueryData<ChatMessage[]>(messagesKey, [userMessage(), assistant]);
     qc.setQueryData<ChatPendingTask>(pendingKey, {
-      task_id: taskId,
+      pending: true,
       status: "running",
     });
 
@@ -126,7 +126,7 @@ describe("applyChatDoneToCache", () => {
     const qc = createQueryClient();
     qc.setQueryData<ChatMessage[]>(messagesKey, [userMessage()]);
     qc.setQueryData<ChatPendingTask>(pendingKey, {
-      task_id: taskId,
+      pending: true,
       status: "running",
     });
 
@@ -141,20 +141,17 @@ describe("applyChatDoneToCache", () => {
     expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
   });
 
-  it("does not clear a newer queued follow-up when the interrupted run finishes", () => {
+  it("clears session outstanding on chat:done even without a task_id", () => {
     const qc = createQueryClient();
     qc.setQueryData<ChatMessage[]>(messagesKey, [userMessage()]);
     qc.setQueryData<ChatPendingTask>(pendingKey, {
-      task_id: "task-followup",
+      pending: true,
       status: "queued",
     });
 
-    applyChatDoneToCache(qc, donePayload({ task_id: taskId }));
+    applyChatDoneToCache(qc, donePayload({ task_id: undefined }));
 
-    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({
-      task_id: "task-followup",
-      status: "queued",
-    });
+    expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({});
   });
 });
 

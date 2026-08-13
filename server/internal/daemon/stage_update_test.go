@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -50,6 +51,54 @@ func TestRunStageUpdateDoesNotTouchSiblingExecutable(t *testing.T) {
 	}
 	if string(got) != string(original) {
 		t.Fatal("sibling executable was mutated — self-replace leak")
+	}
+}
+
+func TestVerifyStagedBinaryUsesScratchPathFromRunStageUpdateStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("scratch fixture is a POSIX --version script")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	prevStage := stageReleaseFn
+	stageReleaseFn = func(targetVersion string, _ time.Duration, _ string) (string, error) {
+		return cli.WriteReleaseScratch(targetVersion, []byte("#!/bin/sh\necho 'multica "+targetVersion+"'\n"))
+	}
+	t.Cleanup(func() { stageReleaseFn = prevStage })
+
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v0.4.16"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	status, err := d.runStageUpdate("v0.4.17")
+	if err != nil {
+		t.Fatalf("runStageUpdate: %v", err)
+	}
+	if _, statErr := os.Stat(status); statErr == nil {
+		t.Fatalf("runStageUpdate returned an existing path %q; handleMachineUpgrade would then verify a status string only if this is not a file", status)
+	}
+
+	if _, err := d.verifyStagedBinary("v0.4.17", status); err != nil {
+		t.Fatalf("verifyStagedBinary with runStageUpdate status %q: %v", status, err)
+	}
+}
+
+func TestRunStageUpdateRejectsStatusStringAsScratch(t *testing.T) {
+	prevStage := stageReleaseFn
+	stageReleaseFn = func(string, time.Duration, string) (string, error) {
+		return "Staged v0.4.17 at /tmp/not-a-file; PATH unchanged", nil
+	}
+	t.Cleanup(func() { stageReleaseFn = prevStage })
+
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v0.4.16"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if _, err := d.runStageUpdate("v0.4.17"); err == nil {
+		t.Fatal("status string was accepted as staged path")
+	}
+	if d.stagedUpgradePath != "" {
+		t.Fatalf("stagedUpgradePath = %q, want empty after rejected status string", d.stagedUpgradePath)
 	}
 }
 

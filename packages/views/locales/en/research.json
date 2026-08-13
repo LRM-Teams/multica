@@ -113,6 +113,9 @@
     "canvas_empty_home": "Back to research home",
     "canvas_empty_create": "Start a new research",
     "canvas_empty_creating": "Starting…",
+    "canvas_empty_create_failed": "Couldn't start a new research session",
+    "canvas_empty_create_failed_hint": "The current canvas is unchanged. Check your connection and try again.",
+    "canvas_empty_retry": "Try again",
     "canvas_empty_create_goal": "What should we explore next?",
     "confirm_failed": "Could not confirm research",
     "confirm_done": "Research confirmed",
@@ -399,6 +402,8 @@
     "outcome": "Outcome",
     "task_type": "Task type",
     "attempt": "Attempt",
+    "attempt_history": "Execution history",
+    "contributors": "Contributors",
     "executor_role": "Actual role:",
     "required_role": "Required role:",
     "expected_result": "Expected output:",
@@ -971,6 +976,8 @@
       "lineage": "Lineage"
     },
     "rail": {
+      "mobile_title": "Research context",
+      "mobile_description": "Fleet conversation and selected research node details.",
       "chat_tab": "Chat with director",
       "detail_tab": "Node detail",
       "hide": "Hide panel",
@@ -1013,9 +1020,83 @@
       "hidden_count": "{{count}} hidden by filter"
     },
     "new_frontier_label": "NEW FRONTIERS",
+    "canvas_a11y": {
+      "status": {
+        "completed": "Completed",
+        "failed": "Failed",
+        "conflict": "Conflict",
+        "refuted": "Refuted",
+        "dead_end": "Dead end",
+        "abandoned": "Abandoned",
+        "cancelled": "Cancelled",
+        "running": "Running",
+        "waiting": "Waiting",
+        "blocked": "Blocked",
+        "queued": "Queued"
+      },
+      "unknown_status": "Unknown status",
+      "low_confidence": "Low confidence",
+      "separator": ", ",
+      "updated_nodes": "{{count}} nodes updated"
+    },
+    "star_graph": {
+      "canvas_label": "Research constellation canvas",
+      "tier_headers": {
+        "xxl": "MASTER SYNTHESIS",
+        "xl": "STABLE RESULT",
+        "l": "IMPORTANT RESULT",
+        "m": "INTERMEDIATE RESULT"
+      },
+      "metrics": {
+        "documents": "{{count}} documents",
+        "confidence": "Confidence {{value}}%",
+        "conclusions": "{{count}} conclusions",
+        "document_badge": "DOC · {{count}}"
+      },
+      "zoom": {
+        "out": "Zoom out",
+        "in": "Zoom in",
+        "fit": "Fit to content"
+      },
+      "map_key": {
+        "aria_label": "Constellation map key",
+        "title": "Map key",
+        "agent_tier": "Agent",
+        "help": "Reopen constellation guide",
+        "tiers": {
+          "xxl": "Final synthesis with the broadest scope and strongest visual emphasis.",
+          "xl": "Stable fused result with supporting evidence and conclusions.",
+          "l": "Important result with its available round and metrics.",
+          "m": "Intermediate result or scoped research direction.",
+          "s": "Agent work node showing its current execution state."
+        },
+        "relations": {
+          "decompose": {
+            "label": "Decompose",
+            "description": "A goal or direction splits into child directions or tasks."
+          },
+          "support": {
+            "label": "Support",
+            "description": "A result supports another result or conclusion."
+          },
+          "challenge": {
+            "label": "Challenge",
+            "description": "A result challenges or contradicts another conclusion."
+          },
+          "newdir": {
+            "label": "New direction",
+            "description": "A new exploration direction branches from existing work."
+          }
+        }
+      }
+    },
     "canvas": {
       "loading": "Loading constellation…",
       "error": "Could not load the typed research graph.",
+      "stale_title": "Constellation may be out of date.",
+      "stale_body": "The last loaded graph remains visible while refresh is unavailable.",
+      "stale_announcement": "Constellation refresh failed. The last loaded graph remains visible.",
+      "recovered_announcement": "Constellation refreshed and is current again.",
       "projection_mismatch_title": "Star-map projection unavailable",
       "projection_mismatch_body": "The session snapshot has graph nodes, but the typed constellation projection did not arrive. Retry or wait for the next sync.",
       "projection_mismatch_diagnostics": "Snapshot nodes: {{snapshotCount}} · Typed nodes: {{typedCount}}"
@@ -1025,6 +1106,8 @@
       "objective": "Current objective",
       "no_task": "No active task",
       "phase": "Phase · {{phase}}",
+      "branch": "Branch",
+      "reason": "Reason",
       "completed": "Completed",
       "current": "In progress",
       "open_agent": "Open agent settings"
@@ -1032,17 +1115,32 @@
     "report": {
       "title": "Node report",
       "empty_summary": "No report summary is available for this node yet.",
-      "lineage_title": "Merged inputs",
+      "lineage_title": "Lineage",
+      "lineage": {
+        "derived_from": "Derived from",
+        "merged_from": "Merged inputs",
+        "parent": "Parent direction",
+        "children": "Child directions",
+        "used_by": "Used by",
+        "restart_of": "Restart of",
+        "superseded_by": "Superseded by",
+        "invalidated_by": "Invalidated by"
+      },
       "goal_version": "Goal version {{version}}"
     },
     "change_receipt": {
       "title": "Canvas update · {{label}}",
+      "input_count": "Merged {{count}} input nodes",
+      "conclusion_count": "{{count}} conclusions",
+      "graph_version": "Graph v{{version}}",
       "ops": {
         "goal_steered": "Goal updated",
         "goal_modified": "Goal version impact",
         "integration_formed": "Results merged",
         "node_retired": "Direction retired",
         "task_restarted": "Task restarted",
+        "frontier_created": "New direction created",
+        "agent_reassigned": "Agent reassigned",
         "run_completed": "Run completed"
       }
     }

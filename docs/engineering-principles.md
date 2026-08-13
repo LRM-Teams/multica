@@ -344,8 +344,9 @@
 ### 4.11 Computer 只有一份 PATH 二进制，升级按 Raft 换文件 — `可执行`（③单一 PATH + ⑤ swap/rollback 回归；owner: @Barry）
 - 产品是 `$HOME/.local/bin/multica`（Windows 为 `%USERPROFILE%\AppData\Local\multica\multica.exe`）。start、supervise、OS service 和 `computer upgrade` 都跑/改这一份文件，没有 `versions/<tag>` catalog，也没有 `activation.json` Active 指针。
 - 升级先把校验过的字节写到 ephemeral scratch，再 `SwapExecutable`：当前文件 rename 成 `.prev`，新文件落到同一 PATH。失败必须把 `.prev` 换回去。回滚只认 `.prev`，不再走 Previous generation CAS。
+- verify / recovery 只能 exec 那个 scratch 文件的 `--version`。`runStageUpdate` 的 status 字符串不是路径；journal `staged_path` 也必须是普通文件，缺失就 restage，不能拿 status 当可执行文件。
 - live resident 是唯一 mutation owner；无 resident 才允许离线 swap。Homebrew prefix 不自替换。
-- **物**：`server/internal/cli/exec_swap.go`、`stage_release.go`、`lifecycle_upgrade.go`；`TestSwapExecutable*`、`TestCommitStagedActivationSwapsInstallPathAndKeepsPrev`、offline `computer upgrade` subprocess 证明 PATH + `.prev`。
+- **物**：`server/internal/cli/exec_swap.go`、`stage_release.go`、`lifecycle_upgrade.go`；`TestSwapExecutable*`、`TestCommitStagedActivationSwapsInstallPathAndKeepsPrev`、`TestVerifyStagedBinaryUsesScratchPathFromRunStageUpdateStatus`、`TestRecoverStagedJournal*`、offline `computer upgrade` subprocess 证明 PATH + `.prev`。
 
 ### 4.12 Daemon 更新观测必须是单调、持久、可降级的事实 — `可执行`（① PostgreSQL daemon scope + ② typed envelope + ③ daemon 单一 coordinator + ⑤重启/CAS 回归；owner: @Barry）
 - daemon 内只有一个 update-observation coordinator；自动轮询和 server 下发更新都必须通过它写入。每次语义变化先把完整 snapshot 原子持久化到本机，再发布给 HTTP/WS heartbeat；持久化失败时拒绝开始更新、重启或对外宣称新状态。进程重启后创建新 `session_id`，`revision` 从 1 开始；未终结的 `checking|updating` 归一为 `interrupted`，已成功的 `restart_pending` 结果必须重放。

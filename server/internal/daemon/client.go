@@ -421,6 +421,15 @@ func (c *Client) GetResidentAgentRuntimeConfig(ctx context.Context, runtimeID, a
 	return &resp, nil
 }
 
+func (c *Client) ReportStandaloneChatReply(ctx context.Context, sessionID, content string) error {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(content) == "" {
+		return nil
+	}
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/chat/sessions/%s/assistant-replies", sessionID), map[string]any{
+		"content": content,
+	}, nil)
+}
+
 func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, step, total int) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/progress", taskID), map[string]any{
 		"summary": summary,

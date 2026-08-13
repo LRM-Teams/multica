@@ -115,18 +115,42 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 			return false, fmt.Errorf("resume staging: %w", err)
 		}
 		journal.Phase = "staged"
+		journal.StagedPath = resolveStagedBinaryFile(d.stagedUpgradePath, stagedOutput)
+		if journal.StagedPath == "" {
+			return false, fmt.Errorf("resume staging: staged binary path is empty")
+		}
 		if err := d.writeMachineUpgradeJournal(journal); err != nil {
 			return false, fmt.Errorf("persist resumed staging: %w", err)
 		}
 	}
 
 	if journal.Phase == "staged" {
+		if resolveStagedBinaryFile(d.stagedUpgradePath, journal.StagedPath) == "" {
+			d.reportRecoveredMachineUpgradeProgress(ctx, runtimeID, journal.ID, "staging")
+			stage := d.machineUpgradeStageFn
+			if stage == nil {
+				stage = d.runStageUpdate
+			}
+			stagedOutput, err = stage(journal.TargetVersion)
+			if err != nil {
+				return false, fmt.Errorf("restage missing scratch: %w", err)
+			}
+			journal.StagedPath = resolveStagedBinaryFile(d.stagedUpgradePath, stagedOutput)
+			if journal.StagedPath == "" {
+				return false, fmt.Errorf("restage missing scratch: staged binary path is empty")
+			}
+			if err := d.writeMachineUpgradeJournal(journal); err != nil {
+				return false, fmt.Errorf("persist restaged scratch: %w", err)
+			}
+		} else if d.stagedUpgradePath == "" {
+			d.stagedUpgradePath = resolveStagedBinaryFile(journal.StagedPath)
+		}
 		d.reportRecoveredMachineUpgradeProgress(ctx, runtimeID, journal.ID, "verifying")
 		verify := d.machineUpgradeVerifyFn
 		if verify == nil {
 			verify = d.verifyStagedBinary
 		}
-		if _, err := verify(journal.TargetVersion, stagedOutput); err != nil {
+		if _, err := verify(journal.TargetVersion, firstNonEmpty(d.stagedUpgradePath, journal.StagedPath)); err != nil {
 			return false, fmt.Errorf("resume verification: %w", err)
 		}
 		d.reportRecoveredMachineUpgradeProgress(ctx, runtimeID, journal.ID, "handoff")

@@ -848,12 +848,19 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			    ELSE research_source_snapshot.evidence_traits
 			  END,
 			  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_source_snapshot.verification_status END
+			WHERE research_source_snapshot.publisher = EXCLUDED.publisher
+			  AND research_source_snapshot.source_class = EXCLUDED.source_class
+			  AND research_source_snapshot.independence_key = EXCLUDED.independence_key
+			  AND research_source_snapshot.snapshot_text = EXCLUDED.snapshot_text
 			RETURNING id::text, retrieved_at
 		`, state.workspaceID, state.run.SessionID, state.task.ID, canonical,
 			truncateBytes(source.Title, 4096), truncateBytes(source.Publisher, 1024),
 			truncateBytes(source.SourceClass, 160), evidenceTraits, truncateBytes(source.IndependenceKey, 160),
 			source.RetrievedAt, source.SnapshotText, contentHash,
 			normalizeJSON(source.Metadata, `{}`), verificationStatus).Scan(&id, &persistedRetrievedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, 0, fmt.Errorf("%w: source key %q was reused for a different evidence identity", ErrResultConflict, source.ClientKey)
+		}
 		if err != nil {
 			return nil, 0, err
 		}

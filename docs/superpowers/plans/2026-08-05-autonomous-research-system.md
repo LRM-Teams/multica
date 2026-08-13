@@ -1007,6 +1007,7 @@ surface 矩阵仍未完成。
   - [x] E2b-guard：migration 350 与 `inquiryModule` 冻结 Hypothesis/Branch/Insight 合法状态迁移，要求 Branch 终止理由，逐类验证多态端点，并禁止 `decomposes | depends_on | refines` 形成有向环；`dispute` 在 H 章实体落库前保持不可写。生产批量写命令、Artifact Passport 原子注册与 Run Event 仍待 E2b-write。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
+  - [x] E4a：`TransitionInquiry` 以 Run state-version 与 entity before-status 双 CAS、真实 assigned Attempt/Agent 和冻结 Manifest 当前版本授权为边界，批量迁移 Hypothesis/Branch/Insight；每项变更保存结构化 before/after/reason，生成 `research-run-v6` production Artifact Version、`revises` Input Reference、current-version policy mutation/eligibility revision，并与幂等 `inquiry_state_changed` Run Event 同事务提交。Question 状态更新与 V6 accepted Task Result 自动调用仍待 E4b。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
 
 退出条件：新证据能加强、削弱或推翻假设，创建/终止分支，并让后续任务引用这些持久对象。

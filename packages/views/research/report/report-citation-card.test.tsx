@@ -20,6 +20,7 @@ vi.mock("../../i18n/use-t", () => ({
           citation_fetch_failed_hint: "Could not fetch this source.",
           citation_summary_empty: "No summary.",
           citation_anchor: `Locate citation ${vars?.label ?? ""}`.trim(),
+          citations_label: "Citations",
         },
       }),
   }),
@@ -121,6 +122,9 @@ describe("ReportCitationList", () => {
       />,
     );
     expect(screen.getAllByTestId("research-citation-card")).toHaveLength(2);
+    expect(screen.getByTestId("research-citation-list")).toHaveAccessibleName(
+      "Citations",
+    );
     expect(screen.getByRole("link", { name: /Milvus benchmarks/i })).toBeInTheDocument();
     expect(screen.getByText("Source unavailable")).toBeInTheDocument();
   });

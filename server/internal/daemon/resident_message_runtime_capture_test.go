@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -219,7 +220,7 @@ func TestResidentMessageRuntimeCapture_UploadsTrustedBatchAtTurnEnd(t *testing.T
 	}))
 	defer upstream.Close()
 
-	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	cfg := Config{WorkspacesRoot: isolatedWorkspacesRoot(t), ServerBaseURL: upstream.URL}
 	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
 		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
@@ -326,7 +327,7 @@ func TestResidentMessageRuntimeCapture_BindsProxyActionToProviderCallAndDrainsTu
 	}))
 	defer upstream.Close()
 
-	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	cfg := Config{WorkspacesRoot: isolatedWorkspacesRoot(t), ServerBaseURL: upstream.URL}
 	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
 		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
@@ -412,7 +413,7 @@ func TestResidentMessageRuntimeCapture_ToolLifecycleDuringIdleInput(t *testing.T
 	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 16)
 	d := &Daemon{
-		cfg:               Config{WorkspacesRoot: t.TempDir()},
+		cfg:               Config{WorkspacesRoot: isolatedWorkspacesRoot(t)},
 		canonicalRuntimes: pool,
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: "workspace-1"}},
 		mixedRunActivityReporter: func(payload protocol.MixedRunActivityTransitionPayload) bool {
@@ -485,7 +486,7 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 	}))
 	defer upstream.Close()
 
-	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	cfg := Config{WorkspacesRoot: isolatedWorkspacesRoot(t), ServerBaseURL: upstream.URL}
 	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
 		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
@@ -582,7 +583,7 @@ func TestResidentMessageRuntimeCapture_ActionOverflowReportsGapWithoutUpload(t *
 	}))
 	defer upstream.Close()
 
-	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	cfg := Config{WorkspacesRoot: isolatedWorkspacesRoot(t), ServerBaseURL: upstream.URL}
 	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
 		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
@@ -649,7 +650,7 @@ func TestResidentMessageRuntimeCapture_AmbiguousContextReportsGapAndRecovers(t *
 		}
 	}))
 	defer upstream.Close()
-	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	cfg := Config{WorkspacesRoot: isolatedWorkspacesRoot(t), ServerBaseURL: upstream.URL}
 	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
 		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
@@ -734,7 +735,7 @@ func TestResidentMessageRuntimeCapture_NoHistoryReplayAfterNewBoundary(t *testin
 	}))
 	defer upstream.Close()
 
-	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	cfg := Config{WorkspacesRoot: isolatedWorkspacesRoot(t), ServerBaseURL: upstream.URL}
 	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
 		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
@@ -819,6 +820,34 @@ func residentTurnCaptureForBoundaryTest(runID, runAgentID, boundary, turnID, bat
 			StartedAt: startedAt, CompletedAt: startedAt.Add(time.Second),
 		}},
 	}
+}
+
+// isolatedWorkspacesRoot is a TempDir that retries RemoveAll. The capture
+// turn finishes its assertions before reportAgentMemoryWrites finishes writing
+// .multica/memory-sync-state.json; t.TempDir() then fails Linux CI cleanup
+// with "directory not empty".
+func isolatedWorkspacesRoot(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("", "multica-capture-ws-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		deadline := time.Now().Add(2 * time.Second)
+		var removeErr error
+		for {
+			removeErr = os.RemoveAll(root)
+			if removeErr == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Errorf("cleanup workspaces root %s: %v", root, removeErr)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+	return root
 }
 
 func waitForCaptureUploads(t *testing.T, mu *sync.Mutex, uploads *[]protocol.TurnCaptureUpload, count int) {

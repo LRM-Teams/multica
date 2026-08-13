@@ -7,7 +7,7 @@ import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { noteKeys, noteWritebacksOptions } from "@multica/core/notes/queries";
 import { previewNoteWritebackContent, writebackHasOpenableEvidence } from "@multica/core/notes/writeback-preview";
-import { appendQueryParams, useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspacePaths } from "@multica/core/paths";
 import type { NotePage, NoteWriteback, NoteWritebackEvidence } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -15,25 +15,7 @@ import { toast } from "sonner";
 import { NoteAIDiffPreview } from "../editor/note-ai-diff";
 import { useT } from "../i18n/use-t";
 import { AppLink } from "../navigation";
-
-export function evidenceHref(
-  item: NoteWritebackEvidence,
-  evidence: NoteWritebackEvidence[],
-  paths: ReturnType<typeof useWorkspacePaths>,
-): string | null {
-  const type = item.type.trim().toLowerCase();
-  const id = item.id.trim();
-  if (!id) return null;
-  if (type === "issue") return paths.issueDetail(id);
-  if (type === "agent") return paths.agentDetail(id);
-  if (type === "run" || type === "task" || type === "agent_task") {
-    const agentId = evidence.find((entry) => entry.type.trim().toLowerCase() === "agent" && entry.id.trim())?.id.trim();
-    if (agentId) return appendQueryParams(paths.agentDetail(agentId), { run: id });
-    const issueId = evidence.find((entry) => entry.type.trim().toLowerCase() === "issue" && entry.id.trim())?.id.trim();
-    return issueId ? paths.issueDetail(issueId) : paths.issues();
-  }
-  return null;
-}
+import { evidenceHref } from "./note-writeback-evidence";
 
 function EvidenceLinks({
   evidence,

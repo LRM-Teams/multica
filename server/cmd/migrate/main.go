@@ -64,6 +64,7 @@ var agentDeleteIndexOptionalRelations = map[string]string{
 	"idx_agent_attachment_upload_session_agent":                   "agent_attachment_upload_session",
 	"idx_note_ai_job_agent":                                       "note_ai_job",
 	"env_dispatch_delivery_obligation_source_recipient_agent_idx": "env_dispatch_delivery_obligation",
+	"note_worker_job_task_idx":                                    "note_worker_job",
 }
 
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
@@ -146,6 +147,7 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 		{"idx_lark_user_binding_installation_workspace", `CREATE INDEX CONCURRENTLY idx_lark_user_binding_installation_workspace ON lark_user_binding (installation_id, workspace_id)`},
 		{"idx_memory_curation_watermark_last_run", `CREATE INDEX CONCURRENTLY idx_memory_curation_watermark_last_run ON memory_curation_watermark (last_run_id) WHERE last_run_id IS NOT NULL`},
 		{"idx_work_node_linked_task", `CREATE INDEX CONCURRENTLY idx_work_node_linked_task ON work_node (linked_task_id) WHERE linked_task_id IS NOT NULL`},
+		{"note_worker_job_task_idx", `CREATE INDEX CONCURRENTLY note_worker_job_task_idx ON note_worker_job (task_id) WHERE task_id IS NOT NULL`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

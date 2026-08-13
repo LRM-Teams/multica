@@ -27,3 +27,9 @@ CREATE INDEX note_worker_job_page_idx
 
 CREATE INDEX note_worker_job_agent_idx
     ON note_worker_job(agent_id);
+
+-- Supporting index for ON DELETE SET NULL when agent_inbox_event rows are
+-- removed during agent hard-delete cascade (see agent_delete_fk_indexes_test).
+CREATE INDEX note_worker_job_task_idx
+    ON note_worker_job(task_id)
+    WHERE task_id IS NOT NULL;

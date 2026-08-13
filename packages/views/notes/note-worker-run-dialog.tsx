@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useReducer, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Check, Hash, Loader2 } from "lucide-react";
 import { api } from "@multica/core/api";
@@ -18,6 +18,51 @@ import { useT } from "../i18n/use-t";
 import { useOpenNoteWorkerChat } from "./use-open-note-worker-chat";
 
 type DestinationKind = "agent" | "channel";
+
+type DialogState = {
+  destinationKind: DestinationKind;
+  agentId: string | null;
+  channelId: string | null;
+  instruction: string;
+  submitting: boolean;
+};
+
+type DialogAction =
+  | { type: "reset"; agentId: string | null }
+  | { type: "setDestination"; kind: DestinationKind; agentId?: string | null }
+  | { type: "setAgentId"; agentId: string | null }
+  | { type: "setChannelId"; channelId: string | null }
+  | { type: "setInstruction"; instruction: string }
+  | { type: "setSubmitting"; submitting: boolean };
+
+function dialogReducer(state: DialogState, action: DialogAction): DialogState {
+  switch (action.type) {
+    case "reset":
+      return {
+        destinationKind: "agent",
+        agentId: action.agentId,
+        channelId: null,
+        instruction: "",
+        submitting: false,
+      };
+    case "setDestination":
+      return {
+        ...state,
+        destinationKind: action.kind,
+        ...(action.agentId !== undefined ? { agentId: action.agentId } : {}),
+      };
+    case "setAgentId":
+      return { ...state, agentId: action.agentId };
+    case "setChannelId":
+      return { ...state, channelId: action.channelId, agentId: null };
+    case "setInstruction":
+      return { ...state, instruction: action.instruction };
+    case "setSubmitting":
+      return { ...state, submitting: action.submitting };
+    default:
+      return state;
+  }
+}
 
 export function NoteWorkerRunDialog({
   pageId,
@@ -38,11 +83,30 @@ export function NoteWorkerRunDialog({
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
   const { openNoteWorkerChat } = useOpenNoteWorkerChat();
-  const [destinationKind, setDestinationKind] = useState<DestinationKind>("agent");
-  const [agentId, setAgentId] = useState<string | null>(defaultAgentId);
-  const [channelId, setChannelId] = useState<string | null>(null);
-  const [instruction, setInstruction] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [state, dispatch] = useReducer(dialogReducer, {
+    destinationKind: "agent" as DestinationKind,
+    agentId: defaultAgentId,
+    channelId: null,
+    instruction: "",
+    submitting: false,
+  });
+  const { destinationKind, agentId, channelId, instruction, submitting } = state;
+
+  const preferredAgentId =
+    defaultAgentId && agents.some((agent) => agent.id === defaultAgentId)
+      ? defaultAgentId
+      : agents[0]?.id ?? null;
+
+  // Reset when the dialog opens — adjust during render (prev ref), not an effect,
+  // so we never paint a stale destination/instruction after reopen.
+  const prevOpenRef = useRef(open);
+  if (open !== prevOpenRef.current) {
+    prevOpenRef.current = open;
+    if (open) dispatch({ type: "reset", agentId: preferredAgentId });
+  } else if (open && destinationKind === "agent" && preferredAgentId && !agentId) {
+    // Agents may arrive after open; fill once without wiping a user pick.
+    dispatch({ type: "setAgentId", agentId: preferredAgentId });
+  }
 
   const { data: channels = [] } = useQuery({
     ...channelsOptions(wsId ?? ""),
@@ -54,26 +118,22 @@ export function NoteWorkerRunDialog({
   });
 
   const channelAgents = useMemo(() => {
-    const ids = new Set(
-      channelMembers.filter((member) => member.member_type === "agent").map((member) => member.member_id),
-    );
+    const ids = new Set<string>();
+    for (const member of channelMembers) {
+      if (member.member_type === "agent") ids.add(member.member_id);
+    }
     return agents.filter((agent) => ids.has(agent.id));
   }, [agents, channelMembers]);
 
-  useEffect(() => {
-    if (!open) return;
-    setDestinationKind("agent");
-    setAgentId(defaultAgentId && agents.some((agent) => agent.id === defaultAgentId) ? defaultAgentId : agents[0]?.id ?? null);
-    setChannelId(null);
-    setInstruction("");
-    setSubmitting(false);
-  }, [open, defaultAgentId, agents]);
-
-  useEffect(() => {
-    if (destinationKind !== "channel") return;
-    if (channelAgents.some((agent) => agent.id === agentId)) return;
-    setAgentId(channelAgents[0]?.id ?? null);
-  }, [destinationKind, channelAgents, agentId]);
+  const channelAgentId =
+    destinationKind === "channel"
+      ? channelAgents.some((agent) => agent.id === agentId)
+        ? agentId
+        : channelAgents[0]?.id ?? null
+      : agentId;
+  if (open && destinationKind === "channel" && channelAgentId !== agentId) {
+    dispatch({ type: "setAgentId", agentId: channelAgentId });
+  }
 
   const submit = async () => {
     const trimmed = instruction.trim();
@@ -89,7 +149,7 @@ export function NoteWorkerRunDialog({
       showErrorToast(t(($) => $.notes_page.worker_instruction_required));
       return;
     }
-    setSubmitting(true);
+    dispatch({ type: "setSubmitting", submitting: true });
     try {
       const job = await api.createNoteWorkerJob(pageId, {
         agent_id: agentId,
@@ -104,7 +164,7 @@ export function NoteWorkerRunDialog({
     } catch (error: unknown) {
       showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.worker_dispatch_failed));
     } finally {
-      setSubmitting(false);
+      dispatch({ type: "setSubmitting", submitting: false });
     }
   };
 
@@ -132,7 +192,7 @@ export function NoteWorkerRunDialog({
                   "flex-1 rounded-md px-3 py-1.5 text-sm",
                   destinationKind === "agent" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50",
                 )}
-                onClick={() => setDestinationKind("agent")}
+                onClick={() => dispatch({ type: "setDestination", kind: "agent", agentId: preferredAgentId })}
                 disabled={submitting}
               >
                 {t(($) => $.notes_page.worker_destination_agent)}
@@ -143,7 +203,7 @@ export function NoteWorkerRunDialog({
                   "flex-1 rounded-md px-3 py-1.5 text-sm",
                   destinationKind === "channel" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50",
                 )}
-                onClick={() => setDestinationKind("channel")}
+                onClick={() => dispatch({ type: "setDestination", kind: "channel" })}
                 disabled={submitting}
               >
                 {t(($) => $.notes_page.worker_destination_channel)}
@@ -170,7 +230,7 @@ export function NoteWorkerRunDialog({
                           "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
                           selected && "bg-muted text-foreground",
                         )}
-                        onClick={() => setChannelId(channel.id)}
+                        onClick={() => dispatch({ type: "setChannelId", channelId: channel.id })}
                         disabled={submitting}
                       >
                         <Hash className="size-4 shrink-0 text-muted-foreground" />
@@ -209,7 +269,7 @@ export function NoteWorkerRunDialog({
                         "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
                         selected && "bg-muted text-foreground",
                       )}
-                      onClick={() => setAgentId(agent.id)}
+                      onClick={() => dispatch({ type: "setAgentId", agentId: agent.id })}
                       disabled={submitting}
                     >
                       <Bot className="size-4 shrink-0 text-muted-foreground" />
@@ -226,7 +286,7 @@ export function NoteWorkerRunDialog({
             <div className="text-sm font-medium">{t(($) => $.notes_page.worker_instruction_label)}</div>
             <Textarea
               value={instruction}
-              onChange={(event) => setInstruction(event.target.value)}
+              onChange={(event) => dispatch({ type: "setInstruction", instruction: event.target.value })}
               onKeyDown={(event) => {
                 if (
                   event.key !== "Enter" ||

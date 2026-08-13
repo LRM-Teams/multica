@@ -7,7 +7,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NotePage, NoteWriteback } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
-import { evidenceHref, NoteWritebackReview } from "./note-writeback-review";
+import { evidenceHref } from "./note-writeback-evidence";
+import { NoteWritebackReview } from "./note-writeback-review";
 
 const listNotePageWritebacks = vi.fn();
 const acceptNotePageWriteback = vi.fn();

@@ -55,7 +55,10 @@ export function createIssueReferenceSuggestion(
     const cachedResponse = listQueries[0]?.[1];
     const cachedIssues: Issue[] = cachedResponse ? flattenIssueBuckets(cachedResponse) : [];
 
-    return cachedIssues.filter((issue) => matchesIssue(issue, query)).map(issueToReference);
+    return cachedIssues.reduce<MentionItem[]>((items, issue) => {
+      if (matchesIssue(issue, query)) items.push(issueToReference(issue));
+      return items;
+    }, []);
   }
 
   return {

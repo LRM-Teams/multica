@@ -176,6 +176,12 @@ function ProjectMentionLink({ projectId, label }: { projectId: string; label?: s
 // Named component so it can call useWorkspaceSlug() — arrow function inlined
 // inside `components` below would still work, but extracting it keeps the
 // hook usage explicit and avoids hook-in-object-literal surprises.
+function readonlyMentionLabel(node: React.ReactNode, fallback?: string): string | undefined {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.join("");
+  return fallback;
+}
+
 function ReadonlyLink({
   href,
   children,
@@ -202,35 +208,17 @@ function ReadonlyLink({
   if (isMentionHref(href)) {
     const match = href.match(/^mention:\/\/(member|agent|issue|project|run|all|squad)\/(.+)$/);
     if (match?.[1] === "issue" && match[2]) {
-      const label =
-        typeof children === "string"
-          ? children
-          : Array.isArray(children)
-            ? children.join("")
-            : undefined;
-      return <IssueMentionLink issueId={match[2]} label={label} />;
+      return <IssueMentionLink issueId={match[2]} label={readonlyMentionLabel(children)} />;
     }
     if (match?.[1] === "run" && match[2]) {
-      const label =
-        typeof children === "string"
-          ? children
-          : Array.isArray(children)
-            ? children.join("")
-            : "run";
       return (
         <span className="mention" data-mention-type="run" data-run-id={match[2]}>
-          {label}
+          {readonlyMentionLabel(children, "run")}
         </span>
       );
     }
     if (match?.[1] === "project" && match[2]) {
-      const label =
-        typeof children === "string"
-          ? children
-          : Array.isArray(children)
-            ? children.join("")
-            : undefined;
-      return <ProjectMentionLink projectId={match[2]} label={label} />;
+      return <ProjectMentionLink projectId={match[2]} label={readonlyMentionLabel(children)} />;
     }
     // Member / agent — full profile popover (parity with editor MentionView
     // and message author hover). Brand semantic token (not per-actor color).

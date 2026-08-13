@@ -42,15 +42,26 @@ const agents: Agent[] = [
   {
     id: "agent-1",
     workspace_id: "ws-1",
+    workspace_role: "member",
+    runtime_id: "runtime-1",
     name: "Deepseek",
+    display_name: "Deepseek",
     description: "",
+    instructions: "",
     avatar_url: null,
-    runtime_id: null,
+    runtime_mode: "local",
+    runtime_config: {},
+    custom_args: [],
+    status: "idle",
+    max_concurrent_tasks: 1,
+    model: "",
     owner_id: "user-1",
+    skills: [],
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     archived_at: null,
-  } as Agent,
+    archived_by: null,
+  },
 ];
 
 function dispatchedJob(overrides: Partial<NoteWorkerJob> = {}): NoteWorkerJob {

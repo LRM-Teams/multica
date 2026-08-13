@@ -47,6 +47,7 @@ type NotesPageUiState = {
   exportOpen: boolean;
   aiAgentOpen: boolean;
   workerOpen: boolean;
+  workerJobId: string | null;
   showTrash: boolean;
 };
 
@@ -810,6 +811,7 @@ function NoteEditor({
   shareNames,
   agents,
   workerJobId,
+  onDismissWorkerJob,
   onOpenPage,
   onOpenShare,
   onOpenWorker,
@@ -823,6 +825,7 @@ function NoteEditor({
   shareNames: string[];
   agents: Agent[];
   workerJobId: string | null;
+  onDismissWorkerJob: () => void;
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
   onOpenWorker: () => void;
@@ -1025,7 +1028,7 @@ function NoteEditor({
           {t(($) => $.notes_page.worker_action)}
         </Button>
       </div>
-      {workerJobId ? <NoteWorkerStatusBanner jobId={workerJobId} onDismiss={() => setWorkerJobId(null)} /> : null}
+      {workerJobId ? <NoteWorkerStatusBanner jobId={workerJobId} onDismiss={onDismissWorkerJob} /> : null}
       <NoteWritebackReview
         page={selected}
         currentContent={draft.content}
@@ -1113,11 +1116,23 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const selectedId = pageId ?? selectedFromList?.id;
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
   const selected = detailPage?.id ? detailPage : selectedFromList;
-  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, workerOpen: false, showTrash: false }));
-  const [workerJobId, setWorkerJobId] = useState<string | null>(null);
-  useEffect(() => {
-    setWorkerJobId(null);
-  }, [selected?.id]);
+  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({
+    sharePage: null,
+    exportOpen: false,
+    aiAgentOpen: false,
+    workerOpen: false,
+    workerJobId: null,
+    showTrash: false,
+  }));
+  // Clear the Worker status banner when the selected note changes — during render
+  // (prev-id comparison), not an effect, so we never paint a stale job for the new page.
+  const prevSelectedIdRef = useRef(selected?.id);
+  if (selected?.id !== prevSelectedIdRef.current) {
+    prevSelectedIdRef.current = selected?.id;
+    if (uiState.workerJobId !== null) {
+      setUiState((current) => ({ ...current, workerJobId: null }));
+    }
+  }
   const [noteExpansionOverrides, setNoteExpansionOverrides] = useState<NoteExpansionOverrides>(() => ({ selectionId: null, expanded: readNoteExpandedIds(wsId), collapsed: new Set() }));
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
   const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
@@ -1169,7 +1184,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const [dragState, setDragState] = useState<NoteDragState>({ draggingId: null, dropTarget: null });
   const [aiAgentConfig, setAiAgentConfig] = useState<NoteAiAgentConfig>(() => ({ workspaceId: null, agentId: null }));
   const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
-  const { sharePage, exportOpen, aiAgentOpen, workerOpen, showTrash } = uiState;
+  const { sharePage, exportOpen, aiAgentOpen, workerOpen, workerJobId, showTrash } = uiState;
   const { draggingId: draggingNoteId } = dragState;
 
   useEffect(() => {
@@ -1521,6 +1536,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               shareNames={selectedShareNames}
               agents={agents}
               workerJobId={workerJobId}
+              onDismissWorkerJob={() => setUiState((current) => ({ ...current, workerJobId: null }))}
               onOpenPage={openPage}
               onOpenShare={() => setUiState((current) => ({ ...current, sharePage: selected }))}
               onOpenWorker={() => setUiState((current) => ({ ...current, workerOpen: true }))}
@@ -1541,7 +1557,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           defaultAgentId={configuredAiAgentId}
           open={workerOpen}
           onOpenChange={(open) => setUiState((current) => ({ ...current, workerOpen: open }))}
-          onDispatched={(job) => setWorkerJobId(job.id)}
+          onDispatched={(job) => setUiState((current) => ({ ...current, workerJobId: job.id }))}
         />
       ) : null}
       <ExportDialog page={selected} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />

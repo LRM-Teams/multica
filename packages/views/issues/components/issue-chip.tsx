@@ -63,11 +63,15 @@ export function IssueChip({ issueId, fallbackLabel, unresolvedLabel, className }
   const wsId = useWorkspaceId();
   const { data: issues = [] } = useQuery(issueListOptions(wsId));
   const listIssue = issues.find((i) => i.id === issueId || i.identifier === issueId);
-  const detailQuery = useQuery({
+  const {
+    data: detailIssue,
+    isLoading: detailLoading,
+    isFetching: detailFetching,
+  } = useQuery({
     ...issueDetailOptions(wsId, issueId),
     enabled: !listIssue && !!issueId,
   });
-  const issue = listIssue ?? detailQuery.data;
+  const issue = listIssue ?? detailIssue;
   const cls = className ? `${BASE_CLASS} ${className}` : BASE_CLASS;
 
   if (issue) {
@@ -82,7 +86,7 @@ export function IssueChip({ issueId, fallbackLabel, unresolvedLabel, className }
     );
   }
 
-  const stillLoading = !listIssue && (detailQuery.isLoading || detailQuery.isFetching);
+  const stillLoading = !listIssue && (detailLoading || detailFetching);
   if (stillLoading) {
     return (
       <span className={cls}>

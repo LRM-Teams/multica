@@ -134,7 +134,7 @@ func runDaemonStart(cmd *cobra.Command, args []string) error {
 	}
 	foreground, _ := cmd.Flags().GetBool("foreground")
 	if foreground {
-		return runDaemonForeground(cmd)
+		return runComputerResident(cmd, args)
 	}
 	if err := runDaemonBackground(cmd); err != nil {
 		return err
@@ -219,45 +219,7 @@ func flagDuration(cmd *cobra.Command, name string) time.Duration {
 	return value
 }
 
-// buildDaemonStartArgs constructs args for the background child process.
-func buildDaemonStartArgs(cmd *cobra.Command) []string {
-	args := []string{"daemon", "start", "--foreground"}
-
-	if v := flagString(cmd, "daemon-id"); v != "" {
-		args = append(args, "--daemon-id", v)
-	}
-	if v := flagString(cmd, "device-name"); v != "" {
-		args = append(args, "--device-name", v)
-	}
-	if v := flagString(cmd, "runtime-name"); v != "" {
-		args = append(args, "--runtime-name", v)
-	}
-	if d, _ := cmd.Flags().GetDuration("poll-interval"); d > 0 {
-		args = append(args, "--poll-interval", d.String())
-	}
-	if d, _ := cmd.Flags().GetDuration("heartbeat-interval"); d > 0 {
-		args = append(args, "--heartbeat-interval", d.String())
-	}
-	// Forward agent-timeout when explicitly set, including an explicit 0
-	// (= no cap), so it can override an environment MULTICA_AGENT_TIMEOUT.
-	if cmd.Flags().Changed("agent-timeout") {
-		d, _ := cmd.Flags().GetDuration("agent-timeout")
-		args = append(args, "--agent-timeout", d.String())
-	}
-	if d, _ := cmd.Flags().GetDuration("codex-semantic-inactivity-timeout"); d > 0 {
-		args = append(args, "--codex-semantic-inactivity-timeout", d.String())
-	}
-	if b, _ := cmd.Flags().GetBool("no-auto-update"); b {
-		args = append(args, "--no-auto-update")
-	}
-	if d, _ := cmd.Flags().GetDuration("auto-update-interval"); d > 0 {
-		args = append(args, "--auto-update-interval", d.String())
-	}
-
-	return args
-}
-
-func runDaemonForeground(cmd *cobra.Command) error {
+func runComputerResident(cmd *cobra.Command, _ []string) error {
 	util.EnsureHiddenConsole()
 
 	profile := ""
@@ -346,10 +308,10 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	ctx, stop := notifyShutdownContext(context.Background())
 	defer stop()
 
-	logger := logger_pkg.NewLogger("daemon")
+	logger := logger_pkg.NewLogger("computer")
 	d := daemon.New(cfg, logger)
 
-	// Write PID file so "daemon stop" can find us. Best-effort: a resident
+	// Write PID file so Computer stop can find us. Best-effort: a resident
 	// whose state directory cannot be created simply runs without a PID file,
 	// exactly as before.
 	lc := &computer.Lifecycle{}
@@ -375,11 +337,11 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		// may still have ExecStart=/…/versions/vOLD/… after vOLD is deleted,
 		// and systemd returns 203/EXEC in a crash-loop (s144 2026-08-04).
 		if err := bestEffortSyncInstalledServiceUnit(profile, restartBin); err != nil {
-			logger.Warn("could not rewrite OS service unit to staged binary; re-run `multica daemon install-service` if the next OS restart fails",
+			logger.Warn("could not rewrite OS service unit to staged binary; re-run `multica computer restart` if the next OS restart fails",
 				"path", restartBin, "error", err)
 		}
 		if runningUnderSupervision() {
-			logger.Info("restarting daemon with updated binary via supervisor handoff", "path", restartBin)
+			logger.Info("restarting Computer with updated binary via supervisor handoff", "path", restartBin)
 			// Runtimes were already deregistered by triggerRestart() before
 			// handoff. The supervisor-spawned successor re-registers on
 			// startup; do not duplicate cleanup here.

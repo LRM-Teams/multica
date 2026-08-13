@@ -125,7 +125,7 @@ func TestDaemonStartsWorkspaceRunnerWithoutOwningSocketInternals(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(raw)
-	if !strings.Contains(source, "go runner.Run(child)") {
+	if !strings.Contains(source, "runner.Run(ctx)") || !strings.Contains(source, "superviseWorkspaceRunner") {
 		t.Fatal("Daemon does not start WorkspaceRunner through Run(ctx)")
 	}
 	for _, forbidden := range []string{

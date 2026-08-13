@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 func TestCommandTestsDoNotConstructRealComputerLifecycle(t *testing.T) {
@@ -49,6 +51,42 @@ func TestCommandTestsDoNotConstructRealComputerLifecycle(t *testing.T) {
 				return true
 			})
 		}
+	}
+}
+
+func TestComputerServiceCommandIsHiddenResidentEntry(t *testing.T) {
+	if got, want := computerServiceCmd.Use, computer.ResidentServiceArg; got != want {
+		t.Fatalf("computer service use = %q, want %q", got, want)
+	}
+	if !computerServiceCmd.Hidden {
+		t.Fatal("computer __service must stay hidden")
+	}
+	if err := computerServiceCmd.Args(computerServiceCmd, nil); err != nil {
+		t.Fatalf("computer __service rejects no arguments: %v", err)
+	}
+	if err := computerServiceCmd.Args(computerServiceCmd, []string{"extra"}); err == nil {
+		t.Fatal("computer __service accepts extra arguments")
+	}
+	if flag := computerServiceCmd.Flags().Lookup("computer-generation"); flag == nil {
+		t.Fatal("computer __service is missing --computer-generation")
+	}
+	if !hasSubcommand(computerCmd, computer.ResidentServiceArg) {
+		t.Fatal("computer command is missing the hidden resident entry")
+	}
+}
+
+func TestComputerRunnerCommandIsHiddenBindingChild(t *testing.T) {
+	if got, want := computerRunnerCmd.Use, computer.ResidentRunnerArg; got != want {
+		t.Fatalf("computer runner use = %q, want %q", got, want)
+	}
+	if !computerRunnerCmd.Hidden {
+		t.Fatal("computer __runner must stay hidden")
+	}
+	if flag := computerRunnerCmd.Flags().Lookup("workspace-id"); flag == nil {
+		t.Fatal("computer __runner is missing --workspace-id")
+	}
+	if !hasSubcommand(computerCmd, computer.ResidentRunnerArg) {
+		t.Fatal("computer command is missing the hidden Binding child entry")
 	}
 }
 

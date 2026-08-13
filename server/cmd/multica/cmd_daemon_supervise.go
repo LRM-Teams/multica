@@ -94,7 +94,7 @@ func runDaemonSupervise(cmd *cobra.Command, _ []string) error {
 	}
 	defer logFile.Close()
 
-	cfg, err := buildSuperviseConfig(profile, exePath, buildDaemonStartArgs(cmd), logFile, logFile)
+	cfg, err := buildSuperviseConfig(profile, exePath, computer.ResidentArgs(computerStartOptions(cmd)), logFile, logFile)
 	if err != nil {
 		return err
 	}

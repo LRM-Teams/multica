@@ -39,7 +39,7 @@ func TestBuildSuperviseConfigDefaultProfile(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	var stdout, stderr bytes.Buffer
-	cfg, err := buildSuperviseConfig("", "/usr/local/bin/multica", []string{"daemon", "start", "--foreground"}, &stdout, &stderr)
+	cfg, err := buildSuperviseConfig("", "/usr/local/bin/multica", []string{"computer", "__service"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("buildSuperviseConfig: %v", err)
 	}
@@ -58,8 +58,8 @@ func TestBuildSuperviseConfigDefaultProfile(t *testing.T) {
 	if gotPath != "/usr/local/bin/multica" {
 		t.Errorf("resolved path = %q, want fallback exePath", gotPath)
 	}
-	if got := strings.Join(gotArgs, " "); got != "daemon start --foreground" {
-		t.Errorf("resolved args = %q, want %q", got, "daemon start --foreground")
+	if got := strings.Join(gotArgs, " "); got != "computer __service" {
+		t.Errorf("resolved args = %q, want %q", got, "computer __service")
 	}
 	if cfg.HandoffExitCode != daemonHandoffExitCode {
 		t.Errorf("HandoffExitCode = %d, want %d", cfg.HandoffExitCode, daemonHandoffExitCode)

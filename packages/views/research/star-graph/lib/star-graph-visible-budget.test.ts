@@ -3,6 +3,7 @@ import type { StarEntityView } from "./star-canvas-view-model";
 import {
   LOW_ZOOM_CLUSTER_COLLAPSE,
   STAR_GRAPH_DOM_BUDGET,
+  OVERVIEW_LANDMARK_BUDGET,
   computeClusterHiddenCounts,
   effectiveEntityBudget,
   filterEntitiesForCanvasDisplay,
@@ -13,7 +14,8 @@ import { emptyCanvasFilter } from "@multica/core/research";
 
 function entity(
   partial: Pick<StarEntityView, "id" | "tier"> &
-    Partial<Pick<StarEntityView, "view" | "clusterId">>,
+    Partial<Pick<StarEntityView, "view" | "clusterId">> &
+    { state?: StarEntityView["view"]["state"] },
 ): StarEntityView {
   return {
     id: partial.id,
@@ -30,7 +32,7 @@ function entity(
       id: partial.id,
       tier: partial.tier,
       tierSource: "typed",
-      state: "default",
+      state: partial.state ?? "default",
       title: partial.id,
       ...(partial.view ?? {}),
     },
@@ -90,6 +92,43 @@ describe("selectVisibleEntityIds", () => {
   it("reduces budget at low zoom", () => {
     expect(effectiveEntityBudget(220, 0.4)).toBeLessThan(220);
     expect(effectiveEntityBudget(220, 1)).toBe(220);
+  });
+
+  it("caps production Landmark-style cards at 12 in 25% overview", () => {
+    const entities = [
+      entity({ id: "goal", tier: "xxl" }),
+      ...Array.from({ length: 40 }, (_, index) =>
+        entity({
+          id: `cluster-${index}`,
+          tier: "xl",
+          clusterId: `c-${index}`,
+        }),
+      ),
+    ];
+    const visible = selectVisibleEntityIds(entities, {
+      rootId: "goal",
+      zoom: 0.25,
+    });
+
+    expect(visible.size).toBe(OVERVIEW_LANDMARK_BUDGET);
+    expect(visible.has("goal")).toBe(true);
+  });
+
+  it("never lets protected nodes exceed the hard DOM budget", () => {
+    const entities = [
+      entity({ id: "goal", tier: "xxl" }),
+      ...Array.from({ length: 30 }, (_, index) =>
+        entity({ id: `running-${index}`, tier: "s", state: "run" }),
+      ),
+    ];
+    const visible = selectVisibleEntityIds(entities, {
+      rootId: "goal",
+      relatedNodeIds: new Set(entities.map((item) => item.id)),
+      budget: 8,
+    });
+
+    expect(visible.size).toBe(8);
+    expect(visible.has("goal")).toBe(true);
   });
 
   it("collapses to one node per cluster at very low zoom", () => {

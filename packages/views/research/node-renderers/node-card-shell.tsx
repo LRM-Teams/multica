@@ -261,7 +261,7 @@ export function NodeCardShell({
         <h3
           data-testid="node-title"
           className={cn(
-            "line-clamp-2 text-sm font-medium leading-snug",
+            "line-clamp-2 [overflow-wrap:anywhere] text-sm font-medium leading-snug",
             stateVisual.titleClass,
           )}
         >
@@ -270,7 +270,10 @@ export function NodeCardShell({
 
         {/* Summary — hidden at 40%. */}
         {summary && !compact && (
-          <p data-testid="node-summary" className="line-clamp-2 text-xs text-muted-foreground">
+          <p
+            data-testid="node-summary"
+            className="line-clamp-2 [overflow-wrap:anywhere] text-xs text-muted-foreground"
+          >
             {summary}
           </p>
         )}

@@ -1173,6 +1173,9 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		if err != nil {
 			return "", err
 		}
+		if err = lockStructuredReportSourcesTx(ctx, tx, state.workspaceID, state.run.SessionID, structuredReport); err != nil {
+			return "", err
+		}
 	}
 	var revision int
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(revision), 0) + 1 FROM research_report WHERE session_id = $1::uuid`, state.run.SessionID).Scan(&revision); err != nil {
@@ -1278,6 +1281,46 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		}
 	}
 	return reportID, nil
+}
+
+func lockStructuredReportSourcesTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, report reportStructuredV1) error {
+	sourceIDs := make([]string, 0, len(report.Sources))
+	for _, source := range report.Sources {
+		sourceIDs = append(sourceIDs, source.SourceID)
+	}
+	if len(sourceIDs) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT source.id::text
+		FROM research_source source
+		WHERE source.workspace_id = $1::uuid
+		  AND source.session_id = $2::uuid
+		  AND source.id::text = ANY($3::text[])
+		ORDER BY source.id
+		FOR KEY SHARE
+	`, workspaceID, sessionID, sourceIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := make(map[string]struct{}, len(sourceIDs))
+	for rows.Next() {
+		var sourceID string
+		if err = rows.Scan(&sourceID); err != nil {
+			return err
+		}
+		found[sourceID] = struct{}{}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, sourceID := range sourceIDs {
+		if _, ok := found[sourceID]; !ok {
+			return fmt.Errorf("%w: report structured source %q is unavailable in this research session", ErrInvalidResult, sourceID)
+		}
+	}
+	return nil
 }
 
 func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultState, evaluation EvaluationProposal) error {

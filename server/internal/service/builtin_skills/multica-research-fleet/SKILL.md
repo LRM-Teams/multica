@@ -98,7 +98,8 @@ chat before `task-result` succeeds.
   reader structure (outline, sections, citations, sources, gaps, conclusion),
   repeats every section and conclusion exactly in `content_md`, and links
   normalized Claim keys to section IDs with exact `anchor_quote` prose. Each
-  linked section cites a stored source that verifiably supports that Claim. A
+  structured source ID must name a stored Source in the same Research session;
+  every linked section cites one of those sources and it verifiably supports that Claim. A
   V3–V5 report explains the applied Method, counterevidence, limitations,
   unresolved gaps, and decision consequence.
 - `quality_gate` / `citation_audit`: independent evaluation of the latest report

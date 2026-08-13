@@ -193,7 +193,11 @@ func LinkPolicyGuardTriggerNames() []string {
 // MigrationDiagnosticReasonCodes lists migration 325 diagnostic reason registry.
 func MigrationDiagnosticReasonCodes() []string {
 	return []string{
+		"ambiguous_local_key",
 		"cross_scope_reference",
+		"cyclic_local_reference",
+		"dangling_local_key",
+		"duplicate_local_key",
 		"invalid_match_decision",
 		"malformed_uuid",
 		"unknown_schema",
@@ -206,6 +210,7 @@ func MigrationRelationshipParserNames() []string {
 	return []string{
 		"research_message_match_decision",
 		"research_decision_inputs",
+		"research_report_structured",
 		"research_run_event_payload",
 	}
 }

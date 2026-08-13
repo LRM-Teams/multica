@@ -752,7 +752,7 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindTask, workspaceID, in.SessionID, taskID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
+	if err = registerProductionTaskPassportTx(ctx, tx, workspaceID, in.SessionID, taskID, "", ArtifactAccessRaw); err != nil {
 		return Task{}, RunEvent{}, err
 	}
 	decisionInputs, _ := json.Marshal(map[string]any{

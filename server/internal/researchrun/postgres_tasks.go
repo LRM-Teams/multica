@@ -1169,7 +1169,7 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindQuestion, in.WorkspaceID, in.SessionID, rootQuestionID, time.Now(), int32Ptr(int32(newGoalVersion)), int32Ptr(int32(newPlanVersion))); err != nil {
+	if err = registerProductionQuestionPassportTx(ctx, tx, in.WorkspaceID, in.SessionID, rootQuestionID, "", ArtifactAccessRaw); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	event, err := appendEvent(ctx, tx, in.WorkspaceID, in.SessionID, "goal_steered", fmt.Sprintf("goal-steered:%d", newGoalVersion), "user", in.UserID, map[string]any{"goal": goal, "goal_version": newGoalVersion, "plan_version": newPlanVersion, "reason": in.Reason, "allow_running_finish": in.AllowRunningFinish})

@@ -485,6 +485,7 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		return nil, 0, err
 	}
 	created := 0
+	createdIDs := make([]string, 0, len(questions))
 	for _, proposal := range questions {
 		var id string
 		_, existed := ids[proposal.ClientKey]
@@ -519,9 +520,7 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		}
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindQuestion, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
-				return nil, 0, err
-			}
+			createdIDs = append(createdIDs, id)
 		}
 		ids[proposal.ClientKey] = id
 	}
@@ -541,6 +540,14 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		return nil, 0, err
 	} else if cyclic {
 		return nil, 0, fmt.Errorf("%w: persisted question graph contains a cycle", ErrInvalidResult)
+	}
+	for _, questionID := range createdIDs {
+		if err = registerProductionQuestionPassportTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, questionID,
+			state.attemptID, state.outputAccess,
+		); err != nil {
+			return nil, 0, err
+		}
 	}
 	return ids, created, nil
 }

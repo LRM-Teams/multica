@@ -114,9 +114,11 @@ describe("research F-state a11y static contract (LRM-1192)", () => {
     const fetchingSkeletonBranch = src.indexOf(
       "if (isLoading || (isFetching && !data) || (!data && !online))",
     );
+    const genericErrorBranch = src.indexOf("if (!data && isError && online)");
 
     expect(serverErrorBranch).toBeGreaterThan(-1);
-    expect(fetchingSkeletonBranch).toBeGreaterThan(serverErrorBranch);
+    expect(genericErrorBranch).toBeGreaterThan(serverErrorBranch);
+    expect(fetchingSkeletonBranch).toBeGreaterThan(genericErrorBranch);
   });
 
   it("source: canvas forming exposes mode-aware aria-busy + aria-live=polite", () => {

@@ -213,6 +213,12 @@ interface ContentEditorRef {
    * Markdown parser is unavailable (readonly/legacy mounts).
    */
   insertMarkdown: (md: string) => void;
+  /**
+   * Open the in-note Editor AI prompt (S3-A4). Uses the current empty paragraph
+   * when possible; otherwise appends one at the end. Returns false when page AI
+   * is not wired.
+   */
+  openPageAI: () => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -681,6 +687,40 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           })
           .focus("end")
           .run();
+      },
+      openPageAI: () => {
+        if (!editor || !onEditPageWithAIRef.current) return false;
+        const open = emptyLineAiStateRef.current;
+        if (open) {
+          editor.commands.focus();
+          return true;
+        }
+        const { selection } = editor.state;
+        const $from = selection.$from;
+        const onEmptyParagraph =
+          selection.empty &&
+          $from.parent.type.name === "paragraph" &&
+          $from.parent.content.size === 0 &&
+          $from.depth >= 1;
+        if (!onEmptyParagraph) {
+          editor.chain().focus("end").insertContent({ type: "paragraph" }).run();
+        }
+        const next = editor.state.selection;
+        const $next = next.$from;
+        if ($next.parent.type.name !== "paragraph" || $next.depth < 1) return false;
+        const from = $next.before($next.depth);
+        const to = $next.after($next.depth);
+        const caretPos = next.from;
+        const anchorRect = posToDOMRect(editor.view, caretPos, caretPos);
+        setEmptyLineAiState({
+          status: "prompt",
+          from,
+          to,
+          caretPos,
+          anchorRect,
+          instruction: "",
+        });
+        return true;
       },
     }));
 

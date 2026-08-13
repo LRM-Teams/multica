@@ -40,7 +40,7 @@ not create runtime-owned update state. Startup keeps incomplete local upgrade
 journals fail-closed; only a proven later Active generation may supersede a
 retained `candidate_ready` marker, and the marker remains available for diagnosis.
 For standalone upgrades, the target first proves its exact local binary,
-VersionStore lineage, PID, Computer generation, and accepted Workspace binding set. The server
+PID, Computer generation, and accepted Workspace binding set. The server
 then atomically changes the Computer generation from predecessor to candidate;
 only after that CAS may the target heartbeat, register runtimes, connect its
 WebSocket, or claim work. Runtime registration is post-takeover recovery and
@@ -70,7 +70,7 @@ multica computer upgrade --target-version <version>
 machine-wide resident. A live resident receives the request through its
 owner-authenticated loopback control surface and owns download, verification,
 handoff, rollback, and convergence. If no resident owns the machine, the command
-may install a verified Active release for the next start under the machine lock;
+may swap the on-PATH Computer (`$HOME/.local/bin/multica`) under the machine lock;
 that offline result is not proof of a running successor. Held resident ownership
 with unavailable control returns `upgrade_service_unreachable` and never falls
 back to offline activation. Omit `--target-version` to use the package selected

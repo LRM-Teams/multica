@@ -541,7 +541,12 @@ type SendChatMessageRequest struct {
 
 type SendChatMessageResponse struct {
 	MessageID string `json:"message_id"`
-	TaskID    string `json:"task_id"`
+	// DeliveryID is set when the Computer was woken with agent:deliver.
+	// Empty on the greeting sticker fast path.
+	DeliveryID string `json:"delivery_id,omitempty"`
+	// Pending is true while a Raft delivery is waiting for an assistant reply.
+	// Greeting fast path is the only send that returns pending=false.
+	Pending bool `json:"pending"`
 	// CreatedAt anchors the chat StatusPill timer the instant the user
 	// hits send. Without it the front-end falls back to its local clock
 	// and the timer "snaps backwards" later when WS events deliver the
@@ -683,49 +688,31 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 
 		writeJSON(w, http.StatusCreated, SendChatMessageResponse{
 			MessageID: uuidToString(msg.ID),
-			TaskID:    "",
+			Pending:   false,
 			CreatedAt: timestampToString(msg.CreatedAt),
 		})
 		return
 	}
 
-	// Enqueue a chat task after the message exists. For web chat the sender is
-	// the authenticated request user (sessions are creator-only), so they are
-	// the task initiator — surfaced to the agent under `## Task Initiator`.
-	task, err := h.TaskService.EnqueueChatTask(r.Context(), session, parseUUID(userID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to enqueue chat task: "+err.Error())
-		return
-	}
-	if err := h.Queries.LinkChatMessageToTask(r.Context(), db.LinkChatMessageToTaskParams{
-		ID:     msg.ID,
-		TaskID: task.ID,
-	}); err != nil {
-		// Don't fail the send: the task already exists and the user message
-		// is persisted. The link is only needed for precise empty-cancel
-		// cleanup; older/unlinked rows simply keep the historical behavior.
-		slog.Warn("link user chat message to task failed",
-			"message_id", uuidToString(msg.ID),
-			"task_id", uuidToString(task.ID),
-			"error", err,
-		)
-	}
+	// Raft-aligned wake: the user chat_message is the fact. Deliver it to
+	// the Computer; do not mint an inbox task. Pending stays true even if
+	// the ledger insert is deferred — greeting is the only pending=false send.
+	deliveryID := h.deliverStandaloneChatMessage(r.Context(), session, msg, content, parts, userID)
 
 	// Touch session updated_at.
 	if err := h.Queries.TouchChatSession(r.Context(), session.ID); err != nil {
 		slog.Warn("failed to touch chat session", "session_id", sessionID, "error", err)
 	}
 	h.clearDMPeerHiddenForChatSession(r.Context(), workspaceID, userID, session.AgentID)
-	taskContext := h.TaskService.AnalyticsContextForTask(r.Context(), task)
 	platform, _, _ := middleware.ClientMetadataFromContext(r.Context())
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.ChatMessageSent(
 		userID,
 		workspaceID,
 		uuidToString(session.ID),
-		uuidToString(task.ID),
+		"",
 		uuidToString(session.AgentID),
-		taskContext.RuntimeMode,
-		taskContext.Provider,
+		"",
+		"",
 		platform,
 	))
 
@@ -736,14 +723,14 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		Role:          "user",
 		Content:       content,
 		Parts:         parts,
-		TaskID:        uuidToString(task.ID),
 		CreatedAt:     timestampToString(msg.CreatedAt),
 	})
 
 	writeJSON(w, http.StatusCreated, SendChatMessageResponse{
-		MessageID: uuidToString(msg.ID),
-		TaskID:    uuidToString(task.ID),
-		CreatedAt: timestampToString(task.CreatedAt),
+		MessageID:  uuidToString(msg.ID),
+		DeliveryID: deliveryID,
+		Pending:    true,
+		CreatedAt:  timestampToString(msg.CreatedAt),
 	})
 }
 
@@ -893,10 +880,10 @@ func (h *Handler) ListChatMessagesPage(w http.ResponseWriter, r *http.Request) {
 // because optimistic seeds don't have a real task created_at and the timer
 // needs to survive refresh / reopen.
 type PendingChatTaskResponse struct {
-	TaskID       string  `json:"task_id,omitempty"`
-	Status       string  `json:"status,omitempty"`
-	CreatedAt    string  `json:"created_at,omitempty"`
-	InboxEventID *string `json:"inbox_event_id,omitempty"`
+	Pending    bool   `json:"pending,omitempty"`
+	Status     string `json:"status,omitempty"`
+	CreatedAt  string `json:"created_at,omitempty"`
+	DeliveryID string `json:"delivery_id,omitempty"`
 }
 
 // MarkChatSessionRead clears the session's unread_since (→ has_unread=false)
@@ -935,9 +922,11 @@ type PendingChatTasksResponse struct {
 }
 
 type PendingChatTaskItem struct {
-	TaskID        string `json:"task_id"`
-	Status        string `json:"status"`
 	ChatSessionID string `json:"chat_session_id"`
+	Pending       bool   `json:"pending,omitempty"`
+	Status        string `json:"status,omitempty"`
+	DeliveryID    string `json:"delivery_id,omitempty"`
+	CreatedAt     string `json:"created_at,omitempty"`
 }
 
 type CancelledChatMessageResponse struct {
@@ -974,18 +963,6 @@ func (h *Handler) ListPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.Queries.ListPendingChatTasksByCreator(r.Context(), db.ListPendingChatTasksByCreatorParams{
-		WorkspaceID: parseUUID(workspaceID),
-		CreatorID:   parseUUID(userID),
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list pending chat tasks")
-		return
-	}
-
-	// Map session → agent so we can filter without an N+1. The user's own
-	// session list is small, so one extra query is cheaper than per-row
-	// lookups.
 	sessions, err := h.Queries.ListAllChatSessionsByCreator(r.Context(), db.ListAllChatSessionsByCreatorParams{
 		WorkspaceID: parseUUID(workspaceID),
 		CreatorID:   parseUUID(userID),
@@ -994,25 +971,31 @@ func (h *Handler) ListPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve chat session agents")
 		return
 	}
-	sessionAgent := make(map[string]string, len(sessions))
-	for _, s := range sessions {
-		sessionAgent[uuidToString(s.ID)] = uuidToString(s.AgentID)
-	}
 
-	items := make([]PendingChatTaskItem, 0, len(rows))
-	for _, row := range rows {
-		sessionID := uuidToString(row.ChatSessionID)
-		agentID, hasAgent := sessionAgent[sessionID]
-		if !hasAgent {
-			continue
-		}
+	// Inbox Task rows are not the standalone bubble's outstanding signal.
+	// The FAB running light is session-scoped pending (last user line
+	// waiting for an assistant reply), not an inbox event.
+	sessionIDs := make([]pgtype.UUID, 0, len(sessions))
+	for _, s := range sessions {
+		agentID := uuidToString(s.AgentID)
 		if _, ok := allowed[agentID]; !ok {
 			continue
 		}
+		sessionIDs = append(sessionIDs, s.ID)
+	}
+	outstanding, err := h.listStandaloneChatOutstanding(r.Context(), sessionIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list outstanding chat sessions")
+		return
+	}
+	items := make([]PendingChatTaskItem, 0, len(outstanding))
+	for _, row := range outstanding {
 		items = append(items, PendingChatTaskItem{
-			TaskID:        uuidToString(row.TaskID),
-			Status:        row.Status,
-			ChatSessionID: sessionID,
+			ChatSessionID: row.SessionID,
+			Pending:       true,
+			Status:        "queued",
+			DeliveryID:    row.DeliveryID,
+			CreatedAt:     row.CreatedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, PendingChatTasksResponse{Tasks: items})
@@ -1034,19 +1017,24 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.Queries.GetPendingChatTask(r.Context(), session.ID)
+	// Standalone bubble: outstanding is a session fact (last line is the
+	// user waiting for a reply). Never invent a task_id from that line
+	// and never report an inbox event as the bubble's pending authority.
+	out, ok, err := h.loadStandaloneChatOutstanding(r.Context(), session.ID)
 	if err != nil {
-		// No in-flight task — return an empty object, not an error.
-		writeJSON(w, http.StatusOK, PendingChatTaskResponse{})
+		writeError(w, http.StatusInternalServerError, "failed to load outstanding chat")
 		return
 	}
-
-	writeJSON(w, http.StatusOK, PendingChatTaskResponse{
-		TaskID:       uuidToString(task.ID),
-		Status:       task.Status,
-		CreatedAt:    timestampToString(task.CreatedAt),
-		InboxEventID: uuidStringPtr(task.InboxEventID),
-	})
+	if ok {
+		writeJSON(w, http.StatusOK, PendingChatTaskResponse{
+			Pending:    true,
+			Status:     "queued",
+			CreatedAt:  out.CreatedAt,
+			DeliveryID: out.DeliveryID,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, PendingChatTaskResponse{})
 }
 
 func (h *Handler) CancelChatAgentInboxEvent(w http.ResponseWriter, r *http.Request) {

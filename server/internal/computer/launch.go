@@ -6,25 +6,15 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 )
 
-// LaunchBinary returns the stable installation entrypoint. Active release
-// binaries stay behind that launcher and are never persisted as lifecycle or
-// service paths.
+// LaunchBinary returns the on-PATH Computer. A missing install path falls
+// back to the running executable so repo checkouts can still start.
 func LaunchBinary() (string, error) {
-	exePath, err := os.Executable()
+	path, err := cli.InstallPath()
 	if err != nil {
 		return "", err
 	}
-	if cli.IsBrewInstall() {
-		return exePath, nil
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		return path, nil
 	}
-	store, err := cli.OpenVersionStore("")
-	if err != nil {
-		return exePath, nil
-	}
-	if _, active, err := store.ActiveBinaryPath(); err == nil && active {
-		if launcher, ok, err := store.LauncherPath(); err == nil && ok {
-			return launcher, nil
-		}
-	}
-	return exePath, nil
+	return os.Executable()
 }

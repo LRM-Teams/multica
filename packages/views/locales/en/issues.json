@@ -157,6 +157,8 @@
     "desc_placeholder": "Add description...",
     "desc_edit_aria": "Edit description",
     "sub_issues_label": "Sub-issues",
+    "linked_notes_label": "Linked notes",
+    "linked_note_untitled": "Untitled",
     "sub_issue_of": "Sub-issue of",
     "from_discussion": "From discussion",
     "add_sub_issues": "Add sub-issues",

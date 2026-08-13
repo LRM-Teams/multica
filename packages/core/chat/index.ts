@@ -8,6 +8,13 @@ export {
   evictInactiveChatMessageCaches,
   CHAT_MESSAGE_GC_TIME_MS,
 } from "./evict-inactive-caches";
+export {
+  isStandaloneListItemOutstanding,
+  isStandaloneSendOutstanding,
+  isStandaloneSessionOutstanding,
+  shouldClearChatPendingOnDone,
+  standaloneStopRequiresInbox,
+} from "./standalone-pending";
 
 import type { createChatStore as CreateChatStoreFn } from "./store";
 

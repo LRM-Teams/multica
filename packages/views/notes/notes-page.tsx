@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Check, ChevronDown, ChevronRight, Copy, Download, FilePlus, FileText, Loader2, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Copy, Download, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -28,6 +28,7 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 import { NoteShareSummary } from "./note-share-summary";
 import { NoteWritebackReview } from "./note-writeback-review";
+import { NoteIntentEntry, type NoteIntentKind } from "./note-intent-entry";
 import { NoteWorkerRunDialog } from "./note-worker-run-dialog";
 import { NoteWorkerStatusBanner } from "./note-worker-status-banner";
 import { waitForNoteAIJobResult } from "./note-ai-job-wait";
@@ -815,6 +816,7 @@ function NoteEditor({
   onOpenPage,
   onOpenShare,
   onOpenWorker,
+  onOpenAiAgentConfig,
   onOptimizeSelection,
   onEditPageWithAI,
 }: {
@@ -829,6 +831,7 @@ function NoteEditor({
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
   onOpenWorker: () => void;
+  onOpenAiAgentConfig: () => void;
   onOptimizeSelection: (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
   onEditPageWithAI: (request: PageEditAIRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
 }) {
@@ -984,11 +987,21 @@ function NoteEditor({
             {t(($) => $.notes_page.share_action)}
           </Button>
         )}
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={creatingIssue}
-          onClick={() => {
+        <NoteIntentEntry
+          creatingIssue={creatingIssue}
+          onSelect={(intent: NoteIntentKind) => {
+            if (intent === "worker") {
+              onOpenWorker();
+              return;
+            }
+            if (intent === "editor") {
+              const opened = editorRef.current?.openPageAI() === true;
+              if (!opened) {
+                showErrorToast(t(($) => $.notes_page.intent_editor_unavailable));
+                onOpenAiAgentConfig();
+              }
+              return;
+            }
             void (async () => {
               if (creatingIssue) return;
               setCreatingIssue(true);
@@ -1019,14 +1032,7 @@ function NoteEditor({
               }
             })();
           }}
-        >
-          {creatingIssue ? <Loader2 className="size-4 animate-spin" /> : <FilePlus className="size-4" />}
-          {t(($) => $.notes_page.create_issue_action)}
-        </Button>
-        <Button variant="outline" size="sm" onClick={onOpenWorker}>
-          <Bot className="size-4" />
-          {t(($) => $.notes_page.worker_action)}
-        </Button>
+        />
       </div>
       {workerJobId ? <NoteWorkerStatusBanner jobId={workerJobId} onDismiss={onDismissWorkerJob} /> : null}
       <NoteWritebackReview
@@ -1422,10 +1428,6 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                 <Sparkles className="size-3.5" />
                 {t(($) => $.notes_page.ai_agent_action)}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, workerOpen: true }))}>
-                <Bot className="size-3.5" />
-                {t(($) => $.notes_page.worker_action)}
-              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, exportOpen: true }))}>
                 <Download className="size-3.5" />
                 {t(($) => $.notes_page.export_action)}
@@ -1540,6 +1542,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               onOpenPage={openPage}
               onOpenShare={() => setUiState((current) => ({ ...current, sharePage: selected }))}
               onOpenWorker={() => setUiState((current) => ({ ...current, workerOpen: true }))}
+              onOpenAiAgentConfig={() => setUiState((current) => ({ ...current, aiAgentOpen: true }))}
               onOptimizeSelection={optimizeSelectedNoteText}
               onEditPageWithAI={editNotePageWithAI}
             />

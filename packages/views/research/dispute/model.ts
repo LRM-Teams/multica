@@ -16,6 +16,17 @@ import { isDisputeDomainNodeType, stanceFromPayload, turnMarkerFromPayload, verd
 
 export const DISPUTE_STANCE_TYPES = new Set(["supports", "contradicts", "refines"]);
 
+const DISPUTE_SUBGRAPH_EDGE_TYPES = new Set([
+  "supports",
+  "contradicts",
+  "refines",
+  "discussed_by",
+  "escalated_to",
+  "resolved_by",
+  "supersedes",
+  "invalidates",
+]);
+
 /** A dispute position with its stance (from the typed edge into the dispute). */
 export type PositionView = {
   node: ResearchGraphNode;
@@ -77,6 +88,79 @@ function indexById(nodes: ResearchGraphNode[]): Map<string, ResearchGraphNode> {
  */
 export function findDisputeRoot(nodes: ResearchGraphNode[]): ResearchGraphNode | null {
   return nodes.find((n) => n.node_type === "dispute") ?? null;
+}
+
+/**
+ * Extract the bounded dispute component containing `focusNodeId`.
+ *
+ * A session can contain several independent disputes. Passing the whole graph
+ * to `buildDisputeModel` would silently combine their positions and decisions,
+ * so production callers must first resolve the nearest dispute through typed
+ * dispute relations and then retain only that connected component. Traversal
+ * never crosses a second dispute root.
+ */
+export function disputeSubgraphForNode(
+  nodes: readonly ResearchGraphNode[],
+  edges: readonly ResearchGraphEdge[],
+  focusNodeId: string,
+): { nodes: ResearchGraphNode[]; edges: ResearchGraphEdge[] } | null {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  if (!byId.has(focusNodeId)) return null;
+  const relevantEdges = edges.filter((edge) =>
+    DISPUTE_SUBGRAPH_EDGE_TYPES.has(edge.edge_type),
+  );
+  const adjacent = new Map<string, ResearchGraphEdge[]>();
+  for (const edge of relevantEdges) {
+    adjacent.set(edge.from_node_id, [...(adjacent.get(edge.from_node_id) ?? []), edge]);
+    adjacent.set(edge.to_node_id, [...(adjacent.get(edge.to_node_id) ?? []), edge]);
+  }
+
+  const queue = [focusNodeId];
+  const visited = new Set<string>();
+  let rootId: string | null = null;
+  while (queue.length && !rootId) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    if (byId.get(id)?.node_type === "dispute") {
+      rootId = id;
+      break;
+    }
+    for (const edge of adjacent.get(id) ?? []) {
+      queue.push(edge.from_node_id === id ? edge.to_node_id : edge.from_node_id);
+    }
+  }
+  if (!rootId) return null;
+
+  const componentIds = new Set<string>();
+  const componentQueue = [rootId];
+  while (componentQueue.length) {
+    const id = componentQueue.shift()!;
+    if (componentIds.has(id)) continue;
+    const node = byId.get(id);
+    if (!node) continue;
+    if (node.node_type === "dispute" && id !== rootId) continue;
+    componentIds.add(id);
+    for (const edge of adjacent.get(id) ?? []) {
+      componentQueue.push(edge.from_node_id === id ? edge.to_node_id : edge.from_node_id);
+    }
+  }
+
+  return {
+    nodes: nodes.filter((node) => componentIds.has(node.id)),
+    edges: relevantEdges.filter(
+      (edge) => componentIds.has(edge.from_node_id) && componentIds.has(edge.to_node_id),
+    ),
+  };
+}
+
+export function buildDisputeModelForNode(
+  nodes: readonly ResearchGraphNode[],
+  edges: readonly ResearchGraphEdge[],
+  focusNodeId: string,
+): DisputeSubgraphModel | null {
+  const subgraph = disputeSubgraphForNode(nodes, edges, focusNodeId);
+  return subgraph ? buildDisputeModel(subgraph.nodes, subgraph.edges) : null;
 }
 
 /** Edges touching the given set of node ids. */

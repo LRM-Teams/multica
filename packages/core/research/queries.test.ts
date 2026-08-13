@@ -3,6 +3,7 @@ import type { TypedGraphResponse } from "./graph-typed";
 import {
   nextTypedGraphPageOffset,
   normalizeResearchPresenceMap,
+  requireConsistentTypedGraphPages,
 } from "./queries";
 
 function graphPage(
@@ -62,7 +63,6 @@ describe("normalizeResearchPresenceMap", () => {
     );
   });
 });
-
 describe("nextTypedGraphPageOffset", () => {
   it("uses the canonical total when the server provides it", () => {
     const first = graphPage(500, 750);
@@ -93,5 +93,27 @@ describe("nextTypedGraphPageOffset", () => {
     const first = graphPage(500, 1200);
     const second = graphPage(300, 800);
     expect(nextTypedGraphPageOffset(second, [first, second])).toBeUndefined();
+  });
+});
+
+describe("requireConsistentTypedGraphPages", () => {
+  const page = (version: number) =>
+    ({ graph_version: version }) as TypedGraphResponse;
+
+  it("preserves pages from one canonical graph version", () => {
+    const data = {
+      pages: [page(7), page(7)],
+      pageParams: [0, 500],
+    };
+    expect(requireConsistentTypedGraphPages(data)).toBe(data);
+  });
+
+  it("rejects offset pages from mixed graph versions", () => {
+    expect(() =>
+      requireConsistentTypedGraphPages({
+        pages: [page(7), page(8)],
+        pageParams: [0, 500],
+      }),
+    ).toThrow("returned mixed graph versions");
   });
 });

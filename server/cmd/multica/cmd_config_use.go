@@ -51,10 +51,6 @@ type environmentSwitchResult struct {
 }
 
 func newEnvironmentSwitcher() (*environmentSwitcher, error) {
-	store, err := cli.OpenVersionStore("")
-	if err != nil {
-		return nil, fmt.Errorf("open version store: %w", err)
-	}
 	lifecycle := &computer.Lifecycle{}
 	return &environmentSwitcher{
 		loadConfig: cli.LoadCLIConfig,
@@ -65,52 +61,52 @@ func newEnvironmentSwitcher() (*environmentSwitcher, error) {
 		health: func(ctx context.Context) map[string]any {
 			return lifecycle.Health(ctx)
 		},
-		withPackageLock: store.WithMachineMutationLock,
+		withPackageLock: cli.WithMachineMutationLock,
 		stagePackage: func(ctx context.Context, channel cli.ReleaseChannel) (string, error) {
-			state, err := store.ReadActivationState()
-			if err != nil {
-				return "", err
-			}
-			if state.ActiveVersion == "" {
-				if !cli.IsReleaseVersion(version) {
-					return "", fmt.Errorf("the current development binary %q is not a release; install Multica before switching environments", version)
-				}
-				if _, err := store.BootstrapActiveFromExecutable(ctx, version); err != nil {
-					return "", fmt.Errorf("bootstrap current package: %w", err)
-				}
+			_ = ctx
+			if !cli.IsReleaseVersion(version) {
+				return "", fmt.Errorf("the current development binary %q is not a release; install Multica before switching environments", version)
 			}
 			manifest, err := cli.FetchReleaseForChannelWithOverride(channel, "")
 			if err != nil {
 				return "", fmt.Errorf("fetch %s package manifest: %w", packageSourceName(channel), err)
 			}
-			staged, err := cli.DownloadAndStageRelease(ctx, store, manifest.TagName, cli.DefaultUpdateDownloadTimeout, "")
-			if err != nil {
+			if _, err := cli.StageReleaseScratch(manifest.TagName, cli.DefaultUpdateDownloadTimeout, ""); err != nil {
 				return "", fmt.Errorf("stage %s package %s: %w", packageSourceName(channel), manifest.TagName, err)
 			}
-			return staged.Staged.Version, nil
+			return cli.NormalizeReleaseTag(manifest.TagName), nil
 		},
 		activatePackage: func(ctx context.Context, targetVersion string) (packageActivation, error) {
-			before, err := store.ReadActivationState()
+			_ = ctx
+			installPath, err := cli.InstallPath()
 			if err != nil {
 				return packageActivation{}, err
 			}
-			after, path, err := store.OfflineActivateStaged(ctx, targetVersion, "environment-switch")
+			if cli.IsReleaseVersion(version) && cli.NormalizeReleaseTag(version) == cli.NormalizeReleaseTag(targetVersion) {
+				return packageActivation{ActiveVersion: targetVersion, BinaryPath: installPath, Changed: false}, nil
+			}
+			staged, err := cli.StageReleaseScratch(targetVersion, cli.DefaultUpdateDownloadTimeout, "")
 			if err != nil {
+				return packageActivation{}, err
+			}
+			if err := cli.SwapExecutable(installPath, staged); err != nil {
 				return packageActivation{}, err
 			}
 			return packageActivation{
-				PreviousVersion: before.ActiveVersion,
-				ActiveVersion:   after.ActiveVersion,
-				BinaryPath:      path,
-				Changed:         before.ActiveVersion != after.ActiveVersion,
+				PreviousVersion: version,
+				ActiveVersion:   targetVersion,
+				BinaryPath:      installPath,
+				Changed:         true,
 			}, nil
 		},
 		rollbackPackage: func(ctx context.Context, previousVersion string) error {
-			if strings.TrimSpace(previousVersion) == "" {
-				return fmt.Errorf("previous Active package is unavailable")
+			_ = ctx
+			_ = previousVersion
+			installPath, err := cli.InstallPath()
+			if err != nil {
+				return err
 			}
-			_, _, err := store.OfflineActivateStaged(ctx, previousVersion, "environment-switch-rollback")
-			return err
+			return cli.RollbackExecutable(installPath)
 		},
 		stop: lifecycle.Stop,
 		start: func() (computer.StartResult, error) {

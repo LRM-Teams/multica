@@ -103,8 +103,10 @@ export function ReportSourceTable({ sources }: { sources: ResearchSource[] }) {
                     <span className="inline-flex rounded-full bg-destructive/15 px-2 py-0.5 text-[11px] font-medium text-destructive">
                       {t(($) => $.reader.source_failed_badge)}
                     </span>
+                  ) : typeof s.credibility_weight === "number" ? (
+                    <WeightBadge weight={s.credibility_weight} />
                   ) : (
-                    <WeightBadge weight={s.credibility_weight ?? 0} />
+                    <span className="text-muted-foreground">—</span>
                   )}
                 </td>
                 <td className="px-3 py-2.5 align-middle">

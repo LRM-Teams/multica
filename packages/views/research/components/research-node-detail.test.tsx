@@ -45,6 +45,8 @@ vi.mock("../../i18n/use-t", () => ({
           outcome: "Outcome",
           task_type: "Task type",
           attempt: "Attempt",
+          attempt_history: "Execution history",
+          contributors: "Contributors",
           executor_role: "Actual role:",
           required_role: "Required role:",
           expected_result: "Expected output:",
@@ -363,7 +365,8 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
           acceptance_criteria: { schema_version: 2, minimum_independent_sources: 2 },
           status: "succeeded",
           assigned_agent_id: "agent-1",
-          attempt_count: 1,
+          attempt_count: 2,
+          max_attempts: 3,
           goal_version: 1,
           plan_version: 1,
         },
@@ -387,6 +390,14 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
           attempt_number: 1,
           assigned_agent_id: "agent-1",
           status: "succeeded",
+        },
+        {
+          id: "attempt-2",
+          task_id: "task-1",
+          attempt_number: 2,
+          assigned_agent_id: "agent-2",
+          status: "retryable_failed",
+          completed_at: "2026-08-04T01:00:00Z",
         },
       ],
       sources: [
@@ -459,6 +470,14 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
         is_lead: false,
         display_name: "Scout Ada",
       },
+      {
+        id: "member-2",
+        agent_id: "agent-2",
+        role: "validator",
+        status: "active",
+        is_lead: false,
+        display_name: "Validator Lin",
+      },
     ];
 
     render(
@@ -479,7 +498,22 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(
       screen.getByText("Search candidate sources and create evidence snapshots"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Scout Ada")).toBeInTheDocument();
+    expect(screen.getAllByText("Scout Ada").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("node-detail-contributors")).toHaveTextContent(
+      "Scout Ada · scout",
+    );
+    expect(screen.getByTestId("node-detail-contributors")).toHaveTextContent(
+      "Validator Lin · validator",
+    );
+    expect(screen.getByTestId("node-detail-attempt-history")).toHaveTextContent(
+      "Attempt 1",
+    );
+    expect(screen.getByTestId("node-detail-attempt-history")).toHaveTextContent(
+      "Attempt 2",
+    );
+    expect(screen.getByTestId("node-detail-attempt-history")).toHaveTextContent(
+      "Failed",
+    );
     expect(screen.getByText("Discover and select sources")).toBeInTheDocument();
     expect(screen.getByText("Required role:")).toBeInTheDocument();
     expect(screen.getByText("Reviewable evidence package")).toBeInTheDocument();

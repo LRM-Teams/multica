@@ -1,9 +1,10 @@
 # Machine Upgrade rollout and rollback
 
-Machine Upgrade is an additive, Computer-scoped lifecycle. Artifact publication,
-staging, and an Active VersionStore pointer are progress only; server
-completion requires a capable successor generation plus recovery of the Runtime
-set captured across every active Workspace Execution Binding at acceptance.
+Machine Upgrade is an additive, Computer-scoped lifecycle. Artifact publication
+and ephemeral scratch staging are progress only; the installed product is the
+on-PATH Computer. Server completion requires a capable successor generation plus
+recovery of the Runtime set captured across every active Workspace Execution
+Binding at acceptance.
 Only the Computer owner may initiate or cancel this machine-wide mutation. A
 Workspace supplies visibility and an entry point, not an independent upgrade
 scope; every active Workspace connection projects the same operation and result.
@@ -15,14 +16,14 @@ The only local CLI entry point is `multica computer upgrade`. It follows the
 Raft service-first rule: a live resident receives the request over its
 owner-authenticated loopback control surface; a proven absent resident permits
 a locked offline install for the next start; and held resident ownership with
-unreachable control fails as `upgrade_service_unreachable` without changing
-Active. Offline installation is not successor or convergence proof. Production
+unreachable control fails as `upgrade_service_unreachable` without swapping
+the PATH Computer. Offline installation is not successor or convergence proof. Production
 and Test continue to select stable/preview packages respectively; only
 `--target-version` overrides that environment-owned source.
 
 For a standalone resident, candidate verification is local-first. The target
 binds the exclusive control port and proves its exact PID, binary version,
-VersionStore generation, Computer generation, and accepted Workspace binding
+Computer generation, and accepted Workspace binding
 set without calling heartbeat or registration. The server then performs one atomic
 predecessor-to-candidate Computer generation CAS. Only after that ownership
 change may the candidate run normal authenticated startup and complete the
@@ -78,7 +79,7 @@ successor registers and all accepted runtimes attest.
 
 ## Rollback
 
-Keep the previous VersionStore generation and machine-upgrade journal while an
+Keep the previous PATH binary (`.prev`) and machine-upgrade journal while an
 operation is non-terminal. If deployment rollback is necessary, first stop
 dispatching new machine actions by withholding the daemon capability, then
 roll back server application code while preserving migrations and canonical
@@ -97,10 +98,10 @@ request without that stop proof is an error, not permission to race another
 resident.
 
 The durable journal is a pending-operation marker, not a permanent startup
-lock. An `accepted` or `staged` operation has not mutated Active. Once the
-server acknowledges that exact operation as `failed`, the Computer clears the
-matching local marker by operation ID, accepted generation, resolved target,
-and accepted Runtime and Workspace sets. If failure reporting was not
+lock. An `accepted` or `staged` operation has not swapped the PATH Computer.
+Once the server acknowledges that exact operation as `failed`, the Computer
+clears the matching local marker by operation ID, accepted generation, resolved
+target, and accepted Runtime and Workspace sets. If failure reporting was not
 acknowledged, or any identity field differs, recovery retains the marker and
 fails closed. `handoff`, `candidate_ready`, and `rollback_pending` never use
 this pre-activation shortcut because they require successor or rollback proof.
@@ -108,9 +109,7 @@ this pre-activation shortcut because they require successor or rollback proof.
 ## Superseded recovery markers
 
 A retained `candidate_ready` journal may outlive its completed server operation
-when a later explicit installer activates another release. Startup may stop
-replaying only that phase when the journal has durable incumbent-generation
-evidence, the VersionStore Active generation is at least two generations after
-that incumbent (the journal target consumed the first), and Active matches the
-running binary. Keep the old journal for diagnosis and terminal reconciliation.
-All earlier phases and `rollback_pending` continue to recover fail-closed.
+when a later explicit install swaps another release onto PATH. Startup does not
+replay that phase from a VersionStore generation. Keep the old journal for
+diagnosis and terminal reconciliation. All earlier phases and `rollback_pending`
+continue to recover fail-closed.

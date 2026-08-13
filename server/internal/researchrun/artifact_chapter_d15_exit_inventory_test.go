@@ -20,7 +20,7 @@ var chapterD15Coverage = map[int]string{
 	3:  "partial", // migration FK negative fixtures
 	4:  "partial", // deferred guard tests in migration suite
 	5:  "partial", // immutability/watermark CAS tests
-	6:  "partial", // backfill diagnostic tests in migration 319
+	6:  "partial", // Message/Decision/Run Event diagnostic detection and repair-rescan coverage
 	7:  "partial", // artifact_policy legacy admission matrix
 	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered
 	9:  "covered", // closed normal-clearance/purpose/evaluation matrix + output taint permutations

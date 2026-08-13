@@ -353,10 +353,10 @@
 - **物**：`server/internal/cli/exec_swap.go`、`stage_release.go`、`lifecycle_upgrade.go`；`TestSwapExecutable*`、`TestCommitStagedActivationSwapsInstallPathAndKeepsPrev`、`TestVerifyStagedBinaryUsesScratchPathFromRunStageUpdateStatus`、`TestRecoverStagedJournal*`、offline `computer upgrade` subprocess 证明 PATH + `.prev`。
 
 ### 4.12 Daemon 更新观测必须是单调、持久、可降级的事实 — `可执行`（① PostgreSQL daemon scope + ② typed envelope + ③ daemon 单一 coordinator + ⑤重启/CAS 回归；owner: @Barry）
-- daemon 内只有一个 update-observation coordinator；自动轮询和 server 下发更新都必须通过它写入。每次语义变化先把完整 snapshot 原子持久化到本机，再发布给 HTTP/WS heartbeat；持久化失败时拒绝开始更新、重启或对外宣称新状态。进程重启后创建新 `session_id`，`revision` 从 1 开始；未终结的 `checking|updating` 归一为 `interrupted`，已成功的 `restart_pending` 结果必须重放。
+- daemon 内只有一个 update-observation coordinator；自动轮询和 server 下发更新都必须通过它写入。每次语义变化先把完整 snapshot 原子持久化到本机，再唤醒 current Workspace Runner control heartbeat；持久化失败时拒绝开始更新、重启或对外宣称新状态。进程重启后创建新 `session_id`，`revision` 从 1 开始；未终结的 `checking|updating` 归一为 `interrupted`，已成功的 `restart_pending` 结果必须重放。
 - server 以 `(workspace_id, daemon_id)` 保存 daemon-scope 最新事实。register 采用新 session，同 session 只接受更高 revision；完全相同的重复 revision 是零写入幂等，旧 session/较低 revision 忽略，同 revision 不同 payload fail closed 并保留 daemon liveness。旧 daemon 在 register 时没有 envelope 必须清空旧投影，不能继续显示历史“健康”状态。
 - 配置来源、运行资格、当前 phase、最近 outcome 是四个独立 typed 轴，禁止用一个字符串混写。`observed_at` 只在 daemon 语义变化时更新，server 另记 `received_at`；错误只允许有限枚举 code 与长度受限、去空白的安全摘要，不得上传原始命令输出、环境变量或凭据。runtime API 对新 daemon 返回 typed `auto_update`，对旧/未知/非法未来枚举返回 `null`，不能因此丢掉 runtime 行。
-- **物**：migration 231 `daemon_update_status`、register/heartbeat session-revision CAS、`daemon-update-status.json` atomic snapshot、HTTP+WS change wake、runtime typed projection、old-daemon clear、duplicate-zero-write / stale-session / conflicting-revision / interrupted-replay / malformed-future-enum regressions。此阶段只增加观测，不改变 host default、claim barrier、supervisor 激活或 UI。
+- **物**：migration 231 `daemon_update_status`、register/heartbeat session-revision CAS、`daemon-update-status.json` atomic snapshot、Runner control change wake、runtime typed projection、old-daemon clear、duplicate-zero-write / stale-session / conflicting-revision / interrupted-replay / malformed-future-enum regressions。此阶段只增加观测，不改变 host default、claim barrier、supervisor 激活或 UI。
 
 ### 4.13 Daemon 每个 profile 只能有一个 supervisor 拥有 worker generation — `可执行`（② typed state + ③单一 supervisor + ⑤真实进程回归；owner: @Barry）
 - supervisor 必须在整个生命周期持有每个 profile 唯一的 OS advisory lock，并且是唯一调用 worker `Start`、`Wait`、终止和重启的进程。锁冲突必须在 worker 启动前 fail closed；不能依赖 stale PID 文件判断唯一性，也不能把 child `Process.Release` 后失去退出事实。
@@ -554,6 +554,12 @@
 - 对齐 Raft：正在跑的 PATH 二进制就是 Computer。journal 的 source/target 都对不上当前版本时，那是上一次升级留下的诊断记录，启动必须继续，禁止 fail closed，也禁止回滚到旧 source。
 - 当前版本仍是该 journal 的 source 或 target 时，按原相恢复：source 上续 accepted/staged，target 上续 successor，`rollback_pending` 只在这一对版本上才换回 `.prev`。
 - **物**：`machineUpgradeJournalSupersededByRunningPath`；`recoverInterruptedMachineUpgrade`；`TestInterruptedMachineUpgradeRecoveryDoesNotBlockNewerPATHWithStaleRollbackPending`；`TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplicitActivation`。
+
+### 4.19.8 Computer 控制动作只走 current Workspace Runner — `可执行`（② capability + ③单一 carrier + ⑤正反向回归）
+- 声明 `workspace_runner_control_plane_v1` 的 current Runner 是该 Computer-Workspace Binding 内 Runtime heartbeat 与 Server pending action 的唯一 carrier。Runner 每次按当前 Workspace Runtime set 发送，Server 每次重新验证 Workspace、Computer 与 generation；ack 只在同一 Runner socket、同一 Workspace Runtime scope 内消费。
+- 当前 daemon 不启动 HTTP heartbeat loop，也不在 legacy runtime-multiplexed socket 上发送 heartbeat 或消费 heartbeat ack。旧 socket 只保留 task wake、Reminder、文件 RPC 与独立 `daemon:liveness_probe/ack`；liveness 不得调用 pending-action handler。Server 保留 legacy WS/HTTP adapter 仅用于 rolling-upgrade 中的旧 daemon。
+- 控制 heartbeat 必须在 Attachment replay 完成后启动；reconnect replacement 先 fence 旧 socket，再由新 current Runner 恢复。多 Workspace 共用一台 Computer 时每个 Binding 独立发送和鉴权，禁止跨 Workspace 或跨 Computer 执行动作。
+- **物**：`DaemonCapabilityWorkspaceRunnerControlPlane`；`WorkspaceRunner.runControlPlaneHeartbeats`；`HandleDaemonWSHeartbeat` 的 Workspace/Computer/generation fence；`TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat`、`TestWorkspaceRunnerControlHeartbeatUsesExactWorkspaceRuntimeSet`、`TestLegacyRuntimeWakeSocketDoesNotExecuteControlAcknowledgements`、`TestLivenessProbeAcknowledgesWithoutInvokingHeartbeatActions`、`TestWorkspaceRunnerHeartbeatRejectsRuntimeAssignedToAnotherComputer`；现场验收矩阵见 [`docs/daemon-control-plane-validation.md`](daemon-control-plane-validation.md)。
 
 ### 4.19.6 Machine Upgrade 后继校对允许退役 provider — `可执行`（⑤ attest 回归）
 - Workspace 连接集合仍必须与 accept 快照完全一致。

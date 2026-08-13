@@ -667,6 +667,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           onOpenAgentPanel={handleOpenAgentPanel}
           canvasMode={canvasMode}
           activeLens={d5Lens}
+          onActiveLensChange={handleD5LensChange}
+          sessionStatus={session.status}
           sources={sources}
           run={data.run}
           members={fleet.members}

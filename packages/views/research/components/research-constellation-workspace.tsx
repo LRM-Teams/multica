@@ -47,6 +47,7 @@ import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
 import { StarGraphCanvas } from "../star-graph";
+import { TrajectoryExplorer } from "../trajectory-explorer";
 import { STAR_GRAPH_DOM_BUDGET, STAR_GRAPH_MOBILE_DOM_BUDGET, selectVisibleEntityIds } from "../star-graph/lib/star-graph-visible-budget";
 import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
@@ -78,6 +79,8 @@ export function ResearchConstellationWorkspace({
   onOpenAgentPanel,
   canvasMode,
   activeLens,
+  onActiveLensChange,
+  sessionStatus,
   sources,
   run,
   members,
@@ -114,6 +117,8 @@ export function ResearchConstellationWorkspace({
   onOpenAgentPanel: OpenAgentPanelFn;
   canvasMode: CanvasBodyMode;
   activeLens: ResearchD5Lens;
+  onActiveLensChange?: (lens: ResearchD5Lens) => void;
+  sessionStatus?: string;
   sources: ResearchSource[];
   run?: ResearchRunSnapshot;
   members: ResearchFleetMember[];
@@ -470,7 +475,31 @@ export function ResearchConstellationWorkspace({
             retryPending={retryTypedGraphPending}
           />
         ) : null}
-        {canvasModel && !projectionMismatch ? (
+        {canvasModel && !projectionMismatch && activeLens === "lineage" ? (
+          <TrajectoryExplorer
+            nodes={canvasNodes}
+            edges={(typedGraph?.edges ?? []).map((edge) => ({
+              id: edge.id,
+              session_id: edge.session_id,
+              from_node_id: edge.from_node_id,
+              to_node_id: edge.to_node_id,
+              edge_type: edge.edge_type,
+              created_at: edge.created_at,
+            }))}
+            sessionStatus={sessionStatus}
+            selectedId={selectedNode?.id ?? null}
+            onSelect={(nodeId) => {
+              if (nodeId) handleCanvasSelect(nodeId);
+              else onSelectNode(null);
+            }}
+            onOpenNodeDetail={handleCanvasSelect}
+            onJumpToCanvas={(nodeId) => {
+              onActiveLensChange?.("relations");
+              handleCanvasSelect(nodeId);
+            }}
+          />
+        ) : null}
+        {canvasModel && !projectionMismatch && activeLens !== "lineage" ? (
           <StarGraphCanvas
             model={canvasModel}
             selectedNodeId={selectedNode?.id ?? null}

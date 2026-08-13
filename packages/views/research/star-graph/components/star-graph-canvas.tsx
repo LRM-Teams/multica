@@ -51,6 +51,8 @@ import "./star-graph-canvas.css";
 
 export interface StarGraphCanvasProps {
   model: StarCanvasViewModel;
+  /** Stable research-session id used to restore camera state without cross-session leakage. */
+  cameraSessionId?: string;
   selectedNodeId?: string | null;
   onSelectNode?: (nodeId: string) => void;
   onOpenNode?: (nodeId: string) => void;
@@ -86,6 +88,7 @@ const DEFAULT_CAMERA: StarGraphCamera = { x: 0, y: 0, zoom: 1 };
 
 export function StarGraphCanvas({
   model,
+  cameraSessionId,
   selectedNodeId = null,
   onSelectNode,
   onOpenNode,
@@ -112,8 +115,13 @@ export function StarGraphCanvas({
 }: StarGraphCanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const initialCameraRef = useRef(false);
-  const storedViewport = useResearchCanvasStore((s) => s.viewport);
+  const storedViewport = useResearchCanvasStore((s) =>
+    cameraSessionId
+      ? (s.viewportBySession?.[cameraSessionId] ?? null)
+      : s.viewport,
+  );
   const setStoredViewport = useResearchCanvasStore((s) => s.setViewport);
+  const setSessionViewport = useResearchCanvasStore((s) => s.setSessionViewport);
   const canvasFilter = useResearchCanvasStore((s) => s.filter);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [camera, setCameraState] = useState<StarGraphCamera>(
@@ -128,11 +136,15 @@ export function StarGraphCanvas({
     (next: StarGraphCamera | ((current: StarGraphCamera) => StarGraphCamera)) => {
       setCameraState((current) => {
         const resolved = typeof next === "function" ? next(current) : next;
-        setStoredViewport(resolved);
+        if (cameraSessionId && setSessionViewport) {
+          setSessionViewport(cameraSessionId, resolved);
+        } else {
+          setStoredViewport(resolved);
+        }
         return resolved;
       });
     },
-    [setStoredViewport],
+    [cameraSessionId, setSessionViewport, setStoredViewport],
   );
 
   const bounds = useMemo(() => computeEntityBounds(model.entities), [model.entities]);
@@ -219,6 +231,30 @@ export function StarGraphCanvas({
     entities: model.entities,
     storedViewport,
   };
+
+  useEffect(() => {
+    initialCameraRef.current = false;
+    if (storedViewport) {
+      setCameraState(storedViewport);
+      initialCameraRef.current = true;
+      return;
+    }
+    if (!bounds || viewport.width <= 0 || viewport.height <= 0) return;
+    const neighborhoodBounds =
+      initialFitEntityIdList && initialFitEntityIdList.length > 0
+        ? computeEntityBoundsForIds(model.entities, new Set(initialFitEntityIdList))
+        : null;
+    setCamera(fitCameraToBounds(neighborhoodBounds ?? bounds, viewport));
+    initialCameraRef.current = true;
+  }, [
+    bounds,
+    cameraSessionId,
+    initialFitEntityIdList,
+    model.entities,
+    setCamera,
+    storedViewport,
+    viewport,
+  ]);
 
   useEffect(() => {
     const node = rootRef.current;

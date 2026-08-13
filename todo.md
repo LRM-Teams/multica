@@ -297,25 +297,35 @@
     - Issue 详情在子 issue 与 Activity 之间展示「关联笔记」列表，跳转 `paths.noteDetail`
     - 测试：`TestListIssueNoteRefs*`、`note-refs-schema.test.ts`
 
-- [ ] **S3-A4 笔记内统一意图入口**
+- [x] **S3-A4 笔记内统一意图入口**
   - **目标**：落实 D3——一个入口路由到 Editor / Worker / 创建 Issue。
   - **要做**：合并 Slice 1/2 分散入口；意图分类明确，失败时让用户选。
   - **不要做**：再堆互不相关的并列按钮而不路由。
   - **依赖**：S1-A1、S2-A2、现有 Editor
   - **完成标准**：三条路径均可达；路由错误有明确提示。
+  - **已落地（2026-08-13）**：
+    - 顶栏单一「用这篇…」菜单：改这篇笔记 / 按这篇做 / 创建 Issue（用户自选，无自动分类）
+    - Editor：`ContentEditor.openPageAI()`；未配置智能体时 toast + 打开配置
+    - 去掉并列的「创建 Issue」「按这篇做」按钮与页头重复 Worker 项
+    - 测试：`note-intent-entry.test.tsx`
 
-- [ ] **S3-A3 从笔记发起 Research（可选延后）**
+- [x] **S3-A3 从笔记发起 Research（可选延后）** — `deferred`（2026-08-13）
   - **目标**：有 Research 能力的工作区可从笔记开题。
   - **要做**：挂 note 为题面；仍走待审写回合同（若写回笔记）。
   - **不要做**：阻塞 Slice 3 其他项；若排期紧可整项推迟并在本条注明 `deferred`。
   - **依赖**：S2-C1 模式可复用
   - **完成标准**：能创建并带 note 上下文；或明确标记延期。
+  - **延期说明**：Slice 3 其余项已齐；Research 开题不阻塞写回/反向发现/统一意图入口，延至有 Research 产品排期时再开。
 
-- [ ] **S3-W3 文档声明：与 Agent Daily 并行**
+- [x] **S3-W3 文档声明：与 Agent Daily 并行**
   - **目标**：防止后续 AI/人把产品写回与 `memory/daily` 合并。
   - **要做**：在本 todo 或 `docs/` 短文声明两套存储并行、可互链、禁止合并（若已有 `docs/agent-memory-model.md`，加一小节交叉引用即可）。
   - **依赖**：无
   - **完成标准**：文档可被后续实现引用。
+  - **已落地（2026-08-13）**：
+    - `docs/notes-editor-worker-contract.md` §「Product note writeback ≠ Agent Daily」
+    - `docs/agent-memory-model.md` §10 交叉引用
+    - `docs/engineering-principles.md` §4.22 增补 S3-W3 可执行条
 
 ---
 
@@ -366,4 +376,4 @@
 | 3 | Slice 2 完成 → `S3-*` |
 | 4 | 管子稳定后 → `S4-S1` 起验证 |
 
-**当前首期范围：** Slice 1 + Slice 2 已完成（见 PR）；Slice 3 进行中（S3-W1/W2 已勾）。
+**当前首期范围：** Slice 1 + Slice 2 已完成（见 PR）；Slice 3 已完成（S3-A3 Research 延期；其余项已勾）。

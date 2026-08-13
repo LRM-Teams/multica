@@ -27,6 +27,20 @@ export interface CanvasViewport {
   zoom: number;
 }
 
+const MAX_SESSION_VIEWPORTS = 20;
+
+function retainRecentSessionViewports(
+  current: Record<string, CanvasViewport>,
+  sessionId: string,
+  viewport: CanvasViewport,
+): Record<string, CanvasViewport> {
+  const previous = Object.entries(current).filter(([key]) => key !== sessionId);
+  return Object.fromEntries([
+    ...previous.slice(-(MAX_SESSION_VIEWPORTS - 1)),
+    [sessionId, viewport],
+  ]);
+}
+
 /** Display-only filter over the canonical node set (LRM-1497 AC: filter only
  *  changes display, never the canonical graph). */
 export interface ResearchCanvasFilter {
@@ -59,11 +73,14 @@ export function isBlankFilter(filter: ResearchCanvasFilter): boolean {
 type CanvasState = {
   /** World-space viewport; `null` when never set (canvas may fitView itself). */
   viewport: CanvasViewport | null;
+  /** Session-scoped viewports prevent camera state leaking between research runs. */
+  viewportBySession: Record<string, CanvasViewport>;
   /** Currently selected node id (client selection, not canonical). */
   selectedNodeId: string | null;
   /** Current display-only filter. */
   filter: ResearchCanvasFilter;
   setViewport: (viewport: CanvasViewport) => void;
+  setSessionViewport: (sessionId: string, viewport: CanvasViewport) => void;
   clearViewport: () => void;
   selectNode: (nodeId: string | null) => void;
   clearSelection: () => void;
@@ -75,9 +92,18 @@ export const useResearchCanvasStore = create<CanvasState>()(
   persist(
     (set) => ({
       viewport: null,
+      viewportBySession: {},
       selectedNodeId: null,
       filter: emptyCanvasFilter(),
       setViewport: (viewport) => set({ viewport }),
+      setSessionViewport: (sessionId, viewport) =>
+        set((state) => ({
+          viewportBySession: retainRecentSessionViewports(
+            state.viewportBySession,
+            sessionId,
+            viewport,
+          ),
+        })),
       clearViewport: () => set({ viewport: null }),
       selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
       clearSelection: () => set({ selectedNodeId: null }),
@@ -92,6 +118,7 @@ export const useResearchCanvasStore = create<CanvasState>()(
       ),
       partialize: (s) => ({
         viewport: s.viewport,
+        viewportBySession: s.viewportBySession,
         selectedNodeId: s.selectedNodeId,
         filter: s.filter,
       }),

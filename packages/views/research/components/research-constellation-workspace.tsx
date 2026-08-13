@@ -473,6 +473,7 @@ export function ResearchConstellationWorkspace({
         {canvasModel && !projectionMismatch ? (
           <StarGraphCanvas
             model={canvasModel}
+            cameraSessionId={typedGraphSessionId}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasSelect}
             onOpenNode={handleCanvasSelect}

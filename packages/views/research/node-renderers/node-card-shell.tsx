@@ -196,6 +196,7 @@ export function NodeCardShell({
   legend,
   className,
 }: NodeCardShellProps) {
+  const { t } = useT("research");
   const familyVisual = familyVisualFor(family);
   const stateVisual = stateVisualFor(state);
   const stateLabel = t(($) => $.node_card.states[state]);

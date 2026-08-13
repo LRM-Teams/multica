@@ -13,6 +13,8 @@ describe("D5 node deep-link restoration", () => {
       source.indexOf("// LRM-776"),
     );
     expect(effect).toContain("if (!resolved) return");
+    expect(effect).toContain("if (appliedNodeLinkRef.current === linkKey) return");
+    expect(effect).toContain("appliedNodeLinkRef.current = linkKey");
     expect(effect).toContain("selectSessionCanvasNode(sessionId, linkedNodeId)");
     expect(effect).toContain('setD5RailMode("detail")');
     expect(effect).toContain("setD5RailOpen(true)");

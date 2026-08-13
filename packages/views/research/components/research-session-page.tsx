@@ -185,6 +185,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     (s) => s.selectSessionNode,
   );
   const clearCanvasFilter = useResearchCanvasStore((s) => s.clearFilter);
+  const appliedNodeLinkRef = useRef<string | null>(null);
   const typedGraph = useMemo(
     () =>
       typedGraphPages?.pages.length
@@ -295,12 +296,18 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (!data) return;
     const linkedNodeId = nav.searchParams.get("node");
-    if (!linkedNodeId) return;
+    if (!linkedNodeId) {
+      appliedNodeLinkRef.current = null;
+      return;
+    }
+    const linkKey = `${sessionId}:${linkedNodeId}`;
+    if (appliedNodeLinkRef.current === linkKey) return;
     const resolved = resolveResearchCanvasNode(linkedNodeId, {
       snapshotNodes: data.nodes,
       typedGraph: displayTypedGraph,
     });
     if (!resolved) return;
+    appliedNodeLinkRef.current = linkKey;
     selectSessionCanvasNode(sessionId, linkedNodeId);
     setD5RailMode("detail");
     setD5RailOpen(true);

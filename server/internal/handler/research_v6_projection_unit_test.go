@@ -45,3 +45,43 @@ func TestResearchV6RootIDsUsesGoalSubtypeForCompatibilityRoot(t *testing.T) {
 		t.Fatalf("roots=%v", roots)
 	}
 }
+
+func TestMapResearchV6GraphStrictBuildsDeterministicUniqueTopology(t *testing.T) {
+	nodes := []ResearchGraphNodeResp{
+		{ID: "legacy-task", Payload: json.RawMessage(`{"kind":"task","task_id":"task-1"}`)},
+		{ID: "legacy-attempt", Payload: json.RawMessage(`{"kind":"attempt","attempt_id":"attempt-1"}`)},
+	}
+	edges := []ResearchGraphEdgeResp{{ID: "attempt-edge", FromNodeID: "legacy-task", ToNodeID: "legacy-attempt", EdgeType: "attempted_by"}}
+	gotNodes, gotEdges, err := mapResearchV6GraphStrict("run-1", nodes, edges)
+	if err != nil || len(gotNodes) != 2 || len(gotEdges) != 1 {
+		t.Fatalf("nodes=%+v edges=%+v err=%v", gotNodes, gotEdges, err)
+	}
+	if gotEdges[0].FromNodeID != "run-1:task:task-1" || gotEdges[0].ToNodeID != "run-1:attempt:attempt-1" {
+		t.Fatalf("edge=%+v", gotEdges[0])
+	}
+}
+
+func TestMapResearchV6GraphStrictRejectsIdentityCollapseAndDanglingEdges(t *testing.T) {
+	baseNodes := []ResearchGraphNodeResp{
+		{ID: "legacy-a", Payload: json.RawMessage(`{"kind":"task","task_id":"task-1"}`)},
+		{ID: "legacy-b", Payload: json.RawMessage(`{"kind":"attempt","attempt_id":"attempt-1"}`)},
+	}
+	tests := []struct {
+		name  string
+		nodes []ResearchGraphNodeResp
+		edges []ResearchGraphEdgeResp
+	}{
+		{name: "canonical node collapse", nodes: []ResearchGraphNodeResp{baseNodes[0], {ID: "legacy-other", Payload: json.RawMessage(`{"kind":"task","task_id":"task-1"}`)}}},
+		{name: "duplicate source node", nodes: []ResearchGraphNodeResp{baseNodes[0], baseNodes[0]}},
+		{name: "dangling edge", nodes: baseNodes, edges: []ResearchGraphEdgeResp{{ID: "edge", FromNodeID: "legacy-a", ToNodeID: "missing", EdgeType: "depends_on"}}},
+		{name: "duplicate edge", nodes: baseNodes, edges: []ResearchGraphEdgeResp{{ID: "edge", FromNodeID: "legacy-a", ToNodeID: "legacy-b", EdgeType: "depends_on"}, {ID: "edge", FromNodeID: "legacy-a", ToNodeID: "legacy-b", EdgeType: "depends_on"}}},
+		{name: "empty edge type", nodes: baseNodes, edges: []ResearchGraphEdgeResp{{ID: "edge", FromNodeID: "legacy-a", ToNodeID: "legacy-b"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, _, err := mapResearchV6GraphStrict("run-1", tt.nodes, tt.edges); err == nil {
+				t.Fatal("expected projection integrity rejection")
+			}
+		})
+	}
+}

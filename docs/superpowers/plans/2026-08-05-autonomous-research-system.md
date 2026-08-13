@@ -1095,6 +1095,7 @@ surface 矩阵仍未完成。
 - [ ] 为历史 V1–V5 Run 建立只读投影和可恢复路径；不伪造历史 Inquiry/Search/Dispute 数据。
 - [ ] 更新 Run Snapshot，使前端能展示 Question、Hypothesis、Branch、Integration、Dispute、Search 和修订详情。
 - [ ] 实现稳定 Graph Projection Node/Edge schema、Snapshot/Delta、完整节点详情和重建 hash 测试。
+  - [x] N-projection-integrity-1：V5/run-v2 compatibility graph 进入 V6 Snapshot 前执行严格拓扑校验；空/重复 source node、多个 source node 折叠为同一 canonical V6 ID、空/重复 edge、dangling endpoint 和空 edge type 全部 fail closed，不再静默丢 edge 或发布带重复 ID 的可哈希 Snapshot。成功映射按 canonical ID 稳定排序，Edge endpoint 必须引用映射后的 V6 Node ID。完整 30-kind Projection、详情与 Delta 重建一致性仍是后续 N 工作。
 - [ ] 实现固定 Snapshot 分页、Projection Slice、详情按需读取、WebSocket event sequence 续传和缺口 resync。
 - [ ] 实现前端 Delta 幂等消费、乱序暂存、融合/扩散/冲突/失效 transition 映射、视口裁剪和显示分组；显示分组不得写回 canonical Graph。
 - [ ] 使用至少一万节点 fixture 验证分页、Slice、重连、重复/乱序 Delta、缺口重建和浏览器不全量载入。

@@ -416,6 +416,7 @@
 - Research Task 自身的 Attempt 永久失败或耗尽预算后必须进入 `failed` 并记录 failure class；`blocked` 只表示任务尚未执行但因依赖终态等外部前置条件无法继续。两者都属于终态，但投影、详情和失败分析不得混用。
 - 已发生的 Research 生产故障必须保留脱敏、可执行回归和明确 oracle。当前集合覆盖画布重复节点、合法 task result 被 403、永久 dispatch 失败扩散、报告绕过验证、评审缺陷丢失和重复证据低收益；测试与症状的权威映射记录在自主调研实现计划 A3。只写事故描述或只断言 HTTP/任务数量之一均不能替代端到端状态断言。
 - 同一 Run Snapshot 的 canvas Projection 内不得产生重复 node/edge ID，并且重复投影必须保持稳定身份和内容。信息收益只按 canonical graph 的变化计算；相同证据可被幂等接纳为不同 Task 的完成事实，但不得重复增长 Source/Observation/Claim/Evidence，连续零收益必须推进有界饱和计数。
+- V6 Snapshot 映射是拓扑完整性边界：source node/edge 身份必须非空且唯一，不同 source node 不得折叠到同一 canonical ID，所有 edge endpoint 必须存在且 type 非空。任何违反都必须拒绝整个 Snapshot；不得静默跳过 dangling edge 后仍给残缺图生成可信 hash。
 - Research 系统评测必须把 Subject 可见的 Task/Environment 与隐藏 Oracle 分离；Executor、Agent Prompt 和生产策略不能读取 Oracle。固定 Corpus 要版本化并覆盖所有研究模式和已声明干扰，多个 seed 的执行错误必须作为失败样本进入分母，不能被 Runner 跳过。事实/冲突、Claim 可追溯性和来源筛选使用独立 grader；删除 grader、缺少 grader 或跨 Corpus version 比较不能得到“无退化”结论。当前可执行装置位于 `server/internal/researcheval`；生产 Run Adapter、LLM judge、Episode 与 Strategy Promotion 未接入前不得宣称生产策略已经通过系统评测。
 - Research 自主行为评测必须验证可观察事实，不能只匹配最终文案：动作至少保留 actor/kind/target/outcome，图至少保留稳定 Node/Edge 和 V6 注册类型，节点详情必须实际提供用途、小目标、进入条件、方法、输入、动作、执行者、结果、证据、决定、失败、恢复及上下游字段，投影必须提供重建 hash、节点身份、分页规模和缺口恢复读数。固定正例 Executor 只验证 grader 和 Corpus 本身；只有真实生产 Adapter 通过同一隐藏 Oracle 才能声明对应能力完成，不得为生产另写放宽版 grader。
 - 每个交付必须有当前 Contract/Plan 的 Divergence Pass。该 Pass 使用隔离上下文和有界 exploration reserve 提出异质视角 probe；推测只能创建 Question/Hypothesis/Branch/Task，不能直接成为 Claim。

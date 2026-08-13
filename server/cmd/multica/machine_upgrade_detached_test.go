@@ -39,13 +39,17 @@ func TestAcceptReadyDetachedCandidateAcceptsMatchingControlPIDAndVersion(t *test
 	probeDetachedSuccessorAttestation = func(string) (computer.MachineAttestation, error) {
 		return computer.MachineAttestation{ServicePID: child.Process.Pid, ComputerVersion: "v10.0.0", SourceServicePID: os.Getpid()}, nil
 	}
+	commits := 0
 	requestDetachedSuccessorTakeover = func(string, daemon.MachineUpgradeTakeoverProof) (daemon.MachineUpgradeTakeoverProof, error) {
-		committed := expected
-		committed.Phase = "takeover_committed"
-		return committed, nil
+		commits++
+		t.Fatal("matching PID+version still treated commit as completion")
+		return daemon.MachineUpgradeTakeoverProof{}, errors.New("commit must not run")
 	}
 	if err := acceptReadyDetachedCandidate(child, "", "v10.0.0", &expected, expected, map[string]any{"cli_version": "v10.0.0"}); err != nil {
 		t.Fatal(err)
+	}
+	if commits != 0 {
+		t.Fatalf("commit calls = %d, want 0", commits)
 	}
 }
 
@@ -79,6 +83,48 @@ func TestAcceptReadyDetachedCandidateRejectsWrongControlPIDOrVersion(t *testing.
 	}
 	if err := acceptReadyDetachedCandidate(child, "", "v10.0.0", &expected, expected, map[string]any{"cli_version": "v10.0.0"}); err == nil {
 		t.Fatal("wrong control version was accepted")
+	}
+}
+
+func TestAcceptReadyDetachedCandidateLegacyStillCommits(t *testing.T) {
+	if os.Getenv("MULTICA_TEST_DETACHED_CANDIDATE_SLEEPER") == "1" {
+		time.Sleep(time.Minute)
+		return
+	}
+	child := exec.Command(os.Args[0], "-test.run=TestAcceptReadyDetachedCandidateLegacyStillCommits")
+	child.Env = append(os.Environ(), "MULTICA_TEST_DETACHED_CANDIDATE_SLEEPER=1")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	expected := daemon.MachineUpgradeTakeoverProof{
+		UpgradeID: "upgrade-1", Generation: "generation-a", ComputerID: "daemon-1",
+		PredecessorComputerGeneration: 11, CandidateComputerGeneration: 12,
+		CandidatePID: child.Process.Pid, TargetVersion: "v10.0.0",
+		WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
+	}
+	originalProbe := probeDetachedSuccessorAttestation
+	originalRequest := requestDetachedSuccessorTakeover
+	t.Cleanup(func() {
+		probeDetachedSuccessorAttestation = originalProbe
+		requestDetachedSuccessorTakeover = originalRequest
+	})
+	probeDetachedSuccessorAttestation = func(string) (computer.MachineAttestation, error) {
+		return computer.MachineAttestation{}, errors.New("old successor has no control answer")
+	}
+	commits := 0
+	requestDetachedSuccessorTakeover = func(string, daemon.MachineUpgradeTakeoverProof) (daemon.MachineUpgradeTakeoverProof, error) {
+		commits++
+		committed := expected
+		committed.Phase = "takeover_committed"
+		return committed, nil
+	}
+	health := map[string]any{"cli_version": "v10.0.0", "machine_upgrade_takeover": expected}
+	if err := acceptReadyDetachedCandidate(child, "", "v10.0.0", &expected, expected, health); err != nil {
+		t.Fatal(err)
+	}
+	if commits != 1 {
+		t.Fatalf("legacy commit calls = %d, want 1", commits)
 	}
 }
 

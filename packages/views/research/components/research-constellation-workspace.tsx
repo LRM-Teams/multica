@@ -56,6 +56,7 @@ import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
 import { ResearchCanvasProjectionMismatch } from "./research-canvas-projection-mismatch";
+import { ResearchCanvasStaleNotice } from "./research-canvas-stale-notice";
 import { ResearchD5MobileRail, ResearchD5Rail } from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
 import "./research-d5-layout.css";
@@ -148,6 +149,7 @@ export function ResearchConstellationWorkspace({
   const hostRef = useRef<HTMLDivElement>(null);
   const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
   const previousLayoutRef = useRef<StarGraphLayoutResult | undefined>(undefined);
+  const projectionWasStaleRef = useRef(false);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [graphLiveMessage, setGraphLiveMessage] = useState("");
   const [inspectorAgentId, setInspectorAgentId] = useState<string | null>(null);
@@ -251,6 +253,18 @@ export function ResearchConstellationWorkspace({
     [typedGraph, viewport, effectiveRailWidth],
   );
   const canvasModel = canvasBuild?.model ?? null;
+
+  useEffect(() => {
+    if (typedError && canvasModel) {
+      projectionWasStaleRef.current = true;
+      setGraphLiveMessage(t(($) => $.d5.canvas.stale_announcement));
+      return;
+    }
+    if (!typedError && projectionWasStaleRef.current) {
+      projectionWasStaleRef.current = false;
+      setGraphLiveMessage(t(($) => $.d5.canvas.recovered_announcement));
+    }
+  }, [canvasModel, t, typedError]);
 
   // react-doctor-disable-next-line react-doctor/no-event-handler -- incremental layout seed is derived from canvas build output, not a click/key handler.
   useEffect(() => {
@@ -602,6 +616,12 @@ export function ResearchConstellationWorkspace({
                 if (inspectorRow) setInspectorAgentId(null);
               },
             }}
+          />
+        ) : null}
+        {canvasModel && !projectionMismatch && typedError ? (
+          <ResearchCanvasStaleNotice
+            onRetry={onRetryTypedGraph}
+            retryPending={retryTypedGraphPending}
           />
         ) : null}
         {showForming ? (

@@ -1093,6 +1093,10 @@
     "canvas": {
       "loading": "Loading constellation…",
       "error": "Could not load the typed research graph.",
+      "stale_title": "Constellation may be out of date.",
+      "stale_body": "The last loaded graph remains visible while refresh is unavailable.",
+      "stale_announcement": "Constellation refresh failed. The last loaded graph remains visible.",
+      "recovered_announcement": "Constellation refreshed and is current again.",
       "projection_mismatch_title": "Star-map projection unavailable",
       "projection_mismatch_body": "The session snapshot has graph nodes, but the typed constellation projection did not arrive. Retry or wait for the next sync.",
       "projection_mismatch_diagnostics": "Snapshot nodes: {{snapshotCount}} · Typed nodes: {{typedCount}}"

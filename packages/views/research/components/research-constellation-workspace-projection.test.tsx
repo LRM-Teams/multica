@@ -221,7 +221,8 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
 });
 
 describe("ResearchConstellationWorkspace local theme", () => {
-  it("mounts the D5 workspace shell inside the session canvas host", () => {
+  it("keeps a cached D5 canvas mounted and retryable after refresh failure", async () => {
+    const onRetry = vi.fn();
     render(
       <ResearchConstellationWorkspace
         typedGraph={{
@@ -270,7 +271,8 @@ describe("ResearchConstellationWorkspace local theme", () => {
           },
         } satisfies TypedGraphResponse}
         typedLoading={false}
-        typedError={false}
+        typedError
+        onRetryTypedGraph={onRetry}
         snapshotNodes={snapshotNodes}
         selectedNode={null}
         onSelectNode={() => {}}
@@ -288,5 +290,8 @@ describe("ResearchConstellationWorkspace local theme", () => {
 
     expect(screen.getByTestId("research-session-canvas-host").className).toContain("d5-canvas-host");
     expect(screen.getByTestId("star-graph-canvas")).toBeTruthy();
+    expect(screen.getByTestId("research-canvas-stale-notice")).toBeTruthy();
+    await userEvent.click(screen.getByTestId("research-canvas-stale-retry"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

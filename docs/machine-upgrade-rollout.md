@@ -88,6 +88,23 @@ generation, a distinct restored daemon generation, and the accepted runtime
 set to prove live registration. Until then the operation stays
 `rollback_pending`, rather than becoming terminal.
 
+## Restart and pre-activation failure recovery
+
+`multica computer restart` preserves the same single-owner boundary as upgrade
+handoff: when a resident was observed, its control port must be proven released
+before a successor generation is allocated or launched. A graceful shutdown
+request without that stop proof is an error, not permission to race another
+resident.
+
+The durable journal is a pending-operation marker, not a permanent startup
+lock. An `accepted` or `staged` operation has not mutated Active. Once the
+server acknowledges that exact operation as `failed`, the Computer clears the
+matching local marker by operation ID, accepted generation, resolved target,
+and accepted Runtime and Workspace sets. If failure reporting was not
+acknowledged, or any identity field differs, recovery retains the marker and
+fails closed. `handoff`, `candidate_ready`, and `rollback_pending` never use
+this pre-activation shortcut because they require successor or rollback proof.
+
 ## Superseded recovery markers
 
 A retained `candidate_ready` journal may outlive its completed server operation

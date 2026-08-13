@@ -504,7 +504,19 @@ func (d *Daemon) failMachineUpgrade(ctx context.Context, runtimeID, upgradeID, c
 	if cause != nil {
 		reportError = cause.Error()
 	}
-	_ = d.client.ReportMachineUpgradeProgress(ctx, runtimeID, upgradeID, "failed", code, reportError)
+	if err := d.client.ReportMachineUpgradeProgress(ctx, runtimeID, upgradeID, "failed", code, reportError); err != nil {
+		if d.logger != nil {
+			d.logger.Warn("machine upgrade failure report rejected", "upgrade_id", upgradeID, "error", err)
+		}
+		return
+	}
+	journal, err := d.currentMachineUpgradeJournal()
+	if err != nil || journal == nil || journal.ID != upgradeID || (journal.Phase != "accepted" && journal.Phase != "staged") {
+		return
+	}
+	if err := d.compareAndClearMachineUpgradeJournal(journal); err != nil && d.logger != nil {
+		d.logger.Warn("could not clear acknowledged pre-activation Machine Upgrade journal", "upgrade_id", upgradeID, "error", err)
+	}
 }
 
 // appendMachineUpgradeEvent records one Machine Upgrade lifecycle transition

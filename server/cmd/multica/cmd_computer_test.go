@@ -1,10 +1,56 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
+
+func TestCommandTestsDoNotConstructRealComputerLifecycle(t *testing.T) {
+	packages, err := parser.ParseDir(token.NewFileSet(), ".", func(info fs.FileInfo) bool {
+		return strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pkg := range packages {
+		for filename, file := range pkg.Files {
+			ast.Inspect(file, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || (selector.Sel.Name != "Stop" && selector.Sel.Name != "Restart" && selector.Sel.Name != "StartBackground") {
+					return true
+				}
+				address, ok := selector.X.(*ast.ParenExpr)
+				if !ok {
+					return true
+				}
+				unary, ok := address.X.(*ast.UnaryExpr)
+				if !ok || unary.Op != token.AND {
+					return true
+				}
+				literal, ok := unary.X.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				lifecycle, ok := literal.Type.(*ast.SelectorExpr)
+				pkg, packageOK := lifecycle.X.(*ast.Ident)
+				if ok && packageOK && pkg.Name == "computer" && lifecycle.Sel.Name == "Lifecycle" {
+					t.Errorf("%s constructs a real Computer lifecycle in a command test; inject the lifecycle seam", filename)
+				}
+				return true
+			})
+		}
+	}
+}
 
 func TestComputerUpgradeCommandUsesBoundComputer(t *testing.T) {
 	if got, want := computerUpgradeCmd.Use, "upgrade"; got != want {

@@ -4697,11 +4697,35 @@ export class ApiClient {
   async getResearchSessionSnapshot(
     id: string,
   ): Promise<import("../types/research").ResearchSessionSnapshot> {
-    const { ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT } = await import("../research/schemas");
+    const { ResearchSessionSnapshotSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}`);
-    return parseWithFallback(raw, ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT, {
-      endpoint: "GET /api/research/sessions/:id",
-    });
+    const parsed = ResearchSessionSnapshotSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(
+        "GET /api/research/sessions/:id response failed schema validation",
+      );
+    }
+    const data = parsed.data;
+    const sessionScoped = [
+      ...data.nodes,
+      ...data.edges,
+      ...data.sources,
+      ...data.evals,
+      ...data.messages,
+      ...(data.report ? [data.report] : []),
+    ];
+    const hasSessionMismatch =
+      data.session.id !== id ||
+      sessionScoped.some(
+        (entity) => entity.session_id !== "" && entity.session_id !== id,
+      ) ||
+      (data.run?.run.session_id != null && data.run.run.session_id !== id);
+    if (hasSessionMismatch) {
+      throw new Error(
+        "GET /api/research/sessions/:id response failed session validation",
+      );
+    }
+    return data;
   }
 
   async getResearchPresence(

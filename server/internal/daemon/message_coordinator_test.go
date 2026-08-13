@@ -200,10 +200,6 @@ func (r *preparingResidentMessageRuntime) PrepareMessageInput(ctx context.Contex
 	if _, hasDeadline := ctx.Deadline(); hasDeadline {
 		return errors.New("resident Message preparation inherited the native acceptance deadline")
 	}
-	if emit != nil {
-		emit(agent.Message{Type: agent.MessageCompactionStarted})
-		emit(agent.Message{Type: agent.MessageCompactionFinished})
-	}
 	r.mu.Lock()
 	r.prepared = true
 	r.mu.Unlock()
@@ -231,19 +227,18 @@ func TestRuntimePoolPreparesResidentInputOutsideNativeAcceptanceTimeout(t *testi
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	var observed []agent.MessageType
 	if err := pool.handoffIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
-		nil, nil,
-		func(message agent.Message) { observed = append(observed, message.Type) },
-		nil,
+		nil, nil, nil, nil,
 	); err != nil {
 		t.Fatalf("handoffIdleMessages: %v", err)
 	}
-	want := []agent.MessageType{agent.MessageCompactionStarted, agent.MessageCompactionFinished}
-	if !reflect.DeepEqual(observed, want) {
-		t.Fatalf("preparation Activity = %v, want %v", observed, want)
+	backend.mu.Lock()
+	prepared := backend.prepared
+	backend.mu.Unlock()
+	if !prepared {
+		t.Fatal("PrepareMessageInput must still run outside the native acceptance deadline")
 	}
 }
 
@@ -269,6 +264,52 @@ func (r *failingCompactionPreparationRuntime) AcceptMessageBatch(context.Context
 func (r *failingCompactionPreparationRuntime) ForceKill() error {
 	r.killCalls++
 	return nil
+}
+
+type emptyTurnAfterCompactRuntime struct{}
+
+func (r *emptyTurnAfterCompactRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *emptyTurnAfterCompactRuntime) PrepareMessageInput(_ context.Context, emit func(agent.Message)) error {
+	if emit != nil {
+		emit(agent.Message{Type: agent.MessageCompactionStarted})
+		emit(agent.Message{Type: agent.MessageCompactionFinished})
+	}
+	return nil
+}
+
+func (r *emptyTurnAfterCompactRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	done := make(chan error, 1)
+	done <- agent.ErrResidentTurnNoSemanticWork
+	close(done)
+	return agent.ResidentMessageAcceptance{Done: done}, nil
+}
+
+func (r *emptyTurnAfterCompactRuntime) ForceKill() error { return nil }
+
+func TestRuntimePoolCompactThenEmptyTurnDoesNotAcceptDelivery(t *testing.T) {
+	backend := &emptyTurnAfterCompactRuntime{}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	accepted := false
+	err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1",
+		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
+		nil,
+		func() { accepted = true },
+		nil,
+		nil,
+	)
+	if !errors.Is(err, agent.ErrResidentTurnNoSemanticWork) {
+		t.Fatalf("handoff error = %v, want ErrResidentTurnNoSemanticWork", err)
+	}
+	if accepted {
+		t.Fatal("compaction-only empty turn must not persist a Context Boundary receipt")
+	}
 }
 
 func TestRuntimePoolCompactionPreparationFailureDoesNotRestartResidentProcess(t *testing.T) {

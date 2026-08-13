@@ -52,7 +52,8 @@ const listAgentProviderBlockByIDs = `-- name: ListAgentProviderBlockByIDs :many
 SELECT id, provider_blocked_until, provider_block_detail
 FROM agent
 WHERE id = ANY($1::uuid[])
-  AND provider_block_detail <> ''
+  AND btrim(COALESCE(provider_block_detail, '')) <> ''
+  AND lower(btrim(provider_block_detail)) NOT IN ('{}', '[]', 'null', 'undefined', '""')
   AND (provider_blocked_until IS NULL OR provider_blocked_until > now())
 `
 

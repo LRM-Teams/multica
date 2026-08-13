@@ -647,7 +647,7 @@ func TestPiRPCBackendCompact(t *testing.T) {
 	}
 }
 
-func TestPiRPCBackendPreparesMessageInputWithVisibleCompactionLifecycle(t *testing.T) {
+func TestPiRPCBackendCompactsAfterCompletedTurnNotBeforeAccept(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pi")
 	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
@@ -661,18 +661,26 @@ func TestPiRPCBackendPreparesMessageInputWithVisibleCompactionLifecycle(t *testi
 	if err != nil {
 		t.Fatalf("initialize Pi RPC: %v", err)
 	}
+	var lifecycle []Message
+	for msg := range session.Messages {
+		if msg.Type == MessageCompactionStarted || msg.Type == MessageCompactionFinished {
+			lifecycle = append(lifecycle, msg)
+		}
+	}
 	if result := <-session.Result; result.Status != "completed" {
 		t.Fatalf("initialize result = %+v", result)
 	}
-
-	var lifecycle []Message
+	if len(lifecycle) != 2 || lifecycle[0].Type != MessageCompactionStarted || lifecycle[1].Type != MessageCompactionFinished || lifecycle[1].Content != "compacted summary" {
+		t.Fatalf("post-turn lifecycle = %+v, want started then finished with summary", lifecycle)
+	}
+	var prep []Message
 	if err := b.PrepareMessageInput(context.Background(), func(message Message) {
-		lifecycle = append(lifecycle, message)
+		prep = append(prep, message)
 	}); err != nil {
 		t.Fatalf("PrepareMessageInput: %v", err)
 	}
-	if len(lifecycle) != 2 || lifecycle[0].Type != MessageCompactionStarted || lifecycle[1].Type != MessageCompactionFinished || lifecycle[1].Content != "compacted summary" {
-		t.Fatalf("preparation lifecycle = %+v, want started then finished with summary", lifecycle)
+	if len(prep) != 0 {
+		t.Fatalf("PrepareMessageInput must not compact, got %+v", prep)
 	}
 }
 

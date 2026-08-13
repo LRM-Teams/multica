@@ -27,6 +27,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 // Mirrors AGENT_DESCRIPTION_MAX_LENGTH in packages/core/agents/constants.ts
@@ -281,7 +282,7 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 			resps[idx].RuntimeStatus = rt.Status
 			resps[idx].RuntimeLastSeenAt = timestampToPtr(rt.LastSeenAt)
 			block := providerBlockByAgent[resps[idx].ID]
-			if block.ProviderBlockDetail != "" {
+			if taskfailure.ProviderLockDetailActive(block.ProviderBlockDetail) {
 				resps[idx].ProviderBlockDetail = block.ProviderBlockDetail
 				if block.ProviderBlockedUntil.Valid {
 					resps[idx].ProviderBlockedUntil = timestampToPtr(block.ProviderBlockedUntil)

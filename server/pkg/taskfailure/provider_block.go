@@ -1,6 +1,7 @@
 package taskfailure
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
@@ -51,14 +52,41 @@ func ParseProviderBlockedUntil(errText string, now time.Time, loc *time.Location
 }
 
 // ProviderLockActive is the read-time predicate for sticky provider lock.
-// detail empty ⇒ unlocked. until NULL while detail set ⇒ locked, unknown end.
-// until known and elapsed ⇒ unlocked.
+// Meaningless detail (empty, whitespace, or a blank JSON placeholder such as
+// "{}") ⇒ unlocked. until NULL while a real detail is set ⇒ locked, unknown
+// end. until known and elapsed ⇒ unlocked.
 func ProviderLockActive(detail string, until time.Time, untilValid bool, now time.Time) bool {
-	if strings.TrimSpace(detail) == "" {
+	if !ProviderLockDetailActive(detail) {
 		return false
 	}
 	if !untilValid {
 		return true
 	}
 	return until.After(now)
+}
+
+// ProviderLockDetailActive reports whether detail is a real lock reason.
+// Blank JSON leftovers ("{}", "[]", null) are not quota copy — treating them
+// as locks paints Online agents Offline.
+func ProviderLockDetailActive(detail string) bool {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		return false
+	}
+	switch strings.ToLower(trimmed) {
+	case "null", "undefined", `""`:
+		return false
+	}
+	var parsed any
+	if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+		switch value := parsed.(type) {
+		case map[string]any:
+			return len(value) > 0
+		case []any:
+			return len(value) > 0
+		case nil:
+			return false
+		}
+	}
+	return true
 }

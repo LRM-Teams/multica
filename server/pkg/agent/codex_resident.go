@@ -43,6 +43,7 @@ type codexAppServerBackend struct {
 	process     atomic.Pointer[codexAppServerProcess]
 	running     atomic.Bool
 	forceKilled atomic.Bool
+	compact     compactionAttemptState
 }
 
 type codexAppServerProcess struct {
@@ -103,7 +104,7 @@ func (b *codexAppServerBackend) Execute(ctx context.Context, prompt string, opts
 		defer close(msgCh)
 		defer close(resCh)
 		started := time.Now()
-		result := b.executeTurn(ctx, prompt, opts, msgCh, nil, true)
+		result := b.executeTurn(ctx, prompt, opts, msgCh, nil)
 		result.DurationMs = time.Since(started).Milliseconds()
 		// Release before publish so an immediate follow-up turn does not race
 		// a still-true running flag (same ordering as cursor/pi residents).
@@ -113,19 +114,12 @@ func (b *codexAppServerBackend) Execute(ctx context.Context, prompt string, opts
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
 }
 
-// PrepareMessageInput completes proactive context compaction before the daemon
-// starts its bounded native-acceptance window. This gate is deliberately
-// separate from turn/start: a slow compaction is runtime progress, not failed
-// Message acceptance and not a reason to replace the Codex process.
+// PrepareMessageInput is a delivery-path hook only. Context compaction runs
+// after a completed turn, not here: a pre-accept compact turns every wake
+// into "Compacting context" and can starve the actual reply.
 func (b *codexAppServerBackend) PrepareMessageInput(ctx context.Context, emit func(Message)) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	p := b.process.Load()
-	if p == nil || !shouldProactivelyCompact(p.client.currentRuntimeStats()) {
-		return nil
-	}
-	return b.compactRuntime(ctx, p, emit)
+	_ = emit
+	return ctx.Err()
 }
 
 // AcceptMessageBatch starts one native Codex app-server turn for canonical
@@ -166,11 +160,15 @@ func (b *codexAppServerBackend) acceptIdleInputPrompt(ctx context.Context, promp
 		defer cancelTurn()
 		result := b.executeTurn(turnCtx, prompt, b.cfg.ResidentOptions, msgCh, func(err error) {
 			accepted <- err
-		}, false)
+		})
 		close(msgCh)
 		b.running.Store(false)
 		if result.Status == "completed" {
-			done <- nil
+			if result.HadSemanticWork {
+				done <- nil
+			} else {
+				done <- ErrResidentTurnNoSemanticWork
+			}
 		} else if result.Error != "" {
 			done <- errors.New(result.Error)
 		} else {
@@ -211,8 +209,7 @@ func (b *codexAppServerBackend) runtimeAlive() (bool, bool) {
 	return processAlive(p.cmd.Process)
 }
 
-func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message, reportAcceptance func(error), allowProactiveCompaction bool) Result {
-	hadResidentProcess := b.process.Load() != nil
+func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message, reportAcceptance func(error)) Result {
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
 		if reportAcceptance != nil {
@@ -223,16 +220,15 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 		}
 		return Result{Status: "failed", Error: err.Error()}
 	}
-	if allowProactiveCompaction && hadResidentProcess && shouldProactivelyCompact(p.client.currentRuntimeStats()) {
-		if err := b.compactRuntime(ctx, p, func(message Message) { trySend(msgCh, message) }); err != nil {
-			b.cfg.Logger.Warn("proactive runtime context compaction failed; continuing turn", "provider", "codex", "error", err)
-		}
-	}
 
 	var outputMu sync.Mutex
 	var output strings.Builder
+	var sawSemantic atomic.Bool
 	p.stateMu.Lock()
 	p.message = func(msg Message) {
+		if messageHasSemanticWork(msg) {
+			sawSemantic.Store(true)
+		}
 		if msg.Type == MessageText {
 			outputMu.Lock()
 			output.WriteString(msg.Content)
@@ -483,11 +479,39 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 		usageMap = map[string]TokenUsage{model: u}
 	}
 
+	hadSemantic := sawSemantic.Load() || strings.TrimSpace(finalOutput) != ""
+	if hadSemantic {
+		b.maybeCompactAfterTurn(p, func(message Message) { trySend(msgCh, message) })
+	}
+
 	return Result{
-		Status:    "completed",
-		Output:    finalOutput,
-		SessionID: threadID,
-		Usage:     usageMap,
+		Status:          "completed",
+		Output:          finalOutput,
+		SessionID:       threadID,
+		Usage:           usageMap,
+		HadSemanticWork: hadSemantic,
+	}
+}
+
+func (b *codexAppServerBackend) maybeCompactAfterTurn(p *codexAppServerProcess, emit func(Message)) {
+	if p == nil || !shouldProactivelyCompactAt(p.client.currentRuntimeStats(), &b.compact) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), postTurnCompactionTimeout)
+	defer cancel()
+	err := b.compactRuntime(ctx, p, emit)
+	b.compact.recordAttempt(err != nil, p.client.currentRuntimeStats())
+	if err != nil && b.cfg.Logger != nil {
+		b.cfg.Logger.Warn("post-turn runtime context compaction failed; leaving session as-is", "provider", "codex", "error", err)
+	}
+}
+
+func messageHasSemanticWork(msg Message) bool {
+	switch msg.Type {
+	case MessageText, MessageToolUse, MessageThinking:
+		return strings.TrimSpace(msg.Content) != "" || msg.Tool != ""
+	default:
+		return false
 	}
 }
 

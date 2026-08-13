@@ -246,7 +246,8 @@ func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context
 			  AND session.status = 'active'
 			  AND event.status IN ('pending', 'failed')
 			  AND NOT (
-			    agent_row.provider_block_detail <> ''
+			    btrim(COALESCE(agent_row.provider_block_detail, '')) <> ''
+			    AND lower(btrim(agent_row.provider_block_detail)) NOT IN ('{}', '[]', 'null', 'undefined', '""')
 			    AND (agent_row.provider_blocked_until IS NULL OR agent_row.provider_blocked_until > now())
 			  )
 			  AND NOT EXISTS (
@@ -766,7 +767,8 @@ func (h *Handler) countReadyAgentInboxEventsForRuntime(ctx context.Context, runt
 		  AND session.status = 'active'
 		  AND event.status IN ('pending', 'failed')
 		  AND NOT (
-		    agent_row.provider_block_detail <> ''
+		    btrim(COALESCE(agent_row.provider_block_detail, '')) <> ''
+		    AND lower(btrim(agent_row.provider_block_detail)) NOT IN ('{}', '[]', 'null', 'undefined', '""')
 		    AND (agent_row.provider_blocked_until IS NULL OR agent_row.provider_blocked_until > now())
 		  )`, runtime.ID).Scan(&count)
 	return count, err

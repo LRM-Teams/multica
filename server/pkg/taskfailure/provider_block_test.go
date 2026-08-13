@@ -61,3 +61,19 @@ func TestProviderLockActive(t *testing.T) {
 		t.Fatal("elapsed until must unlock")
 	}
 }
+
+func TestProviderLockActiveRejectsBlankJSONPlaceholders(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	for _, detail := range []string{"{}", "{ }", "[]", "null", "\"\"", " \n\t "} {
+		if ProviderLockActive(detail, time.Time{}, false, now) {
+			t.Fatalf("placeholder detail %q must be unlocked", detail)
+		}
+		if ProviderLockDetailActive(detail) {
+			t.Fatalf("ProviderLockDetailActive(%q) = true, want false", detail)
+		}
+	}
+	if !ProviderLockDetailActive("429 quota exceeded") {
+		t.Fatal("real quota copy must stay a lock detail")
+	}
+}

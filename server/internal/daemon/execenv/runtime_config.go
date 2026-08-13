@@ -289,6 +289,10 @@ func RenderTurnContext(ctx TaskContextForEnv) string {
 		b.WriteString(boundedPromptText(memories.String(), turnMemorySnapshotMaxBytes, "promoted memory snapshot"))
 		b.WriteString("\n\n")
 	}
+	if strings.TrimSpace(ctx.ChatSessionID) != "" && strings.TrimSpace(ctx.ChannelID) == "" {
+		b.WriteString("## Delivery\n\n")
+		b.WriteString("This turn is Standalone Agent Chat. Final assistant output is delivered to the current chat session automatically. Do not run `multica message send` for this reply.\n\n")
+	}
 	return b.String()
 }
 

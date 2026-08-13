@@ -4,15 +4,13 @@ import { useMemo } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   chatSessionsOptions,
-  chatTranscriptOptions,
-  isTaskMessageTaskId,
   pendingChatTaskOptions,
 } from "@multica/core/chat/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { StreamingMarkdown } from "@multica/ui/markdown";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
-import { coalesceStreamText, researchWakeChatTitle } from "../lib/research-stream";
+import { researchWakeChatTitle } from "../lib/research-stream";
 
 /**
  * Live agent output for research fleet wakes. Subscribes to the wake chat
@@ -48,20 +46,14 @@ export function ResearchLiveStream({ sessionId }: { sessionId: string }) {
   const live = useMemo(() => {
     for (let i = 0; i < wakeSessionIds.length; i++) {
       const pending = pendingQueries[i]?.data;
-      const taskId = pending?.inbox_event_id || pending?.task_id;
-      if (isTaskMessageTaskId(taskId)) {
-        return { chatSessionId: wakeSessionIds[i]!, eventId: taskId };
+      if (pending?.pending === true) {
+        return { chatSessionId: wakeSessionIds[i]! };
       }
     }
     return null;
   }, [pendingQueries, wakeSessionIds]);
 
-  const { data: taskMessages = [] } = useQuery({
-    ...chatTranscriptOptions(live?.chatSessionId ?? "", live?.eventId ?? ""),
-    enabled: !!live,
-  });
-
-  const streamText = useMemo(() => coalesceStreamText(taskMessages), [taskMessages]);
+  const streamText = "";
   const isGenerating = !!live;
 
   if (!isGenerating && !streamText) return null;

@@ -21,6 +21,9 @@ func (h *Handler) HandleAgentDeliveryAck(ctx context.Context, identity daemonws.
 	if err := h.requireAgentMessageDaemonScope(ctx, identity, ack.AgentID); err != nil {
 		return err
 	}
+	if messageID, ok := standaloneChatDeliveryMessageID(ack.DeliveryID, ack.AgentID); ok {
+		return h.persistStandaloneChatDeliveryAck(ctx, identity, ack, messageID)
+	}
 	messageID, ok := canonicalDeliveryMessageID(ack.DeliveryID, ack.AgentID)
 	if !ok {
 		return errors.New("invalid canonical delivery acknowledgement")

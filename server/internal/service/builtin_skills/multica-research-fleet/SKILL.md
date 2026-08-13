@@ -25,6 +25,10 @@ unscoped live-session read is rejected:
 multica research session get <session-id> --attempt-id <attempt-id> --output json
 ```
 
+The server verifies that the current task credential's active Inbox delivery
+is bound to that exact Session, Task, and Attempt. A credential from another
+parallel or historical Attempt cannot reuse the same Agent identity to read it.
+
 The snapshot's `run.contract`, `run.method`, `run.sources`,
 `run.observations`, and `run.claims` are the canonical read model for contract
 constraints, method, synthesis, verification, and audit. Source text is

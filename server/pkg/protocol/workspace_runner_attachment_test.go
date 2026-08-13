@@ -72,28 +72,28 @@ func TestWorkspaceRunnerAgentAttachmentPayloadRoundTrips(t *testing.T) {
 		{
 			name: "attach",
 			value: WorkspaceRunnerAgentAttachPayload{
-				AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3, CorrelationID: "correlation-1",
+				AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3,
 			},
 			new: func() interface{ Validate() error } { return &WorkspaceRunnerAgentAttachPayload{} },
 		},
 		{
 			name: "attached",
 			value: WorkspaceRunnerAgentAttachedPayload{
-				AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3, CorrelationID: "correlation-1",
+				AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3,
 			},
 			new: func() interface{ Validate() error } { return &WorkspaceRunnerAgentAttachedPayload{} },
 		},
 		{
 			name: "detach",
 			value: WorkspaceRunnerAgentDetachPayload{
-				AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3, CorrelationID: "correlation-2",
+				AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3,
 			},
 			new: func() interface{ Validate() error } { return &WorkspaceRunnerAgentDetachPayload{} },
 		},
 		{
 			name: "detached",
 			value: WorkspaceRunnerAgentDetachedPayload{
-				AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3, CorrelationID: "correlation-2",
+				AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3,
 			},
 			new: func() interface{ Validate() error } { return &WorkspaceRunnerAgentDetachedPayload{} },
 		},
@@ -111,7 +111,7 @@ func TestWorkspaceRunnerAgentAttachmentPayloadRoundTrips(t *testing.T) {
 			if err := json.Unmarshal(raw, &fields); err != nil {
 				t.Fatal(err)
 			}
-			if want := []string{"agentId", "runtimeId", "attachmentGeneration", "lifecycleSeq", "correlationId"}; !sameJSONFields(fields, want) {
+			if want := []string{"agentId", "runtimeId", "attachmentGeneration", "lifecycleSeq"}; !sameJSONFields(fields, want) {
 				t.Fatalf("wire fields = %v, want %v; JSON=%s", mapKeys(fields), want, raw)
 			}
 			decoded := test.new()
@@ -127,15 +127,14 @@ func TestWorkspaceRunnerAgentAttachmentPayloadRoundTrips(t *testing.T) {
 
 func TestWorkspaceRunnerAgentAttachmentValidationMatrix(t *testing.T) {
 	valid := WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "correlation-1",
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
 	}
 	invalid := []WorkspaceRunnerAgentAttachPayload{
-		{RuntimeID: valid.RuntimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: valid.CorrelationID},
-		{AgentID: valid.AgentID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: valid.CorrelationID},
-		{AgentID: valid.AgentID, RuntimeID: valid.RuntimeID, LifecycleSeq: 1, CorrelationID: valid.CorrelationID},
-		{AgentID: valid.AgentID, RuntimeID: valid.RuntimeID, AttachmentGeneration: -1, LifecycleSeq: 1, CorrelationID: valid.CorrelationID},
-		{AgentID: valid.AgentID, RuntimeID: valid.RuntimeID, AttachmentGeneration: 1, CorrelationID: valid.CorrelationID},
-		{AgentID: valid.AgentID, RuntimeID: valid.RuntimeID, AttachmentGeneration: 1, LifecycleSeq: 1},
+		{RuntimeID: valid.RuntimeID, AttachmentGeneration: 1, LifecycleSeq: 1},
+		{AgentID: valid.AgentID, AttachmentGeneration: 1, LifecycleSeq: 1},
+		{AgentID: valid.AgentID, RuntimeID: valid.RuntimeID, LifecycleSeq: 1},
+		{AgentID: valid.AgentID, RuntimeID: valid.RuntimeID, AttachmentGeneration: -1, LifecycleSeq: 1},
+		{AgentID: valid.AgentID, RuntimeID: valid.RuntimeID, AttachmentGeneration: 1},
 	}
 	for index, attach := range invalid {
 		values := []interface{ Validate() error }{
@@ -154,7 +153,7 @@ func TestWorkspaceRunnerAgentAttachmentValidationMatrix(t *testing.T) {
 
 func TestWorkspaceRunnerAgentAttachAndStartPayloadsRejectCrossDecode(t *testing.T) {
 	attachRaw, err := json.Marshal(WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "correlation-1",
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +166,7 @@ func TestWorkspaceRunnerAgentAttachAndStartPayloadsRejectCrossDecode(t *testing.
 		t.Fatalf("start payload accepted attach JSON: %s", attachRaw)
 	}
 
-	startRaw, err := json.Marshal(WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"})
+	startRaw, err := json.Marshal(WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

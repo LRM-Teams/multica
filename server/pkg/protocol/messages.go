@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -201,6 +202,11 @@ type AgentMessageProjection struct {
 	// resident turn. It must never be persisted in coordinator state or sent
 	// by the Server because it may contain scoped memory.
 	RuntimeContext string `json:"-"`
+	// Daemon-local lifecycle metadata is copied from the authenticated delivery
+	// envelope and never serialized as part of canonical message content.
+	RunID      string `json:"-"`
+	RunAgentID string `json:"-"`
+	DeliveryID string `json:"-"`
 }
 
 // AgentMessageMemoryProjection is a server-filtered memory item applicable to
@@ -214,6 +220,58 @@ type AgentMessageMemoryProjection struct {
 	SubjectID   string `json:"subject_id,omitempty"`
 }
 
+const (
+	MixedRunActivityActiveTurn             = "active_turn"
+	MixedRunActivityQueuedMessage          = "queued_message"
+	MixedRunActivityInflightTool           = "inflight_tool"
+	MixedRunActivityUnfinishedCaptureBatch = "unfinished_capture_batch"
+)
+
+// MixedRunActivityTransitionPayload reports one durable lifecycle edge. The
+// server owns pending-delivery accounting from obligation rows; the daemon
+// reports the other four dimensions with stable transition IDs so reconnect or
+// retry cannot double-apply a counter delta.
+type MixedRunActivityTransitionPayload struct {
+	AgentID      string `json:"agent_id"`
+	RuntimeID    string `json:"runtime_id"`
+	RunID        string `json:"run_id"`
+	RunAgentID   string `json:"run_agent_id"`
+	TransitionID string `json:"transition_id"`
+	Dimension    string `json:"dimension"`
+	Delta        int    `json:"delta"`
+}
+
+func (p MixedRunActivityTransitionPayload) Validate() error {
+	if strings.TrimSpace(p.AgentID) == "" || strings.TrimSpace(p.RuntimeID) == "" ||
+		strings.TrimSpace(p.RunID) == "" || strings.TrimSpace(p.RunAgentID) == "" || strings.TrimSpace(p.TransitionID) == "" {
+		return errors.New("mixed-run activity transition identity is incomplete")
+	}
+	if p.Delta != -1 && p.Delta != 1 {
+		return errors.New("mixed-run activity transition delta must be -1 or 1")
+	}
+	switch p.Dimension {
+	case MixedRunActivityActiveTurn, MixedRunActivityQueuedMessage, MixedRunActivityInflightTool, MixedRunActivityUnfinishedCaptureBatch:
+		return nil
+	default:
+		return errors.New("invalid mixed-run activity transition dimension")
+	}
+}
+
+// MixedRunActivityTransitionAckPayload confirms the server committed a
+// transition (or recognized the same already-committed payload). The daemon
+// may remove its durable outbox entry only after receiving this frame.
+type MixedRunActivityTransitionAckPayload struct {
+	RunID        string `json:"run_id"`
+	TransitionID string `json:"transition_id"`
+}
+
+func (p MixedRunActivityTransitionAckPayload) Validate() error {
+	if strings.TrimSpace(p.RunID) == "" || strings.TrimSpace(p.TransitionID) == "" {
+		return errors.New("mixed-run activity transition acknowledgement identity is incomplete")
+	}
+	return nil
+}
+
 // AgentDeliverPayload is an at-least-once transfer attempt to a single local
 // Agent coordinator. DeliveryID identifies the attempt lineage; Message.ID
 // plus its target sequence identify the canonical Message being projected.
@@ -224,6 +282,8 @@ type AgentDeliverPayload struct {
 	DeliveryID  string                 `json:"deliveryId"`
 	Message     AgentMessageProjection `json:"message"`
 	Traceparent string                 `json:"traceparent,omitempty"`
+	RunID       string                 `json:"runId,omitempty"`
+	RunAgentID  string                 `json:"runAgentId,omitempty"`
 }
 
 // AgentDeliverAckPayload confirms only per-Agent provider acceptance, Pending
@@ -234,28 +294,6 @@ type AgentDeliverAckPayload struct {
 	Seq         int64  `json:"seq"`
 	DeliveryID  string `json:"deliveryId"`
 	Traceparent string `json:"traceparent,omitempty"`
-}
-
-// AgentRecoveryRequest asks the Server for a stateless snapshot page after
-// local target Context Boundaries. Cursor is empty for the first page.
-type AgentRecoveryRequest struct {
-	AgentID    string           `json:"agent_id"`
-	RecoveryID string           `json:"recovery_id"`
-	Boundaries map[string]int64 `json:"boundaries"`
-	SnapshotID string           `json:"snapshot_id,omitempty"`
-	Cursor     string           `json:"cursor,omitempty"`
-	Limit      int              `json:"limit"`
-}
-
-// AgentRecoveryPage is one bounded page under a stable Server fence.
-type AgentRecoveryPage struct {
-	AgentID       string                   `json:"agent_id"`
-	RecoveryID    string                   `json:"recovery_id"`
-	SnapshotID    string                   `json:"snapshot_id"`
-	HighWatermark string                   `json:"high_watermark"`
-	Messages      []AgentMessageProjection `json:"messages"`
-	NextCursor    string                   `json:"next_cursor,omitempty"`
-	HasMore       bool                     `json:"has_more"`
 }
 
 // AgentMessageHandoffPayload is the content-free observation emitted after a
@@ -398,6 +436,37 @@ type SeedAgentContextRequestPayload struct {
 	InitialNotes  map[string]string `json:"initial_notes,omitempty"`
 	InitialMemory map[string]string `json:"initial_memory,omitempty"`
 	MaxBytes      int               `json:"max_bytes,omitempty"`
+}
+
+// PreparePiRunRequestPayload asks the daemon owning RuntimeID to create the
+// resident Pi backend, bind the durable mixed-run identity, and start the
+// native process without accepting any conversation input.
+type PreparePiRunRequestPayload struct {
+	RequestID  string `json:"request_id"`
+	RuntimeID  string `json:"runtime_id"`
+	AgentID    string `json:"agent_id"`
+	RunID      string `json:"run_id"`
+	RunAgentID string `json:"run_agent_id"`
+}
+
+type PreparePiRunResponsePayload struct {
+	RequestID       string `json:"request_id"`
+	SessionID       string `json:"session_id,omitempty"`
+	CaptureBoundary string `json:"capture_boundary,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+type RevokePiRunRequestPayload struct {
+	RequestID  string `json:"request_id"`
+	RuntimeID  string `json:"runtime_id"`
+	AgentID    string `json:"agent_id"`
+	RunID      string `json:"run_id"`
+	RunAgentID string `json:"run_agent_id"`
+}
+
+type RevokePiRunResponsePayload struct {
+	RequestID string `json:"request_id"`
+	Error     string `json:"error,omitempty"`
 }
 
 // SeedAgentContextResponsePayload is the daemon reply for initial context seeding.
@@ -924,10 +993,6 @@ type DaemonHeartbeatAckPayload struct {
 	// The daemon executes each via agentLifecycleExecutor and reports the
 	// result back via ReportAgentLifecycleOperationResult.
 	PendingAgentLifecycleOperations []DaemonHeartbeatPendingAgentLifecycleOperation `json:"pending_agent_lifecycle_operations,omitempty"`
-	// PendingAgentStartIntents are durable first-start deliveries. The server
-	// retains a pending intent until the Computer acknowledges it, so a missed
-	// heartbeat response is safely replayed with the same dispatch identity.
-	PendingAgentStartIntents []DaemonHeartbeatPendingAgentStartIntent `json:"pending_agent_start_intents,omitempty"`
 	// ReleaseManifestBaseURL, when non-empty, is the server's current opinion
 	// of where the daemon should download CLI update artifacts from. It takes
 	// precedence over the daemon's own MULTICA_RELEASE_MANIFEST_BASE_URL env
@@ -974,17 +1039,6 @@ type DaemonHeartbeatPendingAgentLifecycleOperation struct {
 	RuntimeID   string `json:"runtime_id"`
 	WorkspaceID string `json:"workspace_id"`
 	ActionKind  string `json:"action_kind"`
-}
-
-// DaemonHeartbeatPendingAgentStartIntent is the non-secret delivery envelope
-// for an Agent's first start. Runtime configuration remains server-owned on the
-// Agent row; the Computer receives only stable identities and reports the
-// outcome against StartDispatchID.
-type DaemonHeartbeatPendingAgentStartIntent struct {
-	StartDispatchID string `json:"start_dispatch_id"`
-	AgentID         string `json:"agent_id"`
-	RuntimeID       string `json:"runtime_id"`
-	WorkspaceID     string `json:"workspace_id"`
 }
 
 // DaemonHeartbeatPendingModelList describes a request for the daemon to
@@ -1156,4 +1210,109 @@ type AgentMemoryHydrateEntry struct {
 	ConflictOf  string `json:"conflict_of,omitempty"`
 	ChangeSeq   int64  `json:"change_seq,omitempty"`
 	DeletedAt   string `json:"deleted_at,omitempty"`
+}
+
+// TurnCaptureUpload is the daemon-to-server, agent-credential-authenticated
+// record of one settled resident Pi turn. The daemon, rather than the
+// workspace runner, is the trust boundary which creates this payload.
+type TurnCaptureUpload struct {
+	AgentID         string                      `json:"agent_id"`
+	RuntimeID       string                      `json:"runtime_id"`
+	CaptureBatchID  string                      `json:"capture_batch_id"`
+	Turn            TurnCaptureTurn             `json:"turn"`
+	ProviderCalls   []TurnCaptureProviderCall   `json:"provider_calls"`
+	VisibleActions  []TurnCaptureVisibleAction  `json:"visible_actions,omitempty"`
+	Consumptions    []TurnCaptureConsumption    `json:"consumptions,omitempty"`
+	PayloadHash     string                      `json:"payload_hash"`
+}
+
+// TurnCaptureVisibleAction is a trusted, daemon-observed successful channel
+// message or reaction associated with a provider call in the same batch.
+type TurnCaptureVisibleAction struct {
+	Kind           string `json:"kind"`
+	CanonicalID    string `json:"canonical_id"`
+	ProducerCallID string `json:"producer_call_id"`
+	ActionOrdinal  int64  `json:"action_ordinal"`
+	SucceededAt    string `json:"succeeded_at,omitempty"`
+}
+
+// TurnCaptureConsumption is concrete message acceptance/check evidence for a
+// provider call in the same trusted batch.
+type TurnCaptureConsumption struct {
+	ChannelMessageID    string `json:"channel_message_id"`
+	Source              string `json:"source"`
+	EffectiveFromCallID string `json:"effective_from_call_id"`
+	ConsumedAt          string `json:"consumed_at,omitempty"`
+}
+
+// TurnCaptureTurn identifies the logical resident turn that produced a
+// capture batch. CaptureBoundary is the server-issued binding boundary and is
+// used to reject a stale or cross-run upload.
+type TurnCaptureTurn struct {
+	TurnID          string `json:"turn_id"`
+	RunAgentID      string `json:"run_agent_id"`
+	PiSessionID     string `json:"pi_session_id"`
+	CaptureBoundary string `json:"capture_boundary"`
+	TurnOrdinal     int64  `json:"turn_ordinal"`
+	Status          string `json:"status"`
+	StartedAt       string `json:"started_at,omitempty"`
+	CompletedAt     string `json:"completed_at,omitempty"`
+}
+
+// TurnCaptureProviderCall preserves the final provider request and typed
+// final assistant message for one provider call. RawProviderRequest must have
+// been redacted by the daemon before it reaches this transport DTO.
+type TurnCaptureProviderCall struct {
+	CallID                string          `json:"call_id"`
+	CallOrdinal           int64           `json:"call_ordinal"`
+	Provider              string          `json:"provider"`
+	Model                 string          `json:"model"`
+	APIKind               string          `json:"api_kind"`
+	RawProviderRequest    json.RawMessage `json:"raw_provider_request"`
+	FinalAssistantMessage json.RawMessage `json:"final_assistant_message"`
+	Status                string          `json:"status"`
+	StopReason            string          `json:"stop_reason,omitempty"`
+	ResponseComplete      bool            `json:"response_complete"`
+	AReaLSessionID        string          `json:"areal_session_id,omitempty"`
+	AReaLCallID           string          `json:"areal_call_id,omitempty"`
+	RequestHash           string          `json:"request_hash"`
+	ResponseHash          string          `json:"response_hash"`
+	StartedAt             string          `json:"started_at,omitempty"`
+	CompletedAt           string          `json:"completed_at,omitempty"`
+}
+
+// TurnCaptureUploadResponse is returned when the server atomically accepted
+// (or idempotently recognized) a capture batch. After freeze, Late and
+// SnapshotID identify the immutable late-audit routing without claiming a
+// snapshot mutation.
+type TurnCaptureUploadResponse struct {
+	Accepted           bool   `json:"accepted"`
+	CaptureBatchID     string `json:"capture_batch_id,omitempty"`
+	TurnID             string `json:"turn_id,omitempty"`
+	ProviderCallCount  int    `json:"provider_call_count"`
+	VisibleActionCount int    `json:"visible_action_count"`
+	ConsumptionCount   int    `json:"consumption_count"`
+	RunStatus          string `json:"run_status,omitempty"`
+	Late               bool   `json:"late,omitempty"`
+	SnapshotID         string `json:"snapshot_id,omitempty"`
+}
+
+// TurnCaptureGapReport records why a finished daemon turn cannot supply a
+// trusted complete capture. The server may freeze or otherwise terminally
+// account for the gap; callers must not silently decrement unfinished capture
+// state before this report is acknowledged.
+type TurnCaptureGapReport struct {
+	AgentID         string `json:"agent_id"`
+	RuntimeID       string `json:"runtime_id"`
+	RunAgentID      string `json:"run_agent_id"`
+	TurnID          string `json:"turn_id"`
+	TurnOrdinal     int64  `json:"turn_ordinal"`
+	CaptureBoundary string `json:"capture_boundary"`
+	Reason          string `json:"reason"`
+	OccurredAt      string `json:"occurred_at"`
+}
+
+// TurnCaptureGapResponse acknowledges durable accounting for a capture gap.
+type TurnCaptureGapResponse struct {
+	Accepted bool `json:"accepted"`
 }

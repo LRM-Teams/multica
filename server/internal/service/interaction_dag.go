@@ -496,6 +496,11 @@ type AssembledEdge struct {
 // env_snapshot is reconstructed from the three env_snapshot columns. agent_run_id
 // is the multica task.ID (the run), NOT the agent UUID.
 //
+// Legacy-only path: project-scoped dense session coverage and root-task
+// readiness still apply here for historical /dag consumers. Mixed-RL freezes
+// must use MixedRLFreezeService.GetFrozenRunDAG / ProviderCallLedger.GetFrozenDAG
+// (run lifecycle + immutable snapshot) and must never enter this assembler.
+//
 // A disabled service (or nil store) returns an empty AssembledDag, nil -
 // consistent with the other service methods. Branch provenance
 // (branch_from_segment_id/branch_from_checkpoint_id) is change 2 (MCTS) and

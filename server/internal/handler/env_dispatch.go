@@ -21,26 +21,24 @@ import (
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/stackerr"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // EnvDispatchRequest is the body of POST /api/v1/env-dispatch (spec §6.3).
 type EnvDispatchRequest struct {
-	Mode           string `json:"mode"`
-	EnvID          string `json:"env_id"`
-	SourceTaskID   string `json:"source_task_id,omitempty"`
-	Domain         string `json:"domain,omitempty"`
-	DispatchType   string `json:"dispatch_type"`
-	GroupSize      int    `json:"group_size"`
-	AgentID        string `json:"agent_id"`
-	TrainAgentID   string `json:"train_agent_id,omitempty"`
-	CriticAgentID  string `json:"critic_agent_id,omitempty"`
-	IdempotencyKey string `json:"idempotency_key,omitempty"`
-	// TrainingMode explicitly selects training vs non-training dispatch. It is
-	// required (nil is rejected at the handler boundary before the service is
-	// constructed) so the dispatch mode is an explicit caller choice, never
-	// inferred from the presence of train_agent_id. A pointer distinguishes an
-	// omitted JSON field (nil) from an explicit false.
-	TrainingMode *bool `json:"training_mode"`
+	Mode                   string   `json:"mode"`
+	EnvID                  string   `json:"env_id"`
+	SourceTaskID           string   `json:"source_task_id,omitempty"`
+	Domain                 string   `json:"domain,omitempty"`
+	DispatchType           string   `json:"dispatch_type"`
+	GroupSize              int      `json:"group_size"`
+	AgentID                string   `json:"agent_id"`
+	OnlineTrainableAgents  []string `json:"online_trainable_agents"`
+	OfflineTrainableAgents []string `json:"offline_trainable_agents"`
+	QuietWindowMS          int      `json:"quiet_window_ms"`
+	TotalTimeoutSeconds    int      `json:"total_timeout_seconds"`
+	CriticAgentID          string   `json:"critic_agent_id,omitempty"`
+	IdempotencyKey         string   `json:"idempotency_key,omitempty"`
 	// SharedSandbox optionally requests that all agents of each rollout (sample)
 	// share one sandbox + one daemon + one working directory. Omitted (nil) or
 	// false preserves the current per-agent isolation; the pointer distinguishes
@@ -99,12 +97,94 @@ type MessageDispatchInput struct {
 // EnvDispatchResponse is the 201 response (spec §6.3). On 500 (all rollouts
 // failed) it is reused with Message set and each rollout carrying its Error +
 // Traceback (origin goroutine stack from the failing adapter call).
+type EnvDispatchRunAgentResponse struct {
+	SourceAgentID    string `json:"source_agent_id"`
+	ExecutionAgentID string `json:"execution_agent_id"`
+	TrainingMode     string `json:"training_mode"`
+}
+
 type EnvDispatchResponse struct {
-	ChannelID string                    `json:"channel_id,omitempty"`
-	ProjectID string                    `json:"project_id"`
-	Rollouts  []EnvRolloutResponse      `json:"rollouts"`
-	Message   string                    `json:"message,omitempty"`
-	Audit     *EnvDispatchAuditResponse `json:"audit,omitempty"`
+	RunID                     string                        `json:"run_id,omitempty"`
+	ChannelID                 string                        `json:"channel_id,omitempty"`
+	ProjectID                 string                        `json:"project_id"`
+	Status                    string                        `json:"status,omitempty"`
+	Rollouts                  []EnvRolloutResponse          `json:"rollouts"`
+	QuietWindowMS             int                           `json:"quiet_window_ms"`
+	TotalTimeoutSeconds       int                           `json:"total_timeout_seconds"`
+	InitialMessageSubmittedAt time.Time                     `json:"initial_message_submitted_at,omitempty"`
+	RunAgents                 []EnvDispatchRunAgentResponse `json:"run_agents"`
+	Message                   string                        `json:"message,omitempty"`
+	Audit                     *EnvDispatchAuditResponse     `json:"audit,omitempty"`
+}
+
+// FrozenRunDAGResponse is the sanitized, immutable public view of a completed
+// mixed-RL run. It intentionally projects only the frozen DAG data; raw
+// provider payloads, credentials, SSE, and materialized tensors never cross
+// this boundary. Associations are nested under segments as provider_calls per
+// the frozen-DAG contract; a top-level associations list is never emitted.
+type FrozenRunDAGResponse struct {
+	RunID         string                                `json:"run_id"`
+	ProjectID     string                                `json:"project_id"`
+	WorkspaceID   string                                `json:"workspace_id"`
+	Status        string                                `json:"status"`
+	RunStatus     string                                `json:"run_status"`
+	SnapshotID    string                                `json:"snapshot_id"`
+	SnapshotHash  string                                `json:"snapshot_hash"`
+	SchemaVersion string                                `json:"schema_version"`
+	FrozenAt      time.Time                             `json:"frozen_at"`
+	CaptureGaps   []FrozenRunDAGCaptureGapResponse      `json:"capture_gaps"`
+	RunAgents     []service.FrozenDAGRunAgentRecord     `json:"run_agents"`
+	ProviderCalls []service.FrozenDAGProviderCallRecord `json:"provider_calls"`
+	Segments      []FrozenRunDAGSegmentResponse         `json:"segments"`
+	Edges         []service.CausalEdgeRecord            `json:"edges"`
+}
+
+// FrozenRunDAGSegmentResponse nests call associations under each segment.
+type FrozenRunDAGSegmentResponse struct {
+	SegmentID         string                            `json:"segment_id"`
+	RunAgentID        string                            `json:"run_agent_id"`
+	Kind              string                            `json:"kind"`
+	CanonicalActionID string                            `json:"canonical_action_id,omitempty"`
+	SegmentOrdinal    int64                             `json:"segment_ordinal"`
+	Reward            *float64                          `json:"reward,omitempty"`
+	RewardSource      string                            `json:"reward_source,omitempty"`
+	ProviderCalls     []FrozenRunDAGAssociationResponse `json:"provider_calls"`
+}
+
+// FrozenRunDAGAssociationResponse is the contract-facing call association.
+type FrozenRunDAGAssociationResponse struct {
+	CallID          string `json:"call_id"`
+	CallOrdinal     int64  `json:"call_ordinal"`
+	AssociationKind string `json:"association_kind"`
+}
+
+// FrozenRunDAGCaptureGapResponse is the sanitized capture-gap locator.
+type FrozenRunDAGCaptureGapResponse struct {
+	RunAgentID string `json:"run_agent_id"`
+	TurnID     string `json:"turn_id"`
+	Reason     string `json:"reason"`
+}
+
+// FrozenRunDAGPollingResponse is returned while a mixed run is not yet frozen.
+type FrozenRunDAGPollingResponse struct {
+	RunID               string `json:"run_id"`
+	Status              string `json:"status"`
+	QuietCandidateSince any    `json:"quiet_candidate_since"`
+	DeadlineAt          any    `json:"deadline_at"`
+}
+
+func (response EnvDispatchResponse) MarshalJSON() ([]byte, error) {
+	type responseAlias EnvDispatchResponse
+	if response.QuietWindowMS == 0 {
+		response.QuietWindowMS = 2000
+	}
+	if response.TotalTimeoutSeconds == 0 {
+		response.TotalTimeoutSeconds = 3300
+	}
+	if response.RunAgents == nil {
+		response.RunAgents = []EnvDispatchRunAgentResponse{}
+	}
+	return json.Marshal(responseAlias(response))
 }
 
 // EnvDispatchAuditResponse is the public locator for a server-owned audit
@@ -135,7 +215,7 @@ type EnvRolloutResponse struct {
 	EnvID            string                                `json:"env_id"`
 	ProjectID        string                                `json:"project_id"`
 	IssueID          string                                `json:"issue_id,omitempty"`
-	ChatSessionID    string                                `json:"chat_session_id,omitempty"`
+	ChatSessionID    string                                `json:"-"`
 	AgentRunID       string                                `json:"agent_run_id,omitempty"`
 	Error            string                                `json:"error,omitempty"`
 	Traceback        string                                `json:"traceback,omitempty"`
@@ -154,17 +234,17 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "workspace ID required")
 		return
 	}
-	var req EnvDispatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req := EnvDispatchRequest{QuietWindowMS: 2000, TotalTimeoutSeconds: 3300}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		for _, removed := range []string{"training_mode", "train_agent_id"} {
+			if strings.Contains(err.Error(), `unknown field "`+removed+`"`) {
+				writeError(w, http.StatusBadRequest, removed+" was removed; use online_trainable_agents and offline_trainable_agents")
+				return
+			}
+		}
 		writeError(w, http.StatusBadRequest, "malformed request body")
-		return
-	}
-	// training_mode is required (Task 1): nil means the caller omitted it.
-	// Reject before constructing EnvDispatchInput so the service never sees an
-	// absent training mode. The pointer distinguishes omitted (nil) from an
-	// explicit false.
-	if req.TrainingMode == nil {
-		writeError(w, http.StatusBadRequest, "training_mode is required")
 		return
 	}
 
@@ -188,9 +268,14 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.TrainAgentID != "" {
-		if _, ok := parseUUIDOrBadRequest(w, req.TrainAgentID, "train_agent_id"); !ok {
-			return
+	for field, agentIDs := range map[string][]string{
+		"online_trainable_agents":  req.OnlineTrainableAgents,
+		"offline_trainable_agents": req.OfflineTrainableAgents,
+	} {
+		for _, agentID := range agentIDs {
+			if _, ok := parseUUIDOrBadRequest(w, agentID, field); !ok {
+				return
+			}
 		}
 	}
 	if req.CriticAgentID != "" {
@@ -225,22 +310,43 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		Domain:       service.EnvDomain(req.Domain),
 		DispatchType: service.EnvDispatchType(req.DispatchType),
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
-		TrainAgentID:        req.TrainAgentID,
-		CriticAgentID:       req.CriticAgentID,
-		IdempotencyKey:      req.IdempotencyKey,
-		TrainingMode:        *req.TrainingMode,
-		SharedSandbox:       req.SharedSandbox != nil && *req.SharedSandbox,
-		DefaultBaseTemplate: template,
-		Issue:               mapIssueInput(req.Issue),
-		Message:             mapMessageInput(req.Message),
-		PerAgentEnvSpecs:    mapPerAgentEnvSpecs(req.PerAgentEnv),
-		Audit:               mapEnvDispatchAuditRequest(req.Audit),
+		OnlineTrainableAgents:  append([]string(nil), req.OnlineTrainableAgents...),
+		OfflineTrainableAgents: append([]string(nil), req.OfflineTrainableAgents...),
+		QuietWindowMS:          req.QuietWindowMS,
+		TotalTimeoutSeconds:    req.TotalTimeoutSeconds,
+		CriticAgentID:          req.CriticAgentID,
+		IdempotencyKey:         req.IdempotencyKey,
+		SharedSandbox:          req.SharedSandbox != nil && *req.SharedSandbox,
+		DefaultBaseTemplate:    template,
+		Issue:                  mapIssueInput(req.Issue),
+		Message:                mapMessageInput(req.Message),
+		PerAgentEnvSpecs:       mapPerAgentEnvSpecs(req.PerAgentEnv),
+		Audit:                  mapEnvDispatchAuditRequest(req.Audit),
 	})
 	if err != nil {
 		writeEnvDispatchError(w, err, res)
 		return
 	}
-	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ChannelID: res.ChannelID, ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts), Audit: envDispatchAuditResponseFromResult(res)})
+	writeJSON(w, http.StatusCreated, envDispatchSuccessResponse(res))
+}
+
+func envDispatchSuccessResponse(res service.EnvDispatchResult) EnvDispatchResponse {
+	runID := ""
+	if len(res.Rollouts) > 0 {
+		runID = res.Rollouts[0].RunID
+	}
+	return EnvDispatchResponse{
+		RunID:                     runID,
+		ChannelID:                 res.ChannelID,
+		ProjectID:                 res.ProjectID,
+		Status:                    "running",
+		Rollouts:                  mapRollouts(res.Rollouts),
+		QuietWindowMS:             res.QuietWindowMS,
+		TotalTimeoutSeconds:       res.TotalTimeoutSeconds,
+		InitialMessageSubmittedAt: res.InitialMessageSubmittedAt,
+		RunAgents:                 mapMixedDispatchRunAgents(res.RunAgents),
+		Audit:                     envDispatchAuditResponseFromResult(res),
+	}
 }
 
 // DeleteEnvDispatchProject handles DELETE /api/v1/env-dispatch/{projectID}.
@@ -298,6 +404,113 @@ func (h *Handler) GetDag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.getEnvDispatchDagForProject(w, r, chi.URLParam(r, "projectID"))
+}
+
+// GetFrozenRunDAG serves the run-scoped mixed-RL frozen snapshot. Unlike the
+// legacy project DAG, readiness is derived solely from the mixed run lifecycle
+// and never from a root task or a dense session-cover assumption.
+func (h *Handler) GetFrozenRunDAG(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireUserID(w, r); !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace ID required")
+		return
+	}
+	runID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "runID"), "runID")
+	if !ok {
+		return
+	}
+	run, err := h.Queries.GetMixedRLRun(r.Context(), runID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "lookup mixed run: "+err.Error())
+		return
+	}
+	if run.WorkspaceID != parseUUID(workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+		return
+	}
+	if run.Status != "completed" && run.Status != "failed_timeout" {
+		w.Header().Set("Retry-After", "1")
+		writeJSON(w, http.StatusAccepted, frozenRunDAGPollingResponse(run))
+		return
+	}
+	dag, err := service.NewMixedRLFreezeService(h.Queries, h.TxStarter).GetFrozenRunDAG(
+		r.Context(), runID, run.FrozenSnapshotID.String,
+	)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "read frozen mixed run DAG: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, frozenRunDAGResponse(dag))
+}
+
+func timeValueForJSON(value pgtype.Timestamptz) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Time
+}
+
+func frozenRunDAGPollingResponse(run db.EnvDispatchRun) FrozenRunDAGPollingResponse {
+	return FrozenRunDAGPollingResponse{
+		RunID:               run.RunID.String(),
+		Status:              run.Status,
+		QuietCandidateSince: timeValueForJSON(run.QuietCandidateSince),
+		DeadlineAt:          timeValueForJSON(run.TimeoutDeadlineAt),
+	}
+}
+
+func frozenRunDAGResponse(dag service.FrozenDAGRecord) FrozenRunDAGResponse {
+	associationsBySegment := make(map[string][]FrozenRunDAGAssociationResponse, len(dag.Segments))
+	for _, association := range dag.Associations {
+		associationsBySegment[association.SegmentID] = append(
+			associationsBySegment[association.SegmentID],
+			FrozenRunDAGAssociationResponse{
+				CallID: association.ProviderCallID, CallOrdinal: association.CallOrdinal,
+				AssociationKind: association.AssociationKind,
+			},
+		)
+	}
+	segments := make([]FrozenRunDAGSegmentResponse, 0, len(dag.Segments))
+	for _, segment := range dag.Segments {
+		nested := associationsBySegment[segment.SegmentID]
+		if nested == nil {
+			nested = []FrozenRunDAGAssociationResponse{}
+		}
+		item := FrozenRunDAGSegmentResponse{
+			SegmentID: segment.SegmentID, RunAgentID: segment.RunAgentID.String(),
+			Kind: segment.Kind, SegmentOrdinal: segment.SegmentOrdinal,
+			RewardSource: segment.RewardSource, ProviderCalls: nested,
+		}
+		if segment.CanonicalActionID.Valid {
+			item.CanonicalActionID = segment.CanonicalActionID.String()
+		}
+		if segment.Reward.Valid {
+			reward := segment.Reward.Float64
+			item.Reward = &reward
+		}
+		segments = append(segments, item)
+	}
+	gaps := make([]FrozenRunDAGCaptureGapResponse, 0, len(dag.CaptureGaps))
+	for _, gap := range dag.CaptureGaps {
+		gaps = append(gaps, FrozenRunDAGCaptureGapResponse{
+			RunAgentID: gap.RunAgentID.String(), TurnID: gap.TurnID.String(), Reason: gap.Reason,
+		})
+	}
+	return FrozenRunDAGResponse{
+		RunID: dag.Run.RunID.String(), ProjectID: dag.Run.ProjectID.String(),
+		WorkspaceID: dag.Run.WorkspaceID.String(), Status: dag.Run.Status, RunStatus: dag.Run.Status,
+		SnapshotID: dag.Snapshot.SnapshotID, SnapshotHash: dag.Snapshot.SnapshotHash,
+		SchemaVersion: dag.Snapshot.SchemaVersion, FrozenAt: dag.Run.FrozenAt,
+		CaptureGaps: gaps, RunAgents: dag.RunAgents, ProviderCalls: dag.ProviderCalls,
+		Segments: segments, Edges: dag.Edges,
+	}
 }
 
 // getEnvDispatchDagForProject serves the project-scoped assembled DAG for both
@@ -531,6 +744,16 @@ func mapPerAgentEnvSpecs(m map[string]PerAgentEnvRequest) []service.PerAgentEnvS
 	return out
 }
 
+func mapMixedDispatchRunAgents(agents []service.MixedDispatchRunAgent) []EnvDispatchRunAgentResponse {
+	mapped := make([]EnvDispatchRunAgentResponse, 0, len(agents))
+	for _, agent := range agents {
+		mapped = append(mapped, EnvDispatchRunAgentResponse{
+			SourceAgentID: agent.SourceAgentID, ExecutionAgentID: agent.ExecutionAgentID,
+			TrainingMode: agent.TrainingMode,
+		})
+	}
+	return mapped
+}
 func mapRollouts(rs []service.EnvRollout) []EnvRolloutResponse {
 	out := make([]EnvRolloutResponse, 0, len(rs))
 	for _, r := range rs {
@@ -613,8 +836,24 @@ func (a *envDispatchDepsAdapter) HasEnvDispatchRun(ctx context.Context, projectI
 // service's string IDs to pgtype.UUID via parseUUID (trusted: these IDs are
 // either sqlc round-trips or already-validated request inputs by the time
 // they reach the adapter).
+type mixedDispatchPiRunClient interface {
+	RequestPreparePiRun(context.Context, protocol.PreparePiRunRequestPayload) (*protocol.PreparePiRunResponsePayload, error)
+	RequestRevokePiRun(context.Context, protocol.RevokePiRunRequestPayload) error
+}
+
 type envDispatchDepsAdapter struct {
-	h *Handler
+	h      *Handler
+	piRuns mixedDispatchPiRunClient
+}
+
+func (a *envDispatchDepsAdapter) mixedDispatchPiRuns() mixedDispatchPiRunClient {
+	if a.piRuns != nil {
+		return a.piRuns
+	}
+	if a.h != nil {
+		return a.h.DaemonHub
+	}
+	return nil
 }
 
 // fkViolation23503 reports whether err is a PostgreSQL FK violation
@@ -841,12 +1080,94 @@ func (a *envDispatchDepsAdapter) DeleteProject(ctx context.Context, projectID, w
 	return stackerr.Wrap(err, "delete project")
 }
 
-func (a *envDispatchDepsAdapter) ResolveMessageRoster(ctx context.Context, workspaceID, agentID string) (service.MessageRoster, error) {
-	wsID := parseUUID(workspaceID)
-	if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: parseUUID(agentID), WorkspaceID: wsID}); err != nil {
-		return service.MessageRoster{}, err
+func (a *envDispatchDepsAdapter) ResolveMessageRoster(ctx context.Context, workspaceID, agentID string, specs []service.PerAgentEnvSpec) (service.MessageRoster, error) {
+	wsID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return service.MessageRoster{}, fmt.Errorf("parse workspace_id: %w", err)
 	}
-	return service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
+	roster := service.MessageRoster{
+		LeaderID: agentID,
+		AgentIDs: make([]string, 0, 1+len(specs)),
+	}
+	seen := make(map[string]struct{}, 1+len(specs))
+	members := make([]string, 0, 1+len(specs))
+	members = append(members, agentID)
+	for _, spec := range specs {
+		members = append(members, spec.AgentID)
+	}
+	for _, memberID := range members {
+		if _, duplicate := seen[memberID]; duplicate {
+			continue
+		}
+		memberUUID, err := util.ParseUUID(memberID)
+		if err != nil {
+			return service.MessageRoster{}, fmt.Errorf("parse roster agent_id %q: %w", memberID, err)
+		}
+		if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+			ID: memberUUID, WorkspaceID: wsID,
+		}); err != nil {
+			return service.MessageRoster{}, fmt.Errorf("load roster agent %s in workspace: %w", memberID, err)
+		}
+		seen[memberID] = struct{}{}
+		roster.AgentIDs = append(roster.AgentIDs, memberID)
+	}
+	return roster, nil
+}
+
+// ResolveMixedDispatchRoster performs the read-only production half of mixed
+// dispatch preflight. It validates each source member against its authoritative
+// bound Pi runtime and reports whether the server-owned online route or the
+// source/external offline model configuration is complete. Provisioning and
+// runtime readiness still occur later, before the canonical initial send.
+func (a *envDispatchDepsAdapter) ResolveMixedDispatchRoster(ctx context.Context, workspaceID string, roster service.MessageRoster, specs []service.PerAgentEnvSpec) ([]service.MixedDispatchRosterAgent, error) {
+	wsID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("parse workspace_id: %w", err)
+	}
+	specByAgent := make(map[string]service.PerAgentEnvSpec, len(specs))
+	for _, spec := range specs {
+		specByAgent[spec.AgentID] = spec
+	}
+	training := service.LoadTrainingConfig()
+	onlineReady := strings.TrimSpace(training.BridgeStubURL) != "" && strings.TrimSpace(training.AdminAPIKey) != ""
+	result := make([]service.MixedDispatchRosterAgent, 0, len(roster.AgentIDs))
+	for _, sourceAgentID := range roster.AgentIDs {
+		agentID, err := util.ParseUUID(sourceAgentID)
+		if err != nil {
+			return nil, fmt.Errorf("parse source agent_id: %w", err)
+		}
+		source, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: wsID})
+		if err != nil {
+			return nil, fmt.Errorf("load mixed dispatch source agent %s: %w", sourceAgentID, err)
+		}
+		bound, err := a.h.Queries.GetAgentBoundRuntimeForWorkspace(ctx, db.GetAgentBoundRuntimeForWorkspaceParams{AgentID: agentID, WorkspaceID: wsID})
+		if err != nil {
+			return nil, fmt.Errorf("load mixed dispatch source runtime %s: %w", sourceAgentID, err)
+		}
+		offlineReady := source.Model.Valid && strings.TrimSpace(source.Model.String) != ""
+		if !offlineReady && len(source.RuntimeConfig) > 0 {
+			var runtimeConfig map[string]any
+			if json.Unmarshal(source.RuntimeConfig, &runtimeConfig) == nil {
+				model, _ := runtimeConfig["model"].(string)
+				offlineReady = strings.TrimSpace(model) != ""
+			}
+		}
+		if spec, ok := specByAgent[sourceAgentID]; ok && spec.Runtime != nil {
+			if _, err := service.NormalizeExternalModelRuntime(spec.Runtime); err != nil {
+				return nil, fmt.Errorf("offline runtime for agent %s: %w", sourceAgentID, err)
+			}
+			offlineReady = true
+		}
+		result = append(result, service.MixedDispatchRosterAgent{
+			SourceAgentID: sourceAgentID,
+			Provider:      bound.Provider,
+			TargetPolicy:  "areal-default",
+			Tokenizer:     "areal-default",
+			OnlineReady:   onlineReady,
+			OfflineReady:  offlineReady,
+		})
+	}
+	return result, nil
 }
 
 const envDispatchChannelJoinSource = "env_dispatch"
@@ -906,6 +1227,9 @@ func (a *envDispatchDepsAdapter) DeleteChannel(ctx context.Context, workspaceID,
 }
 
 func (a *envDispatchDepsAdapter) ProvisionEnvDispatchAgent(ctx context.Context, in service.EnvDispatchAgentProvisionInput) (service.EnvDispatchAgentProvisionResult, error) {
+	if a.h.envDispatchProvisionAgentTestHook != nil {
+		return a.h.envDispatchProvisionAgentTestHook(ctx, in)
+	}
 	result, err := a.h.provisionEnvDispatchAgent(ctx, ProvisionEnvDispatchAgentInput{
 		WorkspaceID:             in.WorkspaceID,
 		UserID:                  in.UserID,
@@ -915,6 +1239,9 @@ func (a *envDispatchDepsAdapter) ProvisionEnvDispatchAgent(ctx context.Context, 
 		AgentID:                 in.AgentID,
 		SourceSandboxInstanceID: in.SourceSandboxInstanceID,
 		SandboxConfig:           in.SandboxConfig,
+		TrainingMode:            in.TrainingMode,
+		TargetPolicy:            in.TargetPolicy,
+		Tokenizer:               in.Tokenizer,
 	})
 	if err != nil {
 		return service.EnvDispatchAgentProvisionResult{}, err
@@ -925,15 +1252,84 @@ func (a *envDispatchDepsAdapter) ProvisionEnvDispatchAgent(ctx context.Context, 
 		RuntimeID:         result.RuntimeID,
 		DaemonID:          result.DaemonID,
 		ChatSessionID:     result.ChatSessionID,
+		AReALSessionID:    result.AReALSessionID,
 	}, nil
 }
 
 func (a *envDispatchDepsAdapter) CreateChannelMessage(ctx context.Context, channelID, workspaceID, userID, content string) (string, error) {
-	message, err := a.h.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(workspaceID), "user", parseUUID(userID), "Env Dispatch", content, "env_dispatch", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if a.h.envDispatchCreateMessageTestHook != nil {
+		return a.h.envDispatchCreateMessageTestHook(ctx, channelID, workspaceID, userID, content)
+	}
+	ch, found := a.h.getChannel(ctx, workspaceID, parseUUID(channelID))
+	if !found {
+		return "", stackerr.New("create env-dispatch channel message: channel not found")
+	}
+	message, err := a.h.sendCanonicalChannelMessage(ctx, ch, SendChannelMessageRequest{Content: content}, userID)
 	if err != nil {
 		return "", stackerr.Wrap(err, "create env-dispatch channel message")
 	}
 	return message.ID, nil
+}
+
+func (a *envDispatchDepsAdapter) PersistMixedDispatchInitialMessage(ctx context.Context, channelID, workspaceID, userID, content string) (service.PreparedMixedDispatchMessage, error) {
+	if a.h.envDispatchCreateMessageTestHook != nil {
+		messageID, err := a.h.envDispatchCreateMessageTestHook(ctx, channelID, workspaceID, userID, content)
+		if err != nil {
+			return service.PreparedMixedDispatchMessage{}, err
+		}
+		return service.NewPreparedMixedDispatchMessage(messageID, time.Now().UTC(), nil), nil
+	}
+	ch, found := a.h.getChannel(ctx, workspaceID, parseUUID(channelID))
+	if !found {
+		return service.PreparedMixedDispatchMessage{}, stackerr.New("create env-dispatch channel message: channel not found")
+	}
+	result, err := a.h.prepareCanonicalChannelMessage(ctx, ch, SendChannelMessageRequest{Content: content}, userID)
+	if err != nil {
+		return service.PreparedMixedDispatchMessage{}, stackerr.Wrap(err, "create env-dispatch channel message")
+	}
+	return service.NewPreparedMixedDispatchMessage(result.Message.Message.ID, time.Now().UTC(), result.Acknowledge), nil
+}
+
+func (a *envDispatchDepsAdapter) ReclaimMixedDispatchProvision(ctx context.Context, workspaceID, userID, envID, sourceAgentID string, provisioned service.EnvDispatchAgentProvisionResult) error {
+	var cleanupErrs []error
+	if provisioned.AReALSessionID != "" {
+		if err := reclaimMixedDispatchAReALSession(ctx, provisioned.AReALSessionID); err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	if provisioned.ChatSessionID != "" {
+		if _, err := a.h.DB.Exec(ctx, `DELETE FROM channel_agent_session WHERE chat_session_id::text = $1`, provisioned.ChatSessionID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete provisional channel session binding: %w", err))
+		}
+		if _, err := a.h.DB.Exec(ctx, `DELETE FROM chat_session WHERE id::text = $1`, provisioned.ChatSessionID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete provisional chat session: %w", err))
+		}
+	}
+	binding, bindingErr := (envDispatchChannelStore{}).binding(ctx, a.h.DB, envID, sourceAgentID)
+	if bindingErr == nil && provisioned.AgentID != "" && provisioned.AgentID != sourceAgentID {
+		if err := a.h.cleanupFailedEnvDispatchDerivedAgent(ctx, binding.ID, sourceAgentID, provisioned.AgentID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete provisional derived agent: %w", err))
+		}
+	} else if bindingErr != nil && !errors.Is(bindingErr, pgx.ErrNoRows) {
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("load provisional binding: %w", bindingErr))
+	}
+	if provisioned.SandboxInstanceID != "" {
+		lifecycle := newEnvSandboxLifecycleService(a.h)
+		if lifecycle == nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete provisional sandbox: lifecycle unavailable"))
+		} else if err := lifecycle.Delete(ctx, service.SandboxInstanceRef{
+			WorkspaceID: workspaceID, InstanceID: provisioned.SandboxInstanceID,
+			RuntimeID: provisioned.RuntimeID, DaemonID: provisioned.DaemonID,
+		}, userID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete provisional sandbox: %w", err))
+		}
+	}
+	if provisioned.RuntimeID != "" {
+		if err := a.DeleteAgentRuntime(ctx, workspaceID, provisioned.RuntimeID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete provisional runtime: %w", err))
+		}
+	}
+	return errors.Join(cleanupErrs...)
 }
 
 // LinkEnvDispatchTrainingSession links the binding's persisted training session
@@ -960,6 +1356,72 @@ func (a *envDispatchDepsAdapter) LinkEnvDispatchTrainingSession(ctx context.Cont
 	slog.Info("env-dispatch training session linked to real task",
 		"env_id", envID, "agent_id", agentID, "run_id", runID, "session_id", *binding.TrainingSessionID)
 	return nil
+}
+
+func (a *envDispatchDepsAdapter) CreateMixedDispatchRun(ctx context.Context, projectID, workspaceID, sourceTaskID string, sampleIndex, quietWindowMS, totalTimeoutSeconds int) (string, error) {
+	runUUID := uuid.New()
+	runID := pgtype.UUID{Bytes: runUUID, Valid: true}
+	var sourceTaskUUID pgtype.UUID
+	if sourceTaskID != "" {
+		sourceTaskUUID = parseUUID(sourceTaskID)
+	}
+	store := service.NewEnvDispatchRunStore(a.h.Queries)
+	if _, err := store.CreateRun(ctx, service.CreateEnvDispatchRunInput{
+		RunID: runID, ProjectID: parseUUID(projectID), WorkspaceID: parseUUID(workspaceID),
+		SourceTaskID: sourceTaskUUID, SampleIndex: int32(sampleIndex), QuietWindowMS: int32(quietWindowMS), TotalTimeoutSeconds: int32(totalTimeoutSeconds),
+	}); err != nil {
+		return "", err
+	}
+	if _, err := store.TransitionStatus(ctx, runID, "provisioning", "preflight"); err != nil {
+		return "", err
+	}
+	return runUUID.String(), nil
+}
+
+func (a *envDispatchDepsAdapter) PrepareMixedDispatchRunAgent(ctx context.Context, runID string, runAgent service.MixedDispatchRunAgent) (service.MixedDispatchRunAgent, error) {
+	if a.h.envDispatchPreparePiRunTestHook != nil {
+		return a.h.envDispatchPreparePiRunTestHook(ctx, runID, runAgent)
+	}
+	client := a.mixedDispatchPiRuns()
+	if client == nil {
+		return service.MixedDispatchRunAgent{}, errors.New("prepare mixed Pi run: daemon lifecycle transport unavailable")
+	}
+	runAgent.RunAgentID = uuid.NewString()
+	response, err := client.RequestPreparePiRun(ctx, protocol.PreparePiRunRequestPayload{
+		RequestID: uuid.NewString(), RuntimeID: runAgent.RuntimeID,
+		AgentID: runAgent.ExecutionAgentID, RunID: runID, RunAgentID: runAgent.RunAgentID,
+	})
+	if err != nil {
+		return service.MixedDispatchRunAgent{}, fmt.Errorf("prepare mixed Pi run: %w", err)
+	}
+	runAgent.PiSessionID = response.SessionID
+	runAgent.CaptureBoundary = response.CaptureBoundary
+	return runAgent, nil
+}
+
+func (a *envDispatchDepsAdapter) RevokeMixedDispatchRunAgent(ctx context.Context, runID string, runAgent service.MixedDispatchRunAgent) error {
+	client := a.mixedDispatchPiRuns()
+	if client == nil || runAgent.RunAgentID == "" {
+		return nil
+	}
+	return client.RequestRevokePiRun(ctx, protocol.RevokePiRunRequestPayload{
+		RequestID: uuid.NewString(), RuntimeID: runAgent.RuntimeID,
+		AgentID: runAgent.ExecutionAgentID, RunID: runID, RunAgentID: runAgent.RunAgentID,
+	})
+}
+
+func (a *envDispatchDepsAdapter) BindMixedDispatchRunAgent(ctx context.Context, runID string, agent service.MixedDispatchRunAgent) error {
+	arealSessionID := agent.AReALSessionID
+	_, err := service.NewEnvDispatchRunStore(a.h.Queries).BindRunAgent(ctx, service.BindEnvDispatchRunAgentInput{
+		RunAgentID: parseUUID(agent.RunAgentID), RunID: parseUUID(runID), SourceAgentID: parseUUID(agent.SourceAgentID), ExecutionAgentID: parseUUID(agent.ExecutionAgentID), RuntimeID: parseUUID(agent.RuntimeID),
+		PiSessionID: agent.PiSessionID, TrainingMode: agent.TrainingMode, AReALSessionID: arealSessionID, CaptureBoundary: agent.CaptureBoundary,
+	})
+	return err
+}
+
+func (a *envDispatchDepsAdapter) StartMixedDispatchRun(ctx context.Context, runID string, submittedAt time.Time) error {
+	_, err := service.NewEnvDispatchRunStore(a.h.Queries).StartTimeout(ctx, parseUUID(runID), submittedAt)
+	return err
 }
 
 func (a *envDispatchDepsAdapter) EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in service.ChannelRunInput, _ int) (string, error) {
@@ -2031,8 +2493,44 @@ func (s *stubEnvDispatchDeps) SaveIdempotentResponse(context.Context, string, st
 	return nil
 }
 func (s *stubEnvDispatchDeps) DeleteProject(context.Context, string, string) error { return nil }
-func (s *stubEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID string) (service.MessageRoster, error) {
-	return service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
+func (s *stubEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID string, specs []service.PerAgentEnvSpec) (service.MessageRoster, error) {
+	roster := service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}
+	seen := map[string]struct{}{agentID: {}}
+	for _, spec := range specs {
+		if _, duplicate := seen[spec.AgentID]; duplicate {
+			continue
+		}
+		seen[spec.AgentID] = struct{}{}
+		roster.AgentIDs = append(roster.AgentIDs, spec.AgentID)
+	}
+	return roster, nil
+}
+
+func (s *stubEnvDispatchDeps) ResolveMixedDispatchRoster(_ context.Context, _ string, roster service.MessageRoster, _ []service.PerAgentEnvSpec) ([]service.MixedDispatchRosterAgent, error) {
+	result := make([]service.MixedDispatchRosterAgent, 0, len(roster.AgentIDs))
+	for _, agentID := range roster.AgentIDs {
+		result = append(result, service.MixedDispatchRosterAgent{
+			SourceAgentID: agentID,
+			Provider:      "pi",
+			TargetPolicy:  "areal-default",
+			Tokenizer:     "areal-default",
+			OnlineReady:   true,
+			OfflineReady:  true,
+		})
+	}
+	return result, nil
+}
+
+func (s *stubEnvDispatchDeps) CreateMixedDispatchRun(context.Context, string, string, string, int, int, int) (string, error) {
+	return "70000000-0000-4000-8000-000000000001", nil
+}
+
+func (s *stubEnvDispatchDeps) BindMixedDispatchRunAgent(context.Context, string, service.MixedDispatchRunAgent) error {
+	return nil
+}
+
+func (s *stubEnvDispatchDeps) StartMixedDispatchRun(context.Context, string, time.Time) error {
+	return nil
 }
 func (s *stubEnvDispatchDeps) CreateEnvDispatchChannel(context.Context, string, string, string, string, service.MessageRoster, map[string]service.ResolvedPerAgentSandboxPolicy) (string, error) {
 	return "stub-channel", nil

@@ -24,7 +24,9 @@ const (
 	AgentObservationRuntimeDiagnostic      AgentObservationKind = "runtime_diagnostic"
 	AgentObservationMessageBodyAccepted    AgentObservationKind = "message_body_accepted"
 	AgentObservationFreshnessHeld          AgentObservationKind = "freshness_held"
+	AgentObservationDraftSent              AgentObservationKind = "draft_sent"
 	AgentObservationError                  AgentObservationKind = "error"
+	AgentObservationOffline                AgentObservationKind = "offline"
 )
 
 // AgentObservationData seals the observation taxonomy to the execution facts
@@ -75,6 +77,14 @@ type AgentFreshnessHoldObservationData struct {
 }
 
 func (AgentFreshnessHoldObservationData) agentObservationData() {}
+
+type AgentDraftSentObservationData struct {
+	RuntimeID string
+	Target    string
+	Anyway    bool
+}
+
+func (AgentDraftSentObservationData) agentObservationData() {}
 
 type AgentErrorObservationData struct {
 	RuntimeID         string
@@ -161,7 +171,20 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationError:
+	case AgentObservationDraftSent:
+		if err := observation.validateLaunchID(); err != nil {
+			return err
+		}
+		data, ok := observation.Data.(AgentDraftSentObservationData)
+		if !ok {
+			return observationDataTypeError(observation.Kind)
+		}
+		if strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.Target) == "" {
+			return errors.New("Agent Draft send Runtime and target are required")
+		}
+		return nil
+
+	case AgentObservationError, AgentObservationOffline:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}

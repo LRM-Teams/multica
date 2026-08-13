@@ -1,4 +1,4 @@
-package main
+package computer
 
 import (
 	"crypto/rand"
@@ -7,21 +7,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/multica-ai/multica/server/internal/computer"
 )
 
-const machineUpgradeControlTokenFile = "machine-upgrade-control.token"
+const controlTokenFile = "machine-upgrade-control.token"
 
-func machineUpgradeControlTokenPath(profile string) string {
-	return filepath.Join(computer.RootDir(profile), machineUpgradeControlTokenFile)
+// ControlTokenPath is the owner-only local mutation credential shared by the
+// Computer lifecycle commands and the resident. It authenticates loopback
+// control; server authorization remains a separate check inside the resident.
+func ControlTokenPath(profile string) string {
+	return filepath.Join(RootDir(profile), controlTokenFile)
 }
 
-// ensureMachineUpgradeControlToken creates a per-profile secret readable only
-// by the owning user. This is transport authentication, not server identity:
-// the daemon still applies the canonical server authorization on its request.
-func ensureMachineUpgradeControlToken(profile string) (string, error) {
-	path := machineUpgradeControlTokenPath(profile)
+// EnsureControlToken creates one durable per-owner secret with restrictive
+// permissions, or returns the existing secret.
+func EnsureControlToken(profile string) (string, error) {
+	path := ControlTokenPath(profile)
 	if existing, err := os.ReadFile(path); err == nil {
 		token := strings.TrimSpace(string(existing))
 		if token == "" {
@@ -46,8 +46,9 @@ func ensureMachineUpgradeControlToken(profile string) (string, error) {
 	return token, nil
 }
 
-func readMachineUpgradeControlToken(profile string) (string, error) {
-	data, err := os.ReadFile(machineUpgradeControlTokenPath(profile))
+// ReadControlToken reads the existing credential without creating local state.
+func ReadControlToken(profile string) (string, error) {
+	data, err := os.ReadFile(ControlTokenPath(profile))
 	if err != nil {
 		return "", err
 	}

@@ -100,9 +100,6 @@ func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageO
 	if c.closed {
 		return CoverageOffer{}, fmt.Errorf("%w: Inbox coordinator is closed", ErrCoverageRequestInvalid)
 	}
-	if request.Kind != CoverageRead && c.recovery.status != messageRecoveryReady {
-		return CoverageOffer{}, fmt.Errorf("%w: Message freshness is unknown", ErrCoverageRequestInvalid)
-	}
 	if request.Kind == CoverageHold && !c.boundaryHealthy {
 		return CoverageOffer{}, fmt.Errorf("%w: Context Boundary health is unknown", ErrCoverageRequestInvalid)
 	}
@@ -269,6 +266,7 @@ func (c *MessageCoordinator) CommitCoverage(receiptID string) error {
 	c.boundaries = next
 	c.boundaryHealthy = true
 	pendingChanged := false
+	var removed []protocol.AgentMessageProjection
 	for target, bySequence := range receipt.coveredIdentities {
 		for sequence, identity := range bySequence {
 			message, found := c.pending[target][sequence]
@@ -277,6 +275,7 @@ func (c *MessageCoordinator) CommitCoverage(receiptID string) error {
 			}
 			delete(c.pending[target], sequence)
 			delete(c.accepted, identity)
+			removed = append(removed, message)
 			pendingChanged = true
 		}
 		if len(c.pending[target]) == 0 {
@@ -286,6 +285,7 @@ func (c *MessageCoordinator) CommitCoverage(receiptID string) error {
 	if pendingChanged {
 		c.pendingGeneration++
 	}
+	c.emitQueueActivityLocked(removed, -1)
 	receipt.phase = coverageReceiptCommitted
 	return nil
 }

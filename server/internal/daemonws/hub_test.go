@@ -186,7 +186,7 @@ func TestWorkspaceRunnerRoutesOnlyWithinDaemonWorkspaceScope(t *testing.T) {
 	waitForRunner(t, hub, "daemon-1", "workspace-a")
 	waitForRunner(t, hub, "daemon-1", "workspace-b")
 
-	if !hub.NotifyWorkspaceRunner("daemon-1", "workspace-a", protocol.EventDaemonAgentStart, protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"}) {
+	if !hub.NotifyWorkspaceRunner("daemon-1", "workspace-a", protocol.EventDaemonAgentStart, protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}) {
 		t.Fatal("workspace-a command was not routed")
 	}
 	workspaceA.SetReadDeadline(time.Now().Add(time.Second))
@@ -230,7 +230,7 @@ func TestWorkspaceRunnerAllowsNoProviderRegistrations(t *testing.T) {
 	}
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 	if !hub.NotifyWorkspaceRunner("daemon-1", "workspace-1", protocol.EventAgentAttach, protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
 	}) {
 		t.Fatal("zero-Runtime Runner did not accept Attachment command")
 	}
@@ -342,7 +342,7 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	// The replaced socket either rejects this write locally or the Hub drops it
 	// at the current-ready fence. It must never reach the receipt handler.
 	staleReceipt, err := json.Marshal(protocol.Message{Type: protocol.EventAgentAttached, Payload: mustMarshalRaw(protocol.WorkspaceRunnerAgentAttachedPayload{
-		AgentID: "agent-a", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "stale-receipt",
+		AgentID: "agent-a", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
 	})})
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +391,7 @@ func TestWorkspaceRunnerRoutesAttachmentReplayFramesOnlyAfterReady(t *testing.T)
 		}
 	}
 	attachment := protocol.WorkspaceRunnerAgentAttachedPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "correlation-1",
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
 	}
 	// A valid frame is still ignored before the ready fence.
 	write(protocol.EventAgentAttachmentReplayReq, protocol.WorkspaceRunnerAttachmentReplayRequest{RuntimeCursors: map[string]int64{"runtime-1": 0}})
@@ -448,7 +448,7 @@ func TestWorkspaceRunnerReceivesLiveAttachmentCommandsOnRunnerScope(t *testing.T
 	}
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 	attach := protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "correlation-1",
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
 	}
 	hub.NotifyAgentAttachmentAdded("workspace-1", "daemon-1", attach)
 	hub.NotifyAgentAttachmentRemoved("workspace-1", "daemon-1", protocol.WorkspaceRunnerAgentDetachPayload(attach))
@@ -843,14 +843,14 @@ func TestRelayNotifierPublishesAttachmentToWorkspaceRunnerScope(t *testing.T) {
 	relay := &recordingRelayPublisher{}
 	notifier := NewRelayNotifier(nil, relay)
 	payload := protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3, CorrelationID: "correlation-1",
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3,
 	}
 	notifier.NotifyAgentAttachmentAdded("workspace-1", "daemon-1", payload)
 	if relay.scopeType != realtime.ScopeDaemonWorkspaceRunner || relay.scopeID != workspaceRunnerRelayScopeID("daemon-1", "workspace-1") {
 		t.Fatalf("Attachment relay scope = %q/%q", relay.scopeType, relay.scopeID)
 	}
-	if relay.eventID != payload.CorrelationID {
-		t.Fatalf("Attachment relay event ID = %q, want %q", relay.eventID, payload.CorrelationID)
+	if relay.eventID != "attachment:3" {
+		t.Fatalf("Attachment relay event ID = %q, want lifecycle identity", relay.eventID)
 	}
 	var frame protocol.Message
 	if err := json.Unmarshal(relay.frame, &frame); err != nil || frame.Type != protocol.EventAgentAttach {
@@ -1388,4 +1388,78 @@ func (p *localFirstDaemonRelayPublisher) PublishWithID(scopeType, scopeID, exclu
 		p.t.Fatal("expected local fanout to happen before relay publish")
 	}
 	return nil
+}
+
+func TestWorkspaceRunnerMixedRunActivityAcknowledgesOnlyCommittedTransition(t *testing.T) {
+	hub := NewHub()
+	handled := make(chan string, 2)
+	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, raw json.RawMessage) error {
+		if eventType != protocol.EventMixedRunActivityTransition {
+			return nil
+		}
+		var payload protocol.MixedRunActivityTransitionPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return err
+		}
+		handled <- payload.TransitionID
+		if payload.TransitionID == "failed-transition" {
+			return errors.New("injected transaction failure")
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	write := func(eventType string, payload any) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment}})
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	transition := protocol.MixedRunActivityTransitionPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", RunID: "run-1", RunAgentID: "run-agent-1",
+		TransitionID: "failed-transition", Dimension: protocol.MixedRunActivityActiveTurn, Delta: 1,
+	}
+	write(protocol.EventMixedRunActivityTransition, transition)
+	if got := <-handled; got != transition.TransitionID {
+		t.Fatalf("failed transition handled as %q", got)
+	}
+	transition.TransitionID = "committed-transition"
+	write(protocol.EventMixedRunActivityTransition, transition)
+	if got := <-handled; got != transition.TransitionID {
+		t.Fatalf("committed transition handled as %q", got)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message protocol.Message
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Type != protocol.EventMixedRunActivityAck {
+		t.Fatalf("ack frame type = %q", message.Type)
+	}
+	var ack protocol.MixedRunActivityTransitionAckPayload
+	if err := json.Unmarshal(message.Payload, &ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.RunID != transition.RunID || ack.TransitionID != transition.TransitionID {
+		t.Fatalf("ack = %+v, want committed transition only", ack)
+	}
 }

@@ -35,6 +35,7 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		{name: "runtime diagnostic", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeDiagnostic, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "Provider reported a warning"},
 		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "narrative", entryText: "Message received"},
 		{name: "freshness held", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "2 newer messages available — review then resend"},
+		{name: "draft sent", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1", Target: "#one"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "target: #one\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent"},
 		{name: "error", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed"}, At: at}, kind: protocol.ActivityKindError, detail: "runtime_error", entryKind: "narrative", entryText: "Agent execution failed", processID: "process-1"},
 	}
 
@@ -258,7 +259,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	d.runnerInstanceID = "daemon-1"
 	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
-	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "dispatch-a", StartDispatchID: "dispatch-a" + "-dispatch"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +327,7 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 	d.runnerInstanceID = "daemon-1"
 	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
 	runner.processes.newID = func() string { return "launch-a" }
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a" + "-dispatch"}); err != nil {
 		t.Fatal(err)
 	}
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
@@ -402,7 +403,7 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	d.runnerInstanceID = "daemon-1"
 	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
 	runner.processes.newID = func() string { return "launch-a" }
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a" + "-dispatch"}); err != nil {
 		t.Fatal(err)
 	}
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
@@ -430,6 +431,15 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	}
 	if body.Text != "Agent execution failed" {
 		t.Fatalf("failure narrative = %q", body.Text)
+	}
+	if _, found := runner.processes.Snapshot("agent-a"); found {
+		t.Fatal("provider startup-request failure retained APM launch")
+	}
+	producer.mu.Lock()
+	state := producer.states[agentActivityProducerKey{agentID: "agent-a", launchID: "launch-a"}]
+	producer.mu.Unlock()
+	if state == nil || state.status.Status != protocol.AgentStatusInactive {
+		t.Fatalf("provider startup-request failure status = %+v, want inactive", state)
 	}
 }
 

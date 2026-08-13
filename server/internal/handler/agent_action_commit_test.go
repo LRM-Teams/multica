@@ -261,14 +261,14 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 		t.Fatalf("expected agent in #general, got n=%d err=%v", n, err)
 	}
 
-	var dispatchID, dispatchStatus string
+	var launchID, launchRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		SELECT start_dispatch_id::text, status
-		FROM agent_start_intent WHERE agent_id = $1`, created.ID).Scan(&dispatchID, &dispatchStatus); err != nil {
-		t.Fatalf("load durable start intent: %v", err)
+		SELECT launch_id::text, runtime_id::text
+		FROM agent_runner_launch_projection WHERE agent_id = $1`, created.ID).Scan(&launchID, &launchRuntimeID); err != nil {
+		t.Fatalf("load desired launch: %v", err)
 	}
-	if dispatchID == "" || dispatchStatus != "pending" {
-		t.Fatalf("start intent = id=%q status=%q, want stable pending intent", dispatchID, dispatchStatus)
+	if launchID == "" || launchRuntimeID != uuidToString(createParams.RuntimeID) {
+		t.Fatalf("desired launch = id=%q runtime=%q", launchID, launchRuntimeID)
 	}
 
 	// A completed confirmation is terminal. Even an identical replay conflicts;
@@ -294,7 +294,7 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 	}
 }
 
-func TestCreateAgentManagedCommitAtomicallyCreatesGeneralMembershipAndStartIntent(t *testing.T) {
+func TestCreateAgentManagedCommitAtomicallyCreatesMembershipAndDesiredLaunch(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -326,9 +326,9 @@ func TestCreateAgentManagedCommitAtomicallyCreatesGeneralMembershipAndStartInten
 		parseUUID(generalID), created.ID).Scan(&memberships); err != nil || memberships != 1 {
 		t.Fatalf("manual general membership = %d, err=%v", memberships, err)
 	}
-	var intentCount int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_start_intent WHERE agent_id = $1`, created.ID).Scan(&intentCount); err != nil || intentCount != 1 {
-		t.Fatalf("manual start intent count = %d, err=%v", intentCount, err)
+	var launchCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_runner_launch_projection WHERE agent_id = $1`, created.ID).Scan(&launchCount); err != nil || launchCount != 1 {
+		t.Fatalf("manual desired launch count = %d, err=%v", launchCount, err)
 	}
 }
 

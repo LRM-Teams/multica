@@ -2,8 +2,6 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,32 +9,58 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
-
-// The installed Raft Computer v1.0.15 does not expose recovery pagination.
-// This is Multica's own bounded internal protocol limit; 200 matches the
-// repository's existing bounded Agent event reads.
-const agentMessageRecoveryMaxPage = 200
-
-type agentMessageRecoverySnapshot struct {
-	Targets map[string]int64 `json:"targets"`
-}
-
-type agentMessageRecoveryCursor struct {
-	Target       string `json:"target"`
-	Seq          int64  `json:"seq"`
-	ID           string `json:"id"`
-	SnapshotHash string `json:"snapshot_hash"`
-	Checksum     string `json:"checksum"`
-}
 
 func (h *Handler) HandleAgentDeliveryAck(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 	if strings.TrimSpace(ack.AgentID) == "" || strings.TrimSpace(ack.DeliveryID) == "" || ack.Seq <= 0 {
 		return errors.New("invalid agent delivery acknowledgement")
 	}
-	return h.requireAgentMessageDaemonScope(ctx, identity, ack.AgentID)
+	if err := h.requireAgentMessageDaemonScope(ctx, identity, ack.AgentID); err != nil {
+		return err
+	}
+	messageID, ok := canonicalDeliveryMessageID(ack.DeliveryID, ack.AgentID)
+	if !ok {
+		return errors.New("invalid canonical delivery acknowledgement")
+	}
+	if h.TxStarter == nil {
+		return errors.New("agent delivery acknowledgement transaction unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin agent delivery acknowledgement: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	command, err := tx.Exec(ctx, `
+		UPDATE agent_message_delivery
+		SET acked_at = COALESCE(acked_at, now())
+		WHERE workspace_id = $1 AND agent_id = $2 AND message_id = $3 AND seq = $4`,
+		parseUUID(identity.WorkspaceID), parseUUID(ack.AgentID), parseUUID(messageID), ack.Seq)
+	if err != nil {
+		return fmt.Errorf("persist agent delivery acknowledgement: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("unknown agent delivery acknowledgement")
+	}
+	if _, err := service.SettleDeliveryObligationForExecutionAgent(ctx, tx, parseUUID(messageID), parseUUID(ack.AgentID)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func canonicalDeliveryMessageID(deliveryID, agentID string) (string, bool) {
+	const prefix = "message:"
+	suffix := ":agent:" + agentID
+	if !strings.HasPrefix(deliveryID, prefix) || !strings.HasSuffix(deliveryID, suffix) {
+		return "", false
+	}
+	messageID := strings.TrimSuffix(strings.TrimPrefix(deliveryID, prefix), suffix)
+	if _, err := util.ParseUUID(messageID); err != nil {
+		return "", false
+	}
+	return messageID, true
 }
 
 func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.AgentMessageHandoffPayload) error {
@@ -81,182 +105,6 @@ func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemon
 	return nil
 }
 
-// HandleAgentMessageRecovery statelessly reads canonical Messages under a
-// target-sequence snapshot fence. The complete boundary map is supplied on
-// every page; the Server stores no Agent-facing receive cursor.
-func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemonws.ClientIdentity, request protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error) {
-	if strings.TrimSpace(request.RecoveryID) == "" {
-		return protocol.AgentRecoveryPage{}, errors.New("recovery id is required")
-	}
-	if err := h.requireAgentMessageDaemonScope(ctx, identity, request.AgentID); err != nil {
-		return protocol.AgentRecoveryPage{}, err
-	}
-	if err := validateAgentRecoveryBoundaries(request.Boundaries); err != nil {
-		return protocol.AgentRecoveryPage{}, err
-	}
-	limit := request.Limit
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > agentMessageRecoveryMaxPage {
-		limit = agentMessageRecoveryMaxPage
-	}
-
-	snapshot, snapshotID, err := h.resolveAgentRecoverySnapshot(ctx, identity.WorkspaceID, request.AgentID, request.SnapshotID)
-	if err != nil {
-		return protocol.AgentRecoveryPage{}, err
-	}
-	cursor, err := decodeAgentRecoveryCursor(request.Cursor, snapshotID)
-	if err != nil {
-		return protocol.AgentRecoveryPage{}, err
-	}
-	if cursor.Target != "" {
-		fence, ok := snapshot.Targets[cursor.Target]
-		if !ok || cursor.Seq > fence {
-			return protocol.AgentRecoveryPage{}, errors.New("recovery cursor exceeds snapshot fence")
-		}
-	}
-	boundariesJSON, err := json.Marshal(request.Boundaries)
-	if err != nil {
-		return protocol.AgentRecoveryPage{}, err
-	}
-	fenceJSON, err := json.Marshal(snapshot.Targets)
-	if err != nil {
-		return protocol.AgentRecoveryPage{}, err
-	}
-
-	rows, err := h.DB.Query(ctx, `
-		WITH eligible AS (
-			SELECT m.id, m.channel_id, delivery.seq, m.content, m.parts, delivery.target,
-			       c.kind AS channel_kind, c.project_id, m.author_type, m.author_id,
-			       COALESCE(NULLIF(author_user.name, ''), NULLIF(author_agent.name, ''), '') AS author_name,
-			       CASE c.kind
-			         WHEN 'group' THEN '#' || c.name
-			         WHEN 'dm' THEN 'dm:@' || COALESCE(peer.handle, '')
-			         ELSE ''
-			       END || CASE
-			         WHEN m.thread_root_message_id IS NOT NULL THEN ':' || LEFT(m.thread_root_message_id::text, 8)
-			         ELSE ''
-			       END AS reply_target
-			FROM agent_message_delivery delivery
-			JOIN channel_message m ON m.id = delivery.message_id
-			JOIN channel c ON c.id = m.channel_id AND c.workspace_id = delivery.workspace_id
-			LEFT JOIN "user" author_user ON m.author_type = 'user' AND author_user.id = m.author_id
-			LEFT JOIN agent author_agent ON m.author_type = 'agent' AND author_agent.id = m.author_id
-			LEFT JOIN LATERAL (
-				SELECT COALESCE(NULLIF(u.name, ''), NULLIF(a.name, ''), '') AS handle
-				FROM channel_member cm
-				LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
-				LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id AND a.archived_at IS NULL
-				WHERE cm.channel_id = c.id
-				  AND cm.workspace_id = delivery.workspace_id
-				  AND NOT (cm.member_type = 'agent' AND cm.member_id = $2)
-				ORDER BY cm.created_at ASC
-				LIMIT 1
-			) peer ON c.kind = 'dm'
-			WHERE delivery.workspace_id = $1
-			  AND delivery.agent_id = $2
-			  AND m.deleted_at IS NULL
-		)
-		SELECT id, channel_id, seq, content, parts, target, channel_kind, project_id, author_type, author_id, author_name, reply_target
-		FROM eligible
-		WHERE seq > COALESCE(($3::jsonb ->> target)::bigint, 0)
-		  AND seq <= COALESCE(($4::jsonb ->> target)::bigint, 0)
-		  AND (target, seq, id) > ($5, $6, $7)
-		ORDER BY target, seq, id
-		LIMIT $8`, parseUUID(identity.WorkspaceID), parseUUID(request.AgentID),
-		boundariesJSON, fenceJSON, cursor.Target, cursor.Seq, parseUUIDOrZero(cursor.ID), limit+1)
-	if err != nil {
-		return protocol.AgentRecoveryPage{}, err
-	}
-	defer rows.Close()
-
-	items := make([]protocol.AgentMessageProjection, 0, limit+1)
-	for rows.Next() {
-		var id, channelID, projectID, authorID pgtype.UUID
-		var seq int64
-		var content, target, channelKind, authorType, authorName, replyTarget string
-		var rawParts []byte
-		if err := rows.Scan(&id, &channelID, &seq, &content, &rawParts, &target, &channelKind, &projectID, &authorType, &authorID, &authorName, &replyTarget); err != nil {
-			return protocol.AgentRecoveryPage{}, err
-		}
-		if strings.TrimSpace(replyTarget) == "" {
-			return protocol.AgentRecoveryPage{}, errors.New("canonical Message recovery reply target is unavailable")
-		}
-		var parts []protocol.MessagePart
-		if len(rawParts) > 0 && string(rawParts) != "null" {
-			if err := json.Unmarshal(rawParts, &parts); err != nil {
-				return protocol.AgentRecoveryPage{}, fmt.Errorf("decode canonical Message parts: %w", err)
-			}
-		}
-		projection := protocol.AgentMessageProjection{
-			ID: uuidToString(id), ChannelID: uuidToString(channelID), Target: target, ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
-			ChannelKind: channelKind, ProjectID: uuidToString(projectID),
-			InitiatorType: canonicalMessageInitiatorType(authorType), InitiatorID: uuidToString(authorID), InitiatorName: authorName,
-		}
-		h.attachCanonicalMessageMemories(ctx, identity.WorkspaceID, parseUUID(request.AgentID), &projection)
-		items = append(items, projection)
-	}
-	if err := rows.Err(); err != nil {
-		return protocol.AgentRecoveryPage{}, err
-	}
-
-	hasMore := len(items) > limit
-	if hasMore {
-		items = items[:limit]
-	}
-	nextCursor := ""
-	if hasMore && len(items) > 0 {
-		last := items[len(items)-1]
-		nextCursor, err = encodeAgentRecoveryCursor(agentMessageRecoveryCursor{Target: last.Target, Seq: last.Seq, ID: last.ID}, snapshotID)
-		if err != nil {
-			return protocol.AgentRecoveryPage{}, err
-		}
-	}
-	return protocol.AgentRecoveryPage{
-		AgentID: request.AgentID, RecoveryID: request.RecoveryID, SnapshotID: snapshotID, HighWatermark: snapshotID,
-		Messages: items, NextCursor: nextCursor, HasMore: hasMore,
-	}, nil
-}
-
-func (h *Handler) resolveAgentRecoverySnapshot(ctx context.Context, workspaceID, agentID, encoded string) (agentMessageRecoverySnapshot, string, error) {
-	if encoded != "" {
-		snapshot, err := decodeAgentRecoverySnapshot(encoded)
-		return snapshot, encoded, err
-	}
-	rows, err := h.DB.Query(ctx, `
-		WITH eligible AS (
-			SELECT delivery.seq, delivery.target
-			FROM agent_message_delivery delivery
-			JOIN channel_message m ON m.id = delivery.message_id
-			WHERE delivery.workspace_id = $1
-			  AND delivery.agent_id = $2
-			  AND m.deleted_at IS NULL
-		)
-		SELECT target, max(seq)
-		FROM eligible
-		GROUP BY target`, parseUUID(workspaceID), parseUUID(agentID))
-	if err != nil {
-		return agentMessageRecoverySnapshot{}, "", err
-	}
-	defer rows.Close()
-	targets := make(map[string]int64)
-	for rows.Next() {
-		var target string
-		var seq int64
-		if err := rows.Scan(&target, &seq); err != nil {
-			return agentMessageRecoverySnapshot{}, "", err
-		}
-		targets[target] = seq
-	}
-	if err := rows.Err(); err != nil {
-		return agentMessageRecoverySnapshot{}, "", err
-	}
-	snapshot := agentMessageRecoverySnapshot{Targets: targets}
-	snapshotID, err := encodeAgentRecoverySnapshot(snapshot)
-	return snapshot, snapshotID, err
-}
-
 func (h *Handler) requireAgentMessageDaemonScope(ctx context.Context, identity daemonws.ClientIdentity, agentID string) error {
 	agentUUID, err := util.ParseUUID(agentID)
 	if err != nil {
@@ -278,77 +126,4 @@ func (h *Handler) requireAgentMessageDaemonScope(ctx context.Context, identity d
 		return errors.New("agent delivery daemon mismatch")
 	}
 	return nil
-}
-
-func validateAgentRecoveryBoundaries(boundaries map[string]int64) error {
-	for target, seq := range boundaries {
-		if strings.TrimSpace(target) == "" || seq < 0 {
-			return errors.New("invalid recovery boundaries")
-		}
-	}
-	return nil
-}
-
-func encodeAgentRecoverySnapshot(snapshot agentMessageRecoverySnapshot) (string, error) {
-	raw, err := json.Marshal(snapshot)
-	if err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
-}
-
-func decodeAgentRecoverySnapshot(encoded string) (agentMessageRecoverySnapshot, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return agentMessageRecoverySnapshot{}, errors.New("invalid recovery snapshot")
-	}
-	var snapshot agentMessageRecoverySnapshot
-	if err := json.Unmarshal(raw, &snapshot); err != nil || snapshot.Targets == nil {
-		return agentMessageRecoverySnapshot{}, errors.New("invalid recovery snapshot")
-	}
-	if err := validateAgentRecoveryBoundaries(snapshot.Targets); err != nil {
-		return agentMessageRecoverySnapshot{}, errors.New("invalid recovery snapshot")
-	}
-	return snapshot, nil
-}
-
-func encodeAgentRecoveryCursor(cursor agentMessageRecoveryCursor, snapshotID string) (string, error) {
-	cursor.SnapshotHash = fmt.Sprintf("%x", sha256.Sum256([]byte(snapshotID)))
-	cursor.Checksum = agentRecoveryCursorChecksum(cursor)
-	raw, err := json.Marshal(cursor)
-	if err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
-}
-
-func decodeAgentRecoveryCursor(encoded, snapshotID string) (agentMessageRecoveryCursor, error) {
-	if encoded == "" {
-		return agentMessageRecoveryCursor{}, nil
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return agentMessageRecoveryCursor{}, errors.New("invalid recovery cursor")
-	}
-	var cursor agentMessageRecoveryCursor
-	wantSnapshotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(snapshotID)))
-	if err := json.Unmarshal(raw, &cursor); err != nil || strings.TrimSpace(cursor.Target) == "" || cursor.Seq <= 0 || cursor.ID == "" || cursor.SnapshotHash != wantSnapshotHash || cursor.Checksum != agentRecoveryCursorChecksum(cursor) {
-		return agentMessageRecoveryCursor{}, errors.New("invalid recovery cursor")
-	}
-	if _, err := util.ParseUUID(cursor.ID); err != nil {
-		return agentMessageRecoveryCursor{}, errors.New("invalid recovery cursor")
-	}
-	return cursor, nil
-}
-
-func agentRecoveryCursorChecksum(cursor agentMessageRecoveryCursor) string {
-	value := cursor.Target + "\x00" + fmt.Sprint(cursor.Seq) + "\x00" + cursor.ID + "\x00" + cursor.SnapshotHash
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
-}
-
-func parseUUIDOrZero(value string) pgtype.UUID {
-	if value == "" {
-		return parseUUID("00000000-0000-0000-0000-000000000000")
-	}
-	return parseUUID(value)
 }

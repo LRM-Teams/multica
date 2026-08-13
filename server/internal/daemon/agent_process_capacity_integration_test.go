@@ -66,7 +66,7 @@ func TestManagedCapacityQueuedDetachAndCrashReplacementFence(t *testing.T) {
 		t.Fatalf("second launch=%+v, want queued", secondAck)
 	}
 	if _, err := second.applyAttachmentDetach(protocol.WorkspaceRunnerAgentDetachPayload{
-		AgentID: "agent-b", RuntimeID: "runtime-b", AttachmentGeneration: 1, LifecycleSeq: 2, CorrelationID: "detach-b",
+		AgentID: "agent-b", RuntimeID: "runtime-b", AttachmentGeneration: 1, LifecycleSeq: 2,
 	}); err != nil {
 		t.Fatalf("detach queued launch: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestManagedCapacityQueuedDetachAndCrashReplacementFence(t *testing.T) {
 
 func startManagedForCapacityTest(t *testing.T, runner *WorkspaceRunner, agentID, runtimeID, dispatchID string) protocol.AgentStartAckPayload {
 	t.Helper()
-	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: dispatchID})
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: dispatchID, StartDispatchID: dispatchID + "-dispatch"})
 	if err != nil {
 		t.Fatalf("Start(%s): %v", agentID, err)
 	}
@@ -103,7 +103,7 @@ func startManagedForCapacityTest(t *testing.T, runner *WorkspaceRunner, agentID,
 func attachManagedForCapacityTest(t *testing.T, runner *WorkspaceRunner, agentID, runtimeID string) {
 	t.Helper()
 	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-" + agentID,
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
 	}); err != nil {
 		t.Fatalf("attach %s: %v", agentID, err)
 	}

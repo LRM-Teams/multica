@@ -12,6 +12,13 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+type managedRuntimeFailureStage string
+
+const (
+	managedRuntimeFailureSpawn   managedRuntimeFailureStage = "spawn"
+	managedRuntimeFailureRuntime managedRuntimeFailureStage = "runtime"
+)
+
 func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentProcessManagerSnapshot, bool) {
 	if runner == nil || runner.processes == nil {
 		return agentProcessManagerSnapshot{}, false
@@ -96,14 +103,32 @@ func (runner *WorkspaceRunner) observeMessageTurnCompletion(agentID, runtimeID s
 	}
 	at := time.Now().UTC()
 	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
-	kind, data := AgentObservationRuntimeIdle, AgentObservationData(stage)
 	if turnErr != nil {
-		runner.activity.InterruptCompactionIfActive(agentID, launch.LaunchID)
-		kind, data = AgentObservationError, AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_turn_failed"}
-	} else {
-		_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
+		runner.failManagedRuntime(agentID, runtimeID, launch.LaunchID, managedRuntimeFailureRuntime, "provider_turn_failed", at)
+		return
 	}
-	runner.observeActivity(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: kind, Data: data, At: at}, "Message completion")
+	_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
+	runner.observeActivity(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, "Message completion")
+}
+
+// failManagedRuntime owns the Raft-style runtime-error transition. Activity
+// projection remains in agentActivityProducer; this method only coordinates
+// the lifecycle facts that must change together.
+func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode string, at time.Time) protocol.AgentStatusPayload {
+	runner.activity.InterruptCompactionIfActive(agentID, launchID)
+	_ = runner.processes.Stop(agentProcessCallback{AgentID: agentID, LaunchID: launchID})
+	status := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive}
+	_ = runner.activity.SetManaged(status, protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID})
+	runner.sendAgentFrame(protocol.EventAgentStatus, status)
+	kind := AgentObservationError
+	if stage == managedRuntimeFailureSpawn {
+		kind = AgentObservationOffline
+	}
+	runner.observeActivity(AgentObservation{
+		AgentID: agentID, LaunchID: launchID, Kind: kind,
+		Data: AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: reasonCode}, At: at,
+	}, "Runtime failure")
+	return status
 }
 
 func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
@@ -150,6 +175,23 @@ func (runner *WorkspaceRunner) observeMessageSendHold(agentID, target string, ne
 		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationFreshnessHeld,
 		Data: AgentFreshnessHoldObservationData{RuntimeID: launch.RuntimeID, Target: target, NewMessageCount: int(newer), ReasonCode: reason}, At: time.Now().UTC(),
 	}, "Message send hold")
+}
+
+func (runner *WorkspaceRunner) observeMessageSendDraftSent(agentID, target string, anyway bool) {
+	if runner == nil {
+		return
+	}
+	if runner.logger != nil {
+		runner.logger.Info("Credential Proxy saved Draft sent", "agent_id", agentID, "workspace_id", runner.config.WorkspaceID, "target", target, "anyway", anyway)
+	}
+	launch, found := runner.managedLaunch(agentID, "")
+	if !found || runner.activity == nil {
+		return
+	}
+	runner.observeActivity(AgentObservation{
+		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationDraftSent,
+		Data: AgentDraftSentObservationData{RuntimeID: launch.RuntimeID, Target: target, Anyway: anyway}, At: time.Now().UTC(),
+	}, "Draft sent")
 }
 
 func (runner *WorkspaceRunner) observeActivity(observation AgentObservation, phase string) {

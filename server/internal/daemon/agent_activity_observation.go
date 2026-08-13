@@ -206,10 +206,17 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		data := observation.Data.(AgentFreshnessHoldObservationData)
 		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
 		entry, err = activitySystemEntry(messageSendHoldTitle(), messageSendHoldSubtext(int64(data.NewMessageCount)))
+	case AgentObservationDraftSent:
+		data := observation.Data.(AgentDraftSentObservationData)
+		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
+		entry, err = activitySystemEntry(messageSendDraftSentTitle(), messageSendDraftSentSubtext(data.Target, data.Anyway))
 	case AgentObservationError:
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Agent execution failed")
+	case AgentObservationOffline:
+		projection.activityKind = protocol.ActivityKindOffline
+		entry, err = activityNarrativeEntry(projection.activityKind, "", "Offline")
 	default:
 		return agentActivityProjection{}, fmt.Errorf("unknown Agent Observation kind %q", observation.Kind)
 	}
@@ -246,4 +253,15 @@ func messageSendHoldSubtext(newer int64) string {
 		return fmt.Sprintf("%d newer messages available — review then resend", newer)
 	}
 	return "Send held — review the channel before resending"
+}
+
+func messageSendDraftSentTitle() string {
+	return "Send draft sent"
+}
+
+func messageSendDraftSentSubtext(target string, anyway bool) string {
+	if anyway {
+		return fmt.Sprintf("target: %s\nfreshness updates: not checked (--anyway)\ndecision: saved draft sent with explicit freshness override", target)
+	}
+	return fmt.Sprintf("target: %s\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent", target)
 }

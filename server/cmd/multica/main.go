@@ -76,7 +76,6 @@ func init() {
 	setupCmd.GroupID = groupAdditional
 	attachmentCmd.GroupID = groupAdditional
 	configCmd.GroupID = groupAdditional
-	updateCmd.GroupID = groupAdditional
 	versionCmd.GroupID = groupAdditional
 
 	rootCmd.AddCommand(issueCmd)
@@ -97,7 +96,6 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(attachmentCmd)
 	rootCmd.AddCommand(configCmd)
-	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(channelCmd)
 	rootCmd.AddCommand(goalCmd)

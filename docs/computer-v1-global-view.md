@@ -15,6 +15,8 @@
 - 每条 Workspace connection 独立授权；一个工作区断开不会影响其他工作区。
 - 同一时刻 resident 只连接一个环境的一个服务 origin，同时服务该环境下的全部已连接工作区。
 - Production 和 Test 的连接可以同时保存；切换环境时重启 resident，另一环境的连接不会丢失。
+- Computer owner 是整机 lifecycle mutation 的唯一授权主体。Workspace owner/admin
+  不因此获得别人 Computer 的升级或重启权限。
 
 ```mermaid
 flowchart LR
@@ -53,6 +55,7 @@ flowchart LR
 | 工作区改名会断开吗？ | 不会；身份使用不可变的 `workspace_id`。 |
 | 只删除 Workspace A 里的 Computer 呢？ | 只删除 A 的服务端机器挂载；B 的 connection、credential 和执行状态保留。 |
 | connection 是一个额外进程或目录吗？ | 不是；它是一条独立授权，不是 resident，也不是本机 workspace 目录。 |
+| 在 Workspace A 点击升级会只升级 A 吗？ | 不会。A 只是入口；升级的是整台 Computer，A、B 等全部 active connections 随后使用同一新版本并看到同一进度。 |
 
 ## 3. 环境和包
 

@@ -625,7 +625,6 @@ type (
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport
 	PendingMemoryCuration   = protocol.DaemonHeartbeatPendingMemoryCuration
 	PendingRestart          = protocol.DaemonHeartbeatPendingRestart
-	PendingAgentStartIntent = protocol.DaemonHeartbeatPendingAgentStartIntent
 )
 
 func (c *Client) SendHeartbeat(
@@ -676,6 +675,16 @@ func (c *Client) AttestComputerUpgrade(ctx context.Context, daemonID, upgradeID,
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/attest", upgradeID), map[string]any{
 		"daemon_id": daemonID, "generation_id": generationID, "cli_version": cliVersion,
 		"runtime_ids": runtimeIDs, "workspace_ids": workspaceIDs,
+	}, nil)
+}
+
+func (c *Client) CommitComputerUpgradeTakeover(ctx context.Context, computerID, upgradeID, generationID, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, workspaceIDs []string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/takeover", upgradeID), map[string]any{
+		// daemon_id is the installed-client compatibility spelling of Computer ID.
+		"daemon_id": computerID, "generation_id": generationID, "cli_version": cliVersion,
+		"predecessor_computer_generation": predecessorComputerGeneration,
+		"candidate_computer_generation":   candidateComputerGeneration,
+		"workspace_ids":                   workspaceIDs,
 	}, nil)
 }
 
@@ -767,13 +776,6 @@ func (c *Client) ReportMemoryCurationResult(ctx context.Context, runtimeID, runI
 // out of running/scheduled into succeeded/failed.
 func (c *Client) ReportAgentLifecycleOperationResult(ctx context.Context, runtimeID, operationID string, result map[string]any) error {
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-lifecycle/%s/result", runtimeID, operationID), result, nil, c.tokenForRuntime(runtimeID))
-}
-
-// ReportAgentStartIntent reports a Computer acceptance or a later runtime
-// observation for a durable first-start delivery. Replays use the same
-// dispatch id and lifecycle sequence, so a lost HTTP response is safe.
-func (c *Client) ReportAgentStartIntent(ctx context.Context, runtimeID, startDispatchID string, result map[string]any) error {
-	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-start-intents/%s/report", runtimeID, startDispatchID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ResetAgentRuntimeSession clears every server-owned provider resume pointer
@@ -964,6 +966,42 @@ func isTransientError(err error) bool {
 // retry is safe even if the server's prior response was lost in transit.
 func (c *Client) postJSONWithRetry(ctx context.Context, path string, reqBody any, respBody any, schedule []time.Duration) error {
 	return c.postJSONWithRetryToken(ctx, path, reqBody, respBody, schedule, c.tokenSnapshot())
+}
+
+// UploadTurnCapture posts one trusted, complete resident-Pi turn capture with
+// the cached durable agent credential. It intentionally does not use the
+// runner WebSocket: the daemon owns the Pi extension and redaction boundary.
+func (c *Client) UploadTurnCapture(ctx context.Context, runID string, capture protocol.TurnCaptureUpload, agentCredential string) (*protocol.TurnCaptureUploadResponse, error) {
+	var response protocol.TurnCaptureUploadResponse
+	if err := c.postJSONWithRetryToken(
+		ctx,
+		fmt.Sprintf("/api/v1/env-dispatch/runs/%s/turn-captures", runID),
+		capture,
+		&response,
+		defaultTerminalRetrySchedule,
+		agentCredential,
+	); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+// ReportTurnCaptureGap records a completed resident turn for which the daemon
+// could not produce a trusted complete capture. A caller may finish its local
+// unfinished-capture accounting only after this request is acknowledged.
+func (c *Client) ReportTurnCaptureGap(ctx context.Context, runID string, gap protocol.TurnCaptureGapReport, agentCredential string) (*protocol.TurnCaptureGapResponse, error) {
+	var response protocol.TurnCaptureGapResponse
+	if err := c.postJSONWithRetryToken(
+		ctx,
+		fmt.Sprintf("/api/v1/env-dispatch/runs/%s/turn-capture-gaps", runID),
+		gap,
+		&response,
+		defaultTerminalRetrySchedule,
+		agentCredential,
+	); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 func (c *Client) postJSONWithRetryToken(ctx context.Context, path string, reqBody any, respBody any, schedule []time.Duration, token string) error {

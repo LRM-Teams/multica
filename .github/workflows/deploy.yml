@@ -458,9 +458,9 @@ jobs:
             curl -fsS --retry 5 --retry-delay 2 "$url" >/dev/null
           done
 
-      # Run the new image's migration binary before changing any runtime
-      # container or the live Caddyfile. A failure is therefore reported as a
-      # migration failure and leaves the currently served stack untouched.
+      # Stop the old backend before the new image migrates. Migration 339 is a
+      # coordinated protocol cutover that removes agent_start_intent, so an
+      # old backend must never remain live against the new schema.
       - name: Run database migration
         run: |
           set -euo pipefail
@@ -470,6 +470,15 @@ jobs:
           export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
           export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+            docker compose \
+            --project-name multica \
+            --project-directory "${DEPLOY_DIR}" \
+            --env-file "${DEPLOY_DIR}/.env" \
+            -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+            -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" \
+            stop backend
           bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/run-aliyun-backend-migration.sh" \
             "${DEPLOY_DIR}" \
             "${RUNNER_TEMP}/multica-deploy-bundle"

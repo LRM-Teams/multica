@@ -44,6 +44,52 @@ func (q *Queries) AdvanceInteractionDAGDiagnosisSegmentFetch(ctx context.Context
 	return result.RowsAffected(), nil
 }
 
+const associateMixedRLProviderCall = `-- name: AssociateMixedRLProviderCall :execrows
+INSERT INTO interaction_dag_segment_provider_call (
+  segment_id, provider_call_id, run_id, run_agent_id,
+  call_ordinal, association_kind
+)
+SELECT $1, $2, segment.run_id,
+       segment.run_agent_id, call.call_ordinal, $3
+FROM interaction_dag_run_segment segment
+JOIN pi_provider_call call
+  ON call.call_id = $2
+ AND call.run_id = segment.run_id
+ AND call.run_agent_id = segment.run_agent_id
+ AND call.call_ordinal = $4
+WHERE segment.segment_id = $1
+  AND (
+    $3::text <> 'shared_producer'
+    OR EXISTS (
+      SELECT 1
+      FROM interaction_dag_segment_provider_call owner
+      WHERE owner.provider_call_id = call.call_id
+        AND owner.run_id = segment.run_id
+        AND owner.association_kind = 'owned'
+    )
+  )
+`
+
+type AssociateMixedRLProviderCallParams struct {
+	SegmentID       string `json:"segment_id"`
+	ProviderCallID  string `json:"provider_call_id"`
+	AssociationKind string `json:"association_kind"`
+	CallOrdinal     int64  `json:"call_ordinal"`
+}
+
+func (q *Queries) AssociateMixedRLProviderCall(ctx context.Context, arg AssociateMixedRLProviderCallParams) (int64, error) {
+	result, err := q.db.Exec(ctx, associateMixedRLProviderCall,
+		arg.SegmentID,
+		arg.ProviderCallID,
+		arg.AssociationKind,
+		arg.CallOrdinal,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const completeInteractionDAGDiagnosisRun = `-- name: CompleteInteractionDAGDiagnosisRun :execrows
 UPDATE interaction_dag_diagnosis_run run
 SET status = 'completed', completed_at = now(), updated_at = now()
@@ -89,6 +135,42 @@ func (q *Queries) CompleteInteractionDAGDiagnosisSegment(ctx context.Context, ar
 	return result.RowsAffected(), nil
 }
 
+const countMixedRLEdges = `-- name: CountMixedRLEdges :one
+SELECT count(*) FROM interaction_dag_causal_edge
+WHERE run_id = $1
+`
+
+func (q *Queries) CountMixedRLEdges(ctx context.Context, runID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countMixedRLEdges, runID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countMixedRLProviderCalls = `-- name: CountMixedRLProviderCalls :one
+SELECT count(*) FROM pi_provider_call
+WHERE run_id = $1
+`
+
+func (q *Queries) CountMixedRLProviderCalls(ctx context.Context, runID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countMixedRLProviderCalls, runID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countMixedRLSegments = `-- name: CountMixedRLSegments :one
+SELECT count(*) FROM interaction_dag_run_segment
+WHERE run_id = $1
+`
+
+func (q *Queries) CountMixedRLSegments(ctx context.Context, runID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countMixedRLSegments, runID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createInteractionDAGDiagnosisRun = `-- name: CreateInteractionDAGDiagnosisRun :exec
 INSERT INTO interaction_dag_diagnosis_run (run_id, project_id, task_id, topology_hash, ordered_segment_ids, status)
 VALUES ($1, $2, $3, $4, $5, 'running')
@@ -131,6 +213,62 @@ func (q *Queries) CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg 
 	return err
 }
 
+const createMixedRLFrozenSnapshot = `-- name: CreateMixedRLFrozenSnapshot :one
+INSERT INTO interaction_dag_frozen_snapshot (
+  snapshot_id, run_id, run_status, schema_version, normalization_version,
+  segment_count, call_count, edge_count, canonical_manifest, snapshot_hash
+) VALUES (
+  $1, $2, $3,
+  $4, $5,
+  $6, $7, $8,
+  $9, $10
+)
+RETURNING snapshot_id, run_id, run_status, schema_version, normalization_version, segment_count, call_count, edge_count, canonical_manifest, snapshot_hash, created_at
+`
+
+type CreateMixedRLFrozenSnapshotParams struct {
+	SnapshotID           string      `json:"snapshot_id"`
+	RunID                pgtype.UUID `json:"run_id"`
+	RunStatus            string      `json:"run_status"`
+	SchemaVersion        string      `json:"schema_version"`
+	NormalizationVersion string      `json:"normalization_version"`
+	SegmentCount         int64       `json:"segment_count"`
+	CallCount            int64       `json:"call_count"`
+	EdgeCount            int64       `json:"edge_count"`
+	CanonicalManifest    []byte      `json:"canonical_manifest"`
+	SnapshotHash         string      `json:"snapshot_hash"`
+}
+
+func (q *Queries) CreateMixedRLFrozenSnapshot(ctx context.Context, arg CreateMixedRLFrozenSnapshotParams) (InteractionDagFrozenSnapshot, error) {
+	row := q.db.QueryRow(ctx, createMixedRLFrozenSnapshot,
+		arg.SnapshotID,
+		arg.RunID,
+		arg.RunStatus,
+		arg.SchemaVersion,
+		arg.NormalizationVersion,
+		arg.SegmentCount,
+		arg.CallCount,
+		arg.EdgeCount,
+		arg.CanonicalManifest,
+		arg.SnapshotHash,
+	)
+	var i InteractionDagFrozenSnapshot
+	err := row.Scan(
+		&i.SnapshotID,
+		&i.RunID,
+		&i.RunStatus,
+		&i.SchemaVersion,
+		&i.NormalizationVersion,
+		&i.SegmentCount,
+		&i.CallCount,
+		&i.EdgeCount,
+		&i.CanonicalManifest,
+		&i.SnapshotHash,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const failInteractionDAGDiagnosisRun = `-- name: FailInteractionDAGDiagnosisRun :execrows
 UPDATE interaction_dag_diagnosis_run
 SET status = 'failed', last_error = $2, updated_at = now()
@@ -145,6 +283,105 @@ type FailInteractionDAGDiagnosisRunParams struct {
 // CAS: only an active run can be failed; last_error is bounded by the caller.
 func (q *Queries) FailInteractionDAGDiagnosisRun(ctx context.Context, arg FailInteractionDAGDiagnosisRunParams) (int64, error) {
 	result, err := q.db.Exec(ctx, failInteractionDAGDiagnosisRun, arg.RunID, arg.LastError)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const freezeMixedRLEdges = `-- name: FreezeMixedRLEdges :execrows
+UPDATE interaction_dag_causal_edge
+SET snapshot_id = $1
+WHERE run_id = $2 AND snapshot_id IS NULL
+`
+
+type FreezeMixedRLEdgesParams struct {
+	SnapshotID pgtype.Text `json:"snapshot_id"`
+	RunID      pgtype.UUID `json:"run_id"`
+}
+
+func (q *Queries) FreezeMixedRLEdges(ctx context.Context, arg FreezeMixedRLEdgesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, freezeMixedRLEdges, arg.SnapshotID, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getChannelMessageReactionMessageID = `-- name: GetChannelMessageReactionMessageID :one
+-- Resolves the reacted-to channel message for a successful reaction action.
+SELECT channel_message_id FROM channel_message_reaction
+WHERE id = $1
+`
+
+func (q *Queries) GetChannelMessageReactionMessageID(ctx context.Context, reactionID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getChannelMessageReactionMessageID, reactionID)
+	var channelMessageID pgtype.UUID
+	err := row.Scan(&channelMessageID)
+	return channelMessageID, err
+}
+
+const abortMixedRLUnfinishedProviderCalls = `-- name: AbortMixedRLUnfinishedProviderCalls :execrows
+-- Timeout freeze marks every still-observable unfinished call aborted and
+-- training-ineligible. Capture gaps cover turns whose batch never arrived.
+UPDATE pi_provider_call
+SET status = 'aborted',
+    response_complete = false,
+    training_eligible = false,
+    stop_reason = NULL,
+    completed_at = COALESCE(completed_at, $1)
+WHERE run_id = $2
+  AND frozen_at IS NULL
+  AND status = 'in_progress'
+`
+
+type AbortMixedRLUnfinishedProviderCallsParams struct {
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	RunID       pgtype.UUID        `json:"run_id"`
+}
+
+func (q *Queries) AbortMixedRLUnfinishedProviderCalls(ctx context.Context, arg AbortMixedRLUnfinishedProviderCallsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, abortMixedRLUnfinishedProviderCalls, arg.CompletedAt, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const freezeMixedRLProviderCalls = `-- name: FreezeMixedRLProviderCalls :execrows
+UPDATE pi_provider_call
+SET frozen_at = $1
+WHERE run_id = $2 AND frozen_at IS NULL
+`
+
+type FreezeMixedRLProviderCallsParams struct {
+	FrozenAt pgtype.Timestamptz `json:"frozen_at"`
+	RunID    pgtype.UUID        `json:"run_id"`
+}
+
+func (q *Queries) FreezeMixedRLProviderCalls(ctx context.Context, arg FreezeMixedRLProviderCallsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, freezeMixedRLProviderCalls, arg.FrozenAt, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const freezeMixedRLSegments = `-- name: FreezeMixedRLSegments :execrows
+UPDATE interaction_dag_run_segment
+SET snapshot_id = $1,
+    finalized_at = COALESCE(finalized_at, $2)
+WHERE run_id = $3 AND snapshot_id IS NULL
+`
+
+type FreezeMixedRLSegmentsParams struct {
+	SnapshotID pgtype.Text        `json:"snapshot_id"`
+	FrozenAt   pgtype.Timestamptz `json:"frozen_at"`
+	RunID      pgtype.UUID        `json:"run_id"`
+}
+
+func (q *Queries) FreezeMixedRLSegments(ctx context.Context, arg FreezeMixedRLSegmentsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, freezeMixedRLSegments, arg.SnapshotID, arg.FrozenAt, arg.RunID)
 	if err != nil {
 		return 0, err
 	}
@@ -443,6 +680,72 @@ func (q *Queries) GetLatestInteractionDAGDiagnosisRunForProject(ctx context.Cont
 	return i, err
 }
 
+const getMixedRLFrozenSnapshot = `-- name: GetMixedRLFrozenSnapshot :one
+SELECT snapshot_id, run_id, run_status, schema_version, normalization_version, segment_count, call_count, edge_count, canonical_manifest, snapshot_hash, created_at FROM interaction_dag_frozen_snapshot
+WHERE run_id = $1
+`
+
+func (q *Queries) GetMixedRLFrozenSnapshot(ctx context.Context, runID pgtype.UUID) (InteractionDagFrozenSnapshot, error) {
+	row := q.db.QueryRow(ctx, getMixedRLFrozenSnapshot, runID)
+	var i InteractionDagFrozenSnapshot
+	err := row.Scan(
+		&i.SnapshotID,
+		&i.RunID,
+		&i.RunStatus,
+		&i.SchemaVersion,
+		&i.NormalizationVersion,
+		&i.SegmentCount,
+		&i.CallCount,
+		&i.EdgeCount,
+		&i.CanonicalManifest,
+		&i.SnapshotHash,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getMixedRLProviderCall = `-- name: GetMixedRLProviderCall :one
+SELECT call_id, run_id, run_agent_id, turn_id, pi_session_id, call_ordinal, provider, model, api_kind, raw_provider_request, final_assistant_message, normalized_trajectory, normalization_version, status, stop_reason, response_complete, training_eligible, areal_session_id, areal_call_id, request_hash, response_hash, started_at, completed_at, frozen_at FROM pi_provider_call
+WHERE run_id = $1 AND call_id = $2
+`
+
+type GetMixedRLProviderCallParams struct {
+	RunID  pgtype.UUID `json:"run_id"`
+	CallID string      `json:"call_id"`
+}
+
+func (q *Queries) GetMixedRLProviderCall(ctx context.Context, arg GetMixedRLProviderCallParams) (PiProviderCall, error) {
+	row := q.db.QueryRow(ctx, getMixedRLProviderCall, arg.RunID, arg.CallID)
+	var i PiProviderCall
+	err := row.Scan(
+		&i.CallID,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.TurnID,
+		&i.PiSessionID,
+		&i.CallOrdinal,
+		&i.Provider,
+		&i.Model,
+		&i.ApiKind,
+		&i.RawProviderRequest,
+		&i.FinalAssistantMessage,
+		&i.NormalizedTrajectory,
+		&i.NormalizationVersion,
+		&i.Status,
+		&i.StopReason,
+		&i.ResponseComplete,
+		&i.TrainingEligible,
+		&i.ArealSessionID,
+		&i.ArealCallID,
+		&i.RequestHash,
+		&i.ResponseHash,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.FrozenAt,
+	)
+	return i, err
+}
+
 const getResumableInteractionDAGDiagnosisRun = `-- name: GetResumableInteractionDAGDiagnosisRun :one
 SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode, sandbox_mode
 FROM interaction_dag_diagnosis_run
@@ -595,6 +898,340 @@ func (q *Queries) InsertInteractionDAGStepReward(ctx context.Context, arg Insert
 		arg.Rationale,
 	)
 	return err
+}
+
+const insertMixedRLCausalEdge = `-- name: InsertMixedRLCausalEdge :one
+INSERT INTO interaction_dag_causal_edge (
+  edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type,
+  trigger_message_id, dst_call_id, edge_ordinal
+) VALUES (
+  $1, NULLIF($2, ''), $3,
+  $4, $5, $6,
+  $7, NULLIF($8, ''),
+  $9
+)
+RETURNING edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type, trigger_message_id, dst_call_id, edge_ordinal
+`
+
+type InsertMixedRLCausalEdgeParams struct {
+	EdgeID           pgtype.UUID `json:"edge_id"`
+	SnapshotID       interface{} `json:"snapshot_id"`
+	RunID            pgtype.UUID `json:"run_id"`
+	SrcSegmentID     string      `json:"src_segment_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+	Type             string      `json:"type"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+	DstCallID        interface{} `json:"dst_call_id"`
+	EdgeOrdinal      int64       `json:"edge_ordinal"`
+}
+
+func (q *Queries) InsertMixedRLCausalEdge(ctx context.Context, arg InsertMixedRLCausalEdgeParams) (InteractionDagCausalEdge, error) {
+	row := q.db.QueryRow(ctx, insertMixedRLCausalEdge,
+		arg.EdgeID,
+		arg.SnapshotID,
+		arg.RunID,
+		arg.SrcSegmentID,
+		arg.DstSegmentID,
+		arg.Type,
+		arg.TriggerMessageID,
+		arg.DstCallID,
+		arg.EdgeOrdinal,
+	)
+	var i InteractionDagCausalEdge
+	err := row.Scan(
+		&i.EdgeID,
+		&i.SnapshotID,
+		&i.RunID,
+		&i.SrcSegmentID,
+		&i.DstSegmentID,
+		&i.Type,
+		&i.TriggerMessageID,
+		&i.DstCallID,
+		&i.EdgeOrdinal,
+	)
+	return i, err
+}
+
+const insertMixedRLMessageConsumption = `-- name: InsertMixedRLMessageConsumption :one
+INSERT INTO pi_message_consumption (
+  consumption_id, run_id, run_agent_id, turn_id, channel_message_id,
+  source, effective_from_call_id, consumed_at
+)
+SELECT $1, $2, $3,
+       $4, $5, $6,
+       call.call_id, $7
+FROM pi_provider_call call
+WHERE call.run_id = $2
+  AND call.run_agent_id = $3
+  AND call.call_id = $8
+  AND call.started_at > $7
+RETURNING pi_message_consumption.consumption_id, pi_message_consumption.run_id, pi_message_consumption.run_agent_id, pi_message_consumption.turn_id, pi_message_consumption.channel_message_id, pi_message_consumption.source, pi_message_consumption.effective_from_call_id, pi_message_consumption.consumed_at
+`
+
+type InsertMixedRLMessageConsumptionParams struct {
+	ConsumptionID       pgtype.UUID        `json:"consumption_id"`
+	RunID               pgtype.UUID        `json:"run_id"`
+	RunAgentID          pgtype.UUID        `json:"run_agent_id"`
+	TurnID              pgtype.UUID        `json:"turn_id"`
+	ChannelMessageID    pgtype.UUID        `json:"channel_message_id"`
+	Source              string             `json:"source"`
+	ConsumedAt          pgtype.Timestamptz `json:"consumed_at"`
+	EffectiveFromCallID string             `json:"effective_from_call_id"`
+}
+
+func (q *Queries) InsertMixedRLMessageConsumption(ctx context.Context, arg InsertMixedRLMessageConsumptionParams) (PiMessageConsumption, error) {
+	row := q.db.QueryRow(ctx, insertMixedRLMessageConsumption,
+		arg.ConsumptionID,
+		arg.RunID,
+		arg.RunAgentID,
+		arg.TurnID,
+		arg.ChannelMessageID,
+		arg.Source,
+		arg.ConsumedAt,
+		arg.EffectiveFromCallID,
+	)
+	var i PiMessageConsumption
+	err := row.Scan(
+		&i.ConsumptionID,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.TurnID,
+		&i.ChannelMessageID,
+		&i.Source,
+		&i.EffectiveFromCallID,
+		&i.ConsumedAt,
+	)
+	return i, err
+}
+
+const insertMixedRLProviderCall = `-- name: InsertMixedRLProviderCall :one
+WITH allocated AS (
+  UPDATE env_dispatch_run_agent
+  SET next_call_ordinal = next_call_ordinal + 1
+  WHERE run_id = $2
+    AND run_agent_id = $3
+    AND next_call_ordinal = $22
+  RETURNING next_call_ordinal - 1 AS call_ordinal
+)
+INSERT INTO pi_provider_call (
+  call_id, run_id, run_agent_id, turn_id, pi_session_id, call_ordinal,
+  provider, model, api_kind, raw_provider_request, final_assistant_message,
+  normalized_trajectory, normalization_version, status, stop_reason,
+  response_complete, training_eligible, areal_session_id, areal_call_id,
+  request_hash, response_hash, started_at, completed_at
+)
+SELECT
+  $1, $2, $3, $4,
+  $5, allocated.call_ordinal, $6,
+  $7, $8, $9,
+  $10, $11,
+  NULLIF($12, ''), $13,
+  NULLIF($14, ''), $15,
+  (
+    $13::text = 'completed'
+    AND $15::boolean
+    AND $14::text IN ('stop', 'toolUse')
+  ),
+  NULLIF($16, ''), NULLIF($17, ''),
+  $18, NULLIF($19, ''),
+  $20, $21
+FROM allocated
+RETURNING pi_provider_call.call_id, pi_provider_call.run_id, pi_provider_call.run_agent_id, pi_provider_call.turn_id, pi_provider_call.pi_session_id, pi_provider_call.call_ordinal, pi_provider_call.provider, pi_provider_call.model, pi_provider_call.api_kind, pi_provider_call.raw_provider_request, pi_provider_call.final_assistant_message, pi_provider_call.normalized_trajectory, pi_provider_call.normalization_version, pi_provider_call.status, pi_provider_call.stop_reason, pi_provider_call.response_complete, pi_provider_call.training_eligible, pi_provider_call.areal_session_id, pi_provider_call.areal_call_id, pi_provider_call.request_hash, pi_provider_call.response_hash, pi_provider_call.started_at, pi_provider_call.completed_at, pi_provider_call.frozen_at
+`
+
+type InsertMixedRLProviderCallParams struct {
+	CallID                string             `json:"call_id"`
+	RunID                 pgtype.UUID        `json:"run_id"`
+	RunAgentID            pgtype.UUID        `json:"run_agent_id"`
+	TurnID                pgtype.UUID        `json:"turn_id"`
+	PiSessionID           string             `json:"pi_session_id"`
+	Provider              string             `json:"provider"`
+	Model                 string             `json:"model"`
+	ApiKind               string             `json:"api_kind"`
+	RawProviderRequest    []byte             `json:"raw_provider_request"`
+	FinalAssistantMessage []byte             `json:"final_assistant_message"`
+	NormalizedTrajectory  []byte             `json:"normalized_trajectory"`
+	NormalizationVersion  interface{}        `json:"normalization_version"`
+	Status                string             `json:"status"`
+	StopReason            interface{}        `json:"stop_reason"`
+	ResponseComplete      bool               `json:"response_complete"`
+	ArealSessionID        interface{}        `json:"areal_session_id"`
+	ArealCallID           interface{}        `json:"areal_call_id"`
+	RequestHash           string             `json:"request_hash"`
+	ResponseHash          interface{}        `json:"response_hash"`
+	StartedAt             pgtype.Timestamptz `json:"started_at"`
+	CompletedAt           pgtype.Timestamptz `json:"completed_at"`
+	CallOrdinal           int64              `json:"call_ordinal"`
+}
+
+func (q *Queries) InsertMixedRLProviderCall(ctx context.Context, arg InsertMixedRLProviderCallParams) (PiProviderCall, error) {
+	row := q.db.QueryRow(ctx, insertMixedRLProviderCall,
+		arg.CallID,
+		arg.RunID,
+		arg.RunAgentID,
+		arg.TurnID,
+		arg.PiSessionID,
+		arg.Provider,
+		arg.Model,
+		arg.ApiKind,
+		arg.RawProviderRequest,
+		arg.FinalAssistantMessage,
+		arg.NormalizedTrajectory,
+		arg.NormalizationVersion,
+		arg.Status,
+		arg.StopReason,
+		arg.ResponseComplete,
+		arg.ArealSessionID,
+		arg.ArealCallID,
+		arg.RequestHash,
+		arg.ResponseHash,
+		arg.StartedAt,
+		arg.CompletedAt,
+		arg.CallOrdinal,
+	)
+	var i PiProviderCall
+	err := row.Scan(
+		&i.CallID,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.TurnID,
+		&i.PiSessionID,
+		&i.CallOrdinal,
+		&i.Provider,
+		&i.Model,
+		&i.ApiKind,
+		&i.RawProviderRequest,
+		&i.FinalAssistantMessage,
+		&i.NormalizedTrajectory,
+		&i.NormalizationVersion,
+		&i.Status,
+		&i.StopReason,
+		&i.ResponseComplete,
+		&i.TrainingEligible,
+		&i.ArealSessionID,
+		&i.ArealCallID,
+		&i.RequestHash,
+		&i.ResponseHash,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.FrozenAt,
+	)
+	return i, err
+}
+
+const insertMixedRLRunSegment = `-- name: InsertMixedRLRunSegment :one
+INSERT INTO interaction_dag_run_segment (
+  segment_id, snapshot_id, run_id, run_agent_id, kind,
+  canonical_action_id, segment_ordinal, reward, reward_source,
+  provisional_at, finalized_at
+) VALUES (
+  $1, NULLIF($2, ''), $3,
+  $4, $5, $6,
+  $7, $8,
+  NULLIF($9, ''), $10,
+  $11
+)
+RETURNING segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at
+`
+
+type InsertMixedRLRunSegmentParams struct {
+	SegmentID         string             `json:"segment_id"`
+	SnapshotID        interface{}        `json:"snapshot_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	RunAgentID        pgtype.UUID        `json:"run_agent_id"`
+	Kind              string             `json:"kind"`
+	CanonicalActionID pgtype.UUID        `json:"canonical_action_id"`
+	SegmentOrdinal    int64              `json:"segment_ordinal"`
+	Reward            pgtype.Float8      `json:"reward"`
+	RewardSource      interface{}        `json:"reward_source"`
+	ProvisionalAt     pgtype.Timestamptz `json:"provisional_at"`
+	FinalizedAt       pgtype.Timestamptz `json:"finalized_at"`
+}
+
+func (q *Queries) InsertMixedRLRunSegment(ctx context.Context, arg InsertMixedRLRunSegmentParams) (InteractionDagRunSegment, error) {
+	row := q.db.QueryRow(ctx, insertMixedRLRunSegment,
+		arg.SegmentID,
+		arg.SnapshotID,
+		arg.RunID,
+		arg.RunAgentID,
+		arg.Kind,
+		arg.CanonicalActionID,
+		arg.SegmentOrdinal,
+		arg.Reward,
+		arg.RewardSource,
+		arg.ProvisionalAt,
+		arg.FinalizedAt,
+	)
+	var i InteractionDagRunSegment
+	err := row.Scan(
+		&i.SegmentID,
+		&i.SnapshotID,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.Kind,
+		&i.CanonicalActionID,
+		&i.SegmentOrdinal,
+		&i.Reward,
+		&i.RewardSource,
+		&i.ProvisionalAt,
+		&i.FinalizedAt,
+	)
+	return i, err
+}
+
+const insertMixedRLVisibleAction = `-- name: InsertMixedRLVisibleAction :one
+INSERT INTO pi_visible_action (
+  action_id, run_id, run_agent_id, turn_id, kind, canonical_id,
+  producer_call_id, action_ordinal, status, created_at
+) VALUES (
+  $1, $2, $3,
+  $4, $5, $6,
+  NULLIF($7, ''), $8,
+  $9, $10
+)
+RETURNING action_id, run_id, run_agent_id, turn_id, kind, canonical_id, producer_call_id, action_ordinal, status, created_at
+`
+
+type InsertMixedRLVisibleActionParams struct {
+	ActionID       pgtype.UUID        `json:"action_id"`
+	RunID          pgtype.UUID        `json:"run_id"`
+	RunAgentID     pgtype.UUID        `json:"run_agent_id"`
+	TurnID         pgtype.UUID        `json:"turn_id"`
+	Kind           string             `json:"kind"`
+	CanonicalID    pgtype.UUID        `json:"canonical_id"`
+	ProducerCallID interface{}        `json:"producer_call_id"`
+	ActionOrdinal  int64              `json:"action_ordinal"`
+	Status         string             `json:"status"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertMixedRLVisibleAction(ctx context.Context, arg InsertMixedRLVisibleActionParams) (PiVisibleAction, error) {
+	row := q.db.QueryRow(ctx, insertMixedRLVisibleAction,
+		arg.ActionID,
+		arg.RunID,
+		arg.RunAgentID,
+		arg.TurnID,
+		arg.Kind,
+		arg.CanonicalID,
+		arg.ProducerCallID,
+		arg.ActionOrdinal,
+		arg.Status,
+		arg.CreatedAt,
+	)
+	var i PiVisibleAction
+	err := row.Scan(
+		&i.ActionID,
+		&i.RunID,
+		&i.RunAgentID,
+		&i.TurnID,
+		&i.Kind,
+		&i.CanonicalID,
+		&i.ProducerCallID,
+		&i.ActionOrdinal,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const listInteractionDAGDiagnosisSegments = `-- name: ListInteractionDAGDiagnosisSegments :many
@@ -907,6 +1544,314 @@ func (q *Queries) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ct
 	return items, nil
 }
 
+const listMixedRLCausalEdgesCanonical = `-- name: ListMixedRLCausalEdgesCanonical :many
+SELECT edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type, trigger_message_id, dst_call_id, edge_ordinal FROM interaction_dag_causal_edge
+WHERE run_id = $1
+ORDER BY edge_ordinal, edge_id
+`
+
+func (q *Queries) ListMixedRLCausalEdgesCanonical(ctx context.Context, runID pgtype.UUID) ([]InteractionDagCausalEdge, error) {
+	rows, err := q.db.Query(ctx, listMixedRLCausalEdgesCanonical, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagCausalEdge{}
+	for rows.Next() {
+		var i InteractionDagCausalEdge
+		if err := rows.Scan(
+			&i.EdgeID,
+			&i.SnapshotID,
+			&i.RunID,
+			&i.SrcSegmentID,
+			&i.DstSegmentID,
+			&i.Type,
+			&i.TriggerMessageID,
+			&i.DstCallID,
+			&i.EdgeOrdinal,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMixedRLMessageConsumptions = `-- name: ListMixedRLMessageConsumptions :many
+SELECT consumption_id, run_id, run_agent_id, turn_id, channel_message_id, source, effective_from_call_id, consumed_at FROM pi_message_consumption
+WHERE run_id = $1
+ORDER BY consumed_at, consumption_id
+`
+
+func (q *Queries) ListMixedRLMessageConsumptions(ctx context.Context, runID pgtype.UUID) ([]PiMessageConsumption, error) {
+	rows, err := q.db.Query(ctx, listMixedRLMessageConsumptions, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PiMessageConsumption{}
+	for rows.Next() {
+		var i PiMessageConsumption
+		if err := rows.Scan(
+			&i.ConsumptionID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.TurnID,
+			&i.ChannelMessageID,
+			&i.Source,
+			&i.EffectiveFromCallID,
+			&i.ConsumedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMixedRLProviderCallsCanonical = `-- name: ListMixedRLProviderCallsCanonical :many
+SELECT call.call_id, call.run_id, call.run_agent_id, call.turn_id, call.pi_session_id, call.call_ordinal, call.provider, call.model, call.api_kind, call.raw_provider_request, call.final_assistant_message, call.normalized_trajectory, call.normalization_version, call.status, call.stop_reason, call.response_complete, call.training_eligible, call.areal_session_id, call.areal_call_id, call.request_hash, call.response_hash, call.started_at, call.completed_at, call.frozen_at
+FROM pi_provider_call call
+JOIN env_dispatch_run_agent agent ON agent.run_agent_id = call.run_agent_id
+WHERE call.run_id = $1
+ORDER BY agent.source_agent_id, agent.run_agent_id, call.call_ordinal, call.call_id
+`
+
+func (q *Queries) ListMixedRLProviderCallsCanonical(ctx context.Context, runID pgtype.UUID) ([]PiProviderCall, error) {
+	rows, err := q.db.Query(ctx, listMixedRLProviderCallsCanonical, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PiProviderCall{}
+	for rows.Next() {
+		var i PiProviderCall
+		if err := rows.Scan(
+			&i.CallID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.TurnID,
+			&i.PiSessionID,
+			&i.CallOrdinal,
+			&i.Provider,
+			&i.Model,
+			&i.ApiKind,
+			&i.RawProviderRequest,
+			&i.FinalAssistantMessage,
+			&i.NormalizedTrajectory,
+			&i.NormalizationVersion,
+			&i.Status,
+			&i.StopReason,
+			&i.ResponseComplete,
+			&i.TrainingEligible,
+			&i.ArealSessionID,
+			&i.ArealCallID,
+			&i.RequestHash,
+			&i.ResponseHash,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.FrozenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMixedRLSegmentCallsCanonical = `-- name: ListMixedRLSegmentCallsCanonical :many
+SELECT association.segment_id, association.provider_call_id, association.run_id, association.run_agent_id, association.call_ordinal, association.association_kind, association.created_at
+FROM interaction_dag_segment_provider_call association
+JOIN interaction_dag_run_segment segment
+  ON segment.segment_id = association.segment_id
+WHERE segment.run_id = $1
+ORDER BY segment.segment_ordinal, association.call_ordinal,
+         association.provider_call_id
+`
+
+func (q *Queries) ListMixedRLSegmentCallsCanonical(ctx context.Context, runID pgtype.UUID) ([]InteractionDagSegmentProviderCall, error) {
+	rows, err := q.db.Query(ctx, listMixedRLSegmentCallsCanonical, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagSegmentProviderCall{}
+	for rows.Next() {
+		var i InteractionDagSegmentProviderCall
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.ProviderCallID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.CallOrdinal,
+			&i.AssociationKind,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMixedRLSnapshotSegmentsCanonical = `-- name: ListMixedRLSnapshotSegmentsCanonical :many
+SELECT segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at FROM interaction_dag_run_segment
+WHERE snapshot_id = $1
+ORDER BY segment_ordinal, segment_id
+`
+
+func (q *Queries) ListMixedRLSnapshotSegmentsCanonical(ctx context.Context, snapshotID pgtype.Text) ([]InteractionDagRunSegment, error) {
+	rows, err := q.db.Query(ctx, listMixedRLSnapshotSegmentsCanonical, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagRunSegment{}
+	for rows.Next() {
+		var i InteractionDagRunSegment
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.SnapshotID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.Kind,
+			&i.CanonicalActionID,
+			&i.SegmentOrdinal,
+			&i.Reward,
+			&i.RewardSource,
+			&i.ProvisionalAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMixedRLRunSegmentsCanonical = `-- name: ListMixedRLRunSegmentsCanonical :many
+SELECT segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at FROM interaction_dag_run_segment
+WHERE run_id = $1
+ORDER BY segment_ordinal, segment_id
+`
+
+func (q *Queries) ListMixedRLRunSegmentsCanonical(ctx context.Context, runID pgtype.UUID) ([]InteractionDagRunSegment, error) {
+	rows, err := q.db.Query(ctx, listMixedRLRunSegmentsCanonical, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagRunSegment{}
+	for rows.Next() {
+		var i InteractionDagRunSegment
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.SnapshotID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.Kind,
+			&i.CanonicalActionID,
+			&i.SegmentOrdinal,
+			&i.Reward,
+			&i.RewardSource,
+			&i.ProvisionalAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMixedRLVisibleActionsCanonical = `-- name: ListMixedRLVisibleActionsCanonical :many
+SELECT action_id, run_id, run_agent_id, turn_id, kind, canonical_id, producer_call_id, action_ordinal, status, created_at FROM pi_visible_action
+WHERE run_id = $1
+ORDER BY created_at, canonical_id
+`
+
+func (q *Queries) ListMixedRLVisibleActionsCanonical(ctx context.Context, runID pgtype.UUID) ([]PiVisibleAction, error) {
+	rows, err := q.db.Query(ctx, listMixedRLVisibleActionsCanonical, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PiVisibleAction{}
+	for rows.Next() {
+		var i PiVisibleAction
+		if err := rows.Scan(
+			&i.ActionID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.TurnID,
+			&i.Kind,
+			&i.CanonicalID,
+			&i.ProducerCallID,
+			&i.ActionOrdinal,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordMixedRLLateEvent = `-- name: RecordMixedRLLateEvent :exec
+INSERT INTO env_dispatch_run_audit_event (
+  event_id, run_id, run_agent_id, turn_id, kind, reason, summary, snapshot_id
+) VALUES (
+  $1, $2, $3,
+  $4, 'late_event', $5, $6,
+  $7
+)
+`
+
+type RecordMixedRLLateEventParams struct {
+	EventID    pgtype.UUID `json:"event_id"`
+	RunID      pgtype.UUID `json:"run_id"`
+	RunAgentID pgtype.UUID `json:"run_agent_id"`
+	TurnID     pgtype.UUID `json:"turn_id"`
+	Reason     string      `json:"reason"`
+	Summary    []byte      `json:"summary"`
+	SnapshotID pgtype.Text `json:"snapshot_id"`
+}
+
+func (q *Queries) RecordMixedRLLateEvent(ctx context.Context, arg RecordMixedRLLateEventParams) error {
+	_, err := q.db.Exec(ctx, recordMixedRLLateEvent,
+		arg.EventID,
+		arg.RunID,
+		arg.RunAgentID,
+		arg.TurnID,
+		arg.Reason,
+		arg.Summary,
+		arg.SnapshotID,
+	)
+	return err
+}
+
 const setInteractionDAGDiagnosisRunSandbox = `-- name: SetInteractionDAGDiagnosisRunSandbox :exec
 UPDATE interaction_dag_diagnosis_run
 SET sandbox_instance_id = $2, capability_token_hash = $3, execution_mode = $4,
@@ -1037,4 +1982,137 @@ func (q *Queries) UpsertInteractionDAGSessionRun(ctx context.Context, arg Upsert
 		arg.IssueID,
 	)
 	return err
+}
+
+const validateMixedRLRunForFreeze = `-- name: ValidateMixedRLRunForFreeze :one
+SELECT
+  (
+    SELECT count(*)
+    FROM env_dispatch_run_agent agent
+    WHERE agent.run_id = $1
+      AND agent.training_mode = 'online_rl'
+      AND agent.areal_session_id IS NULL
+  ) AS missing_online_session_count,
+  (
+    SELECT count(*)
+    FROM env_dispatch_run_agent agent
+    WHERE agent.run_id = $1
+      AND (
+        (agent.training_mode = 'online_rl' AND agent.areal_session_id IS NULL)
+        OR (agent.training_mode = 'none' AND agent.areal_session_id IS NOT NULL)
+      )
+  ) AS invalid_run_agent_identity_count,
+  (
+    SELECT count(*)
+    FROM pi_provider_call call
+    JOIN env_dispatch_run_agent agent
+      ON agent.run_id = call.run_id
+     AND agent.run_agent_id = call.run_agent_id
+    WHERE call.run_id = $1
+      AND (
+        call.pi_session_id IS DISTINCT FROM agent.pi_session_id
+        OR (
+          agent.training_mode = 'online_rl'
+          AND (
+            agent.areal_session_id IS NULL
+            OR call.areal_session_id IS DISTINCT FROM agent.areal_session_id
+            OR call.areal_call_id IS NULL
+          )
+        )
+        OR (
+          agent.training_mode <> 'online_rl'
+          AND (call.areal_session_id IS NOT NULL OR call.areal_call_id IS NOT NULL)
+        )
+      )
+  ) AS invalid_provider_call_identity_count,
+  (
+    SELECT count(*)
+    FROM env_dispatch_turn_capture_batch batch
+    JOIN env_dispatch_resident_turn turn ON turn.turn_id = batch.turn_id
+    JOIN env_dispatch_run_agent agent
+      ON agent.run_id = turn.run_id
+     AND agent.run_agent_id = turn.run_agent_id
+    WHERE turn.run_id = $1
+      AND batch.capture_boundary IS DISTINCT FROM agent.capture_boundary
+  ) AS capture_boundary_mismatch_count,
+  (
+    SELECT count(*)
+    FROM interaction_dag_segment_provider_call shared
+    WHERE shared.run_id = $1
+      AND shared.association_kind = 'shared_producer'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM interaction_dag_segment_provider_call owner
+        WHERE owner.run_id = shared.run_id
+          AND owner.provider_call_id = shared.provider_call_id
+          AND owner.association_kind = 'owned'
+      )
+  ) AS shared_without_owner_count,
+  (
+    SELECT count(*)
+    FROM pi_message_consumption consumption
+    LEFT JOIN pi_provider_call call
+      ON call.run_id = consumption.run_id
+     AND call.run_agent_id = consumption.run_agent_id
+     AND call.call_id = consumption.effective_from_call_id
+    WHERE consumption.run_id = $1
+      AND (call.call_id IS NULL OR call.started_at <= consumption.consumed_at)
+  ) AS invalid_consumption_count,
+  (
+    SELECT count(*)
+    FROM (
+      SELECT segment.run_agent_id
+      FROM interaction_dag_run_segment segment
+      WHERE segment.run_id = $1
+        AND segment.kind = 'terminal'
+      GROUP BY segment.run_agent_id
+      HAVING count(*) > 1
+    ) duplicate_terminal
+  ) AS duplicate_terminal_agent_count,
+  (
+    SELECT count(*)
+    FROM env_dispatch_resident_turn turn
+    WHERE turn.run_id = $1
+      AND turn.status = 'settled'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM env_dispatch_turn_capture_batch batch
+        WHERE batch.turn_id = turn.turn_id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM env_dispatch_run_audit_event gap
+        WHERE gap.run_id = turn.run_id
+          AND gap.run_agent_id = turn.run_agent_id
+          AND gap.turn_id = turn.turn_id
+          AND gap.kind = 'capture_gap'
+      )
+  ) AS uncovered_settled_turn_count
+`
+
+type ValidateMixedRLRunForFreezeRow struct {
+	MissingOnlineSessionCount        int64 `json:"missing_online_session_count"`
+	InvalidRunAgentIdentityCount     int64 `json:"invalid_run_agent_identity_count"`
+	InvalidProviderCallIdentityCount int64 `json:"invalid_provider_call_identity_count"`
+	CaptureBoundaryMismatchCount     int64 `json:"capture_boundary_mismatch_count"`
+	SharedWithoutOwnerCount          int64 `json:"shared_without_owner_count"`
+	InvalidConsumptionCount          int64 `json:"invalid_consumption_count"`
+	DuplicateTerminalAgentCount      int64 `json:"duplicate_terminal_agent_count"`
+	UncoveredSettledTurnCount        int64 `json:"uncovered_settled_turn_count"`
+}
+
+func (q *Queries) ValidateMixedRLRunForFreeze(ctx context.Context, runID pgtype.UUID) (ValidateMixedRLRunForFreezeRow, error) {
+	row := q.db.QueryRow(ctx, validateMixedRLRunForFreeze, runID)
+	var i ValidateMixedRLRunForFreezeRow
+	err := row.Scan(
+		&i.MissingOnlineSessionCount,
+		&i.InvalidRunAgentIdentityCount,
+		&i.InvalidProviderCallIdentityCount,
+		&i.CaptureBoundaryMismatchCount,
+		&i.SharedWithoutOwnerCount,
+		&i.InvalidConsumptionCount,
+		&i.DuplicateTerminalAgentCount,
+		&i.UncoveredSettledTurnCount,
+	)
+	return i, err
 }

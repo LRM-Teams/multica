@@ -170,7 +170,11 @@ func projectNarrativeTimelineRow(body protocol.AgentActivityNarrativeBody, fallb
 		row.Subtext = text
 	case protocol.ActivityKindWorking:
 		switch body.DetailKind {
-		case "message_received":
+		case "message_received", "compacting_context", "compaction_finished":
+			// Round lifecycle facts share the same timeline grammar: Working is
+			// the stable action heading and the event-specific fact is subtext.
+			// This keeps compaction aligned with Message received instead of
+			// promoting each lifecycle detail into a competing top-level state.
 			row.Title = "Working"
 			row.Subtext = text
 		default:

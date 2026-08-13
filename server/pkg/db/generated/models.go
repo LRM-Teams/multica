@@ -615,16 +615,197 @@ type EnvDispatchRequest struct {
 }
 
 type EnvDispatchRun struct {
-	ProjectID      pgtype.UUID        `json:"project_id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	TrainingMode   bool               `json:"training_mode"`
-	RootTaskID     pgtype.UUID        `json:"root_task_id"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ProjectID                   pgtype.UUID        `json:"project_id"`
+	WorkspaceID                 pgtype.UUID        `json:"workspace_id"`
+	TrainingMode                bool               `json:"training_mode"`
+	RootTaskID                  pgtype.UUID        `json:"root_task_id"`
+	CreatedAt                   pgtype.Timestamptz `json:"created_at"`
+	RunID                       pgtype.UUID        `json:"run_id"`
+	SourceTaskID                pgtype.UUID        `json:"source_task_id"`
+	SampleIndex                 int32              `json:"sample_index"`
+	LocalIssueID                pgtype.UUID        `json:"local_issue_id"`
+	LocalChannelID              pgtype.UUID        `json:"local_channel_id"`
+	Status                      string             `json:"status"`
+	QuietWindowMs               int32              `json:"quiet_window_ms"`
+	TotalTimeoutSeconds         int32              `json:"total_timeout_seconds"`
+	InitialMessageSubmittedAt   pgtype.Timestamptz `json:"initial_message_submitted_at"`
+	TimeoutDeadlineAt           pgtype.Timestamptz `json:"timeout_deadline_at"`
+	QuietCandidateSince         pgtype.Timestamptz `json:"quiet_candidate_since"`
+	ActiveTurnCount             int64              `json:"active_turn_count"`
+	PendingDeliveryCount        int64              `json:"pending_delivery_count"`
+	QueuedMessageCount          int64              `json:"queued_message_count"`
+	InflightToolCount           int64              `json:"inflight_tool_count"`
+	UnfinishedCaptureBatchCount int64              `json:"unfinished_capture_batch_count"`
+	CaptureGapCount             int64              `json:"capture_gap_count"`
+	FrozenSnapshotID            pgtype.Text        `json:"frozen_snapshot_id"`
+	SnapshotHash                pgtype.Text        `json:"snapshot_hash"`
+	FrozenAt                    pgtype.Timestamptz `json:"frozen_at"`
+	UpdatedAt                   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EnvDispatchDeliveryObligation struct {
+	DeliveryID             pgtype.UUID        `json:"delivery_id"`
+	RunID                  pgtype.UUID        `json:"run_id"`
+	ChannelMessageID       pgtype.UUID        `json:"channel_message_id"`
+	SourceRecipientAgentID pgtype.UUID        `json:"source_recipient_agent_id"`
+	RunAgentID             pgtype.UUID        `json:"run_agent_id"`
+	State                  string             `json:"state"`
+	QueuedAt               pgtype.Timestamptz `json:"queued_at"`
+	SettledAt              pgtype.Timestamptz `json:"settled_at"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+}
+
+type EnvDispatchResidentTurn struct {
+	TurnID             pgtype.UUID        `json:"turn_id"`
+	RunID              pgtype.UUID        `json:"run_id"`
+	RunAgentID         pgtype.UUID        `json:"run_agent_id"`
+	TurnOrdinal        int64              `json:"turn_ordinal"`
+	Status             string             `json:"status"`
+	CaptureStartedAt   pgtype.Timestamptz `json:"capture_started_at"`
+	CaptureCompletedAt pgtype.Timestamptz `json:"capture_completed_at"`
+	AcceptedMessageIds []pgtype.UUID      `json:"accepted_message_ids"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	CompletedAt        pgtype.Timestamptz `json:"completed_at"`
+}
+
+type EnvDispatchRunAgent struct {
+	RunAgentID       pgtype.UUID        `json:"run_agent_id"`
+	RunID            pgtype.UUID        `json:"run_id"`
+	SourceAgentID    pgtype.UUID        `json:"source_agent_id"`
+	ExecutionAgentID pgtype.UUID        `json:"execution_agent_id"`
+	RuntimeID        pgtype.UUID        `json:"runtime_id"`
+	PiSessionID      string             `json:"pi_session_id"`
+	TrainingMode     string             `json:"training_mode"`
+	ArealSessionID   pgtype.Text        `json:"areal_session_id"`
+	CaptureBoundary  string             `json:"capture_boundary"`
+	NextTurnOrdinal  int64              `json:"next_turn_ordinal"`
+	NextCallOrdinal  int64              `json:"next_call_ordinal"`
+	SettledAt        pgtype.Timestamptz `json:"settled_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
+type EnvDispatchRunAuditEvent struct {
+	EventID    pgtype.UUID        `json:"event_id"`
+	RunID      pgtype.UUID        `json:"run_id"`
+	RunAgentID pgtype.UUID        `json:"run_agent_id"`
+	TurnID     pgtype.UUID        `json:"turn_id"`
+	Kind       string             `json:"kind"`
+	Reason     string             `json:"reason"`
+	Summary    []byte             `json:"summary"`
+	SnapshotID pgtype.Text        `json:"snapshot_id"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
+}
+
+type EnvDispatchTurnCaptureBatch struct {
+	CaptureBatchID   pgtype.UUID        `json:"capture_batch_id"`
+	TurnID           pgtype.UUID        `json:"turn_id"`
+	CaptureBoundary  string             `json:"capture_boundary"`
+	CallCount        int32              `json:"call_count"`
+	ActionCount      int32              `json:"action_count"`
+	ConsumptionCount int32              `json:"consumption_count"`
+	PayloadHash      string             `json:"payload_hash"`
+	AcceptedAt       pgtype.Timestamptz `json:"accepted_at"`
+}
+
+type InteractionDagCausalEdge struct {
+	EdgeID           pgtype.UUID `json:"edge_id"`
+	SnapshotID       pgtype.Text `json:"snapshot_id"`
+	RunID            pgtype.UUID `json:"run_id"`
+	SrcSegmentID     string      `json:"src_segment_id"`
+	DstSegmentID     string      `json:"dst_segment_id"`
+	Type             string      `json:"type"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+	DstCallID        pgtype.Text `json:"dst_call_id"`
+	EdgeOrdinal      int64       `json:"edge_ordinal"`
+}
+
+type InteractionDagFrozenSnapshot struct {
+	SnapshotID           string             `json:"snapshot_id"`
+	RunID                pgtype.UUID        `json:"run_id"`
+	RunStatus            string             `json:"run_status"`
+	SchemaVersion        string             `json:"schema_version"`
+	NormalizationVersion string             `json:"normalization_version"`
+	SegmentCount         int64              `json:"segment_count"`
+	CallCount            int64              `json:"call_count"`
+	EdgeCount            int64              `json:"edge_count"`
+	CanonicalManifest    []byte             `json:"canonical_manifest"`
+	SnapshotHash         string             `json:"snapshot_hash"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+}
+
+type InteractionDagRunSegment struct {
+	SegmentID         string             `json:"segment_id"`
+	SnapshotID        pgtype.Text        `json:"snapshot_id"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	RunAgentID        pgtype.UUID        `json:"run_agent_id"`
+	Kind              string             `json:"kind"`
+	CanonicalActionID pgtype.UUID        `json:"canonical_action_id"`
+	SegmentOrdinal    int64              `json:"segment_ordinal"`
+	Reward            pgtype.Float8      `json:"reward"`
+	RewardSource      pgtype.Text        `json:"reward_source"`
+	ProvisionalAt     pgtype.Timestamptz `json:"provisional_at"`
+	FinalizedAt       pgtype.Timestamptz `json:"finalized_at"`
+}
+
+type InteractionDagSegmentProviderCall struct {
+	SegmentID       string             `json:"segment_id"`
+	ProviderCallID  string             `json:"provider_call_id"`
+	RunID           pgtype.UUID        `json:"run_id"`
+	RunAgentID      pgtype.UUID        `json:"run_agent_id"`
+	CallOrdinal     int64              `json:"call_ordinal"`
+	AssociationKind string             `json:"association_kind"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type PiMessageConsumption struct {
+	ConsumptionID       pgtype.UUID        `json:"consumption_id"`
+	RunID               pgtype.UUID        `json:"run_id"`
+	RunAgentID          pgtype.UUID        `json:"run_agent_id"`
+	TurnID              pgtype.UUID        `json:"turn_id"`
+	ChannelMessageID    pgtype.UUID        `json:"channel_message_id"`
+	Source              string             `json:"source"`
+	EffectiveFromCallID string             `json:"effective_from_call_id"`
+	ConsumedAt          pgtype.Timestamptz `json:"consumed_at"`
+}
+
+type PiProviderCall struct {
+	CallID                string             `json:"call_id"`
+	RunID                 pgtype.UUID        `json:"run_id"`
+	RunAgentID            pgtype.UUID        `json:"run_agent_id"`
+	TurnID                pgtype.UUID        `json:"turn_id"`
+	PiSessionID           string             `json:"pi_session_id"`
+	CallOrdinal           int64              `json:"call_ordinal"`
+	Provider              string             `json:"provider"`
+	Model                 string             `json:"model"`
+	ApiKind               string             `json:"api_kind"`
+	RawProviderRequest    []byte             `json:"raw_provider_request"`
+	FinalAssistantMessage []byte             `json:"final_assistant_message"`
+	NormalizedTrajectory  []byte             `json:"normalized_trajectory"`
+	NormalizationVersion  pgtype.Text        `json:"normalization_version"`
+	Status                string             `json:"status"`
+	StopReason            pgtype.Text        `json:"stop_reason"`
+	ResponseComplete      bool               `json:"response_complete"`
+	TrainingEligible      bool               `json:"training_eligible"`
+	ArealSessionID        pgtype.Text        `json:"areal_session_id"`
+	ArealCallID           pgtype.Text        `json:"areal_call_id"`
+	RequestHash           string             `json:"request_hash"`
+	ResponseHash          pgtype.Text        `json:"response_hash"`
+	StartedAt             pgtype.Timestamptz `json:"started_at"`
+	CompletedAt           pgtype.Timestamptz `json:"completed_at"`
+	FrozenAt              pgtype.Timestamptz `json:"frozen_at"`
+}
+
+type PiVisibleAction struct {
+	ActionID       pgtype.UUID        `json:"action_id"`
 	RunID          pgtype.UUID        `json:"run_id"`
-	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
-	SampleIndex    int32              `json:"sample_index"`
-	LocalIssueID   pgtype.UUID        `json:"local_issue_id"`
-	LocalChannelID pgtype.UUID        `json:"local_channel_id"`
+	RunAgentID     pgtype.UUID        `json:"run_agent_id"`
+	TurnID         pgtype.UUID        `json:"turn_id"`
+	Kind           string             `json:"kind"`
+	CanonicalID    pgtype.UUID        `json:"canonical_id"`
+	ProducerCallID pgtype.Text        `json:"producer_call_id"`
+	ActionOrdinal  int64              `json:"action_ordinal"`
+	Status         string             `json:"status"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type SourceTask struct {

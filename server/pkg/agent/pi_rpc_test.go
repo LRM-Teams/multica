@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,226 @@ func TestNewPiRPCBackendImplementsResidentMessagePreparation(t *testing.T) {
 	backend := NewPiRPCBackend(Config{})
 	if _, ok := backend.(ResidentMessagePreparation); !ok {
 		t.Fatal("PiRPCBackend must prepare context outside native Message acceptance")
+	}
+}
+
+func TestBuildResidentTurnCaptureRedactsProviderCredentials(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	records := []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"model":"test","api_key":"secret","nested":{"authorization":"Bearer secret","ok":true}}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","api_key":"secret","content":[{"type":"text","text":"done"}],"stopReason":"stop"}`)},
+	}
+
+	capture, err := buildResidentTurnCapture(binding, 1, 1, records)
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("provider calls: got %d, want 1", len(capture.ProviderCalls))
+	}
+	request := string(capture.ProviderCalls[0].RawProviderRequest)
+	if strings.Contains(request, "secret") || strings.Contains(request, "api_key") || strings.Contains(request, "authorization") {
+		t.Fatalf("redacted request still contains credentials: %s", request)
+	}
+	if response := string(capture.ProviderCalls[0].FinalAssistantMessage); strings.Contains(response, "secret") || strings.Contains(response, "api_key") {
+		t.Fatalf("redacted response still contains credentials: %s", response)
+	}
+	if capture.PayloadHash == "" || capture.CaptureBatchID == "" || capture.TurnID == "" {
+		t.Fatalf("capture identity/integrity missing: %+v", capture)
+	}
+}
+
+func TestResidentTurnCaptureIdentityRetainsBoundaryForGapReporting(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	capture := residentTurnCaptureIdentity(binding, 2)
+	if capture.TurnID == "" || capture.CaptureBatchID == "" || capture.CaptureBoundary != binding.CaptureBoundary {
+		t.Fatalf("capture identity = %+v, want turn, batch, and current boundary", capture)
+	}
+	if capture.Complete {
+		t.Fatal("identity shell without provider records must not be complete")
+	}
+}
+
+func TestNewPiCaptureExtensionIsReadOnlyFinalRequestAndFinalMessageOnly(t *testing.T) {
+	extPath, logPath, err := newPiCaptureExtension()
+	if err != nil {
+		t.Fatalf("newPiCaptureExtension: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(extPath)
+		_ = os.Remove(logPath)
+	})
+	source, err := os.ReadFile(extPath)
+	if err != nil {
+		t.Fatalf("read capture extension: %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{"before_provider_request", "turn_end", "record(\"provider_request\"", "record(\"turn_end\""} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("capture extension missing final-boundary hook %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{
+		"message_update", "text_delta", "sse", "EventSource",
+		"event.payload =", "event.message =", "registerTool", "pi.send",
+	} {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(forbidden)) {
+			t.Fatalf("capture extension must stay read-only / non-SSE; found %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestBuildResidentTurnCapturePreservesTypedAssistantBlocks(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	finalMessage := `{"role":"assistant","blocks":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"hello"},{"type":"toolCall","id":"tool-1","name":"multica","arguments":{"command":"message send"}}],"stopReason":"toolUse"}`
+	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"synthetic-model","messages":[]}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(finalMessage)},
+	})
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(capture.ProviderCalls))
+	}
+	var decoded struct {
+		Role   string `json:"role"`
+		Blocks []struct {
+			Type string `json:"type"`
+		} `json:"blocks"`
+	}
+	if err := json.Unmarshal(capture.ProviderCalls[0].FinalAssistantMessage, &decoded); err != nil {
+		t.Fatalf("decode final assistant message: %v", err)
+	}
+	if decoded.Role != "assistant" || len(decoded.Blocks) != 3 {
+		t.Fatalf("typed blocks = %+v, want assistant with thinking/text/toolCall", decoded)
+	}
+	gotTypes := []string{decoded.Blocks[0].Type, decoded.Blocks[1].Type, decoded.Blocks[2].Type}
+	if gotTypes[0] != "thinking" || gotTypes[1] != "text" || gotTypes[2] != "toolCall" {
+		t.Fatalf("block types = %v, want [thinking text toolCall]", gotTypes)
+	}
+	if capture.ProviderCalls[0].StopReason != "toolUse" || !capture.ProviderCalls[0].ResponseComplete {
+		t.Fatalf("call metadata = %+v, want complete toolUse", capture.ProviderCalls[0])
+	}
+}
+
+func TestBuildResidentTurnCaptureNormalizesContentArrayIntoTypedBlocks(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m"}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}`)},
+	})
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(capture.ProviderCalls[0].FinalAssistantMessage, &decoded); err != nil {
+		t.Fatalf("decode final message: %v", err)
+	}
+	blocks, ok := decoded["blocks"].([]any)
+	if !ok || len(blocks) == 0 {
+		t.Fatalf("final assistant message must expose typed blocks, got %s", capture.ProviderCalls[0].FinalAssistantMessage)
+	}
+	if _, hasContent := decoded["content"]; hasContent {
+		t.Fatalf("final assistant message must not retain raw content arrays: %s", capture.ProviderCalls[0].FinalAssistantMessage)
+	}
+}
+
+func TestBuildResidentTurnCaptureRejectsAmbiguousRequests(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	_, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","attempt":1}`)},
+		{Kind: "provider_request", At: "2026-08-12T00:00:00.500Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","attempt":2}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}],"stopReason":"stop"}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous Pi capture") {
+		t.Fatalf("buildResidentTurnCapture error = %v, want ambiguous Pi capture", err)
+	}
+}
+
+func TestBuildResidentTurnCaptureRejectsProviderRequestWithoutFinalAssistantMessage(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	_, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: PiCaptureEventProviderRequest, At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m"}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider request has no final assistant message") {
+		t.Fatalf("buildResidentTurnCapture error = %v, want incomplete provider request error", err)
+	}
+}
+
+func TestBuildResidentTurnCaptureIgnoresSSEChunkRecords(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m"}`)},
+		{Kind: "message_update", At: "2026-08-12T00:00:00.200Z", Payload: json.RawMessage(`{"type":"text_delta","delta":"partial sse"}`)},
+		{Kind: "sse_chunk", At: "2026-08-12T00:00:00.300Z", Payload: json.RawMessage(`{"data":"stream"}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"final"}],"stopReason":"stop"}`)},
+	})
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(capture.ProviderCalls))
+	}
+	encoded := string(capture.ProviderCalls[0].FinalAssistantMessage) + string(capture.ProviderCalls[0].RawProviderRequest)
+	for _, forbidden := range []string{"partial sse", "sse_chunk", "text_delta", `"data":"stream"`} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("capture retained SSE material %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestReadPiCaptureRecordsStartsAtTrustedTurnOffset(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-2"}
+	path := filepath.Join(t.TempDir(), "capture.jsonl")
+	historicalRequest := piCaptureRecord{Kind: PiCaptureEventProviderRequest, At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","call":"historical"}`)}
+	historicalFinal := piCaptureRecord{Kind: PiCaptureEventTurnEnd, At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"old"}],"stopReason":"stop"}`)}
+	writePiCaptureLines(t, path, false, historicalRequest, historicalFinal)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat capture log: %v", err)
+	}
+	currentRequest := piCaptureRecord{Kind: PiCaptureEventProviderRequest, At: "2026-08-12T00:01:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","call":"current"}`)}
+	currentFinal := piCaptureRecord{Kind: PiCaptureEventTurnEnd, At: "2026-08-12T00:01:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"new"}],"stopReason":"stop"}`)}
+	writePiCaptureLines(t, path, true, currentRequest, currentFinal)
+
+	records, err := readPiCaptureRecords(path, info.Size())
+	if err != nil {
+		t.Fatalf("readPiCaptureRecords: %v", err)
+	}
+	capture, err := buildResidentTurnCapture(binding, 2, 2, records)
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("provider calls = %d, want 1 current call", len(capture.ProviderCalls))
+	}
+	if !strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), `"call":"current"`) {
+		t.Fatalf("expected current request, got %s", capture.ProviderCalls[0].RawProviderRequest)
+	}
+	if strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), "historical") {
+		t.Fatalf("historical call leaked into capture: %s", capture.ProviderCalls[0].RawProviderRequest)
+	}
+}
+
+func writePiCaptureLines(t *testing.T, path string, appendLines bool, records ...piCaptureRecord) {
+	t.Helper()
+	flags := os.O_CREATE | os.O_WRONLY
+	if appendLines {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		t.Fatalf("open capture log: %v", err)
+	}
+	defer file.Close()
+	encoder := json.NewEncoder(file)
+	for _, record := range records {
+		if err := encoder.Encode(record); err != nil {
+			t.Fatalf("encode capture record: %v", err)
+		}
 	}
 }
 
@@ -567,5 +789,124 @@ func TestPiRPCBackendForceKillDuringInitialAckActuallyKillsNotHang(t *testing.T)
 	}
 	if !strings.Contains(execResult.Error, AgentForceKilledMarker) {
 		t.Fatalf("result error = %q, want it to contain %q", execResult.Error, AgentForceKilledMarker)
+	}
+}
+
+func TestPiRPCBackendFreshRunIdentityAndResidentTurnReuse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	starts := filepath.Join(dir, "starts")
+	backend := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": starts,
+	}})
+	t.Cleanup(backend.Close)
+
+	identity := PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	bound, err := backend.BindRunIdentity(identity)
+	if err != nil {
+		t.Fatalf("bind run identity: %v", err)
+	}
+	if bound.SessionID == "" || bound.CaptureBoundary == "" {
+		t.Fatalf("bound identity = %+v, want fresh session and capture boundary", bound)
+	}
+	previousBoundary := bound.CaptureBoundary
+	for turn := 1; turn <= 2; turn++ {
+		acceptance, err := backend.AcceptMessageBatch(context.Background(), []ResidentMessage{{
+			ID: fmt.Sprintf("message-%d", turn), Target: "channel:one", Seq: int64(turn), Content: "hello",
+		}})
+		if err != nil {
+			t.Fatalf("turn %d: %v", turn, err)
+		}
+		if err := <-acceptance.Done; err != nil {
+			t.Fatalf("turn %d completion: %v", turn, err)
+		}
+		if err := backend.SettleRunTurn(identity); err != nil {
+			t.Fatalf("turn %d settlement: %v", turn, err)
+		}
+		settled, err := backend.BindRunIdentity(identity)
+		if err != nil {
+			t.Fatalf("turn %d inspect settled binding: %v", turn, err)
+		}
+		if settled.SessionID != bound.SessionID {
+			t.Fatalf("turn %d settlement changed Pi session: first=%+v settled=%+v", turn, bound, settled)
+		}
+		if settled.CaptureBoundary == previousBoundary {
+			t.Fatalf("turn %d settlement did not advance capture boundary: %+v", turn, settled)
+		}
+		previousBoundary = settled.CaptureBoundary
+	}
+	rebound, err := backend.BindRunIdentity(identity)
+	if err != nil {
+		t.Fatalf("idempotent bind after resident process start: %v", err)
+	}
+	if rebound.SessionID != bound.SessionID {
+		t.Fatalf("idempotent bind changed Pi session: first=%+v rebound=%+v", bound, rebound)
+	}
+	if _, err := backend.BindRunIdentity(PiRunIdentity{RunID: "run-other", RunAgentID: identity.RunAgentID}); err == nil {
+		t.Fatal("resident backend accepted a different run identity")
+	} else if !errors.Is(err, ErrPiRPCRunIdentityRequiresFreshSession) {
+		t.Fatalf("different run identity error = %v, want fresh-session sentinel", err)
+	}
+	data, err := os.ReadFile(starts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "x"); got != 1 {
+		t.Fatalf("resident Pi children = %d, want one reused child", got)
+	}
+
+	other := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": starts,
+	}})
+	t.Cleanup(other.Close)
+	otherBound, err := other.BindRunIdentity(PiRunIdentity{RunID: "run-2", RunAgentID: "run-agent-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherBound.SessionID == bound.SessionID || otherBound.CaptureBoundary == bound.CaptureBoundary {
+		t.Fatalf("dispatches reused Pi identity: first=%+v second=%+v", bound, otherBound)
+	}
+}
+
+func TestPiRPCBackendPrepareRunStartsBoundProcessWithoutAgentTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	startsPath := filepath.Join(dir, "starts")
+	messageInputPath := filepath.Join(dir, "message-input.json")
+	b := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": startsPath, "PI_RPC_TEST_MESSAGE_INPUT": messageInputPath,
+	}})
+	t.Cleanup(b.Close)
+
+	identity := PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	binding, err := b.PrepareRun(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("PrepareRun: %v", err)
+	}
+	if binding.PiRunIdentity != identity || binding.SessionID == "" || binding.CaptureBoundary == "" {
+		t.Fatalf("binding = %+v, want complete native run identity", binding)
+	}
+	waitForPiRPCTestPath(t, startsPath)
+	if _, err := os.Stat(messageInputPath); !os.IsNotExist(err) {
+		t.Fatalf("preflight started an agent turn: message input stat err=%v", err)
+	}
+	alive, known := b.RuntimeAlive()
+	if !known || !alive {
+		t.Fatalf("prepared runtime alive=(%v,%v), want known and alive", alive, known)
+	}
+}
+
+func TestPiRPCBackendPrepareRunRejectsNativeStartFailureBeforeTurn(t *testing.T) {
+	b := newPiRPCBackend(Config{ExecutablePath: filepath.Join(t.TempDir(), "missing-pi")})
+	t.Cleanup(b.Close)
+
+	binding, err := b.PrepareRun(context.Background(), PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"})
+	if err == nil || !strings.Contains(err.Error(), "pi executable not found") {
+		t.Fatalf("PrepareRun binding=%+v err=%v, want deterministic native start failure", binding, err)
+	}
+	if b.running.Load() {
+		t.Fatal("failed preflight left an active agent turn")
 	}
 }

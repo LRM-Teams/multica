@@ -53,6 +53,23 @@
 - **指针**：决策表 `docs/members-directory-decisions.md`；ADR `docs/adr/0013-members-directory-replaces-agents-page.md`；术语 `CONTEXT.md` → Members Directory。
 - **欠债**：实现落地后把 product docs（`members-roles` 等）与 path helpers 改到与上表一致；旧 `/api/agents` 别名退场条件另立。
 
+### 0.2 Agent start dispatch 双身份协议 — `仅文档`（待可执行化）
+
+- **口径（2026-08-12）**：`launchId` 是 Agent 运行生命周期身份，`startDispatchId` 是一次 `agent:start` 命令的幂等身份；两者由服务端独立生成并持久化，协议与 APM 接口均必填，禁止互相 fallback。
+- **ACK 语义**：`agent:start:ack` 只证明 Computer 的 APM 已接受或排队，不证明进程、Provider、session 或消息消费；重连重投必须复用原 dispatch，重复 dispatch 只复用原 ACK。
+- **切换顺序**：Runtime replacement 必须 `stop old → matching inactive → start new`，不得同批 stop/start；setup、reconnect、Computer restart、Agent restart 与 Runtime update 统一经过一个 desired-state reconciliation module。
+- **命名**：领域统一 `computer_id`；既有 `daemon_id` 仅可作为旧存储 adapter 细节，不得进入新增协议、schema、日志或生命周期 module interface。
+- **指针**：完整协议、禁止项、Raft 1.0.15 已验证范围与升级为 `可执行` 所需回归见 `docs/agent-start-dispatch-contract.md`。
+- **当前状态**：实现与迁移尚未完成，不能标 `可执行`；完成后以协议类型、数据库约束、APM/reconcile tests 和日志断言升级本条。
+
+### 0.3 Agent Message ACK 重投协议 — `可执行`（①②⑤，owner: @Codex）
+
+- **口径（2026-08-12）**：普通消息只走 `agent:deliver → APM accepted → agent:deliver:ack`。Server 持久化未 ACK responsibility，Workspace Runner ready 后按原始 `seq` 重投；启动期由 Computer/APM buffer。ACK 不是 read、Provider turn completion 或 Context Boundary advancement。
+- **双层安全**：Server `acked_at` 负责“不丢”；Computer 的 `target + seq` / `consumed-seqs.json` 负责 Provider 去重与真实 context coverage。`deliveryId` 与 `seq` 禁止合并或互相替代。
+- **不存在**：普通消息的 `agent:recovery:request/page` 协议、payload、handler 与 coordinator 状态机已删除；Reminder snapshot 不受影响。
+- **命名**：新增接口和日志使用 Computer；既有 `daemon_id` 只视为旧存储/auth adapter。
+- **物**：migration `340_agent_message_delivery_ack`；协议类型不存在性；`TestWorkspaceRunnerReadyRedeliversUnacknowledgedMessagesInSequenceOrder` 与 `TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery`（均先见红）。完整 Raft 1.0.15 证据边界与 Multica 映射见 `docs/agent-message-delivery-contract.md`。
+
 ## 1. 消息写入管道（BE）
 
 ### 1.1 destination-first 统一 finalizer — `可执行`（已落地）
@@ -211,6 +228,10 @@
 ### 4.0 服务环境决定连接目标与 Computer 包源 — `可执行`（⑤，owner: @Barry）
 - **服务环境**：`production` 是 leagent.me 正式服务，browser/API 的 canonical origin 分别是 `https://www.leagent.me` 与 `https://api.leagent.me`；`test` 是腾讯云测试服务，首版以 `https://82.157.184.89` 同时承担 app/API，之后可只改部署配置切到 `https://test.leagent.me`。服务端用 `APP_ENV=production|test` 声明身份，并通过公共 `/api/config.environment` 明确告诉页面，禁止根据域名或 IP 猜环境。旧服务缺字段或字段非法时，前端保守降级为 production。
 - **Computer 本机模型**：同一 OS 用户只有一个 Computer root/identity/resident；每个环境分别保存登录和 Workspace connection，本地键为 `(environment, workspace_id)`。两边连接可以同时保留，但单个 resident generation 同一时刻只服务当前环境；切换必须 drain、重启、验收，不能并发连接 production/test。
+- **Computer 生命周期所有权**：升级、重启和其他整机 mutation 只由 Computer owner 发起；Workspace owner/admin 只管理自己的 Workspace，不因页面中可见一台 Computer 就取得别人电脑的控制权。Workspace 页面只是发起入口和状态投影；一次 Computer 升级对该环境下全部 active Workspace connections 生效，所有连接必须看到同一 operation、版本和结果，禁止按发起 Workspace 分叉升级 lineage。
+- **Computer 升级只有一个 CLI 入口**：`multica computer upgrade` 先探测本机 resident；live owner 可控时只通过 owner-only loopback control 提交 canonical Machine Upgrade，不自行 stage。只有确认没有 resident owner 时才允许在 machine mutation lock 下离线下载、校验并提交 Active，且结果只表示供下次 Computer start 使用；resident ownership 存在但 control 不可达时必须返回 `upgrade_service_unreachable`，不能离线绕过。顶层 `multica update` 不存在；`--target-version` 是唯一显式包选择，普通升级继续由 production/test 环境固定包源。
+- **Computer restart 与升级恢复共享单 owner 栅栏**：`computer restart` 只有在旧 resident 的 control port 已证明释放后才能分配并启动 successor；仅成功发送 shutdown 不构成 stop proof。Machine Upgrade 的 `accepted/staged` journal 只可在服务端确认同一 operation、generation、target 及 Runtime/Workspace 集合已 `failed` 后 CAS 清理；上报未 ACK 或身份不匹配必须保留。`handoff/candidate_ready/rollback_pending` 仍要求各自的 successor 或 rollback proof。完整合同与回归见 `docs/machine-upgrade-rollout.md`。
+- **Computer CLI 单测不得触碰机器级 resident**：`HOME=t.TempDir()` 只能隔离文件，不能隔离固定 control port `19514`。任何会 start/stop/restart Computer 的命令测试必须替换 lifecycle seam，验证意图和结果而不访问真实端口或进程；真实进程测试必须使用显式隔离 control port，并独立证明不会命中默认 resident。
 - **包源随环境固定**：production 只用 `metainfo.json.environments.production` 的稳定版本；test 只用 `metainfo.json.environments.test` 的预发布版本。没有独立 `release_channel` 让用户制造“test 连稳定包”或“production 连预发布包”的组合。带版本 archive/checksum/manifest 不可变；不发布根目录 channel JSON，也不做隐式 fallback。
 - **页面引导**：Computer 页面用 `/api/config.environment` 决定命令类型，用 `daemon_server_url` 和 `daemon_app_url` 分别填 test API/Web origin。production 显示 `multica setup /<workspace>`；test 显示 `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>`。两个值当前可以相同，但协议不强制同源。页面不能读取本机 `~/.multica`，所以首次连接必须把目标写进命令；完成后本机配置保存 active environment。连接卡只保留平台选择、安装命令、setup 命令和等待状态；一行说明 setup 会激活目标环境、连接 Workspace 并启动 Computer。若 setup 将切换已有 active environment，CLI 必须在任何写入或登录前询问，除非自动化显式传 `--yes`。
 - **部署拓扑**：workflow 结构固定为 `dev → GitHub Environment test → Tencent s89`、`main → legacy-named GitHub Environment aliyun-dev → Aliyun/leagent.me production`。`aliyun-dev` 只因现有 secrets 无法导出而保留旧名字，不代表 dev。部署验收仍必须分别证明 workflow、目标 runner、served origin、镜像 SHA 与数据库迁移；workflow 合并本身不等于已上线。
@@ -336,7 +357,7 @@
 
 ### 4.15 Agent 重启控制面直接替换为 Raft 风格组合 — `仅文档`（新协议尚未落地）
 - 舍弃现有 `agent_lifecycle_operation` 编排，不做适配、双写或兼容层。服务端按 Raft 的边界组合 stop / session reset / workspace reset / start，机器继续用 status / session / Activity 事件表达运行时事实，不另建 phase-event ledger。
-- 复用 Raft 架构不等于继承其丢失窗口：每条命令必须有稳定 ID，破坏性命令必须幂等，Machine Service 必须持久保留终态并重试到 server ACK；start ACK 只代表受理，ready 只能由后续 status/session 证明。Full Reset 必须先取得 runtime 已停止且 provider lease 已释放的可靠证据，之后才能删除并重建完整 Agent Workspace。
+- 复用 Raft 架构不等于继承其丢失窗口：每条命令必须有稳定 ID，破坏性命令必须幂等，Computer 必须持久保留终态并重试到 server ACK；start ACK 只代表受理，ready 只能由后续 status/session 证明。Full Reset 必须先取得 runtime 已停止且 provider lease 已释放的可靠证据，之后才能删除并重建完整 Agent Workspace。
 - Activity 沿用 Raft 的 `Stopped` / `Starting` / `Working` 叙事；stop 事件附带 restart mode 与是否强制中断 active turn，不再发明 request/phase/completion 三套 Activity。三种模式和完整理由见 `docs/adr/0009-three-agent-restart-modes.md`。
 
 ### 4.16 调研进度只认服务端账本，Agent prose 不得推进状态 — `可执行`（① canonical ledger + ② strict envelope + ③单一调度器 + ⑤迁移/幂等回归；owner: @Codex ✅ 已签）

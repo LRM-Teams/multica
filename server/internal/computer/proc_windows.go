@@ -8,6 +8,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 const (
@@ -30,6 +32,7 @@ const (
 	// detachedProcess alone — the resident process is then at the mercy of
 	// the parent's Job lifecycle, which is the pre-fix behaviour.
 	createBreakawayFromJob = 0x01000000
+	windowsStillActive     = 259 // STILL_ACTIVE from WinBase.h.
 	sigBreak               = syscall.Signal(0x15)
 )
 
@@ -61,6 +64,29 @@ func SysProcAttr(withBreakaway bool) *syscall.SysProcAttr {
 // parent's Job Object has not set JOB_OBJECT_LIMIT_BREAKAWAY_OK.
 func IsAccessDeniedSpawnErr(err error) bool {
 	return errors.Is(err, syscall.ERROR_ACCESS_DENIED)
+}
+
+func processAlive(pid int) (bool, bool) {
+	if pid <= 0 {
+		return false, false
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		switch {
+		case errors.Is(err, windows.ERROR_ACCESS_DENIED):
+			return true, true
+		case errors.Is(err, windows.ERROR_INVALID_PARAMETER):
+			return false, true
+		default:
+			return false, false
+		}
+	}
+	defer windows.CloseHandle(handle)
+	var exitCode uint32
+	if err := windows.GetExitCodeProcess(handle, &exitCode); err != nil {
+		return false, false
+	}
+	return exitCode == windowsStillActive, true
 }
 
 // TailLog tails the resident process log file, showing the last lines and

@@ -239,6 +239,12 @@ type Handler struct {
 	// it false so O(agents) fanout does not inflate human or agent send
 	// latency (LRM-272 / LRM-297).
 	SyncChannelMessageSideEffects bool
+	// Test-only env-dispatch hooks isolate external sandbox/daemon work while
+	// preserving the real HTTP adapter, DB-backed roster resolution, preflight,
+	// channel/run creation, and binding flow. Production leaves both nil.
+	envDispatchProvisionAgentTestHook func(context.Context, service.EnvDispatchAgentProvisionInput) (service.EnvDispatchAgentProvisionResult, error)
+	envDispatchCreateMessageTestHook  func(context.Context, string, string, string, string) (string, error)
+	envDispatchPreparePiRunTestHook   func(context.Context, string, service.MixedDispatchRunAgent) (service.MixedDispatchRunAgent, error)
 	// channelMessagePostAckTestHook runs at the start of every post-ack
 	// callback when set. Tests use it to prove send returns while fanout
 	// is still blocked (LRM-297).

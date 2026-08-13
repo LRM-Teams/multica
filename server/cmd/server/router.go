@@ -428,7 +428,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderProjectionAck,
 	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
-	daemonHub.SetAgentRecoveryHandler(h.HandleAgentMessageRecovery)
 	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
 	// The current fenced Workspace Runner owns Attachment, launch, Message, and
 	// typed Activity intake for one daemon/workspace pair.
@@ -564,6 +563,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/heartbeat", h.DaemonHeartbeat)
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
 		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
+		r.Post("/computer/machine-upgrades/{upgradeId}/takeover", h.CommitComputerMachineUpgradeTakeover)
 		r.Get("/ws", h.DaemonWebSocket)
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
@@ -583,7 +583,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
 		r.Post("/runtimes/{runtimeId}/memory-curation/{runId}/result", h.ReportMemoryCurationRunResult)
 		r.Post("/runtimes/{runtimeId}/agent-lifecycle/{operationId}/result", h.ReportAgentLifecycleOperationResult)
-		r.Post("/runtimes/{runtimeId}/agent-start-intents/{startDispatchId}/report", h.ReportAgentStartIntent)
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
@@ -1303,6 +1302,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// template ahead of the first scratch swe_lego dispatch.
 			r.Post("/api/v1/source-tasks/{sourceTaskID}/materialize", h.MaterializeSourceTaskTemplate)
 			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
+			r.Get("/api/v1/env-dispatch/runs/{runID}/dag", h.GetFrozenRunDAG)
+			r.Post("/api/v1/env-dispatch/runs/{runID}/offline-trajectories:resolve", h.ResolveOfflineTrajectories)
+			r.Post("/api/v1/env-dispatch/runs/{runID}/turn-captures", h.AgentTransportUploadTurnCapture)
+			r.Post("/api/v1/env-dispatch/runs/{runID}/turn-capture-gaps", h.AgentTransportReportTurnCaptureGap)
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
 			r.Get("/api/v1/env-dispatch/{projectID}/dag", h.GetDag)
 			r.Post("/api/v1/env-dispatch/{projectID}/diagnosis", h.DiagnoseEnvDispatchProject)

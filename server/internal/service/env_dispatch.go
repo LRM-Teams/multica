@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/util/stackerr"
@@ -48,27 +49,28 @@ const (
 )
 
 // EnvDispatchInput is the service-layer input for the unified dispatch.
-// EnvDispatchInput is the service-layer input for the unified dispatch.
 type EnvDispatchInput struct {
-	WorkspaceID     string
-	UserID          string // creator/actor
-	Mode            EnvMode
-	EnvID           string    // base env (scratch) or state env (branch)
-	SourceProjectID string    // branch only: the single project on EnvID (1:1 invariant), resolved by the handler
-	SourceTaskID    string    // durable reusable sampling identity; resolved before idempotency/fan-out
-	Domain          EnvDomain // required
-	DispatchType    EnvDispatchType
-	GroupSize       int
-	AgentID         string
-	TrainAgentID    string // optional training target (spec §4.1); empty ⇒ no training session
-	CriticAgentID   string // optional critic for trained agent (sub-project E): evaluates the trained agent's output; empty ⇒ unchanged behavior
-	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
+	WorkspaceID            string
+	UserID                 string // creator/actor
+	Mode                   EnvMode
+	EnvID                  string    // base env (scratch) or state env (branch)
+	SourceProjectID        string    // branch only: the single project on EnvID (1:1 invariant), resolved by the handler
+	SourceTaskID           string    // durable reusable sampling identity; resolved before idempotency/fan-out
+	Domain                 EnvDomain // required
+	DispatchType           EnvDispatchType
+	GroupSize              int
+	AgentID                string
+	OnlineTrainableAgents  []string
+	OfflineTrainableAgents []string
+	QuietWindowMS          int
+	TotalTimeoutSeconds    int
 
-	// TrainingMode is the explicit training vs non-training switch (Task 1).
-	// true requires TrainAgentID; false forbids TrainAgentID and CriticAgentID.
-	// The handler dereferences the request pointer and never passes an absent
-	// value (nil is rejected at the HTTP boundary).
-	TrainingMode bool
+	// Legacy fields remain an internal issue-dispatch implementation detail.
+	// The public HTTP and Python contracts never populate or expose them.
+	TrainAgentID   string
+	CriticAgentID  string
+	IdempotencyKey string
+	TrainingMode   bool
 
 	// SharedSandbox is the resolved per-rollout sandbox sharing switch: when
 	// true, all agents of each rollout (sample) share one sandbox + one daemon +
@@ -115,6 +117,10 @@ type EnvDispatchInput struct {
 	MessageRoster       MessageRoster
 	BranchMessageSource *ValidatedBranchMessageSource
 	SourceTask          *SourceTask
+	// MixedPlan is the read-only atomic preflight result used to validate the
+	// provisioned source-to-derived bindings before the canonical initial send.
+	// It is internal service state and never appears in request/response DTOs.
+	MixedPlan *MixedDispatchPlan
 
 	// Audit is an explicit, per-request opt-in for the identifier- and
 	// state-only dispatch lifecycle ledger. Nil and Enabled=false preserve the
@@ -340,16 +346,99 @@ type MessageRoster struct {
 	AgentIDs []string
 }
 
+// MixedDispatchRosterAgent is the resolved provider and policy readiness for
+// one source channel member. Resolution is read-only and precedes provisioning.
+type MixedDispatchRosterAgent struct {
+	SourceAgentID string
+	Provider      string
+	TargetPolicy  string
+	Tokenizer     string
+	OnlineReady   bool
+	OfflineReady  bool
+}
+
+type MixedDispatchRosterResolver interface {
+	ResolveMixedDispatchRoster(context.Context, string, MessageRoster, []PerAgentEnvSpec) ([]MixedDispatchRosterAgent, error)
+}
+
+type MixedDispatchPreflightInput struct {
+	Roster                 []MixedDispatchRosterAgent
+	OnlineTrainableAgents  []string
+	OfflineTrainableAgents []string
+	QuietWindowMS          int
+	TotalTimeoutSeconds    int
+}
+
+type MixedDispatchRunAgent struct {
+	RunAgentID       string `json:"-"`
+	SourceAgentID    string `json:"source_agent_id"`
+	ExecutionAgentID string `json:"execution_agent_id,omitempty"`
+	RuntimeID        string `json:"runtime_id,omitempty"`
+	PiSessionID      string `json:"-"`
+	CaptureBoundary  string `json:"-"`
+	AReALSessionID   string `json:"-"`
+	TrainingMode     string `json:"training_mode"`
+}
+
+type PreparedMixedDispatchMessage struct {
+	MessageID   string
+	SubmittedAt time.Time
+	acknowledge func(context.Context)
+}
+
+func (m PreparedMixedDispatchMessage) Acknowledge(ctx context.Context) {
+	if m.acknowledge != nil {
+		m.acknowledge(ctx)
+	}
+}
+
+func NewPreparedMixedDispatchMessage(messageID string, submittedAt time.Time, acknowledge func(context.Context)) PreparedMixedDispatchMessage {
+	return PreparedMixedDispatchMessage{MessageID: messageID, SubmittedAt: submittedAt, acknowledge: acknowledge}
+}
+
+type MixedDispatchRunLifecycle interface {
+	CreateMixedDispatchRun(ctx context.Context, projectID, workspaceID, sourceTaskID string, sampleIndex, quietWindowMS, totalTimeoutSeconds int) (string, error)
+	PrepareMixedDispatchRunAgent(ctx context.Context, runID string, agent MixedDispatchRunAgent) (MixedDispatchRunAgent, error)
+	BindMixedDispatchRunAgent(ctx context.Context, runID string, agent MixedDispatchRunAgent) error
+	PersistMixedDispatchInitialMessage(ctx context.Context, channelID, workspaceID, userID, content string) (PreparedMixedDispatchMessage, error)
+	StartMixedDispatchRun(ctx context.Context, runID string, submittedAt time.Time) error
+	RevokeMixedDispatchRunAgent(ctx context.Context, runID string, agent MixedDispatchRunAgent) error
+}
+
+type MixedDispatchPlan struct {
+	OnlineTrainableAgents  []string
+	OfflineTrainableAgents []string
+	RunAgents              []MixedDispatchRunAgent
+	TargetPolicy           string
+	Tokenizer              string
+}
+
+func mixedDispatchContractRequested(in EnvDispatchInput) bool {
+	return in.OnlineTrainableAgents != nil || in.OfflineTrainableAgents != nil || in.QuietWindowMS != 0 || in.TotalTimeoutSeconds != 0
+}
+
+// MixedDispatchProvisionReclaimer compensates one successful provisional
+// source-agent provision when mixed preflight later fails. Implementations own
+// derived-agent, sandbox, runtime, session, and binding cleanup; the fallback
+// remains runtime-only for existing test/non-production dependencies.
+type MixedDispatchProvisionReclaimer interface {
+	ReclaimMixedDispatchProvision(ctx context.Context, workspaceID, userID, envID, sourceAgentID string, provisioned EnvDispatchAgentProvisionResult) error
+}
+
 // EnvDispatchAgentProvisionInput identifies the channel member whose isolated
 // runtime, sandbox, and channel chat session must be created.
 type EnvDispatchAgentProvisionInput struct {
 	WorkspaceID, UserID, EnvID, ProjectID, ChannelID, AgentID string
 	SourceSandboxInstanceID                                   string
 	SandboxConfig                                             json.RawMessage
+	TrainingMode                                              string
+	TargetPolicy                                              string
+	Tokenizer                                                 string
 }
 
 type EnvDispatchAgentProvisionResult struct {
 	AgentID, SandboxInstanceID, RuntimeID, DaemonID, ChatSessionID string
+	AReALSessionID                                                 string
 }
 
 // ChannelRunInput carries the explicit binding IDs that must be used for an
@@ -371,19 +460,28 @@ type AgentSandboxStatus struct {
 	DaemonID          string `json:"daemon_id,omitempty"`
 }
 
+type mixedDispatchProvision struct {
+	SourceAgentID string
+	Provisioned   EnvDispatchAgentProvisionResult
+	Prepared      MixedDispatchRunAgent
+}
+
 // EnvRollout is one element of the response array (spec §6.3).
 type EnvRollout struct {
-	RunID          string // unique per rollout; never used as DAG/cleanup identity
-	SourceTaskID   string // durable reusable task identity
-	ChannelID      string
-	LeaderRunID    string
-	AgentSandboxes map[string]AgentSandboxStatus
-	EnvID          string // always a new env_id (branch always forks, incl. N=1)
-	ProjectID      string
-	IssueID        string // empty iff dispatch_type=message
-	ChatSessionID  string // empty iff dispatch_type=issue
-	AgentRunID     string // empty if dispatch failed (partial rollout)
-	Error          string // empty if rollout succeeded
+	RunID                     string // unique per rollout; never used as DAG/cleanup identity
+	SourceTaskID              string // durable reusable task identity
+	ChannelID                 string
+	LeaderRunID               string
+	AgentSandboxes            map[string]AgentSandboxStatus
+	EnvID                     string // always a new env_id (branch always forks, incl. N=1)
+	ProjectID                 string
+	IssueID                   string // empty iff dispatch_type=message
+	ChatSessionID             string // empty iff dispatch_type=issue
+	AgentRunID                string // empty if dispatch failed (partial rollout)
+	RunAgents                 []MixedDispatchRunAgent
+	InitialMessageSubmittedAt time.Time
+	mixedProvisions           []mixedDispatchProvision
+	Error                     string // empty if rollout succeeded
 	// Stack is the origin goroutine stack (stackerr.StackOf) for the error in
 	// Error, when the failure came from an adapter call. Surfaced per-rollout in
 	// the 500 (all-failed) response. Empty on success or for leaf logic errors.
@@ -405,9 +503,13 @@ type EnvRollout struct {
 
 // EnvDispatchResult wraps the rollouts slice.
 type EnvDispatchResult struct {
-	ChannelID string
-	ProjectID string // single project for the dispatch (group_size=1: the rollout's project)
-	Rollouts  []EnvRollout
+	ChannelID                 string
+	ProjectID                 string
+	QuietWindowMS             int
+	TotalTimeoutSeconds       int
+	InitialMessageSubmittedAt time.Time
+	RunAgents                 []MixedDispatchRunAgent
+	Rollouts                  []EnvRollout
 	// Audit is set only when the configured audit storage created a real run.
 	// It is never derived from caller input.
 	Audit *EnvDispatchAuditReport
@@ -438,7 +540,7 @@ type EnvDispatchDeps interface {
 	// target the copied issue (branch+swe_lego) or copied session (branch+self_play).
 	CopyProjectSubtree(ctx context.Context, sourceProjectID, workspaceID, envID string) (newProjectID string, issueIDMap, chatSessionIDMap map[string]string, err error)
 	DeleteProject(ctx context.Context, projectID, workspaceID string) error
-	ResolveMessageRoster(ctx context.Context, workspaceID, agentID string) (MessageRoster, error)
+	ResolveMessageRoster(ctx context.Context, workspaceID, agentID string, specs []PerAgentEnvSpec) (MessageRoster, error)
 	CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster MessageRoster, specs map[string]ResolvedPerAgentSandboxPolicy) (channelID string, err error)
 	DeleteChannel(ctx context.Context, workspaceID, channelID string) error
 	ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error)
@@ -783,13 +885,37 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}
 	}
 	var messageRoster MessageRoster
+	var mixedPlan MixedDispatchPlan
 	if in.DispatchType == EnvDispatchMessage {
 		var err error
-		messageRoster, err = s.deps.ResolveMessageRoster(ctx, in.WorkspaceID, in.AgentID)
+		messageRoster, err = s.deps.ResolveMessageRoster(ctx, in.WorkspaceID, in.AgentID, in.PerAgentEnvSpecs)
 		if err != nil {
 			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve message roster: %w", err)
 		}
 		in.MessageRoster = messageRoster
+		if mixedDispatchContractRequested(in) {
+			resolver, ok := s.deps.(MixedDispatchRosterResolver)
+			if !ok {
+				return EnvDispatchResult{}, fmt.Errorf("validation_failed: mixed dispatch roster preflight is unavailable")
+			}
+			resolved, err := resolver.ResolveMixedDispatchRoster(ctx, in.WorkspaceID, messageRoster, in.PerAgentEnvSpecs)
+			if err != nil {
+				return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve mixed dispatch roster: %w", err)
+			}
+			mixedPlan, err = PreflightMixedDispatch(MixedDispatchPreflightInput{
+				Roster:                 resolved,
+				OnlineTrainableAgents:  in.OnlineTrainableAgents,
+				OfflineTrainableAgents: in.OfflineTrainableAgents,
+				QuietWindowMS:          in.QuietWindowMS,
+				TotalTimeoutSeconds:    in.TotalTimeoutSeconds,
+			})
+			if err != nil {
+				return EnvDispatchResult{}, err
+			}
+			in.OnlineTrainableAgents = mixedPlan.OnlineTrainableAgents
+			in.OfflineTrainableAgents = mixedPlan.OfflineTrainableAgents
+			in.MixedPlan = &mixedPlan
+		}
 	}
 
 	// DB-backed per-agent env spec validation (§5): reject unknown agents and
@@ -940,17 +1066,16 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		// so the adapter-origin StackError survives Unwrap and the handler can render
 		// its traceback; the literal "reset_failed:" prefix still drives the
 		// handler's strings.Contains classification.
-		for i, r := range rollouts {
-			if r.ProjectID != "" || r.EnvID != "" {
-				s.rollbackRollout(ctx, in.WorkspaceID, r)
-				// Shared mode (US3/T024): the rolled-back sibling's pre-created
-				// shared runtime R' must not linger either.
-				s.reclaimSharedRuntimes(ctx, in, r.SandboxRefs)
-			}
+		cause := fmt.Errorf("reset_failed: %w", resetErrs[0])
+		cleanupErr := s.cleanupMixedDispatchRollouts(context.WithoutCancel(ctx), in, rollouts)
+		for i := range rollouts {
 			rollouts[i] = EnvRollout{}
 		}
 		audit.complete(ctx, EnvDispatchAuditOutcomeFailed)
-		return EnvDispatchResult{}, fmt.Errorf("reset_failed: %w", resetErrs[0])
+		if cleanupErr != nil {
+			return EnvDispatchResult{}, errors.Join(cause, fmt.Errorf("rollback cleanup failures: %w", cleanupErr))
+		}
+		return EnvDispatchResult{}, cause
 	}
 
 	// Persist the durable dispatch root row (spec: durable dispatch identity
@@ -959,8 +1084,30 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	// NULL and is bound after the leader task is enqueued (below). Best-effort:
 	// a creation failure is recorded on the rollout but does not fail the
 	// dispatch; /dag treats a missing row as in_progress (no root task yet).
+	mixedRequested := mixedDispatchContractRequested(in)
+	mixedLifecycle, hasMixedLifecycle := s.deps.(MixedDispatchRunLifecycle)
+	if mixedRequested && !hasMixedLifecycle {
+		cause := fmt.Errorf("failed_preflight: mixed dispatch run persistence is unavailable")
+		if cleanupErr := s.cleanupMixedDispatchRollouts(context.WithoutCancel(ctx), in, rollouts); cleanupErr != nil {
+			return EnvDispatchResult{}, errors.Join(cause, fmt.Errorf("rollback cleanup failures: %w", cleanupErr))
+		}
+		return EnvDispatchResult{}, cause
+	}
 	for i := range rollouts {
 		if rollouts[i].ProjectID == "" {
+			continue
+		}
+		if mixedRequested {
+			runID, err := mixedLifecycle.CreateMixedDispatchRun(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.SourceTaskID, i, in.QuietWindowMS, in.TotalTimeoutSeconds)
+			if err != nil {
+				cause := fmt.Errorf("failed_preflight: create mixed dispatch run: %w", err)
+				if cleanupErr := s.cleanupMixedDispatchRollouts(context.WithoutCancel(ctx), in, rollouts); cleanupErr != nil {
+					return EnvDispatchResult{}, errors.Join(cause, fmt.Errorf("rollback cleanup failures: %w", cleanupErr))
+				}
+				return EnvDispatchResult{}, cause
+			}
+			rollouts[i].RunID = runID
+			rollouts[i].SourceTaskID = in.SourceTaskID
 			continue
 		}
 		if in.SourceTaskID != "" {
@@ -975,6 +1122,21 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}
 		if err := s.deps.CreateEnvDispatchRun(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.TrainingMode); err != nil {
 			rollouts[i].Error = fmt.Sprintf("create env_dispatch_run: %v", err)
+		}
+	}
+
+	if mixedDispatchContractRequested(in) {
+		for i := range rollouts {
+			if rollouts[i].ProjectID == "" || rollouts[i].ChannelID == "" {
+				continue
+			}
+			if err := s.deps.SetEnvDispatchRunLocalTargets(ctx, rollouts[i].ProjectID, in.WorkspaceID, rollouts[i].IssueID, rollouts[i].ChannelID); err != nil {
+				cause := fmt.Errorf("failed_preflight: bind mixed run channel: %w", err)
+				if cleanupErr := s.cleanupMixedDispatchRollouts(context.WithoutCancel(ctx), in, rollouts); cleanupErr != nil {
+					return EnvDispatchResult{}, errors.Join(cause, fmt.Errorf("rollback cleanup failures: %w", cleanupErr))
+				}
+				return EnvDispatchResult{}, cause
+			}
 		}
 	}
 
@@ -998,18 +1160,48 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}
 	}
 
-	// Dispatch phase: best-effort, per-rollout errors recorded in rollouts[i].Error.
-	var dispatchWG sync.WaitGroup
-	for i := 0; i < in.GroupSize; i++ {
-		dispatchWG.Add(1)
-		go func(idx int) {
-			defer dispatchWG.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			s.dispatchOne(ctx, in, &rollouts[idx], idx)
-		}(i)
+	// Dispatch phase. Mixed message dispatches first provision, bind, and
+	// validate every rollout. No rollout may submit its canonical initial
+	// message until that dispatch-wide preflight barrier succeeds.
+	runRolloutPhase := func(run func(int)) {
+		var phaseWG sync.WaitGroup
+		for i := 0; i < in.GroupSize; i++ {
+			phaseWG.Add(1)
+			go func(idx int) {
+				defer phaseWG.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				run(idx)
+			}(i)
+		}
+		phaseWG.Wait()
 	}
-	dispatchWG.Wait()
+	mixedMessageRequested := mixedRequested && in.DispatchType == EnvDispatchMessage
+	if mixedMessageRequested {
+		runRolloutPhase(func(idx int) {
+			s.preflightMixedMessageRollout(ctx, in, &rollouts[idx])
+		})
+		for _, rollout := range rollouts {
+			if rollout.Error == "" {
+				continue
+			}
+			cleanupErr := s.cleanupMixedDispatchRollouts(context.WithoutCancel(ctx), in, rollouts)
+			audit.recordEvent(ctx, EnvDispatchAuditEventCreationFailed, "", auditReasonDispatchFailed)
+			audit.complete(ctx, EnvDispatchAuditOutcomeFailed)
+			primaryErr := fmt.Errorf("failed_preflight: mixed dispatch rolled back before initial send: %s", rollout.Error)
+			if cleanupErr != nil {
+				return EnvDispatchResult{}, errors.Join(primaryErr, fmt.Errorf("mixed dispatch cleanup failures: %w", cleanupErr))
+			}
+			return EnvDispatchResult{}, primaryErr
+		}
+		runRolloutPhase(func(idx int) {
+			s.sendMixedChannelMessage(ctx, in, &rollouts[idx])
+		})
+	} else {
+		runRolloutPhase(func(idx int) {
+			s.dispatchOne(ctx, in, &rollouts[idx], idx)
+		})
+	}
 	for _, rollout := range rollouts {
 		if rollout.Error != "" {
 			// Keep error contents out of the ledger: the stable reason code is
@@ -1029,6 +1221,27 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 			if err := s.deps.SetEnvDispatchRunLocalTargets(ctx, rollouts[i].ProjectID, in.WorkspaceID, rollouts[i].IssueID, rollouts[i].ChannelID); err != nil && rollouts[i].Error == "" {
 				rollouts[i].Error = fmt.Sprintf("set env_dispatch local targets: %v", err)
 			}
+		}
+	}
+
+	if mixedDispatchContractRequested(in) {
+		for _, rollout := range rollouts {
+			if rollout.Error == "" {
+				continue
+			}
+			cleanupErr := s.cleanupMixedDispatchRollouts(context.WithoutCancel(ctx), in, rollouts)
+			audit.complete(ctx, EnvDispatchAuditOutcomeFailed)
+			primaryErr := fmt.Errorf("dispatch_failed: mixed dispatch rolled back before acceptance: %s", rollout.Error)
+			if cleanupErr != nil {
+				return EnvDispatchResult{}, errors.Join(primaryErr, fmt.Errorf("mixed dispatch cleanup failures: %w", cleanupErr))
+			}
+			return EnvDispatchResult{}, primaryErr
+		}
+		// Every rollout and source-aware persistence step is accepted. Release
+		// provisional ownership without cleanup; session identifiers must not be
+		// retained in the response or idempotency state.
+		for i := range rollouts {
+			rollouts[i].mixedProvisions = nil
 		}
 	}
 
@@ -1061,7 +1274,22 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	if len(rollouts) > 0 {
 		channelID = rollouts[0].ChannelID
 	}
-	result := EnvDispatchResult{ChannelID: channelID, ProjectID: projectID, Rollouts: rollouts}
+	result := EnvDispatchResult{
+		ChannelID:           channelID,
+		ProjectID:           projectID,
+		QuietWindowMS:       in.QuietWindowMS,
+		TotalTimeoutSeconds: in.TotalTimeoutSeconds,
+		RunAgents:           append([]MixedDispatchRunAgent(nil), mixedPlan.RunAgents...),
+		Rollouts:            rollouts,
+	}
+	for _, rollout := range rollouts {
+		if len(rollout.RunAgents) > 0 && len(result.RunAgents) == len(rollout.RunAgents) {
+			result.RunAgents = append([]MixedDispatchRunAgent(nil), rollout.RunAgents...)
+		}
+		if !rollout.InitialMessageSubmittedAt.IsZero() && (result.InitialMessageSubmittedAt.IsZero() || rollout.InitialMessageSubmittedAt.Before(result.InitialMessageSubmittedAt)) {
+			result.InitialMessageSubmittedAt = rollout.InitialMessageSubmittedAt
+		}
+	}
 
 	// Persist the idempotency response so a retry replays it (spec §7.7). Best-effort.
 	if in.IdempotencyKey != "" {
@@ -1072,7 +1300,7 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	// ErrAllDispatchFailed (handler → 500, body still carries rollouts[]).
 	succeeded := 0
 	for _, r := range rollouts {
-		if r.AgentRunID != "" {
+		if r.AgentRunID != "" || (mixedRequested && r.Error == "" && !r.InitialMessageSubmittedAt.IsZero()) {
 			succeeded++
 		}
 	}
@@ -1229,15 +1457,23 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	if in.AgentID == "" {
 		return fmt.Errorf("validation_failed: agent_id is required")
 	}
-	// training_mode (Task 1): false forbids training IDs; true requires
-	// train_agent_id. The handler rejects an omitted training_mode before
-	// constructing EnvDispatchInput, so the service only sees an explicit
-	// boolean.
-	if !in.TrainingMode && (in.TrainAgentID != "" || in.CriticAgentID != "") {
-		return fmt.Errorf("validation_failed: training_mode=false forbids train_agent_id and critic_agent_id")
-	}
-	if in.TrainingMode && in.TrainAgentID == "" {
-		return fmt.Errorf("validation_failed: training_mode=true requires train_agent_id")
+	if mixedDispatchContractRequested(in) {
+		if in.QuietWindowMS < 100 || in.QuietWindowMS > 60_000 {
+			return fmt.Errorf("validation_failed: quiet_window_ms must be in [100, 60000]")
+		}
+		if in.TotalTimeoutSeconds < 30 || in.TotalTimeoutSeconds > 86_400 {
+			return fmt.Errorf("validation_failed: total_timeout_seconds must be in [30, 86400]")
+		}
+		if int64(in.TotalTimeoutSeconds)*1000 <= int64(in.QuietWindowMS) {
+			return fmt.Errorf("validation_failed: total_timeout_seconds must exceed quiet_window_ms")
+		}
+	} else {
+		if !in.TrainingMode && (in.TrainAgentID != "" || in.CriticAgentID != "") {
+			return fmt.Errorf("validation_failed: training_mode=false forbids train_agent_id and critic_agent_id")
+		}
+		if in.TrainingMode && in.TrainAgentID == "" {
+			return fmt.Errorf("validation_failed: training_mode=true requires train_agent_id")
+		}
 	}
 	// train_agent_id (spec §4.1): the training target. Allowed only when it
 	// equals agent_id (single-agent training). Empty ⇒ today's behavior
@@ -1435,9 +1671,18 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	}
 	envID, err := s.deps.CreateEnv(ctx, in.WorkspaceID, forked, sourceEnv.ID, mode, in.Domain)
 	if err != nil {
-		s.deleteSandboxes(ctx, forked)
-		s.reclaimSharedRuntimes(ctx, in, sandboxRefs)
-		return EnvRollout{}, fmt.Errorf("create env: %w", err)
+		cause := fmt.Errorf("create env: %w", err)
+		var cleanupErrs []error
+		if cleanupErr := s.deleteSandboxes(context.WithoutCancel(ctx), forked); cleanupErr != nil {
+			cleanupErrs = append(cleanupErrs, cleanupErr)
+		}
+		if cleanupErr := s.reclaimSharedRuntimes(context.WithoutCancel(ctx), in, sandboxRefs); cleanupErr != nil {
+			cleanupErrs = append(cleanupErrs, cleanupErr)
+		}
+		if len(cleanupErrs) > 0 {
+			return EnvRollout{}, errors.Join(cause, fmt.Errorf("rollback cleanup failures: %w", errors.Join(cleanupErrs...)))
+		}
+		return EnvRollout{}, cause
 	}
 	audit := envDispatchAuditFromContext(ctx)
 	for _, sandboxID := range forked {
@@ -1453,9 +1698,8 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		name := fmt.Sprintf("env-dispatch-%s", envID) // unique, spec §7.2
 		pid, err := s.deps.CreateProject(ctx, in.WorkspaceID, name, envID)
 		if err != nil {
-			s.rollbackRollout(ctx, in.WorkspaceID, EnvRollout{EnvID: envID})
-			s.reclaimSharedRuntimes(ctx, in, sandboxRefs)
-			return EnvRollout{}, fmt.Errorf("create project: %w", err)
+			cause := fmt.Errorf("create project: %w", err)
+			return EnvRollout{}, s.rollbackRolloutFailure(ctx, in, EnvRollout{EnvID: envID, SandboxRefs: sandboxRefs}, cause)
 		}
 		projectID = pid
 	} else {
@@ -1463,9 +1707,8 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		// in.SourceProjectID is resolved by the handler from the 1:1 env→project.
 		pid, imap, smap, err := s.deps.CopyProjectSubtree(ctx, in.SourceProjectID, in.WorkspaceID, envID)
 		if err != nil {
-			s.rollbackRollout(ctx, in.WorkspaceID, EnvRollout{EnvID: envID})
-			s.reclaimSharedRuntimes(ctx, in, sandboxRefs)
-			return EnvRollout{}, fmt.Errorf("copy project: %w", err)
+			cause := fmt.Errorf("copy project: %w", err)
+			return EnvRollout{}, s.rollbackRolloutFailure(ctx, in, EnvRollout{EnvID: envID, SandboxRefs: sandboxRefs}, cause)
 		}
 		projectID = pid
 		issueIDMap = imap
@@ -1481,15 +1724,11 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	}
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeBranch {
 		if in.BranchMessageSource == nil {
-			s.rollbackRollout(ctx, in.WorkspaceID, r)
-			s.reclaimSharedRuntimes(ctx, in, r.SandboxRefs)
-			return EnvRollout{}, fmt.Errorf("missing validated branch message source")
+			return EnvRollout{}, s.rollbackRolloutFailure(ctx, in, r, fmt.Errorf("missing validated branch message source"))
 		}
 		copyMap, err := s.deps.CopyEnvDispatchChannel(ctx, in.WorkspaceID, in.BranchMessageSource.SourceChannelID, projectID, envID)
 		if err != nil {
-			s.rollbackRollout(ctx, in.WorkspaceID, r)
-			s.reclaimSharedRuntimes(ctx, in, r.SandboxRefs)
-			return EnvRollout{}, fmt.Errorf("copy env-dispatch channel: %w", err)
+			return EnvRollout{}, s.rollbackRolloutFailure(ctx, in, r, fmt.Errorf("copy env-dispatch channel: %w", err))
 		}
 		r.ChannelID = copyMap.ChannelID
 		envDispatchAuditFromContext(ctx).recordChannelBindings(ctx, copyMap.ChannelID, projectID, envID, roster)
@@ -1513,22 +1752,19 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 			for _, spec := range in.PerAgentEnvSpecs {
 				policy, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec)
 				if err != nil {
-					s.rollbackRollout(ctx, in.WorkspaceID, r)
-					return EnvRollout{}, fmt.Errorf("resolve channel sandbox policy: %w", err)
+					return EnvRollout{}, s.rollbackRolloutFailure(ctx, in, r, fmt.Errorf("resolve channel sandbox policy: %w", err))
 				}
 				bindingSpecs[spec.AgentID] = policy
 			}
 			if in.SharedSandbox {
 				if err := ApplySharedRuntimeCatalog(roster, bindingSpecs); err != nil {
-					s.rollbackRollout(ctx, in.WorkspaceID, r)
-					return EnvRollout{}, fmt.Errorf("apply shared runtime catalog: %w", err)
+					return EnvRollout{}, s.rollbackRolloutFailure(ctx, in, r, fmt.Errorf("apply shared runtime catalog: %w", err))
 				}
 			}
 		}
 		channelID, err := s.deps.CreateEnvDispatchChannel(ctx, in.WorkspaceID, in.UserID, projectID, envID, roster, bindingSpecs)
 		if err != nil {
-			s.rollbackRollout(ctx, in.WorkspaceID, r)
-			return EnvRollout{}, fmt.Errorf("create env-dispatch channel: %w", err)
+			return EnvRollout{}, s.rollbackRolloutFailure(ctx, in, r, fmt.Errorf("create env-dispatch channel: %w", err))
 		}
 		r.ChannelID = channelID
 		envDispatchAuditFromContext(ctx).recordChannelBindings(ctx, channelID, projectID, envID, roster)
@@ -1871,22 +2107,24 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 	envDispatchAuditFromContext(ctx).recordTask(ctx, runID, r.EnvID, r.ProjectID, "")
 }
 
-// dispatchScratchChannelMessage starts only the canonical roster leader. The
-// other channel members retain pending bindings and are provisioned by the
-// channel delivery hook on their first directed mention.
+// dispatchScratchChannelMessage starts only the canonical roster leader for a
+// legacy/non-mixed dispatch. Mixed dispatches eagerly provision the complete
+// roster before the canonical initial send.
 func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
 	leaderID := in.MessageRoster.LeaderID
 	if leaderID == "" {
 		r.Error = "internal: missing message roster leader"
 		return
 	}
+	if mixedDispatchContractRequested(in) {
+		s.preflightMixedMessageRollout(ctx, in, r)
+		s.sendMixedChannelMessage(ctx, in, r)
+		return
+	}
+
 	provisioned, err := s.deps.ProvisionEnvDispatchAgent(ctx, EnvDispatchAgentProvisionInput{
-		WorkspaceID:   in.WorkspaceID,
-		UserID:        in.UserID,
-		EnvID:         r.EnvID,
-		ProjectID:     r.ProjectID,
-		ChannelID:     r.ChannelID,
-		AgentID:       leaderID,
+		WorkspaceID: in.WorkspaceID, UserID: in.UserID, EnvID: r.EnvID,
+		ProjectID: r.ProjectID, ChannelID: r.ChannelID, AgentID: leaderID,
 		SandboxConfig: json.RawMessage(`{}`),
 	})
 	if err != nil {
@@ -1895,8 +2133,8 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		return
 	}
 	defer func() {
-		if r.AgentRunID == "" {
-			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, provisioned.RuntimeID)
+		if r.AgentRunID == "" && provisioned.RuntimeID != "" {
+			_ = s.deps.DeleteAgentRuntime(context.WithoutCancel(ctx), in.WorkspaceID, provisioned.RuntimeID)
 		}
 	}()
 	if err := s.deps.SetEnvSandboxes(ctx, r.EnvID, in.WorkspaceID, []string{provisioned.SandboxInstanceID}); err != nil {
@@ -1910,9 +2148,6 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 	for _, agentID := range in.MessageRoster.AgentIDs {
 		status := AgentSandboxStatus{Status: "pending"}
 		if in.SharedSandbox {
-			// Shared mode (FR-005): every roster member reports the sample's
-			// shared identifiers; lazily-attached members stay "pending" until
-			// their first mention.
 			status.SandboxInstanceID = provisioned.SandboxInstanceID
 			status.RuntimeID = provisioned.RuntimeID
 			status.DaemonID = provisioned.DaemonID
@@ -1920,10 +2155,8 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		r.AgentSandboxes[agentID] = status
 	}
 	r.AgentSandboxes[leaderID] = AgentSandboxStatus{
-		Status:            "ready",
-		SandboxInstanceID: provisioned.SandboxInstanceID,
-		RuntimeID:         provisioned.RuntimeID,
-		DaemonID:          provisioned.DaemonID,
+		Status: "ready", SandboxInstanceID: provisioned.SandboxInstanceID,
+		RuntimeID: provisioned.RuntimeID, DaemonID: provisioned.DaemonID,
 	}
 
 	messageID, err := s.deps.CreateChannelMessage(ctx, r.ChannelID, in.WorkspaceID, in.UserID, in.Message.Content)
@@ -1933,15 +2166,10 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		return
 	}
 	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
-		AgentID:            provisioned.AgentID,
-		ChannelID:          r.ChannelID,
-		ProjectID:          r.ProjectID,
-		EnvID:              r.EnvID,
-		ChatSessionID:      provisioned.ChatSessionID,
-		SandboxInstanceID:  provisioned.SandboxInstanceID,
-		RuntimeID:          provisioned.RuntimeID,
-		SourceMessageID:    messageID,
-		SharedWorkdirEnvID: sharedWorkdirAnchor(in, *r),
+		AgentID: provisioned.AgentID, ChannelID: r.ChannelID, ProjectID: r.ProjectID,
+		EnvID: r.EnvID, ChatSessionID: provisioned.ChatSessionID,
+		SandboxInstanceID: provisioned.SandboxInstanceID, RuntimeID: provisioned.RuntimeID,
+		SourceMessageID: messageID, SharedWorkdirEnvID: sharedWorkdirAnchor(in, *r),
 	}, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue channel leader: %v", err)
@@ -1949,14 +2177,9 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		return
 	}
 	if err := s.deps.SaveCollaborationTrigger(ctx, r.EnvID, EnvCollaborationTrigger{
-		AgentID:         leaderID,
-		Kind:            "channel_message",
-		ChannelID:       r.ChannelID,
-		ProjectID:       r.ProjectID,
-		ChatSessionID:   provisioned.ChatSessionID,
-		SourceMessageID: messageID,
-		TaskID:          runID,
-		RuntimeID:       provisioned.RuntimeID,
+		AgentID: leaderID, Kind: "channel_message", ChannelID: r.ChannelID,
+		ProjectID: r.ProjectID, ChatSessionID: provisioned.ChatSessionID,
+		SourceMessageID: messageID, TaskID: runID, RuntimeID: provisioned.RuntimeID,
 	}); err != nil {
 		r.Error = fmt.Sprintf("save collaboration trigger: %v", err)
 		r.Stack = stackerr.StackOf(err)
@@ -1965,19 +2188,253 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 	r.LeaderRunID = runID
 	r.AgentRunID = runID
 	envDispatchAuditFromContext(ctx).recordTask(ctx, runID, r.EnvID, r.ProjectID, r.ChannelID)
-	// AC-4: link the binding's persisted training session (if any) to the real
-	// task so DAG assembly maps session->agent_run. Best-effort; non-training
-	// bindings no-op inside the dep, and link failure never fails the dispatch.
 	_ = s.deps.LinkEnvDispatchTrainingSession(ctx, r.EnvID, leaderID, r.ProjectID, runID, "")
 }
 
-// dispatchBranchChannelMessage resumes the source env's persisted collaboration
-// trigger on the copied channel. Only the trigger-selected agent is woken: its
-// sandbox is cloned from the source binding (when ready) or created from the
-// saved policy. Non-triggered peers keep their pending bindings and are
-// provisioned lazily on first mention. The request's message.content, when
-// non-empty, is appended as nondispatching channel context before the
-// continuation enqueue, without changing the trigger-selected agent.
+// reclaimMixedDispatchProvisions consumes a rollout's provisional ownership.
+// A successful per-rollout send/start retains that ownership until Dispatch
+// accepts every sibling and all post-dispatch persistence. Calling this before
+// rollbackRollout is required because the production reclaimer resolves the
+// provisional binding through the rollout environment.
+func (s *EnvDispatchService) reclaimMixedDispatchProvisions(ctx context.Context, in EnvDispatchInput, r *EnvRollout) error {
+	provisions := r.mixedProvisions
+	r.mixedProvisions = nil
+	if len(provisions) == 0 {
+		return nil
+	}
+	reclaimer, hasReclaimer := s.deps.(MixedDispatchProvisionReclaimer)
+	seenRuntimes := make(map[string]struct{}, len(provisions))
+	var cleanupErrs []error
+	for _, provision := range provisions {
+		var provisionErrs []error
+		if provision.Prepared.RunAgentID != "" {
+			if lifecycle, ok := s.deps.(MixedDispatchRunLifecycle); ok {
+				if err := lifecycle.RevokeMixedDispatchRunAgent(ctx, r.RunID, provision.Prepared); err != nil {
+					provisionErrs = append(provisionErrs, fmt.Errorf("revoke prepared Pi run: %w", err))
+				}
+			}
+		}
+		if hasReclaimer {
+			if err := reclaimer.ReclaimMixedDispatchProvision(
+				ctx, in.WorkspaceID, in.UserID, r.EnvID,
+				provision.SourceAgentID, provision.Provisioned,
+			); err != nil {
+				provisionErrs = append(provisionErrs, err)
+			}
+		} else if provision.Provisioned.RuntimeID != "" {
+			if _, duplicate := seenRuntimes[provision.Provisioned.RuntimeID]; !duplicate {
+				seenRuntimes[provision.Provisioned.RuntimeID] = struct{}{}
+				if err := s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, provision.Provisioned.RuntimeID); err != nil {
+					provisionErrs = append(provisionErrs, err)
+				}
+			}
+		}
+		if err := errors.Join(provisionErrs...); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("reclaim mixed provision for source agent %s: %w", provision.SourceAgentID, err))
+			// Keep failed ownership explicit so a later rollback pass can retry
+			// the same idempotent compensator. Successful provisions are consumed.
+			r.mixedProvisions = append(r.mixedProvisions, provision)
+		}
+	}
+	return errors.Join(cleanupErrs...)
+}
+
+func (s *EnvDispatchService) cleanupMixedDispatchRollouts(ctx context.Context, in EnvDispatchInput, rollouts []EnvRollout) error {
+	var cleanupErrs []error
+	for i := range rollouts {
+		if err := s.reclaimMixedDispatchProvisions(ctx, in, &rollouts[i]); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("rollout %d provisional cleanup: %w", i, err))
+		}
+		if err := s.rollbackRollout(ctx, in.WorkspaceID, rollouts[i]); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("rollout %d resource cleanup: %w", i, err))
+		}
+		if err := s.reclaimSharedRuntimes(ctx, in, rollouts[i].SandboxRefs); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("rollout %d shared runtime cleanup: %w", i, err))
+		}
+	}
+	return errors.Join(cleanupErrs...)
+}
+
+// preflightMixedChannelMessage provisions, binds, and validates one complete
+// mixed roster without submitting its initial message. Dispatch places a
+// barrier after every rollout completes this phase.
+func (s *EnvDispatchService) preflightMixedChannelMessage(
+	ctx context.Context,
+	in EnvDispatchInput,
+	r *EnvRollout,
+	anchorSourceAgentID string,
+	provisionInput func(string) EnvDispatchAgentProvisionInput,
+) {
+	if in.MixedPlan == nil {
+		r.Error = "failed_preflight: mixed dispatch plan is unavailable"
+		return
+	}
+	provisionedBySource := make(map[string]EnvDispatchAgentProvisionResult, len(in.MixedPlan.RunAgents))
+	sandboxIDs := make([]string, 0, len(in.MixedPlan.RunAgents))
+	defer func() {
+		if r.Error != "" {
+			if cleanupErr := s.reclaimMixedDispatchProvisions(context.WithoutCancel(ctx), in, r); cleanupErr != nil {
+				r.Error = fmt.Sprintf("%s (cleanup failures: %v)", r.Error, cleanupErr)
+			}
+		}
+	}()
+
+	for _, planned := range in.MixedPlan.RunAgents {
+		input := provisionInput(planned.SourceAgentID)
+		input.TrainingMode = planned.TrainingMode
+		if planned.TrainingMode != "none" {
+			input.TargetPolicy = in.MixedPlan.TargetPolicy
+			input.Tokenizer = in.MixedPlan.Tokenizer
+		}
+		provisioned, err := s.deps.ProvisionEnvDispatchAgent(ctx, input)
+		if err != nil {
+			r.Error = fmt.Sprintf("provision channel agent %s: %v", planned.SourceAgentID, err)
+			r.Stack = stackerr.StackOf(err)
+			return
+		}
+		provisionedBySource[planned.SourceAgentID] = provisioned
+		r.mixedProvisions = append(r.mixedProvisions, mixedDispatchProvision{
+			SourceAgentID: planned.SourceAgentID,
+			Provisioned:   provisioned,
+		})
+		if provisioned.SandboxInstanceID != "" {
+			sandboxIDs = append(sandboxIDs, provisioned.SandboxInstanceID)
+		}
+		envDispatchAuditFromContext(ctx).recordProvisionedBinding(ctx, provisioned, r.EnvID, r.ProjectID, r.ChannelID)
+		r.RunAgents = append(r.RunAgents, MixedDispatchRunAgent{
+			SourceAgentID: planned.SourceAgentID, ExecutionAgentID: provisioned.AgentID,
+			RuntimeID:      provisioned.RuntimeID,
+			AReALSessionID: provisioned.AReALSessionID, TrainingMode: planned.TrainingMode,
+		})
+	}
+	// Validate the source/derived/runtime/provider bindings before native Pi
+	// preparation. PiSessionID and CaptureBoundary are deliberately absent at
+	// this point: PrepareMixedDispatchRunAgent owns their fresh allocation.
+	if err := ValidateMixedDispatchProvisionedBindings(*in.MixedPlan, r.RunAgents); err != nil {
+		r.Error = err.Error()
+		return
+	}
+	anchor, ok := provisionedBySource[anchorSourceAgentID]
+	if !ok {
+		r.Error = fmt.Sprintf("failed_preflight: dispatch anchor %s was not provisioned", anchorSourceAgentID)
+		return
+	}
+	if len(sandboxIDs) > 0 {
+		if err := s.deps.SetEnvSandboxes(ctx, r.EnvID, in.WorkspaceID, sandboxIDs); err != nil {
+			r.Error = fmt.Sprintf("attach channel roster sandboxes: %v", err)
+			r.Stack = stackerr.StackOf(err)
+			return
+		}
+	}
+	r.ChatSessionID = anchor.ChatSessionID
+	r.AgentSandboxes = make(map[string]AgentSandboxStatus, len(in.MessageRoster.AgentIDs))
+	for _, sourceAgentID := range in.MessageRoster.AgentIDs {
+		provisioned, ready := provisionedBySource[sourceAgentID]
+		if !ready {
+			r.AgentSandboxes[sourceAgentID] = AgentSandboxStatus{Status: "pending"}
+			continue
+		}
+		r.AgentSandboxes[sourceAgentID] = AgentSandboxStatus{
+			Status: "ready", SandboxInstanceID: provisioned.SandboxInstanceID,
+			RuntimeID: provisioned.RuntimeID, DaemonID: provisioned.DaemonID,
+		}
+	}
+
+	lifecycle := s.deps.(MixedDispatchRunLifecycle)
+	for i := range r.RunAgents {
+		prepared, err := lifecycle.PrepareMixedDispatchRunAgent(ctx, r.RunID, r.RunAgents[i])
+		if err != nil {
+			r.Error = fmt.Sprintf("prepare mixed run agent %s: %v", r.RunAgents[i].SourceAgentID, err)
+			r.Stack = stackerr.StackOf(err)
+			return
+		}
+		if prepared.RunAgentID == "" || prepared.PiSessionID == "" || prepared.CaptureBoundary == "" {
+			r.Error = fmt.Sprintf("prepare mixed run agent %s: incomplete native Pi binding", prepared.SourceAgentID)
+			return
+		}
+		r.RunAgents[i] = prepared
+		for j := range r.mixedProvisions {
+			if r.mixedProvisions[j].SourceAgentID == prepared.SourceAgentID {
+				r.mixedProvisions[j].Prepared = prepared
+				break
+			}
+		}
+		if err := lifecycle.BindMixedDispatchRunAgent(ctx, r.RunID, prepared); err != nil {
+			r.Error = fmt.Sprintf("bind mixed run agent %s: %v", prepared.SourceAgentID, err)
+			r.Stack = stackerr.StackOf(err)
+			return
+		}
+	}
+	if err := ValidateMixedDispatchProvisionedAgents(*in.MixedPlan, r.RunAgents); err != nil {
+		r.Error = err.Error()
+		return
+	}
+}
+
+func (s *EnvDispatchService) preflightMixedMessageRollout(ctx context.Context, in EnvDispatchInput, r *EnvRollout) {
+	switch in.Mode {
+	case EnvModeScratch:
+		leaderID := in.MessageRoster.LeaderID
+		if leaderID == "" {
+			r.Error = "internal: missing message roster leader"
+			return
+		}
+		s.preflightMixedChannelMessage(ctx, in, r, leaderID, func(sourceAgentID string) EnvDispatchAgentProvisionInput {
+			return EnvDispatchAgentProvisionInput{
+				WorkspaceID: in.WorkspaceID, UserID: in.UserID, EnvID: r.EnvID,
+				ProjectID: r.ProjectID, ChannelID: r.ChannelID, AgentID: sourceAgentID,
+				SandboxConfig: json.RawMessage(`{}`),
+			}
+		})
+	case EnvModeBranch:
+		if in.BranchMessageSource == nil || in.BranchMessageSource.Trigger.AgentID == "" {
+			r.Error = "internal: missing validated branch message source"
+			return
+		}
+		anchorSourceAgentID := in.BranchMessageSource.Trigger.AgentID
+		s.preflightMixedChannelMessage(ctx, in, r, anchorSourceAgentID, func(sourceAgentID string) EnvDispatchAgentProvisionInput {
+			input := EnvDispatchAgentProvisionInput{
+				WorkspaceID: in.WorkspaceID, UserID: in.UserID, EnvID: r.EnvID,
+				ProjectID: r.ProjectID, ChannelID: r.ChannelID, AgentID: sourceAgentID,
+				SandboxConfig: json.RawMessage(`{}`),
+			}
+			if sourceAgentID == anchorSourceAgentID {
+				input.SourceSandboxInstanceID = in.BranchMessageSource.TriggerSourceSandboxInstanceID
+			}
+			return input
+		})
+	default:
+		r.Error = fmt.Sprintf("internal: unsupported mixed message mode %s", in.Mode)
+	}
+}
+
+func (s *EnvDispatchService) sendMixedChannelMessage(ctx context.Context, in EnvDispatchInput, r *EnvRollout) {
+	if r.Error != "" {
+		return
+	}
+	lifecycle := s.deps.(MixedDispatchRunLifecycle)
+	prepared, err := lifecycle.PersistMixedDispatchInitialMessage(ctx, r.ChannelID, in.WorkspaceID, in.UserID, in.Message.Content)
+	if err != nil {
+		r.Error = fmt.Sprintf("create channel message: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	if prepared.MessageID == "" || prepared.SubmittedAt.IsZero() {
+		r.Error = "create channel message: canonical persistence receipt is incomplete"
+		return
+	}
+	if err := lifecycle.StartMixedDispatchRun(ctx, r.RunID, prepared.SubmittedAt); err != nil {
+		r.Error = fmt.Sprintf("start mixed dispatch timeout: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	r.InitialMessageSubmittedAt = prepared.SubmittedAt
+	prepared.Acknowledge(ctx)
+}
+
+// dispatchBranchChannelMessage resumes a legacy source collaboration trigger
+// for non-mixed dispatches. Mixed branch dispatches use the same complete
+// roster preflight and resident canonical-send lifecycle as mixed scratch.
 func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
 	if in.BranchMessageSource == nil {
 		r.Error = "internal: missing validated branch message source"
@@ -1986,6 +2443,11 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 	src := in.BranchMessageSource.Trigger
 	if src.AgentID == "" {
 		r.Error = "internal: branch collaboration trigger missing agent"
+		return
+	}
+	if mixedDispatchContractRequested(in) {
+		s.preflightMixedMessageRollout(ctx, in, r)
+		s.sendMixedChannelMessage(ctx, in, r)
 		return
 	}
 
@@ -2009,10 +2471,6 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 	dst.TaskID = ""
 	dst.RuntimeID = ""
 
-	// Append the request's message.content as nondispatching channel context
-	// (the store's channel-message insert is a pure SQL insert: it dispatches no
-	// channel events and triggers no mention routing). It must not change which
-	// agent is woken; the trigger agent is provisioned and enqueued below.
 	if in.Message != nil && in.Message.Content != "" {
 		if _, err := s.deps.CreateChannelMessage(ctx, r.ChannelID, in.WorkspaceID, in.UserID, in.Message.Content); err != nil {
 			r.Error = fmt.Sprintf("append branch channel message: %v", err)
@@ -2022,12 +2480,8 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 	}
 
 	provisioned, err := s.deps.ProvisionEnvDispatchAgent(ctx, EnvDispatchAgentProvisionInput{
-		WorkspaceID:             in.WorkspaceID,
-		UserID:                  in.UserID,
-		EnvID:                   r.EnvID,
-		ProjectID:               r.ProjectID,
-		ChannelID:               r.ChannelID,
-		AgentID:                 dst.AgentID,
+		WorkspaceID: in.WorkspaceID, UserID: in.UserID, EnvID: r.EnvID,
+		ProjectID: r.ProjectID, ChannelID: r.ChannelID, AgentID: dst.AgentID,
 		SourceSandboxInstanceID: in.BranchMessageSource.TriggerSourceSandboxInstanceID,
 		SandboxConfig:           json.RawMessage(`{}`),
 	})
@@ -2037,8 +2491,8 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		return
 	}
 	defer func() {
-		if r.AgentRunID == "" {
-			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, provisioned.RuntimeID)
+		if r.AgentRunID == "" && provisioned.RuntimeID != "" {
+			_ = s.deps.DeleteAgentRuntime(context.WithoutCancel(ctx), in.WorkspaceID, provisioned.RuntimeID)
 		}
 	}()
 	if err := s.deps.SetEnvSandboxes(ctx, r.EnvID, in.WorkspaceID, []string{provisioned.SandboxInstanceID}); err != nil {
@@ -2047,15 +2501,10 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		return
 	}
 	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
-		AgentID:            provisioned.AgentID,
-		ChannelID:          r.ChannelID,
-		ProjectID:          r.ProjectID,
-		EnvID:              r.EnvID,
-		ChatSessionID:      provisioned.ChatSessionID,
-		SandboxInstanceID:  provisioned.SandboxInstanceID,
-		RuntimeID:          provisioned.RuntimeID,
-		SourceMessageID:    dst.SourceMessageID,
-		SharedWorkdirEnvID: sharedWorkdirAnchor(in, *r),
+		AgentID: provisioned.AgentID, ChannelID: r.ChannelID, ProjectID: r.ProjectID,
+		EnvID: r.EnvID, ChatSessionID: provisioned.ChatSessionID,
+		SandboxInstanceID: provisioned.SandboxInstanceID, RuntimeID: provisioned.RuntimeID,
+		SourceMessageID: dst.SourceMessageID, SharedWorkdirEnvID: sharedWorkdirAnchor(in, *r),
 	}, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue branch trigger: %v", err)
@@ -2079,9 +2528,6 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 	for _, agentID := range in.MessageRoster.AgentIDs {
 		status := AgentSandboxStatus{Status: "pending"}
 		if in.SharedSandbox {
-			// Shared mode (FR-005): every roster member reports the sample's
-			// shared identifiers; lazily-attached members stay "pending" until
-			// their first mention.
 			status.SandboxInstanceID = provisioned.SandboxInstanceID
 			status.RuntimeID = provisioned.RuntimeID
 			status.DaemonID = provisioned.DaemonID
@@ -2089,10 +2535,8 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		r.AgentSandboxes[agentID] = status
 	}
 	r.AgentSandboxes[dst.AgentID] = AgentSandboxStatus{
-		Status:            "ready",
-		SandboxInstanceID: provisioned.SandboxInstanceID,
-		RuntimeID:         provisioned.RuntimeID,
-		DaemonID:          provisioned.DaemonID,
+		Status: "ready", SandboxInstanceID: provisioned.SandboxInstanceID,
+		RuntimeID: provisioned.RuntimeID, DaemonID: provisioned.DaemonID,
 	}
 }
 
@@ -2110,30 +2554,56 @@ func sharedWorkdirAnchor(in EnvDispatchInput, r EnvRollout) string {
 // Order matters under ON DELETE RESTRICT: delete the project first (it
 // references env_id), then the env row, then its sandboxes. Every rollout
 // forks its own sandboxes, so this never touches a shared/source sandbox.
-func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID string, r EnvRollout) {
+func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID string, r EnvRollout) error {
 	audit := envDispatchAuditFromContext(ctx)
+	var cleanupErrs []error
 	if r.ChannelID != "" {
 		audit.recordResource(ctx, EnvDispatchAuditResourceBinding, r.ChannelID, r.EnvID, r.ProjectID, r.ChannelID, "")
-		_ = s.deps.DeleteChannel(ctx, workspaceID, r.ChannelID)
+		if err := s.deps.DeleteChannel(ctx, workspaceID, r.ChannelID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete rollback channel %s: %w", r.ChannelID, err))
+		}
 	}
 	if r.ProjectID != "" {
-		_ = s.deps.DeleteProject(ctx, r.ProjectID, workspaceID)
+		if err := s.deps.DeleteProject(ctx, r.ProjectID, workspaceID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete rollback project %s: %w", r.ProjectID, err))
+		}
 	}
 	if r.EnvID != "" {
-		env, err := s.deps.GetEnv(ctx, r.EnvID, workspaceID)
-		_ = s.deps.DeleteEnv(ctx, r.EnvID, workspaceID)
-		if err == nil {
+		env, getErr := s.deps.GetEnv(ctx, r.EnvID, workspaceID)
+		if getErr != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("load rollback env %s: %w", r.EnvID, getErr))
+		}
+		if err := s.deps.DeleteEnv(ctx, r.EnvID, workspaceID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete rollback env %s: %w", r.EnvID, err))
+		}
+		if getErr == nil {
 			for _, sandboxID := range env.SandboxIDs {
 				audit.recordResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, r.EnvID, r.ProjectID, r.ChannelID, "")
 				audit.recordEventForResource(ctx, EnvDispatchAuditEventSandboxDeletionRequested, EnvDispatchAuditResourceSandbox, sandboxID, auditReasonRollbackDeleteRequested)
 				if deleteErr := s.deps.DeleteSandbox(ctx, sandboxID); deleteErr != nil {
 					audit.classifyResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, EnvDispatchAuditOwnerUnknown, EnvDispatchAuditClassificationInconclusive, EnvDispatchAuditEventObservationUnavailable, auditReasonDeleteObservationUnavailable)
+					cleanupErrs = append(cleanupErrs, fmt.Errorf("delete rollback sandbox %s: %w", sandboxID, deleteErr))
 					continue
 				}
 				audit.classifyResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, EnvDispatchAuditOwnerDeleted, EnvDispatchAuditClassificationReclaimed, EnvDispatchAuditEventReclaimed, auditReasonRollbackDeleted)
 			}
 		}
 	}
+	return errors.Join(cleanupErrs...)
+}
+
+func (s *EnvDispatchService) rollbackRolloutFailure(ctx context.Context, in EnvDispatchInput, rollout EnvRollout, cause error) error {
+	var cleanupErrs []error
+	if err := s.rollbackRollout(context.WithoutCancel(ctx), in.WorkspaceID, rollout); err != nil {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	if err := s.reclaimSharedRuntimes(context.WithoutCancel(ctx), in, rollout.SandboxRefs); err != nil {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	if len(cleanupErrs) == 0 {
+		return cause
+	}
+	return errors.Join(cause, fmt.Errorf("rollback cleanup failures: %w", errors.Join(cleanupErrs...)))
 }
 
 // forkAll forks every sandbox in src, returning the new sandbox ids. On the
@@ -2144,7 +2614,10 @@ func (s *EnvDispatchService) forkAll(ctx context.Context, src []string, idx int)
 	for _, sid := range src {
 		newID, err := s.deps.ForkSandbox(ctx, sid, idx)
 		if err != nil {
-			s.deleteSandboxes(ctx, forked)
+			cleanupErr := s.deleteSandboxes(ctx, forked)
+			if cleanupErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("cleanup previously forked sandboxes: %w", cleanupErr))
+			}
 			return nil, err
 		}
 		forked = append(forked, newID)
@@ -2154,17 +2627,20 @@ func (s *EnvDispatchService) forkAll(ctx context.Context, src []string, idx int)
 
 // deleteSandboxes best-effort deletes every sandbox id; errors are ignored
 // (rollback is best-effort and the runtime GC is the backstop, spec §7.6).
-func (s *EnvDispatchService) deleteSandboxes(ctx context.Context, ids []string) {
+func (s *EnvDispatchService) deleteSandboxes(ctx context.Context, ids []string) error {
 	audit := envDispatchAuditFromContext(ctx)
+	var cleanupErrs []error
 	for _, sid := range ids {
 		audit.recordResource(ctx, EnvDispatchAuditResourceSandbox, sid, "", "", "", "")
 		audit.recordEventForResource(ctx, EnvDispatchAuditEventSandboxDeletionRequested, EnvDispatchAuditResourceSandbox, sid, auditReasonRollbackDeleteRequested)
 		if err := s.deps.DeleteSandbox(ctx, sid); err != nil {
 			audit.classifyResource(ctx, EnvDispatchAuditResourceSandbox, sid, EnvDispatchAuditOwnerUnknown, EnvDispatchAuditClassificationInconclusive, EnvDispatchAuditEventObservationUnavailable, auditReasonDeleteObservationUnavailable)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete sandbox %s: %w", sid, err))
 			continue
 		}
 		audit.classifyResource(ctx, EnvDispatchAuditResourceSandbox, sid, EnvDispatchAuditOwnerDeleted, EnvDispatchAuditClassificationReclaimed, EnvDispatchAuditEventReclaimed, auditReasonRollbackDeleted)
 	}
+	return errors.Join(cleanupErrs...)
 }
 
 // CreateBaseEnv boots a sandbox and creates a mode='base' env row.
@@ -2178,7 +2654,9 @@ func (s *EnvDispatchService) CreateBaseEnv(ctx context.Context, workspaceID, ima
 	}
 	eid, err := s.deps.CreateEnv(ctx, workspaceID, []string{sbx}, "", EnvModeBase, "")
 	if err != nil {
-		_ = s.deps.DeleteSandbox(ctx, sbx)
+		if cleanupErr := s.deps.DeleteSandbox(ctx, sbx); cleanupErr != nil {
+			return "", "", errors.Join(fmt.Errorf("create env: %w", err), fmt.Errorf("cleanup booted sandbox: %w", cleanupErr))
+		}
 		return "", "", fmt.Errorf("create env: %w", err)
 	}
 	return eid, sbx, nil
@@ -2206,7 +2684,9 @@ func (s *EnvDispatchService) DeleteEnv(ctx context.Context, envID, workspaceID s
 		}
 		return fmt.Errorf("delete env: %w", err)
 	}
-	s.deleteSandboxes(ctx, env.SandboxIDs) // idempotent on 404 in Fleet
+	if err := s.deleteSandboxes(ctx, env.SandboxIDs); err != nil {
+		return fmt.Errorf("delete env sandboxes: %w", err)
+	}
 	return nil
 }
 
@@ -2223,11 +2703,12 @@ func (s *EnvDispatchService) DeleteProject(ctx context.Context, projectID, works
 // any task is enqueued. Shared rollouts expose the same runtime through every
 // agent ref, so each non-empty runtime ID is deleted once. Non-shared cleanup
 // remains owned by the existing single-rollout error paths.
-func (s *EnvDispatchService) reclaimSharedRuntimes(ctx context.Context, in EnvDispatchInput, refs []SandboxInstanceRef) {
+func (s *EnvDispatchService) reclaimSharedRuntimes(ctx context.Context, in EnvDispatchInput, refs []SandboxInstanceRef) error {
 	if !in.SharedSandbox {
-		return
+		return nil
 	}
 	seen := make(map[string]struct{}, len(refs))
+	var cleanupErrs []error
 	for _, ref := range refs {
 		if ref.RuntimeID == "" {
 			continue
@@ -2236,6 +2717,128 @@ func (s *EnvDispatchService) reclaimSharedRuntimes(ctx context.Context, in EnvDi
 			continue
 		}
 		seen[ref.RuntimeID] = struct{}{}
-		_ = s.deps.DeleteAgentRuntime(context.WithoutCancel(ctx), in.WorkspaceID, ref.RuntimeID)
+		if err := s.deps.DeleteAgentRuntime(context.WithoutCancel(ctx), in.WorkspaceID, ref.RuntimeID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete shared rollback runtime %s: %w", ref.RuntimeID, err))
+		}
 	}
+	return errors.Join(cleanupErrs...)
+}
+
+// PreflightMixedDispatch validates the entire source roster without side
+// effects. It returns no partial plan on any failure.
+func PreflightMixedDispatch(in MixedDispatchPreflightInput) (MixedDispatchPlan, error) {
+	fail := func(format string, args ...any) (MixedDispatchPlan, error) {
+		return MixedDispatchPlan{}, fmt.Errorf("validation_failed: "+format, args...)
+	}
+	if in.QuietWindowMS < 100 || in.QuietWindowMS > 60_000 {
+		return fail("quiet_window_ms must be in [100, 60000]")
+	}
+	if in.TotalTimeoutSeconds < 30 || in.TotalTimeoutSeconds > 86_400 {
+		return fail("total_timeout_seconds must be in [30, 86400]")
+	}
+	if int64(in.TotalTimeoutSeconds)*1000 <= int64(in.QuietWindowMS) {
+		return fail("total_timeout_seconds must exceed quiet_window_ms")
+	}
+	deduplicate := func(field string, values []string) ([]string, map[string]struct{}, error) {
+		ordered := make([]string, 0, len(values))
+		set := make(map[string]struct{}, len(values))
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return nil, nil, fmt.Errorf("%s contains an empty agent ID", field)
+			}
+			if _, exists := set[value]; exists {
+				continue
+			}
+			set[value] = struct{}{}
+			ordered = append(ordered, value)
+		}
+		return ordered, set, nil
+	}
+	online, onlineSet, err := deduplicate("online_trainable_agents", in.OnlineTrainableAgents)
+	if err != nil {
+		return fail("%v", err)
+	}
+	offline, offlineSet, err := deduplicate("offline_trainable_agents", in.OfflineTrainableAgents)
+	if err != nil {
+		return fail("%v", err)
+	}
+	for id := range onlineSet {
+		if _, overlap := offlineSet[id]; overlap {
+			return fail("agent %s appears in both trainable lists", id)
+		}
+	}
+	rosterByID := make(map[string]MixedDispatchRosterAgent, len(in.Roster))
+	orderedRoster := make([]MixedDispatchRosterAgent, 0, len(in.Roster))
+	for _, agent := range in.Roster {
+		agent.SourceAgentID = strings.TrimSpace(agent.SourceAgentID)
+		if agent.SourceAgentID == "" {
+			return fail("roster agent ID is required")
+		}
+		if _, duplicate := rosterByID[agent.SourceAgentID]; duplicate {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(agent.Provider), "pi") {
+			return fail("roster agent %s is not a Pi agent", agent.SourceAgentID)
+		}
+		rosterByID[agent.SourceAgentID] = agent
+		orderedRoster = append(orderedRoster, agent)
+	}
+	for field, ids := range map[string]map[string]struct{}{
+		"online_trainable_agents":  onlineSet,
+		"offline_trainable_agents": offlineSet,
+	} {
+		for id := range ids {
+			if _, exists := rosterByID[id]; !exists {
+				return fail("%s contains non-roster agent %s", field, id)
+			}
+		}
+	}
+	plan := MixedDispatchPlan{
+		OnlineTrainableAgents:  online,
+		OfflineTrainableAgents: offline,
+		RunAgents:              make([]MixedDispatchRunAgent, 0, len(orderedRoster)),
+	}
+	for _, agent := range orderedRoster {
+		mode := "none"
+		if _, listed := onlineSet[agent.SourceAgentID]; listed {
+			mode = "online_rl"
+			if !agent.OnlineReady {
+				return fail("online agent %s configuration is incomplete", agent.SourceAgentID)
+			}
+		} else if _, listed := offlineSet[agent.SourceAgentID]; listed {
+			mode = "offline_rl"
+			if !agent.OfflineReady {
+				return fail("offline agent %s configuration is incomplete", agent.SourceAgentID)
+			}
+		}
+		if mode != "none" {
+			policy := strings.TrimSpace(agent.TargetPolicy)
+			tokenizer := strings.TrimSpace(agent.Tokenizer)
+			if policy == "" || tokenizer == "" {
+				return fail("trainable agent %s target policy and tokenizer are required", agent.SourceAgentID)
+			}
+			if plan.TargetPolicy == "" {
+				plan.TargetPolicy, plan.Tokenizer = policy, tokenizer
+			} else if plan.TargetPolicy != policy || plan.Tokenizer != tokenizer {
+				return fail("all trainable agents must share one target policy and tokenizer")
+			}
+		}
+		plan.RunAgents = append(plan.RunAgents, MixedDispatchRunAgent{SourceAgentID: agent.SourceAgentID, TrainingMode: mode})
+	}
+	return plan, nil
+}
+
+func mixedTrainingMode(agentID string, online, offline []string) string {
+	for _, id := range online {
+		if id == agentID {
+			return "online_rl"
+		}
+	}
+	for _, id := range offline {
+		if id == agentID {
+			return "offline_rl"
+		}
+	}
+	return "none"
 }

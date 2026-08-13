@@ -25,6 +25,9 @@ import (
 type Lifecycle struct {
 	// Probe reports resident health; defaults to ProbeHealth.
 	Probe HealthProbe
+	// ControlPort selects the resident's loopback lifecycle port. Zero uses the
+	// machine-wide default; tests may bind an ephemeral port.
+	ControlPort int
 	// Sleep blocks between readiness polls; defaults to time.Sleep.
 	Sleep func(time.Duration)
 	// Executable resolves the binary to exec for a fresh resident process;
@@ -80,8 +83,12 @@ func (l *Lifecycle) view() *startView {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
+	healthPort := l.ControlPort
+	if healthPort <= 0 {
+		healthPort = HealthPort("")
+	}
 	return &startView{
-		health:   HealthPort(""),
+		health:   healthPort,
 		logPath:  LogPath(""),
 		pidPath:  PIDPath(""),
 		probe:    probe,

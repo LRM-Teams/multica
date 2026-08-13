@@ -256,6 +256,7 @@ type canonicalAgentRuntimeSlot struct {
 	idleSince                      time.Time
 	backend                        agent.Backend
 	close                          func()
+	piRunIdentity                  *agent.PiRunIdentity
 	messageInputDone               <-chan error
 	messageInputGeneration         uint64
 	messageInputAttempt            uint64
@@ -607,6 +608,7 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	}
 	slot.backend = nil
 	slot.close = nil
+	slot.piRunIdentity = nil
 	slot.lastPendingNoticeFingerprint = ""
 	slot.lastPendingTargetFingerprint = nil
 	slot.lastPendingNoticeCoordinatorID = ""
@@ -645,6 +647,34 @@ func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string
 	return slot.mode == canonicalRuntimeResident && slot.backend != nil
 }
 
+func (p *canonicalAgentRuntimePool) bindResidentPiRunIdentity(ctx context.Context, agentID, runtimeID string, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	if p == nil {
+		return agent.PiRunBinding{}, errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return agent.PiRunBinding{}, errors.New("canonical resident runtime is not registered")
+	}
+	defer slot.mu.Unlock()
+	backend, ok := slot.backend.(agent.PiRPCBackend)
+	if !ok {
+		return agent.PiRunBinding{}, errors.New("canonical resident runtime is not Pi RPC")
+	}
+	binding, err := backend.PrepareRun(ctx, identity)
+	if err != nil {
+		return agent.PiRunBinding{}, err
+	}
+	copyIdentity := identity
+	slot.piRunIdentity = &copyIdentity
+	return binding, nil
+}
+
 func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	ctx context.Context,
 	agentID, runtimeID string,
@@ -652,7 +682,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	onStarting func(),
 	onAccepted func(),
 	onMessage func(agent.Message),
-	onComplete func(error, uint64),
+	onComplete func(error, uint64, *agent.ResidentTurnCapture),
 ) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
@@ -679,11 +709,10 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 		slot.mu.Unlock()
 		return errors.New("canonical resident runtime does not support idle Message input")
 	}
+	var runtimeWasConfirmedDead bool
 	if liveness, ok := slot.backend.(agent.ResidentRuntimeLivenessChecker); ok {
 		alive, known := liveness.RuntimeAlive()
-		if (!known || !alive) && onStarting != nil {
-			onStarting()
-		}
+		runtimeWasConfirmedDead = known && !alive
 	}
 	batch := make([]agent.ResidentMessage, 0, len(messages))
 	for _, message := range messages {
@@ -786,14 +815,22 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 		activityDone := drainResidentActivity(acceptance.Messages, func(message agent.Message) {
 			p.observeResidentRuntimeMessage(slot, message)
 		})
-		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, 0, nil)
+		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
 		return errors.New("canonical resident runtime was invalidated during Message input acceptance")
+	}
+	if runtimeWasConfirmedDead && onStarting != nil {
+		if liveness, ok := slot.backend.(agent.ResidentRuntimeLivenessChecker); ok {
+			alive, known := liveness.RuntimeAlive()
+			if known && alive {
+				onStarting()
+			}
+		}
 	}
 	if onAccepted != nil {
 		onAccepted()
 	}
 	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
-	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, generation, onComplete)
+	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, onComplete)
 	return nil
 }
 
@@ -910,7 +947,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 	slot.messageInputDone = acceptance.Done
 	slot.mu.Unlock()
 	activityDone := drainResidentActivity(acceptance.Messages, nil)
-	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, 0, nil)
+	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
 	if invalidated {
 		return errors.New("canonical resident runtime was invalidated during Reminder input acceptance")
 	}
@@ -929,6 +966,22 @@ func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.M
 			if onMessage != nil {
 				onMessage(message)
 			}
+		}
+	}()
+	return done
+}
+
+func drainResidentCapture(captures <-chan agent.ResidentTurnCapture) <-chan *agent.ResidentTurnCapture {
+	done := make(chan *agent.ResidentTurnCapture, 1)
+	if captures == nil {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		for capture := range captures {
+			copy := capture
+			done <- &copy
 		}
 	}()
 	return done
@@ -1020,31 +1073,82 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	return nil
 }
 
-func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error, activityDone <-chan struct{}, generation uint64, onComplete func(error, uint64)) {
+func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error, activityDone <-chan struct{}, captureDone <-chan *agent.ResidentTurnCapture, generation uint64, onComplete func(error, uint64, *agent.ResidentTurnCapture)) {
 	turnErr := <-done
-	<-activityDone
+	var capture *agent.ResidentTurnCapture
+	// A failed provider may exit without closing its auxiliary Activity/Capture
+	// streams. The provider completion receipt is authoritative for admission:
+	// release the slot immediately on failure so Pending Messages can be retried.
+	// Successful turns still drain both streams before settlement and completion.
+	if turnErr == nil {
+		<-activityDone
+		if captureDone != nil {
+			capture = <-captureDone
+		}
+	}
 	completed := false
 	freed := false
+	var settleBackend agent.PiRPCBackend
+	var settleIdentity *agent.PiRunIdentity
 	slot.mu.Lock()
 	if slot.messageInputDone == done {
-		slot.messageInputDone = nil
-		slot.running = false
-		slot.compacting = false
-		slot.idleSince = time.Now()
 		if slot.invalidateAfterInput {
+			slot.messageInputDone = nil
+			slot.running = false
+			slot.compacting = false
+			slot.idleSince = time.Now()
 			freed = slot.backend != nil
 			slot.closeBackend()
 			slot.fingerprint = ""
 			slot.mode = ""
+			completed = true
+		} else if slot.piRunIdentity != nil {
+			if backend, ok := slot.backend.(agent.PiRPCBackend); ok {
+				settleBackend = backend
+				identity := *slot.piRunIdentity
+				settleIdentity = &identity
+			} else {
+				slot.messageInputDone = nil
+				slot.running = false
+				slot.compacting = false
+				slot.idleSince = time.Now()
+				completed = true
+			}
+		} else {
+			slot.messageInputDone = nil
+			slot.running = false
+			slot.compacting = false
+			slot.idleSince = time.Now()
+			completed = true
 		}
-		completed = true
 	}
 	slot.mu.Unlock()
+
+	if settleBackend != nil && settleIdentity != nil {
+		if err := settleBackend.SettleRunTurn(*settleIdentity); err != nil && turnErr == nil {
+			turnErr = err
+		}
+		slot.mu.Lock()
+		if slot.messageInputDone == done {
+			slot.messageInputDone = nil
+			slot.running = false
+			slot.compacting = false
+			slot.idleSince = time.Now()
+			if slot.invalidateAfterInput {
+				freed = slot.backend != nil
+				slot.closeBackend()
+				slot.fingerprint = ""
+				slot.mode = ""
+			}
+			completed = true
+		}
+		slot.mu.Unlock()
+	}
 	if freed {
 		p.signalAgentProcessCapacityFreed()
 	}
 	if completed && onComplete != nil {
-		onComplete(turnErr, generation)
+		onComplete(turnErr, generation, capture)
 	}
 }
 
@@ -1163,6 +1267,51 @@ func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID st
 	// Fence any native acceptance that races this restart. The in-flight owner
 	// keeps admission until the killed process actually finishes, then closes
 	// and detaches this backend so the next handoff creates a fresh instance.
+	slot.invalidationGeneration++
+	slot.invalidateAfterInput = true
+	return killable.ForceKill()
+}
+
+// revokeResidentPiRunIdentity retires only the requested run binding. A stale
+// rollback can therefore never kill a newer run that reused the same
+// Agent×runtime slot. Busy native input is force-killed and fenced for detach
+// by finishResidentMessageInput; idle prepared processes are closed now.
+func (p *canonicalAgentRuntimePool) revokeResidentPiRunIdentity(agentID, runtimeID string, identity agent.PiRunIdentity) error {
+	if p == nil {
+		return nil
+	}
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	if agentID == "" || runtimeID == "" || strings.TrimSpace(identity.RunID) == "" || strings.TrimSpace(identity.RunAgentID) == "" {
+		return errors.New("canonical Pi run revocation identity is incomplete")
+	}
+	key := agentID + "\x00" + runtimeID
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return nil
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	defer slot.mu.Unlock()
+	if slot.piRunIdentity == nil {
+		return nil
+	}
+	if *slot.piRunIdentity != identity {
+		return errors.New("canonical Pi run revocation identity mismatch")
+	}
+	if !slot.running {
+		slot.closeBackend()
+		slot.fingerprint = ""
+		slot.mode = ""
+		slot.idleSince = time.Time{}
+		return nil
+	}
+	killable, ok := slot.backend.(agent.ResidentRuntimeForceKillable)
+	if !ok {
+		return ErrCanonicalAgentRuntimeBusy
+	}
 	slot.invalidationGeneration++
 	slot.invalidateAfterInput = true
 	return killable.ForceKill()

@@ -72,16 +72,35 @@ func (r *idleMessageFakeRuntime) noticeSnapshot() []agent.ResidentPendingNotice 
 	return append([]agent.ResidentPendingNotice(nil), r.notices...)
 }
 
-func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
-	dbURL := os.Getenv("DATABASE_URL")
+func openMessageDeliveryAcceptanceDatabase(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
+		t.Skip("DATABASE_URL is unset; run `make test` or load the checkout environment before DB-backed acceptance tests")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
-	if err != nil || pool.Ping(context.Background()) != nil {
-		t.Skip("acceptance database is unavailable")
+	if err != nil {
+		t.Fatalf("configure acceptance database: %v", err)
+	}
+	if err := pool.Ping(context.Background()); err != nil {
+		pool.Close()
+		t.Skipf("acceptance database is unavailable: %v", err)
+	}
+	var deliveryTablePresent bool
+	if err := pool.QueryRow(context.Background(), `SELECT to_regclass('public.agent_message_delivery') IS NOT NULL`).Scan(&deliveryTablePresent); err != nil {
+		pool.Close()
+		t.Fatalf("inspect acceptance database schema: %v", err)
+	}
+	if !deliveryTablePresent {
+		pool.Close()
+		t.Fatal("acceptance database is not migrated through agent_message_delivery; run `make migrate-up` with the same ENV_FILE")
 	}
 	t.Cleanup(pool.Close)
+	return pool
+}
+
+func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
+	pool := openMessageDeliveryAcceptanceDatabase(t)
 	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
 	workspacesRoot := t.TempDir()
@@ -116,14 +135,9 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	serverHandler.AgentDeliveryNotifier = hub
 	acks := make(chan protocol.AgentDeliverAckPayload, 2)
 	handoffs := make(chan protocol.AgentMessageHandoffPayload, 2)
-	recoveryRequests := make(chan protocol.AgentRecoveryRequest, 2)
 	hub.SetAgentDeliveryAckHandler(func(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 		acks <- ack
 		return serverHandler.HandleAgentDeliveryAck(ctx, identity, ack)
-	})
-	hub.SetAgentRecoveryHandler(func(ctx context.Context, identity daemonws.ClientIdentity, request protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error) {
-		recoveryRequests <- request
-		return serverHandler.HandleAgentMessageRecovery(ctx, identity, request)
 	})
 	hub.SetAgentMessageHandoffHandler(func(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.AgentMessageHandoffPayload) error {
 		handoffs <- payload
@@ -153,28 +167,15 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 	}
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch", StartDispatchID: "acceptance-launch" + "-dispatch"}); err != nil {
+		t.Fatalf("accept test APM launch: %v", err)
+	}
 	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
 	}, 20*time.Millisecond, 30*time.Millisecond)
 	teardownRunner := startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
 	defer teardownRunner()
-
-	select {
-	case request := <-recoveryRequests:
-		if request.AgentID != agentID || request.RecoveryID == "" {
-			t.Fatalf("startup recovery request = %+v", request)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("startup recovery request was not observed")
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for !coordinator.FreshnessKnown() && time.Now().Before(deadline) {
-		runtime.Gosched()
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("startup recovery did not complete")
-	}
 
 	body, _ := json.Marshal(map[string]any{"content": "hello", "client_message_id": uuid.NewString()})
 	req := httptest.NewRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", bytes.NewReader(body))
@@ -275,7 +276,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("busy canonical delivery was not acknowledged")
 	}
-	deadline = time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for len(fakeRuntime.noticeSnapshot()) == 0 && time.Now().Before(deadline) {
 		runtime.Gosched()
 	}
@@ -324,15 +325,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	}
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
 		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
-	}
-	runner.beginMessageRecovery(agentID)
-	select {
-	case request := <-recoveryRequests:
-		if request.AgentID != agentID || request.RecoveryID == "" || request.Boundaries[target] != busyCreated.Seq {
-			t.Fatalf("reconnect recovery request = %+v", request)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("reconnect recovery request was not observed")
 	}
 }
 
@@ -487,9 +479,8 @@ func (r *recordingResidentMessage) snapshot() [][]agent.ResidentMessage {
 	return append([][]agent.ResidentMessage(nil), r.batches...)
 }
 
-// failingResidentMessageRuntime simulates a coordinator killed inside the
-// pre-handoff window: the Server-side delivery was acknowledged but the
-// concrete body handoff fails and the Context Boundary never advances.
+// failingResidentMessageRuntime simulates a provider rejecting input before
+// APM acceptance. Raft leaves the delivery unacknowledged in this phase.
 type failingResidentMessageRuntime struct{}
 
 func (failingResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
@@ -506,15 +497,7 @@ func (failingResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent
 // a fresh coordinator on the same Agent root completes recovery and hands the
 // Message over instead of losing it.
 func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.T) {
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
-	if err != nil || pool.Ping(context.Background()) != nil {
-		t.Skip("acceptance database is unavailable")
-	}
-	defer pool.Close()
+	pool := openMessageDeliveryAcceptanceDatabase(t)
 	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
 	workspacesRoot := t.TempDir()
@@ -588,30 +571,15 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 			t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 		}
+		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch", StartDispatchID: "acceptance-launch" + "-dispatch"}); err != nil {
+			t.Fatalf("accept test APM launch: %v", err)
+		}
 		acks = make(chan protocol.AgentDeliverAckPayload, 2)
-		recoveryReqs := make(chan protocol.AgentRecoveryRequest, 2)
 		hub.SetAgentDeliveryAckHandler(func(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 			acks <- ack
 			return serverHandler.HandleAgentDeliveryAck(ctx, identity, ack)
 		})
-		hub.SetAgentRecoveryHandler(func(ctx context.Context, identity daemonws.ClientIdentity, request protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error) {
-			recoveryReqs <- request
-			return serverHandler.HandleAgentMessageRecovery(ctx, identity, request)
-		})
 		teardown = startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
-		select {
-		case request := <-recoveryReqs:
-			if request.AgentID != agentID || request.RecoveryID == "" {
-				t.Fatalf("recovery request = %+v", request)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("startup recovery request was not observed")
-		}
-		deadline := time.Now().Add(2 * time.Second)
-		coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
-		for !coordinator.FreshnessKnown() && time.Now().Before(deadline) {
-			runtime.Gosched()
-		}
 		return d, acks, normal.snapshot, normal.observed, teardown
 	}
 
@@ -673,33 +641,32 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		}
 	}
 
-	// Phase A — crashed coordinator. Recovery completes, a canonical Message is
-	// server-acked, then the runtime handoff fails inside the pre-persist
-	// window: the durable boundary never advances and the runtime never holds
-	// a completed handoff.
+	// Phase A — provider rejection. The body remains Pending, the delivery is
+	// not acknowledged, and the durable boundary does not advance.
 	dA, acksA, batchesA, observedA, teardownA := connect(failingResidentMessageRuntime{})
 	idA, seqA := postMessage()
-	waitAck(acksA, seqA)
-	// The Message was server-acked but never durably consumed: the runtime
-	// handoff failed inside the pre-persist window, so the boundary for this
-	// target must still be below the Message's own sequence even though the
-	// runtime saw a handoff attempt for it.
+	select {
+	case ack := <-acksA:
+		t.Fatalf("provider rejection was acknowledged: %+v", ack)
+	case <-time.After(200 * time.Millisecond):
+	}
 	if got := waitBatch(observedA, batchesA, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
-		t.Fatalf("pre-crash runtime handoff attempt = %+v, want %s", got, idA)
+		t.Fatalf("rejected runtime handoff attempt = %+v, want %s", got, idA)
 	}
 	if got := readBoundary(); got[target] >= seqA {
 		t.Fatalf("boundary advanced to %d before handoff (seq=%d): %v", got[target], seqA, got)
 	}
-	// Crash: abandon the daemon without completing the flush.
+	// Disconnect: the Server still owns the unacknowledged delivery.
 	teardownA()
 	_ = dA
 
-	// Phase B — fresh daemon, same Agent root. Recovery must re-read the acked
-	// Message (the boundary never advanced) and hand it over: nothing lost.
-	_, _, batchesB, observedB, teardownB := connect(&idleMessageFakeRuntime{})
+	// Phase B — fresh daemon, same Agent root. Server redelivery and local
+	// Pending dedup converge on one provider handoff: nothing is lost or doubled.
+	_, acksB, batchesB, observedB, teardownB := connect(&idleMessageFakeRuntime{})
 	if got := waitBatch(observedB, batchesB, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("restarted runtime batches = %+v, want canonical Message %s handed off", got, idA)
 	}
+	waitAck(acksB, seqA)
 	// Runtime observation proves only that native handoff started. Boundary
 	// persistence is a separate commit stage and may finish just afterward.
 	if got := waitBoundary(target, seqA); got[target] != seqA {

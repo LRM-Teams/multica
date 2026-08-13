@@ -147,6 +147,9 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 	if producer == nil || runner.processes == nil {
 		return errors.New("workspace Runner lifecycle owners are unavailable")
 	}
+	if runner.mixedRunActivityReplay != nil {
+		runner.mixedRunActivityReplay(writeFrame)
+	}
 	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && runner.logger != nil {
 			runner.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
@@ -180,7 +183,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 	if err := writeFrame(protocol.EventAgentAttachmentReplayReq, attachmentReplay); err != nil {
 		return err
 	}
-	attachmentReplayComplete := false
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -201,39 +203,55 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 		case protocol.EventDaemonAgentStart:
 			var start protocol.WorkspaceRunnerAgentStartPayload
-			if json.Unmarshal(message.Payload, &start) != nil {
+			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
 				continue
 			}
-			ack, status, session, err := runner.startManagedAgent(start)
+			ack, err := runner.registerManagedAgentStart(start)
 			if err != nil {
+				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "start_rejected", "error", err)
+					runner.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "reason", "start_rejected", "error", err)
 				}
+				failConnection(err)
 				continue
 			}
 			if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {
 				return err
 			}
-			if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
-				return err
-			}
-			if err := writeFrame(protocol.EventAgentSession, session); err != nil {
-				return err
-			}
+			connection.deliveries.Resume(start.AgentID, start.LaunchID)
+			go func() {
+				status, session, err := runner.completeManagedAgentStart(connection.ctx, start, ack)
+				if err != nil {
+					if runner.logger != nil {
+						runner.logger.Warn("Workspace Runner provider start failed", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "start_dispatch_id", start.StartDispatchID, "reason", "provider_start_failed", "error", err)
+					}
+					// The lifecycle module publishes the exact Raft failure projection
+					// (spawn => Offline, runtime => Error) together with inactive.
+					return
+				}
+				if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
+					failConnection(err)
+					return
+				}
+				if err := writeFrame(protocol.EventAgentSession, session); err != nil {
+					failConnection(err)
+					return
+				}
+			}()
 		case protocol.EventDaemonAgentStop:
 			var stop protocol.WorkspaceRunnerAgentStopPayload
 			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
 				continue
 			}
-			launch, found := runner.processes.Snapshot(stop.AgentID)
-			if !found || launch.LaunchID != stop.LaunchID {
+			status, err := runner.stopManagedAgent(stop)
+			if err != nil {
+				if runner.logger != nil {
+					runner.logger.Warn("Workspace Runner stop rejected", "workspace_id", workspaceID, "agent_id", stop.AgentID, "launch_id", stop.LaunchID, "reason", "stop_rejected", "error", err)
+				}
+				failConnection(err)
 				continue
 			}
-			if err := runner.processes.Stop(agentProcessCallback{AgentID: stop.AgentID, LaunchID: stop.LaunchID}); err != nil {
-				continue
-			}
-			producer.RemoveManaged(stop.AgentID, stop.LaunchID)
-			if err := writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil {
+			if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
 				return err
 			}
 		case protocol.EventAgentAttach:
@@ -253,11 +271,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			if runner.requestReminderSnapshot != nil {
 				runner.requestReminderSnapshot(attach.AgentID)
-			}
-			if attachmentReplayComplete {
-				runner.beginMessageRecoveryForAgent(attach.AgentID, func(request protocol.AgentRecoveryRequest) error {
-					return writeFrame(protocol.EventAgentRecoveryRequest, request)
-				})
 			}
 		case protocol.EventAgentDetach:
 			var detach protocol.WorkspaceRunnerAgentDetachPayload
@@ -294,10 +307,16 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentAttachmentReplayAck, ack); err != nil {
 				return err
 			}
-			attachmentReplayComplete = true
-			runner.beginMessageRecoveryForAll(func(request protocol.AgentRecoveryRequest) error {
-				return writeFrame(protocol.EventAgentRecoveryRequest, request)
-			})
+		case protocol.EventMixedRunActivityAck:
+			var activityAck protocol.MixedRunActivityTransitionAckPayload
+			if json.Unmarshal(message.Payload, &activityAck) != nil || activityAck.Validate() != nil {
+				continue
+			}
+			if runner.mixedRunActivityAck != nil {
+				if err := runner.mixedRunActivityAck(activityAck); err != nil && runner.logger != nil {
+					runner.logger.Warn("persist mixed-run activity acknowledgement failed", "error", err, "workspace_id", workspaceID, "run_id", activityAck.RunID, "transition_id", activityAck.TransitionID)
+				}
+			}
 		case protocol.EventAgentDeliver:
 			var transient protocol.AgentTransientDeliverPayload
 			if json.Unmarshal(message.Payload, &transient) == nil && transient.Kind != "" {
@@ -318,16 +337,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			if !connection.deliveries.Enqueue(delivery) && runner.logger != nil {
 				runner.logger.Warn("Workspace Runner Agent delivery was not queued", "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "reason", "connection_delivery_dispatcher_unavailable")
-			}
-		case protocol.EventAgentRecoveryPage:
-			var page protocol.AgentRecoveryPage
-			if json.Unmarshal(message.Payload, &page) != nil {
-				continue
-			}
-			if err := runner.mergeMessageRecoveryPage(page, func(request protocol.AgentRecoveryRequest) error {
-				return writeFrame(protocol.EventAgentRecoveryRequest, request)
-			}); err != nil && runner.logger != nil {
-				runner.logger.Warn("workspace Runner Agent Message recovery failed", "error", err, "workspace_id", workspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
 			}
 		case protocol.EventAgentActivityProbe:
 			var probe protocol.AgentActivityProbePayload

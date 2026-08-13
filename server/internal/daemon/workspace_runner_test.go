@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -122,15 +123,15 @@ func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 	if first == nil || second == nil || second == first {
 		t.Fatal("different Workspace Runners unexpectedly share a process manager")
 	}
-	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"})
+	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("start in first manager: %v", err)
 	}
-	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-2", StartDispatchID: "dispatch-1"})
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-2", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("start in second manager: %v", err)
 	}
-	if firstAck.LaunchID == secondAck.LaunchID || firstAck.QueueState != protocol.AgentStartQueueStarting || secondAck.QueueState != protocol.AgentStartQueueStarting {
+	if firstAck.LaunchID != "dispatch-1" || secondAck.LaunchID != "dispatch-1" || firstAck.QueueState != protocol.AgentStartQueueStarting || secondAck.QueueState != protocol.AgentStartQueueStarting {
 		t.Fatalf("Workspace Runner managers were not isolated: first=%+v second=%+v", firstAck, secondAck)
 	}
 }
@@ -164,7 +165,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			t.Error(err)
 			return
 		}
-		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"})})
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
 			return
@@ -186,9 +187,6 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 					t.Error(err)
 					return
 				}
-			}
-			if msg.Type == protocol.EventAgentRecoveryRequest {
-				continue
 			}
 			frames <- msg
 			responses++
@@ -225,8 +223,9 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
 	}); err != nil {
 		t.Fatalf("attach scoped Agent before start: %v", err)
 	}
@@ -290,6 +289,76 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		t.Fatalf("inactive status=%+v, want launch %q", stopped, accepted.LaunchID)
 	}
 	<-errCh
+}
+
+func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesCoordinator(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	started := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			t.Error(err)
+			return
+		}
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-new", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+		})})
+		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
+			t.Error(err)
+			return
+		}
+		for responses := 0; responses < 3; responses++ {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var frame protocol.Message
+			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventAgentStartAck {
+				continue
+			}
+			started <- struct{}{}
+			return
+		}
+	}))
+	defer server.Close()
+
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	d.runtimeIndex["runtime-old"] = Runtime{ID: "runtime-old", WorkspaceID: "ws-1"}
+	d.runtimeIndex["runtime-new"] = Runtime{ID: "runtime-new", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-old", AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go runner.runConnection(ctx)
+	select {
+	case <-started:
+		_, runtimeID, ok := runner.messageCoordinator("agent-1")
+		if !ok || runtimeID != "runtime-new" {
+			t.Fatalf("coordinator runtime=%q ok=%v, want runtime-new", runtimeID, ok)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for start-owned coordinator")
+	}
 }
 
 func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *testing.T) {

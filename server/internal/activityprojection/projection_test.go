@@ -122,7 +122,7 @@ func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
 	}
 }
 
-func TestProjectTimelineEntryShowsCompactionLifecycleTitles(t *testing.T) {
+func TestProjectTimelineEntryShowsCompactionLifecycleUnderWorking(t *testing.T) {
 	latest := Summary{Label: "Online", Tone: "success"}
 	cases := []struct {
 		body        string
@@ -130,8 +130,13 @@ func TestProjectTimelineEntryShowsCompactionLifecycleTitles(t *testing.T) {
 		wantSubtext string
 	}{
 		{
+			body:        `{"text":"Compacting context","activity_kind":"working","detail_kind":"compacting_context"}`,
+			wantTitle:   "Working",
+			wantSubtext: "Compacting context",
+		},
+		{
 			body:        `{"text":"Context compaction finished","activity_kind":"working","detail_kind":"compaction_finished"}`,
-			wantTitle:   "Compaction finished",
+			wantTitle:   "Working",
 			wantSubtext: "Context compaction finished",
 		},
 		{

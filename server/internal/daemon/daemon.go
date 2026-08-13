@@ -55,12 +55,6 @@ const (
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
 	taskMessageTrajectoryMaxChars       = 2000
-	// recoveryFlushTimeout bounds a background recovery Flush so a busy /
-	// idle-input-unsupported resident runtime can never stall the workspace
-	// runner read loop while waiting on the provider (see
-	// handleMessageRecoveryPageWithSend). The coordinator's pending-notice
-	// retry completes the batch if the runtime is transiently busy.
-	recoveryFlushTimeout = 30 * time.Second
 )
 
 // taskRunner executes a single agent task and returns the result.
@@ -112,9 +106,11 @@ type Daemon struct {
 	workspaceRunners         map[string]*WorkspaceRunner
 	workspaceRunnerCancels   map[string]context.CancelFunc
 	workspaceRunnerRun       func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
+	mixedRunActivityOutbox   *mixedRunActivityOutbox
+	mixedRunActivityReporter func(protocol.MixedRunActivityTransitionPayload) bool
 	lifecycleDiagnostics     *lifecycleDiagnosticWriter
 	machineUpgradeLog        *machineUpgradeEventLog
-	machineUpgradeTakeoverMu sync.Mutex
+	machineUpgradeTakeover   *machineUpgradeTakeover
 	runnerInstanceID         string
 	runnerDiagnostics        *runnerDiagnosticRegistry
 
@@ -296,8 +292,10 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		messageDraftStore:         NewMessageDraftStore(cfg.WorkspacesRoot),
 		workspaceRunners:          make(map[string]*WorkspaceRunner),
 		workspaceRunnerCancels:    make(map[string]context.CancelFunc),
+		mixedRunActivityOutbox:    newMixedRunActivityOutbox(cfg.WorkspacesRoot),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		runnerInstanceID:          uuid.NewString(),
+		machineUpgradeTakeover:    newMachineUpgradeTakeover(),
 	}
 	// A standalone replacement may bind the exclusive control port and finish
 	// registration so the incumbent can inspect it, but it must not claim work
@@ -823,6 +821,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// preflight is never misreported as a started daemon. resolveAuth has
 	// already run, so a missing token still fails fast before we begin serving.
 	go d.serveHealth(ctx, healthLn, time.Now())
+	if d.cfg.DetachedMachineUpgradeCandidate {
+		if err := d.machineUpgradeTakeover.prepare(d); err != nil {
+			return fmt.Errorf("prepare detached Machine Upgrade takeover: %w", err)
+		}
+		if err := d.machineUpgradeTakeover.waitForCommit(ctx); err != nil {
+			return fmt.Errorf("wait for detached Machine Upgrade takeover: %w", err)
+		}
+	}
 
 	// Renew the PAT before the first API call, then do the initial
 	// workspace sync. Both steps live in preflightAuth so the ordering
@@ -853,6 +859,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if err := d.markMachineUpgradeCandidateReady(); err != nil {
 			d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)
 		}
+	}
+	if d.cfg.DetachedMachineUpgradeCandidate {
+		d.releaseClaimBarrier()
 	}
 	if err := d.reconcileMachineUpgradeTerminalJournal(ctx); err != nil {
 		d.logger.Debug("machine upgrade terminal marker not yet clearable", "error", err)
@@ -912,23 +921,6 @@ func (d *Daemon) ReportMachineUpgradeTakeoverFailure(cause error) {
 		return
 	}
 	d.failMachineUpgrade(context.Background(), runtimeID, upgradeID, "candidate_takeover_failed", cause)
-}
-
-func (d *Daemon) BeginMachineUpgradeRollback(cause error) error {
-	if cause == nil || d.client == nil {
-		return nil
-	}
-	if err := d.MarkMachineUpgradeRollbackPending(); err != nil {
-		return err
-	}
-	d.mu.Lock()
-	upgradeID, runtimeID := d.machineUpgradeID, d.machineUpgradeRuntimeID
-	d.mu.Unlock()
-	generation := d.machineUpgradeRollbackGenerationID()
-	if upgradeID == "" || runtimeID == "" || generation == "" {
-		return fmt.Errorf("machine upgrade rollback identity is incomplete")
-	}
-	return d.client.ReportMachineUpgradeRollback(context.Background(), runtimeID, upgradeID, generation, "candidate_takeover_failed", cause.Error())
 }
 
 // ReportMachineUpgradeRollbackFailure leaves the rollback marker intact while
@@ -5219,18 +5211,27 @@ func addMulticaAgentEnv(env map[string]string, cfg Config, workspaceID, agentID 
 func addPiMemoryFastModeEnv(env map[string]string) {
 	// Multica-managed Pi runs should keep explicit memory tools available, but
 	// skip the expensive automatic shutdown pipeline (session summary, learning,
-	// qmd refresh, remote sync). Users can still override these via custom_env.
-	env["PI_MEMORY_BACKGROUND_SHUTDOWN"] = "off"
-	env["PI_MEMORY_LEARNING"] = "off"
-	env["PI_MEMORY_SKILL_DRAFTS"] = "off"
-	env["PI_MEMORY_QMD_UPDATE"] = "off"
-	env["PI_MEMORY_AUTO_SYNC"] = "0"
-	env["PI_MEMORY_AUTO_SYNC_PULL"] = "0"
-	env["PI_MEMORY_AUTO_SYNC_PULL_ON_START"] = "0"
-	env["PI_MEMORY_AUTO_SYNC_UPLOAD"] = "0"
-	env["PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN"] = "0"
-	env["PI_MEMORY_NO_SEARCH"] = "1"
-	env["PI_MEMORY_REVIEW_STARTUP_HINT"] = "0"
+	// qmd refresh, remote sync). These are defaults so custom_env can opt back in
+	// for both one-shot and resident runtimes.
+	defaults := map[string]string{
+		"PI_MEMORY_FINALIZE":                     "off",
+		"PI_MEMORY_BACKGROUND_SHUTDOWN":          "off",
+		"PI_MEMORY_LEARNING":                     "off",
+		"PI_MEMORY_SKILL_DRAFTS":                 "off",
+		"PI_MEMORY_QMD_UPDATE":                   "off",
+		"PI_MEMORY_AUTO_SYNC":                    "0",
+		"PI_MEMORY_AUTO_SYNC_PULL":               "0",
+		"PI_MEMORY_AUTO_SYNC_PULL_ON_START":      "0",
+		"PI_MEMORY_AUTO_SYNC_UPLOAD":             "0",
+		"PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN": "0",
+		"PI_MEMORY_NO_SEARCH":                    "1",
+		"PI_MEMORY_REVIEW_STARTUP_HINT":          "0",
+	}
+	for key, value := range defaults {
+		if _, exists := env[key]; !exists {
+			env[key] = value
+		}
+	}
 }
 
 // AReaL RL proxy runtime override (§4.4). A trained task carries an

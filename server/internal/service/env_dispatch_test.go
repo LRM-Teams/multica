@@ -8,8 +8,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util/stackerr"
 )
 
@@ -160,6 +162,13 @@ type fakeEnvDispatchDeps struct {
 	validateAgentCalls  []string
 	resolveEnvSpecCalls []PerAgentEnvSpec
 	messageRoster       MessageRoster
+	mixedRoster         []MixedDispatchRosterAgent
+	mixedRosterErr      error
+	mixedEvents         []string
+	mixedRunAgents      []MixedDispatchRunAgent
+	mixedStartedRuns    []string
+	mixedStartErr       error
+	provisionErrAgent   string
 	channels            map[string]string
 	createChannelSpecs  map[string]ResolvedPerAgentSandboxPolicy
 	channelMessages     []string
@@ -313,11 +322,75 @@ func (f *fakeEnvDispatchDeps) GetEnvDispatchRootTaskStatus(_ context.Context, pr
 	return "completed", nil
 }
 
-func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID string) (MessageRoster, error) {
+func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID string, _ []PerAgentEnvSpec) (MessageRoster, error) {
 	if f.messageRoster.LeaderID != "" {
 		return f.messageRoster, nil
 	}
 	return MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
+}
+
+func (f *fakeEnvDispatchDeps) ResolveMixedDispatchRoster(_ context.Context, _ string, roster MessageRoster, _ []PerAgentEnvSpec) ([]MixedDispatchRosterAgent, error) {
+	if f.mixedRosterErr != nil {
+		return nil, f.mixedRosterErr
+	}
+	if f.mixedRoster != nil {
+		return append([]MixedDispatchRosterAgent(nil), f.mixedRoster...), nil
+	}
+	result := make([]MixedDispatchRosterAgent, 0, len(roster.AgentIDs))
+	for _, agentID := range roster.AgentIDs {
+		result = append(result, MixedDispatchRosterAgent{
+			SourceAgentID: agentID,
+			Provider:      "pi",
+			TargetPolicy:  "target-a",
+			Tokenizer:     "tokenizer-a",
+			OnlineReady:   true,
+			OfflineReady:  true,
+		})
+	}
+	return result, nil
+}
+
+func (f *fakeEnvDispatchDeps) CreateMixedDispatchRun(_ context.Context, projectID, workspaceID, sourceTaskID string, sampleIndex, _, _ int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	runID := fmt.Sprintf("mixed-run-%d", len(f.dispatchRuns)+1)
+	f.dispatchRuns[projectID] = fakeEnvDispatchRun{
+		WorkspaceID:  workspaceID,
+		RunID:        runID,
+		SourceTaskID: sourceTaskID,
+		SampleIndex:  sampleIndex,
+	}
+	return runID, nil
+}
+
+func (f *fakeEnvDispatchDeps) PrepareMixedDispatchRunAgent(_ context.Context, runID string, runAgent MixedDispatchRunAgent) (MixedDispatchRunAgent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	runAgent.RunAgentID = "run-agent-" + runID + "-" + runAgent.SourceAgentID
+	runAgent.PiSessionID = "native-pi-" + runID + "-" + runAgent.SourceAgentID
+	runAgent.CaptureBoundary = runAgent.PiSessionID + ":1"
+	f.mixedEvents = append(f.mixedEvents, "prepare:"+runAgent.SourceAgentID)
+	return runAgent, nil
+}
+
+func (f *fakeEnvDispatchDeps) RevokeMixedDispatchRunAgent(context.Context, string, MixedDispatchRunAgent) error {
+	return nil
+}
+
+func (f *fakeEnvDispatchDeps) BindMixedDispatchRunAgent(_ context.Context, _ string, agent MixedDispatchRunAgent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mixedRunAgents = append(f.mixedRunAgents, agent)
+	f.mixedEvents = append(f.mixedEvents, "bind:"+agent.SourceAgentID)
+	return nil
+}
+
+func (f *fakeEnvDispatchDeps) StartMixedDispatchRun(_ context.Context, runID string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mixedStartedRuns = append(f.mixedStartedRuns, runID)
+	f.mixedEvents = append(f.mixedEvents, "start")
+	return f.mixedStartErr
 }
 func (f *fakeEnvDispatchDeps) CreateEnvDispatchChannel(_ context.Context, _, _, projectID, _ string, _ MessageRoster, specs map[string]ResolvedPerAgentSandboxPolicy) (string, error) {
 	f.mu.Lock()
@@ -336,7 +409,11 @@ func (f *fakeEnvDispatchDeps) DeleteChannel(_ context.Context, _, channelID stri
 func (f *fakeEnvDispatchDeps) ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error) {
 	f.mu.Lock()
 	f.provisionCalls = append(f.provisionCalls, in)
+	f.mixedEvents = append(f.mixedEvents, "provision:"+in.AgentID)
 	f.mu.Unlock()
+	if in.AgentID == f.provisionErrAgent {
+		return EnvDispatchAgentProvisionResult{}, fmt.Errorf("provision blocked for %s", in.AgentID)
+	}
 	runtimeID, daemonID, err := f.PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, in.AgentID)
 	if err != nil {
 		return EnvDispatchAgentProvisionResult{}, err
@@ -345,19 +422,36 @@ func (f *fakeEnvDispatchDeps) ProvisionEnvDispatchAgent(ctx context.Context, in 
 	if in.SourceSandboxInstanceID != "" {
 		executionAgentID = in.AgentID
 	}
+	arealSessionID := ""
+	if in.TrainingMode == "online_rl" {
+		arealSessionID = "areal-session-" + in.AgentID
+	}
 	return EnvDispatchAgentProvisionResult{
 		AgentID:           executionAgentID,
 		SandboxInstanceID: "binding-sandbox-" + in.AgentID,
 		RuntimeID:         runtimeID,
 		DaemonID:          daemonID,
 		ChatSessionID:     "binding-session-" + in.AgentID,
+		AReALSessionID:    arealSessionID,
 	}, nil
 }
 func (f *fakeEnvDispatchDeps) CreateChannelMessage(_ context.Context, _ string, _, _ string, content string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.channelMessages = append(f.channelMessages, content)
+	f.mixedEvents = append(f.mixedEvents, "send")
 	return fmt.Sprintf("channel-message-%d", len(f.channelMessages)), nil
+}
+func (f *fakeEnvDispatchDeps) PersistMixedDispatchInitialMessage(ctx context.Context, channelID, workspaceID, userID, content string) (PreparedMixedDispatchMessage, error) {
+	messageID, err := f.CreateChannelMessage(ctx, channelID, workspaceID, userID, content)
+	if err != nil {
+		return PreparedMixedDispatchMessage{}, err
+	}
+	return NewPreparedMixedDispatchMessage(messageID, time.Now().UTC(), func(context.Context) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.mixedEvents = append(f.mixedEvents, "deliver")
+	}), nil
 }
 func (f *fakeEnvDispatchDeps) LinkEnvDispatchTrainingSession(_ context.Context, envID, agentID, projectID, runID, issueID string) error {
 	f.mu.Lock()
@@ -2626,62 +2720,6 @@ func TestEnvDispatch_NoCritic_PersistsNull(t *testing.T) {
 	}
 }
 
-// TestEnvDispatchValidate_TrainingMode exercises the training_mode validation
-// rules (Task 1): training_mode=false forbids train_agent_id/critic_agent_id,
-// and training_mode=true requires train_agent_id. The two valid forms
-// (true + train_agent_id, false + no training IDs) must pass the training_mode
-// rules, proving the exact boolean is honored by the service validation.
-func TestEnvDispatchValidate_TrainingMode(t *testing.T) {
-	f := newFakeEnvDispatchDeps()
-	svc := NewEnvDispatchService(f, 1)
-	base := EnvDispatchInput{
-		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: "base",
-		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
-		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
-	}
-
-	// training_mode=false + train_agent_id -> rejected.
-	falseWithTrain := base
-	falseWithTrain.TrainingMode = false
-	falseWithTrain.TrainAgentID = "ag"
-	if err := svc.validate(falseWithTrain); err == nil {
-		t.Fatal("training_mode=false with train_agent_id must be rejected")
-	}
-
-	// training_mode=false + critic_agent_id -> rejected. train_agent_id is
-	// set to satisfy the existing critic shape rule so the rejection is
-	// attributable to the training_mode rule.
-	falseWithCritic := base
-	falseWithCritic.TrainingMode = false
-	falseWithCritic.TrainAgentID = "ag"
-	falseWithCritic.CriticAgentID = "critic"
-	if err := svc.validate(falseWithCritic); err == nil {
-		t.Fatal("training_mode=false with critic_agent_id must be rejected")
-	}
-
-	// training_mode=true + empty train_agent_id -> rejected.
-	trueNoTrain := base
-	trueNoTrain.TrainingMode = true
-	if err := svc.validate(trueNoTrain); err == nil {
-		t.Fatal("training_mode=true without train_agent_id must be rejected")
-	}
-
-	// Valid form 1: training_mode=true + train_agent_id == agent_id -> accepted.
-	trueWithTrain := base
-	trueWithTrain.TrainingMode = true
-	trueWithTrain.TrainAgentID = "ag"
-	if err := svc.validate(trueWithTrain); err != nil {
-		t.Fatalf("training_mode=true with train_agent_id must be accepted, got %v", err)
-	}
-
-	// Valid form 2: training_mode=false + no training IDs -> accepted.
-	falseNoIDs := base
-	falseNoIDs.TrainingMode = false
-	if err := svc.validate(falseNoIDs); err != nil {
-		t.Fatalf("training_mode=false without training IDs must be accepted, got %v", err)
-	}
-}
-
 // TestEnvDispatch_DispatchPersistsRunAndBindsRootTask asserts the spec's
 // "Dispatch run is created and the root task is bound" scenario: every
 // successful rollout persists an env_dispatch_run row with the training_mode and
@@ -3042,6 +3080,31 @@ func TestDispatch_SharedSandboxResetFailureReclaimsSharedResources(t *testing.T)
 	}
 }
 
+func TestDispatch_SharedSandboxResetFailureSurfacesCleanupFailures(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.createEnvFailAfter = 1
+	f.deleteRuntimeErr = errors.New("injected reset runtime cleanup failure")
+	creator := &fakeSandboxInstanceCreator{}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	_, err := svc.Dispatch(context.Background(), sharedSandboxSquadInput(baseEnv, true))
+	if err == nil {
+		t.Fatal("want reset failure")
+	}
+	text := err.Error()
+	for _, want := range []string{"reset_failed", "injected reset runtime cleanup failure"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dispatch error %q does not surface %q", text, want)
+		}
+	}
+	if strings.Index(text, "reset_failed") > strings.Index(text, "injected reset runtime cleanup failure") {
+		t.Fatalf("initiating reset error must remain first: %q", text)
+	}
+	if len(f.deleteRuntimeCalls) != 2 {
+		t.Fatalf("all shared runtime compensators must be attempted, got %v", f.deleteRuntimeCalls)
+	}
+}
 func TestReclaimSharedRuntimesDeletesEachPrecreatedRuntimeOnce(t *testing.T) {
 	deps := newFakeEnvDispatchDeps()
 	svc := NewEnvDispatchService(deps, 1)
@@ -3181,5 +3244,277 @@ func TestDerivedTaskTemplateForcesInstanceBackendAndOverridesPerAgentTemplate(t 
 	}
 	if len(lc.calls) != 1 || lc.calls[0].Template != "derived-template" || !lc.calls[0].DaemonEnabled {
 		t.Fatalf("derived template create = %+v", lc.calls)
+	}
+}
+
+func TestPreflightMixedDispatchClassifiesDeduplicatedRoster(t *testing.T) {
+	fixture := testutil.MixedRLRosterFixture()
+	online, offline, none := fixture.Online[0], fixture.Offline[0], fixture.None[0]
+	plan, err := PreflightMixedDispatch(MixedDispatchPreflightInput{
+		Roster: []MixedDispatchRosterAgent{
+			{SourceAgentID: online.SourceAgentID, Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OnlineReady: true},
+			{SourceAgentID: offline.SourceAgentID, Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OfflineReady: true},
+			{SourceAgentID: none.SourceAgentID, Provider: "pi"},
+		},
+		OnlineTrainableAgents:  []string{online.SourceAgentID, online.SourceAgentID},
+		OfflineTrainableAgents: []string{offline.SourceAgentID, offline.SourceAgentID},
+		QuietWindowMS:          2000,
+		TotalTimeoutSeconds:    3300,
+	})
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if len(plan.RunAgents) != 3 || plan.RunAgents[0].TrainingMode != "online_rl" || plan.RunAgents[1].TrainingMode != "offline_rl" || plan.RunAgents[2].TrainingMode != "none" {
+		t.Fatalf("classifications = %+v", plan.RunAgents)
+	}
+	if len(plan.OnlineTrainableAgents) != 1 || len(plan.OfflineTrainableAgents) != 1 {
+		t.Fatalf("deduplicated lists = online:%v offline:%v", plan.OnlineTrainableAgents, plan.OfflineTrainableAgents)
+	}
+}
+
+func TestPreflightMixedDispatchRejectsInvalidRosterAtomically(t *testing.T) {
+	fixture := testutil.MixedRLRosterFixture()
+	online, offline := fixture.Online[0], fixture.Offline[0]
+	base := MixedDispatchPreflightInput{
+		Roster: []MixedDispatchRosterAgent{
+			{SourceAgentID: online.SourceAgentID, Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OnlineReady: true},
+			{SourceAgentID: offline.SourceAgentID, Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OfflineReady: true},
+		},
+		OnlineTrainableAgents: []string{online.SourceAgentID}, QuietWindowMS: 2000, TotalTimeoutSeconds: 3300,
+	}
+	cases := map[string]func(*MixedDispatchPreflightInput){
+		"overlap": func(in *MixedDispatchPreflightInput) { in.OfflineTrainableAgents = []string{online.SourceAgentID} },
+		"unknown": func(in *MixedDispatchPreflightInput) {
+			in.OfflineTrainableAgents = []string{"70000000-0000-4000-8000-ffffffffffff"}
+		},
+		"non-pi":        func(in *MixedDispatchPreflightInput) { in.Roster[1].Provider = "codex" },
+		"online config": func(in *MixedDispatchPreflightInput) { in.Roster[0].OnlineReady = false },
+		"offline config": func(in *MixedDispatchPreflightInput) {
+			in.OfflineTrainableAgents = []string{offline.SourceAgentID}
+			in.Roster[1].OfflineReady = false
+		},
+		"target policy": func(in *MixedDispatchPreflightInput) {
+			in.OfflineTrainableAgents = []string{offline.SourceAgentID}
+			in.Roster[1].TargetPolicy = "target-b"
+		},
+		"tokenizer": func(in *MixedDispatchPreflightInput) {
+			in.OfflineTrainableAgents = []string{offline.SourceAgentID}
+			in.Roster[1].Tokenizer = "tokenizer-b"
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			in := base
+			in.Roster = append([]MixedDispatchRosterAgent(nil), base.Roster...)
+			mutate(&in)
+			if plan, err := PreflightMixedDispatch(in); err == nil || len(plan.RunAgents) != 0 {
+				t.Fatalf("invalid preflight returned plan=%+v err=%v; want error and no partial plan", plan, err)
+			}
+		})
+	}
+}
+
+func TestDispatchMixedPreflightFailureHasNoConversationOrTrainableActivity(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.messageRoster = MessageRoster{LeaderID: "agent-a", AgentIDs: []string{"agent-a", "agent-b"}}
+	f.mixedRoster = []MixedDispatchRosterAgent{
+		{SourceAgentID: "agent-a", Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OnlineReady: true},
+		{SourceAgentID: "agent-b", Provider: "codex", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OfflineReady: true},
+	}
+
+	_, err := NewEnvDispatchService(f, 1).Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		AgentID: "agent-a", OnlineTrainableAgents: []string{"agent-a"},
+		QuietWindowMS: 2000, TotalTimeoutSeconds: 3300,
+		Message: &MessageInput{Content: "must not send"},
+	})
+	if err == nil {
+		t.Fatal("non-Pi roster preflight unexpectedly succeeded")
+	}
+	if len(f.channels) != 0 || len(f.channelMessages) != 0 || len(f.provisionCalls) != 0 || len(f.channelRuns) != 0 {
+		t.Fatalf("failed preflight leaked activity: channels=%v messages=%v provision=%v runs=%v", f.channels, f.channelMessages, f.provisionCalls, f.channelRuns)
+	}
+}
+
+func TestDispatchMixedSuccessCompletesPreflightBeforeCanonicalInitialSend(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.messageRoster = MessageRoster{
+		LeaderID: "agent-a",
+		AgentIDs: []string{"agent-a", "agent-b", "agent-c"},
+	}
+	f.mixedRoster = []MixedDispatchRosterAgent{
+		{SourceAgentID: "agent-a", Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OnlineReady: true},
+		{SourceAgentID: "agent-b", Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OfflineReady: true},
+		{SourceAgentID: "agent-c", Provider: "pi"},
+	}
+
+	result, err := NewEnvDispatchService(f, 1).Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID:            "ws",
+		UserID:                 "u",
+		Mode:                   EnvModeScratch,
+		EnvID:                  baseEnv,
+		Domain:                 EnvDomainSelfPlay,
+		DispatchType:           EnvDispatchMessage,
+		GroupSize:              1,
+		AgentID:                "agent-a",
+		OnlineTrainableAgents:  []string{"agent-a", "agent-a"},
+		OfflineTrainableAgents: []string{"agent-b"},
+		QuietWindowMS:          2000,
+		TotalTimeoutSeconds:    3300,
+		Message:                &MessageInput{Content: "start mixed run"},
+	})
+	if err != nil {
+		t.Fatalf("mixed dispatch: %v", err)
+	}
+	if len(f.provisionCalls) != 3 || len(f.mixedRunAgents) != 3 {
+		t.Fatalf("preflight identities: provision=%d bind=%d, want 3 each", len(f.provisionCalls), len(f.mixedRunAgents))
+	}
+	if len(f.channelRuns) != 0 {
+		t.Fatalf("mixed resident dispatch enqueued legacy one-shot channel runs: %v", f.channelRuns)
+	}
+	if len(f.channelMessages) != 1 || len(f.mixedStartedRuns) != 1 {
+		t.Fatalf("initial send/start counts: messages=%d starts=%d", len(f.channelMessages), len(f.mixedStartedRuns))
+	}
+	modes := map[string]string{}
+	piSessions := map[string]struct{}{}
+	for _, runAgent := range f.mixedRunAgents {
+		modes[runAgent.SourceAgentID] = runAgent.TrainingMode
+		if runAgent.PiSessionID == "" {
+			t.Fatalf("run agent has no fresh Pi session: %+v", runAgent)
+		}
+		if _, duplicate := piSessions[runAgent.PiSessionID]; duplicate {
+			t.Fatalf("Pi session reused within dispatch: %q", runAgent.PiSessionID)
+		}
+		piSessions[runAgent.PiSessionID] = struct{}{}
+		if runAgent.TrainingMode == "online_rl" && runAgent.AReALSessionID == "" {
+			t.Fatalf("online run agent has no AReaL session: %+v", runAgent)
+		}
+		if runAgent.TrainingMode != "online_rl" && runAgent.AReALSessionID != "" {
+			t.Fatalf("non-online run agent has AReaL session: %+v", runAgent)
+		}
+	}
+	if modes["agent-a"] != "online_rl" || modes["agent-b"] != "offline_rl" || modes["agent-c"] != "none" {
+		t.Fatalf("mixed classifications = %#v", modes)
+	}
+	sendIndex, startIndex := -1, -1
+	for index, event := range f.mixedEvents {
+		if event == "send" {
+			sendIndex = index
+		}
+		if event == "start" {
+			startIndex = index
+		}
+		if (strings.HasPrefix(event, "provision:") || strings.HasPrefix(event, "bind:")) && sendIndex >= 0 {
+			t.Fatalf("preflight event %q occurred after canonical send: %v", event, f.mixedEvents)
+		}
+	}
+	if sendIndex < 0 || startIndex <= sendIndex {
+		t.Fatalf("canonical send/start order = %v", f.mixedEvents)
+	}
+	if result.InitialMessageSubmittedAt.IsZero() || len(result.RunAgents) != 3 {
+		t.Fatalf("mixed response metadata = %+v", result)
+	}
+}
+
+func TestDispatchMixedProvisionFailureRollsBackBeforeInitialSend(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.messageRoster = MessageRoster{LeaderID: "agent-a", AgentIDs: []string{"agent-a", "agent-b"}}
+	f.mixedRoster = []MixedDispatchRosterAgent{
+		{SourceAgentID: "agent-a", Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OnlineReady: true},
+		{SourceAgentID: "agent-b", Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OfflineReady: true},
+	}
+	f.provisionErrAgent = "agent-b"
+
+	_, err := NewEnvDispatchService(f, 1).Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID:            "ws",
+		UserID:                 "u",
+		Mode:                   EnvModeScratch,
+		EnvID:                  baseEnv,
+		Domain:                 EnvDomainSelfPlay,
+		DispatchType:           EnvDispatchMessage,
+		GroupSize:              1,
+		AgentID:                "agent-a",
+		OnlineTrainableAgents:  []string{"agent-a"},
+		OfflineTrainableAgents: []string{"agent-b"},
+		QuietWindowMS:          2000,
+		TotalTimeoutSeconds:    3300,
+		Message:                &MessageInput{Content: "must not send"},
+	})
+	if err == nil {
+		t.Fatal("mixed provisioning failure unexpectedly succeeded")
+	}
+	if len(f.channelMessages) != 0 || len(f.mixedStartedRuns) != 0 {
+		t.Fatalf("failed preflight leaked conversation activity: messages=%v starts=%v", f.channelMessages, f.mixedStartedRuns)
+	}
+	if len(f.deleteRuntimeCalls) != 1 || f.deleteRuntimeCalls[0] != "rt-1" {
+		t.Fatalf("preflight rollback did not reclaim provisioned runtime: %v", f.deleteRuntimeCalls)
+	}
+	for _, event := range f.mixedEvents {
+		if event == "send" || event == "start" {
+			t.Fatalf("failed preflight reached conversation activity: %v", f.mixedEvents)
+		}
+	}
+}
+
+func TestDispatchMixedStartFailureCompensatesAllProvisionedRuntimes(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.messageRoster = MessageRoster{LeaderID: "agent-a", AgentIDs: []string{"agent-a", "agent-b"}}
+	f.mixedRoster = []MixedDispatchRosterAgent{
+		{SourceAgentID: "agent-a", Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OnlineReady: true},
+		{SourceAgentID: "agent-b", Provider: "pi", TargetPolicy: "target-a", Tokenizer: "tokenizer-a", OfflineReady: true},
+	}
+	f.mixedStartErr = errors.New("synthetic timeout-start failure")
+
+	_, err := NewEnvDispatchService(f, 1).Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID:            "ws",
+		UserID:                 "u",
+		Mode:                   EnvModeScratch,
+		EnvID:                  baseEnv,
+		Domain:                 EnvDomainSelfPlay,
+		DispatchType:           EnvDispatchMessage,
+		GroupSize:              1,
+		AgentID:                "agent-a",
+		OnlineTrainableAgents:  []string{"agent-a"},
+		OfflineTrainableAgents: []string{"agent-b"},
+		QuietWindowMS:          2000,
+		TotalTimeoutSeconds:    3300,
+		Message:                &MessageInput{Content: "start mixed run"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "synthetic timeout-start failure") {
+		t.Fatalf("dispatch error = %v, want timeout-start failure", err)
+	}
+	if len(f.channelMessages) != 1 || len(f.mixedStartedRuns) != 1 {
+		t.Fatalf("send/start attempts = %d/%d, want 1/1", len(f.channelMessages), len(f.mixedStartedRuns))
+	}
+	if len(f.deleteRuntimeCalls) != 2 {
+		t.Fatalf("provisioned runtime compensation = %v, want both runtimes reclaimed", f.deleteRuntimeCalls)
+	}
+	if len(f.projects) != 0 || len(f.channels) != 0 || len(f.envs) != 1 {
+		t.Fatalf("rolled-back resources projects=%v channels=%v envs=%v, want only base env", f.projects, f.channels, f.envs)
+	}
+}
+
+func TestPreflightMixedDispatchEmptyListsClassifyEntireRosterNone(t *testing.T) {
+	plan, err := PreflightMixedDispatch(MixedDispatchPreflightInput{
+		Roster: []MixedDispatchRosterAgent{
+			{SourceAgentID: "agent-a", Provider: "pi"},
+			{SourceAgentID: "agent-b", Provider: "pi"},
+		},
+		QuietWindowMS:       2000,
+		TotalTimeoutSeconds: 3300,
+	})
+	if err != nil {
+		t.Fatalf("empty-list preflight: %v", err)
+	}
+	if len(plan.RunAgents) != 2 || plan.RunAgents[0].TrainingMode != "none" || plan.RunAgents[1].TrainingMode != "none" {
+		t.Fatalf("empty-list classifications = %+v, want all none", plan.RunAgents)
+	}
+	if len(plan.OnlineTrainableAgents) != 0 || len(plan.OfflineTrainableAgents) != 0 {
+		t.Fatalf("empty-list plan retained trainable IDs: online=%v offline=%v", plan.OnlineTrainableAgents, plan.OfflineTrainableAgents)
 	}
 }

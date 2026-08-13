@@ -143,7 +143,7 @@ if [[ -z "$compose_environment_unset_line" || -z "$oss_credential_assert_line" ]
   echo "Aliyun deploy must retain compose_environment until the OSS credential assertion has consumed it."
   exit 1
 fi
-if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 4 ]]; then
+if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 5 ]]; then
   echo "Every Aliyun deploy/verify Compose wrapper must clear ambient POSTGRES_* values."
   exit 1
 fi

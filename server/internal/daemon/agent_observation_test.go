@@ -19,6 +19,7 @@ func TestAgentObservationValidationMatrix(t *testing.T) {
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeTool, Data: tool, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at},
+		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1", Target: "#one"}, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed"}, At: at},
 	}
 	for _, observation := range valid {
@@ -35,6 +36,7 @@ func TestAgentObservationValidationMatrix(t *testing.T) {
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeTool, Data: runtime, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1"}, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", ReasonCode: ""}, At: at},
+		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1"}, At: at},
 	}
 	for index, observation := range invalid {
 		if err := observation.Validate(); err == nil {
@@ -50,6 +52,7 @@ func TestAgentObservationTypesExcludePresentationAndSensitiveFields(t *testing.T
 		reflect.TypeOf(AgentRuntimeStageObservationData{}),
 		reflect.TypeOf(AgentMessageAcceptanceObservationData{}),
 		reflect.TypeOf(AgentFreshnessHoldObservationData{}),
+		reflect.TypeOf(AgentDraftSentObservationData{}),
 		reflect.TypeOf(AgentErrorObservationData{}),
 	}
 	for _, typeOf := range types {

@@ -2,11 +2,15 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -46,31 +50,131 @@ func channelMessageHasPendingVoiceTranscription(message ChannelMessageResponse) 
 	return false
 }
 
-// deliverCanonicalMessageToChannelAgents persists and projects one committed
-// canonical Message to exactly the Agents selected by the channel routing
-// policy. Offline delivery is intentionally harmless: startup/reconnect
-// recovery reads the same persisted Delivery mapping.
-func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) {
+type canonicalMessageDeliveryPlan struct {
+	SourceRecipient db.Agent
+	Recipient       db.Agent
+	RunID           string
+	RunAgentID      string
+	Mixed           bool
+	Delivery        protocol.AgentDeliverPayload
+	Created         bool
+}
+
+// planCanonicalMessageDeliveryRecipients applies channel policy to source
+// members first, then resolves any per-run execution identity. Derived agents
+// can therefore never add themselves to the eligible source recipient set.
+func (h *Handler) planCanonicalMessageDeliveryRecipients(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) ([]*canonicalMessageDeliveryPlan, error) {
+	plans := make([]*canonicalMessageDeliveryPlan, 0)
+	for _, sourceRecipient := range h.canonicalMessageDeliveryRecipients(ctx, ch, message) {
+		recipient := sourceRecipient
+		runID, runAgentID, executionAgent, mixed, err := h.resolveCanonicalRunRecipient(ctx, ch, sourceRecipient)
+		if err != nil {
+			return nil, fmt.Errorf("resolve canonical mixed run recipient: %w", err)
+		}
+		if mixed {
+			recipient = executionAgent
+		}
+		plans = append(plans, &canonicalMessageDeliveryPlan{
+			SourceRecipient: sourceRecipient,
+			Recipient:       recipient,
+			RunID:           runID,
+			RunAgentID:      runAgentID,
+			Mixed:           mixed,
+		})
+	}
+	return plans, nil
+}
+
+// persistCanonicalMessageDeliveryPlans commits every selected delivery and
+// mixed-run obligation in one transaction. Compatibility callers use this
+// wrapper; canonical sends call persistCanonicalMessageDeliveryPlansTx from
+// the transaction that also inserts (or repairs) the message.
+func (h *Handler) persistCanonicalMessageDeliveryPlans(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse, plans []*canonicalMessageDeliveryPlan) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	if h.TxStarter == nil {
+		for _, plan := range plans {
+			if plan.Mixed {
+				return errors.New("mixed run delivery transaction unavailable")
+			}
+			delivery, created, err := persistCanonicalMessageDelivery(ctx, h.DB, ch, message, plan.Recipient)
+			if err != nil {
+				return fmt.Errorf("persist canonical Agent Message delivery: %w", err)
+			}
+			plan.Delivery, plan.Created = delivery, created
+		}
+		return nil
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin canonical delivery transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := persistCanonicalMessageDeliveryPlansTx(ctx, tx, ch, message, plans); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit canonical delivery transaction: %w", err)
+	}
+	return nil
+}
+
+func persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, message ChannelMessageResponse, plans []*canonicalMessageDeliveryPlan) error {
+	activity := service.NewEnvDispatchActivityFromQueries(db.New(tx))
+	for _, plan := range plans {
+		delivery, deliveryCreated, err := persistCanonicalMessageDelivery(ctx, tx, ch, message, plan.Recipient)
+		if err != nil {
+			return fmt.Errorf("persist canonical Agent Message delivery: %w", err)
+		}
+		obligationCreated := false
+		if plan.Mixed {
+			obligationCreated, err = createMixedRunDeliveryObligationWithActivity(ctx, activity, plan.RunID, plan.RunAgentID, message.ID, plan.SourceRecipient.ID)
+			if err != nil {
+				return fmt.Errorf("persist canonical mixed run delivery obligation: %w", err)
+			}
+			delivery.RunID = plan.RunID
+			delivery.RunAgentID = plan.RunAgentID
+		}
+		plan.Delivery = delivery
+		// A repaired delivery or obligation needs a live notification after the
+		// acceptance boundary; an ordinary complete replay creates neither.
+		plan.Created = deliveryCreated || obligationCreated
+	}
+	return nil
+}
+
+func (h *Handler) notifyCanonicalMessageDeliveryPlans(ctx context.Context, ch ChannelResponse, plans []*canonicalMessageDeliveryPlan) {
+	for _, plan := range plans {
+		if plan.Created {
+			h.attachCanonicalMessageMemories(ctx, ch.WorkspaceID, plan.Recipient.ID, &plan.Delivery.Message)
+			h.notifyCanonicalMessageDelivery(ctx, ch, plan.Recipient, plan.Delivery)
+		}
+	}
+}
+
+// deliverCanonicalMessageToChannelAgents is the compatibility boundary for
+// non-frontend canonical publishers. Frontend and env-dispatch sends call the
+// same planning/persistence functions through service.SendCanonicalChannelMessage.
+func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) error {
 	if h == nil || h.DB == nil || strings.TrimSpace(message.ID) == "" || message.Seq <= 0 {
-		return
+		return nil
 	}
 	// LRM-1523: agent-authored pure confirmations must not enter any Agent's
 	// MessageCoordinator pending set (same no-wake contract as the retired
 	// task-shaped path).
 	if !channelMessageIsHumanAuthored(message.Type) && channelMessageIsConfirmationNoWake(message) {
-		return
+		return nil
 	}
-	for _, recipient := range h.canonicalMessageDeliveryRecipients(ctx, ch, message) {
-		delivery, ok, err := persistCanonicalMessageDelivery(ctx, h.DB, ch, message, recipient)
-		if err != nil {
-			slog.Warn("persist canonical Agent Message delivery failed", "workspace_id", ch.WorkspaceID, "channel_id", ch.ID, "message_id", message.ID, "agent_id", uuidToString(recipient.ID), "error", err)
-			continue
-		}
-		if ok {
-			h.attachCanonicalMessageMemories(ctx, ch.WorkspaceID, recipient.ID, &delivery.Message)
-			h.notifyCanonicalMessageDelivery(ctx, ch, recipient, delivery)
-		}
+	plans, err := h.planCanonicalMessageDeliveryRecipients(ctx, ch, message)
+	if err != nil {
+		return err
 	}
+	if err := h.persistCanonicalMessageDeliveryPlans(ctx, ch, message, plans); err != nil {
+		return err
+	}
+	h.notifyCanonicalMessageDeliveryPlans(ctx, ch, plans)
+	return nil
 }
 
 // persistCanonicalMessageDelivery records one explicitly selected recipient.
@@ -98,9 +202,7 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 	if err != nil {
 		return protocol.AgentDeliverPayload{}, false, err
 	}
-	if tag.RowsAffected() != 1 {
-		return protocol.AgentDeliverPayload{}, false, nil
-	}
+	created := tag.RowsAffected() == 1
 	return protocol.AgentDeliverPayload{
 		AgentID:    agentID,
 		Target:     target,
@@ -111,7 +213,7 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 			ChannelKind: ch.Kind, ProjectID: stringValue(ch.ProjectID),
 			InitiatorType: canonicalMessageInitiatorType(message.Type), InitiatorID: stringValue(message.AuthorID), InitiatorName: message.AuthorName,
 		},
-	}, true, nil
+	}, created, nil
 }
 
 func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceID string, agentID pgtype.UUID, message *protocol.AgentMessageProjection) {
@@ -139,6 +241,89 @@ func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceI
 			SubjectType: memory.SubjectType, SubjectID: memory.SubjectID,
 		})
 	}
+}
+
+// redeliverUnacknowledgedComputerAgentMessages rebuilds the Computer's
+// at-least-once transport queue whenever its Workspace Runner becomes ready.
+// The persisted delivery sequence remains the canonical target sequence; this
+// path neither invents a recovery cursor nor changes local context coverage.
+func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Context, identity daemonws.ClientIdentity) error {
+	if h == nil || h.DB == nil || h.AgentDeliveryNotifier == nil {
+		return nil
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT delivery.agent_id, m.id, m.channel_id, delivery.seq, m.content, m.parts,
+		       delivery.target, c.kind, c.project_id, m.author_type, m.author_id,
+		       COALESCE(NULLIF(author_user.name, ''), NULLIF(author_agent.name, ''), ''),
+		       CASE c.kind
+		         WHEN 'group' THEN '#' || c.name
+		         WHEN 'dm' THEN 'dm:@' || COALESCE(peer.handle, '')
+		         ELSE ''
+		       END || CASE
+		         WHEN m.thread_root_message_id IS NOT NULL THEN ':' || LEFT(m.thread_root_message_id::text, 8)
+		         ELSE ''
+		       END
+		FROM agent_message_delivery delivery
+		JOIN agent recipient ON recipient.id = delivery.agent_id AND recipient.archived_at IS NULL
+		JOIN agent_runtime runtime ON runtime.id = recipient.runtime_id
+		JOIN channel_message m ON m.id = delivery.message_id AND m.deleted_at IS NULL
+		JOIN channel c ON c.id = m.channel_id AND c.workspace_id = delivery.workspace_id
+		LEFT JOIN "user" author_user ON m.author_type = 'user' AND author_user.id = m.author_id
+		LEFT JOIN agent author_agent ON m.author_type = 'agent' AND author_agent.id = m.author_id
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(NULLIF(u.name, ''), NULLIF(a.name, ''), '') AS handle
+			FROM channel_member cm
+			LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
+			LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id AND a.archived_at IS NULL
+			WHERE cm.channel_id = c.id AND cm.workspace_id = delivery.workspace_id
+			  AND NOT (cm.member_type = 'agent' AND cm.member_id = delivery.agent_id)
+			ORDER BY cm.created_at ASC
+			LIMIT 1
+		) peer ON c.kind = 'dm'
+		WHERE delivery.workspace_id = $1 AND runtime.daemon_id = $2
+		  AND delivery.ack_required AND delivery.acked_at IS NULL
+		ORDER BY delivery.seq, delivery.message_id, delivery.agent_id`,
+		parseUUID(identity.WorkspaceID), identity.DaemonID)
+	if err != nil {
+		return fmt.Errorf("load unacknowledged Computer Agent Messages: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var agentID, messageID, channelID, projectID, authorID pgtype.UUID
+		var seq int64
+		var content, target, channelKind, authorType, authorName, replyTarget string
+		var rawParts []byte
+		if err := rows.Scan(&agentID, &messageID, &channelID, &seq, &content, &rawParts, &target, &channelKind, &projectID, &authorType, &authorID, &authorName, &replyTarget); err != nil {
+			return fmt.Errorf("scan unacknowledged Computer Agent Message: %w", err)
+		}
+		var parts []protocol.MessagePart
+		if len(rawParts) > 0 && string(rawParts) != "null" {
+			if err := json.Unmarshal(rawParts, &parts); err != nil {
+				return fmt.Errorf("decode unacknowledged Computer Agent Message parts: %w", err)
+			}
+		}
+		agentIDText := uuidToString(agentID)
+		message := protocol.AgentMessageProjection{
+			ID: uuidToString(messageID), ChannelID: uuidToString(channelID), Target: target,
+			ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
+			ChannelKind: channelKind, ProjectID: uuidToString(projectID),
+			InitiatorType: canonicalMessageInitiatorType(authorType),
+			InitiatorID:   uuidToString(authorID), InitiatorName: authorName,
+		}
+		h.attachCanonicalMessageMemories(ctx, identity.WorkspaceID, agentID, &message)
+		delivery := protocol.AgentDeliverPayload{
+			AgentID: agentIDText, Target: target, Seq: seq,
+			DeliveryID: "message:" + message.ID + ":agent:" + agentIDText,
+			Message:    message,
+		}
+		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {
+			slog.Debug("Computer Agent Message redelivery deferred", "workspace_id", identity.WorkspaceID, "computer_id", identity.DaemonID, "agent_id", agentIDText, "delivery_id", delivery.DeliveryID, "seq", seq)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate unacknowledged Computer Agent Messages: %w", err)
+	}
+	return nil
 }
 
 func canonicalMessageInitiatorType(authorType string) string {
@@ -211,6 +396,75 @@ func canonicalMessageReplyTarget(ctx context.Context, exec dbExecutor, ch Channe
 		}
 	}
 	return base, nil
+}
+
+func (h *Handler) resolveCanonicalRunRecipient(ctx context.Context, ch ChannelResponse, source db.Agent) (string, string, db.Agent, bool, error) {
+	var runID, runAgentID, executionAgentID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		SELECT run.run_id, run_agent.run_agent_id, run_agent.execution_agent_id
+		FROM env_dispatch_run AS run
+		JOIN env_dispatch_run_agent AS run_agent ON run_agent.run_id = run.run_id
+		WHERE run.local_channel_id = $1
+		  AND run.workspace_id = $2
+		  AND run_agent.source_agent_id = $3
+		  AND run.status IN ('preflight', 'running', 'quiet_candidate')
+		ORDER BY run.created_at DESC
+		LIMIT 1`, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), source.ID).Scan(&runID, &runAgentID, &executionAgentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", db.Agent{}, false, nil
+	}
+	if err != nil {
+		return "", "", db.Agent{}, false, err
+	}
+	execution, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: executionAgentID, WorkspaceID: parseUUID(ch.WorkspaceID)})
+	if err != nil {
+		return "", "", db.Agent{}, false, err
+	}
+	return uuidToString(runID), uuidToString(runAgentID), execution, true, nil
+}
+
+func createMixedRunDeliveryObligationWithActivity(ctx context.Context, activity *service.EnvDispatchActivity, runID, runAgentID, messageID string, sourceAgentID pgtype.UUID) (bool, error) {
+	if activity == nil {
+		return false, errors.New("mixed-run activity service unavailable")
+	}
+	_, created, err := activity.CreateDeliveryObligation(ctx, service.CreateDeliveryObligationInput{
+		RunID:                  parseUUID(runID),
+		ChannelMessageID:       parseUUID(messageID),
+		SourceRecipientAgentID: sourceAgentID,
+		RunAgentID:             parseUUID(runAgentID),
+		State:                  "queued",
+	})
+	return created, err
+}
+
+func (h *Handler) createMixedRunDeliveryObligation(ctx context.Context, runID, runAgentID, messageID, sourceAgentID string) error {
+	if h == nil || h.Queries == nil {
+		return errors.New("mixed run delivery queries unavailable")
+	}
+	if h.TxStarter == nil {
+		return errors.New("mixed run delivery transaction unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	activity := service.NewEnvDispatchActivityFromQueries(h.Queries.WithTx(tx))
+	if _, err := createMixedRunDeliveryObligationWithActivity(ctx, activity, runID, runAgentID, messageID, parseUUID(sourceAgentID)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// settleMixedRunDeliveryObligation settles a run-scoped delivery obligation
+// when the daemon acknowledges canonical delivery. Pending delivery counters
+// decrement through the shared activity path.
+func (h *Handler) settleMixedRunDeliveryObligation(ctx context.Context, channelMessageID, executionAgentID pgtype.UUID) error {
+	if h == nil || h.DB == nil {
+		return errors.New("mixed run delivery executor unavailable")
+	}
+	_, err := service.SettleDeliveryObligationForExecutionAgent(ctx, h.DB, channelMessageID, executionAgentID)
+	return err
 }
 
 func (h *Handler) notifyCanonicalMessageDelivery(ctx context.Context, ch ChannelResponse, recipient db.Agent, delivery protocol.AgentDeliverPayload) {
@@ -322,4 +576,27 @@ func (h *Handler) filterCanonicalMessageDeliveryRecipients(ctx context.Context, 
 		result = append(result, candidate)
 	}
 	return result
+}
+
+// canonicalRunRecipient retains the authoritative source membership identity
+// while carrying the derived execution identity selected for this run.
+type canonicalRunRecipient struct {
+	SourceAgentID  string
+	ExecutionAgent db.Agent
+}
+
+// mapCanonicalRunRecipients maps only recipients already selected by the
+// canonical source-agent policy. A derived identity can never add its source
+// agent to the selected set.
+func mapCanonicalRunRecipients(sourceRecipients []db.Agent, executionBySource map[string]db.Agent) []canonicalRunRecipient {
+	mapped := make([]canonicalRunRecipient, 0, len(sourceRecipients))
+	for _, source := range sourceRecipients {
+		sourceID := uuidToString(source.ID)
+		execution, ok := executionBySource[sourceID]
+		if !ok {
+			continue
+		}
+		mapped = append(mapped, canonicalRunRecipient{SourceAgentID: sourceID, ExecutionAgent: execution})
+	}
+	return mapped
 }

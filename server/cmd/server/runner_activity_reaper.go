@@ -30,6 +30,9 @@ func runRunnerActivityReaper(ctx context.Context, h *handler.Handler) {
 			if err := h.ReapStaleRunnerActivity(ctx, now); err != nil && ctx.Err() == nil {
 				slog.Warn("runner Activity reaper failed", "error", err)
 			}
+			if err := h.ReapMixedRLQuiescence(ctx, now); err != nil && ctx.Err() == nil {
+				slog.Warn("mixed-RL quiescence reaper failed", "error", err)
+			}
 		}
 	}
 }

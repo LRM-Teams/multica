@@ -23,13 +23,20 @@ inviting humans and changing or removing human membership.
 _Avoid_: Agents page (retired name for this surface), Settings members tab
 (retired human-admin entry), team page, people list
 
-### Machine Service
+### Computer
 
 The single machine-local authority for supervising Multica execution under one
 OS user environment. It connects to the Multica service at the canonical
 server origin `https://api.leagent.me` and may manage Workspace Execution Bindings
 for multiple Workspaces.
-_Avoid_: Profile daemon, Workspace daemon
+_Avoid_: Machine Service, daemon, Profile daemon, Workspace daemon
+
+### Computer Owner
+
+The human whose OS-user-scoped Computer identity may be restarted, upgraded,
+or otherwise mutated. Workspace ownership and administration do not grant
+control over another person's Computer.
+_Avoid_: Workspace owner, Workspace admin, runtime owner
 
 ### Credential Proxy
 
@@ -68,7 +75,7 @@ _Avoid_: Workspace attachment, local Workspace
 
 ### Workspace Discovery
 
-The Machine Service's view of Workspaces that the signed-in user may access.
+The Computer's view of Workspaces that the signed-in user may access.
 Discovery follows membership changes but does not authorize local Agent
 execution or start a Workspace Runner.
 _Avoid_: Workspace synchronization, automatic binding
@@ -82,9 +89,9 @@ _Avoid_: Workspace owner, global Workspace runner
 
 ### Agent Attachment
 
-The durable fact that one Machine Service handles one Agent in one Workspace
+The durable fact that one Computer handles one Agent in one Workspace
 through one Runtime. Attachment is fenced by its own generation and survives
-process exit or Machine Service restart. It does not mean that a provider
+process exit or Computer restart. It does not mean that a provider
 process is running, and detaching it does not delete the Agent Root, Inbox,
 Message Draft, or other durable Agent data.
 _Avoid_: Agent process, launch, session, Reminder owner, Workspace attachment
@@ -203,10 +210,19 @@ _Avoid_: Attachment sidecar, markdown-only payload
 
 ### Delivery
 
-An at-least-once transfer attempt of one Message to the Machine Service
+An at-least-once transfer attempt of one Message to the Computer
 currently responsible for an Agent. Replaying the same `delivery_id` is the
 same Delivery; acceptance means the local coordinator accepted it, not that a
 runtime saw it or that a second canonical Message copy was persisted locally.
+
+### Delivery Acknowledgement
+
+The Computer's receipt that its Agent Process Manager accepted responsibility
+for one exact Delivery. It correlates the Agent, Delivery identity, and target
+sequence. It ends Server redelivery responsibility but does not mean the Agent
+read the Message, the Provider completed a turn, or the Context Boundary
+advanced.
+_Avoid_: Read receipt, Message completion, Context Boundary, recovery cursor
 _Avoid_: Inbox lease, task claim, execution
 
 ### Pending Message

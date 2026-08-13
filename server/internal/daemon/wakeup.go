@@ -589,6 +589,20 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleSeedAgentContextRequest(req, writes)
+		case protocol.EventDaemonPreparePiRunRequest:
+			var req protocol.PreparePiRunRequestPayload
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				d.logger.Debug("prepare Pi run request invalid payload", "error", err)
+				continue
+			}
+			d.handlePreparePiRunRequest(context.Background(), req, writes)
+		case protocol.EventDaemonRevokePiRunRequest:
+			var req protocol.RevokePiRunRequestPayload
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				d.logger.Debug("revoke Pi run request invalid payload", "error", err)
+				continue
+			}
+			d.handleRevokePiRunRequest(req, writes)
 		}
 	}
 }

@@ -67,10 +67,16 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if ready.WorkspaceID != identity.WorkspaceID || ready.DaemonInstanceID != daemonInstanceID {
 			return errors.New("Runner ready identity does not match current connection")
 		}
-		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID); err != nil {
+		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
-		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
+		// Raft establishes APM ownership before it offers durable deliveries.
+		// The Computer can then accept messages into the Agent's starting Inbox
+		// and ACK them without requiring the Provider to be ready yet.
+		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
+			return err
+		}
+		if err := h.redeliverUnacknowledgedComputerAgentMessages(ctx, identity); err != nil {
 			return err
 		}
 		return h.dispatchPendingRunnerStops(ctx, identity)
@@ -79,7 +85,13 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := json.Unmarshal(raw, &status); err != nil {
 			return fmt.Errorf("decode Runner status: %w", err)
 		}
-		return h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status)
+		if err := h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status); err != nil {
+			return err
+		}
+		if status.Status == protocol.AgentStatusInactive && h.DaemonHub != nil {
+			return h.reconcileWorkspaceRunnerLaunches(ctx, identity)
+		}
+		return nil
 	case protocol.EventAgentStartAck:
 		var acknowledgement protocol.AgentStartAckPayload
 		if err := json.Unmarshal(raw, &acknowledgement); err != nil {
@@ -122,15 +134,146 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return fmt.Errorf("decode Attachment replay acknowledgement: %w", err)
 		}
 		return h.acknowledgeAgentAttachmentReplay(ctx, identity, acknowledgement)
+	case protocol.EventMixedRunActivityTransition:
+		var transition protocol.MixedRunActivityTransitionPayload
+		if err := json.Unmarshal(raw, &transition); err != nil {
+			return fmt.Errorf("decode mixed-run activity transition: %w", err)
+		}
+		return h.recordMixedRunActivityTransition(ctx, identity, transition)
 	default:
 		return nil
 	}
 }
 
+func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity daemonws.ClientIdentity, transition protocol.MixedRunActivityTransitionPayload) error {
+	if err := transition.Validate(); err != nil {
+		return err
+	}
+	workspaceID, err := util.ParseUUID(identity.WorkspaceID)
+	if err != nil {
+		return errors.New("invalid Runner workspace identity")
+	}
+	runID, err := util.ParseUUID(transition.RunID)
+	if err != nil {
+		return errors.New("invalid mixed-run activity run_id")
+	}
+	runAgentID, err := util.ParseUUID(transition.RunAgentID)
+	if err != nil {
+		return errors.New("invalid mixed-run activity run_agent_id")
+	}
+	agentID, err := util.ParseUUID(transition.AgentID)
+	if err != nil {
+		return errors.New("invalid mixed-run activity agent_id")
+	}
+	runtimeID, err := util.ParseUUID(transition.RuntimeID)
+	if err != nil {
+		return errors.New("invalid mixed-run activity runtime_id")
+	}
+	var counterColumn string
+	switch transition.Dimension {
+	case protocol.MixedRunActivityActiveTurn:
+		counterColumn = "active_turn_count"
+	case protocol.MixedRunActivityQueuedMessage:
+		counterColumn = "queued_message_count"
+	case protocol.MixedRunActivityInflightTool:
+		counterColumn = "inflight_tool_count"
+	case protocol.MixedRunActivityUnfinishedCaptureBatch:
+		counterColumn = "unfinished_capture_batch_count"
+	default:
+		return errors.New("invalid mixed-run activity dimension")
+	}
+	if h.TxStarter == nil {
+		return errors.New("mixed-run activity transaction unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var authorized bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM env_dispatch_run_agent run_agent
+		  JOIN env_dispatch_run run ON run.run_id = run_agent.run_id
+		  JOIN agent_runtime runtime ON runtime.id = run_agent.runtime_id
+		  WHERE run.run_id = $1 AND run.workspace_id = $2
+		    AND run_agent.run_agent_id = $3
+		    AND run_agent.execution_agent_id = $4
+		    AND run_agent.runtime_id = $5
+		    AND runtime.daemon_id = $6
+		)`, runID, workspaceID, runAgentID, agentID, runtimeID, identity.DaemonID).Scan(&authorized); err != nil {
+		return fmt.Errorf("authorize mixed-run activity transition: %w", err)
+	}
+	if !authorized {
+		return errors.New("mixed-run activity transition scope mismatch")
+	}
+	var inserted bool
+	err = tx.QueryRow(ctx, `
+		INSERT INTO env_dispatch_activity_transition AS transition (
+		  run_id, transition_id, run_agent_id, agent_id, runtime_id, dimension, delta
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (run_id, transition_id) DO UPDATE
+		SET transition_id = EXCLUDED.transition_id
+		WHERE transition.run_agent_id = EXCLUDED.run_agent_id
+		  AND transition.agent_id = EXCLUDED.agent_id
+		  AND transition.runtime_id = EXCLUDED.runtime_id
+		  AND transition.dimension = EXCLUDED.dimension
+		  AND transition.delta = EXCLUDED.delta
+		RETURNING (xmax = 0)`, runID, transition.TransitionID, runAgentID, agentID, runtimeID, transition.Dimension, transition.Delta).Scan(&inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("mixed-run activity transition id conflicts with a different payload")
+	}
+	if err != nil {
+		return fmt.Errorf("persist mixed-run activity transition: %w", err)
+	}
+	if !inserted {
+		return tx.Commit(ctx)
+	}
+	query := `UPDATE env_dispatch_run AS run
+		SET ` + counterColumn + ` = ` + counterColumn + ` + $2,
+		    quiet_candidate_since = CASE
+		      WHEN $2 > 0 THEN NULL
+		      WHEN run.active_turn_count + CASE WHEN '` + counterColumn + `' = 'active_turn_count' THEN $2 ELSE 0 END = 0
+		       AND run.pending_delivery_count = 0
+		       AND run.queued_message_count + CASE WHEN '` + counterColumn + `' = 'queued_message_count' THEN $2 ELSE 0 END = 0
+		       AND run.inflight_tool_count + CASE WHEN '` + counterColumn + `' = 'inflight_tool_count' THEN $2 ELSE 0 END = 0
+		       AND run.unfinished_capture_batch_count + CASE WHEN '` + counterColumn + `' = 'unfinished_capture_batch_count' THEN $2 ELSE 0 END = 0
+		      THEN now()
+		      ELSE NULL
+		    END,
+		    status = CASE
+		      WHEN $2 > 0 AND run.status = 'quiet_candidate' THEN 'running'
+		      WHEN $2 < 0
+		       AND run.active_turn_count + CASE WHEN '` + counterColumn + `' = 'active_turn_count' THEN $2 ELSE 0 END = 0
+		       AND run.pending_delivery_count = 0
+		       AND run.queued_message_count + CASE WHEN '` + counterColumn + `' = 'queued_message_count' THEN $2 ELSE 0 END = 0
+		       AND run.inflight_tool_count + CASE WHEN '` + counterColumn + `' = 'inflight_tool_count' THEN $2 ELSE 0 END = 0
+		       AND run.unfinished_capture_batch_count + CASE WHEN '` + counterColumn + `' = 'unfinished_capture_batch_count' THEN $2 ELSE 0 END = 0
+		      THEN 'quiet_candidate'
+		      ELSE run.status
+		    END,
+		    updated_at = now()
+		WHERE run_id = $1
+		  AND status IN ('preflight', 'running', 'quiet_candidate')
+		  AND ` + counterColumn + ` + $2 >= 0`
+	tag, err := tx.Exec(ctx, query, runID, transition.Delta)
+	if err != nil {
+		return fmt.Errorf("apply mixed-run activity transition: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("mixed-run activity transition would make counter negative or mutate an inactive run")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit mixed-run activity transition: %w", err)
+	}
+	return nil
+}
+
 // recordWorkspaceRunnerReady fences launches owned by an older daemon process.
 // A Computer may already be connected while none of its prior Agent processes
 // have restarted; those Agents stay Offline until a new launch is reported.
-func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string) error {
+func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, runningAgentIDs []string) error {
 	return h.runnerPresenceLocked(func() error {
 		workspaceID, err := util.ParseUUID(identity.WorkspaceID)
 		if err != nil {
@@ -152,7 +295,7 @@ func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemo
 		FROM agent_activity_launch l
 		WHERE l.workspace_id = s.workspace_id AND l.agent_id = s.agent_id
 		  AND l.workspace_id = $1 AND l.daemon_id = $2
-		  AND l.daemon_instance_id <> $3 AND l.status = 'active'
+		  AND l.daemon_instance_id <> $3 AND l.status IN ('accepted', 'active')
 		RETURNING s.agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
 		if err != nil {
 			return fmt.Errorf("fence prior Runner snapshots: %w", err)
@@ -171,11 +314,27 @@ func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemo
 			return fmt.Errorf("iterate fenced Runner Agents: %w", err)
 		}
 		rows.Close()
+		if len(runningAgentIDs) == 0 {
+			if _, err := tx.Exec(ctx, `
+				UPDATE agent_activity_launch
+				SET status = 'inactive', updated_at = now()
+				WHERE workspace_id = $1 AND daemon_id = $2
+				  AND daemon_instance_id = $3 AND status IN ('accepted', 'active')`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
+				return fmt.Errorf("fence absent Runner residencies: %w", err)
+			}
+		} else if _, err := tx.Exec(ctx, `
+			UPDATE agent_activity_launch
+			SET status = 'inactive', updated_at = now()
+			WHERE workspace_id = $1 AND daemon_id = $2
+			  AND daemon_instance_id = $3 AND status IN ('accepted', 'active')
+			  AND NOT (agent_id = ANY($4::uuid[]))`, workspaceID, identity.DaemonID, daemonInstanceID, runningAgentIDs); err != nil {
+			return fmt.Errorf("fence absent Runner residencies: %w", err)
+		}
 		rows, err = tx.Query(ctx, `
 		UPDATE agent_activity_launch
 		SET status = 'inactive', updated_at = now()
 		WHERE workspace_id = $1 AND daemon_id = $2
-		  AND daemon_instance_id <> $3 AND status = 'active'
+		  AND daemon_instance_id <> $3 AND status IN ('accepted', 'active')
 		RETURNING agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
 		if err != nil {
 			return fmt.Errorf("fence prior Runner launches: %w", err)
@@ -252,8 +411,7 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 				last_producer_fact_id = '',
 				last_activity_fingerprint = '',
 				updated_at = now()
-			WHERE agent_activity_launch.start_dispatch_id = ''
-			   OR agent_activity_launch.status = 'inactive'
+			WHERE agent_activity_launch.status = 'inactive'
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
 			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
 			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id)`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
@@ -283,40 +441,51 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 		if err != nil {
 			return err
 		}
+		beforeLaunch, err := h.loadRunnerLaunchPresence(ctx, workspaceID, agentID)
+		if err != nil {
+			return err
+		}
+		before := h.projectRunnerLaunchPresence(identity.WorkspaceID, beforeLaunch)
+		var desiredLaunchID, desiredStartDispatchID string
+		if err := h.DB.QueryRow(ctx, `
+			SELECT launch_id::text, start_dispatch_id::text FROM agent_runner_launch_projection
+			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3`, workspaceID, agentID, runtimeID).Scan(&desiredLaunchID, &desiredStartDispatchID); err != nil {
+			return fmt.Errorf("load desired Runner launch: %w", err)
+		}
+		if desiredLaunchID != acknowledgement.LaunchID || desiredStartDispatchID != acknowledgement.StartDispatchID {
+			return errors.New("stale Workspace Runner start acknowledgement")
+		}
 		command, err := h.DB.Exec(ctx, `
 			INSERT INTO agent_activity_launch (
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
-				status, start_dispatch_id, queue_state, queue_depth, queue_age_ms, accepted_at
-			) VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8, $9, $10, now())
+				start_dispatch_id, status, queue_state, queue_depth, queue_age_ms, accepted_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, 'accepted', $8, $9, $10, now())
 			ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
 				runtime_id = EXCLUDED.runtime_id, daemon_id = EXCLUDED.daemon_id,
 				daemon_instance_id = EXCLUDED.daemon_instance_id, launch_id = EXCLUDED.launch_id,
-				status = 'accepted', start_dispatch_id = EXCLUDED.start_dispatch_id,
+				start_dispatch_id = EXCLUDED.start_dispatch_id,
+				status = 'accepted',
 				queue_state = EXCLUDED.queue_state, queue_depth = EXCLUDED.queue_depth,
 				queue_age_ms = EXCLUDED.queue_age_ms, accepted_at = COALESCE(agent_activity_launch.accepted_at, now()),
 				last_client_sequence = 0, last_producer_fact_id = '', last_activity_fingerprint = '', updated_at = now()
 			WHERE agent_activity_launch.status = 'inactive'
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
 			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
-			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id
-			       AND agent_activity_launch.start_dispatch_id = EXCLUDED.start_dispatch_id)`,
-			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, acknowledgement.LaunchID,
-			acknowledgement.StartDispatchID, acknowledgement.QueueState, acknowledgement.QueueDepth, acknowledgement.QueueAgeMS)
+			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id)`,
+			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, acknowledgement.LaunchID, acknowledgement.StartDispatchID,
+			acknowledgement.QueueState, acknowledgement.QueueDepth, acknowledgement.QueueAgeMS)
 		if err != nil {
 			return fmt.Errorf("persist Runner start acknowledgement: %w", err)
 		}
 		if command.RowsAffected() != 1 {
 			return errors.New("stale Workspace Runner start acknowledgement")
 		}
-		if _, err := h.DB.Exec(ctx, `
-			UPDATE agent_start_intent
-			SET status = CASE WHEN $4 = 'queued' THEN 'queued' ELSE 'accepted' END,
-			    lifecycle_seq = GREATEST(lifecycle_seq, 1), accepted_at = COALESCE(accepted_at, now()),
-			    reported_at = now(), updated_at = now()
-			WHERE start_dispatch_id::text = $1 AND agent_id = $2 AND runtime_id = $3
-			  AND status = 'pending'`, acknowledgement.StartDispatchID, agentID, runtimeID, acknowledgement.QueueState); err != nil {
-			return fmt.Errorf("record accepted Runner launch intent: %w", err)
-		}
+		after := h.projectRunnerLaunchPresence(identity.WorkspaceID, &runnerLaunchPresence{
+			daemonID:         identity.DaemonID,
+			daemonInstanceID: daemonInstanceID,
+			status:           "accepted",
+		})
+		h.publishAgentPresenceChange(identity.WorkspaceID, acknowledgement.AgentID, before, after)
 		return nil
 	})
 }

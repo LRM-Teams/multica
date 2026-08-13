@@ -108,12 +108,17 @@ func loadAgentProcessCapInputs(getenv func(string) string, numCPU int) (AgentPro
 	return in, nil
 }
 
-// resolveMaxAgentProcessesFromEnv is the production entry: host NumCPU + env.
-// Returns 0 for unlimited (explicit MULTICA_MAX_AGENT_PROCESSES=0).
+// resolveMaxAgentProcessesFromEnv is the production entry. Resident Agent
+// processes are unlimited unless an operator explicitly sets the absolute
+// safety valve. CPU-scaled defaults are intentionally not applied here: they
+// are not Raft's short-lived concurrent-start scheduler.
 func resolveMaxAgentProcessesFromEnv(getenv func(string) string) (int, error) {
 	in, err := loadAgentProcessCapInputs(getenv, runtime.NumCPU())
 	if err != nil {
 		return 0, err
+	}
+	if in.Absolute == nil {
+		return 0, nil
 	}
 	return resolveMaxAgentProcesses(in), nil
 }

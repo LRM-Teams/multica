@@ -15,19 +15,25 @@ func TestAgentProcessManagerIdempotentStartQueueAndRecovery(t *testing.T) {
 	})
 	manager.newID = sequentialIDs()
 
-	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
+	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"})
 	if err != nil {
 		t.Fatalf("Start(first): %v", err)
 	}
 	if first.QueueState != protocol.AgentStartQueueStarting {
 		t.Fatalf("first queue state = %q, want starting", first.QueueState)
 	}
-	replayed, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
+	replayed, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"})
 	if err != nil || replayed != first {
 		t.Fatalf("replayed start = %+v, %v; want cached %+v", replayed, err, first)
 	}
+	if first.LaunchID != "launch-a" || first.StartDispatchID != "dispatch-a" {
+		t.Fatalf("start identities = %+v, want separate launch and dispatch ids", first)
+	}
+	if _, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-other", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}); err == nil {
+		t.Fatal("conflicting reuse of accepted start dispatch was allowed")
+	}
 
-	queued, err := manager.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-1", StartDispatchID: "dispatch-b"})
+	queued, err := manager.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-1", LaunchID: "launch-b", StartDispatchID: "dispatch-b"})
 	if err != nil {
 		t.Fatalf("Start(queued): %v", err)
 	}
@@ -63,7 +69,7 @@ func TestAgentProcessManagerIdempotentStartQueueAndRecovery(t *testing.T) {
 func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing.T) {
 	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
 	manager.newID = sequentialIDs()
-	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
+	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "dispatch-a", StartDispatchID: "dispatch-a" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("Start(first): %v", err)
 	}
@@ -71,7 +77,7 @@ func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing
 	if err := manager.ProcessSpawned(process); err != nil {
 		t.Fatalf("ProcessSpawned: %v", err)
 	}
-	second, err := manager.Restart(agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID}, agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-b"})
+	second, err := manager.Restart(agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID}, agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "dispatch-b", StartDispatchID: "dispatch-b" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
@@ -90,7 +96,7 @@ func TestAgentProcessManagerRejectsRevokedCapacityGrant(t *testing.T) {
 	admission := newTestProcessAdmission(1)
 	manager := newAgentProcessManager("workspace-1", admission, time.Now, nil)
 	manager.newID = sequentialIDs()
-	accepted, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
+	accepted, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "dispatch-a", StartDispatchID: "dispatch-a" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -109,11 +115,11 @@ func TestAgentProcessManagerSharesCanonicalCapacityAcrossRunners(t *testing.T) {
 	first := newAgentProcessManager("workspace-a", pool.managedProcessAdmission(), time.Now, nil)
 	second := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
 
-	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", StartDispatchID: "dispatch-a"})
+	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", LaunchID: "dispatch-a", StartDispatchID: "dispatch-a" + "-dispatch"})
 	if err != nil || firstAck.QueueState != protocol.AgentStartQueueStarting {
 		t.Fatalf("Start(first) = %+v, %v; want starting", firstAck, err)
 	}
-	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", LaunchID: "dispatch-b", StartDispatchID: "dispatch-b" + "-dispatch"})
 	if err != nil || secondAck.QueueState != protocol.AgentStartQueueQueued {
 		t.Fatalf("Start(second) = %+v, %v; want globally queued", secondAck, err)
 	}
@@ -138,15 +144,15 @@ func TestAgentProcessManagerCancelsGloballyQueuedLaunch(t *testing.T) {
 	second := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
 	third := newAgentProcessManager("workspace-c", pool.managedProcessAdmission(), time.Now, nil)
 
-	firstAck, _ := first.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", StartDispatchID: "dispatch-a"})
-	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	firstAck, _ := first.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", LaunchID: "dispatch-a", StartDispatchID: "dispatch-a" + "-dispatch"})
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", LaunchID: "dispatch-b", StartDispatchID: "dispatch-b" + "-dispatch"})
 	if err != nil || secondAck.QueueState != protocol.AgentStartQueueQueued {
 		t.Fatalf("Start(second) = %+v, %v; want queued", secondAck, err)
 	}
 	if err := second.Stop(agentProcessCallback{AgentID: "agent-b", LaunchID: secondAck.LaunchID}); err != nil {
 		t.Fatalf("Stop(queued): %v", err)
 	}
-	thirdAck, err := third.Start(agentProcessStartRequest{AgentID: "agent-c", RuntimeID: "runtime-c", StartDispatchID: "dispatch-c"})
+	thirdAck, err := third.Start(agentProcessStartRequest{AgentID: "agent-c", RuntimeID: "runtime-c", LaunchID: "dispatch-c", StartDispatchID: "dispatch-c" + "-dispatch"})
 	if err != nil || thirdAck.QueueState != protocol.AgentStartQueueQueued {
 		t.Fatalf("Start(third) = %+v, %v; want queued", thirdAck, err)
 	}
@@ -167,7 +173,7 @@ func TestManagedCapacityCountsResidentProcessAndEvictsOnlyIdle(t *testing.T) {
 	lease.release(true) // resident but idle: safe capacity eviction candidate.
 
 	manager := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
-	ack, err := manager.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	ack, err := manager.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", LaunchID: "dispatch-b", StartDispatchID: "dispatch-b" + "-dispatch"})
 	if err != nil || ack.QueueState != protocol.AgentStartQueueStarting {
 		t.Fatalf("managed Start = %+v, %v; want starting after idle eviction", ack, err)
 	}
@@ -192,29 +198,32 @@ func waitForProcessQueueState(t *testing.T, manager *agentProcessManager, agentI
 	t.Fatalf("queue state for %s = %+v, exists=%v; want %q", agentID, snapshot, ok, want)
 }
 
-func TestAgentProcessManagerReassignsToNewRuntimeWithNewLaunch(t *testing.T) {
+func TestAgentProcessManagerRequiresStopBeforeRuntimeReassignment(t *testing.T) {
 	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
 	manager.newID = sequentialIDs()
-	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
+	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "dispatch-a", StartDispatchID: "dispatch-a" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("Start(first): %v", err)
 	}
-	second, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-2", StartDispatchID: "dispatch-b"})
-	if err != nil {
-		t.Fatalf("Start(reassigned): %v", err)
+	if _, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-2", LaunchID: "dispatch-b", StartDispatchID: "dispatch-b" + "-dispatch"}); err == nil {
+		t.Fatal("cross-Runtime start bypassed explicit stop")
 	}
-	if second.LaunchID == first.LaunchID {
-		t.Fatal("Runner reassignment reused launch ID")
+	if err := manager.Stop(agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID}); err != nil {
+		t.Fatalf("Stop(first): %v", err)
+	}
+	second, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-2", LaunchID: "dispatch-b", StartDispatchID: "dispatch-b" + "-dispatch"})
+	if err != nil {
+		t.Fatalf("Start(after stop): %v", err)
 	}
 	if second.QueueState != protocol.AgentStartQueueStarting {
-		t.Fatalf("reassigned queue state = %q, want starting", second.QueueState)
+		t.Fatalf("replacement queue state = %q, want starting", second.QueueState)
 	}
 }
 
 func TestAgentProcessManagerReadinessPoliciesAndActivationAreIndependent(t *testing.T) {
 	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
 	manager.newID = sequentialIDs()
-	accepted, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a", ReadinessPolicy: agentRuntimeReadinessInitialTurn, DeliveryMode: agentInitialDeliveryStdin})
+	accepted, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "dispatch-a", StartDispatchID: "dispatch-a" + "-dispatch", ReadinessPolicy: agentRuntimeReadinessInitialTurn, DeliveryMode: agentInitialDeliveryStdin})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

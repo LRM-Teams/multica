@@ -542,6 +542,13 @@ func TestPersistAuthenticatedSessionPreservesProductionAppAPISplit(t *testing.T)
 func TestLogoutClearsOnlySessionAndRetainsComputerState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	stopCalls := 0
+	previousStop := stopComputerForLogout
+	stopComputerForLogout = func() computer.StopResult {
+		stopCalls++
+		return computer.StopResult{Running: true, Stopped: true}
+	}
+	t.Cleanup(func() { stopComputerForLogout = previousStop })
 
 	identity, err := (&computer.Lifecycle{}).Identity()
 	if err != nil {
@@ -579,6 +586,9 @@ func TestLogoutClearsOnlySessionAndRetainsComputerState(t *testing.T) {
 	}
 	if got, err := bindings.AllActive(); err != nil || len(got) != 1 {
 		t.Fatalf("Workspace connection was not retained: %+v, %v", got, err)
+	}
+	if stopCalls != 1 {
+		t.Fatalf("logout stopped Computer %d times, want 1", stopCalls)
 	}
 	if _, err := os.Stat(agentRoot); err != nil {
 		t.Fatalf("Agent Root was not retained: %v", err)

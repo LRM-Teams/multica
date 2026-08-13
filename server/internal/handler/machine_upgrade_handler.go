@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,70 @@ type attestComputerMachineUpgradeRequest struct {
 	CLIVersion   string   `json:"cli_version"`
 	RuntimeIDs   []string `json:"runtime_ids"`
 	WorkspaceIDs []string `json:"workspace_ids"`
+}
+
+type commitComputerMachineUpgradeTakeoverRequest struct {
+	ComputerID                    string   `json:"daemon_id"` // Legacy installed-client spelling.
+	GenerationID                  string   `json:"generation_id"`
+	CLIVersion                    string   `json:"cli_version"`
+	PredecessorComputerGeneration int64    `json:"predecessor_computer_generation"`
+	CandidateComputerGeneration   int64    `json:"candidate_computer_generation"`
+	WorkspaceIDs                  []string `json:"workspace_ids"`
+}
+
+// CommitComputerMachineUpgradeTakeover atomically replaces the incumbent
+// Computer generation after exact local candidate proof. It intentionally
+// does not use requireCurrentComputerGeneration: the authenticated caller is
+// the not-yet-active candidate, and this endpoint itself owns the one legal
+// predecessor-to-candidate transition.
+func (h *Handler) CommitComputerMachineUpgradeTakeover(w http.ResponseWriter, r *http.Request) {
+	if h.MachineUpgradeStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
+		return
+	}
+	var req commitComputerMachineUpgradeTakeoverRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.ComputerID = strings.TrimSpace(req.ComputerID)
+	if req.ComputerID == "" || strings.TrimSpace(req.GenerationID) == "" || strings.TrimSpace(req.CLIVersion) == "" ||
+		req.PredecessorComputerGeneration < 1 || req.CandidateComputerGeneration != req.PredecessorComputerGeneration+1 {
+		writeError(w, http.StatusBadRequest, "complete takeover identity is required")
+		return
+	}
+	headerGeneration, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-Computer-Generation")), 10, 64)
+	if err != nil || headerGeneration != req.CandidateComputerGeneration {
+		writeCodedError(w, http.StatusConflict, "stale_computer_generation", "takeover credential does not match candidate Computer generation")
+		return
+	}
+	if credentialComputerID := middleware.DaemonIDFromContext(r.Context()); credentialComputerID != "" && !strings.EqualFold(credentialComputerID, req.ComputerID) {
+		writeError(w, http.StatusForbidden, "Computer credential scope mismatch")
+		return
+	}
+	if err := h.authorizeComputerOwnerRequest(r.Context(), r, req.ComputerID); err != nil {
+		if errors.Is(err, errComputerConnectionUnauthorized) {
+			writeError(w, http.StatusForbidden, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to authorize Computer owner")
+		}
+		return
+	}
+	for field, ids := range map[string][]string{"workspace_ids": req.WorkspaceIDs} {
+		for _, id := range ids {
+			if _, err := util.ParseUUID(id); err != nil {
+				writeError(w, http.StatusBadRequest, field+" must contain immutable UUIDs")
+				return
+			}
+		}
+	}
+	op, err := h.MachineUpgradeStore.CommitTakeover(r.Context(), req.ComputerID, chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion,
+		req.PredecessorComputerGeneration, req.CandidateComputerGeneration, req.WorkspaceIDs)
+	if err != nil {
+		h.writeMachineUpgradeDaemonError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
 }
 
 // AttestComputerMachineUpgrade is the successor's complete machine proof.
@@ -116,17 +181,12 @@ func (h *Handler) AcceptMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	runtimeIDs, err := h.machineUpgradeRuntimeIDs(r.Context(), rt)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to resolve machine runtimes")
-		return
-	}
-	op, err := h.MachineUpgradeStore.Accept(r.Context(), runtimeDaemonKey(rt), chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion, req.ResolvedTarget, runtimeIDs)
+	op, err := h.MachineUpgradeStore.Accept(r.Context(), runtimeDaemonKey(rt), chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion, req.ResolvedTarget)
 	if err != nil {
 		h.writeMachineUpgradeDaemonError(w, err)
 		return
 	}
-	h.publishMachineUpgradeProjection(r, rt)
+	h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	writeJSON(w, http.StatusOK, op)
 }
 
@@ -188,7 +248,7 @@ func (h *Handler) ReportMachineUpgradeProgress(w http.ResponseWriter, r *http.Re
 		writeCodedError(w, http.StatusConflict, "machine_upgrade_phase_conflict", "machine upgrade phase cannot advance from its current state")
 		return
 	}
-	h.publishMachineUpgradeProjection(r, rt)
+	h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	writeJSON(w, http.StatusOK, op)
 }
 
@@ -221,7 +281,7 @@ func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
-	_, _, ok := h.requireMachineUpgradeManager(w, r, daemonID)
+	_, _, ok := h.requireMachineUpgradeViewer(w, r, daemonID)
 	if !ok {
 		return
 	}
@@ -255,7 +315,7 @@ func (h *Handler) CancelMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	h.publishMachineUpgradeProjection(r, rt)
+	h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	writeJSON(w, http.StatusOK, op)
 }
 
@@ -308,7 +368,7 @@ func (h *Handler) createMachineUpgrade(
 		return nil, false, err
 	}
 	if created {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 	return op, created, nil
 }
@@ -343,20 +403,19 @@ func (h *Handler) writeMachineUpgradeDaemonError(w http.ResponseWriter, err erro
 		writeError(w, http.StatusNotFound, "machine upgrade not found")
 	case errors.Is(err, errMachineUpgradeAcceptanceConflict), errors.Is(err, errMachineUpgradeAttestationRejected):
 		writeCodedError(w, http.StatusConflict, "machine_upgrade_attestation_rejected", err.Error())
+	case errors.Is(err, errStaleComputerGeneration):
+		writeCodedError(w, http.StatusConflict, "stale_computer_generation", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "machine upgrade operation failed: "+err.Error())
 	}
 }
 
 func (h *Handler) machineUpgradeRuntimeIDs(ctx context.Context, rt db.AgentRuntime) ([]string, error) {
-	daemonID := runtimeDaemonKey(rt)
-	if daemonID == "" {
+	computerID := runtimeDaemonKey(rt)
+	if computerID == "" {
 		return nil, errMachineUpgradeAttestationRejected
 	}
-	rows, err := h.DB.Query(ctx, `
-		SELECT id FROM agent_runtime
-		WHERE workspace_id = $1 AND daemon_id = $2
-		ORDER BY id ASC`, rt.WorkspaceID, daemonID)
+	rows, err := h.DB.Query(ctx, machineUpgradeComputerRuntimeSelect, computerID)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +459,7 @@ func (h *Handler) attestMachineUpgradeRegistration(r *http.Request, rt db.AgentR
 		return
 	}
 	if updated != nil {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 }
 
@@ -435,7 +494,7 @@ func (h *Handler) attestLegacyMachineUpgradeRegistration(r *http.Request, rt db.
 		slog.Warn("legacy machine upgrade registration attestation failed", "error", err, "runtime_id", uuidToString(rt.ID), "upgrade_id", op.ID)
 	}
 	if updated != nil {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 }
 
@@ -456,14 +515,14 @@ func (h *Handler) attestMachineUpgradeRollbackRegistration(r *http.Request, rt d
 		slog.Warn("machine upgrade rollback registration attestation failed", "error", err, "runtime_id", uuidToString(rt.ID), "upgrade_id", op.ID)
 	}
 	if updated != nil {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 }
 
-// requireMachineUpgradeManager returns 404 for an unknown daemon and 403 for
-// a workspace member who is neither the computer owner nor a workspace
-// owner/admin. The canonical endpoint receives daemon_id directly.
-func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Request, daemonID string) (db.AgentRuntime, db.Member, bool) {
+// requireMachineUpgradeViewer resolves a Computer through the current
+// Workspace. Every Workspace member may observe the one machine-wide upgrade;
+// visibility does not grant lifecycle mutation authority.
+func (h *Handler) requireMachineUpgradeViewer(w http.ResponseWriter, r *http.Request, daemonID string) (db.AgentRuntime, db.Member, bool) {
 	if daemonID == "" {
 		writeError(w, http.StatusBadRequest, "daemon_id is required")
 		return db.AgentRuntime{}, db.Member{}, false
@@ -496,17 +555,61 @@ func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return db.AgentRuntime{}, db.Member{}, false
 	}
+	return rt, member, true
+}
+
+// requireMachineUpgradeManager adds the Computer-owner mutation fence to the
+// Workspace visibility check.
+func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Request, daemonID string) (db.AgentRuntime, db.Member, bool) {
+	rt, member, ok := h.requireMachineUpgradeViewer(w, r, daemonID)
+	if !ok {
+		return db.AgentRuntime{}, db.Member{}, false
+	}
 	if !canManageMachineUpgrade(member, rt) {
-		writeError(w, http.StatusForbidden, "only the computer owner or a workspace owner/admin can update this daemon")
+		writeError(w, http.StatusForbidden, "only the Computer owner can manage this upgrade")
 		return db.AgentRuntime{}, db.Member{}, false
 	}
 	return rt, member, true
 }
 
-func (h *Handler) publishMachineUpgradeProjection(r *http.Request, rt db.AgentRuntime) {
-	h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
-		"runtime": h.runtimeToResponse(r.Context(), rt),
-	})
+// publishComputerUpgradeProjection invalidates the Computer projection in
+// every active Workspace binding. Upgrade lifecycle does not belong to a
+// Runtime, and the Workspace that initiated the mutation has no special role.
+func (h *Handler) publishComputerUpgradeProjection(r *http.Request, computerID string) {
+	computerID = strings.TrimSpace(computerID)
+	if computerID == "" {
+		return
+	}
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT workspace_id
+		FROM computer_workspace_bindings
+		WHERE daemon_id = $1 AND active = TRUE AND revoked_at IS NULL
+		ORDER BY workspace_id`, computerID)
+	if err != nil {
+		slog.Warn("machine upgrade projection scope failed", "error", err, "computer_id", computerID)
+		return
+	}
+	workspaceIDs := make([]pgtype.UUID, 0)
+	for rows.Next() {
+		var workspaceID pgtype.UUID
+		if err := rows.Scan(&workspaceID); err != nil {
+			rows.Close()
+			slog.Warn("machine upgrade projection scan failed", "error", err, "computer_id", computerID)
+			return
+		}
+		workspaceIDs = append(workspaceIDs, workspaceID)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		slog.Warn("machine upgrade projection scope failed", "error", rowsErr, "computer_id", computerID)
+		return
+	}
+	for _, workspaceID := range workspaceIDs {
+		h.publish(protocol.EventComputerUpdated, uuidToString(workspaceID), "system", "", map[string]any{
+			"computer_id": computerID,
+		})
+	}
 }
 
 func runtimeUpdateFromMachineUpgrade(op *MachineUpgrade, runtimeID string) *UpdateRequest {

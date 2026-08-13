@@ -146,3 +146,64 @@ func TestCloneEnvDispatchAgentSurfacesCopyError(t *testing.T) {
 		t.Fatalf("channel member must not be replaced after skills copy failure")
 	}
 }
+
+func validMixedProvisionPlan() MixedDispatchPlan {
+	return MixedDispatchPlan{
+		OnlineTrainableAgents:  []string{"source-online"},
+		OfflineTrainableAgents: []string{"source-offline"},
+		TargetPolicy:           "target-a",
+		Tokenizer:              "tokenizer-a",
+		RunAgents: []MixedDispatchRunAgent{
+			{SourceAgentID: "source-online", TrainingMode: "online_rl"},
+			{SourceAgentID: "source-offline", TrainingMode: "offline_rl"},
+			{SourceAgentID: "source-none", TrainingMode: "none"},
+		},
+	}
+}
+
+func validMixedProvisionedAgents() []MixedDispatchRunAgent {
+	return []MixedDispatchRunAgent{
+		{SourceAgentID: "source-online", ExecutionAgentID: "derived-online", RuntimeID: "runtime-online", PiSessionID: "pi-online", AReALSessionID: "areal-online", TrainingMode: "online_rl"},
+		{SourceAgentID: "source-offline", ExecutionAgentID: "derived-offline", RuntimeID: "runtime-offline", PiSessionID: "pi-offline", TrainingMode: "offline_rl"},
+		{SourceAgentID: "source-none", ExecutionAgentID: "derived-none", RuntimeID: "runtime-none", PiSessionID: "pi-none", TrainingMode: "none"},
+	}
+}
+
+func TestValidateMixedDispatchProvisionedAgentsAcceptsReadyFreshDerivedBindings(t *testing.T) {
+	if err := ValidateMixedDispatchProvisionedAgents(validMixedProvisionPlan(), validMixedProvisionedAgents()); err != nil {
+		t.Fatalf("valid provisioned run agents rejected: %v", err)
+	}
+}
+
+func TestValidateMixedDispatchProvisionedAgentsRejectsIncompletePreSendState(t *testing.T) {
+	cases := map[string]func([]MixedDispatchRunAgent){
+		"missing derived binding":             func(agents []MixedDispatchRunAgent) { agents[0].ExecutionAgentID = "" },
+		"source reused as execution identity": func(agents []MixedDispatchRunAgent) { agents[0].ExecutionAgentID = agents[0].SourceAgentID },
+		"runtime not ready":                   func(agents []MixedDispatchRunAgent) { agents[0].RuntimeID = "" },
+		"missing Pi session":                  func(agents []MixedDispatchRunAgent) { agents[0].PiSessionID = "" },
+		"Pi session reused":                   func(agents []MixedDispatchRunAgent) { agents[1].PiSessionID = agents[0].PiSessionID },
+		"online provider session missing":     func(agents []MixedDispatchRunAgent) { agents[0].AReALSessionID = "" },
+		"unexpected none provider session":    func(agents []MixedDispatchRunAgent) { agents[2].AReALSessionID = "unexpected" },
+		"classification drift":                func(agents []MixedDispatchRunAgent) { agents[1].TrainingMode = "none" },
+		"source binding drift":                func(agents []MixedDispatchRunAgent) { agents[1].SourceAgentID = "other-source" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			agents := validMixedProvisionedAgents()
+			mutate(agents)
+			if err := ValidateMixedDispatchProvisionedAgents(validMixedProvisionPlan(), agents); err == nil {
+				t.Fatal("invalid pre-send state unexpectedly accepted")
+			}
+		})
+	}
+}
+
+func TestValidateMixedDispatchProvisionedAgentsRejectsUnsupportedTrainingMode(t *testing.T) {
+	plan := validMixedProvisionPlan()
+	plan.RunAgents[2].TrainingMode = "legacy"
+	agents := validMixedProvisionedAgents()
+	agents[2].TrainingMode = "legacy"
+	if err := ValidateMixedDispatchProvisionedAgents(plan, agents); err == nil || !strings.Contains(err.Error(), "training mode") {
+		t.Fatalf("unsupported training mode error = %v, want field-specific rejection", err)
+	}
+}

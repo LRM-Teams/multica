@@ -21,6 +21,11 @@ import (
 // server work behind an active conversation.
 var ErrPiRPCTurnBusy = errors.New("pi RPC turn busy")
 
+// ErrPiRPCRunIdentityRequiresFreshSession means an existing resident cannot
+// adopt the requested run identity without violating the one-session-per-run
+// boundary. The daemon may replace the backend only while its pool slot is idle.
+var ErrPiRPCRunIdentityRequiresFreshSession = errors.New("pi RPC run identity requires a fresh session")
+
 // PiRPCBackend is the daemon-owned lifecycle surface for chat sessions. Close
 // is required after a failed turn, identity mismatch, idle eviction, or daemon
 // shutdown so no stale native context is retained.
@@ -30,6 +35,9 @@ type PiRPCBackend interface {
 	ResidentMessagePreparation
 	ResidentReminderInputReceiver
 	ResidentPendingNoticeInput
+	BindRunIdentity(PiRunIdentity) (PiRunBinding, error)
+	PrepareRun(context.Context, PiRunIdentity) (PiRunBinding, error)
+	SettleRunTurn(PiRunIdentity) error
 	Close()
 	// Compact explicitly compacts the Pi session context with custom instructions.
 	// Returns the compaction summary and before/after token counts.
@@ -171,9 +179,15 @@ func (b *piRPCBackend) sendControlCommand(ctx context.Context, p *piRPCProcess, 
 type piRPCBackend struct {
 	cfg Config
 
-	mu      sync.Mutex
-	process *piRPCProcess
-	running atomic.Bool
+	mu             sync.Mutex
+	process        *piRPCProcess
+	runBinding     *PiRunBinding
+	boundarySerial uint64
+	captureLogPath string
+	captureExtPath string
+	captureTurns   int64
+	captureCalls   int64
+	running        atomic.Bool
 	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
 	// field of the same name for the full explanation.
 	forceKilled               atomic.Bool
@@ -194,11 +208,19 @@ type piRPCProcess struct {
 }
 
 type piRPCIdleInput struct {
-	done     chan piRPCCompletion
-	turnDone chan error
-	messages chan Message
-	stream   *piRPCTurn
+	done             chan piRPCCompletion
+	turnDone         chan error
+	messages         chan Message
+	captures         chan ResidentTurnCapture
+	stream           *piRPCTurn
+	captureOffset    int64
+	captureBinding   PiRunBinding
+	captureTurn      int64
+	captureFirstCall int64
 }
+
+// Capture extension generation, typed JSONL events, redaction, and trusted
+// ResidentTurnCapture assembly live in pi_provider_capture.go.
 
 type piRPCTurn struct {
 	response chan piRPCResponse
@@ -263,6 +285,89 @@ func (b *piRPCBackend) Close() {
 	if b.process != nil {
 		b.disposeLocked(b.process)
 	}
+}
+
+func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, error) {
+	if strings.TrimSpace(identity.RunID) == "" || strings.TrimSpace(identity.RunAgentID) == "" {
+		return PiRunBinding{}, errors.New("Pi run identity requires run_id and run_agent_id")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.runBinding != nil {
+		if b.runBinding.PiRunIdentity != identity {
+			return PiRunBinding{}, fmt.Errorf("%w: Pi backend is already bound to another run agent", ErrPiRPCRunIdentityRequiresFreshSession)
+		}
+		return *b.runBinding, nil
+	}
+	if b.process != nil {
+		return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process starts", ErrPiRPCRunIdentityRequiresFreshSession)
+	}
+	sessionPath, err := newPiSessionPath()
+	if err != nil {
+		return PiRunBinding{}, fmt.Errorf("allocate Pi run session: %w", err)
+	}
+	captureExtPath, captureLogPath, err := newPiCaptureExtension()
+	if err != nil {
+		return PiRunBinding{}, err
+	}
+	b.boundarySerial++
+	binding := PiRunBinding{
+		PiRunIdentity:   identity,
+		SessionID:       sessionPath,
+		CaptureBoundary: fmt.Sprintf("%s:%d", sessionPath, b.boundarySerial),
+	}
+	b.cfg.ResidentOptions.ResumeSessionID = sessionPath
+	b.runBinding = &binding
+	b.captureExtPath = captureExtPath
+	b.captureLogPath = captureLogPath
+	b.captureTurns = 0
+	b.captureCalls = 0
+	return binding, nil
+}
+
+// PrepareRun binds a fresh run-specific native session and starts the Pi RPC
+// process without submitting a prompt. A successful return proves executable,
+// session-file, environment, and process startup readiness before any canonical
+// conversation input can be persisted or delivered.
+func (b *piRPCBackend) PrepareRun(ctx context.Context, identity PiRunIdentity) (PiRunBinding, error) {
+	binding, err := b.BindRunIdentity(identity)
+	if err != nil {
+		return PiRunBinding{}, err
+	}
+	if _, err := b.ensureProcess(b.cfg.ResidentOptions); err != nil {
+		b.mu.Lock()
+		if b.process == nil && b.runBinding != nil && b.runBinding.PiRunIdentity == identity {
+			b.runBinding = nil
+			b.cfg.ResidentOptions.ResumeSessionID = ""
+			b.removeCaptureArtifactsLocked()
+		}
+		b.mu.Unlock()
+		_ = os.Remove(binding.SessionID)
+		return PiRunBinding{}, fmt.Errorf("prepare Pi run process: %w", err)
+	}
+	alive, known := b.runtimeAlive()
+	if known && !alive {
+		b.Close()
+		_ = os.Remove(binding.SessionID)
+		return PiRunBinding{}, errors.New("prepare Pi run process: native process exited during startup")
+	}
+	return binding, nil
+}
+
+// SettleRunTurn closes only the current capture boundary. The resident Pi
+// process and native session stay alive for later message batches in this run.
+func (b *piRPCBackend) SettleRunTurn(identity PiRunIdentity) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.runBinding == nil || b.runBinding.PiRunIdentity != identity {
+		return errors.New("Pi turn settlement identity mismatch")
+	}
+	if b.running.Load() {
+		return ErrPiRPCTurnBusy
+	}
+	b.boundarySerial++
+	b.runBinding.CaptureBoundary = fmt.Sprintf("%s:%d", b.runBinding.SessionID, b.boundarySerial)
+	return nil
 }
 
 // ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Same
@@ -355,10 +460,32 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
+	b.mu.Lock()
+	binding := PiRunBinding{}
+	if b.runBinding != nil {
+		binding = *b.runBinding
+	}
+	captureTurn := b.captureTurns + 1
+	captureFirstCall := b.captureCalls + 1
+	captureOffset := int64(0)
+	if b.captureLogPath != "" {
+		if info, statErr := os.Stat(b.captureLogPath); statErr != nil {
+			b.mu.Unlock()
+			return ResidentMessageAcceptance{}, fmt.Errorf("Pi capture log stat: %w", statErr)
+		} else {
+			captureOffset = info.Size()
+		}
+	}
+	b.mu.Unlock()
 	idleInput := &piRPCIdleInput{
-		done:     make(chan piRPCCompletion, 1),
-		turnDone: make(chan error, 1),
-		messages: make(chan Message, 256),
+		done:             make(chan piRPCCompletion, 1),
+		turnDone:         make(chan error, 1),
+		messages:         make(chan Message, 256),
+		captures:         make(chan ResidentTurnCapture, 1),
+		captureOffset:    captureOffset,
+		captureBinding:   binding,
+		captureTurn:      captureTurn,
+		captureFirstCall: captureFirstCall,
 	}
 	idleInput.stream = &piRPCTurn{
 		done: idleInput.done,
@@ -399,7 +526,7 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 	// Context Boundary; a concurrent canonical turn must not overlap the Pi turn.
 	releaseAdmission = false
 	go b.finishIdleMessageInput(p, idleInput)
-	return ResidentMessageAcceptance{Done: idleInput.turnDone, Messages: idleInput.messages}, nil
+	return ResidentMessageAcceptance{Done: idleInput.turnDone, Messages: idleInput.messages, Capture: idleInput.captures}, nil
 }
 
 // AcceptPendingNotice queues a content-free steering input while Pi is busy.
@@ -464,6 +591,38 @@ func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCI
 	}
 	p.stateMu.Unlock()
 	turnErr := piRPCCompletionError(completion)
+	var capture *ResidentTurnCapture
+	if idleInput.captureBinding.RunID != "" {
+		identity := residentTurnCaptureIdentity(idleInput.captureBinding, idleInput.captureTurn)
+		capture = &identity
+	}
+	if turnErr == nil && idleInput.captureBinding.RunID != "" {
+		b.mu.Lock()
+		captureLogPath := b.captureLogPath
+		b.mu.Unlock()
+		if captureLogPath != "" {
+			records, captureErr := readPiCaptureRecords(captureLogPath, idleInput.captureOffset)
+			if captureErr == nil {
+				builtCapture, buildErr := buildResidentTurnCapture(idleInput.captureBinding, idleInput.captureTurn, idleInput.captureFirstCall, records)
+				if buildErr == nil {
+					b.mu.Lock()
+					b.captureTurns = idleInput.captureTurn
+					b.captureCalls += int64(len(builtCapture.ProviderCalls))
+					b.mu.Unlock()
+					captureCopy := builtCapture
+					capture = &captureCopy
+				} else {
+					b.cfg.Logger.Warn("Pi resident capture rejected", "error", buildErr)
+				}
+			} else {
+				b.cfg.Logger.Warn("Pi resident capture unavailable", "error", captureErr)
+			}
+		}
+	}
+	if capture != nil {
+		idleInput.captures <- *capture
+	}
+	close(idleInput.captures)
 	if turnErr != nil {
 		b.dispose(p)
 	}
@@ -623,6 +782,7 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	if b.process != nil {
 		return b.process, nil
 	}
+	opts.piCaptureExtension = b.captureExtPath
 	execName := b.cfg.ExecutablePath
 	if execName == "" {
 		execName = "pi"
@@ -999,6 +1159,18 @@ func (b *piRPCBackend) disposeLocked(p *piRPCProcess) {
 	if p.mcpConfigPath != "" {
 		_ = os.Remove(p.mcpConfigPath)
 	}
+	b.removeCaptureArtifactsLocked()
+}
+
+func (b *piRPCBackend) removeCaptureArtifactsLocked() {
+	if b.captureExtPath != "" {
+		_ = os.Remove(b.captureExtPath)
+		b.captureExtPath = ""
+	}
+	if b.captureLogPath != "" {
+		_ = os.Remove(b.captureLogPath)
+		b.captureLogPath = ""
+	}
 }
 
 func trySendPiRPCResponse(ch chan<- piRPCResponse, response piRPCResponse) {
@@ -1043,6 +1215,9 @@ func buildPiRPCArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) [
 				args = append(args, "--extension", p)
 			}
 		}
+	}
+	if opts.piCaptureExtension != "" {
+		args = append(args, "--extension", opts.piCaptureExtension)
 	}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)

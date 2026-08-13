@@ -1,0 +1,304 @@
+package computer
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/multica-ai/multica/server/internal/cli"
+)
+
+type UpgradeRoute string
+
+const (
+	UpgradeRouteLive    UpgradeRoute = "live"
+	UpgradeRouteOffline UpgradeRoute = "offline"
+)
+
+// UpgradeOptions is the complete caller input for one explicit Computer
+// upgrade. An empty target follows the package source fixed by the active
+// production/test environment.
+type UpgradeOptions struct {
+	TargetVersion   string
+	RequestID       string
+	DownloadTimeout time.Duration
+}
+
+// UpgradeResult distinguishes a live canonical operation from an offline
+// installation. Offline Active state is progress for the next start, never
+// proof that a successor is running or converged.
+type UpgradeResult struct {
+	Route           UpgradeRoute
+	RequestedTarget string
+	ResolvedTarget  string
+	Operation       map[string]any
+	ActiveVersion   string
+	PreviousVersion string
+	Generation      uint64
+	BinaryPath      string
+	AlreadyCurrent  bool
+}
+
+// Upgrade implements Raft-style service-first routing behind the Computer
+// lifecycle seam. A live resident is the sole mutation owner. Only a proven
+// absent resident permits a locked offline install; an unreachable live owner
+// fails closed without touching VersionStore Active.
+func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (UpgradeResult, error) {
+	requestedTarget, err := normalizeUpgradeTarget(options.TargetVersion)
+	if err != nil {
+		return UpgradeResult{}, err
+	}
+	requestID := strings.TrimSpace(options.RequestID)
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+
+	if health := l.upgradeHealth(ctx); Alive(health) {
+		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget)
+	}
+	if err := rejectLivePIDWithoutControl(l.view().pidPath); err != nil {
+		return UpgradeResult{}, err
+	}
+
+	store, err := cli.OpenVersionStore("")
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("open version store: %w", err)
+	}
+	downloadTimeout := options.DownloadTimeout
+	if downloadTimeout <= 0 {
+		downloadTimeout = cli.DefaultUpdateDownloadTimeout
+	}
+
+	var result UpgradeResult
+	var ownerBecameLive bool
+	err = store.WithMachineMutationLock(ctx, func() error {
+		startLease, err := acquireStartLease(ctx, RootDir(""))
+		if err != nil {
+			return fmt.Errorf("serialize Computer start with offline upgrade: %w", err)
+		}
+		defer startLease.Close()
+
+		if health := l.upgradeHealth(ctx); Alive(health) {
+			ownerBecameLive = true
+			return nil
+		}
+		if err := rejectLivePIDWithoutControl(l.view().pidPath); err != nil {
+			return err
+		}
+
+		leaseCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		residentLease, err := AcquireResidentLease(leaseCtx, RootDir(""))
+		cancel()
+		if err != nil {
+			return fmt.Errorf("upgrade_service_unreachable: Computer resident ownership is held but its local control surface is unavailable; refusing offline activation")
+		}
+		defer residentLease.Close()
+
+		result, err = installOfflineUpgrade(ctx, store, requestID, requestedTarget, downloadTimeout)
+		return err
+	})
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("offline Computer upgrade: %w", err)
+	}
+	if ownerBecameLive {
+		health := l.upgradeHealth(ctx)
+		if !Alive(health) {
+			return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: Computer ownership changed while routing the upgrade; retry")
+		}
+		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget)
+	}
+	return result, nil
+}
+
+func normalizeUpgradeTarget(raw string) (string, error) {
+	target := strings.TrimSpace(raw)
+	if target == "" || strings.EqualFold(target, "latest") {
+		return "latest", nil
+	}
+	if !cli.IsReleaseVersion(target) {
+		return "", fmt.Errorf("invalid --target-version %q: expected vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N", raw)
+	}
+	return cli.NormalizeReleaseTag(target), nil
+}
+
+func (l *Lifecycle) upgradeHealth(ctx context.Context) map[string]any {
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	v := l.view()
+	return v.probe(probeCtx, v.health)
+}
+
+func rejectLivePIDWithoutControl(path string) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("upgrade_service_unreachable: inspect Computer PID state: %w", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("upgrade_service_unreachable: Computer PID state is invalid; refusing offline activation")
+	}
+	alive, known := processAlive(pid)
+	if !known {
+		return fmt.Errorf("upgrade_service_unreachable: Computer PID %d liveness is unknown; refusing offline activation", pid)
+	}
+	if alive {
+		return fmt.Errorf("upgrade_service_unreachable: Computer PID %d is alive but its local control surface is unavailable; refusing offline activation", pid)
+	}
+	return nil
+}
+
+func (l *Lifecycle) requestLiveUpgrade(
+	ctx context.Context,
+	health map[string]any,
+	requestID, targetVersion string,
+) (UpgradeResult, error) {
+	daemonID, _ := health["daemon_id"].(string)
+	daemonID = strings.TrimSpace(daemonID)
+	if daemonID == "" {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live Computer did not prove its machine identity")
+	}
+	controlToken, err := ReadControlToken("")
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: read owner control credential: %w", err)
+	}
+	body, err := json.Marshal(map[string]string{
+		"request_id":     requestID,
+		"target_version": targetVersion,
+	})
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: encode owner request: %w", err)
+	}
+	port := l.view().health
+	url := fmt.Sprintf("http://127.0.0.1:%d/machine-upgrades", port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: build owner request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Multica-Control-Token", controlToken)
+	client := &http.Client{Timeout: 30 * time.Second}
+	response, err := client.Do(req)
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: request upgrade through live owner: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		if response.StatusCode == http.StatusConflict {
+			return UpgradeResult{}, fmt.Errorf("machine upgrade request rejected: %s", strings.TrimSpace(string(message)))
+		}
+		return UpgradeResult{}, fmt.Errorf(
+			"upgrade_service_unreachable: local control returned %s: %s",
+			response.Status,
+			strings.TrimSpace(string(message)),
+		)
+	}
+	var operation map[string]any
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&operation); err != nil {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: decode live owner response: %w", err)
+	}
+	operationID, _ := operation["id"].(string)
+	if strings.TrimSpace(operationID) == "" {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live owner response is missing operation id")
+	}
+	phase, _ := operation["phase"].(string)
+	if strings.TrimSpace(phase) == "" {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live owner response is missing operation phase")
+	}
+	resolvedTarget, _ := operation["resolved_target"].(string)
+	if strings.TrimSpace(resolvedTarget) == "" {
+		resolvedTarget, _ = operation["requested_target"].(string)
+	}
+	if strings.TrimSpace(resolvedTarget) == "" {
+		resolvedTarget = targetVersion
+	}
+	return UpgradeResult{
+		Route:           UpgradeRouteLive,
+		RequestedTarget: targetVersion,
+		ResolvedTarget:  resolvedTarget,
+		Operation:       operation,
+	}, nil
+}
+
+func installOfflineUpgrade(
+	ctx context.Context,
+	store *cli.VersionStore,
+	requestID, requestedTarget string,
+	downloadTimeout time.Duration,
+) (UpgradeResult, error) {
+	state, err := store.ReadActivationState()
+	if err != nil {
+		return UpgradeResult{}, err
+	}
+	if state.Generation == 0 && cli.IsReleaseVersion(cli.ClientVersion) {
+		state, err = store.BootstrapActiveFromExecutable(ctx, cli.ClientVersion)
+		if err != nil {
+			return UpgradeResult{}, fmt.Errorf("bootstrap current Active release: %w", err)
+		}
+	}
+
+	targetVersion := requestedTarget
+	if targetVersion == "latest" {
+		cfg, err := cli.LoadCLIConfigForProfile("")
+		if err != nil {
+			return UpgradeResult{}, fmt.Errorf("load service environment: %w", err)
+		}
+		channel, err := cli.ResolveReleaseChannel(cfg)
+		if err != nil {
+			return UpgradeResult{}, fmt.Errorf("resolve package source: %w", err)
+		}
+		release, err := cli.FetchReleaseForChannelWithOverride(channel, "")
+		if err != nil {
+			return UpgradeResult{}, fmt.Errorf("resolve upgrade target: %w", err)
+		}
+		targetVersion = cli.NormalizeReleaseTag(release.TagName)
+	}
+
+	if state.ActiveVersion == targetVersion {
+		current, path, err := store.OfflineActivateStaged(ctx, targetVersion, "computer-upgrade-"+requestID)
+		if err != nil {
+			return UpgradeResult{}, fmt.Errorf("verify current Active release: %w", err)
+		}
+		return offlineUpgradeResult(requestedTarget, targetVersion, current, path, true), nil
+	}
+
+	staged, err := cli.DownloadAndStageRelease(ctx, store, targetVersion, downloadTimeout, "")
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("stage release: %w", err)
+	}
+	active, path, err := store.OfflineActivateStaged(ctx, staged.Staged.Version, "computer-upgrade-"+requestID)
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("activate staged release: %w", err)
+	}
+	return offlineUpgradeResult(requestedTarget, targetVersion, active, path, false), nil
+}
+
+func offlineUpgradeResult(
+	requestedTarget, resolvedTarget string,
+	state cli.ActivationState,
+	path string,
+	alreadyCurrent bool,
+) UpgradeResult {
+	return UpgradeResult{
+		Route:           UpgradeRouteOffline,
+		RequestedTarget: requestedTarget,
+		ResolvedTarget:  resolvedTarget,
+		ActiveVersion:   state.ActiveVersion,
+		PreviousVersion: state.PreviousVersion,
+		Generation:      state.Generation,
+		BinaryPath:      path,
+		AlreadyCurrent:  alreadyCurrent,
+	}
+}

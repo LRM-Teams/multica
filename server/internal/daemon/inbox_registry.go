@@ -4,11 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
-
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var errInboxRegistryClosed = errors.New("Inbox registry is closed")
@@ -32,8 +29,9 @@ type inboxRegistryDependencies struct {
 }
 
 // InboxRegistry owns every in-memory Message coordinator for one immutable
-// Workspace Runner scope. The Attachment registry remains the authority for
-// whether an Inbox may be opened and which Runtime it belongs to.
+// Workspace Runner scope. Production lifecycle creation is owned by an
+// APM-accepted server start; Attachment resolution remains available to
+// explicit legacy repair and test seams.
 type InboxRegistry struct {
 	workspaceID string
 	attachments inboxAttachmentResolver
@@ -78,7 +76,6 @@ func (registry *InboxRegistry) Ensure(agentID string) (bool, error) {
 	if !registry.ownsRuntime(attachment.RuntimeID) {
 		return false, fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, registry.workspaceID)
 	}
-
 	registry.mu.Lock()
 	if registry.closed {
 		registry.mu.Unlock()
@@ -89,10 +86,7 @@ func (registry *InboxRegistry) Ensure(agentID string) (bool, error) {
 		registry.mu.Unlock()
 		return false, nil
 	}
-	coordinator, err := registry.open(
-		InboxKey{WorkspaceID: registry.workspaceID, AgentID: agentID},
-		attachment.RuntimeID,
-	)
+	coordinator, err := registry.open(InboxKey{WorkspaceID: registry.workspaceID, AgentID: agentID}, attachment.RuntimeID)
 	if err != nil {
 		registry.mu.Unlock()
 		return false, err
@@ -111,6 +105,43 @@ func (registry *InboxRegistry) Ensure(agentID string) (bool, error) {
 		previous.coordinator.Close()
 	}
 	registry.log("workspace Runner Inbox opened", agentID, attachment.RuntimeID, map[bool]string{true: "replaced", false: "created"}[exists])
+	return true, nil
+}
+
+// AcceptStart is the AgentProcessManager start seam. The server-owned
+// start command is current placement authority; replacing a stale local Inbox
+// here keeps setup, reconnect, and runtime move in lifecycle rather than in
+// Message delivery.
+func (registry *InboxRegistry) AcceptStart(agentID, runtimeID string) (bool, error) {
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	if registry == nil || agentID == "" || runtimeID == "" {
+		return false, errors.New("Inbox registry, Agent identity, and Runtime identity are required")
+	}
+	if !registry.ownsRuntime(runtimeID) {
+		return false, fmt.Errorf("Runtime %q is not owned by Workspace %q", runtimeID, registry.workspaceID)
+	}
+	registry.mu.Lock()
+	if registry.closed {
+		registry.mu.Unlock()
+		return false, errInboxRegistryClosed
+	}
+	previous, exists := registry.inboxes[agentID]
+	if exists && previous.runtimeID == runtimeID && previous.coordinator != nil {
+		registry.mu.Unlock()
+		return false, nil
+	}
+	coordinator, err := registry.open(InboxKey{WorkspaceID: registry.workspaceID, AgentID: agentID}, runtimeID)
+	if err != nil {
+		registry.mu.Unlock()
+		return false, err
+	}
+	registry.inboxes[agentID] = inboxRegistryEntry{runtimeID: runtimeID, coordinator: coordinator}
+	registry.mu.Unlock()
+	if exists && previous.coordinator != nil {
+		previous.coordinator.Close()
+	}
+	registry.log("workspace Runner Inbox opened", agentID, runtimeID, map[bool]string{true: "lifecycle_replaced", false: "lifecycle_started"}[exists])
 	return true, nil
 }
 
@@ -146,34 +177,6 @@ func (registry *InboxRegistry) Remove(agentID, runtimeID string) {
 	if ok && entry.coordinator != nil {
 		entry.coordinator.Close()
 		registry.log("workspace Runner Inbox closed", agentID, entry.runtimeID, "removed")
-	}
-}
-
-// BeginRecovery snapshots only this Workspace Runner's Inboxes. A reconnect
-// therefore cannot fan recovery out to another Workspace.
-func (registry *InboxRegistry) BeginRecovery(send func(protocol.AgentRecoveryRequest) error) {
-	if registry == nil || send == nil {
-		return
-	}
-	registry.mu.RLock()
-	agentIDs := make([]string, 0, len(registry.inboxes))
-	coordinators := make(map[string]*MessageCoordinator, len(registry.inboxes))
-	for agentID, entry := range registry.inboxes {
-		if entry.coordinator != nil {
-			agentIDs = append(agentIDs, agentID)
-			coordinators[agentID] = entry.coordinator
-		}
-	}
-	registry.mu.RUnlock()
-	sort.Strings(agentIDs)
-	for _, agentID := range agentIDs {
-		request := coordinators[agentID].BeginRecovery(agentID, 100)
-		if registry.logger != nil {
-			registry.logger.Info("Agent Message recovery started", "workspace_id", registry.workspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_reconnect")
-		}
-		if err := send(request); err != nil && registry.logger != nil {
-			registry.logger.Warn("workspace Runner Inbox recovery request failed", "error", err, "workspace_id", registry.workspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_connection_write_failed")
-		}
 	}
 }
 

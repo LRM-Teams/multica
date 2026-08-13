@@ -135,11 +135,11 @@ func (n *RelayNotifier) NotifyReminderProjection(runtimeID string, payload proto
 }
 
 func (n *RelayNotifier) NotifyAgentAttachmentRemoved(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentDetachPayload) {
-	n.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentDetach, payload, payload.CorrelationID)
+	n.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentDetach, payload, "attachment:"+strconv.FormatInt(payload.LifecycleSeq, 10))
 }
 
 func (n *RelayNotifier) NotifyAgentAttachmentAdded(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentAttachPayload) {
-	n.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentAttach, payload, payload.CorrelationID)
+	n.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentAttach, payload, "attachment:"+strconv.FormatInt(payload.LifecycleSeq, 10))
 }
 
 func (n *RelayNotifier) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType string, payload any, eventID string) {

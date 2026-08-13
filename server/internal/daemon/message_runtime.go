@@ -2,11 +2,17 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -35,6 +41,9 @@ func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*Messag
 	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		return d.canonicalRuntimes.handoffBusyNotice(ctx, key.AgentID, runtimeID, snapshot, commitIfCurrent)
 	}, 0, 0)
+	coordinator.ConfigureQueueActivity(func(messages []protocol.AgentMessageProjection, delta int) {
+		d.reportMixedRunMessageQueueActivity(key.AgentID, runtimeID, messages, delta)
+	})
 	return coordinator, nil
 }
 
@@ -83,18 +92,15 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	if !runtimeKnown || runtime.WorkspaceID != workspaceID {
 		return fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, workspaceID)
 	}
-	created, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID)
+	_, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID)
 	if err != nil {
 		return fmt.Errorf("repair Agent Message coordinator: %w", err)
-	}
-	if created {
-		runner.beginMessageRecovery(agentID)
 	}
 	return nil
 }
 
-// restoreResidentAgents rebuilds Inbox ownership for durable Attachments after
-// a Computer process restart. Provider launches are never reconstructed here;
+// restoreResidentAgents rebuilds durable Agent roots after a Computer process
+// restart. Attachment ownership alone does not create a Message coordinator;
 // the Workspace Runner receives an explicit managed start when work exists.
 func (d *Daemon) restoreResidentAgents() error {
 	if d == nil {
@@ -114,9 +120,6 @@ func (d *Daemon) restoreResidentAgents() error {
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 			return fmt.Errorf("restore Agent root %q: %w", attachment.AgentID, err)
 		}
-		if _, err := d.ensureIdleMessageCoordinator(attachment.WorkspaceID, attachment.AgentID, attachment.RuntimeID); err != nil {
-			return fmt.Errorf("restore Agent Message coordinator %q: %w", attachment.AgentID, err)
-		}
 		if _, err := d.ensureWorkspaceRunner(attachment.WorkspaceID); err != nil {
 			return fmt.Errorf("restore Agent Workspace Runner %q: %w", attachment.AgentID, err)
 		}
@@ -124,7 +127,25 @@ func (d *Daemon) restoreResidentAgents() error {
 	return nil
 }
 
+func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
+	if len(messages) == 0 || messages[0].RunID == "" || messages[0].RunAgentID == "" {
+		return "", "", "", false
+	}
+	runID, runAgentID := messages[0].RunID, messages[0].RunAgentID
+	identities := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.RunID != runID || message.RunAgentID != runAgentID {
+			return "", "", "", false
+		}
+		identities = append(identities, message.ID+"\x00"+message.Target+"\x00"+strconv.FormatInt(message.Seq, 10))
+	}
+	sort.Strings(identities)
+	sum := sha256.Sum256([]byte(runID + "\x00" + runAgentID + "\x01" + strings.Join(identities, "\x01")))
+	return runID, runAgentID, hex.EncodeToString(sum[:]), true
+}
+
 func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
@@ -133,14 +154,32 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	if err != nil {
 		return err
 	}
+	var canonicalActionTurn canonicalActionTurnToken
+	if mixed {
+		canonicalActionTurn = d.allocateCanonicalActionTurnToken()
+	}
 	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
 		runner.observeMessageLifecycle(agentID, runtimeID)
 	}, func() {
+		if mixed {
+			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
+			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:start", protocol.MixedRunActivityActiveTurn, 1)
+			// Capture-batch accounting opens with the resident turn and closes
+			// only after the trusted upload (or capture-gap) is acknowledged.
+			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:start", protocol.MixedRunActivityUnfinishedCaptureBatch, 1)
+		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
 		runner.observeMessageAccepted(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
+		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
 		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
-	}, func(turnErr error, generation uint64) {
+	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
+		if mixed {
+			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
+			if d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, turnErr, capture) {
+				d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:end", protocol.MixedRunActivityUnfinishedCaptureBatch, -1)
+			}
+		}
 		outcome, reasonCode := "completed", ""
 		if turnErr != nil {
 			outcome, reasonCode = "failed", "provider_turn_failed"
@@ -161,6 +200,9 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		})
 	})
 	if err != nil {
+		if mixed {
+			d.endCanonicalActionTurn(agentID, canonicalActionTurn)
+		}
 		outcome := "rejected"
 		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 			outcome = "deferred"
@@ -175,6 +217,148 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		runner.observeMessageTurnCompletion(agentID, runtimeID, err)
 	}
 	return err
+}
+
+// reportResidentTurnCapture performs durable server-side accounting before the
+// daemon releases the matching unfinished-capture counter. A failed upload is
+// deliberately left unfinished; a successful server gap report is the only
+// alternate terminal outcome.
+func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, activityTurnID string, turnToken canonicalActionTurnToken, turnErr error, capture *agent.ResidentTurnCapture) bool {
+	drained := d.endCanonicalActionTurn(agentID, turnToken)
+	if d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
+		return false
+	}
+	credential, ok := readCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, time.Now())
+	if !ok {
+		if d.logger != nil {
+			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID)
+		}
+		return false
+	}
+	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	gapReason := "capture_unavailable"
+	if turnErr != nil {
+		gapReason = "provider_turn_failed"
+	}
+	if drained.Overflow {
+		gapReason = "canonical_action_overflow"
+	}
+	if drained.Ambiguous {
+		gapReason = "canonical_action_context_ambiguous"
+	}
+	if turnErr == nil && !drained.Overflow && !drained.Ambiguous && capture != nil && capture.Complete {
+		payload := protocol.TurnCaptureUpload{
+			AgentID: agentID, RuntimeID: runtimeID, CaptureBatchID: capture.CaptureBatchID,
+			Turn: protocol.TurnCaptureTurn{
+				TurnID: capture.TurnID, RunAgentID: capture.RunAgentID, PiSessionID: capture.PiSessionID,
+				CaptureBoundary: capture.CaptureBoundary, TurnOrdinal: capture.TurnOrdinal, Status: "settled",
+				StartedAt: capture.StartedAt.UTC().Format(time.RFC3339Nano), CompletedAt: capture.CompletedAt.UTC().Format(time.RFC3339Nano),
+			},
+			PayloadHash: capture.PayloadHash,
+		}
+		for _, call := range capture.ProviderCalls {
+			payload.ProviderCalls = append(payload.ProviderCalls, protocol.TurnCaptureProviderCall{
+				CallID: call.CallID, CallOrdinal: call.CallOrdinal, Provider: call.Provider, Model: call.Model, APIKind: call.APIKind,
+				RawProviderRequest: call.RawProviderRequest, FinalAssistantMessage: call.FinalAssistantMessage,
+				Status: call.Status, StopReason: call.StopReason, ResponseComplete: call.ResponseComplete,
+				RequestHash: call.RequestHash, ResponseHash: call.ResponseHash,
+				StartedAt: call.StartedAt.UTC().Format(time.RFC3339Nano), CompletedAt: call.CompletedAt.UTC().Format(time.RFC3339Nano),
+			})
+		}
+		payload.VisibleActions = resolvedTurnCaptureVisibleActions(capture.ProviderCalls, drained.Associations)
+		response, err := d.client.UploadTurnCapture(reportCtx, runID, payload, credential.Token)
+		if err == nil && response.Accepted {
+			return true
+		}
+		if d.logger != nil {
+			d.logger.Warn("mixed-run capture upload failed", "run_id", runID, "run_agent_id", runAgentID, "error", err)
+		}
+		gapReason = "capture_upload_rejected"
+	}
+	gapTurnID, turnOrdinal, boundary := mixedRunCaptureGapIdentity(runAgentID, activityTurnID, capture)
+	response, err := d.client.ReportTurnCaptureGap(reportCtx, runID, protocol.TurnCaptureGapReport{
+		AgentID: agentID, RuntimeID: runtimeID, RunAgentID: runAgentID, TurnID: gapTurnID, TurnOrdinal: turnOrdinal,
+		CaptureBoundary: boundary, Reason: gapReason, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}, credential.Token)
+	if err == nil && response.Accepted {
+		return true
+	}
+	if d.logger != nil {
+		d.logger.Warn("mixed-run capture gap report failed", "run_id", runID, "run_agent_id", runAgentID, "error", err)
+	}
+	return false
+}
+
+// resolvedTurnCaptureVisibleActions binds daemon-observed tool outcomes only
+// when Pi's typed final assistant blocks identify exactly one provider call.
+// Unresolved and ambiguous tool IDs fail closed.
+func resolvedTurnCaptureVisibleActions(calls []agent.ResidentProviderCallCapture, associations []CanonicalActionAssociation) []protocol.TurnCaptureVisibleAction {
+	toolProviders := make(map[string][]string)
+	for _, call := range calls {
+		var message struct {
+			Role   string `json:"role"`
+			Blocks []struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			} `json:"blocks"`
+		}
+		if json.Unmarshal(call.FinalAssistantMessage, &message) != nil || message.Role != "assistant" {
+			continue
+		}
+		seen := make(map[string]struct{})
+		for _, block := range message.Blocks {
+			if block.Type != "toolCall" || strings.TrimSpace(block.ID) == "" {
+				continue
+			}
+			if _, duplicate := seen[block.ID]; duplicate {
+				continue
+			}
+			seen[block.ID] = struct{}{}
+			toolProviders[block.ID] = append(toolProviders[block.ID], call.CallID)
+		}
+	}
+	visible := make([]protocol.TurnCaptureVisibleAction, 0, len(associations))
+	for index, association := range associations {
+		providerIDs := toolProviders[association.ToolCallID]
+		if len(providerIDs) != 1 || association.SucceededAt.IsZero() {
+			continue
+		}
+		visible = append(visible, protocol.TurnCaptureVisibleAction{
+			Kind: association.Kind, CanonicalID: association.CanonicalID,
+			ProducerCallID: providerIDs[0], ActionOrdinal: int64(index + 1),
+			SucceededAt: association.SucceededAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	return visible
+}
+
+func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agent.ResidentTurnCapture) (string, int64, string) {
+	if capture != nil {
+		return capture.TurnID, capture.TurnOrdinal, capture.CaptureBoundary
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(runAgentID+":capture-gap:"+activityTurnID)).String(), 0, ""
+}
+
+// reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.
+// User-facing Activity emission stays with the Workspace Runner; this reports
+// only the durable mixed-run transition deltas.
+func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, turnToken canonicalActionTurnToken, message agent.Message) {
+	if runID == "" || runAgentID == "" || turnID == "" || strings.TrimSpace(message.CallID) == "" {
+		return
+	}
+	switch message.Type {
+	case agent.MessageToolUse:
+		d.SetActiveProviderToolContext(ActiveProviderToolContext{
+			AgentID: agentID, CallID: message.CallID, ToolCallID: message.CallID, TurnToken: turnToken,
+		})
+		d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID,
+			"turn:"+turnID+":tool:"+message.CallID+":start", protocol.MixedRunActivityInflightTool, 1)
+	case agent.MessageToolResult:
+		d.clearActiveProviderToolContext(agentID, turnToken, message.CallID)
+		d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID,
+			"turn:"+turnID+":tool:"+message.CallID+":end", protocol.MixedRunActivityInflightTool, -1)
+	}
 }
 
 // prepareResidentMessageBatch hydrates the portable memory center once, then

@@ -478,11 +478,6 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to add agent to #general: "+err.Error())
 		return
 	}
-	if _, err := ensureAgentDurableStartIntent(r.Context(), tx, wsUUID, agent.ID, createParams.RuntimeID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create agent start intent: "+err.Error())
-		return
-	}
-
 	for idx, skillID := range allSkillIDs {
 		if err := qtx.AddAgentSkill(r.Context(), db.AddAgentSkillParams{
 			AgentID: agent.ID,

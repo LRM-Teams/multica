@@ -98,20 +98,21 @@ type messageDeliveryAcceptance struct {
 }
 
 // acceptMessageDelivery is the Raft-aligned per-Agent acceptance seam. It
-// first gives an idle resident Runtime the concrete body. When that is not
-// currently possible, the Agent's Pending projection takes responsibility.
-// Either outcome permits the transport ACK; a rejected coordinator does not.
+// gives the current launch's durable Pending projection responsibility before
+// attempting provider handoff. That is Raft's APM-accepted boundary: provider
+// startup may still be deferred, while an unknown/stale launch is not ACKed.
 func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
-	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
-	if !ok {
-		if _, err := runner.ensureMessageInbox(delivery.AgentID, ""); err != nil {
-			return messageDeliveryAcceptance{}, err
-		}
-		coordinator, runtimeID, ok = runner.messageCoordinator(delivery.AgentID)
-		if !ok {
-			return messageDeliveryAcceptance{}, fmt.Errorf("no Message coordinator for Agent %q", delivery.AgentID)
-		}
+	launch, managed := runner.processes.Snapshot(delivery.AgentID)
+	if !managed {
+		return messageDeliveryAcceptance{}, fmt.Errorf("Agent %q has not been accepted by APM", delivery.AgentID)
 	}
+	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
+	if !ok || runtimeID != launch.RuntimeID {
+		return messageDeliveryAcceptance{}, fmt.Errorf("APM Agent %q has no Inbox for Runtime %q", delivery.AgentID, launch.RuntimeID)
+	}
+	delivery.Message.RunID = delivery.RunID
+	delivery.Message.RunAgentID = delivery.RunAgentID
+	delivery.Message.DeliveryID = delivery.DeliveryID
 	accepted, err := coordinator.Accept(ctx, delivery)
 	if err != nil {
 		return messageDeliveryAcceptance{}, err
@@ -126,11 +127,17 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
 	))
-	if !accepted {
+	if launch.QueueState == protocol.AgentStartQueueQueued {
 		return result, nil
 	}
-
-	if err := runner.ensureResidentRuntime(ctx, delivery.AgentID, runtimeID); err != nil {
+	runIdentity, identityErr := residentPiRunIdentity(delivery.RunID, delivery.RunAgentID)
+	if identityErr != nil {
+		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "failed", canonicalMessageFailureReason(identityErr),
+		))
+		return messageDeliveryAcceptance{}, identityErr
+	}
+	if err := runner.ensureResidentRuntime(ctx, delivery.AgentID, runtimeID, runIdentity); err != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "deferred", canonicalMessageFailureReason(err),
 		))
@@ -145,91 +152,23 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		result.outcome = messageDeliveryProviderAccepted
 	}
 	if err != nil {
-		outcome := "failed"
-		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown") {
-			outcome = "deferred"
-		}
+		deferred := errors.Is(err, ErrCanonicalAgentRuntimeBusy)
+		outcome := map[bool]string{true: "deferred", false: "failed"}[deferred]
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
 		))
 		if runner.logger != nil {
 			runner.logger.Warn("Workspace Runner Agent Message handoff incomplete before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
 		}
-		return result, nil
+		if deferred {
+			return result, nil
+		}
+		return messageDeliveryAcceptance{}, err
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
 	))
 	return result, nil
-}
-
-func (runner *WorkspaceRunner) beginMessageRecovery(agentID string) {
-	runner.beginMessageRecoveryForAgent(agentID, func(request protocol.AgentRecoveryRequest) error {
-		return runner.sendOnCurrentConnection(protocol.EventAgentRecoveryRequest, request)
-	})
-}
-
-func (runner *WorkspaceRunner) beginMessageRecoveryForAgent(agentID string, send func(protocol.AgentRecoveryRequest) error) {
-	if send == nil {
-		return
-	}
-	coordinator, _, ok := runner.messageCoordinator(agentID)
-	if !ok {
-		return
-	}
-	request := coordinator.BeginRecovery(agentID, 100)
-	if runner.logger != nil {
-		runner.logger.Info("Agent Message recovery started", "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "agent_scoped_recovery")
-	}
-	if err := send(request); err != nil && runner.logger != nil {
-		runner.logger.Warn("Agent Message recovery request failed", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_connection_write_failed")
-	}
-}
-
-func (runner *WorkspaceRunner) beginMessageRecoveryForAll(send func(protocol.AgentRecoveryRequest) error) {
-	if runner == nil || runner.inboxes == nil {
-		return
-	}
-	runner.inboxes.BeginRecovery(send)
-}
-
-func (runner *WorkspaceRunner) mergeMessageRecoveryPage(page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
-	if send == nil {
-		return errors.New("Message recovery sender is unavailable")
-	}
-	coordinator, runtimeID, ok := runner.messageCoordinator(page.AgentID)
-	if !ok {
-		return fmt.Errorf("no Message coordinator for recovery Agent %q", page.AgentID)
-	}
-	if err := coordinator.MergeRecoveryPage(page); err != nil {
-		return err
-	}
-	if runner.logger != nil {
-		runner.logger.Debug("Agent Message recovery page merged", "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "runtime_id", runtimeID, "recovery_id", page.RecoveryID, "snapshot_id", page.SnapshotID, "message_count", len(page.Messages), "has_more", page.HasMore)
-	}
-	if page.HasMore {
-		return send(coordinator.RecoveryRequest(page.AgentID, 100))
-	}
-	if runner.logger != nil {
-		runner.logger.Info("Agent Message recovery completed", "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "runtime_id", runtimeID, "recovery_id", page.RecoveryID, "snapshot_id", page.SnapshotID, "high_watermark", page.HighWatermark)
-	}
-
-	// Freshness is durable after MergeRecoveryPage. Runtime availability is a
-	// separate best-effort concern and must never block the Runner read loop.
-	flushCtx, cancel := context.WithTimeout(context.Background(), recoveryFlushTimeout)
-	go func() {
-		defer cancel()
-		if err := runner.ensureResidentRuntime(flushCtx, page.AgentID, runtimeID); err != nil {
-			if runner.logger != nil {
-				runner.logger.Warn("Workspace Runner Message recovery Runtime unavailable", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
-			}
-			return
-		}
-		if err := coordinator.Flush(flushCtx); err != nil && runner.logger != nil {
-			runner.logger.Warn("Workspace Runner Message recovery flush deferred", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
-		}
-	}()
-	return nil
 }
 
 func (runner *WorkspaceRunner) notifyPendingMessagesAfterTurn(agentID string) {

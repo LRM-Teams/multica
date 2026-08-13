@@ -128,6 +128,65 @@ func (r *activityResidentMessageRuntime) AcceptMessageBatch(context.Context, []a
 
 func (r *activityResidentMessageRuntime) RuntimeAlive() (bool, bool) { return false, false }
 
+type livenessTransitionResidentMessageRuntime struct {
+	mu          sync.Mutex
+	alive       bool
+	known       bool
+	acceptError error
+}
+
+func (r *livenessTransitionResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *livenessTransitionResidentMessageRuntime) RuntimeAlive() (bool, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.alive, r.known
+}
+
+func (r *livenessTransitionResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.acceptError != nil {
+		return agent.ResidentMessageAcceptance{}, r.acceptError
+	}
+	r.alive, r.known = true, true
+	done := make(chan error)
+	close(done)
+	return agent.ResidentMessageAcceptance{Done: done}, nil
+}
+
+func TestRuntimePoolReportsStartingOnlyAfterAcceptedInputStartsConfirmedRuntime(t *testing.T) {
+	tests := []struct {
+		name         string
+		backend      *livenessTransitionResidentMessageRuntime
+		wantStarting int
+		wantError    bool
+	}{
+		{name: "unknown liveness stays fail open", backend: &livenessTransitionResidentMessageRuntime{}, wantStarting: 0},
+		{name: "failed acceptance is not a start", backend: &livenessTransitionResidentMessageRuntime{known: true, acceptError: errors.New("provider busy")}, wantStarting: 0, wantError: true},
+		{name: "confirmed dead becomes alive", backend: &livenessTransitionResidentMessageRuntime{known: true}, wantStarting: 1},
+		{name: "already alive remains the same process", backend: &livenessTransitionResidentMessageRuntime{known: true, alive: true}, wantStarting: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pool := newCanonicalAgentRuntimePool()
+			pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: test.backend}
+			starting := 0
+			err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}}, func() {
+				starting++
+			}, nil, nil, nil)
+			if (err != nil) != test.wantError {
+				t.Fatalf("handoff error = %v, wantError %v", err, test.wantError)
+			}
+			if starting != test.wantStarting {
+				t.Fatalf("Starting observations = %d, want %d", starting, test.wantStarting)
+			}
+		})
+	}
+}
+
 type preparingResidentMessageRuntime struct {
 	mu       sync.Mutex
 	prepared bool
@@ -239,6 +298,126 @@ func TestRuntimePoolCompactionPreparationFailureDoesNotRestartResidentProcess(t 
 	}
 }
 
+type settlementBlockingPiTurn struct {
+	boundary string
+	done     chan error
+}
+
+type settlementBlockingPiRuntime struct {
+	mu                sync.Mutex
+	binding           agent.PiRunBinding
+	boundarySerial    int
+	active            bool
+	accepted          chan settlementBlockingPiTurn
+	settlementStarted chan struct{}
+	settlementRelease chan struct{}
+	releaseOnce       sync.Once
+	settlementCalls   int
+}
+
+func newSettlementBlockingPiRuntime() *settlementBlockingPiRuntime {
+	return &settlementBlockingPiRuntime{
+		accepted:          make(chan settlementBlockingPiTurn, 2),
+		settlementStarted: make(chan struct{}),
+		settlementRelease: make(chan struct{}),
+	}
+}
+
+func (r *settlementBlockingPiRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *settlementBlockingPiRuntime) AcceptMessageBatch(_ context.Context, _ []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	if r.active {
+		r.mu.Unlock()
+		return agent.ResidentMessageAcceptance{}, agent.ErrPiRPCTurnBusy
+	}
+	r.active = true
+	turn := settlementBlockingPiTurn{boundary: r.binding.CaptureBoundary, done: make(chan error, 1)}
+	r.mu.Unlock()
+	r.accepted <- turn
+	return agent.ResidentMessageAcceptance{Done: turn.done}, nil
+}
+
+func (r *settlementBlockingPiRuntime) PrepareMessageInput(_ context.Context, _ func(agent.Message)) error {
+	return nil
+}
+
+func (r *settlementBlockingPiRuntime) AcceptReminderInput(_ context.Context, _ agent.ResidentReminderInput) (agent.ResidentMessageAcceptance, error) {
+	return agent.ResidentMessageAcceptance{}, nil
+}
+
+func (r *settlementBlockingPiRuntime) AcceptPendingNotice(context.Context, agent.ResidentPendingNotice) error {
+	return nil
+}
+
+func (r *settlementBlockingPiRuntime) BindRunIdentity(identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.binding.SessionID == "" {
+		r.boundarySerial = 1
+		r.binding = agent.PiRunBinding{
+			PiRunIdentity:   identity,
+			SessionID:       "pi-session",
+			CaptureBoundary: "capture-1",
+		}
+	} else if r.binding.PiRunIdentity != identity {
+		return agent.PiRunBinding{}, agent.ErrPiRPCRunIdentityRequiresFreshSession
+	}
+	return r.binding, nil
+}
+
+func (r *settlementBlockingPiRuntime) PrepareRun(_ context.Context, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	return r.BindRunIdentity(identity)
+}
+func (r *settlementBlockingPiRuntime) SettleRunTurn(identity agent.PiRunIdentity) error {
+	r.mu.Lock()
+	if r.binding.PiRunIdentity != identity {
+		r.mu.Unlock()
+		return errors.New("Pi turn settlement identity mismatch")
+	}
+	r.settlementCalls++
+	call := r.settlementCalls
+	r.mu.Unlock()
+	if call == 1 {
+		close(r.settlementStarted)
+		<-r.settlementRelease
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active {
+		return agent.ErrPiRPCTurnBusy
+	}
+	r.boundarySerial++
+	r.binding.CaptureBoundary = fmt.Sprintf("capture-%d", r.boundarySerial)
+	return nil
+}
+
+func (r *settlementBlockingPiRuntime) complete(turn settlementBlockingPiTurn, err error) {
+	r.mu.Lock()
+	r.active = false
+	r.mu.Unlock()
+	turn.done <- err
+	close(turn.done)
+}
+
+func (r *settlementBlockingPiRuntime) releaseSettlement() {
+	r.releaseOnce.Do(func() { close(r.settlementRelease) })
+}
+
+func (r *settlementBlockingPiRuntime) Close() {}
+
+func (r *settlementBlockingPiRuntime) Compact(context.Context, string) (agent.PiCompactionResult, error) {
+	return agent.PiCompactionResult{}, nil
+}
+
+func (r *settlementBlockingPiRuntime) SetAutoCompaction(context.Context, bool) error { return nil }
+
+func (r *settlementBlockingPiRuntime) RuntimeStats(context.Context) (*agent.RuntimeTokenStats, error) {
+	return nil, nil
+}
+
 type pendingNoticeRuntime struct {
 	mu      sync.Mutex
 	notices []agent.ResidentPendingNotice
@@ -301,6 +480,77 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 	}
 }
 
+func TestRuntimePoolSettlesPiTurnBeforeReopeningMessageAdmission(t *testing.T) {
+	backend := newSettlementBlockingPiRuntime()
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	identity := agent.PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	initialBinding, err := pool.bindResidentPiRunIdentity(context.Background(), "agent-1", "runtime-1", identity)
+	if err != nil {
+		t.Fatalf("bind Pi run identity: %v", err)
+	}
+	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"}}
+	firstComplete := make(chan error, 1)
+	if err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1", messages,
+		nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) { firstComplete <- err },
+	); err != nil {
+		t.Fatalf("first handoff: %v", err)
+	}
+	firstTurn := <-backend.accepted
+	if firstTurn.boundary != initialBinding.CaptureBoundary {
+		t.Fatalf("first turn boundary = %q, want %q", firstTurn.boundary, initialBinding.CaptureBoundary)
+	}
+	backend.complete(firstTurn, nil)
+	select {
+	case <-backend.settlementStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first turn settlement did not start")
+	}
+
+	// Settlement is blocked after native completion. A racing handoff must not
+	// cross Pi's input boundary until the pool has advanced the capture boundary.
+	racingErr := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1", messages,
+		nil, nil, nil, nil,
+	)
+	backend.releaseSettlement()
+	if !errors.Is(racingErr, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("handoff during settlement error = %v, want pool busy", racingErr)
+	}
+	select {
+	case err := <-firstComplete:
+		if err != nil {
+			t.Fatalf("first completion after settlement: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first completion did not reopen admission after settlement")
+	}
+
+	secondComplete := make(chan error, 1)
+	if err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1", messages,
+		nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) { secondComplete <- err },
+	); err != nil {
+		t.Fatalf("second handoff after settlement: %v", err)
+	}
+	secondTurn := <-backend.accepted
+	if secondTurn.boundary == firstTurn.boundary {
+		t.Fatalf("second turn reused stale capture boundary %q", secondTurn.boundary)
+	}
+	backend.complete(secondTurn, nil)
+	select {
+	case err := <-secondComplete:
+		if err != nil {
+			t.Fatalf("second completion: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second completion was not observed")
+	}
+}
+
 func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.T) {
 	backend := &activityResidentMessageRuntime{done: make(chan error, 1), messages: make(chan agent.Message, 1)}
 	backend.messages <- agent.Message{Type: agent.MessageThinking}
@@ -329,7 +579,7 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 			observed = append(observed, "activity")
 			mu.Unlock()
 		},
-		func(error, uint64) {
+		func(error, uint64, *agent.ResidentTurnCapture) {
 			mu.Lock()
 			observed = append(observed, "complete")
 			mu.Unlock()
@@ -348,8 +598,8 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !reflect.DeepEqual(observed, []string{"starting", "accepted", "activity", "complete"}) {
-		t.Fatalf("callback order = %v, want starting, acceptance, runtime Activity, then completion", observed)
+	if !reflect.DeepEqual(observed, []string{"accepted", "activity", "complete"}) {
+		t.Fatalf("callback order = %v, want acceptance, runtime Activity, then completion without synthetic Starting", observed)
 	}
 }
 
@@ -362,7 +612,7 @@ func TestRuntimePoolDrainsResidentActivityWithoutObserver(t *testing.T) {
 	if err := pool.handoffIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
-		nil, nil, nil, func(error, uint64) { close(completed) },
+		nil, nil, nil, func(error, uint64, *agent.ResidentTurnCapture) { close(completed) },
 	); err != nil {
 		t.Fatalf("handoff: %v", err)
 	}
@@ -395,7 +645,7 @@ func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testin
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1}}
 	result := make(chan bool, 1)
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, func(_ error, generation uint64) {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, func(_ error, generation uint64, _ *agent.ResidentTurnCapture) {
 		if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
 			result <- true
 			return
@@ -741,10 +991,38 @@ func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 	}
 }
 
+func TestMessageCoordinatorReportsQueuedLifecycleOnAcceptAndFlush(t *testing.T) {
+	var transitions []int
+	coordinator, err := NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.ConfigureQueueActivity(func(messages []protocol.AgentMessageProjection, delta int) {
+		if len(messages) != 1 || messages[0].RunID != "run-1" || messages[0].RunAgentID != "run-agent-1" {
+			t.Fatalf("queue activity messages = %+v", messages)
+		}
+		transitions = append(transitions, delta)
+	})
+	message := protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello", RunID: "run-1", RunAgentID: "run-agent-1", DeliveryID: "delivery-1"}
+	created, err := coordinator.Accept(context.Background(), protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: message.Target, Seq: message.Seq, DeliveryID: message.DeliveryID, Message: message,
+	})
+	if err != nil || !created {
+		t.Fatalf("accept mixed-run message created=%v err=%v", created, err)
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("flush mixed-run message: %v", err)
+	}
+	if !reflect.DeepEqual(transitions, []int{1, -1}) {
+		t.Fatalf("queue lifecycle transitions = %v, want [1 -1]", transitions)
+	}
+}
+
 func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *testing.T) {
 	root := t.TempDir()
 	var mu sync.Mutex
 	var notices []agent.ResidentPendingNotice
+
 	activityCount := 0
 	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
@@ -1023,7 +1301,7 @@ func TestMessageCoordinatorCoverageCheckRetainsPendingWhenCommitWriteFails(t *te
 	}
 }
 
-func TestWorkspaceRunnerAttachmentRegistersCoordinatorAtAgentRoot(t *testing.T) {
+func TestWorkspaceRunnerAttachmentPreparesAgentRootWithoutCoordinator(t *testing.T) {
 	const workspaceID = "11111111-1111-4111-8111-111111111111"
 	const agentID = "22222222-2222-4222-8222-222222222222"
 	const runtimeID = "33333333-3333-4333-8333-333333333333"
@@ -1033,24 +1311,20 @@ func TestWorkspaceRunnerAttachmentRegistersCoordinatorAtAgentRoot(t *testing.T) 
 	runner, _ := attachTestWorkspaceRunner(t, daemon, workspaceID, nil)
 
 	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
 	}); err != nil {
 		t.Fatalf("applyAttachmentAttach: %v", err)
 	}
-	coordinator, registeredRuntimeID := resolveTestInbox(t, daemon, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
-	if coordinator == nil || registeredRuntimeID != runtimeID {
-		t.Fatalf("coordinator=%v runtime_id=%q", coordinator, registeredRuntimeID)
-	}
 	wantRoot := agentworkspace.Root(daemon.cfg.WorkspacesRoot, workspaceID, agentID)
-	if coordinator.root != wantRoot {
-		t.Fatalf("coordinator root = %q, want Agent root %q", coordinator.root, wantRoot)
+	if _, _, ok := runner.messageCoordinator(agentID); ok {
+		t.Fatal("Attachment created a Message coordinator before agent:start")
 	}
 	if _, err := os.Stat(wantRoot); err != nil {
 		t.Fatalf("Agent root was not provisioned: %v", err)
 	}
 
 	if _, err := runner.applyAttachmentDetach(protocol.WorkspaceRunnerAgentDetachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2, CorrelationID: "detach-1",
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2,
 	}); err != nil {
 		t.Fatalf("applyAttachmentDetach: %v", err)
 	}
@@ -1070,10 +1344,6 @@ func testDelivery(id, target string, seq int64, deliveryID string) protocol.Agen
 
 func completeCoordinatorRecovery(t *testing.T, coordinator *MessageCoordinator) {
 	t.Helper()
-	request := coordinator.BeginRecovery("agent-1", 2)
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "fence-1"}); err != nil {
-		t.Fatalf("complete recovery: %v", err)
-	}
 }
 
 func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T) {
@@ -1691,15 +1961,12 @@ func TestMessageCoordinatorDeletedBoundaryReplaysConservatively(t *testing.T) {
 	if got := coordinator.Boundaries(); len(got) != 0 {
 		t.Fatalf("boundaries after deletion = %v, want unknown empty coverage", got)
 	}
-	if _, ok := coordinator.ContextBoundary("channel-1"); ok {
-		t.Fatal("boundary available before recovery after deletion")
+	if boundary, ok := coordinator.ContextBoundary("channel-1"); !ok || boundary != 0 {
+		t.Fatalf("empty boundary after deletion = %d, %v; want valid zero", boundary, ok)
 	}
-	request := coordinator.BeginRecovery("agent-1", 2)
 	message := protocol.AgentMessageProjection{ID: "message-6", Target: "channel-1", Seq: 6, Content: "replayed-after-deletion"}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "restart", HighWatermark: "restart", Messages: []protocol.AgentMessageProjection{message},
-	}); err != nil {
-		t.Fatalf("MergeRecoveryPage: %v", err)
+	if _, err := coordinator.Accept(context.Background(), protocol.AgentDeliverPayload{AgentID: "agent-1", Target: message.Target, Seq: message.Seq, DeliveryID: "delivery-6", Message: message}); err != nil {
+		t.Fatalf("Accept redelivery: %v", err)
 	}
 	if err := coordinator.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
@@ -1722,413 +1989,15 @@ func TestMessageCoordinatorLowerBoundaryConservativelyReplays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	request := coordinator.BeginRecovery("agent-1", 2)
 	message := protocol.AgentMessageProjection{ID: "message-2", Target: "channel-1", Seq: 2, Content: "replayed"}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "lower", HighWatermark: "lower", Messages: []protocol.AgentMessageProjection{message},
-	}); err != nil {
-		t.Fatalf("MergeRecoveryPage: %v", err)
+	if _, err := coordinator.Accept(context.Background(), protocol.AgentDeliverPayload{AgentID: "agent-1", Target: message.Target, Seq: message.Seq, DeliveryID: "delivery-2", Message: message}); err != nil {
+		t.Fatalf("Accept redelivery: %v", err)
 	}
 	if err := coordinator.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 	if len(handedOff) != 1 || handedOff[0].ID != message.ID || coordinator.Boundaries()[message.Target] != message.Seq {
 		t.Fatalf("handoff=%+v boundaries=%v", handedOff, coordinator.Boundaries())
-	}
-}
-
-func TestMessageCoordinatorRecoveryMergesLiveAndPagedMessagesBeforeFlush(t *testing.T) {
-	var got []string
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
-		for _, message := range messages {
-			got = append(got, message.ID)
-		}
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	request := coordinator.BeginRecovery("agent-1", 1)
-	if request.Limit != 1 || request.AgentID != "agent-1" {
-		t.Fatalf("request = %+v", request)
-	}
-	if _, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel-1", 2, "live-2")); err != nil {
-		t.Fatalf("live Accept: %v", err)
-	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snap", HighWatermark: "42", Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel-1", Seq: 1, Content: "one"}}, NextCursor: "cursor-1", HasMore: true}); err != nil {
-		t.Fatalf("page 1: %v", err)
-	}
-	if coordinator.FreshnessKnown() {
-		t.Fatal("freshness became known before terminal page")
-	}
-	if err := coordinator.Flush(context.Background()); err == nil {
-		t.Fatal("Flush succeeded before recovery fence completed")
-	}
-	if _, err := coordinator.Accept(context.Background(), testDelivery("message-3", "channel-1", 3, "live-3")); err != nil {
-		t.Fatalf("live Accept during recovery: %v", err)
-	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snap", HighWatermark: "42", Messages: []protocol.AgentMessageProjection{
-		{ID: "message-2", Target: "channel-1", Seq: 2, Content: "two"},
-		{ID: "message-3", Target: "channel-1", Seq: 3, Content: "three"},
-	}}); err != nil {
-		t.Fatalf("page 2: %v", err)
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("terminal recovery page did not establish freshness before runtime handoff")
-	}
-	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
-		t.Fatalf("Context Boundary advanced to %d when recovery completed", got)
-	}
-	if accepted, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "live-after-terminal")); err != nil || accepted {
-		t.Fatalf("duplicate live Delivery after recovery = accepted %v, error %v", accepted, err)
-	}
-	if err := coordinator.Flush(context.Background()); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("runtime handoff reverted known freshness")
-	}
-	if want := []string{"message-1", "message-2", "message-3"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("handoff = %v, want %v", got, want)
-	}
-}
-
-func TestMessageCoordinatorConcurrentLiveAndRecoveryDeliveryDeduplicates(t *testing.T) {
-	var handedOff []protocol.AgentMessageProjection
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
-		handedOff = append(handedOff, messages...)
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	request := coordinator.BeginRecovery("agent-1", 1)
-	message := protocol.AgentMessageProjection{ID: "message-1", Target: "channel-1", Seq: 1, Content: "one"}
-	delivery := protocol.AgentDeliverPayload{
-		AgentID: "agent-1", Target: message.Target, Seq: message.Seq, DeliveryID: "live-1", Message: message,
-	}
-	start := make(chan struct{})
-	var (
-		waitGroup sync.WaitGroup
-		acceptErr error
-		mergeErr  error
-	)
-	waitGroup.Add(2)
-	go func() {
-		defer waitGroup.Done()
-		<-start
-		_, acceptErr = coordinator.Accept(context.Background(), delivery)
-	}()
-	go func() {
-		defer waitGroup.Done()
-		<-start
-		mergeErr = coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-			AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "watermark-1",
-			Messages: []protocol.AgentMessageProjection{message},
-		})
-	}()
-	close(start)
-	waitGroup.Wait()
-	if acceptErr != nil || mergeErr != nil {
-		t.Fatalf("concurrent live/recovery merge errors = Accept %v, Merge %v", acceptErr, mergeErr)
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("concurrent live Delivery prevented terminal recovery readiness")
-	}
-	if err := coordinator.Flush(context.Background()); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	if len(handedOff) != 1 || handedOff[0].ID != message.ID {
-		t.Fatalf("concurrent live/recovery handoff = %+v, want one canonical Message", handedOff)
-	}
-	if got := coordinator.Boundaries()[message.Target]; got != message.Seq {
-		t.Fatalf("Context Boundary = %d, want %d", got, message.Seq)
-	}
-}
-
-func TestMessageCoordinatorTerminalRecoveryIsReadyWithoutRuntimeHandoff(t *testing.T) {
-	handoffCalls := 0
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
-		handoffCalls++
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	request := coordinator.BeginRecovery("agent-1", 2)
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "empty", HighWatermark: "empty",
-	}); err != nil {
-		t.Fatalf("MergeRecoveryPage: %v", err)
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("terminal empty recovery did not become ready")
-	}
-	if handoffCalls != 0 {
-		t.Fatalf("terminal empty recovery made %d runtime handoff calls", handoffCalls)
-	}
-	if got := coordinator.Boundaries(); len(got) != 0 {
-		t.Fatalf("terminal empty recovery advanced Context Boundaries: %v", got)
-	}
-}
-
-func TestMessageCoordinatorRecoveryStateTransitionsRequireNewAttemptAfterFailure(t *testing.T) {
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	if got := coordinator.recovery.status; got != messageRecoveryUnknown {
-		t.Fatalf("initial recovery status = %q, want %q", got, messageRecoveryUnknown)
-	}
-	failedAttempt := coordinator.BeginRecovery("agent-1", 1)
-	if got := coordinator.recovery.status; got != messageRecoveryRecovering {
-		t.Fatalf("status after BeginRecovery = %q, want %q", got, messageRecoveryRecovering)
-	}
-	firstPage := protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: failedAttempt.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "watermark-1",
-		NextCursor: "cursor-1", HasMore: true,
-	}
-	if err := coordinator.MergeRecoveryPage(firstPage); err != nil {
-		t.Fatalf("first recovery page: %v", err)
-	}
-	if got := coordinator.recovery.status; got != messageRecoveryRecovering {
-		t.Fatalf("status after non-terminal page = %q, want %q", got, messageRecoveryRecovering)
-	}
-	if err := coordinator.MergeRecoveryPage(firstPage); err == nil {
-		t.Fatal("non-advancing recovery cursor was accepted")
-	}
-	if got := coordinator.recovery.status; got != messageRecoveryFailed {
-		t.Fatalf("status after invalid cursor = %q, want %q", got, messageRecoveryFailed)
-	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: failedAttempt.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "watermark-1",
-	}); err == nil {
-		t.Fatal("failed recovery resumed without a new recovery identity")
-	}
-	if got := coordinator.recovery.status; got != messageRecoveryFailed {
-		t.Fatalf("failed recovery changed status to %q", got)
-	}
-
-	readyAttempt := coordinator.BeginRecovery("agent-1", 1)
-	if readyAttempt.RecoveryID == failedAttempt.RecoveryID {
-		t.Fatal("new recovery attempt reused failed recovery identity")
-	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: readyAttempt.RecoveryID, SnapshotID: "snapshot-2", HighWatermark: "watermark-2",
-	}); err != nil {
-		t.Fatalf("new terminal recovery: %v", err)
-	}
-	if got := coordinator.recovery.status; got != messageRecoveryReady {
-		t.Fatalf("terminal recovery status = %q, want %q", got, messageRecoveryReady)
-	}
-}
-
-func TestMessageCoordinatorReadyPendingUsesNormalFreshnessHoldAfterBusyHandoff(t *testing.T) {
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
-		return ErrCanonicalAgentRuntimeBusy
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	request := coordinator.BeginRecovery("agent-1", 2)
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "busy", HighWatermark: "busy",
-		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel-1", Seq: 1, Content: "one"}},
-	}); err != nil {
-		t.Fatalf("MergeRecoveryPage: %v", err)
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("terminal recovery with Pending did not become ready")
-	}
-	if err := coordinator.Flush(context.Background()); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
-		t.Fatalf("busy Flush = %v", err)
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("busy runtime handoff reverted known freshness")
-	}
-	result, err := coordinator.PreflightMessageSend("channel-1")
-	if err != nil {
-		t.Fatalf("ready Pending freshness preflight: %v", err)
-	}
-	if !result.Held || result.LatestSeq != 1 || result.NewMessageCount != 1 {
-		t.Fatalf("ready Pending freshness = %+v, want held through sequence 1", result)
-	}
-}
-
-func TestMessageCoordinatorRuntimeHandoffFailureDoesNotRevertReadyRecovery(t *testing.T) {
-	handoffFailure := errors.New("runtime handoff failed")
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
-		return handoffFailure
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	request := coordinator.BeginRecovery("agent-1", 1)
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "watermark-1",
-		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel-1", Seq: 1, Content: "one"}},
-	}); err != nil {
-		t.Fatalf("MergeRecoveryPage: %v", err)
-	}
-	if err := coordinator.Flush(context.Background()); !errors.Is(err, handoffFailure) {
-		t.Fatalf("Flush error = %v, want %v", err, handoffFailure)
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("runtime handoff failure reverted ready recovery")
-	}
-	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
-		t.Fatalf("failed runtime handoff advanced Context Boundary to %d", got)
-	}
-}
-
-func TestMessageCoordinatorRejectsDelayedPageFromPreviousReconnect(t *testing.T) {
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	stale := coordinator.BeginRecovery("agent-1", 2)
-	current := coordinator.BeginRecovery("agent-1", 2)
-	if stale.RecoveryID == current.RecoveryID {
-		t.Fatal("two recovery attempts reused recovery_id")
-	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: stale.RecoveryID, SnapshotID: "stale", HighWatermark: "stale",
-	}); err == nil {
-		t.Fatal("delayed page from the previous reconnect completed the current recovery")
-	}
-	if coordinator.FreshnessKnown() {
-		t.Fatal("freshness became known after stale recovery page")
-	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID:       current.AgentID,
-		RecoveryID:    current.RecoveryID,
-		SnapshotID:    "current-snapshot",
-		HighWatermark: "current-snapshot",
-	}); err != nil {
-		t.Fatalf("current recovery page was poisoned by stale page: %v", err)
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("current terminal recovery did not become ready after stale page")
-	}
-}
-
-func TestMessageCoordinatorRestartRecoversAcceptedMessageBeforeHandoff(t *testing.T) {
-	root := t.TempDir()
-	first, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
-		t.Fatal("first coordinator handed off before simulated crash")
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("first NewMessageCoordinator: %v", err)
-	}
-	completeCoordinatorRecovery(t, first)
-	delivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
-	if accepted, err := first.Accept(context.Background(), delivery); err != nil || !accepted {
-		t.Fatalf("Accept before crash = %v, %v", accepted, err)
-	}
-	if _, err := os.Stat(filepath.Join(root, consumedSeqsFileName)); !os.IsNotExist(err) {
-		t.Fatalf("acceptance persisted receive state before handoff: %v", err)
-	}
-
-	var recovered []protocol.AgentMessageProjection
-	restarted, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
-		recovered = append(recovered, messages...)
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("restarted NewMessageCoordinator: %v", err)
-	}
-	request := restarted.BeginRecovery("agent-1", 2)
-	if err := restarted.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "restart", HighWatermark: "restart",
-		Messages: []protocol.AgentMessageProjection{delivery.Message},
-	}); err != nil {
-		t.Fatalf("merge restart recovery: %v", err)
-	}
-	if err := restarted.Flush(context.Background()); err != nil {
-		t.Fatalf("flush restart recovery: %v", err)
-	}
-	if len(recovered) != 1 || recovered[0].ID != delivery.Message.ID || restarted.Boundaries()[delivery.Target] != delivery.Seq {
-		t.Fatalf("recovered=%+v boundaries=%v", recovered, restarted.Boundaries())
-	}
-}
-
-func TestMessageCoordinatorUpgradeRestartRecoversBusyPendingMessage(t *testing.T) {
-	root := t.TempDir()
-	firstDelivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
-	pendingDelivery := testDelivery("message-2", "channel-1", 2, "delivery-2")
-	handoffCalls := 0
-	first, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
-		handoffCalls++
-		if handoffCalls == 1 {
-			return nil
-		}
-		return ErrCanonicalAgentRuntimeBusy
-	}, nil)
-	if err != nil {
-		t.Fatalf("first NewMessageCoordinator: %v", err)
-	}
-	completeCoordinatorRecovery(t, first)
-	if _, err := first.Accept(context.Background(), firstDelivery); err != nil {
-		t.Fatalf("accept first: %v", err)
-	}
-	if err := first.Flush(context.Background()); err != nil {
-		t.Fatalf("flush first: %v", err)
-	}
-	if _, err := first.Accept(context.Background(), pendingDelivery); err != nil {
-		t.Fatalf("accept pending: %v", err)
-	}
-	if err := first.Flush(context.Background()); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
-		t.Fatalf("busy flush = %v", err)
-	}
-	if got := first.Boundaries()[firstDelivery.Target]; got != firstDelivery.Seq {
-		t.Fatalf("pre-upgrade boundary = %d, want %d", got, firstDelivery.Seq)
-	}
-	first.Close()
-
-	var recovered []protocol.AgentMessageProjection
-	restarted, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
-		recovered = append(recovered, messages...)
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("restarted NewMessageCoordinator: %v", err)
-	}
-	request := restarted.BeginRecovery("agent-1", 10)
-	if err := restarted.MergeRecoveryPage(protocol.AgentRecoveryPage{
-		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "upgrade", HighWatermark: "upgrade",
-		Messages: []protocol.AgentMessageProjection{firstDelivery.Message, pendingDelivery.Message},
-	}); err != nil {
-		t.Fatalf("merge upgrade recovery: %v", err)
-	}
-	if err := restarted.Flush(context.Background()); err != nil {
-		t.Fatalf("flush upgrade recovery: %v", err)
-	}
-	if len(recovered) != 1 || recovered[0].ID != pendingDelivery.Message.ID {
-		t.Fatalf("recovered = %+v, want only busy pending Message", recovered)
-	}
-	if got := restarted.Boundaries()[pendingDelivery.Target]; got != pendingDelivery.Seq {
-		t.Fatalf("post-upgrade boundary = %d, want %d", got, pendingDelivery.Seq)
-	}
-}
-
-func TestMessageCoordinatorCredentialBoundaryFailsClosedAfterRecoveryFailure(t *testing.T) {
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	request := coordinator.BeginRecovery("agent-1", 2)
-	if _, ok := coordinator.ContextBoundary("channel-1"); ok {
-		t.Fatal("boundary available during recovery")
-	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snap", HighWatermark: "one", NextCursor: "cursor", HasMore: true}); err != nil {
-		t.Fatalf("page 1: %v", err)
-	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "other", HighWatermark: "two"}); err == nil {
-		t.Fatal("changed fence accepted")
-	}
-	if _, ok := coordinator.ContextBoundary("channel-1"); ok {
-		t.Fatal("boundary available after recovery failure")
 	}
 }
 

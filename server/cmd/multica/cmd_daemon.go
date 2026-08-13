@@ -79,6 +79,8 @@ func init() {
 	_ = f.MarkHidden("computer-generation")
 	f.Bool("machine-upgrade-detached-candidate", false, "Internal detached Machine Upgrade candidate marker")
 	_ = f.MarkHidden("machine-upgrade-detached-candidate")
+	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
+	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 
 	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
 	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
@@ -349,7 +351,11 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		}
 	}
 	cfg.DetachedMachineUpgradeCandidate, _ = cmd.Flags().GetBool("machine-upgrade-detached-candidate")
-	controlToken, err := ensureMachineUpgradeControlToken(profile)
+	takeoverProtocol, _ := cmd.Flags().GetString("machine-upgrade-takeover-protocol")
+	cfg.MachineUpgradeTakeoverProtocol = machineUpgradeTakeoverProtocolForGeneration(
+		takeoverProtocol, cfg.ComputerGeneration,
+	)
+	controlToken, err := computer.EnsureControlToken(profile)
 	if err != nil {
 		return err
 	}
@@ -410,9 +416,14 @@ func runDaemonForeground(cmd *cobra.Command) error {
 			takeoverErr = spawnDetachedDaemonBinary(restartBin, profile, d.MachineUpgradeTarget(), &takeoverExpectation)
 		}
 		if takeoverErr != nil {
-			if rollbackStateErr := d.BeginMachineUpgradeRollback(takeoverErr); rollbackStateErr != nil {
-				return fmt.Errorf("record detached takeover rollback: %w", rollbackStateErr)
+			// The candidate has not returned a successful takeover CAS, so the
+			// incumbent still owns the server generation. Restore the retained
+			// source locally and terminally fail the operation; remote rollback is
+			// reserved for failures after ownership actually changed.
+			if rollbackStateErr := d.MarkMachineUpgradeRollbackPending(); rollbackStateErr != nil {
+				return fmt.Errorf("record detached takeover restore: %w", rollbackStateErr)
 			}
+			d.ReportMachineUpgradeTakeoverFailure(takeoverErr)
 			if recoveryErr := rollbackDetachedMachineUpgrade(profile, d); recoveryErr != nil {
 				d.ReportMachineUpgradeRollbackFailure(recoveryErr)
 				return fmt.Errorf("start detached machine-upgrade successor: %w; rollback recovery: %v", takeoverErr, recoveryErr)

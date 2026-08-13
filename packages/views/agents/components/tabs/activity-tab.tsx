@@ -96,15 +96,26 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
   const { t } = useT("agents");
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
-  const body = row.body?.trim();
-  const bodyIsLong = Boolean(body && isLongActivityCommand(body));
+  // UI-first command readability: today's projection keeps the (often clipped)
+  // shell text in subtext with body empty. Prefer body when present; otherwise
+  // promote Running-command subtext into the mono + Copy block so the Activity
+  // tab is not stuck with a muted single-line-looking span.
+  const bodyText = row.body?.trim() ?? "";
+  const isRunningCommandTitle = /^Running command/.test(row.title ?? "");
+  const commandFromSubtext =
+    !bodyText && (row.body_kind === "command" || isRunningCommandTitle)
+      ? (row.subtext?.trim() ?? "")
+      : "";
+  const displayCommand = bodyText || commandFromSubtext;
+  const plainSubtext = !displayCommand ? row.subtext?.trim() : undefined;
+  const bodyIsLong = Boolean(displayCommand && isLongActivityCommand(displayCommand));
   const exactTime = formatExactTime(row.occurred_at, exactTimeFormatter);
   const copyLabel = copied
     ? t(($) => $.tab_body.activity.command_copied)
     : t(($) => $.tab_body.activity.copy_command);
 
   const copy = async () => {
-    if (!body || !(await copyText(body))) return;
+    if (!displayCommand || !(await copyText(displayCommand))) return;
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
   };
@@ -133,13 +144,13 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
             {formatRelativeTime(row.occurred_at)}
           </time>
         </div>
-        {body ? (
+        {displayCommand ? (
           <>
             <TimelineBodyBlock
               body={
                 bodyIsLong && !bodyExpanded
-                  ? foldActivityCommandPreview(body)
-                  : body
+                  ? foldActivityCommandPreview(displayCommand)
+                  : displayCommand
               }
               copied={copied}
               copyLabel={copyLabel}
@@ -161,12 +172,12 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
               </button>
             ) : null}
           </>
-        ) : row.subtext ? (
+        ) : plainSubtext ? (
           <span
             data-testid="runner-activity-subtext"
             className="mt-0.5 block whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted-foreground"
           >
-            {row.subtext}
+            {plainSubtext}
           </span>
         ) : null}
       </div>

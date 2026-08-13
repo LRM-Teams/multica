@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,11 +16,36 @@ import (
 	"time"
 )
 
+// ErrPiCLIResidentUnsupported is returned when a caller asks the one-shot Pi
+// CLI backend for mixed-run resident APIs. Use NewPiRPCBackend / AsPiRPCBackend
+// instead of agent.New("pi") for persistent run identity, AcceptMessageBatch,
+// and non-terminal SettleRunTurn.
+var ErrPiCLIResidentUnsupported = errors.New("pi CLI backend does not support resident mixed-run APIs")
+
 // piBackend implements Backend by spawning the Pi CLI in non-interactive
 // JSON mode (`pi -p --mode json --session <path>`) and parsing its event
 // stream on stdout.
+//
+// Interface segregation: piBackend is intentionally one-shot only. It does
+// not implement PiRPCBackend, ResidentMessageInput, or related resident
+// surfaces. Mixed-run callers must obtain a PiRPCBackend via NewPiRPCBackend
+// (or AsPiRPCBackend) so PrepareRun / AcceptMessageBatch / SettleRunTurn cannot
+// be mistaken for CLI Execute semantics.
 type piBackend struct {
 	cfg Config
+}
+
+// Compile-time: one-shot CLI remains a Backend. Resident APIs stay on
+// PiRPCBackend so type assertions fail closed for mixed runs.
+var _ Backend = (*piBackend)(nil)
+
+// AsPiRPCBackend returns the resident Pi surface. One-shot CLI backends from
+// agent.New("pi") yield ErrPiCLIResidentUnsupported.
+func AsPiRPCBackend(b Backend) (PiRPCBackend, error) {
+	if rpc, ok := b.(PiRPCBackend); ok {
+		return rpc, nil
+	}
+	return nil, fmt.Errorf("%w: use NewPiRPCBackend for persistent run identity and resident turns", ErrPiCLIResidentUnsupported)
 }
 
 var (
@@ -788,11 +814,13 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 
 func filterPiCustomArgs(opts ExecOptions, logger *slog.Logger) []string {
 	blocked := piBlockedArgs
-	if opts.DisableTools || opts.MaxOutputTokens > 0 {
+	if opts.DisableTools || opts.MaxOutputTokens > 0 || opts.piCaptureExtension != "" {
 		blocked = make(map[string]blockedArgMode, len(piBlockedArgs)+16)
 		for name, mode := range piBlockedArgs {
 			blocked[name] = mode
 		}
+	}
+	if opts.DisableTools || opts.MaxOutputTokens > 0 {
 		blocked["--tools"] = blockedWithValue
 		blocked["-t"] = blockedWithValue
 		blocked["--no-tools"] = blockedStandalone
@@ -811,6 +839,14 @@ func filterPiCustomArgs(opts ExecOptions, logger *slog.Logger) []string {
 		blocked["-nc"] = blockedStandalone
 		blocked["--approve"] = blockedStandalone
 		blocked["-a"] = blockedStandalone
+	}
+	// Application-generated capture extension is the only allowed --extension
+	// for mixed-run resident sessions; reject user overrides while it is loaded.
+	if opts.piCaptureExtension != "" {
+		blocked["--extension"] = blockedWithValue
+		blocked["-e"] = blockedWithValue
+		blocked["--no-extensions"] = blockedStandalone
+		blocked["-ne"] = blockedStandalone
 	}
 	return filterCustomArgs(opts.CustomArgs, blocked, logger)
 }

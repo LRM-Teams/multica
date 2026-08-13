@@ -231,6 +231,26 @@ func (c *Client) ExportTrajectory(
 	return out.Traj, nil
 }
 
+// RemoveSession revokes one AReaL session without exporting it for training.
+// AReaL v2 has no end_session endpoint; export_trajectories with
+// remove_session=true is the authoritative teardown operation and is safe for
+// a fresh preflight session that has not produced a trajectory.
+func (c *Client) RemoveSession(ctx context.Context, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("arealrl: remove_session requires session_id")
+	}
+	body := exportRequest{
+		SessionIDs:    []string{sessionID},
+		RemoveSession: true,
+	}
+	resp, err := c.doJSON(ctx, exportTrajPath, c.adminKey, body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkStatus(resp, "remove_session")
+}
+
 // doJSON POSTs a JSON body to path with Bearer authentication.
 func (c *Client) doJSON(
 	ctx context.Context,

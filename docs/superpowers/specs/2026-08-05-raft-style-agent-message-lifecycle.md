@@ -1,6 +1,14 @@
 # Raft-style Direct Agent Message Lifecycle
 
-Status: ready-for-agent
+Status: superseded in part by `docs/agent-message-delivery-contract.md`
+
+> 2026-08-12 correction: the ordinary Message snapshot recovery design in this
+> document was rejected after inspecting the installed Raft Computer 1.0.15
+> artifact. `agent:recovery:request/page` is retired. Durable unacknowledged
+> `agent:deliver` redelivery plus the local target sequence boundary now owns
+> the same loss/duplicate safety. The message command, Pending, Context Boundary,
+> Draft, and Notice sections remain applicable unless the newer contract says
+> otherwise.
 
 ## Problem Statement
 

@@ -77,17 +77,18 @@ the resident-reported version:
 Adoption is complete when `computer status` reports the same `Version` as the
 canonical `multica version`.
 
-### Update
+### Computer Upgrade
 
 ```bash
-multica update
+multica computer upgrade
 ```
 
-若 daemon 正在运行，`multica update` 会向该机器的受保护控制面提交一个
-Machine Upgrade；daemon 是唯一负责 stage、handoff 和收敛的进程。daemon
-不存在时，命令会锁定 VersionStore，安装 Active 版本供**下一次** daemon 启动使用，
-不会声称已有运行中的 successor。若 PID 存在但控制面不可用，命令会以
-`upgrade_service_unreachable` 拒绝离线绕过。
+若 Computer resident 正在运行，`multica computer upgrade` 会向该机器的
+owner-only 控制面提交 canonical Machine Upgrade；resident 是唯一负责 download、
+verify、handoff 和收敛的进程。确认 resident 不存在时，命令会锁定 VersionStore，
+安装 Active 版本供**下一次** Computer 启动使用，不会声称已有运行中的 successor。
+若 resident ownership 存在但控制面不可用，命令会以
+`upgrade_service_unreachable` 拒绝离线绕过。顶层 `multica update` 已移除。
 
 
 ## Stuck on an old CLI (periodic self-update is retired)

@@ -64,9 +64,9 @@ func ReleaseManifestBaseURLWithOverride(serverDispatched string) string {
 // URL with the full three-layer precedence (task #815 step 2):
 // serverDispatched (from the daemon's heartbeat ack) > ReleaseManifestBaseURLEnv
 // > DefaultReleaseManifestBaseURL. serverDispatched is blank for every caller
-// that has no daemon/server context (the CLI's own `multica update`,
-// ReleaseWebURL); only the daemon's auto-update loop can supply it, since only
-// it holds a live connection to ask the server in the first place.
+// that has no daemon/server context (including an offline `computer upgrade`);
+// only the daemon's release-detection loop can supply it, since only it holds a
+// live connection to ask the server in the first place.
 func releaseManifestBaseURLWithOverride(serverDispatched string) string {
 	if v := strings.TrimSpace(serverDispatched); v != "" {
 		return v
@@ -75,37 +75,6 @@ func releaseManifestBaseURLWithOverride(serverDispatched string) string {
 		return v
 	}
 	return DefaultReleaseManifestBaseURL
-}
-
-// ReleaseWebURL is the human-facing form of releaseManifestBaseURL(), for
-// error messages that point a user at the release source. Tracks the same
-// override so a redirected machine's error text matches where it actually
-// looked.
-func ReleaseWebURL() string {
-	return releaseManifestBaseURL()
-}
-
-const LegacyBrewPackage = "multica-ai/tap/multica"
-
-// BrewPackage returns the optional Homebrew package name to upgrade. It is
-// intentionally not defaulted: the public installer must not fall back to the
-// old upstream tap when the LRM repo is the release source.
-func BrewPackage() string {
-	return strings.TrimSpace(os.Getenv("MULTICA_BREW_PACKAGE"))
-}
-
-// IsLegacyBrewPackage reports whether pkg points at the old upstream tap that
-// is not authoritative for LRM-Teams/multica releases.
-func IsLegacyBrewPackage(pkg string) bool {
-	return strings.EqualFold(strings.TrimSpace(pkg), LegacyBrewPackage)
-}
-
-// IsBrewUpdateConfigured reports whether the current environment has an
-// explicit Homebrew package to use for CLI updates. The old upstream tap is
-// intentionally ignored so LRM builds fall back to the repo release assets.
-func IsBrewUpdateConfigured() bool {
-	pkg := BrewPackage()
-	return pkg != "" && !IsLegacyBrewPackage(pkg)
 }
 
 // ReleaseManifest describes one immutable Computer release. Exact-version
@@ -380,24 +349,6 @@ func updateTargetPathFromResolved(resolved string) string {
 		return prefix + "/bin/multica"
 	}
 	return resolved
-}
-
-// UpdateViaBrew runs the explicitly configured Homebrew upgrade package.
-// Returns the combined output and any error.
-func UpdateViaBrew() (string, error) {
-	pkg := BrewPackage()
-	if pkg == "" {
-		return "", fmt.Errorf("Homebrew package is not configured; set MULTICA_BREW_PACKAGE or use direct download")
-	}
-	if IsLegacyBrewPackage(pkg) {
-		return "", fmt.Errorf("Homebrew package %q is the legacy upstream tap; use direct LRM release download", pkg)
-	}
-	cmd := exec.Command("brew", "upgrade", pkg)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("brew upgrade failed: %w", err)
-	}
-	return string(out), nil
 }
 
 func updateDownloadTimeoutOrDefault(timeout time.Duration) time.Duration {

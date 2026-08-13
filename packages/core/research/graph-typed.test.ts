@@ -104,16 +104,29 @@ describe("typed graph schema (LRM-1497 · fed by LRM-1505)", () => {
 
   it("defaults absent optional fields without fabricating values", () => {
     const parsed = parseWithFallback(
-      { session_id: "s1", graph_version: 0, nodes: [], edges: [], clusters: [], lineage: {} },
+      {
+        session_id: "s1",
+        graph_version: 0,
+        nodes: [{ id: "n-without-metrics", title: "事实尚未提供" }],
+        edges: [],
+        clusters: [],
+        lineage: {},
+      },
       TypedGraphResponseSchema,
       EMPTY_TYPED_GRAPH,
       { endpoint: "test" },
     ) as TypedGraphResponse;
 
-    expect(parsed.nodes).toEqual([]);
+    expect(parsed.nodes).toHaveLength(1);
     expect(parsed.lineage.derived).toEqual({});
-    // Defaults are inert, not invented confidence/rounds.
-    expect(parsed.nodes).toHaveLength(0);
+    expect(parsed.nodes[0]).toMatchObject({
+      id: "n-without-metrics",
+      title: "事实尚未提供",
+      confidence: null,
+    });
+    expect(parsed.nodes[0]).not.toHaveProperty("round");
+    expect(parsed.nodes[0]).not.toHaveProperty("document_count");
+    expect(parsed.nodes[0]).not.toHaveProperty("conclusion_count");
   });
 
   it("parses total_node_count when the graph is paginated", () => {

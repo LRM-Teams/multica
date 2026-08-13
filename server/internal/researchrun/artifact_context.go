@@ -330,6 +330,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		ProvenanceCompleteness: ArtifactProvenanceComplete,
 		AccessLevel:            ArtifactAccessRaw,
 		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            plan.ManifestHash,
 	}); err != nil {
 		return dispatchManifestPlan{}, err
 	}

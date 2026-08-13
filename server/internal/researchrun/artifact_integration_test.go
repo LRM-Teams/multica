@@ -275,6 +275,26 @@ func TestCreateDispatchIntentPersistsManifestBoundOutbox(t *testing.T) {
 	if manifestID == "" || manifestHash == "" || requestHash == "" {
 		t.Fatalf("outbox binding incomplete: manifest_id=%q manifest_hash=%q request_hash=%q", manifestID, manifestHash, requestHash)
 	}
+	var versionContentHash, hashOrigin, provenance string
+	if err = pool.QueryRow(ctx, `
+		SELECT v.content_hash, v.hash_origin, p.provenance_completeness
+		FROM research_artifact_passport p
+		JOIN research_artifact_version v
+		  ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+		     (p.workspace_id, p.session_id, p.id, p.current_version)
+		WHERE p.workspace_id = $1::uuid AND p.session_id = $2::uuid
+		  AND p.id = $3::uuid AND p.entity_kind = 'context_manifest'
+	`, fixture.workspaceID, run.SessionID, manifestID).Scan(
+		&versionContentHash, &hashOrigin, &provenance,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if versionContentHash != manifestHash {
+		t.Fatalf("manifest version content_hash=%q want persisted manifest_hash=%q", versionContentHash, manifestHash)
+	}
+	if hashOrigin != string(ArtifactHashOriginProduction) || provenance != string(ArtifactProvenanceComplete) {
+		t.Fatalf("manifest hash_origin=%q provenance=%q", hashOrigin, provenance)
+	}
 	var manifestAttemptID, grantID, grantPrincipalID, grantClearance string
 	var grantRevision int64
 	if err = pool.QueryRow(ctx, `

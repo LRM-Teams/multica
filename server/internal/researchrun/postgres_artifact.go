@@ -86,6 +86,9 @@ func recordVerificationPolicyMutationTx(ctx context.Context, tx pgx.Tx, workspac
 }
 
 func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtifactPassportInput) error {
+	if in.HashOrigin == ArtifactHashOriginProduction && in.ContentHash == "" {
+		return fmt.Errorf("%w: production artifact %s requires an explicit content hash", ErrInvalidContract, in.Kind)
+	}
 	if in.AccessLevel == "" {
 		in.AccessLevel = ArtifactAccessRaw
 	}

@@ -226,7 +226,7 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 		{
 			name: "manifest_entry_representation_bytes",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
 					UPDATE research_artifact_context_entry e
 					SET representation_bytes = convert_to('sha256:mutated-after-accept-preflight', 'UTF8')
 					FROM research_artifact_context_manifest m
@@ -235,7 +235,7 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 					  AND m.session_id = $2::uuid
 					  AND m.attempt_id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID)
-				return err
+				return nil
 			},
 		},
 		{

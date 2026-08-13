@@ -36,32 +36,42 @@ export function ResearchD5Rail({
   composer,
   onClose,
   className,
+  id,
   ...rest
 }: ResearchD5RailContentProps & {
   onClose?: () => void;
   className?: string;
-} & Pick<ComponentProps<"aside">, "inert">) {
+} & Pick<ComponentProps<"aside">, "id" | "inert" | "aria-hidden">) {
   const { t } = useT("research");
-  const panelId = useId();
-  const chatTabId = `${panelId}-chat-tab`;
-  const detailTabId = `${panelId}-detail-tab`;
+  const generatedId = useId();
+  const railId = id ?? `research-d5-rail-${generatedId}`;
+  const chatTabId = `${railId}-chat-tab`;
+  const detailTabId = `${railId}-detail-tab`;
+  const chatPanelId = `${railId}-chat-panel`;
+  const detailPanelId = `${railId}-detail-panel`;
   const chatTabRef = useRef<HTMLButtonElement>(null);
   const detailTabRef = useRef<HTMLButtonElement>(null);
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const next =
-      event.key === "ArrowLeft" || event.key === "Home"
-        ? "chat"
-        : event.key === "ArrowRight" || event.key === "End"
-          ? "detail"
-          : null;
-    if (!next) return;
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
     event.preventDefault();
-    onModeChange(next);
-    (next === "chat" ? chatTabRef : detailTabRef).current?.focus();
+    let nextMode: ResearchD5RailMode;
+    if (event.key === "Home") nextMode = "chat";
+    else if (event.key === "End") nextMode = "detail";
+    else nextMode = event.currentTarget === chatTabRef.current ? "detail" : "chat";
+    onModeChange(nextMode);
+    (nextMode === "chat" ? chatTabRef : detailTabRef).current?.focus();
   };
 
   return (
     <aside
+      id={railId}
       data-testid="research-d5-rail"
       data-rail-mode={mode}
       className={cn("d5-rail", className)}
@@ -70,11 +80,11 @@ export function ResearchD5Rail({
       <div className="d5-rail-tabs" role="tablist">
         <button
           ref={chatTabRef}
-          type="button"
           id={chatTabId}
+          type="button"
           role="tab"
           aria-selected={mode === "chat"}
-          aria-controls={panelId}
+          aria-controls={chatPanelId}
           tabIndex={mode === "chat" ? 0 : -1}
           className={cn("d5-rail-tab", mode === "chat" && "d5-rail-tab-active")}
           onClick={() => onModeChange("chat")}
@@ -84,11 +94,11 @@ export function ResearchD5Rail({
         </button>
         <button
           ref={detailTabRef}
-          type="button"
           id={detailTabId}
+          type="button"
           role="tab"
           aria-selected={mode === "detail"}
-          aria-controls={panelId}
+          aria-controls={detailPanelId}
           tabIndex={mode === "detail" ? 0 : -1}
           className={cn("d5-rail-tab", mode === "detail" && "d5-rail-tab-active")}
           onClick={() => onModeChange("detail")}
@@ -109,12 +119,22 @@ export function ResearchD5Rail({
         ) : null}
       </div>
       <div
-        id={panelId}
+        id={chatPanelId}
         role="tabpanel"
-        aria-labelledby={mode === "chat" ? chatTabId : detailTabId}
+        aria-labelledby={chatTabId}
         className="d5-rail-body"
+        hidden={mode !== "chat"}
       >
-        {mode === "chat" ? chatPanel : detailPanel}
+        {chatPanel}
+      </div>
+      <div
+        id={detailPanelId}
+        role="tabpanel"
+        aria-labelledby={detailTabId}
+        className="d5-rail-body"
+        hidden={mode !== "detail"}
+      >
+        {detailPanel}
       </div>
       {mode === "chat" && composer ? (
         <div className="d5-rail-footer">{composer}</div>

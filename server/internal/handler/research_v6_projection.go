@@ -183,7 +183,37 @@ func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.R
 		writeJSON(w, 200, nil)
 		return
 	}
-	writeJSON(w, 200, researchV6Delta{FromSequenceExclusive: from, ThroughSequence: snap.ThroughEventSequence, NodeUpserts: snap.Nodes, EdgeUpserts: snap.Edges, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: researchV6RootIDs(snap.Nodes)})
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT sequence, event_type, payload
+		FROM research_run_event
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND sequence > $3
+		ORDER BY sequence
+		LIMIT $4
+	`, h.resolveWorkspaceID(r), strings.TrimSpace(chi.URLParam(r, "runId")), from, researchV6MaximumDeltaEvents+1)
+	if err != nil {
+		writeResearchV6Error(w, err)
+		return
+	}
+	defer rows.Close()
+	events := []researchV6ProjectionEvent{}
+	for rows.Next() {
+		var event researchV6ProjectionEvent
+		if err = rows.Scan(&event.Sequence, &event.Type, &event.Payload); err != nil {
+			writeResearchV6Error(w, err)
+			return
+		}
+		events = append(events, event)
+	}
+	if err = rows.Err(); err != nil {
+		writeResearchV6Error(w, err)
+		return
+	}
+	delta, safe := buildResearchV6EventDelta(snap, from, events)
+	if !safe {
+		writeError(w, http.StatusConflict, "projection delta cannot be reconstructed safely; snapshot resync required")
+		return
+	}
+	writeJSON(w, http.StatusOK, delta)
 }
 func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.Request) {
 	var req struct {

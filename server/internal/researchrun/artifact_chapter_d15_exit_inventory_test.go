@@ -16,7 +16,7 @@ const chapterD15EnforceComplete = false
 //   - missing: no meaningful executable coverage yet
 var chapterD15Coverage = map[int]string{
 	1:  "partial", // migration 318–330 roundtrip tests
-	2:  "partial", // trigger/constraint name inventory tests
+	2:  "covered", // live catalog scope/FK/revision-uniqueness/complete stable guard inventory
 	3:  "partial", // migration FK negative fixtures
 	4:  "partial", // deferred guard tests in migration suite
 	5:  "partial", // immutability/watermark CAS tests

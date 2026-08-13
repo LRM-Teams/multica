@@ -990,6 +990,12 @@ Manifest 不再仅依赖进程内硬编码 clearance。D 章尚未完成，最�
 `artifact_chapter_d15_exit_inventory_test.go` 的 26 项退出清单为准，不能以 migration
 数量或 fixture 正例替代完整验收。
 
+D-ddl-1 证据：PostgreSQL catalog 验收逐表检查所有 D-owned Passport/Version/Result/
+Manifest/Entry/Omission/Input/Supersession/Lifecycle/Policy 表的非空 workspace/session scope
+与 composite FK，并检查 target+new-revision 唯一索引、完整生产关系 FK，以及 passport/class/
+verification/grant/supersession/lifecycle/integrity/append-only/delete 守卫的稳定实际名称。
+§15.2 已收口；Go 常量清单不再被单独视为数据库存在性证据。
+
 D-access-2 证据：human Session snapshot 拒绝 `attempt_id`，在读取 Session、Fleet、
 legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-private context
 只能经 Agent 专用路由的 principal、active Fleet membership 和 assigned Attempt 校验读取。

@@ -119,6 +119,7 @@ func TestMigratedTransactionsUseResearchTransactionRunner(t *testing.T) {
 		{file: "postgres_circuit.go", function: "RecordCircuitSuccess", wantBegins: 1, wantCommits: 5},
 		{file: "postgres_circuit.go", function: "ClaimCircuitProbe", wantBegins: 1, wantCommits: 4},
 		{file: "postgres_circuit.go", function: "ResolveCircuitProbe", wantBegins: 1, wantCommits: 1},
+		{file: "postgres_artifact_supersession.go", function: "SupersedeArtifact", wantBegins: 1, wantCommits: 2},
 	}
 
 	for _, test := range tests {

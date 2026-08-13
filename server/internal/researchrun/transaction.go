@@ -51,6 +51,7 @@ const (
 	txOpReconcileLeaseClaim       researchTxOperation = "reconcile_lease.claim"
 	txOpReconcileLeaseRenew       researchTxOperation = "reconcile_lease.renew"
 	txOpReconcileLeaseRelease     researchTxOperation = "reconcile_lease.release"
+	txOpArtifactSupersede         researchTxOperation = "artifact.supersede"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

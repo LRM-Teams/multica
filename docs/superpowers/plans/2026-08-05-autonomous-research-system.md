@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-access-3 证据：真实 PostgreSQL HTTP 矩阵同时保留同 scope human live projection 与
+assigned active Agent Attempt projection 两个正向对照，并证明 unbound Fleet Agent、active
+但未分配 Agent、cross-workspace principal 与伪造 `X-Agent-ID` 均在 Run Snapshot 加载前
+fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
+grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

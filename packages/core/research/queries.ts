@@ -1,5 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import type { InfiniteData } from "@tanstack/react-query";
 import { api } from "../api";
+import type { TypedGraphResponse } from "./graph-typed";
 
 export type ResearchPresencePhase =
   | "idle"
@@ -81,6 +83,23 @@ export type ResearchGraphTypedPagination = {
   limit?: number;
   offset?: number;
 };
+
+/**
+ * Offset pages are one logical snapshot. Mixing graph versions can invent a
+ * topology that never existed, so fail the query and let the session retry all
+ * pages through its existing projection-error recovery.
+ */
+export function requireConsistentTypedGraphPages(
+  data: InfiniteData<TypedGraphResponse, number>,
+): InfiniteData<TypedGraphResponse, number> {
+  const versions = new Set(data.pages.map((page) => page.graph_version));
+  if (versions.size > 1) {
+    throw new Error(
+      "GET /api/research/sessions/:id/graph/typed returned mixed graph versions",
+    );
+  }
+  return data;
+}
 
 /** Normalize GET /presence wire map (snake updated_at) → ResearchPresenceMap. */
 export function normalizeResearchPresenceMap(
@@ -209,6 +228,7 @@ export function researchGraphTypedInfiniteOptions(wsId: string, sessionId: strin
       if (total != null && loaded < total) return loaded;
       return undefined;
     },
+    select: requireConsistentTypedGraphPages,
     enabled: !!wsId && !!sessionId,
   });
 }

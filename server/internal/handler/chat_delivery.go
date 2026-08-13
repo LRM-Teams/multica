@@ -163,7 +163,6 @@ func (h *Handler) listStandaloneChatOutstanding(ctx context.Context, sessionIDs 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []standaloneChatOutstanding
 	for rows.Next() {
 		var sessionID pgtype.UUID
@@ -175,19 +174,29 @@ func (h *Handler) listStandaloneChatOutstanding(ctx context.Context, sessionIDs 
 		if !standaloneChatOutstandingFromLastRole(role) {
 			continue
 		}
-		item := standaloneChatOutstanding{SessionID: uuidToString(sessionID), CreatedAt: createdAt.UTC().Format(time.RFC3339Nano)}
+		out = append(out, standaloneChatOutstanding{
+			SessionID: uuidToString(sessionID),
+			CreatedAt: createdAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	for i := range out {
 		var agentID, messageID pgtype.UUID
 		if qerr := h.DB.QueryRow(ctx, `
 			SELECT agent_id, message_id
 			FROM agent_chat_delivery
 			WHERE chat_session_id = $1 AND acked_at IS NULL
 			ORDER BY seq DESC, message_id DESC
-			LIMIT 1`, sessionID).Scan(&agentID, &messageID); qerr == nil {
-			item.DeliveryID = standaloneChatDeliveryID(uuidToString(messageID), uuidToString(agentID))
+			LIMIT 1`, parseUUID(out[i].SessionID)).Scan(&agentID, &messageID); qerr == nil {
+			out[i].DeliveryID = standaloneChatDeliveryID(uuidToString(messageID), uuidToString(agentID))
 		}
-		out = append(out, item)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (h *Handler) insertStandaloneAssistantReply(ctx context.Context, session db.ChatSession, content string, parts []protocol.MessagePart) (db.ChatMessage, error) {

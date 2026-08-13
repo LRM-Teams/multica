@@ -411,7 +411,29 @@ const ResearchRunSnapshotSchema = z
           .passthrough(),
       )
       .default([]),
-    attempts: z.array(z.record(z.string(), z.unknown())).default([]),
+    attempts: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            task_id: z.string(),
+            attempt_number: z.number(),
+            assigned_agent_id: z.string(),
+            inbox_task_id: z.string().optional(),
+            dispatch_key: z.string().optional(),
+            client_request_id: z.string().optional(),
+            status: z.string(),
+            result_hash: z.string().optional(),
+            failure_class: z.string().optional(),
+            diagnostics: z.string().optional(),
+            dispatched_at: z.string().optional(),
+            started_at: z.string().optional(),
+            result_submitted_at: z.string().optional(),
+            completed_at: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
     sources: z
       .array(
         z

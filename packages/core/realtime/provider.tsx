@@ -128,14 +128,14 @@ export function WSProvider({
       wsClient ? wsClient.onConnectionStatus(callback) : () => {},
     [wsClient],
   );
-  const readConnectionStatus = useCallback(
+  const readConnectionStatus = useCallback<() => WSConnectionStatus>(
     () => wsClient?.getConnectionStatus() ?? "idle",
     [wsClient],
   );
   const connectionStatus = useSyncExternalStore(
     subscribeConnectionStatus,
     readConnectionStatus,
-    () => "idle",
+    (): WSConnectionStatus => "idle",
   );
 
   const subscribe = useCallback(

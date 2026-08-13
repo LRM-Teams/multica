@@ -72,26 +72,33 @@ func invokeDispatchWithBeforeCommitFault(t *testing.T, ctx context.Context, fx d
 
 func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRaceFixture) {
 	t.Helper()
-	var attemptCount, manifestCount, outboxCount int
+	var attempts, passports, manifests, entries, omissions, grants, outboxes, events int
 	if err := fx.pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_task_attempt WHERE id = $1::uuid
-	`, fx.input.AttemptID).Scan(&attemptCount); err != nil {
+		SELECT
+		  (SELECT count(*)::int FROM research_task_attempt WHERE id=$1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_passport
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid
+		     AND (id=$1::uuid OR entity_kind='context_manifest')),
+		  (SELECT count(*)::int FROM research_artifact_context_manifest
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_entry
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_omission
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_policy_grant
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id=$1::uuid),
+		  (SELECT count(*)::int FROM research_run_event
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid
+		     AND event_type='task_dispatching' AND payload->>'attempt_id'=$1::text)
+	`, fx.input.AttemptID, fx.fixture.workspaceID, fx.run.SessionID).Scan(
+		&attempts, &passports, &manifests, &entries, &omissions, &grants, &outboxes, &events,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_artifact_context_manifest
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
-	`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&manifestCount); err != nil {
-		t.Fatal(err)
-	}
-	if err := fx.pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id = $1::uuid
-	`, fx.input.AttemptID).Scan(&outboxCount); err != nil {
-		t.Fatal(err)
-	}
-	if attemptCount != 0 || manifestCount != 0 || outboxCount != 0 {
-		t.Fatalf("rolled-back dispatch leaked attempt=%d manifest=%d outbox=%d",
-			attemptCount, manifestCount, outboxCount)
+	if attempts != 0 || passports != 0 || manifests != 0 || entries != 0 || omissions != 0 || grants != 0 || outboxes != 0 || events != 0 {
+		t.Fatalf("rolled-back dispatch leaked attempt=%d passports=%d manifest=%d entries=%d omissions=%d grants=%d outbox=%d events=%d",
+			attempts, passports, manifests, entries, omissions, grants, outboxes, events)
 	}
 	var taskStatus string
 	if err := fx.pool.QueryRow(ctx, `
@@ -101,6 +108,100 @@ func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRace
 	}
 	if taskStatus != string(TaskStatusReady) && taskStatus != string(TaskStatusPending) {
 		t.Fatalf("task status=%q want ready or pending after rolled-back dispatch", taskStatus)
+	}
+}
+
+func assertDispatchCommittedOnceWithFreshFacts(t *testing.T, ctx context.Context, fx dispatchRaceFixture, mutation string) {
+	t.Helper()
+	var attempts, manifests, outboxes, events int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_task_attempt WHERE id=$1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_manifest
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid AND attempt_id=$1::uuid),
+		  (SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id=$1::uuid),
+		  (SELECT count(*)::int FROM research_run_event
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid
+		     AND event_type='task_dispatching' AND payload->>'attempt_id'=$1::text)
+	`, fx.input.AttemptID, fx.fixture.workspaceID, fx.run.SessionID).Scan(
+		&attempts, &manifests, &outboxes, &events,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || manifests != 1 || outboxes != 1 || events != 1 {
+		t.Fatalf("fresh dispatch cardinality attempt=%d manifest=%d outbox=%d events=%d want all 1",
+			attempts, manifests, outboxes, events)
+	}
+	var taskStatus string
+	if err := fx.pool.QueryRow(ctx, `SELECT status FROM research_task WHERE id=$1::uuid`, fx.task.ID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != string(TaskStatusDispatching) {
+		t.Fatalf("fresh dispatch task status=%q want %q", taskStatus, TaskStatusDispatching)
+	}
+
+	switch mutation {
+	case "eligibility_revision":
+		var entryRevision, passportRevision int64
+		if err := fx.pool.QueryRow(ctx, `
+			SELECT e.eligibility_revision, p.eligibility_revision
+			FROM research_artifact_context_entry e
+			JOIN research_artifact_context_manifest m
+			  ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
+			JOIN research_artifact_version v
+			  ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
+			JOIN research_artifact_passport p
+			  ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id)
+			WHERE m.attempt_id=$1::uuid AND p.id=$2::uuid
+		`, fx.input.AttemptID, fx.claimID).Scan(&entryRevision, &passportRevision); err != nil {
+			t.Fatal(err)
+		}
+		if entryRevision <= 1 || entryRevision != passportRevision {
+			t.Fatalf("entry eligibility revision=%d passport=%d want matching advanced revision", entryRevision, passportRevision)
+		}
+	case "version_content_hash":
+		wantHash := contentHashFromPayload([]byte("mutated after dispatch preflight"))
+		var gotHash string
+		if err := fx.pool.QueryRow(ctx, `
+			SELECT v.content_hash
+			FROM research_artifact_context_entry e
+			JOIN research_artifact_context_manifest m
+			  ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
+			JOIN research_artifact_version v
+			  ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
+			WHERE m.attempt_id=$1::uuid AND v.artifact_id=$2::uuid
+		`, fx.input.AttemptID, fx.claimID).Scan(&gotHash); err != nil {
+			t.Fatal(err)
+		}
+		if gotHash != wantHash {
+			t.Fatalf("manifest version content hash=%q want fresh %q", gotHash, wantHash)
+		}
+	case "withdrawn_lifecycle":
+		var entries, omissions int
+		if err := fx.pool.QueryRow(ctx, `
+			SELECT
+			  (SELECT count(*)::int
+			   FROM research_artifact_context_entry e
+			   JOIN research_artifact_context_manifest m
+			     ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
+			   JOIN research_artifact_version v
+			     ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
+			   WHERE m.attempt_id=$1::uuid AND v.artifact_id=$2::uuid),
+			  (SELECT count(*)::int
+			   FROM research_artifact_context_omission o
+			   JOIN research_artifact_context_manifest m
+			     ON (m.workspace_id,m.session_id,m.id)=(o.workspace_id,o.session_id,o.manifest_id)
+			   JOIN research_artifact_version v
+			     ON (v.workspace_id,v.session_id,v.id)=(o.workspace_id,o.session_id,o.candidate_version_id)
+			   WHERE m.attempt_id=$1::uuid AND v.artifact_id=$2::uuid AND o.reason='lifecycle')
+		`, fx.input.AttemptID, fx.claimID).Scan(&entries, &omissions); err != nil {
+			t.Fatal(err)
+		}
+		if entries != 0 || omissions != 1 {
+			t.Fatalf("withdrawn claim entries=%d lifecycle omissions=%d want 0/1", entries, omissions)
+		}
+	default:
+		t.Fatalf("unhandled fresh-fact assertion for mutation %q", mutation)
 	}
 }
 
@@ -190,6 +291,7 @@ func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateDispatchIntent after fresh candidate mutation: %v", err)
 			}
+			assertDispatchCommittedOnceWithFreshFacts(t, ctx, fx, tc.name)
 		})
 	}
 }

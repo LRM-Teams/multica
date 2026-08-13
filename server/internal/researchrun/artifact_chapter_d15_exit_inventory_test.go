@@ -25,7 +25,7 @@ var chapterD15Coverage = map[int]string{
 	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered
 	9:  "covered", // closed normal-clearance/purpose/evaluation matrix + output taint permutations
 	10: "covered", // structural subject isolation + real subject/grader frozen-manifest dispatch
-	11: "partial", // dispatch race: eligibility/state/hash/lifecycle after rolled-back intent
+	11: "covered", // rolled-back dispatch retries re-evaluate eligibility/state/hash/lifecycle facts
 	12: "partial", // dispatch normalized locks + concurrent shared-candidate test
 	13: "partial", // eligibility + representation CAS
 	14: "covered", // replay/prompt/outbox binding tests

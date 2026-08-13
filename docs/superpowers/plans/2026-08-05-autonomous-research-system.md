@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-race-2 证据：`CreateDispatchIntent` 在 `before_commit` 故障后证明 Attempt、Passport、
+Manifest entry/omission、grant、Outbox、Task transition 和 dispatch Event 全部回滚；使用
+同一幂等输入重试时重新读取权威事实。entry 冻结更新后的 eligibility revision 并绑定携带
+新 content hash 的 Version，withdrawn 工件只生成 lifecycle omission，stale Run state version fail closed，
+成功路径最终各只有一个 Attempt、Manifest、Outbox 和 Event。§15.11 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

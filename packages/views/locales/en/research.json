@@ -185,6 +185,7 @@
     "handoff_project": "Create development project",
     "handoff_channel": "Create development channel",
     "handoff": "Handoff",
+    "handoff_submitting": "Handing off…",
     "presence": "Working",
     "weight": "Weight",
     "fleet_badge": {

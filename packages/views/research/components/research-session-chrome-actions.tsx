@@ -83,7 +83,7 @@ export function ResearchSessionChromeActions({
   onCreateChannelChange: (v: boolean) => void;
   onConfirm: () => void;
   onReject?: (reason: string) => void | Promise<void>;
-  onHandoff: () => void;
+  onHandoff: () => void | Promise<void>;
   confirmPending?: boolean;
   rejectPending?: boolean;
   handoffPending?: boolean;
@@ -104,6 +104,7 @@ export function ResearchSessionChromeActions({
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const handoffSubmittingRef = useRef(false);
   const rejectSubmittingRef = useRef(false);
 
   const status = session.status;
@@ -280,26 +281,51 @@ export function ResearchSessionChromeActions({
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               <Checkbox
                 checked={createProject}
-                onCheckedChange={(v) => onCreateProjectChange(v === true)}
+                aria-disabled={handoffPending || undefined}
+                onCheckedChange={(v) => {
+                  if (handoffPending) return;
+                  onCreateProjectChange(v === true);
+                }}
               />
               {t(($) => $.panel.handoff_project)}
             </label>
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               <Checkbox
                 checked={createChannel}
-                onCheckedChange={(v) => onCreateChannelChange(v === true)}
+                aria-disabled={handoffPending || undefined}
+                onCheckedChange={(v) => {
+                  if (handoffPending) return;
+                  onCreateChannelChange(v === true);
+                }}
               />
               {t(($) => $.panel.handoff_channel)}
             </label>
             <Button
               size="sm"
-              disabled={!createProject && !createChannel}
-              onClick={() => {
-                onHandoff();
-                setHandoffOpen(false);
+              disabled={
+                (!createProject && !createChannel && !handoffPending) || undefined
+              }
+              aria-disabled={handoffPending || undefined}
+              aria-busy={handoffPending || undefined}
+              className={cn(handoffPending && "cursor-not-allowed opacity-50")}
+              data-testid="research-session-handoff-submit"
+              onClick={async () => {
+                if (handoffPending || handoffSubmittingRef.current) return;
+                handoffSubmittingRef.current = true;
+                try {
+                  await onHandoff();
+                  setHandoffOpen(false);
+                } catch {
+                  // The mutation owner reports the error. Keep the selected
+                  // handoff targets and recovery surface available.
+                } finally {
+                  handoffSubmittingRef.current = false;
+                }
               }}
             >
-              {t(($) => $.panel.handoff)}
+              {handoffPending
+                ? t(($) => $.panel.handoff_submitting)
+                : t(($) => $.panel.handoff)}
             </Button>
           </PopoverContent>
         </Popover>

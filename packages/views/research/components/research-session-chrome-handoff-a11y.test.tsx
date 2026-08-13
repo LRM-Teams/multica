@@ -39,7 +39,10 @@ describe("LRM-1265 chrome handoff pending a11y", () => {
 
   it("submit: only unchecked targets use native disabled (no handoffPending ||)", () => {
     const block = handoffBlock();
-    expect(block).toContain("disabled={!createProject && !createChannel}");
+    expect(block).toContain("!createProject && !createChannel && !handoffPending");
+    expect(block).toContain("aria-disabled={handoffPending || undefined}");
+    expect(block).toContain("aria-busy={handoffPending || undefined}");
+    expect(block).toContain("handoffSubmittingRef.current");
     expect(block).not.toMatch(
       /disabled=\{handoffPending\s*\|\|\s*\(!createProject\s*&&\s*!createChannel\)\}/,
     );

@@ -34,6 +34,8 @@ import {
   EMPTY_RUNTIME_AGENT_WORKSPACES_RESPONSE,
   StickerCatalogResponseSchema,
   UserSchema,
+  ConversationHandleLookupSchema,
+  EMPTY_CONVERSATION_HANDLE_LOOKUP,
   SandboxNodeTemplatesResponseSchema,
   EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
   VoiceTranscriptResponseSchema,
@@ -835,5 +837,37 @@ describe("EnsureWindyResponseSchema", () => {
     expect(EnsureWindyResponseSchema.parse({ agent: { id: "wendy-1" } }).agent.id).toBe("wendy-1");
     expect(() => EnsureWindyResponseSchema.parse({ agent: {} })).toThrow();
     expect(() => EnsureWindyResponseSchema.parse({ dm_id: "dm-1" })).toThrow();
+  });
+});
+
+describe("ConversationHandleLookupSchema", () => {
+  it("accepts an authorized href", () => {
+    expect(
+      ConversationHandleLookupSchema.parse({
+        available: true,
+        href: "/acme/channels/chan-1?message=msg-1",
+      }),
+    ).toEqual({
+      available: true,
+      href: "/acme/channels/chan-1?message=msg-1",
+    });
+  });
+
+  it("falls closed when the payload is malformed", () => {
+    const missing = parseWithFallback(
+      { href: "/acme/channels/chan-1" },
+      ConversationHandleLookupSchema,
+      EMPTY_CONVERSATION_HANDLE_LOOKUP,
+      { endpoint: "GET /api/conversations/lookup" },
+    );
+    expect(missing).toEqual(EMPTY_CONVERSATION_HANDLE_LOOKUP);
+
+    const wrongType = parseWithFallback(
+      { available: "yes" },
+      ConversationHandleLookupSchema,
+      EMPTY_CONVERSATION_HANDLE_LOOKUP,
+      { endpoint: "GET /api/conversations/lookup" },
+    );
+    expect(wrongType).toEqual(EMPTY_CONVERSATION_HANDLE_LOOKUP);
   });
 });

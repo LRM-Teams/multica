@@ -24,6 +24,12 @@ export interface ConversationListResponse {
   next_cursor?: string;
 }
 
+/** Authorized read of a CLI/Activity/chat handle (`#channel`, `#channel:shortId`). */
+export interface ConversationHandleLookup {
+  available: boolean;
+  href?: string | null;
+}
+
 /**
  * The DM side of a conversation row. Defined structurally here (rather than
  * re-exporting `DMItem`) so the unified module owns its contract without a

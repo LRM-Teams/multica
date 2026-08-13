@@ -15,7 +15,27 @@ import (
 
 const reminderCacheStateFile = "reminder_cache.json"
 
+const defaultReminderFireRetryDelay = time.Second
+
 var errReminderProjectionGap = errors.New("reminder projection sequence gap")
+
+// reminderDueIdentity is the Raft 1.0.16 due key: owner + reminder + version.
+type reminderDueIdentity struct {
+	OwnerAgentID string `json:"owner_agent_id"`
+	ReminderID   string `json:"reminder_id"`
+	Version      int64  `json:"version"`
+}
+
+// reminderDueReceipt is the persisted local due fact. It stays until both the
+// owner wake is enqueued and the server has acknowledged the same identity.
+type reminderDueReceipt struct {
+	Job           protocol.ReminderTimerJob `json:"job"`
+	FiredAtClient string                    `json:"fired_at_client"`
+	Catchup       bool                      `json:"catchup"`
+	WakeEnqueued  bool                      `json:"wake_enqueued"`
+	ServerAcked   bool                      `json:"server_acked"`
+	ItemConsumed  bool                      `json:"item_consumed"`
+}
 
 type reminderTimer interface {
 	Stop() bool
@@ -50,6 +70,7 @@ type reminderCacheState struct {
 	RuntimeCursors   map[string]int64                `json:"runtime_cursors"`
 	RuntimeResets    map[string]bool                 `json:"runtime_resets,omitempty"`
 	RecoveryRequired bool                            `json:"recovery_required,omitempty"`
+	Receipts         map[string][]reminderDueReceipt `json:"receipts,omitempty"`
 }
 
 // reminderCache is the owner-daemon timer projection. Entries are ephemeral,
@@ -64,9 +85,14 @@ type reminderCache struct {
 	runtimeResets    map[string]bool
 	recoveryRequired bool
 	attemptedFires   map[string]int64
+	receipts         map[string][]reminderDueReceipt
 	suspended        bool
 	clock            reminderClock
 	onFire           func(protocol.ReminderTimerJob)
+	onFireDelivery   func(protocol.ReminderTimerJob) bool
+	fireRetryDelay   time.Duration
+	fireRetryTimers  map[string]reminderTimer
+	dispatching      map[string]bool
 	logger           *slog.Logger
 	path             string
 	loadErr          error
@@ -81,15 +107,19 @@ func newReminderCache(clock reminderClock, logger *slog.Logger, onFire func(prot
 		logger = slog.Default()
 	}
 	return &reminderCache{
-		entries:        make(map[string]reminderCacheEntry),
-		fences:         make(map[string]reminderVersionFence),
-		runtimeCursors: make(map[string]int64),
-		runtimeResets:  make(map[string]bool),
-		attemptedFires: make(map[string]int64),
-		clock:          clock,
-		onFire:         onFire,
-		logger:         logger,
-		writeState:     writeDaemonStateAtomically,
+		entries:         make(map[string]reminderCacheEntry),
+		fences:          make(map[string]reminderVersionFence),
+		runtimeCursors:  make(map[string]int64),
+		runtimeResets:   make(map[string]bool),
+		attemptedFires:  make(map[string]int64),
+		receipts:        make(map[string][]reminderDueReceipt),
+		fireRetryTimers: make(map[string]reminderTimer),
+		dispatching:     make(map[string]bool),
+		fireRetryDelay:  defaultReminderFireRetryDelay,
+		clock:           clock,
+		onFire:          onFire,
+		logger:          logger,
+		writeState:      writeDaemonStateAtomically,
 	}
 }
 
@@ -135,6 +165,9 @@ func (c *reminderCache) setPersistence(root string) {
 		}
 	}
 	c.recoveryRequired = state.RecoveryRequired
+	if state.Receipts != nil {
+		c.receipts = cloneReminderReceipts(state.Receipts)
+	}
 }
 
 func (c *reminderCache) recoverCorruptStateLocked(cause error) {
@@ -151,6 +184,7 @@ func (c *reminderCache) initializeRecoveryStateLocked(cause error) {
 	clear(c.runtimeCursors)
 	clear(c.runtimeResets)
 	clear(c.attemptedFires)
+	clear(c.receipts)
 	c.recoveryRequired = true
 	c.loadErr = nil
 	if err := c.persistLocked(); err != nil {
@@ -175,7 +209,10 @@ func (c *reminderCache) persistLocked() error {
 	if c.path == "" {
 		return nil
 	}
-	state := reminderCacheState{Fences: c.fences, RuntimeCursors: c.runtimeCursors, RuntimeResets: c.runtimeResets, RecoveryRequired: c.recoveryRequired}
+	state := reminderCacheState{
+		Fences: c.fences, RuntimeCursors: c.runtimeCursors, RuntimeResets: c.runtimeResets,
+		RecoveryRequired: c.recoveryRequired, Receipts: c.receipts,
+	}
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -217,6 +254,44 @@ func cloneAttemptedFires(in map[string]int64) map[string]int64 {
 		out[id] = version
 	}
 	return out
+}
+
+func cloneReminderReceipts(in map[string][]reminderDueReceipt) map[string][]reminderDueReceipt {
+	out := make(map[string][]reminderDueReceipt, len(in))
+	for id, receipts := range in {
+		if len(receipts) == 0 {
+			continue
+		}
+		copied := make([]reminderDueReceipt, len(receipts))
+		copy(copied, receipts)
+		out[id] = copied
+	}
+	return out
+}
+
+func reminderReceiptKey(identity reminderDueIdentity) string {
+	return identity.OwnerAgentID + "\x00" + identity.ReminderID + "\x00" + fmt.Sprintf("%d", identity.Version)
+}
+
+func receiptIdentity(receipt reminderDueReceipt) reminderDueIdentity {
+	return reminderDueIdentity{
+		OwnerAgentID: receipt.Job.OwnerAgentID,
+		ReminderID:   receipt.Job.ReminderID,
+		Version:      receipt.Job.Version,
+	}
+}
+
+func sameDueIdentity(a, b reminderDueIdentity) bool {
+	return a.OwnerAgentID == b.OwnerAgentID && a.ReminderID == b.ReminderID && a.Version == b.Version
+}
+
+func findReceiptIndex(receipts []reminderDueReceipt, identity reminderDueIdentity) int {
+	for i, receipt := range receipts {
+		if sameDueIdentity(receiptIdentity(receipt), identity) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) (bool, error) {
@@ -261,6 +336,13 @@ func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) 
 			OwnerAgentID: event.AgentID, Version: event.Version, LastSeq: event.Seq, Terminal: event.Terminal,
 		}
 		delete(c.attemptedFires, event.ReminderID)
+		if event.EventType == "fire_result" {
+			for _, receipt := range append([]reminderDueReceipt(nil), c.receipts[event.ReminderID]...) {
+				if receipt.Job.OwnerAgentID == event.AgentID {
+					c.ackFireReceiptLocked(receiptIdentity(receipt))
+				}
+			}
+		}
 	}
 	c.runtimeCursors[event.RuntimeID] = event.Seq
 	if err := c.persistLocked(); err != nil {
@@ -308,6 +390,64 @@ func (c *reminderCache) cancel(reminderID string, version int64) bool {
 	}
 	ok, _ := c.applyProjection(event)
 	return ok
+}
+
+func (c *reminderCache) cancelOwned(reminderID string, version int64, ownerAgentID string) bool {
+	if c == nil || reminderID == "" || version < 1 {
+		return false
+	}
+	fence := c.highWatermark(reminderID)
+	if fence.OwnerAgentID != "" && ownerAgentID != "" && fence.OwnerAgentID != ownerAgentID {
+		return false
+	}
+	if fence.Version > version {
+		return false
+	}
+	return c.cancel(reminderID, version)
+}
+
+func (c *reminderCache) pendingFireReceipts() []reminderDueReceipt {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]reminderDueReceipt, 0)
+	for _, receipts := range c.receipts {
+		out = append(out, receipts...)
+	}
+	return out
+}
+
+func (c *reminderCache) ackFireReceipt(identity reminderDueIdentity) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ackFireReceiptLocked(identity)
+}
+
+func (c *reminderCache) ackFireReceiptLocked(identity reminderDueIdentity) bool {
+	receipts := c.receipts[identity.ReminderID]
+	index := findReceiptIndex(receipts, identity)
+	if index < 0 {
+		return false
+	}
+	receipts[index].ServerAcked = true
+	if receipts[index].WakeEnqueued {
+		c.clearFireRetryLocked(identity)
+		receipts = append(receipts[:index], receipts[index+1:]...)
+		if len(receipts) == 0 {
+			delete(c.receipts, identity.ReminderID)
+		} else {
+			c.receipts[identity.ReminderID] = receipts
+		}
+	} else {
+		c.receipts[identity.ReminderID] = receipts
+	}
+	_ = c.persistLocked()
+	return true
 }
 
 func (c *reminderCache) nextTestSeq() int64 {
@@ -796,10 +936,11 @@ func (c *reminderCache) armLocked(job protocol.ReminderTimerJob, fireAt time.Tim
 	}
 }
 
-// attemptFireOnce removes the due job before invoking the transport. The
-// in-memory attempt fence prevents snapshots on this connection from creating
-// a makeup attempt. A reconnect clears that fence, allowing the canonical
-// snapshot to recover the same version only when the server never committed it.
+// attemptFireOnce removes the due timer, persists a local due receipt, then
+// dispatches the owner wake. The receipt stays until wake is enqueued and the
+// server acknowledges the same identity. The in-memory attempt fence still
+// prevents a second timer from being armed for this version on the current
+// connection; reconnect recovery is the snapshot of the persisted receipt.
 func (c *reminderCache) attemptFireOnce(job protocol.ReminderTimerJob) {
 	c.mu.Lock()
 	current, ok := c.entries[job.ReminderID]
@@ -809,8 +950,122 @@ func (c *reminderCache) attemptFireOnce(job protocol.ReminderTimerJob) {
 	}
 	delete(c.entries, job.ReminderID)
 	c.attemptedFires[job.ReminderID] = job.Version
+	fireAt, _ := time.Parse(time.RFC3339, job.FireAt)
+	receipt := reminderDueReceipt{
+		Job:           job,
+		FiredAtClient: c.clock.Now().UTC().Format(time.RFC3339Nano),
+		Catchup:       fireAt.Before(c.clock.Now()),
+	}
+	identity := receiptIdentity(receipt)
+	if findReceiptIndex(c.receipts[job.ReminderID], identity) < 0 {
+		c.receipts[job.ReminderID] = append(c.receipts[job.ReminderID], receipt)
+		_ = c.persistLocked()
+	} else {
+		receipt = c.receipts[job.ReminderID][findReceiptIndex(c.receipts[job.ReminderID], identity)]
+	}
 	c.mu.Unlock()
+	c.dispatchFire(receipt)
+}
+
+func (c *reminderCache) deliverFire(job protocol.ReminderTimerJob) bool {
+	if c.onFireDelivery != nil {
+		return c.onFireDelivery(job)
+	}
 	if c.onFire != nil {
 		c.onFire(job)
+		return true
+	}
+	return false
+}
+
+func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
+	identity := receiptIdentity(receipt)
+	key := reminderReceiptKey(identity)
+	c.mu.Lock()
+	if c.dispatching[key] {
+		c.mu.Unlock()
+		return
+	}
+	c.dispatching[key] = true
+	c.clearFireRetryLocked(identity)
+	c.mu.Unlock()
+
+	wakeEnqueued := false
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil && c.logger != nil {
+				c.logger.Error("reminder onFire panicked", "reminder_id", receipt.Job.ReminderID, "error", recovered)
+			}
+		}()
+		wakeEnqueued = c.deliverFire(receipt.Job)
+	}()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.dispatching, key)
+	index := findReceiptIndex(c.receipts[receipt.Job.ReminderID], identity)
+	if index < 0 {
+		return
+	}
+	pending := c.receipts[receipt.Job.ReminderID]
+	if !wakeEnqueued {
+		c.scheduleFireRetryLocked(pending[index])
+		return
+	}
+	pending[index].WakeEnqueued = true
+	if pending[index].ServerAcked {
+		c.clearFireRetryLocked(identity)
+		pending = append(pending[:index], pending[index+1:]...)
+		if len(pending) == 0 {
+			delete(c.receipts, receipt.Job.ReminderID)
+		} else {
+			c.receipts[receipt.Job.ReminderID] = pending
+		}
+	} else {
+		c.receipts[receipt.Job.ReminderID] = pending
+	}
+	_ = c.persistLocked()
+}
+
+func (c *reminderCache) scheduleFireRetryLocked(receipt reminderDueReceipt) {
+	if receipt.WakeEnqueued {
+		return
+	}
+	identity := receiptIdentity(receipt)
+	if findReceiptIndex(c.receipts[receipt.Job.ReminderID], identity) < 0 {
+		return
+	}
+	key := reminderReceiptKey(identity)
+	if _, exists := c.fireRetryTimers[key]; exists {
+		return
+	}
+	delay := c.fireRetryDelay
+	if delay <= 0 {
+		delay = defaultReminderFireRetryDelay
+	}
+	timer := c.clock.AfterFunc(delay, func() {
+		c.mu.Lock()
+		if current, ok := c.fireRetryTimers[key]; ok {
+			delete(c.fireRetryTimers, key)
+			_ = current
+		}
+		index := findReceiptIndex(c.receipts[receipt.Job.ReminderID], identity)
+		var pending reminderDueReceipt
+		if index >= 0 {
+			pending = c.receipts[receipt.Job.ReminderID][index]
+		}
+		c.mu.Unlock()
+		if index >= 0 {
+			c.dispatchFire(pending)
+		}
+	})
+	c.fireRetryTimers[key] = timer
+}
+
+func (c *reminderCache) clearFireRetryLocked(identity reminderDueIdentity) {
+	key := reminderReceiptKey(identity)
+	if timer, ok := c.fireRetryTimers[key]; ok {
+		timer.Stop()
+		delete(c.fireRetryTimers, key)
 	}
 }

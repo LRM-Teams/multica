@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { conversationMessageHref } from "@multica/core/conversations";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { channelsOptions } from "@multica/core/channels/queries";
 import type { Channel } from "@multica/core/types";
@@ -25,9 +26,13 @@ import { ChannelChip } from "./channel-chip";
 export function ChannelRefLink({
   channelId,
   label,
+  messageId,
+  threadId,
 }: {
   channelId: string;
   label?: string;
+  messageId?: string;
+  threadId?: string;
 }) {
   const wsId = useWorkspaceId();
   const { data: channels } = useQuery(channelsOptions(wsId));
@@ -35,7 +40,7 @@ export function ChannelRefLink({
   const displayName = liveName ?? label ?? channelId;
   const paths = useWorkspacePaths();
   const navigation = useOptionalNavigation();
-  const href = paths.channelDetail(channelId);
+  const href = conversationMessageHref(paths.channelDetail(channelId), { messageId, threadId });
 
   const chip = (
     <ChannelChip name={displayName} className="cursor-pointer hover:bg-accent transition-colors" />

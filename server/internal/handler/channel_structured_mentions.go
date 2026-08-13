@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/mention"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/conversationhandle"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -93,6 +95,9 @@ func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelRe
 	}
 	parts = appendReferenceOccurrences(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
 	parts = appendReferenceOccurrences(parts, h.resolveChannelReferenceLinks(ctx, ch.WorkspaceID, content))
+	// Thread handles (#channel:shortId) must claim the full span before bare
+	// `#name` or `:deadbeef` is leftover prose.
+	parts = appendReferenceOccurrences(parts, h.resolveBareConversationHandles(ctx, ch.WorkspaceID, content))
 	// Bare `#name` runs after the link form so an explicit composer link always
 	// wins the span it already owns (appendReferenceOccurrences keeps the first
 	// verified anchor per span).
@@ -252,6 +257,75 @@ func (h *Handler) resolveBareChannelReferences(ctx context.Context, workspaceID,
 	return out
 }
 
+// resolveBareConversationHandles persists a channel-ref over the full
+// `#channel:shortId` span (Raft CLI / agent thread handles) so the hex is not
+// leftover prose beside a `#name` chip. Prefix lookup must be unique in that
+// channel; an unknown or ambiguous short id degrades to the `#name` span.
+func (h *Handler) resolveBareConversationHandles(ctx context.Context, workspaceID, content string) []protocol.MessagePart {
+	if !strings.Contains(content, "#") {
+		return nil
+	}
+	matches := conversationhandle.Find(content)
+	if len(matches) == 0 {
+		return nil
+	}
+	candidates := h.channelReferenceCandidates(ctx, workspaceID)
+	if len(candidates) == 0 {
+		return nil
+	}
+	skipRegions := mention.FindLiteralSkipRegions(content)
+	out := make([]protocol.MessagePart, 0)
+	for _, match := range matches {
+		if match.Handle.Kind != conversationhandle.KindChannel || match.Handle.MessagePrefix == "" {
+			continue
+		}
+		if mention.InLiteralSkipRegion(match.Start, skipRegions) {
+			continue
+		}
+		if mention.IsInsideMarkdownLink(content, match.Start, match.End) {
+			continue
+		}
+		candidate, ok := candidates[normalizeMentionCandidateLabel(match.Handle.Name)]
+		if !ok {
+			continue
+		}
+		channelID, err := util.ParseUUID(candidate.ID)
+		if err != nil {
+			continue
+		}
+		start, end := match.Start, match.End
+		params := json.RawMessage(nil)
+		if messageID, threadRoot, ok := h.lookupUniqueMessageByPrefix(ctx, parseUUID(workspaceID), channelID, match.Handle.MessagePrefix); ok {
+			payload := map[string]string{"message_id": uuidToString(messageID)}
+			if threadRoot.Valid {
+				payload["thread_id"] = uuidToString(threadRoot)
+			}
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				continue
+			}
+			params = encoded
+		} else {
+			colon := strings.Index(match.Raw, ":")
+			if colon < 0 {
+				continue
+			}
+			end = match.Start + colon
+		}
+		startUTF16, endUTF16 := contentUTF16Span(content, start, end)
+		out = append(out, protocol.MessagePart{
+			Type:              protocol.MessagePartTypeReference,
+			RefType:           "channel-ref",
+			RefID:             candidate.ID,
+			Label:             candidate.Name,
+			Params:            params,
+			ContentStartUTF16: &startUTF16,
+			ContentEndUTF16:   &endUTF16,
+		})
+	}
+	return out
+}
+
 // channelReferenceCandidates lists the linkable group channels of a workspace
 // keyed by lowercased name. DMs are excluded for the same reason
 // resolveChannelReferenceLinks drops them (private 1:1s are not a shareable
@@ -300,6 +374,12 @@ func findBareChannelReferences(content string, candidates map[string]channelRefe
 		return utf8.RuneCountInString(candidates[keys[i]].Name) > utf8.RuneCountInString(candidates[keys[j]].Name)
 	})
 	skipRegions := mention.FindLiteralSkipRegions(content)
+	threadHandleAt := map[int]bool{}
+	for _, match := range conversationhandle.Find(content) {
+		if match.Handle.Kind == conversationhandle.KindChannel && match.Handle.MessagePrefix != "" {
+			threadHandleAt[match.Start] = true
+		}
+	}
 
 	out := make([]channelReferenceOccurrence, 0)
 	for start := 0; start < len(content); {
@@ -308,7 +388,7 @@ func findBareChannelReferences(content string, candidates map[string]channelRefe
 			break
 		}
 		hash += start
-		if !mentionHandleBoundaryBefore(content, hash) || mention.InLiteralSkipRegion(hash, skipRegions) {
+		if threadHandleAt[hash] || !mentionHandleBoundaryBefore(content, hash) || mention.InLiteralSkipRegion(hash, skipRegions) {
 			start = hash + 1
 			continue
 		}

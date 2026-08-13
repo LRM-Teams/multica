@@ -197,6 +197,12 @@ func TestProjectTimelineEntryLabelsFineGrainedToolKinds(t *testing.T) {
 			wantTitle:   "Working",
 			wantSubtext: "Using cursor-agent",
 		},
+		{
+			name:        "updating reminder shows the reminder id on the timeline",
+			body:        `{"text":"#a291584b","activity_kind":"working","detail_kind":"updating_reminder"}`,
+			wantTitle:   "Updating reminder",
+			wantSubtext: "#a291584b",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

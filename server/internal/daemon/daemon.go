@@ -332,7 +332,8 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		logger: logger,
 	}
 	d.runner = taskRunnerFunc(d.runTask)
-	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
+	d.reminderCache = newReminderCache(nil, logger, nil)
+	d.reminderCache.onFireDelivery = d.onReminderTimer
 	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
 	d.agentAttachments = newLocalAgentAttachmentRegistry(cfg.WorkspacesRoot, logger)
 	d.runUpdateFn = d.runUpdate

@@ -190,7 +190,12 @@ function issueRef(start: number, end: number): MessagePart {
     content_end_utf16: end,
   } as MessagePart;
 }
-function channelRef(start: number, end: number, label = "team-a"): MessagePart {
+function channelRef(
+  start: number,
+  end: number,
+  label = "team-a",
+  params?: { message_id?: string; thread_id?: string },
+): MessagePart {
   return {
     type: "reference",
     ref_type: "channel-ref",
@@ -198,6 +203,7 @@ function channelRef(start: number, end: number, label = "team-a"): MessagePart {
     label,
     content_start_utf16: start,
     content_end_utf16: end,
+    ...(params ? { params } : {}),
   } as MessagePart;
 }
 
@@ -264,6 +270,25 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.getByText("#team-a")).toBeInTheDocument();
     expect(screen.queryByText(raw, { exact: false })).toBeNull();
     expect(screen.queryByText(/mention:\/\/channel/)).toBeNull();
+  });
+
+  it("deep-links a #channel:shortId channel-ref to the verified message", () => {
+    const content = "see #raft-research:a291584b";
+    render(
+      <InlineReferenceContent
+        content={content}
+        parts={[
+          channelRef(4, content.length, "raft-research", {
+            message_id: "msg-1",
+            thread_id: "root-1",
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("channel-chip").closest("a")).toHaveAttribute(
+      "href",
+      "/acme/channels/channel-uuid?thread=root-1&message=msg-1",
+    );
   });
 
   it("renders a bare `#name` channel-ref as a chip, replacing the hash the author typed (LRM-1153)", () => {

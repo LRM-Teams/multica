@@ -1,11 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, ArrowDown, Clock, Copy } from "lucide-react";
 import { useRunnerActivity } from "@multica/core/agents";
-import { channelsOptions } from "@multica/core/channels";
-import { useWorkspacePaths } from "@multica/core/paths";
 import type { Agent, RunnerActivityTimelineRow } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -13,11 +10,11 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
-import { AppLink } from "../../../navigation";
 import {
   foldActivityCommandPreview,
   isLongActivityCommand,
 } from "./activity-command-body";
+import { ActivitySubtext } from "./activity-subtext";
 
 const TONE_DOT: Record<string, string> = {
   neutral: "bg-muted-foreground/40",
@@ -96,36 +93,14 @@ function TimelineBodyBlock({
   );
 }
 
-function ActivitySubtext({ text, channelPaths }: { text: string; channelPaths: ReadonlyMap<string, string> }) {
-  const lines = text.split("\n");
-  const target = lines[0]?.match(/^target: (#([^:\s]+)(?::[^\s]+)?)$/);
-  const channelPath = target ? channelPaths.get(target[2] ?? "") : undefined;
-  const targetLabel = target?.[1];
-  if (!targetLabel || !channelPath) return <>{text}</>;
-  const targetPrefix = lines[0]?.slice(0, -targetLabel.length);
-
-  return (
-    <>
-      {targetPrefix}
-      <AppLink
-        href={channelPath}
-        className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {targetLabel}
-      </AppLink>
-      {lines.length > 1 ? `\n${lines.slice(1).join("\n")}` : null}
-    </>
-  );
-}
-
 function TimelineRow({
   row,
+  workspaceId,
   exactTimeFormatter,
-  channelPaths,
 }: {
   row: RunnerActivityTimelineRow;
+  workspaceId: string;
   exactTimeFormatter: Intl.DateTimeFormat;
-  channelPaths: ReadonlyMap<string, string>;
 }) {
   const { t } = useT("agents");
   const [bodyExpanded, setBodyExpanded] = useState(false);
@@ -207,12 +182,7 @@ function TimelineRow({
             ) : null}
           </>
         ) : plainSubtext ? (
-          <span
-            data-testid="runner-activity-subtext"
-            className="mt-0.5 block whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted-foreground"
-          >
-            <ActivitySubtext text={plainSubtext} channelPaths={channelPaths} />
-          </span>
+          <ActivitySubtext text={plainSubtext} workspaceId={workspaceId} />
         ) : null}
       </div>
     </article>
@@ -272,12 +242,6 @@ export function ActivityTab({ agent }: { agent: Agent }) {
     [timeZone],
   );
   const { data, isLoading, isError, refetch } = useRunnerActivity(agent.workspace_id, agent.id);
-  const { data: channels = [] } = useQuery(channelsOptions(agent.workspace_id));
-  const workspacePaths = useWorkspacePaths();
-  const channelPaths = useMemo(
-    () => new Map(channels.map((channel) => [channel.name, workspacePaths.channelDetail(channel.id)])),
-    [channels, workspacePaths],
-  );
   const rootRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -332,8 +296,8 @@ export function ActivityTab({ agent }: { agent: Agent }) {
             <TimelineRow
               key={row.id}
               row={row}
+              workspaceId={agent.workspace_id}
               exactTimeFormatter={exactTimeFormatter}
-              channelPaths={channelPaths}
             />
           ))}
         </div>

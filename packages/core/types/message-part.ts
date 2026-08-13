@@ -61,6 +61,11 @@ export type MessagePart =
       /** Exact UTF-16 range in the message content; emitted by the server. */
       content_start_utf16?: number;
       content_end_utf16?: number;
+      /** Present when the span is a `#channel:shortId` thread handle. */
+      params?: {
+        message_id?: string;
+        thread_id?: string;
+      };
     }
   | {
       /** Canonical Message-backed agent:create Proposal. */

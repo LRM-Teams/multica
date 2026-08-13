@@ -1,74 +1,52 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
+import { WorkspaceSlugProvider } from "@multica/core/paths";
 import enAgents from "../../../locales/en/agents.json";
 import enCommon from "../../../locales/en/common.json";
 
 const runnerActivity = vi.fn();
-const channelsQuery = vi.fn();
-const navigationPush = vi.fn();
+const listChannels = vi.hoisted(() => vi.fn());
+const lookupConversationHandle = vi.hoisted(() => vi.fn());
 vi.mock("@multica/core/agents", () => ({ useRunnerActivity: (...args: unknown[]) => runnerActivity(...args) }));
-vi.mock("@tanstack/react-query", () => ({ useQuery: (...args: unknown[]) => channelsQuery(...args) }));
-vi.mock("@multica/core/channels", () => ({ channelsOptions: (workspaceId: string) => ({ queryKey: ["channels", workspaceId] }) }));
-vi.mock("@multica/core/paths", () => ({ useWorkspacePaths: () => ({ channelDetail: (id: string) => `/test/channels/${id}` }) }));
 vi.mock("@multica/ui/lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../../../common/use-viewing-timezone", () => ({ useViewingTimezone: () => "UTC" }));
+vi.mock("@multica/core/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/api")>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      listChannels: (...args: unknown[]) => listChannels(...args),
+      lookupConversationHandle: (...args: unknown[]) => lookupConversationHandle(...args),
+    },
+  };
+});
 
 import { ActivityTab } from "./activity-tab";
 import { copyText } from "@multica/ui/lib/clipboard";
-import { NavigationProvider } from "../../../navigation";
 
 const agent = { id: "agent-1", workspace_id: "workspace-1" } as never;
 const TEST_RESOURCES = { en: { agents: enAgents, common: enCommon } };
 
 function renderActivityTab() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <NavigationProvider value={{
-      push: navigationPush,
-      replace: vi.fn(),
-      back: vi.fn(),
-      pathname: "/test/members",
-      searchParams: new URLSearchParams(),
-      getShareableUrl: vi.fn((path: string) => path),
-    }}>
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <ActivityTab agent={agent} />
-      </I18nProvider>
-    </NavigationProvider>,
+    <QueryClientProvider client={queryClient}>
+      <WorkspaceSlugProvider slug="acme">
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <ActivityTab agent={agent} />
+        </I18nProvider>
+      </WorkspaceSlugProvider>
+    </QueryClientProvider>,
   );
 }
 
 describe("ActivityTab", () => {
-  it("links the target channel in a successful saved-Draft Activity", () => {
-    channelsQuery.mockReturnValue({ data: [{ id: "channel-1", name: "test123" }] });
-    runnerActivity.mockReturnValue({
-      data: {
-        summary: { label: "Online", tone: "success", visibility: "visible" },
-        timeline: [{
-          id: "row-draft-sent",
-          occurred_at: "2026-08-13T00:38:46Z",
-          title: "Send draft sent",
-          subtext: "target: #test123\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent",
-          tone: "success",
-          body_kind: "none",
-        }],
-      },
-      isLoading: false,
-      isError: false,
-      refetch: vi.fn(),
-    });
-
-    renderActivityTab();
-
-    expect(screen.getByRole("link", { name: "#test123" })).toHaveAttribute(
-      "href",
-      "/test/channels/channel-1",
-    );
-    const link = screen.getByRole("link", { name: "#test123" });
-    expect(link).not.toHaveTextContent("freshness updates");
-    expect(screen.getByTestId("runner-activity-subtext")).toHaveTextContent(
-      "freshness updates: 0 newer messages",
-    );
+  beforeEach(() => {
+    listChannels.mockResolvedValue([]);
+    lookupConversationHandle.mockResolvedValue({ available: false });
   });
 
   it("renders the server-projected rows in the previous chronological timeline UI", () => {
@@ -184,10 +162,87 @@ describe("ActivityTab", () => {
     });
     renderActivityTab();
     expect(screen.getByText("Message held — review newer messages before sending")).toBeInTheDocument();
-    expect(screen.getByText("3 newer messages available — review then resend")).toHaveClass(
-      "block",
-      "break-words",
+    const subtext = screen.getByTestId("runner-activity-subtext");
+    expect(subtext).toHaveClass("block", "break-words");
+    expect(subtext).toHaveTextContent("3 newer messages available — review then resend");
+  });
+
+  it("links the target channel in a successful saved-Draft Activity", async () => {
+    listChannels.mockResolvedValue([{ id: "channel-1", name: "test123", kind: "group" }]);
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Online", tone: "success", visibility: "visible" },
+        timeline: [{
+          id: "row-draft-sent",
+          occurred_at: "2026-08-13T00:38:46Z",
+          title: "Send draft sent",
+          subtext: "target: #test123\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent",
+          tone: "success",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    const link = await screen.findByRole("link", { name: "#test123" });
+    expect(link).toHaveAttribute("href", "/acme/channels/channel-1");
+    expect(link).not.toHaveTextContent("freshness updates");
+    expect(screen.getByTestId("runner-activity-subtext")).toHaveTextContent(
+      "freshness updates: 0 newer messages",
     );
+  });
+
+  it("turns a target channel handle into a workspace channel link", async () => {
+    listChannels.mockResolvedValue([{ id: "chan-1", name: "general", kind: "group" }]);
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Updating reminder...", tone: "warning", visibility: "visible" },
+        timeline: [{
+          id: "row-target",
+          occurred_at: "2026-08-13T02:01:50Z",
+          title: "Updating reminder",
+          subtext: "target: #general\nfreshness updates: 0 newer messages",
+          tone: "warning",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    const link = await screen.findByRole("link", { name: "#general" });
+    expect(link).toHaveAttribute("href", "/acme/channels/chan-1");
+    expect(screen.getByTestId("runner-activity-subtext").textContent).toContain("target: #general");
+  });
+
+  it("turns a #channel:shortId target into the authorized message deep link", async () => {
+    lookupConversationHandle.mockResolvedValue({
+      available: true,
+      href: "/acme/channels/chan-9?thread=root-1&message=msg-1",
+    });
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Updating reminder...", tone: "warning", visibility: "visible" },
+        timeline: [{
+          id: "row-thread",
+          occurred_at: "2026-08-13T02:01:50Z",
+          title: "Updating reminder",
+          subtext: "target: #raft-research:a291584b",
+          tone: "warning",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    const link = await screen.findByRole("link", { name: "#raft-research:a291584b" });
+    expect(link).toHaveAttribute("href", "/acme/channels/chan-9?thread=root-1&message=msg-1");
+    expect(lookupConversationHandle).toHaveBeenCalledWith("#raft-research:a291584b");
   });
 
   it("does not invent a summary when the server withholds it", () => {

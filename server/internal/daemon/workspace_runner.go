@@ -220,20 +220,30 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			connection.deliveries.Resume(start.AgentID, start.LaunchID)
 			go func() {
-				status, session, err := runner.completeManagedAgentStart(connection.ctx, start, ack)
+				// Provider startup belongs to the Runner, not the socket that
+				// delivered agent:start. A Machine Upgrade successor can drop
+				// that control connection while Codex is still booting.
+				startCtx := runner.life
+				if startCtx == nil {
+					startCtx = context.Background()
+				}
+				status, session, err := runner.completeManagedAgentStart(startCtx, start, ack)
 				if err != nil {
 					if runner.logger != nil {
 						runner.logger.Warn("Workspace Runner provider start failed", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "start_dispatch_id", start.StartDispatchID, "reason", "provider_start_failed", "error", err)
 					}
-					// The lifecycle module publishes the exact Raft failure projection
-					// (spawn => Offline, runtime => Error) together with inactive.
+					if status.AgentID != "" {
+						if writeErr := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); writeErr != nil && runner.logger != nil {
+							runner.logger.Debug("workspace Runner start-failure status unpublished", "workspace_id", workspaceID, "agent_id", start.AgentID, "error", writeErr)
+						}
+					}
 					return
 				}
-				if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
+				if err := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); err != nil {
 					failConnection(err)
 					return
 				}
-				if err := writeFrame(protocol.EventAgentSession, session); err != nil {
+				if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, session); err != nil {
 					failConnection(err)
 					return
 				}

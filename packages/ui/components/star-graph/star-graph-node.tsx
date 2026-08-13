@@ -51,8 +51,19 @@ export interface StarGraphNodeProps {
   agentBadge?: string;
   /** Live metrics for XL/XXL/L. */
   metrics?: StarGraphNodeMetrics;
+  /** Fully formatted localized metric strings supplied by the product layer. */
+  metricText?: {
+    documentCount?: string;
+    confidence?: string;
+    conclusionCount?: string;
+    documentBadge?: string;
+  };
   /** Override the computed accessible name (D5 keyboard/SR contract). */
   accessibleName?: string;
+  /** Opaque graph id used by the canvas focus manager. */
+  nodeId?: string;
+  /** Canvas uses roving tabindex so a large graph contributes one tab stop. */
+  tabIndex?: number;
   /** Explicitly busy (spinner/pulse). */
   busy?: boolean;
   /** Grid position on the canvas (left/top in % or px). Optional. */
@@ -75,8 +86,11 @@ export function StarGraphNode({
   headerLabel,
   agentBadge,
   metrics,
+  metricText,
   busy,
   accessibleName,
+  nodeId,
+  tabIndex,
   style,
   onOpen,
   tabIndex,
@@ -104,7 +118,7 @@ export function StarGraphNode({
   const showDocumentBadge =
     (token.tier === "xxl" || token.tier === "xl" || token.tier === "l") &&
     hasDocuments;
-  const metricSummary = metricsText(metrics, showDocumentBadge);
+  const metricSummary = metricsSummaryText(metrics, metricText, showDocumentBadge);
 
   return (
     <button
@@ -112,6 +126,8 @@ export function StarGraphNode({
       data-node-id={nodeId}
       tabIndex={tabIndex}
       aria-label={readable}
+      data-node-id={nodeId}
+      tabIndex={tabIndex}
       onClick={onOpen}
       data-tier={tier}
       data-state={state}
@@ -173,7 +189,7 @@ export function StarGraphNode({
       </span>
       {showDocumentBadge && (
         <span data-testid="star-graph-document-badge" className="sg-document-badge">
-          DOC · {documentCount}
+          {metricText?.documentBadge ?? `DOC · ${documentCount}`}
         </span>
       )}
       {stateToken.glyph !== "none" && (
@@ -217,18 +233,23 @@ function SNodeContent({
   );
 }
 
-function metricsText(
+function metricsSummaryText(
   metrics: StarGraphNodeMetrics | undefined,
+  localized: StarGraphNodeProps["metricText"],
   omitDocumentCount = false,
 ): string {
   if (!metrics) return "";
   const parts: string[] = [];
   if (metrics.round) parts.push(`R${metrics.round}`);
   if (!omitDocumentCount && metrics.documentCount != null && metrics.documentCount > 0) {
-    parts.push(`${metrics.documentCount} 文档`);
+    parts.push(localized?.documentCount ?? `DOC · ${metrics.documentCount}`);
   }
-  if (metrics.confidence != null) parts.push(`置信 ${metrics.confidence}%`);
-  if (metrics.conclusionCount != null) parts.push(`${metrics.conclusionCount} 结论`);
+  if (metrics.confidence != null) {
+    parts.push(localized?.confidence ?? `${metrics.confidence}%`);
+  }
+  if (metrics.conclusionCount != null) {
+    parts.push(localized?.conclusionCount ?? `Σ · ${metrics.conclusionCount}`);
+  }
   return parts.join(" · ");
 }
 

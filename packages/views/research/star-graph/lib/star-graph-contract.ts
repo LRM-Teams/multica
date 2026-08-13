@@ -38,7 +38,7 @@ export interface StarGraphTypedFields {
   cluster_id?: string | null;
   /** Source/supporting document count. */
   document_count?: number | null;
-  /** Confidence 0..100. */
+  /** Confidence as canonical 0..1, or legacy percent 0..100. */
   confidence?: number | null;
   /** Conclusion/count of findings. */
   conclusion_count?: number | null;

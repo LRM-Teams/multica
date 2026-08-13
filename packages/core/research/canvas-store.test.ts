@@ -17,6 +17,7 @@ describe("useResearchCanvasStore (LRM-1497 shared client state)", () => {
   beforeEach(() => {
     useResearchCanvasStore.setState({
       viewport: null,
+      viewportBySession: {},
       selectedNodeId: null,
       filter: emptyCanvasFilter(),
     });
@@ -32,6 +33,30 @@ describe("useResearchCanvasStore (LRM-1497 shared client state)", () => {
   it("stores the world-space viewport (zoom preserved on resize path)", () => {
     useResearchCanvasStore.getState().setViewport({ x: 120, y: 40, zoom: 1.5 });
     expect(useResearchCanvasStore.getState().viewport).toEqual({ x: 120, y: 40, zoom: 1.5 });
+  });
+
+  it("isolates persisted viewports by research session", () => {
+    const store = useResearchCanvasStore.getState();
+    store.setSessionViewport("session-a", { x: 120, y: 40, zoom: 1.5 });
+    store.setSessionViewport("session-b", { x: -20, y: 80, zoom: 0.8 });
+
+    expect(useResearchCanvasStore.getState().viewportBySession).toEqual({
+      "session-a": { x: 120, y: 40, zoom: 1.5 },
+      "session-b": { x: -20, y: 80, zoom: 0.8 },
+    });
+  });
+
+  it("bounds retained session viewports", () => {
+    for (let index = 0; index < 24; index += 1) {
+      useResearchCanvasStore
+        .getState()
+        .setSessionViewport(`session-${index}`, { x: index, y: 0, zoom: 1 });
+    }
+
+    const saved = useResearchCanvasStore.getState().viewportBySession;
+    expect(Object.keys(saved)).toHaveLength(20);
+    expect(saved["session-0"]).toBeUndefined();
+    expect(saved["session-23"]).toEqual({ x: 23, y: 0, zoom: 1 });
   });
 
   it("keeps selection across a filter change (AC: select then fit preserves selection)", () => {

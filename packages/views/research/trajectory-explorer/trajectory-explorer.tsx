@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { ResearchGraphNode } from "@multica/core/types";
+import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import { buildTrajectoryLaneLayout } from "@multica/core/research";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
@@ -19,6 +19,7 @@ import { TrajectoryDetail } from "./trajectory-detail";
 
 export interface TrajectoryExplorerProps {
   nodes: readonly ResearchGraphNode[];
+  edges?: readonly ResearchGraphEdge[];
   /** Session status: completed/archived/done disable interaction. */
   sessionStatus?: string;
   /** Selected node id coming from the canvas/session (bidirectional sync). */
@@ -43,6 +44,7 @@ export interface TrajectoryExplorerProps {
  */
 export function TrajectoryExplorer({
   nodes,
+  edges = [],
   sessionStatus,
   selectedId,
   onSelect,
@@ -68,12 +70,16 @@ export function TrajectoryExplorer({
 
   const layout = useMemo(() => {
     const filteredNodes = filterNodesForTrajectory(nodes, filters);
-    const commits = deriveTrajectoryCommits(filteredNodes, []);
+    const visibleIds = new Set(filteredNodes.map((node) => node.id));
+    const filteredEdges = edges.filter(
+      (edge) => visibleIds.has(edge.from_node_id) && visibleIds.has(edge.to_node_id),
+    );
+    const commits = deriveTrajectoryCommits(filteredNodes, filteredEdges);
     return buildTrajectoryLaneLayout(commits);
     // Adapter orders by created_at (time); lane-layout preserves that positional
     // order as logical order. A time/logical sort switch is a later slice; both
     // deterministic paths consume the same filtered commit set (AC3 reflow).
-  }, [nodes, filters]);
+  }, [edges, nodes, filters]);
 
   const selectedNode = useMemo(() => {
     if (!effectiveSelectedId) return null;

@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -199,16 +201,21 @@ func TestInterruptedMachineUpgradeRecoveryResumesOnlyIncompletePhases(t *testing
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
+			t.Setenv("HOME", root)
 			previousRoot := versionStoreRootFn
 			versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
 			t.Cleanup(func() { versionStoreRootFn = previousRoot })
+			scratch := filepath.Join(root, "staged-multica")
+			if err := os.WriteFile(scratch, []byte("staged-binary"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			stageCalls, verifyCalls, activateCalls, restartCalls := 0, 0, 0, 0
 			d := &Daemon{
 				cfg:    Config{CLIVersion: tc.runningVersion, ComputerGeneration: 2, DetachedMachineUpgradeCandidate: tc.detached},
 				logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 				machineUpgradeStageFn: func(string) (string, error) {
 					stageCalls++
-					return "staged", nil
+					return scratch, nil
 				},
 				machineUpgradeVerifyFn: func(string, string) (string, error) {
 					verifyCalls++
@@ -216,13 +223,16 @@ func TestInterruptedMachineUpgradeRecoveryResumesOnlyIncompletePhases(t *testing
 				},
 				activateStagedFn: func(context.Context, string, string) (string, error) {
 					activateCalls++
-					return "/versions/v10.0.0/multica", nil
+					return scratch, nil
 				},
 				cancelFunc: func() { restartCalls++ },
 			}
 			journal := &machineUpgradeJournal{
 				ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
 				PredecessorComputerGeneration: 1, RuntimeIDs: []string{"runtime-1"}, Phase: tc.phase,
+			}
+			if tc.phase == "staged" {
+				journal.StagedPath = scratch
 			}
 			if err := d.writeMachineUpgradeJournal(journal); err != nil {
 				t.Fatal(err)
@@ -383,6 +393,90 @@ func TestMachineUpgradeFailureReportErrorRetainsPreActivationJournal(t *testing.
 	d.failMachineUpgrade(context.Background(), "runtime-1", journal.ID, "stage_failed", fmt.Errorf("download failed"))
 	if retained, err := d.currentMachineUpgradeJournal(); err != nil || retained == nil {
 		t.Fatalf("unacknowledged failure removed journal=%+v err=%v", retained, err)
+	}
+}
+
+func TestRecoverStagedJournalVerifiesPersistedScratchPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("scratch fixture is a POSIX --version script")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configureMachineUpgradeRecoveryVersionStore(t)
+	scratch, err := cli.WriteReleaseScratch("v10.0.0", []byte("#!/bin/sh\necho 'multica v10.0.0'\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v9.9.9"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "/tmp/not-used", nil
+		},
+		cancelFunc: func() {},
+	}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-1"}, Phase: "staged", StagedPath: scratch,
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := d.recoverInterruptedMachineUpgrade(context.Background())
+	if err != nil {
+		t.Fatalf("staged recovery: %v", err)
+	}
+	if !restarted {
+		t.Fatal("staged recovery did not schedule restart")
+	}
+	if d.stagedUpgradePath != scratch {
+		t.Fatalf("stagedUpgradePath = %q, want persisted scratch %q", d.stagedUpgradePath, scratch)
+	}
+}
+
+func TestRecoverStagedJournalRestagesWhenScratchMissing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("scratch fixture is a POSIX --version script")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configureMachineUpgradeRecoveryVersionStore(t)
+
+	restageCalls := 0
+	prevStage := stageReleaseFn
+	stageReleaseFn = func(targetVersion string, _ time.Duration, _ string) (string, error) {
+		restageCalls++
+		return cli.WriteReleaseScratch(targetVersion, []byte("#!/bin/sh\necho 'multica "+targetVersion+"'\n"))
+	}
+	t.Cleanup(func() { stageReleaseFn = prevStage })
+
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v9.9.9"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			return "/tmp/not-used", nil
+		},
+		cancelFunc: func() {},
+	}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-1"}, Phase: "staged", StagedPath: filepath.Join(home, "missing-scratch"),
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.recoverInterruptedMachineUpgrade(context.Background()); err != nil {
+		t.Fatalf("missing-scratch recovery: %v", err)
+	}
+	if restageCalls != 1 {
+		t.Fatalf("restageCalls = %d, want 1", restageCalls)
+	}
+	stored, err := d.currentMachineUpgradeJournal()
+	if err != nil || stored == nil || resolveStagedBinaryFile(stored.StagedPath) == "" {
+		t.Fatalf("journal did not persist restaged scratch: %+v err=%v", stored, err)
 	}
 }
 
@@ -798,15 +892,30 @@ func TestHandleMachineUpgradeDifferentVersionStartsWithServerAcceptance(t *testi
 }
 
 func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale(t *testing.T) {
-	storeRoot := filepath.Join(t.TempDir(), "store")
+	if runtime.GOOS == "windows" {
+		t.Skip("scratch fixture is a POSIX --version script")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	storeRoot := filepath.Join(home, "store")
 	previousRoot := versionStoreRootFn
 	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
 
+	install, err := cli.DefaultInstallPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(install), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(install, []byte("old-path-computer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	previousStage := stageReleaseFn
 	stageReleaseFn = func(targetVersion string, _ time.Duration, _ string) (string, error) {
-		t.Setenv("HOME", filepath.Dir(storeRoot))
-		return cli.WriteReleaseScratch(targetVersion, []byte("#!/bin/sh\necho 'multica 0.4.17'\n"))
+		return cli.WriteReleaseScratch(targetVersion, []byte("#!/bin/sh\necho 'multica "+targetVersion+"'\n"))
 	}
 	t.Cleanup(func() { stageReleaseFn = previousStage })
 
@@ -832,11 +941,13 @@ func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale
 		t.Fatalf("persist stale update observation: %v", err)
 	}
 
+	restarted := false
 	d := &Daemon{
 		cfg:               Config{CLIVersion: "v0.4.16"},
 		client:            NewClient(server.URL),
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		updateObservation: observation,
+		cancelFunc:        func() { restarted = true },
 	}
 	d.client.SetToken("test-token")
 	d.handleMachineUpgrade(context.Background(), "runtime-1", &PendingMachineUpgrade{
@@ -844,8 +955,19 @@ func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale
 		TargetVersion: "v0.4.17",
 	})
 
-	if d.stagedUpgradePath == "" {
-		t.Fatal("accepted target was not staged")
+	journal, err := d.currentMachineUpgradeJournal()
+	if err != nil || journal == nil || journal.Phase != "handoff" || journal.TargetVersion != "v0.4.17" {
+		t.Fatalf("accepted target journal = %+v err=%v", journal, err)
+	}
+	if d.restartBinary != install {
+		t.Fatalf("restartBinary = %q, want PATH %q", d.restartBinary, install)
+	}
+	if !restarted {
+		t.Fatal("accepted target did not schedule restart")
+	}
+	got, err := os.ReadFile(install)
+	if err != nil || !strings.Contains(string(got), "multica v0.4.17") {
+		t.Fatalf("PATH after activation = %q err=%v", got, err)
 	}
 }
 

@@ -14,9 +14,13 @@ vi.mock("../../i18n/use-t", () => ({
         d5: {
           change_receipt: {
             title: "Canvas update · {{label}}",
+            input_count: "Merged {{count}} input nodes",
+            conclusion_count: "{{count}} conclusions",
+            graph_version: "Graph v{{version}}",
             ops: {
               goal_modified: "Goal version impact",
               integration_formed: "Results merged",
+              task_restarted: "Task restarted",
             },
           },
         },
@@ -52,5 +56,34 @@ describe("ResearchCanvasChangeCard (Slice F)", () => {
       "goal_modified",
     );
     expect(screen.getByText("Canvas update · Goal version impact")).toBeTruthy();
+  });
+
+  it("maps the production graph_merge operation and renders committed facts", () => {
+    const message = processMessage("graph_merge");
+    message.body = "Merged two independently verified results";
+    message.meta = {
+      op: "graph_merge",
+      title: "Combined finding",
+      input_node_ids: ["n1", "n2"],
+      conclusion_count: 4,
+      graph_version: 9,
+    };
+
+    expect(isCanvasChangeProcessMessage(message)).toBe(true);
+    render(<ResearchCanvasChangeCard message={message} />);
+
+    expect(screen.getByTestId("research-canvas-change-card")).toHaveAttribute(
+      "data-canvas-change-kind",
+      "integration_formed",
+    );
+    expect(screen.getByText("Canvas update · Results merged")).toBeTruthy();
+    expect(screen.getByText("Merged 2 input nodes")).toBeTruthy();
+    expect(screen.getByText("4 conclusions")).toBeTruthy();
+    expect(screen.getByText("Graph v9")).toBeTruthy();
+  });
+
+  it("maps the production retry command without treating unrelated process cards as changes", () => {
+    expect(isCanvasChangeProcessMessage(processMessage("node_command_retry"))).toBe(true);
+    expect(isCanvasChangeProcessMessage(processMessage("source_upsert"))).toBe(false);
   });
 });

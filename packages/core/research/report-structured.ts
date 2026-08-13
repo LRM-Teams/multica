@@ -41,7 +41,7 @@ const SourceRefSchema = z
     source_id: z.string(),
     title: z.string().optional().default(""),
     url: z.string().optional().default(""),
-    credibility_weight: z.number().optional().default(0.5),
+    credibility_weight: z.number().nullable().optional(),
     source_class: z.string().optional().default("other"),
   })
   .passthrough();

@@ -796,7 +796,11 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	invalidationGeneration := slot.invalidationGeneration
 	slot.mu.Unlock()
 
+	compactedThisInput := false
 	observeRuntimeMessage := func(message agent.Message) {
+		if message.Type == agent.MessageCompactionStarted {
+			compactedThisInput = true
+		}
 		p.observeResidentRuntimeMessage(slot, message)
 		if onMessage != nil {
 			onMessage(message)
@@ -886,11 +890,32 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 			}
 		}
 	}
+	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
+	if !compactedThisInput {
+		if onAccepted != nil {
+			onAccepted()
+		}
+		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, onComplete)
+		return nil
+	}
+	// Raft: compaction does not cover inbox. After a prepare-time compact,
+	// wait for the follow-up turn to do real work before the Context Boundary
+	// receipt. An empty/compaction-only turn stays uncommitted so the Message
+	// can be retried.
+	finished := make(chan error, 1)
+	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, func(turnErr error, gen uint64, capture *agent.ResidentTurnCapture) {
+		finished <- turnErr
+		if onComplete != nil {
+			onComplete(turnErr, gen, capture)
+		}
+	})
+	turnErr := <-finished
+	if turnErr != nil {
+		return turnErr
+	}
 	if onAccepted != nil {
 		onAccepted()
 	}
-	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
-	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, onComplete)
 	return nil
 }
 

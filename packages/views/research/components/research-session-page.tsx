@@ -89,6 +89,10 @@ import {
 import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
+import {
+  INITIAL_RESEARCH_SESSION_UI_STATE,
+  researchSessionUiReducer,
+} from "../lib/research-session-ui-state";
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchCanvasChangeCard, isCanvasChangeProcessMessage } from "./research-canvas-change-card";
@@ -105,6 +109,7 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchServerErrorPage } from "./research-server-error-page";
+import { ResearchSessionBoundary } from "./research-session-boundary";
 import {
   ResearchSessionInterruptBanner,
   type InterruptBannerPhase,
@@ -115,54 +120,19 @@ import {
   ResearchStageChatMarker,
 } from "./research-stage-timeline";
 
-type UiState = {
-  body: string;
-  createProject: boolean;
-  createChannel: boolean;
-  deliveryOpen: boolean;
-  selectedFamily: string | null;
-};
-
-type UiAction =
-  | { type: "setBody"; body: string }
-  | { type: "setCreateProject"; value: boolean }
-  | { type: "setCreateChannel"; value: boolean }
-  | { type: "setDeliveryOpen"; value: boolean }
-  | { type: "setFamily"; family: string | null }
-  | { type: "clearBody" };
-
-const initialUi: UiState = {
-  body: "",
-  createProject: true,
-  createChannel: true,
-  deliveryOpen: false,
-  selectedFamily: null,
-};
-
-function uiReducer(state: UiState, action: UiAction): UiState {
-  switch (action.type) {
-    case "setBody":
-      return { ...state, body: action.body };
-    case "setCreateProject":
-      return { ...state, createProject: action.value };
-    case "setCreateChannel":
-      return { ...state, createChannel: action.value };
-    case "setDeliveryOpen":
-      return { ...state, deliveryOpen: action.value };
-    case "setFamily":
-      return { ...state, selectedFamily: action.family };
-    case "clearBody":
-      return { ...state, body: "" };
-    default:
-      return state;
-  }
-}
-
 function mutationErrorToast(fallback: string, err: unknown) {
   showErrorToast(err instanceof Error && err.message ? err.message : fallback);
 }
 
 export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
+  return (
+    <ResearchSessionBoundary sessionId={sessionId}>
+      <ResearchSessionPageContent sessionId={sessionId} />
+    </ResearchSessionBoundary>
+  );
+}
+
+function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
   const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
@@ -240,7 +210,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     },
     [nav, setD5Lens],
   );
-  const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  const [ui, dispatch] = useReducer(
+    researchSessionUiReducer,
+    INITIAL_RESEARCH_SESSION_UI_STATE,
+  );
   useEffect(() => {
     clearCanvasSelection();
     clearCanvasFilter();

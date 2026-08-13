@@ -17,7 +17,7 @@ describe("D5 Agent inspector rail-safe position", () => {
       /\.d5-workspace\[data-d5-rail-open="true"\]\s*\{[^}]*--d5-inspector-right:\s*376px/s,
     );
     expect(css).toMatch(
-      /@media \(min-width: 768px\) and \(max-width: 1199px\)[\s\S]*?\.d5-workspace\[data-d5-rail-open="true"\]\s*\{[^}]*--d5-inspector-right:\s*336px/s,
+      /@media \(min-width: 768px\) and \(max-width: 959px\)[\s\S]*?\.d5-workspace\[data-d5-rail-open="true"\]\s*\{[^}]*--d5-inspector-right:\s*336px/s,
     );
     expect(css).toMatch(
       /\.research-agent-inspector\s*\{[^}]*right:\s*var\(--d5-inspector-right\)/s,

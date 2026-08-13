@@ -229,6 +229,35 @@
   cursor: wait;
 }
 
+@media (max-width: 767px) {
+  .sg-canvas-root .sg-map-key {
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 12px;
+    max-width: none;
+    gap: 0.55rem;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .sg-canvas-root .sg-map-key::-webkit-scrollbar {
+    display: none;
+  }
+  .sg-canvas-root .sg-map-key .sg-item {
+    min-width: max-content;
+    min-height: 32px;
+  }
+  .sg-zoom-controls {
+    right: 12px;
+    bottom: calc(62px + env(safe-area-inset-bottom));
+  }
+  .sg-summary-label {
+    left: 12px;
+    top: 12px;
+    max-width: calc(100% - 24px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sg-canvas-world {
     will-change: auto;

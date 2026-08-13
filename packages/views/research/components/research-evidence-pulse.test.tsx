@@ -22,6 +22,7 @@ vi.mock("../../i18n/use-t", () => ({
           evidence_expect_3: "Readiness",
         },
         session_page: { retry: "Retry" },
+        connectivity: { retrying: "Retrying…" },
       }),
   }),
 }));
@@ -85,5 +86,22 @@ describe("ResearchEvidencePulse (LRM-1329)", () => {
       /permission/i,
     );
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("keeps the retry focusable while a retry is pending", () => {
+    const onRetry = vi.fn();
+    render(
+      <ResearchEvidencePulse
+        mode="error"
+        revisionKey="retrying"
+        onRetry={onRetry}
+        retryPending
+      />,
+    );
+    const retry = screen.getByRole("button", {
+      name: "Retrying…",
+    }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(false);
+    expect(retry).toHaveAttribute("aria-disabled", "true");
   });
 });

@@ -208,7 +208,11 @@ export function ExecutionOverlayRow({
                 })}
               </span>
             ) : null}
-            <span>{copy.updatedLabel} {formatClock(agent.updatedAt, copy.clock_time)}</span>
+            {agent.updatedAt != null ? (
+              <span>
+                {copy.updatedLabel} {formatClock(agent.updatedAt, copy.clock_time)}
+              </span>
+            ) : null}
             {agent.locationLabel ? (
               <>
                 <span aria-hidden="true">·</span>

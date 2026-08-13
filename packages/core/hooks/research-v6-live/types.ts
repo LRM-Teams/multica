@@ -25,6 +25,9 @@ export type LiveConnectionStatus =
   | "reconnecting" // a drop was detected, resume in flight
   | "disconnected"; // explicitly stopped or errored past auto-reconnect
 
+/** Snapshot repair lifecycle, deliberately separate from socket state. */
+export type ProjectionSyncStatus = "idle" | "resyncing" | "failed";
+
 export interface LiveSourceDisconnect {
   /** Stop receiving deltas and cancel reconnect wiring. Idempotent. */
   disconnect(): void;
@@ -41,7 +44,10 @@ export interface ResearchV6LiveSource {
    * order; the underlying projection client re-orders / de-duplicates. Returns
    * a handle whose `disconnect()` tears the live link down.
    */
-  connect(onDelta: (delta: ResearchV6Delta) => void): LiveSourceDisconnect;
+  connect(
+    onDelta: (delta: ResearchV6Delta) => void,
+    onMalformedFrame?: (payload: unknown) => void,
+  ): LiveSourceDisconnect;
   /** Registers a callback for when the underlying transport reconnects. */
   onReconnect(handler: () => void): () => void;
   /** Emits the current connection status as it changes. */

@@ -71,7 +71,11 @@ import {
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
-import { resolveResearchCanvasNode, enrichResearchNodeForDetail } from "../lib/resolve-research-canvas-node";
+import {
+  enrichResearchNodeForDetail,
+  mergeResearchCanvasNodes,
+  resolveResearchCanvasNode,
+} from "../lib/resolve-research-canvas-node";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -85,6 +89,14 @@ import {
 import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
+import {
+  canvasSnapshotToTypedGraph,
+  useResearchSessionCanvas,
+} from "../v6-session-adapter";
+import {
+  INITIAL_RESEARCH_SESSION_UI_STATE,
+  researchSessionUiReducer,
+} from "../lib/research-session-ui-state";
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchCanvasChangeCard, isCanvasChangeProcessMessage } from "./research-canvas-change-card";
@@ -101,6 +113,7 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchServerErrorPage } from "./research-server-error-page";
+import { ResearchSessionBoundary } from "./research-session-boundary";
 import {
   ResearchSessionInterruptBanner,
   type InterruptBannerPhase,
@@ -111,54 +124,19 @@ import {
   ResearchStageChatMarker,
 } from "./research-stage-timeline";
 
-type UiState = {
-  body: string;
-  createProject: boolean;
-  createChannel: boolean;
-  deliveryOpen: boolean;
-  selectedFamily: string | null;
-};
-
-type UiAction =
-  | { type: "setBody"; body: string }
-  | { type: "setCreateProject"; value: boolean }
-  | { type: "setCreateChannel"; value: boolean }
-  | { type: "setDeliveryOpen"; value: boolean }
-  | { type: "setFamily"; family: string | null }
-  | { type: "clearBody" };
-
-const initialUi: UiState = {
-  body: "",
-  createProject: true,
-  createChannel: true,
-  deliveryOpen: false,
-  selectedFamily: null,
-};
-
-function uiReducer(state: UiState, action: UiAction): UiState {
-  switch (action.type) {
-    case "setBody":
-      return { ...state, body: action.body };
-    case "setCreateProject":
-      return { ...state, createProject: action.value };
-    case "setCreateChannel":
-      return { ...state, createChannel: action.value };
-    case "setDeliveryOpen":
-      return { ...state, deliveryOpen: action.value };
-    case "setFamily":
-      return { ...state, selectedFamily: action.family };
-    case "clearBody":
-      return { ...state, body: "" };
-    default:
-      return state;
-  }
-}
-
 function mutationErrorToast(fallback: string, err: unknown) {
   showErrorToast(err instanceof Error && err.message ? err.message : fallback);
 }
 
 export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
+  return (
+    <ResearchSessionBoundary sessionId={sessionId}>
+      <ResearchSessionPageContent sessionId={sessionId} />
+    </ResearchSessionBoundary>
+  );
+}
+
+function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
   const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
@@ -182,7 +160,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
   );
-  const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
+  const { data: presenceData } = useQuery(
+    researchPresenceOptions(wsId, sessionId),
+  );
+  const presence = presenceData ?? {};
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const {
     data: typedGraphPages,
@@ -207,6 +188,48 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         : undefined,
     [typedGraphPages, selectedNodeId],
   );
+  // The current durable run contract is session-keyed. Probe the V6 projection
+  // with that stable key; only an explicit 404/501 is allowed to use V5.
+  const projectionGateway = useResearchSessionCanvas({
+    wsId,
+    sessionId,
+    runId: sessionId,
+    transports: {
+      loadV6Snapshot: (runId) => api.getResearchV6ProjectionSnapshot(runId),
+      loadV5Session: async (id) => {
+        const snapshot = await api.getResearchSessionSnapshot(id);
+        return { sessionId: id, nodes: snapshot.nodes, edges: snapshot.edges };
+      },
+    },
+  });
+  const displayTypedGraph = useMemo(
+    () => {
+      if (projectionGateway.status === "error") return undefined;
+      return projectionGateway.source === "v6" && projectionGateway.canvas
+        ? canvasSnapshotToTypedGraph(sessionId, projectionGateway.snapshot)
+        : typedGraph;
+    },
+    [
+      projectionGateway.canvas,
+      projectionGateway.snapshot,
+      projectionGateway.source,
+      projectionGateway.status,
+      sessionId,
+      typedGraph,
+    ],
+  );
+  const detailGraphNodes = useMemo(
+    () => mergeResearchCanvasNodes(data?.nodes ?? [], displayTypedGraph),
+    [data?.nodes, displayTypedGraph],
+  );
+  const detailGraphEdges = useMemo(() => {
+    const byId = new Map((data?.edges ?? []).map((edge) => [edge.id, edge]));
+    for (const edge of displayTypedGraph?.edges ?? []) {
+      const key = edge.id || `${edge.from_node_id}:${edge.edge_type}:${edge.to_node_id}`;
+      if (!byId.has(key)) byId.set(key, edge);
+    }
+    return Array.from(byId.values());
+  }, [data?.edges, displayTypedGraph?.edges]);
   useEffect(() => {
     const fromUrl = nav.searchParams.get("lens");
     if (isResearchD5Lens(fromUrl) && fromUrl !== d5Lens) {
@@ -224,7 +247,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     },
     [nav, setD5Lens],
   );
-  const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  const [ui, dispatch] = useReducer(
+    researchSessionUiReducer,
+    INITIAL_RESEARCH_SESSION_UI_STATE,
+  );
   useEffect(() => {
     clearCanvasSelection();
     clearCanvasFilter();
@@ -235,6 +261,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       if (node) dispatch({ type: "setFamily", family: dimensionFamilyOf(node) });
     },
     [selectCanvasNode],
+  );
+  const handleFocusDetailNode = useCallback(
+    (nodeId: string) => {
+      const node = resolveResearchCanvasNode(nodeId, {
+        snapshotNodes: data?.nodes,
+        typedGraph,
+      });
+      if (node) handleSelectCanvasNode(enrichResearchNodeForDetail(node, typedGraph));
+    },
+    [data?.nodes, handleSelectCanvasNode, typedGraph],
   );
   useEffect(() => {
     if (!data) return;
@@ -397,18 +433,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       });
   }, [sessionInterrupt, sessionId, qc, wsId, t]);
 
-  // LRM-799: never keep a permanent skeleton on failure — only while loading.
-  // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
-  // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
-  if (isLoading || (isFetching && !data) || (!data && !online)) {
-    return (
-      <ResearchConnectivityShell>
-        <ResearchSessionPageSkeleton />
-      </ResearchConnectivityShell>
-    );
-  }
-
-  // LRM-833 — 5xx with no cache: dedicated error page + retry.
+  // LRM-833 — 5xx with no cache: dedicated error page + retry. This must stay
+  // ahead of the fetching skeleton so a background retry does not unmount the
+  // focused retry control and erase the visible error context.
   if (!data && isError && isServerError(error)) {
     return (
       <ResearchConnectivityShell>
@@ -423,9 +450,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     );
   }
 
-  // Keep successful snapshot on refetch failure so Delivery can show its error
-  // surface (LRM-993) instead of blanking the whole session shell.
-  if (!data) {
+  // Keep the generic load failure mounted while its refetch is pending for the
+  // same focus/restoration contract as the dedicated 5xx surface. Offline wins
+  // below so the connectivity shell can retain its offline-first skeleton.
+  if (!data && isError && online) {
     return (
       <ResearchConnectivityShell>
         <div
@@ -443,15 +471,38 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             type="button"
             variant="outline"
             size="sm"
+            aria-disabled={isFetching || undefined}
+            className={isFetching ? "cursor-not-allowed opacity-50" : undefined}
             onClick={() => {
+              if (isFetching) return;
               void refetch();
             }}
           >
-            {t(($) => $.session_page.retry)}
+            {t(($) =>
+              isFetching ? $.connectivity.retrying : $.session_page.retry,
+            )}
           </Button>
         </div>
       </ResearchConnectivityShell>
     );
+  }
+
+  // LRM-799: never keep a permanent skeleton on failure — only while loading.
+  // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
+  // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
+  if (isLoading || (isFetching && !data) || (!data && !online)) {
+    return (
+      <ResearchConnectivityShell>
+        <ResearchSessionPageSkeleton />
+      </ResearchConnectivityShell>
+    );
+  }
+
+  // Keep successful snapshot on refetch failure so Delivery can show its error
+  // surface (LRM-993) instead of blanking the whole session shell. The remaining
+  // no-data case is offline and is handled by the skeleton branch above.
+  if (!data) {
+    return null;
   }
 
   const { session, messages, report, sources } = data;
@@ -468,6 +519,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const executionRows = buildExecutionOverlayRows({
     members: fleet.members,
     presence,
+    presenceAvailable: presenceData != null,
     nodes: data.nodes,
     run: data.run,
   });
@@ -492,6 +544,18 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   ];
 
   const postUser = (body: string) => send.mutate(body);
+  const postUserCommitted = (body: string) =>
+    send.mutateAsync(body).then(() => undefined);
+  const stopAndPostUser = async (body: string) => {
+    const stopRequest = api.stopResearchSession(sessionId).catch((error: unknown) => {
+      showErrorToast(error instanceof Error ? error.message : String(error));
+      throw error;
+    });
+    await Promise.all([stopRequest, postUserCommitted(body)]);
+    void qc.invalidateQueries({
+      queryKey: researchKeys.snapshot(wsId, sessionId),
+    });
+  };
 
   // Plain derivation after data-gated early returns — do not use hooks here
   // (rules-of-hooks). goal history is cheap and only needed on the success path.
@@ -501,12 +565,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     currentVersion: goalVersion,
     messages,
   });
-  const goalImpact = typedGraph?.nodes ? summarizeGoalImpact(typedGraph.nodes) : null;
+  const goalImpact = displayTypedGraph?.nodes
+    ? summarizeGoalImpact(displayTypedGraph.nodes)
+    : null;
   const projectionMismatch =
     canvasMode === "ready" &&
+    projectionGateway.status !== "probing" &&
+    projectionGateway.status !== "error" &&
     !typedGraphLoading &&
     !typedGraphError &&
-    (!typedGraph || typedGraph.nodes.length === 0);
+    (!displayTypedGraph || displayTypedGraph.nodes.length === 0);
 
   const onClarificationOption = (
     question: ResearchClarificationQuestion,
@@ -610,7 +678,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onCreateChannelChange={(value) => dispatch({ type: "setCreateChannel", value })}
         onConfirm={() => confirm.mutate()}
         onReject={(reason) =>
-          rejectConfirm.mutate(formatStageGateRejectReply(reason))
+          rejectConfirm
+            .mutateAsync(formatStageGateRejectReply(reason))
+            .then(() => undefined)
         }
         onHandoff={() => handoff.mutate()}
         confirmPending={confirm.isPending}
@@ -644,17 +714,22 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       <div className="relative flex min-h-0 flex-1">
         <ResearchConstellationWorkspace
           className="min-h-0 flex-1"
-          typedGraph={typedGraph}
-          typedLoading={typedGraphLoading}
-          typedError={typedGraphError}
+          typedGraph={displayTypedGraph}
+          typedLoading={typedGraphLoading || projectionGateway.status === "probing"}
+          typedError={typedGraphError || projectionGateway.status === "error"}
+          projectionErrorReason={projectionGateway.error?.reason}
           projectionMismatch={projectionMismatch}
           onRetryTypedGraph={() => {
             void refetchTypedGraph();
+            projectionGateway.refetch();
           }}
-          retryTypedGraphPending={typedGraphFetching && !typedGraphFetchingNextPage}
+          retryTypedGraphPending={
+            projectionGateway.isFetching ||
+            (typedGraphFetching && !typedGraphFetchingNextPage)
+          }
           snapshotNodeCount={data.nodes.length}
           typedGraphSessionId={sessionId}
-          typedGraphVersion={typedGraph?.graph_version ?? null}
+          typedGraphVersion={displayTypedGraph?.graph_version ?? null}
           typedGraphHasNextPage={typedGraphHasNextPage === true}
           typedGraphLoadMorePending={typedGraphFetchingNextPage}
           onLoadMoreTypedGraph={
@@ -667,6 +742,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           onOpenAgentPanel={handleOpenAgentPanel}
           canvasMode={canvasMode}
           activeLens={d5Lens}
+          onActiveLensChange={handleD5LensChange}
+          sessionStatus={session.status}
           sources={sources}
           run={data.run}
           members={fleet.members}
@@ -687,6 +764,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 sources={sources}
                 run={data.run}
                 members={fleet.members}
+                graphNodes={detailGraphNodes}
+                graphEdges={detailGraphEdges}
+                onFocusNode={handleFocusDetailNode}
                 open
                 placement="inline"
                 onClose={() => handleSelectCanvasNode(null)}
@@ -730,33 +810,28 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   compact
                   pending={send.isPending}
                   onAgree={() =>
-                    postUser(
+                    postUserCommitted(
                       `同意罗纳尔多产品轮 Round ${latestRound.round_number} 裁定：${latestRound.decision}`,
                     )
                   }
-                  onRejectContinue={() => {
-                    void api.stopResearchSession(sessionId).then(() => {
-                      void qc.invalidateQueries({
-                        queryKey: researchKeys.snapshot(wsId, sessionId),
-                      });
-                    });
-                    postUser(
+                  onRejectContinue={async () => {
+                    await stopAndPostUser(
                       `驳回 continue：请停止调研（Round ${latestRound.round_number}）。`,
                     );
                   }}
                   onRejectStop={() =>
-                    postUser(
+                    postUserCommitted(
                       `驳回 stop：请在预算内再开一轮加深（Round ${latestRound.round_number}，剩余 ${latestRound.budget_remaining}）。`,
                     )
                   }
                   onConfirmGoalPatch={(text) =>
-                    postUser(`确认将调研最终目标更新为：${text}`)
+                    postUserCommitted(`确认将调研最终目标更新为：${text}`)
                   }
                   onEditGoalPatch={(text) =>
-                    postUser(`请按以下文本更新调研最终目标：${text}`)
+                    postUserCommitted(`请按以下文本更新调研最终目标：${text}`)
                   }
                   onRejectGoalPatch={() =>
-                    postUser(
+                    postUserCommitted(
                       `拒绝本轮目标回灌提案（Round ${latestRound.round_number}），保持当前目标不变。`,
                     )
                   }
@@ -837,49 +912,45 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                       >
                         {isCanvasChangeProcessMessage(item.message) ? (
                           <ResearchCanvasChangeCard message={item.message} />
-                        ) : null}
-                        <ResearchChatCard
-                          message={item.message}
-                          members={fleet.members}
-                          messages={messages}
-                          currentGoal={session.goal}
-                          roundPending={send.isPending}
-                          clarificationPending={send.isPending}
-                          onClarificationOption={onClarificationOption}
-                          onClarificationForm={onClarificationForm}
-                          onClarificationSkip={onClarificationSkip}
-                          onRoundAgree={(card) =>
-                            postUser(
-                              `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
-                            )
-                          }
-                          onRoundRejectContinue={(card) => {
-                            void api.stopResearchSession(sessionId).then(() => {
-                              void qc.invalidateQueries({
-                                queryKey: researchKeys.snapshot(wsId, sessionId),
-                              });
-                            });
-                            postUser(
-                              `驳回 continue：请停止调研（Round ${card.round_number}）。`,
-                            );
-                          }}
-                          onRoundRejectStop={(card) =>
-                            postUser(
-                              `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
-                            )
-                          }
-                          onConfirmGoalPatch={(_card, text) =>
-                            postUser(`确认将调研最终目标更新为：${text}`)
-                          }
-                          onEditGoalPatch={(_card, text) =>
-                            postUser(`请按以下文本更新调研最终目标：${text}`)
-                          }
-                          onRejectGoalPatch={(card) =>
-                            postUser(
-                              `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
-                            )
-                          }
-                        />
+                        ) : (
+                          <ResearchChatCard
+                            message={item.message}
+                            members={fleet.members}
+                            messages={messages}
+                            currentGoal={session.goal}
+                            roundPending={send.isPending}
+                            clarificationPending={send.isPending}
+                            onClarificationOption={onClarificationOption}
+                            onClarificationForm={onClarificationForm}
+                            onClarificationSkip={onClarificationSkip}
+                            onRoundAgree={(card) =>
+                              postUserCommitted(
+                                `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
+                              )
+                            }
+                            onRoundRejectContinue={async (card) => {
+                              await stopAndPostUser(
+                                `驳回 continue：请停止调研（Round ${card.round_number}）。`,
+                              );
+                            }}
+                            onRoundRejectStop={(card) =>
+                              postUserCommitted(
+                                `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
+                              )
+                            }
+                            onConfirmGoalPatch={(_card, text) =>
+                              postUserCommitted(`确认将调研最终目标更新为：${text}`)
+                            }
+                            onEditGoalPatch={(_card, text) =>
+                              postUserCommitted(`请按以下文本更新调研最终目标：${text}`)
+                            }
+                            onRejectGoalPatch={(card) =>
+                              postUserCommitted(
+                                `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
+                              )
+                            }
+                          />
+                        )}
                       </div>
                     ) : (
                       <ResearchFleetStepCard

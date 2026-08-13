@@ -8,6 +8,7 @@ import {
   resolveCitationSource,
   type CitationCardSource,
 } from "./report-citation-resolve";
+import { safeSourceUrl } from "./safe-source-url";
 
 /** LRM-834 — payload-derived failure reason codes for readable copy. */
 export type SourceFailureReasonCode =
@@ -71,14 +72,7 @@ export function resolveSourceFailureReasonCode(
   }
 
   const url = (source.url ?? "").trim();
-  if (url) {
-    try {
-      // eslint-disable-next-line no-new
-      new URL(url);
-    } catch {
-      return "invalid_url";
-    }
-  }
+  if (url && !safeSourceUrl(url)) return "invalid_url";
   const title = (source.title ?? "").trim();
   if (!title && !url) return "missing";
   return "unknown";

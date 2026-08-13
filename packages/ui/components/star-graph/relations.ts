@@ -7,9 +7,11 @@
  * shared or tested without importing a React component.
  */
 
+export type StarGraphRelationKey = "decompose" | "support" | "challenge" | "newdir";
+
 export interface StarGraphRelationToken {
   /** Stable key. */
-  key: string;
+  key: StarGraphRelationKey;
   /** Short label shown in the Map Key. */
   label: string;
   /** Plain-language hover/focus explanation. */
@@ -42,5 +44,11 @@ export const STAR_GRAPH_RELATIONS: readonly StarGraphRelationToken[] = [
     label: "新方向",
     description: "紫色虚线：与既有成果无关的全新探索方向。",
     demoClass: "sg-line-demo sg-newdir",
+  },
+  {
+    key: "neutral",
+    label: "其他关系",
+    description: "灰色点线：未归类或新版本关系；保留原始类型，不解释为支持或挑战。",
+    demoClass: "sg-line-demo sg-neutral",
   },
 ];

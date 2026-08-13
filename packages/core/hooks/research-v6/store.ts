@@ -6,6 +6,10 @@ import type {
   ResearchV6Snapshot,
 } from "../../types/research-v6";
 import { ResearchV6ProjectionClient } from "./projection-client";
+import {
+  isResearchV6DeltaForRun,
+  isResearchV6SnapshotForRun,
+} from "./projection-identity";
 
 /**
  * Client-side display cache for the Research V6 Graph Projection.
@@ -92,11 +96,17 @@ export const useResearchV6ProjectionStore = create<ResearchV6ProjectionStoreShap
   applyDelta(runId, delta) {
     const client = get().clients[runId];
     if (!client) return;
+    if (!isResearchV6DeltaForRun(delta, runId)) {
+      client.requestResync();
+      get().hydrate(runId, client);
+      return;
+    }
     client.applyDelta(delta);
     get().hydrate(runId, client);
   },
 
   applySnapshot(runId, snapshot) {
+    if (!isResearchV6SnapshotForRun(snapshot, runId)) return;
     const client = get().clients[runId];
     if (!client) {
       const fresh = new ResearchV6ProjectionClient();

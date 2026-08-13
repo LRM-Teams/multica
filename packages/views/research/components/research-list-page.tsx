@@ -166,26 +166,41 @@ export function ResearchListPage() {
   }, []);
 
   const online = useBrowserOnline();
-  useQuery(researchFleetOptions(wsId));
+  const fleetQuery = useQuery(researchFleetOptions(wsId));
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
+  const bootstrapLoading = isLoading || fleetQuery.isLoading;
+  const bootstrapError = isError
+    ? error
+    : fleetQuery.isError
+      ? fleetQuery.error
+      : null;
+  const bootstrapIsError = isError || fleetQuery.isError;
+  const bootstrapFetching = isFetching || fleetQuery.isFetching;
+  const retryBootstrap = () => {
+    void refetch();
+    void fleetQuery.refetch();
+  };
 
   const create = useMutation({
     mutationFn: (params: ReturnType<typeof normalizeCreateParams>) => {
       const language = i18n?.language;
-      return api.createResearchSession({
-        goal: buildCreateGoal(
-          selectedTemplate,
-          goal,
-          language,
-          selectedTemplate ? appliedTemplatePrompt : null,
-        ),
-        depth_tier: params.depth_tier,
-        language: params.language,
-        source_weights: params.source_weights,
-        ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
-      });
+      return api.createResearchSession(
+        {
+          goal: buildCreateGoal(
+            selectedTemplate,
+            goal,
+            language,
+            selectedTemplate ? appliedTemplatePrompt : null,
+          ),
+          depth_tier: params.depth_tier,
+          language: params.language,
+          source_weights: params.source_weights,
+          ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
+        },
+        wsId,
+      );
     },
     onSuccess: (res) => {
       // Seed snapshot from kickoff payload so the session page paints a busy graph
@@ -468,15 +483,18 @@ export function ResearchListPage() {
   };
 
   // LRM-833 — 5xx with no cache: dedicated error page + retry (not a blank shell).
-  if (!isLoading && !data && isError && isServerError(error)) {
+  if (
+    !bootstrapLoading &&
+    !data &&
+    bootstrapIsError &&
+    isServerError(bootstrapError)
+  ) {
     return (
       <ResearchConnectivityShell>
         <ResearchServerErrorPage
-          onRetry={() => {
-            void refetch();
-          }}
-          message={error instanceof Error ? error.message : null}
-          retrying={isFetching}
+          onRetry={retryBootstrap}
+          message={bootstrapError instanceof Error ? bootstrapError.message : null}
+          retrying={bootstrapFetching}
         />
       </ResearchConnectivityShell>
     );
@@ -497,7 +515,7 @@ export function ResearchListPage() {
           data-testid="research-list-workbench"
         >
           {/* LRM-1144 Δ1: dot-grid matches workbench width; omit on skeleton/error. */}
-          {!isLoading && !isError ? (
+          {!bootstrapLoading && !bootstrapIsError ? (
             <ResearchShellAtmosphere className="-top-2" heightClassName="h-[200px]" />
           ) : null}
           {/* LRM-783 / LRM-784 / LRM-1106: brand-hero + full-width composer (12 cols). */}
@@ -652,7 +670,7 @@ export function ResearchListPage() {
                     >
                       {create.isPending ? (
                         <>
-                          <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                          <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
                           {t(($) => $.home.creating)}
                         </>
                       ) : (
@@ -707,7 +725,7 @@ export function ResearchListPage() {
             </ResearchHomeHero>
           </div>
 
-          {isLoading ? (
+          {bootstrapLoading ? (
             <ResearchSessionListSkeleton rows={4} label={t(($) => $.list.loading)} />
           ) : !data && !online ? (
             <output
@@ -721,7 +739,7 @@ export function ResearchListPage() {
                 {t(($) => $.connectivity.waiting_network_hint)}
               </p>
             </output>
-          ) : isError ? (
+          ) : bootstrapIsError ? (
             <div
               role="alert"
               data-testid="research-list-error"
@@ -731,8 +749,8 @@ export function ResearchListPage() {
                 <AlertCircle className="mt-0.5 size-5 shrink-0 text-destructive" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">
-                    {error instanceof Error && error.message
-                      ? error.message
+                    {bootstrapError instanceof Error && bootstrapError.message
+                      ? bootstrapError.message
                       : t(($) => $.list.load_failed)}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
@@ -744,18 +762,18 @@ export function ResearchListPage() {
                 type="button"
                 variant="outline"
                 size="sm"
-                aria-disabled={isFetching || undefined}
+                aria-disabled={bootstrapFetching || undefined}
                 className={cn(
                   "w-full shrink-0 md:w-auto",
-                  isFetching && "cursor-not-allowed opacity-50",
+                  bootstrapFetching && "cursor-not-allowed opacity-50",
                 )}
                 onClick={() => {
-                  if (isFetching) return;
-                  void refetch();
+                  if (bootstrapFetching) return;
+                  retryBootstrap();
                 }}
               >
                 {t(($) =>
-                  isFetching ? $.connectivity.retrying : $.list.retry,
+                  bootstrapFetching ? $.connectivity.retrying : $.list.retry,
                 )}
               </Button>
             </div>

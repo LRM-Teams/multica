@@ -21,6 +21,17 @@ const sessionsQueryRef = vi.hoisted(() => ({
   },
 }));
 
+const fleetQueryRef = vi.hoisted(() => ({
+  current: {
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    error: null as unknown,
+    refetch: vi.fn(),
+  },
+}));
+
 const mutationRef = vi.hoisted(() => ({
   current: {
     mutate: vi.fn(),
@@ -35,7 +46,7 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey?: unknown[] }) =>
     opts?.queryKey?.[2] === "sessions"
       ? sessionsQueryRef.current
-      : { data: undefined, isLoading: false, isFetching: false },
+      : fleetQueryRef.current,
   useMutation: () => mutationRef.current,
   useQueryClient: () => ({
     setQueryData: vi.fn(),
@@ -144,6 +155,14 @@ function setQuery(partial: Partial<typeof sessionsQueryRef.current>) {
 beforeEach(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
   mutationRef.current = { mutate: vi.fn(), isPending: false, isError: false, error: null, reset: vi.fn() };
+  fleetQueryRef.current = {
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  };
 });
 
 describe("ResearchListPage list states (LRM-789)", () => {
@@ -211,6 +230,29 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(screen.queryByTestId("research-list-error")).toBeNull();
     await userEvent.click(screen.getByTestId("research-server-error-retry"));
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces fleet bootstrap failure and retries both bootstrap queries", async () => {
+    const sessionsRefetch = vi.fn();
+    const fleetRefetch = vi.fn();
+    setQuery({ data: { sessions: [] }, refetch: sessionsRefetch });
+    fleetQueryRef.current = {
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isError: true,
+      error: new Error("Fleet bootstrap failed"),
+      refetch: fleetRefetch,
+    };
+
+    render(<ResearchListPage />);
+    expect(screen.getByTestId("research-list-error").textContent).toContain(
+      "Fleet bootstrap failed",
+    );
+    expect(screen.queryByText(enResearch.empty_title)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: enResearch.list.retry }));
+    expect(sessionsRefetch).toHaveBeenCalledTimes(1);
+    expect(fleetRefetch).toHaveBeenCalledTimes(1);
   });
 
   it("LRM-833: offline with no cache keeps hero and waiting strip (no white/empty)", () => {

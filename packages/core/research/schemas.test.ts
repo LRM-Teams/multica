@@ -29,6 +29,16 @@ describe("research schemas", () => {
     expect(parsed.fleet.id).toBe("f1");
   });
 
+  it("preserves missing source scores as unknown", () => {
+    const parsed = ResearchSessionSnapshotSchema.parse({
+      session: { id: "s1", workspace_id: "w1" },
+      fleet: { id: "f1", workspace_id: "w1", members: [] },
+      sources: [{ id: "src1", title: "Undated score" }],
+    });
+    expect(parsed.sources[0]).not.toHaveProperty("credibility_weight");
+    expect(parsed.sources[0]).not.toHaveProperty("relevance");
+  });
+
   it("falls back on malformed attempt_context in run snapshot", () => {
     const raw = {
       session: { id: "s1", workspace_id: "w1", title: "t", goal: "g" },

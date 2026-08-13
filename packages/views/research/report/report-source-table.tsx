@@ -9,6 +9,7 @@ import {
   type SourceFailureReasonCode,
 } from "./report-source-degrade";
 import { weightTier } from "./report-weight";
+import { safeSourceUrl } from "./safe-source-url";
 
 function WeightBadge({ weight }: { weight: number }) {
   const tier = weightTier(weight);
@@ -87,6 +88,7 @@ export function ReportSourceTable({ sources }: { sources: ResearchSource[] }) {
             const label = s.title || s.url || s.source_class;
             // Localized reason only — never append raw payload codes (ETIMEDOUT, etc.).
             const reasonText = failed && reasonCode ? reasonLabel(reasonCode) : null;
+            const href = failed ? null : safeSourceUrl(s.url);
             return (
               <tr
                 key={s.id}
@@ -103,17 +105,19 @@ export function ReportSourceTable({ sources }: { sources: ResearchSource[] }) {
                     <span className="inline-flex rounded-full bg-destructive/15 px-2 py-0.5 text-[11px] font-medium text-destructive">
                       {t(($) => $.reader.source_failed_badge)}
                     </span>
+                  ) : typeof s.credibility_weight === "number" ? (
+                    <WeightBadge weight={s.credibility_weight} />
                   ) : (
-                    <WeightBadge weight={s.credibility_weight ?? 0} />
+                    <span className="text-muted-foreground">—</span>
                   )}
                 </td>
                 <td className="px-3 py-2.5 align-middle">
                   <TypeChip value={s.source_class} />
                 </td>
                 <td className="px-3 py-2.5 align-middle">
-                  {s.url && !failed ? (
+                  {href ? (
                     <a
-                      href={s.url}
+                      href={href}
                       target="_blank"
                       rel="noreferrer noopener"
                       className="font-medium text-brand underline-offset-2 hover:underline"

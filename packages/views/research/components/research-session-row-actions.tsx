@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { researchKeys } from "@multica/core/research";
+import { evictResearchSessionQueries, researchKeys } from "@multica/core/research";
 import type { ResearchSession } from "@multica/core/types/research";
 import {
   AlertDialog,
@@ -74,9 +74,9 @@ export function ResearchSessionRowActions({
 
   const del = useMutation({
     mutationFn: () => api.deleteResearchSession(session.id),
-    onSuccess: () => {
+    onSuccess: async () => {
+      await evictResearchSessionQueries(qc, wsId, session.id);
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
-      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, session.id) });
       toast.success(t(($) => $.actions.delete_done));
       setConfirmDelete(false);
     },

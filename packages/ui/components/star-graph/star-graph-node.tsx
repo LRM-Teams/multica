@@ -89,15 +89,16 @@ export function StarGraphNode({
 
   const size = `${token.sizePx}px`;
 
+  const documentCount = metrics?.documentCount;
+  const hasDocuments = documentCount != null && documentCount > 0;
   const showMetrics =
     token.tier !== "s" &&
-    (metrics?.documentCount != null ||
+    (hasDocuments ||
       metrics?.confidence != null ||
       metrics?.conclusionCount != null);
-  const documentCount = metrics?.documentCount;
   const showDocumentBadge =
     (token.tier === "xxl" || token.tier === "xl" || token.tier === "l") &&
-    documentCount != null;
+    hasDocuments;
   const metricSummary = metricsText(metrics, showDocumentBadge);
 
   return (
@@ -216,7 +217,7 @@ function metricsText(
   if (!metrics) return "";
   const parts: string[] = [];
   if (metrics.round) parts.push(`R${metrics.round}`);
-  if (!omitDocumentCount && metrics.documentCount != null) {
+  if (!omitDocumentCount && metrics.documentCount != null && metrics.documentCount > 0) {
     parts.push(`${metrics.documentCount} 文档`);
   }
   if (metrics.confidence != null) parts.push(`置信 ${metrics.confidence}%`);

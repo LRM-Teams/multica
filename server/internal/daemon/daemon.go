@@ -97,22 +97,27 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
-	messageDraftStore        *MessageDraftStore
-	agentProxyCredentialMu   sync.RWMutex
-	agentProxyCredentials    map[[32]byte]authenticatedAgentProxy
-	messageSendMu            sync.Mutex
-	messageSends             map[string]int
-	workspaceRunnerMu        sync.RWMutex
-	workspaceRunners         map[string]*WorkspaceRunner
-	workspaceRunnerCancels   map[string]context.CancelFunc
-	workspaceRunnerRun       func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
-	mixedRunActivityOutbox   *mixedRunActivityOutbox
-	mixedRunActivityReporter func(protocol.MixedRunActivityTransitionPayload) bool
-	lifecycleDiagnostics     *lifecycleDiagnosticWriter
-	machineUpgradeLog        *machineUpgradeEventLog
-	machineUpgradeTakeover   *machineUpgradeTakeover
-	runnerInstanceID         string
-	runnerDiagnostics        *runnerDiagnosticRegistry
+	messageDraftStore             *MessageDraftStore
+	agentProxyCredentialMu        sync.RWMutex
+	agentProxyCredentials         map[[32]byte]authenticatedAgentProxy
+	messageSendMu                 sync.Mutex
+	messageSends                  map[string]int
+	workspaceRunnerMu             sync.RWMutex
+	workspaceRunners              map[string]*WorkspaceRunner
+	workspaceRunnerCancels        map[string]context.CancelFunc
+	workspaceRunnerRun            func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
+	workspaceRunnerSpawn          func(string) (computer.BindingChild, error)
+	workspaceRunnerChildren       map[string]computer.BindingChild
+	workspaceRunnerRecords        map[string]*computer.RunnerRecord
+	workspaceRunnerNow            func() time.Time
+	workspaceRunnerReconcileEvery time.Duration
+	mixedRunActivityOutbox        *mixedRunActivityOutbox
+	mixedRunActivityReporter      func(protocol.MixedRunActivityTransitionPayload) bool
+	lifecycleDiagnostics          *lifecycleDiagnosticWriter
+	machineUpgradeLog             *machineUpgradeEventLog
+	machineUpgradeTakeover        *machineUpgradeTakeover
+	runnerInstanceID              string
+	runnerDiagnostics             *runnerDiagnosticRegistry
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState

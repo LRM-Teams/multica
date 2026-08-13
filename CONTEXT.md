@@ -84,7 +84,10 @@ _Avoid_: Workspace synchronization, automatic binding
 
 The machine-local execution owner for one Workspace Execution Binding. At most
 one Workspace Runner is active for a binding, while the same Workspace may have
-other Workspace Runners on other machines.
+other Workspace Runners on other machines. The Computer host supervises one OS
+child per Binding (`computer __runner`) on a 5s reconcile, with a 2s crash
+backoff and a 3-crashes-in-60s degrade. A previous child generation cannot
+mutate the live slot.
 _Avoid_: Workspace owner, global Workspace runner
 
 ### Agent Attachment

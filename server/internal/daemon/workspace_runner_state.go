@@ -299,6 +299,15 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	}
 	runner.replaceConnection(connection)
 	defer runner.releaseConnection(connection)
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go func() {
+		select {
+		case <-ctx.Done():
+			connection.Close()
+		case <-stopWatch:
+		}
+	}()
 	if err := connection.Write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
 		WorkspaceID: workspaceID, DaemonInstanceID: runner.config.DaemonInstanceID,
 		RunningAgents: runner.processes.RunningAgentIDs(),

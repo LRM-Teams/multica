@@ -533,6 +533,12 @@
 - transient Reminder 与 canonical Message 共用当前 Runner 连接和 resident-turn admission，但不获得 Message identity、cursor、replay、ACK、MessageCoordinator 或 Activity。Agent idle 时注入一次；busy/compacting、transport lost 或 native injection failure 都是最终丢弃，不能排队或在 reconnect/idle boundary 重放。
 - **物**：`AgentTransientDeliverPayload` 的协议形状与 golden；Workspace Runner 的 `agent:deliver` union dispatch；Reminder relay scope 回归；idle/busy/invalid placement/capability 回归；`EventReminderOwnerInput` 常量不存在。
 
+### 4.19.4 Computer host 按 Raft 监督 Binding OS child — `可执行`（③ host reconcile + ⑤ crash/degrade/generation tests）
+- **口径（2026-08-13）**：对齐 Raft Computer `serviceReconcileLoop` / `runnerStateMachine`：host 每 5s 对账 desired Binding；crash 后 2s backoff；60s 内 3 次 crash 进入 degraded、不再自动拉起。摘掉 Binding 是 graceful stop，不是 unlinked/degraded。
+- **generation fence**：每次 spawn 递增 generation。旧 supervise 的 `observe(nil)` 或旧 child Wait 对不上当前 generation 时必须 no-op。这是 Raft APM `inactive_process_generation`（`current !== process`）在 Binding slot 上的同一道篱笆。
+- **诚实边界**：这一刀的 OS child 是 lifetime/crash 边界（`computer __runner`）。Delivery / APM 仍在 host 进程内；把 coordinator 搬进 child 是下一刀，不是本刀的完成条件。
+- **物**：`computer.RunnerRecord` / `BindingRunner`；`workspace_runner.go` 的 reconcile/supervise；`TestRunnerSpawnGenerationStaysMonotonicAcrossExit`；`TestWorkspaceRunnerStaleObserveDoesNotMutateNextGeneration`；`TestWorkspaceRunnerOSChildCrashLeavesHostAliveThenDegrades`。完整判断见 [`ADR-0015`](adr/0015-computer-host-supervises-binding-runner.md)。
+
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。
 - **物**：`CreateSandboxInstance` 写入 `metadata.docker_container_name` / job `docker_container_name`；`sandboxd` 使用该字段作为 `--name`，旧 payload 只回退到 instance-id 名称。

@@ -413,8 +413,8 @@ func TestResidentArgsOwnedByComputerAndNeverSelectProfileOrOrigin(t *testing.T) 
 		AgentTimeoutSet: true, AgentTimeout: 0,
 	})
 	joined := strings.Join(args, " ")
-	if !strings.HasPrefix(joined, "daemon start --foreground") {
-		t.Fatalf("resident compatibility contract = %q", joined)
+	if !strings.HasPrefix(joined, "computer __service") {
+		t.Fatalf("resident process contract = %q", joined)
 	}
 	for _, forbidden := range []string{"--profile", "--server-url", "supervise", "install-service"} {
 		if strings.Contains(joined, forbidden) {

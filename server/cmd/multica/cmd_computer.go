@@ -44,6 +44,22 @@ func rejectRetiredComputerProfileFlag(cmd *cobra.Command) error {
 	return nil
 }
 
+var computerServiceCmd = &cobra.Command{
+	Use:    computer.ResidentServiceArg,
+	Hidden: true,
+	Short:  "Run the Computer resident process",
+	Args:   cobra.NoArgs,
+	RunE:   runComputerResident,
+}
+
+var computerRunnerCmd = &cobra.Command{
+	Use:    computer.ResidentRunnerArg,
+	Hidden: true,
+	Short:  "Run one Workspace Binding child",
+	Args:   cobra.NoArgs,
+	RunE:   runComputerBindingRunner,
+}
+
 var computerStartCmd = &cobra.Command{
 	Use:   "start [/<workspace>]",
 	Short: "Start the resident Computer",
@@ -171,6 +187,12 @@ func init() {
 	computerDoctorCmd.Flags().Bool("fix", false, "Apply only provably safe stale-state cleanup")
 	computerDoctorCmd.Flags().String("output", "table", "Output format: table or json")
 
+	addComputerResidentFlags(computerServiceCmd)
+	computerRunnerCmd.Flags().String("workspace-id", "", "Workspace Binding identity")
+	_ = computerRunnerCmd.MarkFlagRequired("workspace-id")
+
+	computerCmd.AddCommand(computerServiceCmd)
+	computerCmd.AddCommand(computerRunnerCmd)
 	computerCmd.AddCommand(computerStartCmd)
 	computerCmd.AddCommand(computerStopCmd)
 	computerCmd.AddCommand(computerStatusCmd)
@@ -181,6 +203,34 @@ func init() {
 	computerIdentityCmd.AddCommand(computerIdentityAdoptCmd)
 	computerIdentityCmd.AddCommand(computerIdentityFreshCmd)
 	computerCmd.AddCommand(computerIdentityCmd)
+}
+
+func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
+	workspaceID, _ := cmd.Flags().GetString("workspace-id")
+	if strings.TrimSpace(workspaceID) == "" {
+		return fmt.Errorf("workspace-id is required")
+	}
+	ctx, stop := notifyShutdownContext(context.Background())
+	defer stop()
+	<-ctx.Done()
+	return nil
+}
+
+func addComputerResidentFlags(cmd *cobra.Command) {
+	f := cmd.Flags()
+	f.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
+	f.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
+	f.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
+	f.Duration("poll-interval", 0, "Task poll interval (env: MULTICA_DAEMON_POLL_INTERVAL)")
+	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
+	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
+	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
+	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
+	_ = f.MarkHidden("computer-generation")
+	f.Bool("machine-upgrade-detached-candidate", false, "Internal detached Machine Upgrade candidate marker")
+	_ = f.MarkHidden("machine-upgrade-detached-candidate")
+	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
+	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 }
 
 func requireComputerStoppedForIdentityChange() error {

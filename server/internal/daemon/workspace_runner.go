@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -26,6 +29,12 @@ func (d *Daemon) workspaceRunnerLoop(ctx context.Context) {
 	}
 	changes, unsub := d.runtimeSet.Subscribe()
 	defer unsub()
+	interval := d.workspaceRunnerReconcileEvery
+	if interval <= 0 {
+		interval = computer.RunnerReconcileInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	d.reconcileWorkspaceRunners(ctx)
 	for {
 		select {
@@ -33,6 +42,8 @@ func (d *Daemon) workspaceRunnerLoop(ctx context.Context) {
 			d.stopWorkspaceRunners()
 			return
 		case <-changes:
+			d.reconcileWorkspaceRunners(ctx)
+		case <-ticker.C:
 			d.reconcileWorkspaceRunners(ctx)
 		}
 	}
@@ -47,8 +58,10 @@ func (d *Daemon) reconcileWorkspaceRunners(parent context.Context) {
 		desired[workspaceID] = struct{}{}
 	}
 	type start struct {
-		runner *WorkspaceRunner
-		ctx    context.Context
+		runner     *WorkspaceRunner
+		ctx        context.Context
+		cancel     context.CancelFunc
+		generation int64
 	}
 	var starts []start
 	var stops []context.CancelFunc
@@ -59,8 +72,20 @@ func (d *Daemon) reconcileWorkspaceRunners(parent context.Context) {
 	if d.workspaceRunnerCancels == nil {
 		d.workspaceRunnerCancels = make(map[string]context.CancelFunc)
 	}
+	if d.workspaceRunnerRecords == nil {
+		d.workspaceRunnerRecords = make(map[string]*computer.RunnerRecord)
+	}
+	if d.workspaceRunnerChildren == nil {
+		d.workspaceRunnerChildren = make(map[string]computer.BindingChild)
+	}
+	now := d.runnerNow()
 	for workspaceID, cancel := range d.workspaceRunnerCancels {
 		if _, ok := desired[workspaceID]; !ok {
+			// Desired-set removal is a graceful stop. Unlinked is only for a
+			// child that vanished without Wait; using it here would degrade
+			// the Binding and refuse a later re-add.
+			d.recordForWorkspaceRunner(workspaceID).ObserveExit(now, computer.RunnerExitGraceful)
+			d.stopStoredBindingChild(workspaceID)
 			delete(d.workspaceRunnerCancels, workspaceID)
 			delete(d.workspaceRunners, workspaceID)
 			stops = append(stops, cancel)
@@ -68,6 +93,10 @@ func (d *Daemon) reconcileWorkspaceRunners(parent context.Context) {
 	}
 	for workspaceID := range desired {
 		if _, running := d.workspaceRunnerCancels[workspaceID]; running {
+			continue
+		}
+		record := d.recordForWorkspaceRunner(workspaceID)
+		if !record.CanSpawn(true, now) {
 			continue
 		}
 		runner := d.workspaceRunners[workspaceID]
@@ -84,28 +113,159 @@ func (d *Daemon) reconcileWorkspaceRunners(parent context.Context) {
 		}
 		child, cancel := context.WithCancel(parent)
 		d.workspaceRunnerCancels[workspaceID] = cancel
-		starts = append(starts, start{runner: runner, ctx: child})
+		record.ObserveSpawn()
+		starts = append(starts, start{runner: runner, ctx: child, cancel: cancel, generation: record.Generation()})
 	}
 	d.workspaceRunnerMu.Unlock()
 	for _, cancel := range stops {
 		cancel()
 	}
 	for _, next := range starts {
-		if d.workspaceRunnerRun != nil {
-			d.workspaceRunnerRun(next.runner, next.ctx)
-			continue
-		}
-		runner, child := next.runner, next.ctx
-		go runner.Run(child)
+		d.superviseWorkspaceRunner(next.runner, next.ctx, next.cancel, next.generation)
 	}
+}
+
+func (d *Daemon) runnerNow() time.Time {
+	if d != nil && d.workspaceRunnerNow != nil {
+		return d.workspaceRunnerNow()
+	}
+	return time.Now()
+}
+
+func (d *Daemon) recordForWorkspaceRunner(workspaceID string) *computer.RunnerRecord {
+	rec := d.workspaceRunnerRecords[workspaceID]
+	if rec == nil {
+		rec = &computer.RunnerRecord{Lifecycle: computer.RunnerLifecycleStopped}
+		d.workspaceRunnerRecords[workspaceID] = rec
+	}
+	return rec
+}
+
+func (d *Daemon) startBindingChild(workspaceID string) (computer.BindingChild, error) {
+	if d != nil && d.workspaceRunnerSpawn != nil {
+		return d.workspaceRunnerSpawn(workspaceID)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return computer.StartBindingRunner(exe, workspaceID)
+}
+
+func (d *Daemon) stopStoredBindingChild(workspaceID string) {
+	if d.workspaceRunnerChildren == nil {
+		return
+	}
+	if child := d.workspaceRunnerChildren[workspaceID]; child != nil {
+		_ = child.Stop()
+		delete(d.workspaceRunnerChildren, workspaceID)
+	}
+}
+
+func (d *Daemon) superviseWorkspaceRunner(runner *WorkspaceRunner, ctx context.Context, cancel context.CancelFunc, generation int64) {
+	workspaceID := runner.WorkspaceID()
+	useProcess := d.workspaceRunnerRun == nil || d.workspaceRunnerSpawn != nil
+	var child computer.BindingChild
+	if useProcess {
+		spawned, err := d.startBindingChild(workspaceID)
+		if err != nil {
+			if d.logger != nil {
+				d.logger.Warn("Workspace Runner child spawn failed", "workspace_id", workspaceID, "error", err)
+			}
+			d.observeWorkspaceRunnerExit(workspaceID, generation, nil, computer.RunnerExitCrash)
+			return
+		}
+		d.workspaceRunnerMu.Lock()
+		d.workspaceRunnerChildren[workspaceID] = spawned
+		d.workspaceRunnerMu.Unlock()
+		child = spawned
+	}
+	go func() {
+		var runCrashed atomic.Bool
+		runDone := make(chan struct{})
+		go func() {
+			defer close(runDone)
+			defer func() {
+				if recover() != nil {
+					runCrashed.Store(true)
+				}
+			}()
+			if d.workspaceRunnerRun != nil {
+				d.workspaceRunnerRun(runner, ctx)
+			} else if runner != nil {
+				runner.Run(ctx)
+			}
+			if ctx.Err() == nil {
+				runCrashed.Store(true)
+			}
+		}()
+		class := computer.RunnerExitGraceful
+		if child != nil {
+			waitDone := make(chan computer.RunnerExitClass, 1)
+			go func() {
+				waitDone <- child.Wait()
+			}()
+			select {
+			case waitClass := <-waitDone:
+				if ctx.Err() == nil {
+					class = waitClass
+				}
+				if cancel != nil {
+					cancel()
+				}
+				<-runDone
+			case <-runDone:
+				if ctx.Err() == nil || runCrashed.Load() {
+					class = computer.RunnerExitCrash
+				}
+				_ = child.Stop()
+				<-waitDone
+			}
+		} else {
+			<-runDone
+		}
+		if runCrashed.Load() {
+			class = computer.RunnerExitCrash
+		}
+		d.observeWorkspaceRunnerExit(workspaceID, generation, child, class)
+	}()
+}
+
+func (d *Daemon) observeWorkspaceRunnerExit(workspaceID string, generation int64, child computer.BindingChild, class computer.RunnerExitClass) {
+	if d == nil || workspaceID == "" {
+		return
+	}
+	d.workspaceRunnerMu.Lock()
+	defer d.workspaceRunnerMu.Unlock()
+	rec := d.workspaceRunnerRecords[workspaceID]
+	// Raft Computer rejects stale process work as inactive_process_generation
+	// when current !== process. A previous supervise must not crash, degrade,
+	// or delete a later spawn — including observe(nil) after a test-only Run.
+	if rec == nil || !rec.HasChild() || rec.Generation() != generation {
+		return
+	}
+	if child != nil {
+		if current := d.workspaceRunnerChildren[workspaceID]; current != nil && current != child {
+			return
+		}
+	}
+	rec.ObserveExit(d.runnerNow(), class)
+	delete(d.workspaceRunnerCancels, workspaceID)
+	delete(d.workspaceRunnerChildren, workspaceID)
+	delete(d.workspaceRunners, workspaceID)
 }
 
 func (d *Daemon) stopWorkspaceRunners() {
 	d.workspaceRunnerMu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(d.workspaceRunnerCancels))
+	now := d.runnerNow()
 	for workspaceID, cancel := range d.workspaceRunnerCancels {
 		cancels = append(cancels, cancel)
 		delete(d.workspaceRunnerCancels, workspaceID)
+		d.stopStoredBindingChild(workspaceID)
+		if rec := d.workspaceRunnerRecords[workspaceID]; rec != nil && rec.HasChild() {
+			rec.ObserveExit(now, computer.RunnerExitGraceful)
+		}
 	}
 	d.workspaceRunnerMu.Unlock()
 	for _, cancel := range cancels {

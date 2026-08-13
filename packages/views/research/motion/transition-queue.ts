@@ -10,7 +10,7 @@
  * DOM, this module owns the state machine and policy rules only.
  *
  * Invariants
- *  - Every entry that is enqueued eventually reaches `settled` (either by
+ *  - Every entry accepted for playback eventually reaches `settled` (either by
  *    playing to its planned end, by being coalesced into a newer sibling, or
  *    by the queue cap / budget truncation force-settling it). Animation never
  *    prevents the final view from matching a no-animation replay (AC2).
@@ -55,7 +55,7 @@ export interface ProjectionTransitionEvent {
 // ─── Motion profile (spec §4) ────────────────────────────────────────────────
 
 export interface MotionProfile {
-  /** prefers-reduced-motion: all displacement → 0, uniform fade + instant layout. */
+  /** prefers-reduced-motion: projection settles without entering playback. */
   reducedMotion: boolean;
   /** Low CPU/memory: 30fps throttle, no glow/blur, budget halved. */
   lowPerformance: boolean;
@@ -136,7 +136,7 @@ export function laneKeyFor(
 
 // ─── Timings (spec §3) ───────────────────────────────────────────────────────
 
-/** Per-verb duration table; reduced-motion collapses to a uniform fade. */
+/** Per-verb duration table; reduced-motion has no playback duration. */
 const VERB_DURATION_MS: Record<DisplayVerb, number> = {
   appear: 300,
   merge: 320,
@@ -155,7 +155,7 @@ export function verbDurationMs(
   verb: DisplayVerb,
   profile: MotionProfile,
 ): number {
-  if (profile.reducedMotion) return 200; // uniform fade-in
+  if (profile.reducedMotion) return 0;
   return VERB_DURATION_MS[verb];
 }
 
@@ -266,6 +266,11 @@ function enqueueInto(
   event: ProjectionTransitionEvent,
   nowMs: number,
 ): TransitionQueue {
+  // The authoritative projection has already reached its final layout. Under
+  // prefers-reduced-motion do not enqueue even an opacity-only replay: D5 §8
+  // requires immediate settlement, and the static node state remains visible.
+  if (state.profile.reducedMotion) return state;
+
   const spec = resolveSemanticDisplay(event.transition_kind);
   const laneKey = laneKeyFor(event.transition_kind, event.anchor_id);
   const verb = effectiveVerb(spec, state.profile);

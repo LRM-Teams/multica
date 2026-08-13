@@ -208,7 +208,7 @@ describe("LRM-1407 AC5 — 50 nodes / 10 updates collapse (backpressure, no long
     expect(trackedNodeCount(model)).toBe(50);
   });
 
-  it("reduced-motion profile keeps events but engine collapses to uniform fade", () => {
+  it("keeps semantic events for reduced-motion consumers to settle immediately", () => {
     const model = createResearchNodeStateModel({
       reducedMotion: true,
       lowPerformance: false,
@@ -217,8 +217,8 @@ describe("LRM-1407 AC5 — 50 nodes / 10 updates collapse (backpressure, no long
       type: "apply",
       deltas: [{ id: "task-1", lifecycle: "generated", parentId: "problem-0" }],
     });
-    // reduced-motion does not change the event kind; the engine turns it into
-    // a uniform fade (effectiveVerb → reappear).
+    // State projection does not change the event kind; the transition queue
+    // drops playback immediately under the reduced-motion profile.
     expect(events).toHaveLength(1);
     expect(events[0]!.transition_kind).toBe("branch_spawned");
   });

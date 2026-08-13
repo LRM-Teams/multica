@@ -1174,6 +1174,26 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			return "", err
 		}
 	}
+	rows, err := tx.Query(ctx, `
+		SELECT id::text
+		FROM research_report
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		  AND produced_by_attempt_id = $3::uuid
+		ORDER BY revision, id
+		FOR UPDATE
+	`, state.workspaceID, state.run.SessionID, state.attemptID)
+	if err != nil {
+		return "", err
+	}
+	if rows.Next() {
+		rows.Close()
+		return "", fmt.Errorf("%w: attempt already owns a report revision", ErrResultConflict)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return "", err
+	}
+	rows.Close()
 	var revision int
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(revision), 0) + 1 FROM research_report WHERE session_id = $1::uuid`, state.run.SessionID).Scan(&revision); err != nil {
 		return "", err

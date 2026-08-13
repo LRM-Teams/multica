@@ -1,6 +1,8 @@
 /// LRM-1472 / UI-04 — dispute subgraph component module export surface.
 export {
   buildDisputeModel,
+  buildDisputeModelForNode,
+  disputeSubgraphForNode,
   findDisputeRoot,
   type DisputeSubgraphModel,
   type EvidenceView,

@@ -2,6 +2,7 @@
 
 import type {
   ResearchFleetMember,
+  ResearchGraphEdge,
   ResearchGraphNode,
   ResearchRunAttempt,
   ResearchRunSnapshot,
@@ -23,6 +24,15 @@ import { cn } from "@multica/ui/lib/utils";
 import { useMemo } from "react";
 import { useT } from "../../i18n/use-t";
 import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
+import {
+  buildDisputeModelForNode,
+  DecisionDetailSection,
+  DeliberationDetailSection,
+  DisputeDetailSection,
+  isDisputeDomainNodeType,
+  PositionDetailSection,
+  TurnDetailSection,
+} from "../dispute";
 import { isAbandonedStatus, readAbandonReason } from "../lib/abandon-reason";
 import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
 import { ResearchNodeContentFaces } from "./research-node-content-faces";
@@ -488,6 +498,9 @@ export function ResearchNodeDetailBody({
   sources,
   run,
   members,
+  graphNodes,
+  graphEdges,
+  onFocusNode,
   onClose,
   showClose,
 }: {
@@ -495,6 +508,9 @@ export function ResearchNodeDetailBody({
   sources: ResearchSource[];
   run?: ResearchRunSnapshot;
   members: ResearchFleetMember[];
+  graphNodes?: readonly ResearchGraphNode[];
+  graphEdges?: readonly ResearchGraphEdge[];
+  onFocusNode?: (nodeId: string) => void;
   onClose?: () => void;
   showClose?: boolean;
 }) {
@@ -554,6 +570,13 @@ export function ResearchNodeDetailBody({
     }
   }
   const nextSteps = nextStepsForNode(node);
+  const disputeModel = useMemo(
+    () =>
+      isDisputeDomainNodeType(node.node_type)
+        ? buildDisputeModelForNode(graphNodes ?? [node], graphEdges ?? [], node.id)
+        : null,
+    [graphEdges, graphNodes, node],
+  );
 
   // Only explicitly associated sources (source_id / source_ids). Never fall
   // back to session-wide sources — that would attribute other nodes' evidence
@@ -657,6 +680,22 @@ export function ResearchNodeDetailBody({
       </header>
 
       <div className="space-y-4 p-4">
+        {disputeModel ? (
+          <section data-testid="research-dispute-node-detail" className="rounded-lg border bg-muted/10 p-3">
+            {node.node_type === "dispute" ? (
+              <DisputeDetailSection model={disputeModel} onFocusNode={onFocusNode} />
+            ) : node.node_type === "dispute_position" ? (
+              <PositionDetailSection node={node} model={disputeModel} onFocusNode={onFocusNode} />
+            ) : node.node_type === "deliberation" ? (
+              <DeliberationDetailSection model={disputeModel} />
+            ) : node.node_type === "deliberation_turn" ? (
+              <TurnDetailSection node={node} />
+            ) : node.node_type === "decision" ? (
+              <DecisionDetailSection model={disputeModel} onFocusNode={onFocusNode} />
+            ) : null}
+          </section>
+        ) : null}
+
         {/* LRM-1332: four content faces before run Objective/Method/Outcome. */}
         <ResearchNodeContentFaces node={node} density="detail" />
 
@@ -1011,22 +1050,28 @@ export function ResearchNodeDetail({
   sources = EMPTY_SOURCES,
   run,
   members = EMPTY_MEMBERS,
+  graphNodes,
+  graphEdges,
   open = true,
   onClose,
   placement,
   onOpenReport,
   onContinueDeepening,
+  onFocusNode,
 }: {
   node: ResearchGraphNode;
   sources?: ResearchSource[];
   run?: ResearchRunSnapshot;
   members?: ResearchFleetMember[];
+  graphNodes?: readonly ResearchGraphNode[];
+  graphEdges?: readonly ResearchGraphEdge[];
   open?: boolean;
   onClose?: () => void;
   /** Force placement; default: overlay-card on desktop, sheet on narrow. */
   placement?: "overlay-card" | "sheet" | "inline";
   onOpenReport?: () => void;
   onContinueDeepening?: () => void;
+  onFocusNode?: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -1051,6 +1096,9 @@ export function ResearchNodeDetail({
           sources={sources}
           run={run}
           members={members}
+          graphNodes={graphNodes}
+          graphEdges={graphEdges}
+          onFocusNode={onFocusNode}
           onClose={onClose}
           showClose={Boolean(onClose)}
         />
@@ -1092,6 +1140,9 @@ export function ResearchNodeDetail({
             sources={sources}
             run={run}
             members={members}
+            graphNodes={graphNodes}
+            graphEdges={graphEdges}
+            onFocusNode={onFocusNode}
             onClose={onClose}
             showClose
           />
@@ -1117,7 +1168,16 @@ export function ResearchNodeDetail({
           <SheetTitle>{node.title}</SheetTitle>
           <SheetDescription>{t(($) => $.node.detail_hint)}</SheetDescription>
         </SheetHeader>
-        <ResearchNodeDetailBody node={node} sources={sources} run={run} members={members} onClose={onClose} />
+        <ResearchNodeDetailBody
+          node={node}
+          sources={sources}
+          run={run}
+          members={members}
+          graphNodes={graphNodes}
+          graphEdges={graphEdges}
+          onFocusNode={onFocusNode}
+          onClose={onClose}
+        />
       </SheetContent>
     </Sheet>
   );

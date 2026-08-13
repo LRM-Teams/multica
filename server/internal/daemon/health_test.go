@@ -128,16 +128,9 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
 
 	attestations := 0
-	var upstreamProof map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-1/takeover" {
-			t.Fatalf("upstream path = %s", r.URL.Path)
-		}
 		attestations++
-		if err := json.NewDecoder(r.Body).Decode(&upstreamProof); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"phase": "completed"})
+		t.Fatalf("local proof contacted server: %s", r.URL.Path)
 	}))
 	defer upstream.Close()
 
@@ -229,20 +222,17 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	if rec.Code != http.StatusOK {
 		t.Fatalf("exact takeover status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if attestations != 1 {
-		t.Fatalf("server attestations = %d, want 1", attestations)
+	if attestations != 0 {
+		t.Fatalf("local proof still contacted server: %d requests", attestations)
 	}
 	if !d.pauseClaims {
-		t.Fatal("takeover CAS released claims before normal candidate startup")
-	}
-	if got := stringSetFromAny(upstreamProof["workspace_ids"]); !sameStringSet(got, expected.WorkspaceIDs) {
-		t.Fatalf("upstream Workspace proof = %#v, want %#v", got, expected.WorkspaceIDs)
+		t.Fatal("local proof released claims before normal candidate startup")
 	}
 	stored, err := d.currentMachineUpgradeJournal()
 	if err != nil || stored == nil || stored.Phase != "takeover_committed" {
 		t.Fatalf("durable takeover journal = %+v err=%v", stored, err)
 	}
-	if replay := request(expected, "profile-secret"); replay.Code != http.StatusOK || attestations != 1 {
+	if replay := request(expected, "profile-secret"); replay.Code != http.StatusOK || attestations != 0 {
 		t.Fatalf("takeover replay status=%d attestations=%d body=%s", replay.Code, attestations, replay.Body.String())
 	}
 	if proof := readHealthProof(); proof.Phase != "takeover_committed" {
@@ -258,11 +248,8 @@ func TestDetachedMachineUpgradeHealthProjectsLegacyLauncherHandshakeWithoutRegis
 
 	takeoverRequests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-1/takeover" {
-			t.Fatalf("upstream path = %s", r.URL.Path)
-		}
 		takeoverRequests++
-		_ = json.NewEncoder(w).Encode(map[string]string{"phase": "handoff"})
+		t.Fatalf("legacy launcher commit contacted server: %s", r.URL.Path)
 	}))
 	defer upstream.Close()
 
@@ -309,7 +296,7 @@ func TestDetachedMachineUpgradeHealthProjectsLegacyLauncherHandshakeWithoutRegis
 	}
 	select {
 	case <-d.machineUpgradeTakeover.committed:
-		t.Fatal("legacy health projection released startup before takeover CAS")
+		t.Fatal("legacy health projection released startup before local proof")
 	default:
 	}
 
@@ -328,7 +315,7 @@ func TestDetachedMachineUpgradeHealthProjectsLegacyLauncherHandshakeWithoutRegis
 	if err := json.NewDecoder(committed.Body).Decode(&proof); err != nil {
 		t.Fatal(err)
 	}
-	if proof.Phase != "candidate_ready" || takeoverRequests != 1 {
+	if proof.Phase != "candidate_ready" || takeoverRequests != 0 {
 		t.Fatalf("legacy launcher commit proof = %+v requests=%d", proof, takeoverRequests)
 	}
 	stored, err := d.currentMachineUpgradeJournal()
@@ -343,15 +330,6 @@ func TestDetachedMachineUpgradeHealthProjectsLegacyLauncherHandshakeWithoutRegis
 	default:
 		t.Fatal("legacy launcher commit did not release candidate startup")
 	}
-}
-
-func stringSetFromAny(value any) []string {
-	items, _ := value.([]any)
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		result = append(result, fmt.Sprint(item))
-	}
-	return result
 }
 
 // TestHealthHandlerReportsStartingUntilReady pins the liveness/readiness split:

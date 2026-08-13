@@ -874,10 +874,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("restore resident Agents: %w", err)
 	}
 	// A supervised target records local readiness after normal authenticated
-	// registration/preflight. A detached candidate deliberately remains in
-	// handoff until the incumbent validates its local process proof through the
-	// authenticated takeover endpoint; that endpoint then owns remote
-	// attestation and the durable candidate_ready transition.
+	// registration/preflight. A detached candidate remains in handoff until
+	// the incumbent validates its local PID+version proof; Attest then notifies
+	// the server that the local upgrade completed.
 	if !d.cfg.DetachedMachineUpgradeCandidate {
 		if err := d.markMachineUpgradeCandidateReady(); err != nil {
 			d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)

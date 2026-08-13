@@ -468,9 +468,9 @@ func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs 
 	if !sameStringSet(journal.RuntimeIDs, runtimeIDs) {
 		return fmt.Errorf("successor Runtime set does not match accepted complete set")
 	}
-	// A detached candidate may register only after the predecessor-to-candidate
-	// Computer generation CAS is durably committed. Before that point Run is
-	// blocked in the takeover module and cannot reach this function.
+	// A detached candidate attests only after the incumbent accepted the local
+	// PID+version proof. Before that point Run is blocked in the takeover
+	// module and cannot reach this function.
 	if d.cfg.DetachedMachineUpgradeCandidate && journal.Phase != "takeover_committed" {
 		return nil
 	}

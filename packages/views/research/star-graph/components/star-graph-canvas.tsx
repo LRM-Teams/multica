@@ -259,6 +259,19 @@ export function StarGraphCanvas({
     setCamera(fitCameraToBounds(bounds, viewport));
   }, [bounds, setCamera, viewport]);
 
+  const focusNodeButton = useCallback((nodeId: string) => {
+    const buttons = rootRef.current?.querySelectorAll<HTMLElement>(
+      '[data-testid="star-graph-node"]',
+    );
+    for (const button of buttons ?? []) {
+      if (button.dataset.nodeId === nodeId) {
+        button.focus({ preventScroll: true });
+        return;
+      }
+    }
+    rootRef.current?.focus({ preventScroll: true });
+  }, []);
+
   const focusSelectedEntity = useCallback(
     (nodeId: string | null) => {
       if (!nodeId || viewport.width <= 0 || viewport.height <= 0) return;
@@ -272,9 +285,9 @@ export function StarGraphCanvas({
           { rightPanelWidth },
         ),
       );
-      rootRef.current?.focus();
+      focusNodeButton(nodeId);
     },
-    [model.entities, rightPanelWidth, setCamera, viewport],
+    [focusNodeButton, model.entities, rightPanelWidth, setCamera, viewport],
   );
 
   useEffect(() => {
@@ -353,7 +366,7 @@ export function StarGraphCanvas({
           onSelectNode?.(action.nodeId);
           const node = keyboardNav?.nodes.find((candidate) => candidate.id === action.nodeId);
           if (node) setLiveText(buildNodeAccessibleName(node));
-          rootRef.current?.focus();
+          focusNodeButton(action.nodeId);
           return;
         }
         case "openDetail":
@@ -376,7 +389,15 @@ export function StarGraphCanvas({
           return;
       }
     },
-    [fitToContent, handleZoomIn, handleZoomOut, keyboardNav, onOpenNode, onSelectNode],
+    [
+      fitToContent,
+      focusNodeButton,
+      handleZoomIn,
+      handleZoomOut,
+      keyboardNav,
+      onOpenNode,
+      onSelectNode,
+    ],
   );
 
   const handleKeyDown = useCallback(
@@ -420,7 +441,7 @@ export function StarGraphCanvas({
       data-testid="star-graph-canvas"
       className={cn("sg-canvas-root research-semantic-motion", className)}
       role="application"
-      tabIndex={keyboardNav ? -1 : undefined}
+      tabIndex={keyboardNav ? 0 : undefined}
       aria-label="Research constellation canvas"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

@@ -51,6 +51,10 @@ export interface StarGraphNodeProps {
   metrics?: StarGraphNodeMetrics;
   /** Override the computed accessible name (D5 keyboard/SR contract). */
   accessibleName?: string;
+  /** Opaque graph id used by the canvas focus manager. */
+  nodeId?: string;
+  /** Canvas uses roving tabindex so a large graph contributes one tab stop. */
+  tabIndex?: number;
   /** Explicitly busy (spinner/pulse). */
   busy?: boolean;
   /** Grid position on the canvas (left/top in % or px). Optional. */
@@ -73,6 +77,8 @@ export function StarGraphNode({
   metrics,
   busy,
   accessibleName,
+  nodeId,
+  tabIndex,
   style,
   onOpen,
   className,
@@ -105,6 +111,8 @@ export function StarGraphNode({
     <button
       type="button"
       aria-label={readable}
+      data-node-id={nodeId}
+      tabIndex={tabIndex}
       onClick={onOpen}
       data-tier={tier}
       data-state={state}

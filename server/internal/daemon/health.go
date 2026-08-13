@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -121,6 +123,48 @@ func (d *Daemon) healthHandler(startedAt time.Time) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// machineAttestationHandler is the local control method Raft names
+// machine-attestation. It shares the existing loopback listener with /health
+// and does not change the /health contract.
+func (d *Daemon) machineAttestationHandler(startedAt time.Time) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(d.machineAttestation(startedAt))
+	}
+}
+
+func (d *Daemon) machineAttestation(startedAt time.Time) computer.MachineAttestation {
+	ids := d.attestationWorkspaceIDs()
+	attestation := computer.MachineAttestation{
+		ComputerVersion:     d.cfg.CLIVersion,
+		ServiceGeneration:   d.runnerInstanceID,
+		ComputerGeneration:  d.cfg.ComputerGeneration,
+		ServicePID:          os.Getpid(),
+		ManagedWorkspaceIDs: ids,
+		ManagedSetRevision:  startedAt.UTC().Format(time.RFC3339) + ":" + strings.Join(ids, ","),
+	}
+	if d.cfg.MachineAttestationSourcePID > 0 {
+		attestation.SourceServicePID = d.cfg.MachineAttestationSourcePID
+	}
+	return attestation
+}
+
+func (d *Daemon) attestationWorkspaceIDs() []string {
+	if bindings, err := d.configuredWorkspaceBindings(); err == nil && len(bindings) > 0 {
+		ids := make([]string, 0, len(bindings))
+		for id := range bindings {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		return ids
+	}
+	return d.workspaceRunnerWorkspaceIDs()
 }
 
 // shutdownHandler triggers a graceful daemon shutdown by cancelling the
@@ -568,6 +612,7 @@ func (d *Daemon) credentialProxyMessageMutationHandler(path string, bodyFor any)
 func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt time.Time) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
+	mux.HandleFunc(computer.MachineAttestationPath, d.machineAttestationHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
 	mux.HandleFunc("/environment-switch/prepare", d.localEnvironmentSwitchPrepareHandler())
 	mux.HandleFunc("/environment-switch/release", d.localEnvironmentSwitchReleaseHandler())

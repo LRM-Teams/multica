@@ -73,6 +73,7 @@ func TestMarshalArtifactCanonicalJSONSortsObjectKeys(t *testing.T) {
 func TestArtifactCanonicalTestVectors(t *testing.T) {
 	wantHashes := map[ArtifactEntityKind]string{
 		ArtifactKindAttempt:              "sha256:fd514dbd54cf1257729cca91d3f76ceaee59a13b7bc16cbe63af78669a89a05d",
+		ArtifactKindBranch:               "sha256:816d340d10128f77bb4a7461192b912e89e679b5f7828652ac486ff3c5d7b665",
 		ArtifactKindClaim:                "sha256:1b045a093bfdb9669cd08566c1856821552da22096a10491fb57c1ac63bfe381",
 		ArtifactKindContextManifest:      "sha256:892cbc9e44d8848ac9a7793f3853039d6c740c3e679d5bbff6707edbb92ea67d",
 		ArtifactKindContractRevision:     "sha256:3c32cb46b4bdc2e06c5cb86acfc7b3bb45d02bf98352d627b44f055355796ee9",
@@ -80,6 +81,9 @@ func TestArtifactCanonicalTestVectors(t *testing.T) {
 		ArtifactKindEvidenceLink:         "sha256:e273d7c9b1895334047fed87a75ac26c3357e972057c8c803b0b90c7e794b331",
 		ArtifactKindGraphEdge:            "sha256:b126ec6ebfe107f30c6d164253a542ac83d0e0a2721c34f7b8046bb93cdbf3fb",
 		ArtifactKindGraphNode:            "sha256:84243fa3e1f5b531497051b4d08dcd8d9d6feef75ef3ae25f6464f097e662eb8",
+		ArtifactKindHypothesis:           "sha256:51e66938d67aeceee2c56d98984649058a49c66b156876d025348a2d0fdb8053",
+		ArtifactKindInquiryEdge:          "sha256:3b0fbaa81b31561ad281cc04b1fdf90c0f7e19a2c8963ce8cf1790d1dfb548ef",
+		ArtifactKindInsight:              "sha256:adf8c419d7305ea850d9d4e5ae9b46791eef3c07ce2707b9b37ed44dbf3c42af",
 		ArtifactKindLegacySource:         "sha256:7410eb392af128f3c95814bf60ca99aa1d9926680fa64ed8640a3a9b79671adb",
 		ArtifactKindMethodDecision:       "sha256:12f728b8316e54dd36ad6c2aa4a710ad2f5816bbae5c30286596ee0e557d8b9e",
 		ArtifactKindObservation:          "sha256:e49c9298680ff6c6e24b8aaa5dacfba9e875d65ca17357b5af4923a71ba6b5e8",

@@ -971,6 +971,8 @@
       "lineage": "轮次谱系"
     },
     "rail": {
+      "mobile_title": "调研上下文",
+      "mobile_description": "查看调研团对话与当前选中节点详情。",
       "chat_tab": "与调研主理人聊天",
       "detail_tab": "节点详情",
       "hide": "收起面板",

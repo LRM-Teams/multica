@@ -89,13 +89,10 @@
   color: var(--accent-foreground);
   background: var(--accent);
 }
-.d5-rail-collapsed {
-  transform: translateY(calc(100% - 44px));
-}
 .d5-rail-toggle {
   position: absolute;
   right: 12px;
-  bottom: calc(min(72dvh, 560px) + 8px);
+  bottom: 12px;
   z-index: 40;
 }
 .d5-rail-toggle-desktop {
@@ -221,6 +218,15 @@
     border-left: 0;
     border-top: 1px solid var(--border);
     box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.45);
+  }
+  .d5-mobile-rail-sheet .d5-rail {
+    position: static;
+    inset: auto;
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border-top: 0;
+    box-shadow: none;
   }
   .d5-lens-group {
     display: none;

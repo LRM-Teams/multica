@@ -971,6 +971,8 @@
       "lineage": "Lineage"
     },
     "rail": {
+      "mobile_title": "Research context",
+      "mobile_description": "Fleet conversation and selected research node details.",
       "chat_tab": "Chat with director",
       "detail_tab": "Node detail",
       "hide": "Hide panel",

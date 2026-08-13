@@ -57,7 +57,9 @@ assigned Agent must still be an active member of the session Fleet, and every
 manifest-bound policy grant must still be active at its exact revision,
 principal, purpose, policy version, and compartment when the result is
 accepted. A grant or membership change after dispatch therefore requires a new
-authorized attempt; the stale result fails closed.
+authorized attempt; the stale result fails closed. The server also seals every
+Manifest omission (candidate version, order, and exact policy reason) and
+revalidates that omission digest before accepting a result.
 
 4. Do not call `graph-append`, `source-upsert`, `report-patch`,
 `product-rounds/judgment`, or `stage-eval` for an assigned durable task. Those

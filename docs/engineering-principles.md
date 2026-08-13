@@ -393,6 +393,7 @@
 - 目标协议见 `docs/superpowers/plans/2026-08-05-autonomous-research-system.md`。新能力必须把 Hypothesis、Branch、Insight、Search/Corpus 谱系、Integration Round、Dispute、Research Monitor、Capability Observation、Episode 和 Strategy Version 变成服务端可验证事实；增加 Agent 角色或 Prompt 文字不能算完成。
 - 每批可信结果都必须能够触发固定输入版本的整合、争议检测、候选工作生成和有分项理由的组合选择。Integrator 只能提议，Evidence、Inquiry、Dispute、Task 和 Gate 状态仍由 Research Run 验证后更新。
 - 每个 accepted Task Result 都必须写 Assimilation Check Decision。存在相关同类结果时，原产出 Agent 必须提交有工件引用的 Integration Contribution；存在冲突时转入 Research Deliberation；没有相关结果时记录等待水位，后续结果到达后重检。Agent 不可用必须保留缺席原因，不能伪造 Contribution。
+- Dispatch Manifest 的 omission 是冻结的授权决策，不是可改写诊断；候选 version、顺序和精确 reason 必须被持久 hash 覆盖，Result acceptance 在提交前重算并 fail closed。
 - Research Run 创建时必须把当前 Research Fleet lead 固定为 `research_director_agent_id`；现有产品中该 Agent 是罗纳尔多。只有该身份能提交 Team Formation 或 lead adjudication。运行中 Fleet lead 变化不能暗改 Director；只能由用户显式改派并写版本化 Decision。
 - Research Director 自主创建 Agent 必须经过 Contract 授权、Team Formation Decision、预算/权限/重复检查和 Research Team Membership；失败和退出必须保留事实。没有这些对象的“hire Agent”消息不能改变 Fleet。
 - 冲突 Agent 的讨论必须写 Research Deliberation Turn 并由 canonical Position/Evidence/scope delta 衡量进展；deadlock 自动升级给 Research Director。Director 只能按证据解决、拆分范围、创建区分任务或保留未解决状态，不能用身份覆盖 Evidence Standard。

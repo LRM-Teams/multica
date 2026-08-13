@@ -48,6 +48,7 @@ type dispatchManifestPlan struct {
 	PolicyWatermark         int64
 	ThroughStateVersion     int64
 	ManifestHash            string
+	OmissionHash            string
 	NormalGrantID           string
 	NormalGrantRevision     int64
 	EvaluationGrantID       string
@@ -134,6 +135,7 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		PolicyWatermark:     watermark,
 		ThroughStateVersion: stateVersion,
 		ManifestHash:        manifestHash,
+		OmissionHash:        hashManifestOmissions(omissions),
 		Purpose:             purpose,
 	}, nil
 }
@@ -159,6 +161,18 @@ func hashManifestEntries(entries []artifactVersionCandidate) string {
 	sort.Strings(parts)
 	payload := strings.Join(parts, "\n")
 	sum := sha256.Sum256([]byte(payload))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func hashManifestOmissions(omissions []artifactVersionCandidate) string {
+	parts := make([]string, 0, len(omissions))
+	for ordinal, omission := range omissions {
+		parts = append(parts, fmt.Sprintf(
+			"omission=%d:%s:%s",
+			ordinal, omission.VersionRowID, omission.OmissionReason,
+		))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
@@ -337,14 +351,16 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		INSERT INTO research_artifact_context_manifest (
 		  id, workspace_id, session_id, attempt_id, task_id,
 		  purpose, policy_version, policy_watermark, through_state_version,
-		  normal_grant_id, normal_grant_revision, evaluation_grant_id, evaluation_grant_revision, manifest_hash
+		  normal_grant_id, normal_grant_revision, evaluation_grant_id, evaluation_grant_revision,
+		  manifest_hash, omission_hash
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
-		  $6, $7, $8, $9, $10::uuid, $11, NULLIF($12, '')::uuid, NULLIF($13, 0), $14
+		  $6, $7, $8, $9, $10::uuid, $11, NULLIF($12, '')::uuid, NULLIF($13, 0), $14, $15
 		)
 	`, plan.ManifestID, in.WorkspaceID, in.SessionID, in.AttemptID, in.TaskID,
 		plan.Purpose, LegacyV1V5CompatPolicy, plan.PolicyWatermark, plan.ThroughStateVersion,
-		plan.NormalGrantID, plan.NormalGrantRevision, plan.EvaluationGrantID, plan.EvaluationGrantRevision, plan.ManifestHash); err != nil {
+		plan.NormalGrantID, plan.NormalGrantRevision, plan.EvaluationGrantID, plan.EvaluationGrantRevision,
+		plan.ManifestHash, plan.OmissionHash); err != nil {
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
 	}
 

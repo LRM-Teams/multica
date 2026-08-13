@@ -124,6 +124,16 @@
     "handoff_failed": "交接失败",
     "send_failed": "消息发送失败"
   },
+  "director_messages": {
+    "wake_retry": "请重试刚才失败的唤醒{{reason}}：{{headline}}。配置根因仍走运维/LRM-858；本条只请求再试一次。",
+    "wake_reassign": "请将唤醒失败的任务改派给其他活跃成员：{{title}} · {{summary}}",
+    "round_agree": "同意产品轮 Round {{round}} 裁定：{{decision}}。",
+    "round_reject_continue": "驳回 continue：请在 Round {{round}} 后停止调研。",
+    "round_reject_stop": "驳回 stop：请在预算内再开一轮加深（Round {{round}}，剩余 {{remaining}}）。",
+    "goal_confirm": "确认将调研最终目标更新为：{{goal}}",
+    "goal_edit": "请按以下文本更新调研最终目标：{{goal}}",
+    "goal_reject": "拒绝本轮目标回灌提案（Round {{round}}），保持当前目标不变。"
+  },
   "overlay": {
     "fleet_expand": "展开调研团",
     "fleet_collapse": "收起调研团",

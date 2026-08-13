@@ -409,9 +409,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const retrySessionInterrupt = useCallback(() => {
     if (!sessionInterrupt) return;
     const reason = sessionInterrupt.reason
-      ? `（reason=${sessionInterrupt.reason}）`
+      ? ` (reason=${sessionInterrupt.reason})`
       : "";
-    const body = `请重试刚才失败的唤醒${reason}：${sessionInterrupt.headline}。配置根因仍走运维/LRM-858；本条只请求再试一次。`;
+    const body = t(($) => $.director_messages.wake_retry, {
+      reason,
+      headline: sessionInterrupt.headline,
+    });
     interruptRetryPriorIdRef.current = sessionInterrupt.messageId;
     setInterruptPhase("pending");
     void api
@@ -624,15 +627,21 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   };
 
   const onStepRetry = (card: FleetStepCardModel) => {
-    const reason = card.reason ? `（reason=${card.reason}）` : "";
+    const reason = card.reason ? ` (reason=${card.reason})` : "";
     postFleetAction(
-      `请重试刚才失败的唤醒${reason}：${card.summaryHeadline}。配置根因仍走运维/LRM-858；本条只请求再试一次。`,
+      t(($) => $.director_messages.wake_retry, {
+        reason,
+        headline: card.summaryHeadline,
+      }),
     );
   };
 
   const onStepReassign = (card: FleetStepCardModel) => {
     postFleetAction(
-      `请将唤醒失败的任务改派给其他活跃成员：${card.title} · ${card.summaryHeadline}`,
+      t(($) => $.director_messages.wake_reassign, {
+        title: card.title,
+        summary: card.summaryHeadline,
+      }),
     );
   };
 
@@ -807,28 +816,42 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   pending={send.isPending}
                   onAgree={() =>
                     postUserCommitted(
-                      `同意罗纳尔多产品轮 Round ${latestRound.round_number} 裁定：${latestRound.decision}`,
+                      t(($) => $.director_messages.round_agree, {
+                        round: latestRound.round_number,
+                        decision: latestRound.decision,
+                      }),
                     )
                   }
                   onRejectContinue={async () => {
                     await stopAndPostUser(
-                      `驳回 continue：请停止调研（Round ${latestRound.round_number}）。`,
+                      t(($) => $.director_messages.round_reject_continue, {
+                        round: latestRound.round_number,
+                      }),
                     );
                   }}
                   onRejectStop={() =>
                     postUserCommitted(
-                      `驳回 stop：请在预算内再开一轮加深（Round ${latestRound.round_number}，剩余 ${latestRound.budget_remaining}）。`,
+                      t(($) => $.director_messages.round_reject_stop, {
+                        round: latestRound.round_number,
+                        remaining: latestRound.budget_remaining,
+                      }),
                     )
                   }
                   onConfirmGoalPatch={(text) =>
-                    postUserCommitted(`确认将调研最终目标更新为：${text}`)
+                    postUserCommitted(
+                      t(($) => $.director_messages.goal_confirm, { goal: text }),
+                    )
                   }
                   onEditGoalPatch={(text) =>
-                    postUserCommitted(`请按以下文本更新调研最终目标：${text}`)
+                    postUserCommitted(
+                      t(($) => $.director_messages.goal_edit, { goal: text }),
+                    )
                   }
                   onRejectGoalPatch={() =>
                     postUserCommitted(
-                      `拒绝本轮目标回灌提案（Round ${latestRound.round_number}），保持当前目标不变。`,
+                      t(($) => $.director_messages.goal_reject, {
+                        round: latestRound.round_number,
+                      }),
                     )
                   }
                 />
@@ -921,28 +944,46 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                             onClarificationSkip={onClarificationSkip}
                             onRoundAgree={(card) =>
                               postUserCommitted(
-                                `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
+                                t(($) => $.director_messages.round_agree, {
+                                  round: card.round_number,
+                                  decision: card.decision,
+                                }),
                               )
                             }
                             onRoundRejectContinue={async (card) => {
                               await stopAndPostUser(
-                                `驳回 continue：请停止调研（Round ${card.round_number}）。`,
+                                t(($) => $.director_messages.round_reject_continue, {
+                                  round: card.round_number,
+                                }),
                               );
                             }}
                             onRoundRejectStop={(card) =>
                               postUserCommitted(
-                                `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
+                                t(($) => $.director_messages.round_reject_stop, {
+                                  round: card.round_number,
+                                  remaining: card.budget_remaining,
+                                }),
                               )
                             }
                             onConfirmGoalPatch={(_card, text) =>
-                              postUserCommitted(`确认将调研最终目标更新为：${text}`)
+                              postUserCommitted(
+                                t(($) => $.director_messages.goal_confirm, {
+                                  goal: text,
+                                }),
+                              )
                             }
                             onEditGoalPatch={(_card, text) =>
-                              postUserCommitted(`请按以下文本更新调研最终目标：${text}`)
+                              postUserCommitted(
+                                t(($) => $.director_messages.goal_edit, {
+                                  goal: text,
+                                }),
+                              )
                             }
                             onRejectGoalPatch={(card) =>
                               postUserCommitted(
-                                `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
+                                t(($) => $.director_messages.goal_reject, {
+                                  round: card.round_number,
+                                }),
                               )
                             }
                           />

@@ -124,6 +124,16 @@
     "handoff_failed": "Handoff failed",
     "send_failed": "Could not send message"
   },
+  "director_messages": {
+    "wake_retry": "Retry the failed wake-up{{reason}}: {{headline}}. Keep configuration root-cause repair in operations/LRM-858; this message only requests another attempt.",
+    "wake_reassign": "Reassign the failed wake-up task to another active member: {{title}} · {{summary}}",
+    "round_agree": "Accept the product-round decision for Round {{round}}: {{decision}}.",
+    "round_reject_continue": "Reject continue and stop the research after Round {{round}}.",
+    "round_reject_stop": "Reject stop and open another deepening round within budget (Round {{round}}, {{remaining}} remaining).",
+    "goal_confirm": "Confirm the final Research goal update: {{goal}}",
+    "goal_edit": "Update the final Research goal to the following text: {{goal}}",
+    "goal_reject": "Reject the goal patch from Round {{round}} and keep the current goal unchanged."
+  },
   "overlay": {
     "fleet_expand": "Expand research fleet",
     "fleet_collapse": "Collapse research fleet",

@@ -118,7 +118,7 @@ export function normalizeResearchPresenceMap(
 export function researchFleetOptions(wsId: string) {
   return queryOptions({
     queryKey: researchKeys.fleet(wsId),
-    queryFn: () => api.ensureResearchFleet(),
+    queryFn: () => api.ensureResearchFleet(wsId),
     enabled: !!wsId,
   });
 }
@@ -126,7 +126,7 @@ export function researchFleetOptions(wsId: string) {
 export function researchSessionListOptions(wsId: string) {
   return queryOptions({
     queryKey: researchKeys.sessions(wsId),
-    queryFn: () => api.listResearchSessions(),
+    queryFn: () => api.listResearchSessions(wsId),
     enabled: !!wsId,
   });
 }

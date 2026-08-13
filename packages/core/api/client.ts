@@ -4644,23 +4644,78 @@ export class ApiClient {
   }
 
   // Research Fleet
-  async ensureResearchFleet(): Promise<import("../types/research").ResearchFleet> {
-    const { ResearchFleetSchema, EMPTY_RESEARCH_FLEET } = await import("../research/schemas");
+  async ensureResearchFleet(
+    expectedWorkspaceId?: string,
+  ): Promise<import("../types/research").ResearchFleet> {
+    const { ResearchFleetSchema } = await import("../research/schemas");
     const raw = await this.fetch("/api/research/fleet/ensure", { method: "POST" });
-    return parseWithFallback(raw, ResearchFleetSchema, EMPTY_RESEARCH_FLEET, {
-      endpoint: "POST /api/research/fleet/ensure",
-    });
+    const rawFleet =
+      raw && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : null;
+    if (!rawFleet || !Array.isArray(rawFleet.members)) {
+      throw new Error("POST /api/research/fleet/ensure response failed schema validation");
+    }
+    const parsed = ResearchFleetSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("POST /api/research/fleet/ensure response failed schema validation");
+    }
+    const fleet = parsed.data;
+    const memberIds = fleet.members.map((member) => member.id);
+    const agentIds = fleet.members.map((member) => member.agent_id);
+    if (
+      !fleet.id ||
+      !fleet.workspace_id ||
+      (expectedWorkspaceId != null && fleet.workspace_id !== expectedWorkspaceId) ||
+      fleet.members.some((member) => !member.id || !member.agent_id) ||
+      new Set(memberIds).size !== memberIds.length ||
+      new Set(agentIds).size !== agentIds.length ||
+      (fleet.lead_agent_id != null && !agentIds.includes(fleet.lead_agent_id))
+    ) {
+      throw new Error("POST /api/research/fleet/ensure response failed identity validation");
+    }
+    return fleet;
   }
 
-  async listResearchSessions(): Promise<import("../types/research").ListResearchSessionsResponse> {
-    const {
-      ListResearchSessionsResponseSchema,
-      EMPTY_RESEARCH_SESSIONS,
-    } = await import("../research/schemas");
+  async listResearchSessions(
+    expectedWorkspaceId?: string,
+  ): Promise<import("../types/research").ListResearchSessionsResponse> {
+    const { ListResearchSessionsResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch("/api/research/sessions");
-    return parseWithFallback(raw, ListResearchSessionsResponseSchema, EMPTY_RESEARCH_SESSIONS, {
-      endpoint: "GET /api/research/sessions",
-    });
+    const rawSessions =
+      raw && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>).sessions
+        : null;
+    if (
+      !Array.isArray(rawSessions) ||
+      rawSessions.some((session) => {
+        if (!session || typeof session !== "object" || Array.isArray(session)) return true;
+        const value = session as Record<string, unknown>;
+        return ["id", "workspace_id", "fleet_id", "status", "current_stage"].some(
+          (key) => typeof value[key] !== "string" || value[key] === "",
+        );
+      })
+    ) {
+      throw new Error("GET /api/research/sessions response failed schema validation");
+    }
+    const parsed = ListResearchSessionsResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error("GET /api/research/sessions response failed schema validation");
+    }
+    const sessions = parsed.data.sessions;
+    const ids = sessions.map((session) => session.id);
+    if (
+      sessions.some(
+        (session) =>
+          !session.id ||
+          !session.workspace_id ||
+          (expectedWorkspaceId != null && session.workspace_id !== expectedWorkspaceId),
+      ) ||
+      new Set(ids).size !== ids.length
+    ) {
+      throw new Error("GET /api/research/sessions response failed identity validation");
+    }
+    return parsed.data;
   }
 
   async createResearchSession(

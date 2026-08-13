@@ -3490,6 +3490,42 @@ func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	}
 }
 
+func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root}, slog.Default())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	d.client = NewClient(srv.URL)
+
+	agentID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	runtimeID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	backend := statusStreamBackend{sessionID: "live-provider-sess", statusCount: 1}
+	_, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", agent.ExecOptions{Cwd: "/work"}, slog.Default(), Task{
+		ID:        "task-live-session",
+		AgentID:   agentID,
+		RuntimeID: runtimeID,
+	})
+	if err != nil {
+		t.Fatalf("executeAndDrainForTask: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		got, err = d.agentLifecycleExecutor.sessions.Get(agentID, runtimeID)
+		if err != nil {
+			t.Fatalf("read session store: %v", err)
+		}
+		if got == "live-provider-sess" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("session store = %q, want live-provider-sess (production never recorded the live provider session)", got)
+}
+
 // TestExecuteAndDrain_PinsTaskSessionOnlyOnce covers the
 // sessionPinned.CompareAndSwap(false, true) idempotency guard: backends may
 // repeat MessageStatus on every turn (e.g. Claude Code CLI streams a status

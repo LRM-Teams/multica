@@ -4743,6 +4743,22 @@ export class ApiClient {
       );
     }
     const data = parsed.data;
+    const hasSessionMismatch =
+      (data.session_id !== "" && data.session_id !== id) ||
+      data.nodes.some(
+        (node) => node.session_id !== "" && node.session_id !== id,
+      ) ||
+      data.edges.some(
+        (edge) => edge.session_id !== "" && edge.session_id !== id,
+      ) ||
+      data.clusters.some(
+        (cluster) => cluster.session_id !== "" && cluster.session_id !== id,
+      );
+    if (hasSessionMismatch) {
+      throw new Error(
+        `GET /api/research/sessions/:id/graph/typed response failed session validation`,
+      );
+    }
     return { ...data, ...(data.session_id ? {} : { session_id: id }) };
   }
 

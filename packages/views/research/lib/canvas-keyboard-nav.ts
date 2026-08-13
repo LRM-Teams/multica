@@ -204,27 +204,6 @@ export function crossLaneNeighbor(
   return branches[nextIndex]!;
 }
 
-const STATUS_LABEL_ZH: Record<string, string> = {
-  done: "已完成",
-  completed: "已完成",
-  resolved: "已完成",
-  success: "已完成",
-  failed: "已失败",
-  error: "已失败",
-  conflict: "冲突",
-  refuted: "已否定",
-  dead_end: "死胡同",
-  abandoned: "已废弃",
-  cancelled: "已取消",
-  active: "运行中",
-  running: "运行中",
-  in_progress: "运行中",
-  waiting: "等待中",
-  pending: "等待中",
-  blocked: "阻塞",
-  queued: "排队中",
-};
-
 const LANE_LABEL_ZH: Record<LogicLaneId, string> = {
   orchestrate: "编排轨",
   source: "寻源轨",
@@ -233,13 +212,74 @@ const LANE_LABEL_ZH: Record<LogicLaneId, string> = {
   draft: "起草轨",
 };
 
-function statusPhrase(node: ResearchGraphNode): string {
-  const s = (node.status || "").toLowerCase();
-  if (STATUS_LABEL_ZH[s]) return STATUS_LABEL_ZH[s]!;
-  if (node.node_type === "conflict") return "冲突";
-  if (node.node_type === "refuted") return "已否定";
-  if (node.node_type === "dead_end") return "死胡同";
-  return s || "未知状态";
+export interface CanvasNodeA11yCopy {
+  statuses: {
+    completed: string;
+    failed: string;
+    conflict: string;
+    refuted: string;
+    deadEnd: string;
+    abandoned: string;
+    cancelled: string;
+    running: string;
+    waiting: string;
+    blocked: string;
+    queued: string;
+  };
+  lanes: Record<LogicLaneId, string>;
+  unknownStatus: string;
+  lowConfidence: string;
+  separator: string;
+  faceLabels: typeof CONTENT_FACE_A11Y_ZH;
+  faceCopy: typeof CONTENT_FACE_COPY_ZH;
+  multipleUpdates: (count: number) => string;
+}
+
+export const CANVAS_NODE_A11Y_ZH: CanvasNodeA11yCopy = {
+  statuses: {
+    completed: "已完成",
+    failed: "已失败",
+    conflict: "冲突",
+    refuted: "已否定",
+    deadEnd: "死胡同",
+    abandoned: "已废弃",
+    cancelled: "已取消",
+    running: "运行中",
+    waiting: "等待中",
+    blocked: "阻塞",
+    queued: "排队中",
+  },
+  lanes: LANE_LABEL_ZH,
+  unknownStatus: "未知状态",
+  lowConfidence: "低置信",
+  separator: "，",
+  faceLabels: CONTENT_FACE_A11Y_ZH,
+  faceCopy: CONTENT_FACE_COPY_ZH,
+  multipleUpdates: (count) => `${count} 个节点更新`,
+};
+
+function statusPhrase(
+  status: string,
+  nodeType: string,
+  copy: CanvasNodeA11yCopy,
+): string {
+  const s = (status || "").toLowerCase();
+  if (["done", "completed", "resolved", "success", "succeeded"].includes(s)) {
+    return copy.statuses.completed;
+  }
+  if (["failed", "error", "terminal_failed", "retryable_failed"].includes(s)) {
+    return copy.statuses.failed;
+  }
+  if (s === "conflict" || nodeType === "conflict") return copy.statuses.conflict;
+  if (s === "refuted" || nodeType === "refuted") return copy.statuses.refuted;
+  if (s === "dead_end" || nodeType === "dead_end") return copy.statuses.deadEnd;
+  if (s === "abandoned") return copy.statuses.abandoned;
+  if (s === "cancelled") return copy.statuses.cancelled;
+  if (["active", "running", "in_progress"].includes(s)) return copy.statuses.running;
+  if (["waiting", "pending"].includes(s)) return copy.statuses.waiting;
+  if (s === "blocked") return copy.statuses.blocked;
+  if (s === "queued") return copy.statuses.queued;
+  return s ? `${copy.unknownStatus}: ${s}` : copy.unknownStatus;
 }
 
 function isLowConfidence(node: ResearchGraphNode): boolean {
@@ -252,18 +292,21 @@ function isLowConfidence(node: ResearchGraphNode): boolean {
 }
 
 /** `aria-label` = 标题 + 状态 + 轨道（低置信含文本）. */
-export function buildNodeAccessibleName(node: ResearchGraphNode): string {
+export function buildNodeAccessibleName(
+  node: ResearchGraphNode,
+  copy: CanvasNodeA11yCopy = CANVAS_NODE_A11Y_ZH,
+): string {
   const title = node.title?.trim() || node.id;
-  const status = statusPhrase(node);
-  const lane = LANE_LABEL_ZH[laneForNode(node)];
+  const status = statusPhrase(node.status, node.node_type, copy);
+  const lane = copy.lanes[laneForNode(node)];
   const parts = [title, status, lane];
-  if (isLowConfidence(node)) parts.push("低置信");
+  if (isLowConfidence(node)) parts.push(copy.lowConfidence);
   // LRM-1332: four content-face labels must not rely on visual position alone.
-  const faces = resolveContentFaceValues(node, "surface", CONTENT_FACE_COPY_ZH);
+  const faces = resolveContentFaceValues(node, "surface", copy.faceCopy);
   for (const key of CONTENT_FACE_KEYS) {
-    parts.push(`${CONTENT_FACE_A11Y_ZH[key]} ${faces[key]}`);
+    parts.push(`${copy.faceLabels[key]} ${faces[key]}`);
   }
-  return parts.join("，");
+  return parts.join(copy.separator);
 }
 
 export type StatusAnnouncement = {
@@ -278,15 +321,15 @@ export type StatusAnnouncement = {
  */
 export function mergeStatusAnnouncements(
   updates: StatusAnnouncement[],
+  copy: CanvasNodeA11yCopy = CANVAS_NODE_A11Y_ZH,
 ): string {
   if (updates.length === 0) return "";
   if (updates.length === 1) {
     const u = updates[0]!;
-    const s = (u.status || "").toLowerCase();
-    const phrase = STATUS_LABEL_ZH[s] ?? s;
+    const phrase = statusPhrase(u.status, "", copy);
     return `${u.title} ${phrase}`.trim();
   }
-  return `${updates.length} 个节点更新`;
+  return copy.multipleUpdates(updates.length);
 }
 
 function moveOrNoop(nodeId: string | null): CanvasKeyboardAction {

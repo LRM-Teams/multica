@@ -155,6 +155,8 @@
     "desc_placeholder": "添加描述...",
     "desc_edit_aria": "编辑描述",
     "sub_issues_label": "子 issue",
+    "linked_notes_label": "关联笔记",
+    "linked_note_untitled": "无标题",
     "sub_issue_of": "属于父 issue",
     "from_discussion": "源自讨论",
     "add_sub_issues": "添加子 issue",

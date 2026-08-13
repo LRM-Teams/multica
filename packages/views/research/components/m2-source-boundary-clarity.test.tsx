@@ -60,7 +60,11 @@ vi.mock("../../i18n/use-t", () => ({
       fn: (dict: Record<string, unknown>) => unknown,
       vars?: Record<string, unknown>,
     ) => {
-      const raw = fn({ m2: M2, session_page: { retry: "重试" } });
+      const raw = fn({
+        m2: M2,
+        session_page: { retry: "重试" },
+        connectivity: { retrying: "正在重试…" },
+      });
       if (typeof raw === "string" && vars?.count != null) {
         return raw.replace("{{count}}", String(vars.count));
       }
@@ -159,7 +163,7 @@ describe("SourceStrategyStrip (LRM-1282)", () => {
     expect(grid.className).not.toMatch(/md:grid-cols-3|lg:grid-cols-3/);
   });
 
-  it("surfaces snapshot errors with optional retry that can disable", async () => {
+  it("surfaces snapshot errors with a focusable pending retry", async () => {
     const onRetry = vi.fn();
     render(
       <SourceStrategyStrip
@@ -170,8 +174,9 @@ describe("SourceStrategyStrip (LRM-1282)", () => {
       />,
     );
     expect(screen.getByRole("alert").textContent).toContain("network down");
-    const btn = screen.getByRole("button", { name: "重试" });
-    expect(btn).toBeDisabled();
+    const btn = screen.getByRole("button", { name: "正在重试…" });
+    expect(btn).not.toBeDisabled();
+    expect(btn).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(btn);
     expect(onRetry).not.toHaveBeenCalled();
   });

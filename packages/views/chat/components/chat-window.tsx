@@ -39,7 +39,10 @@ import {
   pendingChatTaskOptions,
   pendingChatTasksOptions,
   chatKeys,
-  isTaskMessageTaskId,
+  isStandaloneListItemOutstanding,
+  isStandaloneSendOutstanding,
+  isStandaloneSessionOutstanding,
+  standaloneStopRequiresInbox,
 } from "@multica/core/chat/queries";
 import {
   useCreateChatSession,
@@ -165,7 +168,6 @@ function replaceOptimisticChatMessageId(
   sessionId: string,
   optimisticId: string,
   messageId: string,
-  taskId: string,
 ) {
   const replace = (messages: ChatMessage[] | undefined) => {
     if (!messages) return messages;
@@ -173,7 +175,7 @@ function replaceOptimisticChatMessageId(
       return messages.filter((m) => m.id !== optimisticId);
     }
     return messages.map((m) =>
-      m.id === optimisticId ? { ...m, id: messageId, task_id: taskId } : m,
+      m.id === optimisticId ? { ...m, id: messageId } : m,
     );
   };
 
@@ -282,15 +284,12 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   // keeps isLoading false so the starter prompts aren't hidden.
   const showSkeleton = !!activeSessionId && messagesLoading;
 
-  // Server-authoritative pending task. Survives refresh / reopen / session
-  // switch because it's keyed on sessionId in the Query cache; WS events
-  // (chat:message / chat:done / task:*) keep it invalidated in real time.
-  //
-  // This is the SOLE source for pendingTaskId — no mirror in the store.
+  // Server-authoritative session outstanding. Survives refresh / reopen
+  // because it's keyed on sessionId; chat:done clears it.
   const { data: pendingTask } = useQuery(
     pendingChatTaskOptions(activeSessionId ?? ""),
   );
-  const pendingTaskId = pendingTask?.task_id ?? null;
+  const turnOutstanding = isStandaloneSessionOutstanding(pendingTask);
   const stopRequestedBeforeTaskRef = useRef(false);
   const [restoreDraftRequest, setRestoreDraftRequest] = useState<{
     id: string;
@@ -364,14 +363,14 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
     uiLogger.info("ChatWindow mount", {
       isOpen,
       activeSessionId,
-      pendingTaskId,
+      turnOutstanding,
       selectedAgentId,
       wsId,
     });
     return () => {
       uiLogger.info("ChatWindow unmount", {
         activeSessionId,
-        pendingTaskId,
+        turnOutstanding,
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
@@ -486,40 +485,36 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
     [ensureSession, uploadWithToast, qc, setActiveSession],
   );
 
-  const cancelChatTask = useCallback(
-    async (
-      inboxEventId: string,
-      sessionId: string,
-      options: { source: string },
-    ) => {
-      apiLogger.info("cancelTask.start", {
-        inboxEventId,
+  const cancelStandaloneTurn = useCallback(
+    async (sessionId: string, options: { source: string }) => {
+      apiLogger.info("cancelStandalone.start", {
         sessionId,
         source: options.source,
+        requiresInbox: standaloneStopRequiresInbox(),
       });
       qc.setQueryData(chatKeys.pendingTask(sessionId), {});
-
+      qc.setQueryData<PendingChatTasksResponse>(chatKeys.pendingTasks(wsId), (current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          tasks: current.tasks.filter((item) => item.chat_session_id !== sessionId),
+        };
+      });
       try {
-        const result = await api.cancelChatInboxEvent(sessionId, inboxEventId);
+        await api.cancelStandaloneChat(sessionId);
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
-        apiLogger.info("cancelTask.success", {
-          inboxEventId,
-          sessionId,
-        });
-        return result;
+        qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
+        qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
       } catch (err) {
-        apiLogger.warn("cancelTask.error (task may have already finished)", {
-          inboxEventId,
-          sessionId,
-          err,
-        });
+        apiLogger.warn("cancelStandalone.error", { sessionId, err });
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
-        return null;
+        qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
+        qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
       }
     },
-    [qc],
+    [qc, wsId],
   );
 
   const handleSend = useCallback(
@@ -579,13 +574,8 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         chatKeys.messages(sessionId),
         (old) => (old ? [...old, optimistic] : [optimistic]),
       );
-      // Seed the pending-task with a temporary id so the StatusPill mounts
-      // and starts ticking the instant the user clicks send. Real task_id
-      // and server-authoritative created_at land below; until then the pill
-      // is anchored to the local clock (drift is the request RTT, ~50–200ms,
-      // which doesn't change the rendered "Ns" value).
       qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
-        task_id: `optimistic-${optimistic.id}`,
+        pending: true,
         status: "queued",
         created_at: sentAt,
       });
@@ -608,12 +598,11 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       apiLogger.info("sendChatMessage.success", {
         sessionId,
         messageId: result.message_id,
-        taskId: result.task_id,
+        pending: result.pending,
+        deliveryId: result.delivery_id,
       });
-      replaceOptimisticChatMessageId(qc, sessionId, optimistic.id, result.message_id, result.task_id);
-      // Greeting fast path (L4): server returns no task_id and already wrote
-      // the assistant sticker. Clear pending pill and refresh messages.
-      if (!result.task_id) {
+      replaceOptimisticChatMessageId(qc, sessionId, optimistic.id, result.message_id);
+      if (!isStandaloneSendOutstanding(result)) {
         stopRequestedBeforeTaskRef.current = false;
         qc.setQueryData(chatKeys.pendingTask(sessionId), {});
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
@@ -621,23 +610,19 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
         return true;
       }
-      // Replace the temporary task_id with the server's real one (so the WS
-      // task: handlers can match against it) and snap the anchor to the
-      // server's created_at — keeping the elapsed-seconds reading stable.
-      // Also pull inbox_event_id from pending-task (authoritative Stop id).
       let pendingAfterSend: ChatPendingTask = {
-        task_id: result.task_id,
+        pending: true,
+        delivery_id: result.delivery_id,
         status: "queued",
         created_at: result.created_at,
       };
       try {
         const serverPending = await api.getPendingChatTask(sessionId);
-        if (serverPending.task_id || serverPending.inbox_event_id) {
+        if (isStandaloneSessionOutstanding(serverPending)) {
           pendingAfterSend = {
             ...pendingAfterSend,
             ...serverPending,
-            task_id: serverPending.task_id ?? result.task_id,
-            status: serverPending.status ?? "queued",
+            pending: true,
             created_at: serverPending.created_at ?? result.created_at,
           };
         }
@@ -647,28 +632,19 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
       qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), pendingAfterSend);
       if (stopRequestedBeforeTaskRef.current) {
         stopRequestedBeforeTaskRef.current = false;
-        const inboxEventId = pendingAfterSend.inbox_event_id?.trim();
-        if (!inboxEventId) {
-          apiLogger.warn("cancelTask.deferred skipped: pending-task missing inbox_event_id", {
-            sessionId,
-            taskId: result.task_id,
-          });
-          return false;
-        }
-        await cancelChatTask(inboxEventId, sessionId, {
-          source: "deferred-send",
-        });
+        await cancelStandaloneTurn(sessionId, { source: "deferred-send" });
         return false;
       }
       qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
       qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
+      qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
       return true;
     },
     [
       activeSessionId,
       activeAgent,
       ensureSession,
-      cancelChatTask,
+      cancelStandaloneTurn,
       qc,
       setActiveSession,
       t,
@@ -677,29 +653,16 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   );
 
   const handleStop = useCallback(() => {
-    const inboxEventId = pendingTask?.inbox_event_id?.trim();
     if (!activeSessionId) {
-      apiLogger.debug("cancelTask skipped: no active session");
+      apiLogger.debug("cancelStandalone skipped: no active session");
       return;
     }
-    // Optimistic send has no inbox_event_id yet — defer until send resolves
-    // and pending-task returns the authoritative Stop id.
-    if (!inboxEventId) {
-      if (pendingTaskId && !isTaskMessageTaskId(pendingTaskId)) {
-        stopRequestedBeforeTaskRef.current = true;
-        apiLogger.info("cancelTask.deferred until inbox_event_id", {
-          taskId: pendingTaskId,
-          sessionId: activeSessionId,
-        });
-        return;
-      }
-      apiLogger.debug("cancelTask skipped: no inbox_event_id on pending-task");
+    if (!turnOutstanding) {
+      stopRequestedBeforeTaskRef.current = true;
       return;
     }
-    void cancelChatTask(inboxEventId, activeSessionId, {
-      source: "active-input",
-    });
-  }, [pendingTask, pendingTaskId, activeSessionId, cancelChatTask]);
+    void cancelStandaloneTurn(activeSessionId, { source: "active-input" });
+  }, [turnOutstanding, activeSessionId, cancelStandaloneTurn]);
 
   const handleSelectAgent = useCallback(
     (agent: Agent) => {
@@ -725,10 +688,10 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   const handleNewChat = useCallback(() => {
     uiLogger.info("newChat", {
       previousSessionId: activeSessionId,
-      previousPendingTask: pendingTaskId,
+      previousOutstanding: turnOutstanding,
     });
     setActiveSession(null);
-  }, [activeSessionId, pendingTaskId, setActiveSession]);
+  }, [activeSessionId, turnOutstanding, setActiveSession]);
 
   const handleSelectSession = useCallback(
     (session: ChatSession) => {
@@ -761,19 +724,17 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   const handleMinimize = useCallback(() => {
     uiLogger.info("minimize (close)", {
       activeSessionId,
-      pendingTaskId,
+      turnOutstanding,
     });
     setOpen(false);
-  }, [activeSessionId, pendingTaskId, setOpen]);
+  }, [activeSessionId, turnOutstanding, setOpen]);
 
   const isExpanded = useChatStore((s) => s.isExpanded);
 
   const windowRef = useRef<HTMLDivElement>(null);
   const { renderWidth, renderHeight, isAtMax, boundsReady, isDragging, toggleExpand, startDrag } = useChatResize(windowRef);
 
-  // Show the list (vs empty state) as soon as there's anything to display —
-  // a real message, or a pending task whose timeline will stream in.
-  const hasMessages = messages.length > 0 || !!pendingTaskId;
+  const hasMessages = messages.length > 0 || turnOutstanding;
 
   const isVisible = isOpen && (effectiveLayout === "fullscreen" || isExpanded || boundsReady);
 
@@ -1006,7 +967,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         onRestoreDraftConsumed={handleRestoreDraftConsumed}
         onUploadFile={handleUploadFile}
         onStop={handleStop}
-        isRunning={!!pendingTaskId}
+        isRunning={turnOutstanding}
         disabled={isSessionArchived}
         noAgent={noAgent}
         agentName={activeAgentDisplayName}
@@ -1244,7 +1205,12 @@ function SessionDropdown({
   // window doesn't fire a second request — TanStack dedupes by key.
   const { data: pending } = useQuery(pendingChatTasksOptions(wsId));
   const pendingTaskBySessionId = useMemo(
-    () => new Map((pending?.tasks ?? []).map((task) => [task.chat_session_id, task])),
+    () =>
+      new Map(
+        (pending?.tasks ?? [])
+          .filter((task) => isStandaloneListItemOutstanding(task))
+          .map((task) => [task.chat_session_id, task]),
+      ),
     [pending],
   );
   const inFlightSessionIds = useMemo(
@@ -1351,58 +1317,27 @@ function SessionDropdown({
     setIsHistoryOpen(false);
   };
 
-  const handleConfirmStop = (session: ChatSession, task: PendingChatTasksResponse["tasks"][number]) => {
-    setStoppingTaskId(task.task_id);
+  const handleConfirmStop = (session: ChatSession) => {
+    setStoppingTaskId(session.id);
     previousInFlightRef.current = new Set(
       [...previousInFlightRef.current].filter((sessionId) => sessionId !== session.id),
     );
-
-    // Same optimistic behavior as the active chat Stop button: remove the
-    // running affordance immediately, then let task:cancelled / refetches
-    // converge every open surface on the server truth.
     queryClient.setQueryData<PendingChatTasksResponse>(chatKeys.pendingTasks(wsId), (current) => {
       if (!current) return current;
       return {
         ...current,
-        tasks: current.tasks.filter((item) => item.task_id !== task.task_id),
+        tasks: current.tasks.filter((item) => item.chat_session_id !== session.id),
       };
     });
     queryClient.setQueryData(chatKeys.pendingTask(session.id), {});
-    queryClient.invalidateQueries({ queryKey: chatKeys.messages(session.id) });
-    queryClient.invalidateQueries({ queryKey: chatKeys.messagesPage(session.id) });
-
-    // List pending-tasks has no inbox_event_id yet — resolve via pending-task
-    // (LRM-581 contract), never cancelTaskById.
-    void (async () => {
-      try {
-        const pending = await api.getPendingChatTask(session.id);
-        const inboxEventId = pending.inbox_event_id?.trim();
-        if (!inboxEventId) {
-          apiLogger.warn("cancelTask.error (history row): pending-task missing inbox_event_id", {
-            taskId: task.task_id,
-            sessionId: session.id,
-          });
-          return;
-        }
-        await api.cancelChatInboxEvent(session.id, inboxEventId);
-        apiLogger.info("cancelTask.success (history row)", {
-          inboxEventId,
-          taskId: task.task_id,
-          sessionId: session.id,
-        });
-      } catch (err) {
-        apiLogger.warn("cancelTask.error (history row; task may have already finished)", {
-          taskId: task.task_id,
-          sessionId: session.id,
-          err,
-        });
-      } finally {
-        queryClient.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
-        queryClient.invalidateQueries({ queryKey: chatKeys.pendingTask(session.id) });
-        setStoppingTaskId(null);
-        setConfirmingStopId(null);
-      }
-    })();
+    void api.cancelStandaloneChat(session.id).finally(() => {
+      queryClient.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
+      queryClient.invalidateQueries({ queryKey: chatKeys.pendingTask(session.id) });
+      queryClient.invalidateQueries({ queryKey: chatKeys.messages(session.id) });
+      queryClient.invalidateQueries({ queryKey: chatKeys.messagesPage(session.id) });
+      setStoppingTaskId(null);
+      setConfirmingStopId(null);
+    });
   };
 
   const renderRow = (session: ChatSession) => {
@@ -1536,7 +1471,7 @@ function SessionDropdown({
                   e.preventDefault();
                   setConfirmingStopId(null);
                 }}
-                disabled={stoppingTaskId === pendingTask.task_id}
+                disabled={stoppingTaskId === session.id}
                 className="inline-flex h-7 items-center rounded px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
               >
                 {t(($) => $.session_history.stop_dialog.cancel)}
@@ -1550,12 +1485,12 @@ function SessionDropdown({
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
-                  handleConfirmStop(session, pendingTask);
+                  handleConfirmStop(session);
                 }}
-                disabled={stoppingTaskId === pendingTask.task_id}
+                disabled={stoppingTaskId === session.id}
                 className="inline-flex h-7 items-center rounded px-2 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
               >
-                {stoppingTaskId === pendingTask.task_id
+                {stoppingTaskId === session.id
                   ? t(($) => $.session_history.stop_dialog.confirming)
                   : t(($) => $.session_history.stop_dialog.confirm)}
               </button>

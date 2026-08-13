@@ -1193,6 +1193,40 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	}
 }
 
+func TestAgentWorkspaceHoldsCodeCheckouts(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		IssueID:      "issue-1",
+		ProjectID:    "project-1",
+		ProjectTitle: "Launch Project",
+		AgentRoot:    "/tmp/multica/workspace-1/agents/agent-1",
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	for _, want := range []string{
+		"This workspace is also where code checkouts live",
+		"When working in a repository, first choose the specific project directory or worktree inside this workspace",
+		"then run git or package-manager commands there",
+		"Do not run git against the workspace root",
+		"Do not check out repositories outside this workspace",
+		"Project id: `project-1`",
+		"multica workspace info --projects --output json",
+		"this runtime file is not updated when project resources change",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("workspace checkout contract missing %q\n---\n%s", want, out)
+		}
+	}
+	for _, banned := range []string{
+		"https://github.com/",
+		"multica repo checkout",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("runtime brief leaked repository location %q\n---\n%s", banned, out)
+		}
+	}
+}
+
 func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{

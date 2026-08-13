@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleCheck,
+  FileText,
   MessageSquare,
   MoreHorizontal,
   PanelRight,
@@ -89,7 +90,7 @@ import {
 } from "../../common/use-resolved-actor-identity";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useRecentContextStore } from "@multica/core/chat";
-import { issueListOptions, issueDetailOptions, childIssuesOptions, issueUsageOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
+import { issueListOptions, issueDetailOptions, childIssuesOptions, issueNoteRefsOptions, issueUsageOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multica/core/labels";
@@ -1135,6 +1136,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   });
   const { data: childIssues = [] } = useQuery({
     ...childIssuesOptions(wsId, id),
+    enabled: !!issue,
+  });
+  const { data: linkedNotes = [] } = useQuery({
+    ...issueNoteRefsOptions(wsId, id),
     enabled: !!issue,
   });
   // Parent's children — used to render the "x/y" progress next to the
@@ -2229,6 +2234,32 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </div>
             );
           })()}
+
+          {linkedNotes.length > 0 && (
+            <div className="mt-10">
+              <div className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>{t(($) => $.detail.linked_notes_label)}</span>
+                <span className="rounded-full bg-muted/60 px-2 py-0.5 text-[11px] tabular-nums font-medium text-muted-foreground">
+                  {linkedNotes.length}
+                </span>
+              </div>
+              <div className="overflow-hidden rounded-lg border bg-card/30 divide-y divide-border/60">
+                {linkedNotes.map((note) => (
+                  <AppLink
+                    key={note.id}
+                    href={paths.noteDetail(note.id)}
+                    className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {note.title.trim() || t(($) => $.detail.linked_note_untitled)}
+                    </span>
+                  </AppLink>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="my-8 border-t" />
 

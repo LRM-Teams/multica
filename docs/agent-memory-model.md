@@ -312,7 +312,16 @@ curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会
 
 不上 Neo4j/全量 Graphiti；不绑 Harness；不替代 LRM-982 自进化证据链 AC。
 
-## 10. 最终判断口诀
+## 10. 与产品笔记写回并行（S3-W3）
+
+Agent 私有 `memory/daily/` **不是**产品笔记，也 **不是** `note_page_writeback`。
+
+- **产品侧**：workspace 笔记页 + 待审写回（人类审阅后进 `note_page`）——合同见 `docs/notes-editor-worker-contract.md`。
+- **记忆侧**：本文件描述的 agent 私有文件与平台审核记忆。
+
+两套存储**并行、可互链、禁止合并**。不要把 Daily 流水账灌进笔记正文，也不要把待审写回当 Daily 的替代表。后续实现若需要「从 Daily 生成回顾笔记」，必须是显式产品功能，并仍走笔记 ACL / 待审合同，而不是静默同步。
+
+## 11. 最终判断口诀
 
 ```text
 当前 agent 自己要记住        -> agent 私有文件

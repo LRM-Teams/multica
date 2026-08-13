@@ -111,6 +111,40 @@ describe("useResearchSessionCanvas — LRM-1484 behavior", () => {
     expect(result.current.snapshot.nodes).toHaveLength(0);
   });
 
+  it("reports background capability retries as fetching until they settle", async () => {
+    const qc = makeClient();
+    let calls = 0;
+    let resolveRetry: ((snapshot: ResearchV6Snapshot) => void) | null = null;
+    const transports: SessionCanvasTransports = {
+      loadV6Snapshot: () => {
+        calls += 1;
+        if (calls === 1) return v6LoaderSchemaError();
+        return new Promise<ResearchV6Snapshot>((resolve) => {
+          resolveRetry = resolve;
+        });
+      },
+      loadV5Session: () => Promise.resolve(V5_INPUT),
+    };
+    const { result } = renderHook(
+      () =>
+        useResearchSessionCanvas({
+          wsId: "w",
+          sessionId: "sess-a",
+          runId: "run-a",
+          transports,
+        }),
+      { wrapper: wrapper(qc) },
+    );
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(result.current.isFetching).toBe(false);
+
+    act(() => result.current.refetch());
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+    act(() => resolveRetry?.(v6FixtureSnapshot()));
+    await waitFor(() => expect(result.current.status).toBe("v6"));
+    expect(result.current.isFetching).toBe(false);
+  });
+
   it("switching session cancels old work: new session never reuses the old snapshot", async () => {
     const qc = makeClient();
     // V6 route is absent for BOTH sessions → V5 fallback, so we can observe the

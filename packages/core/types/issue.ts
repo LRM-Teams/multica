@@ -127,3 +127,14 @@ export interface Issue {
   created_at: string;
   updated_at: string;
 }
+
+/** Note linked from an issue via note_page_issue_ref (S3-R5b). ACL-filtered. */
+export interface IssueNoteRef {
+  id: string;
+  title: string;
+  created_at: string;
+}
+
+export interface IssueNoteRefListResponse {
+  notes: IssueNoteRef[];
+}

@@ -79,7 +79,7 @@ describe("ResearchProductRoundCardView", () => {
     expect(screen.getByText("Agree")).toBeTruthy();
   });
 
-  it("auto-adopts Ronaldo decision after timeout without writing goal_patch", () => {
+  it("auto-adopts Ronaldo decision after timeout without writing goal_patch", async () => {
     const onAgree = vi.fn();
     const onConfirmGoalPatch = vi.fn();
     render(
@@ -91,8 +91,9 @@ describe("ResearchProductRoundCardView", () => {
       />,
     );
     expect(screen.getByText(/Auto-adopt in/)).toBeTruthy();
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(2500);
+      await Promise.resolve();
     });
     expect(onAgree).toHaveBeenCalledTimes(1);
     expect(onConfirmGoalPatch).not.toHaveBeenCalled();
@@ -109,6 +110,81 @@ describe("ResearchProductRoundCardView", () => {
       vi.advanceTimersByTime(6000);
     });
     expect(onAgree).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the round open and suppresses rapid repeats until agree commits", async () => {
+    let resolveAgree: (() => void) | undefined;
+    const onAgree = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveAgree = resolve;
+        }),
+    );
+    render(
+      <ResearchProductRoundCardView
+        card={card}
+        onAgree={onAgree}
+        autoAdoptSeconds={0}
+      />,
+    );
+
+    const agree = screen.getByTestId("research-round-agree");
+    fireEvent.click(agree);
+    fireEvent.click(agree);
+    expect(onAgree).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("缺口 A")).toBeTruthy();
+
+    await act(async () => {
+      resolveAgree?.();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("缺口 A")).toBeNull();
+  });
+
+  it("preserves the round and goal draft when a decision commit fails", async () => {
+    const onAgree = vi.fn().mockRejectedValue(new Error("commit failed"));
+    const onConfirmGoalPatch = vi
+      .fn()
+      .mockRejectedValue(new Error("goal commit failed"));
+    render(
+      <ResearchProductRoundCardView
+        card={card}
+        onAgree={onAgree}
+        onConfirmGoalPatch={onConfirmGoalPatch}
+        autoAdoptSeconds={0}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("research-round-agree"));
+    await act(async () => Promise.resolve());
+    expect(screen.getByText("缺口 A")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("research-round-goal-edit"));
+    const draft = screen.getByRole("textbox");
+    fireEvent.change(draft, { target: { value: "保留修改后的目标" } });
+    fireEvent.click(screen.getByTestId("research-round-goal-confirm-send"));
+    await act(async () => Promise.resolve());
+    expect(onConfirmGoalPatch).toHaveBeenCalledWith("保留修改后的目标");
+    expect(screen.getByRole("textbox")).toHaveValue("保留修改后的目标");
+  });
+
+  it("does not permanently lock a round when automatic adoption fails", async () => {
+    const onAgree = vi.fn().mockRejectedValue(new Error("offline"));
+    render(
+      <ResearchProductRoundCardView
+        card={card}
+        onAgree={onAgree}
+        autoAdoptSeconds={2}
+      />,
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+      await Promise.resolve();
+    });
+    expect(onAgree).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("research-round-agree")).not.toBeDisabled();
+    expect(screen.queryByText("Timed out — adopted")).toBeNull();
   });
 
   it("LRM-1239: pending uses aria-disabled (not native disabled) and guards handlers", () => {
@@ -153,13 +229,14 @@ describe("ResearchProductRoundCardView", () => {
     expect(onRejectGoalPatch).not.toHaveBeenCalled();
   });
 
-  it("LRM-1239: auto-adopt / countdown announcements use native <output>", () => {
+  it("LRM-1239: auto-adopt / countdown announcements use native <output>", async () => {
     render(<ResearchProductRoundCardView card={card} autoAdoptSeconds={5} />);
     const countdown = screen.getByText(/Auto-adopt in/);
     expect(countdown.tagName).toBe("OUTPUT");
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(5500);
+      await Promise.resolve();
     });
     const adopted = screen.getByText("Timed out — adopted");
     expect(adopted.tagName).toBe("OUTPUT");

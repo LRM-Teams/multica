@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import type { TypedGraphResponse } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
+import enResearch from "../../locales/en/research.json";
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => false,
@@ -44,31 +45,11 @@ vi.mock("@multica/core/research", async (importOriginal) => {
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (selector: (bundle: Record<string, unknown>) => string) =>
-      selector({
-        d5: {
-          canvas: {
-            loading: "Loading constellation…",
-            error: "Could not load the typed research graph.",
-            stale_title: "Canvas may be stale.",
-            stale_body: "Last loaded graph stays visible.",
-            stale_announcement: "Canvas refresh failed.",
-            recovered_announcement: "Canvas refreshed.",
-            projection_mismatch_title: "Star-map projection unavailable",
-            projection_mismatch_body: "Typed projection missing.",
-            projection_mismatch_diagnostics:
-              "Snapshot nodes: {{snapshotCount}} · Typed nodes: {{typedCount}}",
-          },
-          rail: { hide: "Hide", show: "Show", chat_tab: "Chat", detail_tab: "Detail" },
-          summary: {
-            title: "Constellation · {{loaded}} loaded directions",
-            detail: "{{stable}} stable",
-          },
-          report: { title: "Node report", empty_summary: "No summary" },
-        },
-        session_page: { retry: "Retry" },
-        interrupt: { retrying: "Retrying…" },
-      }),
+    t: (selector: (bundle: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
+      const raw = selector(enResearch);
+      if (typeof raw !== "string" || !vars) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? ""));
+    },
   }),
 }));
 
@@ -146,6 +127,96 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps projection retry focused while a gateway retry is pending", async () => {
+    const onRetry = vi.fn();
+    render(
+      <ResearchConstellationWorkspace
+        typedGraph={undefined}
+        typedLoading={false}
+        typedError
+        projectionErrorReason="V6 interface error"
+        onRetryTypedGraph={onRetry}
+        retryTypedGraphPending
+        snapshotNodes={snapshotNodes}
+        selectedNode={null}
+        onSelectNode={() => {}}
+        executionRows={[]}
+        onOpenAgentPanel={() => {}}
+        canvasMode="ready"
+        activeLens="relations"
+        sources={[]}
+        members={[]}
+        chatPanel={<div>chat</div>}
+        detailPanel={<div>detail</div>}
+        composer={<div>composer</div>}
+      />,
+    );
+
+    const retry = screen.getByRole("button", { name: "Retrying…" });
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    expect(retry).not.toBeDisabled();
+    retry.focus();
+    await userEvent.click(retry);
+    expect(document.activeElement).toBe(retry);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+});
+
+describe("ResearchConstellationWorkspace typed graph recovery", () => {
+  it("offers a retry action when the initial typed graph request fails", async () => {
+    const onRetry = vi.fn();
+    render(
+      <ResearchConstellationWorkspace
+        typedGraph={undefined}
+        typedLoading={false}
+        typedError
+        onRetryTypedGraph={onRetry}
+        snapshotNodes={[]}
+        selectedNode={null}
+        onSelectNode={() => {}}
+        executionRows={[]}
+        onOpenAgentPanel={() => {}}
+        canvasMode="ready"
+        activeLens="relations"
+        sources={[]}
+        members={[]}
+        chatPanel={<div>chat</div>}
+        detailPanel={<div>detail</div>}
+        composer={<div>composer</div>}
+      />,
+    );
+
+    expect(screen.getByTestId("research-typed-graph-error")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables retry while typed graph recovery is pending", () => {
+    render(
+      <ResearchConstellationWorkspace
+        typedGraph={undefined}
+        typedLoading={false}
+        typedError
+        onRetryTypedGraph={() => {}}
+        retryTypedGraphPending
+        snapshotNodes={[]}
+        selectedNode={null}
+        onSelectNode={() => {}}
+        executionRows={[]}
+        onOpenAgentPanel={() => {}}
+        canvasMode="ready"
+        activeLens="relations"
+        sources={[]}
+        members={[]}
+        chatPanel={<div>chat</div>}
+        detailPanel={<div>detail</div>}
+        composer={<div>composer</div>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
   });
 });
 

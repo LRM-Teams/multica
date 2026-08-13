@@ -566,6 +566,22 @@ func TestRunWorkspaceInfo(t *testing.T) {
 					"failure_reason": "agent_error.provider_capacity_or_rate_limit",
 				},
 			})
+		case r.URL.Path == "/api/projects":
+			json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{
+					{
+						"id": "proj-1", "title": "Agent UX 2026", "status": "in_progress",
+						"resources": []map[string]any{
+							{
+								"id": "res-1", "resource_type": "github_repo",
+								"resource_ref": map[string]any{"url": "https://github.com/org/agent-ux"},
+								"label":        "agent-ux",
+							},
+						},
+					},
+				},
+				"total": 1,
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -583,6 +599,12 @@ func TestRunWorkspaceInfo(t *testing.T) {
 	cmd.Flags().String("server-url", "", "")
 	cmd.Flags().String("output", "table", "")
 	cmd.Flags().Bool("include-archived", false, "")
+	cmd.Flags().Bool("agents", false, "")
+	cmd.Flags().Bool("computers", false, "")
+	cmd.Flags().Bool("projects", false, "")
+	cmd.Flags().String("query", "", "")
+	cmd.Flags().Int("limit", 0, "")
+	cmd.Flags().Int("offset", 0, "")
 
 	// Capture stdout.
 	rOut, wOut, err := os.Pipe()
@@ -613,6 +635,9 @@ func TestRunWorkspaceInfo(t *testing.T) {
 		"s144",
 		"old-box",
 		"activation did not complete",
+		"## Projects (1)",
+		"Agent UX 2026",
+		"https://github.com/org/agent-ux",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\nfull:\n%s", want, out)

@@ -133,7 +133,7 @@ func acceptReadyDetachedCandidate(
 	health map[string]any,
 ) error {
 	actualVersion, _ := health["cli_version"].(string)
-	if expectedVersion != "" && !handoffVersionsMatch(actualVersion, expectedVersion) {
+	if expectedVersion != "" && !detachedVersionsMatch(actualVersion, expectedVersion) {
 		terminateDetachedCandidate(child)
 		return fmt.Errorf("detached successor version %q does not match target %q", actualVersion, expectedVersion)
 	}
@@ -256,4 +256,12 @@ func validateDetachedSuccessorProof(expected, observed daemon.MachineUpgradeTake
 		return fmt.Errorf("detached successor does not match committed handoff: %w", err)
 	}
 	return nil
+}
+
+func detachedVersionsMatch(a, b string) bool {
+	normalize := func(v string) string {
+		return strings.TrimPrefix(strings.TrimSpace(v), "v")
+	}
+	a, b = normalize(a), normalize(b)
+	return a != "" && a == b
 }

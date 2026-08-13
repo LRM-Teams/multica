@@ -551,7 +551,8 @@
 - 待审写回（`note_page_writeback`）是第三条管道（D1），不是第三种 job。
 - **订阅策略（S3-W1）**：「有关联即订阅」——`note_page_issue_ref` 行即隐式订阅；无独立订阅表。
 - **事件白名单（S3-W2）**：仅 issue 状态新进入 `done` / `cancelled` 时出提案；进行中/阻塞/标题编辑/普通评论为零提案。
-- **物**：`docs/notes-editor-worker-contract.md`；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` / `note_writeback_events.go` + 误用、dispatch/ACL、prompt breakout、白名单测。
+- **与 Agent Daily 并行（S3-W3）**：产品笔记/待审写回与 agent 私有 `memory/daily/` 两套存储并行、可互链、禁止合并；交叉声明见合同文档 §「Product note writeback ≠ Agent Daily」与 `docs/agent-memory-model.md` §10。
+- **物**：`docs/notes-editor-worker-contract.md`；`docs/agent-memory-model.md` §10；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` / `note_writeback_events.go` + 误用、dispatch/ACL、prompt breakout、白名单测。
 
 ### 4.23 Context compaction 是可见 Activity，不是 Message acceptance 或进程生命周期 — `可执行`（②统一 lifecycle event + ③单一 gate/投影 + ⑤状态机回归；owner: @Codex）
 - Provider 原生事件先归一成 `MessageCompactionStarted` / `MessageCompactionFinished`；resident runtime 的主动压缩必须在独立 `ResidentMessagePreparation` gate 完成，不能共享 20 秒 native Message acceptance timeout，也不能把压缩超时解释成进程重启。

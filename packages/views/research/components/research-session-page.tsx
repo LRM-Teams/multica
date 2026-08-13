@@ -188,6 +188,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const d5Lens = useResearchUiStore((s) => s.d5Lens);
   const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
+  const setD5RailOpen = useResearchUiStore((s) => s.setD5RailOpen);
+  const setD5RailMode = useResearchUiStore((s) => s.setD5RailMode);
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
@@ -221,6 +223,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const selectSessionCanvasNode = useResearchCanvasStore(
     (s) => s.selectSessionNode,
   );
+  const appliedNodeLinkRef = useRef<string | null>(null);
   const typedGraph = useMemo(
     () =>
       typedGraphPages?.pages.length
@@ -328,18 +331,28 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (!data) return;
     const linkedNodeId = nav.searchParams.get("node");
-    if (!linkedNodeId) return;
+    if (!linkedNodeId) {
+      appliedNodeLinkRef.current = null;
+      return;
+    }
+    const linkKey = `${sessionId}:${linkedNodeId}`;
+    if (appliedNodeLinkRef.current === linkKey) return;
     const resolved = resolveResearchCanvasNode(linkedNodeId, {
       snapshotNodes: data.nodes,
       typedGraph: displayTypedGraph,
     });
     if (!resolved) return;
+    appliedNodeLinkRef.current = linkKey;
     selectSessionCanvasNode(sessionId, linkedNodeId);
+    setD5RailMode("detail");
+    setD5RailOpen(true);
   }, [
     data,
     displayTypedGraph,
     nav.searchParams,
     selectSessionCanvasNode,
+    setD5RailMode,
+    setD5RailOpen,
     sessionId,
   ]);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).

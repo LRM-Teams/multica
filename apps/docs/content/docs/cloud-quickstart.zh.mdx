@@ -5,13 +5,13 @@ description: 5 分钟从注册到给智能体分配第一个任务。
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-这一页带你走一遍 Multica Cloud 的端到端流程——**注册 → 装 [命令行工具](/cli) → 启动 [守护进程](/daemon-runtimes) → 创建 [智能体](/agents) → 分配第一个 [任务](/tasks)**，约 5 分钟完成。
+这一页带你走一遍 Multica Cloud 的端到端流程——**注册 → 装 [命令行工具](/cli) → 连接 Workspace 并启动 [Computer](/daemon-runtimes) → 创建 [智能体](/agents) → 分配第一个 [任务](/tasks)**，约 5 分钟完成。
 
-前置只有一个：你本地已经装了至少一款 [AI 编程工具](/providers)（[Claude Code](/providers#claude-code)、[Codex](/providers#codex)、[Cursor](/providers#cursor)、[Grok](/providers#grok)、[Kiro CLI](/providers#kiro-cli)、[OpenCode](/providers#opencode)、[Pi](/providers#pi)）中的一款。守护进程启动时会自动探测它们，没装任何一个的话守护进程会直接拒绝启动。
+前置只有一个：你本地已经装了至少一款 [AI 编程工具](/providers)（[Claude Code](/providers#claude-code)、[Codex](/providers#codex)、[Cursor](/providers#cursor)、[Grok](/providers#grok)、[Kiro CLI](/providers#kiro-cli)、[OpenCode](/providers#opencode)、[Pi](/providers#pi)）中的一款。Computer 会自动探测，并按“Workspace connection × 工具”上报 Runtime。
 
 ## 1. 注册账号
 
-到 [multica.ai](https://multica.ai) 注册账号。可以用邮箱（6 位验证码）或 Google 登录。
+到 [www.leagent.me](https://www.leagent.me) 注册账号。可以用邮箱（6 位验证码）或 Google 登录。
 
 注册完成后你会被自动分到一个默认工作区（以你的账号名生成）。之后可以改名字，也可以创建新的工作区。
 
@@ -20,13 +20,13 @@ import { Callout } from "fumadocs-ui/components/callout";
 **macOS / Linux**：
 
 ```bash
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
 **Windows（PowerShell）**：
 
 ```powershell
-irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | iex
+irm https://cdn.leagent.me/computer/install.ps1 | iex
 ```
 
 装完验证一下：
@@ -35,38 +35,41 @@ irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | i
 multica version
 ```
 
-## 3. 登录 + 启动守护进程
+## 3. 连接工作区 + 启动 Computer
 
-一条命令完成登录 + 启动守护进程：
+一条命令完成登录、添加一条 Workspace connection 并启动 Computer：
 
 ```bash
-multica setup
+multica setup /my-workspace
 ```
 
-`multica setup` 会：
+把 `my-workspace` 换成工作区 URL 里的 slug。`multica setup` 会：
 
-1. 把命令行工具配置成连接 Multica Cloud
+1. 选择固定正式服务：app 为 `https://www.leagent.me`，API/认证/WebSocket 为 `https://api.leagent.me`
 2. 打开浏览器让你登录（和 Web 登录一样的邮箱验证码 / Google OAuth）
 3. 把生成的 PAT 存到 `~/.multica/config.json`
-4. **自动启动守护进程**——开始每 3 秒轮询任务、每 15 秒发心跳
+4. 添加这个工作区连接，不删除已有连接
+5. **自动启动全机唯一 Computer resident**
 
 <Callout type="info">
-**用的是桌面应用？** 桌面应用启动时**自动拉起守护进程**，不需要手动跑 `multica setup`。见 [桌面应用](/desktop-app)。
+腾讯云测试阶段使用 `multica setup --environment test --server-url https://test.leagent.me --app-url https://test.leagent.me /my-workspace`。API 和 Web 地址分别显式填写；现在可以相同，以后也可以拆成不同域名而不用改 CLI 结构。DNS/TLS 还没准备好时也可以显式写 `http://IP:端口`。setup 会直接激活测试环境、连接工作区并启动同一个 Computer，不需要随后再运行 `config use test`；如果当前是另一个环境，setup 会先询问是否切换。
 </Callout>
 
-验证守护进程在运行：
+production 和 test 都 setup 过一次后，只有以后切换时才使用 `multica config use test` 或 `multica config use production`。production 自动使用 stable 包，test 自动使用 preview 包；两边的登录和 Workspace connections 都会保留。
+
+验证 Computer 在运行：
 
 ```bash
-multica daemon status
+multica computer status
 ```
 
-看到 `online` 就说明它成功注册到服务器了。
+看到 `connected: true` 就说明 resident 已注册到当前所选环境。
 
 ## 4. 验证 Runtime 在线
 
-到 Web 界面的 **Settings → Runtimes**，你应该能看到你刚启动的守护进程作为一个或多个活跃 Runtime 列出——每款你本地装好的 AI 编程工具对应一个。
+到 Web 界面的 **Settings → Runtimes**，你应该能看到 Computer 按“Workspace connection × 已安装工具”上报的活跃 Runtime。
 
-看到"离线"不要慌，先看 [故障排查 → 守护进程连不上服务器](/troubleshooting#守护进程连不上服务器)。
+看到“离线”时，先看 [故障排查 → Computer 连不上当前环境](/troubleshooting#computer-连不上当前环境)。
 
 ## 5. 创建智能体
 
@@ -95,7 +98,7 @@ multica issue assign MUL-1 --to my-agent-name
 
 `--to` 后面填智能体或成员的**名字**，子串就行——如果智能体叫 `my-code-reviewer`，填 `reviewer` 也能命中。如果工作区里名字相互重叠或冲突，改用 `--to-id <uuid>`（与 `--to` 互斥）；UUID 来自 `multica agent list --output json` 或 `multica workspace member list --output json`。
 
-**接下来守护进程会**：
+**接下来 Computer resident 会**：
 
 1. 3 秒内领走这条任务（任务状态从 `queued` 变 `dispatched`）
 2. 调用对应的 AI 编程工具开始执行（状态变 `running`）
@@ -106,8 +109,8 @@ Web 界面会**实时**（通过 WebSocket）显示进度——不需要刷新�
 
 ## 下一步
 
-- [守护进程与运行时](/daemon-runtimes) —— 守护进程怎么运作、运行时概念
+- [Computer 与运行时](/daemon-runtimes) —— Computer resident 怎么运作、运行时概念
 - [执行任务](/tasks) —— 任务生命周期、重试规则
-- [AI 编程工具对照](/providers) —— 12 款工具的能力差异
-- [桌面应用](/desktop-app) —— 不想自己跑守护进程的话
+- [AI 编程工具对照](/providers) —— 7 款工具的能力差异
+- [桌面应用](/desktop-app) —— 遗留功能，不属于 Computer v1
 - [Self-Host 快速上手](/self-host-quickstart) —— 在自己服务器上跑一套

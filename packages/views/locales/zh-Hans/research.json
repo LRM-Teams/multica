@@ -417,6 +417,10 @@
     "updated_at": "更新",
     "duration": "时长",
     "input": "输入",
+    "raw_input_expand": "展开原始输入",
+    "raw_input_collapse": "收起原始输入",
+    "objective_expand": "展开完整目标",
+    "objective_collapse": "收起完整目标",
     "gate_blocker": "门禁阻塞",
     "next_steps": "下一步",
     "next_step_actions": {

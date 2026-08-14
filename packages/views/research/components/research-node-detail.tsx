@@ -450,6 +450,95 @@ function observationText(
   return null;
 }
 
+type StructuredInputEntry = { key: string; value: string };
+
+function parseStructuredInput(value: string): StructuredInputEntry[] | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return Object.entries(parsed as Record<string, unknown>)
+      .slice(0, 16)
+      .map(([key, item]) => ({
+        key,
+        value:
+          typeof item === "string"
+            ? item
+            : item === null || typeof item === "number" || typeof item === "boolean"
+              ? String(item)
+              : JSON.stringify(item),
+      }));
+  } catch {
+    return null;
+  }
+}
+
+function NodeInputDetail({ value }: { value: string }) {
+  const { t } = useT("research");
+  const entries = parseStructuredInput(value);
+  return (
+    <section data-testid="node-detail-input">
+      <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+        {t(($) => $.node.input)}
+      </h3>
+      {entries ? (
+        <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-2 rounded-lg bg-muted/20 p-3 text-xs">
+          {entries.map((entry) => (
+            <div key={entry.key} className="contents">
+              <dt className="min-w-0 break-words text-muted-foreground">
+                {entry.key.replaceAll("_", " ")}
+              </dt>
+              <dd className="max-w-40 break-words text-right font-mono text-foreground">
+                {entry.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <details className="group rounded-lg bg-muted/20 p-3 text-xs">
+          <summary className="cursor-pointer list-none text-foreground marker:hidden">
+            <span className="line-clamp-4 whitespace-pre-wrap leading-relaxed group-open:hidden">
+              {value}
+            </span>
+            <span className="mt-1 block text-muted-foreground group-open:hidden">
+              {t(($) => $.node.raw_input_expand)}
+            </span>
+            <span className="hidden font-medium group-open:inline">
+              {t(($) => $.node.raw_input_collapse)}
+            </span>
+          </summary>
+          <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words border-t pt-3 font-mono text-xs leading-relaxed text-muted-foreground">
+            {value}
+          </pre>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function ExpandableObjective({ value }: { value: string }) {
+  const { t } = useT("research");
+  const isLong = value.length > 280 || value.split("\n").length > 6;
+  if (!isLong) {
+    return <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{value}</p>;
+  }
+  return (
+    <details className="group">
+      <summary className="cursor-pointer list-none marker:hidden">
+        <span className="line-clamp-5 whitespace-pre-wrap text-sm leading-relaxed text-foreground group-open:hidden">
+          {value}
+        </span>
+        <span className="mt-1 block text-xs text-muted-foreground group-open:hidden">
+          {t(($) => $.node.objective_expand)}
+        </span>
+        <span className="hidden text-xs font-medium text-muted-foreground group-open:inline">
+          {t(($) => $.node.objective_collapse)}
+        </span>
+      </summary>
+      <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-foreground">{value}</p>
+    </details>
+  );
+}
+
 function typeLabelFor(
   nodeType: string,
   t: ReturnType<typeof useT<"research">>["t"],
@@ -674,7 +763,9 @@ export function ResearchNodeDetailBody({
             </Badge>
           ) : null}
         </div>
-        <h2 className="text-base leading-snug font-semibold">{node.title}</h2>
+        <h2 className="line-clamp-3 text-base font-medium leading-snug" title={node.title}>
+          {node.title}
+        </h2>
         <p className="sr-only">{t(($) => $.node.detail_hint)}</p>
 
         {/* LRM-1410 residual: real session-run header meta — phase, run
@@ -747,14 +838,7 @@ export function ResearchNodeDetailBody({
 
         {/* LRM-1410 residual: explicit Input block above Output/Result. */}
         {runContext.input ? (
-          <section data-testid="node-detail-input">
-            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-              {t(($) => $.node.input)}
-            </h3>
-            <p className="whitespace-pre-wrap text-xs leading-relaxed font-mono text-muted-foreground">
-              {runContext.input}
-            </p>
-          </section>
+          <NodeInputDetail value={runContext.input} />
         ) : null}
 
         {runContext.objective ? (
@@ -762,9 +846,7 @@ export function ResearchNodeDetailBody({
             <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
               {t(($) => $.node.objective)}
             </h3>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-              {runContext.objective}
-            </p>
+            <ExpandableObjective value={runContext.objective} />
           </section>
         ) : null}
 

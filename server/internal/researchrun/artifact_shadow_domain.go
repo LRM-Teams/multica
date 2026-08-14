@@ -154,6 +154,9 @@ func loadLegacyShadowDomainProjectionTx(
 func projectManifestForShadow(plan dispatchManifestPlan) []shadowDomainProjectionRecord {
 	projection := make([]shadowDomainProjectionRecord, 0, len(plan.Entries)+len(plan.Omissions))
 	for _, entry := range plan.Entries {
+		if !isDispatchManifestCandidateKind(entry.Kind) {
+			continue
+		}
 		projection = append(projection, shadowDomainProjectionRecord{
 			Kind: entry.Kind, ArtifactID: entry.ArtifactID, Disposition: shadowDispositionEntry,
 		})

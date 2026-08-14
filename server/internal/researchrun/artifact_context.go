@@ -355,6 +355,75 @@ func loadArtifactVersionCandidates(
 	return out, nil
 }
 
+// loadDispatchAttemptCandidateTx loads only the attempt that owns the manifest.
+// Attempts are excluded from the ordinary context candidate universe so prior
+// execution envelopes cannot leak into a new dispatch, but the current envelope
+// must still be frozen for deterministic replay.
+func loadDispatchAttemptCandidateTx(
+	ctx context.Context, tx pgx.Tx, workspaceID, sessionID, attemptID string,
+) (artifactVersionCandidate, error) {
+	var candidate artifactVersionCandidate
+	var kindRaw, lifecycleRaw, provenanceRaw, accessRaw string
+	err := tx.QueryRow(ctx, `
+		SELECT v.id::text, p.id::text, p.entity_kind, v.version,
+		       p.eligibility_revision, v.access_level, p.lifecycle_status,
+		       p.provenance_completeness, v.content_hash, '' AS domain_status,
+		       EXISTS (
+		         SELECT 1 FROM research_artifact_migration_diagnostic diagnostic
+		         WHERE diagnostic.workspace_id=p.workspace_id
+		           AND diagnostic.session_id=p.session_id
+		           AND diagnostic.owner_kind=p.entity_kind
+		           AND diagnostic.owner_id=p.id
+		       ),
+		       (SELECT count(*)::int FROM research_artifact_version all_v
+		         WHERE (all_v.workspace_id,all_v.session_id,all_v.artifact_id)=(p.workspace_id,p.session_id,p.id)),
+		       (SELECT count(*)::int FROM research_artifact_input_reference input_ref
+		         JOIN research_artifact_version input_v
+		           ON (input_v.workspace_id,input_v.session_id,input_v.id)=(input_ref.workspace_id,input_ref.session_id,input_ref.input_version_id)
+		         WHERE (input_v.workspace_id,input_v.session_id,input_v.artifact_id)=(p.workspace_id,p.session_id,p.id)),
+		       (SELECT count(*)::int FROM research_artifact_input_reference output_ref
+		         JOIN research_artifact_version output_v
+		           ON (output_v.workspace_id,output_v.session_id,output_v.id)=(output_ref.workspace_id,output_ref.session_id,output_ref.consumer_version_id)
+		         WHERE (output_v.workspace_id,output_v.session_id,output_v.artifact_id)=(p.workspace_id,p.session_id,p.id))
+		FROM research_artifact_passport p
+		JOIN research_artifact_version v
+		  ON v.workspace_id=p.workspace_id AND v.session_id=p.session_id
+		 AND v.artifact_id=p.id AND v.version=p.current_version
+		WHERE p.workspace_id=$1::uuid AND p.session_id=$2::uuid
+		  AND p.id=$3::uuid AND p.entity_kind='attempt'
+	`, workspaceID, sessionID, attemptID).Scan(
+		&candidate.VersionRowID, &candidate.ArtifactID, &kindRaw,
+		&candidate.Version, &candidate.EligibilityRevision,
+		&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash,
+		&candidate.DomainStatus, &candidate.HasMigrationDiagnostic,
+		&candidate.VersionCount, &candidate.InputReferenceCount, &candidate.OutputReferenceCount,
+	)
+	if err != nil {
+		return artifactVersionCandidate{}, err
+	}
+	kind, err := ParseArtifactEntityKind(kindRaw)
+	if err != nil {
+		return artifactVersionCandidate{}, err
+	}
+	candidate.Kind = kind
+	candidate.AccessLevel = ArtifactAccessLevel(accessRaw)
+	candidate.Lifecycle = ArtifactLifecycleStatus(lifecycleRaw)
+	candidate.Provenance = ArtifactProvenanceCompleteness(provenanceRaw)
+	if candidate.HasMigrationDiagnostic || candidate.Lifecycle != ArtifactLifecycleRegistered ||
+		candidate.Provenance != ArtifactProvenanceComplete {
+		return artifactVersionCandidate{}, fmt.Errorf("%w: dispatch attempt is not eligible for frozen context", ErrInvalidTransition)
+	}
+	relationshipHashes, err := loadArtifactRelationshipHashesTx(ctx, tx, workspaceID, sessionID)
+	if err != nil {
+		return artifactVersionCandidate{}, err
+	}
+	candidate.RelationshipHash = relationshipHashes[candidate.VersionRowID]
+	if candidate.RelationshipHash == "" {
+		candidate.RelationshipHash = contentHashFromPayload(nil)
+	}
+	return candidate, nil
+}
+
 func auditManifestCandidateDispositions(
 	candidates, entries, omissions []artifactVersionCandidate,
 	clearance ArtifactClearance,
@@ -494,6 +563,19 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	authorized.Purpose = plan.Purpose
 	authorized.PolicyWatermark = plan.PolicyWatermark
 	plan = authorized
+	dispatchAttempt, err := loadDispatchAttemptCandidateTx(
+		ctx, tx, in.WorkspaceID, in.SessionID, in.AttemptID,
+	)
+	if err != nil {
+		return dispatchManifestPlan{}, err
+	}
+	plan.Entries = append(plan.Entries, dispatchAttempt)
+	sort.Slice(plan.Entries, func(i, j int) bool {
+		if plan.Entries[i].Kind != plan.Entries[j].Kind {
+			return plan.Entries[i].Kind < plan.Entries[j].Kind
+		}
+		return plan.Entries[i].ArtifactID < plan.Entries[j].ArtifactID
+	})
 	if err = freezeArtifactRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
 	}

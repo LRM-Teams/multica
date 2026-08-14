@@ -29,8 +29,8 @@ func compareShadowSnapshotRepresentations(live, filtered RunSnapshot) error {
 	if err != nil {
 		return err
 	}
+	mismatchIndex := -1
 	if len(liveProjection) == len(filteredProjection) {
-		match := true
 		for i := range liveProjection {
 			if liveProjection[i].Kind != filteredProjection[i].Kind ||
 				liveProjection[i].ArtifactID != filteredProjection[i].ArtifactID ||
@@ -38,18 +38,23 @@ func compareShadowSnapshotRepresentations(live, filtered RunSnapshot) error {
 				liveProjection[i].Ordinal != filteredProjection[i].Ordinal ||
 				liveProjection[i].Hash != filteredProjection[i].Hash ||
 				string(liveProjection[i].Bytes) != string(filteredProjection[i].Bytes) {
-				match = false
+				mismatchIndex = i
 				break
 			}
 		}
-		if match {
+		if mismatchIndex == -1 {
 			return nil
 		}
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"live_representations":     liveProjection,
-		"filtered_representations": filteredProjection,
-	})
+	diagnostic := map[string]any{
+		"live_count": len(liveProjection), "filtered_count": len(filteredProjection),
+		"mismatch_index": mismatchIndex,
+	}
+	if mismatchIndex >= 0 {
+		diagnostic["live_representation"] = liveProjection[mismatchIndex]
+		diagnostic["filtered_representation"] = filteredProjection[mismatchIndex]
+	}
+	payload, _ := json.Marshal(diagnostic)
 	return fmt.Errorf("%w: manifest representation shadow mismatch: %s", ErrInvalidTransition, payload)
 }
 
@@ -89,6 +94,13 @@ func projectSnapshotRepresentations(snapshot RunSnapshot, allowed map[string]str
 	ordinals := make(map[string]int)
 	appendRecord := func(kind ArtifactEntityKind, id, parent string, value any) error {
 		if id == "" {
+			// The independently loaded live snapshot can still contain legacy
+			// nested records which have no passport identity. They cannot be in
+			// the manifest allow-set, so they are outside this comparison. A
+			// missing ID in the filtered snapshot remains a fail-closed error.
+			if selectAllowed {
+				return nil
+			}
 			return fmt.Errorf("%w: shadow representation has no artifact ID", ErrInvalidTransition)
 		}
 		if selectAllowed {

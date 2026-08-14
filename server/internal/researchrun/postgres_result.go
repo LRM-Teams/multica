@@ -1107,11 +1107,50 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			// Legacy source projection already exists for this snapshot.
 		} else if err != nil {
 			return nil, 0, err
-		} else if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindLegacySource, state.workspaceID, state.run.SessionID, legacySourceID, time.Now(), nil, nil, state.outputAccess); err != nil {
-			return nil, 0, err
+		} else {
+			versionHash, hashErr := ArtifactContentHash(ArtifactKindLegacySource, legacySourceArtifactContent(
+				canonical, truncateBytes(source.Title, 4096), truncateBytes(source.SourceClass, 160),
+				sourceProjectionWeight(state.run.OrchestratorVersion, source.SourceClass), "", 0.5,
+				truncateBytes(result.Summary, 4096), truncateBytes(source.SnapshotText, 2000), payload, id,
+			))
+			if hashErr != nil {
+				return nil, 0, hashErr
+			}
+			if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+				WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: legacySourceID,
+				Kind: ArtifactKindLegacySource, SourceCreatedAt: timePtr(time.Now()),
+				ProvenanceCompleteness: ArtifactProvenanceComplete,
+				AccessLevel:            state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+				ContentHash: versionHash, ProducedByAttemptID: state.attemptID,
+			}); err != nil {
+				return nil, 0, err
+			}
 		}
 	}
 	return ids, created, nil
+}
+
+func legacySourceArtifactContent(
+	url, title, sourceClass string,
+	credibilityWeight float64,
+	stance string,
+	relevance float64,
+	summary, excerpt string,
+	payload []byte,
+	sourceSnapshotID string,
+) map[string]any {
+	return map[string]any{
+		"url":                url,
+		"title":              title,
+		"source_class":       sourceClass,
+		"credibility_weight": credibilityWeight,
+		"stance":             stance,
+		"relevance":          relevance,
+		"summary":            summary,
+		"excerpt":            excerpt,
+		"payload":            json.RawMessage(payload),
+		"source_snapshot_id": sourceSnapshotID,
+	}
 }
 
 func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResultState, result ResultEnvelope, sourceIDs map[string]string) (map[string]string, int, error) {

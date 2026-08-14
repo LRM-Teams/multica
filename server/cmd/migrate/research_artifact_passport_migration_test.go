@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const researchArtifactPassportLegacySchema = `
@@ -310,7 +312,6 @@ func TestResearchArtifactReciprocalGuards320RoundTrips(t *testing.T) {
 	}
 	workspaceID := "10000000-0000-4000-8000-000000000001"
 	sessionID := "20000000-0000-4000-8000-000000000001"
-	taskID := "30000000-0000-4000-8000-000000000003"
 	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
@@ -327,55 +328,90 @@ func TestResearchArtifactReciprocalGuards320RoundTrips(t *testing.T) {
 		}
 	}
 
-	positiveTx, err := conn.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin positive tx: %v", err)
+	commitOrForce := func(t *testing.T, tx pgx.Tx, immediate bool) error {
+		t.Helper()
+		if immediate {
+			if _, constraintErr := tx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); constraintErr != nil {
+				return constraintErr
+			}
+		}
+		return tx.Commit(ctx)
 	}
-	if _, err = positiveTx.Exec(ctx, `
-		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
-		VALUES ($1::uuid, $2::uuid, 'legacy-v1-v5-compat-v1', 0)
-		ON CONFLICT (workspace_id, session_id) DO NOTHING
-	`, workspaceID, sessionID); err != nil {
-		positiveTx.Rollback(ctx)
-		t.Fatalf("insert policy state: %v", err)
-	}
-	if _, err = positiveTx.Exec(ctx, `
-		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'guard-positive', 1, 1)
-	`, taskID, workspaceID, sessionID); err != nil {
-		positiveTx.Rollback(ctx)
-		t.Fatalf("insert task: %v", err)
-	}
-	if _, err = positiveTx.Exec(ctx, `
-		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
-	`, workspaceID, sessionID, taskID); err != nil {
-		positiveTx.Rollback(ctx)
-		t.Fatalf("register task passport: %v", err)
-	}
-	if _, err = positiveTx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
-		positiveTx.Rollback(ctx)
-		t.Fatalf("set constraints immediate: %v", err)
-	}
-	if err = positiveTx.Commit(ctx); err != nil {
-		t.Fatalf("commit paired task insert: %v", err)
+	assertConstraint := func(t *testing.T, got error, want string) {
+		t.Helper()
+		pgErr, ok := got.(*pgconn.PgError)
+		if !ok || pgErr.ConstraintName != want {
+			t.Fatalf("constraint error=%v want=%s", got, want)
+		}
 	}
 
-	negativeTx, err := conn.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin negative tx: %v", err)
+	modes := []struct {
+		name      string
+		immediate bool
+		suffix    string
+	}{
+		{name: "immediate", immediate: true, suffix: "003"},
+		{name: "ordinary_commit", immediate: false, suffix: "004"},
 	}
-	orphanTaskID := "30000000-0000-4000-8000-000000000099"
-	if _, err = negativeTx.Exec(ctx, `
-		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'guard-negative', 1, 1)
-	`, orphanTaskID, workspaceID, sessionID); err != nil {
-		negativeTx.Rollback(ctx)
-		t.Fatalf("insert orphan task: %v", err)
-	}
-	if err = negativeTx.Commit(ctx); err == nil {
-		t.Fatal("expected orphan task insert to fail reciprocal guard on commit")
-	} else {
-		negativeTx.Rollback(ctx)
+	for _, mode := range modes {
+		mode := mode
+		t.Run(mode.name, func(t *testing.T) {
+			pairedTaskID := "30000000-0000-4000-8000-000000000" + mode.suffix
+			pairedTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin paired tx: %v", beginErr)
+			}
+			defer pairedTx.Rollback(ctx)
+			if _, execErr := pairedTx.Exec(ctx, `
+				INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+				VALUES ($1::uuid, $2::uuid, 'legacy-v1-v5-compat-v1', 0)
+				ON CONFLICT (workspace_id, session_id) DO NOTHING
+			`, workspaceID, sessionID); execErr != nil {
+				t.Fatalf("insert policy state: %v", execErr)
+			}
+			if _, execErr := pairedTx.Exec(ctx, `
+				INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+				VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 1, 1)
+			`, pairedTaskID, workspaceID, sessionID, "guard-positive-"+mode.name); execErr != nil {
+				t.Fatalf("insert paired task: %v", execErr)
+			}
+			if _, execErr := pairedTx.Exec(ctx, `
+				SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
+			`, workspaceID, sessionID, pairedTaskID); execErr != nil {
+				t.Fatalf("register paired task passport: %v", execErr)
+			}
+			if commitErr := commitOrForce(t, pairedTx, mode.immediate); commitErr != nil {
+				t.Fatalf("commit paired task and passport: %v", commitErr)
+			}
+
+			domainOnlyTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin domain-only tx: %v", beginErr)
+			}
+			defer domainOnlyTx.Rollback(ctx)
+			if _, execErr := domainOnlyTx.Exec(ctx, `
+				INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+				VALUES ('30000000-0000-4000-8000-000000000099'::uuid, $1::uuid, $2::uuid, $3, 1, 1)
+			`, workspaceID, sessionID, "guard-domain-only-"+mode.name); execErr != nil {
+				t.Fatalf("insert domain-only task: %v", execErr)
+			}
+			assertConstraint(t, commitOrForce(t, domainOnlyTx, mode.immediate), "research_task_artifact_passport_guard")
+
+			passportOnlyTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin passport-only tx: %v", beginErr)
+			}
+			defer passportOnlyTx.Rollback(ctx)
+			if _, execErr := passportOnlyTx.Exec(ctx, `
+				SELECT research_artifact_backfill_registered(
+				  $1::uuid, $2::uuid, '30000000-0000-4000-8000-000000000098'::uuid,
+				  'task', now(), 1, 1
+				)
+			`, workspaceID, sessionID); execErr != nil {
+				t.Fatalf("insert passport-only task registration: %v", execErr)
+			}
+			assertConstraint(t, commitOrForce(t, passportOnlyTx, mode.immediate), "research_artifact_passport_domain_guard")
+		})
 	}
 
 	if _, err = conn.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, workspaceID); err != nil {
@@ -460,7 +496,31 @@ func TestResearchArtifactAppendOnlyCascadeGuards335RoundTrips(t *testing.T) {
 	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
 	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
 	up335, down335 := readMigrationPair(t, "335_research_artifact_append_only_cascade_guards")
-	for _, upSQL := range []string{up318, up319, up320, up335} {
+	for _, upSQL := range []string{up318, up319} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision,
+		  old_lifecycle_status, new_lifecycle_status, eligibility_reason
+		) VALUES (
+		  $1::uuid, $2::uuid, 1, 'lifecycle', $3::uuid,
+		  1, 2, 'registered', 'accepted', 'append-only fixture'
+		);
+		INSERT INTO research_artifact_lifecycle_event (
+		  workspace_id, session_id, artifact_id, old_status, new_status,
+		  old_eligibility_revision, new_eligibility_revision, policy_watermark, reason
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'registered', 'accepted',
+		  1, 2, 1, 'append-only fixture'
+		);
+	`, workspaceID, sessionID, attemptID); err != nil {
+		t.Fatalf("seed append-only ledgers: %v", err)
+	}
+	for _, upSQL := range []string{up320, up335} {
 		if _, err = conn.Exec(ctx, upSQL); err != nil {
 			t.Fatalf("apply migration: %v", err)
 		}
@@ -497,6 +557,32 @@ func TestResearchArtifactAppendOnlyCascadeGuards335RoundTrips(t *testing.T) {
 	if _, err = conn.Exec(ctx, `DELETE FROM research_artifact_version WHERE session_id = $1::uuid`, sessionID); err == nil {
 		t.Fatal("expected direct version delete to remain rejected")
 	}
+	appendOnlyMutations := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "policy mutation update",
+			sql:  `UPDATE research_artifact_policy_mutation SET eligibility_reason = 'tampered' WHERE session_id = $1::uuid`,
+		},
+		{
+			name: "policy mutation delete",
+			sql:  `DELETE FROM research_artifact_policy_mutation WHERE session_id = $1::uuid`,
+		},
+		{
+			name: "lifecycle event update",
+			sql:  `UPDATE research_artifact_lifecycle_event SET reason = 'tampered' WHERE session_id = $1::uuid`,
+		},
+		{
+			name: "lifecycle event delete",
+			sql:  `DELETE FROM research_artifact_lifecycle_event WHERE session_id = $1::uuid`,
+		},
+	}
+	for _, mutation := range appendOnlyMutations {
+		if _, err = conn.Exec(ctx, mutation.sql, sessionID); err == nil {
+			t.Fatalf("expected direct %s to be rejected", mutation.name)
+		}
+	}
 	directDeleteTx, err := conn.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin direct producer delete: %v", err)
@@ -509,9 +595,18 @@ func TestResearchArtifactAppendOnlyCascadeGuards335RoundTrips(t *testing.T) {
 	if _, err = conn.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, workspaceID); err != nil {
 		t.Fatalf("workspace cascade delete: %v", err)
 	}
-	var remainingVersions int
-	if err = conn.QueryRow(ctx, `SELECT count(*)::int FROM research_artifact_version`).Scan(&remainingVersions); err != nil || remainingVersions != 0 {
-		t.Fatalf("versions after cascade=%d err=%v", remainingVersions, err)
+	var remainingVersions, remainingMutations, remainingLifecycleEvents int
+	if err = conn.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_version),
+		  (SELECT count(*)::int FROM research_artifact_policy_mutation),
+		  (SELECT count(*)::int FROM research_artifact_lifecycle_event)
+	`).Scan(&remainingVersions, &remainingMutations, &remainingLifecycleEvents); err != nil {
+		t.Fatalf("count append-only rows after workspace cascade: %v", err)
+	}
+	if remainingVersions != 0 || remainingMutations != 0 || remainingLifecycleEvents != 0 {
+		t.Fatalf("append-only rows after cascade: versions=%d mutations=%d lifecycle_events=%d",
+			remainingVersions, remainingMutations, remainingLifecycleEvents)
 	}
 
 	if _, err = conn.Exec(ctx, down335); err != nil {
@@ -2167,6 +2262,147 @@ func TestResearchDispatchManifestBinding330RoundTrips(t *testing.T) {
 	if _, err = conn.Exec(ctx, up330); err != nil {
 		t.Fatalf("reapply 330 up: %v", err)
 	}
+}
+
+func TestResearchArtifactLateManifestPolicyMigrationsRoundTrip(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_late_policy_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+
+	prerequisites := []string{
+		"318_research_artifact_passport",
+		"319_research_artifact_passport_backfill",
+		"320_research_artifact_reciprocal_guards",
+		"321_research_artifact_policy_coupling_guards",
+		"322_research_artifact_policy_ledger_guards",
+		"323_research_artifact_integrity_guards",
+		"324_research_artifact_link_policy_guards",
+		"325_research_artifact_migration_diagnostics",
+		"326_research_artifact_scoped_relationship_fks",
+		"327_research_artifact_canonicalization_registry",
+		"328_research_artifact_passport_d_completion",
+	}
+	for _, name := range prerequisites {
+		upSQL, _ := readMigrationPair(t, name)
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply prerequisite %s: %v", name, err)
+		}
+	}
+
+	up346, down346 := readMigrationPair(t, "346_research_manifest_policy_grants")
+	up347, down347 := readMigrationPair(t, "347_research_manifest_gate_snapshot")
+	up349, down349 := readMigrationPair(t, "349_research_evaluation_manifest_grant_guard")
+	apply := func(label string) {
+		t.Helper()
+		for _, migration := range []struct {
+			name string
+			sql  string
+		}{{"346", up346}, {"347", up347}, {"349", up349}} {
+			if _, applyErr := conn.Exec(ctx, migration.sql); applyErr != nil {
+				t.Fatalf("%s apply %s: %v", label, migration.name, applyErr)
+			}
+		}
+	}
+	assertUp := func(label string) {
+		t.Helper()
+		var constraints, columns, triggers int
+		var functionDefinition string
+		if queryErr := conn.QueryRow(ctx, `
+			SELECT count(*)::int FROM pg_constraint
+			WHERE conrelid='research_artifact_context_manifest'::regclass
+			  AND conname IN (
+			    'research_artifact_context_manifest_normal_grant_pair_check',
+			    'research_artifact_context_manifest_evaluation_grant_pair_check',
+			    'research_artifact_context_manifest_normal_grant_fkey',
+			    'research_artifact_context_manifest_evaluation_grant_fkey'
+			  )
+		`).Scan(&constraints); queryErr != nil {
+			t.Fatalf("%s query constraints: %v", label, queryErr)
+		}
+		if queryErr := conn.QueryRow(ctx, `
+			SELECT count(*)::int FROM information_schema.columns
+			WHERE table_schema=current_schema() AND table_name='research_artifact_context_manifest'
+			  AND column_name IN ('gate_snapshot_bytes','gate_snapshot_hash')
+		`).Scan(&columns); queryErr != nil {
+			t.Fatalf("%s query columns: %v", label, queryErr)
+		}
+		if queryErr := conn.QueryRow(ctx, `
+			SELECT count(*)::int FROM pg_trigger
+			WHERE tgrelid='research_artifact_context_manifest'::regclass
+			  AND tgname='research_artifact_context_manifest_grant_guard' AND NOT tgisinternal
+		`).Scan(&triggers); queryErr != nil {
+			t.Fatalf("%s query trigger: %v", label, queryErr)
+		}
+		if queryErr := conn.QueryRow(ctx, `
+			SELECT pg_get_functiondef('research_artifact_context_manifest_grant_guard_fn()'::regprocedure)
+		`).Scan(&functionDefinition); queryErr != nil {
+			t.Fatalf("%s query function: %v", label, queryErr)
+		}
+		for _, required := range []string{
+			"NEW.purpose = 'evaluation'",
+			"NEW.purpose NOT IN ('task_execution','evaluation')",
+			"NEW.evaluation_grant_id IS NULL",
+		} {
+			if !strings.Contains(functionDefinition, required) {
+				t.Fatalf("%s strict grant function missing %q", label, required)
+			}
+		}
+		if constraints != 4 || columns != 2 || triggers != 1 {
+			t.Fatalf("%s constraints=%d columns=%d triggers=%d want 4/2/1", label, constraints, columns, triggers)
+		}
+	}
+
+	apply("first")
+	assertUp("first")
+	for _, migration := range []struct {
+		name string
+		sql  string
+	}{{"349", down349}, {"347", down347}, {"346", down346}} {
+		if _, err = conn.Exec(ctx, migration.sql); err != nil {
+			t.Fatalf("apply %s down: %v", migration.name, err)
+		}
+	}
+	var constraints, columns, triggers, functions int
+	if err = conn.QueryRow(ctx, `
+		SELECT
+		 (SELECT count(*)::int FROM pg_constraint WHERE conrelid='research_artifact_context_manifest'::regclass
+		   AND conname LIKE 'research_artifact_context_manifest_%grant%'),
+		 (SELECT count(*)::int FROM information_schema.columns WHERE table_schema=current_schema()
+		   AND table_name='research_artifact_context_manifest' AND column_name IN ('gate_snapshot_bytes','gate_snapshot_hash')),
+		 (SELECT count(*)::int FROM pg_trigger WHERE tgrelid='research_artifact_context_manifest'::regclass
+		   AND tgname='research_artifact_context_manifest_grant_guard' AND NOT tgisinternal),
+		 (SELECT count(*)::int FROM pg_proc JOIN pg_namespace ON pg_namespace.oid=pg_proc.pronamespace
+		   WHERE pg_namespace.nspname=current_schema() AND proname='research_artifact_context_manifest_grant_guard_fn')
+	`).Scan(&constraints, &columns, &triggers, &functions); err != nil {
+		t.Fatalf("query down state: %v", err)
+	}
+	if constraints != 0 || columns != 0 || triggers != 0 || functions != 0 {
+		t.Fatalf("down state constraints=%d columns=%d triggers=%d functions=%d want zero", constraints, columns, triggers, functions)
+	}
+	apply("reapply")
+	assertUp("reapply")
 }
 
 func TestResearchArtifactManifestOmissionReasons333RoundTrips(t *testing.T) {

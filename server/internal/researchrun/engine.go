@@ -167,7 +167,11 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 			retErr = errors.Join(retErr, heartbeatFailure)
 		default:
 		}
-		if releaseErr := e.store.ReleaseRun(context.WithoutCancel(ctx), lease, next); releaseErr != nil {
+		lastError := ""
+		if retErr != nil {
+			lastError = retErr.Error()
+		}
+		if releaseErr := e.store.ReleaseRun(context.WithoutCancel(ctx), lease, next, lastError); releaseErr != nil {
 			if !errors.Is(releaseErr, ErrRunLeaseLost) || !errors.Is(retErr, ErrRunLeaseLost) {
 				retErr = errors.Join(retErr, fmt.Errorf("release research run lease: %w", releaseErr))
 			}

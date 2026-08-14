@@ -1019,6 +1019,11 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
+D-cas-1 证据：Dispatch 在 authoritative manifest plan 与持久化之间分别注入 Passport
+eligibility/current-version/lifecycle/provenance、Version access/content hash 与内存 representation
+bytes 漂移；每一项都必须命中 CAS，并证明 Attempt、Passport/Version、Manifest、Entry/Omission、
+Grant/Mutation、Outbox、Task transition 与 Event 完整回滚。§15.13 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

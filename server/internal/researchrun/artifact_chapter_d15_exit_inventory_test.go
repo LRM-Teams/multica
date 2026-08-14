@@ -27,7 +27,7 @@ var chapterD15Coverage = map[int]string{
 	10: "covered", // structural subject isolation + real subject/grader frozen-manifest dispatch
 	11: "partial", // dispatch race: eligibility/state/hash/lifecycle after rolled-back intent
 	12: "covered", // canonical candidate locks + concurrent shared candidates + stable entry ordinals
-	13: "partial", // eligibility + representation CAS
+	13: "covered", // full-intent rollback on eligibility/version/access/lifecycle/provenance/content/representation CAS drift
 	14: "covered", // replay/prompt/outbox binding tests
 	15: "covered", // after-begin/before-commit/after-commit dispatch artifact recovery matrix
 	16: "covered", // historical live vs frozen manifest tests

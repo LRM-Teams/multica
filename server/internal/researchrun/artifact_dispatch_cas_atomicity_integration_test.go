@@ -48,6 +48,46 @@ func TestDispatchManifestCASMismatchRollsBackCompleteIntent(t *testing.T) {
 					contentHashFromPayload([]byte("representation changed after authoritative plan")))
 			},
 		},
+		{
+			name: "current version",
+			mutate: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fx dispatchRaceFixture, entry artifactVersionCandidate) {
+				mutateIntegrationArtifactForCASTest(t, ctx, pool, `
+					UPDATE research_artifact_passport
+					SET current_version=current_version+1
+					WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, entry.ArtifactID)
+			},
+		},
+		{
+			name: "access level",
+			mutate: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fx dispatchRaceFixture, entry artifactVersionCandidate) {
+				mutateIntegrationArtifactForCASTest(t, ctx, pool, `
+					UPDATE research_artifact_version
+					SET access_level='verified_only'
+					WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, entry.VersionRowID)
+			},
+		},
+		{
+			name: "lifecycle",
+			mutate: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fx dispatchRaceFixture, entry artifactVersionCandidate) {
+				mutateIntegrationArtifactForCASTest(t, ctx, pool, `
+					UPDATE research_artifact_passport
+					SET lifecycle_status='withdrawn'
+					WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, entry.ArtifactID)
+			},
+		},
+		{
+			name: "provenance",
+			mutate: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, fx dispatchRaceFixture, entry artifactVersionCandidate) {
+				mutateIntegrationArtifactForCASTest(t, ctx, pool, `
+					UPDATE research_artifact_passport
+					SET provenance_completeness='unknown'
+					WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, entry.ArtifactID)
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := setupDispatchRaceFixture(t, ctx, pool)

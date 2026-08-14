@@ -622,6 +622,10 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 				writeError(w, http.StatusNotFound, "research session not found")
 				return
 			}
+			if agentAttemptScoped && errors.Is(runErr, researchrun.ErrArtifactAccessDenied) {
+				writeError(w, http.StatusForbidden, "research artifact access denied")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "failed to load research run state")
 			return
 		}

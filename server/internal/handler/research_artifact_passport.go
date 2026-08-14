@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -22,6 +23,33 @@ func backfillArtifactPassportTx(
 		)
 	`, workspaceID, sessionID, entityID, kind)
 	return err
+}
+
+func (h *Handler) setResearchMessageMatchDecisionWithPassport(
+	ctx context.Context,
+	workspaceID, sessionID, messageID pgtype.UUID,
+	payload json.RawMessage,
+) (db.ResearchMessage, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.ResearchMessage{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err = researchrun.AdvanceProductionResearchMessageMatchDecisionTx(
+		ctx, tx, uuidToString(workspaceID), uuidToString(sessionID), uuidToString(messageID), payload,
+	); err != nil {
+		return db.ResearchMessage{}, err
+	}
+	msg, err := h.Queries.WithTx(tx).GetResearchMessage(ctx, db.GetResearchMessageParams{
+		ID: messageID, SessionID: sessionID, WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return db.ResearchMessage{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return db.ResearchMessage{}, err
+	}
+	return msg, nil
 }
 
 func ensureGraphNodePassportTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, nodeID pgtype.UUID) error {

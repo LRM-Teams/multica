@@ -1022,9 +1022,10 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 D-race-1 证据：Dispatch Request 预计算后先注入 before-commit rollback，确认旧 Attempt、
 Manifest、Entry/Omission、Grant、Input Reference、Outbox、Task transition 与 Event 全部不存在；
 随后以同一 Request 分别改变 eligibility、Run state、current version、Version access/content hash、
-provenance、lifecycle 与 unrelated policy watermark。重试必须从数据库事实重算，合法变化只提交
-一套 fresh 写集，缺失 current version/过期 Run state fail closed。§15.11 的 verification 与
-supersession 子矩阵仍保持 partial。
+provenance、lifecycle、unrelated policy watermark、Source verification 与生产 Supersede 命令。
+重试必须从数据库事实重算，合法变化只提交一套 fresh 写集，缺失 current version/过期 Run state
+fail closed；旧预计算结果不能把 rejected Source 或 superseded Artifact 带入新 Manifest。§15.11
+已收口。
 
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 

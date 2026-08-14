@@ -415,6 +415,12 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 	}); err != nil {
 		return err
 	}
+	if err = persistDecisionInputReferencesTx(
+		ctx, tx, state.workspaceID, state.run.SessionID,
+		decisionID, kind, inputs, outcome,
+	); err != nil {
+		return err
+	}
 	return state.checkpointAfter(ctx, txResultAfterMethod)
 }
 
@@ -2227,6 +2233,12 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 		AccessLevel: state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
 		ContentHash: contentHash, ProducedByAttemptID: state.attemptID,
 	}); err != nil {
+		return err
+	}
+	if err = persistDecisionInputReferencesTx(
+		ctx, tx, state.workspaceID, state.run.SessionID,
+		decisionID, kind, inputs, outcome,
+	); err != nil {
 		return err
 	}
 	return state.checkpointAfter(ctx, txResultAfterEvaluation)

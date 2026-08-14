@@ -477,8 +477,13 @@ type frozenDurableContext struct {
 	Attempts  []Attempt
 }
 
-func loadFrozenDurableContextPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (frozenDurableContext, error) {
-	rows, err := pool.Query(ctx, `
+type frozenRepresentationQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func loadFrozenDurableContext(ctx context.Context, query frozenRepresentationQuerier, workspaceID, sessionID, attemptID string) (frozenDurableContext, error) {
+	rows, err := query.Query(ctx, `
 		SELECT p.entity_kind, e.representation_bytes, e.representation_hash
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
@@ -563,7 +568,7 @@ func loadFrozenDurableContextPool(ctx context.Context, pool *pgxpool.Pool, works
 	}
 	if len(attempts) == 0 {
 		var attempt Attempt
-		if loadErr := pool.QueryRow(ctx, `
+		if loadErr := query.QueryRow(ctx, `
 			SELECT id::text, session_id::text, workspace_id::text, task_id::text,
 			       attempt_number, COALESCE(assigned_agent_id::text,''), dispatch_key, status, dispatched_at
 			FROM research_task_attempt
@@ -606,10 +611,18 @@ func loadFrozenDurableContextPool(ctx context.Context, pool *pgxpool.Pool, works
 	return out, nil
 }
 
-func loadFrozenRunRepresentationPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (Run, error) {
+func loadFrozenDurableContextPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (frozenDurableContext, error) {
+	return loadFrozenDurableContext(ctx, pool, workspaceID, sessionID, attemptID)
+}
+
+func loadFrozenDurableContextTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, attemptID string) (frozenDurableContext, error) {
+	return loadFrozenDurableContext(ctx, tx, workspaceID, sessionID, attemptID)
+}
+
+func loadFrozenRunRepresentation(ctx context.Context, query frozenRepresentationQuerier, workspaceID, sessionID, attemptID string) (Run, error) {
 	var encoded []byte
 	var storedHash string
-	err := pool.QueryRow(ctx, `
+	err := query.QueryRow(ctx, `
 		SELECT e.representation_bytes, e.representation_hash
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m
@@ -635,6 +648,14 @@ func loadFrozenRunRepresentationPool(ctx context.Context, pool *pgxpool.Pool, wo
 		return Run{}, fmt.Errorf("%w: frozen run session scope mismatch", ErrInvalidTransition)
 	}
 	return run, nil
+}
+
+func loadFrozenRunRepresentationPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (Run, error) {
+	return loadFrozenRunRepresentation(ctx, pool, workspaceID, sessionID, attemptID)
+}
+
+func loadFrozenRunRepresentationTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, attemptID string) (Run, error) {
+	return loadFrozenRunRepresentation(ctx, tx, workspaceID, sessionID, attemptID)
 }
 
 func loadFrozenEvaluationPrivatePool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]EvaluationPrivateContext, error) {

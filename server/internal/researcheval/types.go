@@ -302,6 +302,8 @@ type TrialResult struct {
 	TaskID         string           `json:"task_id"`
 	Seed           int64            `json:"seed"`
 	ExecutionError string           `json:"execution_error,omitempty"`
+	Artifact       *Artifact        `json:"artifact,omitempty"`
+	ArtifactHash   string           `json:"artifact_hash,omitempty"`
 	Grades         map[string]Grade `json:"grades"`
 	Score          float64          `json:"score"`
 	Passed         bool             `json:"passed"`

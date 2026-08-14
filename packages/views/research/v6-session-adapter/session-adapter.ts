@@ -97,8 +97,8 @@ export function adaptV6Session(
 
 /**
  * Shape bridge from the canonical projection to the existing D5 renderer.
- * Missing V6 fields stay empty: no tier, confidence, cluster, or lineage is
- * inferred from title/summary text.
+ * V6 D5 semantics are copied verbatim from the canonical projection. Missing
+ * fields stay empty and are never inferred from title/summary text.
  */
 export function canvasSnapshotToTypedGraph(
   sessionId: string,
@@ -117,21 +117,21 @@ export function canvasSnapshotToTypedGraph(
       status: node.status,
       actor_agent_id: node.actor ?? null,
       payload: node.payload,
-      level: "",
-      round: 0,
-      cluster_id: null,
-      confidence: null,
-      document_count: 0,
-      conclusion_count: 0,
+      level: node.level ?? "",
+      round: node.round,
+      cluster_id: node.clusterId ?? null,
+      confidence: node.confidence ?? null,
+      document_count: node.documentCount ?? undefined,
+      conclusion_count: node.conclusionCount ?? undefined,
       goal_version_id: node.planVersion ?? null,
-      derived_from: null,
-      merged_from: [],
-      superseded_by: null,
-      restart_of: null,
-      invalidated_by: null,
+      derived_from: node.derivedFrom ?? null,
+      merged_from: node.mergedFrom ?? [],
+      superseded_by: node.supersededBy ?? null,
+      restart_of: node.restartOf ?? null,
+      invalidated_by: node.invalidatedBy ?? null,
       superseded_at: null,
       invalidated_at: null,
-      parent_id: null,
+      parent_id: node.parentId ?? null,
       child_ids: [],
       children_of: [],
       created_at: node.createdAt ?? "",
@@ -145,7 +145,23 @@ export function canvasSnapshotToTypedGraph(
       edge_type: edge.relation,
       created_at: typeof edge.createdAt === "string" ? edge.createdAt : "",
     })),
-    clusters: [],
+    clusters: (snapshot.clusters ?? []).map((cluster) => ({
+      id: cluster.id,
+      session_id: sessionId,
+      name: cluster.id,
+      label: cluster.label,
+      level: "m",
+      cluster_type: cluster.clusterType,
+      goal_version_id: null,
+      payload: {
+        member_node_ids: cluster.memberNodeIds,
+        confidence: cluster.confidence,
+        document_count: cluster.documentCount,
+        conclusion_count: cluster.conclusionCount,
+      },
+      created_at: "",
+      updated_at: "",
+    })),
     lineage: {
       derived: {},
       merged: {},

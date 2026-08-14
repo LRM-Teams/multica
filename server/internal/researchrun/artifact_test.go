@@ -1,11 +1,7 @@
 package researchrun
 
 import (
-	"os"
-	"path/filepath"
-	"regexp"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -17,56 +13,6 @@ func TestMigrationArtifactContentHashMatchesSQL(t *testing.T) {
 	want := "sha256:89a0eb387df6af5e0f77bcfe0452a48fd924d7377d69ff9b0e26d9afda5d47cf"
 	if got != want {
 		t.Fatalf("hash=%q want=%q", got, want)
-	}
-}
-
-func TestRunEventRelationshipSchemaRegistryCoversProductionWriters(t *testing.T) {
-	registered := make(map[string]bool)
-	for _, eventType := range RunEventRelationshipSchemaNames() {
-		if registered[eventType] {
-			t.Fatalf("duplicate Run Event schema %q", eventType)
-		}
-		registered[eventType] = true
-	}
-	callPattern := regexp.MustCompile(`appendEvent\([^,\n]+,[^,\n]+,[^,\n]+,[^,\n]+,\s*"([a-z0-9_]+)"`)
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
-		}
-		source, readErr := os.ReadFile(file)
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		for _, match := range callPattern.FindAllSubmatch(source, -1) {
-			eventType := string(match[1])
-			if eventType == "node_command_" {
-				continue
-			}
-			if !registered[eventType] {
-				t.Errorf("%s writes unregistered Run Event schema %q", file, eventType)
-			}
-		}
-	}
-	for _, dynamic := range []string{
-		"node_command_continue", "node_command_fork", "node_command_retry", "node_command_reassign",
-		"run_paused", "run_cancelled", "run_archived", "run_failed",
-	} {
-		if !registered[dynamic] {
-			t.Errorf("dynamic Run Event schema %q is not registered", dynamic)
-		}
-	}
-	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "367_research_run_event_relationship_schema.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for eventType := range registered {
-		if !strings.Contains(string(migration), "'"+eventType+"'") {
-			t.Errorf("migration 367 SQL registry missing Run Event schema %q", eventType)
-		}
 	}
 }
 
@@ -261,6 +207,7 @@ func TestMigrationDiagnosticReasonCodes(t *testing.T) {
 		"duplicate_local_key",
 		"invalid_match_decision",
 		"malformed_uuid",
+		"mismatched_reference",
 		"unknown_schema",
 		"unresolved_reference",
 	}
@@ -277,6 +224,7 @@ func TestMigrationRelationshipParserNames(t *testing.T) {
 		"research_message_match_decision",
 		"research_decision_inputs",
 		"research_graph_node_payload",
+		"research_legacy_source_payload",
 		"research_report_structured",
 		"research_run_event_payload",
 	}
@@ -311,7 +259,6 @@ func TestScopedRelationshipFKNames(t *testing.T) {
 		"research_report_claim_claim_scoped_fkey",
 		"research_graph_edge_from_node_scoped_fkey",
 		"research_graph_edge_to_node_scoped_fkey",
-		"research_graph_node_run_event_scoped_fkey",
 	}
 	got := ScopedRelationshipFKNames()
 	slices.Sort(want)

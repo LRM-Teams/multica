@@ -92,4 +92,37 @@ func TestAcceptedReportVersionBindsCanonicalContentAndProducerAttempt(t *testing
 		t.Fatalf("report version hash=%q want=%q origin=%q provenance=%q attempt=%q wantAttempt=%q",
 			contentHash, wantHash, hashOrigin, provenanceCompleteness, versionAttemptID, attemptID)
 	}
+	var structuredReport reportStructuredV1
+	if err = json.Unmarshal(report.Structured, &structuredReport); err != nil {
+		t.Fatal(err)
+	}
+	wantSourceIDs := make([]string, 0, len(structuredReport.Sources))
+	for _, source := range structuredReport.Sources {
+		wantSourceIDs = append(wantSourceIDs, source.SourceID)
+	}
+	var sourceIDs []string
+	if err = pool.QueryRow(ctx, `
+		SELECT array_agg(input_version.artifact_id::text ORDER BY reference.ordinal)
+		FROM research_artifact_input_reference reference
+		JOIN research_artifact_version report_version
+		  ON report_version.workspace_id = reference.workspace_id
+		 AND report_version.session_id = reference.session_id
+		 AND report_version.id = reference.consumer_version_id
+		JOIN research_artifact_version input_version
+		  ON input_version.workspace_id = reference.workspace_id
+		 AND input_version.session_id = reference.session_id
+		 AND input_version.id = reference.input_version_id
+		WHERE report_version.artifact_id = (
+			SELECT id FROM research_report
+			WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			ORDER BY revision DESC LIMIT 1
+		)
+		  AND reference.relation = 'report_source'
+		  AND reference.purpose = 'report_materialization'
+	`, fixture.workspaceID, fixture.sessionID).Scan(&sourceIDs); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(sourceIDs) != fmt.Sprint(wantSourceIDs) {
+		t.Fatalf("report source lineage=%v want=%v", sourceIDs, wantSourceIDs)
+	}
 }

@@ -31,9 +31,12 @@ func (h *Handler) replayAgentAttachmentCommands(ctx context.Context, identity da
 	if err != nil {
 		return err
 	}
-	if len(payload.RuntimeCursors) != len(allowed) {
-		return errors.New("Attachment replay request omitted a Runner Runtime cursor")
-	}
+	// Runtime membership is mutable Runner input, not fixed connection
+	// identity. A Computer can retain historical offline rows for providers
+	// that are no longer installed, so requiring the request to equal every
+	// DB row would block replay (and therefore the control heartbeat) forever.
+	// Each requested Runtime is still authorized against the Computer and
+	// Workspace below; the request itself is the current local Runtime set.
 	events := make([]agentAttachmentReplayEvent, 0)
 	end := make(map[string]int64, len(payload.RuntimeCursors))
 	for runtimeID, cursor := range payload.RuntimeCursors {

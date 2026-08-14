@@ -2,6 +2,7 @@ package researchrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -172,6 +173,74 @@ func TestWithdrawArtifactTransactionRecovery(t *testing.T) {
 			recover: invoke,
 		}
 	})
+}
+
+func TestWithdrawArtifactBlocksAffectedInFlightAcceptance(t *testing.T) {
+	run := newTransactionRecoveryRun(t, "Withdrawal in-flight acceptance")
+	claimID := uuid.NewString()
+	seedIntegrationClaimArtifact(
+		t, run.ctx, run.pool, run.fixture.workspaceID, run.fixture.sessionID,
+		claimID, "withdrawal-inflight", "withdrawn after dispatch",
+	)
+
+	input := testDispatchIntentInput(
+		t, run.ctx, run.store, run.fixture.sessionID,
+		run.fixture.workspaceID, run.taskID, run.fixture.agentID,
+	)
+	attempt, _, err := run.store.CreateDispatchIntent(run.ctx, input)
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	inboxID := seedIntegrationInboxEvent(t, run.ctx, run.pool, run.fixture.workspaceID, run.fixture.agentID)
+	if _, _, err = run.store.AttachInboxTask(run.ctx, attempt.ID, inboxID); err != nil {
+		t.Fatalf("AttachInboxTask: %v", err)
+	}
+	if _, err = run.store.WithdrawArtifact(run.ctx, WithdrawArtifactInput{
+		WorkspaceID: run.fixture.workspaceID,
+		SessionID:   run.fixture.sessionID,
+		ArtifactID:  claimID,
+		ActorType:   "user",
+		ActorID:     run.fixture.userID,
+		Reason:      "withdraw while attempt is in flight",
+	}); err != nil {
+		t.Fatalf("WithdrawArtifact: %v", err)
+	}
+
+	tasks, err := run.store.ListTasks(run.ctx, run.fixture.sessionID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	raw, err := json.Marshal(upgradeResultToV5(validV4PlanResult(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, hash, err := DecodeAndValidateResultForVersion(
+		OrchestratorVersion, raw, tasks[0], DefaultRunConfig("standard"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = run.store.AcceptResult(run.ctx, AcceptResultInput{
+		SessionID:   run.fixture.sessionID,
+		AttemptID:   attempt.ID,
+		AgentID:     run.fixture.agentID,
+		InboxTaskID: inboxID,
+		Raw:         raw,
+		Result:      result,
+		Hash:        hash,
+	})
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("AcceptResult err=%v want ErrInvalidTransition", err)
+	}
+	var resultCount int
+	if err = run.pool.QueryRow(run.ctx, `
+		SELECT count(*)::int FROM research_result_artifact WHERE attempt_id=$1::uuid
+	`, attempt.ID).Scan(&resultCount); err != nil {
+		t.Fatal(err)
+	}
+	if resultCount != 0 {
+		t.Fatalf("withdrawn in-flight acceptance persisted %d results", resultCount)
+	}
 }
 
 func assertWithdrawalState(

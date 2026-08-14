@@ -91,23 +91,36 @@ func (upgrade *hostMachineUpgrade) localRequestHandler() http.HandlerFunc {
 			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
 			return
 		}
-		var request struct {
-			RequestID     string `json:"request_id"`
-			TargetVersion string `json:"target_version"`
-		}
+		var request protocol.ComputerUpgradePayload
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&request); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		operation, err := upgrade.createServerOperation(r.Context(), request.RequestID, request.TargetVersion)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+		operationID := strings.TrimSpace(request.OperationID)
+		if operationID == "" {
+			http.Error(w, "operationId is required", http.StatusBadRequest)
 			return
 		}
+		if strings.TrimSpace(request.RequestID) == "" {
+			http.Error(w, "requestId is required", http.StatusBadRequest)
+			return
+		}
+		targetVersion := strings.TrimSpace(request.TargetVersion)
+		if targetVersion == "" {
+			targetVersion = "latest"
+		}
+		runtime, token, ok := upgrade.firstCurrentRuntime()
+		if !ok {
+			http.Error(w, "Computer has no ready Binding Runtime for Machine Upgrade", http.StatusConflict)
+			return
+		}
+		go upgrade.execute(context.Background(), runtime, token, protocol.DaemonHeartbeatPendingMachineUpgrade{
+			ID: operationID, TargetVersion: targetVersion,
+		})
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(operation)
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "phase": "queued"})
 	}
 }
 
@@ -118,29 +131,6 @@ func (upgrade *hostMachineUpgrade) authorized(r *http.Request) bool {
 	expected := strings.TrimSpace(upgrade.host.control.token)
 	provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
 	return expected != "" && provided != "" && subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
-}
-
-func (upgrade *hostMachineUpgrade) createServerOperation(ctx context.Context, requestID, targetVersion string) (map[string]any, error) {
-	runtime, token, ok := upgrade.firstCurrentRuntime()
-	if !ok {
-		return nil, errors.New("Computer has no ready Binding Runtime for Machine Upgrade")
-	}
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		requestID = uuid.NewString()
-	}
-	targetVersion = strings.TrimSpace(targetVersion)
-	if targetVersion == "" {
-		targetVersion = "latest"
-	}
-	var operation map[string]any
-	err := upgrade.postJSON(ctx, fmt.Sprintf("/api/daemons/%s/upgrades", url.PathEscape(upgrade.config.identity.ComputerID)), token, map[string]string{
-		"request_id": requestID, "target_version": targetVersion,
-	}, &operation, map[string]string{"X-Workspace-ID": runtime.WorkspaceID})
-	if err != nil {
-		return nil, err
-	}
-	return operation, nil
 }
 
 func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {

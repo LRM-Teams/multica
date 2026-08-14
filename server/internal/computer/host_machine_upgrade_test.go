@@ -1,6 +1,7 @@
 package computer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -56,6 +57,89 @@ func TestHostMachineUpgradeAcceptanceRequiresCompleteComputerSet(t *testing.T) {
 		[]string{"runtime-a", "runtime-b"}, []string{"workspace-a", "workspace-b"})
 	if err == nil || !strings.Contains(err.Error(), "complete Computer set") {
 		t.Fatalf("partial acceptance error = %v", err)
+	}
+}
+
+func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testing.T) {
+	const controlToken = "owner-secret"
+	var humanIntentCalls atomic.Int32
+	attested := make(chan struct{}, 1)
+	acceptedGeneration := "generation-a"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/daemons/computer-a/upgrades":
+			humanIntentCalls.Add(1)
+			http.Error(w, "Host must not create human lifecycle intents", http.StatusForbidden)
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
+			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
+				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
+				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
+			})
+		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
+			attested <- struct{}{}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
+			http.Error(w, "unexpected child control request", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer childControl.Close()
+
+	host, err := NewHost(HostConfig{
+		ControlToken: controlToken,
+		Spawn: func(string, int64) (BindingChild, error) {
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(8051), controlURL: childControl.URL}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Stop()
+	host.Reconcile(context.Background(), []string{"workspace-a"})
+	waitForSupervisorLifecycle(t, host.supervisor, "workspace-a", RunnerLifecycleRunning)
+	record, pid, ok := host.Snapshot("workspace-a")
+	if !ok {
+		t.Fatal("missing live Binding child")
+	}
+	host.runtimeSets["workspace-a"] = hostBindingRuntimeSet{
+		Identity:    BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: record.Generation(), PID: pid},
+		Runtimes:    []hostBindingRuntime{{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"}},
+		DaemonToken: "runtime-token", ExpiresAt: time.Now().Add(time.Hour),
+	}
+	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{identity: HostProcessIdentity{
+		ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
+		Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+	}})
+	host.upgrade = upgrade
+
+	body, err := json.Marshal(protocol.ComputerUpgradePayload{
+		RequestID: "request-a", OperationID: "upgrade-a", TargetVersion: "v1.0.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/machine-upgrades", bytes.NewReader(body))
+	request.Header.Set("X-Multica-Control-Token", controlToken)
+	response := httptest.NewRecorder()
+	upgrade.localRequestHandler()(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("local delivery status = %d body=%s", response.Code, response.Body.String())
+	}
+	select {
+	case <-attested:
+	case <-time.After(time.Second):
+		t.Fatal("local delivery did not execute and attest the server operation")
+	}
+	if got := humanIntentCalls.Load(); got != 0 {
+		t.Fatalf("Host created %d human lifecycle intents, want zero", got)
 	}
 }
 

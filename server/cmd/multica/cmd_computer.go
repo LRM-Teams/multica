@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -388,7 +389,8 @@ func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), cli.DefaultUpdateDownloadTimeout+30*time.Second)
 	defer cancel()
 	upgrade, err := (&computer.Lifecycle{ControlPort: computerUpgradeControlPort("")}).Upgrade(ctx, computer.UpgradeOptions{
-		TargetVersion: targetVersion,
+		TargetVersion:    targetVersion,
+		CreateLiveIntent: createComputerUpgradeHumanIntent,
 	})
 	if err != nil {
 		return err
@@ -418,4 +420,30 @@ func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 		upgrade.BinaryPath,
 	)
 	return nil
+}
+
+func createComputerUpgradeHumanIntent(ctx context.Context, computerID, requestID, targetVersion string) (map[string]any, error) {
+	cfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return nil, fmt.Errorf("load human session: %w", err)
+	}
+	target, err := cli.ResolveServiceTarget(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.Token) == "" {
+		return nil, fmt.Errorf("human session is missing; run `multica login`")
+	}
+	if strings.TrimSpace(cfg.WorkspaceID) == "" {
+		return nil, fmt.Errorf("human session has no Workspace context; run `multica setup /<workspace>`")
+	}
+	client := cli.NewAPIClient(target.Origin, cfg.WorkspaceID, cfg.Token)
+	var operation map[string]any
+	path := fmt.Sprintf("/api/daemons/%s/upgrades", url.PathEscape(strings.TrimSpace(computerID)))
+	if err := client.PostJSON(ctx, path, map[string]string{
+		"request_id": requestID, "target_version": targetVersion,
+	}, &operation); err != nil {
+		return nil, err
+	}
+	return operation, nil
 }

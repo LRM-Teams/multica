@@ -22,4 +22,13 @@ when the successor comes online. Attest notifies the server that the upgrade
 completed. The `/takeover` HTTP route remains only as a compatibility receipt
 for older Computers that still POST it; it does not CAS generation.
 
+Operation authorization is separate from binary execution. A Web request
+creates the server operation with human authorization and sends
+`computer:upgrade` over the DaemonCore socket. The local `multica computer
+upgrade` command uses its saved human session to create the same canonical
+server operation before delivering that operation ID to Computer Host over
+authenticated loopback. Socket and loopback delivery may race; Host deduplicates
+them by operation ID. Workspace execution credentials accept, report progress,
+and attest an existing operation, but never create a human operation.
+
 Cloud generation CAS is not upgrade completion, and it is not Raft alignment.

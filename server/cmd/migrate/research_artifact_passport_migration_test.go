@@ -917,7 +917,7 @@ func TestResearchArtifactPolicyLedgerGuards322RoundTrips(t *testing.T) {
 				) VALUES (
 				  $1::uuid, $2::uuid, $3::uuid, 'task', 1, 'registered', 'partial', now()
 				);
-			`, orphanID, workspaceID, sessionID, "ledger-orphan-"+mode.name); execErr != nil {
+			`, pgx.QueryExecModeSimpleProtocol, orphanID, workspaceID, sessionID, "ledger-orphan-"+mode.name); execErr != nil {
 				t.Fatalf("insert paired domain/passport without ledger: %v", execErr)
 			}
 			assertArtifactConstraint(t,
@@ -1499,7 +1499,7 @@ func TestResearchArtifactLinkPolicyGuards324RoundTrips(t *testing.T) {
 				  workspace_id,session_id,watermark,mutation_kind,artifact_id,
 				  old_eligibility_revision,new_eligibility_revision
 				) VALUES ($1::uuid,$2::uuid,$4,'supersession',$3::uuid,1,2);
-			`, workspaceID, sessionID, orphanSupersessionTaskID, mutationWatermark); execErr != nil {
+			`, pgx.QueryExecModeSimpleProtocol, workspaceID, sessionID, orphanSupersessionTaskID, mutationWatermark); execErr != nil {
 				t.Fatalf("insert ledger-only supersession: %v", execErr)
 			}
 			assertArtifactConstraint(t,
@@ -1546,7 +1546,7 @@ func TestResearchArtifactLinkPolicyGuards324RoundTrips(t *testing.T) {
 				  workspace_id,session_id,watermark,mutation_kind,artifact_id,
 				  old_eligibility_revision,new_eligibility_revision,old_lifecycle_status,new_lifecycle_status
 				) VALUES ($1::uuid,$2::uuid,$4,'lifecycle',$3::uuid,1,2,'registered','accepted');
-			`, workspaceID, sessionID, orphanLifecycleTaskID, mutationWatermark); execErr != nil {
+			`, pgx.QueryExecModeSimpleProtocol, workspaceID, sessionID, orphanLifecycleTaskID, mutationWatermark); execErr != nil {
 				t.Fatalf("insert ledger-only lifecycle: %v", execErr)
 			}
 			assertArtifactConstraint(t,

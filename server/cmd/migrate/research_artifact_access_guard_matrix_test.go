@@ -52,7 +52,7 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 		VALUES
 		  ($3::uuid,$1::uuid,$2::uuid,'access-immediate',1,1),
 		  ($4::uuid,$1::uuid,$2::uuid,'access-ordinary',1,1);
-	`, workspaceID, sessionID, taskIDs[0], taskIDs[1]); err != nil {
+	`, pgx.QueryExecModeSimpleProtocol, workspaceID, sessionID, taskIDs[0], taskIDs[1]); err != nil {
 		t.Fatalf("seed access fixture: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 	}
 
 	for _, taskID := range taskIDs {
-		for version, access := range map[int]string{2: "raw", 3: "redacted", 4: "redacted", 5: "verified_only"} {
+		for version, access := range map[int]string{2: "raw", 3: "redacted", 4: "verified_only"} {
 			if _, err = conn.Exec(ctx, `
 				INSERT INTO research_artifact_version(
 				  workspace_id,session_id,artifact_id,version,content_hash,access_level
@@ -105,7 +105,7 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 				  workspace_id,session_id,watermark,mutation_kind,artifact_id,
 				  old_eligibility_revision,new_eligibility_revision,old_current_version,new_current_version
 				) VALUES ($1::uuid,$2::uuid,$4,'current_version',$3::uuid,1,2,1,2);
-			`, workspaceID, sessionID, mode.taskID, watermark); execErr != nil {
+			`, pgx.QueryExecModeSimpleProtocol, workspaceID, sessionID, mode.taskID, watermark); execErr != nil {
 				t.Fatalf("write paired current-version transition: %v", execErr)
 			}
 			if finishErr := finishAccessGuardTx(ctx, tx, mode.immediate); finishErr != nil {
@@ -125,7 +125,7 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 				  old_eligibility_revision,new_eligibility_revision,old_current_version,new_current_version,
 				  old_access_level,new_access_level
 				) VALUES ($1::uuid,$2::uuid,$4,'access',$3::uuid,2,3,2,3,'raw','redacted');
-			`, workspaceID, sessionID, mode.taskID, watermark); execErr != nil {
+			`, pgx.QueryExecModeSimpleProtocol, workspaceID, sessionID, mode.taskID, watermark); execErr != nil {
 				t.Fatalf("write paired access transition: %v", execErr)
 			}
 			if finishErr := finishAccessGuardTx(ctx, tx, mode.immediate); finishErr != nil {
@@ -134,9 +134,11 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 		})
 
 		for _, negative := range []struct {
-			name  string
-			query string
-			wants []string
+			name          string
+			query         string
+			wants         []string
+			usesWatermark bool
+			batch         bool
 		}{
 			{
 				name: "current_version_passport_only",
@@ -150,11 +152,11 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 				          workspace_id,session_id,watermark,mutation_kind,artifact_id,
 				          old_eligibility_revision,new_eligibility_revision,old_current_version,new_current_version
 				        ) VALUES ($1::uuid,$2::uuid,$4,'current_version',$3::uuid,3,4,3,4)`,
-				wants: []string{"research_artifact_policy_mutation_to_current_version_guard", "research_artifact_policy_mutation_to_passport_guard"},
+				wants: []string{"research_artifact_policy_mutation_to_current_version_guard", "research_artifact_policy_mutation_to_passport_guard"}, usesWatermark: true,
 			},
 			{
 				name: "access_passport_only",
-				query: `UPDATE research_artifact_passport SET current_version=5,eligibility_revision=4
+				query: `UPDATE research_artifact_passport SET current_version=4,eligibility_revision=4
 				        WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`,
 				wants: []string{"research_artifact_current_version_to_policy_guard", "research_artifact_passport_to_policy_mutation_guard"},
 			},
@@ -164,18 +166,18 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 				          workspace_id,session_id,watermark,mutation_kind,artifact_id,
 				          old_eligibility_revision,new_eligibility_revision,old_current_version,new_current_version,
 				          old_access_level,new_access_level
-				        ) VALUES ($1::uuid,$2::uuid,$4,'access',$3::uuid,3,4,3,5,'redacted','verified_only')`,
-				wants: []string{"research_artifact_policy_mutation_to_current_version_guard", "research_artifact_policy_mutation_to_passport_guard"},
+				        ) VALUES ($1::uuid,$2::uuid,$4,'access',$3::uuid,3,4,3,4,'redacted','verified_only')`,
+				wants: []string{"research_artifact_policy_mutation_to_current_version_guard", "research_artifact_policy_mutation_to_passport_guard"}, usesWatermark: true,
 			},
 			{
 				name: "access_change_as_current_version",
-				query: `UPDATE research_artifact_passport SET current_version=5,eligibility_revision=4
+				query: `UPDATE research_artifact_passport SET current_version=4,eligibility_revision=4
 				        WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid;
 				        INSERT INTO research_artifact_policy_mutation(
 				          workspace_id,session_id,watermark,mutation_kind,artifact_id,
 				          old_eligibility_revision,new_eligibility_revision,old_current_version,new_current_version
-				        ) VALUES ($1::uuid,$2::uuid,$4,'current_version',$3::uuid,3,4,3,5)`,
-				wants: []string{"research_artifact_current_version_to_policy_guard", "research_artifact_policy_mutation_to_current_version_guard"},
+				        ) VALUES ($1::uuid,$2::uuid,$4,'current_version',$3::uuid,3,4,3,4)`,
+				wants: []string{"research_artifact_current_version_to_policy_guard", "research_artifact_policy_mutation_to_current_version_guard"}, usesWatermark: true, batch: true,
 			},
 			{
 				name: "publication_as_access_change",
@@ -186,14 +188,21 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 				          old_eligibility_revision,new_eligibility_revision,old_current_version,new_current_version,
 				          old_access_level,new_access_level
 				        ) VALUES ($1::uuid,$2::uuid,$4,'access',$3::uuid,3,4,3,4,'raw','redacted')`,
-				wants: []string{"research_artifact_current_version_to_policy_guard", "research_artifact_policy_mutation_to_current_version_guard"},
+				wants: []string{"research_artifact_current_version_to_policy_guard", "research_artifact_policy_mutation_to_current_version_guard"}, usesWatermark: true, batch: true,
 			},
 		} {
 			t.Run(negative.name+"/"+mode.name, func(t *testing.T) {
 				tx := beginAccessGuardTx(t, ctx, conn.Conn())
 				defer tx.Rollback(ctx)
 				watermark := reserveAccessGuardWatermark(t, ctx, tx, workspaceID, sessionID)
-				if _, execErr := tx.Exec(ctx, negative.query, workspaceID, sessionID, mode.taskID, watermark); execErr != nil {
+				args := []any{workspaceID, sessionID, mode.taskID}
+				if negative.usesWatermark {
+					args = append(args, watermark)
+				}
+				if negative.batch {
+					args = append([]any{pgx.QueryExecModeSimpleProtocol}, args...)
+				}
+				if _, execErr := tx.Exec(ctx, negative.query, args...); execErr != nil {
 					t.Fatalf("write %s: %v", negative.name, execErr)
 				}
 				assertAccessGuardConstraint(t, finishAccessGuardTx(ctx, tx, mode.immediate), negative.wants...)
@@ -216,7 +225,7 @@ func TestResearchArtifactAccessAndCurrentVersionGuardMatrix(t *testing.T) {
 				INSERT INTO research_artifact_policy_mutation(
 				  workspace_id,session_id,watermark,mutation_kind,artifact_id,old_eligibility_revision,new_eligibility_revision
 				) VALUES ($1::uuid,$2::uuid,$4,'artifact_create',$3::uuid,0,1);
-			`, workspaceID, sessionID, wrongID, watermark, "wrong-kind-"+mode.name); execErr != nil {
+			`, pgx.QueryExecModeSimpleProtocol, workspaceID, sessionID, wrongID, watermark, "wrong-kind-"+mode.name); execErr != nil {
 				t.Fatalf("write wrong-kind reciprocal pair: %v", execErr)
 			}
 			assertAccessGuardConstraint(t, finishAccessGuardTx(ctx, tx, mode.immediate),

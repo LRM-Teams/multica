@@ -776,10 +776,14 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	clientKey := fmt.Sprintf("control:%s:%d:%d:%d", in.Kind, goalVersion, planVersion, kindSequence)
 	expected := expectedResultForTaskVersion(orchestratorVersion, in.Kind)
 	findingCodes := sortedFindingCodes(in.Findings)
+	targetFindings := in.Findings
+	if targetFindings == nil {
+		targetFindings = []GateFinding{}
+	}
 	acceptanceCriteria, _ := json.Marshal(map[string]any{
 		"schema_version": resultSchemaVersionForOrchestrator(orchestratorVersion),
 		"remediation": map[string]any{
-			"finding_codes": findingCodes, "target_findings": in.Findings,
+			"finding_codes": findingCodes, "target_findings": targetFindings,
 			"question_id": in.QuestionID, "question_key": questionKey,
 		},
 	})

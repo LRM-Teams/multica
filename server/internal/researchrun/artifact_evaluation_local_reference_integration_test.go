@@ -27,18 +27,14 @@ func TestEvaluationDecisionLocalReferenceDiagnosticsRepair(t *testing.T) {
 	reportID := uuid.NewString()
 	claimID := uuid.NewString()
 	decisionID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, reportID, ArtifactKindReportRevision, `
 		INSERT INTO research_report (id,workspace_id,session_id,revision,content_md,structured,goal_version,plan_version)
 		VALUES ($1::uuid,$2::uuid,$3::uuid,1,'Report','{"sections":[{"id":"section.valid"}]}',1,1)
-	`, reportID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, `
+	`, reportID, fixture.workspaceID, fixture.sessionID)
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, claimID, ArtifactKindClaim, `
 		INSERT INTO research_claim (id,workspace_id,session_id,client_key,claim_text,goal_version,plan_version)
 		VALUES ($1::uuid,$2::uuid,$3::uuid,'claim.valid','Valid claim',1,1)
-	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	`, claimID, fixture.workspaceID, fixture.sessionID)
 	if _, err = pool.Exec(ctx, `
 		INSERT INTO research_report_claim (workspace_id,session_id,report_id,claim_id,section_id)
 		VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'section.valid')
@@ -51,14 +47,12 @@ func TestEvaluationDecisionLocalReferenceDiagnosticsRepair(t *testing.T) {
 		"reviewed_section_ids":["section.valid"],
 		"defects":[{"claim_keys":["claim.valid"],"section_ids":["section.missing"]}]
 	}`
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, decisionID, ArtifactKindEvaluationDecision, `
 		INSERT INTO research_decision (
 		  id,workspace_id,session_id,decision_kind,actor_type,goal_version,plan_version,inputs,outcome
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,'quality_gate','system',1,1,
 		  jsonb_build_object('report_id',$4::text),$5::jsonb)
-	`, decisionID, fixture.workspaceID, fixture.sessionID, reportID, badOutcome); err != nil {
-		t.Fatal(err)
-	}
+	`, decisionID, fixture.workspaceID, fixture.sessionID, reportID, badOutcome)
 	assertEvaluationLocalDiagnostic(t, ctx, pool, decisionID, "/outcome/reviewed_claim_keys/0", "dangling_local_key")
 	assertEvaluationLocalDiagnostic(t, ctx, pool, decisionID, "/outcome/defects/0/section_ids/0", "dangling_local_key")
 

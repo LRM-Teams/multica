@@ -47,14 +47,12 @@ func TestDecisionRelationshipSchemaDiagnostics(t *testing.T) {
 	insertDecision := func(kind string, outcome string) string {
 		t.Helper()
 		id := uuid.NewString()
-		if _, insertErr := pool.Exec(ctx, `
+		seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, id, ArtifactKindEvaluationDecision, `
 			INSERT INTO research_decision(
 			  id,workspace_id,session_id,decision_kind,actor_type,
 			  goal_version,plan_version,inputs,outcome,rationale
 			) VALUES($1::uuid,$2::uuid,$3::uuid,$4,'system',1,1,'{}'::jsonb,$5::jsonb,'fixture')
-		`, id, fixture.workspaceID, run.SessionID, kind, outcome); insertErr != nil {
-			t.Fatal(insertErr)
-		}
+		`, id, fixture.workspaceID, run.SessionID, kind, outcome)
 		return id
 	}
 	validID := insertDecision("remediation_routing", `{"task_id":"`+taskID+`","question_id":"`+questionID+`"}`)

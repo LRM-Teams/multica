@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_research_message_workspace_target_agent;

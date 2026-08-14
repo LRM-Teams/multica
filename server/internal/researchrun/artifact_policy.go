@@ -95,7 +95,7 @@ func (ArtifactPolicy) CanReadNormal(
 // and must never appear in ordinary task-execution manifests or subject context.
 func (ArtifactPolicy) EvaluationPrivateKind(kind ArtifactEntityKind) bool {
 	switch kind {
-	case ArtifactKindStageEvaluation:
+	case ArtifactKindStageEvaluation, ArtifactKindEvaluationDecision:
 		return true
 	default:
 		return false

@@ -172,10 +172,20 @@ func TestAcceptedSourceAndObservationVersionsBindCanonicalContentAndAttempt(t *t
 		SELECT
 		  count(*) FILTER (WHERE reference.relation='projects')::int,
 		  count(*) FILTER (WHERE reference.relation='observes')::int,
-		  (SELECT count(*)::int FROM research_artifact_input_reference
-		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND relation='source_producer'),
-		  (SELECT count(*)::int FROM research_artifact_input_reference
-		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND relation='observation_producer')
+		  (SELECT count(*)::int FROM research_artifact_input_reference producer
+		   JOIN research_artifact_version consumer ON consumer.id=producer.consumer_version_id
+		   WHERE producer.workspace_id=$1::uuid AND producer.session_id=$2::uuid
+		     AND producer.relation='source_producer' AND consumer.artifact_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference producer
+		   WHERE producer.workspace_id=$1::uuid AND producer.session_id=$2::uuid
+		     AND producer.relation='observation_producer'
+		     AND producer.consumer_version_id IN (
+		       SELECT observes.consumer_version_id
+		       FROM research_artifact_input_reference observes
+		       JOIN research_artifact_version source_version ON source_version.id=observes.input_version_id
+		       WHERE observes.workspace_id=$1::uuid AND observes.session_id=$2::uuid
+		         AND observes.relation='observes' AND source_version.artifact_id=$3::uuid
+		     ))
 		FROM research_artifact_input_reference reference
 		JOIN research_artifact_version input_version
 		  ON input_version.workspace_id=reference.workspace_id

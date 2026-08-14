@@ -27,21 +27,17 @@ func TestClaimMethodStandardDiagnosticsResolveAndRepair(t *testing.T) {
 	methodID := uuid.NewString()
 	claimID := uuid.NewString()
 	legacyClaimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, methodID, ArtifactKindMethodDecision, `
 		INSERT INTO research_decision (
 		  id,workspace_id,session_id,decision_kind,actor_type,goal_version,plan_version,outcome
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,'research_method','system',1,1,
 		  '{"evidence_standards":[{"client_key":"standard.valid"}]}'::jsonb)
-	`, methodID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, `
+	`, methodID, fixture.workspaceID, fixture.sessionID)
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, claimID, ArtifactKindClaim, `
 		INSERT INTO research_claim (
 		  id,workspace_id,session_id,client_key,evidence_standard_key,claim_text,goal_version,plan_version
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,'claim.test','standard.missing','Claim',1,1)
-	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	`, claimID, fixture.workspaceID, fixture.sessionID)
 	assertClaimMethodDiagnostic(t, ctx, pool, claimID, "dangling_local_key")
 
 	if _, err = pool.Exec(ctx, `UPDATE research_claim SET evidence_standard_key='standard.valid' WHERE id=$1::uuid`, claimID); err != nil {
@@ -62,13 +58,11 @@ func TestClaimMethodStandardDiagnosticsResolveAndRepair(t *testing.T) {
 	}
 	assertClaimMethodDiagnostic(t, ctx, pool, claimID, "ambiguous_local_key")
 
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, legacyClaimID, ArtifactKindClaim, `
 		INSERT INTO research_claim (
 		  id,workspace_id,session_id,client_key,evidence_standard_key,claim_text,goal_version,plan_version
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,'claim.legacy','','Legacy claim',1,1)
-	`, legacyClaimID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	`, legacyClaimID, fixture.workspaceID, fixture.sessionID)
 	if got := claimMethodDiagnosticCount(t, ctx, pool, legacyClaimID); got != 0 {
 		t.Fatalf("empty legacy standard key produced %d diagnostics", got)
 	}

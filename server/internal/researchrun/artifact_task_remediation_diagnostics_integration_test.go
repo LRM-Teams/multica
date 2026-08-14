@@ -27,29 +27,18 @@ func TestTaskRemediationDiagnosticsResolveRepairAndIgnoreOpaqueCriteria(t *testi
 	questionID := uuid.NewString()
 	controlTaskID := uuid.NewString()
 	opaqueTaskID := uuid.NewString()
-	otherSessionID := uuid.NewString()
 	otherClaimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, questionID, ArtifactKindQuestion, `
 		INSERT INTO research_question (
 		  id,workspace_id,session_id,client_key,kind,question,goal_version,plan_version
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,'q.valid','gap','What remains?',1,1)
-	`, questionID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_session (
-		  id,workspace_id,fleet_id,created_by,title,goal,status,depth_tier
-		) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'Other','Other','running','standard')
-	`, otherSessionID, fixture.workspaceID, fixture.fleetID, fixture.userID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, `
+	`, questionID, fixture.workspaceID, fixture.sessionID)
+	other := seedResearchRunFixture(t, ctx, pool)
+	seedDiagnosticArtifact(t, ctx, pool, other.workspaceID, other.sessionID, otherClaimID, ArtifactKindClaim, `
 		INSERT INTO research_claim (
 		  id,workspace_id,session_id,client_key,claim_text,goal_version,plan_version
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,'claim.other','Other claim',1,1)
-	`, otherClaimID, fixture.workspaceID, otherSessionID); err != nil {
-		t.Fatal(err)
-	}
+	`, otherClaimID, other.workspaceID, other.sessionID)
 
 	insertTask := `INSERT INTO research_task (
 		id,workspace_id,session_id,client_key,kind,objective,required_capability,
@@ -57,17 +46,13 @@ func TestTaskRemediationDiagnosticsResolveRepairAndIgnoreOpaqueCriteria(t *testi
 	) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,'discover','Repair','scout',
 	  'research_evidence_v5',$5::jsonb,1,1)`
 	malformed := `{"remediation":{"target_findings":[{"metadata":{"question_id":"not-a-uuid"}}]}}`
-	if _, err = pool.Exec(ctx, insertTask, opaqueTaskID, fixture.workspaceID, fixture.sessionID,
-		"agent.task", malformed); err != nil {
-		t.Fatal(err)
-	}
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, opaqueTaskID, ArtifactKindTask,
+		insertTask, opaqueTaskID, fixture.workspaceID, fixture.sessionID, "agent.task", malformed)
 	if got := taskDiagnosticCount(t, ctx, pool, opaqueTaskID); got != 0 {
 		t.Fatalf("opaque Agent criteria produced %d diagnostics", got)
 	}
-	if _, err = pool.Exec(ctx, insertTask, controlTaskID, fixture.workspaceID, fixture.sessionID,
-		"control:discover:1:1:1", malformed); err != nil {
-		t.Fatal(err)
-	}
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, controlTaskID, ArtifactKindTask,
+		insertTask, controlTaskID, fixture.workspaceID, fixture.sessionID, "control:discover:1:1:1", malformed)
 	assertTaskDiagnostic(t, ctx, pool, controlTaskID,
 		"/acceptance_criteria/remediation/target_findings/0/metadata/question_id", "malformed_uuid")
 
@@ -92,12 +77,11 @@ func TestTaskRemediationDiagnosticsResolveRepairAndIgnoreOpaqueCriteria(t *testi
 	}
 	assertTaskDiagnostic(t, ctx, pool, controlTaskID,
 		"/acceptance_criteria/remediation/target_findings/0/metadata/claim_key", "dangling_local_key")
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (workspace_id,session_id,client_key,claim_text,goal_version,plan_version)
-		VALUES ($1::uuid,$2::uuid,'claim.repair','Repaired claim',1,1)
-	`, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	repairClaimID := uuid.NewString()
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, fixture.sessionID, repairClaimID, ArtifactKindClaim, `
+		INSERT INTO research_claim (id,workspace_id,session_id,client_key,claim_text,goal_version,plan_version)
+		VALUES ($1::uuid,$2::uuid,$3::uuid,'claim.repair','Repaired claim',1,1)
+	`, repairClaimID, fixture.workspaceID, fixture.sessionID)
 	if _, err = pool.Exec(ctx, `UPDATE research_task SET acceptance_criteria=acceptance_criteria WHERE id=$1::uuid`, controlTaskID); err != nil {
 		t.Fatal(err)
 	}

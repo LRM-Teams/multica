@@ -132,10 +132,10 @@ func seedDirectScopedFKDomain(t *testing.T, ctx context.Context, conn *pgx.Conn,
 		{ids["workspace"].crossWorkspace, ids["session"].crossWorkspace},
 	} {
 		if _, err := conn.Exec(ctx, `INSERT INTO workspace(id) VALUES ($1::uuid) ON CONFLICT DO NOTHING`, scope.workspace); err != nil {
-			t.Fatal(err)
+			t.Fatalf("seed workspace %s: %+v", scope.workspace, err)
 		}
 		if _, err := conn.Exec(ctx, `INSERT INTO research_session(id,workspace_id,orchestrator_version) VALUES ($1::uuid,$2::uuid,'research-run-v5')`, scope.session, scope.workspace); err != nil {
-			t.Fatal(err)
+			t.Fatalf("seed session %s in workspace %s: %+v", scope.session, scope.workspace, err)
 		}
 	}
 	for i, scope := range []struct{ workspace, session, contract, task, attempt, evalAttempt, decision string }{
@@ -144,19 +144,19 @@ func seedDirectScopedFKDomain(t *testing.T, ctx context.Context, conn *pgx.Conn,
 		{ids["workspace"].crossWorkspace, ids["session"].crossWorkspace, ids["contract"].crossWorkspace, ids["task"].crossWorkspace, ids["attempt"].crossWorkspace, ids["eval_attempt"].crossWorkspace, ids["decision"].crossWorkspace},
 	} {
 		if _, err := conn.Exec(ctx, `INSERT INTO research_contract_revision(id,workspace_id,session_id,goal_version) VALUES ($1::uuid,$2::uuid,$3::uuid,1)`, scope.contract, scope.workspace, scope.session); err != nil {
-			t.Fatal(err)
+			t.Fatalf("seed contract %s: %+v", scope.contract, err)
 		}
 		if _, err := conn.Exec(ctx, `INSERT INTO research_task(id,workspace_id,session_id,client_key,goal_version,plan_version) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,1,1)`, scope.task, scope.workspace, scope.session, fmt.Sprintf("task-%d", i)); err != nil {
-			t.Fatal(err)
+			t.Fatalf("seed task %s: %+v", scope.task, err)
 		}
 		if _, err := conn.Exec(ctx, `INSERT INTO research_task_attempt(id,workspace_id,session_id,task_id,status) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'succeeded')`, scope.attempt, scope.workspace, scope.session, scope.task); err != nil {
-			t.Fatal(err)
+			t.Fatalf("seed task attempt %s: %+v", scope.attempt, err)
 		}
 		if _, err := conn.Exec(ctx, `INSERT INTO research_task_attempt(id,workspace_id,session_id,task_id,status) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'succeeded')`, scope.evalAttempt, scope.workspace, scope.session, scope.task); err != nil {
-			t.Fatal(err)
+			t.Fatalf("seed evaluation attempt %s: %+v", scope.evalAttempt, err)
 		}
 		if _, err := conn.Exec(ctx, `INSERT INTO research_decision(id,workspace_id,session_id,decision_kind,goal_version,plan_version) VALUES ($1::uuid,$2::uuid,$3::uuid,'test',1,1)`, scope.decision, scope.workspace, scope.session); err != nil {
-			t.Fatal(err)
+			t.Fatalf("seed decision %s: %+v", scope.decision, err)
 		}
 	}
 }
@@ -171,29 +171,50 @@ func seedDirectScopedFKArtifacts(t *testing.T, ctx context.Context, conn *pgx.Co
 		{ids["workspace"].crossWorkspace, ids["session"].crossWorkspace, ids["passport"].crossWorkspace, ids["passport2"].crossWorkspace, ids["version"].crossWorkspace, ids["version2"].crossWorkspace, ids["grant"].crossWorkspace, ids["eval_grant"].crossWorkspace, ids["eval_normal_grant"].crossWorkspace, ids["manifest"].crossWorkspace, ids["eval_manifest"].crossWorkspace, ids["result"].crossWorkspace, ids["task"].crossWorkspace, ids["attempt"].crossWorkspace, ids["eval_attempt"].crossWorkspace, ids["contract"].crossWorkspace, ids["decision"].crossWorkspace},
 	}
 	for _, scope := range scopes {
+		if _, err := conn.Exec(ctx, `INSERT INTO research_claim(id,workspace_id,session_id) VALUES ($1::uuid,$2::uuid,$3::uuid),($4::uuid,$2::uuid,$3::uuid)`, scope.passport, scope.workspace, scope.session, scope.passport2); err != nil {
+			t.Fatalf("seed claim domains for session %s: %+v", scope.session, err)
+		}
 		for _, passport := range []struct{ id, kind string }{
-			{scope.passport, "claim"}, {scope.passport2, "claim"}, {scope.manifest, "context_manifest"}, {scope.evalManifest, "context_manifest"}, {scope.result, "result_artifact"},
+			{scope.passport, "claim"}, {scope.passport2, "claim"},
 		} {
 			if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_passport(id,workspace_id,session_id,entity_kind) VALUES ($1::uuid,$2::uuid,$3::uuid,$4)`, passport.id, scope.workspace, scope.session, passport.kind); err != nil {
-				t.Fatal(err)
+				t.Fatalf("seed %s passport %s: %+v", passport.kind, passport.id, err)
 			}
 		}
 		for _, version := range []struct{ id, passport string }{{scope.version, scope.passport}, {scope.version2, scope.passport2}} {
 			if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_version(id,workspace_id,session_id,artifact_id,version,content_hash,access_level) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','raw')`, version.id, scope.workspace, scope.session, version.passport); err != nil {
-				t.Fatal(err)
+				t.Fatalf("seed artifact version %s: %+v", version.id, err)
 			}
 		}
 		if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_policy_grant(id,workspace_id,session_id,principal_kind,principal_id,purpose,normal_clearance,evaluation_private,revision,status) VALUES ($1::uuid,$2::uuid,$3::uuid,'agent',$4::uuid,'task_execution','raw',false,1,'active'),($5::uuid,$2::uuid,$3::uuid,'agent',$4::uuid,'evaluation',NULL,true,1,'active'),($6::uuid,$2::uuid,$3::uuid,'agent',$4::uuid,'evaluation','raw',false,1,'active')`, scope.grant, scope.workspace, scope.session, scope.attempt, scope.evalGrant, scope.evalNormalGrant); err != nil {
-			t.Fatal(err)
+			t.Fatalf("seed policy grants for session %s: %+v", scope.session, err)
 		}
-		if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_context_manifest(id,workspace_id,session_id,attempt_id,task_id,purpose,normal_grant_id,normal_grant_revision) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'task_execution',$6::uuid,1)`, scope.manifest, scope.workspace, scope.session, scope.attempt, scope.task, scope.grant); err != nil {
-			t.Fatal(err)
+		pairTx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin reciprocal artifact seed: %v", err)
 		}
-		if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_context_manifest(id,workspace_id,session_id,attempt_id,task_id,purpose,normal_grant_id,normal_grant_revision,evaluation_grant_id,evaluation_grant_revision) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'evaluation',$6::uuid,1,$7::uuid,1)`, scope.evalManifest, scope.workspace, scope.session, scope.evalAttempt, scope.task, scope.evalNormalGrant, scope.evalGrant); err != nil {
-			t.Fatal(err)
+		for _, passport := range []struct{ id, kind string }{
+			{scope.manifest, "context_manifest"}, {scope.evalManifest, "context_manifest"}, {scope.result, "result_artifact"},
+		} {
+			if _, err := pairTx.Exec(ctx, `INSERT INTO research_artifact_passport(id,workspace_id,session_id,entity_kind) VALUES ($1::uuid,$2::uuid,$3::uuid,$4)`, passport.id, scope.workspace, scope.session, passport.kind); err != nil {
+				pairTx.Rollback(ctx)
+				t.Fatalf("seed %s passport %s: %+v", passport.kind, passport.id, err)
+			}
 		}
-		if _, err := conn.Exec(ctx, `INSERT INTO research_result_artifact(id,workspace_id,session_id,attempt_id,content_hash) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')`, scope.result, scope.workspace, scope.session, scope.attempt); err != nil {
-			t.Fatal(err)
+		if _, err := pairTx.Exec(ctx, `INSERT INTO research_artifact_context_manifest(id,workspace_id,session_id,attempt_id,task_id,purpose,normal_grant_id,normal_grant_revision) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'task_execution',$6::uuid,1)`, scope.manifest, scope.workspace, scope.session, scope.attempt, scope.task, scope.grant); err != nil {
+			pairTx.Rollback(ctx)
+			t.Fatalf("seed task manifest %s: %+v", scope.manifest, err)
+		}
+		if _, err := pairTx.Exec(ctx, `INSERT INTO research_artifact_context_manifest(id,workspace_id,session_id,attempt_id,task_id,purpose,normal_grant_id,normal_grant_revision,evaluation_grant_id,evaluation_grant_revision) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'evaluation',$6::uuid,1,$7::uuid,1)`, scope.evalManifest, scope.workspace, scope.session, scope.evalAttempt, scope.task, scope.evalNormalGrant, scope.evalGrant); err != nil {
+			pairTx.Rollback(ctx)
+			t.Fatalf("seed evaluation manifest %s: %+v", scope.evalManifest, err)
+		}
+		if _, err := pairTx.Exec(ctx, `INSERT INTO research_result_artifact(id,workspace_id,session_id,attempt_id,content_hash) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')`, scope.result, scope.workspace, scope.session, scope.attempt); err != nil {
+			pairTx.Rollback(ctx)
+			t.Fatalf("seed result artifact %s: %+v", scope.result, err)
+		}
+		if err := pairTx.Commit(ctx); err != nil {
+			t.Fatalf("commit reciprocal artifacts for session %s: %+v", scope.session, err)
 		}
 	}
 
@@ -201,7 +222,7 @@ func seedDirectScopedFKArtifacts(t *testing.T, ctx context.Context, conn *pgx.Co
 	if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_context_entry(workspace_id,session_id,manifest_id,ordinal,artifact_version_id,eligibility_revision,representation) VALUES ($1::uuid,$2::uuid,$3::uuid,0,$4::uuid,1,'full')`, local.workspace, local.session, local.manifest, local.version); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_context_omission(workspace_id,session_id,manifest_id,candidate_version_id,ordinal,reason) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,0,'policy_denied')`, local.workspace, local.session, local.manifest, local.version2); err != nil {
+	if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_context_omission(workspace_id,session_id,manifest_id,candidate_version_id,ordinal,reason) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,0,'access_denied')`, local.workspace, local.session, local.manifest, local.version2); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec(ctx, `INSERT INTO research_artifact_input_reference(workspace_id,session_id,consumer_version_id,input_version_id,relation,manifest_id) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'uses',$5::uuid)`, local.workspace, local.session, local.version, local.version2, local.manifest); err != nil {
@@ -233,8 +254,8 @@ func directScopedFKMutations(ids map[string]scopedFKTarget) []scopedFKMutation {
 		{"supersession/superseded-version", `UPDATE research_artifact_supersession SET superseded_version_id=$1::uuid WHERE workspace_id='10000000-0000-4000-8000-000000000001'::uuid`, ids["version2"]},
 		{"supersession/passport", `UPDATE research_artifact_supersession SET superseded_artifact_id=$1::uuid WHERE workspace_id='10000000-0000-4000-8000-000000000001'::uuid`, ids["passport2"]},
 		{"supersession/decision", `UPDATE research_artifact_supersession SET decision_id=$1::uuid WHERE workspace_id='10000000-0000-4000-8000-000000000001'::uuid`, ids["decision"]},
-		{"lifecycle/passport", `UPDATE research_artifact_lifecycle_event SET artifact_id=$1::uuid WHERE workspace_id='10000000-0000-4000-8000-000000000001'::uuid`, ids["passport"]},
-		{"lifecycle/decision", `UPDATE research_artifact_lifecycle_event SET decision_id=$1::uuid WHERE workspace_id='10000000-0000-4000-8000-000000000001'::uuid`, ids["decision"]},
+		{"lifecycle/passport", `INSERT INTO research_artifact_lifecycle_event(workspace_id,session_id,artifact_id,old_status,new_status,old_eligibility_revision,new_eligibility_revision,policy_watermark,decision_id) VALUES ('10000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001',$1::uuid,'accepted','superseded',2,3,2,'33000000-0000-4000-8000-000000000001')`, ids["passport"]},
+		{"lifecycle/decision", `INSERT INTO research_artifact_lifecycle_event(workspace_id,session_id,artifact_id,old_status,new_status,old_eligibility_revision,new_eligibility_revision,policy_watermark,decision_id) VALUES ('10000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','34000000-0000-4000-8000-000000000001','accepted','superseded',2,3,2,$1::uuid)`, ids["decision"]},
 	}
 }
 

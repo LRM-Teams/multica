@@ -420,7 +420,7 @@ func auditManifestCandidateDispositions(
 		} else if policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
 			expected = "omission"
 			expectedReason = policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
-		} else if admitted, deny := policy.LegacyAdmissionAllowed(candidate.Kind, candidate.Lifecycle, candidate.Provenance); !admitted {
+		} else if admitted, deny := policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts()); !admitted {
 			expected = "omission"
 			expectedReason = policy.ManifestOmissionReason(deny)
 		} else if allowed, deny := policy.CanReadNormal(

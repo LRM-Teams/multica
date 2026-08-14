@@ -209,6 +209,6 @@ func appendInquiryArtifactVersionTx(ctx context.Context, tx pgx.Tx, in InquiryTr
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO research_artifact_policy_mutation(workspace_id,session_id,watermark,mutation_kind,artifact_id,
 		old_eligibility_revision,new_eligibility_revision,old_current_version,new_current_version,old_access_level,new_access_level,eligibility_reason)
-		VALUES($1::uuid,$2::uuid,$3,'current_version',$4::uuid,$5,$6,$7,$8,$9,$9,$10)`, in.WorkspaceID, in.SessionID, watermark, change.EntityID, state.eligibility, state.eligibility+1, state.passportVersion, next, string(state.access), strings.TrimSpace(change.Reason))
+		VALUES($1::uuid,$2::uuid,$3,'current_version',$4::uuid,$5,$6,$7,$8,NULL,NULL,$9)`, in.WorkspaceID, in.SessionID, watermark, change.EntityID, state.eligibility, state.eligibility+1, state.passportVersion, next, strings.TrimSpace(change.Reason))
 	return err
 }

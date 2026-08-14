@@ -29,6 +29,7 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 		controlToken = "host-control-token"
 	)
 	readyFrames := make(chan protocol.WorkspaceRunnerReadyPayload, 1)
+	runtimeWakeConnected := make(chan struct{}, 1)
 	var registerCalls atomic.Int32
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +68,18 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 					return
 				}
 			}
+		case r.URL.Path == "/api/daemon/connect" && r.URL.Query().Get("runtime_ids") == "runtime-a":
+			if got := r.Header.Get("Authorization"); got != "Bearer scoped-daemon-token" {
+				http.Error(w, "runtime wake socket used the wrong Binding credential", http.StatusUnauthorized)
+				return
+			}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			runtimeWakeConnected <- struct{}{}
+			<-r.Context().Done()
 		default:
 			http.NotFound(w, r)
 		}
@@ -133,6 +146,11 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("real child never connected its Workspace Runner")
+	}
+	select {
+	case <-runtimeWakeConnected:
+	case <-ctx.Done():
+		t.Fatal("real child never authenticated its runtime wake socket with the scoped Binding credential")
 	}
 	hostServer.Close()
 	exited := make(chan computer.RunnerExitClass, 1)

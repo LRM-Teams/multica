@@ -215,16 +215,42 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	attemptNumber := attemptCount + 1
 	var manifestPlan dispatchManifestPlan
 	var manifestBound bool
-	var attempt Attempt
+	dispatchedAt := time.Now().UTC()
+	attempt := Attempt{
+		ID:              in.AttemptID,
+		WorkspaceID:     workspaceID,
+		SessionID:       in.SessionID,
+		TaskID:          in.TaskID,
+		AttemptNumber:   attemptNumber,
+		AssignedAgentID: in.AgentID,
+		ExecutionTarget: target,
+		DispatchKey:     in.Request.Key,
+		Status:          AttemptStatusDispatching,
+		DispatchedAt:    dispatchedAt,
+	}
+	contentHash, err := ArtifactContentHash(ArtifactKindAttempt, attemptArtifactContent(attempt))
+	if err != nil {
+		return Attempt{}, RunEvent{}, err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: in.SessionID, EntityID: attempt.ID,
+		Kind: ArtifactKindAttempt, SourceCreatedAt: &attempt.DispatchedAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            int32Ptr(int32(goalVersion)), PlanVersion: int32Ptr(int32(planVersion)),
+		AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash,
+	}); err != nil {
+		return Attempt{}, RunEvent{}, err
+	}
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_task_attempt (
 			id, workspace_id, session_id, task_id, attempt_number, assigned_agent_id,
 			execution_adapter, runtime_id, provider, model, target_config_fingerprint,
 			agent_config_fingerprint, runtime_config_fingerprint, provider_config_fingerprint,
-			dispatch_key, status
+			dispatch_key, status, dispatched_at
 		) VALUES (
 			$1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid,
-			$8, NULLIF($9, '')::uuid, $10, $11, $12, $13, $14, $15, $7, 'dispatching'
+			$8, NULLIF($9, '')::uuid, $10, $11, $12, $13, $14, $15, $7, 'dispatching', $16
 		)
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
 		          attempt_number, assigned_agent_id::text,
@@ -239,7 +265,8 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		          pending_failure_retryable, result_submitted_at, completed_at
 	`, in.AttemptID, workspaceID, in.SessionID, in.TaskID, attemptNumber, in.AgentID, in.Request.Key,
 		target.Adapter, target.RuntimeID, target.Provider, target.Model, target.ConfigFingerprint,
-		target.AgentConfigFingerprint, target.RuntimeConfigFingerprint, target.ProviderConfigFingerprint).Scan(
+		target.AgentConfigFingerprint, target.RuntimeConfigFingerprint, target.ProviderConfigFingerprint,
+		dispatchedAt).Scan(
 		&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID, &attempt.TaskID,
 		&attempt.AttemptNumber, &attempt.AssignedAgentID,
 		&attempt.ExecutionTarget.Adapter, &attempt.ExecutionTarget.RuntimeID,
@@ -256,9 +283,6 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		&attempt.CompletedAt,
 	)
 	if err != nil {
-		return Attempt{}, RunEvent{}, err
-	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindAttempt, workspaceID, in.SessionID, attempt.ID, time.Now(), nil, nil); err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
 	if artifactPassportEnabled {
@@ -357,6 +381,23 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		return Attempt{}, RunEvent{}, err
 	}
 	return attempt, event, nil
+}
+
+func attemptArtifactContent(attempt Attempt) map[string]any {
+	return map[string]any{
+		"task_id":                     attempt.TaskID,
+		"attempt_number":              attempt.AttemptNumber,
+		"assigned_agent_id":           attempt.AssignedAgentID,
+		"dispatch_key":                attempt.DispatchKey,
+		"execution_adapter":           attempt.ExecutionTarget.Adapter,
+		"runtime_id":                  attempt.ExecutionTarget.RuntimeID,
+		"provider":                    attempt.ExecutionTarget.Provider,
+		"model":                       attempt.ExecutionTarget.Model,
+		"target_config_fingerprint":   attempt.ExecutionTarget.ConfigFingerprint,
+		"agent_config_fingerprint":    attempt.ExecutionTarget.AgentConfigFingerprint,
+		"runtime_config_fingerprint":  attempt.ExecutionTarget.RuntimeConfigFingerprint,
+		"provider_config_fingerprint": attempt.ExecutionTarget.ProviderConfigFingerprint,
+	}
 }
 
 func loadDispatchIntentReplayPrepare(
@@ -752,7 +793,7 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindTask, workspaceID, in.SessionID, taskID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
+	if err = registerProductionTaskPassportTx(ctx, tx, workspaceID, in.SessionID, taskID, "", ArtifactAccessRaw); err != nil {
 		return Task{}, RunEvent{}, err
 	}
 	decisionInputs, _ := json.Marshal(map[string]any{
@@ -772,7 +813,7 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	`, workspaceID, in.SessionID, goalVersion, planVersion, decisionInputs, decisionOutcome, in.Rationale).Scan(&decisionID); err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("remediation_routing"), workspaceID, in.SessionID, decisionID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
+	if err = registerProductionDecisionPassportTx(ctx, tx, workspaceID, in.SessionID, decisionID, "", ArtifactAccessRaw); err != nil {
 		return Task{}, RunEvent{}, err
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "control_task_created", "control-task:"+taskID, "system", "", map[string]any{
@@ -1169,7 +1210,7 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindQuestion, in.WorkspaceID, in.SessionID, rootQuestionID, time.Now(), int32Ptr(int32(newGoalVersion)), int32Ptr(int32(newPlanVersion))); err != nil {
+	if err = registerProductionQuestionPassportTx(ctx, tx, in.WorkspaceID, in.SessionID, rootQuestionID, "", ArtifactAccessRaw); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	event, err := appendEvent(ctx, tx, in.WorkspaceID, in.SessionID, "goal_steered", fmt.Sprintf("goal-steered:%d", newGoalVersion), "user", in.UserID, map[string]any{"goal": goal, "goal_version": newGoalVersion, "plan_version": newPlanVersion, "reason": in.Reason, "allow_running_finish": in.AllowRunningFinish})

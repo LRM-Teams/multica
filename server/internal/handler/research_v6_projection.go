@@ -72,6 +72,23 @@ type researchV6Snapshot struct {
 	NextCursor           *string                    `json:"next_cursor"`
 }
 
+type researchV6ResumeCursor struct {
+	SnapshotID            string
+	LastConfirmedSequence int64
+}
+
+func researchV6ResumeRequiresResync(cursor researchV6ResumeCursor, current researchV6Snapshot, firstRetainedSequence int64) bool {
+	if cursor.LastConfirmedSequence < 0 || cursor.LastConfirmedSequence > current.ThroughEventSequence {
+		return true
+	}
+	if cursor.SnapshotID != "" && cursor.SnapshotID != current.SnapshotID {
+		return true
+	}
+	// The first needed event is cursor+1 and must still exist in the retained
+	// event window. A zero first sequence means the Run has no events.
+	return firstRetainedSequence > 0 && firstRetainedSequence > cursor.LastConfirmedSequence+1
+}
+
 func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, error) {
 	runID := strings.TrimSpace(chi.URLParam(r, "runId"))
 	workspaceID := h.resolveWorkspaceID(r)
@@ -102,6 +119,38 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 			continue
 		}
 		edges = append(edges, researchV6ProjectionEdge{ID: runID + ":edge:" + e.ID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: e.EdgeType})
+	}
+	canonicalNodes, canonicalEdges, err := h.loadResearchV6InquiryProjection(r.Context(), workspaceID, runID)
+	if err != nil {
+		return researchV6Snapshot{}, err
+	}
+	nodeByID := make(map[string]researchV6ProjectionNode, len(nodes)+len(canonicalNodes))
+	for _, node := range nodes {
+		nodeByID[node.ID] = node
+	}
+	for _, node := range canonicalNodes {
+		nodeByID[node.ID] = node
+	}
+	nodes = nodes[:0]
+	for _, node := range nodeByID {
+		nodes = append(nodes, node)
+	}
+	edgeByID := make(map[string]researchV6ProjectionEdge, len(edges)+len(canonicalEdges))
+	for _, edge := range edges {
+		edgeByID[edge.ID] = edge
+	}
+	for _, edge := range canonicalEdges {
+		if _, fromOK := nodeByID[edge.FromNodeID]; !fromOK {
+			continue
+		}
+		if _, toOK := nodeByID[edge.ToNodeID]; !toOK {
+			continue
+		}
+		edgeByID[edge.ID] = edge
+	}
+	edges = edges[:0]
+	for _, edge := range edgeByID {
+		edges = append(edges, edge)
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
@@ -162,6 +211,25 @@ func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http
 		writeResearchV6Error(w, err)
 		return
 	}
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		limit, parseErr := strconv.Atoi(rawLimit)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "snapshot limit must be an integer")
+			return
+		}
+		snap, err = paginateResearchV6Snapshot(snap, limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+		if err != nil {
+			if strings.Contains(err.Error(), "resync") {
+				writeError(w, http.StatusConflict, err.Error())
+			} else {
+				writeError(w, http.StatusBadRequest, err.Error())
+			}
+			return
+		}
+	} else if strings.TrimSpace(r.URL.Query().Get("cursor")) != "" {
+		writeError(w, http.StatusBadRequest, "snapshot cursor requires limit")
+		return
+	}
 	writeJSON(w, 200, snap)
 }
 func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.Request) {
@@ -183,11 +251,42 @@ func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.R
 		writeJSON(w, 200, nil)
 		return
 	}
-	writeJSON(w, 200, researchV6Delta{FromSequenceExclusive: from, ThroughSequence: snap.ThroughEventSequence, NodeUpserts: snap.Nodes, EdgeUpserts: snap.Edges, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: researchV6RootIDs(snap.Nodes)})
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT sequence, event_type, payload
+		FROM research_run_event
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND sequence > $3
+		ORDER BY sequence
+		LIMIT $4
+	`, h.resolveWorkspaceID(r), strings.TrimSpace(chi.URLParam(r, "runId")), from, researchV6MaximumDeltaEvents+1)
+	if err != nil {
+		writeResearchV6Error(w, err)
+		return
+	}
+	defer rows.Close()
+	events := []researchV6ProjectionEvent{}
+	for rows.Next() {
+		var event researchV6ProjectionEvent
+		if err = rows.Scan(&event.Sequence, &event.Type, &event.Payload); err != nil {
+			writeResearchV6Error(w, err)
+			return
+		}
+		events = append(events, event)
+	}
+	if err = rows.Err(); err != nil {
+		writeResearchV6Error(w, err)
+		return
+	}
+	delta, safe := buildResearchV6EventDelta(snap, from, events)
+	if !safe {
+		writeError(w, http.StatusConflict, "projection delta cannot be reconstructed safely; snapshot resync required")
+		return
+	}
+	writeJSON(w, http.StatusOK, delta)
 }
 func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		LastConfirmedSequence int64 `json:"last_confirmed_sequence"`
+		SnapshotID            string `json:"snapshot_id,omitempty"`
+		LastConfirmedSequence int64  `json:"last_confirmed_sequence"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LastConfirmedSequence < 0 {
 		writeError(w, 400, "last_confirmed_sequence must be a non-negative integer")
@@ -198,7 +297,16 @@ func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.
 		writeResearchV6Error(w, err)
 		return
 	}
-	if req.LastConfirmedSequence > snap.ThroughEventSequence {
+	var firstRetainedSequence int64
+	if err = h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(min(sequence), 0)
+		FROM research_run_event
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+	`, h.resolveWorkspaceID(r), strings.TrimSpace(chi.URLParam(r, "runId"))).Scan(&firstRetainedSequence); err != nil {
+		writeResearchV6Error(w, err)
+		return
+	}
+	if researchV6ResumeRequiresResync(researchV6ResumeCursor{SnapshotID: req.SnapshotID, LastConfirmedSequence: req.LastConfirmedSequence}, snap, firstRetainedSequence) {
 		writeJSON(w, 200, map[string]any{"ok": false, "resync_required": true})
 		return
 	}

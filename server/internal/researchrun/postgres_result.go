@@ -1369,13 +1369,14 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			                    WHEN research_claim.resolution = '' THEN EXCLUDED.resolution ELSE research_claim.resolution END,
 			  updated_at = now()
 			WHERE research_claim.claim_text = EXCLUDED.claim_text
+			  AND research_claim.significance = EXCLUDED.significance
 			  AND (research_claim.evidence_standard_key = '' OR EXCLUDED.evidence_standard_key = '' OR research_claim.evidence_standard_key = EXCLUDED.evidence_standard_key)
 			RETURNING id::text
 		`, state.workspaceID, state.run.SessionID, state.task.ID, claim.ClientKey,
 			claim.EvidenceStandardKey, strings.TrimSpace(claim.Text), claim.Significance, claim.Confidence, status,
 			state.task.GoalVersion, state.targetPlan, truncateBytes(claim.Resolution, 8192), adjudicated).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, 0, fmt.Errorf("%w: claim key %q was reused for different text", ErrResultConflict, claim.ClientKey)
+			return nil, 0, fmt.Errorf("%w: claim key %q was reused for a different claim identity", ErrResultConflict, claim.ClientKey)
 		}
 		if err != nil {
 			return nil, 0, err

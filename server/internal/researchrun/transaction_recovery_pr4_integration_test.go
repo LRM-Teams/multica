@@ -167,7 +167,7 @@ func TestReleaseRunTransactionRecovery(t *testing.T) {
 		}
 		next := time.Now().UTC().Add(5 * time.Second)
 		invoke := func() error {
-			return run.store.ReleaseRun(run.ctx, lease, next)
+			return run.store.ReleaseRun(run.ctx, lease, next, "temporary manifest dispatch failure")
 		}
 		return transactionRecoveryOperation{
 			invoke: invoke,
@@ -184,17 +184,21 @@ func TestReleaseRunTransactionRecovery(t *testing.T) {
 			},
 			assertCommitted: func() {
 				var leaseToken *string
+				var lastError string
 				if err := run.pool.QueryRow(run.ctx, `
-					SELECT reconcile_lease_token::text FROM research_session WHERE id = $1::uuid
-				`, run.fixture.sessionID).Scan(&leaseToken); err != nil {
+					SELECT reconcile_lease_token::text, last_error FROM research_session WHERE id = $1::uuid
+				`, run.fixture.sessionID).Scan(&leaseToken, &lastError); err != nil {
 					t.Fatal(err)
 				}
 				if leaseToken != nil {
 					t.Fatalf("lease still held after release: %v", *leaseToken)
 				}
+				if lastError != "temporary manifest dispatch failure" {
+					t.Fatalf("last_error=%q want persisted reconcile failure", lastError)
+				}
 			},
 			recover: func() error {
-				err := run.store.ReleaseRun(run.ctx, lease, next)
+				err := run.store.ReleaseRun(run.ctx, lease, next, "temporary manifest dispatch failure")
 				if errors.Is(err, ErrRunLeaseLost) {
 					return nil
 				}

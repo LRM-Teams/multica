@@ -101,6 +101,8 @@ func rebindDispatchPromptForManifestTx(
 	}
 	request := in.Request
 	request.Prompt = prompt
+	request.ManifestID = manifestID
+	request.ManifestHash = manifestSet.Hash
 	return request, nil
 }
 
@@ -199,6 +201,9 @@ func verifyManifestPromptShadow(
 	livePrompt, manifestPrompt string,
 	liveSnapshot, filtered RunSnapshot,
 ) error {
+	if err := compareShadowSnapshotRepresentations(liveSnapshot, filtered); err != nil {
+		return err
+	}
 	// Passport-enabled dispatch intentionally leaves the caller prompt empty:
 	// the frozen manifest is the only authoritative input for prompt rendering.
 	if livePrompt == "" {
@@ -210,8 +215,17 @@ func verifyManifestPromptShadow(
 	if len(liveSnapshot.Sources) != len(filtered.Sources) ||
 		len(liveSnapshot.Observations) != len(filtered.Observations) ||
 		len(liveSnapshot.Claims) != len(filtered.Claims) ||
+		countSnapshotEvidence(liveSnapshot) != countSnapshotEvidence(filtered) ||
 		len(filtered.EvaluationPrivate) > 0 {
 		return nil
 	}
 	return fmt.Errorf("%w: manifest prompt shadow mismatch", ErrInvalidTransition)
+}
+
+func countSnapshotEvidence(snapshot RunSnapshot) int {
+	count := 0
+	for _, claim := range snapshot.Claims {
+		count += len(claim.Evidence)
+	}
+	return count
 }

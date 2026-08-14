@@ -39,15 +39,18 @@ func decodeResearchJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 }
 
 type steerResearchRunRequest struct {
-	Goal               string          `json:"goal"`
-	Reason             string          `json:"reason"`
-	AllowRunningFinish bool            `json:"allow_running_finish"`
-	Scope              json.RawMessage `json:"scope"`
-	Audience           *string         `json:"audience"`
-	Freshness          *string         `json:"freshness"`
-	Language           *string         `json:"language"`
-	SourcePolicy       json.RawMessage `json:"source_policy"`
-	RunLimits          json.RawMessage `json:"run_limits"`
+	Goal                 string          `json:"goal"`
+	Reason               string          `json:"reason"`
+	AllowRunningFinish   bool            `json:"allow_running_finish"`
+	ExpectedStateVersion int64           `json:"expected_state_version"`
+	AffectedBranchIDs    []string        `json:"affected_branch_ids"`
+	FullReplan           bool            `json:"full_replan"`
+	Scope                json.RawMessage `json:"scope"`
+	Audience             *string         `json:"audience"`
+	Freshness            *string         `json:"freshness"`
+	Language             *string         `json:"language"`
+	SourcePolicy         json.RawMessage `json:"source_policy"`
+	RunLimits            json.RawMessage `json:"run_limits"`
 }
 
 func (h *Handler) SteerResearchRun(w http.ResponseWriter, r *http.Request) {
@@ -71,8 +74,13 @@ func (h *Handler) SteerResearchRun(w http.ResponseWriter, r *http.Request) {
 	if !decodeResearchJSON(w, r, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Goal) == "" || len(strings.TrimSpace(req.Goal)) > 32<<10 {
+	selective := req.ExpectedStateVersion > 0 || req.FullReplan || len(req.AffectedBranchIDs) > 0
+	if (!selective && strings.TrimSpace(req.Goal) == "") || len(strings.TrimSpace(req.Goal)) > 32<<10 {
 		writeError(w, http.StatusBadRequest, "goal is required")
+		return
+	}
+	if selective && (req.ExpectedStateVersion < 1 || strings.TrimSpace(req.Reason) == "" || req.FullReplan == (len(req.AffectedBranchIDs) > 0)) {
+		writeError(w, http.StatusBadRequest, "selective steering requires expected_state_version, reason, and exactly one scope")
 		return
 	}
 	if len(req.Reason) > 4096 || !validOptionalResearchJSONObject(req.Scope) || !validOptionalResearchJSONObject(req.SourcePolicy) || !validOptionalResearchJSONObject(req.RunLimits) {
@@ -90,18 +98,21 @@ func (h *Handler) SteerResearchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, err := h.ResearchRun.Steer(r.Context(), researchrun.SteerInput{
-		SessionID:          sessionID,
-		WorkspaceID:        workspaceID,
-		UserID:             userID,
-		Goal:               strings.TrimSpace(req.Goal),
-		Reason:             strings.TrimSpace(req.Reason),
-		AllowRunningFinish: req.AllowRunningFinish,
-		Scope:              req.Scope,
-		Audience:           trimOptionalString(req.Audience),
-		Freshness:          trimOptionalString(req.Freshness),
-		Language:           trimOptionalString(req.Language),
-		SourcePolicy:       req.SourcePolicy,
-		RunLimits:          req.RunLimits,
+		SessionID:            sessionID,
+		WorkspaceID:          workspaceID,
+		UserID:               userID,
+		Goal:                 strings.TrimSpace(req.Goal),
+		Reason:               strings.TrimSpace(req.Reason),
+		AllowRunningFinish:   req.AllowRunningFinish,
+		ExpectedStateVersion: req.ExpectedStateVersion,
+		AffectedBranchIDs:    req.AffectedBranchIDs,
+		FullReplan:           req.FullReplan,
+		Scope:                req.Scope,
+		Audience:             trimOptionalString(req.Audience),
+		Freshness:            trimOptionalString(req.Freshness),
+		Language:             trimOptionalString(req.Language),
+		SourcePolicy:         req.SourcePolicy,
+		RunLimits:            req.RunLimits,
 	})
 	if err != nil {
 		if errors.Is(err, researchrun.ErrRunNotFound) {
@@ -112,7 +123,7 @@ func (h *Handler) SteerResearchRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if errors.Is(err, researchrun.ErrInvalidTransition) {
+		if errors.Is(err, researchrun.ErrInvalidTransition) || errors.Is(err, researchrun.ErrControlTargetChanged) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}

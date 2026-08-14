@@ -2,7 +2,9 @@ package researchrun
 
 import (
 	"errors"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +32,95 @@ func validSelectiveSteeringState() selectiveSteeringState {
 			{ID: steeringTaskB, Status: TaskStatusPending, BranchIDs: []string{steeringRootB}},
 			{ID: steeringDoneA, Status: TaskStatusSucceeded, BranchIDs: []string{steeringRootA}},
 		},
+	}
+}
+
+func validSelectiveSteerInput() SteerInput {
+	return SteerInput{
+		WorkspaceID: "30000000-0000-4000-8000-000000000001",
+		SessionID:   "30000000-0000-4000-8000-000000000002",
+		UserID:      "30000000-0000-4000-8000-000000000003",
+		Reason:      "Redirect this branch after contradictory evidence.", ExpectedStateVersion: 9,
+		AffectedBranchIDs: []string{steeringRootB, steeringRootA},
+	}
+}
+
+func TestValidateSelectiveSteerInput(t *testing.T) {
+	if err := validateSelectiveSteerInput(validSelectiveSteerInput()); err != nil {
+		t.Fatalf("valid selective steer rejected: %v", err)
+	}
+	full := validSelectiveSteerInput()
+	full.AffectedBranchIDs = nil
+	full.FullReplan = true
+	if err := validateSelectiveSteerInput(full); err != nil {
+		t.Fatalf("valid full replan rejected: %v", err)
+	}
+	for _, mutate := range []func(*SteerInput){
+		func(in *SteerInput) { in.ExpectedStateVersion = 0 },
+		func(in *SteerInput) { in.Reason = "" },
+		func(in *SteerInput) { in.FullReplan = true },
+		func(in *SteerInput) { in.AffectedBranchIDs = nil },
+		func(in *SteerInput) { in.AffectedBranchIDs = append(in.AffectedBranchIDs, in.AffectedBranchIDs[0]) },
+		func(in *SteerInput) { in.AffectedBranchIDs[0] = "branch.one" },
+	} {
+		in := validSelectiveSteerInput()
+		mutate(&in)
+		if err := validateSelectiveSteerInput(in); !errors.Is(err, ErrInvalidContract) {
+			t.Fatalf("error=%v, want ErrInvalidContract", err)
+		}
+	}
+}
+
+func TestSelectiveSteeringIdempotencyKeyIsSemantic(t *testing.T) {
+	in := validSelectiveSteerInput()
+	request := canonicalSelectiveSteeringRequest(in)
+	key, err := selectiveSteeringIdempotencyKey(in.UserID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reversed := validSelectiveSteerInput()
+	reversed.AffectedBranchIDs[0], reversed.AffectedBranchIDs[1] = reversed.AffectedBranchIDs[1], reversed.AffectedBranchIDs[0]
+	replayKey, err := selectiveSteeringIdempotencyKey(reversed.UserID, canonicalSelectiveSteeringRequest(reversed))
+	if err != nil || replayKey != key {
+		t.Fatalf("semantic replay key=%q want=%q err=%v", replayKey, key, err)
+	}
+}
+
+func TestApplySelectiveSteeringTransactionRecovery(t *testing.T) {
+	source, err := os.ReadFile("postgres_selective_steering.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := inspectTransactionBoundaryCalls(t, source, "ApplySelectiveSteering")
+	if len(calls.direct) != 0 || calls.runner["beginResearchTx"] != 1 || calls.runner["commitResearchTx"] != 2 {
+		t.Fatalf("transaction boundaries=%+v", calls)
+	}
+}
+
+func TestSelectiveSteeringPersistenceUsesExplicitScopeAndPreservesEvidence(t *testing.T) {
+	source, err := os.ReadFile("postgres_selective_steering.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := string(source)
+	for _, required := range []string{
+		"id::text=ANY($3::text[])",
+		"plan.ObsoleteBranchIDs",
+		"plan.ObsoleteTaskIDs",
+		"plan.CancelRunningTaskIDs",
+		"state_version=state_version+1",
+		"state_version=$3",
+		"'selective_steering'",
+		"\"selective_steering_applied\"",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Fatalf("selective steering persistence missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"DELETE FROM research_source", "DELETE FROM research_claim", "DELETE FROM research_observation", "DELETE FROM research_artifact"} {
+		if strings.Contains(contents, forbidden) {
+			t.Fatalf("selective steering must preserve accepted Evidence: found %q", forbidden)
+		}
 	}
 }
 

@@ -58,6 +58,7 @@ const (
 	txOpRunResume                 researchTxOperation = "run.resume"
 	txOpRunTransition             researchTxOperation = "run.transition"
 	txOpRunSteer                  researchTxOperation = "run.steer"
+	txOpRunSelectiveSteer         researchTxOperation = "run.selective_steer"
 	txOpNodeCommand               researchTxOperation = "node_command.execute"
 	txOpCircuitFailure            researchTxOperation = "circuit.record_failure"
 	txOpCircuitSuccess            researchTxOperation = "circuit.record_success"

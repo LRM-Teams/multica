@@ -3,6 +3,7 @@ package researchrun
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -18,6 +19,42 @@ type selectiveSteeringRequest struct {
 	FullReplan           bool
 	AffectedBranchIDs    []string
 	AllowRunningFinish   bool
+}
+
+type SelectiveSteeringOutcome struct {
+	Run      Run                   `json:"run"`
+	Event    RunEvent              `json:"event"`
+	Plan     selectiveSteeringPlan `json:"plan"`
+	Replayed bool                  `json:"replayed"`
+}
+
+func validateSelectiveSteerInput(in SteerInput) error {
+	for name, value := range map[string]string{"workspace": in.WorkspaceID, "session": in.SessionID, "user": in.UserID} {
+		if _, err := uuid.Parse(value); err != nil {
+			return fmt.Errorf("%w: selective steering %s identity is invalid", ErrInvalidContract, name)
+		}
+	}
+	if in.ExpectedStateVersion < 1 || strings.TrimSpace(in.Reason) == "" || len(in.Reason) > 4096 {
+		return fmt.Errorf("%w: selective steering requires state version and reason", ErrInvalidContract)
+	}
+	if in.FullReplan == (len(in.AffectedBranchIDs) > 0) {
+		return fmt.Errorf("%w: selective steering requires exactly one of full_replan or affected branches", ErrInvalidContract)
+	}
+	seen := make(map[string]struct{}, len(in.AffectedBranchIDs))
+	for _, branchID := range in.AffectedBranchIDs {
+		if _, err := uuid.Parse(branchID); err != nil {
+			return fmt.Errorf("%w: selective steering branch identity is invalid", ErrInvalidContract)
+		}
+		if _, duplicate := seen[branchID]; duplicate {
+			return fmt.Errorf("%w: selective steering branch is duplicated", ErrInvalidContract)
+		}
+		seen[branchID] = struct{}{}
+	}
+	return nil
+}
+
+func isSelectiveSteer(in SteerInput) bool {
+	return in.ExpectedStateVersion > 0 || in.FullReplan || len(in.AffectedBranchIDs) > 0
 }
 
 type steeringBranchState struct {
@@ -39,11 +76,11 @@ type selectiveSteeringState struct {
 }
 
 type selectiveSteeringPlan struct {
-	ImpactedBranchIDs      []string
-	ObsoleteBranchIDs      []string
-	ObsoleteTaskIDs        []string
-	CancelRunningTaskIDs   []string
-	RetainedRunningTaskIDs []string
+	ImpactedBranchIDs      []string `json:"impacted_branch_ids"`
+	ObsoleteBranchIDs      []string `json:"obsolete_branch_ids"`
+	ObsoleteTaskIDs        []string `json:"obsolete_task_ids"`
+	CancelRunningTaskIDs   []string `json:"cancel_running_task_ids"`
+	RetainedRunningTaskIDs []string `json:"retained_running_task_ids"`
 }
 
 func (selectiveSteeringModule) Plan(request selectiveSteeringRequest, state selectiveSteeringState) (selectiveSteeringPlan, error) {

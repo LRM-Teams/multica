@@ -85,6 +85,10 @@ type researchV6Delta struct {
 	AffectedRootNodeIDs   []string                      `json:"affected_root_node_ids"`
 	TransitionKind        *string                       `json:"transition_kind"`
 }
+type researchV6DeltaEnvelope struct {
+	RunID string          `json:"run_id"`
+	Delta researchV6Delta `json:"delta"`
+}
 type researchV6Snapshot struct {
 	SnapshotID           string                        `json:"snapshot_id"`
 	RunID                string                        `json:"run_id"`
@@ -225,6 +229,34 @@ func remapResearchV6NodeReferences(node *researchV6ProjectionNode, nodeIDs map[s
 		}
 	}
 	node.MergedFrom = merged
+}
+
+// mapResearchV6Graph is the single V5/run-v2 to V6 identity boundary used by
+// both HTTP snapshots and realtime deltas. Keeping it shared prevents a live
+// frame from naming a node or edge differently from the subsequent resync.
+func mapResearchV6Graph(runID string, legacyNodes []ResearchGraphNodeResp, legacyEdges []ResearchGraphEdgeResp) ([]researchV6ProjectionNode, []researchV6ProjectionEdge) {
+	nodeIDs := make(map[string]string, len(legacyNodes))
+	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
+	for _, node := range legacyNodes {
+		mapped := mapResearchV6Node(runID, node)
+		nodeIDs[node.ID] = mapped.ID
+		nodes = append(nodes, mapped)
+	}
+	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
+	for _, edge := range legacyEdges {
+		from, fromOK := nodeIDs[edge.FromNodeID]
+		to, toOK := nodeIDs[edge.ToNodeID]
+		if !fromOK || !toOK {
+			continue
+		}
+		edges = append(edges, researchV6ProjectionEdge{
+			ID: runID + ":edge:" + edge.ID, RunID: runID,
+			FromNodeID: from, ToNodeID: to, EdgeType: edge.EdgeType,
+		})
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges
 }
 
 func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6ProjectionNode {

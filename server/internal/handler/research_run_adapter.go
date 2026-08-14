@@ -399,7 +399,7 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	if h.ResearchRun != nil {
 		if snap, snapErr := h.ResearchRun.Snapshot(ctx, event.SessionID, event.WorkspaceID); snapErr == nil {
 			nodes, edges := projectRunV2Graph(snap)
-			if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Sequence, nodes, edges); err != nil {
+			if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Type, event.Sequence, nodes, edges); err != nil {
 				return err
 			}
 		} else {
@@ -468,7 +468,7 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 
 // publishProjectedRunGraph upserts the full run-v2 projected graph over WS.
 // Stable node/edge IDs let the client replace prior semantic nodes in place.
-func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, actorType, actorID, sessionID string, eventSequence int64, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) error {
+func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, actorType, actorID, sessionID, eventType string, eventSequence int64, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) error {
 	if h == nil {
 		return nil
 	}
@@ -500,7 +500,62 @@ func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, acto
 		}
 		h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, actorType, actorID, payload)
 	}
+	// V6 is run-scoped and sequence-framed. Publish the same deterministic graph
+	// that the projector committed, using the exact identity mapper used by the
+	// snapshot route. Full upserts are intentionally valid and idempotent here;
+	// the bounded HTTP delta route may return a smaller event-derived set.
+	if err := assertResearchProjectionLease(ctx, h.DB, sessionID); err != nil {
+		return err
+	}
+	h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID, buildResearchV6ProjectedGraphEnvelope(sessionID, eventType, eventSequence, nodes, edges))
 	return nil
+}
+
+func buildResearchV6ProjectedGraphEnvelope(runID, eventType string, eventSequence int64, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) researchV6DeltaEnvelope {
+	v6Nodes, v6Edges := mapResearchV6Graph(runID, nodes, edges)
+	from := eventSequence - 1
+	if from < 0 {
+		from = 0
+	}
+	delta := researchV6Delta{
+		FromSequenceExclusive: from,
+		ThroughSequence:       eventSequence,
+		NodeUpserts:           v6Nodes,
+		EdgeUpserts:           v6Edges,
+		NodeTombstones:        []string{},
+		EdgeTombstones:        []string{},
+		AffectedRootNodeIDs:   researchV6RootIDs(v6Nodes),
+		TransitionKind:        researchV6TransitionKindForEvent(eventType),
+	}
+	return researchV6DeltaEnvelope{RunID: runID, Delta: delta}
+}
+
+func researchV6TransitionKindForEvent(eventType string) *string {
+	var transition string
+	switch eventType {
+	case "task_dispatching", "task_dispatched":
+		transition = "task_dispatched"
+	case "task_result_accepted":
+		transition = "result_accepted"
+	case "integration_completed", "insight_created":
+		transition = "integration_formed"
+	case "insight_staled":
+		transition = "insight_staled"
+	case "dispute_opened":
+		transition = "dispute_opened"
+	case "deliberation_turn_recorded":
+		transition = "deliberation_progressed"
+	case "lead_escalated":
+		transition = "lead_escalated"
+	case "team_formation_committed", "team_membership_changed":
+		transition = "team_membership_changed"
+	case "report_revised":
+		transition = "report_revised"
+	}
+	if transition == "" {
+		return nil
+	}
+	return &transition
 }
 
 func assertResearchProjectionLease(ctx context.Context, executor dbExecutor, sessionID string) error {

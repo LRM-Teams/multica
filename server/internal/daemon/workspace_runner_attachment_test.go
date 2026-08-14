@@ -436,6 +436,29 @@ func TestWorkspaceRunnerManagedStopRejectsStaleLaunchID(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerManagedStopAcknowledgesAbsentLaunchInactive(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	payload := protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-1", LaunchID: "launch-failed"}
+	var published []protocol.AgentStatusPayload
+	if err := runner.stopManagedAgent(payload, func(eventType string, raw any) error {
+		if eventType != protocol.EventAgentStatus {
+			t.Fatalf("absent stop event = %q", eventType)
+		}
+		status, ok := raw.(protocol.AgentStatusPayload)
+		if !ok {
+			t.Fatalf("absent stop payload = %#v", raw)
+		}
+		published = append(published, status)
+		return nil
+	}); err != nil {
+		t.Fatalf("stop absent managed Agent: %v", err)
+	}
+	if want := []protocol.AgentStatusPayload{{AgentID: payload.AgentID, LaunchID: payload.LaunchID, Status: protocol.AgentStatusInactive}}; !reflect.DeepEqual(published, want) {
+		t.Fatalf("absent stop publications = %+v, want %+v", published, want)
+	}
+}
+
 func TestWorkspaceRunnerManagedStartRejectsRuntimeMoveWithoutStopAndKeepsInbox(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	workspaceID, agentID := "workspace-1", "agent-1"

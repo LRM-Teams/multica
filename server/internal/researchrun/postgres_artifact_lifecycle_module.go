@@ -95,7 +95,17 @@ func (s *PostgresStore) ApplyArtifactLifecycleChange(ctx context.Context, change
 	if change.Kind == artifactLifecycleWithdraw {
 		newLifecycle = string(target)
 	}
-	if _, err = tx.Exec(ctx, `
+	if change.Kind == artifactLifecycleSupersede {
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO research_artifact_policy_mutation (
+			  workspace_id,session_id,watermark,mutation_kind,artifact_id,
+			  old_eligibility_revision,new_eligibility_revision,eligibility_reason
+			) VALUES ($1::uuid,$2::uuid,$3,'supersession',$4::uuid,$5,$6,$7)
+		`, change.WorkspaceID, change.SessionID, watermark, change.ArtifactID,
+			oldRevision, newRevision, change.Reason); err != nil {
+			return artifactLifecycleOutcome{}, err
+		}
+	} else if _, err = tx.Exec(ctx, `
 		INSERT INTO research_artifact_policy_mutation (
 		  workspace_id,session_id,watermark,mutation_kind,artifact_id,
 		  old_eligibility_revision,new_eligibility_revision,

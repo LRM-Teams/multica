@@ -190,8 +190,8 @@ func TestEvaluatedSubjectSerializationExcludesPrivateArtifactWhileGraderUsesFroz
 		t.Fatalf("grader frozen private entries=%d want=1", privateEntriesBefore)
 	}
 	revokeIntegrationManifestEvaluationGrant(t, ctx, pool, fixture.workspaceID, run.SessionID, graderAttempt.ID)
-	if _, err = store.TaskContextForAttempt(ctx, graderAttempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("revoked grader surface err=%v want ErrInvalidTransition", err)
+	if _, err = store.TaskContextForAttempt(ctx, graderAttempt.ID, fixture.workspaceID); !errors.Is(err, ErrArtifactAccessDenied) || !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("revoked grader surface err=%v want access denial and transition compatibility", err)
 	}
 	if privateEntriesAfter := countManifestEntriesForArtifact(
 		t, ctx, pool, fixture.workspaceID, run.SessionID, graderAttempt.ID, privateID,
@@ -247,10 +247,13 @@ func countManifestEntriesForArtifact(
 		JOIN research_artifact_context_manifest manifest
 		  ON (manifest.workspace_id, manifest.session_id, manifest.id) =
 		     (entry.workspace_id, entry.session_id, entry.manifest_id)
+		JOIN research_artifact_version version
+		  ON (version.workspace_id, version.session_id, version.id) =
+		     (entry.workspace_id, entry.session_id, entry.artifact_version_id)
 		WHERE manifest.workspace_id = $1::uuid
 		  AND manifest.session_id = $2::uuid
 		  AND manifest.attempt_id = $3::uuid
-		  AND entry.artifact_id = $4::uuid
+		  AND version.artifact_id = $4::uuid
 	`, workspaceID, sessionID, attemptID, artifactID).Scan(&count); err != nil {
 		t.Fatalf("count frozen manifest entries for artifact: %v", err)
 	}

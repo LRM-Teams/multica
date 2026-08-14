@@ -218,6 +218,13 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		next = dispatchNext
 		return e.projectPending(ctx, sessionID)
 	}
+	if hasUnfinishedCurrentWork(run, tasks) {
+		// Delivery Gate findings such as plan_incomplete and tasks_incomplete
+		// describe expected intermediate state while current-plan work remains.
+		// They must not create remediation work before that work has run.
+		next = e.clock.Now().Add(10 * time.Second)
+		return e.projectPending(ctx, sessionID)
+	}
 
 	gateOutcome, err := e.gateModule().Advance(ctx, run, tasks)
 	if err != nil {
@@ -274,6 +281,19 @@ func hasExecutingCurrentWork(run Run, tasks []Task) bool {
 			continue
 		}
 		if task.Status == TaskStatusDispatching || task.Status == TaskStatusRunning {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUnfinishedCurrentWork(run Run, tasks []Task) bool {
+	for _, task := range tasks {
+		if task.GoalVersion != run.GoalVersion || task.PlanVersion != run.PlanVersion {
+			continue
+		}
+		switch task.Status {
+		case TaskStatusPending, TaskStatusReady, TaskStatusDispatching, TaskStatusRunning:
 			return true
 		}
 	}

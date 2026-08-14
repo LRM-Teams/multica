@@ -101,6 +101,14 @@ surface for that Binding. Presence is derived from this connection. It is not
 the OS child and not a RuntimeSession.
 _Avoid_: Workspace owner, global Workspace runner, DaemonCore, runtime
 
+### DaemonConnection
+
+The Raft 1.0.16 analogue for one live `/api/daemon/ws` socket inside a
+DaemonCore. Socket open is Computer liveness for that Workspace. Workspace
+Runner owns commands on top of it; `GET /api/computers` only reads the
+server-side Hub registration of this socket.
+_Avoid_: heartbeat liveness, `/api/computers` as a daemon RPC
+
 ### RuntimeSession
 
 One Agent's live provider execution session inside a DaemonCore: one Agent,

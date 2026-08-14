@@ -950,11 +950,10 @@ func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
 	staleSend := func() error {
 		return runner.sendOnConnection(firstConnection, protocol.EventAgentDeliverAck, map[string]any{"request": 0})
 	}
-	secondCtx, secondCancel := context.WithCancel(context.Background())
-	secondConnection := &workspaceRunnerConnection{workspaceID: "workspace-1", ctx: secondCtx, cancel: secondCancel, write: func(string, any) error {
+	secondConnection := newDaemonConnection("workspace-1", context.Background(), func(string, any) error {
 		second++
 		return nil
-	}, close: func() {}}
+	}, func() {})
 	runner.replaceConnection(secondConnection)
 	defer runner.releaseConnection(secondConnection)
 	if err := staleSend(); err == nil {

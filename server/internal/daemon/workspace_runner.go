@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -15,7 +12,7 @@ import (
 
 const workspaceRunnerWriteTimeout = 10 * time.Second
 
-func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnection, conn *websocket.Conn) error {
+func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, conn *websocket.Conn) error {
 	workspaceID := connection.workspaceID
 	writeFrame := func(eventType string, payload any) error {
 		return runner.sendOnConnection(connection, eventType, payload)
@@ -236,7 +233,7 @@ func (runner *WorkspaceRunner) ownsRuntime(runtimeID string) bool {
 	return false
 }
 
-func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, connection *workspaceRunnerConnection) {
+func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, connection *DaemonConnection) {
 	if runner == nil || runner.controlHeartbeatPayload == nil {
 		return
 	}
@@ -284,37 +281,4 @@ func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, co
 			}
 		}
 	}
-}
-
-func writeWorkspaceRunnerFrame(conn *websocket.Conn, eventType string, payload any) error {
-	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
-	if err != nil {
-		return err
-	}
-	if err := conn.SetWriteDeadline(time.Now().Add(workspaceRunnerWriteTimeout)); err != nil {
-		return err
-	}
-	return conn.WriteMessage(websocket.TextMessage, frame)
-}
-
-func workspaceRunnerURL(baseURL, workspaceID string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return "", fmt.Errorf("invalid daemon server URL: %w", err)
-	}
-	switch u.Scheme {
-	case "http":
-		u.Scheme = "ws"
-	case "https":
-		u.Scheme = "wss"
-	case "ws", "wss":
-	default:
-		return "", fmt.Errorf("daemon server URL must use http, https, ws, or wss")
-	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/ws"
-	q := u.Query()
-	q.Set("workspace_id", workspaceID)
-	u.RawQuery = q.Encode()
-	u.Fragment = ""
-	return u.String(), nil
 }

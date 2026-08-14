@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send func(string, any) error) (*WorkspaceRunner, *workspaceRunnerConnection) {
+func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send func(string, any) error) (*WorkspaceRunner, *DaemonConnection) {
 	t.Helper()
 	if send == nil {
 		send = func(string, any) error { return nil }
@@ -15,14 +15,7 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	connection := &workspaceRunnerConnection{
-		workspaceID: workspaceID,
-		ctx:         ctx,
-		cancel:      cancel,
-		write:       send,
-		close:       func() {},
-	}
+	connection := newDaemonConnection(workspaceID, context.Background(), send, func() {})
 	runner.replaceConnection(connection)
 	d.attachWorkspaceRunner(runner)
 	t.Cleanup(func() {

@@ -1,6 +1,9 @@
 package researchrun
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ArtifactEntityKind identifies one canonical Research artifact passport.
 type ArtifactEntityKind string
@@ -105,6 +108,52 @@ const ArtifactCanonicalizationVersion = "research-artifact-c14n-v1"
 
 // LegacyV1V5CompatPolicy is the named ordinary-task admission exception for backfilled rows.
 const LegacyV1V5CompatPolicy = "legacy-v1-v5-compat-v1"
+
+// WithdrawArtifactInput identifies one passport whose future ordinary
+// admission is being revoked. DecisionID is optional because a lifecycle event
+// is the canonical reciprocal fact for withdrawal; callers may bind a scoped
+// Decision when the owning workflow has one.
+type WithdrawArtifactInput struct {
+	WorkspaceID string
+	SessionID   string
+	ArtifactID  string
+	DecisionID  string
+	ActorType   string
+	ActorID     string
+	Reason      string
+}
+
+// ArtifactWithdrawal is the durable receipt for one lifecycle transition.
+type ArtifactWithdrawal struct {
+	ArtifactID             string
+	EntityKind             ArtifactEntityKind
+	OldLifecycle           ArtifactLifecycleStatus
+	NewLifecycle           ArtifactLifecycleStatus
+	OldEligibilityRevision int64
+	NewEligibilityRevision int64
+	PolicyWatermark        int64
+	LifecycleEventID       string
+	DecisionID             string
+}
+
+func (in WithdrawArtifactInput) validate() error {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.SessionID) == "" || strings.TrimSpace(in.ArtifactID) == "" {
+		return fmt.Errorf("%w: withdrawal scope is required", ErrInvalidContract)
+	}
+	if strings.TrimSpace(in.Reason) == "" {
+		return fmt.Errorf("%w: withdrawal reason is required", ErrInvalidContract)
+	}
+	switch in.ActorType {
+	case "system":
+	case "user", "agent":
+		if strings.TrimSpace(in.ActorID) == "" {
+			return fmt.Errorf("%w: withdrawal actor id is required", ErrInvalidContract)
+		}
+	default:
+		return fmt.Errorf("%w: invalid withdrawal actor type %q", ErrInvalidContract, in.ActorType)
+	}
+	return nil
+}
 
 func ParseArtifactEntityKind(raw string) (ArtifactEntityKind, error) {
 	kind := ArtifactEntityKind(raw)

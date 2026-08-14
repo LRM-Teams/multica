@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -179,6 +180,33 @@ func TestShadowEquivalencePromptHashMatchesAfterDispatch(t *testing.T) {
 	}
 	if replayed != outboxPrompt {
 		t.Fatal("shadow dispatch prompt hash path: replayed prompt differs from outbox")
+	}
+	before, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt before live mutation: %v", err)
+	}
+	if before.LegacyContext == nil || len(before.LegacyContext.Sources) != 1 ||
+		len(before.LegacyContext.Messages) != 1 || len(before.LegacyContext.ProductRounds) != 1 ||
+		len(before.LegacyContext.ThoughtStrategies) != 2 || before.LegacyContext.Report == nil {
+		t.Fatalf("incomplete frozen legacy context: %+v", before.LegacyContext)
+	}
+	for _, statement := range []string{
+		`UPDATE research_source SET title='live-mutated-source' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`,
+		`UPDATE research_message SET body='live-mutated-message' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`,
+		`UPDATE research_product_round_card SET confidence_note='live-mutated-round' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`,
+		`UPDATE research_graph_node SET payload='{"thought_strategy":{"rationale":"live","expected_outcome":"mutated"}}'::jsonb WHERE workspace_id=$1::uuid AND session_id=$2::uuid`,
+		`UPDATE research_report SET content_md='live-mutated-report' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`,
+	} {
+		if _, err = pool.Exec(ctx, statement, fixture.workspaceID, run.SessionID); err != nil {
+			t.Fatalf("mutate live compatibility row: %v", err)
+		}
+	}
+	after, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt after live mutation: %v", err)
+	}
+	if !reflect.DeepEqual(before.LegacyContext, after.LegacyContext) {
+		t.Fatalf("frozen legacy context changed after live mutation\nbefore=%+v\nafter=%+v", before.LegacyContext, after.LegacyContext)
 	}
 	var stateVersion int64
 	tx, err := pool.Begin(ctx)

@@ -1,6 +1,9 @@
 package researchrun
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestArtifactPolicyNormalAccessDominates(t *testing.T) {
 	policy := ArtifactPolicy{}
@@ -14,73 +17,115 @@ func TestArtifactPolicyNormalAccessDominates(t *testing.T) {
 
 func TestArtifactPolicyLegacyAdmissionMatrix(t *testing.T) {
 	policy := ArtifactPolicy{}
+	kinds := append(RegisteredArtifactEntityKinds(), ArtifactEntityKind("future-artifact-kind"))
+	lifecycles := []ArtifactLifecycleStatus{
+		ArtifactLifecycleRegistered,
+		ArtifactLifecycleAccepted,
+		ArtifactLifecycleRejected,
+		ArtifactLifecycleStale,
+		ArtifactLifecycleSuperseded,
+		ArtifactLifecycleWithdrawn,
+		ArtifactLifecycleStatus("future-lifecycle"),
+	}
+	provenances := []ArtifactProvenanceCompleteness{
+		ArtifactProvenanceComplete,
+		ArtifactProvenancePartial,
+		ArtifactProvenanceUnknown,
+		ArtifactProvenanceCompleteness("future-provenance"),
+	}
+
+	for _, kind := range kinds {
+		for _, lifecycle := range lifecycles {
+			for _, provenance := range provenances {
+				name := fmt.Sprintf("%s/%s/%s", kind, lifecycle, provenance)
+				t.Run(name, func(t *testing.T) {
+					wantOK, wantReason := expectedLegacyAdmission(kind, lifecycle, provenance)
+					ok, reason := policy.LegacyAdmissionAllowed(kind, lifecycle, provenance)
+					if ok != wantOK || reason != wantReason {
+						t.Fatalf("ok=%v reason=%q want ok=%v reason=%q", ok, reason, wantOK, wantReason)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestArtifactPolicyLegacyDomainAdmissionMatrix(t *testing.T) {
+	policy := ArtifactPolicy{}
+	base := legacyAdmissionFacts{
+		Lifecycle:  ArtifactLifecycleRegistered,
+		Provenance: ArtifactProvenancePartial,
+	}
 	tests := []struct {
-		name       string
-		kind       ArtifactEntityKind
-		lifecycle  ArtifactLifecycleStatus
-		provenance ArtifactProvenanceCompleteness
-		wantOK     bool
-		wantReason ArtifactDenyReason
+		name, status string
+		kind         ArtifactEntityKind
+		wantOK       bool
 	}{
-		{
-			name: "registered partial task", kind: ArtifactKindTask,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenancePartial,
-			wantOK: true,
-		},
-		{
-			name: "registered unknown-producer claim", kind: ArtifactKindClaim,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceUnknown,
-			wantOK: true,
-		},
-		{
-			name: "accepted partial source", kind: ArtifactKindSourceSnapshot,
-			lifecycle: ArtifactLifecycleAccepted, provenance: ArtifactProvenancePartial,
-			wantOK: true,
-		},
-		{
-			name: "succeeded task lineage registered", kind: ArtifactKindTask,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceComplete,
-			wantOK: true,
-		},
-		{
-			name: "succeeded attempt lineage registered", kind: ArtifactKindAttempt,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceComplete,
-			wantOK: true,
-		},
-		{
-			name: "context manifest always denied", kind: ArtifactKindContextManifest,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceComplete,
-			wantOK: false, wantReason: ArtifactDenyLegacyIneligible,
-		},
-		{
-			name: "future inquiry artifact denied by legacy policy", kind: ArtifactKindHypothesis,
-			lifecycle: ArtifactLifecycleAccepted, provenance: ArtifactProvenanceComplete,
-			wantOK: false, wantReason: ArtifactDenyLegacyIneligible,
-		},
-		{
-			name: "superseded lifecycle denied", kind: ArtifactKindClaim,
-			lifecycle: ArtifactLifecycleSuperseded, provenance: ArtifactProvenancePartial,
-			wantOK: false, wantReason: ArtifactDenyLifecycle,
-		},
-		{
-			name: "withdrawn lifecycle denied", kind: ArtifactKindObservation,
-			lifecycle: ArtifactLifecycleWithdrawn, provenance: ArtifactProvenancePartial,
-			wantOK: false, wantReason: ArtifactDenyLifecycle,
-		},
-		{
-			name: "unknown kind denied", kind: ArtifactEntityKind("not-a-kind"),
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenancePartial,
-			wantOK: false, wantReason: ArtifactDenyUnknownKind,
-		},
+		{name: "task pending", kind: ArtifactKindTask, status: "pending", wantOK: true},
+		{name: "task ready", kind: ArtifactKindTask, status: "ready", wantOK: true},
+		{name: "task dispatching", kind: ArtifactKindTask, status: "dispatching", wantOK: true},
+		{name: "task running", kind: ArtifactKindTask, status: "running", wantOK: true},
+		{name: "task succeeded lineage", kind: ArtifactKindTask, status: "succeeded", wantOK: true},
+		{name: "task failed lineage", kind: ArtifactKindTask, status: "failed", wantOK: true},
+		{name: "task blocked lineage", kind: ArtifactKindTask, status: "blocked", wantOK: true},
+		{name: "task obsolete lineage", kind: ArtifactKindTask, status: "obsolete", wantOK: true},
+		{name: "task cancelled lineage", kind: ArtifactKindTask, status: "cancelled", wantOK: true},
+		{name: "task unknown", kind: ArtifactKindTask, status: "paused"},
+		{name: "attempt dispatching", kind: ArtifactKindAttempt, status: "dispatching", wantOK: true},
+		{name: "attempt running", kind: ArtifactKindAttempt, status: "running", wantOK: true},
+		{name: "attempt cancelling", kind: ArtifactKindAttempt, status: "cancelling", wantOK: true},
+		{name: "attempt succeeded lineage", kind: ArtifactKindAttempt, status: "succeeded", wantOK: true},
+		{name: "attempt failed lineage", kind: ArtifactKindAttempt, status: "failed", wantOK: true},
+		{name: "attempt cancelled lineage", kind: ArtifactKindAttempt, status: "cancelled", wantOK: true},
+		{name: "attempt lost lineage", kind: ArtifactKindAttempt, status: "lost", wantOK: true},
+		{name: "attempt obsolete invalid", kind: ArtifactKindAttempt, status: "obsolete"},
+		{name: "claim proposed", kind: ArtifactKindClaim, status: "proposed", wantOK: true},
+		{name: "claim supported", kind: ArtifactKindClaim, status: "supported", wantOK: true},
+		{name: "claim disputed", kind: ArtifactKindClaim, status: "disputed", wantOK: true},
+		{name: "claim refuted lineage", kind: ArtifactKindClaim, status: "refuted", wantOK: true},
+		{name: "claim unresolved", kind: ArtifactKindClaim, status: "unresolved", wantOK: true},
+		{name: "claim superseded", kind: ArtifactKindClaim, status: "superseded"},
+		{name: "claim unknown", kind: ArtifactKindClaim, status: "accepted"},
+		{name: "source pending", kind: ArtifactKindSourceSnapshot, status: "pending", wantOK: true},
+		{name: "source verified", kind: ArtifactKindSourceSnapshot, status: "verified", wantOK: true},
+		{name: "source rejected", kind: ArtifactKindSourceSnapshot, status: "rejected"},
+		{name: "observation unknown", kind: ArtifactKindObservation, status: "unknown"},
+		{name: "evidence verified", kind: ArtifactKindEvidenceLink, status: "verified", wantOK: true},
+		{name: "context manifest never legacy admitted", kind: ArtifactKindContextManifest},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, reason := policy.LegacyAdmissionAllowed(tc.kind, tc.lifecycle, tc.provenance)
-			if ok != tc.wantOK || reason != tc.wantReason {
-				t.Fatalf("ok=%v reason=%q want ok=%v reason=%q", ok, reason, tc.wantOK, tc.wantReason)
+			facts := base
+			facts.Kind = tc.kind
+			facts.DomainStatus = tc.status
+			ok, deny := policy.LegacyAdmissionAllowedFacts(facts)
+			if ok != tc.wantOK {
+				t.Fatalf("ok=%v deny=%q want ok=%v", ok, deny, tc.wantOK)
+			}
+			if !tc.wantOK && deny != ArtifactDenyDomainFact {
+				t.Fatalf("deny=%q want %q", deny, ArtifactDenyDomainFact)
 			}
 		})
 	}
+}
+
+func expectedLegacyAdmission(
+	kind ArtifactEntityKind,
+	lifecycle ArtifactLifecycleStatus,
+	provenance ArtifactProvenanceCompleteness,
+) (bool, ArtifactDenyReason) {
+	if _, ok := registeredArtifactEntityKinds[kind]; !ok {
+		return false, ArtifactDenyUnknownKind
+	}
+	if lifecycle != ArtifactLifecycleRegistered && lifecycle != ArtifactLifecycleAccepted {
+		return false, ArtifactDenyLifecycle
+	}
+	if provenance != ArtifactProvenanceComplete &&
+		provenance != ArtifactProvenancePartial &&
+		provenance != ArtifactProvenanceUnknown {
+		return false, ArtifactDenyMissingPassport
+	}
+	return true, ""
 }
 
 func TestArtifactPolicyLegacyAdmissionDeniesDAndFutureOnlyKinds(t *testing.T) {
@@ -165,9 +210,6 @@ func TestArtifactPolicyManifestOmissionReasons(t *testing.T) {
 	}
 	if policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment) != "evaluation_compartment" {
 		t.Fatal("expected evaluation_compartment omission reason")
-	}
-	if policy.ManifestOmissionReason(ArtifactDenyLegacyIneligible) != "policy_denied" {
-		t.Fatal("expected legacy-ineligible policy_denied omission reason")
 	}
 }
 

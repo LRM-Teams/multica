@@ -417,6 +417,10 @@
     "updated_at": "Updated",
     "duration": "Duration",
     "input": "Input",
+    "raw_input_expand": "Expand raw input",
+    "raw_input_collapse": "Collapse raw input",
+    "objective_expand": "Expand full objective",
+    "objective_collapse": "Collapse full objective",
     "gate_blocker": "Gate blocked",
     "next_steps": "Next steps",
     "next_step_actions": {

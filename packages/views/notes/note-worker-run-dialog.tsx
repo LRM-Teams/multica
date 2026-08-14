@@ -15,6 +15,11 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../i18n/use-t";
+import {
+  NOTE_WORKER_PLAYBOOKS,
+  type NoteWorkerPlaybookId,
+  noteWorkerPlaybookById,
+} from "./note-worker-playbooks";
 import { useOpenNoteWorkerChat } from "./use-open-note-worker-chat";
 
 type DestinationKind = "agent" | "channel";
@@ -24,6 +29,7 @@ type DialogState = {
   agentId: string | null;
   channelId: string | null;
   instruction: string;
+  playbookId: NoteWorkerPlaybookId | null;
   submitting: boolean;
 };
 
@@ -33,6 +39,13 @@ type DialogAction =
   | { type: "setAgentId"; agentId: string | null }
   | { type: "setChannelId"; channelId: string | null }
   | { type: "setInstruction"; instruction: string }
+  | {
+      type: "applyPlaybook";
+      playbookId: NoteWorkerPlaybookId;
+      instruction: string;
+      prefersChannel: boolean;
+      agentId: string | null;
+    }
   | { type: "setSubmitting"; submitting: boolean };
 
 function dialogReducer(state: DialogState, action: DialogAction): DialogState {
@@ -43,12 +56,19 @@ function dialogReducer(state: DialogState, action: DialogAction): DialogState {
         agentId: action.agentId,
         channelId: null,
         instruction: "",
+        playbookId: null,
         submitting: false,
       };
     case "setDestination":
       return {
         ...state,
         destinationKind: action.kind,
+        playbookId:
+          action.kind === "agent" && state.playbookId
+            ? noteWorkerPlaybookById(state.playbookId)?.prefersChannel
+              ? null
+              : state.playbookId
+            : state.playbookId,
         ...(action.agentId !== undefined ? { agentId: action.agentId } : {}),
       };
     case "setAgentId":
@@ -56,11 +76,43 @@ function dialogReducer(state: DialogState, action: DialogAction): DialogState {
     case "setChannelId":
       return { ...state, channelId: action.channelId, agentId: null };
     case "setInstruction":
-      return { ...state, instruction: action.instruction };
+      return { ...state, instruction: action.instruction, playbookId: null };
+    case "applyPlaybook":
+      return {
+        ...state,
+        playbookId: action.playbookId,
+        instruction: action.instruction,
+        destinationKind: action.prefersChannel ? "channel" : state.destinationKind,
+        ...(action.prefersChannel && action.agentId
+          ? { agentId: action.agentId }
+          : {}),
+      };
     case "setSubmitting":
       return { ...state, submitting: action.submitting };
     default:
       return state;
+  }
+}
+
+function playbookLabelKey(id: NoteWorkerPlaybookId) {
+  switch (id) {
+    case "coordinate":
+      return "worker_playbook_coordinate" as const;
+    case "hire":
+      return "worker_playbook_hire" as const;
+    case "writeback":
+      return "worker_playbook_writeback" as const;
+  }
+}
+
+function playbookInstructionKey(id: NoteWorkerPlaybookId) {
+  switch (id) {
+    case "coordinate":
+      return "worker_playbook_coordinate_instruction" as const;
+    case "hire":
+      return "worker_playbook_hire_instruction" as const;
+    case "writeback":
+      return "worker_playbook_writeback_instruction" as const;
   }
 }
 
@@ -88,9 +140,10 @@ export function NoteWorkerRunDialog({
     agentId: defaultAgentId,
     channelId: null,
     instruction: "",
+    playbookId: null,
     submitting: false,
   });
-  const { destinationKind, agentId, channelId, instruction, submitting } = state;
+  const { destinationKind, agentId, channelId, instruction, playbookId, submitting } = state;
 
   const preferredAgentId =
     defaultAgentId && agents.some((agent) => agent.id === defaultAgentId)
@@ -134,6 +187,25 @@ export function NoteWorkerRunDialog({
   if (open && destinationKind === "channel" && channelAgentId !== agentId) {
     dispatch({ type: "setAgentId", agentId: channelAgentId });
   }
+
+  const activePlaybook = noteWorkerPlaybookById(playbookId);
+  const showChannelHint =
+    destinationKind === "channel" &&
+    !!activePlaybook?.prefersChannel &&
+    !channelId;
+
+  const applyPlaybook = (id: NoteWorkerPlaybookId) => {
+    const playbook = noteWorkerPlaybookById(id);
+    if (!playbook) return;
+    const key = playbookInstructionKey(id);
+    dispatch({
+      type: "applyPlaybook",
+      playbookId: id,
+      instruction: t(($) => $.notes_page[key]),
+      prefersChannel: playbook.prefersChannel,
+      agentId: preferredAgentId,
+    });
+  };
 
   const submit = async () => {
     const trimmed = instruction.trim();
@@ -184,6 +256,32 @@ export function NoteWorkerRunDialog({
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
+            <div className="text-sm font-medium">{t(($) => $.notes_page.worker_playbooks_label)}</div>
+            <div className="flex flex-wrap gap-2">
+              {NOTE_WORKER_PLAYBOOKS.map((playbook) => {
+                const selected = playbookId === playbook.id;
+                const labelKey = playbookLabelKey(playbook.id);
+                return (
+                  <button
+                    key={playbook.id}
+                    type="button"
+                    className={cn(
+                      "rounded-md border px-2.5 py-1 text-left text-xs",
+                      selected
+                        ? "border-primary/40 bg-muted font-medium text-foreground"
+                        : "text-muted-foreground hover:bg-muted/50",
+                    )}
+                    onClick={() => applyPlaybook(playbook.id)}
+                    disabled={submitting}
+                  >
+                    {t(($) => $.notes_page[labelKey])}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
             <div className="text-sm font-medium">{t(($) => $.notes_page.worker_destination_label)}</div>
             <div className="flex gap-1 rounded-md border p-1">
               <button
@@ -209,6 +307,11 @@ export function NoteWorkerRunDialog({
                 {t(($) => $.notes_page.worker_destination_channel)}
               </button>
             </div>
+            {showChannelHint ? (
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.notes_page.worker_playbook_channel_hint)}
+              </p>
+            ) : null}
           </div>
 
           {destinationKind === "channel" ? (

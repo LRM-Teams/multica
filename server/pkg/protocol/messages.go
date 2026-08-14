@@ -528,6 +528,11 @@ const (
 	DaemonCapabilityMemoryCrossDeviceSync    = "memory_cross_device_sync_v2"
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
+	// DaemonCapabilityReminderLocalInbox selects the Raft 1.0.16 delivery
+	// contract: the owner daemon accepts a due item locally and reports only a
+	// fire receipt to the server. A server must not also push transient owner
+	// input to a runtime that advertises this capability.
+	DaemonCapabilityReminderLocalInbox = "reminder_local_inbox_v1"
 	// DaemonCapabilityReminderTransientInput gates the owner-only, idle-only
 	// Reminder system input. Unlike canonical Message delivery, this transport
 	// is best-effort and creates no queue, receipt, or reconnect replay.
@@ -555,6 +560,11 @@ const (
 	// command/replay contract. It is intentionally additive: all previously
 	// advertised daemon capabilities remain independently meaningful.
 	DaemonCapabilityWorkspaceRunnerAttachment = "workspace_runner_attachment_v1"
+	// DaemonCapabilityWorkspaceRunnerControlPlane selects the current ready
+	// Workspace Runner as the sole carrier for heartbeat actions belonging to
+	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
+	// adapters for older daemons and must not execute actions for this Runner.
+	DaemonCapabilityWorkspaceRunnerControlPlane = "workspace_runner_control_plane_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by
@@ -564,6 +574,27 @@ type ReminderTimerJob struct {
 	OwnerAgentID string `json:"owner_agent_id"`
 	Version      int64  `json:"version"`
 	FireAt       string `json:"fire_at"`
+	// LocalInput is the bounded, owner-authorized material needed by the
+	// Computer-local Inbox. Nil identifies the legacy server-pushed input
+	// contract and is retained only for rolling upgrade compatibility.
+	LocalInput *ReminderLocalInputPayload `json:"local_input,omitempty"`
+}
+
+// ReminderLocalInputPayload is persisted with one timer revision so the
+// owner Computer can wake its Agent without waiting for a server round trip.
+// It deliberately carries no canonical Message identity or delivery cursor.
+type ReminderLocalInputPayload struct {
+	Title      string                       `json:"title"`
+	Anchor     ReminderOwnerInputAnchor     `json:"anchor"`
+	Occurrence ReminderLocalInputOccurrence `json:"occurrence"`
+}
+
+type ReminderLocalInputOccurrence struct {
+	OccurrenceID string `json:"occurrence_id"`
+	ScheduledFor string `json:"scheduled_for"`
+	DueAt        string `json:"due_at"`
+	Cadence      string `json:"cadence,omitempty"`
+	Timezone     string `json:"timezone,omitempty"`
 }
 
 type ReminderUpsertPayload struct {
@@ -652,7 +683,14 @@ type ReminderProjectionAckPayload struct {
 	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
 }
 
+type ReminderFireAckPayload struct {
+	AgentID    string `json:"agent_id"`
+	ReminderID string `json:"reminder_id"`
+	Version    int64  `json:"version"`
+}
+
 type ReminderFireResultPayload struct {
+	Ack        ReminderFireAckPayload  `json:"ack"`
 	Projection ReminderProjectionEvent `json:"projection"`
 }
 
@@ -1220,14 +1258,14 @@ type AgentMemoryHydrateEntry struct {
 // record of one settled resident Pi turn. The daemon, rather than the
 // workspace runner, is the trust boundary which creates this payload.
 type TurnCaptureUpload struct {
-	AgentID         string                      `json:"agent_id"`
-	RuntimeID       string                      `json:"runtime_id"`
-	CaptureBatchID  string                      `json:"capture_batch_id"`
-	Turn            TurnCaptureTurn             `json:"turn"`
-	ProviderCalls   []TurnCaptureProviderCall   `json:"provider_calls"`
-	VisibleActions  []TurnCaptureVisibleAction  `json:"visible_actions,omitempty"`
-	Consumptions    []TurnCaptureConsumption    `json:"consumptions,omitempty"`
-	PayloadHash     string                      `json:"payload_hash"`
+	AgentID        string                     `json:"agent_id"`
+	RuntimeID      string                     `json:"runtime_id"`
+	CaptureBatchID string                     `json:"capture_batch_id"`
+	Turn           TurnCaptureTurn            `json:"turn"`
+	ProviderCalls  []TurnCaptureProviderCall  `json:"provider_calls"`
+	VisibleActions []TurnCaptureVisibleAction `json:"visible_actions,omitempty"`
+	Consumptions   []TurnCaptureConsumption   `json:"consumptions,omitempty"`
+	PayloadHash    string                     `json:"payload_hash"`
 }
 
 // TurnCaptureVisibleAction is a trusted, daemon-observed successful channel

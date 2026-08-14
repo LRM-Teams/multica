@@ -30,6 +30,10 @@ const (
 // outcome is consumed here: none enters MessageCoordinator, Pending Notice,
 // recovery, Activity, or another durable/user-visible projection.
 func (d *Daemon) handleReminderOwnerInput(ctx context.Context, payload protocol.ReminderOwnerInputPayload) reminderOwnerInputOutcome {
+	return d.acceptReminderOwnerInput(ctx, payload, protocol.DaemonCapabilityReminderTransientInput)
+}
+
+func (d *Daemon) acceptReminderOwnerInput(ctx context.Context, payload protocol.ReminderOwnerInputPayload, requiredServerCapability string) reminderOwnerInputOutcome {
 	if reason := validateReminderOwnerInputPayload(payload); reason != "" {
 		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, reason)
 		return reminderOwnerInputRejected
@@ -42,7 +46,7 @@ func (d *Daemon) handleReminderOwnerInput(ctx context.Context, payload protocol.
 	runtime, runtimeKnown := d.runtimeIndex[payload.RuntimeID]
 	workspace := d.workspaces[payload.WorkspaceID]
 	d.mu.Unlock()
-	if !runtimeKnown || runtime.WorkspaceID != payload.WorkspaceID || !workspaceHasServerCapability(workspace, protocol.DaemonCapabilityReminderTransientInput) {
+	if !runtimeKnown || runtime.WorkspaceID != payload.WorkspaceID || (requiredServerCapability != "" && !workspaceHasServerCapability(workspace, requiredServerCapability)) {
 		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, "runtime_or_capability_mismatch")
 		return reminderOwnerInputRejected
 	}

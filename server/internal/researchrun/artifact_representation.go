@@ -37,7 +37,25 @@ func loadFrozenAttemptRepresentationsPool(ctx context.Context, pool *pgxpool.Poo
 		}
 		out[item.ID] = item
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if out[attemptID].ID == "" {
+		var item Attempt
+		if loadErr := pool.QueryRow(ctx, `
+			SELECT id::text, session_id::text, workspace_id::text, task_id::text,
+			       attempt_number, COALESCE(assigned_agent_id::text,''), dispatch_key, status, dispatched_at
+			FROM research_task_attempt
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, workspaceID, sessionID, attemptID).Scan(
+			&item.ID, &item.SessionID, &item.WorkspaceID, &item.TaskID,
+			&item.AttemptNumber, &item.AssignedAgentID, &item.DispatchKey, &item.Status, &item.DispatchedAt,
+		); loadErr != nil {
+			return nil, fmt.Errorf("%w: current attempt is absent from frozen context", ErrInvalidTransition)
+		}
+		out[item.ID] = item
+	}
+	return out, nil
 }
 
 func applyFrozenAttempts(live []Attempt, frozen map[string]Attempt, currentAttemptID string) ([]Attempt, error) {
@@ -542,6 +560,21 @@ func loadFrozenDurableContextPool(ctx context.Context, pool *pgxpool.Pool, works
 	}
 	if err = rows.Err(); err != nil {
 		return frozenDurableContext{}, err
+	}
+	if len(attempts) == 0 {
+		var attempt Attempt
+		if loadErr := pool.QueryRow(ctx, `
+			SELECT id::text, session_id::text, workspace_id::text, task_id::text,
+			       attempt_number, COALESCE(assigned_agent_id::text,''), dispatch_key, status, dispatched_at
+			FROM research_task_attempt
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, workspaceID, sessionID, attemptID).Scan(
+			&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID, &attempt.TaskID,
+			&attempt.AttemptNumber, &attempt.AssignedAgentID, &attempt.DispatchKey, &attempt.Status, &attempt.DispatchedAt,
+		); loadErr != nil {
+			return frozenDurableContext{}, fmt.Errorf("%w: frozen durable context is incomplete", ErrInvalidTransition)
+		}
+		attempts = append(attempts, frozenOrderedRepresentation[Attempt]{Value: attempt})
 	}
 	if len(contracts) == 0 || len(tasks) == 0 || len(attempts) == 0 {
 		return frozenDurableContext{}, fmt.Errorf("%w: frozen durable context is incomplete", ErrInvalidTransition)

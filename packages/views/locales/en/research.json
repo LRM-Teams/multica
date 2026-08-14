@@ -510,6 +510,7 @@
     "task_meta": "Task",
     "agent_legend": "Agent {{id}}",
     "kinds": {
+      "goal": "Goal",
       "task": "Task",
       "attempt": "Attempt",
       "result_artifact": "Result artifact",

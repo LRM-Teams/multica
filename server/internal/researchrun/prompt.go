@@ -65,7 +65,7 @@ func buildTaskPromptV1(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 	fmt.Fprintf(&b, "- Contract language: %s\n- Contract audience: %s\n- Contract freshness: %s\n", snapshot.Contract.Language, snapshot.Contract.Audience, snapshot.Contract.Freshness)
 	fmt.Fprintf(&b, "- Contract scope: `%s`\n- Source policy: `%s`\n", compactJSON(snapshot.Contract.Scope), compactJSON(snapshot.Contract.SourcePolicy))
 	if len(task.AcceptanceCriteria) > 0 {
-		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", string(task.AcceptanceCriteria))
+		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", compactJSON(task.AcceptanceCriteria))
 	}
 	b.WriteString("- Active fleet roles:")
 	for _, member := range members {
@@ -115,7 +115,7 @@ func buildTaskPromptV2(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 	fmt.Fprintf(&b, "- Contract language: %s\n- Contract audience: %s\n- Contract freshness: %s\n", snapshot.Contract.Language, snapshot.Contract.Audience, snapshot.Contract.Freshness)
 	fmt.Fprintf(&b, "- Contract scope: `%s`\n- Source policy: `%s`\n", compactJSON(snapshot.Contract.Scope), compactJSON(snapshot.Contract.SourcePolicy))
 	if len(task.AcceptanceCriteria) > 0 {
-		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", string(task.AcceptanceCriteria))
+		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", compactJSON(task.AcceptanceCriteria))
 	}
 	b.WriteString("- Active fleet roles:")
 	for _, member := range members {
@@ -165,7 +165,7 @@ func buildTaskPromptV3(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 	fmt.Fprintf(&b, "- Contract language: %s\n- Contract audience: %s\n- Contract freshness: %s\n", snapshot.Contract.Language, snapshot.Contract.Audience, snapshot.Contract.Freshness)
 	fmt.Fprintf(&b, "- Contract scope: `%s`\n- Source policy: `%s`\n", compactJSON(snapshot.Contract.Scope), compactJSON(snapshot.Contract.SourcePolicy))
 	if len(task.AcceptanceCriteria) > 0 {
-		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", string(task.AcceptanceCriteria))
+		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", compactJSON(task.AcceptanceCriteria))
 	}
 	b.WriteString("- Active fleet roles:")
 	for _, member := range members {
@@ -224,7 +224,7 @@ func buildTaskPromptV4(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 	fmt.Fprintf(&b, "- Contract language: %s\n- Contract audience: %s\n- Contract freshness: %s\n", snapshot.Contract.Language, snapshot.Contract.Audience, snapshot.Contract.Freshness)
 	fmt.Fprintf(&b, "- Contract scope: `%s`\n- Source policy: `%s`\n", compactJSON(snapshot.Contract.Scope), compactJSON(snapshot.Contract.SourcePolicy))
 	if len(task.AcceptanceCriteria) > 0 {
-		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", string(task.AcceptanceCriteria))
+		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", compactJSON(task.AcceptanceCriteria))
 	}
 	b.WriteString("- Active fleet roles:")
 	for _, member := range members {

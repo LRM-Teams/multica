@@ -268,7 +268,17 @@ func loadArtifactVersionCandidates(
 		    WHEN 'evidence_link' THEN (SELECT e.verification_status FROM research_claim_evidence e
 		      WHERE (e.workspace_id,e.session_id,e.id)=(p.workspace_id,p.session_id,p.id))
 		    ELSE ''
-		  END, '') AS domain_status
+		  END, '') AS domain_status,
+		  (SELECT count(*)::int FROM research_artifact_version all_v
+		    WHERE (all_v.workspace_id,all_v.session_id,all_v.artifact_id)=(p.workspace_id,p.session_id,p.id)),
+		  (SELECT count(*)::int FROM research_artifact_input_reference input_ref
+		    JOIN research_artifact_version input_v
+		      ON (input_v.workspace_id,input_v.session_id,input_v.id)=(input_ref.workspace_id,input_ref.session_id,input_ref.input_version_id)
+		    WHERE (input_v.workspace_id,input_v.session_id,input_v.artifact_id)=(p.workspace_id,p.session_id,p.id)),
+		  (SELECT count(*)::int FROM research_artifact_input_reference output_ref
+		    JOIN research_artifact_version output_v
+		      ON (output_v.workspace_id,output_v.session_id,output_v.id)=(output_ref.workspace_id,output_ref.session_id,output_ref.consumer_version_id)
+		    WHERE (output_v.workspace_id,output_v.session_id,output_v.artifact_id)=(p.workspace_id,p.session_id,p.id))
 		FROM research_artifact_passport p
 		JOIN research_artifact_version v
 		  ON v.workspace_id = p.workspace_id
@@ -293,6 +303,7 @@ func loadArtifactVersionCandidates(
 			&candidate.VersionRowID, &candidate.ArtifactID, &kindRaw,
 			&candidate.Version, &candidate.EligibilityRevision,
 			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash, &candidate.DomainStatus,
+			&candidate.VersionCount, &candidate.InputReferenceCount, &candidate.OutputReferenceCount,
 		); err != nil {
 			return nil, err
 		}
@@ -825,12 +836,39 @@ func insertResultArtifactRowTx(
 		  id, workspace_id, session_id, attempt_id,
 		  orchestrator_version, result_schema_version, result,
 		  client_request_id, content_hash, acceptance_policy_watermark, accepted_at,
-		  manifest_id, manifest_hash, input_version_set_hash
-		) VALUES (
+		  manifest_id, manifest_hash, input_version_set_hash,
+		  acceptance_manifest_id, acceptance_manifest_hash,
+		  resolved_input_versions, acceptance_lineage
+		)
+		SELECT
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
 		  $5, $6, $7::jsonb, $8, $9, $10, now(),
-		  $11::uuid, $12, $13
-		)
+		  $11::uuid, $12, $13,
+		  $11::uuid, $12,
+		  COALESCE((
+		    SELECT jsonb_agg(version_id ORDER BY version_id)
+		    FROM (
+		      SELECT DISTINCT entry.artifact_version_id::text AS version_id
+		      FROM research_artifact_context_entry entry
+		      WHERE entry.workspace_id = $2::uuid
+		        AND entry.session_id = $3::uuid
+		        AND entry.manifest_id = $11::uuid
+		    ) versions
+		  ), '[]'::jsonb),
+		  COALESCE((
+		    SELECT jsonb_agg(jsonb_build_object(
+		      'input_version_id', entry.artifact_version_id::text,
+		      'relation', 'acceptance_input',
+		      'manifest_id', entry.manifest_id::text,
+		      'explicitly_used', true,
+		      'purpose', 'result_acceptance',
+		      'ordinal', entry.ordinal
+		    ) ORDER BY entry.ordinal, entry.artifact_version_id::text)
+		    FROM research_artifact_context_entry entry
+		    WHERE entry.workspace_id = $2::uuid
+		      AND entry.session_id = $3::uuid
+		      AND entry.manifest_id = $11::uuid
+		  ), '[]'::jsonb)
 		ON CONFLICT (workspace_id, session_id, attempt_id) DO NOTHING
 	`, resultID, workspaceID, sessionID, attemptID,
 		orchestratorVersion, fmt.Sprintf("%d", result.SchemaVersion), resultJSON,

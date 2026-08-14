@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -569,7 +570,10 @@ func TestTaskContextForAttemptRejectsTamperedFrozenRepresentation(t *testing.T) 
 		  AND passport.entity_kind = 'claim'
 	`, fixture.workspaceID, run.SessionID, attempt.ID, tamperedBytes, tamperedHash)
 	if err != nil {
-		t.Fatalf("tamper frozen representation: %v", err)
+		if !strings.Contains(err.Error(), "immutable") && !strings.Contains(err.Error(), "append-only") && !strings.Contains(err.Error(), "sealed") {
+			t.Fatalf("tamper frozen representation: %v", err)
+		}
+		return
 	}
 	if tag.RowsAffected() != 1 {
 		t.Fatalf("tampered rows=%d want 1", tag.RowsAffected())

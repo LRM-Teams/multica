@@ -361,6 +361,17 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 		return err
 	}
 	rationale := truncateBytes(method.MethodRationale, 8192)
+	existing, existingErr := loadResearchMethodVersion(ctx, tx, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
+	if existingErr == nil {
+		if existing.DecisionQuestion != method.DecisionQuestion ||
+			existing.MethodRationale != method.MethodRationale {
+			return fmt.Errorf("%w: accepted research method changed", ErrResultConflict)
+		}
+		return nil
+	}
+	if !errors.Is(existingErr, ErrInvalidResult) {
+		return existingErr
+	}
 	var decisionID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
@@ -1457,28 +1468,7 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				if err != nil {
 					return nil, 0, err
 				}
-			} else {
-				version, versionErr := lockMutableArtifactVersionForAttemptTx(
-					ctx, tx, state.workspaceID, state.run.SessionID, evidenceID,
-					state.attemptID, ArtifactKindEvidenceLink, state.outputAccess,
-				)
-				if versionErr != nil {
-					return nil, 0, versionErr
-				}
-				currentContent := map[string]any{
-					"claim_id": id, "observation_id": observationID, "relation": evidence.Relation,
-					"strength": currentStrength, "directness": currentDirectness, "method_fit": currentMethodFit,
-					"verification_status": currentVerification, "verified_by_task_id": currentVerifiedBy,
-					"rationale": currentRationale,
-				}
-				currentHash, hashErr := ArtifactContentHash(ArtifactKindEvidenceLink, currentContent)
-				if hashErr != nil {
-					return nil, 0, hashErr
-				}
-				if version.HashOrigin != ArtifactHashOriginProduction || version.ContentHash != currentHash {
-					return nil, 0, fmt.Errorf("%w: evidence link canonical state no longer matches its frozen version", ErrResultConflict)
-				}
-
+			} else if state.attemptID != "" {
 				nextStrength := max(currentStrength, evidence.Strength)
 				nextDirectness := max(currentDirectness, evidence.Directness)
 				nextMethodFit := max(currentMethodFit, evidence.MethodFit)
@@ -1501,6 +1491,26 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 					nextMethodFit != currentMethodFit || nextVerification != currentVerification ||
 					nextVerifiedBy != currentVerifiedBy || nextRationale != currentRationale
 				if changed {
+					version, versionErr := lockMutableArtifactVersionForAttemptTx(
+						ctx, tx, state.workspaceID, state.run.SessionID, evidenceID,
+						state.attemptID, ArtifactKindEvidenceLink, state.outputAccess,
+					)
+					if versionErr != nil {
+						return nil, 0, versionErr
+					}
+					currentContent := map[string]any{
+						"claim_id": id, "observation_id": observationID, "relation": evidence.Relation,
+						"strength": currentStrength, "directness": currentDirectness, "method_fit": currentMethodFit,
+						"verification_status": currentVerification, "verified_by_task_id": currentVerifiedBy,
+						"rationale": currentRationale,
+					}
+					currentHash, hashErr := ArtifactContentHash(ArtifactKindEvidenceLink, currentContent)
+					if hashErr != nil {
+						return nil, 0, hashErr
+					}
+					if version.HashOrigin != ArtifactHashOriginProduction || version.ContentHash != currentHash {
+						return nil, 0, fmt.Errorf("%w: evidence link canonical state no longer matches its frozen version", ErrResultConflict)
+					}
 					if _, err = tx.Exec(ctx, `
 						UPDATE research_claim_evidence
 						SET strength=$4, directness=$5, method_fit=$6, verification_status=$7,

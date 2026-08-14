@@ -86,7 +86,7 @@ func TestResearchV6CompatibilityProjectionCarriesCompleteCanonicalDetails(t *tes
 		assertResearchV6DetailComplete(t, node.EntityKind, detail)
 		byKind[node.EntityKind] = detail
 	}
-	for _, kind := range []string{runGraphKindRoot, runGraphKindQuestion, runGraphKindTask, runGraphKindAttempt, runGraphKindClaim, runGraphKindGate} {
+	for _, kind := range []string{"goal", runGraphKindQuestion, runGraphKindTask, runGraphKindAttempt, runGraphKindClaim, runGraphKindGate} {
 		if byKind[kind] == nil {
 			t.Fatalf("missing compatibility node kind %q", kind)
 		}

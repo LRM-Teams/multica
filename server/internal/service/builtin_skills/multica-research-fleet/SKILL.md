@@ -54,7 +54,10 @@ the Claim, not a universal source hierarchy. Evidence Links are separately
 authorized manifest artifacts even though they appear nested under a Claim;
 the snapshot omits any link the assigned Attempt cannot read. Preserve retrieved source text in
 each source snapshot. Every quoted observation must be an exact substring of
-that snapshot. Execute required counter-search and record uncertainty.
+that snapshot. Execute required counter-search and record uncertainty. Source
+URLs must identify public resources and must never embed a username, password,
+token, or other credential; authenticated retrieval uses the provider's
+separate credential channel.
 
 3. Write one JSON result with the fields permitted by the assignment prompt.
 Use stable client keys and a globally unique `client_request_id`. Submit once:

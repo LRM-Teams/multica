@@ -609,7 +609,9 @@ func (s *PostgresMachineUpgradeStore) BeginRollback(ctx context.Context, daemonI
 }
 
 // AttestRollback proves an actual restored daemon generation: exact source
-// version, exact accepted managed set, and one distinct rollback generation.
+// version, every accepted Runtime whose provider is still shipped, and one
+// distinct rollback generation. As with successor attestation, a provider
+// removed from the shipped catalog cannot permanently block recovery.
 func (s *PostgresMachineUpgradeStore) AttestRollback(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("machine upgrade store is not configured")
@@ -619,29 +621,37 @@ func (s *PostgresMachineUpgradeStore) AttestRollback(ctx context.Context, daemon
 		return op, err
 	}
 	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
+	providers, err := s.providersForRuntimeIDs(ctx, op.AcceptedRuntimeIDs)
+	if err != nil {
+		return nil, err
+	}
+	providerOf := func(id string) string { return providers[id] }
+	requiredRuntimeIDs := agent.MissingRequiredRuntimeIDs(op.AcceptedRuntimeIDs, nil, providerOf, true)
 	if op.Phase == MachineUpgradeRolledBack && op.RollbackGeneration != nil && *op.RollbackGeneration == strings.TrimSpace(generation) &&
 		op.SourceVersion != nil && versionsMatch(op.SourceVersion, stringPointer(strings.TrimSpace(cliVersion))) &&
-		sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) && sameMachineRuntimeSet(op.RollbackRuntimeIDs, runtimeIDs) {
+		containsMachineRuntimeID(op.AcceptedRuntimeIDs, runtimeID) && containsMachineRuntimeID(runtimeIDs, runtimeID) &&
+		len(agent.MissingRequiredRuntimeIDs(op.AcceptedRuntimeIDs, op.RollbackRuntimeIDs, providerOf, true)) == 0 {
 		return op, nil
 	}
 	if op.Phase != MachineUpgradeRollbackPending || op.RollbackGeneration == nil || *op.RollbackGeneration != strings.TrimSpace(generation) ||
 		op.SourceVersion == nil || !versionsMatch(op.SourceVersion, stringPointer(strings.TrimSpace(cliVersion))) ||
-		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) || !containsMachineRuntimeID(op.AcceptedRuntimeIDs, runtimeID) {
+		!containsMachineRuntimeID(op.AcceptedRuntimeIDs, runtimeID) || !containsMachineRuntimeID(runtimeIDs, runtimeID) ||
+		len(agent.MissingRequiredRuntimeIDs(op.AcceptedRuntimeIDs, runtimeIDs, providerOf, true)) > 0 {
 		return nil, errMachineUpgradeAttestationRejected
 	}
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
 		SET rollback_runtime_ids = ARRAY(SELECT DISTINCT unnest(rollback_runtime_ids || ARRAY[$3::uuid])),
-			phase = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(rollback_runtime_ids || ARRAY[$3::uuid]))
+			phase = CASE WHEN $5::uuid[] <@ ARRAY(SELECT DISTINCT unnest(rollback_runtime_ids || ARRAY[$3::uuid]))
 				THEN 'rolled_back' ELSE 'rollback_pending' END,
-			result = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(rollback_runtime_ids || ARRAY[$3::uuid]))
+			result = CASE WHEN $5::uuid[] <@ ARRAY(SELECT DISTINCT unnest(rollback_runtime_ids || ARRAY[$3::uuid]))
 				THEN 'rolled_back' ELSE NULL END,
-			completed_at = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(rollback_runtime_ids || ARRAY[$3::uuid]))
+			completed_at = CASE WHEN $5::uuid[] <@ ARRAY(SELECT DISTINCT unnest(rollback_runtime_ids || ARRAY[$3::uuid]))
 				THEN now() ELSE NULL END,
 			updated_at = now()
 		WHERE daemon_id = $1 AND id = $2 AND phase = 'rollback_pending' AND rollback_generation = $4
 		RETURNING `+machineUpgradeColumns,
-		strings.TrimSpace(daemonID), strings.TrimSpace(id), strings.TrimSpace(runtimeID), strings.TrimSpace(generation)))
+		strings.TrimSpace(daemonID), strings.TrimSpace(id), strings.TrimSpace(runtimeID), strings.TrimSpace(generation), requiredRuntimeIDs))
 }
 
 func (s *PostgresMachineUpgradeStore) Cancel(ctx context.Context, daemonID, id string) (*MachineUpgrade, error) {

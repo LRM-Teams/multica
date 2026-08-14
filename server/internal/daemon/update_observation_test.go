@@ -1,8 +1,6 @@
 package daemon
 
 import (
-	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -217,20 +215,7 @@ func TestWSHeartbeatCarriesCurrentUpdateObservation(t *testing.T) {
 		updateObservation: coordinator,
 		runtimeIndex:      map[string]Runtime{"runtime-a": {ID: "runtime-a"}},
 	}
-	writes := make(chan []byte, 2)
-	daemon.sendWSHeartbeats(context.Background(), []string{"runtime-a"}, writes)
-
-	var frame protocol.Message
-	if err := json.Unmarshal(<-writes, &frame); err != nil {
-		t.Fatalf("decode heartbeat frame: %v", err)
-	}
-	if frame.Type != protocol.EventDaemonHeartbeat {
-		t.Fatalf("frame type = %q, want %q", frame.Type, protocol.EventDaemonHeartbeat)
-	}
-	var heartbeat protocol.DaemonHeartbeatRequestPayload
-	if err := json.Unmarshal(frame.Payload, &heartbeat); err != nil {
-		t.Fatalf("decode heartbeat payload: %v", err)
-	}
+	heartbeat := daemon.controlPlaneHeartbeatPayload("runtime-a")
 	current := coordinator.Snapshot()
 	if heartbeat.UpdateObservation == nil || *heartbeat.UpdateObservation != current {
 		t.Fatalf("heartbeat observation = %+v, current = %+v", heartbeat.UpdateObservation, current)

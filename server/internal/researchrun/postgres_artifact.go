@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -258,14 +259,40 @@ func questionArtifactContent(
 }
 
 func registerRunSessionArtifactTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, sourceCreatedAt time.Time) error {
+	var persistedJSON string
+	if err := tx.QueryRow(ctx, `
+		SELECT (
+			to_jsonb(session_row) - ARRAY[
+				'id', 'workspace_id', 'artifact_passport_enabled'
+			]
+		)::text
+		FROM research_session session_row
+		WHERE session_row.workspace_id = $1::uuid AND session_row.id = $2::uuid
+	`, workspaceID, sessionID).Scan(&persistedJSON); err != nil {
+		return fmt.Errorf("load initialized run session %s: %w", sessionID, err)
+	}
+	contentHash, err := ArtifactContentHash(
+		ArtifactKindRunSession,
+		runSessionArtifactContent(json.RawMessage(persistedJSON)),
+	)
+	if err != nil {
+		return err
+	}
 	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            workspaceID,
 		SessionID:              sessionID,
 		EntityID:               sessionID,
 		Kind:                   ArtifactKindRunSession,
 		SourceCreatedAt:        &sourceCreatedAt,
-		ProvenanceCompleteness: ArtifactProvenancePartial,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
 	})
+}
+
+func runSessionArtifactContent(persisted json.RawMessage) map[string]any {
+	return map[string]any{"persisted": persisted}
 }
 
 func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {

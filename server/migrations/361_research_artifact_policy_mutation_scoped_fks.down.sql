@@ -1,0 +1,3 @@
+ALTER TABLE research_artifact_policy_mutation
+  DROP CONSTRAINT IF EXISTS research_artifact_policy_mutation_grant_scoped_fkey,
+  DROP CONSTRAINT IF EXISTS research_artifact_policy_mutation_artifact_scoped_fkey;

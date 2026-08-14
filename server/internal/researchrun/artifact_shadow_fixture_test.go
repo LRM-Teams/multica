@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -225,6 +226,170 @@ func TestShadowEquivalencePromptHashMatchesAfterDispatch(t *testing.T) {
 	}
 }
 
+func TestShadowEquivalenceFixtureCoversAcceptedPlanAndDurableFamilies(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := setupPlanAcceptanceRaceFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture.fixture)
+	if _, err = fixture.store.AcceptResult(ctx, fixture.input); err != nil {
+		t.Fatalf("AcceptResult plan: %v", err)
+	}
+	seedShadowEquivalenceArtifacts(t, ctx, pool, fixture.fixture.workspaceID, fixture.run.SessionID)
+	seedShadowInquiryFamilies(t, ctx, pool, fixture.fixture.workspaceID, fixture.run.SessionID, fixture.attempt.ID)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var stateVersion int64
+	if err = tx.QueryRow(ctx, `
+		SELECT state_version FROM research_session
+		WHERE workspace_id=$1::uuid AND id=$2::uuid
+	`, fixture.fixture.workspaceID, fixture.run.SessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyShadowEquivalenceTx(
+		ctx, tx, fixture.fixture.workspaceID, fixture.run.SessionID,
+		stateVersion, ArtifactPurposeTaskExecution,
+	); err != nil {
+		t.Fatalf("verifyShadowEquivalenceTx: %v", err)
+	}
+
+	projection, err := loadLegacyShadowDomainProjectionTx(
+		ctx, tx, fixture.fixture.workspaceID, fixture.run.SessionID,
+		ArtifactPurposeTaskExecution, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := make(map[ArtifactEntityKind]bool)
+	for _, record := range projection {
+		covered[record.Kind] = true
+	}
+	for _, kind := range []ArtifactEntityKind{
+		ArtifactKindRunSession,
+		ArtifactKindContractRevision,
+		ArtifactKindMethodDecision,
+		ArtifactKindQuestion,
+		ArtifactKindTask,
+		ArtifactKindAttempt,
+		ArtifactKindResultArtifact,
+		ArtifactKindLegacySource,
+		ArtifactKindSourceSnapshot,
+		ArtifactKindObservation,
+		ArtifactKindClaim,
+		ArtifactKindEvidenceLink,
+		ArtifactKindReportRevision,
+		ArtifactKindStageEvaluation,
+		ArtifactKindEvaluationDecision,
+		ArtifactKindResearchMessage,
+		ArtifactKindProductRoundDecision,
+		ArtifactKindRunEvent,
+		ArtifactKindGraphNode,
+		ArtifactKindGraphEdge,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindInquiryEdge,
+	} {
+		if !covered[kind] {
+			t.Errorf("shadow fixture missing durable family %s", kind)
+		}
+	}
+
+	var taskStatus, attemptStatus string
+	if err = tx.QueryRow(ctx, `
+		SELECT task.status, attempt.status
+		FROM research_task task
+		JOIN research_task_attempt attempt
+		  ON attempt.workspace_id=task.workspace_id
+		 AND attempt.session_id=task.session_id
+		 AND attempt.task_id=task.id
+		WHERE task.workspace_id=$1::uuid AND task.session_id=$2::uuid
+		  AND attempt.id=$3::uuid
+	`, fixture.fixture.workspaceID, fixture.run.SessionID, fixture.attempt.ID).Scan(&taskStatus, &attemptStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != string(TaskStatusSucceeded) || attemptStatus != string(AttemptStatusSucceeded) {
+		t.Fatalf("accepted control task=%s attempt=%s", taskStatus, attemptStatus)
+	}
+}
+
+func seedShadowInquiryFamilies(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID string,
+) {
+	t.Helper()
+	var questionID, taskID string
+	if err := pool.QueryRow(ctx, `
+		SELECT id::text FROM research_question
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+		ORDER BY created_at,id LIMIT 1
+	`, workspaceID, sessionID).Scan(&questionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT task_id::text FROM research_task_attempt
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+
+	hypothesisID := uuid.NewString()
+	branchID := uuid.NewString()
+	insightID := uuid.NewString()
+	edgeID := uuid.NewString()
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_hypothesis(
+			  id,workspace_id,session_id,question_id,statement,created_by_task_id,created_by_attempt_id
+			) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'Shadow hypothesis',$5::uuid,$6::uuid);
+			INSERT INTO research_branch(
+			  id,workspace_id,session_id,objective,status,created_by_task_id
+			) VALUES ($7::uuid,$2::uuid,$3::uuid,'Shadow branch','active',$5::uuid);
+			INSERT INTO research_insight(
+			  id,workspace_id,session_id,title,summary,status,created_by_attempt_id
+			) VALUES ($8::uuid,$2::uuid,$3::uuid,'Shadow insight','Durable shadow insight','accepted',$6::uuid);
+			INSERT INTO research_inquiry_edge(
+			  id,workspace_id,session_id,from_kind,from_entity_id,to_kind,to_entity_id,
+			  relation,rationale,created_by_attempt_id
+			) VALUES (
+			  $9::uuid,$2::uuid,$3::uuid,'question',$4::uuid,'hypothesis',$1::uuid,
+			  'decomposes','Shadow inquiry relationship',$6::uuid
+			)
+		`, hypothesisID, workspaceID, sessionID, questionID, taskID, attemptID, branchID, insightID, edgeID); err != nil {
+			return err
+		}
+		for _, artifact := range []struct {
+			id   string
+			kind ArtifactEntityKind
+		}{
+			{id: hypothesisID, kind: ArtifactKindHypothesis},
+			{id: branchID, kind: ArtifactKindBranch},
+			{id: insightID, kind: ArtifactKindInsight},
+			{id: edgeID, kind: ArtifactKindInquiryEdge},
+		} {
+			backfillIntegrationArtifactPassport(
+				t, ctx, tx, workspaceID, sessionID, artifact.id, string(artifact.kind), nil, nil,
+			)
+		}
+		return nil
+	})
+}
+
 func seedShadowEquivalenceArtifacts(
 	t *testing.T,
 	ctx context.Context,
@@ -244,6 +409,7 @@ func seedShadowEquivalenceArtifacts(
 	productRoundID := uuid.NewString()
 	reportID := uuid.NewString()
 	stageEvalID := uuid.NewString()
+	evaluationDecisionID := uuid.NewString()
 	now := time.Now().UTC()
 	gv, pv := 1, 1
 	tx, err := pool.Begin(ctx)
@@ -397,6 +563,21 @@ func seedShadowEquivalenceArtifacts(
 		t.Fatalf("insert stage eval: %v", err)
 	}
 	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, stageEvalID, string(ArtifactKindStageEvaluation), nil, nil)
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_decision(
+		  id,workspace_id,session_id,decision_kind,actor_type,
+		  goal_version,plan_version,inputs,outcome,rationale,created_at
+		) VALUES (
+		  $1::uuid,$2::uuid,$3::uuid,'quality_gate','system',
+		  $4,$5,'{}'::jsonb,'{"passed":true}'::jsonb,'Shadow evaluation decision',$6
+		)
+	`, evaluationDecisionID, workspaceID, sessionID, gv, pv, now); err != nil {
+		t.Fatalf("insert evaluation decision: %v", err)
+	}
+	backfillIntegrationArtifactPassport(
+		t, ctx, tx, workspaceID, sessionID, evaluationDecisionID,
+		string(ArtifactKindEvaluationDecision), intPtr(gv), intPtr(pv),
+	)
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatalf("commit shadow artifacts and passports: %v", err)
 	}
@@ -407,7 +588,8 @@ func seedShadowEquivalenceArtifacts(
 			nodeFromID, nodeToID, edgeID, messageID, productRoundID, reportID,
 		},
 		OmissionChecks: map[string]string{
-			stageEvalID: "evaluation_compartment",
+			stageEvalID:          "evaluation_compartment",
+			evaluationDecisionID: "evaluation_compartment",
 		},
 	}
 }

@@ -190,8 +190,8 @@ func TestEvaluatedSubjectSerializationExcludesPrivateArtifactWhileGraderUsesFroz
 		t.Fatalf("grader frozen private entries=%d want=1", privateEntriesBefore)
 	}
 	revokeIntegrationManifestEvaluationGrant(t, ctx, pool, fixture.workspaceID, run.SessionID, graderAttempt.ID)
-	if _, err = store.TaskContextForAttempt(ctx, graderAttempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("revoked grader surface err=%v want ErrInvalidTransition", err)
+	if _, err = store.TaskContextForAttempt(ctx, graderAttempt.ID, fixture.workspaceID); !errors.Is(err, ErrArtifactAccessDenied) || !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("revoked grader surface err=%v want access denial and transition compatibility", err)
 	}
 	if privateEntriesAfter := countManifestEntriesForArtifact(
 		t, ctx, pool, fixture.workspaceID, run.SessionID, graderAttempt.ID, privateID,

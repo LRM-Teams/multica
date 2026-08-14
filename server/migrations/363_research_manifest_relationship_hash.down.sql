@@ -1,0 +1,3 @@
+ALTER TABLE research_artifact_context_entry
+  DROP CONSTRAINT IF EXISTS research_artifact_context_entry_selection_relationship_hash_check,
+  DROP COLUMN IF EXISTS selection_relationship_hash;

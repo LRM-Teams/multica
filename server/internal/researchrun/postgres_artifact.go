@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -345,14 +346,112 @@ func registerProductionDecisionPassportTx(
 	if err != nil {
 		return err
 	}
-	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: decisionID,
 		Kind: kind, SourceCreatedAt: &createdAt,
 		ProvenanceCompleteness: ArtifactProvenanceComplete,
 		GoalVersion:            &goalVersion, PlanVersion: &planVersion,
 		AccessLevel: accessLevel, HashOrigin: ArtifactHashOriginProduction,
 		ContentHash: contentHash, ProducedByAttemptID: producedByAttemptID,
-	})
+	}); err != nil {
+		return err
+	}
+	return persistDecisionInputReferencesTx(
+		ctx, tx, workspaceID, sessionID, decisionID, kind, inputs, outcome,
+	)
+}
+
+func persistDecisionInputReferencesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, decisionID string,
+	decisionKind ArtifactEntityKind,
+	inputsJSON, outcomeJSON []byte,
+) error {
+	var inputs, outcome map[string]json.RawMessage
+	if err := json.Unmarshal(inputsJSON, &inputs); err != nil {
+		return fmt.Errorf("%w: decode Decision inputs lineage: %v", ErrInvalidContract, err)
+	}
+	if err := json.Unmarshal(outcomeJSON, &outcome); err != nil {
+		return fmt.Errorf("%w: decode Decision outcome lineage: %v", ErrInvalidContract, err)
+	}
+	type referenceSpec struct {
+		container map[string]json.RawMessage
+		field     string
+		kind      ArtifactEntityKind
+		relation  string
+	}
+	direct := []referenceSpec{
+		{inputs, "task_id", ArtifactKindTask, "decision_input_task"},
+		{inputs, "attempt_id", ArtifactKindAttempt, "decision_input_attempt"},
+		{inputs, "question_id", ArtifactKindQuestion, "decision_input_question"},
+		{inputs, "report_id", ArtifactKindReportRevision, "decision_input_report"},
+		{outcome, "created_by_task_id", ArtifactKindTask, "decision_creator_task"},
+		{outcome, "task_id", ArtifactKindTask, "decision_outcome_task"},
+		{outcome, "attempt_id", ArtifactKindAttempt, "decision_outcome_attempt"},
+		{outcome, "question_id", ArtifactKindQuestion, "decision_outcome_question"},
+		{outcome, "report_id", ArtifactKindReportRevision, "decision_outcome_report"},
+		{outcome, "evaluation_decision_id", ArtifactKindEvaluationDecision, "decision_evaluation"},
+	}
+	for _, reference := range direct {
+		artifactID, present, err := decisionReferenceID(reference.container, reference.field)
+		if err != nil {
+			return err
+		}
+		if !present {
+			continue
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			decisionID, decisionKind, artifactID, reference.kind,
+			reference.relation, "decision_materialization", 0,
+		); err != nil {
+			return err
+		}
+	}
+	arrays := []referenceSpec{
+		{inputs, "affected_branch_ids", ArtifactKindBranch, "decision_affected_branch"},
+		{outcome, "impacted_branch_ids", ArtifactKindBranch, "decision_impacted_branch"},
+		{outcome, "obsolete_branch_ids", ArtifactKindBranch, "decision_obsolete_branch"},
+		{outcome, "obsolete_task_ids", ArtifactKindTask, "decision_obsolete_task"},
+		{outcome, "cancel_running_task_ids", ArtifactKindTask, "decision_cancel_task"},
+		{outcome, "retained_running_task_ids", ArtifactKindTask, "decision_retained_task"},
+	}
+	for _, reference := range arrays {
+		raw, present := reference.container[reference.field]
+		if !present || string(raw) == "null" {
+			continue
+		}
+		var artifactIDs []string
+		if err := json.Unmarshal(raw, &artifactIDs); err != nil {
+			return fmt.Errorf("%w: Decision has invalid %s reference array", ErrInvalidContract, reference.field)
+		}
+		for ordinal, artifactID := range artifactIDs {
+			if strings.TrimSpace(artifactID) == "" {
+				return fmt.Errorf("%w: Decision has empty %s reference", ErrInvalidContract, reference.field)
+			}
+			if err := persistTypedArtifactInputReferenceTx(
+				ctx, tx, workspaceID, sessionID,
+				decisionID, decisionKind, artifactID, reference.kind,
+				reference.relation, "decision_materialization", ordinal,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decisionReferenceID(container map[string]json.RawMessage, field string) (string, bool, error) {
+	raw, present := container[field]
+	if !present || string(raw) == "null" {
+		return "", false, nil
+	}
+	var artifactID string
+	if err := json.Unmarshal(raw, &artifactID); err != nil || strings.TrimSpace(artifactID) == "" {
+		return "", false, fmt.Errorf("%w: Decision has invalid %s reference", ErrInvalidContract, field)
+	}
+	return artifactID, true, nil
 }
 
 func decisionArtifactContent(

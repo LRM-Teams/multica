@@ -727,6 +727,32 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 			return nil, 0, err
 		}
 	}
+	for _, questionID := range createdIDs {
+		var parentID, createdByTaskID string
+		if err = tx.QueryRow(ctx, `
+			SELECT COALESCE(parent_question_id::text, ''), created_by_task_id::text
+			FROM research_question
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, state.workspaceID, state.run.SessionID, questionID).Scan(&parentID, &createdByTaskID); err != nil {
+			return nil, 0, err
+		}
+		if parentID != "" {
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				questionID, ArtifactKindQuestion, parentID, ArtifactKindQuestion,
+				"question_parent", "question_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, state.workspaceID, state.run.SessionID,
+			questionID, ArtifactKindQuestion, createdByTaskID, ArtifactKindTask,
+			"created_by_task", "question_materialization", 0,
+		); err != nil {
+			return nil, 0, err
+		}
+	}
 	return ids, created, nil
 }
 
@@ -1356,7 +1382,8 @@ func persistTypedArtifactInputReferenceTx(
 	relation, purpose string,
 	ordinal int,
 ) error {
-	var inserted int
+	var resolved int
+	var persistedOrdinal *int
 	err := tx.QueryRow(ctx, `
 		WITH consumer AS (
 			SELECT version.id
@@ -1381,17 +1408,32 @@ func persistTypedArtifactInputReferenceTx(
 			)
 			SELECT $1::uuid, $2::uuid, consumer.id, input.id, $7, true, $8, $9
 			FROM consumer CROSS JOIN input
+			ON CONFLICT (workspace_id, session_id, consumer_version_id, input_version_id, relation)
+			DO NOTHING
 			RETURNING 1
 		)
-		SELECT count(*)::int FROM inserted
-	`, workspaceID, sessionID, consumerID, string(consumerKind), inputID, string(inputKind), relation, purpose, ordinal).Scan(&inserted)
+		SELECT
+		  (SELECT count(*)::int FROM consumer CROSS JOIN input),
+		  (SELECT reference.ordinal
+		   FROM research_artifact_input_reference reference
+		   CROSS JOIN consumer CROSS JOIN input
+		   WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
+		     AND reference.consumer_version_id=consumer.id
+		     AND reference.input_version_id=input.id AND reference.relation=$7)
+	`, workspaceID, sessionID, consumerID, string(consumerKind), inputID, string(inputKind), relation, purpose, ordinal).Scan(&resolved, &persistedOrdinal)
 	if err != nil {
 		return err
 	}
-	if inserted != 1 {
+	if resolved != 1 || persistedOrdinal == nil {
 		return fmt.Errorf(
 			"%w: %s %s could not resolve %s %s for %s lineage",
 			ErrInvalidResult, consumerKind, consumerID, inputKind, inputID, relation,
+		)
+	}
+	if *persistedOrdinal != ordinal {
+		return fmt.Errorf(
+			"%w: %s %s has conflicting %s lineage ordinal %d (want %d)",
+			ErrInvalidResult, consumerKind, consumerID, relation, *persistedOrdinal, ordinal,
 		)
 	}
 	return nil
@@ -2078,7 +2120,7 @@ func updateQuestionProgress(ctx context.Context, tx pgx.Tx, state acceptedResult
 			}
 		}
 	}
-	_, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE research_question
 		SET coverage = LEAST(1, coverage + $2),
 		    status = CASE
@@ -2089,7 +2131,20 @@ func updateQuestionProgress(ctx context.Context, tx pgx.Tx, state acceptedResult
 		    updated_at = now()
 		WHERE id = $1::uuid
 	`, state.task.QuestionID, result.CoverageDelta, answerClaimID)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("%w: question %s is unavailable", ErrInvalidResult, state.task.QuestionID)
+	}
+	if answerClaimID == "" {
+		return nil
+	}
+	return persistTypedArtifactInputReferenceTx(
+		ctx, tx, state.workspaceID, state.run.SessionID,
+		state.task.QuestionID, ArtifactKindQuestion, answerClaimID, ArtifactKindClaim,
+		"answer_claim", "question_progress", 0,
+	)
 }
 
 func verificationTask(kind TaskKind) bool {

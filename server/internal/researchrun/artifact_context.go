@@ -574,11 +574,12 @@ func loadManifestGateSnapshotPool(
 	workspaceID, sessionID, attemptID string,
 ) (GateResult, bool, error) {
 	var raw []byte
+	var storedHash string
 	err := pool.QueryRow(ctx, `
-		SELECT gate_snapshot_bytes
+		SELECT gate_snapshot_bytes, gate_snapshot_hash
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, workspaceID, sessionID, attemptID).Scan(&raw)
+	`, workspaceID, sessionID, attemptID).Scan(&raw, &storedHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GateResult{}, false, nil
 	}
@@ -586,7 +587,13 @@ func loadManifestGateSnapshotPool(
 		return GateResult{}, false, err
 	}
 	if len(raw) == 0 {
+		if storedHash != "" {
+			return GateResult{}, false, fmt.Errorf("%w: empty frozen gate snapshot has a hash", ErrInvalidTransition)
+		}
 		return GateResult{}, false, nil
+	}
+	if storedHash == "" || storedHash != contentHashFromPayload(raw) {
+		return GateResult{}, false, fmt.Errorf("%w: frozen gate snapshot hash mismatch", ErrInvalidTransition)
 	}
 	var gate GateResult
 	if err = json.Unmarshal(raw, &gate); err != nil {

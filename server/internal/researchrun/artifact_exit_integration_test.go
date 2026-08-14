@@ -561,6 +561,72 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	}
 }
 
+func TestTaskContextForAttemptRejectsTamperedFrozenGateSnapshot(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	cases := []struct {
+		name   string
+		mutate string
+	}{
+		{
+			name: "bytes",
+			mutate: `UPDATE research_artifact_context_manifest
+			         SET gate_snapshot_bytes='{"passed":true,"score":1,"findings":[]}'::bytea
+			         WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid`,
+		},
+		{
+			name: "hash",
+			mutate: `UPDATE research_artifact_context_manifest
+			         SET gate_snapshot_hash='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+			         WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := seedResearchRunFixture(t, ctx, pool)
+			defer cleanupResearchRunFixture(pool, fixture)
+			store := NewPostgresStore(pool)
+			run, _, createErr := store.CreateRun(ctx, StartInput{
+				WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+				LeadAgentID: fixture.agentID, Goal: "Gate snapshot integrity", Title: "Gate integrity",
+				DepthTier: "standard", Language: "English",
+			}, DefaultRunConfig("standard"))
+			if createErr != nil {
+				t.Fatal(createErr)
+			}
+			tasks, listErr := store.ListTasks(ctx, run.SessionID)
+			if listErr != nil || len(tasks) == 0 {
+				t.Fatalf("ListTasks err=%v len=%d", listErr, len(tasks))
+			}
+			attempt, _, dispatchErr := store.CreateDispatchIntent(ctx, testDispatchIntentInput(
+				t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID,
+			))
+			if dispatchErr != nil {
+				t.Fatal(dispatchErr)
+			}
+			if _, readErr := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); readErr != nil {
+				t.Fatalf("control frozen read: %v", readErr)
+			}
+			if _, mutateErr := pool.Exec(ctx, tc.mutate, fixture.workspaceID, run.SessionID, attempt.ID); mutateErr != nil {
+				t.Fatal(mutateErr)
+			}
+			if _, readErr := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(readErr, ErrInvalidTransition) {
+				t.Fatalf("tampered %s read err=%v want ErrInvalidTransition", tc.name, readErr)
+			}
+		})
+	}
+}
+
 func gateFindingCount(gate GateResult, code string) (int, bool) {
 	for _, finding := range gate.Findings {
 		if finding.Code != code {

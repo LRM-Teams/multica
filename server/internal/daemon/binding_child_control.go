@@ -47,6 +47,60 @@ func (client *bindingHostControlClient) forwardMachineActions(ctx context.Contex
 // DaemonCore connect socket received computer:upgrade / computer:restart.
 // Binding children do not swap the machine binary; they forward the command
 // to Computer Host through the injected Host control seam.
+func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
+	if ack == nil || ack.RuntimeID == "" {
+		return
+	}
+	if ack.RuntimeGone {
+		go d.handleRuntimeGone(ack.RuntimeID)
+		return
+	}
+	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
+}
+
+func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *HeartbeatResponse) {
+	if d == nil || ack == nil {
+		return
+	}
+	if d.bindingHostControl == nil {
+		d.handleWSHeartbeatAck(ctx, ack)
+		return
+	}
+	local := *ack
+	local.PendingUpdate = nil
+	local.PendingMachineUpgrade = nil
+	local.PendingRestart = nil
+	local.ReleaseManifestBaseURL = ""
+	d.handleWSHeartbeatAck(ctx, &local)
+
+	machine := HeartbeatResponse{
+		RuntimeID:              ack.RuntimeID,
+		Status:                 ack.Status,
+		PendingUpdate:          ack.PendingUpdate,
+		PendingMachineUpgrade:  ack.PendingMachineUpgrade,
+		PendingRestart:         ack.PendingRestart,
+		ReleaseManifestBaseURL: ack.ReleaseManifestBaseURL,
+	}
+	if machine.PendingUpdate == nil && machine.PendingMachineUpgrade == nil && machine.PendingRestart == nil && machine.ReleaseManifestBaseURL == "" {
+		return
+	}
+	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, machine); err != nil && d.logger != nil {
+		d.logger.Warn("forward Binding child machine action to Host failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
+	}
+}
+
+func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
+	return protocol.DaemonHeartbeatRequestPayload{
+		RuntimeID:                 runtimeID,
+		ComputerGeneration:        d.cfg.ComputerGeneration,
+		SupportsBatchImport:       true,
+		SupportsMemoryCuration:    true,
+		ActiveMemoryCurationRunID: d.activeMemoryCurationRun(runtimeID),
+	}
+}
+
 func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
 	if d == nil {
 		return errors.New("DaemonCore is unavailable")

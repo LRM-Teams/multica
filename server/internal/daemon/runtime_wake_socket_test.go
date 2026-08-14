@@ -1,5 +1,8 @@
 package daemon
 
+// Tests for the leftover runtime wake / reminder socket in
+// runtime_wake_socket.go. They do not cover DaemonConnection liveness.
+
 import (
 	"encoding/json"
 	"io"

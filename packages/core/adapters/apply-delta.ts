@@ -120,6 +120,7 @@ export function applyCanvasDelta(
 
   const nodes = snapshot.nodes.slice();
   const edges = snapshot.edges.slice();
+  const clusters = (snapshot.clusters ?? []).slice();
   const appliedNodeIds: string[] = [];
   const appliedEdgeIds: string[] = [];
 
@@ -128,6 +129,17 @@ export function applyCanvasDelta(
   }
   for (const e of delta.upsertEdges) {
     if (upsertEdge(edges, e)) appliedEdgeIds.push(e.id);
+  }
+  for (const incoming of delta.upsertClusters ?? []) {
+    const index = clusters.findIndex((cluster) => cluster.id === incoming.id);
+    if (index >= 0) clusters[index] = incoming;
+    else clusters.push(incoming);
+  }
+  if (delta.tombstoneClusterIds?.length) {
+    const tombstones = new Set(delta.tombstoneClusterIds);
+    for (let index = clusters.length - 1; index >= 0; index--) {
+      if (tombstones.has(clusters[index]!.id)) clusters.splice(index, 1);
+    }
   }
 
   // Visibility tombstones: drop the view node and every dangling edge.
@@ -166,9 +178,10 @@ export function applyCanvasDelta(
   const next: CanvasSnapshot = {
     ...snapshot,
     throughEventSequence: delta.throughSequence,
-    graphContentHash: snapshotContentHash({ ...snapshot, nodes, edges: nextEdges }),
+    graphContentHash: snapshotContentHash({ ...snapshot, nodes, edges: nextEdges, clusters }),
     nodes,
     edges: nextEdges,
+    clusters,
   };
 
   return {

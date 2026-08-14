@@ -223,7 +223,7 @@ func TestExecutionCircuitConfigurationResetAndRunLeaseFence(t *testing.T) {
 	}); !errors.Is(err, ErrRunLeaseLost) {
 		t.Fatalf("stale reconciler circuit mutation err=%v", err)
 	}
-	if err = store.ReleaseRun(ctx, secondLease, time.Now().UTC()); err != nil {
+	if err = store.ReleaseRun(ctx, secondLease, time.Now().UTC(), ""); err != nil {
 		t.Fatal(err)
 	}
 

@@ -45,6 +45,27 @@ vi.mock("@multica/core/api", () => ({
   api: { getBaseUrl: () => "" },
 }));
 
+vi.mock("@multica/core/paths", () => ({
+  useWorkspacePaths: () => ({
+    noteDetail: (id: string) => `/acme/notes/${id}`,
+  }),
+}));
+
+vi.mock("../../navigation", () => ({
+  AppLink: ({
+    href,
+    children,
+    ...props
+  }: {
+    href: string;
+    children: React.ReactNode;
+  }) => (
+    <a href={href} {...props}>
+      {children}
+    </a>
+  ),
+}));
+
 vi.mock("@multica/core/stickers", () => ({
   stickerCatalogOptions: () => ({ queryKey: ["stickers", "catalog"] }),
 }));
@@ -278,5 +299,23 @@ describe("MessagePartsRenderer — note_brief", () => {
 
     await user.click(screen.getByTestId("note-brief-toggle"));
     expect(screen.getByTestId("note-brief-body").textContent).toContain("Verify DM reply path.");
+  });
+
+  it("links back to the source note from the expanded brief (N2-A4)", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    const part: MessagePart = {
+      type: "note_brief",
+      ref_id: "page-42",
+      label: "Weekly plan",
+      text: "Ship the bridge.",
+    };
+
+    renderWithI18n(<MessagePartsRenderer parts={[part]} />);
+    await user.click(screen.getByTestId("note-brief-toggle"));
+
+    const link = screen.getByTestId("note-brief-open-note");
+    expect(link.getAttribute("href")).toMatch(/\/notes\/page-42/);
+    expect(link.textContent).toMatch(/Open note|打开笔记/);
   });
 });

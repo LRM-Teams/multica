@@ -121,7 +121,7 @@ describe("NoteWorkerRunDialog", () => {
       screen.getByPlaceholderText(/Create issues from this brief/i),
       "Create issues from this brief",
     );
-    await user.click(screen.getByRole("button", { name: /Start|开始/i }));
+    await user.click(screen.getByRole("button", { name: /^Start$/i }));
 
     await waitFor(() => {
       expect(createNoteWorkerJob).toHaveBeenCalledWith("page-1", {
@@ -149,7 +149,7 @@ describe("NoteWorkerRunDialog", () => {
       screen.getByPlaceholderText(/Create issues from this brief/i),
       "Summarize for the channel",
     );
-    await user.click(screen.getByRole("button", { name: /Start|开始/i }));
+    await user.click(screen.getByRole("button", { name: /^Start$/i }));
 
     await waitFor(() => {
       expect(createNoteWorkerJob).toHaveBeenCalledWith("page-1", {
@@ -179,5 +179,70 @@ describe("NoteWorkerRunDialog", () => {
         intent: "worker",
       });
     });
+  });
+
+  it("fills a coordination playbook and prefers a channel destination", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: /Start collaboration/i }));
+
+    const input = screen.getByPlaceholderText(
+      /Create issues from this brief/i,
+    ) as HTMLTextAreaElement;
+    expect(input.value).toMatch(/coordination channel/i);
+    expect(input.value).toMatch(/assign/i);
+    expect(screen.getByText("general")).toBeTruthy();
+    expect(screen.getByText(/works best in a group channel/i)).toBeTruthy();
+  });
+
+  it("fills hire and writeback playbooks with stable keywords", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: /Ask Wendy to hire/i }));
+    let input = screen.getByPlaceholderText(
+      /Create issues from this brief/i,
+    ) as HTMLTextAreaElement;
+    expect(input.value).toMatch(/Wendy/i);
+    expect(input.value).toMatch(/hiring proposal/i);
+    expect(input.value).toMatch(/do not create agents yourself/i);
+
+    await user.click(screen.getByRole("button", { name: /Prepare writeback/i }));
+    input = screen.getByPlaceholderText(
+      /Create issues from this brief/i,
+    ) as HTMLTextAreaElement;
+    expect(input.value).toMatch(/pending writeback/i);
+    expect(input.value).toMatch(/do not edit the note body directly/i);
+  });
+
+  it("hides the channel hint after a channel is selected; still dispatches Worker only", async () => {
+    const user = userEvent.setup();
+    createNoteWorkerJob.mockResolvedValue(dispatchedJob({ channel_id: "ch-1" }));
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: /Start collaboration/i }));
+    expect(screen.getByText(/works best in a group channel/i)).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText("general")).toBeTruthy();
+    });
+    await user.click(screen.getByText("general"));
+    expect(screen.queryByText(/works best in a group channel/i)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /^Start$/i }));
+    await waitFor(() => {
+      expect(createNoteWorkerJob).toHaveBeenCalledWith(
+        "page-1",
+        expect.objectContaining({
+          agent_id: "agent-1",
+          intent: "worker",
+          channel_id: "ch-1",
+        }),
+      );
+    });
+    const [, body] = createNoteWorkerJob.mock.calls.at(-1) as [string, { instruction: string }];
+    expect(body.instruction).toMatch(/coordination channel/i);
+    expect(createNoteAIJob).not.toHaveBeenCalled();
   });
 });

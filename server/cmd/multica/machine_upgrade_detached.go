@@ -20,7 +20,7 @@ const detachedSuccessorPortReleaseTimeout = 5 * time.Second
 const detachedSuccessorReadyTimeout = 45 * time.Second
 const detachedSuccessorCommitRetryTimeout = 15 * time.Second
 
-var spawnDetachedDaemonBinary = startDetachedDaemonBinary
+var spawnDetachedComputerBinary = startDetachedComputerBinary
 var requestDetachedSuccessorTakeover = commitDetachedSuccessorTakeover
 var probeDetachedSuccessorHealth = func(profile string) map[string]any {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -33,13 +33,13 @@ var probeDetachedSuccessorAttestation = func(profile string) (computer.MachineAt
 	return computer.ProbeMachineAttestation(ctx, computer.HealthPort(profile))
 }
 
-// startDetachedDaemonBinary launches the committed target as the next Computer
+// startDetachedComputerBinary launches the committed target as the next Computer
 // generation only after the machine-wide loopback control port is no longer
 // live. It inherits neither a supervisor marker nor the incumbent process
 // group, so a failed target cannot keep the old process alive as a hidden
 // second owner. The successor must independently bind the port and complete
 // normal Machine Upgrade registration/convergence.
-func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string, takeoverExpectation *daemon.MachineUpgradeTakeoverProof) error {
+func startDetachedComputerBinary(binaryPath, profile, expectedVersion string, takeoverExpectation *daemon.MachineUpgradeTakeoverProof) error {
 	if binaryPath == "" {
 		return fmt.Errorf("detached successor binary is required")
 	}

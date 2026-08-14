@@ -41,17 +41,33 @@ type localAgentAttachmentRegistry struct {
 	placementHighWatermarks map[string]int64
 	runtimeLifecycleCursors map[string]int64
 	root                    string
+	workspacesRoot          string
+	workspaceScope          string
 	path                    string
 	logger                  *slog.Logger
 	writeState              func(string, []byte) error
 }
 
 func newLocalAgentAttachmentRegistry(workspacesRoot string, logger *slog.Logger) *localAgentAttachmentRegistry {
+	return newLocalAgentAttachmentRegistryAt(workspacesRoot, workspacesRoot, logger)
+}
+
+func newLocalAgentAttachmentRegistryAt(stateRoot, workspacesRoot string, logger *slog.Logger) *localAgentAttachmentRegistry {
+	return newLocalAgentAttachmentRegistryAtScope(stateRoot, workspacesRoot, "", logger)
+}
+
+func newLocalAgentAttachmentRegistryForBinding(stateRoot, workspacesRoot, workspaceID string, logger *slog.Logger) *localAgentAttachmentRegistry {
+	return newLocalAgentAttachmentRegistryAtScope(stateRoot, workspacesRoot, workspaceID, logger)
+}
+
+func newLocalAgentAttachmentRegistryAtScope(stateRoot, workspacesRoot, workspaceID string, logger *slog.Logger) *localAgentAttachmentRegistry {
 	registry := &localAgentAttachmentRegistry{
 		agents:                  make(map[string]localAgentAttachmentRecord),
 		placementHighWatermarks: make(map[string]int64),
 		runtimeLifecycleCursors: make(map[string]int64),
-		root:                    strings.TrimSpace(workspacesRoot),
+		root:                    strings.TrimSpace(stateRoot),
+		workspacesRoot:          strings.TrimSpace(workspacesRoot),
+		workspaceScope:          strings.TrimSpace(workspaceID),
 		logger:                  logger,
 		writeState:              writeDaemonStateAtomically,
 	}
@@ -653,10 +669,14 @@ func (r *localAgentAttachmentRegistry) load() {
 // for another task to execute. Removed Attachments remain fenced so stale
 // credential directories cannot resurrect them after detach or migration.
 func (r *localAgentAttachmentRegistry) bootstrapFromLocalAgentConfigs() {
-	if r == nil || r.root == "" {
+	if r == nil || r.workspacesRoot == "" {
 		return
 	}
-	workspaces, err := os.ReadDir(r.root)
+	if r.workspaceScope != "" {
+		r.bootstrapWorkspaceAgentConfigs(r.workspaceScope)
+		return
+	}
+	workspaces, err := os.ReadDir(r.workspacesRoot)
 	if err != nil {
 		if !os.IsNotExist(err) && r.logger != nil {
 			r.logger.Warn("scan Agent Attachment bootstrap configs failed", "error", err)
@@ -667,33 +687,40 @@ func (r *localAgentAttachmentRegistry) bootstrapFromLocalAgentConfigs() {
 		if !workspace.IsDir() || !isCanonicalUUIDDirName(workspace.Name()) {
 			continue
 		}
-		agentsRoot := agentworkspace.AgentsDir(r.root, workspace.Name())
-		agents, readErr := os.ReadDir(agentsRoot)
+		r.bootstrapWorkspaceAgentConfigs(workspace.Name())
+	}
+}
+
+func (r *localAgentAttachmentRegistry) bootstrapWorkspaceAgentConfigs(workspaceID string) {
+	if r == nil || !isCanonicalUUIDDirName(workspaceID) {
+		return
+	}
+	agentsRoot := agentworkspace.AgentsDir(r.workspacesRoot, workspaceID)
+	agents, readErr := os.ReadDir(agentsRoot)
+	if readErr != nil {
+		return
+	}
+	for _, agentDir := range agents {
+		if !agentDir.IsDir() {
+			continue
+		}
+		configPath := filepath.Join(agentworkspace.Root(r.workspacesRoot, workspaceID, agentDir.Name()), "runtime", "credentials", "current.json")
+		raw, readErr := os.ReadFile(configPath)
 		if readErr != nil {
 			continue
 		}
-		for _, agentDir := range agents {
-			if !agentDir.IsDir() {
-				continue
-			}
-			configPath := filepath.Join(agentworkspace.Root(r.root, workspace.Name(), agentDir.Name()), "runtime", "credentials", "current.json")
-			raw, readErr := os.ReadFile(configPath)
-			if readErr != nil {
-				continue
-			}
-			var config cachedAgentCredential
-			if json.Unmarshal(raw, &config) != nil || config.AgentID == "" || config.AgentID != agentDir.Name() || config.WorkspaceID != workspace.Name() {
-				continue
-			}
-			if r.placementHighWatermarks[config.AgentID] > 0 {
-				continue
-			}
-			if _, exists := r.agents[config.AgentID]; exists {
-				continue
-			}
-			r.agents[config.AgentID] = localAgentAttachmentRecord{
-				AgentID: config.AgentID, RuntimeID: config.RuntimeID, WorkspaceID: config.WorkspaceID,
-			}
+		var config cachedAgentCredential
+		if json.Unmarshal(raw, &config) != nil || config.AgentID == "" || config.AgentID != agentDir.Name() || config.WorkspaceID != workspaceID {
+			continue
+		}
+		if r.placementHighWatermarks[config.AgentID] > 0 {
+			continue
+		}
+		if _, exists := r.agents[config.AgentID]; exists {
+			continue
+		}
+		r.agents[config.AgentID] = localAgentAttachmentRecord{
+			AgentID: config.AgentID, RuntimeID: config.RuntimeID, WorkspaceID: config.WorkspaceID,
 		}
 	}
 }

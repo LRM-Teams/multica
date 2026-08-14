@@ -430,7 +430,7 @@ func (d *Daemon) attestAlreadyCurrentMachineUpgrade(ctx context.Context, receipt
 	if receipt == nil || strings.TrimSpace(receipt.ID) == "" || receipt.AcceptedGeneration == nil || strings.TrimSpace(*receipt.AcceptedGeneration) == "" {
 		return fmt.Errorf("already-current machine upgrade acceptance receipt is incomplete")
 	}
-	workspaceIDs := d.workspaceRunnerWorkspaceIDs()
+	workspaceIDs := d.attestationWorkspaceIDs()
 	if !sameStringSet(receipt.AcceptedWorkspaceIDs, workspaceIDs) {
 		return fmt.Errorf("already-current Workspace connection set does not match accepted complete set")
 	}

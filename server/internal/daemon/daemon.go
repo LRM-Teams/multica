@@ -22,6 +22,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/internal/secretscoped"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/internal/turntransport"
@@ -70,6 +71,13 @@ func (f taskRunnerFunc) run(ctx context.Context, task Task, provider string, slo
 	return f(ctx, task, provider, slot, log)
 }
 
+type daemonProcessRole uint8
+
+const (
+	daemonProcessLegacy daemonProcessRole = iota
+	daemonProcessBindingChild
+)
+
 var (
 	isBrewInstall        = cli.IsBrewInstall
 	getBrewPrefix        = cli.GetBrewPrefix
@@ -90,33 +98,33 @@ type workspaceState struct {
 	serverCapabilities []string
 }
 
-// Daemon is the local agent runtime that polls for and executes tasks.
+// Daemon implements one Workspace execution runtime. A Computer Binding child
+// uses the scoped role; the public Computer Host is composed in
+// internal/computer and never constructs this type.
 type Daemon struct {
 	cfg    Config
 	client *Client
 	logger *slog.Logger
+	role   daemonProcessRole
 
-	messageDraftStore             *MessageDraftStore
-	agentProxyCredentialMu        sync.RWMutex
-	agentProxyCredentials         map[[32]byte]authenticatedAgentProxy
-	messageSendMu                 sync.Mutex
-	messageSends                  map[string]int
-	workspaceRunnerMu             sync.RWMutex
-	workspaceRunners              map[string]*WorkspaceRunner
-	workspaceRunnerCancels        map[string]context.CancelFunc
-	workspaceRunnerRun            func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
-	workspaceRunnerSpawn          func(string) (computer.BindingChild, error)
-	workspaceRunnerChildren       map[string]computer.BindingChild
-	workspaceRunnerRecords        map[string]*computer.RunnerRecord
-	workspaceRunnerNow            func() time.Time
-	workspaceRunnerReconcileEvery time.Duration
-	mixedRunActivityOutbox        *mixedRunActivityOutbox
-	mixedRunActivityReporter      func(protocol.MixedRunActivityTransitionPayload) bool
-	lifecycleDiagnostics          *lifecycleDiagnosticWriter
-	machineUpgradeLog             *machineUpgradeEventLog
-	machineUpgradeTakeover        *machineUpgradeTakeover
-	runnerInstanceID              string
-	runnerDiagnostics             *runnerDiagnosticRegistry
+	messageDraftStore          *MessageDraftStore
+	agentProxyCredentialMu     sync.RWMutex
+	agentProxyCredentials      map[[32]byte]authenticatedAgentProxy
+	messageSendMu              sync.Mutex
+	messageSends               map[string]int
+	workspaceRunnerMu          sync.RWMutex
+	workspaceRunners           map[string]*WorkspaceRunner
+	mixedRunActivityOutbox     *mixedRunActivityOutbox
+	mixedRunActivityReporter   func(protocol.MixedRunActivityTransitionPayload) bool
+	lifecycleDiagnostics       *lifecycleDiagnosticWriter
+	machineUpgradeLog          *machineUpgradeEventLog
+	machineUpgradeTakeover     *machineUpgradeTakeover
+	runnerInstanceID           string
+	runnerDiagnostics          runnerDiagnosticSink
+	runnerDiagnosticStore      *diagnosticlog.Store
+	bindingHostControl         *bindingHostControlClient
+	bindingDiagnostics         *bindingChildDiagnosticForwarder
+	bindingChildMachineActions func(context.Context, string, *HeartbeatResponse)
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -254,6 +262,11 @@ type Daemon struct {
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.
 	canonicalRuntimes *canonicalAgentRuntimePool
+	// processAdmission is the machine-wide managed-launch admission seam. The
+	// legacy in-process composition uses the canonical pool; a Binding child
+	// replaces it with a generation-fenced Computer Host control client. A
+	// Computer Host does not construct Binding execution admission.
+	processAdmission agentProcessAdmission
 	// residentCrashBackoff tracks repeated crashes per agent×runtime (task
 	// #42②) so a resident process stuck crash-looping is flagged terminal
 	// instead of silently retried forever.
@@ -264,8 +277,18 @@ type Daemon struct {
 	canonicalResidentFactoryOverride canonicalRuntimeBackendFactory
 }
 
-// New creates a new Daemon instance.
+// New creates the legacy single-process execution composition. The public
+// Computer Host never calls this constructor; supervised Binding children use
+// RunBindingChild and its explicit scoped role.
 func New(cfg Config, logger *slog.Logger) *Daemon {
+	return newDaemonForRole(cfg, logger, daemonProcessLegacy)
+}
+
+func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *Daemon {
+	bindingStateRoot := strings.TrimSpace(cfg.BindingStateRoot)
+	if bindingStateRoot == "" {
+		bindingStateRoot = cfg.WorkspacesRoot
+	}
 	client := NewClient(cfg.ServerBaseURL)
 	// Tag every daemon HTTP request with the daemon's CLI version so the
 	// server can split logs/metrics by client version (parallel to the CLI).
@@ -275,6 +298,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		cfg:                       cfg,
 		client:                    client,
 		logger:                    logger,
+		role:                      role,
 		workspaces:                make(map[string]*workspaceState),
 		runtimeIndex:              make(map[string]Runtime),
 		runtimeSet:                newRuntimeSetWatcher(),
@@ -287,14 +311,11 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		sharedSkillScanCache:      make(map[string]string),
 		memoryCurationRuns:        make(map[string]string),
 		activeCurationRuns:        make(map[string]string),
-		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
-		messageDraftStore:         NewMessageDraftStore(cfg.WorkspacesRoot),
-		workspaceRunners:          make(map[string]*WorkspaceRunner),
-		workspaceRunnerCancels:    make(map[string]context.CancelFunc),
-		mixedRunActivityOutbox:    newMixedRunActivityOutbox(cfg.WorkspacesRoot),
-		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		runnerInstanceID:          uuid.NewString(),
-		machineUpgradeTakeover:    newMachineUpgradeTakeover(),
+	}
+	d.initializeBindingExecution(bindingStateRoot)
+	if role != daemonProcessBindingChild {
+		d.initializeLegacyMachineLifecycleModules()
 	}
 	// A standalone replacement may bind the exclusive control port and finish
 	// registration so the incumbent can inspect it, but it must not claim work
@@ -302,33 +323,50 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	if cfg.DetachedMachineUpgradeCandidate {
 		d.pauseClaims = true
 	}
-	d.canonicalRuntimes.setMaxAgentProcesses(cfg.MaxAgentProcesses)
+	return d
+}
+
+func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
+	d.workspaceRunners = make(map[string]*WorkspaceRunner)
+	d.canonicalRuntimes = newCanonicalAgentRuntimePool()
+	d.canonicalRuntimes.setMaxAgentProcesses(d.cfg.MaxAgentProcesses)
+	d.processAdmission = d.canonicalRuntimes.managedProcessAdmission()
 	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
 		d.onResidentRuntimeCrash(ev)
 	})
 	d.canonicalRuntimes.subscribeResidentRuntimeRecovered(func(agentID, runtimeID string) {
 		d.clearAgentProviderCrashedOnServer(runtimeID, agentID)
 	})
-	d.updateObservation = newUpdateObservationCoordinator(cfg, logger)
-	if cfg.WorkspacesRoot != "" {
-		d.lifecycleDiagnostics = newLifecycleDiagnosticWriter(filepath.Join(cfg.WorkspacesRoot, ".multica", "lifecycle-diagnostics"), time.Now)
-	}
-	d.machineUpgradeLog = newMachineUpgradeEventLog(time.Now)
-	sessions := newAgentRuntimeSessionStore(cfg.WorkspacesRoot)
+	d.messageDraftStore = NewMessageDraftStore(d.cfg.WorkspacesRoot)
+	d.mixedRunActivityOutbox = newMixedRunActivityOutbox(bindingStateRoot)
+	d.residentCrashBackoff = newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap)
+	sessions := newAgentRuntimeSessionStore(d.cfg.WorkspacesRoot)
 	d.agentRuntimeSessions = sessions
 	d.runner = taskRunnerFunc(d.runTask)
-	d.reminderCache = newReminderCache(nil, logger, nil)
-	d.agentAttachments = newLocalAgentAttachmentRegistry(cfg.WorkspacesRoot, logger)
+	d.reminderCache = newReminderCache(nil, d.logger, nil)
+	if d.role == daemonProcessBindingChild {
+		d.agentAttachments = newLocalAgentAttachmentRegistryForBinding(bindingStateRoot, d.cfg.WorkspacesRoot, d.cfg.WorkspaceID, d.logger)
+	} else {
+		d.agentAttachments = newLocalAgentAttachmentRegistryAt(bindingStateRoot, d.cfg.WorkspacesRoot, d.logger)
+	}
 	d.localReminderInbox = &LocalReminderInbox{daemon: d}
 	d.reminderCache.onFireDelivery = d.localReminderInbox.AcceptDue
 	d.reminderCache.onFireReceipt = d.queueReminderFireReceipt
-	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
+	d.reminderCache.setPersistence(bindingStateRoot)
+}
+
+func (d *Daemon) initializeLegacyMachineLifecycleModules() {
+	d.updateObservation = newUpdateObservationCoordinator(d.cfg, d.logger)
+	if d.cfg.WorkspacesRoot != "" {
+		d.lifecycleDiagnostics = newLifecycleDiagnosticWriter(filepath.Join(d.cfg.WorkspacesRoot, ".multica", "lifecycle-diagnostics"), time.Now)
+	}
+	d.machineUpgradeLog = newMachineUpgradeEventLog(time.Now)
+	d.machineUpgradeTakeover = newMachineUpgradeTakeover()
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	d.machineUpgradeStageFn = d.runStageUpdate
 	d.machineUpgradeVerifyFn = d.verifyStagedBinary
 	d.machineUpgradeRollbackFn = d.restoreMachineUpgradeSource
-	return d
 }
 
 // setAgentVersion records the detected CLI version for an agent provider so
@@ -625,6 +663,11 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	ws.runtimeIDs = newIDs
 	ws.serverCapabilities = append([]string(nil), resp.ServerCapabilities...)
 	d.mu.Unlock()
+	if d.bindingHostControl != nil {
+		if err := d.bindingHostControl.reportRuntimeSet(ctx, resp.Runtimes, resp.DaemonToken, resp.DaemonTokenExpiresAt); err != nil {
+			return fmt.Errorf("report re-registered Binding child Runtime set: %w", err)
+		}
+	}
 
 	for _, rid := range newIDs {
 		d.logger.Info("re-registered runtime after server-side deletion",
@@ -709,8 +752,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// prevent the Computer resident, Workspace Runners, or Agent turns from
 	// starting.
 	d.initializeRunnerDiagnostics()
-	if d.runnerDiagnostics != nil && d.runnerDiagnostics.store != nil {
-		defer d.runnerDiagnostics.store.Close()
+	if d.runnerDiagnosticStore != nil {
+		defer d.runnerDiagnosticStore.Close()
 	}
 
 	// Wrap context so handleUpdate can cancel the daemon for restart.
@@ -718,10 +761,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer cancel()
 	d.cancelFunc = cancel
 	d.rootCtx = ctx
-	if d.runnerDiagnostics != nil && d.runnerDiagnostics.store != nil {
-		go d.runnerDiagnostics.store.RunCleanup(ctx)
+	if d.runnerDiagnosticStore != nil {
+		go d.runnerDiagnosticStore.RunCleanup(ctx)
 	}
-	defer func() { _ = d.canonicalRuntimes.closeAll() }()
+	if d.canonicalRuntimes != nil {
+		defer func() { _ = d.canonicalRuntimes.closeAll() }()
+	}
 
 	// Bind health port early to detect another running daemon.
 	healthLn, err := d.listenHealth()
@@ -751,8 +796,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"machine_upgrade_mode", "explicit_only",
 		"launched_by", d.cfg.LaunchedBy,
 	)
-	if err := d.reminderCache.stateError(); err != nil {
-		return fmt.Errorf("reminder cache is not recoverable: %w", err)
+	if d.reminderCache != nil {
+		if err := d.reminderCache.stateError(); err != nil {
+			return fmt.Errorf("reminder cache is not recoverable: %w", err)
+		}
 	}
 
 	// Load auth token from CLI config.
@@ -782,17 +829,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.preflightAuth(ctx); err != nil {
 		return err
 	}
-	// preflight registered this Computer's runtimes. Recovery may immediately
-	// reactivate and restart an interrupted Machine Upgrade, so install cleanup
-	// before entering the recovery state machine.
 	defer d.deregisterRuntimes()
 	if restarted, err := d.recoverInterruptedMachineUpgrade(ctx); err != nil {
 		return fmt.Errorf("recover interrupted Machine Upgrade: %w", err)
 	} else if restarted {
 		return nil
-	}
-	if err := d.restoreResidentAgents(); err != nil {
-		return fmt.Errorf("restore resident Agents: %w", err)
 	}
 	// A supervised target records local readiness after normal authenticated
 	// registration/preflight. A v2 detached candidate is already live after
@@ -812,13 +853,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start workspace sync loop to discover newly created workspaces.
 	go d.workspaceSyncLoop(ctx)
 
-	taskWakeups := make(chan taskWakeup, 256)
-	go d.taskWakeupLoop(ctx, taskWakeups)
-	go d.workspaceRunnerLoop(ctx)
 	go d.diagnosticsCleanupLoop(ctx)
-	go d.residentCrashWatchLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
-	go d.sharedSkillsSyncLoop(ctx)
 	go d.releaseDetectionLoop(ctx)
 
 	// Preflight succeeded and the background loops are up: the daemon has
@@ -827,10 +863,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// readiness wait blocks on, so success is reported only after startup
 	// actually completed, not merely because the health port came up.
 	d.ready.Store(true)
-	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, workspace-runner, gc, token-renewal, shared-skills, release-detection); machine upgrades are explicit-only; health now reporting ready")
-	err = d.pollLoop(ctx, taskWakeups)
-	d.logger.Debug("daemon main loop returning", "error", err)
-	return err
+	d.logger.Debug("daemon execution loops launched; health now reporting ready")
+	<-ctx.Done()
+	d.logger.Debug("Computer Host main loop returning", "error", ctx.Err())
+	return ctx.Err()
 }
 
 // RestartBinary returns the path to the new binary if the daemon needs to restart
@@ -1338,7 +1374,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			d.mu.Lock()
 			d.workspaces[id] = newWorkspaceState(id, nil)
 			d.mu.Unlock()
-			d.logger.Info("watching zero-Agent workspace", "workspace_id", id, "name", name)
+			d.logger.Info("watching Workspace Binding", "workspace_id", id, "name", name)
 			registered++
 			continue
 		}
@@ -1433,33 +1469,17 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp == nil {
 		return
 	}
-	if err := d.reconcileMachineUpgradeTerminalJournal(ctx); err != nil {
-		d.logger.Debug("machine upgrade terminal marker not yet clearable", "runtime_id", runtimeID, "error", err)
+	if d.role != daemonProcessBindingChild {
+		d.handleLegacyMachineHeartbeatActions(ctx, runtimeID, resp)
 	}
-	if resp.ReleaseManifestBaseURL != "" {
-		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
-	}
-	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil {
-		d.logger.Debug("heartbeat: pending actions",
+	if resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil {
+		d.logger.Debug("heartbeat: pending Workspace actions",
 			"runtime_id", runtimeID,
-			"update", resp.PendingUpdate != nil,
-			"machine_upgrade", resp.PendingMachineUpgrade != nil,
 			"model_list", resp.PendingModelList != nil,
 			"local_skills", resp.PendingLocalSkills != nil,
 			"local_skill_import", resp.PendingLocalSkillImport != nil,
 			"memory_curation", resp.PendingMemoryCuration != nil,
-			"restart", resp.PendingRestart != nil,
 		)
-	}
-	if resp.PendingUpdate != nil {
-		go d.handleUpdate(ctx, runtimeID, resp.PendingUpdate)
-	}
-	if resp.PendingMachineUpgrade != nil {
-		go d.handleMachineUpgrade(ctx, runtimeID, resp.PendingMachineUpgrade)
-	}
-	if resp.PendingRestart != nil {
-		d.logger.Info("remote restart requested", "runtime_id", runtimeID, "restart_id", resp.PendingRestart.ID)
-		d.triggerRestart()
 	}
 	if resp.PendingModelList != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
@@ -1501,6 +1521,41 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 		} else {
 			go d.handleMemoryCuration(ctx, *rt, *resp.PendingMemoryCuration)
 		}
+	}
+}
+
+// handleLegacyMachineHeartbeatActions is intentionally unreachable from a
+// supervised Binding child. The production Computer resident owns these
+// actions in internal/computer and children forward them across Host control.
+func (d *Daemon) handleLegacyMachineHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {
+	if err := d.reconcileMachineUpgradeTerminalJournal(ctx); err != nil {
+		d.logger.Debug("machine upgrade terminal marker not yet clearable", "runtime_id", runtimeID, "error", err)
+	}
+	if resp.ReleaseManifestBaseURL != "" {
+		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
+	}
+	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 {
+		d.logger.Debug("heartbeat: pending actions",
+			"runtime_id", runtimeID,
+			"update", resp.PendingUpdate != nil,
+			"machine_upgrade", resp.PendingMachineUpgrade != nil,
+			"model_list", resp.PendingModelList != nil,
+			"local_skills", resp.PendingLocalSkills != nil,
+			"local_skill_import", resp.PendingLocalSkillImport != nil,
+			"memory_curation", resp.PendingMemoryCuration != nil,
+			"restart", resp.PendingRestart != nil,
+			"agent_lifecycle_operations", len(resp.PendingAgentLifecycleOperations),
+		)
+	}
+	if resp.PendingUpdate != nil {
+		go d.handleUpdate(ctx, runtimeID, resp.PendingUpdate)
+	}
+	if resp.PendingMachineUpgrade != nil {
+		go d.handleMachineUpgrade(ctx, runtimeID, resp.PendingMachineUpgrade)
+	}
+	if resp.PendingRestart != nil {
+		d.logger.Info("remote restart requested", "runtime_id", runtimeID, "restart_id", resp.PendingRestart.ID)
+		d.triggerRestart()
 	}
 }
 

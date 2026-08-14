@@ -84,3 +84,22 @@ func (d *Daemon) diagnosticsCleanupLoop(ctx context.Context) {
 		}
 	}
 }
+
+func (d *Daemon) recordAgentLifecycleTransition(transition agentLifecycleTransition) {
+	if d == nil {
+		return
+	}
+	if d.bindingDiagnostics != nil {
+		if err := d.bindingDiagnostics.recordLifecycle(transition); err != nil && d.logger != nil {
+			d.logger.Debug("Host lifecycle diagnostic aggregation failed", "reason", "queue_unavailable")
+		}
+		return
+	}
+	if d.lifecycleDiagnostics == nil {
+		return
+	}
+	if err := d.lifecycleDiagnostics.Record(transition); err != nil && d.logger != nil {
+		// Local diagnostics are intentionally non-blocking for lifecycle.
+		d.logger.Debug("agent lifecycle diagnostic write failed", "error", err)
+	}
+}

@@ -54,6 +54,51 @@ func TestCommandTestsDoNotConstructRealComputerLifecycle(t *testing.T) {
 	}
 }
 
+func TestComputerResidentConstructsComputerHostWithoutDaemonContainer(t *testing.T) {
+	packages, err := parser.ParseDir(token.NewFileSet(), ".", func(info fs.FileInfo) bool {
+		return strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundComputerHost bool
+	for _, pkg := range packages {
+		for filename, file := range pkg.Files {
+			ast.Inspect(file, func(node ast.Node) bool {
+				declaration, ok := node.(*ast.FuncDecl)
+				if !ok || declaration.Name.Name != "runComputerResident" {
+					return true
+				}
+				ast.Inspect(declaration.Body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					selector, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					owner, ok := selector.X.(*ast.Ident)
+					if !ok {
+						return true
+					}
+					if owner.Name == "daemon" {
+						t.Errorf("%s: Computer resident must not depend on internal/daemon (%s)", filename, selector.Sel.Name)
+					}
+					if owner.Name == "computer" && selector.Sel.Name == "NewHost" {
+						foundComputerHost = true
+					}
+					return true
+				})
+				return false
+			})
+		}
+	}
+	if !foundComputerHost {
+		t.Fatal("Computer resident does not construct computer.Host")
+	}
+}
+
 func TestComputerServiceCommandIsHiddenResidentEntry(t *testing.T) {
 	if got, want := computerServiceCmd.Use, computer.ResidentServiceArg; got != want {
 		t.Fatalf("computer service use = %q, want %q", got, want)

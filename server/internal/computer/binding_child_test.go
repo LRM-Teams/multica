@@ -1,9 +1,12 @@
 package computer
 
 import (
+	"context"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestBindingRunnerArgsAreComputerOwned(t *testing.T) {
@@ -89,7 +92,99 @@ func lookPathSleep() (sleepHelper, error) {
 }
 
 func TestStartBindingRunnerRequiresWorkspace(t *testing.T) {
-	if _, err := StartBindingRunner("/bin/true", ""); err == nil {
+	if _, err := StartBindingRunner("/bin/true", BindingChildBootstrap{}); err == nil {
 		t.Fatal("empty workspace-id must fail")
 	}
+}
+
+func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.T) {
+	t.Setenv("MULTICA_BINDING_CHILD_HELPER", "ready")
+	bootstrap := BindingChildBootstrap{
+		ProtocolVersion:    BindingChildProtocolVersion,
+		WorkspaceID:        "workspace-a",
+		DaemonID:           "computer-a",
+		ComputerGeneration: 11,
+		RunnerGeneration:   7,
+		Environment:        "test",
+		ServerBaseURL:      "https://test.example.com",
+		HostControlURL:     "http://127.0.0.1:19514",
+		BindingsRoot:       "/tmp/computer-a",
+		WorkspacesRoot:     "/tmp/workspaces-a",
+	}
+	child, err := StartBindingProcess(os.Args[0], []string{"-test.run=TestBindingChildProtocolHelper"}, bootstrap)
+	if err != nil {
+		t.Fatalf("StartBindingProcess: %v", err)
+	}
+	defer child.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ready, err := child.AwaitReady(ctx)
+	if err != nil {
+		t.Fatalf("AwaitReady: %v", err)
+	}
+	if ready.WorkspaceID != bootstrap.WorkspaceID || ready.RunnerGeneration != bootstrap.RunnerGeneration {
+		t.Fatalf("ready identity = %#v, want workspace %q generation %d", ready, bootstrap.WorkspaceID, bootstrap.RunnerGeneration)
+	}
+	if ready.PID != child.PID() {
+		t.Fatalf("ready pid = %d, want child pid %d", ready.PID, child.PID())
+	}
+	if class := child.Wait(); class != RunnerExitGraceful {
+		t.Fatalf("helper exit class = %s, want graceful", class)
+	}
+}
+
+func TestBindingChildReadyRejectsStaleGeneration(t *testing.T) {
+	t.Setenv("MULTICA_BINDING_CHILD_HELPER", "stale")
+	bootstrap := BindingChildBootstrap{
+		ProtocolVersion:    BindingChildProtocolVersion,
+		WorkspaceID:        "workspace-a",
+		DaemonID:           "computer-a",
+		ComputerGeneration: 11,
+		RunnerGeneration:   7,
+		Environment:        "production",
+		ServerBaseURL:      "https://api.leagent.me",
+		HostControlURL:     "http://127.0.0.1:19514",
+		BindingsRoot:       "/tmp/computer-a",
+		WorkspacesRoot:     "/tmp/workspaces-a",
+	}
+	child, err := StartBindingProcess(os.Args[0], []string{"-test.run=TestBindingChildProtocolHelper"}, bootstrap)
+	if err != nil {
+		t.Fatalf("StartBindingProcess: %v", err)
+	}
+	defer child.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := child.AwaitReady(ctx); err == nil || !strings.Contains(err.Error(), "runner generation") {
+		t.Fatalf("AwaitReady error = %v, want runner generation rejection", err)
+	}
+	if class := child.Wait(); class != RunnerExitGraceful {
+		t.Fatalf("helper exit class = %s, want graceful", class)
+	}
+}
+
+func TestBindingChildProtocolHelper(t *testing.T) {
+	mode := os.Getenv("MULTICA_BINDING_CHILD_HELPER")
+	if mode == "" {
+		return
+	}
+	bootstrap, err := ReadBindingChildBootstrap(os.Stdin)
+	if err != nil {
+		os.Exit(2)
+	}
+	ready := BindingChildReady{
+		ProtocolVersion:  BindingChildProtocolVersion,
+		WorkspaceID:      bootstrap.WorkspaceID,
+		RunnerGeneration: bootstrap.RunnerGeneration,
+		PID:              os.Getpid(),
+		ControlURL:       "http://127.0.0.1:19515",
+	}
+	if mode == "stale" {
+		ready.RunnerGeneration--
+	}
+	if err := WriteBindingChildReady(os.Stdout, ready); err != nil {
+		os.Exit(3)
+	}
+	os.Exit(0)
 }

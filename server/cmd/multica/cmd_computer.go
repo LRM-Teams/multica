@@ -11,6 +11,8 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
+	"github.com/multica-ai/multica/server/internal/daemon"
+	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
 )
 
 var computerCmd = &cobra.Command{
@@ -210,10 +212,45 @@ func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(workspaceID) == "" {
 		return fmt.Errorf("workspace-id is required")
 	}
+	bootstrap, err := computer.ReadBindingChildBootstrap(os.Stdin)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(workspaceID) != bootstrap.WorkspaceID {
+		return fmt.Errorf("workspace-id %q does not match Binding child bootstrap %q", workspaceID, bootstrap.WorkspaceID)
+	}
+	cfg, err := daemon.LoadConfig(daemon.Overrides{
+		ServerURL:      bootstrap.ServerBaseURL,
+		WorkspacesRoot: bootstrap.WorkspacesRoot,
+		DaemonID:       bootstrap.DaemonID,
+		Profile:        bootstrap.Profile,
+	})
+	if err != nil {
+		return err
+	}
+	cfg.CLIVersion = version
+	cfg.Environment = bootstrap.Environment
+	cfg.ServerBaseURL = bootstrap.ServerBaseURL
+	cfg.DaemonID = bootstrap.DaemonID
+	cfg.ComputerGeneration = bootstrap.ComputerGeneration
+	cfg.BindingsRoot = bootstrap.BindingsRoot
+	cfg.WorkspacesRoot = bootstrap.WorkspacesRoot
+	controlToken, err := computer.ReadControlToken(bootstrap.Profile)
+	if err != nil {
+		return fmt.Errorf("read Computer Host control token: %w", err)
+	}
+	cfg.LocalControlToken = controlToken
 	ctx, stop := notifyShutdownContext(context.Background())
 	defer stop()
-	<-ctx.Done()
-	return nil
+	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID, "runner_generation", bootstrap.RunnerGeneration)
+	return daemon.RunBindingChild(ctx, daemon.BindingChildRunConfig{
+		Daemon:    cfg,
+		Bootstrap: bootstrap,
+		Logger:    logger,
+		PublishReady: func(ready computer.BindingChildReady) error {
+			return computer.WriteBindingChildReady(os.Stdout, ready)
+		},
+	})
 }
 
 func addComputerResidentFlags(cmd *cobra.Command) {

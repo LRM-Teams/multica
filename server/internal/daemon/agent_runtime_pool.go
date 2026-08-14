@@ -174,6 +174,8 @@ type canonicalAgentRuntimePool struct {
 	managedProcessGrants    map[string]agentProcessCapacityGrant
 	pendingManagedProcesses map[string]pendingManagedProcess
 	pendingManagedOrder     []string
+	machineWorkspaceID      string
+	machineAdmission        agentProcessAdmission
 
 	// maxAgentProcesses bounds distinct agents with a live resident backend
 	// (backend != nil). 0 = unlimited. See #35 / resolveMaxAgentProcesses.
@@ -362,6 +364,17 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 				return nil, fmt.Errorf("canonical runtime before-create: %w", err)
 			}
 		}
+		machineGrant, err := p.reserveMachineProcessCapacity(request.Context, request.Identity.AgentID, request.Identity.RuntimeID)
+		if err != nil {
+			slot.running = false
+			return nil, err
+		}
+		machineGrantAttached := false
+		defer func() {
+			if machineGrant.LaunchID != "" && !machineGrantAttached {
+				p.releaseMachineProcessCapacity(machineGrant)
+			}
+		}()
 		config := request.BackendConfig
 		config.ExecutablePath = request.Identity.Executable
 		config.Env = cloneStringMap(request.Identity.Environment)
@@ -395,10 +408,13 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 			return nil, errors.New("canonical runtime backend factory returned nil backend")
 		}
 		backend = created
-		closeBackend = combineRuntimeCleanup(closeFn, processCleanup)
+		closeBackend = combineRuntimeCleanup(closeFn, processCleanup, func() {
+			p.releaseMachineProcessCapacity(machineGrant)
+		})
 		slot.backend = created
 		slot.close = closeBackend
 		slot.provider = request.Identity.Provider
+		machineGrantAttached = true
 		// New resident process is up — clear any server-side "crashed"
 		// fact from a prior idle death. First-ever create is a no-op clear.
 		// Fire async: we still hold slot.mu here and subscribers may do I/O.

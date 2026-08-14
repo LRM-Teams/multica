@@ -162,6 +162,9 @@ func prepareHeadlessWorkspaceRunnerTestDaemon(d *Daemon, workspacesRoot string) 
 	if d.canonicalRuntimes == nil {
 		d.canonicalRuntimes = newCanonicalAgentRuntimePool()
 	}
+	if d.processAdmission == nil {
+		d.processAdmission = d.canonicalRuntimes.managedProcessAdmission()
+	}
 	if d.client == nil {
 		d.client = NewClient("")
 	}

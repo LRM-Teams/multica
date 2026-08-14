@@ -42,7 +42,8 @@ type workspaceRunnerDependencies struct {
 	logger                      *slog.Logger
 	attachments                 *localAgentAttachmentRegistry
 	runtimes                    *canonicalAgentRuntimePool
-	diagnostics                 *runnerDiagnosticRegistry
+	processAdmission            agentProcessAdmission
+	diagnostics                 runnerDiagnosticSink
 	openInbox                   inboxCoordinatorFactory
 	runtimeSet                  func() AgentAttachmentRuntimeSet
 	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
@@ -80,7 +81,7 @@ type WorkspaceRunner struct {
 
 	attachments *localAgentAttachmentRegistry
 	runtimes    *canonicalAgentRuntimePool
-	diagnostics *runnerDiagnosticRegistry
+	diagnostics runnerDiagnosticSink
 
 	runtimeSet                  func() AgentAttachmentRuntimeSet
 	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
@@ -103,6 +104,7 @@ type WorkspaceRunner struct {
 
 	connectionMu sync.Mutex
 	connection   *workspaceRunnerConnection
+	onReady      func()
 }
 
 func (runner *WorkspaceRunner) WorkspaceID() string {
@@ -117,8 +119,8 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 	if err != nil {
 		return nil, err
 	}
-	if dependencies.client == nil || dependencies.attachments == nil || dependencies.runtimes == nil || dependencies.openInbox == nil || dependencies.runtimeSet == nil || dependencies.ensureResidentRuntime == nil {
-		return nil, errors.New("Workspace Runner client, Attachment registry, Runtime pool, Inbox factory, Runtime scope, and resident Runtime are required")
+	if dependencies.client == nil || dependencies.attachments == nil || dependencies.runtimes == nil || dependencies.processAdmission == nil || dependencies.openInbox == nil || dependencies.runtimeSet == nil || dependencies.ensureResidentRuntime == nil {
+		return nil, errors.New("Workspace Runner client, Attachment registry, Runtime pool, process admission, Inbox factory, Runtime scope, and resident Runtime are required")
 	}
 	now := dependencies.now
 	if now == nil {
@@ -149,7 +151,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		workspacesRoot: dependencies.workspacesRoot,
 		processes: newAgentProcessManager(
 			config.WorkspaceID,
-			dependencies.runtimes.managedProcessAdmission(),
+			dependencies.processAdmission,
 			now,
 			dependencies.onTransition,
 		),
@@ -336,6 +338,9 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	if runner.onReady != nil {
+		runner.onReady()
+	}
 	return runner.serveConnection(connection, conn)
 }
 
@@ -356,27 +361,22 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		return nil, errors.New("Workspace Runner Daemon is required")
 	}
 	onTransition := func(transition agentLifecycleTransition) {
-		if d.lifecycleDiagnostics == nil {
-			return
-		}
-		if err := d.lifecycleDiagnostics.Record(transition); err != nil && d.logger != nil {
-			// Local diagnostics are intentionally non-blocking for lifecycle.
-			d.logger.Debug("agent lifecycle diagnostic write failed", "error", err)
-		}
+		d.recordAgentLifecycleTransition(transition)
 	}
 	return newWorkspaceRunner(WorkspaceRunnerConfig{
 		DaemonID:         d.cfg.DaemonID,
 		DaemonInstanceID: d.runnerInstanceID,
 		WorkspaceID:      workspaceID,
 	}, workspaceRunnerDependencies{
-		client:         d.client,
-		serverBaseURL:  d.cfg.ServerBaseURL,
-		workspacesRoot: d.cfg.WorkspacesRoot,
-		logger:         d.logger,
-		attachments:    d.attachmentRegistry(),
-		runtimes:       d.canonicalRuntimes,
-		diagnostics:    d.runnerDiagnostics,
-		openInbox:      d.openMessageCoordinator,
+		client:           d.client,
+		serverBaseURL:    d.cfg.ServerBaseURL,
+		workspacesRoot:   d.cfg.WorkspacesRoot,
+		logger:           d.logger,
+		attachments:      d.attachmentRegistry(),
+		runtimes:         d.canonicalRuntimes,
+		processAdmission: d.processAdmission,
+		diagnostics:      d.runnerDiagnostics,
+		openInbox:        d.openMessageCoordinator,
 		runtimeSet: func() AgentAttachmentRuntimeSet {
 			return d.attachmentRuntimeSet(workspaceID)
 		},
@@ -412,7 +412,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		removeDetachedReminderAgent: d.removeDetachedReminderAgent,
 		controlHeartbeatInterval:    d.cfg.HeartbeatInterval,
 		controlHeartbeatPayload:     d.controlPlaneHeartbeatPayload,
-		controlHeartbeatAck:         d.handleWSHeartbeatAck,
+		controlHeartbeatAck:         d.handleWorkspaceRunnerControlAck,
 		controlHeartbeatChanges: func() (<-chan struct{}, func()) {
 			if d.updateObservation == nil {
 				return nil, func() {}

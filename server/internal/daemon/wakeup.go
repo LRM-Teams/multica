@@ -402,6 +402,39 @@ func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatRespons
 	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
 }
 
+func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *HeartbeatResponse) {
+	if d == nil || ack == nil {
+		return
+	}
+	if d.bindingHostControl == nil {
+		d.handleWSHeartbeatAck(ctx, ack)
+		return
+	}
+	local := *ack
+	local.PendingUpdate = nil
+	local.PendingMachineUpgrade = nil
+	local.PendingRestart = nil
+	local.ReleaseManifestBaseURL = ""
+	d.handleWSHeartbeatAck(ctx, &local)
+
+	machine := HeartbeatResponse{
+		RuntimeID:              ack.RuntimeID,
+		Status:                 ack.Status,
+		PendingUpdate:          ack.PendingUpdate,
+		PendingMachineUpgrade:  ack.PendingMachineUpgrade,
+		PendingRestart:         ack.PendingRestart,
+		ReleaseManifestBaseURL: ack.ReleaseManifestBaseURL,
+	}
+	if machine.PendingUpdate == nil && machine.PendingMachineUpgrade == nil && machine.PendingRestart == nil && machine.ReleaseManifestBaseURL == "" {
+		return
+	}
+	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, machine); err != nil && d.logger != nil {
+		d.logger.Warn("forward Binding child machine action to Host failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
+	}
+}
+
 // taskWakeupReadLimit must stay aligned with daemonws hub SetReadLimit.
 // Heartbeat acks can include pending_memory_curation with DB evidence bundles
 // that exceed the old 64KiB client limit and abort the socket with

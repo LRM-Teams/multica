@@ -26,7 +26,8 @@ func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
 	}
 	dependencies := workspaceRunnerDependencies{
 		client: NewClient(""), attachments: registry, runtimes: runtimes,
-		openInbox: func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
+		processAdmission: runtimes.managedProcessAdmission(),
+		openInbox:        func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
 		runtimeSet: func() AgentAttachmentRuntimeSet {
 			return AgentAttachmentRuntimeSet{WorkspaceID: "workspace-1"}
 		},
@@ -46,12 +47,13 @@ func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
 		})
 	}
 	for name, mutate := range map[string]func(*workspaceRunnerDependencies){
-		"client":           func(dependencies *workspaceRunnerDependencies) { dependencies.client = nil },
-		"attachments":      func(dependencies *workspaceRunnerDependencies) { dependencies.attachments = nil },
-		"runtimes":         func(dependencies *workspaceRunnerDependencies) { dependencies.runtimes = nil },
-		"Inbox factory":    func(dependencies *workspaceRunnerDependencies) { dependencies.openInbox = nil },
-		"Runtime scope":    func(dependencies *workspaceRunnerDependencies) { dependencies.runtimeSet = nil },
-		"resident Runtime": func(dependencies *workspaceRunnerDependencies) { dependencies.ensureResidentRuntime = nil },
+		"client":            func(dependencies *workspaceRunnerDependencies) { dependencies.client = nil },
+		"attachments":       func(dependencies *workspaceRunnerDependencies) { dependencies.attachments = nil },
+		"runtimes":          func(dependencies *workspaceRunnerDependencies) { dependencies.runtimes = nil },
+		"process admission": func(dependencies *workspaceRunnerDependencies) { dependencies.processAdmission = nil },
+		"Inbox factory":     func(dependencies *workspaceRunnerDependencies) { dependencies.openInbox = nil },
+		"Runtime scope":     func(dependencies *workspaceRunnerDependencies) { dependencies.runtimeSet = nil },
+		"resident Runtime":  func(dependencies *workspaceRunnerDependencies) { dependencies.ensureResidentRuntime = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := dependencies
@@ -221,22 +223,27 @@ func TestWorkspaceRunnerReconnectReplacesConnectionContextAndWriter(t *testing.T
 	}
 }
 
-func TestDaemonStartsWorkspaceRunnerWithoutOwningSocketInternals(t *testing.T) {
-	raw, err := os.ReadFile("workspace_runner.go")
+func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceRunner(t *testing.T) {
+	daemonRaw, err := os.ReadFile("workspace_runner.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := string(raw)
-	if !strings.Contains(source, "runner.Run(ctx)") || !strings.Contains(source, "superviseWorkspaceRunner") {
-		t.Fatal("Daemon does not start WorkspaceRunner through Run(ctx)")
+	childRaw, err := os.ReadFile("binding_child_runtime.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, forbidden := range []string{
-		"func (d *Daemon) runWorkspaceRunner(",
-		"func (d *Daemon) runWorkspaceRunnerConnection(",
-	} {
-		if strings.Contains(source, forbidden) {
-			t.Fatalf("Daemon still owns Workspace Runner socket lifecycle %q", forbidden)
-		}
+	supervisorRaw, err := os.ReadFile("../computer/binding_supervisor.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(daemonRaw), "superviseWorkspaceRunner") || strings.Contains(string(daemonRaw), "workspaceRunnerChildren") {
+		t.Fatal("daemon package still contains Computer Host process supervision")
+	}
+	if !strings.Contains(string(childRaw), "runner.Run(runCtx)") {
+		t.Fatal("Binding child does not own WorkspaceRunner.Run")
+	}
+	if !strings.Contains(string(supervisorRaw), "type BindingSupervisor struct") || !strings.Contains(string(supervisorRaw), "child.Wait()") {
+		t.Fatal("computer package does not own Binding child supervision")
 	}
 }
 
@@ -308,8 +315,9 @@ func TestWorkspaceRunnerOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 	diagnostics := &runnerDiagnosticRegistry{}
 	dependencies := workspaceRunnerDependencies{
 		client: NewClient(""), attachments: attachments, runtimes: runtimes,
-		diagnostics: diagnostics,
-		openInbox:   func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
+		processAdmission: runtimes.managedProcessAdmission(),
+		diagnostics:      diagnostics,
+		openInbox:        func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
 		runtimeSet: func() AgentAttachmentRuntimeSet {
 			return AgentAttachmentRuntimeSet{WorkspaceID: "workspace-1"}
 		},

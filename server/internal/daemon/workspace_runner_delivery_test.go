@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -1047,16 +1049,10 @@ func TestRestoreResidentAgentsRebuildsRootWithoutMessageLifecycle(t *testing.T) 
 		t.Fatalf("restore residents: %v", err)
 	}
 
-	runner := restarted.currentWorkspaceRunner(workspaceID)
-	if runner == nil {
-		t.Fatal("restore did not create Workspace Runner")
+	if _, err := os.Stat(agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+		t.Fatalf("restored Agent root: %v", err)
 	}
-	if _, _, ok := runner.inboxes.Resolve(agentID); ok {
-		t.Fatal("restore created a Message coordinator before agent:start")
-	}
-	producer := runner.activity
-	_, frames := producer.AttachTransport(func(protocol.AgentActivityPayload) {})
-	if len(frames) != 0 {
-		t.Fatalf("restored Attachment invented Runner lifecycle frames = %#v", frames)
+	if runner := restarted.currentWorkspaceRunner(workspaceID); runner != nil {
+		t.Fatal("Host restore created a Workspace Runner before the Binding child started")
 	}
 }

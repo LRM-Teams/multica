@@ -164,7 +164,14 @@ func (d *Daemon) attestationWorkspaceIDs() []string {
 		sort.Strings(ids)
 		return ids
 	}
-	return d.workspaceRunnerWorkspaceIDs()
+	d.mu.Lock()
+	ids := make([]string, 0, len(d.workspaces))
+	for workspaceID := range d.workspaces {
+		ids = append(ids, workspaceID)
+	}
+	d.mu.Unlock()
+	sort.Strings(ids)
+	return ids
 }
 
 // shutdownHandler triggers a graceful daemon shutdown by cancelling the
@@ -618,6 +625,10 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/environment-switch/release", d.localEnvironmentSwitchReleaseHandler())
 	mux.HandleFunc("/machine-upgrades", d.localMachineUpgradeHandler())
 	mux.HandleFunc("/machine-upgrade-takeover/commit", d.localMachineUpgradeTakeoverHandler())
+	d.serveLocalHTTP(ctx, ln, mux, "health server")
+}
+
+func (d *Daemon) registerCredentialProxyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
 	mux.HandleFunc("/credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
 	mux.HandleFunc("/credential-proxy/messages/send", d.credentialProxyMessageSendHandler())
@@ -626,16 +637,18 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/credential-proxy/messages/react", d.credentialProxyMessageReactHandler())
 	mux.HandleFunc(MessageCoverageCommitPath, d.credentialProxyMessageCoverageCommitHandler())
 	mux.HandleFunc("/api/", d.credentialProxyAgentAPIHandler())
+}
 
-	srv := &http.Server{Handler: mux}
+func (d *Daemon) serveLocalHTTP(ctx context.Context, ln net.Listener, handler http.Handler, name string) {
+	srv := &http.Server{Handler: handler}
 
 	go func() {
 		<-ctx.Done()
 		srv.Close()
 	}()
 
-	d.logger.Info("health server listening", "addr", ln.Addr().String())
+	d.logger.Info(name+" listening", "addr", ln.Addr().String())
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		d.logger.Warn("health server error", "error", err)
+		d.logger.Warn(name+" error", "error", err)
 	}
 }

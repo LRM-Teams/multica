@@ -112,6 +112,36 @@ func TestAgentAttachmentRegistryBootstrapsLocalAgentConfig(t *testing.T) {
 	assertAgentAttachmentStatePermissions(t, registry.path)
 }
 
+func TestBindingAttachmentRegistryBootstrapsOnlyItsWorkspace(t *testing.T) {
+	workspacesRoot := t.TempDir()
+	workspaceA, workspaceB := uuid.NewString(), uuid.NewString()
+	agentA, agentB := uuid.NewString(), uuid.NewString()
+	for _, config := range []cachedAgentCredential{
+		{AgentID: agentA, RuntimeID: "runtime-a", WorkspaceID: workspaceA},
+		{AgentID: agentB, RuntimeID: "runtime-b", WorkspaceID: workspaceB},
+	} {
+		raw, err := json.Marshal(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		configPath := filepath.Join(agentworkspace.Root(workspacesRoot, config.WorkspaceID, config.AgentID), "runtime", "credentials", "current.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(configPath, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	registry := newLocalAgentAttachmentRegistryForBinding(t.TempDir(), workspacesRoot, workspaceA, nil)
+	if entry, ok := registry.agents[agentA]; !ok || entry.WorkspaceID != workspaceA {
+		t.Fatalf("Binding registry did not bootstrap its Agent: %+v found=%v", entry, ok)
+	}
+	if _, leaked := registry.agents[agentB]; leaked {
+		t.Fatal("Binding registry bootstrapped a sibling Workspace Agent")
+	}
+}
+
 func assertAgentAttachmentStatePermissions(t *testing.T, path string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

@@ -16,8 +16,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon"
-	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
-	"github.com/multica-ai/multica/server/internal/util"
 )
 
 var daemonCmd = &cobra.Command{
@@ -221,165 +219,6 @@ func flagDuration(cmd *cobra.Command, name string) time.Duration {
 	return value
 }
 
-func runComputerResident(cmd *cobra.Command, _ []string) error {
-	util.EnsureHiddenConsole()
-
-	profile := ""
-
-	// The service environment is an explicit machine choice. Production is
-	// fixed to leagent.me; only test may carry a validated Tencent Cloud
-	// IP/domain origin.
-	machineConfig, err := cli.LoadCLIConfigForProfile("")
-	if err != nil {
-		return fmt.Errorf("read Computer environment: %w", err)
-	}
-	serviceTarget, err := cli.ResolveServiceTarget(machineConfig)
-	if err != nil {
-		return fmt.Errorf("resolve Computer environment: %w", err)
-	}
-	overrides := daemon.Overrides{
-		ServerURL:   serviceTarget.Origin,
-		DaemonID:    flagString(cmd, "daemon-id"),
-		DeviceName:  flagString(cmd, "device-name"),
-		RuntimeName: flagString(cmd, "runtime-name"),
-		Profile:     profile,
-		HealthPort:  computer.HealthPort(profile),
-	}
-	if overrides.DaemonID == "" {
-		identity, err := (&computer.Lifecycle{}).Identity()
-		if err != nil {
-			return fmt.Errorf("resolve machine-wide Computer identity: %w", err)
-		}
-		overrides.DaemonID = identity
-	}
-	if d, _ := cmd.Flags().GetDuration("poll-interval"); d > 0 {
-		overrides.PollInterval = d
-	}
-	if d, _ := cmd.Flags().GetDuration("heartbeat-interval"); d > 0 {
-		overrides.HeartbeatInterval = d
-	}
-	// Distinguish "flag not passed" from an explicit `--agent-timeout 0` so a
-	// user can turn off an env-configured cap from the CLI.
-	if cmd.Flags().Changed("agent-timeout") {
-		d, _ := cmd.Flags().GetDuration("agent-timeout")
-		overrides.AgentTimeout = &d
-	}
-	if d, _ := cmd.Flags().GetDuration("codex-semantic-inactivity-timeout"); d > 0 {
-		overrides.CodexSemanticInactivityTimeout = d
-	}
-	if b, _ := cmd.Flags().GetBool("no-auto-update"); b {
-		overrides.DisableAutoUpdate = true
-	}
-	if d, _ := cmd.Flags().GetDuration("auto-update-interval"); d > 0 {
-		overrides.ReleaseDetectionInterval = d
-	}
-
-	cfg, err := daemon.LoadConfig(overrides)
-	if err != nil {
-		return err
-	}
-	cfg.CLIVersion = version
-	cfg.Environment = string(serviceTarget.Environment)
-	channel, err := cli.ResolveReleaseChannel(machineConfig)
-	if err != nil {
-		return err
-	}
-	cfg.ReleaseChannel = string(channel)
-	cfg.BindingsRoot = computer.RootDir("")
-	cfg.ComputerGeneration, _ = cmd.Flags().GetInt64("computer-generation")
-	if cfg.ComputerGeneration == 0 {
-		cfg.ComputerGeneration, err = computer.NewGenerationStore(computer.RootDir("")).Next()
-		if err != nil {
-			return fmt.Errorf("allocate Computer generation: %w", err)
-		}
-	}
-	cfg.DetachedMachineUpgradeCandidate, _ = cmd.Flags().GetBool("machine-upgrade-detached-candidate")
-	takeoverProtocol, _ := cmd.Flags().GetString("machine-upgrade-takeover-protocol")
-	cfg.MachineUpgradeTakeoverProtocol = machineUpgradeTakeoverProtocolForGeneration(
-		takeoverProtocol, cfg.ComputerGeneration,
-	)
-	cfg.MachineAttestationSourcePID, _ = cmd.Flags().GetInt("machine-attestation-source-pid")
-	controlToken, err := computer.EnsureControlToken(profile)
-	if err != nil {
-		return err
-	}
-	cfg.LocalControlToken = controlToken
-	// Set by the Electron Desktop app when it spawns the CLI so the server
-	// can mark those runtimes as "managed" and hide CLI self-update UI.
-	cfg.LaunchedBy = os.Getenv("MULTICA_LAUNCHED_BY")
-
-	ctx, stop := notifyShutdownContext(context.Background())
-	defer stop()
-
-	logger := logger_pkg.NewLogger("computer")
-	d := daemon.New(cfg, logger)
-
-	// Write PID file so Computer stop can find us. Best-effort: a resident
-	// whose state directory cannot be created simply runs without a PID file,
-	// exactly as before.
-	lc := &computer.Lifecycle{}
-	cleanupPID := func() {}
-	if computer.RootDir(profile) != "" {
-		cleanup, err := lc.PublishPID()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not write PID file: %v\n", err)
-		} else {
-			cleanupPID = cleanup
-		}
-	}
-	defer cleanupPID()
-
-	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		return err
-	}
-
-	// Check if the daemon needs to restart after a CLI update.
-	if restartBin := d.RestartBinary(); restartBin != "" {
-		// Point the OS service unit at the staged Active binary before we exit
-		// (and before any later systemd restart). Without this, install-service
-		// may still have ExecStart=/…/versions/vOLD/… after vOLD is deleted,
-		// and systemd returns 203/EXEC in a crash-loop (s144 2026-08-04).
-		if err := bestEffortSyncInstalledServiceUnit(profile, restartBin); err != nil {
-			logger.Warn("could not rewrite OS service unit to staged binary; re-run `multica computer restart` if the next OS restart fails",
-				"path", restartBin, "error", err)
-		}
-		if runningUnderSupervision() {
-			logger.Info("restarting Computer with updated binary via supervisor handoff", "path", restartBin)
-			// Runtimes were already deregistered by triggerRestart() before
-			// handoff. The supervisor-spawned successor re-registers on
-			// startup; do not duplicate cleanup here.
-			os.Exit(daemonHandoffExitCode)
-		}
-		// A standalone Machine Upgrade cannot end at stage-and-stop. Wait for
-		// the incumbent's control listener to disappear, then launch the exact
-		// committed binary as a detached foreground daemon. Its startup bind is
-		// the local exclusive-ownership gate; server-side completion still waits
-		// for the same journal generation plus every accepted runtime to attest.
-		takeoverExpectation, takeoverErr := d.MachineUpgradeTakeoverExpectation()
-		if takeoverErr == nil {
-			takeoverErr = spawnDetachedDaemonBinary(restartBin, profile, d.MachineUpgradeTarget(), &takeoverExpectation)
-		}
-		if takeoverErr != nil {
-			// The candidate has not returned a successful takeover CAS, so the
-			// incumbent still owns the server generation. Restore the retained
-			// source locally and terminally fail the operation; remote rollback is
-			// reserved for failures after ownership actually changed.
-			if rollbackStateErr := d.MarkMachineUpgradeRollbackPending(); rollbackStateErr != nil {
-				return fmt.Errorf("record detached takeover restore: %w", rollbackStateErr)
-			}
-			d.ReportMachineUpgradeTakeoverFailure(takeoverErr)
-			if recoveryErr := rollbackDetachedMachineUpgrade(profile, d); recoveryErr != nil {
-				d.ReportMachineUpgradeRollbackFailure(recoveryErr)
-				return fmt.Errorf("start detached machine-upgrade successor: %w; rollback recovery: %v", takeoverErr, recoveryErr)
-			}
-			return fmt.Errorf("start detached machine-upgrade successor: %w; previous Active generation restored", takeoverErr)
-		}
-		logger.Info("started detached machine-upgrade successor", "path", restartBin)
-	}
-
-	return nil
-}
-
 func runActiveComputerBinary(target string) error {
 	child := exec.Command(target, os.Args[1:]...)
 	child.Stdin = os.Stdin
@@ -405,7 +244,7 @@ func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
 	if err := bestEffortSyncInstalledServiceUnit(profile, path); err != nil {
 		return fmt.Errorf("rewrite OS service to restored Active: %w", err)
 	}
-	if err := spawnDetachedDaemonBinary(path, profile, d.MachineUpgradeTarget(), nil); err != nil {
+	if err := spawnDetachedComputerBinary(path, profile, d.MachineUpgradeTarget(), nil); err != nil {
 		return fmt.Errorf("start restored incumbent: %w", err)
 	}
 	return nil

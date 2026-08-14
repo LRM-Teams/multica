@@ -15,8 +15,14 @@ func TestRunnerRecordCanSpawnOnlyWhenWantedAndIdle(t *testing.T) {
 		t.Fatal("unwanted Binding must not spawn")
 	}
 	rec.ObserveSpawn()
+	if rec.Lifecycle != RunnerLifecycleStarting {
+		t.Fatalf("spawn lifecycle = %s, want starting", rec.Lifecycle)
+	}
 	if rec.CanSpawn(true, now) {
 		t.Fatal("running child must not spawn again")
+	}
+	if !rec.ObserveReady(rec.Generation()) || rec.Lifecycle != RunnerLifecycleRunning {
+		t.Fatal("matching child Ready did not move lifecycle to running")
 	}
 }
 
@@ -24,6 +30,7 @@ func TestRunnerCrashRestartsAfterBackoffThenDegrades(t *testing.T) {
 	now := time.Date(2026, 8, 13, 15, 0, 0, 0, time.UTC)
 	rec := &RunnerRecord{Lifecycle: RunnerLifecycleStopped}
 	rec.ObserveSpawn()
+	rec.ObserveReady(rec.Generation())
 	rec.ObserveExit(now, RunnerExitCrash)
 	if rec.Lifecycle != RunnerLifecycleCrashed {
 		t.Fatalf("first crash lifecycle = %s, want crashed", rec.Lifecycle)
@@ -36,8 +43,10 @@ func TestRunnerCrashRestartsAfterBackoffThenDegrades(t *testing.T) {
 	}
 
 	rec.ObserveSpawn()
+	rec.ObserveReady(rec.Generation())
 	rec.ObserveExit(now.Add(time.Second), RunnerExitCrash)
 	rec.ObserveSpawn()
+	rec.ObserveReady(rec.Generation())
 	rec.ObserveExit(now.Add(2*time.Second), RunnerExitCrash)
 	if rec.Lifecycle != RunnerLifecycleDegraded {
 		t.Fatalf("third crash in 60s lifecycle = %s, want degraded", rec.Lifecycle)
@@ -54,6 +63,7 @@ func TestRunnerSpawnGenerationStaysMonotonicAcrossExit(t *testing.T) {
 		t.Fatalf("fresh generation = %d", rec.Generation())
 	}
 	rec.ObserveSpawn()
+	rec.ObserveReady(rec.Generation())
 	first := rec.Generation()
 	if first == 0 {
 		t.Fatal("ObserveSpawn must allocate a generation")
@@ -63,6 +73,7 @@ func TestRunnerSpawnGenerationStaysMonotonicAcrossExit(t *testing.T) {
 		t.Fatal("ObserveExit must not reset spawn generation")
 	}
 	rec.ObserveSpawn()
+	rec.ObserveReady(rec.Generation())
 	if rec.Generation() <= first {
 		t.Fatal("next spawn must not reuse the previous generation")
 	}
@@ -72,6 +83,7 @@ func TestRunnerUnlinkedAndGracefulExits(t *testing.T) {
 	now := time.Date(2026, 8, 13, 15, 0, 0, 0, time.UTC)
 	rec := &RunnerRecord{}
 	rec.ObserveSpawn()
+	rec.ObserveReady(rec.Generation())
 	rec.ObserveExit(now, RunnerExitUnlinked)
 	if rec.Lifecycle != RunnerLifecycleDegraded || rec.CanSpawn(true, now) {
 		t.Fatalf("unlinked runner = %s spawn=%v", rec.Lifecycle, rec.CanSpawn(true, now))
@@ -79,6 +91,7 @@ func TestRunnerUnlinkedAndGracefulExits(t *testing.T) {
 
 	rec = &RunnerRecord{}
 	rec.ObserveSpawn()
+	rec.ObserveReady(rec.Generation())
 	rec.ObserveExit(now, RunnerExitGraceful)
 	if rec.Lifecycle != RunnerLifecycleStopped || !rec.CanSpawn(true, now) {
 		t.Fatalf("graceful stop = %s spawn=%v", rec.Lifecycle, rec.CanSpawn(true, now))

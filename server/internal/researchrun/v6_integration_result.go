@@ -275,6 +275,11 @@ func (r V6IntegrationResult) validate() error {
 		if err := dispute.validate(i, disputeKeys); err != nil {
 			return err
 		}
+		for _, position := range dispute.Positions {
+			if _, err := decodeV6DisputePositionSeed(position); err != nil {
+				return err
+			}
+		}
 	}
 	taskKeys := map[string]struct{}{}
 	for i, task := range r.ProposedTasks {

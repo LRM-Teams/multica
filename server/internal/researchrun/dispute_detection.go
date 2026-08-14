@@ -25,17 +25,17 @@ const (
 // Normalization must resolve entity, metric, time window, and scope before
 // deterministic detection so superficially similar claims are not conflated.
 type ConflictFact struct {
-	ClaimID             string
-	EntityKey           string
-	MetricKey           string
-	TimeWindowKey       string
-	ScopeHash           string
-	PropositionHash     string
-	Polarity            ConflictPolarity
-	UnitKey             string
-	VersionKey          string
-	SourceSnapshotID    string
-	CitationMeaningHash string
+	ClaimID             string           `json:"claim_id"`
+	EntityKey           string           `json:"entity_key"`
+	MetricKey           string           `json:"metric_key"`
+	TimeWindowKey       string           `json:"time_window_key"`
+	ScopeHash           string           `json:"scope_hash"`
+	PropositionHash     string           `json:"proposition_hash"`
+	Polarity            ConflictPolarity `json:"polarity"`
+	UnitKey             string           `json:"unit_key"`
+	VersionKey          string           `json:"version_key"`
+	SourceSnapshotID    string           `json:"source_snapshot_id"`
+	CitationMeaningHash string           `json:"citation_meaning_hash"`
 }
 
 type DeterministicConflict struct {
@@ -87,6 +87,29 @@ func DetectDeterministicConflicts(facts []ConflictFact) ([]DeterministicConflict
 		return conflicts[i].Kind < conflicts[j].Kind
 	})
 	return conflicts, nil
+}
+
+// ValidateDeclaredDeterministicConflict proves that the normalized facts, not
+// the submitting Agent's label, establish the declared conflict for every
+// Position in the Dispute.
+func ValidateDeclaredDeterministicConflict(kind DisputeKind, facts []ConflictFact) error {
+	if kind != DisputeKindLogical && kind != DisputeKindSourceInterpretation && kind != DisputeKindVersion && kind != DisputeKindUnit {
+		return fmt.Errorf("%w: %q is not a deterministic conflict kind", ErrInvalidContract, kind)
+	}
+	conflicts, err := DetectDeterministicConflicts(facts)
+	if err != nil {
+		return err
+	}
+	involved := map[string]bool{}
+	for _, conflict := range conflicts {
+		if DisputeKind(conflict.Kind) == kind {
+			involved[conflict.LeftClaimID], involved[conflict.RightClaimID] = true, true
+		}
+	}
+	if len(involved) != len(facts) {
+		return fmt.Errorf("%w: server facts do not prove the declared deterministic conflict for every Position", ErrInvalidContract)
+	}
+	return nil
 }
 
 func sameComparisonFrame(left, right ConflictFact) bool {

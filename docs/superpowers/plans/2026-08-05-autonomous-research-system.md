@@ -1100,6 +1100,7 @@ projection 生成。§15.23 已收口。
 ### H. Dispute Graph 与独立裁决
 
 - [ ] 实现 Dispute、Position、类型、严重度、状态机和交付义务。
+  - [x] H1a-conflict-basis：V6 Integration 的每个 Position 必须提交 closed `conflict_basis`。`logical | unit | version | source_interpretation` 使用规范化 entity/metric/time-window/scope/proposition/polarity/unit/version/Source/citation-meaning fact；服务端解析真实 Claim ID 后重新运行确定性检测，只有声明类型覆盖每个 Position 才能建 Dispute，Agent 标签不能自行决定类型。`scope | method | semantic` 作为 Agent candidate 必须给出明确 reason、真实 Claim 引用和原 Agent provenance。事务不再把所有 Dispute 降级为 semantic，并为 Position Passport 写入 Claim/Source typed lineage。跨全部 canonical Claim 的主动扫描与自动建 Dispute 仍待 H1b。
 - [ ] 实现确定性冲突检测和 Agent 冲突候选协议。
 - [ ] 实现盲复核、Methodologist、区分任务和 Adjudicator 输入隔离。
 - [ ] 实现 Research Deliberation Turn、进展水位、轮次/成本限制、deadlock 和 Research Director 自动升级。

@@ -1309,6 +1309,14 @@ func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID st
 	// keeps admission until the killed process actually finishes, then closes
 	// and detaches this backend so the next handoff creates a fresh instance.
 	slot.invalidationGeneration++
+	// An accepted Message turn owns a terminal Activity callback keyed by its
+	// messageInputGeneration. Lifecycle interruption is an expected boundary,
+	// not a provider failure: advance that generation now so the killed turn's
+	// late completion cannot remove the replacement managed launch or repaint
+	// it Offline after restart.
+	if slot.messageInputDone != nil {
+		slot.messageInputGeneration++
+	}
 	slot.invalidateAfterInput = true
 	return killable.ForceKill()
 }

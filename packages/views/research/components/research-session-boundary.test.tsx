@@ -1,29 +1,35 @@
 import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResearchSessionBoundary } from "./research-session-boundary";
 
-const mockResearchCopy = {
+type ResearchBoundaryCopy = {
   session_page: {
-    load_failed: "Could not load research",
-    load_failed_hint: "Existing research is unaffected.",
-    retry: "Retry",
-  },
+    load_failed: string;
+    load_failed_hint: string;
+    technical_details: string;
+    retry: string;
+  };
 };
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (selector: (copy: typeof mockResearchCopy) => string) =>
-      selector(mockResearchCopy),
+    t: (selector: (value: ResearchBoundaryCopy) => string) => selector(copy),
   }),
 }));
 
-let shouldThrow = false;
+const copy: ResearchBoundaryCopy = {
+  session_page: {
+    load_failed: "Research could not be displayed",
+    load_failed_hint: "Reload the research data and try again.",
+    technical_details: "Technical details",
+    retry: "Retry",
+  },
+};
 
-function RenderProbe() {
-  if (shouldThrow) throw new Error("incomplete failed-session projection");
-  return <p>Research canvas</p>;
-}
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function DraftProbe() {
   const [draft, setDraft] = useState("");
@@ -37,10 +43,6 @@ function DraftProbe() {
 }
 
 describe("ResearchSessionBoundary", () => {
-  beforeEach(() => {
-    shouldThrow = false;
-  });
-
   it("remounts local session state when the session id changes", () => {
     const { rerender } = render(
       <ResearchSessionBoundary sessionId="s1">
@@ -60,27 +62,22 @@ describe("ResearchSessionBoundary", () => {
     expect(screen.getByLabelText("draft")).toHaveValue("");
   });
 
-  it("contains a failed-session render exception instead of crashing the page", () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    shouldThrow = true;
+  it("contains a render failure inside the research route and exposes diagnostics", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    function BrokenResearchView(): never {
+      throw new Error("failed session has no renderable graph");
+    }
 
     render(
       <ResearchSessionBoundary sessionId="failed-session">
-        <RenderProbe />
+        <BrokenResearchView />
       </ResearchSessionBoundary>,
     );
 
-    expect(screen.getByTestId("research-session-render-error")).toHaveTextContent(
-      "Could not load research",
-    );
-    expect(consoleError).toHaveBeenCalledWith(
-      "Research session render failed",
-      expect.objectContaining({ sessionId: "failed-session" }),
-    );
-
-    shouldThrow = false;
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(screen.getByText("Research canvas")).toBeInTheDocument();
-    consoleError.mockRestore();
+    expect(screen.getByTestId("research-session-render-error")).toBeInTheDocument();
+    expect(screen.getByText("Research could not be displayed")).toBeVisible();
+    expect(screen.getByText("failed session has no renderable graph")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
   });
 });

@@ -13,13 +13,20 @@ import { useMentionPopupStore } from "@multica/core/inbox";
  *    popup emerged from the inbox.
  * Rendered only for the inbox nav entry; other icons render plain.
  */
-export function InboxNavIcon({ icon }: { icon: LucideIcon }) {
+export function InboxNavIcon({
+  icon,
+  unread = false,
+}: {
+  icon: LucideIcon;
+  unread?: boolean;
+}) {
   const ref = useRef<SVGSVGElement>(null);
   const setIconRect = useMentionPopupStore((s) => s.setIconRect);
   const bounceSignal = useMentionPopupStore((s) => s.bounceSignal);
   const controls = useAnimationControls();
-  // Wrap the passed lucide icon (which forwards its ref to the <svg>) so we can
-  // both measure it and animate it without adding a layout-affecting wrapper.
+  // The lucide icon forwards its ref to the <svg> so we can measure and
+  // bounce it. The inline-flex wrapper only positions the collapsed unread
+  // dot and does not change the svg box used by the mention popup.
   const MotionIcon = useMemo(() => motion.create(icon), [icon]);
 
   useEffect(() => {
@@ -49,5 +56,16 @@ export function InboxNavIcon({ icon }: { icon: LucideIcon }) {
     });
   }, [bounceSignal, controls]);
 
-  return <MotionIcon ref={ref} animate={controls} />;
+  return (
+    <span className="relative inline-flex shrink-0">
+      <MotionIcon ref={ref} animate={controls} />
+      {unread ? (
+        <span
+          aria-hidden
+          data-testid="inbox-unread-dot"
+          className="absolute -top-0.5 -right-0.5 hidden size-1.5 rounded-full bg-brand-solid group-data-[collapsible=icon]:block"
+        />
+      ) : null}
+    </span>
+  );
 }

@@ -1563,7 +1563,7 @@ func persistTypedArtifactInputReferenceTx(
 	relation, purpose string,
 	ordinal int,
 ) error {
-	var resolved int
+	var consumerResolved, inputResolved int
 	var persistedOrdinal *int
 	err := tx.QueryRow(ctx, `
 		WITH consumer AS (
@@ -1591,24 +1591,29 @@ func persistTypedArtifactInputReferenceTx(
 			FROM consumer CROSS JOIN input
 			ON CONFLICT (workspace_id, session_id, consumer_version_id, input_version_id, relation)
 			DO NOTHING
-			RETURNING 1
+			RETURNING ordinal
 		)
 		SELECT
-		  (SELECT count(*)::int FROM consumer CROSS JOIN input),
-		  (SELECT reference.ordinal
-		   FROM research_artifact_input_reference reference
-		   CROSS JOIN consumer CROSS JOIN input
-		   WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
-		     AND reference.consumer_version_id=consumer.id
-		     AND reference.input_version_id=input.id AND reference.relation=$7)
-	`, workspaceID, sessionID, consumerID, string(consumerKind), inputID, string(inputKind), relation, purpose, ordinal).Scan(&resolved, &persistedOrdinal)
+		  (SELECT count(*)::int FROM consumer),
+		  (SELECT count(*)::int FROM input),
+		  COALESCE(
+		    (SELECT inserted.ordinal FROM inserted),
+		    (SELECT reference.ordinal
+		     FROM research_artifact_input_reference reference
+		     CROSS JOIN consumer CROSS JOIN input
+		     WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
+		       AND reference.consumer_version_id=consumer.id
+		       AND reference.input_version_id=input.id AND reference.relation=$7)
+		  )
+	`, workspaceID, sessionID, consumerID, string(consumerKind), inputID, string(inputKind), relation, purpose, ordinal).Scan(&consumerResolved, &inputResolved, &persistedOrdinal)
 	if err != nil {
 		return err
 	}
-	if resolved != 1 || persistedOrdinal == nil {
+	if consumerResolved != 1 || inputResolved != 1 || persistedOrdinal == nil {
 		return fmt.Errorf(
-			"%w: %s %s could not resolve %s %s for %s lineage",
-			ErrInvalidResult, consumerKind, consumerID, inputKind, inputID, relation,
+			"%w: %s %s (resolved=%d) could not resolve %s %s (resolved=%d) for %s lineage",
+			ErrInvalidResult, consumerKind, consumerID, consumerResolved,
+			inputKind, inputID, inputResolved, relation,
 		)
 	}
 	if *persistedOrdinal != ordinal {

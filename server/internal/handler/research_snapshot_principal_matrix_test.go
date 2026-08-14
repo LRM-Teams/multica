@@ -252,7 +252,11 @@ func TestResearchSnapshotPrincipalSurfaceMatrix(t *testing.T) {
 		useResearchRunEngine(t, engine)
 		path := fmt.Sprintf("/api/agent/research/sessions/%s?attempt_id=%s", fixture.sessionID, fixture.attemptID)
 		req := withURLParam(newRequest(http.MethodGet, path, nil), "id", fixture.sessionID)
+		req = withChatTestWorkspaceCtx(t, req)
 		req = withAgentPrincipal(req, fixture.assignedAgentID, testWorkspaceID, testUserID)
+		req.Header.Set("X-Agent-Inbox-Event-ID", fixture.inboxEventID)
+		req.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.inboxDeliveryID)
+		req.Header.Set("X-Agent-Inbox-Lease-Token", fixture.inboxLeaseToken)
 		recorder := httptest.NewRecorder()
 
 		testHandler.GetAgentResearchSessionSnapshot(recorder, req)

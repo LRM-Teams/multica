@@ -59,7 +59,27 @@ func loadLegacyShadowDomainProjectionTx(
 		SELECT domain_ref.kind, domain_ref.artifact_id::text,
 		       COALESCE(passport.entity_kind, ''), COALESCE(passport.lifecycle_status, ''),
 		       COALESCE(passport.provenance_completeness, ''),
-		       COALESCE(version.access_level, '')
+		       COALESCE(version.access_level, ''),
+		       COALESCE(CASE domain_ref.kind
+		         WHEN 'task' THEN (SELECT entity.status FROM research_task entity
+		           WHERE (entity.workspace_id,entity.session_id,entity.id)=(passport.workspace_id,passport.session_id,passport.id))
+		         WHEN 'claim' THEN (SELECT entity.status FROM research_claim entity
+		           WHERE (entity.workspace_id,entity.session_id,entity.id)=(passport.workspace_id,passport.session_id,passport.id))
+		         WHEN 'source_snapshot' THEN (SELECT entity.verification_status FROM research_source_snapshot entity
+		           WHERE (entity.workspace_id,entity.session_id,entity.id)=(passport.workspace_id,passport.session_id,passport.id))
+		         WHEN 'observation' THEN (SELECT entity.verification_status FROM research_observation entity
+		           WHERE (entity.workspace_id,entity.session_id,entity.id)=(passport.workspace_id,passport.session_id,passport.id))
+		         WHEN 'evidence_link' THEN (SELECT entity.verification_status FROM research_claim_evidence entity
+		           WHERE (entity.workspace_id,entity.session_id,entity.id)=(passport.workspace_id,passport.session_id,passport.id))
+		         ELSE ''
+		       END, ''),
+		       EXISTS (
+		         SELECT 1 FROM research_artifact_migration_diagnostic diagnostic
+		         WHERE diagnostic.workspace_id=passport.workspace_id
+		           AND diagnostic.session_id=passport.session_id
+		           AND diagnostic.owner_kind=passport.entity_kind
+		           AND diagnostic.owner_id=passport.id
+		       )
 		FROM domain_ref
 		LEFT JOIN research_artifact_passport passport
 		  ON passport.workspace_id=$1::uuid AND passport.session_id=$2::uuid
@@ -79,8 +99,12 @@ func loadLegacyShadowDomainProjectionTx(
 	var projection []shadowDomainProjectionRecord
 	for rows.Next() {
 		var domainKindRaw, artifactID string
-		var passportKindRaw, lifecycleRaw, provenanceRaw, accessRaw sql.NullString
-		if err = rows.Scan(&domainKindRaw, &artifactID, &passportKindRaw, &lifecycleRaw, &provenanceRaw, &accessRaw); err != nil {
+		var passportKindRaw, lifecycleRaw, provenanceRaw, accessRaw, domainStatusRaw sql.NullString
+		var hasMigrationDiagnostic bool
+		if err = rows.Scan(
+			&domainKindRaw, &artifactID, &passportKindRaw, &lifecycleRaw,
+			&provenanceRaw, &accessRaw, &domainStatusRaw, &hasMigrationDiagnostic,
+		); err != nil {
 			return nil, err
 		}
 		domainKind, parseErr := ParseArtifactEntityKind(domainKindRaw)
@@ -102,13 +126,15 @@ func loadLegacyShadowDomainProjectionTx(
 
 		disposition := shadowDispositionEntry
 		private := policy.EvaluationPrivateKind(domainKind)
-		if private && purpose == ArtifactPurposeTaskExecution {
+		if hasMigrationDiagnostic {
+			disposition = policy.ManifestOmissionReason(ArtifactDenyLegacyIneligible)
+		} else if private && purpose == ArtifactPurposeTaskExecution {
 			disposition = policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
-		} else if admitted, deny := policy.LegacyAdmissionAllowed(
-			domainKind,
-			ArtifactLifecycleStatus(lifecycleRaw.String),
-			ArtifactProvenanceCompleteness(provenanceRaw.String),
-		); !admitted {
+		} else if admitted, deny := policy.LegacyAdmissionAllowedFacts(legacyAdmissionFacts{
+			Kind: domainKind, Lifecycle: ArtifactLifecycleStatus(lifecycleRaw.String),
+			Provenance:   ArtifactProvenanceCompleteness(provenanceRaw.String),
+			DomainStatus: domainStatusRaw.String,
+		}); !admitted {
 			disposition = policy.ManifestOmissionReason(deny)
 		} else if allowed, deny := policy.CanReadNormal(
 			clearance, ArtifactAccessLevel(accessRaw.String), purpose, private,
@@ -128,6 +154,9 @@ func loadLegacyShadowDomainProjectionTx(
 func projectManifestForShadow(plan dispatchManifestPlan) []shadowDomainProjectionRecord {
 	projection := make([]shadowDomainProjectionRecord, 0, len(plan.Entries)+len(plan.Omissions))
 	for _, entry := range plan.Entries {
+		if !isDispatchManifestCandidateKind(entry.Kind) {
+			continue
+		}
 		projection = append(projection, shadowDomainProjectionRecord{
 			Kind: entry.Kind, ArtifactID: entry.ArtifactID, Disposition: shadowDispositionEntry,
 		})

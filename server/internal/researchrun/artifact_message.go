@@ -158,9 +158,28 @@ func AdvanceProductionResearchMessageMatchDecisionTx(
 			  explicitly_used,purpose,ordinal
 			) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,true,'match_decision',$6)
 			ON CONFLICT (workspace_id,session_id,consumer_version_id,input_version_id,relation)
-			DO UPDATE SET ordinal=EXCLUDED.ordinal,purpose=EXCLUDED.purpose,explicitly_used=true
+			DO NOTHING
 		`, workspaceID, sessionID, consumerVersionID, inputVersionID, ref.Relation, ref.Ordinal); err != nil {
 			return err
+		}
+		var persistedOrdinal int
+		var persistedPurpose string
+		var explicitlyUsed bool
+		if err = tx.QueryRow(ctx, `
+			SELECT ordinal,purpose,explicitly_used
+			FROM research_artifact_input_reference
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+			  AND consumer_version_id=$3::uuid AND input_version_id=$4::uuid AND relation=$5
+		`, workspaceID, sessionID, consumerVersionID, inputVersionID, ref.Relation).Scan(
+			&persistedOrdinal, &persistedPurpose, &explicitlyUsed,
+		); err != nil {
+			return err
+		}
+		if persistedOrdinal != ref.Ordinal || persistedPurpose != "match_decision" || !explicitlyUsed {
+			return fmt.Errorf(
+				"%w: conflicting %s lineage for %s at ordinal %d",
+				ErrInvalidContract, ref.Relation, ref.ArtifactID, ref.Ordinal,
+			)
 		}
 	}
 	return nil

@@ -102,7 +102,7 @@ func manifestDispositionCandidate(
 	access ArtifactAccessLevel,
 ) artifactVersionCandidate {
 	id := fmt.Sprintf("%s:%s", kind, suffix)
-	return artifactVersionCandidate{
+	candidate := artifactVersionCandidate{
 		VersionRowID: id,
 		ArtifactID:   "artifact:" + id,
 		Kind:         kind,
@@ -110,6 +110,15 @@ func manifestDispositionCandidate(
 		Provenance:   provenance,
 		AccessLevel:  access,
 	}
+	switch kind {
+	case ArtifactKindTask:
+		candidate.DomainStatus = string(TaskStatusReady)
+	case ArtifactKindClaim:
+		candidate.DomainStatus = string(ClaimStatusProposed)
+	case ArtifactKindSourceSnapshot, ArtifactKindObservation, ArtifactKindEvidenceLink:
+		candidate.DomainStatus = "verified"
+	}
+	return candidate
 }
 
 func mutateDispositionReason(

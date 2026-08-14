@@ -32,31 +32,29 @@ func TestResearchMessagePrincipalAndRunEventScopeConstraints(t *testing.T) {
 	insertEvent := `INSERT INTO research_run_event (
 		id,workspace_id,session_id,sequence,event_type,idempotency_key,actor_type
 	) VALUES ($1::uuid,$2::uuid,$3::uuid,1,'run_started',$4,'system')`
-	if _, err = pool.Exec(ctx, insertEvent, leftEvent, left.workspaceID, left.sessionID, "left-"+uuid.NewString()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, insertEvent, rightEvent, right.workspaceID, right.sessionID, "right-"+uuid.NewString()); err != nil {
-		t.Fatal(err)
-	}
+	seedDiagnosticArtifact(t, ctx, pool, left.workspaceID, left.sessionID, leftEvent, ArtifactKindRunEvent,
+		insertEvent, leftEvent, left.workspaceID, left.sessionID, "left-"+uuid.NewString())
+	seedDiagnosticArtifact(t, ctx, pool, right.workspaceID, right.sessionID, rightEvent, ArtifactKindRunEvent,
+		insertEvent, rightEvent, right.workspaceID, right.sessionID, "right-"+uuid.NewString())
 
 	insertMessage := `INSERT INTO research_message (
-		workspace_id,session_id,sender_type,sender_id,target_agent_id,run_event_id,body
-	) VALUES ($1::uuid,$2::uuid,$3,$4::uuid,$5::uuid,$6::uuid,'message')`
-	_, err = pool.Exec(ctx, insertMessage, left.workspaceID, left.sessionID, "agent", left.agentID, right.agentID, leftEvent)
+		id,workspace_id,session_id,sender_type,sender_id,target_agent_id,run_event_id,body
+	) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7::uuid,'message')`
+	_, err = pool.Exec(ctx, insertMessage, uuid.NewString(), left.workspaceID, left.sessionID, "agent", left.agentID, right.agentID, leftEvent)
 	assertResearchMessageConstraint(t, err, "research_message_target_agent_scoped_fkey")
-	_, err = pool.Exec(ctx, insertMessage, left.workspaceID, left.sessionID, "agent", left.agentID, left.agentID, rightEvent)
+	_, err = pool.Exec(ctx, insertMessage, uuid.NewString(), left.workspaceID, left.sessionID, "agent", left.agentID, left.agentID, rightEvent)
 	assertResearchMessageConstraint(t, err, "research_message_run_event_scoped_fkey")
-	_, err = pool.Exec(ctx, insertMessage, left.workspaceID, left.sessionID, "agent", right.agentID, left.agentID, leftEvent)
+	_, err = pool.Exec(ctx, insertMessage, uuid.NewString(), left.workspaceID, left.sessionID, "agent", right.agentID, left.agentID, leftEvent)
 	assertResearchMessageConstraint(t, err, "research_message_sender_principal_guard")
-	_, err = pool.Exec(ctx, insertMessage, left.workspaceID, left.sessionID, "system", left.userID, left.agentID, leftEvent)
+	_, err = pool.Exec(ctx, insertMessage, uuid.NewString(), left.workspaceID, left.sessionID, "system", left.userID, left.agentID, leftEvent)
 	assertResearchMessageConstraint(t, err, "research_message_sender_principal_guard")
 
-	if _, err = pool.Exec(ctx, insertMessage, left.workspaceID, left.sessionID, "agent", left.agentID, left.agentID, leftEvent); err != nil {
-		t.Fatalf("same-scope Agent control failed: %v", err)
-	}
-	if _, err = pool.Exec(ctx, insertMessage, left.workspaceID, left.sessionID, "user", left.userID, nil, nil); err != nil {
-		t.Fatalf("existing user control failed: %v", err)
-	}
+	agentMessageID := uuid.NewString()
+	seedDiagnosticArtifact(t, ctx, pool, left.workspaceID, left.sessionID, agentMessageID, ArtifactKindResearchMessage,
+		insertMessage, agentMessageID, left.workspaceID, left.sessionID, "agent", left.agentID, left.agentID, leftEvent)
+	userMessageID := uuid.NewString()
+	seedDiagnosticArtifact(t, ctx, pool, left.workspaceID, left.sessionID, userMessageID, ArtifactKindResearchMessage,
+		insertMessage, userMessageID, left.workspaceID, left.sessionID, "user", left.userID, nil, nil)
 }
 
 func assertResearchMessageConstraint(t *testing.T, err error, constraint string) {

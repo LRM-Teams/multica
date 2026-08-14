@@ -614,8 +614,12 @@ func decisionReferenceID(container map[string]json.RawMessage, field string) (st
 		return "", false, nil
 	}
 	var artifactID string
-	if err := json.Unmarshal(raw, &artifactID); err != nil || strings.TrimSpace(artifactID) == "" {
+	if err := json.Unmarshal(raw, &artifactID); err != nil {
 		return "", false, fmt.Errorf("%w: Decision has invalid %s reference", ErrInvalidContract, field)
+	}
+	artifactID = strings.TrimSpace(artifactID)
+	if artifactID == "" {
+		return "", false, nil
 	}
 	return artifactID, true, nil
 }

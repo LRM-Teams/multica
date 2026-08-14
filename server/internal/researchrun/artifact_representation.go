@@ -28,10 +28,11 @@ func loadFrozenAttemptRepresentationsPool(ctx context.Context, pool *pgxpool.Poo
 		if err = rows.Scan(&encoded); err != nil {
 			return nil, err
 		}
-		var item Attempt
-		if err = json.Unmarshal(encoded, &item); err != nil {
+		var frozen frozenOrderedRepresentation[Attempt]
+		if err = json.Unmarshal(encoded, &frozen); err != nil {
 			return nil, fmt.Errorf("decode frozen attempt: %w", err)
 		}
+		item := frozen.Value
 		if item.ID == "" || out[item.ID].ID != "" {
 			return nil, fmt.Errorf("%w: invalid or duplicate frozen attempt", ErrInvalidTransition)
 		}
@@ -41,16 +42,10 @@ func loadFrozenAttemptRepresentationsPool(ctx context.Context, pool *pgxpool.Poo
 		return nil, err
 	}
 	if out[attemptID].ID == "" {
-		var item Attempt
-		if loadErr := pool.QueryRow(ctx, `
-			SELECT id::text, session_id::text, workspace_id::text, task_id::text,
-			       attempt_number, COALESCE(assigned_agent_id::text,''), dispatch_key, status, dispatched_at
-			FROM research_task_attempt
-			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
-		`, workspaceID, sessionID, attemptID).Scan(
-			&item.ID, &item.SessionID, &item.WorkspaceID, &item.TaskID,
-			&item.AttemptNumber, &item.AssignedAgentID, &item.DispatchKey, &item.Status, &item.DispatchedAt,
-		); loadErr != nil {
+		item, loadErr := scanAttempt(pool.QueryRow(ctx, attemptSelectSQL+`
+			WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.id=$3::uuid
+		`, workspaceID, sessionID, attemptID))
+		if loadErr != nil {
 			return nil, fmt.Errorf("%w: current attempt is absent from frozen context", ErrInvalidTransition)
 		}
 		out[item.ID] = item
@@ -575,16 +570,10 @@ func loadFrozenDurableContext(ctx context.Context, query frozenRepresentationQue
 		return frozenDurableContext{}, err
 	}
 	if len(attempts) == 0 {
-		var attempt Attempt
-		if loadErr := query.QueryRow(ctx, `
-			SELECT id::text, session_id::text, workspace_id::text, task_id::text,
-			       attempt_number, COALESCE(assigned_agent_id::text,''), dispatch_key, status, dispatched_at
-			FROM research_task_attempt
-			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
-		`, workspaceID, sessionID, attemptID).Scan(
-			&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID, &attempt.TaskID,
-			&attempt.AttemptNumber, &attempt.AssignedAgentID, &attempt.DispatchKey, &attempt.Status, &attempt.DispatchedAt,
-		); loadErr != nil {
+		attempt, loadErr := scanAttempt(query.QueryRow(ctx, attemptSelectSQL+`
+			WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.id=$3::uuid
+		`, workspaceID, sessionID, attemptID))
+		if loadErr != nil {
 			return frozenDurableContext{}, fmt.Errorf("%w: frozen durable context is incomplete", ErrInvalidTransition)
 		}
 		attempts = append(attempts, frozenOrderedRepresentation[Attempt]{Value: attempt})
@@ -739,7 +728,6 @@ func loadFrozenEvidenceRepresentations(ctx context.Context, query frozenRepresen
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	defer rows.Close()
 	sources := []SourceSnapshotView{}
 	observations := []Observation{}
 	claims := []Claim{}
@@ -772,7 +760,83 @@ func loadFrozenEvidenceRepresentations(ctx context.Context, query frozenRepresen
 			claims = append(claims, item)
 		}
 	}
-	return sources, observations, claims, rows.Err()
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, nil, err
+	}
+	rows.Close()
+
+	// ClaimEvidence.ArtifactID is deliberately excluded from its public JSON
+	// representation. Restore that internal identity from the manifest's
+	// separately authorized Evidence Link entries so the shadow comparison can
+	// prove nesting without exposing denied links in Agent-visible bytes.
+	evidenceRows, err := query.Query(ctx, `
+		SELECT evidence.claim_id::text, evidence.id::text
+		FROM research_artifact_context_entry entry
+		JOIN research_artifact_context_manifest manifest
+		  ON (manifest.workspace_id,manifest.session_id,manifest.id)=(entry.workspace_id,entry.session_id,entry.manifest_id)
+		JOIN research_artifact_version version
+		  ON (version.workspace_id,version.session_id,version.id)=(entry.workspace_id,entry.session_id,entry.artifact_version_id)
+		JOIN research_artifact_passport passport
+		  ON (passport.workspace_id,passport.session_id,passport.id)=(version.workspace_id,version.session_id,version.artifact_id)
+		JOIN research_claim_evidence evidence
+		  ON (evidence.workspace_id,evidence.session_id,evidence.id)=(passport.workspace_id,passport.session_id,passport.id)
+		WHERE manifest.workspace_id=$1::uuid AND manifest.session_id=$2::uuid
+		  AND manifest.attempt_id=$3::uuid AND passport.entity_kind='evidence_link'
+		ORDER BY evidence.claim_id, evidence.created_at, evidence.observation_id, evidence.relation, evidence.id
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer evidenceRows.Close()
+	evidenceIDs := make(map[string][]string)
+	for evidenceRows.Next() {
+		var claimID, evidenceID string
+		if err = evidenceRows.Scan(&claimID, &evidenceID); err != nil {
+			return nil, nil, nil, err
+		}
+		evidenceIDs[claimID] = append(evidenceIDs[claimID], evidenceID)
+	}
+	if err = evidenceRows.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	for claimIndex := range claims {
+		ids := evidenceIDs[claims[claimIndex].ID]
+		if len(ids) != len(claims[claimIndex].Evidence) {
+			return nil, nil, nil, fmt.Errorf("%w: frozen Claim evidence identity set is incomplete", ErrInvalidTransition)
+		}
+		for evidenceIndex := range claims[claimIndex].Evidence {
+			claims[claimIndex].Evidence[evidenceIndex].ArtifactID = ids[evidenceIndex]
+		}
+	}
+	// Manifest entries are stored in canonical kind/ID order, while the Agent
+	// wire contract uses the same durable ordering as the live ledger readers.
+	// Restore that ordering after decoding the independently frozen bytes.
+	sort.Slice(sources, func(i, j int) bool {
+		if !sources[i].CreatedAt.Equal(sources[j].CreatedAt) {
+			return sources[i].CreatedAt.Before(sources[j].CreatedAt)
+		}
+		return sources[i].ID < sources[j].ID
+	})
+	sort.Slice(observations, func(i, j int) bool {
+		if !observations[i].CreatedAt.Equal(observations[j].CreatedAt) {
+			return observations[i].CreatedAt.Before(observations[j].CreatedAt)
+		}
+		return observations[i].ID < observations[j].ID
+	})
+	sort.Slice(claims, func(i, j int) bool {
+		if claims[i].GoalVersion != claims[j].GoalVersion {
+			return claims[i].GoalVersion < claims[j].GoalVersion
+		}
+		if claims[i].PlanVersion != claims[j].PlanVersion {
+			return claims[i].PlanVersion < claims[j].PlanVersion
+		}
+		if !claims[i].CreatedAt.Equal(claims[j].CreatedAt) {
+			return claims[i].CreatedAt.Before(claims[j].CreatedAt)
+		}
+		return claims[i].ID < claims[j].ID
+	})
+	return sources, observations, claims, nil
 }
 
 func loadFrozenEvidenceRepresentationsPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]SourceSnapshotView, []Observation, []Claim, error) {

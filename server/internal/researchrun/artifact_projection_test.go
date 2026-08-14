@@ -43,7 +43,7 @@ func TestBuildArtifactProjectionStableAndFailSafe(t *testing.T) {
 func TestArtifactProjectionHumanPrivateKindFilterTracksPolicy(t *testing.T) {
 	t.Parallel()
 	got := evaluationPrivateArtifactKindStrings()
-	if len(got) != 1 || got[0] != string(ArtifactKindStageEvaluation) {
+	if len(got) != 2 || got[0] != string(ArtifactKindEvaluationDecision) || got[1] != string(ArtifactKindStageEvaluation) {
 		t.Fatalf("evaluation-private projection filter drifted from policy: %v", got)
 	}
 }

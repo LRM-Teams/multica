@@ -19,6 +19,21 @@ multica project update <project-id> --title "<title>" --output json
 multica project status <project-id> in_progress --output json
 ```
 
+For a sustained multi-agent channel Goal, the channel manager must establish
+the code-delivery control plane before creating implementation Issues:
+
+```bash
+multica goal bootstrap --channel <group-id-or-name> \
+  --project-title "<title>" \
+  --repository-url "https://github.com/<owner>/<repo>.git" \
+  --default-branch dev
+```
+
+This atomically creates or reuses the channel Project, attaches the canonical
+`github_repo`, and binds the channel. It does not create vague placeholder
+Issues: follow it with one channel-linked parent Issue and bounded child Issues
+that carry acceptance criteria, distinct assignees, branches, and review.
+
 Project create, update, delete, and status commands mutate workspace state.
 
 When the current task is bound to a project, inspect live bindings with

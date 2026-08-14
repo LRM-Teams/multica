@@ -283,8 +283,6 @@ func TestShadowEquivalenceFixtureCoversAcceptedPlanAndDurableFamilies(t *testing
 		ArtifactKindMethodDecision,
 		ArtifactKindQuestion,
 		ArtifactKindTask,
-		ArtifactKindAttempt,
-		ArtifactKindResultArtifact,
 		ArtifactKindLegacySource,
 		ArtifactKindSourceSnapshot,
 		ArtifactKindObservation,
@@ -355,22 +353,22 @@ func seedShadowInquiryFamilies(
 	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO research_hypothesis(
-			  id,workspace_id,session_id,question_id,statement,created_by_task_id,created_by_attempt_id
-			) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'Shadow hypothesis',$5::uuid,$6::uuid);
+			  id,workspace_id,session_id,client_key,question_id,statement,created_by_task_id,created_by_attempt_id
+			) VALUES ($1::uuid,$2::uuid,$3::uuid,'shadow-hypothesis',$4::uuid,'Shadow hypothesis',$5::uuid,$6::uuid);
 			INSERT INTO research_branch(
-			  id,workspace_id,session_id,objective,status,created_by_task_id
-			) VALUES ($7::uuid,$2::uuid,$3::uuid,'Shadow branch','active',$5::uuid);
+			  id,workspace_id,session_id,client_key,objective,status,created_by_task_id
+			) VALUES ($7::uuid,$2::uuid,$3::uuid,'shadow-branch','Shadow branch','active',$5::uuid);
 			INSERT INTO research_insight(
-			  id,workspace_id,session_id,title,summary,status,created_by_attempt_id
-			) VALUES ($8::uuid,$2::uuid,$3::uuid,'Shadow insight','Durable shadow insight','accepted',$6::uuid);
+			  id,workspace_id,session_id,client_key,title,summary,status,created_by_attempt_id
+			) VALUES ($8::uuid,$2::uuid,$3::uuid,'shadow-insight','Shadow insight','Durable shadow insight','accepted',$6::uuid);
 			INSERT INTO research_inquiry_edge(
-			  id,workspace_id,session_id,from_kind,from_entity_id,to_kind,to_entity_id,
+			  id,workspace_id,session_id,client_key,from_kind,from_entity_id,to_kind,to_entity_id,
 			  relation,rationale,created_by_attempt_id
 			) VALUES (
-			  $9::uuid,$2::uuid,$3::uuid,'question',$4::uuid,'hypothesis',$1::uuid,
+			  $9::uuid,$2::uuid,$3::uuid,'shadow-edge','question',$4::uuid,'hypothesis',$1::uuid,
 			  'decomposes','Shadow inquiry relationship',$6::uuid
 			)
-		`, hypothesisID, workspaceID, sessionID, questionID, taskID, attemptID, branchID, insightID, edgeID); err != nil {
+		`, pgx.QueryExecModeSimpleProtocol, hypothesisID, workspaceID, sessionID, questionID, taskID, attemptID, branchID, insightID, edgeID); err != nil {
 			return err
 		}
 		for _, artifact := range []struct {

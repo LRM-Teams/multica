@@ -124,10 +124,9 @@ func TestMatchDecisionAdvancesMessageVersionAndExactLineageAtomically(t *testing
 	`, messageID).Scan(&storedMeta, &currentVersion); err != nil {
 		t.Fatal(err)
 	}
-	if currentVersion != 2 || !json.Valid(storedMeta) || string(storedMeta) != `{"match_decision": `+string(payload)+`}` {
-		var stored map[string]json.RawMessage
-		if json.Unmarshal(storedMeta, &stored) != nil || string(stored["match_decision"]) != string(payload) || currentVersion != 2 {
-			t.Fatalf("invalid update escaped rollback: version=%d meta=%s", currentVersion, storedMeta)
-		}
+	var stored map[string]json.RawMessage
+	if currentVersion != 2 || json.Unmarshal(storedMeta, &stored) != nil ||
+		!semanticJSONEqual(stored["match_decision"], payload) {
+		t.Fatalf("invalid update escaped rollback: version=%d meta=%s", currentVersion, storedMeta)
 	}
 }

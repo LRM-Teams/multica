@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -45,6 +46,36 @@ func TestManifestEntryOrdinalFollowsCanonicalKindAndIDOrder(t *testing.T) {
 	attempt, _, err := store.CreateDispatchIntent(ctx, input)
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	wantAttemptHash, err := ArtifactContentHash(ArtifactKindAttempt, attemptArtifactContent(attempt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var provenance, hashOrigin, contentHash string
+	var artifactGoalVersion, artifactPlanVersion int
+	if err = pool.QueryRow(ctx, `
+		SELECT p.provenance_completeness, v.hash_origin, v.content_hash,
+		       v.goal_version, v.plan_version
+		FROM research_artifact_passport p
+		JOIN research_artifact_version v
+		  ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+		     (p.workspace_id, p.session_id, p.id, p.current_version)
+		WHERE p.workspace_id = $1::uuid AND p.session_id = $2::uuid
+		  AND p.id = $3::uuid AND p.entity_kind = 'attempt'
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&provenance, &hashOrigin, &contentHash, &artifactGoalVersion, &artifactPlanVersion,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if provenance != string(ArtifactProvenanceComplete) || hashOrigin != string(ArtifactHashOriginProduction) {
+		t.Fatalf("attempt provenance=%q hash_origin=%q", provenance, hashOrigin)
+	}
+	if contentHash != wantAttemptHash {
+		t.Fatalf("attempt content_hash=%q want=%q", contentHash, wantAttemptHash)
+	}
+	if artifactGoalVersion != input.Request.Task.GoalVersion || artifactPlanVersion != input.Request.Task.PlanVersion {
+		t.Fatalf("attempt goal/plan=%d/%d want=%d/%d", artifactGoalVersion, artifactPlanVersion,
+			input.Request.Task.GoalVersion, input.Request.Task.PlanVersion)
 	}
 
 	type orderedEntry struct {
@@ -175,13 +206,30 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 		if err = rows.Scan(&reprBytes, &contentHash, &reprHash, &kind); err != nil {
 			t.Fatal(err)
 		}
-		if kind == string(ArtifactKindSourceSnapshot) || kind == string(ArtifactKindObservation) || kind == string(ArtifactKindClaim) {
+		switch ArtifactEntityKind(kind) {
+		case ArtifactKindContractRevision, ArtifactKindMethodDecision, ArtifactKindQuestion, ArtifactKindTask, ArtifactKindAttempt:
+			var decoded struct {
+				Order int            `json:"order"`
+				Value map[string]any `json:"value"`
+			}
+			if err = json.Unmarshal(reprBytes, &decoded); err != nil || len(decoded.Value) == 0 {
+				t.Fatalf("%s representation is not frozen ordered JSON: %q err=%v", kind, reprBytes, err)
+			}
+		case ArtifactKindRunSession, ArtifactKindSourceSnapshot, ArtifactKindObservation, ArtifactKindClaim:
 			var decoded map[string]any
-			if err = json.Unmarshal(reprBytes, &decoded); err != nil || decoded["id"] == "" {
+			if err = json.Unmarshal(reprBytes, &decoded); err != nil {
 				t.Fatalf("%s representation is not frozen wire JSON: %q err=%v", kind, reprBytes, err)
 			}
-		} else if string(reprBytes) != contentHash {
-			t.Fatalf("legacy %s representation_bytes=%q content_hash=%q", kind, reprBytes, contentHash)
+			if kind == string(ArtifactKindRunSession) && decoded["session_id"] != run.SessionID {
+				t.Fatalf("run session representation session_id=%v want=%s", decoded["session_id"], run.SessionID)
+			}
+			if kind != string(ArtifactKindRunSession) && decoded["id"] == "" {
+				t.Fatalf("%s representation has no id: %q", kind, reprBytes)
+			}
+		default:
+			if string(reprBytes) != contentHash {
+				t.Fatalf("legacy %s representation_bytes=%q content_hash=%q", kind, reprBytes, contentHash)
+			}
 		}
 		wantHash := contentHashFromPayload(reprBytes)
 		if reprHash != wantHash {
@@ -193,6 +241,51 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected manifest entries with representation bytes")
+	}
+	before, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt before mutation: %v", err)
+	}
+	if len(before.Questions) == 0 || len(before.Tasks) == 0 || len(before.Attempts) == 0 {
+		t.Fatalf("incomplete frozen durable context: questions=%d tasks=%d attempts=%d", len(before.Questions), len(before.Tasks), len(before.Attempts))
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_contract_revision SET goal='live-mutated-contract' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_question SET question='live-mutated-question' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task SET objective='live-mutated-task' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET diagnostics='live-mutated-attempt' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt after mutation: %v", err)
+	}
+	if !reflect.DeepEqual(before.Contract, after.Contract) || !reflect.DeepEqual(before.Method, after.Method) ||
+		!reflect.DeepEqual(before.Questions, after.Questions) || !reflect.DeepEqual(before.Tasks, after.Tasks) ||
+		!reflect.DeepEqual(before.Attempts, after.Attempts) {
+		t.Fatalf("task-bound durable context changed after live mutation\nbefore=%+v\nafter=%+v", before, after)
+	}
+
+	if _, err = pool.Exec(ctx, `UPDATE research_session SET title='live-mutated-title', goal='live-mutated-goal' WHERE workspace_id=$1::uuid AND id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_fleet_member SET status='archived' WHERE workspace_id=$1::uuid AND fleet_id=$2::uuid AND agent_id=$3::uuid`, fixture.workspaceID, fixture.fleetID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt: %v", err)
+	}
+	if frozen.Run.Title != "Representation bytes" || frozen.Run.Goal != "Representation bytes" {
+		t.Fatalf("task-bound Run used live mutation: title=%q goal=%q", frozen.Run.Title, frozen.Run.Goal)
+	}
+	if len(frozen.PrincipalHeader) == 0 || frozen.PrincipalHeader[0].Status == "archived" {
+		t.Fatalf("task-bound principal header used live roster: %+v", frozen.PrincipalHeader)
 	}
 }
 

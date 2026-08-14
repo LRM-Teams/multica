@@ -16,8 +16,9 @@ func TestResearchTransactionRecoveryMatrixCoversRegistry(t *testing.T) {
 	registry := parseResearchTransactionOperationRegistry(t)
 	covered := parseRecoveryMatrixOperations(t, registry)
 	bespoke := map[researchTxOperation]string{
-		txOpDispatchIntentCreate: "TestCreateDispatchIntentTransactionRecovery",
-		txOpStrategyPromotion:    "TestPersistStrategyPromotionTransactionRecovery",
+		txOpDispatchIntentCreate:   "TestCreateDispatchIntentTransactionRecovery",
+		txOpStrategyPromotion:      "TestPersistStrategyPromotionTransactionRecovery",
+		txOpTaskInquiryTargetsBind: "TestBindTaskInquiryTargetsTransactionRecovery",
 	}
 	for operation, testName := range bespoke {
 		covered[operation] = struct{}{}

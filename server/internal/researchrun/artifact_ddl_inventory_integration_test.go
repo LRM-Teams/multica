@@ -169,7 +169,11 @@ func assertCatalogNames(
 	}
 	var missing []string
 	for _, name := range want {
-		if _, ok := present[name]; !ok {
+		catalogName := name
+		if len(catalogName) > 63 {
+			catalogName = catalogName[:63]
+		}
+		if _, ok := present[catalogName]; !ok {
 			missing = append(missing, name)
 		}
 	}

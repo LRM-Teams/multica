@@ -144,11 +144,11 @@ func appendProducedArtifactVersionTx(
 		  old_access_level, new_access_level
 		) VALUES (
 		  $1::uuid,$2::uuid,$3,'current_version',$4::uuid,
-		  $5,$6,$7,$8,$9,$9
+		  $5,$6,$7,$8,NULL,NULL
 		)
 	`, workspaceID, sessionID, watermark, artifactID,
 		state.EligibilityRevision, state.EligibilityRevision+1,
-		state.Version, nextVersion, string(state.AccessLevel))
+		state.Version, nextVersion)
 	return err
 }
 

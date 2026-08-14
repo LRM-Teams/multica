@@ -44,8 +44,8 @@ func TestInquiryDatabaseGuardsRejectInvalidTransitionsEndpointsAndCycles(t *test
 	hypothesisID := uuid.NewString()
 	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 		if _, insertErr := tx.Exec(ctx, `
-			INSERT INTO research_hypothesis (id,workspace_id,session_id,question_id,statement)
-			VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'A falsifiable hypothesis')
+			INSERT INTO research_hypothesis (id,workspace_id,session_id,question_id,statement,client_key)
+			VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'A falsifiable hypothesis','legacy:'||$1::text)
 		`, hypothesisID, fixture.workspaceID, run.SessionID, questionID); insertErr != nil {
 			return insertErr
 		}
@@ -62,8 +62,8 @@ func TestInquiryDatabaseGuardsRejectInvalidTransitionsEndpointsAndCycles(t *test
 	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 		if _, insertErr := tx.Exec(ctx, `
 			INSERT INTO research_inquiry_edge (
-			  id,workspace_id,session_id,from_kind,from_entity_id,to_kind,to_entity_id,relation
-			) VALUES ($1::uuid,$2::uuid,$3::uuid,'question',$4::uuid,'hypothesis',$5::uuid,'decomposes')
+			  id,workspace_id,session_id,from_kind,from_entity_id,to_kind,to_entity_id,relation,client_key
+			) VALUES ($1::uuid,$2::uuid,$3::uuid,'question',$4::uuid,'hypothesis',$5::uuid,'decomposes','legacy:'||$1::text)
 		`, edgeID, fixture.workspaceID, run.SessionID, questionID, hypothesisID); insertErr != nil {
 			return insertErr
 		}

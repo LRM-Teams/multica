@@ -114,6 +114,7 @@ BEGIN
       AND m.old_eligibility_revision = v_revision - 1
       AND m.new_eligibility_revision = v_revision
       AND m.watermark = v_watermark
+      AND m.xmin = pg_current_xact_id()::xid
   ) THEN
     RAISE foreign_key_violation USING CONSTRAINT = p_constraint_name;
   END IF;

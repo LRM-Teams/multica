@@ -90,9 +90,13 @@ func (runner *WorkspaceRunner) stopManagedAgent(payload protocol.WorkspaceRunner
 	}
 	launch, found := runner.processes.Snapshot(payload.AgentID)
 	if !found || launch.LaunchID != payload.LaunchID {
-		// Raft treats an explicit stop for an absent process as idempotent. The
-		// launch fence additionally makes an old stop harmless after replacement.
-		return nil
+		// Raft treats an explicit stop for an absent process as idempotent, but
+		// the server still needs the terminal lifecycle fact to release an
+		// accepted launch fence after provider startup failed. A stale old-launch
+		// status is harmless because the server fences it by launch ID.
+		return writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{
+			AgentID: payload.AgentID, LaunchID: payload.LaunchID, Status: protocol.AgentStatusInactive,
+		})
 	}
 	if err := runner.runtimes.forceInvalidateSession(payload.AgentID, launch.RuntimeID); err != nil {
 		return fmt.Errorf("stop managed Agent provider: %w", err)

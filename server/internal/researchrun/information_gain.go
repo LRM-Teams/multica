@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"math"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -181,5 +180,8 @@ func recordInformationGain(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	if err != nil {
 		return err
 	}
-	return ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("information_gain"), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)))
+	return registerProductionDecisionPassportTx(
+		ctx, tx, state.workspaceID, state.run.SessionID, decisionID,
+		state.attemptID, state.outputAccess,
+	)
 }

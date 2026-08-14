@@ -471,29 +471,40 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 	}
 }
 
-func TestPendingRunnerStopDispatchUsesCurrentLaunchID(t *testing.T) {
+func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	agentID, runtimeID := createHandlerTestAgent(t, "runner-stop-"+uuid.NewString()[:8], nil), handlerTestRuntimeID(t)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (
-			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
-		) VALUES ($1, $2, $3, 'daemon-1', 'instance-1', 'launch-current', 'active')`, testWorkspaceID, agentID, runtimeID); err != nil {
+	daemonID := "daemon-runner-lifecycle-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "runner lifecycle")
+	agentID := createHandlerTestAgentOnRuntime(t, "runner-lifecycle-"+uuid.NewString()[:8], runtimeID)
+	var launchID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT launch_id::text
+		FROM agent_runner_launch_projection
+		WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
+	`, testWorkspaceID, agentID, runtimeID).Scan(&launchID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_launch (
+			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
+		) VALUES ($1, $2, $3, $4, 'instance-1', $5, 'active')`, testWorkspaceID, agentID, runtimeID, daemonID, launchID); err != nil {
+		t.Fatal(err)
+	}
+	operationID := uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_lifecycle_operation (
-			workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
+			id, workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
 			action_kind, status, execution_mode, step, started_at
-		) VALUES ($1, $2, $3, $4, $5, 'restart', 'running', 'immediate', 'restart_runtime', now())`,
-		testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
+		) VALUES ($1, $2, $3, $4, $5, $6, 'restart', 'running', 'immediate', 'restart_runtime', now())`,
+		operationID, testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
 	hub := daemonws.NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
 	}))
 	defer server.Close()
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
@@ -509,7 +520,8 @@ func TestPendingRunnerStopDispatchUsesCurrentLaunchID(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceRunnerConnectionCount("daemon-1", testWorkspaceID) != 1 {
+	for hub.WorkspaceRunnerConnectionCount(daemonID, testWorkspaceID) != 1 ||
+		!hub.WorkspaceRunnerSupportsCapability(daemonID, testWorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
 		if time.Now().After(deadline) {
 			t.Fatal("Runner did not become ready")
 		}
@@ -517,22 +529,23 @@ func TestPendingRunnerStopDispatchUsesCurrentLaunchID(t *testing.T) {
 	}
 	h := *testHandler
 	h.DaemonHub = hub
-	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if err := h.dispatchPendingRunnerStops(ctx, identity); err != nil {
-		t.Fatalf("dispatch pending Runner stop: %v", err)
-	}
-	conn.SetReadDeadline(time.Now().Add(time.Second))
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
+	h.AgentLifecycleDispatchStore = NewInMemoryAgentLifecycleDispatchStore(h.DB)
+	if _, err := h.AgentLifecycleDispatchStore.Create(ctx, operationID, agentID, runtimeID, testWorkspaceID, string(agentLifecycleRestart)); err != nil {
 		t.Fatal(err)
 	}
-	var frame protocol.Message
-	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStop {
-		t.Fatalf("Runner stop frame=%+v err=%v", frame, err)
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	ack, err := h.HandleDaemonWSHeartbeat(ctx, identity, protocol.DaemonHeartbeatRequestPayload{RuntimeID: runtimeID})
+	if err != nil {
+		t.Fatalf("handle Runner heartbeat: %v", err)
 	}
-	var stop protocol.WorkspaceRunnerAgentStopPayload
-	if err := json.Unmarshal(frame.Payload, &stop); err != nil || stop.AgentID != agentID || stop.LaunchID != "launch-current" {
-		t.Fatalf("Runner stop payload=%+v err=%v", stop, err)
+	if ack == nil || len(ack.PendingAgentLifecycleOperations) != 1 || ack.PendingAgentLifecycleOperations[0].OperationID != operationID {
+		t.Fatalf("heartbeat lifecycle operations = %+v", ack)
+	}
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, raw, err := conn.ReadMessage(); err == nil {
+		var frame protocol.Message
+		_ = json.Unmarshal(raw, &frame)
+		t.Fatalf("lifecycle operation dispatched a parallel Runner frame: %+v", frame)
 	}
 }
 

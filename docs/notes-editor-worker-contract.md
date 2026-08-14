@@ -72,12 +72,32 @@ Notes page exposes a single **Use this note** / 「用这篇…」 menu (S3-A4) 
 
 The timeline card for `note_brief` is **collapsed by default**; expanding it reveals the note body snapshot captured at dispatch.
 
-Agent replies that follow a Worker `note_brief` trigger show two actions under the message body:
+Agent replies that **propose a write** (`note_write` part) after a Worker `note_brief` trigger show two actions under the message body. Ordinary chat/status replies in that thread stay button-free.
 
-1. **Insert below note** — appends a blank line + `## {title}` + reply body onto the original note (`PATCH` content). Title is derived from the first line of the reply.
-2. **Create child note** — `POST` a child page under the original note (titled), then write the reply into that child's content.
+1. **Insert below note** — appends a blank line + `## {title}` + the proposed body onto the original note (`PATCH` content). Title is derived from the first line of the proposal.
+2. **Create child note** — `POST` a child page under the original note (titled), then write the proposal into that child's content.
+
+The same two actions appear when a chat `note_write` part targets an existing page (`--note-page-id`, or a `/notes/<uuid>` link in the preceding user message).
 
 FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banner.tsx`, `note-worker-reply-actions.tsx`; helpers in `@multica/core/notes/worker-reply-actions`.
+
+## Chat → note confirmation (DM and channel)
+
+Agents must not silent-write `note_page` or claim a local `notes/*.md` file is a product note. Confirmation buttons appear when:
+
+- the agent opts this send in with `--note-write`, or
+- the immediately preceding human message asked to insert/write a note (or asked for the confirm button) **and** the agent reply looks like the payload (not a one-line ack).
+
+The stdin / message body should be only the cleaned note markdown. Omitting `--note-page-id` is the default (Create note). Pass `--note-page-id` only when the human gave a UUID or `/notes/<uuid>` link. The Server attaches a `note_write` part when the agent passes the flag — agents never submit Parts.
+
+UI (human click writes with the clicker's note ACL):
+
+| Specified note? | Buttons |
+|-----------------|---------|
+| No (`note_write` without `ref_id`) | **Create note** — `POST` a top-level page, then `PATCH` the proposed body |
+| Yes (`note_brief` sticky, `--note-page-id`, or `/notes/<uuid>` on the preceding user message) | **Insert below note** / **Create child note** (same as Worker replies) |
+
+Do not show Create note / Insert below on ordinary agent replies (a poem request with no save intent stays button-free). A one-line ack after “写入笔记” also stays button-free.
 
 ## Agent read path (S2-C2)
 
@@ -91,6 +111,7 @@ FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banne
 - Worker create/get + cross-rejection: `server/internal/handler/note_worker.go`
 - Agent note read: `server/internal/handler/agent_notes.go`
 - Worker prompt partitions/escape: `server/internal/handler/note_worker_prompt.go`
+- Chat note-write confirmation: `appendAgentNoteWritePart` in `agent_transport.go`; CLI `--note-write` / `--note-page-id`; FE `NoteWorkerReplyActions`
 - Note brief context helper: `server/internal/service/note_brief.go`
 - Shared intent constants: `server/internal/handler/note_intent.go`
 - FE types: `packages/core/types/note.ts` (`NoteIntent`, `CreateNoteWorkerJobRequest`, …)

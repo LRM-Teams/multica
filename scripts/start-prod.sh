@@ -122,7 +122,10 @@ if [ "$WITH_DAEMON" = true ]; then
   if [ -n "$DAEMON_PROFILE" ]; then
     daemon_args=(--profile "$DAEMON_PROFILE")
   fi
-  bash scripts/start-daemon.sh "${daemon_args[@]}"
+  if ! bash scripts/start-daemon.sh "${daemon_args[@]}"; then
+    echo "Warning: daemon failed to start; backend and frontend are still running." >&2
+    echo "         Retry: scripts/start-daemon.sh" >&2
+  fi
 fi
 
 wait

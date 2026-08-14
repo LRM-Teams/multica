@@ -553,6 +553,11 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"--attachment-id <id>",
 		"Agent message sends do not accept sticker parts",
 		"Agents never submit message Parts, stickers, or voice markers",
+		"--note-write",
+		"--note-page-id",
+		"do NOT Write or create a local file",
+		"Never claim the note was saved",
+		"confirm button appears",
 		"Do not synthesize, encode, upload, or attach an audio file",
 		"Reactions: use a reaction for a pure acknowledgement",
 		"Freshness holds:",
@@ -639,6 +644,25 @@ func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestChatRuntimeBriefPinsProductNoteWritePath(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChannelID:       "channel-1",
+		MessageDelivery: true,
+	})
+	for _, want := range []string{
+		"--note-write",
+		"do NOT Write or create a local file",
+		"Never claim the note was saved",
+		"confirm button appears",
+		"They will not see that in the Notes UI",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("chat brief missing product-note write path %q\n---\n%s", want, out)
+		}
 	}
 }
 
@@ -1174,6 +1198,7 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 		"## Multica Agent Memory Scope",
 		"Agent workspace (`MULTICA_AGENT_ROOT`): `/tmp/multica/workspace-1/agents/agent-1`",
 		"Relative layout: `memory/`, `skills/`, `notes/`, `users/`, `projects/`, and `channels/`",
+		"not the workspace Notes UI",
 		"does not expose a separate environment variable for every subdirectory",
 		"Do not use provider-global memory directories",
 		"### Harness boundary (kernel vs shell)",
@@ -1258,6 +1283,8 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"source is provenance, not scope",
 		"Claiming memory",
 		"Human and peer-agent durable instructions use the same bar",
+		"Workspace product notes",
+		"Proposing a product note with `--note-write` is not claiming memory",
 		"Problem closeout",
 		"memory/STATE.md",
 		"memory/REVIEW.md",

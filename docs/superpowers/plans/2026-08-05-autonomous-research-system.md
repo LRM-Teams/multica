@@ -1019,6 +1019,12 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
+D-lifecycle-1 证据：生产 Supersede/Withdraw 命令都原子推进 eligibility revision 与 Session
+policy watermark，并写入 reciprocal lineage/lifecycle + policy mutation；新 Context 排除旧工件，
+已冻结但尚未提交的 Attempt 在 Result acceptance 时重新授权并被拒绝，且失败提交不会产生
+Result Artifact。事务恢复、幂等重放、authorized audit 与 domain/version 历史保留均由真实
+PostgreSQL 用例覆盖，§15.24 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

@@ -45,3 +45,27 @@ func TestResearchV6RootIDsUsesGoalSubtypeForCompatibilityRoot(t *testing.T) {
 		t.Fatalf("roots=%v", roots)
 	}
 }
+
+func TestResearchV6ResumeRequiresResyncFencesSnapshotAndRetention(t *testing.T) {
+	current := researchV6Snapshot{SnapshotID: "sha256:current", ThroughEventSequence: 20}
+	tests := []struct {
+		name          string
+		cursor        researchV6ResumeCursor
+		firstRetained int64
+		want          bool
+	}{
+		{name: "contiguous", cursor: researchV6ResumeCursor{SnapshotID: "sha256:current", LastConfirmedSequence: 10}, firstRetained: 11},
+		{name: "legacy client remains compatible", cursor: researchV6ResumeCursor{LastConfirmedSequence: 10}, firstRetained: 11},
+		{name: "snapshot changed", cursor: researchV6ResumeCursor{SnapshotID: "sha256:old", LastConfirmedSequence: 10}, firstRetained: 11, want: true},
+		{name: "cursor ahead", cursor: researchV6ResumeCursor{SnapshotID: "sha256:current", LastConfirmedSequence: 21}, firstRetained: 1, want: true},
+		{name: "history expired", cursor: researchV6ResumeCursor{SnapshotID: "sha256:current", LastConfirmedSequence: 10}, firstRetained: 13, want: true},
+		{name: "initial baseline history expired", cursor: researchV6ResumeCursor{SnapshotID: "sha256:current", LastConfirmedSequence: 0}, firstRetained: 13, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := researchV6ResumeRequiresResync(tt.cursor, current, tt.firstRetained); got != tt.want {
+				t.Fatalf("got=%v want=%v", got, tt.want)
+			}
+		})
+	}
+}

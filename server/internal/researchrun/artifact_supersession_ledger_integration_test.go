@@ -64,10 +64,26 @@ func TestSupersessionLedgerExcludesOldArtifactAndPreservesBothVersions(t *testin
 		t.Fatal(err)
 	}
 
-	oldRevision, newRevision, watermark := supersedeIntegrationArtifact(
-		t, ctx, pool, fixture.workspaceID, run.SessionID,
-		oldClaimID, successorClaimID, decisionID,
-	)
+	operationID := uuid.NewString()
+	outcome, err := (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: operationID, WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: oldClaimID, Kind: artifactLifecycleSupersede,
+		SuccessorArtifactID: successorClaimID, DecisionID: decisionID,
+		Reason: "corrected by verified successor",
+	})
+	if err != nil {
+		t.Fatalf("supersede through lifecycle module: %v", err)
+	}
+	replayed, err := (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: operationID, WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: oldClaimID, Kind: artifactLifecycleSupersede,
+		SuccessorArtifactID: successorClaimID, DecisionID: decisionID,
+		Reason: "corrected by verified successor",
+	})
+	if err != nil || !replayed.Replayed {
+		t.Fatalf("supersession replay=%+v err=%v", replayed, err)
+	}
+	oldRevision, newRevision, watermark := outcome.EligibilityRevision-1, outcome.EligibilityRevision, outcome.PolicyWatermark
 
 	var edgeCount, mutationCount, versionCount int
 	if err = pool.QueryRow(ctx, `

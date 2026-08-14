@@ -133,8 +133,8 @@ func runHandlerTests(m *testing.M) int {
 
 type acceptingAgentLifecycleNotifier struct{}
 
-func (acceptingAgentLifecycleNotifier) NotifyAgentLifecycle(_ string, _ string, payload protocol.WorkspaceRunnerAgentLifecyclePayload) bool {
-	return payload.Validate() == nil
+func (acceptingAgentLifecycleNotifier) NotifyAgentLifecycleCommand(_ string, _ string, _ string, _ string, _ any) bool {
+	return true
 }
 
 // ensureAgentInboxTestFixtureDefaults keeps low-level SQL fixtures concise

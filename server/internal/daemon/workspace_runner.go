@@ -400,7 +400,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
 				continue
 			}
-			ack, replayed, err := runner.registerManagedAgentStartOnce(start)
+			ack, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(workspaceID, start, failConnection)
 			if err != nil {
 				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {
@@ -409,57 +409,25 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				failConnection(err)
 				continue
 			}
-			if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {
-				return err
+			writeErr := writeFrame(protocol.EventAgentStartAck, ack)
+			if releaseStartupPublication != nil {
+				// Provider startup is already owned before the ACK write. Publication
+				// waits only to preserve ACK-before-status ordering; a failed write
+				// still releases the owner so reconnect/stop cannot strand Starting.
+				releaseStartupPublication()
 			}
-			connection.deliveries.Resume(start.AgentID, start.LaunchID)
-			if replayed {
-				// A control cycle sends one heartbeat per Runtime, so the server
-				// may re-offer this immutable dispatch before the first async
-				// provider start reports Active. ACK every replay, but preserve
-				// Raft's hasStarting fence: only the first receipt owns startup.
-				// If startup already completed and its status was lost, re-drive
-				// the terminal status without spawning another provider.
-				if current, ok := runner.processes.Snapshot(start.AgentID); ok && current.LaunchID == start.LaunchID && current.QueueState == protocol.AgentStartQueueRunning {
-					status := protocol.AgentStatusPayload{AgentID: start.AgentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}
-					if err := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); err != nil {
-						failConnection(err)
-						continue
-					}
-					runner.publishManagedAgentStartActivity(start.AgentID, start.RuntimeID)
-				}
-				continue
+			if writeErr != nil {
+				return writeErr
 			}
 			go func() {
-				// Provider startup belongs to the Runner, not the socket that
-				// delivered agent:start. A Machine Upgrade successor can drop
-				// that control connection while Codex is still booting.
-				startCtx := runner.life
-				if startCtx == nil {
-					startCtx = context.Background()
+				published := startupPublished != nil && <-startupPublished
+				if published && replayed {
+					published = runner.replayManagedAgentStartPublication(start, failConnection)
 				}
-				status, session, err := runner.completeManagedAgentStart(startCtx, start, ack)
-				if err != nil {
-					if runner.logger != nil {
-						runner.logger.Warn("Workspace Runner provider start failed", runner.managedStartLogAttrs(start, ack.QueueState, "provider_start_failed", "failed", err)...)
-					}
-					if status.AgentID != "" {
-						if writeErr := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); writeErr != nil && runner.logger != nil {
-							runner.logger.Debug("workspace Runner start-failure status unpublished", "workspace_id", workspaceID, "agent_id", start.AgentID, "error", writeErr)
-						}
-					}
-					return
-				}
-				if err := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); err != nil {
-					failConnection(err)
-					return
-				}
-				runner.publishManagedAgentStartActivity(start.AgentID, start.RuntimeID)
-				if session.ProviderSessionID != "" {
-					if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, session); err != nil {
-						failConnection(err)
-						return
-					}
+				if published {
+					connection.deliveries.Resume(start.AgentID, start.LaunchID)
+				} else {
+					connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				}
 			}()
 		case protocol.EventDaemonAgentStop:
@@ -467,12 +435,23 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
 				continue
 			}
-			if err := runner.stopManagedAgent(stop, writeFrame); err != nil {
+			if err := runner.stopManagedAgent(connection.ctx, stop, func() {
+				connection.deliveries.FenceStop(stop.AgentID, stop.LaunchID)
+			}, writeFrame); err != nil {
 				if runner.logger != nil {
 					runner.logger.Warn("Workspace Runner stop rejected", "workspace_id", workspaceID, "agent_id", stop.AgentID, "launch_id", stop.LaunchID, "reason", "stop_rejected", "error", err)
 				}
 				failConnection(err)
 				continue
+			}
+		case protocol.EventDaemonAgentResetWorkspace:
+			var reset protocol.WorkspaceRunnerAgentResetWorkspacePayload
+			if json.Unmarshal(message.Payload, &reset) != nil || reset.Validate() != nil {
+				continue
+			}
+			result := runner.resetManagedAgentWorkspace(reset)
+			if err := writeFrame(protocol.EventAgentResetWorkspaceResult, result); err != nil {
+				return err
 			}
 		case protocol.EventAgentAttach:
 			var attach protocol.WorkspaceRunnerAgentAttachPayload

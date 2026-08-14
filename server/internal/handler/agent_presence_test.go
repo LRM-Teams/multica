@@ -498,7 +498,7 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 		INSERT INTO agent_lifecycle_operation (
 			id, workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
 			action_kind, status, execution_mode, step, started_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'restart', 'running', 'immediate', 'restart_runtime', now())`,
+		) VALUES ($1, $2, $3, $4, $5, $6, 'restart', 'running', 'immediate', 'stopping', now())`,
 		operationID, testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
@@ -529,17 +529,9 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 	}
 	h := *testHandler
 	h.DaemonHub = hub
-	h.AgentLifecycleDispatchStore = NewInMemoryAgentLifecycleDispatchStore(h.DB)
-	if _, err := h.AgentLifecycleDispatchStore.Create(ctx, operationID, agentID, runtimeID, testWorkspaceID, string(agentLifecycleRestart)); err != nil {
-		t.Fatal(err)
-	}
 	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	ack, err := h.HandleDaemonWSHeartbeat(ctx, identity, protocol.DaemonHeartbeatRequestPayload{RuntimeID: runtimeID})
-	if err != nil {
-		t.Fatalf("handle Runner heartbeat: %v", err)
-	}
-	if ack == nil || len(ack.PendingAgentLifecycleOperations) != 1 || ack.PendingAgentLifecycleOperations[0].OperationID != operationID {
-		t.Fatalf("heartbeat lifecycle operations = %+v", ack)
+	if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
+		t.Fatalf("reconcile while lifecycle stop is active: %v", err)
 	}
 	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if _, raw, err := conn.ReadMessage(); err == nil {

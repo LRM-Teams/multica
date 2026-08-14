@@ -866,13 +866,27 @@ func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID
 			return
 		}
 		delivered = h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
-	case protocol.EventDaemonAgentLifecycle:
-		var payload protocol.WorkspaceRunnerAgentLifecyclePayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil || payload.WorkspaceID != workspaceID {
+	case protocol.EventDaemonAgentStart:
+		var payload protocol.WorkspaceRunnerAgentStartPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			M.WakeupDeliveredMiss.Add(1)
 			return
 		}
-		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle, frame)
+		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment, frame)
+	case protocol.EventDaemonAgentStop:
+		var payload protocol.WorkspaceRunnerAgentStopPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			M.WakeupDeliveredMiss.Add(1)
+			return
+		}
+		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment, frame)
+	case protocol.EventDaemonAgentResetWorkspace:
+		var payload protocol.WorkspaceRunnerAgentResetWorkspacePayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			M.WakeupDeliveredMiss.Add(1)
+			return
+		}
+		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentReset, frame)
 	default:
 		M.WakeupDeliveredMiss.Add(1)
 		return
@@ -884,15 +898,19 @@ func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID
 	}
 }
 
-func (h *Hub) NotifyAgentLifecycle(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentLifecyclePayload) bool {
-	if h == nil || workspaceID == "" || daemonID == "" || payload.Validate() != nil || payload.WorkspaceID != workspaceID {
+func (h *Hub) NotifyAgentLifecycleCommand(workspaceID, daemonID, eventType, commandID string, payload any) bool {
+	if h == nil || workspaceID == "" || daemonID == "" || commandID == "" || !validAgentLifecycleCommand(eventType, payload) {
 		return false
 	}
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentLifecycle, Payload: mustMarshalRaw(payload)})
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
 	if err != nil {
 		return false
 	}
-	return h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle, frame)
+	capability := protocol.DaemonCapabilityWorkspaceRunnerAttachment
+	if eventType == protocol.EventDaemonAgentResetWorkspace {
+		capability = protocol.DaemonCapabilityWorkspaceRunnerAgentReset
+	}
+	return h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, capability, frame)
 }
 
 func (h *Hub) notifyFrame(runtimeID string, data []byte, eventID string) (delivered bool, deduped bool) {
@@ -1353,14 +1371,8 @@ func (c *client) handleFrame(raw []byte) {
 			return
 		}
 		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentLifecycleAck:
-		var payload protocol.WorkspaceRunnerAgentLifecycleAckPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentLifecycleResult:
-		var payload protocol.WorkspaceRunnerAgentLifecycleResultPayload
+	case protocol.EventAgentResetWorkspaceResult:
+		var payload protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}

@@ -16,22 +16,35 @@ import (
 )
 
 type capturedAgentLifecycleNotifier struct {
+	mu          sync.Mutex
 	workspaceID string
 	daemonID    string
-	payload     protocol.WorkspaceRunnerAgentLifecyclePayload
+	eventType   string
+	commandID   string
+	payload     any
 }
 
 type rejectingAgentLifecycleNotifier struct{}
 
-func (rejectingAgentLifecycleNotifier) NotifyAgentLifecycle(string, string, protocol.WorkspaceRunnerAgentLifecyclePayload) bool {
+func (rejectingAgentLifecycleNotifier) NotifyAgentLifecycleCommand(string, string, string, string, any) bool {
 	return false
 }
 
-func (n *capturedAgentLifecycleNotifier) NotifyAgentLifecycle(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentLifecyclePayload) bool {
+func (n *capturedAgentLifecycleNotifier) NotifyAgentLifecycleCommand(workspaceID, daemonID, eventType, commandID string, payload any) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	n.workspaceID = workspaceID
 	n.daemonID = daemonID
+	n.eventType = eventType
+	n.commandID = commandID
 	n.payload = payload
 	return true
+}
+
+func (n *capturedAgentLifecycleNotifier) snapshot() (string, string, string, string, any) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.workspaceID, n.daemonID, n.eventType, n.commandID, n.payload
 }
 
 func TestAgentLifecycleContractPure(t *testing.T) {
@@ -50,10 +63,10 @@ func TestAgentLifecycleContractPure(t *testing.T) {
 	if agentLifecycleInitialStep(agentLifecycleScheduled) != "waiting_for_current_run" {
 		t.Fatal("scheduled operation did not expose the drain wait step")
 	}
-	if agentLifecycleInitialStep(agentLifecycleRunning) != "starting" {
-		t.Fatal("running operation did not expose the starting step")
+	if agentLifecycleInitialStep(agentLifecycleRunning) != agentLifecycleStepStopping {
+		t.Fatal("running operation did not expose the stopping step")
 	}
-	if !agentLifecycleCapabilityPresent([]string{"other", "workspace_runner_agent_lifecycle_v1"}) {
+	if !agentLifecycleCapabilityPresent([]string{"other", "workspace_runner_agent_reset_workspace_v1"}) {
 		t.Fatal("lifecycle capability was not detected")
 	}
 	if agentLifecycleCapabilityPresent([]string{"other"}) {
@@ -340,13 +353,13 @@ func TestAgentLifecycleIdleActionsStartImmediately(t *testing.T) {
 }
 
 // TestAgentLifecycleCreateDispatchesImmediateOperationToDaemon pins the
-// direct public seam: accepted create emits exactly one Workspace Runner
-// command carrying the operation row's identity and requested action.
+// public seam: even an idle restart begins with Raft's discrete agent:stop
+// fence, never a product-level composite lifecycle payload.
 func TestAgentLifecycleCreateDispatchesImmediateOperationToDaemon(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	agentID, _ := createAgentLifecycleFixture(t, true)
 	notifier := &capturedAgentLifecycleNotifier{}
 	previous := testHandler.AgentLifecycleNotifier
 	testHandler.AgentLifecycleNotifier = notifier
@@ -360,22 +373,137 @@ func TestAgentLifecycleCreateDispatchesImmediateOperationToDaemon(t *testing.T) 
 		t.Fatalf("decode operation: %v", err)
 	}
 
-	if notifier.payload.OperationID != operation.ID {
-		t.Fatalf("command operation_id = %q, want %q", notifier.payload.OperationID, operation.ID)
+	workspaceID, daemonID, eventType, commandID, payload := notifier.snapshot()
+	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	if !ok {
+		t.Fatalf("command payload = %T, want Agent stop", payload)
 	}
-	if notifier.payload.AgentID != agentID || notifier.payload.RuntimeID != runtimeID {
-		t.Fatalf("command identity = %+v", notifier.payload)
+	if eventType != protocol.EventDaemonAgentStop || commandID != operation.ID {
+		t.Fatalf("command event=%q command=%q payload=%+v", eventType, commandID, stop)
 	}
-	if notifier.payload.ActionKind != string(agentLifecycleRestart) || notifier.workspaceID != testWorkspaceID || notifier.daemonID != "agent-lifecycle-test-daemon" {
-		t.Fatalf("command route/action = workspace %q daemon %q payload %+v", notifier.workspaceID, notifier.daemonID, notifier.payload)
+	if stop.AgentID != agentID || stop.LaunchID == "" {
+		t.Fatalf("restart stop fence = %+v", stop)
+	}
+	if workspaceID != testWorkspaceID || daemonID != "agent-lifecycle-test-daemon" {
+		t.Fatalf("command route = workspace %q daemon %q", workspaceID, daemonID)
 	}
 }
 
-func TestWorkspaceRunnerLifecycleReceiptsAdvanceOperation(t *testing.T) {
+func TestAgentLifecycleRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	var oldLaunchID string
+	if err := testPool.QueryRow(context.Background(), `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&oldLaunchID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
+		VALUES ($1, $2, $3, 'agent-lifecycle-test-daemon', 'runner-instance', $4, 'active')
+	`, testWorkspaceID, agentID, runtimeID, oldLaunchID); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &capturedAgentLifecycleNotifier{}
+	previous := testHandler.AgentLifecycleNotifier
+	testHandler.AgentLifecycleNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentLifecycleNotifier = previous })
+
+	create := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleRestart)
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
+		t.Fatal(err)
+	}
+	_, _, eventType, commandID, payload := notifier.snapshot()
+	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	if !ok || eventType != protocol.EventDaemonAgentStop || commandID != operation.ID || stop.AgentID != agentID || stop.LaunchID != oldLaunchID {
+		t.Fatalf("first restart command event=%q command=%q payload=%+v", eventType, commandID, payload)
+	}
+
+	identity := daemonws.ClientIdentity{DaemonID: "agent-lifecycle-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if handled, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: uuid.NewString(), Status: protocol.AgentStatusInactive}); err != nil || handled {
+		t.Fatalf("stale inactive advanced stop fence: handled=%v err=%v", handled, err)
+	}
+	if handled, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: oldLaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+		t.Fatalf("advance inactive handled=%v err=%v", handled, err)
+	}
+	_, _, eventType, commandID, payload = notifier.snapshot()
+	start, ok := payload.(protocol.WorkspaceRunnerAgentStartPayload)
+	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.AgentID != agentID || start.RuntimeID != runtimeID || start.LaunchID == oldLaunchID || start.SessionID != nil {
+		t.Fatalf("replacement restart command event=%q command=%q payload=%+v", eventType, commandID, payload)
+	}
+	if handled, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
+		t.Fatalf("advance active handled=%v err=%v", handled, err)
+	}
+	finished, err := getAgentLifecycleOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
+	if err != nil || finished == nil || finished.Status != agentLifecycleSucceeded || finished.FinishedAt == nil {
+		t.Fatalf("finished restart = %+v err=%v", finished, err)
+	}
+}
+
+func TestAgentLifecycleFullResetWaitsForWorkspaceResultBeforeFreshStart(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	notifier := &capturedAgentLifecycleNotifier{}
+	previous := testHandler.AgentLifecycleNotifier
+	testHandler.AgentLifecycleNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentLifecycleNotifier = previous })
+
+	create := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleFullResetRestart)
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
+		t.Fatal(err)
+	}
+	_, _, eventType, commandID, payload := notifier.snapshot()
+	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	if !ok || eventType != protocol.EventDaemonAgentStop || commandID != operation.ID {
+		t.Fatalf("full reset stop event=%q command=%q payload=%+v", eventType, commandID, payload)
+	}
+	identity := daemonws.ClientIdentity{DaemonID: "agent-lifecycle-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if handled, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+		t.Fatalf("advance full reset stop handled=%v err=%v", handled, err)
+	}
+	_, _, eventType, commandID, payload = notifier.snapshot()
+	reset, ok := payload.(protocol.WorkspaceRunnerAgentResetWorkspacePayload)
+	if !ok || eventType != protocol.EventDaemonAgentResetWorkspace || commandID != operation.ID || reset.OperationID != operation.ID || reset.AgentID != agentID {
+		t.Fatalf("full reset command event=%q command=%q payload=%+v", eventType, commandID, payload)
+	}
+	if err := testHandler.recordAgentWorkspaceResetResult(context.Background(), identity, protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload{
+		OperationID: operation.ID, AgentID: agentID, Status: protocol.AgentResetWorkspaceSucceeded,
+	}); err != nil {
+		t.Fatalf("record workspace reset result: %v", err)
+	}
+	_, _, eventType, commandID, payload = notifier.snapshot()
+	start, ok := payload.(protocol.WorkspaceRunnerAgentStartPayload)
+	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.SessionID == nil || *start.SessionID != "" {
+		t.Fatalf("fresh replacement command event=%q command=%q payload=%+v", eventType, commandID, payload)
+	}
+	if handled, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
+		t.Fatalf("advance full reset active handled=%v err=%v", handled, err)
+	}
+	finished, err := getAgentLifecycleOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
+	if err != nil || finished == nil || finished.Status != agentLifecycleSucceeded {
+		t.Fatalf("finished full reset = %+v err=%v", finished, err)
+	}
+}
+
+func TestWorkspaceRunnerActiveStatusCompletesLifecycleOperation(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	notifier := &capturedAgentLifecycleNotifier{}
+	previous := testHandler.AgentLifecycleNotifier
+	testHandler.AgentLifecycleNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentLifecycleNotifier = previous })
 	create := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleRestart)
 	if create.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
@@ -389,30 +517,23 @@ func TestWorkspaceRunnerLifecycleReceiptsAdvanceOperation(t *testing.T) {
 		WorkspaceID: testWorkspaceID,
 		RuntimeIDs:  []string{runtimeID},
 	}
-	ack, _ := json.Marshal(protocol.WorkspaceRunnerAgentLifecycleAckPayload{
-		OperationID: operation.ID,
-		AgentID:     agentID,
-		RuntimeID:   runtimeID,
-		Outcome:     protocol.AgentLifecycleCommandAccepted,
-	})
-	if err := testHandler.HandleWorkspaceRunnerFrame(context.Background(), identity, "runner-instance", protocol.EventAgentLifecycleAck, ack); err != nil {
-		t.Fatalf("record accepted receipt: %v", err)
+	_, _, _, _, firstPayload := notifier.snapshot()
+	stop, ok := firstPayload.(protocol.WorkspaceRunnerAgentStopPayload)
+	if !ok {
+		t.Fatalf("first lifecycle payload=%T, want stop", firstPayload)
 	}
-	accepted, err := getAgentLifecycleOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
-	if err != nil || accepted == nil || accepted.Step != "accepted" || accepted.Status != agentLifecycleRunning {
-		t.Fatalf("accepted operation = %+v, %v", accepted, err)
+	if handled, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+		t.Fatalf("advance stop handled=%v err=%v", handled, err)
 	}
-	result, _ := json.Marshal(protocol.WorkspaceRunnerAgentLifecycleResultPayload{
-		OperationID: operation.ID,
-		AgentID:     agentID,
-		RuntimeID:   runtimeID,
-		Status:      agentLifecycleSucceeded,
-	})
-	if err := testHandler.HandleWorkspaceRunnerFrame(context.Background(), identity, "runner-instance", protocol.EventAgentLifecycleResult, result); err != nil {
-		t.Fatalf("record terminal receipt: %v", err)
+	var launchID string
+	if err := testPool.QueryRow(context.Background(), `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&launchID); err != nil {
+		t.Fatal(err)
 	}
-	if err := testHandler.HandleWorkspaceRunnerFrame(context.Background(), identity, "runner-instance", protocol.EventAgentLifecycleResult, result); err != nil {
-		t.Fatalf("replay terminal receipt: %v", err)
+	status := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive}
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, status); err != nil {
+			t.Fatalf("record active status attempt %d: %v", attempt+1, err)
+		}
 	}
 	finished, err := getAgentLifecycleOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
 	if err != nil || finished == nil || finished.Status != agentLifecycleSucceeded || finished.FinishedAt == nil {
@@ -420,7 +541,7 @@ func TestWorkspaceRunnerLifecycleReceiptsAdvanceOperation(t *testing.T) {
 	}
 }
 
-func TestAgentLifecycleUnavailableRunnerFailsWithoutReplayQueue(t *testing.T) {
+func TestAgentLifecycleUnavailableRunnerRemainsResumableUntilReady(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -436,8 +557,19 @@ func TestAgentLifecycleUnavailableRunnerFailsWithoutReplayQueue(t *testing.T) {
 	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
 		t.Fatal(err)
 	}
-	if operation.Status != agentLifecycleFailed || operation.Step != "dispatch" || operation.FinishedAt == nil {
-		t.Fatalf("unavailable Runner operation = %+v", operation)
+	if operation.Status != agentLifecycleRunning || operation.Step != agentLifecycleStepStopping || operation.FinishedAt != nil {
+		t.Fatalf("unavailable Runner operation should remain resumable = %+v", operation)
+	}
+	notifier := &capturedAgentLifecycleNotifier{}
+	testHandler.AgentLifecycleNotifier = notifier
+	identity := daemonws.ClientIdentity{DaemonID: "agent-lifecycle-test-daemon", WorkspaceID: testWorkspaceID}
+	if err := testHandler.resumeAgentLifecycleOperations(context.Background(), identity); err != nil {
+		t.Fatalf("resume lifecycle operation on Runner ready: %v", err)
+	}
+	_, _, eventType, commandID, payload := notifier.snapshot()
+	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	if !ok || eventType != protocol.EventDaemonAgentStop || commandID != operation.ID || stop.LaunchID == "" {
+		t.Fatalf("resumed command event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
 }
 
@@ -466,6 +598,96 @@ func TestAgentLifecycleCommandTimeoutFailsBusinessRecordOnly(t *testing.T) {
 	got, err := getAgentLifecycleOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
 	if err != nil || got == nil || got.Status != agentLifecycleFailed || got.Step != "timeout" || got.FinishedAt == nil {
 		t.Fatalf("timed-out operation = %+v, %v", got, err)
+	}
+}
+
+func TestTimedOutResetStartKeepsExplicitFreshSessionOnReconcile(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	notifier := &capturedAgentLifecycleNotifier{}
+	previous := testHandler.AgentLifecycleNotifier
+	testHandler.AgentLifecycleNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentLifecycleNotifier = previous })
+	create := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleResetSessionRestart)
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, payload := notifier.snapshot()
+	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	if !ok {
+		t.Fatalf("first reset payload=%T, want stop", payload)
+	}
+	identity := daemonws.ClientIdentity{DaemonID: "agent-lifecycle-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if handled, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+		t.Fatalf("advance stop handled=%v err=%v", handled, err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_lifecycle_operation SET started_at = now() - interval '3 minutes' WHERE id = $1`, operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SweepTimedOutAgentLifecycleOperations(context.Background(), testPool); err != nil {
+		t.Fatal(err)
+	}
+	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range desired {
+		if launch.agentID == agentID {
+			if launch.sessionID == nil || *launch.sessionID != "" || launch.startDispatchID != operation.ID {
+				t.Fatalf("timed-out reset desired launch=%+v, want persisted explicit fresh session", launch)
+			}
+			return
+		}
+	}
+	t.Fatal("timed-out reset desired launch not found")
+}
+
+func TestTimedOutWorkspaceResetDoesNotResumePreResetDesiredLaunch(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	notifier := &capturedAgentLifecycleNotifier{}
+	previous := testHandler.AgentLifecycleNotifier
+	testHandler.AgentLifecycleNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentLifecycleNotifier = previous })
+	create := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleFullResetRestart)
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, payload := notifier.snapshot()
+	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
+	if !ok {
+		t.Fatalf("first full-reset payload=%T, want stop", payload)
+	}
+	identity := daemonws.ClientIdentity{DaemonID: "agent-lifecycle-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if handled, err := testHandler.advanceAgentLifecycleFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
+		t.Fatalf("advance stop handled=%v err=%v", handled, err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_lifecycle_operation SET started_at = now() - interval '3 minutes' WHERE id = $1`, operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SweepTimedOutAgentLifecycleOperations(context.Background(), testPool); err != nil {
+		t.Fatal(err)
+	}
+	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range desired {
+		if launch.agentID == agentID {
+			t.Fatalf("timed-out workspace reset resumed pre-reset desired launch: %+v", launch)
+		}
 	}
 }
 
@@ -598,7 +820,7 @@ func createAgentLifecycleFixtureWithProvider(t *testing.T, capable bool, provide
 	t.Helper()
 	capabilities := `[]`
 	if capable {
-		capabilities = `["agent_lifecycle_actions_v1","workspace_runner_agent_lifecycle_v1","agent_session_reset_v1"]`
+		capabilities = `["workspace_runner_attachment_v1","workspace_runner_agent_reset_workspace_v1","agent_session_reset_v1"]`
 	}
 	ctx := context.Background()
 	if err := testPool.QueryRow(ctx, `

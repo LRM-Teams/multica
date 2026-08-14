@@ -156,6 +156,8 @@ const (
 	EventAgentAttachmentReplayAck   = "agent:attachment.replay_ack"
 	EventDaemonAgentStart           = "agent:start"
 	EventDaemonAgentStop            = "agent:stop"
+	EventDaemonAgentResetWorkspace  = "agent:reset-workspace"
+	EventAgentResetWorkspaceResult  = "agent:reset-workspace:result"
 	EventDaemonAgentLifecycleReq    = "agent:lifecycle.request"
 	EventDaemonAgentLifecycleEnd    = "agent:lifecycle.replay_end"
 	EventDaemonAgentLifecycleAck    = "agent:lifecycle.ack"

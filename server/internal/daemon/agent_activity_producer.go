@@ -146,6 +146,31 @@ func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, s
 	return nil
 }
 
+// UpdateProviderSession advances the reconnect projection for an already
+// managed launch. It returns true only when the provider identity changed so
+// ordinary Messages do not repeat an identical agent:session frame.
+func (p *agentActivityProducer) UpdateProviderSession(session protocol.AgentSessionPayload) (bool, error) {
+	if p == nil {
+		return false, errors.New("Activity producer is not configured")
+	}
+	if err := session.Validate(); err != nil {
+		return false, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state := p.states[agentActivityProducerKey{agentID: session.AgentID, launchID: session.LaunchID}]
+	if state == nil {
+		return false, nil
+	}
+	if state.session.ProviderSessionID == session.ProviderSessionID {
+		return false, nil
+	}
+	session.TurnID = state.session.TurnID
+	session.RuntimeGeneration = state.session.RuntimeGeneration
+	state.session = session
+	return true, nil
+}
+
 func (p *agentActivityProducer) SetConnected(agentID, launchID string, connected bool) {
 	if p == nil {
 		return

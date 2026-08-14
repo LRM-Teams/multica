@@ -86,34 +86,9 @@ func (h *Handler) ResetAgentRuntimeSession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Clear both canonical and legacy resume sources. Work directories remain
-	// pinned so this is a model-context reset, not a workspace reset.
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE agent_runtime_state
-		SET provider_session_id = NULL,
-		    provider_config_fingerprint = NULL,
-		    generation = generation + 1,
-		    last_turn_id = $1,
-		    fresh_session_notice_reason = 'reset',
-		    updated_at = now()
-		WHERE agent_id = $2 AND runtime_id = $3
-	`, operationID, agentID, runtimeID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reset agent session")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE chat_session
-		SET session_id = NULL, updated_at = now()
-		WHERE agent_id = $1 AND runtime_id = $2
-	`, agentID, runtimeID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reset agent session")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE agent_inbox_event
-		SET session_id = NULL, updated_at = now()
-		WHERE agent_id = $1 AND runtime_id = $2 AND session_id IS NOT NULL
-	`, agentID, runtimeID); err != nil {
+	// Clear both canonical and legacy resume sources through the same state
+	// seam used by the server lifecycle orchestrator.
+	if err := clearAgentRuntimeSessionState(r.Context(), tx, req.OperationID, chi.URLParam(r, "agentId"), chi.URLParam(r, "runtimeId")); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to reset agent session")
 		return
 	}

@@ -17,6 +17,7 @@ type runnerDesiredLaunch struct {
 	runtimeID       string
 	launchID        string
 	startDispatchID string
+	sessionID       *string
 }
 
 type runnerObservedLaunch struct {
@@ -73,7 +74,7 @@ func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObserv
 		// dispatch the desired start only after an inactive report removes it
 		// from the observed set on the next reconcile.
 		if wanted && !mismatched && !running {
-			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: want.agentID, RuntimeID: want.runtimeID, LaunchID: want.launchID, StartDispatchID: want.startDispatchID}})
+			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: want.agentID, RuntimeID: want.runtimeID, LaunchID: want.launchID, StartDispatchID: want.startDispatchID, SessionID: want.sessionID}})
 		}
 	}
 	if len(actions) == 0 {
@@ -92,34 +93,19 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	if !h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
 		return nil
 	}
-	rows, err := h.DB.Query(ctx, `
-		SELECT desired.agent_id::text, desired.runtime_id::text,
-		       desired.launch_id::text, desired.start_dispatch_id::text
-		FROM agent_runner_launch_projection desired
-		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
-		WHERE desired.workspace_id::text = $1 AND runtime.daemon_id = $2
-		ORDER BY desired.agent_id`, identity.WorkspaceID, identity.DaemonID)
+	desired, err := h.loadRunnerDesiredLaunches(ctx, identity)
 	if err != nil {
-		return fmt.Errorf("load desired Runner launches: %w", err)
-	}
-	desired := make([]runnerDesiredLaunch, 0)
-	for rows.Next() {
-		var launch runnerDesiredLaunch
-		if err := rows.Scan(&launch.agentID, &launch.runtimeID, &launch.launchID, &launch.startDispatchID); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan desired Runner launch: %w", err)
-		}
-		desired = append(desired, launch)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
 		return err
 	}
-	rows.Close()
-	rows, err = h.DB.Query(ctx, `
+	rows, err := h.DB.Query(ctx, `
 		SELECT agent_id::text, COALESCE(runtime_id::text, ''), launch_id, status
 		FROM agent_activity_launch
 		WHERE workspace_id::text = $1 AND daemon_id = $2 AND status IN ('accepted', 'active')
+		  AND NOT EXISTS (
+			SELECT 1 FROM agent_lifecycle_operation operation
+			WHERE operation.agent_id = agent_activity_launch.agent_id
+			  AND operation.status = 'running' AND operation.step <> 'starting'
+		  )
 		ORDER BY agent_id`, identity.WorkspaceID, identity.DaemonID)
 	if err != nil {
 		return fmt.Errorf("load observed Runner launches: %w", err)
@@ -145,6 +131,54 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 		slog.Debug("Workspace Runner lifecycle reconciled", "workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID, "event_type", action.eventType, "outcome", "sent", "reason", "desired_running_mismatch")
 	}
 	return nil
+}
+
+func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemonws.ClientIdentity) ([]runnerDesiredLaunch, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT desired.agent_id::text, desired.runtime_id::text,
+		       desired.launch_id::text, desired.start_dispatch_id::text,
+		       COALESCE(launch_operation.action_kind <> 'restart'
+		                AND launch_operation.status <> 'succeeded', false)
+		FROM agent_runner_launch_projection desired
+		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
+		LEFT JOIN agent_lifecycle_operation active_operation
+		  ON active_operation.agent_id = desired.agent_id AND active_operation.status = 'running'
+		LEFT JOIN agent_lifecycle_operation launch_operation
+		  ON launch_operation.id = desired.start_dispatch_id
+		WHERE desired.workspace_id::text = $1 AND runtime.daemon_id = $2
+		  AND (active_operation.id IS NULL OR active_operation.step = 'starting')
+		  AND NOT EXISTS (
+			SELECT 1 FROM agent_lifecycle_operation failed_reset
+			WHERE failed_reset.agent_id = desired.agent_id
+			  AND failed_reset.status = 'failed'
+			  AND failed_reset.action_kind <> 'restart'
+			  AND failed_reset.id <> desired.start_dispatch_id
+			  AND failed_reset.finished_at >= desired.updated_at
+		  )
+		ORDER BY desired.agent_id`, identity.WorkspaceID, identity.DaemonID)
+	if err != nil {
+		return nil, fmt.Errorf("load desired Runner launches: %w", err)
+	}
+	desired := make([]runnerDesiredLaunch, 0)
+	for rows.Next() {
+		var launch runnerDesiredLaunch
+		var freshSession bool
+		if err := rows.Scan(&launch.agentID, &launch.runtimeID, &launch.launchID, &launch.startDispatchID, &freshSession); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan desired Runner launch: %w", err)
+		}
+		if freshSession {
+			fresh := ""
+			launch.sessionID = &fresh
+		}
+		desired = append(desired, launch)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	return desired, nil
 }
 
 func (h *Handler) reconcileConnectedRuntime(ctx context.Context, workspaceID string, runtimeID pgtype.UUID) {

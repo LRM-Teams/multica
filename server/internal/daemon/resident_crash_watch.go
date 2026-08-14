@@ -2,11 +2,8 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
-
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -63,50 +60,6 @@ func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
 			d.canonicalRuntimes.checkResidentLiveness(time.Now())
 		}
 	}
-}
-
-func (d *Daemon) executeAgentLifecycleCommand(ctx context.Context, command protocol.WorkspaceRunnerAgentLifecyclePayload) protocol.WorkspaceRunnerAgentLifecycleResultPayload {
-	result := protocol.WorkspaceRunnerAgentLifecycleResultPayload{
-		OperationID: command.OperationID,
-		AgentID:     command.AgentID,
-		RuntimeID:   command.RuntimeID,
-		Status:      "failed",
-		Step:        "dispatch",
-	}
-	if d == nil || d.agentLifecycleExecutor == nil {
-		result.ReasonCode = "Agent lifecycle executor is unavailable"
-		return result
-	}
-	if d.logger != nil {
-		d.logger.Info("agent lifecycle operation requested", "operation_id", command.OperationID, "agent_id", command.AgentID, "runtime_id", command.RuntimeID, "action_kind", command.ActionKind)
-	}
-	execErr := d.agentLifecycleExecutor.Execute(ctx, agentLifecycleExecutionRequest{
-		OperationID: command.OperationID,
-		WorkspaceID: command.WorkspaceID,
-		AgentID:     command.AgentID,
-		RuntimeID:   command.RuntimeID,
-		ActionKind:  agentLifecycleActionKind(command.ActionKind),
-	})
-	if execErr != nil {
-		result.ReasonCode = execErr.Error()
-		var stepErr *agentLifecycleExecutionError
-		if errors.As(execErr, &stepErr) {
-			result.Step = stepErr.Step
-			result.ReasonCode = stepErr.Err.Error()
-		}
-		if d.logger != nil {
-			d.logger.Warn("agent lifecycle operation failed", "operation_id", command.OperationID, "agent_id", command.AgentID, "runtime_id", command.RuntimeID, "error", execErr)
-		}
-		return result
-	}
-	result.Status = "succeeded"
-	result.Step = ""
-	result.ReasonCode = ""
-	// A human explicitly asked for this operation, so give the runtime a
-	// fresh crash-retry budget and clear the server-side crashed display fact.
-	d.residentCrashBackoff.clear(command.AgentID, command.RuntimeID)
-	d.clearAgentProviderCrashedOnServer(command.RuntimeID, command.AgentID)
-	return result
 }
 
 // onResidentRuntimeCrash is the daemon's own subscriber to crash events —

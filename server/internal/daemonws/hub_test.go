@@ -1586,16 +1586,16 @@ func TestWorkspaceRunnerMixedRunActivityAcknowledgesOnlyCommittedTransition(t *t
 	}
 }
 
-func TestWorkspaceRunnerAgentLifecycleCommandAndReceiptUseCurrentCapableRunner(t *testing.T) {
+func TestWorkspaceRunnerAgentResetCommandAndReceiptUseCurrentCapableRunner(t *testing.T) {
 	hub := NewHub()
 	received := make(chan string, 1)
 	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, raw json.RawMessage) error {
-		if eventType == protocol.EventAgentLifecycleAck {
-			var ack protocol.WorkspaceRunnerAgentLifecycleAckPayload
-			if err := json.Unmarshal(raw, &ack); err != nil {
+		if eventType == protocol.EventAgentResetWorkspaceResult {
+			var result protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload
+			if err := json.Unmarshal(raw, &result); err != nil {
 				return err
 			}
-			received <- ack.OperationID
+			received <- result.OperationID
 		}
 		return nil
 	})
@@ -1620,14 +1620,14 @@ func TestWorkspaceRunnerAgentLifecycleCommandAndReceiptUseCurrentCapableRunner(t
 	}
 	write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
-		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment, protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle},
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment, protocol.DaemonCapabilityWorkspaceRunnerAgentReset},
 	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
-	command := protocol.WorkspaceRunnerAgentLifecyclePayload{
-		OperationID: "operation-1", WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-1", ActionKind: "restart",
+	command := protocol.WorkspaceRunnerAgentResetWorkspacePayload{
+		OperationID: "operation-1", AgentID: "agent-1",
 	}
-	if !hub.NotifyAgentLifecycle("workspace-1", "daemon-1", command) {
-		t.Fatal("lifecycle command was not delivered")
+	if !hub.NotifyAgentLifecycleCommand("workspace-1", "daemon-1", protocol.EventDaemonAgentResetWorkspace, command.OperationID, command) {
+		t.Fatal("reset command was not delivered")
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	_, raw, err := conn.ReadMessage()
@@ -1635,11 +1635,11 @@ func TestWorkspaceRunnerAgentLifecycleCommandAndReceiptUseCurrentCapableRunner(t
 		t.Fatal(err)
 	}
 	var frame protocol.Message
-	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentLifecycle {
-		t.Fatalf("lifecycle frame = %+v, err=%v", frame, err)
+	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentResetWorkspace {
+		t.Fatalf("reset frame = %+v, err=%v", frame, err)
 	}
-	write(protocol.EventAgentLifecycleAck, protocol.WorkspaceRunnerAgentLifecycleAckPayload{
-		OperationID: command.OperationID, AgentID: command.AgentID, RuntimeID: command.RuntimeID, Outcome: protocol.AgentLifecycleCommandAccepted,
+	write(protocol.EventAgentResetWorkspaceResult, protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload{
+		OperationID: command.OperationID, AgentID: command.AgentID, Status: protocol.AgentResetWorkspaceSucceeded,
 	})
 	select {
 	case operationID := <-received:
@@ -1647,6 +1647,6 @@ func TestWorkspaceRunnerAgentLifecycleCommandAndReceiptUseCurrentCapableRunner(t
 			t.Fatalf("receipt operation_id = %q", operationID)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("lifecycle acknowledgement was not forwarded")
+		t.Fatal("workspace reset result was not forwarded")
 	}
 }

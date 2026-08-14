@@ -141,9 +141,10 @@ An attachment or historical Runtime list on the WebSocket identity must not
 silently filter `agent:start`. Attachment reconciliation and Agent lifecycle
 reconciliation are separate paths.
 
-Setup, reconnect, Computer process restart, Agent creation, explicit restart,
+Setup, reconnect, Computer process restart, Agent creation, lifecycle start,
 and Runtime update call the same desired-versus-observed reconciliation module.
-Callers do not construct lifecycle command sequences themselves.
+The server lifecycle orchestrator owns stop/reset/start ordering; HTTP callers
+and the Runner never construct a composite sequence.
 
 ## 6. Runtime replacement is two phase
 
@@ -232,8 +233,8 @@ each entry point and then passing with the shared implementation:
 
 ## 11. Raft alignment evidence
 
-The accepted behavior was checked against the locally installed Raft Computer
-1.0.15 artifact on 2026-08-12. The artifact directly verifies:
+The accepted behavior was checked against `@botiverse/raft-daemon@1.0.16` on
+2026-08-14. The artifact directly verifies:
 
 - separate `launchId` and `startDispatchId` fields;
 - in-flight and accepted dispatch deduplication;
@@ -241,6 +242,9 @@ The accepted behavior was checked against the locally installed Raft Computer
 - `agent:start:ack` after APM acceptance and before provider startup completes;
 - correlation of both IDs in lifecycle traces;
 - buffering of deliveries received while start acceptance is in progress.
+- `agent:stop`, `agent:reset-workspace`, and `agent:start` are separate input
+  messages, with no composite `agent:lifecycle` message;
+- `agent:start.config.sessionId` is the provider resume/fresh-session boundary.
 
 The Raft server source was not available in that artifact. Exact server-side ID
 generation and retention policy is therefore a Multica contract above, not a

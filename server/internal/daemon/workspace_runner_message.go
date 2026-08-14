@@ -280,7 +280,7 @@ func (runner *WorkspaceRunner) restartFromIdleSnapshot(agentID string, res agent
 	if runner.processes == nil || res.runtimeID == "" || res.launchID == "" {
 		return fmt.Errorf("idle snapshot for Agent %q is incomplete", agentID)
 	}
-	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID)
+	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID, firstNonEmpty(res.startDispatchID, res.launchID))
 }
 
 func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {
@@ -294,13 +294,32 @@ func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, ag
 		AgentID: agentID, RuntimeID: res.runtimeID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
 	}
 	ack := protocol.AgentStartAckPayload{AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID}
-	if _, _, err := runner.completeManagedAgentStart(ctx, start, ack); err != nil {
+	callback := agentProcessCallback{AgentID: agentID, LaunchID: res.launchID}
+	failed := false
+	defer func() {
+		if failed {
+			runner.processes.completeFailedManagedStart(callback)
+		} else {
+			runner.processes.completeManagedStart(callback)
+		}
+	}()
+	outcome, err := runner.completeManagedAgentStart(ctx, start, ack)
+	if err != nil {
+		failed = true
+		runner.publishManagedAgentStartFailure(start, outcome)
 		if runner.logger != nil && ctx.Err() == nil {
 			runner.logger.Warn("Workspace Runner idle snapshot start failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "provider_start_failed", "failed", err)...)
 		}
 		return
 	}
+	if err := runner.establishManagedAgentStart(start, outcome); err != nil {
+		if runner.logger != nil && ctx.Err() == nil {
+			runner.logger.Warn("Workspace Runner idle snapshot state failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "state_failed", "failed", err)...)
+		}
+		return
+	}
 	runner.publishManagedAgentStartActivity(agentID, res.runtimeID)
+	runner.flushManagedAgentStartMessages(ctx, start, ack)
 }
 
 func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {

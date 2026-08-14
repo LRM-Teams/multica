@@ -70,6 +70,9 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
+		if err := h.resumeAgentLifecycleOperations(ctx, identity); err != nil {
+			return err
+		}
 		// Raft establishes APM ownership before it offers durable deliveries.
 		// The Computer can then accept messages into the Agent's starting Inbox
 		// and ACK them without requiring the Provider to be ready yet.
@@ -91,6 +94,13 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status); err != nil {
 			return err
 		}
+		handled, err := h.advanceAgentLifecycleFromStatus(ctx, identity, status)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
 		if status.Status == protocol.AgentStatusInactive && h.DaemonHub != nil {
 			return h.reconcileWorkspaceRunnerLaunches(ctx, identity)
 		}
@@ -107,18 +117,12 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		// were rejected_no_process while the Agent was down — same ledger
 		// as Runner ready, not a fake ACK.
 		return h.redeliverUnacknowledgedStandaloneChat(ctx, identity)
-	case protocol.EventAgentLifecycleAck:
-		var acknowledgement protocol.WorkspaceRunnerAgentLifecycleAckPayload
-		if err := json.Unmarshal(raw, &acknowledgement); err != nil {
-			return fmt.Errorf("decode Agent lifecycle acknowledgement: %w", err)
-		}
-		return h.recordAgentLifecycleAcknowledgement(ctx, identity, acknowledgement)
-	case protocol.EventAgentLifecycleResult:
-		var result protocol.WorkspaceRunnerAgentLifecycleResultPayload
+	case protocol.EventAgentResetWorkspaceResult:
+		var result protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload
 		if err := json.Unmarshal(raw, &result); err != nil {
-			return fmt.Errorf("decode Agent lifecycle result: %w", err)
+			return fmt.Errorf("decode Agent workspace reset result: %w", err)
 		}
-		return h.recordWorkspaceRunnerAgentLifecycleResult(ctx, identity, result)
+		return h.recordAgentWorkspaceResetResult(ctx, identity, result)
 	case protocol.EventAgentSession:
 		var session protocol.AgentSessionPayload
 		if err := json.Unmarshal(raw, &session); err != nil {
@@ -164,109 +168,6 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 	default:
 		return nil
 	}
-}
-
-func (h *Handler) recordAgentLifecycleAcknowledgement(ctx context.Context, identity daemonws.ClientIdentity, acknowledgement protocol.WorkspaceRunnerAgentLifecycleAckPayload) error {
-	if err := acknowledgement.Validate(); err != nil {
-		return err
-	}
-	workspaceID, err := util.ParseUUID(identity.WorkspaceID)
-	if err != nil {
-		return errors.New("invalid Runner workspace identity")
-	}
-	operationID, err := util.ParseUUID(acknowledgement.OperationID)
-	if err != nil {
-		return errors.New("invalid Agent lifecycle operation_id")
-	}
-	agentID, err := util.ParseUUID(acknowledgement.AgentID)
-	if err != nil {
-		return errors.New("invalid Agent lifecycle agent_id")
-	}
-	runtimeID, err := util.ParseUUID(acknowledgement.RuntimeID)
-	if err != nil {
-		return errors.New("invalid Agent lifecycle runtime_id")
-	}
-	commandTag, err := h.DB.Exec(ctx, `
-		UPDATE agent_lifecycle_operation operation
-		SET step = 'accepted'
-		WHERE operation.id = $1
-		  AND operation.workspace_id = $2
-		  AND operation.agent_id = $3
-		  AND operation.runtime_id = $4
-		  AND operation.status = 'running'
-		  AND EXISTS (
-			SELECT 1 FROM agent_runtime runtime
-			WHERE runtime.id = operation.runtime_id
-			  AND runtime.workspace_id = operation.workspace_id
-			  AND runtime.daemon_id = $5
-		  )
-	`, operationID, workspaceID, agentID, runtimeID, identity.DaemonID)
-	if err != nil {
-		return err
-	}
-	if commandTag.RowsAffected() == 0 {
-		return errors.New("Agent lifecycle acknowledgement scope mismatch")
-	}
-	return nil
-}
-
-func (h *Handler) recordWorkspaceRunnerAgentLifecycleResult(ctx context.Context, identity daemonws.ClientIdentity, result protocol.WorkspaceRunnerAgentLifecycleResultPayload) error {
-	if err := result.Validate(); err != nil {
-		return err
-	}
-	workspaceID, err := util.ParseUUID(identity.WorkspaceID)
-	if err != nil {
-		return errors.New("invalid Runner workspace identity")
-	}
-	operationID, err := util.ParseUUID(result.OperationID)
-	if err != nil {
-		return errors.New("invalid Agent lifecycle operation_id")
-	}
-	agentID, err := util.ParseUUID(result.AgentID)
-	if err != nil {
-		return errors.New("invalid Agent lifecycle agent_id")
-	}
-	runtimeID, err := util.ParseUUID(result.RuntimeID)
-	if err != nil {
-		return errors.New("invalid Agent lifecycle runtime_id")
-	}
-	commandTag, err := h.DB.Exec(ctx, `
-		UPDATE agent_lifecycle_operation operation
-		SET status = $1, step = $2, reason_code = $3, finished_at = now()
-		WHERE operation.id = $4
-		  AND operation.workspace_id = $5
-		  AND operation.agent_id = $6
-		  AND operation.runtime_id = $7
-		  AND operation.status = 'running'
-		  AND EXISTS (
-			SELECT 1 FROM agent_runtime runtime
-			WHERE runtime.id = operation.runtime_id
-			  AND runtime.workspace_id = operation.workspace_id
-			  AND runtime.daemon_id = $8
-		  )
-	`, result.Status, result.Step, result.ReasonCode, operationID, workspaceID, agentID, runtimeID, identity.DaemonID)
-	if err != nil {
-		return err
-	}
-	if commandTag.RowsAffected() == 0 {
-		// Terminal receipt replay is an idempotent no-op; any non-terminal row
-		// miss is rejected as a scope mismatch.
-		var terminal bool
-		if err := h.DB.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM agent_lifecycle_operation
-				WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 AND runtime_id = $4
-				  AND status IN ('succeeded', 'failed')
-			)
-		`, operationID, workspaceID, agentID, runtimeID).Scan(&terminal); err != nil {
-			return err
-		}
-		if terminal {
-			return nil
-		}
-		return errors.New("Agent lifecycle result scope mismatch")
-	}
-	return nil
 }
 
 func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity daemonws.ClientIdentity, transition protocol.MixedRunActivityTransitionPayload) error {

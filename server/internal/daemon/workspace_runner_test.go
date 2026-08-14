@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -106,7 +105,7 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			for _, capability := range got.ready.ActiveCapabilities {
 				capabilities[capability] = true
 			}
-			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAttachment] || !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle] || !capabilities[protocol.DaemonCapabilityReminderTransientInput] {
+			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAttachment] || !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentReset] || !capabilities[protocol.DaemonCapabilityReminderTransientInput] {
 				t.Fatalf("Runner capabilities = %v, want Attachment and Reminder transient input", got.ready.ActiveCapabilities)
 			}
 		case <-ctx.Done():
@@ -160,146 +159,6 @@ func TestWorkspaceRunnerRunReturnsWhenBindingContextCancelsLiveSocket(t *testing
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after Binding ctx cancel")
-	}
-}
-
-func TestWorkspaceRunnerLifecycleCommandAcknowledgesAndExecutesDuplicateOnce(t *testing.T) {
-	const (
-		workspaceID = "11111111-1111-4111-8111-111111111111"
-		agentID     = "22222222-2222-4222-8222-222222222222"
-		runtimeID   = "33333333-3333-4333-8333-333333333333"
-		operationID = "44444444-4444-4444-8444-444444444444"
-	)
-	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	releaseExecution := make(chan struct{})
-	serverDone := make(chan error, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			serverDone <- err
-			return
-		}
-		defer conn.Close()
-		if _, _, err := conn.ReadMessage(); err != nil { // Runner ready
-			serverDone <- err
-			return
-		}
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
-			serverDone <- err
-			return
-		}
-		command := protocol.WorkspaceRunnerAgentLifecyclePayload{
-			OperationID: operationID,
-			WorkspaceID: workspaceID,
-			AgentID:     agentID,
-			RuntimeID:   runtimeID,
-			ActionKind:  "restart",
-		}
-		frame, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentLifecycle, Payload: marshalRaw(command)})
-		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
-			serverDone <- err
-			return
-		}
-		first, err := readWorkspaceRunnerLifecycleAck(conn)
-		if err != nil {
-			serverDone <- err
-			return
-		}
-		if first.OperationID != operationID || first.Outcome != protocol.AgentLifecycleCommandAccepted {
-			serverDone <- fmt.Errorf("first lifecycle ack = %+v", first)
-			return
-		}
-		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
-			serverDone <- err
-			return
-		}
-		duplicate, err := readWorkspaceRunnerLifecycleAck(conn)
-		if err != nil {
-			serverDone <- err
-			return
-		}
-		if duplicate.OperationID != operationID || duplicate.Outcome != protocol.AgentLifecycleCommandDuplicate {
-			serverDone <- fmt.Errorf("duplicate lifecycle ack = %+v", duplicate)
-			return
-		}
-		close(releaseExecution)
-		for {
-			_, raw, err := conn.ReadMessage()
-			if err != nil {
-				serverDone <- err
-				return
-			}
-			var message protocol.Message
-			if json.Unmarshal(raw, &message) != nil || message.Type != protocol.EventAgentLifecycleResult {
-				continue
-			}
-			var result protocol.WorkspaceRunnerAgentLifecycleResultPayload
-			if err := json.Unmarshal(message.Payload, &result); err != nil {
-				serverDone <- err
-				return
-			}
-			if result.OperationID != operationID || result.Status != "succeeded" {
-				serverDone <- fmt.Errorf("lifecycle result = %+v", result)
-				return
-			}
-			serverDone <- nil
-			return
-		}
-	}))
-	defer server.Close()
-
-	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.runnerInstanceID = "instance-1"
-	d.client.SetWorkspaceDaemonToken(workspaceID, "workspace-token", time.Now().Add(time.Minute))
-	d.mu.Lock()
-	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
-	d.mu.Unlock()
-	runner, err := d.newWorkspaceRunner(workspaceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var calls atomic.Int32
-	runner.executeAgentLifecycle = func(_ context.Context, command protocol.WorkspaceRunnerAgentLifecyclePayload) protocol.WorkspaceRunnerAgentLifecycleResultPayload {
-		calls.Add(1)
-		<-releaseExecution
-		return protocol.WorkspaceRunnerAgentLifecycleResultPayload{
-			OperationID: command.OperationID,
-			AgentID:     command.AgentID,
-			RuntimeID:   command.RuntimeID,
-			Status:      "succeeded",
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	go runner.Run(ctx)
-	select {
-	case err := <-serverDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for lifecycle result")
-	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("lifecycle execution count = %d, want 1", got)
-	}
-}
-
-func readWorkspaceRunnerLifecycleAck(conn *websocket.Conn) (protocol.WorkspaceRunnerAgentLifecycleAckPayload, error) {
-	for {
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			return protocol.WorkspaceRunnerAgentLifecycleAckPayload{}, err
-		}
-		var message protocol.Message
-		if json.Unmarshal(raw, &message) != nil || message.Type != protocol.EventAgentLifecycleAck {
-			continue
-		}
-		var ack protocol.WorkspaceRunnerAgentLifecycleAckPayload
-		if err := json.Unmarshal(message.Payload, &ack); err != nil {
-			return protocol.WorkspaceRunnerAgentLifecycleAckPayload{}, err
-		}
-		return ack, nil
 	}
 }
 

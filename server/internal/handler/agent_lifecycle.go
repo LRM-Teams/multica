@@ -211,46 +211,27 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to create agent lifecycle operation")
 		return
 	}
-	// Raft-style direct command: one operation row, one Workspace Runner
-	// command, one accepted receipt, one terminal result. There is no parallel
-	// heartbeat queue or destructive replay scheduler.
-	dispatched := h.AgentLifecycleNotifier != nil && runtime.DaemonID.Valid && h.AgentLifecycleNotifier.NotifyAgentLifecycle(
-		uuidToString(lockedAgent.WorkspaceID), runtime.DaemonID.String,
-		protocol.WorkspaceRunnerAgentLifecyclePayload{
-			OperationID: op.ID,
-			WorkspaceID: uuidToString(lockedAgent.WorkspaceID),
-			AgentID:     uuidToString(lockedAgent.ID),
-			RuntimeID:   uuidToString(runtime.ID),
-			ActionKind:  string(req.ActionKind),
-		},
-	)
-	if !dispatched {
-		if failed, failErr := h.failAgentLifecycleDispatch(r.Context(), lockedAgent.ID, parseUUID(op.ID), runtime.ID, "workspace Runner is unavailable"); failErr != nil {
-			slog.Warn("failed to record unavailable Agent lifecycle command", "operation_id", op.ID, "error", failErr)
-		} else if failed != nil {
-			op = failed
+	// Product actions are server-owned state machines. The daemon sees only
+	// Raft's discrete stop/reset-workspace/start commands and reports the
+	// process facts that advance this durable operation.
+	if runtime.DaemonID.Valid {
+		state := lifecycleStateFromOperation(op, uuidToString(lockedAgent.WorkspaceID), runtime.DaemonID.String)
+		if err := h.beginAgentLifecycleOperation(r.Context(), state); err != nil {
+			// Relay publication and socket acceptance are not completion proof.
+			// Keep the operation resumable until Runner ready or timeout instead
+			// of fabricating a terminal result at the transport boundary.
+			slog.Warn("Agent lifecycle command not yet delivered", "operation_id", op.ID, "step", op.Step, "error", err)
 		}
+	}
+	if latest, loadErr := getAgentLifecycleOperation(r.Context(), h.DB, lockedAgent.ID, parseUUID(op.ID)); loadErr == nil && latest != nil {
+		op = latest
 	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
-func (h *Handler) failAgentLifecycleDispatch(ctx context.Context, agentID, operationID, runtimeID pgtype.UUID, reason string) (*AgentLifecycleOperation, error) {
-	if h == nil || h.DB == nil {
-		return nil, errors.New("database is unavailable")
-	}
-	if _, err := h.DB.Exec(ctx, `
-		UPDATE agent_lifecycle_operation
-		SET status = 'failed', step = 'dispatch', reason_code = $1, finished_at = now()
-		WHERE id = $2 AND agent_id = $3 AND runtime_id = $4 AND status = 'running'
-	`, reason, operationID, agentID, runtimeID); err != nil {
-		return nil, err
-	}
-	return getAgentLifecycleOperation(ctx, h.DB, agentID, operationID)
-}
-
 // SweepTimedOutAgentLifecycleOperations is a business-record backstop, not a
-// delivery scheduler. It never replays a destructive command; it only clears
-// a visible running operation whose accepted command never produced a result.
+// delivery scheduler. It only clears a visible running operation whose Runner
+// status/reset facts never advanced it to a terminal state.
 func SweepTimedOutAgentLifecycleOperations(ctx context.Context, exec dbExecutor) (int64, error) {
 	if exec == nil {
 		return 0, errors.New("database is unavailable")
@@ -288,63 +269,6 @@ func (h *Handler) GetAgentLifecycleOperation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, op)
-}
-
-type agentLifecycleResultRequest struct {
-	Status     string `json:"status"`
-	Step       string `json:"step"`
-	ReasonCode string `json:"reason_code"`
-}
-
-// ReportAgentLifecycleOperationResult is retained for compatibility with a
-// command already accepted by an older daemon during a rolling upgrade. New
-// daemons return the same terminal receipt on the Workspace Runner socket.
-func (h *Handler) ReportAgentLifecycleOperationResult(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
-	if !ok {
-		return
-	}
-	operationID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "operationId"), "operation_id")
-	if !ok {
-		return
-	}
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(rt.WorkspaceID)) {
-		return
-	}
-	var req agentLifecycleResultRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	status := strings.ToLower(strings.TrimSpace(req.Status))
-	if status != agentLifecycleSucceeded && status != agentLifecycleFailed {
-		writeError(w, http.StatusBadRequest, "status must be succeeded or failed")
-		return
-	}
-	if h.DB == nil {
-		writeError(w, http.StatusServiceUnavailable, "agent lifecycle is unavailable")
-		return
-	}
-	commandTag, err := h.DB.Exec(r.Context(), `
-		UPDATE agent_lifecycle_operation
-		SET status = $1, step = $2, reason_code = $3, finished_at = now()
-		WHERE id = $4 AND runtime_id = $5 AND status IN ('running', 'scheduled')
-	`, status, req.Step, req.ReasonCode, operationID, runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record agent lifecycle result")
-		return
-	}
-	if commandTag.RowsAffected() == 0 {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
 }
 
 func (h *Handler) loadAgentLifecycleTarget(w http.ResponseWriter, r *http.Request) (db.Agent, bool) {
@@ -556,12 +480,12 @@ func agentLifecycleInitialStep(status string) string {
 	if status == agentLifecycleScheduled {
 		return "waiting_for_current_run"
 	}
-	return "starting"
+	return agentLifecycleStepStopping
 }
 
 func agentLifecycleCapabilityPresent(capabilities []string) bool {
 	for _, capability := range capabilities {
-		if capability == protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle {
+		if capability == protocol.DaemonCapabilityWorkspaceRunnerAgentReset {
 			return true
 		}
 	}

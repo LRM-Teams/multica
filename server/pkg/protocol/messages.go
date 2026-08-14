@@ -541,10 +541,9 @@ const (
 	// transport capability. New daemons deliberately do not advertise it so a
 	// mixed-version server/daemon pair fails closed during rollout.
 	DaemonCapabilityAgentLifecycleActions = "agent_lifecycle_actions_v1"
-	// DaemonCapabilityWorkspaceRunnerAgentLifecycle selects the direct
-	// Raft-style command/receipt transport. Servers must not dispatch lifecycle
-	// work to the legacy heartbeat queue when this capability is absent.
-	DaemonCapabilityWorkspaceRunnerAgentLifecycle = "workspace_runner_agent_lifecycle_v1"
+	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
+	// agent:reset-workspace command plus Multica's terminal reset receipt.
+	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"
 	// DaemonCapabilityMachineUpgrade gates the machine-scoped upgrade
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.

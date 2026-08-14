@@ -57,8 +57,8 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if containsString(legacy, protocol.DaemonCapabilityAgentLifecycleActions) || containsString(capable, protocol.DaemonCapabilityAgentLifecycleActions) {
 		t.Fatalf("registration retained legacy heartbeat lifecycle capability: legacy=%#v capable=%#v", legacy, capable)
 	}
-	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle) {
-		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle, legacy, capable)
+	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) {
+		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAgentReset, legacy, capable)
 	}
 	if !containsString(legacy, protocol.DaemonCapabilityAgentSessionReset) ||
 		!containsString(capable, protocol.DaemonCapabilityAgentSessionReset) {
@@ -3437,7 +3437,7 @@ func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var got string
 	for time.Now().Before(deadline) {
-		got, err = d.agentLifecycleExecutor.sessions.Get(agentID, runtimeID)
+		got, err = d.agentRuntimeSessions.Get(agentID, runtimeID)
 		if err != nil {
 			t.Fatalf("read session store: %v", err)
 		}

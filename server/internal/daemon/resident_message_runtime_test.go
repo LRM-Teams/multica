@@ -275,6 +275,32 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 	}
 }
 
+func TestEnsureResidentMessageRuntimeResumesStoredProviderSessionDuringPrestart(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+		sessionID   = "provider-session-before-restart"
+	)
+	var captured agent.Config
+	d := newResidentStartTestDaemon(t, workspaceID, runtimeID, agentID, func(config agent.Config) (agent.Backend, func(), error) {
+		captured = config
+		return &residentProcessStartProbe{}, func() {}, nil
+	})
+	sessions := newAgentRuntimeSessionStore(d.cfg.WorkspacesRoot)
+	if err := sessions.Put(agentID, runtimeID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	d.agentRuntimeSessions = sessions
+
+	if err := d.ensureResidentMessageRuntime(context.Background(), agentID, runtimeID, nil); err != nil {
+		t.Fatalf("ensure resident Message runtime: %v", err)
+	}
+	if captured.ResidentOptions.ResumeSessionID != sessionID {
+		t.Fatalf("provider prestart ResumeSessionID = %q, want %q", captured.ResidentOptions.ResumeSessionID, sessionID)
+	}
+}
+
 func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"
@@ -468,6 +494,48 @@ func TestWorkspaceRunnerStartBecomesActiveAfterResidentProcess(t *testing.T) {
 	last := activities[len(activities)-1].Snapshot
 	if last.ActivityKind != protocol.ActivityKindOnline || last.DetailKind != "idle" {
 		t.Fatalf("Activity after resident readiness = %q/%q, want online/idle", last.ActivityKind, last.DetailKind)
+	}
+}
+
+func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+	)
+	for _, test := range []struct {
+		name      string
+		sessionID string
+	}{
+		{name: "resume", sessionID: "provider-session-before-restart"},
+		{name: "fresh", sessionID: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var captured agent.Config
+			d := newResidentStartTestDaemon(t, workspaceID, runtimeID, agentID, func(config agent.Config) (agent.Backend, func(), error) {
+				captured = config
+				return &residentProcessStartProbe{}, func() {}, nil
+			})
+			sessions := newAgentRuntimeSessionStore(d.cfg.WorkspacesRoot)
+			if err := sessions.Put(agentID, runtimeID, "stale-provider-session"); err != nil {
+				t.Fatal(err)
+			}
+			d.agentRuntimeSessions = sessions
+			runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+
+			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1", SessionID: &test.sessionID,
+			})
+			if err != nil {
+				t.Fatalf("managed start: %v", err)
+			}
+			if status.Status != protocol.AgentStatusActive {
+				t.Fatalf("status = %+v, want active", status)
+			}
+			if captured.ResidentOptions.ResumeSessionID != test.sessionID {
+				t.Fatalf("provider ResumeSessionID = %q, want %q", captured.ResidentOptions.ResumeSessionID, test.sessionID)
+			}
+		})
 	}
 }
 

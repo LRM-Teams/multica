@@ -143,12 +143,12 @@ One of three explicit ways to restart an Agent runtime:
 All three preserve the server-side Agent identity, configuration, chat history,
 and Issues.
 
-The server operation is only the user-visible request/result record. Execution
-is one direct Workspace Runner command with an immediate accepted/duplicate
-receipt and one terminal result. Restart is never dispatched in parallel over
-heartbeat or as a separate managed-launch stop. The Runner keeps only a bounded
-in-process receipt cache; an unavailable or timed-out command fails visibly and
-is not replayed automatically after a process restart.
+The server operation is the durable product orchestrator. It advances only
+through Raft 1.0.16's discrete Runner boundaries: `agent:stop`, inactive
+status, optional session clear, optional `agent:reset-workspace`, then
+`agent:start(config.sessionId)`. A replacement is complete only after the new
+launch reports active. The Runner never receives a composite restart action;
+heartbeat lifecycle queues and parallel stop/start paths remain retired.
 _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
 
 ## Standalone Agent Chat

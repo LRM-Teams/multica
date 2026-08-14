@@ -87,6 +87,8 @@ func TestArtifactDDLInventoryMatchesChapterDContract(t *testing.T) {
 		"research_artifact_context_manifest_passport_fkey",
 		"research_artifact_context_manifest_attempt_fkey",
 		"research_artifact_context_manifest_task_fkey",
+		"research_artifact_context_manifest_normal_grant_fkey",
+		"research_artifact_context_manifest_evaluation_grant_fkey",
 		"research_artifact_context_entry_manifest_fkey",
 		"research_artifact_context_entry_version_fkey",
 		"research_artifact_context_omission_manifest_fkey",
@@ -100,6 +102,9 @@ func TestArtifactDDLInventoryMatchesChapterDContract(t *testing.T) {
 		"research_artifact_supersession_decision_fkey",
 		"research_artifact_lifecycle_event_passport_fkey",
 		"research_artifact_lifecycle_event_decision_fkey",
+		"research_artifact_policy_mutation_artifact_scoped_fkey",
+		"research_artifact_policy_mutation_grant_scoped_fkey",
+		"research_dispatch_outbox_manifest_fkey",
 	}
 	assertCatalogNames(t, ctx, pool, "constraint", expectedConstraints, `
 		SELECT constraint_row.conname

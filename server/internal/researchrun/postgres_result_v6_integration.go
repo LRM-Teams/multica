@@ -72,6 +72,7 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 	}
 
 	namespace := uuid.MustParse(state.attemptID)
+	integrationAgents := map[string]bool{}
 	for _, contribution := range result.IntegrationContributions {
 		ids := make([]string, 0, len(contribution.ComparedArtifacts))
 		authorID := ""
@@ -83,6 +84,9 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 			ids = append(ids, artifact.ID)
 			if authorID == "" && artifact.AgentID != "" {
 				authorID = artifact.AgentID
+			}
+			if artifact.AgentID != "" {
+				integrationAgents[artifact.AgentID] = true
 			}
 		}
 		if authorID == "" {
@@ -193,6 +197,13 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 			return err
 		}
 		for ordinal, position := range dispute.Positions {
+			seed, seedErr := decodeV6DisputePositionSeed(position)
+			if seedErr != nil {
+				return seedErr
+			}
+			if !integrationAgents[seed.AuthorAgentID] {
+				return fmt.Errorf("%w: Dispute Position author has no accepted Integration input", ErrInvalidContract)
+			}
 			payload, marshalErr := json.Marshal(position)
 			if marshalErr != nil {
 				return marshalErr
@@ -202,18 +213,33 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 				return canonicalErr
 			}
 			positionID := uuid.NewSHA1(namespace, []byte(fmt.Sprintf("dispute-position/%s/%d", dispute.ClientKey, ordinal))).String()
-			claimIDs := []string{}
-			if dispute.Subject.Kind == "claim" {
-				claimIDs = append(claimIDs, subject.ID)
+			claimIDs, evidenceIDs := make([]string, 0, len(seed.ClaimRefs)), make([]string, 0, len(seed.EvidenceRefs))
+			for _, ref := range seed.ClaimRefs {
+				id, resolveErr := resolveV6EntityKeyTx(ctx, tx, state, ref)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				claimIDs = append(claimIDs, id)
+			}
+			for _, ref := range seed.EvidenceRefs {
+				id, resolveErr := resolveV6EntityKeyTx(ctx, tx, state, ref)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				evidenceIDs = append(evidenceIDs, id)
 			}
 			encodedClaims, _ := json.Marshal(claimIDs)
+			encodedEvidence, _ := json.Marshal(evidenceIDs)
+			positionScope, _ := json.Marshal(seed.Scope)
 			if _, err = tx.Exec(ctx, `INSERT INTO research_dispute_position
 				(id,workspace_id,session_id,dispute_id,author_agent_id,statement,scope,claim_ids,evidence_ids,position_payload)
-				VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,'{}'::jsonb,$7::jsonb,'[]'::jsonb,$8::jsonb)`, positionID,
-				state.workspaceID, state.run.SessionID, disputeID, agentID, string(canonical), encodedClaims, payload); err != nil {
+				VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb)`, positionID,
+				state.workspaceID, state.run.SessionID, disputeID, seed.AuthorAgentID, seed.Statement, positionScope, encodedClaims, encodedEvidence, payload); err != nil {
 				return err
 			}
-			positionContent := map[string]any{"dispute_id": disputeID, "author_agent_id": agentID, "position_payload": json.RawMessage(payload), "ordinal": ordinal}
+			positionContent := map[string]any{"dispute_id": disputeID, "author_agent_id": seed.AuthorAgentID, "statement": seed.Statement,
+				"scope": seed.Scope, "claim_ids": claimIDs, "evidence_ids": evidenceIDs, "position_payload": json.RawMessage(payload), "ordinal": ordinal,
+				"canonical_payload": string(canonical)}
 			if err = registerAcceptedV6IntegrationArtifactTx(ctx, tx, state, positionID, ArtifactKindDisputePosition, positionContent); err != nil {
 				return err
 			}

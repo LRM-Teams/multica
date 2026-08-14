@@ -76,6 +76,12 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
 			}
 			in.V6Integration, lockedHash, lockedResult = &lockedIntegration, integrationHash, researchV6IntegrationEnvelope(lockedIntegration)
+		} else if state.task.Kind == TaskKindDeliberate && state.task.ExpectedResult == "research_deliberation_v6" {
+			lockedDeliberation, deliberationHash, decodeErr := DecodeAndValidateV6DeliberationResult(in.Raw)
+			if decodeErr != nil {
+				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
+			}
+			in.V6Deliberation, lockedHash, lockedResult = &lockedDeliberation, deliberationHash, researchV6DeliberationEnvelope(lockedDeliberation)
 		} else {
 			return AcceptResultOutcome{}, fmt.Errorf("%w: V6 task result adapter is not available for %s", ErrUnsupportedVersion, state.task.Kind)
 		}
@@ -188,6 +194,11 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	}
 	if in.V6Integration != nil {
 		if err = materializeAcceptedV6IntegrationTx(ctx, tx, state, *in.V6Integration, in.AgentID); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
+	if in.V6Deliberation != nil {
+		if err = materializeAcceptedV6DeliberationTx(ctx, tx, state, *in.V6Deliberation, in.AgentID); err != nil {
 			return AcceptResultOutcome{}, err
 		}
 	}

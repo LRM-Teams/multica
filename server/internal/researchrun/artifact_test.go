@@ -97,6 +97,8 @@ func TestRegisteredArtifactEntityKindsMatchSpecInventory(t *testing.T) {
 		ArtifactKindIntegrationRound,
 		ArtifactKindDispute,
 		ArtifactKindDisputePosition,
+		ArtifactKindDeliberation,
+		ArtifactKindDeliberationTurn,
 		ArtifactKindInquiryEdge,
 		ArtifactKindSearchPlan,
 		ArtifactKindQueryExecution,

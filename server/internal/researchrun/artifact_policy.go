@@ -120,6 +120,8 @@ func (ArtifactPolicy) LegacyAdmissionAllowed(
 		ArtifactKindIntegrationRound,
 		ArtifactKindDispute,
 		ArtifactKindDisputePosition,
+		ArtifactKindDeliberation,
+		ArtifactKindDeliberationTurn,
 		ArtifactKindInquiryEdge:
 		return false, ArtifactDenyLegacyIneligible
 	}

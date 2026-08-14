@@ -8,16 +8,17 @@ import (
 )
 
 type AcceptResultInput struct {
-	SessionID     string
-	AttemptID     string
-	AgentID       string
-	InboxTaskID   string
-	Raw           json.RawMessage
-	Result        ResultEnvelope
-	V6Plan        *ResearchV6PlanResult
-	V6Evidence    *V6EvidenceResult
-	V6Integration *V6IntegrationResult
-	Hash          string
+	SessionID      string
+	AttemptID      string
+	AgentID        string
+	InboxTaskID    string
+	Raw            json.RawMessage
+	Result         ResultEnvelope
+	V6Plan         *ResearchV6PlanResult
+	V6Evidence     *V6EvidenceResult
+	V6Integration  *V6IntegrationResult
+	V6Deliberation *V6DeliberationResult
+	Hash           string
 }
 
 type AcceptResultOutcome struct {

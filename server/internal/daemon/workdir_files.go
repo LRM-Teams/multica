@@ -108,7 +108,7 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 
 	if reason := agentworkspace.PreviewDeniedReason(req.FilePath); reason != "" {
 		resp.Error = reason
-		d.sendDaemonFrame(protocol.EventDaemonReadFileResponse, resp, req.RequestID, writes)
+		d.sendDaemonFrame(protocol.EventAgentWorkspaceFileContent, resp, req.RequestID, writes)
 		return
 	}
 

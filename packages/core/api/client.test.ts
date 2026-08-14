@@ -507,14 +507,14 @@ describe("ApiClient", () => {
     const client = new ApiClient("https://api.example.test");
     await client.listAgentFiles("agent-1", { include_hidden: true, path: "memory" });
     const listed = String(fetchMock.mock.calls[0]![0]);
-    expect(listed).toContain("/api/agents/agent-1/files?");
+    expect(listed).toContain("/api/members/agents/agent-1/files?");
     expect(listed).toContain("include_hidden=true");
     expect(listed).toContain("path=memory");
 
     fetchMock.mockClear();
     await client.listAgentFiles("agent-1");
     const root = String(fetchMock.mock.calls[0]![0]);
-    expect(root).toContain("/api/agents/agent-1/files");
+    expect(root).toContain("/api/members/agents/agent-1/files");
     expect(root).not.toContain("include_hidden");
     expect(root).not.toContain("path=");
   });

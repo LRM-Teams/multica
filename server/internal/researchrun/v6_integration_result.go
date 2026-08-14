@@ -318,7 +318,7 @@ func (i V6InsightProposal) validate(index int, seen map[string]struct{}) error {
 	if err := validateV6Refs("insight inputs", i.Inputs, 2, 128); err != nil {
 		return err
 	}
-	if !oneOf(i.Relation, "integrates", "explains", "conditions", "resolves", "distinguishes") || !oneOf(i.SemanticValue, "new_explanation", "deduplication", "conflict_resolution", "hypothesis_change", "frontier_change", "report_change", "lossless_compression") {
+	if !integrationOneOf(i.Relation, "integrates", "explains", "conditions", "resolves", "distinguishes") || !integrationOneOf(i.SemanticValue, "new_explanation", "deduplication", "conflict_resolution", "hypothesis_change", "frontier_change", "report_change", "lossless_compression") {
 		return fmt.Errorf("%w: insight %q has invalid relation or semantic value", ErrInvalidResult, i.ClientKey)
 	}
 	return nil
@@ -368,7 +368,7 @@ func (t V6TaskProposal) validate(index int, seen map[string]struct{}) error {
 	if err := validateV6UniqueKey(fmt.Sprintf("proposed_tasks[%d].client_key", index), t.ClientKey, seen); err != nil {
 		return err
 	}
-	if !oneOf(t.Kind, "discover", "deep_read", "verify", "counter_search", "integrate", "deliberate", "diverge", "synthesize", "quality_gate", "citation_audit") {
+	if !integrationOneOf(t.Kind, "discover", "deep_read", "verify", "counter_search", "integrate", "deliberate", "diverge", "synthesize", "quality_gate", "citation_audit") {
 		return fmt.Errorf("%w: task %q has invalid kind", ErrInvalidResult, t.ClientKey)
 	}
 	if err := validateV6Text("task objective", t.Objective, 32768); err != nil {
@@ -377,7 +377,7 @@ func (t V6TaskProposal) validate(index int, seen map[string]struct{}) error {
 	if err := validateV6Key("required_capability", t.RequiredCapability); err != nil {
 		return err
 	}
-	if !oneOf(t.ExpectedResult, "research_evidence_v6", "research_integration_v6", "research_deliberation_v6", "research_divergence_v6", "research_report_v6", "research_quality_evaluation_v6", "research_citation_audit_v6") || !unitInterval(t.Priority) {
+	if !integrationOneOf(t.ExpectedResult, "research_evidence_v6", "research_integration_v6", "research_deliberation_v6", "research_divergence_v6", "research_report_v6", "research_quality_evaluation_v6", "research_citation_audit_v6") || !unitInterval(t.Priority) {
 		return fmt.Errorf("%w: task %q has invalid expected result or priority", ErrInvalidResult, t.ClientKey)
 	}
 	if err := validateV6Refs("task targets", t.Targets, 1, 32); err != nil {
@@ -413,7 +413,7 @@ func (q V6QuestionProposal) validate(index int, seen map[string]struct{}) error 
 	if err := validateV6Text("question text", q.Text, 32768); err != nil {
 		return err
 	}
-	if !oneOf(q.Kind, "dimension", "hypothesis", "contradiction", "gap", "follow_up") || !unitInterval(q.Priority) || !unitInterval(q.Impact) || !unitInterval(q.Uncertainty) || !unitInterval(q.Novelty) {
+	if !integrationOneOf(q.Kind, "dimension", "hypothesis", "contradiction", "gap", "follow_up") || !unitInterval(q.Priority) || !unitInterval(q.Impact) || !unitInterval(q.Uncertainty) || !unitInterval(q.Novelty) {
 		return fmt.Errorf("%w: question %q has invalid kind or score", ErrInvalidResult, q.ClientKey)
 	}
 	return nil
@@ -432,7 +432,7 @@ func validateV6Refs(name string, refs []V6EntityRef, min, max int) error {
 }
 
 func validateV6Ref(name string, ref V6EntityRef) error {
-	if !oneOf(ref.Kind, "question", "hypothesis", "branch", "claim", "insight", "dispute", "task", "source") {
+	if !integrationOneOf(ref.Kind, "question", "hypothesis", "branch", "claim", "insight", "dispute", "task", "source") {
 		return fmt.Errorf("%w: %s has invalid kind", ErrInvalidResult, name)
 	}
 	return validateV6Key(name+".key", ref.Key)
@@ -472,7 +472,7 @@ func validateV6Texts(name string, values []string, max int) error {
 	return nil
 }
 
-func oneOf(value string, allowed ...string) bool {
+func integrationOneOf(value string, allowed ...string) bool {
 	for _, candidate := range allowed {
 		if value == candidate {
 			return true

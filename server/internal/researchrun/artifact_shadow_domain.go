@@ -55,6 +55,7 @@ func loadLegacyShadowDomainProjectionTx(
 		  UNION ALL SELECT 'branch', entity.id FROM research_branch entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
 		  UNION ALL SELECT 'insight', entity.id FROM research_insight entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
 		  UNION ALL SELECT 'inquiry_edge', entity.id FROM research_inquiry_edge entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'research_director_identity', entity.id FROM research_director_identity entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
 		)
 		SELECT domain_ref.kind, domain_ref.artifact_id::text,
 		       COALESCE(passport.entity_kind, ''), COALESCE(passport.lifecycle_status, ''),

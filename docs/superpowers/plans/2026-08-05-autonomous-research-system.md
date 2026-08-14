@@ -1058,6 +1058,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
   - [x] G2a-trigger：`integration_trigger.go` 冻结 `research-integration-trigger-v1` 的确定性触发决定；仅消费当前 Event 水位之后的 accepted Result Artifact 精确版本，至少两个原 Agent 参与，并按阻断冲突、待交付、结果数和信息增益触发。活动轮次、无新结果、阈值不足和轮次/成本预算均返回明确不触发原因；相同水位、Policy 和输入版本生成相同 Round Key。持久 Integration Round 的原子预留、执行和状态应用仍待 G2b，不能仅凭本项宣称持续整合已运行。
 - [ ] 实现每 Result 的 Assimilation Check、peer_synthesis、原 Agent Integration Contribution 和离线/退出参与者处理。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。
+  - [x] G4a-merge-decision：`integration_merge.go` 冻结 Claim、Question、Hypothesis 三类同类实体的服务端候选判定。精确语义指纹或达到版本化 semantic/lexical/entity 阈值才可提议合并；kind、访问权、终态、scope、method、time 任一不相容都返回稳定、有序拒绝理由。输入顺序不改变实体对身份或审计指纹，Agent prose 不能替代 server-computed signals。该切片只完成决策合同；候选持久化、相似度计算 Adapter、合并应用事务与 Event 尚待后续接线。
 - [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。
   - [x] G-derivation-1：新增服务端 `insightDerivationModule`，只接纳 2–128 个 accepted/fresh Claim/Insight Version，要求至少两个不同 Task 或 Branch origin，按 `1 + max(input Insight level)` 计算层级，并以排序后的 input version/content hash、scope hash 和 relation 生成稳定幂等指纹。没有服务端观察到的语义价值或只有单一 origin 时返回 `no_semantic_gain`；重复/自环/循环 derivation edge fail closed，Claim/Insight 失效按 DAG 递归产生确定性 stale Insight 集合。持久命令、状态写入与重新整合 Work Item 仍待后续切片。
 - [ ] 后续任务 Context 读取跨 Agent 的最新 Integration Snapshot。

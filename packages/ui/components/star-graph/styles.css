@@ -150,9 +150,11 @@
   box-shadow: 0 0 18px var(--ring);
   pointer-events: none;
 }
-.sg-node[data-state="abandoned"],
+.sg-node[data-state="abandoned"] {
+  opacity: 0.62;
+}
 .sg-node[data-state="failed"] {
-  opacity: 0.55;
+  opacity: 1;
 }
 
 /* Concentric decorative rings via background layering (tier ringCount).

@@ -318,8 +318,11 @@ func MigrationRelationshipParserNames() []string {
 	return []string{
 		"research_message_match_decision",
 		"research_decision_inputs",
+		"research_graph_node_payload",
+		"research_legacy_source_payload",
 		"research_report_structured",
 		"research_run_event_payload",
+		"research_task_remediation_acceptance_criteria",
 	}
 }
 

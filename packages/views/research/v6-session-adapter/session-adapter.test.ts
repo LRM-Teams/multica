@@ -5,6 +5,7 @@ import {
   v6FixtureSnapshot,
 } from "@multica/core/adapters/fixtures";
 import { adaptV5Session, adaptV6Session, resolveSessionCanvas } from "./session-adapter";
+import { canvasSnapshotToTypedGraph } from "./session-adapter";
 import { classifyV6Probe } from "./capability";
 
 describe("adaptV5Session — V5 path produces a unified CanvasSnapshot", () => {
@@ -46,6 +47,21 @@ describe("adaptV6Session — V6 path produces a unified CanvasSnapshot", () => {
     const canvas = adaptV6Session(v6FixtureSnapshot());
     expect(canvas.snapshot.snapshotId).toBe("v6-snap-1");
     expect(canvas.snapshot.throughEventSequence).toBe(6);
+  });
+
+  it("passes V6 D5 hierarchy and real clusters into the renderer graph", () => {
+    const canvas = adaptV6Session(v6FixtureSnapshot());
+    const typed = canvasSnapshotToTypedGraph("session-1", canvas.snapshot);
+    const insight = typed.nodes.find((node) => node.node_type === "insight")!;
+    expect(insight.level).toBe("xxl");
+    expect(insight.cluster_id).toBe("cluster-cost");
+    expect(insight.document_count).toBe(46);
+    expect(insight.conclusion_count).toBe(4);
+    expect(typed.clusters[0]).toMatchObject({
+      id: "cluster-cost",
+      label: "Cost evidence",
+      cluster_type: "stable_result",
+    });
   });
 });
 

@@ -87,30 +87,13 @@ type researchV6Delta struct {
 	TransitionKind        *string                       `json:"transition_kind"`
 }
 
-func buildResearchV6Snapshot(runID string, sequence int64, snap researchrun.RunSnapshot) researchV6Snapshot {
-	legacyNodes, legacyEdges := projectRunV2Graph(snap)
-	nodeIDs := make(map[string]string, len(legacyNodes))
-	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
-	for _, node := range legacyNodes {
-		mapped := mapResearchV6Node(runID, node)
-		nodeIDs[node.ID] = mapped.ID
-		nodes = append(nodes, mapped)
+func researchV6DeltaForSnapshot(snapshot researchV6Snapshot, from int64) researchV6Delta {
+	return researchV6Delta{
+		FromSequenceExclusive: from, ThroughSequence: snapshot.ThroughEventSequence,
+		GraphContentHash: snapshot.GraphContentHash, NodeUpserts: snapshot.Nodes, EdgeUpserts: snapshot.Edges,
+		NodeTombstones: []string{}, EdgeTombstones: []string{}, ClusterUpserts: snapshot.Clusters,
+		ClusterTombstones: []string{}, AffectedRootNodeIDs: researchV6RootIDs(snapshot.Nodes),
 	}
-	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
-	for _, edge := range legacyEdges {
-		from, fromOK := nodeIDs[edge.FromNodeID]
-		to, toOK := nodeIDs[edge.ToNodeID]
-		if fromOK && toOK {
-			edges = append(edges, researchV6ProjectionEdge{ID: runID + ":edge:" + edge.ID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: normalizeResearchV6EdgeType(edge.EdgeType)})
-		}
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
-	nodeBytes, _ := json.Marshal(nodes)
-	edgeBytes, _ := json.Marshal(edges)
-	nodeHash, edgeHash := sha256.Sum256(nodeBytes), sha256.Sum256(edgeBytes)
-	snapshotHash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%x:%x", runID, sequence, nodeHash, edgeHash)))
-	return researchV6Snapshot{SnapshotID: "sha256:" + hex.EncodeToString(snapshotHash[:]), RunID: runID, ThroughEventSequence: sequence, GraphContentHash: map[string]string{"nodes": "sha256:" + hex.EncodeToString(nodeHash[:]), "edges": "sha256:" + hex.EncodeToString(edgeHash[:])}, Nodes: nodes, Edges: edges, NextCursor: nil}
 }
 
 type researchV6DeltaEnvelope struct {
@@ -155,37 +138,16 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if err != nil {
 		return researchV6Snapshot{}, err
 	}
-	legacyNodes, legacyEdges := projectRunV2Graph(snap)
 	var sequence int64
 	if err = h.DB.QueryRow(r.Context(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err != nil {
 		return researchV6Snapshot{}, err
 	}
 	typedGraph := projectRunV2TypedGraph(snap, 0, 0, false)
-	typedByID := make(map[string]ResearchGraphTypedNodeResp, len(typedGraph.Nodes))
-	for _, node := range typedGraph.Nodes {
-		typedByID[node.ID] = node
+	legacyNodes, legacyEdges := projectRunV2Graph(snap)
+	nodes, edges, clusters, err := mapResearchV6TypedGraph(runID, legacyNodes, legacyEdges, typedGraph)
+	if err != nil {
+		return researchV6Snapshot{}, err
 	}
-	nodeIDs := make(map[string]string, len(legacyNodes))
-	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
-	for _, n := range legacyNodes {
-		typed := typedByID[n.ID]
-		mapped := mapResearchV6NodeWithSemantics(runID, n, &typed)
-		nodeIDs[n.ID] = mapped.ID
-		nodes = append(nodes, mapped)
-	}
-	for index := range nodes {
-		remapResearchV6NodeReferences(&nodes[index], nodeIDs)
-	}
-	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
-	for _, e := range legacyEdges {
-		from, fromOK := nodeIDs[e.FromNodeID]
-		to, toOK := nodeIDs[e.ToNodeID]
-		if !fromOK || !toOK {
-			continue
-		}
-		edges = append(edges, researchV6ProjectionEdge{ID: runID + ":edge:" + e.ID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: normalizeResearchV6EdgeType(e.EdgeType)})
-	}
-	clusters := projectResearchV6Clusters(typedGraph.Clusters, typedGraph.Nodes, nodeIDs)
 	canonicalNodes, canonicalEdges, err := h.loadResearchV6InquiryProjection(r.Context(), workspaceID, runID)
 	if err != nil {
 		return researchV6Snapshot{}, err
@@ -263,11 +225,14 @@ func remapResearchV6NodeReferences(node *researchV6ProjectionNode, nodeIDs map[s
 // mapResearchV6Graph is the single V5/run-v2 to V6 identity boundary used by
 // both HTTP snapshots and realtime deltas. Keeping it shared prevents a live
 // frame from naming a node or edge differently from the subsequent resync.
-func mapResearchV6Graph(runID string, legacyNodes []ResearchGraphNodeResp, legacyEdges []ResearchGraphEdgeResp) ([]researchV6ProjectionNode, []researchV6ProjectionEdge) {
+func mapResearchV6Graph(runID string, legacyNodes []ResearchGraphNodeResp, legacyEdges []ResearchGraphEdgeResp) ([]researchV6ProjectionNode, []researchV6ProjectionEdge, error) {
 	nodeIDs := make(map[string]string, len(legacyNodes))
 	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
 	for _, node := range legacyNodes {
-		mapped := mapResearchV6Node(runID, node)
+		mapped, err := mapResearchV6Node(runID, node)
+		if err != nil {
+			return nil, nil, err
+		}
 		nodeIDs[node.ID] = mapped.ID
 		nodes = append(nodes, mapped)
 	}
@@ -285,7 +250,46 @@ func mapResearchV6Graph(runID string, legacyNodes []ResearchGraphNodeResp, legac
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
-	return nodes, edges
+	return nodes, edges, nil
+}
+
+func mapResearchV6TypedGraph(runID string, legacyNodes []ResearchGraphNodeResp, legacyEdges []ResearchGraphEdgeResp,
+	typedGraph ResearchGraphTypedResp) ([]researchV6ProjectionNode, []researchV6ProjectionEdge, []researchV6ProjectionCluster, error) {
+	typedByID := make(map[string]ResearchGraphTypedNodeResp, len(typedGraph.Nodes))
+	for _, node := range typedGraph.Nodes {
+		typedByID[node.ID] = node
+	}
+	nodeIDs := make(map[string]string, len(legacyNodes))
+	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
+	for _, node := range legacyNodes {
+		typed, ok := typedByID[node.ID]
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("research V6 typed graph is missing node %q", node.ID)
+		}
+		mapped, err := mapResearchV6NodeWithSemantics(runID, node, &typed)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		nodeIDs[node.ID] = mapped.ID
+		nodes = append(nodes, mapped)
+	}
+	for index := range nodes {
+		remapResearchV6NodeReferences(&nodes[index], nodeIDs)
+	}
+	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
+	for _, edge := range legacyEdges {
+		from, fromOK := nodeIDs[edge.FromNodeID]
+		to, toOK := nodeIDs[edge.ToNodeID]
+		if !fromOK || !toOK {
+			return nil, nil, nil, fmt.Errorf("research V6 typed edge %q has a dangling endpoint", edge.ID)
+		}
+		edges = append(edges, researchV6ProjectionEdge{ID: runID + ":edge:" + edge.ID, RunID: runID,
+			FromNodeID: from, ToNodeID: to, EdgeType: normalizeResearchV6EdgeType(edge.EdgeType)})
+	}
+	clusters := projectResearchV6Clusters(typedGraph.Clusters, typedGraph.Nodes, nodeIDs)
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges, clusters, nil
 }
 
 // mapResearchV6GraphStrict is the integrity boundary between the compatibility
@@ -305,7 +309,10 @@ func mapResearchV6GraphStrict(runID string, legacyNodes []ResearchGraphNodeResp,
 		if _, duplicate := nodeIDs[node.ID]; duplicate {
 			return nil, nil, fmt.Errorf("research V6 projection contains duplicate source node %q", node.ID)
 		}
-		mapped := mapResearchV6Node(runID, node)
+		mapped, err := mapResearchV6Node(runID, node)
+		if err != nil {
+			return nil, nil, err
+		}
 		if prior, duplicate := canonicalNodeIDs[mapped.ID]; duplicate {
 			return nil, nil, fmt.Errorf("research V6 projection nodes %q and %q collapse to canonical identity %q", prior, node.ID, mapped.ID)
 		}
@@ -339,11 +346,11 @@ func mapResearchV6GraphStrict(runID string, legacyNodes []ResearchGraphNodeResp,
 	return nodes, edges, nil
 }
 
-func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6ProjectionNode {
+func mapResearchV6Node(runID string, node ResearchGraphNodeResp) (researchV6ProjectionNode, error) {
 	return mapResearchV6NodeWithSemantics(runID, node, nil)
 }
 
-func mapResearchV6NodeWithSemantics(runID string, node ResearchGraphNodeResp, typed *ResearchGraphTypedNodeResp) researchV6ProjectionNode {
+func mapResearchV6NodeWithSemantics(runID string, node ResearchGraphNodeResp, typed *ResearchGraphTypedNodeResp) (researchV6ProjectionNode, error) {
 	kind := "generic"
 	entityID := node.ID
 	var detail map[string]any
@@ -399,7 +406,7 @@ func mapResearchV6NodeWithSemantics(runID string, node ResearchGraphNodeResp, ty
 	if kind == "goal" {
 		projected.Level = "m"
 	}
-	return projected
+	return projected, nil
 }
 
 func normalizeResearchV6Importance(confidence *float64) float64 {
@@ -422,10 +429,6 @@ func normalizeResearchV6EdgeType(edgeType string) string {
 	default:
 		return edgeType
 	}
-}
-
-func researchV6DeltaForSnapshot(snapshot researchV6Snapshot, from int64) researchV6Delta {
-	return researchV6Delta{FromSequenceExclusive: from, ThroughSequence: snapshot.ThroughEventSequence, GraphContentHash: snapshot.GraphContentHash, NodeUpserts: snapshot.Nodes, EdgeUpserts: snapshot.Edges, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: researchV6RootIDs(snapshot.Nodes)}
 }
 
 func normalizeResearchV6EntityKind(raw string) string {

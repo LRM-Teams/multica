@@ -64,7 +64,10 @@ func TestResearchV6CompatibilityProjectionCarriesCompleteCanonicalDetails(t *tes
 	nodeIDs := make(map[string]string, len(legacyNodes))
 	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
 	for _, legacy := range legacyNodes {
-		mapped := mapResearchV6Node(snapshot.Run.SessionID, legacy)
+		mapped, err := mapResearchV6Node(snapshot.Run.SessionID, legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
 		nodeIDs[legacy.ID] = mapped.ID
 		nodes = append(nodes, mapped)
 	}

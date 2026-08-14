@@ -33,16 +33,14 @@ func (h *Handler) publishResearchGraph(workspaceID string, actorType, actorID st
 	// new clients receive an explicit envelope and can reject cross-run frames.
 	if h.ResearchRun != nil {
 		runID := uuidToString(sessionID)
-		if snapshot, err := h.ResearchRun.Snapshot(context.Background(), runID, workspaceID); err == nil {
+		if _, err := h.ResearchRun.Snapshot(context.Background(), runID, workspaceID); err == nil {
 			var sequence int64
 			if err = h.DB.QueryRow(context.Background(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err == nil {
-				projection := buildResearchV6Snapshot(runID, sequence, snapshot)
-				from := sequence - 1
-				if from < 0 {
-					from = 0
-				}
-				delta := researchV6DeltaForSnapshot(projection, from)
-				h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID, map[string]any{"run_id": runID, "delta": delta})
+				// This compatibility callback has no committed Run Event payload and
+				// therefore no trustworthy prior graph baseline for tombstones. Tell
+				// V6 clients to reload instead of publishing a lossy synthetic delta.
+				h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID,
+					researchV6RealtimeResyncEnvelope{RunID: runID, ResyncRequired: true, ThroughSequence: sequence})
 			}
 		}
 	}

@@ -27,3 +27,11 @@ func TestBuildResearchV6EventDeltaFailsClosedOnGapUnknownOrStructuralResult(t *t
 		}
 	}
 }
+
+func TestBuildResearchV6EventDeltaRequiresResyncWhenClusterTombstoneCannotBeProven(t *testing.T) {
+	snapshot := researchV6Snapshot{ThroughEventSequence: 1, Clusters: []researchV6ProjectionCluster{}}
+	events := []researchV6ProjectionEvent{{Sequence: 1, Type: "goal_steered", Payload: json.RawMessage(`{"goal_version":2}`)}}
+	if _, safe := buildResearchV6EventDelta(snapshot, 0, events); safe {
+		t.Fatal("structural event without prior cluster baseline must require Snapshot resync")
+	}
+}

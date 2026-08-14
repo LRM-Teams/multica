@@ -35,6 +35,9 @@ func buildResearchV6EventDelta(snapshot researchV6Snapshot, from int64, events [
 	affectedNodes := map[string]researchV6ProjectionNode{}
 	transition := ""
 	for _, event := range events {
+		if researchV6ClusterTopologyRequiresResync(event.Type) {
+			return delta, false
+		}
 		var payload map[string]any
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return delta, false
@@ -83,12 +86,23 @@ func buildResearchV6EventDelta(snapshot researchV6Snapshot, from int64, events [
 	}
 	sort.Slice(delta.EdgeUpserts, func(i, j int) bool { return delta.EdgeUpserts[i].ID < delta.EdgeUpserts[j].ID })
 	delta.ThroughSequence = snapshot.ThroughEventSequence
+	delta.GraphContentHash = snapshot.GraphContentHash
 	delta.AffectedRootNodeIDs = researchV6RootIDs(snapshot.Nodes)
 	delta.ClusterUpserts = append(delta.ClusterUpserts, snapshot.Clusters...)
 	if transition != "" {
 		delta.TransitionKind = &transition
 	}
 	return delta, true
+}
+
+func researchV6ClusterTopologyRequiresResync(eventType string) bool {
+	switch eventType {
+	case "goal_steered", "selective_steering_applied", "inquiry_graph_created", "insight_staled",
+		"artifact_withdrawn", "artifact_superseded":
+		return true
+	default:
+		return false
+	}
 }
 
 type researchV6EntityRef struct{ kind, id string }

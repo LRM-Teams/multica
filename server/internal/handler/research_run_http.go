@@ -167,7 +167,7 @@ func (h *Handler) SubmitAgentResearchTaskResult(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	inboxTaskID, allowed := h.resolveResearchResultInboxTaskID(w, r, principal, sessionID, taskID, attemptID)
+	inboxTaskID, allowed := h.resolveResearchAttemptInboxTaskID(w, r, principal, sessionID, taskID, attemptID)
 	if !allowed {
 		return
 	}
@@ -210,7 +210,7 @@ type researchInboxTaskContext struct {
 	AttemptID string `json:"research_attempt_id"`
 }
 
-func (h *Handler) resolveResearchResultInboxTaskID(
+func (h *Handler) resolveResearchAttemptInboxTaskID(
 	w http.ResponseWriter,
 	r *http.Request,
 	principal middleware.AgentPrincipal,

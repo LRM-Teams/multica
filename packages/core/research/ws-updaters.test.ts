@@ -24,6 +24,40 @@ function makeQc(initial: unknown) {
 }
 
 describe("applyResearchWSEvent", () => {
+  it("coalesces session-list refreshes per workspace to at most once per second", () => {
+    vi.useFakeTimers();
+    const qc = makeQc(EMPTY_RESEARCH_SNAPSHOT);
+    const event = {
+      type: "research_session:status_changed",
+      payload: { session_id: "s1" },
+    };
+
+    applyResearchWSEvent(qc, "ws", event);
+    applyResearchWSEvent(qc, "ws", event);
+    applyResearchWSEvent(qc, "ws-other", event);
+
+    expect(qc.invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: researchKeys.sessions("ws"),
+    });
+    vi.advanceTimersByTime(999);
+    expect(qc.invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: researchKeys.sessions("ws"),
+    });
+    vi.advanceTimersByTime(1);
+    expect(qc.invalidateQueries).toHaveBeenCalledTimes(2);
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.sessions("ws"),
+    });
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.sessions("ws-other"),
+    });
+
+    applyResearchWSEvent(qc, "ws", event);
+    vi.advanceTimersByTime(1000);
+    expect(qc.invalidateQueries).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
   it("upserts graph nodes without dropping prior nodes", () => {
     const qc = makeQc({
       ...EMPTY_RESEARCH_SNAPSHOT,

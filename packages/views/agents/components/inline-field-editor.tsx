@@ -138,7 +138,7 @@ export function InlineFieldEditor({
         type="button"
         data-testid={`${testId}-trigger`}
         onClick={startEdit}
-        className="group -mx-1 inline-flex w-full min-w-0 items-start gap-1.5 rounded px-1 text-left transition-colors hover:bg-accent/50"
+        className="group -mx-1 inline-flex w-fit max-w-full min-w-0 items-start gap-1.5 rounded px-1 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {value ? (
           <span

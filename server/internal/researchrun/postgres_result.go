@@ -1667,6 +1667,13 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 	}); err != nil {
 		return "", err
 	}
+	if usesStructuredResultContract(state.run.OrchestratorVersion) {
+		if err = persistReportSourceInputReferencesTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, reportID, structuredReport,
+		); err != nil {
+			return "", err
+		}
+	}
 	if err = state.checkpointAfter(ctx, txResultAfterReport); err != nil {
 		return "", err
 	}
@@ -1735,6 +1742,69 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		}
 	}
 	return reportID, nil
+}
+
+func persistReportSourceInputReferencesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, reportID string,
+	report reportStructuredV1,
+) error {
+	if len(report.Sources) == 0 {
+		return nil
+	}
+	sourceIDs := make([]string, 0, len(report.Sources))
+	for _, source := range report.Sources {
+		sourceIDs = append(sourceIDs, source.SourceID)
+	}
+	var inserted int
+	err := tx.QueryRow(ctx, `
+		WITH report_version AS (
+			SELECT version.id
+			FROM research_artifact_passport passport
+			JOIN research_artifact_version version
+			  ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+			     (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+			WHERE passport.workspace_id = $1::uuid
+			  AND passport.session_id = $2::uuid
+			  AND passport.id = $3::uuid
+			  AND passport.entity_kind = 'report_revision'
+		), requested_source AS (
+			SELECT source_id, (ordinal - 1)::integer AS ordinal
+			FROM unnest($4::text[]) WITH ORDINALITY requested(source_id, ordinal)
+		), source_version AS (
+			SELECT requested.source_id, requested.ordinal, version.id
+			FROM requested_source requested
+			JOIN research_artifact_passport passport
+			  ON passport.workspace_id = $1::uuid
+			 AND passport.session_id = $2::uuid
+			 AND passport.id = requested.source_id::uuid
+			 AND passport.entity_kind = 'legacy_source'
+			JOIN research_artifact_version version
+			  ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+			     (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+		), inserted AS (
+			INSERT INTO research_artifact_input_reference (
+				workspace_id, session_id, consumer_version_id, input_version_id,
+				relation, explicitly_used, purpose, ordinal
+			)
+			SELECT $1::uuid, $2::uuid, report_version.id, source_version.id,
+			       'report_source', true, 'report_materialization', source_version.ordinal
+			FROM report_version CROSS JOIN source_version
+			RETURNING 1
+		)
+		SELECT count(*)::int FROM inserted
+	`, workspaceID, sessionID, reportID, sourceIDs).Scan(&inserted)
+	if err != nil {
+		return err
+	}
+	if inserted != len(sourceIDs) {
+		return fmt.Errorf(
+			"%w: report source lineage resolved %d of %d source artifact versions",
+			ErrInvalidResult, inserted, len(sourceIDs),
+		)
+	}
+	return nil
 }
 
 func lockStructuredReportSourcesTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, report reportStructuredV1) error {

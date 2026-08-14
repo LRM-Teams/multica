@@ -470,24 +470,30 @@ func verifyShadowEquivalenceTx(
 	tx pgx.Tx,
 	workspaceID, sessionID string,
 	stateVersion int64,
+	purpose ArtifactPurpose,
 ) error {
 	module := NewArtifactContextModule()
-	plan, err := module.PlanDispatchManifest(ctx, tx, workspaceID, sessionID, stateVersion)
+	plan, err := module.PlanDispatchManifestForPurpose(ctx, tx, workspaceID, sessionID, stateVersion, purpose)
 	if err != nil {
 		return err
 	}
-	liveIDs, err := loadLegacyManifestVisibleArtifactIDsTx(ctx, tx, workspaceID, sessionID)
+	return verifyShadowPlanEquivalenceTx(ctx, tx, workspaceID, sessionID, plan, "")
+}
+
+func verifyShadowPlanEquivalenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	plan dispatchManifestPlan,
+	excludedContextManifestID string,
+) error {
+	domainProjection, err := loadLegacyShadowDomainProjectionTx(
+		ctx, tx, workspaceID, sessionID, plan.Purpose, excludedContextManifestID,
+	)
 	if err != nil {
 		return err
 	}
-	manifestIDs := make(map[string]struct{}, len(plan.Entries))
-	for _, entry := range plan.Entries {
-		manifestIDs[entry.ArtifactID] = struct{}{}
-	}
-	return compareShadowManifestError(liveIDs, manifestArtifactSet{
-		ArtifactIDs: manifestIDs,
-		Hash:        plan.ManifestHash,
-	})
+	return compareShadowDomainProjection(domainProjection, projectManifestForShadow(plan), plan.ManifestHash)
 }
 
 func loadLegacyManifestVisibleArtifactIDsTx(

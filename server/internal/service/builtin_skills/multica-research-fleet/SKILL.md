@@ -77,6 +77,10 @@ authorized attempt; the stale result fails closed.
 legacy mutations are rejected for initialized runs. Do not claim completion in
 chat before `task-result` succeeds.
 
+5. A task receives domain artifacts selected for its frozen manifest. Context
+Manifest internals and V6 inquiry artifacts are never admitted through the
+legacy V1–V5 compatibility policy.
+
 ## Result responsibilities
 
 - `plan` / `replan`: required questions, an explicit decision question and

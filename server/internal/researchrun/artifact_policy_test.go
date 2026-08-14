@@ -128,6 +128,22 @@ func expectedLegacyAdmission(
 	return true, ""
 }
 
+func TestArtifactPolicyLegacyAdmissionDeniesDAndFutureOnlyKinds(t *testing.T) {
+	policy := ArtifactPolicy{}
+	for _, kind := range []ArtifactEntityKind{
+		ArtifactKindContextManifest,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindInquiryEdge,
+	} {
+		ok, reason := policy.LegacyAdmissionAllowed(kind, ArtifactLifecycleAccepted, ArtifactProvenanceComplete)
+		if ok || reason != ArtifactDenyLegacyIneligible {
+			t.Fatalf("kind=%s ok=%v reason=%q want legacy-ineligible denial", kind, ok, reason)
+		}
+	}
+}
+
 func TestArtifactPolicyAccessMatrix(t *testing.T) {
 	policy := ArtifactPolicy{}
 	clearances := []ArtifactClearance{

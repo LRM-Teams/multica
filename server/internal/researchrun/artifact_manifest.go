@@ -86,6 +86,41 @@ func casArtifactVersionSelectionTx(
 	return nil
 }
 
+func casArtifactRelationshipSelectionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	entry artifactVersionCandidate,
+) error {
+	var versionCount, inputReferenceCount, outputReferenceCount int
+	err := tx.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_version versions
+		   WHERE versions.workspace_id=$1::uuid
+		     AND versions.session_id=$2::uuid
+		     AND versions.artifact_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference refs
+		   WHERE refs.workspace_id=$1::uuid
+		     AND refs.session_id=$2::uuid
+		     AND refs.consumer_version_id=$4::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference refs
+		   WHERE refs.workspace_id=$1::uuid
+		     AND refs.session_id=$2::uuid
+		     AND refs.input_version_id=$4::uuid)
+	`, workspaceID, sessionID, entry.ArtifactID, entry.VersionRowID).Scan(
+		&versionCount, &inputReferenceCount, &outputReferenceCount,
+	)
+	if err != nil {
+		return err
+	}
+	if versionCount != entry.VersionCount ||
+		inputReferenceCount != entry.InputReferenceCount ||
+		outputReferenceCount != entry.OutputReferenceCount {
+		return fmt.Errorf("%w: artifact relationship projection CAS failed", ErrInvalidTransition)
+	}
+	return nil
+}
+
 func reservePolicyWatermarkCASTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, expected int64) (int64, error) {
 	var current int64
 	err := tx.QueryRow(ctx, `

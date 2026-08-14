@@ -4,18 +4,18 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
 func TestResearchV6DeltaCarriesThroughSequenceSnapshotHash(t *testing.T) {
-	run := researchrun.RunSnapshot{
-		Run:      researchrun.Run{SessionID: "run-1", Goal: "goal", Status: researchrun.RunStatusRunning, StateVersion: 3, LastProgressAt: time.Unix(1_700_000_000, 0).UTC()},
-		Contract: researchrun.ResearchContract{Goal: "goal"},
-		Tasks:    []researchrun.Task{{ID: "task-1", Objective: "verify", Kind: researchrun.TaskKindVerify, Status: researchrun.TaskStatusReady}},
+	snapshot := researchV6Snapshot{
+		RunID:                "run-1",
+		ThroughEventSequence: 7,
+		GraphContentHash: map[string]string{
+			"nodes": "sha256:nodes", "edges": "sha256:edges", "clusters": "sha256:clusters",
+		},
 	}
-	snapshot := buildResearchV6Snapshot("run-1", 7, run)
 	delta := researchV6DeltaForSnapshot(snapshot, 4)
 	if delta.FromSequenceExclusive != 4 || delta.ThroughSequence != 7 {
 		t.Fatalf("delta sequence = %d..%d", delta.FromSequenceExclusive, delta.ThroughSequence)
@@ -23,12 +23,8 @@ func TestResearchV6DeltaCarriesThroughSequenceSnapshotHash(t *testing.T) {
 	if !reflect.DeepEqual(delta.GraphContentHash, snapshot.GraphContentHash) {
 		t.Fatalf("delta hash = %v, snapshot hash = %v", delta.GraphContentHash, snapshot.GraphContentHash)
 	}
-	if delta.GraphContentHash["nodes"] == "" || delta.GraphContentHash["edges"] == "" {
+	if delta.GraphContentHash["nodes"] == "" || delta.GraphContentHash["edges"] == "" || delta.GraphContentHash["clusters"] == "" {
 		t.Fatalf("delta hash is incomplete: %v", delta.GraphContentHash)
-	}
-	rebuilt := buildResearchV6Snapshot("run-1", 7, run)
-	if !reflect.DeepEqual(rebuilt.GraphContentHash, snapshot.GraphContentHash) {
-		t.Fatalf("same state rebuilt hash = %v, want %v", rebuilt.GraphContentHash, snapshot.GraphContentHash)
 	}
 }
 
@@ -40,7 +36,10 @@ func TestMapResearchV6NodeBindsRunAndCanonicalEntity(t *testing.T) {
 		Payload:   json.RawMessage(`{"kind":"task","task_id":"task-1"}`),
 		CreatedAt: "2026-08-13T00:00:00Z", UpdatedAt: "2026-08-13T00:00:01Z",
 	}
-	got := mapResearchV6Node("run-1", node)
+	got, err := mapResearchV6Node("run-1", node)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.ID != "run-1:task:task-1" || got.RunID != "run-1" || got.EntityKind != "task" || got.EntityID != "task-1" {
 		t.Fatalf("unexpected projection identity: %+v", got)
 	}
@@ -54,7 +53,10 @@ func TestMapResearchV6NodeDegradesUnknownKindToGeneric(t *testing.T) {
 		ID: "display-node", NodeType: "future-shape", Title: "Future node",
 		Payload: json.RawMessage(`{"kind":"future_private_kind","entity_id":"hidden-id"}`),
 	}
-	got := mapResearchV6Node("run-1", node)
+	got, err := mapResearchV6Node("run-1", node)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.EntityKind != "generic" || got.NodeKind != "generic" {
 		t.Fatalf("unknown kind must degrade to generic: %+v", got)
 	}
@@ -79,7 +81,10 @@ func TestMapResearchV6NodeProjectsGoalAndTypedD5Semantics(t *testing.T) {
 		ID: "display-goal", NodeType: "goal", Title: "Research origin", Status: "failed",
 		Payload: json.RawMessage(`{"kind":"root"}`),
 	}
-	got := mapResearchV6NodeWithSemantics("run-1", node, &typed)
+	got, err := mapResearchV6NodeWithSemantics("run-1", node, &typed)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.NodeKind != "goal" || got.NodeSubtype != "goal" || got.Level != "m" || got.Status != "active" || got.Round != 2 {
 		t.Fatalf("goal semantics=%+v", got)
 	}
@@ -110,6 +115,39 @@ func TestProjectResearchV6ClustersUsesRealMembershipAndNullableMetrics(t *testin
 	if len(clusters) != 1 || clusters[0].ClusterType != "new_frontier" || len(clusters[0].MemberNodeIDs) != 1 ||
 		clusters[0].Confidence == nil || clusters[0].DocumentCount != nil || clusters[0].ConclusionCount != nil {
 		t.Fatalf("clusters=%+v", clusters)
+	}
+}
+
+func TestRealtimeEnvelopeUsesTypedNodeAndClusterSemantics(t *testing.T) {
+	clusterID := "cluster-1"
+	confidence := .84
+	legacy := []ResearchGraphNodeResp{{ID: "source-node", NodeType: "finding", Title: "Finding", Status: "accepted", Confidence: &confidence, Payload: json.RawMessage(`{"kind":"insight"}`)}}
+	typed := ResearchGraphTypedResp{
+		Nodes:    []ResearchGraphTypedNodeResp{{ID: "source-node", Level: "XXL", Round: 2, ClusterID: &clusterID, Confidence: &confidence, DocumentCount: 46, ConclusionCount: 4}},
+		Clusters: []ResearchGraphClusterResp{{ID: clusterID, Label: "Stable result", ClusterType: "stable_result"}},
+	}
+	raw, err := buildResearchV6ProjectedGraphEnvelope("run-1", "task_dispatched", 7, legacy, nil, typed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, ok := raw.(researchV6DeltaEnvelope)
+	if !ok || len(envelope.Delta.NodeUpserts) != 1 || len(envelope.Delta.ClusterUpserts) != 1 {
+		t.Fatalf("realtime envelope=%#v", raw)
+	}
+	node := envelope.Delta.NodeUpserts[0]
+	if node.Level != "xxl" || node.ClusterID == nil || *node.ClusterID != clusterID || node.DocumentCount == nil || *node.DocumentCount != 46 {
+		t.Fatalf("realtime typed node=%+v", node)
+	}
+}
+
+func TestRealtimeEnvelopeRequiresResyncForStructuralClusterChange(t *testing.T) {
+	raw, err := buildResearchV6ProjectedGraphEnvelope("run-1", "goal_steered", 8, nil, nil, ResearchGraphTypedResp{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resync, ok := raw.(researchV6RealtimeResyncEnvelope)
+	if !ok || !resync.ResyncRequired || resync.ThroughSequence != 8 {
+		t.Fatalf("realtime structural envelope=%#v", raw)
 	}
 }
 

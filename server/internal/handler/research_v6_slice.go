@@ -33,11 +33,12 @@ type researchV6SliceNode struct {
 }
 
 type researchV6ProjectionSlice struct {
-	SnapshotID string                     `json:"snapshot_id"`
-	Request    researchV6SliceRequest     `json:"request"`
-	Nodes      []researchV6SliceNode      `json:"nodes"`
-	Edges      []researchV6ProjectionEdge `json:"edges"`
-	NextCursor *string                    `json:"next_cursor"`
+	SnapshotID string                        `json:"snapshot_id"`
+	Request    researchV6SliceRequest        `json:"request"`
+	Nodes      []researchV6SliceNode         `json:"nodes"`
+	Edges      []researchV6ProjectionEdge    `json:"edges"`
+	Clusters   []researchV6ProjectionCluster `json:"clusters"`
+	NextCursor *string                       `json:"next_cursor"`
 }
 
 type researchV6SliceCursor struct {
@@ -172,7 +173,7 @@ func buildResearchV6ProjectionSlice(snapshot researchV6Snapshot, request researc
 	}
 	pageIDs := ordered[offset:end]
 	pageSet := stringSet(pageIDs)
-	page := researchV6ProjectionSlice{SnapshotID: snapshot.SnapshotID, Request: request, Nodes: []researchV6SliceNode{}, Edges: []researchV6ProjectionEdge{}}
+	page := researchV6ProjectionSlice{SnapshotID: snapshot.SnapshotID, Request: request, Nodes: []researchV6SliceNode{}, Edges: []researchV6ProjectionEdge{}, Clusters: []researchV6ProjectionCluster{}}
 	page.Request.Cursor = request.Cursor
 	for _, id := range pageIDs {
 		unloaded := 0
@@ -186,6 +187,14 @@ func buildResearchV6ProjectionSlice(snapshot researchV6Snapshot, request researc
 	for _, edge := range snapshot.Edges {
 		if (len(relations) == 0 || hasStringKey(relations, edge.EdgeType)) && hasStringKey(pageSet, edge.FromNodeID) && hasStringKey(pageSet, edge.ToNodeID) {
 			page.Edges = append(page.Edges, edge)
+		}
+	}
+	for _, cluster := range snapshot.Clusters {
+		for _, memberID := range cluster.MemberNodeIDs {
+			if hasStringKey(pageSet, memberID) {
+				page.Clusters = append(page.Clusters, cluster)
+				break
+			}
 		}
 	}
 	if end < len(ordered) {

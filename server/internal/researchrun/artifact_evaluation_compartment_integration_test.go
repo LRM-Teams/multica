@@ -2,6 +2,7 @@ package researchrun
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -157,6 +158,151 @@ func TestEvaluatedSubjectSerializationExcludesPrivateArtifactWhileGraderUsesFroz
 	}
 	if strings.Contains(replayed, laterPrivateID) || strings.Contains(replayed, "later-private-version") {
 		t.Fatal("grader prompt included evaluation-private data created after its manifest")
+	}
+
+	subjectSnapshot, err := store.TaskContextForAttempt(ctx, subjectAttempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("load subject surface before grader revocation: %v", err)
+	}
+	assertEvaluationPrivateAbsent(t, subjectSnapshot, privateID, laterPrivateID)
+	if subjectSnapshot.ArtifactProjection == nil || len(subjectSnapshot.ArtifactProjection.Items) == 0 {
+		t.Fatal("subject lost every same-scope allowed passport from its projection")
+	}
+
+	graderSnapshot, err := store.TaskContextForAttempt(ctx, graderAttempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("load grader surface before revocation: %v", err)
+	}
+	if len(graderSnapshot.EvaluationPrivate) == 0 {
+		t.Fatal("authorized grader surface omitted frozen evaluation-private context")
+	}
+	if !projectionContainsEntity(graderSnapshot.ArtifactProjection, privateID) {
+		t.Fatalf("authorized grader projection omitted private passport %q", privateID)
+	}
+	if projectionContainsEntity(graderSnapshot.ArtifactProjection, laterPrivateID) {
+		t.Fatalf("grader projection included post-manifest private passport %q", laterPrivateID)
+	}
+
+	privateEntriesBefore := countManifestEntriesForArtifact(
+		t, ctx, pool, fixture.workspaceID, run.SessionID, graderAttempt.ID, privateID,
+	)
+	if privateEntriesBefore != 1 {
+		t.Fatalf("grader frozen private entries=%d want=1", privateEntriesBefore)
+	}
+	revokeIntegrationManifestEvaluationGrant(t, ctx, pool, fixture.workspaceID, run.SessionID, graderAttempt.ID)
+	if _, err = store.TaskContextForAttempt(ctx, graderAttempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("revoked grader surface err=%v want ErrInvalidTransition", err)
+	}
+	if privateEntriesAfter := countManifestEntriesForArtifact(
+		t, ctx, pool, fixture.workspaceID, run.SessionID, graderAttempt.ID, privateID,
+	); privateEntriesAfter != privateEntriesBefore {
+		t.Fatalf("evaluation grant revocation changed frozen private history %d→%d", privateEntriesBefore, privateEntriesAfter)
+	}
+
+	subjectAfterRevocation, err := store.TaskContextForAttempt(ctx, subjectAttempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("grader revocation denied unrelated subject surface: %v", err)
+	}
+	assertEvaluationPrivateAbsent(t, subjectAfterRevocation, privateID, laterPrivateID)
+	if subjectAfterRevocation.ArtifactProjection == nil || len(subjectAfterRevocation.ArtifactProjection.Items) == 0 {
+		t.Fatal("grader revocation removed subject's same-scope allowed projection")
+	}
+}
+
+func assertEvaluationPrivateAbsent(t *testing.T, snapshot RunSnapshot, deniedIDs ...string) {
+	t.Helper()
+	if len(snapshot.EvaluationPrivate) != 0 {
+		t.Fatalf("subject surface exposed evaluation-private context: %+v", snapshot.EvaluationPrivate)
+	}
+	for _, deniedID := range deniedIDs {
+		if projectionContainsEntity(snapshot.ArtifactProjection, deniedID) {
+			t.Fatalf("subject projection exposed evaluation-private passport %q", deniedID)
+		}
+	}
+}
+
+func projectionContainsEntity(projection *ArtifactProjection, entityID string) bool {
+	if projection == nil {
+		return false
+	}
+	for _, item := range projection.Items {
+		if item.EntityID == entityID {
+			return true
+		}
+	}
+	return false
+}
+
+func countManifestEntriesForArtifact(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID, artifactID string,
+) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM research_artifact_context_entry entry
+		JOIN research_artifact_context_manifest manifest
+		  ON (manifest.workspace_id, manifest.session_id, manifest.id) =
+		     (entry.workspace_id, entry.session_id, entry.manifest_id)
+		WHERE manifest.workspace_id = $1::uuid
+		  AND manifest.session_id = $2::uuid
+		  AND manifest.attempt_id = $3::uuid
+		  AND entry.artifact_id = $4::uuid
+	`, workspaceID, sessionID, attemptID, artifactID).Scan(&count); err != nil {
+		t.Fatalf("count frozen manifest entries for artifact: %v", err)
+	}
+	return count
+}
+
+func revokeIntegrationManifestEvaluationGrant(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID string,
+) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var grantID string
+	var oldRevision, watermark int64
+	if err = tx.QueryRow(ctx, `
+		SELECT evaluation_grant_id::text, evaluation_grant_revision
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&grantID, &oldRevision); err != nil {
+		t.Fatalf("load evaluation grant: %v", err)
+	}
+	if err = tx.QueryRow(ctx, `
+		UPDATE research_artifact_policy_state
+		SET watermark = watermark + 1, updated_at = now()
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		RETURNING watermark
+	`, workspaceID, sessionID).Scan(&watermark); err != nil {
+		t.Fatalf("advance evaluation revocation watermark: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE research_artifact_policy_grant
+		SET status = 'revoked', revision = revision + 1, revoked_at = now()
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, grantID); err != nil {
+		t.Fatalf("revoke evaluation grant: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, policy_grant_id,
+		  old_grant_revision, new_grant_revision, old_grant_status, new_grant_status
+		) VALUES ($1::uuid, $2::uuid, $3, 'grant_revoke', $4::uuid, $5, $6, 'active', 'revoked')
+	`, workspaceID, sessionID, watermark, grantID, oldRevision, oldRevision+1); err != nil {
+		t.Fatalf("record evaluation grant revocation: %v", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit evaluation grant revocation: %v", err)
 	}
 }
 

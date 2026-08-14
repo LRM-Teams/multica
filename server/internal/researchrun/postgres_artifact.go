@@ -298,11 +298,24 @@ func runSessionArtifactContent(persisted json.RawMessage) map[string]any {
 func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {
 	var contractID string
 	var contractCreatedAt time.Time
+	var contractGoalVersion int
+	var goal, audience, freshness, language, authoredBy, reason string
+	var scope, sourcePolicy, runLimits []byte
 	err := tx.QueryRow(ctx, `
-		SELECT id::text, created_at
+		SELECT id::text, goal_version, goal, scope, audience, freshness, language,
+		       source_policy, run_limits, authored_by::text, reason, created_at
 		FROM research_contract_revision
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND goal_version = 1
-	`, workspaceID, sessionID).Scan(&contractID, &contractCreatedAt)
+	`, workspaceID, sessionID).Scan(
+		&contractID, &contractGoalVersion, &goal, &scope, &audience, &freshness, &language,
+		&sourcePolicy, &runLimits, &authoredBy, &reason, &contractCreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	contractHash, err := ArtifactContentHash(ArtifactKindContractRevision, contractRevisionArtifactContent(
+		contractGoalVersion, goal, scope, audience, freshness, language, sourcePolicy, runLimits, authoredBy, reason,
+	))
 	if err != nil {
 		return err
 	}
@@ -311,7 +324,10 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: contractID,
 		Kind: ArtifactKindContractRevision, SourceCreatedAt: &contractCreatedAt,
-		GoalVersion: &goalVersion,
+		GoalVersion:            &goalVersion,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contractHash,
 	}); err != nil {
 		return err
 	}
@@ -345,6 +361,28 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 		Kind: ArtifactKindTask, SourceCreatedAt: &taskCreatedAt,
 		GoalVersion: &goalVersion, PlanVersion: &planVersion,
 	})
+}
+
+func contractRevisionArtifactContent(
+	goalVersion int,
+	goal string,
+	scope []byte,
+	audience, freshness, language string,
+	sourcePolicy, runLimits []byte,
+	authoredBy, reason string,
+) map[string]any {
+	return map[string]any{
+		"goal_version":  goalVersion,
+		"goal":          goal,
+		"scope":         json.RawMessage(scope),
+		"audience":      audience,
+		"freshness":     freshness,
+		"language":      language,
+		"source_policy": json.RawMessage(sourcePolicy),
+		"run_limits":    json.RawMessage(runLimits),
+		"authored_by":   authoredBy,
+		"reason":        reason,
+	}
 }
 
 func registerRunArtifactsAfterInitializationTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {

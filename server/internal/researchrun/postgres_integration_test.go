@@ -102,6 +102,35 @@ func TestPostgresStoreCreateRunIsAtomic(t *testing.T) {
 			t.Fatalf("artifact passport %s rows=%d want=%d", kind, got, want)
 		}
 	}
+	var contractID, contractHash, contractHashOrigin, contractProvenance string
+	var contractGoalVersion int
+	var contractGoal, contractAudience, contractFreshness, contractLanguage, contractAuthor, contractReason string
+	var contractScope, contractSourcePolicy, contractRunLimits []byte
+	if err = pool.QueryRow(ctx, `
+		SELECT c.id::text, c.goal_version, c.goal, c.scope, c.audience, c.freshness, c.language,
+		       c.source_policy, c.run_limits, c.authored_by::text, c.reason,
+		       v.content_hash, v.hash_origin, p.provenance_completeness
+		FROM research_contract_revision c
+		JOIN research_artifact_passport p ON (p.workspace_id, p.session_id, p.id) = (c.workspace_id, c.session_id, c.id)
+		JOIN research_artifact_version v ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+		  (p.workspace_id, p.session_id, p.id, p.current_version)
+		WHERE c.session_id = $1::uuid AND c.goal_version = 1
+	`, run.SessionID).Scan(&contractID, &contractGoalVersion, &contractGoal, &contractScope,
+		&contractAudience, &contractFreshness, &contractLanguage, &contractSourcePolicy,
+		&contractRunLimits, &contractAuthor, &contractReason, &contractHash,
+		&contractHashOrigin, &contractProvenance); err != nil {
+		t.Fatal(err)
+	}
+	wantContractHash, err := ArtifactContentHash(ArtifactKindContractRevision, contractRevisionArtifactContent(
+		contractGoalVersion, contractGoal, contractScope, contractAudience, contractFreshness,
+		contractLanguage, contractSourcePolicy, contractRunLimits, contractAuthor, contractReason,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contractID == "" || contractHash != wantContractHash || contractHashOrigin != string(ArtifactHashOriginProduction) || contractProvenance != string(ArtifactProvenanceComplete) {
+		t.Fatalf("contract id=%q hash=%q want=%q origin=%q provenance=%q", contractID, contractHash, wantContractHash, contractHashOrigin, contractProvenance)
+	}
 	wantEventHash, err := ArtifactContentHash(ArtifactKindRunEvent, runEventArtifactContent(event))
 	if err != nil {
 		t.Fatal(err)

@@ -63,39 +63,9 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 		return AcceptResultOutcome{}, ErrRunNotFound
 	}
 	var result ResultEnvelope
-	var v6Plan *ResearchV6PlanResult
-	var v6Evidence *V6EvidenceResult
-	var v6Integration *V6IntegrationResult
-	var v6Deliberation *V6DeliberationResult
 	var hash string
 	if run.OrchestratorVersion == OrchestratorVersionV6 {
-		if task.Kind == TaskKindPlan {
-			decoded, decodedHash, decodeErr := DecodeAndValidateResearchV6PlanResult(submission.Raw)
-			if decodeErr != nil {
-				return AcceptResultOutcome{}, decodeErr
-			}
-			v6Plan, hash, result = &decoded, decodedHash, researchV6PlanEnvelope(decoded)
-		} else if isEvidenceTask(task.Kind) && task.ExpectedResult == "research_evidence_v6" {
-			decoded, decodedHash, decodeErr := DecodeAndValidateV6EvidenceResult(submission.Raw)
-			if decodeErr != nil {
-				return AcceptResultOutcome{}, decodeErr
-			}
-			v6Evidence, hash, result = &decoded, decodedHash, researchV6EvidenceEnvelope(decoded)
-		} else if task.Kind == TaskKindIntegrate && task.ExpectedResult == "research_integration_v6" {
-			decoded, decodedHash, decodeErr := decodeAndHashV6IntegrationResult(submission.Raw)
-			if decodeErr != nil {
-				return AcceptResultOutcome{}, decodeErr
-			}
-			v6Integration, hash, result = &decoded, decodedHash, researchV6IntegrationEnvelope(decoded)
-		} else if task.Kind == TaskKindDeliberate && task.ExpectedResult == "research_deliberation_v6" {
-			decoded, decodedHash, decodeErr := DecodeAndValidateV6DeliberationResult(submission.Raw)
-			if decodeErr != nil {
-				return AcceptResultOutcome{}, decodeErr
-			}
-			v6Deliberation, hash, result = &decoded, decodedHash, researchV6DeliberationEnvelope(decoded)
-		} else {
-			return AcceptResultOutcome{}, fmt.Errorf("%w: V6 task result adapter is not available for %s", ErrUnsupportedVersion, task.Kind)
-		}
+		return AcceptResultOutcome{}, fmt.Errorf("%w: Ronaldo V6 uses the generic Work Item submission boundary", ErrUnsupportedVersion)
 	} else {
 		result, hash, err = DecodeAndValidateResultForVersion(run.OrchestratorVersion, submission.Raw, task, run.Config)
 		if err != nil {
@@ -138,7 +108,7 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 	return module.store.AcceptResult(ctx, AcceptResultInput{
 		SessionID: submission.SessionID, AttemptID: submission.AttemptID,
 		AgentID: submission.AgentID, InboxTaskID: submission.InboxTaskID,
-		Raw: submission.Raw, Result: result, V6Plan: v6Plan, V6Evidence: v6Evidence, V6Integration: v6Integration, V6Deliberation: v6Deliberation, Hash: hash,
+		Raw: submission.Raw, Result: result, Hash: hash,
 	})
 }
 

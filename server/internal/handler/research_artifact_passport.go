@@ -25,11 +25,23 @@ func backfillArtifactPassportTx(
 }
 
 func ensureGraphNodePassportTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, nodeID pgtype.UUID) error {
-	return backfillArtifactPassportTx(ctx, tx, workspaceID, sessionID, nodeID, "graph_node")
+	return researchrun.RegisterProductionGraphNodeTx(
+		ctx,
+		tx,
+		uuidToString(workspaceID),
+		uuidToString(sessionID),
+		uuidToString(nodeID),
+	)
 }
 
 func ensureGraphEdgePassportTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, edgeID pgtype.UUID) error {
-	return backfillArtifactPassportTx(ctx, tx, workspaceID, sessionID, edgeID, "graph_edge")
+	return researchrun.RegisterProductionGraphEdgeTx(
+		ctx,
+		tx,
+		uuidToString(workspaceID),
+		uuidToString(sessionID),
+		uuidToString(edgeID),
+	)
 }
 
 func ensureResearchMessagePassportTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, messageID pgtype.UUID) error {

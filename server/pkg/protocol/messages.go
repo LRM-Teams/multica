@@ -560,6 +560,11 @@ const (
 	// command/replay contract. It is intentionally additive: all previously
 	// advertised daemon capabilities remain independently meaningful.
 	DaemonCapabilityWorkspaceRunnerAttachment = "workspace_runner_attachment_v1"
+	// DaemonCapabilityWorkspaceRunnerControlPlane selects the current ready
+	// Workspace Runner as the sole carrier for heartbeat actions belonging to
+	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
+	// adapters for older daemons and must not execute actions for this Runner.
+	DaemonCapabilityWorkspaceRunnerControlPlane = "workspace_runner_control_plane_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by
@@ -678,7 +683,14 @@ type ReminderProjectionAckPayload struct {
 	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
 }
 
+type ReminderFireAckPayload struct {
+	AgentID    string `json:"agent_id"`
+	ReminderID string `json:"reminder_id"`
+	Version    int64  `json:"version"`
+}
+
 type ReminderFireResultPayload struct {
+	Ack        ReminderFireAckPayload  `json:"ack"`
 	Projection ReminderProjectionEvent `json:"projection"`
 }
 

@@ -119,12 +119,7 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	if err != nil {
 		return err
 	}
-	// HTTP heartbeats resume the moment WS detaches so the freshness window
-	// from a previous connection cannot keep them silenced past disconnect.
-	defer func() {
-		_ = conn.Close()
-		d.clearWSHeartbeatAcks()
-	}()
+	defer func() { _ = conn.Close() }()
 
 	d.setWSConnState("open")
 	d.logger.Info("task wakeup websocket connected",
@@ -134,13 +129,8 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	)
 	signalTaskWakeup(taskWakeups, "")
 
-	// Serialize all writes through a single channel: the gorilla/websocket
-	// Conn does not allow concurrent WriteMessage calls, and the heartbeat
-	// sender now coexists with future server-initiated writes. The buffer
-	// is sized to fit a full per-runtime heartbeat batch plus headroom; a
-	// fixed 8-slot queue would silently drop heartbeats once a daemon
-	// watched more than ~8 runtimes (typical when one machine connects to
-	// several workspaces), even when the network was healthy.
+	// Serialize all task-wakeup, Reminder, file RPC, and liveness writes through
+	// one channel because gorilla/websocket permits only one concurrent writer.
 	writeBufSize := 16
 	if 2*len(runtimeIDs) > writeBufSize {
 		writeBufSize = 2 * len(runtimeIDs)
@@ -153,13 +143,6 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 		return errors.New("queue initial reminder projection replay")
 	}
 
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
-	hbDone := make(chan struct{})
-	go func() {
-		defer close(hbDone)
-		d.runWSHeartbeatSender(heartbeatCtx, runtimeIDs, writes)
-	}()
-
 	watchdog := newInboundWatchdogState(time.Now())
 	var watchdogTimedOut atomic.Bool
 	watchdogCtx, cancelWatchdog := context.WithCancel(ctx)
@@ -167,7 +150,7 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	watchdogErrCh := make(chan error, 1)
 	go func() {
 		defer close(wdDone)
-		if err := d.runInboundWatchdog(watchdogCtx, conn, watchdog, runtimeIDs, writes, &watchdogTimedOut); err != nil {
+		if err := d.runInboundWatchdog(watchdogCtx, conn, watchdog, writes, &watchdogTimedOut); err != nil {
 			// One-shot result so the outer select can return the sentinel
 			// instead of treating a side-effect Close as a generic network error.
 			select {
@@ -182,21 +165,11 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 		errCh <- d.readTaskWakeupMessages(conn, taskWakeups, writes, watchdog)
 	}()
 
-	// Defer cleanup must shut goroutines down in this order:
-	//   1. cancel the heartbeat sender's ctx
-	//   2. wait for the sender to actually return — only then is it safe
-	//      to close the writes channel without a "send on closed channel"
-	//      panic from sendWSHeartbeats
-	//   3. close writes; the writer drains and exits
-	//   4. wait for the writer to finish so it doesn't outlive the conn
-	//
-	// LIFO defer order would close writes before the sender stops, so the
-	// teardown is folded into a single deferred function instead.
+	// Stop the watchdog before closing the serialized writer so no producer
+	// can race a write into the closed channel during connection teardown.
 	defer func() {
 		cancelWatchdog()
 		<-wdDone
-		cancelHeartbeat()
-		<-hbDone
 		d.clearReminderWS(writes)
 		close(writes)
 		<-writerDone
@@ -268,7 +241,7 @@ func (d *Daemon) inboundWatchdogInterval() time.Duration {
 // terminate (force reconnect) after a second full interval still silent.
 // On terminate it closes conn and returns errInboundWatchdogTimeout so the
 // connection loop can surface the cause (not a bare network close error).
-func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, state *inboundWatchdogState, runtimeIDs []string, writes chan<- []byte, timedOut *atomic.Bool) error {
+func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, state *inboundWatchdogState, writes chan<- []byte, timedOut *atomic.Bool) error {
 	interval := d.cfg.InboundWatchdog
 	if interval < 0 {
 		interval = DefaultInboundWatchdog
@@ -300,9 +273,18 @@ func (d *Daemon) runInboundWatchdog(ctx context.Context, conn *websocket.Conn, s
 					"inbound_watchdog", interval,
 					"conn_state", d.getWSConnState(),
 				)
-				// Reuse the existing heartbeat frame as the liveness probe so
-				// upgraded servers reply with daemon:heartbeat_ack (marks inbound).
-				d.sendWSHeartbeats(ctx, runtimeIDs, writes)
+				frame, err := json.Marshal(protocol.Message{Type: protocol.EventDaemonLivenessProbe})
+				if err != nil {
+					continue
+				}
+				select {
+				case writes <- frame:
+				case <-ctx.Done():
+					return nil
+				default:
+					_ = conn.Close()
+					return errors.New("liveness probe writer backlog")
+				}
 			case inboundWatchdogTerminate:
 				d.logger.Warn("task wakeup watchdog timeout; reconnecting",
 					"reason", "watchdog_timeout",
@@ -359,8 +341,8 @@ func (d *Daemon) reconcileReminderRuntimeSet(runtimeIDs []string) error {
 	return nil
 }
 
-// runWSWriter funnels writes from the heartbeat sender (and any future
-// daemon-initiated message) into a single goroutine. gorilla/websocket
+// runWSWriter funnels daemon-initiated data and liveness frames into a single
+// goroutine. gorilla/websocket
 // requires that all WriteMessage calls happen from the same goroutine.
 func (d *Daemon) runWSWriter(conn *websocket.Conn, writes <-chan []byte, done chan<- struct{}) {
 	defer close(done)
@@ -378,71 +360,18 @@ func (d *Daemon) runWSWriter(conn *websocket.Conn, writes <-chan []byte, done ch
 	}
 }
 
-// runWSHeartbeatSender emits a daemon:heartbeat per runtime every
-// HeartbeatInterval. The first batch fires immediately so the server learns
-// the connection identity without waiting a full interval. Frames are queued
-// to the writer; if the queue is full the heartbeat is dropped (the
-// freshness window is short enough that one missed beat just means HTTP will
-// pick it up next tick).
-func (d *Daemon) runWSHeartbeatSender(ctx context.Context, runtimeIDs []string, writes chan<- []byte) {
-	d.sendWSHeartbeats(ctx, runtimeIDs, writes)
-	var updateChanged <-chan struct{}
-	unsubscribe := func() {}
-	if d.updateObservation != nil {
-		updateChanged, unsubscribe = d.updateObservation.Subscribe()
-	}
-	defer unsubscribe()
-	interval := d.cfg.HeartbeatInterval
-	if interval <= 0 {
-		interval = 15 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-updateChanged:
-			d.sendWSHeartbeats(ctx, runtimeIDs, writes)
-		case <-ticker.C:
-			d.sendWSHeartbeats(ctx, runtimeIDs, writes)
-		}
-	}
-}
-
-func (d *Daemon) sendWSHeartbeats(ctx context.Context, runtimeIDs []string, writes chan<- []byte) {
+func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
 	var observation *protocol.DaemonUpdateObservation
-	if d.updateObservation != nil {
+	if d != nil && d.updateObservation != nil {
 		observation = d.updateObservation.PublishedSnapshot()
 	}
-	for _, rid := range runtimeIDs {
-		if ctx.Err() != nil {
-			return
-		}
-		frame, err := json.Marshal(protocol.Message{
-			Type: protocol.EventDaemonHeartbeat,
-			Payload: marshalRaw(protocol.DaemonHeartbeatRequestPayload{
-				RuntimeID:                 rid,
-				ComputerGeneration:        d.cfg.ComputerGeneration,
-				SupportsBatchImport:       true,
-				SupportsMemoryCuration:    true,
-				ActiveMemoryCurationRunID: d.activeMemoryCurationRun(rid),
-				UpdateObservation:         observation,
-			}),
-		})
-		if err != nil {
-			d.logger.Debug("ws heartbeat marshal failed", "error", err, "runtime_id", rid)
-			continue
-		}
-		select {
-		case writes <- frame:
-		case <-ctx.Done():
-			return
-		default:
-			// Writer is backed up; drop this beat. HTTP heartbeat will resume
-			// on its next tick once the freshness window expires.
-			d.logger.Debug("ws heartbeat dropped: writer backlog", "runtime_id", rid)
-		}
+	return protocol.DaemonHeartbeatRequestPayload{
+		RuntimeID:                 runtimeID,
+		ComputerGeneration:        d.cfg.ComputerGeneration,
+		SupportsBatchImport:       true,
+		SupportsMemoryCuration:    true,
+		ActiveMemoryCurationRunID: d.activeMemoryCurationRun(runtimeID),
+		UpdateObservation:         observation,
 	}
 }
 
@@ -454,15 +383,11 @@ func marshalRaw(v any) json.RawMessage {
 	return data
 }
 
-// handleWSHeartbeatAck dispatches one heartbeat_ack received over the WS
-// task-wakeup connection. Extracted from readTaskWakeupMessages so tests can
-// exercise the branching logic without a real WebSocket.
+// handleWSHeartbeatAck dispatches one heartbeat acknowledgement received by
+// the current Workspace Runner control plane.
 //
-// A RuntimeGone=true ack is the WebSocket twin of an HTTP 404 "runtime not
-// found": it tells the daemon the runtime row was deleted server-side. We
-// route it through the same self-heal entry point as the HTTP path and do
-// NOT record a heartbeat freshness mark — pretending the runtime is alive
-// would let HTTP keep skipping its own heartbeat against the dead UUID.
+// A RuntimeGone=true acknowledgement means the runtime row was deleted
+// server-side and routes through the same self-heal entry point as polling.
 //
 // handleRuntimeGone uses the daemon root context for its register call, so
 // this function can safely pass any caller context here.
@@ -474,7 +399,6 @@ func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatRespons
 		go d.handleRuntimeGone(ack.RuntimeID)
 		return
 	}
-	d.recordWSHeartbeatAck(ack.RuntimeID)
 	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
 }
 
@@ -512,13 +436,6 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				d.logger.Debug("task wakeup received", "runtime_id", payload.RuntimeID, "task_id", payload.TaskID)
 			}
 			signalTaskWakeup(taskWakeups, payload.RuntimeID)
-		case protocol.EventDaemonHeartbeatAck:
-			var ack HeartbeatResponse
-			if err := json.Unmarshal(msg.Payload, &ack); err != nil {
-				d.logger.Debug("ws heartbeat ack invalid payload", "error", err)
-				continue
-			}
-			d.handleWSHeartbeatAck(context.Background(), &ack)
 		case protocol.EventReminderProjection:
 			var payload protocol.ReminderProjectionEvent
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
@@ -534,7 +451,7 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				d.logger.Debug("reminder fire result invalid payload", "error", err)
 				continue
 			}
-			if err := d.handleReminderProjection(payload.Projection); err != nil {
+			if err := d.handleReminderFireResult(payload); err != nil {
 				return err
 			}
 		case protocol.EventReminderSnapshot:
@@ -663,6 +580,17 @@ func (d *Daemon) handleReminderProjection(payload protocol.ReminderProjectionEve
 	return d.ackReminderProjectionCursors(d.reminderCache.projectionCursors())
 }
 
+func (d *Daemon) handleReminderFireResult(payload protocol.ReminderFireResultPayload) error {
+	if d != nil && d.reminderCache != nil && payload.Ack.AgentID != "" && payload.Ack.ReminderID != "" && payload.Ack.Version > 0 {
+		d.reminderCache.ackFireReceipt(reminderDueIdentity{
+			OwnerAgentID: payload.Ack.AgentID,
+			ReminderID:   payload.Ack.ReminderID,
+			Version:      payload.Ack.Version,
+		})
+	}
+	return d.handleReminderProjection(payload.Projection)
+}
+
 func (d *Daemon) setReminderWS(writes chan<- []byte, done <-chan struct{}, closeFn func() error) {
 	d.reminderWSMu.Lock()
 	d.reminderWrites = writes
@@ -711,9 +639,8 @@ func (d *Daemon) queueTaskWakeupFrame(writes chan<- []byte, eventType string, pa
 		return errors.New("task wakeup websocket generation changed")
 	}
 	// Raft-style transport contract: application frames wait for the single
-	// serialized writer. Only reconstructible signals such as heartbeat may be
-	// dropped under local backpressure. The writer deadline closes genuinely
-	// broken network connections and unblocks this wait through reminderWSDone.
+	// serialized writer. The writer deadline closes genuinely broken network
+	// connections and unblocks this wait through reminderWSDone.
 	select {
 	case d.reminderWrites <- frame:
 		return nil

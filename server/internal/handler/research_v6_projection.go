@@ -127,7 +127,6 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if err != nil {
 		return researchV6Snapshot{}, err
 	}
-	legacyNodes, legacyEdges := projectRunV2Graph(snap)
 	var sequence int64
 	if err = h.DB.QueryRow(r.Context(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err != nil {
 		return researchV6Snapshot{}, err

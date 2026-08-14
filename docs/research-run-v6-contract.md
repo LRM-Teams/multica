@@ -173,6 +173,12 @@ Goal version, Branch state versions, artifact versions, representations and
 expected result schema. The Agent cannot cite platform-supplied material absent
 from that Manifest.
 
+V6 dispatch uses `research-v6-context-v1`, distinct from the V1–V5 legacy
+compatibility policy. It admits only current `registered | accepted` artifacts
+with complete provenance; evaluation-private artifacts remain compartmented.
+The policy version is bound into the Manifest, grant, hash and acceptance
+verification.
+
 For content-producing work, `catalog_access` authorizes a pinned, paginated Run-
 wide catalog of every fresh nonterminal node at the Agent's current tier and
 catalog summaries of higher candidates in the named Branches. It does not grant
@@ -254,6 +260,14 @@ include normalized facts that the server recomputes; an Agent label cannot
 establish their kind. Scope, method and semantic candidates instead carry an
 explicit reason and resolved Claim references. Position passports retain typed
 lineage to all cited Claims and Source Snapshots.
+
+On creation, each Position receives an independent verification Task; a method
+conflict also receives a Methodologist Task, and every Dispute gets a
+distinguishing-evidence search. Position authors are hard-excluded from routing.
+Each review Attempt Manifest contains only the Run/Contract/Method foundation
+plus the assigned Dispute, Position, Claims and cited evidence; unrelated
+positions and private evaluation artifacts are frozen as omissions rather than
+exposed to the reviewer.
 
 Turns are persisted before the next round and are user-visible. Hidden
 chain-of-thought, provider token streams, credentials and unbounded tool logs are

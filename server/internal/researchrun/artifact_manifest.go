@@ -575,10 +575,19 @@ func verifyShadowPlanEquivalenceTx(
 	excludedContextManifestID string,
 ) error {
 	domainProjection, err := loadLegacyShadowDomainProjectionTx(
-		ctx, tx, workspaceID, sessionID, plan.Purpose, excludedContextManifestID,
+		ctx, tx, workspaceID, sessionID, plan.Purpose, plan.PolicyVersion, excludedContextManifestID,
 	)
 	if err != nil {
 		return err
+	}
+	if plan.IsolationAllowlist != nil {
+		for index := range domainProjection {
+			_, explicit := plan.IsolationAllowlist[domainProjection[index].ArtifactID]
+			foundation := domainProjection[index].Kind == ArtifactKindRunSession || domainProjection[index].Kind == ArtifactKindContractRevision || domainProjection[index].Kind == ArtifactKindMethodDecision
+			if domainProjection[index].Disposition == shadowDispositionEntry && !explicit && !foundation {
+				domainProjection[index].Disposition = "irrelevant"
+			}
+		}
 	}
 	return compareShadowDomainProjection(domainProjection, projectManifestForShadow(plan), plan.ManifestHash)
 }

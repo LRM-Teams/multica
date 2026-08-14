@@ -211,6 +211,7 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 			subject.ID, ArtifactEntityKind(dispute.Subject.Kind), "disputes", "v6_integration", 0); err != nil {
 			return err
 		}
+		reviewPositions := make([]DisputeReviewPosition, 0, len(dispute.Positions))
 		for ordinal, position := range dispute.Positions {
 			seed := positionSeeds[ordinal]
 			payload, marshalErr := json.Marshal(position)
@@ -240,6 +241,14 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 			encodedClaims, _ := json.Marshal(claimIDs)
 			encodedEvidence, _ := json.Marshal(evidenceIDs)
 			positionScope, _ := json.Marshal(seed.Scope)
+			positionScopeCanonical, canonicalScopeErr := MarshalArtifactCanonicalJSON(json.RawMessage(positionScope))
+			if canonicalScopeErr != nil {
+				return canonicalScopeErr
+			}
+			positionScopeHash := ArtifactContentHashFromCanonicalJSON(positionScopeCanonical)
+			if seed.ConflictBasis.Fact != nil {
+				positionScopeHash = seed.ConflictBasis.Fact.ScopeHash
+			}
 			if _, err = tx.Exec(ctx, `INSERT INTO research_dispute_position
 				(id,workspace_id,session_id,dispute_id,author_agent_id,statement,scope,claim_ids,evidence_ids,position_payload)
 				VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb)`, positionID,
@@ -272,6 +281,10 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 					return err
 				}
 			}
+			reviewPositions = append(reviewPositions, DisputeReviewPosition{PositionID: positionID, AuthorAgentID: seed.AuthorAgentID, ClaimIDs: claimIDs, EvidenceIDs: evidenceIDs, ScopeHash: positionScopeHash})
+		}
+		if err = materializeV6DisputeReviewTasksTx(ctx, tx, state, disputeID, subject.ID, string(disputeKind), reviewPositions); err != nil {
+			return err
 		}
 	}
 	if err := applyAcceptedV6StatusUpdatesTx(ctx, tx, state, result.StatusUpdates, agentID); err != nil {
@@ -368,6 +381,86 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 		map[string]any{"attempt_id": state.attemptID, "integration_round_id": roundID, "contributions": len(result.IntegrationContributions),
 			"insights": len(result.Insights), "disputes": len(result.Disputes), "follow_up_questions": len(followUpQuestions), "follow_up_tasks": len(result.ProposedTasks)})
 	return err
+}
+
+func materializeV6DisputeReviewTasksTx(ctx context.Context, tx pgx.Tx, state acceptedResultState, disputeID, subjectID, disputeKind string, positions []DisputeReviewPosition) error {
+	reviews, err := PlanDisputeReview(DisputeReviewInput{DisputeID: disputeID, SubjectArtifactID: subjectID, Kind: disputeKind, Positions: positions})
+	if err != nil {
+		return err
+	}
+	var existingTasks int
+	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_task WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, state.workspaceID, state.run.SessionID).Scan(&existingTasks); err != nil {
+		return err
+	}
+	if existingTasks+len(reviews) > state.run.Config.MaxTasks {
+		return fmt.Errorf("%w: Dispute review tasks exceed the Run task budget", ErrBudgetExhausted)
+	}
+	for _, review := range reviews {
+		taskID := uuid.NewSHA1(uuid.MustParse(disputeID), []byte(review.TaskKey)).String()
+		kind := TaskKindVerify
+		if review.Purpose == "collect_evidence_that_distinguishes_positions" {
+			kind = TaskKindCounterSearch
+		}
+		objective := objectiveForDisputeReview(review.Purpose)
+		searchPlan := ResearchV6SearchPlan{ClientKey: "dispute-review-search", Targets: []ResearchV6EntityRef{{Kind: "dispute", Key: "dispute:" + disputeID}},
+			Adapter: "web", QueryStrategy: objective, InclusionCriteria: []string{"Evidence must distinguish or independently test the assigned position."},
+			ExclusionCriteria:  []string{"Exclude unsupported summaries and evidence visible only through another position."},
+			StoppingConditions: []string{"Stop after the position has a reproducible independent test or the search is exhausted."}, StrategyVersion: "dispute-review-v1"}
+		criteria, _ := json.Marshal(map[string]any{
+			"mode": "dispute_review", "dispute_id": disputeID, "target_position_id": review.TargetPositionID, "review_purpose": review.Purpose,
+			"routing":      map[string]any{"excluded_agent_ids": review.ExcludedAgentIDs, "independence_required": true},
+			"task_context": map[string]any{"mode": "dispute_review", "visible_artifact_ids": review.VisibleArtifactIDs},
+			"search_plans": []ResearchV6SearchPlan{searchPlan},
+		})
+		if _, err = tx.Exec(ctx, `INSERT INTO research_task
+			(id,workspace_id,session_id,parent_task_id,client_key,kind,objective,required_capability,expected_result,acceptance_criteria,priority,status,goal_version,plan_version,max_attempts,timeout_seconds,ready_at)
+			VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8,'research_evidence_v6',$9::jsonb,1,'ready',$10,$11,2,$12,now())`, taskID,
+			state.workspaceID, state.run.SessionID, state.task.ID, review.TaskKey, kind, objective, review.RequiredCapability, criteria,
+			state.run.GoalVersion, state.targetPlan, state.run.Config.TaskTimeoutSeconds); err != nil {
+			return err
+		}
+		if err = registerProductionTaskPassportTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, state.attemptID, state.outputAccess); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO research_task_dependency(workspace_id,session_id,task_id,depends_on_task_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING`, state.workspaceID, state.run.SessionID, taskID, state.task.ID); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO research_task_inquiry_target(workspace_id,session_id,task_id,target_kind,target_entity_id,goal_version,plan_version,bound_by_attempt_id)
+			VALUES($1::uuid,$2::uuid,$3::uuid,'dispute',$4::uuid,$5,$6,$7::uuid) ON CONFLICT DO NOTHING`, state.workspaceID, state.run.SessionID, taskID, disputeID, state.run.GoalVersion, state.targetPlan, state.attemptID); err != nil {
+			return err
+		}
+		for ordinal, artifactID := range review.VisibleArtifactIDs {
+			var kindRaw string
+			if err = tx.QueryRow(ctx, `SELECT entity_kind FROM research_artifact_passport WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, state.workspaceID, state.run.SessionID, artifactID).Scan(&kindRaw); err != nil {
+				return err
+			}
+			artifactKind, parseErr := ParseArtifactEntityKind(kindRaw)
+			if parseErr != nil {
+				return parseErr
+			}
+			if err = persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, ArtifactKindTask, artifactID, artifactKind,
+				"review_input", "dispute_review", ordinal); err != nil {
+				return err
+			}
+		}
+		if err = persistMaterializedTaskRelationshipReferencesTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID); err != nil {
+			return err
+		}
+	}
+	_, err = appendEvent(ctx, tx, state.workspaceID, state.run.SessionID, "v6_dispute_review_tasks_created", "v6-dispute-review:"+disputeID, "system", "",
+		map[string]any{"dispute_id": disputeID, "task_count": len(reviews)})
+	return err
+}
+
+func objectiveForDisputeReview(purpose string) string {
+	switch purpose {
+	case "review_measurement_sample_bias_and_comparability":
+		return "Independently review the disputed method, measurement, sample, bias, and comparability."
+	case "collect_evidence_that_distinguishes_positions":
+		return "Find new accepted evidence that can distinguish the Dispute Positions."
+	default:
+		return "Independently verify one Dispute Position from its isolated canonical inputs."
+	}
 }
 
 func validateV6DisputeConflictBasisTx(ctx context.Context, tx pgx.Tx, state acceptedResultState, seeds []V6DisputePositionSeed) (DisputeKind, error) {

@@ -9,7 +9,7 @@ func disputeReviewFixture() DisputeReviewInput {
 	return DisputeReviewInput{
 		DisputeID: "d1", SubjectArtifactID: "subject", Kind: "method",
 		Positions: []DisputeReviewPosition{
-			{PositionID: "p1", AuthorAgentID: "a1", ClaimIDs: []string{"c1"}, ScopeHash: "s1"},
+			{PositionID: "p1", AuthorAgentID: "a1", ClaimIDs: []string{"c1"}, EvidenceIDs: []string{"e1"}, ScopeHash: "s1"},
 			{PositionID: "p2", AuthorAgentID: "a2", ClaimIDs: []string{"c2"}, ScopeHash: "s2"},
 		},
 	}
@@ -26,7 +26,7 @@ func TestPlanDisputeReviewCreatesBlindIndependentWork(t *testing.T) {
 	if want := []string{"a1", "a2"}; !reflect.DeepEqual(tasks[0].ExcludedAgentIDs, want) {
 		t.Fatalf("excluded=%v want %v", tasks[0].ExcludedAgentIDs, want)
 	}
-	if want := []string{"c1", "subject"}; !reflect.DeepEqual(tasks[0].VisibleArtifactIDs, want) {
+	if want := []string{"c1", "d1", "e1", "p1", "subject"}; !reflect.DeepEqual(tasks[0].VisibleArtifactIDs, want) {
 		t.Fatalf("position review visible=%v want %v", tasks[0].VisibleArtifactIDs, want)
 	}
 	if tasks[0].TargetPositionID != "p1" || tasks[1].TargetPositionID != "p2" {

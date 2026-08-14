@@ -39,6 +39,21 @@ func TestHashManifestEntriesDeterministic(t *testing.T) {
 	}
 }
 
+func TestDisputeReviewManifestUsesClosedArtifactAllowlist(t *testing.T) {
+	plan := dispatchManifestPlan{Entries: []artifactVersionCandidate{
+		{ArtifactID: "run", Kind: ArtifactKindRunSession}, {ArtifactID: "task", Kind: ArtifactKindTask},
+		{ArtifactID: "position", Kind: ArtifactKindDisputePosition}, {ArtifactID: "other-claim", Kind: ArtifactKindClaim},
+	}}
+	task := Task{ID: "task", AcceptanceCriteria: json.RawMessage(`{"task_context":{"mode":"dispute_review","visible_artifact_ids":["position"]}}`)}
+	got := isolateDisputeReviewManifest(plan, task)
+	if len(got.Entries) != 3 || len(got.Omissions) != 1 || got.Omissions[0].ArtifactID != "other-claim" || got.Omissions[0].OmissionReason != "irrelevant" {
+		t.Fatalf("isolated plan=%+v", got)
+	}
+	if _, ok := got.IsolationAllowlist["position"]; !ok {
+		t.Fatal("visible position missing from allowlist")
+	}
+}
+
 func TestHashManifestOmissionsBindsFrozenDisposition(t *testing.T) {
 	base := []artifactVersionCandidate{
 		{VersionRowID: "version-1", OmissionReason: "lifecycle"},

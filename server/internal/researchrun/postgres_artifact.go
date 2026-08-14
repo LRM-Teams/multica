@@ -165,9 +165,11 @@ func migrationArtifactContentHash(kind ArtifactEntityKind, workspaceID, sessionI
 func ensureSessionPolicyStateTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
-		VALUES ($1::uuid, $2::uuid, $3, 0)
+		SELECT $1::uuid, $2::uuid,
+		  CASE WHEN orchestrator_version=$3 THEN $4 ELSE $5 END, 0
+		FROM research_session WHERE workspace_id=$1::uuid AND id=$2::uuid
 		ON CONFLICT (workspace_id, session_id) DO NOTHING
-	`, workspaceID, sessionID, LegacyV1V5CompatPolicy)
+	`, workspaceID, sessionID, OrchestratorVersionV6, ResearchV6ContextPolicy, LegacyV1V5CompatPolicy)
 	return err
 }
 

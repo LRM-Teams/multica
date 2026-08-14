@@ -175,6 +175,28 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 		mutate func(context.Context, acceptanceRaceFixture) error
 	}{
 		{
+			name: "run_orchestrator_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := fx.pool.Exec(ctx, `
+					UPDATE research_session
+					SET orchestrator_version = 'research-run-v4', updated_at = now()
+					WHERE workspace_id = $1::uuid AND id = $2::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID)
+				return err
+			},
+		},
+		{
+			name: "task_expected_result_contract",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := fx.pool.Exec(ctx, `
+					UPDATE research_task
+					SET expected_result = 'research_evidence_v5', updated_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.task.ID)
+				return err
+			},
+		},
+		{
 			name: "eligibility_revision",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
 				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `

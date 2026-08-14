@@ -54,6 +54,16 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		}
 		return AcceptResultOutcome{}, err
 	}
+	lockedResult, lockedHash, err := DecodeAndValidateResultForVersion(
+		state.run.OrchestratorVersion, in.Raw, state.task, state.run.Config,
+	)
+	if err != nil {
+		return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, err)
+	}
+	if normalizeArtifactContentHash(lockedHash) != in.Hash {
+		return AcceptResultOutcome{}, fmt.Errorf("%w: result hash changed under locked run/task contract", ErrResultConflict)
+	}
+	in.Result = lockedResult
 	state.outputAccess = ArtifactAccessRaw
 	state.checkpoint = func(ctx context.Context, point researchTxFaultPoint) error {
 		if s.txFaultHook == nil {

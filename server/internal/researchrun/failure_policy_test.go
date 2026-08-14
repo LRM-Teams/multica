@@ -50,6 +50,13 @@ func TestClassifyInboxFailureRespectsRuntimeNonRetryableFact(t *testing.T) {
 	}
 }
 
+func TestClassifyInboxFailureRetriesQueuedExpiryAfterInboxDeliveryTerminates(t *testing.T) {
+	got := ClassifyInboxFailure(taskfailure.ReasonQueuedExpired.String(), false)
+	if !got.Retryable || got.Class != FailureRuntimeLost || got.MaxAttempts != 3 || got.Repair != RepairWaitForTarget {
+		t.Fatalf("queued expiry must retry the Research Task on an available target: %+v", got)
+	}
+}
+
 func TestClassifyInboxFailureDoesNotGuessUnknownString(t *testing.T) {
 	got := ClassifyInboxFailure("new_provider_copy_not_in_taxonomy", true)
 	if got.Class != FailureUnknown || got.CircuitScope != CircuitAgent || got.MaxAttempts != 2 {

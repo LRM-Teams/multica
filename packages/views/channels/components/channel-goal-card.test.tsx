@@ -38,6 +38,18 @@ const goal: ChannelGoal = {
     waiting: 1,
     stale: 0,
   },
+  coordination: {
+    git_repository_bound: false,
+    agent_member_count: 3,
+    channel_issue_total: 0,
+    channel_project_issue_total: 0,
+    project_issue_total: 0,
+    open_project_issue_total: 0,
+    in_review_project_issue_total: 0,
+    subgoal_total: 0,
+    open_subgoal_total: 0,
+    execution_admission: "project_required",
+  },
 };
 
 function graphNode(id: string, patch: Partial<WorkGraphNode>): WorkGraphNode {
@@ -132,11 +144,13 @@ describe("ChannelGoalCard work graph", () => {
     const view = renderCard();
 
     expect(await screen.findByText(goal.title)).toBeInTheDocument();
+    expect(screen.getByTestId("channel-goal-control-plane-badge")).toHaveTextContent("Setup required");
     expect(state.graphQuery).not.toHaveBeenCalled();
     expect(screen.queryByTestId("goal-mini-graph")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Expand goal" }));
 
+    expect(await screen.findByTestId("channel-goal-control-plane")).toHaveTextContent("Delivery control plane");
     expect(await screen.findByTestId("goal-mini-graph")).toBeInTheDocument();
     expect(state.graphQuery).toHaveBeenCalledTimes(1);
     await waitFor(() => {

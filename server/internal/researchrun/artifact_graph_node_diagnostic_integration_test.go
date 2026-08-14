@@ -47,32 +47,26 @@ func TestGraphNodeTypedReferenceDiagnosticsDenyAndClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	sourceID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, sourceID, ArtifactKindLegacySource, `
 		INSERT INTO research_source(id,workspace_id,session_id,url,title,source_class)
 		VALUES($1::uuid,$2::uuid,$3::uuid,'https://example.test/graph-diagnostic','source','primary')
-	`, sourceID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatal(err)
-	}
+	`, sourceID, fixture.workspaceID, run.SessionID)
 	validPayload, _ := json.Marshal(map[string]any{
 		"source_id": sourceID, "question_id": questionID,
 		"details": map[string]any{"task_id": taskID},
 	})
 	validNodeID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, validNodeID, ArtifactKindGraphNode, `
 		INSERT INTO research_graph_node(id,workspace_id,session_id,node_type,title,status,payload)
 		VALUES($1::uuid,$2::uuid,$3::uuid,'finding','valid graph reference','active',$4::jsonb)
-	`, validNodeID, fixture.workspaceID, run.SessionID, validPayload); err != nil {
-		t.Fatalf("insert same-scope graph node: %v", err)
-	}
+	`, validNodeID, fixture.workspaceID, run.SessionID, validPayload)
 
 	brokenNodeID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, brokenNodeID, ArtifactKindGraphNode, `
 		INSERT INTO research_graph_node(id,workspace_id,session_id,node_type,title,status,payload)
 		VALUES($1::uuid,$2::uuid,$3::uuid,'finding','broken graph reference','active',
 		       '{"source_id":"not-a-uuid"}'::jsonb)
-	`, brokenNodeID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatal(err)
-	}
+	`, brokenNodeID, fixture.workspaceID, run.SessionID)
 	var validCount, brokenCount int
 	if err = pool.QueryRow(ctx, `
 		SELECT

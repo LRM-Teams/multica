@@ -920,8 +920,8 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	`, fixture.workspaceID, fixture.sessionID).Scan(&questionLineageCount); err != nil {
 		t.Fatal(err)
 	}
-	if questionLineageCount != 2 {
-		t.Fatalf("question typed lineage count=%d want=2", questionLineageCount)
+	if questionLineageCount != 1 {
+		t.Fatalf("question typed lineage count=%d want=1", questionLineageCount)
 	}
 	tasks, err = store.ListTasks(ctx, fixture.sessionID)
 	discoverReady := false

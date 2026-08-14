@@ -1390,6 +1390,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/channels/{channelId}/goal", h.CreateAgentChannelGoal)
 				r.Patch("/channels/{channelId}/goal", h.UpdateAgentChannelGoal)
 				r.Post("/channels/{channelId}/goal/checkpoint", h.CheckpointAgentChannelGoal)
+				r.Post("/channels/{channelId}/goal/bootstrap", h.BootstrapAgentChannelGoalControlPlane)
 				r.Get("/channels/{channelId}/goal/subgoals", h.ListAgentChannelGoalSubgoals)
 				r.Post("/channels/{channelId}/goal/subgoals", h.CreateAgentChannelGoalSubgoal)
 				r.Post("/work-graphs", h.CreateAgentWorkGraph)

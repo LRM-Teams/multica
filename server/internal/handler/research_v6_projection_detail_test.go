@@ -21,7 +21,7 @@ func TestResearchV6CompatibilityProjectionCarriesCompleteCanonicalDetails(t *tes
 	snapshot := researchrun.RunSnapshot{
 		Run: researchrun.Run{
 			SessionID: "run-1", CreatedBy: "user-1", Goal: "verify the market",
-			Status: researchrun.RunStatusFailed, CurrentStage: "s4_quality",
+			Status: researchrun.RunStatusFailed, CurrentStage: "s4_delivery",
 			GoalVersion: 2, PlanVersion: 3, StateVersion: 9,
 			Stats:      researchrun.RunStats{AcceptedResults: 1, ClaimsCreated: 1},
 			StopReason: "quality gate failed", LastProgressAt: time.Unix(1_700_000_000, 0).UTC(),

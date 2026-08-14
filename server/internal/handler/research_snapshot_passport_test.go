@@ -40,7 +40,7 @@ func (f *recordingResearchRunEngine) Snapshot(_ context.Context, sessionID, work
 	f.snapshotCalled = true
 	f.snapshotSessionID = sessionID
 	f.snapshotWorkspaceID = workspaceID
-	return f.snapshot, f.snapshotForAttemptErr
+	return f.snapshot, nil
 }
 
 func (f *recordingResearchRunEngine) SnapshotForAttempt(_ context.Context, sessionID, workspaceID, attemptID string) (researchrun.RunSnapshot, error) {
@@ -48,7 +48,7 @@ func (f *recordingResearchRunEngine) SnapshotForAttempt(_ context.Context, sessi
 	f.snapshotSessionID = sessionID
 	f.snapshotWorkspaceID = workspaceID
 	f.snapshotAttemptID = attemptID
-	return f.snapshot, nil
+	return f.snapshot, f.snapshotForAttemptErr
 }
 
 func (f *recordingResearchRunEngine) ListFleetMembers(context.Context, string, string) ([]researchrun.FleetMember, error) {

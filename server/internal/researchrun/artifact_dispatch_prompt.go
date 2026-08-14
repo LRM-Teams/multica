@@ -79,6 +79,32 @@ func rebindDispatchPromptForManifestTx(
 	if err != nil {
 		return DispatchRequest{}, err
 	}
+	// TaskContext uses the pool and therefore cannot observe the attempt that
+	// this transaction just inserted. Align the independently loaded shadow
+	// with the transaction-visible task/attempt state used to freeze the
+	// manifest, otherwise derived fields such as Task.AttemptCount compare 0
+	// against 1 and reject every first dispatch.
+	liveTask, err := scanTask(tx.QueryRow(ctx, taskSelectSQL+` WHERE t.workspace_id=$1::uuid AND t.session_id=$2::uuid AND t.id=$3::uuid`, workspaceID, in.SessionID, in.TaskID))
+	if err != nil {
+		return DispatchRequest{}, err
+	}
+	for i := range liveSnapshot.Tasks {
+		if liveSnapshot.Tasks[i].ID == liveTask.ID {
+			liveSnapshot.Tasks[i] = liveTask
+			break
+		}
+	}
+	foundAttempt := false
+	for i := range liveSnapshot.Attempts {
+		if liveSnapshot.Attempts[i].ID == attempt.ID {
+			liveSnapshot.Attempts[i] = attempt
+			foundAttempt = true
+			break
+		}
+	}
+	if !foundAttempt {
+		liveSnapshot.Attempts = append(liveSnapshot.Attempts, attempt)
+	}
 	filtered := filterRunSnapshotByManifest(liveSnapshot, manifestSet.ArtifactIDs)
 	filtered.Run, err = loadFrozenRunRepresentationTx(
 		ctx, tx, workspaceID, in.SessionID, attempt.ID,

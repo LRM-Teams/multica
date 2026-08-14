@@ -50,6 +50,7 @@ var preMigrationHooks = map[string]preMigrationHook{
 	"245_research_fleet_agent_indexes":                 runResearchFleetAgentIndexesHook,
 	"337_env_dispatch_delivery_obligation_agent_index": runAgentDeleteFKIndexesHook,
 	"384_research_message_target_agent_scoped_index":   runAgentDeleteFKIndexesHook,
+	"385_research_message_target_agent_index":          runResearchMessageTargetAgentIndexHook,
 }
 
 type concurrentIndexSpec struct {
@@ -126,6 +127,13 @@ func runResearchFleetAgentIndexesHook(
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)
+}
+
+func runResearchMessageTargetAgentIndexHook(ctx context.Context, pool *pgxpool.Pool) error {
+	return ensureConcurrentIndexes(ctx, pool, []concurrentIndexSpec{{
+		"idx_research_message_workspace_target_agent",
+		`CREATE INDEX CONCURRENTLY idx_research_message_workspace_target_agent ON research_message (workspace_id, target_agent_id) WHERE target_agent_id IS NOT NULL`,
+	}})
 }
 
 func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {

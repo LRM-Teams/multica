@@ -72,6 +72,8 @@ const (
 	txOpReconcileLeaseClaim       researchTxOperation = "reconcile_lease.claim"
 	txOpReconcileLeaseRenew       researchTxOperation = "reconcile_lease.renew"
 	txOpReconcileLeaseRelease     researchTxOperation = "reconcile_lease.release"
+	txOpInquiryTransition         researchTxOperation = "inquiry.transition"
+	txOpSearchLineageRecord       researchTxOperation = "search_lineage.record"
 	txOpArtifactSupersede         researchTxOperation = "artifact.supersede"
 	txOpArtifactWithdraw          researchTxOperation = "artifact.withdraw"
 	txOpInquiryGraphCreate        researchTxOperation = "inquiry_graph.create"

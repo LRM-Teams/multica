@@ -457,6 +457,15 @@ func validateV6Texts(name string, values []string, max int) error {
 	return nil
 }
 
+func integrationOneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 func presentJSON(raw json.RawMessage) bool {
 	return len(bytes.TrimSpace(raw)) > 0
 }

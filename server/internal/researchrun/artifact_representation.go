@@ -16,6 +16,87 @@ type frozenOrderedRepresentation[T any] struct {
 	Value T   `json:"value"`
 }
 
+func loadFrozenAttemptRepresentationsPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (map[string]Attempt, error) {
+	rows, err := pool.Query(ctx, `SELECT e.representation_bytes FROM research_artifact_context_entry e JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id) JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id) JOIN research_artifact_passport p ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id) WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.attempt_id=$3::uuid AND p.entity_kind='attempt' ORDER BY e.ordinal`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Attempt{}
+	for rows.Next() {
+		var encoded []byte
+		if err = rows.Scan(&encoded); err != nil {
+			return nil, err
+		}
+		var item Attempt
+		if err = json.Unmarshal(encoded, &item); err != nil {
+			return nil, fmt.Errorf("decode frozen attempt: %w", err)
+		}
+		if item.ID == "" || out[item.ID].ID != "" {
+			return nil, fmt.Errorf("%w: invalid or duplicate frozen attempt", ErrInvalidTransition)
+		}
+		out[item.ID] = item
+	}
+	return out, rows.Err()
+}
+
+func applyFrozenAttempts(live []Attempt, frozen map[string]Attempt, currentAttemptID string) ([]Attempt, error) {
+	if frozen[currentAttemptID].ID == "" {
+		return nil, fmt.Errorf("%w: current attempt is absent from frozen context", ErrInvalidTransition)
+	}
+	out := make([]Attempt, 0, len(frozen))
+	for _, item := range live {
+		if frozenItem, ok := frozen[item.ID]; ok {
+			out = append(out, frozenItem)
+			delete(frozen, item.ID)
+		}
+	}
+	if len(frozen) != 0 {
+		return nil, fmt.Errorf("%w: frozen attempt ordering source is missing", ErrInvalidTransition)
+	}
+	return out, nil
+}
+
+type frozenCoreContext struct {
+	Run       *Run
+	Contract  *ResearchContract
+	Method    *ResearchMethod
+	Questions map[string]Question
+	Tasks     map[string]Task
+}
+
+func applyFrozenCoreContext(live RunSnapshot, frozen frozenCoreContext) (RunSnapshot, error) {
+	if frozen.Run == nil || frozen.Contract == nil {
+		return RunSnapshot{}, fmt.Errorf("%w: frozen core context is incomplete", ErrInvalidTransition)
+	}
+	live.Run = *frozen.Run
+	live.Contract = *frozen.Contract
+	live.Method = frozen.Method
+	questions := make([]Question, 0, len(frozen.Questions))
+	for _, item := range live.Questions {
+		if frozenItem, ok := frozen.Questions[item.ID]; ok {
+			questions = append(questions, frozenItem)
+			delete(frozen.Questions, item.ID)
+		}
+	}
+	if len(frozen.Questions) != 0 {
+		return RunSnapshot{}, fmt.Errorf("%w: frozen question ordering source is missing", ErrInvalidTransition)
+	}
+	live.Questions = questions
+	tasks := make([]Task, 0, len(frozen.Tasks))
+	for _, item := range live.Tasks {
+		if frozenItem, ok := frozen.Tasks[item.ID]; ok {
+			tasks = append(tasks, frozenItem)
+			delete(frozen.Tasks, item.ID)
+		}
+	}
+	if len(frozen.Tasks) != 0 {
+		return RunSnapshot{}, fmt.Errorf("%w: frozen task ordering source is missing", ErrInvalidTransition)
+	}
+	live.Tasks = tasks
+	return live, nil
+}
+
 // freezeArtifactRepresentationsTx replaces hash placeholders with exact bounded
 // wire representations supplied to an Agent. Only already-authorized entries
 // are read here. Kinds not yet projected retain their legacy placeholder and

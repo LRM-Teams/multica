@@ -74,6 +74,7 @@ const (
 	txOpArtifactSupersede         researchTxOperation = "artifact.supersede"
 	txOpArtifactWithdraw          researchTxOperation = "artifact.withdraw"
 	txOpInquiryGraphCreate        researchTxOperation = "inquiry_graph.create"
+	txOpStrategyPromotion         researchTxOperation = "strategy.promote"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

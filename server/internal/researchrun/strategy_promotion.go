@@ -1,6 +1,10 @@
 package researchrun
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"strings"
+)
 
 type StrategyEvaluation struct {
 	StrategyVersion               string
@@ -33,7 +37,10 @@ type StrategyPromotionDecision struct {
 
 func EvaluateStrategyPromotion(input StrategyPromotionInput) (StrategyPromotionDecision, error) {
 	decision := StrategyPromotionDecision{NewVersion: input.Candidate.StrategyVersion, PreviousVersion: input.Current.StrategyVersion}
-	if input.Current.StrategyVersion == "" || input.Candidate.StrategyVersion == "" || input.Current.CorpusVersion == "" || input.Candidate.CorpusVersion == "" || input.MinimumSeeds <= 1 || input.MinimumHistoricalReplays <= 0 || input.EvaluationRunID == "" {
+	if strings.TrimSpace(input.Current.StrategyVersion) == "" || len(input.Current.StrategyVersion) > 128 || strings.TrimSpace(input.Candidate.StrategyVersion) == "" || len(input.Candidate.StrategyVersion) > 128 || input.Current.StrategyVersion == input.Candidate.StrategyVersion ||
+		strings.TrimSpace(input.Current.CorpusVersion) == "" || len(input.Current.CorpusVersion) > 256 || strings.TrimSpace(input.Candidate.CorpusVersion) == "" || len(input.Candidate.CorpusVersion) > 256 || input.MinimumSeeds <= 1 ||
+		input.MinimumHistoricalReplays <= 0 || strings.TrimSpace(input.EvaluationRunID) == "" || len(input.EvaluationRunID) > 256 || !finitePromotionNumber(input.MaximumCost) ||
+		!finitePromotionNumber(input.MaximumLatency) || !validStrategyEvaluation(input.Current, false) || !validStrategyEvaluation(input.Candidate, true) {
 		return decision, fmt.Errorf("%w: Strategy Promotion input is incomplete", ErrInvalidContract)
 	}
 	if input.Current.CorpusVersion != input.Candidate.CorpusVersion {
@@ -63,12 +70,31 @@ func EvaluateStrategyPromotion(input StrategyPromotionInput) (StrategyPromotionD
 			return decision, nil
 		}
 	}
-	if input.ApproverUserID == "" {
+	if strings.TrimSpace(input.ApproverUserID) == "" {
 		decision.Reason = "promotion_approval_missing"
 		return decision, nil
 	}
 	decision.Promoted, decision.Reason = true, "offline_evaluation_and_approval_passed"
 	return decision, nil
+}
+
+func validStrategyEvaluation(evaluation StrategyEvaluation, requireSamples bool) bool {
+	if !finitePromotionNumber(evaluation.Cost) || !finitePromotionNumber(evaluation.Latency) || len(evaluation.ModeScores) == 0 || len(evaluation.ModeScores) > 128 {
+		return false
+	}
+	if requireSamples && (evaluation.SeedCount < 0 || evaluation.HistoricalReplayCount < 0) {
+		return false
+	}
+	for mode, score := range evaluation.ModeScores {
+		if strings.TrimSpace(mode) == "" || math.IsNaN(score) || math.IsInf(score, 0) || score < 0 || score > 1 {
+			return false
+		}
+	}
+	return true
+}
+
+func finitePromotionNumber(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
 }
 
 type StrategyAssignment struct {

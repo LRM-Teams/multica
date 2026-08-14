@@ -180,6 +180,27 @@ func TestResearchSnapshotPrincipalSurfaceMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("revoked manifest grant denies Agent surface without leaking projection", func(t *testing.T) {
+		engine := &recordingResearchRunEngine{
+			snapshot:              principalMatrixSnapshot(fixture),
+			snapshotForAttemptErr: researchrun.ErrArtifactAccessDenied,
+		}
+		useResearchRunEngine(t, engine)
+		path := fmt.Sprintf("/api/agent/research/sessions/%s?attempt_id=%s", fixture.sessionID, fixture.attemptID)
+		req := withURLParam(newRequest(http.MethodGet, path, nil), "id", fixture.sessionID)
+		req = withAgentPrincipal(req, fixture.assignedAgentID, testWorkspaceID, testUserID)
+		recorder := httptest.NewRecorder()
+
+		testHandler.GetAgentResearchSessionSnapshot(recorder, req)
+
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		if !engine.snapshotForAttemptCalled || strings.Contains(recorder.Body.String(), fixture.passportID) {
+			t.Fatalf("revoked surface call=%v body=%q", engine.snapshotForAttemptCalled, recorder.Body.String())
+		}
+	})
+
 	denied := []struct {
 		name        string
 		agentID     string

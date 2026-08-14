@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { ResearchSession } from "@multica/core/types/research";
 import { cn } from "@multica/ui/lib/utils";
 import { AlertTriangle, ArrowRight, Check, FileCheck2, GitBranch, Radio, Users } from "lucide-react";
@@ -8,6 +8,11 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { Time } from "../../i18n/time";
 import { useT } from "../../i18n/use-t";
 import { AppLink } from "../../navigation/app-link";
+import {
+  activeResearchSessions,
+  knownResearchAttentionKind,
+  selectedResearchSession,
+} from "../lib/research-home-selection";
 
 const STAGES = ["s1_plan", "s2_sources", "s3_validation", "s4_delivery"] as const;
 
@@ -16,48 +21,28 @@ function stageIndex(stage: string): number {
   return index < 0 ? 0 : index;
 }
 
-function rank(session: ResearchSession): number {
-  const kind = knownAttentionKind(session.list_progress?.attention_kind);
-  if (kind === "user_confirmation") return 0;
-  if (kind === "blocked_tasks") return 1;
-  if (kind === "recoverable_failure") return 2;
-  if (session.status === "running") return 3;
-  if (session.status === "paused") return 4;
-  return 5;
-}
-
-function knownAttentionKind(value: string | null | undefined) {
-  return value === "user_confirmation" || value === "blocked_tasks" || value === "recoverable_failure" || value === "stalled" ? value : null;
-}
-
-function isActive(session: ResearchSession): boolean {
-  if (["completed", "archived", "cancelled"].includes(session.status)) return false;
-  return session.status !== "failed" || session.list_progress?.recoverable === true;
-}
-
 export function ResearchHomeOverview({
   sessions,
+  selectedId,
+  onSelect,
   hrefFor,
   onNavigate,
 }: {
   sessions: ResearchSession[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
   hrefFor: (id: string) => string;
   onNavigate?: (id: string) => void;
 }) {
   const { t } = useT("research");
-  const active = useMemo(
-    () => sessions.filter(isActive).sort((a, b) => rank(a) - rank(b) || Date.parse(b.list_progress?.last_progress_at ?? b.updated_at) - Date.parse(a.list_progress?.last_progress_at ?? a.updated_at)),
-    [sessions],
-  );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const latestCompleted = sessions.find((session) => session.status === "completed") ?? null;
-  const selected = active.find((session) => session.id === selectedId) ?? active[0] ?? latestCompleted;
+  const active = useMemo(() => activeResearchSessions(sessions), [sessions]);
+  const selected = selectedResearchSession(sessions, selectedId);
 
   if (!selected) return null;
 
   const projectionAvailable = sessions.some((session) => session.list_progress !== undefined);
-  const workingAgents = new Set(active.flatMap((session) => (session.active_assignments ?? []).map((assignment) => assignment.agent_id))).size;
-  const needsAttention = active.filter((session) => Boolean(knownAttentionKind(session.list_progress?.attention_kind))).length;
+  const workingAgents = new Set(active.flatMap((session) => (session.active_assignments ?? []).filter((assignment) => assignment.state === "running").map((assignment) => assignment.agent_id))).size;
+  const needsAttention = active.filter((session) => Boolean(knownResearchAttentionKind(session.list_progress?.attention_kind))).length;
   const todayEvidence = sessions.reduce((sum, session) => sum + (session.list_progress?.today_evidence_count ?? 0), 0);
   const summary = [
     [t(($) => $.home_overview.active), active.length, "text-brand"],
@@ -89,7 +74,7 @@ export function ResearchHomeOverview({
               <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Radio className="size-3.5 text-success" aria-hidden />{t(($) => $.home_overview.live)}</span>
             </div>
             <div className="max-h-[390px] overflow-y-auto p-1.5">
-              {active.map((session) => <QueueRow key={session.id} session={session} selected={session.id === selected.id} onSelect={() => setSelectedId(session.id)} />)}
+              {active.map((session) => <QueueRow key={session.id} session={session} selected={session.id === selected.id} onSelect={() => onSelect(session.id)} />)}
             </div>
           </aside>
         ) : null}
@@ -103,12 +88,14 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
   const progress = session.list_progress;
   const current = stageIndex(session.current_stage);
   const outcomes = session.latest_outcomes ?? [];
-  const assignments = session.active_assignments ?? [];
-  const attention = knownAttentionKind(progress?.attention_kind);
+  const assignments = (session.active_assignments ?? []).filter(
+    (assignment) => assignment.state === "running",
+  );
+  const attention = knownResearchAttentionKind(progress?.attention_kind);
   const completed = session.status === "completed";
 
   return (
-    <article className={cn("relative overflow-hidden rounded-xl border bg-card/88 p-4 md:p-5", attention ? "border-warning/40" : "border-brand/25")} data-testid="research-focus-session">
+    <article className={cn("relative overflow-hidden rounded-xl border bg-card/88 p-4", attention ? "border-warning/40" : "border-brand/25")} data-testid="research-focus-session">
       <div className="pointer-events-none absolute right-[-60px] top-[-80px] size-64 rounded-full bg-brand/9 blur-3xl" aria-hidden />
       <div className="relative">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -122,7 +109,7 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
             <h2 className="mt-2 line-clamp-2 text-base font-medium text-foreground">{session.title || session.goal}</h2>
             <p className="mt-1 text-xs text-muted-foreground">{t(($) => $.stage[session.current_stage as keyof typeof $.stage] ?? session.current_stage)}</p>
           </div>
-          <AppLink href={href} onClick={onNavigate} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-3.5 text-sm font-medium text-brand-foreground outline-none transition-colors hover:bg-brand/80 focus-visible:ring-2 focus-visible:ring-ring">
+          <AppLink href={href} onClick={onNavigate} className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-brand px-3.5 text-sm font-medium text-brand-foreground outline-none transition-colors hover:bg-brand/80 focus-visible:ring-2 focus-visible:ring-ring md:w-auto">
             {completed ? t(($) => $.home_overview.read_report) : attention === "user_confirmation" ? t(($) => $.home_overview.handle_confirmation) : t(($) => $.home_overview.enter)}
             <ArrowRight className="size-3.5" aria-hidden />
           </AppLink>
@@ -154,7 +141,7 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
               {assignments.length > 0 ? assignments.slice(0, 4).map((assignment) => (
                 <div key={assignment.task_id} className="flex items-center gap-2">
                   <ActorAvatar actorType="agent" actorId={assignment.agent_id} size={24} profileLink={false} />
-                  <div className="min-w-0"><p className="truncate text-xs font-medium text-foreground">{assignment.task_title}</p><p className="text-xs text-muted-foreground">{assignment.role || assignment.state}</p></div>
+                  <div className="min-w-0"><p className="truncate text-xs font-medium text-foreground">{assignment.task_title}</p><p className="text-xs text-muted-foreground">{assignment.role || t(($) => $.home_overview.agent)} · {assignment.state}</p></div>
                 </div>
               )) : session.active_assignments === undefined ? <p className="text-xs leading-relaxed text-muted-foreground">{t(($) => $.home_overview.projection_unavailable)}</p> : (session.fleet_preview ?? []).slice(0, 4).map((member) => <div key={member.agent_id} className="flex items-center gap-2"><ActorAvatar actorType="agent" actorId={member.agent_id} size={24} profileLink={false} /><div className="min-w-0"><p className="truncate text-xs font-medium text-foreground">{member.display_name || member.name || member.role || t(($) => $.home_overview.agent)}</p><p className="text-xs text-muted-foreground">{member.is_lead ? t(($) => $.home_overview.lead_idle) : member.role || t(($) => $.home_overview.waiting_dispatch)}</p></div></div>)}
             </div>
@@ -162,7 +149,7 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
           <section>
             <h3 className="text-xs font-medium text-foreground">{t(($) => $.home_overview.latest_outcomes)}</h3>
             <div className="mt-2 space-y-2">
-              {outcomes.length > 0 ? outcomes.slice(0, 2).map((outcome) => <div key={outcome.id} className="flex gap-2"><span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", outcome.kind === "claim" ? "bg-success" : "bg-brand")} aria-hidden /><div className="min-w-0"><p className="line-clamp-1 text-xs font-medium text-foreground">{outcome.title}</p>{outcome.summary ? <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{outcome.summary}</p> : null}</div></div>) : <p className="text-xs leading-relaxed text-muted-foreground">{session.latest_outcomes === undefined ? t(($) => $.home_overview.projection_unavailable) : t(($) => $.home_overview.outcomes_empty)}</p>}
+              {outcomes.length > 0 ? outcomes.slice(0, 2).map((outcome) => <div key={outcome.id} className="flex gap-2"><span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", outcome.kind === "claim" ? "bg-success" : "bg-brand")} aria-hidden /><div className="min-w-0"><p className="line-clamp-1 text-xs font-medium text-foreground">{outcome.title}</p><p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{outcome.kind} · {outcome.verification_state}{outcome.summary ? ` · ${outcome.summary}` : ""}</p></div></div>) : <p className="text-xs leading-relaxed text-muted-foreground">{session.latest_outcomes === undefined ? t(($) => $.home_overview.projection_unavailable) : t(($) => $.home_overview.outcomes_empty)}</p>}
             </div>
           </section>
         </div>
@@ -174,8 +161,10 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
 function QueueRow({ session, selected, onSelect }: { session: ResearchSession; selected: boolean; onSelect: () => void }) {
   const { t } = useT("research");
   const progress = session.list_progress;
-  const assignment = session.active_assignments?.[0];
-  const attention = knownAttentionKind(progress?.attention_kind);
+  const assignment = session.active_assignments?.find(
+    (item) => item.state === "running",
+  );
+  const attention = knownResearchAttentionKind(progress?.attention_kind);
   return <button type="button" onClick={onSelect} aria-pressed={selected} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring", selected && "bg-muted text-foreground hover:bg-muted")}>
     <span className={cn("size-2 shrink-0 rounded-full", attention ? "bg-warning" : session.status === "running" ? "bg-brand" : "bg-muted-foreground")} aria-hidden />
     <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{session.title || session.goal}</span><span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground"><span>{t(($) => $.stage_short[session.current_stage as keyof typeof $.stage_short] ?? session.current_stage)}</span>{progress ? <><span aria-hidden>·</span><span className="tabular-nums">{t(($) => $.home_overview.tasks, { done: progress.task_completed, total: progress.task_total })}</span><span aria-hidden>·</span><span>{progress.evidence_count} {t(($) => $.home_overview.evidence_short)}</span></> : null}</span></span>

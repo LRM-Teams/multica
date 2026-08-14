@@ -44,6 +44,18 @@ export const ResearchV6ProjectionNodeSchema = z
     title: z.string().optional().default(""),
     summary: z.string().optional().default(""),
     status: z.string().optional().default(""),
+    level: z.enum(["xxl", "xl", "l", "m", "s"]).optional().default("m"),
+    cluster_id: z.string().nullable().optional().default(null),
+    parent_id: z.string().nullable().optional().default(null),
+    round: z.number().int().positive().optional().default(1),
+    confidence: z.number().min(0).max(1).nullable().optional().default(null),
+    document_count: z.number().int().nonnegative().nullable().optional().default(null),
+    conclusion_count: z.number().int().nonnegative().nullable().optional().default(null),
+    derived_from: z.string().nullable().optional().default(null),
+    merged_from: z.array(z.string()).optional().default([]),
+    superseded_by: z.string().nullable().optional().default(null),
+    restart_of: z.string().nullable().optional().default(null),
+    invalidated_by: z.string().nullable().optional().default(null),
     importance: z.number().optional().default(0),
     freshness: z.string().nullable().optional().default(null),
     contract_version: z.string().nullable().optional().default(null),
@@ -59,6 +71,18 @@ export const ResearchV6ProjectionNodeSchema = z
     created_sequence: z.number().nullable().optional().default(null),
     updated_sequence: z.number().nullable().optional().default(null),
     terminal_sequence: z.number().nullable().optional().default(null),
+  })
+  .passthrough();
+
+export const ResearchV6ProjectionClusterSchema = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    cluster_type: z.enum(["stable_result", "exploration", "new_frontier"]),
+    member_node_ids: z.array(z.string()),
+    confidence: z.number().min(0).max(1).nullable().optional().default(null),
+    document_count: z.number().int().nonnegative().nullable().optional().default(null),
+    conclusion_count: z.number().int().nonnegative().nullable().optional().default(null),
   })
   .passthrough();
 
@@ -78,10 +102,20 @@ export const ResearchV6DeltaSchema = z
   .object({
     from_sequence_exclusive: z.number(),
     through_sequence: z.number(),
+    graph_content_hash: z
+      .object({
+        nodes: z.string(),
+        edges: z.string(),
+      })
+      .nullable()
+      .optional()
+      .default(null),
     node_upserts: z.array(ResearchV6ProjectionNodeSchema).optional().default([]),
     edge_upserts: z.array(ResearchV6ProjectionEdgeSchema).optional().default([]),
     node_tombstones: z.array(z.string()).optional().default([]),
     edge_tombstones: z.array(z.string()).optional().default([]),
+    cluster_upserts: z.array(ResearchV6ProjectionClusterSchema).optional().default([]),
+    cluster_tombstones: z.array(z.string()).optional().default([]),
     affected_root_node_ids: z.array(z.string()).optional().default([]),
     transition_kind: z.string().nullable().optional().default(null),
   })
@@ -100,6 +134,7 @@ export const ResearchV6SnapshotSchema = z
       .optional(),
     nodes: z.array(ResearchV6ProjectionNodeSchema).optional().default([]),
     edges: z.array(ResearchV6ProjectionEdgeSchema).optional().default([]),
+    clusters: z.array(ResearchV6ProjectionClusterSchema).optional().default([]),
     next_cursor: z.string().nullable().optional().default(null),
   })
   .passthrough();
@@ -116,6 +151,7 @@ export const EMPTY_RESEARCH_V6_SNAPSHOT: ResearchV6Snapshot = {
   graph_content_hash: { nodes: "", edges: "" },
   nodes: [],
   edges: [],
+  clusters: [],
   next_cursor: null,
 };
 

@@ -9,19 +9,52 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type acceptanceRaceFixture struct {
-	pool    *pgxpool.Pool
-	store   *PostgresStore
-	fixture researchRunFixture
-	run     Run
-	task    Task
-	attempt Attempt
-	inboxID string
-	claimID string
-	input   AcceptResultInput
+	pool     *pgxpool.Pool
+	store    *PostgresStore
+	fixture  researchRunFixture
+	run      Run
+	task     Task
+	attempt  Attempt
+	inboxID  string
+	claimID  string
+	sourceID string
+	input    AcceptResultInput
+}
+
+type acceptanceRaceWriteSet struct {
+	resultArtifacts   int
+	methodDecisions   int
+	questions         int
+	tasks             int
+	acceptedEvents    int
+	producedPassports int
+	inputReferences   int
+}
+
+func loadAcceptanceRaceWriteSet(t *testing.T, ctx context.Context, fx acceptanceRaceFixture) acceptanceRaceWriteSet {
+	t.Helper()
+	var state acceptanceRaceWriteSet
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_result_artifact WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid AND decision_kind = 'research_method'),
+		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND event_type = 'task_result_accepted'),
+		  (SELECT count(*)::int FROM research_artifact_passport WHERE session_id = $1::uuid AND produced_by_attempt_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference WHERE session_id = $1::uuid)
+	`, fx.run.SessionID, fx.attempt.ID).Scan(
+		&state.resultArtifacts, &state.methodDecisions, &state.questions, &state.tasks,
+		&state.acceptedEvents, &state.producedPassports, &state.inputReferences,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) acceptanceRaceFixture {
@@ -46,6 +79,28 @@ func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgx
 		t, ctx, pool, fixture.workspaceID, run.SessionID,
 		claimID, "accept-race-claim", "claim referenced by manifest",
 	)
+	sourceID := uuid.NewString()
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, insertErr := tx.Exec(ctx, `
+			INSERT INTO research_source_snapshot (
+			  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
+			  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text,
+			  metadata, verification_status
+			) VALUES (
+			  $1::uuid, $2::uuid, $3::uuid, 'https://example.test/accept-race',
+			  'Acceptance race source', 'example.test', 'official', '{}'::text[],
+			  'accept-race-source', now(), 'sha256:accept-race', 'frozen source body',
+			  '{}'::jsonb, 'pending'
+			)
+		`, sourceID, fixture.workspaceID, run.SessionID); insertErr != nil {
+			return insertErr
+		}
+		backfillIntegrationArtifactPassport(
+			t, ctx, tx, fixture.workspaceID, run.SessionID, sourceID,
+			string(ArtifactKindSourceSnapshot), nil, nil,
+		)
+		return nil
+	})
 
 	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, task.ID, fixture.agentID))
 	if err != nil {
@@ -65,7 +120,7 @@ func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgx
 	}
 	return acceptanceRaceFixture{
 		pool: pool, store: store, fixture: fixture, run: run, task: task,
-		attempt: attempt, inboxID: inboxID, claimID: claimID,
+		attempt: attempt, inboxID: inboxID, claimID: claimID, sourceID: sourceID,
 		input: AcceptResultInput{
 			SessionID: run.SessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
 			InboxTaskID: inboxID, Raw: raw, Result: result, Hash: hash,
@@ -149,7 +204,30 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 	cases := []struct {
 		name   string
 		mutate func(context.Context, acceptanceRaceFixture) error
+		want   error
 	}{
+		{
+			name: "run_orchestrator_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := fx.pool.Exec(ctx, `
+					UPDATE research_session
+					SET orchestrator_version = 'research-run-v4', updated_at = now()
+					WHERE workspace_id = $1::uuid AND id = $2::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID)
+				return err
+			},
+		},
+		{
+			name: "task_expected_result_contract",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := fx.pool.Exec(ctx, `
+					UPDATE research_task
+					SET expected_result = 'research_evidence_v5', updated_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.task.ID)
+				return err
+			},
+		},
 		{
 			name: "eligibility_revision",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
@@ -157,6 +235,89 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 					UPDATE research_artifact_passport
 					SET eligibility_revision = eligibility_revision + 1
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "access_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_policy_state
+					SET watermark = watermark + 1, updated_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid;
+
+					INSERT INTO research_artifact_version (
+					  workspace_id, session_id, artifact_id, version,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, access_level, goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					)
+					SELECT
+					  workspace_id, session_id, artifact_id, version + 1,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, 'redacted', goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					FROM research_artifact_version
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+					  AND artifact_id = $3::uuid AND version = 1;
+
+					UPDATE research_artifact_passport
+					SET current_version = 2, eligibility_revision = eligibility_revision + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "verification_status",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_policy_state
+					SET watermark = watermark + 1, updated_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid;
+
+					UPDATE research_source_snapshot
+					SET verification_status = 'rejected'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+
+					UPDATE research_artifact_passport
+					SET eligibility_revision = eligibility_revision + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.sourceID)
+				return nil
+			},
+		},
+		{
+			name: "current_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					INSERT INTO research_artifact_version (
+					  workspace_id, session_id, artifact_id, version,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, access_level, goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					)
+					SELECT
+					  workspace_id, session_id, artifact_id, version + 1,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, access_level, goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					FROM research_artifact_version
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+					  AND artifact_id = $3::uuid AND version = 1;
+
+					UPDATE research_artifact_passport
+					SET current_version = 2
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
 				return nil
 			},
@@ -226,7 +387,7 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 		{
 			name: "manifest_entry_representation_bytes",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
 					UPDATE research_artifact_context_entry e
 					SET representation_bytes = convert_to('sha256:mutated-after-accept-preflight', 'UTF8')
 					FROM research_artifact_context_manifest m
@@ -235,7 +396,7 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 					  AND m.session_id = $2::uuid
 					  AND m.attempt_id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID)
-				return err
+				return nil
 			},
 		},
 		{
@@ -260,10 +421,18 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 			if err := tc.mutate(ctx, fx); err != nil {
 				t.Fatalf("mutate: %v", err)
 			}
-			if _, err = fx.store.AcceptResult(ctx, fx.input); !errors.Is(err, ErrInvalidTransition) {
-				t.Fatalf("AcceptResult after mutation err=%v want ErrInvalidTransition", err)
+			beforeRetry := loadAcceptanceRaceWriteSet(t, ctx, fx)
+			want := tc.want
+			if want == nil {
+				want = ErrInvalidTransition
+			}
+			if _, err = fx.store.AcceptResult(ctx, fx.input); !errors.Is(err, want) {
+				t.Fatalf("AcceptResult after mutation err=%v want %v", err, want)
 			}
 			assertAcceptanceRolledBack(t, ctx, fx)
+			if afterRetry := loadAcceptanceRaceWriteSet(t, ctx, fx); afterRetry != beforeRetry {
+				t.Fatalf("failed retry changed acceptance write set before=%+v after=%+v", beforeRetry, afterRetry)
+			}
 		})
 	}
 }
@@ -312,10 +481,34 @@ func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedStateAdvan
 		t.Run(tc.name, func(t *testing.T) {
 			fx := setupPlanAcceptanceRaceFixture(t, ctx, pool)
 			defer cleanupResearchRunFixture(pool, fx.fixture)
+			var initialWatermark int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&initialWatermark); err != nil {
+				t.Fatalf("read initial policy watermark: %v", err)
+			}
 			invokeAcceptWithBeforeCommitFault(t, ctx, fx)
 			assertAcceptanceRolledBack(t, ctx, fx)
+			var rolledBackWatermark int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&rolledBackWatermark); err != nil {
+				t.Fatalf("read rolled-back policy watermark: %v", err)
+			}
+			if rolledBackWatermark != initialWatermark {
+				t.Fatalf("rolled-back watermark=%d want initial=%d", rolledBackWatermark, initialWatermark)
+			}
 			if err = tc.mutate(ctx, fx); err != nil {
 				t.Fatalf("advance unrelated state: %v", err)
+			}
+			var beforeRetryWatermark int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&beforeRetryWatermark); err != nil {
+				t.Fatalf("read pre-retry policy watermark: %v", err)
 			}
 			outcome, acceptErr := fx.store.AcceptResult(ctx, fx.input)
 			if acceptErr != nil {
@@ -325,14 +518,28 @@ func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedStateAdvan
 				t.Fatalf("outcome=%+v", outcome)
 			}
 			var resultArtifacts int
+			var acceptanceWatermark int64
 			if err = pool.QueryRow(ctx, `
-				SELECT count(*)::int FROM research_result_artifact
+				SELECT count(*)::int, max(acceptance_policy_watermark)::bigint FROM research_result_artifact
 				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-			`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&resultArtifacts); err != nil {
+			`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&resultArtifacts, &acceptanceWatermark); err != nil {
 				t.Fatal(err)
 			}
 			if resultArtifacts != 1 {
 				t.Fatalf("result artifacts=%d want 1", resultArtifacts)
+			}
+			var finalWatermark int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&finalWatermark); err != nil {
+				t.Fatalf("read final policy watermark: %v", err)
+			}
+			if finalWatermark != beforeRetryWatermark+1 {
+				t.Fatalf("final watermark=%d want retry reservation=%d", finalWatermark, beforeRetryWatermark+1)
+			}
+			if acceptanceWatermark != finalWatermark {
+				t.Fatalf("result acceptance watermark=%d want final reserved=%d", acceptanceWatermark, finalWatermark)
 			}
 		})
 	}

@@ -15,8 +15,9 @@ import (
 )
 
 type PostgresStore struct {
-	pool        *pgxpool.Pool
-	txFaultHook researchTxFaultHook
+	pool                          *pgxpool.Pool
+	txFaultHook                   researchTxFaultHook
+	dispatchManifestBeforeCASHook func(context.Context, *dispatchManifestPlan) error
 }
 
 var (
@@ -695,12 +696,8 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		}
 		return RunSnapshot{}, err
 	}
-	snapshot, err := s.TaskContext(ctx, taskID, workspaceID)
-	if err != nil {
-		return RunSnapshot{}, err
-	}
 	if !passportEnabled {
-		return snapshot, nil
+		return s.TaskContext(ctx, taskID, workspaceID)
 	}
 	allowed, ok, err := loadManifestAuthorizedArtifactIDsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
@@ -709,12 +706,34 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 	if !ok {
 		return RunSnapshot{}, fmt.Errorf("%w: attempt has no frozen artifact manifest", ErrInvalidTransition)
 	}
-	filtered := filterRunSnapshotByManifest(snapshot, allowed)
+	frozenRun, err := loadFrozenRunRepresentationPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered := RunSnapshot{Run: frozenRun}
+	frozenDurable, err := loadFrozenDurableContextPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.Contract = frozenDurable.Contract
+	filtered.Method = frozenDurable.Method
+	filtered.Questions = frozenDurable.Questions
+	filtered.Tasks = frozenDurable.Tasks
+	filtered.Attempts = frozenDurable.Attempts
+	filtered.PrincipalHeader, err = loadManifestPrincipalHeaderPool(ctx, s, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
 	privateEvaluations, err := loadFrozenEvaluationPrivatePool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
 	filtered.EvaluationPrivate = privateEvaluations
+	frozenLegacy, err := loadFrozenLegacyContextPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.LegacyContext = &frozenLegacy
 	frozenSources, frozenObservations, frozenClaims, err := loadFrozenEvidenceRepresentationsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return RunSnapshot{}, err
@@ -845,7 +864,7 @@ func (s *PostgresStore) RenewRunLease(ctx context.Context, lease RunLease, durat
 	return renewed, nil
 }
 
-func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time) error {
+func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time, lastError string) error {
 	tx, err := s.beginResearchTx(ctx, txOpReconcileLeaseRelease, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -854,12 +873,12 @@ func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next tim
 	command, err := tx.Exec(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_token = NULL, reconcile_lease_expires_at = NULL,
-		    next_reconcile_at = $4, updated_at = now()
+		    next_reconcile_at = $4, last_error = $5, updated_at = now()
 		WHERE id = $1::uuid
 		  AND reconcile_lease_token = $2::uuid
 		  AND reconcile_lease_generation = $3
 		  AND reconcile_lease_expires_at > now()
-	`, lease.SessionID, lease.Token, lease.Generation, next)
+	`, lease.SessionID, lease.Token, lease.Generation, next, truncateBytes(lastError, 4096))
 	if err != nil {
 		return err
 	}
@@ -1027,10 +1046,32 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindRunEvent, workspaceID, sessionID, event.ID, event.CreatedAt, nil, nil); err != nil {
+	contentHash, err := ArtifactContentHash(ArtifactKindRunEvent, runEventArtifactContent(event))
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: event.ID,
+		Kind: ArtifactKindRunEvent, SourceCreatedAt: &event.CreatedAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
+	}); err != nil {
 		return RunEvent{}, err
 	}
 	return event, nil
+}
+
+func runEventArtifactContent(event RunEvent) map[string]any {
+	return map[string]any{
+		"sequence":        event.Sequence,
+		"event_type":      event.Type,
+		"idempotency_key": event.IdempotencyKey,
+		"actor_type":      event.ActorType,
+		"actor_id":        event.ActorID,
+		"payload":         json.RawMessage(event.Payload),
+	}
 }
 
 func semanticJSONEqual(left, right []byte) bool {

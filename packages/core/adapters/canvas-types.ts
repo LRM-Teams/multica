@@ -45,6 +45,18 @@ export interface CanvasNode {
   /** Bounded summary — display copy only, never a research fact source. */
   summary: string;
   status: string;
+  level?: "xxl" | "xl" | "l" | "m" | "s";
+  clusterId?: string | null;
+  parentId?: string | null;
+  round?: number;
+  confidence?: number | null;
+  documentCount?: number | null;
+  conclusionCount?: number | null;
+  derivedFrom?: string | null;
+  mergedFrom?: string[];
+  supersededBy?: string | null;
+  restartOf?: string | null;
+  invalidatedBy?: string | null;
   /** 0..1 importance rank (documented field or stable neutral). */
   importance: number;
   /**
@@ -67,6 +79,16 @@ export interface CanvasNode {
   /** Backend timestamps verbatim (`null` when the projection reports none). */
   createdAt: string | null;
   updatedAt: string | null;
+}
+
+export interface CanvasCluster {
+  id: string;
+  label: string;
+  clusterType: string;
+  memberNodeIds: string[];
+  confidence: number | null;
+  documentCount: number | null;
+  conclusionCount: number | null;
 }
 
 export interface CanvasEdge {
@@ -93,6 +115,7 @@ export interface CanvasSnapshot {
   graphContentHash: string;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
+  clusters?: CanvasCluster[];
 }
 
 /**
@@ -112,6 +135,8 @@ export interface CanvasDelta {
   upsertEdges: CanvasEdge[];
   tombstoneNodeIds: CanvasNodeId[];
   tombstoneEdgeIds: string[];
+  upsertClusters?: CanvasCluster[];
+  tombstoneClusterIds?: string[];
   affectedRootIds: CanvasNodeId[];
   transitionKind: CanvasTransitionKind;
 }

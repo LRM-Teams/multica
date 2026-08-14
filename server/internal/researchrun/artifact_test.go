@@ -272,6 +272,7 @@ func TestMigrationDiagnosticReasonCodes(t *testing.T) {
 
 func TestMigrationRelationshipParserNames(t *testing.T) {
 	want := []string{
+		"research_claim_method_evidence_standard",
 		"research_message_match_decision",
 		"research_decision_inputs",
 		"research_decision_evaluation_local_references",

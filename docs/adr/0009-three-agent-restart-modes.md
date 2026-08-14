@@ -1,62 +1,64 @@
-# Model Agent restart as three explicit modes
+# Align Agent Restart with Raft's three reset modes
 
-Agent lifecycle exposes three ordered restart modes rather than one restart
-flag with optional side effects:
+Agent Restart exposes the same three product modes as Raft v1.0.16:
 
-1. `restart` replaces the runtime process while retaining both its model
+1. `restart` stops and starts the provider process while retaining its model
    session and complete Agent Workspace.
-2. `reset_session_restart` clears the model session and context, retains the
-   complete Agent Workspace, and starts a fresh model session.
-3. `full_reset_restart` clears the model session and context, removes the
-   complete Agent Workspace, reprovisions an empty canonical directory, and
-   restarts the Agent.
+2. `session` stops the process, clears the model session and context, then
+   starts fresh while retaining the Agent Workspace.
+3. `full` stops the process, clears the model session and context, resets the
+   Agent Workspace, then starts fresh.
 
 None of these modes deletes the server-side Agent identity, configuration,
 chat history, or Issues. Full Reset is destructive local reinitialization, not
-Agent Deletion and not Local Agent Workspace Deletion: unlike local deletion,
-it immediately reprovisions the directory and keeps the Agent executable.
+Agent deletion: it reprovisions the canonical directory and keeps the Agent
+executable.
 
-All three modes may force-interrupt an active turn. Full Reset cannot remove the
-Agent Workspace until Machine Service has reliable evidence that the runtime
-process has stopped and its provider lease has been released.
+The Web API uses `resetAgent(agentId, mode)` and sends only `{ "mode":
+"restart" | "session" | "full" }`. Runtime IDs, filesystem paths, and force
+flags are server-owned. The operation response is an `AgentRestartOperation`;
+the database table is also hard-cut to `agent_restart_operation`. There is no
+legacy lifecycle table or parallel storage contract.
 
-Raft Computer 1.0.16 accepts three separate lifecycle messages:
-`agent:stop`, `agent:reset-workspace`, and `agent:start`; it has no
-`agent:lifecycle` composite message. Therefore `agent_lifecycle_operation` is
-the durable server-side product orchestrator, while the Workspace Runner owns
-only the local process transition named by each Raft message. The three product
-modes are composed as follows:
+Raft Computer 1.0.16 accepts three discrete commands: `agent:stop`,
+`agent:reset-workspace`, and `agent:start`. It has no composite
+`agent:lifecycle` command. Multica therefore composes each product mode from
+the same child primitives:
 
-1. `restart`: stop, then start with the retained session.
-2. `reset_session_restart`: stop, reset the session, then start fresh.
-3. `full_reset_restart`: stop, reset the session, reset the workspace, then
-   start fresh.
+| Mode | Ordered commands | `agent:start.config` |
+| --- | --- | --- |
+| `restart` | stop -> start | `{ "sessionId": "<canonical provider session>" }` |
+| `session` | stop -> clear canonical session -> start | `{}` |
+| `full` | stop -> clear canonical session -> reset-workspace -> start | `{}` |
 
-Stop persists the exact old launch in `stop_launch_id`; only that launch's
-inactive status advances the operation. The Runner removes it from local
-admission, fences late startup, force-interrupts any resident provider, and
-waits for both its startup owner and provider lease/process to quiesce before
-publishing inactive. Start persists a new `launchId` and stable
-`startDispatchId` before dispatch. `restart` leaves `config.sessionId`
-unspecified so the
-Computer resumes its stored provider session; both reset modes send an explicit
-empty session ID so startup cannot resume stale context. `full_reset_restart`
-adds the Raft `agent:reset-workspace` boundary and waits for Multica's terminal
-reset result extension before start, because Raft's own fire-and-forget handler
-does not provide enough evidence for a destructive product operation.
+Raft treats a truthy `config.sessionId` as resume and an absent/empty value as
+fresh. Multica follows that behavior directly; it does not expose an invented
+nil/empty/omitted three-state contract. Its generic WebSocket envelope remains
+`{ "type": "agent:start", "payload": { ... } }`, while the command type and
+nested `config.sessionId` semantics match Raft.
 
-Runner reconnect resumes the persisted current step. Stop and reset steps
-suppress generic desired/observed start reconciliation; the starting step uses
-that same reconciliation and immutable start IDs. Relay publication is not
-accepted/completed proof: an undelivered operation stays visible and resumable
-until Runner ready or its timeout. Workspace reset is idempotently retryable
-only while no managed launch/provider process exists.
+Multica retains two stronger correctness proofs around those Raft primitives:
 
-The removed paths must not return in parallel: no Agent lifecycle payload on
-daemon heartbeat, no composite `agent:lifecycle` wire event, no lifecycle
-delivery lease, and no local `.multica/lifecycle-commands` ledger.
+- Stop persists the exact old `launchId` as `stop_launch_id`; only an inactive
+  status for that launch may advance the operation.
+- Full Reset waits for a terminal reset result carrying the same operation ID
+  before dispatching start. Raft's Computer handler alone is fire-and-forget
+  and is not sufficient completion evidence for a destructive server-owned
+  operation.
 
-Frontend Activity consumes the normal managed-launch facts rather than a
-separate operation-phase event stream. It shows Raft-style `Stopped`,
-`Starting`, and `Idle/Working`; operation mode and failures remain in the
-server business record.
+Start persists one replacement `launchId` and stable `startDispatchId` before
+dispatch. Reconnect replays stop or reset with the same operation ID, while a
+starting operation reuses the persisted launch and dispatch IDs through normal
+desired/observed Runner reconciliation. Relay publication is not completion:
+an undelivered operation stays visible and resumable until Runner Ready or
+timeout.
+
+The removed parallel paths must not return: no composite Agent Restart payload
+on daemon heartbeat, no `agent:lifecycle` wire command, no restart delivery
+lease, no public scheduling/execution mode, and no local
+`.multica/lifecycle-commands` ledger.
+
+Agent Restart produces no dedicated toast stream. The direct modal closes once
+the request is accepted and normal Agent status/Activity shows the resulting
+`Stopped -> Starting -> Idle/Working` facts. Configuration save continues to
+use its ordinary save success/failure feedback without an extra restart toast.

@@ -100,8 +100,6 @@ type HeartbeatHandler func(ctx context.Context, identity ClientIdentity, payload
 
 type ReminderSnapshotHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error)
 type ReminderFireAttemptHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error)
-type ReminderProjectionHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error)
-type ReminderProjectionAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionAckPayload) error
 type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentDeliverAckPayload) error
 type AgentMessageHandoffHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentMessageHandoffPayload) error
 
@@ -112,9 +110,8 @@ type WorkspaceRunnerHandler func(ctx context.Context, identity ClientIdentity, d
 type WorkspaceRunnerDisconnectHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID string) error
 
 type ReminderOwnerGoneError struct {
-	AgentID             string
-	RuntimeID           string
-	PlacementGeneration int64
+	AgentID   string
+	RuntimeID string
 }
 
 func (e *ReminderOwnerGoneError) Error() string { return "reminder owner no longer belongs to daemon" }
@@ -142,8 +139,6 @@ type Hub struct {
 	reminderMu                  sync.RWMutex
 	onReminderSnapshot          ReminderSnapshotHandler
 	onReminderFire              ReminderFireAttemptHandler
-	onReminderProjection        ReminderProjectionHandler
-	onReminderProjectionAck     ReminderProjectionAckHandler
 	deliveryMu                  sync.RWMutex
 	onAgentDeliveryAck          AgentDeliveryAckHandler
 	onAgentMessageHandoff       AgentMessageHandoffHandler
@@ -580,13 +575,6 @@ func (h *Hub) SetReminderHandlers(snapshot ReminderSnapshotHandler, fire Reminde
 	h.reminderMu.Unlock()
 }
 
-func (h *Hub) SetReminderProjectionHandlers(replay ReminderProjectionHandler, ack ReminderProjectionAckHandler) {
-	h.mu.Lock()
-	h.onReminderProjection = replay
-	h.onReminderProjectionAck = ack
-	h.mu.Unlock()
-}
-
 func (h *Hub) reminderHandlers() (ReminderSnapshotHandler, ReminderFireAttemptHandler) {
 	h.reminderMu.RLock()
 	defer h.reminderMu.RUnlock()
@@ -626,15 +614,6 @@ func (h *Hub) RequestRevokePiRun(ctx context.Context, req protocol.RevokePiRunRe
 	return nil
 }
 
-func (h *Hub) reminderProjectionHandlers() (ReminderProjectionHandler, ReminderProjectionAckHandler) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.onReminderProjection, h.onReminderProjectionAck
-}
-
-// SetMessageKindRecorder installs an optional callback fired exactly once per
-// inbound daemon WebSocket frame. Used by the metrics layer to count traffic
-// by handler kind without hard-coupling the hub to any specific collector.
 func (h *Hub) SetMessageKindRecorder(rec MessageKindRecorder) {
 	if h == nil {
 		return
@@ -697,16 +676,12 @@ func (h *Hub) NotifyTaskAvailable(runtimeID, taskID string) {
 	h.notifyTaskAvailable(runtimeID, taskID, "")
 }
 
-func (h *Hub) NotifyReminderProjection(runtimeID string, payload protocol.ReminderProjectionEvent) {
-	h.notifyReminder(runtimeID, protocol.EventReminderProjection, payload, fmt.Sprintf("reminder-projection:%s:%d", runtimeID, payload.Seq))
+func (h *Hub) NotifyReminderUpsert(runtimeID string, payload protocol.ReminderUpsertPayload) {
+	h.notifyReminder(runtimeID, protocol.EventReminderUpsert, payload, fmt.Sprintf("reminder-upsert:%s:%d", payload.Reminder.ReminderID, payload.Reminder.Version))
 }
 
-func (h *Hub) NotifyAgentAttachmentRemoved(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentDetachPayload) {
-	h.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentDetach, payload)
-}
-
-func (h *Hub) NotifyAgentAttachmentAdded(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentAttachPayload) {
-	h.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentAttach, payload)
+func (h *Hub) NotifyReminderCancel(runtimeID string, payload protocol.ReminderCancelPayload) {
+	h.notifyReminder(runtimeID, protocol.EventReminderCancel, payload, fmt.Sprintf("reminder-cancel:%s:%d", payload.ReminderID, payload.Version))
 }
 
 func (h *Hub) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType string, payload any) bool {
@@ -852,34 +827,20 @@ func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID
 			return
 		}
 		delivered = h.notifyWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame, eventID)
-	case protocol.EventAgentAttach:
-		var payload protocol.WorkspaceRunnerAgentAttachPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			M.WakeupDeliveredMiss.Add(1)
-			return
-		}
-		delivered = h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
-	case protocol.EventAgentDetach:
-		var payload protocol.WorkspaceRunnerAgentDetachPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			M.WakeupDeliveredMiss.Add(1)
-			return
-		}
-		delivered = h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
 	case protocol.EventDaemonAgentStart:
 		var payload protocol.WorkspaceRunnerAgentStartPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			M.WakeupDeliveredMiss.Add(1)
 			return
 		}
-		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment, frame)
+		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess, frame)
 	case protocol.EventDaemonAgentStop:
 		var payload protocol.WorkspaceRunnerAgentStopPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			M.WakeupDeliveredMiss.Add(1)
 			return
 		}
-		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment, frame)
+		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess, frame)
 	case protocol.EventDaemonAgentResetWorkspace:
 		var payload protocol.WorkspaceRunnerAgentResetWorkspacePayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
@@ -898,19 +859,19 @@ func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID
 	}
 }
 
-func (h *Hub) NotifyAgentLifecycleCommand(workspaceID, daemonID, eventType, commandID string, payload any) bool {
-	if h == nil || workspaceID == "" || daemonID == "" || commandID == "" || !validAgentLifecycleCommand(eventType, payload) {
+func (h *Hub) NotifyAgentRestartCommand(workspaceID, computerID, eventType, commandID string, payload any) bool {
+	if h == nil || workspaceID == "" || computerID == "" || commandID == "" || !validAgentRestartCommand(eventType, payload) {
 		return false
 	}
 	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
 	if err != nil {
 		return false
 	}
-	capability := protocol.DaemonCapabilityWorkspaceRunnerAttachment
+	capability := protocol.DaemonCapabilityWorkspaceRunnerAgentProcess
 	if eventType == protocol.EventDaemonAgentResetWorkspace {
 		capability = protocol.DaemonCapabilityWorkspaceRunnerAgentReset
 	}
-	return h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, capability, frame)
+	return h.notifyCapableWorkspaceRunnerFrame(computerID, workspaceID, capability, frame)
 }
 
 func (h *Hub) notifyFrame(runtimeID string, data []byte, eventID string) (delivered bool, deduped bool) {
@@ -1395,30 +1356,6 @@ func (c *client) handleFrame(raw []byte) {
 			return
 		}
 		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentAttachmentReplayReq:
-		var payload protocol.WorkspaceRunnerAttachmentReplayRequest
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentAttached:
-		var payload protocol.WorkspaceRunnerAgentAttachedPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentDetached:
-		var payload protocol.WorkspaceRunnerAgentDetachedPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentAttachmentReplayAck:
-		var payload protocol.WorkspaceRunnerAttachmentReplayAck
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
 	case protocol.EventMixedRunActivityTransition:
 		var payload protocol.MixedRunActivityTransitionPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
@@ -1477,10 +1414,6 @@ func (c *client) handleFrame(raw []byte) {
 		c.handleReminderSnapshotRequest(msg.Payload)
 	case protocol.EventReminderFireAttempt:
 		c.handleReminderFireAttempt(msg.Payload)
-	case protocol.EventReminderProjectionReq:
-		c.handleReminderProjectionRequest(msg.Payload)
-	case protocol.EventReminderProjectionAck:
-		c.handleReminderProjectionAck(msg.Payload)
 	case protocol.EventAgentDeliverAck:
 		handler := c.hub.agentDeliveryAckHandler()
 		if handler == nil {
@@ -1519,7 +1452,7 @@ func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
 		return
 	}
 	var payload protocol.ReminderSnapshotRequestPayload
-	if err := json.Unmarshal(raw, &payload); err != nil || payload.AgentID == "" {
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.RuntimeID == "" {
 		slog.Debug("daemon websocket reminder snapshot invalid payload", "error", err, "daemon_id", c.identity.DaemonID)
 		return
 	}
@@ -1529,7 +1462,7 @@ func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
 		if errors.As(err, &ownerGone) {
 			return
 		}
-		slog.Warn("daemon websocket reminder snapshot failed", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID)
+		slog.Warn("daemon websocket reminder snapshot failed", "error", err, "daemon_id", c.identity.DaemonID, "runtime_id", payload.RuntimeID)
 		_ = c.conn.Close()
 		return
 	}
@@ -1575,46 +1508,6 @@ func (c *client) handleReminderFireAttempt(raw json.RawMessage) {
 	}
 	if result != nil {
 		_ = c.sendReminderFrame(protocol.EventReminderFireResult, result)
-	}
-}
-
-func (c *client) handleReminderProjectionRequest(raw json.RawMessage) {
-	handler, _ := c.hub.reminderProjectionHandlers()
-	if handler == nil {
-		return
-	}
-	var payload protocol.ReminderProjectionRequestPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		_ = c.conn.Close()
-		return
-	}
-	events, end, err := handler(context.Background(), c.identity, payload)
-	if err != nil {
-		slog.Warn("daemon websocket reminder projection replay failed", "error", err, "daemon_id", c.identity.DaemonID)
-		_ = c.conn.Close()
-		return
-	}
-	for _, event := range events {
-		if err := c.sendReminderFrame(protocol.EventReminderProjection, event); err != nil {
-			return
-		}
-	}
-	_ = c.sendReminderFrame(protocol.EventReminderProjectionEnd, end)
-}
-
-func (c *client) handleReminderProjectionAck(raw json.RawMessage) {
-	_, handler := c.hub.reminderProjectionHandlers()
-	if handler == nil {
-		return
-	}
-	var payload protocol.ReminderProjectionAckPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		_ = c.conn.Close()
-		return
-	}
-	if err := handler(context.Background(), c.identity, payload); err != nil {
-		slog.Warn("daemon websocket reminder projection ack failed", "error", err, "daemon_id", c.identity.DaemonID)
-		_ = c.conn.Close()
 	}
 }
 

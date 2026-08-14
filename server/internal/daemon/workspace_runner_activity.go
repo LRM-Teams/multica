@@ -81,7 +81,7 @@ func (runner *WorkspaceRunner) publishManagedAgentStartActivity(agentID, runtime
 // stopManagedAgent owns the complete Raft stop transition. The inactive
 // lifecycle fact must reach the server before the terminal Stopped Activity;
 // only after both have been published may the local Activity state be
-// forgotten. Attachment is intentionally absent from this operation.
+// forgotten. No second ownership registry participates in this operation.
 func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload protocol.WorkspaceRunnerAgentStopPayload, pause func(), writeFrame func(string, any) error) error {
 	if runner == nil || runner.processes == nil || runner.runtimes == nil || runner.inboxes == nil || runner.activity == nil || writeFrame == nil {
 		return errors.New("Workspace Runner stop dependencies are unavailable")
@@ -105,11 +105,6 @@ func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload pro
 				return nil
 			}
 			runtimeID = resident.runtimeID
-		}
-		if runtimeID == "" && runner.attachments != nil {
-			if attachment, ok := runner.attachments.Resolve(runner.config.WorkspaceID, payload.AgentID); ok {
-				runtimeID = attachment.RuntimeID
-			}
 		}
 	}
 	if pause != nil {

@@ -70,7 +70,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if err != nil {
 		return fmt.Errorf("load resident Agent configuration: %w", err)
 	}
-	if config.Agent == nil || config.Agent.ID != agentID || config.RuntimeID != runtimeID || config.WorkspaceID != runtime.WorkspaceID || config.RuntimeStateGeneration <= 0 {
+	if config.Agent == nil || config.Agent.ID != agentID || config.RuntimeID != runtimeID || config.WorkspaceID != runtime.WorkspaceID {
 		return errors.New("invalid resident Agent configuration")
 	}
 	if !isCanonicalResidentProvider(runtime.Provider) {

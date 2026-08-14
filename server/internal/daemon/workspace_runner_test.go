@@ -57,10 +57,6 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			t.Errorf("invalid ready frame: %+v", readyFrame)
 			return
 		}
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
-			t.Error(err)
-			return
-		}
 		ping, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerPing, Payload: marshalRaw(protocol.WorkspaceRunnerPingPayload{PingID: "ping-1"})})
 		if err := conn.WriteMessage(websocket.TextMessage, ping); err != nil {
 			t.Error(err)
@@ -105,8 +101,8 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			for _, capability := range got.ready.ActiveCapabilities {
 				capabilities[capability] = true
 			}
-			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAttachment] || !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentReset] || !capabilities[protocol.DaemonCapabilityReminderTransientInput] {
-				t.Fatalf("Runner capabilities = %v, want Attachment and Reminder transient input", got.ready.ActiveCapabilities)
+			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentProcess] || !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentReset] || !capabilities[protocol.DaemonCapabilityReminderTransientInput] {
+				t.Fatalf("Runner capabilities = %v, want Agent process, reset, and Reminder transient input", got.ready.ActiveCapabilities)
 			}
 		case <-ctx.Done():
 			t.Fatalf("timed out waiting for Runner connection %d", attempt+1)
@@ -215,10 +211,6 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		frames <- ready
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
-			t.Error(err)
-			return
-		}
 		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "dispatch-1", StartDispatchID: "dispatch-1" + "-dispatch"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
@@ -307,11 +299,6 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		t.Fatal(err)
 	}
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatalf("attach scoped Agent before start: %v", err)
-	}
 	d.attachWorkspaceRunner(runner)
 	t.Cleanup(func() {
 		d.detachWorkspaceRunner(runner)
@@ -435,22 +422,6 @@ func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 			serverResult <- fmt.Errorf("read Runner ready: %w", err)
 			return
 		}
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
-			serverResult <- err
-			return
-		}
-
-		oldAttach := protocol.WorkspaceRunnerAgentAttachPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-codex", AttachmentGeneration: 1, LifecycleSeq: 1,
-		}
-		if err := writeCommand(protocol.EventAgentAttach, oldAttach); err != nil {
-			serverResult <- err
-			return
-		}
-		if _, err := waitForType(protocol.EventAgentAttached); err != nil {
-			serverResult <- fmt.Errorf("wait for Codex Attachment receipt: %w", err)
-			return
-		}
 
 		oldStart := protocol.WorkspaceRunnerAgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-codex", LaunchID: "launch-codex", StartDispatchID: "dispatch-codex",
@@ -485,30 +456,6 @@ func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *tes
 				serverResult <- fmt.Errorf("wait for Codex launch: %w", err)
 				return
 			}
-		}
-
-		oldDetach := protocol.WorkspaceRunnerAgentDetachPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-codex", AttachmentGeneration: 2, LifecycleSeq: 2,
-		}
-		if err := writeCommand(protocol.EventAgentDetach, oldDetach); err != nil {
-			serverResult <- err
-			return
-		}
-		if _, err := waitForType(protocol.EventAgentDetached); err != nil {
-			serverResult <- fmt.Errorf("wait for Codex detach receipt: %w", err)
-			return
-		}
-
-		newAttach := protocol.WorkspaceRunnerAgentAttachPayload{
-			AgentID: "agent-1", RuntimeID: "runtime-grok", AttachmentGeneration: 2, LifecycleSeq: 1,
-		}
-		if err := writeCommand(protocol.EventAgentAttach, newAttach); err != nil {
-			serverResult <- err
-			return
-		}
-		if _, err := waitForType(protocol.EventAgentAttached); err != nil {
-			serverResult <- fmt.Errorf("wait for Grok Attachment receipt: %w", err)
-			return
 		}
 
 		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.WorkspaceRunnerAgentStopPayload{
@@ -668,10 +615,6 @@ func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T
 			t.Error(err)
 			return
 		}
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
-			t.Error(err)
-			return
-		}
 		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 		})})
@@ -712,11 +655,6 @@ func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T
 		<-hold
 		started <- ctx
 		return ctx.Err()
-	}
-	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatalf("attach Agent: %v", err)
 	}
 	d.attachWorkspaceRunner(runner)
 	t.Cleanup(func() {
@@ -769,10 +707,6 @@ func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 		}
 		defer conn.Close()
 		if _, _, err := conn.ReadMessage(); err != nil {
-			t.Error(err)
-			return
-		}
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
 			t.Error(err)
 			return
 		}
@@ -836,11 +770,6 @@ func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 		<-releaseProvider
 		return nil
 	}
-	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatalf("attach Agent: %v", err)
-	}
 	d.attachWorkspaceRunner(runner)
 	t.Cleanup(func() {
 		d.detachWorkspaceRunner(runner)
@@ -893,10 +822,6 @@ func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(
 			t.Error(err)
 			return
 		}
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
-			t.Error(err)
-			return
-		}
 		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
 			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 		})})
@@ -937,11 +862,6 @@ func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(
 	}
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
 		return errors.New("codex app-server did not start")
-	}
-	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatalf("attach Agent: %v", err)
 	}
 	d.attachWorkspaceRunner(runner)
 	t.Cleanup(func() {
@@ -998,24 +918,6 @@ func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 				}
 				if !found {
 					t.Error("ready did not advertise Workspace Runner control plane")
-					return
-				}
-				continue
-			}
-			if frame.Type == protocol.EventAgentAttachmentReplayReq {
-				var request protocol.WorkspaceRunnerAttachmentReplayRequest
-				if json.Unmarshal(frame.Payload, &request) != nil {
-					t.Error("invalid Attachment replay request")
-					return
-				}
-				end, _ := json.Marshal(protocol.Message{
-					Type: protocol.EventAgentAttachmentReplayEnd,
-					Payload: marshalRaw(protocol.WorkspaceRunnerAttachmentReplayEnd{
-						RuntimeCursors: request.RuntimeCursors,
-					}),
-				})
-				if err := conn.WriteMessage(websocket.TextMessage, end); err != nil {
-					t.Error(err)
 					return
 				}
 				continue
@@ -1078,7 +980,7 @@ func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesCoordinator(t *testing.T) {
+func TestWorkspaceRunnerStartCreatesCoordinatorForCommandRuntime(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	started := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1089,10 +991,6 @@ func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesCoordinator(t *testing.
 		}
 		defer conn.Close()
 		if _, _, err := conn.ReadMessage(); err != nil {
-			t.Error(err)
-			return
-		}
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
 			t.Error(err)
 			return
 		}
@@ -1129,11 +1027,6 @@ func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesCoordinator(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-old", AttachmentGeneration: 1, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go runner.runConnection(ctx)
@@ -1159,10 +1052,6 @@ func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *te
 		}
 		defer conn.Close()
 		if _, _, err := conn.ReadMessage(); err != nil {
-			t.Error(err)
-			return
-		}
-		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
 			t.Error(err)
 			return
 		}

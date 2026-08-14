@@ -16,13 +16,13 @@ import (
 )
 
 const (
-	workOwnerLeaseRoleExecutor     = "executor"
-	workOwnerLeaseRoleReviewer     = "reviewer"
-	workOwnerLeaseRoleCoordinator  = "coordinator"
-	workOwnerLeaseStatusActive     = "active"
-	workOwnerLeaseStatusReleased   = "released"
-	workOwnerLeaseDefaultTTL       = 72 * time.Hour
-	workOwnerLeaseMaxTTL           = 14 * 24 * time.Hour
+	workOwnerLeaseRoleExecutor    = "executor"
+	workOwnerLeaseRoleReviewer    = "reviewer"
+	workOwnerLeaseRoleCoordinator = "coordinator"
+	workOwnerLeaseStatusActive    = "active"
+	workOwnerLeaseStatusReleased  = "released"
+	workOwnerLeaseDefaultTTL      = 72 * time.Hour
+	workOwnerLeaseMaxTTL          = 14 * 24 * time.Hour
 )
 
 type WorkOwnerLeaseResponse struct {
@@ -44,14 +44,14 @@ type WorkOwnerLeaseResponse struct {
 }
 
 type workOwnerLeaseAcquireRequest struct {
-	IssueID         string   `json:"issue_id"`
-	Role            string   `json:"role"`
-	CanonicalBranch string   `json:"canonical_branch"`
-	ConversationID  string   `json:"conversation_id"`
-	RuntimeLane     string   `json:"runtime_lane"`
-	AllowedPaths    []string `json:"allowed_paths"`
-	MigrationNumbers []int   `json:"migration_numbers"`
-	TTLHours        int      `json:"ttl_hours"`
+	IssueID          string   `json:"issue_id"`
+	Role             string   `json:"role"`
+	CanonicalBranch  string   `json:"canonical_branch"`
+	ConversationID   string   `json:"conversation_id"`
+	RuntimeLane      string   `json:"runtime_lane"`
+	AllowedPaths     []string `json:"allowed_paths"`
+	MigrationNumbers []int    `json:"migration_numbers"`
+	TTLHours         int      `json:"ttl_hours"`
 }
 
 type workOwnerLeaseReleaseRequest struct {

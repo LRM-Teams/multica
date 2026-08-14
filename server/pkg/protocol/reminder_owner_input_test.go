@@ -7,13 +7,12 @@ import (
 
 func TestReminderOwnerInputPayloadJSONGolden(t *testing.T) {
 	payload := ReminderOwnerInputPayload{
-		WorkspaceID:         "workspace-a",
-		AgentID:             "agent-a",
-		RuntimeID:           "runtime-a",
-		PlacementGeneration: 7,
-		ReminderID:          "reminder-a",
-		Version:             11,
-		Title:               "Review the deployment",
+		WorkspaceID: "workspace-a",
+		AgentID:     "agent-a",
+		RuntimeID:   "runtime-a",
+		ReminderID:  "reminder-a",
+		Version:     11,
+		Title:       "Review the deployment",
 		Anchor: ReminderOwnerInputAnchor{
 			Available:           true,
 			ChannelID:           "channel-a",
@@ -38,7 +37,7 @@ func TestReminderOwnerInputPayloadJSONGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal Reminder owner input: %v", err)
 	}
-	const want = `{"kind":"reminder","transient":true,"reminder":{"workspace_id":"workspace-a","agent_id":"agent-a","runtime_id":"runtime-a","placement_generation":7,"reminder_id":"reminder-a","version":11,"title":"Review the deployment","anchor":{"available":true,"channel_id":"channel-a","message_id":"message-a","thread_root_message_id":"root-a","target":"thread:root-a","reply_target":"#general:root-a","excerpt":"Please review after deploy."},"occurrence":{"occurrence_id":"occurrence-a","scheduled_for":"2026-08-11T07:00:00Z","due_at":"2026-08-11T07:00:00Z","cadence":"every:1h","timezone":"Asia/Shanghai"}}}`
+	const want = `{"kind":"reminder","transient":true,"reminder":{"workspace_id":"workspace-a","agent_id":"agent-a","runtime_id":"runtime-a","reminder_id":"reminder-a","version":11,"title":"Review the deployment","anchor":{"available":true,"channel_id":"channel-a","message_id":"message-a","thread_root_message_id":"root-a","target":"thread:root-a","reply_target":"#general:root-a","excerpt":"Please review after deploy."},"occurrence":{"occurrence_id":"occurrence-a","scheduled_for":"2026-08-11T07:00:00Z","due_at":"2026-08-11T07:00:00Z","cadence":"every:1h","timezone":"Asia/Shanghai"}}}`
 	if string(raw) != want {
 		t.Fatalf("Reminder owner input JSON\n got: %s\nwant: %s", raw, want)
 	}

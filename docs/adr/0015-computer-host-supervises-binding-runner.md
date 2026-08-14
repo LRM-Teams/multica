@@ -2,43 +2,126 @@
 status: accepted
 ---
 
-# Computer host supervises one Binding Runner child
+# Computer host supervises one real Binding execution child
 
-The Computer host owns the desired Binding set. Each wanted Binding has at
-most one supervised OS child (`computer __runner --workspace-id`). Host
-reconcile, not the cloud, decides spawn, stop, backoff, and degrade.
+The Computer owns the desired Binding set. Each wanted Binding has at most one
+generation-fenced OS child (`computer __runner --workspace-id`). That child is
+the real execution owner, not a lifetime sentinel.
 
-This matches Raft Computer's host loop:
+```text
+Computer Host (internal/computer)
+├── Binding child A (internal/daemon)
+│   ├── WorkspaceRunner A
+│   ├── AgentProcessManager
+│   ├── Inbox / MessageCoordinator
+│   ├── Activity
+│   └── provider runtime processes
+└── Binding child B (internal/daemon)
+    └── same isolated execution owners
+```
 
-- `RECONCILE_INTERVAL_MS = 5s`
-- `CHILD_RESTART_BACKOFF_MS = 2s`
-- `CRASH_WINDOW_MS = 60s`, `DEGRADED_THRESHOLD = 3`
-- `canSpawn` is false while a child occupies the slot, or while lifecycle is
-  not `crashed` / `stopped`, or while backoff has not elapsed
-- `unlinked-terminal` is a child that the server deleted; it is not "Binding
-  removed from the local desired set"
+This intentionally differs from Raft v1.0.16 only in Binding cardinality:
+Raft launches one child per attached Server, while Multica launches one child
+per Workspace Execution Binding. The reusable architecture is the same:
+one machine owner supervises N real execution children.
 
-Desired-set removal is a graceful stop. The Binding can be re-added and
-spawned again. Using unlinked here would degrade the slot and refuse a later
-re-add.
+## Responsibility boundary
 
-## Generation fence
+`internal/computer` owns all machine-scoped policy:
 
-Raft Computer rejects stale process work as `inactive_process_generation`
-when `current !== process`. The Binding slot uses the same fence: each
-`ObserveSpawn` increments a generation, and `observe` is a no-op unless that
-generation still owns the slot. A previous supervise — including
-`observe(nil)` when there is no child handle — must not crash, degrade, or
-delete a later spawn.
+- desired Binding reconciliation and OS process spawn/stop;
+- Runner generation, PID fence, Ready transition, crash budget and backoff;
+- machine-wide provider-process capacity admission;
+- authenticated child control and diagnostic aggregation routing;
+- cross-child environment-switch and Machine Upgrade prepare/release;
+- Machine Upgrade accept, journal, stage, verify, activation, successor
+  re-registration, and attestation.
 
-The live child handle is a second identity check when an OS child exists.
+`internal/daemon` owns one Binding child's execution behavior:
 
-## What this cut is not
+- Workspace authentication and `WorkspaceRunner.Run`;
+- Agent Process Manager and canonical provider runtime pool;
+- Inbox, MessageCoordinator, Activity, Attachments and Reminder execution;
+- child-local Credential Proxy and child-local durable execution state;
+- its own claim barrier, drain, provider termination, and Runtime
+  registration.
 
-The OS child is the lifetime and crash boundary. Workspace Runner delivery,
-Inbox, and Agent Process Manager still run in the host process. Moving that
-coordinator into the child is a later cut. This ADR does not claim Raft-complete
-process isolation of delivery.
+The public resident path lives in `cmd/multica/cmd_computer_resident.go` and is
+`runComputerResident → computer.NewHost → Host.RunProcess`; it does not construct
+or call `daemon.Daemon`. An executable
+architecture test enforces both directions: the Computer resident has no
+`daemon.*` dependency, while production daemon files cannot expose a resident
+`Run`, health/machine-attestation owner, restart/update executor, Machine
+Upgrade journal, takeover, stage, or successor lifecycle. The only
+Machine-Upgrade-related daemon behavior is child-local prepare/release and
+Runtime re-registration requested by the Computer.
 
-Machine Upgrade (local swap completes locally; cloud is post-hoc attestation)
-is a different cut.
+The CLI is composition only. A Computer Host must not construct provider
+runtimes, Inbox/Activity owners, Agent Restart executor, Attachment registry,
+Reminder cache, or Binding draft/outbox state.
+
+## Bootstrap, Ready, and local control
+
+The parent sends one immutable bootstrap document over stdin. It includes
+`computer_generation`, `runner_generation`, Workspace identity, environment,
+roots, server URL, and the loopback Host-control URL. It deliberately excludes
+execution credentials; the child reads its scoped credential from the
+permission-restricted Binding store.
+
+The child publishes Ready only after it has:
+
+1. attested its exact `(workspace, runner generation, PID)` to the Host;
+2. validated the current Binding credential and Computer generation;
+3. registered its provider Runtime set and reported it to the Host;
+4. constructed its child-local execution owners;
+5. opened the Workspace Runner transport and emitted the real Runner Ready
+   frame.
+
+Ready returns the child's loopback control URL. The Host uses that URL only
+with the exact generation/PID identity and the machine control token.
+
+## Generation fence and crash policy
+
+`computer_generation` is the machine resident tenure. `runner_generation` is
+the independent spawn tenure of one Binding slot. Each spawn increments the
+Runner generation; an exit, control request, Runtime report, diagnostic, or
+capacity lease from a previous generation/PID is rejected or ignored.
+
+Host reconciliation follows the Raft Computer policy:
+
+- reconcile every 5 seconds;
+- crash restart backoff of 2 seconds;
+- 3 crashes inside 60 seconds enters `degraded` and stops automatic restart;
+- desired-set removal is a graceful stop, not `unlinked` / degraded;
+- removing one Binding does not restart or mutate its siblings.
+
+## Machine Upgrade
+
+Machine Upgrade remains one Computer operation. The Host first asks every
+current child to close and drain its child-local execution admission barrier.
+If one child rejects preparation, the Host releases every sibling already
+prepared. Re-registration and rollback convergence are also sent to the child;
+the Host never probes provider CLIs or creates Runtime execution objects.
+
+A successful process replacement stops all children with the Host process.
+The successor Computer reconstructs the desired set, waits for every real
+child Ready, then performs generation/runtime attestation.
+
+The accepted generation and complete Runtime/Workspace set are persisted in a
+permission-restricted Host journal before activation. A successor reads that
+journal only after every desired child is really Ready, asks the children to
+re-register, performs Computer-level attestation, and then clears the journal.
+An environment switch uses a distinct child barrier that waits for admitted
+work naturally; it does not reuse Machine Upgrade's terminate-and-drain path.
+
+## Consequences
+
+- A child crash contains Workspace execution without taking down sibling
+  Bindings or the Computer Host.
+- Deleting the child process now deletes the complete Binding execution
+  behavior, so the OS-process seam is deep rather than ceremonial.
+- Per-Binding durable execution state lives under
+  `binding-children/<environment>/<workspace-id>`; machine identity and the
+  explicit Binding store remain machine-wide.
+- Message delivery and Activity keep their different contracts: durable
+  delivery responsibility is not inferred from best-effort Activity.

@@ -828,7 +828,7 @@ function MachineDetailView({
     return agent;
   };
 
-  /** Raft-aligned bulk bar: Stop = cancel active tasks; Restart = lifecycle restart. */
+  /** Raft-aligned bulk bar: Stop = cancel active tasks; Restart = `restart` mode. */
   const handleBulkStop = async () => {
     if (selectedCount === 0 || bulkBusy) return;
     const ids = Array.from(selectedAgentIds);
@@ -876,7 +876,7 @@ function MachineDetailView({
       const results = await Promise.all(
         ids.map(async (id) => {
           try {
-            await api.startAgentLifecycleAction(
+            await api.resetAgent(
               id,
               "restart",
               crypto.randomUUID(),

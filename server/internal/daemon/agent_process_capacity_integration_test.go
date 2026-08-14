@@ -42,7 +42,7 @@ func TestManagedCapacityMultiWorkspaceFIFOAndRunnerRemoval(t *testing.T) {
 	}
 }
 
-func TestManagedCapacityQueuedDetachRequiresFormalStopAndCrashReplacementFence(t *testing.T) {
+func TestManagedCapacityQueuedLaunchRequiresFormalStopAndCrashReplacementFence(t *testing.T) {
 	d := New(Config{DaemonID: "daemon-1", WorkspacesRoot: t.TempDir(), MaxAgentProcesses: 1}, nil)
 	for _, runtime := range []Runtime{
 		{ID: "runtime-a", WorkspaceID: "workspace-a"},
@@ -56,25 +56,16 @@ func TestManagedCapacityQueuedDetachRequiresFormalStopAndCrashReplacementFence(t
 	first, _ := attachTestWorkspaceRunner(t, d, "workspace-a", nil)
 	second, _ := attachTestWorkspaceRunner(t, d, "workspace-b", nil)
 	third, _ := attachTestWorkspaceRunner(t, d, "workspace-c", nil)
-	attachManagedForCapacityTest(t, first, "agent-a", "runtime-a")
-	attachManagedForCapacityTest(t, second, "agent-b", "runtime-b")
-	attachManagedForCapacityTest(t, third, "agent-c", "runtime-c")
-
 	firstAck := startManagedForCapacityTest(t, first, "agent-a", "runtime-a", "dispatch-a")
 	secondAck := startManagedForCapacityTest(t, second, "agent-b", "runtime-b", "dispatch-b")
 	if secondAck.QueueState != protocol.AgentStartQueueQueued {
 		t.Fatalf("second launch=%+v, want queued", secondAck)
 	}
-	if _, err := second.applyAttachmentDetach(protocol.WorkspaceRunnerAgentDetachPayload{
-		AgentID: "agent-b", RuntimeID: "runtime-b", AttachmentGeneration: 1, LifecycleSeq: 2,
-	}); err != nil {
-		t.Fatalf("detach queued launch: %v", err)
-	}
 	if launch, found := second.processes.Snapshot("agent-b"); !found || launch.LaunchID != secondAck.LaunchID {
-		t.Fatalf("Attachment detach changed queued launch: %+v found=%v", launch, found)
+		t.Fatalf("queued launch disappeared before formal stop: %+v found=%v", launch, found)
 	}
 	if err := second.processes.Stop(agentProcessCallback{AgentID: "agent-b", LaunchID: secondAck.LaunchID}); err != nil {
-		t.Fatalf("formal stop of detached queued launch: %v", err)
+		t.Fatalf("formal stop of queued launch: %v", err)
 	}
 	thirdAck := startManagedForCapacityTest(t, third, "agent-c", "runtime-c", "dispatch-c")
 	if thirdAck.QueueState != protocol.AgentStartQueueQueued {
@@ -104,13 +95,4 @@ func startManagedForCapacityTest(t *testing.T, runner *WorkspaceRunner, agentID,
 		t.Fatalf("Start(%s): %v", agentID, err)
 	}
 	return ack
-}
-
-func attachManagedForCapacityTest(t *testing.T, runner *WorkspaceRunner, agentID, runtimeID string) {
-	t.Helper()
-	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatalf("attach %s: %v", agentID, err)
-	}
 }

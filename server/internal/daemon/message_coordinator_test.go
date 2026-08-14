@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -719,10 +718,10 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}); err != nil {
 		t.Fatal(err)
 	}
-	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		backend: backend,
@@ -793,10 +792,10 @@ func TestResidentMessageTurnErrorDoesNotAutoHandoffPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}); err != nil {
 		t.Fatal(err)
 	}
-	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		backend: backend,
@@ -1342,40 +1341,6 @@ func TestMessageCoordinatorCoverageCheckRetainsPendingWhenCommitWriteFails(t *te
 	}
 }
 
-func TestWorkspaceRunnerAttachmentPreparesAgentRootWithoutCoordinator(t *testing.T) {
-	const workspaceID = "11111111-1111-4111-8111-111111111111"
-	const agentID = "22222222-2222-4222-8222-222222222222"
-	const runtimeID = "33333333-3333-4333-8333-333333333333"
-	root := t.TempDir()
-	daemon := New(Config{WorkspacesRoot: root}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	daemon.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
-	runner, _ := attachTestWorkspaceRunner(t, daemon, workspaceID, nil)
-
-	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatalf("applyAttachmentAttach: %v", err)
-	}
-	wantRoot := agentworkspace.Root(daemon.cfg.WorkspacesRoot, workspaceID, agentID)
-	if _, _, ok := runner.messageCoordinator(agentID); ok {
-		t.Fatal("Attachment created a Message coordinator before agent:start")
-	}
-	if _, err := os.Stat(wantRoot); err != nil {
-		t.Fatalf("Agent root was not provisioned: %v", err)
-	}
-
-	if _, err := runner.applyAttachmentDetach(protocol.WorkspaceRunnerAgentDetachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2,
-	}); err != nil {
-		t.Fatalf("applyAttachmentDetach: %v", err)
-	}
-	if runner := daemon.currentWorkspaceRunner(workspaceID); runner != nil {
-		if _, _, ok := runner.inboxes.Resolve(agentID); ok {
-			t.Fatal("coordinator remained registered after accepted placement stop")
-		}
-	}
-}
-
 func testDelivery(id, target string, seq int64, deliveryID string) protocol.AgentDeliverPayload {
 	return protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: target, Seq: seq, DeliveryID: deliveryID,
@@ -1918,9 +1883,6 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 	}
 	daemon := &Daemon{canonicalRuntimes: newCanonicalAgentRuntimePool()}
 	runner := registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-1"}, "runtime-old", oldCoordinator)
-	resolver := &testInboxAttachmentResolver{attachments: map[InboxKey]AgentAttachment{}}
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-test", AgentID: "agent-1", RuntimeID: "runtime-old", AttachmentGeneration: 1})
-	runner.inboxes.attachments = resolver
 	runner.inboxes.ownsRuntime = func(string) bool { return true }
 	runner.inboxes.open = func(key InboxKey, runtimeID string) (*MessageCoordinator, error) {
 		return NewMessageCoordinator(key, newRoot, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
@@ -1930,9 +1892,8 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 	<-handoffStarted
 
 	replacementDone := make(chan error, 1)
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-test", AgentID: "agent-1", RuntimeID: "runtime-new", AttachmentGeneration: 2})
 	go func() {
-		_, err := runner.inboxes.Ensure("agent-1")
+		_, err := runner.inboxes.AcceptStart("agent-1", "runtime-new")
 		replacementDone <- err
 	}()
 	select {

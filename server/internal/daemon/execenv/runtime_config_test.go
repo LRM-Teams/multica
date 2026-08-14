@@ -729,49 +729,6 @@ func TestChatRuntimeBriefPinsReminderDecisionBoundary(t *testing.T) {
 	}
 }
 
-func TestRuntimeBriefMakesFreshCanonicalSessionExplicit(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		reason string
-		ctx    TaskContextForEnv
-	}{
-		{
-			name:   "cutover issue wake",
-			reason: "cutover",
-			ctx:    TaskContextForEnv{IssueID: "issue-1"},
-		},
-		{
-			name:   "reset chat wake",
-			reason: "reset",
-			ctx:    TaskContextForEnv{ChannelID: "channel-1"},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.ctx.FreshSessionNoticeReason = tc.reason
-			out := buildMetaSkillContent("pi", tc.ctx)
-			for _, want := range []string{
-				"## Fresh Provider Session",
-				"Your provider session is brand new.",
-				"Historical sessions are archived read-only",
-				"your workspace files remain",
-				"Retrieve historical conclusions from issue comments or chat history when needed.",
-			} {
-				if !strings.Contains(out, want) {
-					t.Errorf("fresh-session brief missing %q\n---\n%s", want, out)
-				}
-			}
-			if strings.Count(out, "## Fresh Provider Session") != 1 {
-				t.Errorf("fresh-session notice must render exactly once\n---\n%s", out)
-			}
-		})
-	}
-
-	out := buildMetaSkillContent("pi", TaskContextForEnv{IssueID: "issue-1"})
-	if strings.Contains(out, "## Fresh Provider Session") {
-		t.Errorf("ordinary wake must not receive fresh-session notice\n---\n%s", out)
-	}
-}
-
 func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()

@@ -17,6 +17,7 @@ type RunnerLifecycle string
 
 const (
 	RunnerLifecycleStopped  RunnerLifecycle = "stopped"
+	RunnerLifecycleStarting RunnerLifecycle = "starting"
 	RunnerLifecycleRunning  RunnerLifecycle = "running"
 	RunnerLifecycleCrashed  RunnerLifecycle = "crashed"
 	RunnerLifecycleDegraded RunnerLifecycle = "degraded"
@@ -75,8 +76,16 @@ func (r *RunnerRecord) ObserveSpawn() {
 	}
 	r.generation++
 	r.child = true
-	r.Lifecycle = RunnerLifecycleRunning
+	r.Lifecycle = RunnerLifecycleStarting
 	r.BackoffUntil = time.Time{}
+}
+
+func (r *RunnerRecord) ObserveReady(generation int64) bool {
+	if r == nil || !r.child || r.generation != generation || r.Lifecycle != RunnerLifecycleStarting {
+		return false
+	}
+	r.Lifecycle = RunnerLifecycleRunning
+	return true
 }
 
 func (r *RunnerRecord) ObserveExit(now time.Time, class RunnerExitClass) {

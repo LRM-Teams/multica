@@ -635,101 +635,10 @@ type (
 	PendingRestart          = protocol.DaemonHeartbeatPendingRestart
 )
 
-// MachineUpgradeReceipt is the immutable server acceptance snapshot needed by
-// the daemon before any local release mutation.
-type MachineUpgradeReceipt struct {
-	ID                   string   `json:"id"`
-	RequestedTarget      string   `json:"requested_target"`
-	ResolvedTarget       *string  `json:"resolved_target,omitempty"`
-	Phase                string   `json:"phase"`
-	AcceptedGeneration   *string  `json:"accepted_generation,omitempty"`
-	AcceptedRuntimeIDs   []string `json:"accepted_runtime_ids,omitempty"`
-	AttestedRuntimeIDs   []string `json:"attested_runtime_ids,omitempty"`
-	AcceptedWorkspaceIDs []string `json:"accepted_workspace_ids,omitempty"`
-	AttestedWorkspaceIDs []string `json:"attested_workspace_ids,omitempty"`
-	SourceVersion        *string  `json:"source_version,omitempty"`
-	RollbackGeneration   *string  `json:"rollback_generation,omitempty"`
-	RollbackRuntimeIDs   []string `json:"rollback_runtime_ids,omitempty"`
-}
-
-func (c *Client) GetMachineUpgradeReceipt(ctx context.Context, runtimeID, upgradeID string) (*MachineUpgradeReceipt, error) {
-	var receipt MachineUpgradeReceipt
-	err := c.getJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s", runtimeID, upgradeID), &receipt, c.tokenForRuntime(runtimeID))
-	if err != nil {
-		return nil, err
-	}
-	return &receipt, nil
-}
-
-func (c *Client) AttestComputerUpgrade(ctx context.Context, daemonID, upgradeID, generationID, cliVersion string, runtimeIDs, workspaceIDs []string) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/attest", upgradeID), map[string]any{
-		"daemon_id": daemonID, "generation_id": generationID, "cli_version": cliVersion,
-		"runtime_ids": runtimeIDs, "workspace_ids": workspaceIDs,
-	}, nil)
-}
-
-// MachineUpgradeControlOperation is the minimal canonical operation receipt
-// needed by the owner-only local control surface. It intentionally does not
-// duplicate handler types across the daemon package boundary.
-type MachineUpgradeControlOperation struct {
-	ID              string `json:"id"`
-	DaemonID        string `json:"daemon_id"`
-	RequestedTarget string `json:"requested_target"`
-	Phase           string `json:"phase"`
-}
-
-func (c *Client) CreateMachineUpgrade(ctx context.Context, workspaceID, daemonID, requestID, targetVersion string) (*MachineUpgradeControlOperation, error) {
-	var operation MachineUpgradeControlOperation
-	err := c.postJSONWithTokenAndHeaders(ctx, fmt.Sprintf("/api/daemons/%s/upgrades", daemonID), map[string]string{
-		"request_id":     requestID,
-		"target_version": targetVersion,
-	}, &operation, c.tokenSnapshot(), map[string]string{"X-Workspace-ID": workspaceID})
-	if err != nil {
-		return nil, err
-	}
-	return &operation, nil
-}
-
 func (c *Client) ComputerHeartbeat(ctx context.Context, workspaceID, daemonID string, generation int64) error {
 	return c.postJSONWithToken(ctx, "/api/daemon/computer/heartbeat", map[string]any{
 		"workspace_id": workspaceID, "daemon_id": daemonID, "generation": generation,
 	}, nil, c.tokenForWorkspace(workspaceID))
-}
-
-// AcceptMachineUpgrade records that this daemon process accepted the claimed
-// machine operation. The following full registration is the attestation; the
-// server will not complete the operation until every captured sibling does so.
-func (c *Client) AcceptMachineUpgrade(ctx context.Context, runtimeID, upgradeID, generationID, cliVersion, resolvedTarget string) (*MachineUpgradeReceipt, error) {
-	var receipt MachineUpgradeReceipt
-	err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s/accept", runtimeID, upgradeID), map[string]any{
-		"generation_id":   generationID,
-		"cli_version":     cliVersion,
-		"resolved_target": resolvedTarget,
-	}, &receipt, c.tokenForRuntime(runtimeID))
-	if err != nil {
-		return nil, err
-	}
-	return &receipt, nil
-}
-
-func (c *Client) ReportMachineUpgradeProgress(ctx context.Context, runtimeID, upgradeID, phase, errorCode, errorMessage string) error {
-	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s/progress", runtimeID, upgradeID), map[string]any{
-		"phase": phase, "error_code": errorCode, "error_message": errorMessage,
-	}, nil, c.tokenForRuntime(runtimeID))
-}
-
-func (c *Client) ReportMachineUpgradeRollback(ctx context.Context, runtimeID, upgradeID, generation, errorCode, errorMessage string) error {
-	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s/progress", runtimeID, upgradeID), map[string]any{
-		"phase":         "rollback_pending",
-		"generation_id": generation,
-		"error_code":    errorCode,
-		"error_message": errorMessage,
-	}, nil, c.tokenForRuntime(runtimeID))
-}
-
-// ReportUpdateResult sends the CLI update result back to the server.
-func (c *Client) ReportUpdateResult(ctx context.Context, runtimeID, updateID string, result map[string]any) error {
-	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/update/%s/result", runtimeID, updateID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportModelListResult sends the model-discovery result back to the server.
@@ -749,14 +658,6 @@ func (c *Client) ReportLocalSkillImportResult(ctx context.Context, runtimeID, re
 
 func (c *Client) ReportMemoryCurationResult(ctx context.Context, runtimeID, runID string, result map[string]any) error {
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/memory-curation/%s/result", runtimeID, runID), result, nil, c.tokenForRuntime(runtimeID))
-}
-
-// ResetAgentRuntimeSession clears every server-owned provider resume pointer
-// for this agent and runtime. The operation ID makes retries idempotent.
-func (c *Client) ResetAgentRuntimeSession(ctx context.Context, operationID, agentID, runtimeID string) error {
-	return c.postJSONWithToken(ctx,
-		fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/session/reset", runtimeID, agentID),
-		map[string]any{"operation_id": operationID}, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportAgentProviderCrashed tells the server an idle resident provider

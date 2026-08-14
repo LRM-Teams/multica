@@ -50,12 +50,11 @@ func TestStartupStaticDigestNoLongerReflectsManagerRole(t *testing.T) {
 // neither rotate the resident backend nor leak into its startup brief.
 func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 	a := TaskContextForEnv{
-		AgentID:                  "agent-a",
-		AgentName:                "Agent A",
-		AgentInstructions:        "durable-agent-instructions",
-		FreshSessionNoticeReason: "fresh-alpha-review-sentinel",
-		PriorSessionResumed:      true,
-		TriggerCommentID:         "private-alpha-review-sentinel",
+		AgentID:             "agent-a",
+		AgentName:           "Agent A",
+		AgentInstructions:   "durable-agent-instructions",
+		PriorSessionResumed: true,
+		TriggerCommentID:    "private-alpha-review-sentinel",
 		AgentMemories: []MemoryContextForEnv{{
 			Name: "memory-alpha-review-sentinel", Content: "memory-alpha-review-sentinel",
 			Scope: "user", SubjectType: "member", SubjectID: "user-alpha",
@@ -70,7 +69,6 @@ func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 		AgentRadarPrompt:        "radar-alpha-review-sentinel",
 	}
 	b := a
-	b.FreshSessionNoticeReason = "fresh-beta-review-sentinel"
 	b.PriorSessionResumed = false
 	b.TriggerCommentID = "private-beta-review-sentinel"
 	b.AgentMemories = []MemoryContextForEnv{{
@@ -250,19 +248,18 @@ func TestStartupKernelBoundsConfigurableSections(t *testing.T) {
 
 func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testing.T) {
 	ctx := TaskContextForEnv{
-		AgentInstructions:        "stable instructions must not repeat",
-		FreshSessionNoticeReason: "runtime switched",
-		InitiatorType:            "member",
-		InitiatorID:              "member-1",
-		InitiatorName:            "Alice",
-		InitiatorEmail:           "alice@example.com",
+		AgentInstructions: "stable instructions must not repeat",
+		InitiatorType:     "member",
+		InitiatorID:       "member-1",
+		InitiatorName:     "Alice",
+		InitiatorEmail:    "alice@example.com",
 		AgentMemories: []MemoryContextForEnv{{
 			Name: "Large selected memory", Content: strings.Repeat("记", 8*1024), Scope: "user",
 		}},
 	}
 	turn := RenderTurnContext(ctx)
 
-	for _, want := range []string{"## Current Provider Session", "## Current Task Initiator", "Alice", "member-1", "## Effective Promoted Memory Snapshot"} {
+	for _, want := range []string{"## Current Task Initiator", "Alice", "member-1", "## Effective Promoted Memory Snapshot"} {
 		if !strings.Contains(turn, want) {
 			t.Errorf("turn context missing %q", want)
 		}

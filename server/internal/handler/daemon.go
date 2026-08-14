@@ -1177,7 +1177,7 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	// its fenced socket. Do not also return the legacy first-start envelope on
 	// the heartbeat: both paths share the same durable intent, but only one may
 	// be active for a given connection generation.
-	if h.DaemonHub != nil && h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
+	if h.DaemonHub != nil && h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) {
 		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
 			return nil, err
 		}

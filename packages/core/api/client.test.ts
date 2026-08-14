@@ -1452,15 +1452,14 @@ describe("ApiClient", () => {
 
   });
 
-  describe("agent lifecycle (#633)", () => {
-    it("starts a lifecycle action with the Idempotency-Key header and action_kind only", async () => {
+  describe("agent reset", () => {
+    it("starts a Raft reset mode with the Idempotency-Key header", async () => {
       const op = {
         id: "op-1",
         agent_id: "a-1",
         runtime_id: "rt-1",
-        action_kind: "full_reset_restart",
-        status: "scheduled",
-        execution_mode: "after_current_run",
+        mode: "full",
+        status: "running",
         created_at: "2026-07-24T00:00:00Z",
       };
       const fetchMock = vi.fn().mockResolvedValue(
@@ -1472,18 +1471,18 @@ describe("ApiClient", () => {
       vi.stubGlobal("fetch", fetchMock);
       const client = new ApiClient("https://api.example.test");
 
-      const result = await client.startAgentLifecycleAction(
+      const result = await client.resetAgent(
         "a-1",
-        "full_reset_restart",
+        "full",
         "idem-uuid-1",
       );
 
       expect(result.id).toBe("op-1");
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://api.example.test/api/members/agents/a-1/lifecycle",
+        "https://api.example.test/api/members/agents/a-1/reset",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ action_kind: "full_reset_restart" }),
+          body: JSON.stringify({ mode: "full" }),
           headers: expect.objectContaining({ "Idempotency-Key": "idem-uuid-1" }),
         }),
       );
@@ -1492,12 +1491,11 @@ describe("ApiClient", () => {
     it("reads the per-action preflight", async () => {
       const preflight = {
         actions: {
-          restart: { supported: true, execution_mode: "immediate" },
-          reset_session_restart: { supported: true, execution_mode: "immediate" },
-          full_reset_restart: {
+          restart: { supported: true },
+          session: { supported: true },
+          full: {
             supported: false,
             disabled_reason: "agent_active",
-            execution_mode: "immediate",
           },
         },
       };
@@ -1512,10 +1510,10 @@ describe("ApiClient", () => {
       );
       const client = new ApiClient("https://api.example.test");
 
-      const result = await client.getAgentLifecyclePreflight("a-1");
+      const result = await client.getAgentRestartPreflight("a-1");
       expect(result.actions.restart.supported).toBe(true);
-      expect(result.actions.full_reset_restart.supported).toBe(false);
-      expect(result.actions.full_reset_restart.disabled_reason).toBe("agent_active");
+      expect(result.actions.full.supported).toBe(false);
+      expect(result.actions.full.disabled_reason).toBe("agent_active");
     });
 
     it("polls a single operation by id", async () => {
@@ -1525,9 +1523,8 @@ describe("ApiClient", () => {
             id: "op-1",
             agent_id: "a-1",
             runtime_id: "rt-1",
-            action_kind: "restart",
+            mode: "restart",
             status: "succeeded",
-            execution_mode: "immediate",
             created_at: "2026-07-24T00:00:00Z",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -1536,11 +1533,53 @@ describe("ApiClient", () => {
       vi.stubGlobal("fetch", fetchMock);
       const client = new ApiClient("https://api.example.test");
 
-      const op = await client.getAgentLifecycleOperation("a-1", "op-1");
+      const op = await client.getAgentRestartOperation("a-1", "op-1");
       expect(op.status).toBe("succeeded");
       expect(fetchMock.mock.calls[0]?.[0]).toBe(
-        "https://api.example.test/api/members/agents/a-1/lifecycle/op-1",
+        "https://api.example.test/api/members/agents/a-1/reset/op-1",
       );
+    });
+
+    it("fails closed when reset preflight is malformed", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ actions: null }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+      const client = new ApiClient("https://api.example.test");
+
+      const result = await client.getAgentRestartPreflight("a-1");
+
+      expect(result.actions).toEqual({
+        restart: { supported: false, disabled_reason: "unavailable" },
+        session: { supported: false, disabled_reason: "unavailable" },
+        full: { supported: false, disabled_reason: "unavailable" },
+      });
+    });
+
+    it("returns a terminal failure when an operation response is malformed", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ id: 42, status: null }), {
+            status: 202,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+      const client = new ApiClient("https://api.example.test");
+
+      const result = await client.resetAgent("a-1", "restart", "idem-1");
+
+      expect(result).toMatchObject({
+        id: "",
+        status: "failed",
+        reason_code: "invalid_server_response",
+      });
     });
   });
 });

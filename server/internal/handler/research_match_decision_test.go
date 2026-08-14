@@ -14,9 +14,9 @@ func TestExtractMatchDecisionFromMeta(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{
 		"op": "chat",
 		"match_decision": map[string]any{
-			"confidence":              conf,
-			"primary_anchor_node_id":  anchor,
-			"matched_node_ids":        []string{anchor, anchor, "cccccccc-cccc-cccc-cccc-cccccccccccc"},
+			"confidence":             conf,
+			"primary_anchor_node_id": anchor,
+			"matched_node_ids":       []string{anchor, anchor, "cccccccc-cccc-cccc-cccc-cccccccccccc"},
 			"decisions": []map[string]any{
 				{"node_id": anchor, "action": "continue", "reason": "续研定价"},
 				{"node_id": "cccccccc-cccc-cccc-cccc-cccccccccccc", "action": "deprecate", "reason": "方向不符"},

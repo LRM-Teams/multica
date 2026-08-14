@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -70,7 +69,7 @@ func seedDueReminder(t *testing.T, agentID, channelID, messageID, cadence, timez
 
 func fireReminderAttemptResult(h *Handler, reminderID string) (*protocol.ReminderFireResultPayload, protocol.ReminderFireAttemptPayload, error) {
 	var agentID, workspaceID, runtimeID string
-	var version, placementGeneration int64
+	var version int64
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT reminder.agent_id, reminder.workspace_id, agent.runtime_id, reminder.version
 		FROM agent_reminder reminder
@@ -78,16 +77,12 @@ func fireReminderAttemptResult(h *Handler, reminderID string) (*protocol.Reminde
 		WHERE reminder.id = $1`, reminderID).Scan(&agentID, &workspaceID, &runtimeID, &version); err != nil {
 		return nil, protocol.ReminderFireAttemptPayload{}, err
 	}
-	if err := testPool.QueryRow(context.Background(), `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&placementGeneration); err != nil {
-		return nil, protocol.ReminderFireAttemptPayload{}, err
-	}
 	payload := protocol.ReminderFireAttemptPayload{
-		AgentID:             agentID,
-		RuntimeID:           runtimeID,
-		PlacementGeneration: placementGeneration,
-		ReminderID:          reminderID,
-		Version:             version,
-		FiredAtClient:       time.Now().UTC().Format(time.RFC3339Nano),
+		AgentID:       agentID,
+		RuntimeID:     runtimeID,
+		ReminderID:    reminderID,
+		Version:       version,
+		FiredAtClient: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	result, err := h.HandleDaemonReminderFireAttempt(context.Background(), daemonws.ClientIdentity{
 		WorkspaceID: workspaceID,
@@ -135,6 +130,19 @@ type capturedReminderOwnerInputNotifier struct {
 	mu     sync.Mutex
 	calls  []capturedReminderOwnerInput
 	result bool
+}
+
+type capturedReminderNotifier struct {
+	upserts []protocol.ReminderUpsertPayload
+	cancels []protocol.ReminderCancelPayload
+}
+
+func (n *capturedReminderNotifier) NotifyReminderUpsert(_ string, payload protocol.ReminderUpsertPayload) {
+	n.upserts = append(n.upserts, payload)
+}
+
+func (n *capturedReminderNotifier) NotifyReminderCancel(_ string, payload protocol.ReminderCancelPayload) {
+	n.cancels = append(n.cancels, payload)
 }
 
 func (n *capturedReminderOwnerInputNotifier) NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool {
@@ -374,16 +382,9 @@ func TestReminderLocalInboxProjectionIsTheOnlyWakePath(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{localReminderInbox: true}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "local reminder anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
-	var generation int64
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT COALESCE(max(placement_generation), 0)
-		FROM agent_reminder_daemon_owner_event
-		WHERE agent_id = $1`, fixture.agentIDs[0]).Scan(&generation); err != nil {
-		t.Fatal(err)
-	}
 	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{fixture.runtimeIDs[0]}}
 	snapshot, err := fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identity, protocol.ReminderSnapshotRequestPayload{
-		AgentID: fixture.agentIDs[0], RuntimeID: fixture.runtimeIDs[0], PlacementGeneration: generation,
+		RuntimeID: fixture.runtimeIDs[0],
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -403,480 +404,6 @@ func TestReminderLocalInboxProjectionIsTheOnlyWakePath(t *testing.T) {
 	}
 	if got := len(notifier.snapshot()); got != 0 {
 		t.Fatalf("local-Inbox runtime also received %d server-pushed owner inputs", got)
-	}
-}
-
-func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHistory(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
-	agentID := fixture.agentIDs[0]
-	runtimeA := fixture.runtimeIDs[0]
-	var runtimeB string
-	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1, $2, 'cloud', 'pi', 'online', 'reminder lifecycle migration target', $3, now())
-		RETURNING id`, testWorkspaceID, "reminder-lifecycle-target-"+uuid.NewString(), []byte(`{"capabilities":["reminder_versioned_cache_v1"]}`)).Scan(&runtimeB); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeB)
-	})
-	identityA := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeA}}
-	identityB := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeB}}
-
-	initial, cursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
-		RuntimeCursors: map[string]int64{runtimeA: 0},
-	})
-	if err != nil || len(initial) != 1 || initial[0].AgentID != agentID || initial[0].EventType != "start" || initial[0].PlacementGeneration < 1 {
-		t.Fatalf("initial lifecycle = %+v cursors=%v err=%v", initial, cursors, err)
-	}
-	initialGeneration := initial[0].PlacementGeneration
-	var initialAttachmentRuntime string
-	if err := testPool.QueryRow(context.Background(), `SELECT runtime_id::text FROM agent_attachment_projection WHERE agent_id = $1`, agentID).Scan(&initialAttachmentRuntime); err != nil || initialAttachmentRuntime != runtimeA {
-		t.Fatalf("initial attachment projection runtime=%q err=%v", initialAttachmentRuntime, err)
-	}
-	quiet, quietCursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
-		RuntimeCursors: map[string]int64{runtimeA: cursors[runtimeA]},
-	})
-	if err != nil || len(quiet) != 0 || quietCursors[runtimeA] != cursors[runtimeA] {
-		t.Fatalf("lifecycle without scheduled owner = %+v cursors=%v err=%v", quiet, quietCursors, err)
-	}
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeB); err != nil {
-		t.Fatal(err)
-	}
-
-	oldRuntime, oldCursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
-		RuntimeCursors: map[string]int64{runtimeA: cursors[runtimeA]},
-	})
-	if err != nil || len(oldRuntime) != 1 || oldRuntime[0].EventType != "stop" || oldRuntime[0].PlacementGeneration <= initialGeneration {
-		t.Fatalf("old-runtime replay = %+v cursors=%v err=%v", oldRuntime, oldCursors, err)
-	}
-	newRuntime, newCursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityB, protocol.DaemonAgentLifecycleRequestPayload{
-		RuntimeCursors: map[string]int64{runtimeB: 0},
-	})
-	if err != nil || len(newRuntime) != 1 || newRuntime[0].EventType != "start" || newRuntime[0].PlacementGeneration != oldRuntime[0].PlacementGeneration {
-		t.Fatalf("new-runtime replay = %+v cursors=%v err=%v", newRuntime, newCursors, err)
-	}
-	var attachmentEvents []struct {
-		runtimeID  string
-		kind       string
-		generation int64
-	}
-	rows, err := testPool.Query(context.Background(), `
-		SELECT runtime_id::text, event_type, attachment_generation
-		FROM agent_attachment_projection_event
-		WHERE agent_id = $1 AND lifecycle_seq > $2
-		ORDER BY lifecycle_seq`, agentID, cursors[runtimeA])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for rows.Next() {
-		var event struct {
-			runtimeID, kind string
-			generation      int64
-		}
-		if err := rows.Scan(&event.runtimeID, &event.kind, &event.generation); err != nil {
-			t.Fatal(err)
-		}
-		attachmentEvents = append(attachmentEvents, event)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	rows.Close()
-	if len(attachmentEvents) != 2 || attachmentEvents[0].runtimeID != runtimeA || attachmentEvents[0].kind != "detach" || attachmentEvents[1].runtimeID != runtimeB || attachmentEvents[1].kind != "attach" || attachmentEvents[0].generation != attachmentEvents[1].generation || attachmentEvents[1].generation != newRuntime[0].PlacementGeneration {
-		t.Fatalf("attachment move projection = %+v", attachmentEvents)
-	}
-	var projectedRuntime string
-	var projectedGeneration int64
-	if err := testPool.QueryRow(context.Background(), `SELECT runtime_id::text, attachment_generation FROM agent_attachment_projection WHERE agent_id = $1`, agentID).Scan(&projectedRuntime, &projectedGeneration); err != nil || projectedRuntime != runtimeB || projectedGeneration != newRuntime[0].PlacementGeneration {
-		t.Fatalf("current attachment projection runtime=%q generation=%d err=%v", projectedRuntime, projectedGeneration, err)
-	}
-	_, err = fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identityA, protocol.ReminderSnapshotRequestPayload{
-		AgentID: agentID, RuntimeID: runtimeA, PlacementGeneration: initialGeneration,
-	})
-	var ownerGone *daemonws.ReminderOwnerGoneError
-	if !errors.As(err, &ownerGone) || ownerGone.RuntimeID != runtimeA || ownerGone.PlacementGeneration != oldRuntime[0].PlacementGeneration {
-		t.Fatalf("stale owner snapshot err = %#v", err)
-	}
-	current, err := fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identityB, protocol.ReminderSnapshotRequestPayload{
-		AgentID: agentID, RuntimeID: runtimeB, PlacementGeneration: newRuntime[0].PlacementGeneration,
-	})
-	if err != nil || current.RuntimeID != runtimeB || current.PlacementGeneration != newRuntime[0].PlacementGeneration {
-		t.Fatalf("current owner snapshot = %+v err=%v", current, err)
-	}
-
-	if err := fixture.handler.HandleDaemonReminderOwnerLifecycleAck(context.Background(), identityA, protocol.DaemonAgentLifecycleAckPayload{
-		RuntimeCursors: map[string]int64{runtimeA: oldCursors[runtimeA]},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var oldHistory int
-	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeA).Scan(&oldHistory); err != nil {
-		t.Fatal(err)
-	}
-	if oldHistory != 1 {
-		t.Fatalf("acked old-runtime history rows = %d, want one latest checkpoint", oldHistory)
-	}
-	if _, _, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
-		RuntimeCursors: map[string]int64{runtimeB: 0},
-	}); err == nil {
-		t.Fatal("cross-runtime lifecycle replay accepted")
-	}
-}
-
-func TestAgentAttachmentReplayReceiptsFenceStaleGenerationAndSurviveServerRestart(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
-	ctx := context.Background()
-	agentID, runtimeA := fixture.agentIDs[0], fixture.runtimeIDs[0]
-	var runtimeB string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
-		VALUES ($1, $2, 'cloud', 'pi', 'online', 'attachment replay target', $3, now())
-		RETURNING id`, testWorkspaceID, "attachment-replay-target-"+uuid.NewString(), []byte(`{"capabilities":["reminder_versioned_cache_v1"]}`)).Scan(&runtimeB); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeA)
-		_, _ = testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeB)
-	})
-
-	type attachmentEvent struct {
-		runtimeID, kind string
-		generation, seq int64
-	}
-	load := func(runtimeID, kind string) attachmentEvent {
-		t.Helper()
-		var event attachmentEvent
-		if err := testPool.QueryRow(ctx, `
-			SELECT runtime_id::text, event_type, attachment_generation, lifecycle_seq
-			FROM agent_attachment_projection_event
-			WHERE agent_id = $1 AND runtime_id = $2 AND event_type = $3
-			ORDER BY lifecycle_seq DESC LIMIT 1`, agentID, runtimeID, kind).Scan(
-			&event.runtimeID, &event.kind, &event.generation, &event.seq,
-		); err != nil {
-			t.Fatal(err)
-		}
-		return event
-	}
-	receipt := func(event attachmentEvent) protocol.WorkspaceRunnerAgentAttachedPayload {
-		return protocol.WorkspaceRunnerAgentAttachedPayload{
-			AgentID: agentID, RuntimeID: event.runtimeID, AttachmentGeneration: event.generation,
-			LifecycleSeq: event.seq,
-		}
-	}
-
-	initial := load(runtimeA, "attach")
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeB); err != nil {
-		t.Fatal(err)
-	}
-	detachA, attachB := load(runtimeA, "detach"), load(runtimeB, "attach")
-	identityA := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeA}}
-	identityB := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeB}}
-
-	// A stale attach receipt is valid only for its exact old command. It cannot
-	// advance the cursor across the newer detach generation.
-	if err := fixture.handler.acknowledgeAgentAttachmentCommand(ctx, identityA, protocol.EventAgentAttached, receipt(initial)); err != nil {
-		t.Fatalf("record initial attach receipt: %v", err)
-	}
-	if err := fixture.handler.acknowledgeAgentAttachmentCommand(ctx, identityA, protocol.EventAgentAttached, receipt(initial)); err != nil {
-		t.Fatalf("idempotent initial attach receipt: %v", err)
-	}
-	if err := fixture.handler.acknowledgeAgentAttachmentReplay(ctx, identityA, protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{runtimeA: detachA.seq}}); err == nil {
-		t.Fatal("cursor ACK skipped newer detach receipt")
-	}
-	if err := fixture.handler.acknowledgeAgentAttachmentCommand(ctx, identityA, protocol.EventAgentDetached, receipt(detachA)); err != nil {
-		t.Fatalf("record detach receipt: %v", err)
-	}
-	if err := fixture.handler.acknowledgeAgentAttachmentReplay(ctx, identityA, protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{runtimeA: detachA.seq}}); err != nil {
-		t.Fatalf("acknowledge detached runtime: %v", err)
-	}
-	var cursor int64
-	if err := testPool.QueryRow(ctx, `SELECT ack_seq FROM agent_attachment_projection_cursor WHERE runtime_id = $1`, runtimeA).Scan(&cursor); err != nil || cursor != detachA.seq {
-		t.Fatalf("persisted attachment cursor=%d err=%v, want %d", cursor, err, detachA.seq)
-	}
-	if err := fixture.handler.acknowledgeAgentAttachmentCommand(ctx, identityA, protocol.EventAgentAttached, receipt(initial)); err == nil {
-		t.Fatal("compacted stale attach receipt was accepted")
-	}
-
-	// Reconstructing the Handler models a server restart: the durable receipt
-	// and cursor still converge the pending new-runtime command idempotently.
-	restarted := &Handler{DB: fixture.handler.DB}
-	if err := restarted.acknowledgeAgentAttachmentCommand(ctx, identityB, protocol.EventAgentAttached, receipt(attachB)); err != nil {
-		t.Fatalf("record new-runtime receipt after restart: %v", err)
-	}
-	if err := restarted.acknowledgeAgentAttachmentReplay(ctx, identityB, protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{runtimeB: attachB.seq}}); err != nil {
-		t.Fatalf("acknowledge new-runtime replay after restart: %v", err)
-	}
-	if err := restarted.acknowledgeAgentAttachmentReplay(ctx, identityB, protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{runtimeB: attachB.seq}}); err != nil {
-		t.Fatalf("idempotent new-runtime replay acknowledgement: %v", err)
-	}
-}
-
-func TestReminderCurrentOwnerCheckpointRecoversAckedDefinitionToOccurrenceHistory(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
-	agentID := fixture.agentIDs[0]
-	runtimeID := fixture.runtimeIDs[0]
-	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	anchor := fixture.insertMessage(t, "user", testUserID, "acked reminder recovery anchor", nil)
-	reminderID := seedDueReminder(t, agentID, fixture.channel.ID, anchor.ID, "", "")
-
-	var generation, lifecycleCursor, projectionCursor int64
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT COALESCE(max(placement_generation), 0), COALESCE(max(seq), 0)
-		FROM agent_reminder_daemon_owner_event
-		WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeID).Scan(&generation, &lifecycleCursor); err != nil {
-		t.Fatal(err)
-	}
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT COALESCE(max(seq), 0)
-		FROM agent_reminder_daemon_projection_event
-		WHERE reminder_id = $1 AND runtime_id = $2`, reminderID, runtimeID).Scan(&projectionCursor); err != nil {
-		t.Fatal(err)
-	}
-	if generation < 1 || lifecycleCursor < 1 || projectionCursor < 1 {
-		t.Fatalf("seed owner/projection generation=%d lifecycle=%d projection=%d", generation, lifecycleCursor, projectionCursor)
-	}
-	if err := fixture.handler.HandleDaemonReminderProjectionAck(context.Background(), identity, protocol.ReminderProjectionAckPayload{
-		RuntimeCursors: map[string]int64{runtimeID: projectionCursor},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var remainingProjectionRows int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_reminder_daemon_projection_event
-		WHERE reminder_id = $1 AND runtime_id = $2 AND seq <= $3`,
-		reminderID, runtimeID, projectionCursor).Scan(&remainingProjectionRows); err != nil || remainingProjectionRows != 0 {
-		t.Fatalf("acked reminder projections=%d err=%v, want zero", remainingProjectionRows, err)
-	}
-
-	checkpoints, cursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identity, protocol.DaemonAgentLifecycleRequestPayload{
-		RuntimeCursors: map[string]int64{runtimeID: lifecycleCursor},
-	})
-	if err != nil || len(checkpoints) != 1 || checkpoints[0].EventType != "start" ||
-		checkpoints[0].AgentID != agentID || checkpoints[0].PlacementGeneration != generation ||
-		cursors[runtimeID] != lifecycleCursor {
-		t.Fatalf("authoritative owner checkpoint=%+v cursors=%v err=%v", checkpoints, cursors, err)
-	}
-	snapshot, err := fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identity, protocol.ReminderSnapshotRequestPayload{
-		AgentID: agentID, RuntimeID: runtimeID, PlacementGeneration: generation,
-	})
-	if err != nil || snapshot.ProjectionWatermark != projectionCursor || len(snapshot.Reminders) != 1 ||
-		snapshot.Reminders[0].ReminderID != reminderID {
-		t.Fatalf("acked reminder snapshot=%+v err=%v", snapshot, err)
-	}
-	if _, err := fixture.handler.HandleDaemonReminderFireAttempt(context.Background(), identity, protocol.ReminderFireAttemptPayload{
-		AgentID: agentID, RuntimeID: runtimeID, PlacementGeneration: generation,
-		ReminderID: reminderID, Version: snapshot.Reminders[0].Version,
-		FiredAtClient: time.Now().UTC().Format(time.RFC3339Nano),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	occurrences, receipts, deliveries, firedEvents := reminderFireCounts(t, reminderID)
-	if occurrences != 1 || receipts != 0 || deliveries != 0 || firedEvents != 1 {
-		t.Fatalf("recovered reminder history=%d/%d/%d/%d, want 1/0/0/1", occurrences, receipts, deliveries, firedEvents)
-	}
-}
-
-func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{localReminderInbox: true}, {localReminderInbox: true}})
-	agentID := fixture.agentIDs[0]
-	runtimeID := fixture.runtimeIDs[0]
-	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET runtime_id = $2 WHERE id = $1`, fixture.agentIDs[1], runtimeID); err != nil {
-		t.Fatal(err)
-	}
-
-	// A newly registered runtime with no timer mutations must still be able to
-	// durably ACK cursor zero. Otherwise reconnect repeats an empty replay
-	// forever and never advances to snapshots.
-	if err := fixture.handler.HandleDaemonReminderProjectionAck(context.Background(), identity, protocol.ReminderProjectionAckPayload{
-		RuntimeCursors: map[string]int64{runtimeID: 0},
-	}); err != nil {
-		t.Fatalf("zero projection ack: %v", err)
-	}
-
-	anchor := fixture.insertMessage(t, "user", testUserID, "projection generation anchor", nil)
-	reminderID := seedDueReminder(t, agentID, fixture.channel.ID, anchor.ID, "", "")
-	var generation int64
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT max(placement_generation)
-		FROM agent_reminder_daemon_owner_event
-		WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeID).Scan(&generation); err != nil {
-		t.Fatal(err)
-	}
-	forcedEvents, forcedEnd, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{
-		RuntimeCursors:       map[string]int64{runtimeID: 0},
-		RuntimeResidencies:   map[string][]protocol.ReminderRuntimeResidency{runtimeID: {{AgentID: agentID, PlacementGeneration: generation}}},
-		RuntimeResetRequired: map[string]bool{runtimeID: true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	forcedReset, ok := forcedEnd.RuntimeResets[runtimeID]
-	if len(forcedEvents) != 0 || !ok || forcedReset.ProjectionWatermark < 1 || len(forcedReset.Owners) != 1 || len(forcedReset.Owners[0].Reminders) != 1 || forcedReset.Owners[0].Reminders[0].ReminderID != reminderID || forcedReset.Owners[0].Reminders[0].LocalInput == nil {
-		t.Fatalf("forced canonical reset with zero ack events=%+v end=%+v", forcedEvents, forcedEnd)
-	}
-	events, end, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{
-		RuntimeCursors: map[string]int64{runtimeID: 0},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var projection *protocol.ReminderProjectionEvent
-	for i := range events {
-		if events[i].ReminderID == reminderID {
-			projection = &events[i]
-			break
-		}
-	}
-	if projection == nil {
-		t.Fatalf("replay omitted reminder %s: %+v", reminderID, events)
-	}
-	if projection.Reminder.LocalInput == nil {
-		t.Fatalf("replay omitted local Reminder input: %+v", projection)
-	}
-	if projection.PlacementGeneration != generation || generation < 1 {
-		t.Fatalf("projection generation=%d owner generation=%d", projection.PlacementGeneration, generation)
-	}
-	if end.RuntimeCursors[runtimeID] < projection.Seq {
-		t.Fatalf("replay watermark=%d before projection=%d", end.RuntimeCursors[runtimeID], projection.Seq)
-	}
-	if err := fixture.handler.HandleDaemonReminderProjectionAck(context.Background(), identity, protocol.ReminderProjectionAckPayload{
-		RuntimeCursors: map[string]int64{runtimeID: end.RuntimeCursors[runtimeID]},
-	}); err != nil {
-		t.Fatalf("projection ack: %v", err)
-	}
-	var remaining int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_reminder_daemon_projection_event
-		WHERE runtime_id = $1 AND seq <= $2`, runtimeID, end.RuntimeCursors[runtimeID]).Scan(&remaining); err != nil || remaining != 0 {
-		t.Fatalf("acked projection rows=%d err=%v", remaining, err)
-	}
-	resetEvents, resetEnd, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{
-		RuntimeCursors:     map[string]int64{runtimeID: 0},
-		RuntimeResidencies: map[string][]protocol.ReminderRuntimeResidency{runtimeID: {{AgentID: agentID, PlacementGeneration: generation}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resetEvents) != 0 {
-		t.Fatalf("cursor-loss reset replayed GC events: %+v", resetEvents)
-	}
-	reset, ok := resetEnd.RuntimeResets[runtimeID]
-	if !ok || reset.ProjectionWatermark != end.RuntimeCursors[runtimeID] || len(reset.Owners) != 1 {
-		t.Fatalf("cursor-loss reset=%+v end=%+v", reset, resetEnd)
-	}
-	if reset.Owners[0].AgentID != agentID || reset.Owners[0].Terminal || len(reset.Owners[0].Reminders) != 1 || reset.Owners[0].Reminders[0].ReminderID != reminderID {
-		t.Fatalf("cursor-loss reset owner=%+v", reset.Owners[0])
-	}
-	if reset.Owners[0].AgentID == fixture.agentIDs[1] {
-		t.Fatal("server injected an unsubmitted resident owner")
-	}
-}
-
-func TestReminderRuntimeResetDefinitionsAndWatermarkShareOneOrderBoundary(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
-	agentID := fixture.agentIDs[0]
-	runtimeID := fixture.runtimeIDs[0]
-	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	anchor := fixture.insertMessage(t, "user", testUserID, "runtime reset boundary", nil)
-	reminderID := seedDueReminder(t, agentID, fixture.channel.ID, anchor.ID, "", "")
-	events, firstEnd, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{RuntimeCursors: map[string]int64{runtimeID: 0}})
-	if err != nil || len(events) == 0 {
-		t.Fatalf("seed projection events=%d err=%v", len(events), err)
-	}
-	if err := fixture.handler.HandleDaemonReminderProjectionAck(context.Background(), identity, protocol.ReminderProjectionAckPayload{RuntimeCursors: firstEnd.RuntimeCursors}); err != nil {
-		t.Fatal(err)
-	}
-	var generation int64
-	if err := testPool.QueryRow(context.Background(), `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&generation); err != nil {
-		t.Fatal(err)
-	}
-
-	holder, err := testPool.Begin(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer holder.Rollback(context.Background())
-	if _, err := holder.Exec(context.Background(), `SELECT pg_advisory_xact_lock(hashtextextended($1, 210))`, runtimeID); err != nil {
-		t.Fatal(err)
-	}
-	type resetResult struct {
-		reset protocol.ReminderRuntimeReset
-		err   error
-	}
-	resetDone := make(chan resetResult, 1)
-	go func() {
-		reset, err := fixture.handler.buildReminderRuntimeReset(context.Background(), identity, runtimeID, 0, []protocol.ReminderRuntimeResidency{{AgentID: agentID, PlacementGeneration: generation}}, false)
-		resetDone <- resetResult{reset: reset, err: err}
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		var waiting int
-		if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("reset did not reach runtime advisory boundary")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	mutationDone := make(chan error, 1)
-	go func() {
-		tx, err := testPool.Begin(context.Background())
-		if err == nil {
-			_, err = tx.Exec(context.Background(), `SELECT 1 FROM agent WHERE id = $1 FOR UPDATE`, agentID)
-		}
-		if err == nil {
-			_, err = tx.Exec(context.Background(), `UPDATE agent_reminder SET title = 'after reset boundary', version = version + 1, updated_at = now() WHERE id = $1`, reminderID)
-		}
-		if err == nil {
-			err = tx.Commit(context.Background())
-		} else if tx != nil {
-			_ = tx.Rollback(context.Background())
-		}
-		mutationDone <- err
-	}()
-	select {
-	case err := <-mutationDone:
-		t.Fatalf("mutation crossed locked reset owner before boundary release: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	if err := holder.Commit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	result := <-resetDone
-	if result.err != nil {
-		t.Fatal(result.err)
-	}
-	if err := <-mutationDone; err != nil {
-		t.Fatal(err)
-	}
-	if result.reset.ProjectionWatermark != firstEnd.RuntimeCursors[runtimeID] || len(result.reset.Owners) != 1 || len(result.reset.Owners[0].Reminders) != 1 || result.reset.Owners[0].Reminders[0].Version != 1 {
-		t.Fatalf("reset returned mixed definitions/watermark: first=%d reset=%+v", firstEnd.RuntimeCursors[runtimeID], result.reset)
-	}
-	replay, replayEnd, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{RuntimeCursors: map[string]int64{runtimeID: result.reset.ProjectionWatermark}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var dbVersion int64
-	if err := testPool.QueryRow(context.Background(), `SELECT version FROM agent_reminder WHERE id = $1`, reminderID).Scan(&dbVersion); err != nil {
-		t.Fatal(err)
-	}
-	if dbVersion != 2 || replayEnd.RuntimeCursors[runtimeID] <= result.reset.ProjectionWatermark {
-		t.Fatalf("post-reset DB/replay truth version=%d end=%+v reset=%+v", dbVersion, replayEnd, result.reset)
-	}
-	found := false
-	for _, event := range replay {
-		if event.ReminderID == reminderID && event.Version == dbVersion {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("post-reset replay omitted DB truth version=%d events=%+v", dbVersion, replay)
 	}
 }
 
@@ -940,13 +467,9 @@ func TestDaemonReminderFireAttemptRejectsStaleCancelledAndCrossOwner(t *testing.
 		t.Fatal(err)
 	}
 	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{fixture.runtimeIDs[0]}}
-	var placementGeneration int64
-	if err := testPool.QueryRow(context.Background(), `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, fixture.agentIDs[0]).Scan(&placementGeneration); err != nil {
-		t.Fatal(err)
-	}
 	for _, payload := range []protocol.ReminderFireAttemptPayload{
-		{AgentID: fixture.agentIDs[0], RuntimeID: fixture.runtimeIDs[0], PlacementGeneration: placementGeneration, ReminderID: reminderID, Version: version + 1},
-		{AgentID: fixture.agentIDs[1], RuntimeID: fixture.runtimeIDs[0], PlacementGeneration: placementGeneration, ReminderID: reminderID, Version: version},
+		{AgentID: fixture.agentIDs[0], RuntimeID: fixture.runtimeIDs[0], ReminderID: reminderID, Version: version + 1},
+		{AgentID: fixture.agentIDs[1], RuntimeID: fixture.runtimeIDs[0], ReminderID: reminderID, Version: version},
 	} {
 		_, _ = fixture.handler.HandleDaemonReminderFireAttempt(context.Background(), identity, payload)
 	}
@@ -960,7 +483,7 @@ func TestDaemonReminderFireAttemptRejectsStaleCancelledAndCrossOwner(t *testing.
 		t.Fatal(err)
 	}
 	if _, err := fixture.handler.HandleDaemonReminderFireAttempt(context.Background(), identity, protocol.ReminderFireAttemptPayload{
-		AgentID: fixture.agentIDs[0], RuntimeID: fixture.runtimeIDs[0], PlacementGeneration: placementGeneration, ReminderID: reminderID, Version: version + 1,
+		AgentID: fixture.agentIDs[0], RuntimeID: fixture.runtimeIDs[0], ReminderID: reminderID, Version: version + 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1006,21 +529,17 @@ func TestReminderMutationAndFireRaceHasOneVersionFencedWinner(t *testing.T) {
 			notifier := &capturedReminderOwnerInputNotifier{result: true}
 			fixture.handler.ReminderOwnerInputNotifier = notifier
 
-			var version, placementGeneration int64
+			var version int64
 			if err := testPool.QueryRow(context.Background(), `SELECT version FROM agent_reminder WHERE id = $1`, reminderID).Scan(&version); err != nil {
-				t.Fatal(err)
-			}
-			if err := testPool.QueryRow(context.Background(), `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, fixture.agentIDs[0]).Scan(&placementGeneration); err != nil {
 				t.Fatal(err)
 			}
 			identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{fixture.runtimeIDs[0]}}
 			payload := protocol.ReminderFireAttemptPayload{
-				AgentID:             fixture.agentIDs[0],
-				RuntimeID:           fixture.runtimeIDs[0],
-				PlacementGeneration: placementGeneration,
-				ReminderID:          reminderID,
-				Version:             version,
-				FiredAtClient:       time.Now().UTC().Format(time.RFC3339Nano),
+				AgentID:       fixture.agentIDs[0],
+				RuntimeID:     fixture.runtimeIDs[0],
+				ReminderID:    reminderID,
+				Version:       version,
+				FiredAtClient: time.Now().UTC().Format(time.RFC3339Nano),
 			}
 
 			start := make(chan struct{})
@@ -1400,8 +919,8 @@ func TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot(t *testing.T) {
 	if result == nil || result.Ack.AgentID != attempt.AgentID || result.Ack.ReminderID != attempt.ReminderID || result.Ack.Version != attempt.Version {
 		t.Fatalf("recurring fire ACK=%+v, want exact attempted owner/reminder/version %+v", result, attempt)
 	}
-	if result.Projection.Version != attempt.Version+1 || result.Projection.EventType != "upsert" {
-		t.Fatalf("recurring canonical projection=%+v, want next-version upsert independent of ACK identity", result.Projection)
+	if result.Upsert == nil || result.Upsert.Reminder.Version != attempt.Version+1 {
+		t.Fatalf("recurring canonical upsert=%+v, want next-version upsert independent of ACK identity", result.Upsert)
 	}
 	var status string
 	var nextFire, nextCadence time.Time
@@ -2318,18 +1837,18 @@ func setReminderModernTransportInitiator(t *testing.T, fixture reminderModernTra
 	}
 }
 
-func TestAgentReminderUpsertPublishesAuthoritativeOwnerBeforeProjection(t *testing.T) {
+func TestAgentReminderSchedulePublishesDirectRuntimeUpsert(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	fixture := seedReminderModernTransportFixture(t)
 	previousNotifier := testHandler.ReminderNotifier
-	notifier := &recordingReminderNotifier{}
+	notifier := &capturedReminderNotifier{}
 	testHandler.ReminderNotifier = notifier
 	t.Cleanup(func() { testHandler.ReminderNotifier = previousNotifier })
 
 	scheduleRec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
-		"title": "owner before projection", "delay_seconds": 300, "message_id": fixture.anchorMessageID,
+		"title": "direct runtime upsert", "delay_seconds": 300, "message_id": fixture.anchorMessageID,
 	})
 	if scheduleRec.Code != http.StatusCreated {
 		t.Fatalf("schedule status=%d body=%s", scheduleRec.Code, scheduleRec.Body.String())
@@ -2342,18 +1861,45 @@ func TestAgentReminderUpsertPublishesAuthoritativeOwnerBeforeProjection(t *testi
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
 	})
 
-	if !reflect.DeepEqual(notifier.order, []string{"start", "projection"}) {
-		t.Fatalf("reminder notifier order=%v, want [start projection]", notifier.order)
+	if len(notifier.upserts) != 1 || len(notifier.cancels) != 0 {
+		t.Fatalf("reminder notifier upserts/cancels=%d/%d", len(notifier.upserts), len(notifier.cancels))
 	}
-	if len(notifier.starts) != 1 || len(notifier.projections) != 1 {
-		t.Fatalf("reminder notifier start/projection=%d/%d", len(notifier.starts), len(notifier.projections))
+	upsert := notifier.upserts[0]
+	var runtimeID string
+	if err := testPool.QueryRow(context.Background(), `SELECT runtime_id::text FROM agent WHERE id = $1`, fixture.agentID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
 	}
-	start := notifier.starts[0]
-	projection := notifier.projections[0]
-	if start.AgentID != fixture.agentID || start.RuntimeID != projection.RuntimeID ||
-		start.AttachmentGeneration < 1 || start.AttachmentGeneration != projection.PlacementGeneration ||
-		projection.AgentID != fixture.agentID || projection.ReminderID != scheduled.ID || projection.Terminal {
-		t.Fatalf("owner/projection mismatch start=%+v projection=%+v", start, projection)
+	if upsert.RuntimeID != runtimeID || upsert.Reminder.OwnerAgentID != fixture.agentID || upsert.Reminder.ReminderID != scheduled.ID {
+		t.Fatalf("direct Reminder upsert mismatch: %+v", upsert)
+	}
+}
+
+func TestAgentRuntimeMoveReconcilesScheduledRemindersDirectly(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "runtime move reminder", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+	notifier := &capturedReminderNotifier{}
+	fixture.handler.ReminderNotifier = notifier
+
+	err := fixture.handler.reconcileAgentReminderRuntime(
+		context.Background(),
+		parseUUID(fixture.agentIDs[0]),
+		parseUUID(fixture.runtimeIDs[0]),
+		parseUUID(fixture.runtimeIDs[1]),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.cancels) != 1 || len(notifier.upserts) != 1 {
+		t.Fatalf("runtime move notifier cancels/upserts=%d/%d, want 1/1", len(notifier.cancels), len(notifier.upserts))
+	}
+	cancel := notifier.cancels[0]
+	if cancel.RuntimeID != fixture.runtimeIDs[0] || cancel.AgentID != fixture.agentIDs[0] || cancel.ReminderID != reminderID {
+		t.Fatalf("old Runtime cancel mismatch: %+v", cancel)
+	}
+	upsert := notifier.upserts[0]
+	if upsert.RuntimeID != fixture.runtimeIDs[1] || upsert.AgentID != fixture.agentIDs[0] || upsert.Reminder.ReminderID != reminderID {
+		t.Fatalf("new Runtime upsert mismatch: %+v", upsert)
 	}
 }
 

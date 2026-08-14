@@ -8,9 +8,9 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import {
-  agentLifecycleActionState,
-  agentLifecyclePreflightOptions,
-  resolveLifecycleDisabledReasonKey,
+  agentRestartModeState,
+  agentRestartPreflightOptions,
+  resolveRestartDisabledReasonKey,
 } from "@multica/core/agents";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -83,23 +83,24 @@ export function AgentProfileActions({
   // The provider-level gate above (forceRestartSupported) only tells us the
   // agent's provider CAN be force-restarted in principle — not that the
   // daemon it's actually running on is new enough to execute it right now
-  // (e.g. pre-v0.3.95 daemons predate agent_lifecycle_actions_v1). Fetch the
+  // Fetch the server-owned restart capability instead of inferring it from
+  // Agent presentation state.
   // real preflight whenever we'd otherwise offer the button, so a stale
   // daemon shows a standing reason instead of a click that silently no-ops.
   // Visibility: managers always see Restart while online (Parker #26) —
   // hiding when force_restart is false made the feature look missing.
   const wantsRestartOffer = canManage && !isArchived && isRuntimeOnline;
   const { data: restartPreflightData, isSuccess: restartPreflightSucceeded } = useQuery(
-    agentLifecyclePreflightOptions(agent.id, wantsRestartOffer && forceRestartSupported),
+    agentRestartPreflightOptions(agent.id, wantsRestartOffer && forceRestartSupported),
   );
-  const restartState = agentLifecycleActionState(restartPreflightData, "restart");
+  const restartState = agentRestartModeState(restartPreflightData, "restart");
   // Only trust preflight disable once resolved — don't flash "unavailable".
   const preflightBlocked = forceRestartSupported && restartPreflightSucceeded && !restartState.supported;
   const restartBlocked = !forceRestartSupported || preflightBlocked;
   const restartDisabledReason = !forceRestartSupported
     ? t(($) => $.restart_modal.disabled_reason.no_force_capability)
     : preflightBlocked
-      ? t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(restartState.disabled_reason)])
+      ? t(($) => $.restart_modal.disabled_reason[resolveRestartDisabledReasonKey(restartState.disabled_reason)])
       : null;
 
   const invalidateAgents = () => {

@@ -11,7 +11,7 @@
 ## 1. 总模型
 
 - 同一个 OS 用户下只有一个机器级 Computer identity，不随 workspace slug 变化。
-- 只有一个 resident 持有本机锁、健康端口和 PID。
+- 只有一个 Computer Host resident 持有本机锁、健康端口和主 PID；它为每条当前 active connection 监督一个真实 Binding execution child。
 - 每条 Workspace connection 独立授权；一个工作区断开不会影响其他工作区。
 - 同一时刻 resident 只连接一个环境的一个服务 origin，同时服务该环境下的全部已连接工作区。
 - Production 和 Test 的连接可以同时保存；切换环境时重启 resident，另一环境的连接不会丢失。
@@ -20,7 +20,7 @@
 
 ```mermaid
 flowchart LR
-  C["这台电脑<br/>一个 identity · 一个 resident · 一个 generation"]
+  C["这台电脑<br/>一个 identity · 一个 Host resident · 一个 computer generation"]
 
   PA["Production · Workspace A"]
   PB["Production · Workspace B"]
@@ -51,10 +51,10 @@ flowchart LR
 
 | 问题 | Computer V1 的答案 |
 | --- | --- |
-| 一台电脑能连接两个工作区吗？ | 可以；同一环境下由一个 resident 同时服务。 |
+| 一台电脑能连接两个工作区吗？ | 可以；同一环境下由一个 Computer Host 监督两个隔离的 Binding children。 |
 | 工作区改名会断开吗？ | 不会；身份使用不可变的 `workspace_id`。 |
 | 只删除 Workspace A 里的 Computer 呢？ | 只删除 A 的服务端机器挂载；B 的 connection、credential 和执行状态保留。 |
-| connection 是一个额外进程或目录吗？ | 不是；它是一条独立授权，不是 resident，也不是本机 workspace 目录。 |
+| connection 是一个额外进程或目录吗？ | connection 本身是一条独立授权；active 时 Host 会为它监督一个 execution child。child 不是第二个 Computer identity/Host resident，也不创造另一套 Workspace 目录。 |
 | 在 Workspace A 点击升级会只升级 A 吗？ | 不会。A 只是入口；升级的是整台 Computer，A、B 等全部 active connections 随后使用同一新版本并看到同一进度。 |
 
 ## 3. 环境和包
@@ -99,7 +99,7 @@ multica config show
 2. 登录并把 slug 解析成不可变的 `workspace_id`。
 3. 由服务端授权 Computer connection 并签发 execution credential。
 4. 以 `(environment, workspace_id)` 原子 upsert 本地 connection；重复 setup 是修复，不制造副本。
-5. 启动或重启唯一 resident，并领取新的 generation。
+5. 启动或重启唯一 Computer Host resident，领取新的 `computer_generation`，再为全部 active connections 启动各自的 `runner_generation` child。
 6. 用 `running + connected:true` 验收 environment、origin 和工作区均一致。
 
 工作区没有 Agent 时也可以 setup 成功；验收依据是 Computer 是否真正连接服务，不是 runtime 数量。
@@ -132,15 +132,17 @@ flowchart LR
 flowchart LR
   I["服务端 Inbox<br/>environment + workspace_id"]
   W["Workspace WebSocket"]
-  R["唯一 resident<br/>校验 generation 和 connection"]
+  H["Computer Host<br/>校验 computer generation"]
+  R["Binding child<br/>校验 runner generation + connection"]
   A["Agent Root<br/>持久目录与上下文"]
   P["Provider CLI<br/>Codex / Claude / ..."]
 
+  H -->|spawn / stop / generation fence| R
   I --> W --> R --> A --> P
   P -->|结果回报| R
 ```
 
-旧 generation 即使进程仍存活，也会被服务端拒绝，避免两个 resident 同时接受或回报工作。
+旧 `computer_generation` 会被服务端拒绝；旧 `runner_generation + PID` 会被本机 Host control 拒绝，避免 predecessor Host 或 stale Binding child 接受和回报工作。
 
 ## 6. Delete Computer
 
@@ -296,7 +298,7 @@ multica computer logs
 
 ## 结论
 
-1. 一台电脑只有一个 Computer identity 和一个 resident。
+1. 一台电脑只有一个 Computer identity 和一个 Host resident；每条 active Workspace connection 有一个由 Host 监督的 Binding execution child。
 2. 一个 Computer 可以连接多个工作区。
 3. Production 固定 stable；Test 固定 preview。
 4. `Delete Computer` 只删除当前工作区的服务端机器挂载，不删除本机文件或其他工作区。

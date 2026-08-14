@@ -122,7 +122,7 @@ type Handler struct {
 	ReminderNotifier           daemonws.ReminderNotifier
 	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
 	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
-	AgentLifecycleNotifier     daemonws.AgentLifecycleNotifier
+	AgentRestartNotifier       daemonws.AgentRestartNotifier
 	SandboxHub                 *sandboxws.Hub
 	Bus                        *events.Bus
 	TaskService                *service.TaskService

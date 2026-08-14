@@ -58,7 +58,6 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, job.TaskID).Scan(&contextR
 	}
 }
 
-
 func TestCreateNoteWorkerJobDispatchesWithNoteBrief(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

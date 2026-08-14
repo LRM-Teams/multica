@@ -422,10 +422,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderSnapshot,
 		h.HandleDaemonReminderFireAttempt,
 	)
-	daemonHub.SetReminderProjectionHandlers(
-		h.HandleDaemonReminderProjection,
-		h.HandleDaemonReminderProjectionAck,
-	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
 	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
 	// The current fenced Workspace Runner owns Attachment, launch, Message, and
@@ -569,7 +565,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/runtimes/{runtimeId}/agents/{agentId}/runtime-config", h.DaemonGetAgentRuntimeConfig)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed", h.ReportAgentProviderCrashed)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
-		r.Post("/runtimes/{runtimeId}/agents/{agentId}/session/reset", h.ResetAgentRuntimeSession)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
 		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/accept", h.AcceptMachineUpgrade)
@@ -1149,9 +1144,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/restore", h.RestoreAgent)
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
 					r.Get("/health", h.GetAgentHealth)
-					r.Get("/lifecycle", h.GetAgentLifecycle)
-					r.Post("/lifecycle", h.CreateAgentLifecycleOperation)
-					r.Get("/lifecycle/{operationId}", h.GetAgentLifecycleOperation)
+					r.Get("/reset", h.GetAgentRestart)
+					r.Post("/reset", h.ResetAgent)
+					r.Get("/reset/{operationId}", h.GetAgentRestartOperation)
 					// Workspace Runner Activity is the only public Agent Activity
 					// contract. It is a server-owned presentation read model; there is
 					// no compatibility translation from the removed event timeline.

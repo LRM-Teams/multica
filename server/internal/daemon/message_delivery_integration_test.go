@@ -125,9 +125,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.workspaces[workspaceID] = newWorkspaceState(workspaceID, []string{runtimeID})
 	d.mu.Unlock()
-	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
-		t.Fatal(err)
-	}
 	hub := daemonws.NewHub()
 	eventBus := events.New()
 	eventBus.SubscribeAll(func(event events.Event) {
@@ -139,7 +136,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		db.New(pool), pool, realtime.NewHub(), eventBus, service.NewEmailService(), nil, nil,
 		analytics.NoopClient{}, serverhandler.Config{}, hub,
 	)
-	installWorkspaceRunnerAttachmentReplayEcho(hub)
 	serverHandler.AgentDeliveryNotifier = hub
 	acks := make(chan protocol.AgentDeliverAckPayload, 2)
 	handoffs := make(chan protocol.AgentMessageHandoffPayload, 2)
@@ -172,11 +168,11 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		backend: fakeRuntime,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
-		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
-	}
 	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch", StartDispatchID: "acceptance-launch" + "-dispatch"}); err != nil {
 		t.Fatalf("accept test APM launch: %v", err)
+	}
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
+		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 	}
 	// Start() only admits the launch into Starting. Provider handoff and the
 	// no-ACK rejection path both require Running; otherwise Accept buffers
@@ -416,22 +412,6 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 	}
 }
 
-func installWorkspaceRunnerAttachmentReplayEcho(hub *daemonws.Hub) {
-	hub.SetWorkspaceRunnerHandler(func(_ context.Context, identity daemonws.ClientIdentity, _ string, eventType string, raw json.RawMessage) error {
-		if eventType != protocol.EventAgentAttachmentReplayReq {
-			return nil
-		}
-		var request protocol.WorkspaceRunnerAttachmentReplayRequest
-		if err := json.Unmarshal(raw, &request); err != nil {
-			return err
-		}
-		if !hub.NotifyWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, protocol.EventAgentAttachmentReplayEnd, protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: request.RuntimeCursors}) {
-			return errors.New("send test Attachment replay end")
-		}
-		return nil
-	})
-}
-
 func seedIdleMessageAcceptanceBoundaries(ctx context.Context, pool *pgxpool.Pool, root, workspaceID, agentID string) error {
 	rows, err := pool.Query(ctx, `
 		SELECT CASE WHEN message.thread_root_message_id IS NULL
@@ -556,7 +536,6 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		db.New(pool), pool, realtime.NewHub(), eventBus, service.NewEmailService(), nil, nil,
 		analytics.NoopClient{}, serverhandler.Config{}, hub,
 	)
-	installWorkspaceRunnerAttachmentReplayEcho(hub)
 	serverHandler.AgentDeliveryNotifier = hub
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: workspaceID})
@@ -593,9 +572,6 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 		d.workspaces[workspaceID] = newWorkspaceState(workspaceID, []string{runtimeID})
 		d.mu.Unlock()
-		if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
-			t.Fatal(err)
-		}
 		runner, err := d.newWorkspaceRunner(workspaceID)
 		if err != nil {
 			t.Fatal(err)
@@ -604,11 +580,11 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 			backend: normal,
 		}
-		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
-			t.Fatalf("ensureIdleMessageCoordinator: %v", err)
-		}
 		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch", StartDispatchID: "acceptance-launch" + "-dispatch"}); err != nil {
 			t.Fatalf("accept test APM launch: %v", err)
+		}
+		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
+			t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 		}
 		markTestLaunchRunning(t, runner, agentID)
 		acks = make(chan protocol.AgentDeliverAckPayload, 2)

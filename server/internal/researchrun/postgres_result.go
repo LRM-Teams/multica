@@ -1270,6 +1270,20 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
 			return nil, 0, err
 		}
+		var sourceProducerTaskID string
+		if err = tx.QueryRow(ctx, `
+			SELECT produced_by_task_id::text FROM research_source_snapshot
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, state.workspaceID, state.run.SessionID, id).Scan(&sourceProducerTaskID); err != nil {
+			return nil, 0, err
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, state.workspaceID, state.run.SessionID,
+			id, ArtifactKindSourceSnapshot, sourceProducerTaskID, ArtifactKindTask,
+			"source_producer", "source_materialization", 0,
+		); err != nil {
+			return nil, 0, err
+		}
 		payload, _ := json.Marshal(map[string]any{
 			"snapshot_id": id, "publisher": source.Publisher,
 			"independence_key": source.IndependenceKey, "retrieved_at": source.RetrievedAt,
@@ -1439,6 +1453,20 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 			}
 		}
 		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
+			return nil, 0, err
+		}
+		var observationProducerTaskID string
+		if err = tx.QueryRow(ctx, `
+			SELECT produced_by_task_id::text FROM research_observation
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, state.workspaceID, state.run.SessionID, id).Scan(&observationProducerTaskID); err != nil {
+			return nil, 0, err
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, state.workspaceID, state.run.SessionID,
+			id, ArtifactKindObservation, observationProducerTaskID, ArtifactKindTask,
+			"observation_producer", "observation_materialization", 0,
+		); err != nil {
 			return nil, 0, err
 		}
 	}

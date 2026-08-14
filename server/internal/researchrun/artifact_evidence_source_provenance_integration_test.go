@@ -167,11 +167,15 @@ func TestAcceptedSourceAndObservationVersionsBindCanonicalContentAndAttempt(t *t
 			observationVersionHash, wantObservationHash, observationOrigin,
 			observationProvenance, observationAttemptID, sourceAttemptID)
 	}
-	var projectionEdges, observationEdges int
+	var projectionEdges, observationEdges, sourceProducerEdges, observationProducerEdges int
 	if err = pool.QueryRow(ctx, `
 		SELECT
 		  count(*) FILTER (WHERE reference.relation='projects')::int,
-		  count(*) FILTER (WHERE reference.relation='observes')::int
+		  count(*) FILTER (WHERE reference.relation='observes')::int,
+		  (SELECT count(*)::int FROM research_artifact_input_reference
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND relation='source_producer'),
+		  (SELECT count(*)::int FROM research_artifact_input_reference
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND relation='observation_producer')
 		FROM research_artifact_input_reference reference
 		JOIN research_artifact_version input_version
 		  ON input_version.workspace_id=reference.workspace_id
@@ -179,10 +183,14 @@ func TestAcceptedSourceAndObservationVersionsBindCanonicalContentAndAttempt(t *t
 		 AND input_version.id=reference.input_version_id
 		WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
 		  AND input_version.artifact_id=$3::uuid
-	`, fixture.workspaceID, fixture.sessionID, sourceID).Scan(&projectionEdges, &observationEdges); err != nil {
+	`, fixture.workspaceID, fixture.sessionID, sourceID).Scan(
+		&projectionEdges, &observationEdges, &sourceProducerEdges, &observationProducerEdges,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if projectionEdges != 1 || observationEdges == 0 {
-		t.Fatalf("source lineage projects=%d want=1 observes=%d want>0", projectionEdges, observationEdges)
+	if projectionEdges != 1 || observationEdges == 0 || sourceProducerEdges != 1 ||
+		observationProducerEdges != observationEdges {
+		t.Fatalf("source lineage projects=%d want=1 observes=%d producers=%d/%d",
+			projectionEdges, observationEdges, sourceProducerEdges, observationProducerEdges)
 	}
 }

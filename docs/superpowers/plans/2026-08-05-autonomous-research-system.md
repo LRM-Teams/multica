@@ -373,6 +373,14 @@ Projection 的后端读模型必须给每个节点提供：节点用途、绑定
 - detail payload 与 canonical entity reference；
 - created/updated/terminal event sequence。
 
+D5/V6 的视觉语义也属于 Projection 契约：节点输出 `level`、可空
+`cluster_id`/`parent_id`、`round`、可空真实指标和 lineage；Snapshot
+输出成果簇，Delta 输出簇 upsert/tombstone。Goal 是独立 M 级研究起点，
+唯一最高层且有 canonical derivation 的 accepted Insight 才投影为 XXL
+`master_synthesis`。Run 生命周期与节点生命周期分离，运行时失败只影响
+当前 Task/Attempt，不得污染 Goal 或历史成果。`importance` 保持 `[0,1]`，
+前端不得用旧量纲阈值推断视觉层级。
+
 V6 必须注册的 `node_kind` 至少包括：`task | attempt | result_artifact | search_plan | query_execution | source_candidate | screening_decision | source_snapshot | observation | claim | question | hypothesis | branch | insight | insight_derivation | integration_round | integration_contribution | dispute | dispute_position | deliberation | deliberation_turn | decision | team_formation | team_membership | divergence_pass | capability_observation | report_revision | evaluation_defect | monitoring_cycle | episode`。未知未来类型必须能以 generic node 降级显示，不能让旧客户端崩溃。
 
 稳定边类型至少包括：

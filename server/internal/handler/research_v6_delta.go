@@ -15,7 +15,7 @@ type researchV6ProjectionEvent struct {
 }
 
 func buildResearchV6EventDelta(snapshot researchV6Snapshot, from int64, events []researchV6ProjectionEvent) (researchV6Delta, bool) {
-	delta := researchV6Delta{FromSequenceExclusive: from, NodeUpserts: []researchV6ProjectionNode{}, EdgeUpserts: []researchV6ProjectionEdge{}, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: []string{}}
+	delta := researchV6Delta{FromSequenceExclusive: from, NodeUpserts: []researchV6ProjectionNode{}, EdgeUpserts: []researchV6ProjectionEdge{}, NodeTombstones: []string{}, EdgeTombstones: []string{}, ClusterUpserts: []researchV6ProjectionCluster{}, ClusterTombstones: []string{}, AffectedRootNodeIDs: []string{}}
 	if len(events) == 0 {
 		delta.ThroughSequence = from
 		return delta, from == snapshot.ThroughEventSequence
@@ -84,6 +84,7 @@ func buildResearchV6EventDelta(snapshot researchV6Snapshot, from int64, events [
 	sort.Slice(delta.EdgeUpserts, func(i, j int) bool { return delta.EdgeUpserts[i].ID < delta.EdgeUpserts[j].ID })
 	delta.ThroughSequence = snapshot.ThroughEventSequence
 	delta.AffectedRootNodeIDs = researchV6RootIDs(snapshot.Nodes)
+	delta.ClusterUpserts = append(delta.ClusterUpserts, snapshot.Clusters...)
 	if transition != "" {
 		delta.TransitionKind = &transition
 	}

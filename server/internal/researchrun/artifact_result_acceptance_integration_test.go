@@ -69,12 +69,31 @@ func TestAcceptResultAcceptsAfterUnrelatedPolicyWatermarkAdvance(t *testing.T) {
 	store := NewPostgresStore(pool)
 
 	attempt, inboxID, raw, run, task := setupRunningPlanAttempt(t, ctx, store, fixture)
+	var manifestWatermark int64
+	if err = pool.QueryRow(ctx, `
+		SELECT policy_watermark
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&manifestWatermark); err != nil {
+		t.Fatalf("load dispatch manifest watermark: %v", err)
+	}
 	if _, err = pool.Exec(ctx, `
 		UPDATE research_artifact_policy_state
 		SET watermark = watermark + 1, updated_at = now()
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
 	`, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("advance unrelated policy watermark: %v", err)
+	}
+	var advancedWatermark int64
+	if err = pool.QueryRow(ctx, `
+		SELECT watermark
+		FROM research_artifact_policy_state
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, fixture.workspaceID, run.SessionID).Scan(&advancedWatermark); err != nil {
+		t.Fatalf("load unrelated advanced watermark: %v", err)
+	}
+	if advancedWatermark <= manifestWatermark {
+		t.Fatalf("unrelated advance watermark=%d want > manifest=%d", advancedWatermark, manifestWatermark)
 	}
 
 	result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, run.Config)
@@ -92,14 +111,35 @@ func TestAcceptResultAcceptsAfterUnrelatedPolicyWatermarkAdvance(t *testing.T) {
 		t.Fatalf("outcome=%+v", outcome)
 	}
 	var resultArtifacts int
+	var acceptanceWatermark int64
 	if err = pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_result_artifact
+		SELECT count(*)::int, max(acceptance_policy_watermark)
+		FROM research_result_artifact
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&resultArtifacts); err != nil {
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&resultArtifacts,
+		&acceptanceWatermark,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if resultArtifacts != 1 {
 		t.Fatalf("result artifacts=%d want 1", resultArtifacts)
+	}
+	var finalWatermark int64
+	if err = pool.QueryRow(ctx, `
+		SELECT watermark
+		FROM research_artifact_policy_state
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, fixture.workspaceID, run.SessionID).Scan(&finalWatermark); err != nil {
+		t.Fatalf("load final acceptance watermark: %v", err)
+	}
+	if acceptanceWatermark != finalWatermark || acceptanceWatermark != advancedWatermark+1 {
+		t.Fatalf(
+			"acceptance watermark=%d final=%d advanced=%d want acceptance=final=advanced+1",
+			acceptanceWatermark,
+			finalWatermark,
+			advancedWatermark,
+		)
 	}
 }
 

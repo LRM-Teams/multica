@@ -78,3 +78,9 @@ transactions enforce the following referential and state rules:
   `OrchestratorVersion`, or accepting schema version 6 is a separate activation
   change and is forbidden until the production decoder, persistence modules,
   recovery, projection, hidden-oracle evaluation, and E–K gates are complete.
+- `researchrun.AssessV6Activation` is the executable release-audit seam. Every
+  gate result must carry a durable evidence identity and revision; a bare pass
+  boolean is insufficient. It reports all missing gates in canonical order and
+  requires an exercised `research-run-v5` previous version. A successful audit
+  does not itself add V6 to the decoder or change the default, so activation
+  remains an explicit, reviewable change after the audit is complete.

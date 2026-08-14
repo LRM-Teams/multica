@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -180,7 +181,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	}
 	if artifactPassportEnabled {
 		resultID, persistErr := persistAcceptedResultArtifactTx(
-			ctx, tx, state.workspaceID, in.SessionID, in.AttemptID,
+			ctx, tx, state.workspaceID, in.SessionID, state.task.ID, in.AttemptID,
 			state.run.OrchestratorVersion, in.Result, resultJSON, in.Hash, acceptancePolicyWatermark, state.outputAccess,
 		)
 		if persistErr != nil {
@@ -431,24 +432,17 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 	state.targetPlan = state.task.PlanVersion
 	state.stale = state.task.GoalVersion != state.run.GoalVersion || state.task.PlanVersion != state.run.PlanVersion
 	state.verified = verificationTask(state.task.Kind)
-	if attemptStatus == AttemptStatusSucceeded {
-		if existingRequestID != in.Result.ClientRequestID || existingHash != in.Hash ||
-			assignedAgentID != in.AgentID || assignedInboxTaskID == "" || assignedInboxTaskID != in.InboxTaskID {
-			return acceptedResultState{}, nil, ErrResultConflict
-		}
-		passportEnabled, replayErr := sessionArtifactPassportEnabled(ctx, tx, in.SessionID, state.workspaceID)
-		if replayErr != nil {
-			return acceptedResultState{}, nil, replayErr
-		}
-		if passportEnabled {
-			if replayErr = verifyAcceptedResultReplayTx(ctx, tx, state.workspaceID, in); replayErr != nil {
-				return acceptedResultState{}, nil, replayErr
-			}
-		}
-		return state, &AcceptResultOutcome{Replayed: true, TaskID: state.task.ID, TaskKind: state.task.Kind, GoalVersion: state.task.GoalVersion, PlanVersion: state.task.PlanVersion}, nil
-	}
 	if assignedAgentID != in.AgentID || assignedInboxTaskID == "" || assignedInboxTaskID != in.InboxTaskID {
 		return acceptedResultState{}, nil, ErrAttemptNotAssigned
+	}
+	if attemptStatus == AttemptStatusSucceeded {
+		if existingRequestID == in.Result.ClientRequestID && existingHash == in.Hash {
+			if err = verifyAcceptedResultReplayLineageTx(ctx, tx, state, in); err != nil {
+				return acceptedResultState{}, nil, err
+			}
+			return state, &AcceptResultOutcome{Replayed: true, TaskID: state.task.ID, TaskKind: state.task.Kind, GoalVersion: state.task.GoalVersion, PlanVersion: state.task.PlanVersion}, nil
+		}
+		return acceptedResultState{}, nil, ErrResultConflict
 	}
 	if attemptStatus != AttemptStatusDispatching && attemptStatus != AttemptStatusRunning {
 		return acceptedResultState{}, nil, fmt.Errorf("%w: attempt is %s", ErrInvalidTransition, attemptStatus)
@@ -459,87 +453,114 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 	return state, nil, nil
 }
 
-func verifyAcceptedResultReplayTx(
+func verifyAcceptedResultReplayLineageTx(
 	ctx context.Context,
 	tx pgx.Tx,
-	workspaceID string,
+	state acceptedResultState,
 	in AcceptResultInput,
 ) error {
-	if err := verifyAcceptanceManifestHashTx(ctx, tx, workspaceID, in.SessionID, in.AttemptID); err != nil {
-		if errors.Is(err, ErrInvalidTransition) {
-			return fmt.Errorf("%w: accepted manifest hash changed", ErrResultConflict)
-		}
-		return err
-	}
-
-	var bindingMatches bool
-	err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-		  SELECT 1
-		  FROM research_result_artifact r
-		  JOIN research_artifact_passport p
-		    ON (p.workspace_id, p.session_id, p.id) = (r.workspace_id, r.session_id, r.id)
-		  JOIN research_artifact_version rv
-		    ON rv.workspace_id = p.workspace_id
-		   AND rv.session_id = p.session_id
-		   AND rv.artifact_id = p.id
-		   AND rv.version = p.current_version
-		  JOIN research_artifact_context_manifest m
-		    ON m.workspace_id = r.workspace_id
-		   AND m.session_id = r.session_id
-		   AND m.attempt_id = r.attempt_id
-		  WHERE r.workspace_id = $1::uuid
-		    AND r.session_id = $2::uuid
-		    AND r.attempt_id = $3::uuid
-		    AND r.client_request_id = $4
-		    AND r.content_hash = $5
-		    AND p.entity_kind = 'result_artifact'
-		    AND p.produced_by_attempt_id = r.attempt_id
-		    AND rv.content_hash = r.content_hash
-		    AND NOT EXISTS (
-		      SELECT e.artifact_version_id
-		      FROM research_artifact_context_entry e
-		      WHERE (e.workspace_id, e.session_id, e.manifest_id) =
-		            (m.workspace_id, m.session_id, m.id)
-		      EXCEPT
-		      SELECT ref.input_version_id
-		      FROM research_artifact_input_reference ref
-		      WHERE ref.workspace_id = r.workspace_id
-		        AND ref.session_id = r.session_id
-		        AND ref.consumer_version_id = rv.id
-		        AND ref.relation = 'acceptance_input'
-		        AND ref.manifest_id = m.id
-		    )
-		    AND NOT EXISTS (
-		      SELECT ref.input_version_id
-		      FROM research_artifact_input_reference ref
-		      WHERE ref.workspace_id = r.workspace_id
-		        AND ref.session_id = r.session_id
-		        AND ref.consumer_version_id = rv.id
-		        AND ref.relation = 'acceptance_input'
-		        AND ref.manifest_id = m.id
-		      EXCEPT
-		      SELECT e.artifact_version_id
-		      FROM research_artifact_context_entry e
-		      WHERE (e.workspace_id, e.session_id, e.manifest_id) =
-		            (m.workspace_id, m.session_id, m.id)
-		    )
-		    AND NOT EXISTS (
-		      SELECT 1
-		      FROM research_artifact_input_reference ref
-		      WHERE ref.workspace_id = r.workspace_id
-		        AND ref.session_id = r.session_id
-		        AND ref.consumer_version_id = rv.id
-		        AND ref.relation = 'acceptance_input'
-		        AND ref.manifest_id IS DISTINCT FROM m.id
-		    )
-		)
-	`, workspaceID, in.SessionID, in.AttemptID, in.Result.ClientRequestID, in.Hash).Scan(&bindingMatches)
+	resultJSON, err := json.Marshal(in.Result)
 	if err != nil {
 		return err
 	}
-	if !bindingMatches {
-		return fmt.Errorf("%w: accepted result manifest, resolved versions, or lineage changed", ErrResultConflict)
+	var (
+		manifestID, storedManifestHash, currentManifestHash, storedInputSetHash string
+		resultHash, requestID, orchestratorVersion, schemaVersion               string
+		resultTaskID, resultAttemptID, manifestTaskID                           string
+		acceptanceWatermark, manifestWatermark, currentWatermark                int64
+		exactInputSet, resultMatches                                            bool
+	)
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(result.manifest_id::text,''), result.manifest_hash,
+		       manifest.manifest_hash, result.input_version_set_hash,
+		       result.content_hash, result.client_request_id, result.orchestrator_version,
+		       result.result_schema_version,
+		       COALESCE(version.produced_by_task_id::text,''),
+		       COALESCE(version.produced_by_attempt_id::text,''), manifest.task_id::text,
+		       COALESCE(result.acceptance_policy_watermark,-1), manifest.policy_watermark,
+		       policy.watermark,
+		       result.result=$5::jsonb,
+		       NOT EXISTS (
+		         (SELECT entry.artifact_version_id
+		          FROM research_artifact_context_entry entry
+		          WHERE entry.workspace_id=result.workspace_id
+		            AND entry.session_id=result.session_id
+		            AND entry.manifest_id=result.manifest_id)
+		         EXCEPT
+		         (SELECT reference.input_version_id
+		          FROM research_artifact_input_reference reference
+		          WHERE reference.workspace_id=result.workspace_id
+		            AND reference.session_id=result.session_id
+		            AND reference.consumer_version_id=version.id
+		            AND reference.relation='acceptance_input'
+		            AND reference.manifest_id=result.manifest_id)
+		       )
+		       AND NOT EXISTS (
+		         (SELECT reference.input_version_id
+		          FROM research_artifact_input_reference reference
+		          WHERE reference.workspace_id=result.workspace_id
+		            AND reference.session_id=result.session_id
+		            AND reference.consumer_version_id=version.id
+		            AND reference.relation='acceptance_input')
+		         EXCEPT
+		         (SELECT entry.artifact_version_id
+		          FROM research_artifact_context_entry entry
+		          WHERE entry.workspace_id=result.workspace_id
+		            AND entry.session_id=result.session_id
+		            AND entry.manifest_id=result.manifest_id)
+		       )
+		FROM research_result_artifact result
+		JOIN research_artifact_passport passport
+		  ON (passport.workspace_id,passport.session_id,passport.id)=
+		     (result.workspace_id,result.session_id,result.id)
+		JOIN research_artifact_version version
+		  ON (version.workspace_id,version.session_id,version.artifact_id,version.version)=
+		     (passport.workspace_id,passport.session_id,passport.id,passport.current_version)
+		JOIN research_artifact_context_manifest manifest
+		  ON (manifest.workspace_id,manifest.session_id,manifest.id,manifest.attempt_id)=
+		     (result.workspace_id,result.session_id,result.manifest_id,result.attempt_id)
+		JOIN research_artifact_policy_state policy
+		  ON (policy.workspace_id,policy.session_id)=(result.workspace_id,result.session_id)
+		WHERE result.workspace_id=$1::uuid AND result.session_id=$2::uuid
+		  AND result.attempt_id=$3::uuid AND result.id=passport.id
+		  AND result.attempt_id=$4::uuid
+	`, state.workspaceID, state.run.SessionID, in.AttemptID, state.attemptID, resultJSON).Scan(
+		&manifestID, &storedManifestHash, &currentManifestHash, &storedInputSetHash,
+		&resultHash, &requestID, &orchestratorVersion, &schemaVersion,
+		&resultTaskID, &resultAttemptID, &manifestTaskID,
+		&acceptanceWatermark, &manifestWatermark, &currentWatermark,
+		&resultMatches, &exactInputSet,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var passportEnabled bool
+		if loadErr := tx.QueryRow(ctx, `
+			SELECT artifact_passport_enabled FROM research_session
+			WHERE workspace_id=$1::uuid AND id=$2::uuid
+		`, state.workspaceID, state.run.SessionID).Scan(&passportEnabled); loadErr != nil {
+			return loadErr
+		}
+		if !passportEnabled {
+			return nil
+		}
+		return fmt.Errorf("%w: accepted Result lineage is missing", ErrResultConflict)
+	}
+	if err != nil {
+		return err
+	}
+	inputSetHash, err := manifestInputVersionSetHashTx(ctx, tx, state.workspaceID, state.run.SessionID, manifestID)
+	if err != nil {
+		return err
+	}
+	if manifestID == "" || storedManifestHash == "" || storedInputSetHash == "" ||
+		storedManifestHash != currentManifestHash || storedInputSetHash != inputSetHash ||
+		!exactInputSet || !resultMatches || resultHash != in.Hash || requestID != in.Result.ClientRequestID ||
+		orchestratorVersion != state.run.OrchestratorVersion || schemaVersion != fmt.Sprintf("%d", in.Result.SchemaVersion) ||
+		(resultTaskID != "" && resultTaskID != state.task.ID) || resultAttemptID != in.AttemptID || manifestTaskID != state.task.ID ||
+		acceptanceWatermark <= manifestWatermark || acceptanceWatermark > currentWatermark {
+		return fmt.Errorf("%w: accepted Result replay lineage changed", ErrResultConflict)
+	}
+	if err = verifyAcceptanceManifestHashTx(ctx, tx, state.workspaceID, state.run.SessionID, in.AttemptID); err != nil {
+		return fmt.Errorf("%w: accepted Result manifest changed: %v", ErrResultConflict, err)
 	}
 	return nil
 }
@@ -580,6 +601,7 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		return nil, 0, err
 	}
 	created := 0
+	createdIDs := make([]string, 0, len(questions))
 	for _, proposal := range questions {
 		var id string
 		_, existed := ids[proposal.ClientKey]
@@ -614,9 +636,7 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		}
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindQuestion, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
-				return nil, 0, err
-			}
+			createdIDs = append(createdIDs, id)
 		}
 		ids[proposal.ClientKey] = id
 	}
@@ -636,6 +656,14 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		return nil, 0, err
 	} else if cyclic {
 		return nil, 0, fmt.Errorf("%w: persisted question graph contains a cycle", ErrInvalidResult)
+	}
+	for _, questionID := range createdIDs {
+		if err = registerProductionQuestionPassportTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, questionID,
+			state.attemptID, state.outputAccess,
+		); err != nil {
+			return nil, 0, err
+		}
 	}
 	return ids, created, nil
 }
@@ -709,6 +737,7 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 		return 0, fmt.Errorf("%w: proposed tasks exceed remaining run budget", ErrInvalidResult)
 	}
 	created := 0
+	createdTaskIDs := make([]string, 0, missing)
 	for _, proposal := range proposals {
 		questionID := ""
 		if proposal.QuestionKey != "" {
@@ -746,24 +775,35 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			criteria, proposal.Priority, state.run.GoalVersion, state.targetPlan,
 			maxAttempts, timeout).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
-			var existingKind TaskKind
-			var existingObjective, existingCapability, existingResult string
+			var matches bool
 			err = tx.QueryRow(ctx, `
-				SELECT id::text, kind, objective, required_capability, expected_result
+				SELECT id::text,
+				       COALESCE(question_id::text, '') = $5
+				       AND COALESCE(parent_task_id::text, '') = $6
+				       AND kind = $7
+				       AND objective = $8
+				       AND required_capability = $9
+				       AND expected_result = $10
+				       AND acceptance_criteria = $11::jsonb
+				       AND priority = $12::double precision
+				       AND max_attempts = $13
+				       AND timeout_seconds = $14
 				FROM research_task
 				WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND client_key = $4
-			`, state.run.SessionID, state.run.GoalVersion, state.targetPlan, proposal.ClientKey).Scan(
-				&id, &existingKind, &existingObjective, &existingCapability, &existingResult,
-			)
-			if err == nil && (existingKind != proposal.Kind || existingObjective != strings.TrimSpace(proposal.Objective) || existingCapability != strings.TrimSpace(proposal.RequiredCapability) || existingResult != strings.TrimSpace(proposal.ExpectedResult)) {
+			`, state.run.SessionID, state.run.GoalVersion, state.targetPlan, proposal.ClientKey,
+				questionID, state.task.ID, proposal.Kind, strings.TrimSpace(proposal.Objective),
+				strings.TrimSpace(proposal.RequiredCapability), strings.TrimSpace(proposal.ExpectedResult),
+				criteria, proposal.Priority, maxAttempts, timeout).Scan(&id, &matches)
+			if err == nil && !matches {
 				return 0, fmt.Errorf("%w: task key %q was reused for different content", ErrResultConflict, proposal.ClientKey)
+			}
+			if err == nil {
+				taskIDs[proposal.ClientKey] = id
 			}
 		} else if err == nil {
 			created++
 			taskIDs[proposal.ClientKey] = id
-			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindTask, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
-				return 0, err
-			}
+			createdTaskIDs = append(createdTaskIDs, id)
 		}
 		if err != nil {
 			return 0, err
@@ -782,6 +822,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 				return 0, err
 			}
 		}
+	}
+	if err = validateDeclaredTaskDependencies(ctx, tx, state.workspaceID, state.run.SessionID, proposals, taskIDs); err != nil {
+		return 0, err
 	}
 	if usesEvidenceFitnessContract(state.run.OrchestratorVersion) {
 		for _, proposal := range result.ProposedTasks {
@@ -803,7 +846,68 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 	} else if cyclic {
 		return 0, fmt.Errorf("%w: persisted task dependency graph contains a cycle", ErrInvalidResult)
 	}
+	for _, taskID := range createdTaskIDs {
+		if err = registerProductionTaskPassportTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, taskID,
+			state.attemptID, state.outputAccess,
+		); err != nil {
+			return 0, err
+		}
+	}
 	return created, nil
+}
+
+func validateDeclaredTaskDependencies(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	proposals []TaskProposal,
+	taskIDs map[string]string,
+) error {
+	for _, proposal := range proposals {
+		expected := make([]string, 0, len(proposal.DependsOn))
+		for _, dependencyKey := range proposal.DependsOn {
+			dependencyID, ok := taskIDs[dependencyKey]
+			if !ok {
+				return fmt.Errorf("%w: task %q references unknown dependency %q", ErrInvalidResult, proposal.ClientKey, dependencyKey)
+			}
+			expected = append(expected, dependencyID)
+		}
+		sort.Strings(expected)
+
+		rows, err := tx.Query(ctx, `
+			SELECT depends_on_task_id::text
+			FROM research_task_dependency
+			WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND task_id = $3::uuid
+			ORDER BY depends_on_task_id
+		`, workspaceID, sessionID, taskIDs[proposal.ClientKey])
+		if err != nil {
+			return err
+		}
+		actual := make([]string, 0, len(expected))
+		for rows.Next() {
+			var dependencyID string
+			if err = rows.Scan(&dependencyID); err != nil {
+				rows.Close()
+				return err
+			}
+			actual = append(actual, dependencyID)
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if len(actual) != len(expected) {
+			return fmt.Errorf("%w: task key %q was reused with different dependencies", ErrResultConflict, proposal.ClientKey)
+		}
+		for i := range expected {
+			if actual[i] != expected[i] {
+				return fmt.Errorf("%w: task key %q was reused with different dependencies", ErrResultConflict, proposal.ClientKey)
+			}
+		}
+	}
+	return nil
 }
 
 func attachV4ProposedWorkToDelivery(ctx context.Context, tx pgx.Tx, state acceptedResultState, proposals []TaskProposal, taskIDs map[string]string) error {
@@ -1010,11 +1114,50 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			// Legacy source projection already exists for this snapshot.
 		} else if err != nil {
 			return nil, 0, err
-		} else if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindLegacySource, state.workspaceID, state.run.SessionID, legacySourceID, time.Now(), nil, nil, state.outputAccess); err != nil {
-			return nil, 0, err
+		} else {
+			versionHash, hashErr := ArtifactContentHash(ArtifactKindLegacySource, legacySourceArtifactContent(
+				canonical, truncateBytes(source.Title, 4096), truncateBytes(source.SourceClass, 160),
+				sourceProjectionWeight(state.run.OrchestratorVersion, source.SourceClass), "", 0.5,
+				truncateBytes(result.Summary, 4096), truncateBytes(source.SnapshotText, 2000), payload, id,
+			))
+			if hashErr != nil {
+				return nil, 0, hashErr
+			}
+			if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+				WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: legacySourceID,
+				Kind: ArtifactKindLegacySource, SourceCreatedAt: timePtr(time.Now()),
+				ProvenanceCompleteness: ArtifactProvenanceComplete,
+				AccessLevel:            state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+				ContentHash: versionHash, ProducedByAttemptID: state.attemptID,
+			}); err != nil {
+				return nil, 0, err
+			}
 		}
 	}
 	return ids, created, nil
+}
+
+func legacySourceArtifactContent(
+	url, title, sourceClass string,
+	credibilityWeight float64,
+	stance string,
+	relevance float64,
+	summary, excerpt string,
+	payload []byte,
+	sourceSnapshotID string,
+) map[string]any {
+	return map[string]any{
+		"url":                url,
+		"title":              title,
+		"source_class":       sourceClass,
+		"credibility_weight": credibilityWeight,
+		"stance":             stance,
+		"relevance":          relevance,
+		"summary":            summary,
+		"excerpt":            excerpt,
+		"payload":            json.RawMessage(payload),
+		"source_snapshot_id": sourceSnapshotID,
+	}
 }
 
 func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResultState, result ResultEnvelope, sourceIDs map[string]string) (map[string]string, int, error) {

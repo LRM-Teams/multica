@@ -34,7 +34,7 @@ var chapterD15Coverage = map[int]string{
 	17: "covered", // exact Gate bytes/hash + policy version + unchanged V1-V5 rubric on frozen Attempt context
 	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state + Task contract/dependencies after rollback
 	19: "covered", // unrelated advance reauthorization + affected eligibility denial + final acceptance watermark
-	20: "partial", // result lock-order concurrency + normalized manifest locks
+	20: "covered", // kind/artifact/version total order + opposite-payload concurrent acceptance without deadlock
 	21: "covered", // payload + manifest ID/hash + exact input-version set + producer/watermark lineage replay
 	22: "partial", // result accept transaction recovery matrix
 	23: "partial", // human/assigned/unbound/unassigned/cross-workspace/header-spoof HTTP matrix; evaluator/projector surfaces open

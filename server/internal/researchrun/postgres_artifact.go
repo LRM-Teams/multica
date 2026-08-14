@@ -192,6 +192,71 @@ func stringPtrValue(value *string) string {
 	return *value
 }
 
+func registerProductionQuestionPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, questionID, producedByAttemptID string,
+	accessLevel ArtifactAccessLevel,
+) error {
+	var parentID, createdByTaskID, clientKey, kind, question string
+	var required bool
+	var priority, impact, uncertainty, novelty, coverage float64
+	var goalVersion, planVersion int32
+	var createdAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(parent_question_id::text, ''), COALESCE(created_by_task_id::text, ''),
+		       client_key, kind, question, required, priority, impact, uncertainty, novelty,
+		       coverage, goal_version, plan_version, created_at
+		FROM research_question
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, questionID).Scan(
+		&parentID, &createdByTaskID, &clientKey, &kind, &question, &required,
+		&priority, &impact, &uncertainty, &novelty, &coverage,
+		&goalVersion, &planVersion, &createdAt,
+	)
+	if err != nil {
+		return err
+	}
+	contentHash, err := ArtifactContentHash(ArtifactKindQuestion, questionArtifactContent(
+		parentID, createdByTaskID, clientKey, kind, question, required,
+		priority, impact, uncertainty, novelty, coverage, int(goalVersion), int(planVersion),
+	))
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: questionID,
+		Kind: ArtifactKindQuestion, SourceCreatedAt: &createdAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            &goalVersion, PlanVersion: &planVersion,
+		AccessLevel: accessLevel, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash, ProducedByAttemptID: producedByAttemptID,
+	})
+}
+
+func questionArtifactContent(
+	parentID, createdByTaskID, clientKey, kind, question string,
+	required bool,
+	priority, impact, uncertainty, novelty, coverage float64,
+	goalVersion, planVersion int,
+) map[string]any {
+	return map[string]any{
+		"parent_question_id": parentID,
+		"created_by_task_id": createdByTaskID,
+		"client_key":         clientKey,
+		"kind":               kind,
+		"question":           question,
+		"required":           required,
+		"priority":           priority,
+		"impact":             impact,
+		"uncertainty":        uncertainty,
+		"novelty":            novelty,
+		"coverage":           coverage,
+		"goal_version":       goalVersion,
+		"plan_version":       planVersion,
+	}
+}
+
 func registerRunSessionArtifactTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, sourceCreatedAt time.Time) error {
 	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            workspaceID,
@@ -234,11 +299,7 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 	`, workspaceID, sessionID).Scan(&questionID, &questionCreatedAt); err != nil {
 		return err
 	}
-	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
-		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: questionID,
-		Kind: ArtifactKindQuestion, SourceCreatedAt: &questionCreatedAt,
-		GoalVersion: &goalVersion, PlanVersion: &planVersion,
-	}); err != nil {
+	if err = registerProductionQuestionPassportTx(ctx, tx, workspaceID, sessionID, questionID, "", ArtifactAccessRaw); err != nil {
 		return err
 	}
 

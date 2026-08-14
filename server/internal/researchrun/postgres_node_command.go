@@ -195,7 +195,7 @@ func (s *PostgresStore) nodeCommandContinueFork(
 		if err != nil {
 			return NodeCommandOutcome{}, err
 		}
-		if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindQuestion, workspaceID, in.SessionID, newQID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
+		if err = registerProductionQuestionPassportTx(ctx, tx, workspaceID, in.SessionID, newQID, "", ArtifactAccessRaw); err != nil {
 			return NodeCommandOutcome{}, err
 		}
 		q := Question{

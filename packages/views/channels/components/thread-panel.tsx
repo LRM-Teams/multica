@@ -8,12 +8,10 @@ import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
-import { ComposerQuotePreview } from "./message-quote";
 import {
   ComposerSendErrorBar,
   type ComposerSendErrorState,
 } from "./composer-send-error-bar";
-import type { QuoteTarget } from "./message-quote-types";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { Composer, type ComposerProps } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
@@ -62,8 +60,6 @@ export interface ThreadPanelProps {
   /** Click a human author's avatar/name → open the LRM-619 member Profile
    *  dock (same parity; without it member avatar clicks are dead). */
   onOpenMember?: (userId: string) => void;
-  quoteTarget?: QuoteTarget | null;
-  onClearQuote?: () => void;
   /** #772 inline send-failure bar for the thread composer (surface-owned). */
   sendError?: ComposerSendErrorState | null;
   onRestorePrevious?: () => void;
@@ -130,8 +126,6 @@ export function ThreadPanel({
   onRetrySend,
   onOpenAgent,
   onOpenMember,
-  quoteTarget,
-  onClearQuote,
   sendError,
   onRestorePrevious,
   editor,
@@ -314,7 +308,7 @@ export function ThreadPanel({
             onVoiceSend={onVoiceSend}
             isMobile={isMobile}
             // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-            prefix={sendError || quoteTarget || composerPrefixExtra ? (
+            prefix={sendError || composerPrefixExtra ? (
               <>
                 {composerPrefixExtra}
                 <ComposerSendErrorBar
@@ -322,13 +316,6 @@ export function ThreadPanel({
                   onRetry={onSend}
                   onRestore={onRestorePrevious ?? (() => {})}
                 />
-                {quoteTarget ? (
-                  <ComposerQuotePreview
-                    quote={quoteTarget}
-                    onCancel={onClearQuote ?? (() => {})}
-                    cancelLabel={t(($) => $.quote.cancel)}
-                  />
-                ) : null}
               </>
             ) : undefined}
             tray={composerTray}

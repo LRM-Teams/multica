@@ -6,6 +6,17 @@ import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 const mockFocus = vi.hoisted(() => vi.fn());
 const mockSetContent = vi.hoisted(() => vi.fn());
 const mockSetTextSelection = vi.hoisted(() => vi.fn());
+const mockInsertContent = vi.hoisted(() => vi.fn());
+const editorChain = vi.hoisted(() => {
+  const chain: Record<string, ReturnType<typeof vi.fn>> = {};
+  chain.focus = vi.fn(() => chain);
+  chain.insertContent = vi.fn((content: unknown) => {
+    mockInsertContent(content);
+    return chain;
+  });
+  chain.run = vi.fn(() => true);
+  return chain;
+});
 const editorState = vi.hoisted(() => ({
   isFocused: false,
   isDestroyed: false,
@@ -101,6 +112,7 @@ vi.mock("@tiptap/react", () => ({
           setContent: mockSetContent,
           setTextSelection: mockSetTextSelection,
         },
+        chain: () => editorChain,
         getMarkdown: () => editorState.markdown,
         view: { dom: document.createElement("div") },
         state: {
@@ -127,7 +139,7 @@ vi.mock("@tiptap/react", () => ({
   ),
 }));
 
-import { ContentEditor } from "./content-editor";
+import { ContentEditor, type ContentEditorRef } from "./content-editor";
 
 describe("ContentEditor", () => {
   beforeEach(() => {
@@ -265,6 +277,25 @@ describe("ContentEditor", () => {
     });
 
     expect(onUpdate).toHaveBeenCalledWith("draft before switching");
+  });
+
+  it("inserts a literal editable quote followed by a response paragraph", () => {
+    const ref = { current: null as ContentEditorRef | null };
+    render(<ContentEditor ref={ref} />);
+
+    act(() => ref.current?.insertQuoteText("> first\n> second"));
+
+    expect(mockInsertContent).toHaveBeenCalledWith([
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "> first" },
+          { type: "hardBreak" },
+          { type: "text", text: "> second" },
+        ],
+      },
+      { type: "paragraph" },
+    ]);
   });
 
   it("opens the empty-line AI prompt when Space is pressed in an empty paragraph", () => {

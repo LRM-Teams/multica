@@ -1,8 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
-import { ComposerQuotePreview, MessageQuoteCard } from "./message-quote";
+import { buildEditableMessageQuoteText, MessageQuoteCard } from "./message-quote";
 
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
@@ -75,30 +74,31 @@ function message(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
   };
 }
 
-describe("ComposerQuotePreview", () => {
-  it("shows sender and a text summary", () => {
-    render(
-      <ComposerQuotePreview
-        quote={message({ content: "  Hello\nworld  " })}
-        cancelLabel="Cancel quote"
-        onCancel={vi.fn()}
-      />,
-    );
+const quoteLabels = {
+  attachment: "Attachment",
+  attachments: (count: number) => `${count} attachments`,
+  image: "Image",
+  images: (count: number) => `${count} images`,
+  empty: "No preview available",
+};
+const resolveMention = (_type: "member" | "agent", id: string, fallback: string) =>
+  id === "agent-1" ? "Helper Bot" : fallback;
 
-    expect(screen.getByTestId("composer-quote-preview")).toBeInTheDocument();
-    expect(screen.getByTestId("composer-quote-preview")).toHaveTextContent(
-      "> agent: Hello world",
-    );
+describe("buildEditableMessageQuoteText", () => {
+  it("builds author-free literal text for editable composer content", () => {
+    expect(
+      buildEditableMessageQuoteText(
+        message({ content: "  Hello\nworld  " }),
+        quoteLabels,
+        resolveMention,
+      ),
+    ).toBe("> Hello world");
   });
 
   it("resolves a quoted mention to the display name — no internal handle (#530)", () => {
-    // Wiring test, not a projection test: projectReferencesToText is covered in
-    // message-preview.test.ts. What can silently break HERE is the call itself —
-    // delete it and the quote falls back to raw content, the leak returns, and CI
-    // stays green. So assert this surface, not the helper.
-    render(
-      <ComposerQuotePreview
-        quote={message({
+    expect(
+      buildEditableMessageQuoteText(
+        message({
           content: "cc @agent_123 pls",
           parts: [
             {
@@ -111,21 +111,18 @@ describe("ComposerQuotePreview", () => {
               content_end_utf16: 13,
             },
           ],
-        } as never)}
-        cancelLabel="Cancel quote"
-        onCancel={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("cc @Helper Bot pls")).toBeInTheDocument();
-    expect(screen.queryByText(/agent_123/)).toBeNull();
+        } as never),
+        quoteLabels,
+        resolveMention,
+      ),
+    ).toBe("> cc @Helper Bot pls");
   });
 
   it("projects a quoted channel reference to its readable channel name (LRM-1431)", () => {
     const raw = "[pr-ops](mention://channel/channel-1)";
-    render(
-      <ComposerQuotePreview
-        quote={message({
+    expect(
+      buildEditableMessageQuoteText(
+        message({
           content: `ask ${raw}`,
           parts: [
             {
@@ -137,34 +134,17 @@ describe("ComposerQuotePreview", () => {
               content_end_utf16: 4 + raw.length,
             },
           ],
-        } as never)}
-        cancelLabel="Cancel quote"
-        onCancel={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("ask #pr-ops")).toBeInTheDocument();
-    expect(screen.queryByText(/mention:\/\/channel/)).toBeNull();
+        } as never),
+        quoteLabels,
+        resolveMention,
+      ),
+    ).toBe("> ask #pr-ops");
   });
 
-  it("still summarizes an ordinary quote — the control (#530)", () => {
-    // Without this, a projection returning "" would satisfy the leak assertion
-    // above while destroying every quote summary.
-    render(
-      <ComposerQuotePreview
-        quote={message({ content: "no mentions here" })}
-        cancelLabel="Cancel quote"
-        onCancel={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("no mentions here")).toBeInTheDocument();
-  });
-
-  it("summarizes image-only quotes without leaking empty content", () => {
-    render(
-      <ComposerQuotePreview
-        quote={message({
+  it("builds a safe editable summary for an image-only message", () => {
+    expect(
+      buildEditableMessageQuoteText(
+        message({
           content: "",
           attachments: [
             {
@@ -185,106 +165,11 @@ describe("ComposerQuotePreview", () => {
               created_at: "2026-07-09T00:00:00Z",
             },
           ],
-        })}
-        cancelLabel="Cancel quote"
-        onCancel={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("Image: photo.png")).toBeInTheDocument();
-  });
-
-  it("summarizes attachment parts with counts (not raw markdown images)", () => {
-    render(
-      <ComposerQuotePreview
-        quote={message({
-          content: "",
-          parts: [
-            { type: "attachment", attachment_id: "att-1" },
-            { type: "attachment", attachment_id: "att-2" },
-          ],
-          attachments: [
-            {
-              id: "att-1",
-              workspace_id: "w1",
-              issue_id: null,
-              comment_id: null,
-              chat_session_id: null,
-              chat_message_id: null,
-              uploader_type: "user",
-              uploader_id: "user-1",
-              filename: "a.png",
-              url: "/a.png",
-              download_url: "/a.png",
-              markdown_url: "/a.png",
-              content_type: "image/png",
-              size_bytes: 10,
-              created_at: "2026-07-09T00:00:00Z",
-            },
-            {
-              id: "att-2",
-              workspace_id: "w1",
-              issue_id: null,
-              comment_id: null,
-              chat_session_id: null,
-              chat_message_id: null,
-              uploader_type: "user",
-              uploader_id: "user-1",
-              filename: "b.png",
-              url: "/b.png",
-              download_url: "/b.png",
-              markdown_url: "/b.png",
-              content_type: "image/png",
-              size_bytes: 10,
-              created_at: "2026-07-09T00:00:00Z",
-            },
-          ],
-        })}
-        cancelLabel="Cancel quote"
-        onCancel={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("2 images")).toBeInTheDocument();
-    expect(screen.queryByText(/!\[/)).not.toBeInTheDocument();
-  });
-
-  it("does not leak filename for missing attachment parts in quote summary", () => {
-    render(
-      <ComposerQuotePreview
-        quote={message({
-          content: "",
-          parts: [
-            {
-              type: "attachment",
-              attachment_id: "missing",
-              filename: "secret.pdf",
-            },
-          ],
-          attachments: [],
-        })}
-        cancelLabel="Cancel quote"
-        onCancel={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("Attachment")).toBeInTheDocument();
-    expect(screen.queryByText(/secret/)).not.toBeInTheDocument();
-  });
-
-  it("calls onCancel from the cancel control", async () => {
-    const onCancel = vi.fn();
-    render(
-      <ComposerQuotePreview
-        quote={message({ content: "quoted" })}
-        cancelLabel="Cancel quote"
-        onCancel={onCancel}
-      />,
-    );
-
-    await userEvent.click(screen.getByRole("button", { name: "Cancel quote" }));
-
-    expect(onCancel).toHaveBeenCalledTimes(1);
+        }),
+        quoteLabels,
+        resolveMention,
+      ),
+    ).toBe("> Image: photo.png");
   });
 });
 

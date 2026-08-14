@@ -116,6 +116,7 @@ func (ArtifactPolicy) LegacyAdmissionAllowed(
 		ArtifactKindHypothesis,
 		ArtifactKindBranch,
 		ArtifactKindInsight,
+		ArtifactKindIntegrationContribution,
 		ArtifactKindInquiryEdge:
 		return false, ArtifactDenyLegacyIneligible
 	}

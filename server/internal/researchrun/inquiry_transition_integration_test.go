@@ -26,8 +26,8 @@ func seedInquiryTransitionFixture(t *testing.T, ctx context.Context, pool *pgxpo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO research_hypothesis(id,workspace_id,session_id,question_id,statement,status)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'Transition fixture','investigating')`, entityID, workspaceID, sessionID, questionID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO research_hypothesis(id,workspace_id,session_id,question_id,statement,status,client_key)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'Transition fixture','investigating','legacy:'||$1::text)`, entityID, workspaceID, sessionID, questionID); err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatal(err)
 	}

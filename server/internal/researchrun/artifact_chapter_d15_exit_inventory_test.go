@@ -15,30 +15,30 @@ const chapterD15EnforceComplete = false
 //   - partial: some but not all required fixtures/matrix rows
 //   - missing: no meaningful executable coverage yet
 var chapterD15Coverage = map[int]string{
-	1:  "partial", // migration 318–330 roundtrip tests
+	1:  "covered", // aggregate 318–330 fresh up, reverse down/up, lint, reconciliation, and no fabricated E–N rows
 	2:  "covered", // live catalog scope/FK/revision-uniqueness/complete stable guard inventory
-	3:  "partial", // migration FK negative fixtures
+	3:  "covered", // legacy domain + normalized D same-scope/cross-session/cross-workspace direct FK matrices
 	4:  "partial", // deferred guard tests in migration suite
-	5:  "partial", // version/lifecycle/policy-ledger update+delete guards and watermark/passport CAS; remaining revision/concurrency matrix open
+	5:  "covered", // immutable versions + reciprocal/append-only ledgers + exact revision/watermark guards + concurrent writer convergence
 	6:  "partial", // backfill diagnostic tests in migration 319
 	7:  "covered", // exhaustive registered/unknown kind × lifecycle × provenance legacy admission matrix
 	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered
 	9:  "covered", // closed normal-clearance/purpose/evaluation matrix + output taint permutations
 	10: "covered", // structural subject isolation + real subject/grader frozen-manifest dispatch
-	11: "partial", // dispatch race: eligibility/state/hash/lifecycle after rolled-back intent
+	11: "covered", // stale-request rollback/recompute across state/version/access/hash/provenance/lifecycle/verification/supersession/watermark
 	12: "covered", // canonical candidate locks + concurrent shared candidates + stable entry ordinals
-	13: "partial", // eligibility + representation CAS
+	13: "covered", // full-intent rollback on eligibility/version/access/lifecycle/provenance/content/representation CAS drift
 	14: "covered", // replay/prompt/outbox binding tests
 	15: "covered", // after-begin/before-commit/after-commit dispatch artifact recovery matrix
 	16: "covered", // historical live vs frozen manifest tests
 	17: "covered", // exact Gate bytes/hash + policy version + unchanged V1-V5 rubric on frozen Attempt context
-	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state + Task contract/dependencies after rollback
+	18: "covered", // full preflight race matrix + complete domain/passport/version/ledger rollback write-set assertions
 	19: "covered", // unrelated advance reauthorization + affected eligibility denial + final acceptance watermark
-	20: "partial", // result lock-order concurrency + normalized manifest locks
+	20: "covered", // kind/artifact/version total order + opposite-payload concurrent acceptance without deadlock
 	21: "covered", // payload + manifest ID/hash + exact input-version set + producer/watermark lineage replay
-	22: "partial", // result accept transaction recovery matrix
+	22: "covered", // all 19 semantic checkpoints + begin/commit/unknown recovery + D ledger atomicity guards
 	23: "partial", // human/assigned/unbound/unassigned/cross-workspace/header-spoof HTTP matrix; evaluator/projector surfaces open
-	24: "partial", // withdrawal/acceptance ledger + revoked frozen-read denial/history preservation
+	24: "covered", // supersession/withdrawal ledger, new-context exclusion, in-flight denial, audit/history preservation
 	25: "covered", // stable passport-ID/hash projection + frozen Attempt scope + enum/FE fallback
 	26: "covered", // transaction structural guard tests
 }

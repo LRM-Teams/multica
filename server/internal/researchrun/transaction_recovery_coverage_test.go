@@ -21,6 +21,7 @@ func TestResearchTransactionRecoveryMatrixCoversRegistry(t *testing.T) {
 		txOpRunSelectiveSteer:      "TestApplySelectiveSteeringTransactionRecovery",
 		txOpStrategyPromotion:      "TestPersistStrategyPromotionTransactionRecovery",
 		txOpTaskInquiryTargetsBind: "TestBindTaskInquiryTargetsTransactionRecovery",
+		txOpSearchLineageRecord:    "TestRecordSearchLineageBatchTransactionRecovery",
 	}
 	for operation, testName := range bespoke {
 		covered[operation] = struct{}{}

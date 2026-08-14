@@ -212,15 +212,18 @@ func loadResultArtifactRecoveryCounts(t *testing.T, run *transactionRecoveryRun,
 	}
 	if err := run.pool.QueryRow(run.ctx, `
 		SELECT
-		  (SELECT count(*)::int FROM research_artifact_passport
-		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid
-		     AND entity_kind = 'result_artifact' AND produced_by_attempt_id = $3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_passport passport
+		   JOIN research_artifact_version version
+		     ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+		        (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+		   WHERE passport.workspace_id = $1::uuid AND passport.session_id = $2::uuid
+		     AND passport.entity_kind = 'result_artifact' AND version.produced_by_attempt_id = $3::uuid),
 		  (SELECT count(*)::int FROM research_artifact_version version
 		   JOIN research_artifact_passport passport
 		     ON (passport.workspace_id, passport.session_id, passport.id) =
 		        (version.workspace_id, version.session_id, version.artifact_id)
 		   WHERE passport.workspace_id = $1::uuid AND passport.session_id = $2::uuid
-		     AND passport.entity_kind = 'result_artifact' AND passport.produced_by_attempt_id = $3::uuid)
+		     AND passport.entity_kind = 'result_artifact' AND version.produced_by_attempt_id = $3::uuid)
 	`, run.fixture.workspaceID, run.fixture.sessionID, attemptID).Scan(
 		&counts.resultPassports, &counts.resultVersions,
 	); err != nil {

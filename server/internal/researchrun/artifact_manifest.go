@@ -433,7 +433,7 @@ func verifyAttemptManifestReadGrantPool(
 		return fmt.Errorf("verify attempt manifest read grant: %w", err)
 	}
 	if !authorized {
-		return fmt.Errorf("%w: attempt manifest grant no longer authorizes task context", ErrInvalidTransition)
+		return fmt.Errorf("%w: %w: attempt manifest grant no longer authorizes task context", ErrArtifactAccessDenied, ErrInvalidTransition)
 	}
 	return nil
 }
@@ -857,7 +857,8 @@ func loadManifestEntryCandidatesForAttempt(
 		  e.selection_provenance_completeness,
 		  e.selection_version_count,
 		  e.selection_input_reference_count,
-		  e.selection_output_reference_count
+		  e.selection_output_reference_count,
+		  e.selection_relationship_hash
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m
 		  ON m.workspace_id = e.workspace_id
@@ -887,10 +888,11 @@ func loadManifestEntryCandidatesForAttempt(
 		var kindRaw, accessRaw string
 		var lifecycleRaw, provenanceRaw *string
 		var versionCount, inputCount, outputCount *int
+		var relationshipHash *string
 		if err = rows.Scan(
 			&entry.VersionRowID, &entry.ArtifactID, &kindRaw, &entry.Version, &entry.EligibilityRevision,
 			&accessRaw, &entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
-			&lifecycleRaw, &provenanceRaw, &versionCount, &inputCount, &outputCount,
+			&lifecycleRaw, &provenanceRaw, &versionCount, &inputCount, &outputCount, &relationshipHash,
 		); err != nil {
 			return nil, dispatchManifestHashInput{}, "", err
 		}
@@ -907,6 +909,9 @@ func loadManifestEntryCandidatesForAttempt(
 		entry.VersionCount = *versionCount
 		entry.InputReferenceCount = *inputCount
 		entry.OutputReferenceCount = *outputCount
+		if relationshipHash != nil {
+			entry.RelationshipHash = *relationshipHash
+		}
 		entries = append(entries, entry)
 	}
 	if err = rows.Err(); err != nil {
@@ -1051,7 +1056,10 @@ func sortAcceptanceManifestLockTargets(targets []acceptanceManifestLockTarget) {
 		if targets[i].Kind != targets[j].Kind {
 			return targets[i].Kind < targets[j].Kind
 		}
-		return targets[i].ArtifactID < targets[j].ArtifactID
+		if targets[i].ArtifactID != targets[j].ArtifactID {
+			return targets[i].ArtifactID < targets[j].ArtifactID
+		}
+		return targets[i].VersionRowID < targets[j].VersionRowID
 	})
 }
 

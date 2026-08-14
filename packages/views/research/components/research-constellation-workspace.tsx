@@ -509,8 +509,15 @@ export function ResearchConstellationWorkspace({
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
-        if (isMobile) setRailOpen(false);
-        openAgentInspector(typedNode.actor_agent_id);
+        if (isMobile) {
+          setRailOpen(false);
+          openAgentInspector(typedNode.actor_agent_id);
+        } else {
+          // The persistent desktop rail is the single detail surface. A second
+          // canvas overlay duplicates task data and obscures the constellation.
+          setRailOpen(true);
+          closeOverlay();
+        }
         return;
       }
       if (level === "l" || level === "xl" || level === "xxl") {

@@ -376,6 +376,10 @@ type researchRunProjector struct {
 	handler *Handler
 }
 
+type researchProjectionSnapshotReader interface {
+	SnapshotForProjection(context.Context, string, string) (researchrun.RunSnapshot, error)
+}
+
 func (p *researchRunProjector) Project(ctx context.Context, event researchrun.RunEvent) error {
 	h := p.handler
 	if h == nil {
@@ -397,7 +401,11 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	// deterministic semantic graph so the UI stops treating dispatch events as
 	// the research map.
 	if h.ResearchRun != nil {
-		if snap, snapErr := h.ResearchRun.Snapshot(ctx, event.SessionID, event.WorkspaceID); snapErr == nil {
+		projectionReader, ok := h.ResearchRun.(researchProjectionSnapshotReader)
+		if !ok {
+			return errors.New("research projection snapshot reader is unavailable")
+		}
+		if snap, snapErr := projectionReader.SnapshotForProjection(ctx, event.SessionID, event.WorkspaceID); snapErr == nil {
 			nodes, edges := projectRunV2Graph(snap)
 			typedGraph := projectRunV2TypedGraph(snap, 0, 0, false)
 			if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Type, event.Sequence, nodes, edges, typedGraph); err != nil {

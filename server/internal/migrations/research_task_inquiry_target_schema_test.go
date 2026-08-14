@@ -13,7 +13,7 @@ func TestMigration355DefinesCanonicalTaskInquiryTargets(t *testing.T) {
 	}
 	sql := string(up)
 	for _, required := range []string{
-		"CREATE TABLE research_task_inquiry_target",
+		"CREATE TABLE IF NOT EXISTS research_task_inquiry_target",
 		"PRIMARY KEY (workspace_id, session_id, task_id, target_kind, target_entity_id)",
 		"REFERENCES research_session(workspace_id, id) ON DELETE CASCADE",
 		"REFERENCES research_task(workspace_id, session_id, id) ON DELETE CASCADE",

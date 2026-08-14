@@ -42,7 +42,7 @@ func TestTaskInquiryTargetsAreScopedTypedAndOrdered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO research_hypothesis(id,workspace_id,session_id,question_id,statement) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'Target hypothesis')`, hypothesisID, fixture.workspaceID, run.SessionID, questionID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO research_hypothesis(id,workspace_id,session_id,question_id,statement,client_key) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,'Target hypothesis','legacy:'||$1::text)`, hypothesisID, fixture.workspaceID, run.SessionID, questionID); err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatal(err)
 	}

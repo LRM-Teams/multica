@@ -12,13 +12,14 @@ import (
 )
 
 type dispatchRaceFixture struct {
-	pool    *pgxpool.Pool
-	store   *PostgresStore
-	fixture researchRunFixture
-	run     Run
-	task    Task
-	claimID string
-	input   CreateDispatchIntentInput
+	pool     *pgxpool.Pool
+	store    *PostgresStore
+	fixture  researchRunFixture
+	run      Run
+	task     Task
+	claimID  string
+	sourceID string
+	input    CreateDispatchIntentInput
 }
 
 func assertDispatchCommittedOnceWithFreshFacts(t *testing.T, ctx context.Context, fx dispatchRaceFixture, mutation string) {
@@ -60,11 +61,38 @@ func setupDispatchRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.P
 		t, ctx, pool, fixture.workspaceID, run.SessionID,
 		claimID, "dispatch-race-claim", "claim for dispatch race",
 	)
+	sourceID := uuid.NewString()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_source_snapshot (
+		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
+		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
+		  verification_status
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'https://example.test/dispatch-race',
+		  'Dispatch race source', 'example.test', 'primary', '{}'::text[],
+		  'dispatch-race-source', now(), 'sha256:dispatch-race-source',
+		  'dispatch race source snapshot', '{}'::jsonb, 'verified'
+		)
+	`, sourceID, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatalf("insert dispatch race source: %v", err)
+	}
+	backfillIntegrationArtifactPassport(
+		t, ctx, tx, fixture.workspaceID, run.SessionID, sourceID,
+		string(ArtifactKindSourceSnapshot), nil, nil,
+	)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit dispatch race source: %v", err)
+	}
 
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, task.ID, fixture.agentID)
 	return dispatchRaceFixture{
 		pool: pool, store: store, fixture: fixture, run: run, task: task,
-		claimID: claimID, input: input,
+		claimID: claimID, sourceID: sourceID, input: input,
 	}
 }
 
@@ -202,16 +230,15 @@ func TestDispatchCASMismatchRollsBackCompleteWriteSet(t *testing.T) {
 			},
 		},
 		{
-			name: "input reference projection",
+			name: "relationship identity hash",
 			hook: func(ctx context.Context, fx dispatchRaceFixture, _ *dispatchManifestPlan) error {
 				_, err := fx.pool.Exec(ctx, `
 					INSERT INTO research_artifact_input_reference(
 					  workspace_id,session_id,consumer_version_id,input_version_id,
 					  relation,explicitly_used,purpose,ordinal
 					)
-					SELECT
-					  consumer.workspace_id,consumer.session_id,consumer.id,input.id,
-					  'dispatch_race_reference',true,'task_execution',0
+					SELECT consumer.workspace_id,consumer.session_id,consumer.id,input.id,
+					       'shadow_identity_race',true,'task_execution',0
 					FROM research_artifact_passport consumer_passport
 					JOIN research_artifact_version consumer
 					  ON consumer.workspace_id=consumer_passport.workspace_id
@@ -305,6 +332,40 @@ func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 			},
 		},
 		{
+			name:        "missing_current_version",
+			wantInvalid: true,
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET current_version = current_version + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "version_access_level",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_version
+					SET access_level = 'verified_only'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "provenance_becomes_unknown",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET provenance_completeness = 'unknown'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
 			name: "withdrawn_lifecycle",
 			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
 				_, err := fx.pool.Exec(ctx, `
@@ -312,6 +373,51 @@ func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 					SET lifecycle_status = 'withdrawn'
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return err
+			},
+		},
+		{
+			name: "source_verification_rejected",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_source_snapshot
+					SET verification_status = 'rejected'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.sourceID)
+				return nil
+			},
+		},
+		{
+			name: "artifact_superseded",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				successorID := uuid.NewString()
+				decisionID := uuid.NewString()
+				seedIntegrationClaimArtifact(
+					t, ctx, fx.pool, fx.fixture.workspaceID, fx.run.SessionID,
+					successorID, "dispatch-race-successor", "successor after rolled-back dispatch",
+				)
+				seedIntegrationSupersessionDecision(
+					t, ctx, fx.pool, fx.fixture.workspaceID, fx.run.SessionID,
+					fx.fixture.userID, decisionID,
+				)
+				var successorVersionID, supersededVersionID string
+				if err := fx.pool.QueryRow(ctx, `
+					SELECT id::text FROM research_artifact_version
+					WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1
+				`, fx.fixture.workspaceID, fx.run.SessionID, successorID).Scan(&successorVersionID); err != nil {
+					return err
+				}
+				if err := fx.pool.QueryRow(ctx, `
+					SELECT id::text FROM research_artifact_version
+					WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID).Scan(&supersededVersionID); err != nil {
+					return err
+				}
+				_, err := fx.store.SupersedeArtifact(ctx, SupersedeArtifactInput{
+					WorkspaceID: fx.fixture.workspaceID, SessionID: fx.run.SessionID,
+					SuccessorVersionID: successorVersionID, SupersededVersionID: supersededVersionID,
+					DecisionID: decisionID, Reason: "dispatch race supersession",
+				})
 				return err
 			},
 		},

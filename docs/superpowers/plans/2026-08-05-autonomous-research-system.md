@@ -1025,6 +1025,14 @@ Agent HTTP surface 将该领域拒绝映射为不泄漏 Run/Attempt/Agent/Passpo
 内部 500。普通 Agent、grader 与 HTTP 撤权路径已闭合；projector principal 的独立 surface
 及撤权矩阵仍未完成，因此 §15.23 保持 partial。
 
+D-access-5 证据：D5/V6 图 Projector 不再复用 human live `Snapshot`，而通过内部
+`SnapshotForProjection` capability 只读取 Run、Contract、Method、Question、Task、Attempt、
+Claim 与 Gate。其 Store seam 在编译期不具备 Source、Observation、evaluation-private、
+Attempt frozen context 或 Artifact representation 读取能力，返回模型也验证这些 surface
+始终为空；未提供该 capability 时 Projector fail closed。Projector 是无 Agent 身份的系统
+principal，当前没有 grant-bearing revocation 生命周期，因此 §15.23 的 evaluator 与完整撤权
+矩阵仍保持 partial，不以本切片冒充全部收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

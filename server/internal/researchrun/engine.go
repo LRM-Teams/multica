@@ -390,6 +390,67 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	return snapshot, nil
 }
 
+// SnapshotForProjection is the internal least-privilege read model used by
+// graph projection. Projection needs durable graph identities and delivery
+// readiness, but it must not read source/observation representations,
+// evaluation-private context, frozen Attempt context, or Artifact contents.
+func (e *Engine) SnapshotForProjection(ctx context.Context, sessionID, workspaceID string) (RunSnapshot, error) {
+	if e == nil || e.store == nil {
+		return RunSnapshot{}, errors.New("research run engine is unavailable")
+	}
+	return loadProjectionSnapshot(ctx, e.store, sessionID, workspaceID)
+}
+
+type projectionSnapshotStore interface {
+	GetRun(context.Context, string, string) (Run, error)
+	GetCurrentContract(context.Context, string, string) (ResearchContract, error)
+	GetCurrentMethod(context.Context, string, string) (*ResearchMethod, error)
+	ListQuestions(context.Context, string) ([]Question, error)
+	ListTasks(context.Context, string) ([]Task, error)
+	ListAttempts(context.Context, string) ([]Attempt, error)
+	ListClaims(context.Context, string) ([]Claim, error)
+	EvaluateGate(context.Context, string) (GateResult, error)
+}
+
+func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, sessionID, workspaceID string) (RunSnapshot, error) {
+	run, err := store.GetRun(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	contract, err := store.GetCurrentContract(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	method, err := store.GetCurrentMethod(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	questions, err := store.ListQuestions(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	tasks, err := store.ListTasks(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	attempts, err := store.ListAttempts(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	claims, err := store.ListClaims(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	gate, err := store.EvaluateGate(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	return RunSnapshot{
+		Run: run, Contract: contract, Method: method, Questions: questions,
+		Tasks: tasks, Attempts: attempts, Claims: claims, Gate: gate,
+	}, nil
+}
+
 func (e *Engine) SnapshotForAttempt(ctx context.Context, sessionID, workspaceID, attemptID string) (RunSnapshot, error) {
 	if e == nil || e.store == nil {
 		return RunSnapshot{}, errors.New("research run engine is unavailable")

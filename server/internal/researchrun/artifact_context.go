@@ -39,6 +39,7 @@ type artifactVersionCandidate struct {
 	RepresentationBytes []byte
 	RepresentationHash  string
 	OmissionReason      string
+	DomainStatus        string
 }
 
 type dispatchManifestPlan struct {
@@ -94,9 +95,7 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 			omissions = append(omissions, candidate)
 			continue
 		}
-		admitted, deny := m.policy.LegacyAdmissionAllowed(
-			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
-		)
+		admitted, deny := m.policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts())
 		if !admitted {
 			candidate.OmissionReason = m.policy.ManifestOmissionReason(deny)
 			omissions = append(omissions, candidate)
@@ -138,6 +137,13 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		OmissionHash:        hashManifestOmissions(omissions),
 		Purpose:             purpose,
 	}, nil
+}
+
+func (candidate artifactVersionCandidate) legacyAdmissionFacts() legacyAdmissionFacts {
+	return legacyAdmissionFacts{
+		Kind: candidate.Kind, Lifecycle: candidate.Lifecycle,
+		Provenance: candidate.Provenance, DomainStatus: candidate.DomainStatus,
+	}
 }
 
 func sortManifestEntryCandidates(entries []artifactVersionCandidate) {
@@ -231,7 +237,20 @@ func loadArtifactVersionCandidates(
 		  v.access_level,
 		  p.lifecycle_status,
 		  p.provenance_completeness,
-		  v.content_hash
+		  v.content_hash,
+		  COALESCE(CASE p.entity_kind
+		    WHEN 'task' THEN (SELECT t.status FROM research_task t
+		      WHERE (t.workspace_id,t.session_id,t.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'claim' THEN (SELECT c.status FROM research_claim c
+		      WHERE (c.workspace_id,c.session_id,c.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'source_snapshot' THEN (SELECT s.verification_status FROM research_source_snapshot s
+		      WHERE (s.workspace_id,s.session_id,s.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'observation' THEN (SELECT o.verification_status FROM research_observation o
+		      WHERE (o.workspace_id,o.session_id,o.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'evidence_link' THEN (SELECT e.verification_status FROM research_claim_evidence e
+		      WHERE (e.workspace_id,e.session_id,e.id)=(p.workspace_id,p.session_id,p.id))
+		    ELSE ''
+		  END, '') AS domain_status
 		FROM research_artifact_passport p
 		JOIN research_artifact_version v
 		  ON v.workspace_id = p.workspace_id
@@ -240,7 +259,7 @@ func loadArtifactVersionCandidates(
 		 AND v.version = p.current_version
 		WHERE p.workspace_id = $1::uuid
 		  AND p.session_id = $2::uuid
-		  AND p.entity_kind NOT IN ('attempt', 'context_manifest', 'result_artifact')
+		  AND p.entity_kind NOT IN ('context_manifest', 'result_artifact')
 		ORDER BY p.entity_kind, p.id::text
 	`, workspaceID, sessionID)
 	if err != nil {
@@ -255,7 +274,7 @@ func loadArtifactVersionCandidates(
 		if err = rows.Scan(
 			&candidate.VersionRowID, &candidate.ArtifactID, &kindRaw,
 			&candidate.Version, &candidate.EligibilityRevision,
-			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash,
+			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash, &candidate.DomainStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -280,6 +299,7 @@ type persistDispatchManifestInput struct {
 	Plan              dispatchManifestPlan
 	ExpectedWatermark int64
 	Purpose           ArtifactPurpose
+	BeforeCASHook     func(context.Context, *dispatchManifestPlan) error
 }
 
 func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) (dispatchManifestPlan, error) {
@@ -321,7 +341,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	authorized.Purpose = plan.Purpose
 	authorized.PolicyWatermark = plan.PolicyWatermark
 	plan = authorized
-	if err = freezeEvidenceRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
+	if err = freezeArtifactRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
 	}
 	plan.ManifestHash = hashDispatchManifest(dispatchManifestHashInput{
@@ -344,6 +364,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		ProvenanceCompleteness: ArtifactProvenanceComplete,
 		AccessLevel:            ArtifactAccessRaw,
 		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            plan.ManifestHash,
 	}); err != nil {
 		return dispatchManifestPlan{}, err
 	}
@@ -363,6 +384,11 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		plan.ManifestHash, plan.OmissionHash); err != nil {
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
 	}
+	if in.BeforeCASHook != nil {
+		if err := in.BeforeCASHook(ctx, &plan); err != nil {
+			return dispatchManifestPlan{}, err
+		}
+	}
 
 	if err := lockDispatchManifestCandidateRowsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
@@ -377,7 +403,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		}
 		if err := casArtifactVersionRepresentationTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
-			entry.ContentHash, entry.RepresentationHash,
+			entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}
@@ -564,11 +590,12 @@ func loadManifestGateSnapshotPool(
 	workspaceID, sessionID, attemptID string,
 ) (GateResult, bool, error) {
 	var raw []byte
+	var storedHash string
 	err := pool.QueryRow(ctx, `
-		SELECT gate_snapshot_bytes
+		SELECT gate_snapshot_bytes, gate_snapshot_hash
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, workspaceID, sessionID, attemptID).Scan(&raw)
+	`, workspaceID, sessionID, attemptID).Scan(&raw, &storedHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GateResult{}, false, nil
 	}
@@ -576,7 +603,13 @@ func loadManifestGateSnapshotPool(
 		return GateResult{}, false, err
 	}
 	if len(raw) == 0 {
+		if storedHash != "" {
+			return GateResult{}, false, fmt.Errorf("%w: empty frozen gate snapshot has a hash", ErrInvalidTransition)
+		}
 		return GateResult{}, false, nil
+	}
+	if storedHash == "" || storedHash != contentHashFromPayload(raw) {
+		return GateResult{}, false, fmt.Errorf("%w: frozen gate snapshot hash mismatch", ErrInvalidTransition)
 	}
 	var gate GateResult
 	if err = json.Unmarshal(raw, &gate); err != nil {
@@ -607,7 +640,7 @@ func loadAttemptManifestSummary(
 func persistAcceptedResultArtifactTx(
 	ctx context.Context,
 	tx pgx.Tx,
-	workspaceID, sessionID, attemptID, orchestratorVersion string,
+	workspaceID, sessionID, taskID, attemptID, orchestratorVersion string,
 	result ResultEnvelope,
 	resultJSON []byte,
 	contentHash string,
@@ -624,6 +657,7 @@ func persistAcceptedResultArtifactTx(
 		AccessLevel:            accessLevel,
 		HashOrigin:             ArtifactHashOriginProduction,
 		ContentHash:            contentHash,
+		ProducedByTaskID:       taskID,
 		ProducedByAttemptID:    attemptID,
 		SourceCreatedAt:        timePtr(time.Now()),
 		SchemaName:             string(ArtifactKindResultArtifact),
@@ -631,9 +665,22 @@ func persistAcceptedResultArtifactTx(
 	}); err != nil {
 		return "", err
 	}
+	var manifestID, manifestHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text, manifest_hash
+		FROM research_artifact_context_manifest
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&manifestID, &manifestHash); err != nil {
+		return "", err
+	}
+	inputVersionSetHash, err := manifestInputVersionSetHashTx(ctx, tx, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return "", err
+	}
 	if err := insertResultArtifactRowTx(
 		ctx, tx, resultID, workspaceID, sessionID, attemptID, orchestratorVersion,
 		result, resultJSON, contentHash, policyWatermark,
+		manifestID, manifestHash, inputVersionSetHash,
 	); err != nil {
 		return "", err
 	}
@@ -655,20 +702,24 @@ func insertResultArtifactRowTx(
 	resultJSON []byte,
 	contentHash string,
 	policyWatermark int64,
+	manifestID, manifestHash, inputVersionSetHash string,
 ) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO research_result_artifact (
 		  id, workspace_id, session_id, attempt_id,
 		  orchestrator_version, result_schema_version, result,
-		  client_request_id, content_hash, acceptance_policy_watermark, accepted_at
+		  client_request_id, content_hash, acceptance_policy_watermark, accepted_at,
+		  manifest_id, manifest_hash, input_version_set_hash
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
-		  $5, $6, $7::jsonb, $8, $9, $10, now()
+		  $5, $6, $7::jsonb, $8, $9, $10, now(),
+		  $11::uuid, $12, $13
 		)
 		ON CONFLICT (workspace_id, session_id, attempt_id) DO NOTHING
 	`, resultID, workspaceID, sessionID, attemptID,
 		orchestratorVersion, fmt.Sprintf("%d", result.SchemaVersion), resultJSON,
-		result.ClientRequestID, contentHash, policyWatermark)
+		result.ClientRequestID, contentHash, policyWatermark,
+		manifestID, manifestHash, inputVersionSetHash)
 	return err
 }
 

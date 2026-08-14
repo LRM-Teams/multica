@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -276,7 +277,15 @@ func (h *Handler) SubmitResearchProductRoundJudgment(w http.ResponseWriter, r *h
 		nextFocusText = pgtype.Text{String: nextFocus, Valid: true}
 	}
 
-	card, err := h.Queries.CreateResearchProductRoundCard(r.Context(), db.CreateResearchProductRoundCardParams{
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin product round judgment")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	qtx := h.Queries.WithTx(tx)
+
+	card, err := qtx.CreateResearchProductRoundCard(r.Context(), db.CreateResearchProductRoundCardParams{
 		WorkspaceID:       wsUUID,
 		SessionID:         sessionID,
 		RoundNumber:       round,
@@ -297,6 +306,16 @@ func (h *Handler) SubmitResearchProductRoundJudgment(w http.ResponseWriter, r *h
 		writeError(w, http.StatusInternalServerError, "failed to persist product round judgment")
 		return
 	}
+	if err := researchrun.RegisterProductionProductRoundDecisionTx(
+		r.Context(),
+		tx,
+		workspaceID,
+		uuidToString(sessionID),
+		uuidToString(card.ID),
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to register product round judgment artifact")
+		return
+	}
 
 	update := db.UpdateResearchSessionParams{
 		ID:          sessionID,
@@ -310,9 +329,13 @@ func (h *Handler) SubmitResearchProductRoundJudgment(w http.ResponseWriter, r *h
 		update.CurrentStage = pgtype.Text{String: "s1_plan", Valid: true}
 		update.ProductRound = pgtype.Int4{Int32: round + 1, Valid: true}
 	}
-	updated, err := h.Queries.UpdateResearchSession(r.Context(), update)
+	updated, err := qtx.UpdateResearchSession(r.Context(), update)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to advance session after product round judgment")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit product round judgment")
 		return
 	}
 

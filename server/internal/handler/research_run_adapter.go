@@ -146,21 +146,16 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	if err != nil {
 		return researchrun.DispatchResult{}, err
 	}
+	inboxContext, err := encodeResearchDispatchInboxContext(request, requestHash)
+	if err != nil {
+		return researchrun.DispatchResult{}, err
+	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE agent_inbox_event
-		SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object(
-		  'type', 'research_run_task',
-		  'research_dispatch_key', $2::text,
-		  'research_dispatch_request_hash', $3::text,
-		  'research_session_id', $4::text,
-		  'research_task_id', $5::text,
-		  'research_attempt_id', $6::text,
-		  'research_task_timeout_seconds', $7::integer,
-		  'research_task_acceptance_criteria', $8::jsonb
-		), updated_at = now()
+		SET context = COALESCE(context, '{}'::jsonb) || $2::jsonb,
+		    updated_at = now()
 		WHERE id = $1
-	`, task.ID, request.Key, requestHash, request.Run.SessionID, request.Task.ID, request.AttemptID,
-		request.Task.TimeoutSeconds, request.Task.AcceptanceCriteria); err != nil {
+	`, task.ID, inboxContext); err != nil {
 		return researchrun.DispatchResult{}, fmt.Errorf("bind research task dispatch: %w", err)
 	}
 	if err = qtx.LinkChatMessageToTask(ctx, db.LinkChatMessageToTaskParams{ID: message.ID, TaskID: task.ID}); err != nil {
@@ -174,6 +169,31 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	}
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
 	return researchrun.DispatchResult{InboxTaskID: uuidToString(task.ID)}, nil
+}
+
+func encodeResearchDispatchInboxContext(request researchrun.DispatchRequest, requestHash string) ([]byte, error) {
+	contextPayload := map[string]any{
+		"type":                              "research_run_task",
+		"research_dispatch_key":             request.Key,
+		"research_dispatch_request_hash":    requestHash,
+		"research_session_id":               request.Run.SessionID,
+		"research_task_id":                  request.Task.ID,
+		"research_attempt_id":               request.AttemptID,
+		"research_task_timeout_seconds":     request.Task.TimeoutSeconds,
+		"research_task_acceptance_criteria": request.Task.AcceptanceCriteria,
+	}
+	if request.ManifestID != "" || request.ManifestHash != "" {
+		if request.ManifestID == "" || request.ManifestHash == "" {
+			return nil, fmt.Errorf("research dispatch manifest identity is incomplete")
+		}
+		contextPayload["research_manifest_id"] = request.ManifestID
+		contextPayload["research_manifest_hash"] = request.ManifestHash
+	}
+	encoded, err := json.Marshal(contextPayload)
+	if err != nil {
+		return nil, fmt.Errorf("encode research dispatch inbox context: %w", err)
+	}
+	return encoded, nil
 }
 
 func classifyResearchDispatchError(err error) error {

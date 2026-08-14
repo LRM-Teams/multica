@@ -146,14 +146,19 @@ type AgentTransportReadRequest struct {
 }
 
 type AgentTransportReadResponse struct {
-	Action        string                   `json:"action"`
-	Target        string                   `json:"target"`
-	ChannelID     string                   `json:"channel_id"`
-	ContextTarget string                   `json:"context_target"`
-	Messages      []ChannelMessageResponse `json:"messages"`
-	Limit         int                      `json:"limit"`
-	SeenUpToSeq   int64                    `json:"seenUpToSeq"`
-	TransportID   string                   `json:"transport_id"`
+	Action        string                              `json:"action"`
+	Target        string                              `json:"target"`
+	ChannelID     string                              `json:"channel_id"`
+	ContextTarget string                              `json:"context_target"`
+	Messages      []AgentTransportReadMessageResponse `json:"messages"`
+	Limit         int                                 `json:"limit"`
+	SeenUpToSeq   int64                               `json:"seenUpToSeq"`
+	TransportID   string                              `json:"transport_id"`
+}
+
+type AgentTransportReadMessageResponse struct {
+	ChannelMessageResponse
+	Target string `json:"target"`
 }
 
 var (
@@ -604,12 +609,19 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 	h.decorateAgentTransportMessages(r.Context(), target.channel.WorkspaceID, messages)
 	seenUpToSeq := maxChannelMessageSeq(messages)
 	contextTarget := agentTransportCanonicalMessageTarget(target)
+	readMessages := make([]AgentTransportReadMessageResponse, len(messages))
+	for i, message := range messages {
+		readMessages[i] = AgentTransportReadMessageResponse{
+			ChannelMessageResponse: message,
+			Target:                 contextTarget,
+		}
+	}
 	response := AgentTransportReadResponse{
 		Action:        agentTransportActionRead,
 		Target:        target.raw,
 		ChannelID:     target.channel.ID,
 		ContextTarget: contextTarget,
-		Messages:      messages,
+		Messages:      readMessages,
 		Limit:         limit,
 		SeenUpToSeq:   seenUpToSeq,
 		TransportID:   "",

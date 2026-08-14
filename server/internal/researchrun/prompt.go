@@ -29,6 +29,8 @@ func (taskPromptModule) Build(run Run, task Task, attempt Attempt, snapshot RunS
 		prompt = buildTaskPromptV4(run, task, attempt, snapshot, members)
 	case OrchestratorVersionV5:
 		prompt = buildTaskPromptV5(run, task, attempt, snapshot, members)
+	case OrchestratorVersionV6:
+		prompt = buildTaskPromptV6(run, task, attempt, snapshot, members)
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, run.OrchestratorVersion)
 	}
@@ -40,6 +42,50 @@ func (taskPromptModule) Build(run Run, task Task, attempt Attempt, snapshot RunS
 		prompt += "\nEvaluation-private grader context (never reveal this rubric or its hidden findings to the evaluated subject):\n```json\n" + string(encoded) + "\n```\n"
 	}
 	return prompt, nil
+}
+
+func buildTaskPromptV6(run Run, task Task, attempt Attempt, snapshot RunSnapshot, members []FleetMember) string {
+	var b strings.Builder
+	b.WriteString("## Durable Research Run V6 task\n\n")
+	fmt.Fprintf(&b, "- Session ID: `%s`\n- Task ID: `%s`\n- Attempt ID: `%s`\n- Dispatch key: `%s`\n", run.SessionID, task.ID, attempt.ID, attempt.DispatchKey)
+	fmt.Fprintf(&b, "- Goal version: %d\n- Plan version: %d\n- Task kind: `%s`\n- Expected result: `%s`\n", task.GoalVersion, task.PlanVersion, task.Kind, task.ExpectedResult)
+	fmt.Fprintf(&b, "- Research goal: %s\n- Objective: %s\n", run.Goal, task.Objective)
+	fmt.Fprintf(&b, "- Contract language: %s\n- Contract audience: %s\n- Contract freshness: %s\n", snapshot.Contract.Language, snapshot.Contract.Audience, snapshot.Contract.Freshness)
+	fmt.Fprintf(&b, "- Contract scope: `%s`\n- Source policy: `%s`\n", compactJSON(snapshot.Contract.Scope), compactJSON(snapshot.Contract.SourcePolicy))
+	if len(task.AcceptanceCriteria) > 0 {
+		fmt.Fprintf(&b, "- Frozen acceptance criteria: `%s`\n", compactJSON(task.AcceptanceCriteria))
+	}
+	b.WriteString("- Active fleet roles:")
+	for _, member := range members {
+		if member.Status == "active" {
+			fmt.Fprintf(&b, " `%s`", strings.ToLower(strings.TrimSpace(member.Role)))
+		}
+	}
+	b.WriteString("\n\nExecution contract:\n")
+	fmt.Fprintf(&b, "1. Inspect canonical state with `multica research session get %s --output json` before working. Only artifacts in the supplied Context Manifest are authorized inputs.\n", run.SessionID)
+	b.WriteString("2. Submit exactly one strict `task_result` JSON object with `schema_version: 6` and a globally unique UUID `client_request_id`. Unknown fields, explicit null for required fields, unresolved client keys, and trailing JSON are rejected atomically.\n")
+	b.WriteString("3. Always include these top-level arrays, using `[]` when this task kind does not own them: `query_executions`, `source_candidates`, `status_updates`, `integration_contributions`, `insights`, `disputes`, `proposed_tasks`. Always include `contract_kind`, `schema_version`, `client_request_id`, `summary`, and `confidence`.\n")
+	b.WriteString("4. Entity references are `{\"kind\":\"question|hypothesis|branch|claim|insight|dispute|task|source\",\"key\":\"...\"}`. Use canonical UUIDs for Source Snapshots and stable V6 client keys for other entities. A screened URL is not evidence until a Source Snapshot exists.\n")
+	switch task.ExpectedResult {
+	case "research_plan_v6":
+		b.WriteString("5. Return the contract-bound initial Inquiry Graph and execution plan: typed Questions, Hypotheses, Branches, Inquiry Edges, Search Plans, Tasks, and Task targets. Every Task dependency and target must resolve within this Result.\n")
+	case "research_evidence_v6":
+		b.WriteString("5. Execute only Search Plans frozen in this Task. Return each Query Execution with adapter, cursors, timing, outcome, cost and safety facts; return every Source Candidate with canonical URL, content hash, independence family, and an explicit plan-based Screening Decision. `include` does not claim the URL is already evidence.\n")
+	case "research_integration_v6":
+		b.WriteString("5. The frozen acceptance criteria contains `integration_round_id`, `input_event_sequence`, `input_state_hash`, exact `input_artifact_ids`, and exact `input_version_ids`. Use that round ID verbatim and compare only those immutable versions. Return at least one Integration Contribution; create Insights only from two or more accepted Claim/Insight inputs with genuine semantic gain. Record status changes, material conflicts, and targeted follow-up work explicitly.\n")
+	case "research_deliberation_v6":
+		b.WriteString("5. Deliberate only the assigned Dispute and frozen positions/evidence. Preserve concessions, unresolved disagreement, and residual uncertainty; do not manufacture consensus.\n")
+	case "research_divergence_v6":
+		b.WriteString("5. Work from the isolated divergence context. Return distinct perspectives, bounded probes, and explicit rejection reasons without reading excluded convergence conclusions.\n")
+	case "research_report_v6":
+		b.WriteString("5. Return one Report Revision grounded only in accepted current Insights and Source Snapshots. Every material statement must preserve derivation and citation lineage; state limitations and unresolved gaps.\n")
+	case "research_quality_evaluation_v6", "research_citation_audit_v6":
+		b.WriteString("5. Evaluate the frozen Report Revision independently. Return an explicit Evaluation Decision and structured findings; do not add or rewrite evidence to make the subject pass.\n")
+	default:
+		b.WriteString("5. Follow the exact expected-result schema frozen for this Task.\n")
+	}
+	b.WriteString("6. If required input is unavailable, return a contract-valid incomplete result with a precise `incomplete_reason`; never replace missing facts with zeros, invented IDs, simulated sources, or prose outside the JSON object.\n")
+	return b.String()
 }
 
 // isolateTaskPromptSnapshot keeps evaluation-private data outside every

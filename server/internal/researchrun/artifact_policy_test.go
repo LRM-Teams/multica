@@ -118,7 +118,7 @@ func expectedLegacyAdmission(
 		return false, ArtifactDenyUnknownKind
 	}
 	switch kind {
-	case ArtifactKindContextManifest, ArtifactKindHypothesis, ArtifactKindBranch, ArtifactKindInsight, ArtifactKindIntegrationContribution, ArtifactKindInquiryEdge:
+	case ArtifactKindContextManifest, ArtifactKindHypothesis, ArtifactKindBranch, ArtifactKindInsight, ArtifactKindIntegrationContribution, ArtifactKindIntegrationRound, ArtifactKindInquiryEdge:
 		return false, ArtifactDenyLegacyIneligible
 	}
 	if lifecycle != ArtifactLifecycleRegistered && lifecycle != ArtifactLifecycleAccepted {
@@ -140,6 +140,7 @@ func TestArtifactPolicyLegacyAdmissionDeniesDAndFutureOnlyKinds(t *testing.T) {
 		ArtifactKindBranch,
 		ArtifactKindInsight,
 		ArtifactKindIntegrationContribution,
+		ArtifactKindIntegrationRound,
 		ArtifactKindInquiryEdge,
 	} {
 		ok, reason := policy.LegacyAdmissionAllowed(kind, ArtifactLifecycleAccepted, ArtifactProvenanceComplete)

@@ -963,6 +963,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
     - [x] C1c-2：为 Run reconcile claim 增加续租和 fencing token，使进程暂停超过 claim TTL 后的旧 owner 不能继续提交状态，并覆盖双 worker、长调用和进程暂停竞态。
 - [x] 实现完整失败分类、provider/Adapter circuit state、有界重试和目标幂等修复。
   - [x] C2a：冻结 Attempt 执行目标，复用 Agent Inbox `taskfailure.Reason` 建立结构化 Research FailureClass/Disposition，未知失败不得伪装成瞬时网络错误。
+    - [x] C2a-1：修复真实 `queued_expired` 事故中 Inbox delivery 终态与 Research Task attempt budget 被混为一谈的问题。未被 worker claim 的过期 delivery 仍以 `runtime_lost` 结算原 Attempt，但无论该 Inbox 行的通用 retryable flag 为何，Task 在自身预算内回到 `ready` 并重新解析目标；`runtime_offline` 等其他明确 non-retryable 事实仍收紧 disposition。单元回归锁定分类边界，PostgreSQL 回归锁定 attempt 1/3 后 Task=`ready`、Run=`running`。
   - [x] C2b：实现 workspace-bound Agent/Runtime/provider/Adapter 持久 circuit、失败窗口、带 generation 的 half-open probe lease、配置指纹恢复和 Transition 审计。
   - [x] C2c：让 dispatch 与 runtime reconcile 在选择、失败、成功路径驱动 circuit；有健康同能力 Agent 时换目标，无健康目标时等待最早 probe，不复制正在执行或取消中的 Task。
     - [x] C2c-1：批量读取候选实际存在的 Agent/Runtime/provider/Adapter circuit 与 provider lock；路由先选无 probe 的健康目标，再选到期 probe；全部阻塞时保持原 Task `ready`、记录幂等等待 Event，并把 Task/Run 唤醒时间设为最早 circuit 恢复时间。存量或本地 Adapter 没有 Runtime/provider 身份时只评估实际存在的层级，不伪造身份，也不拒绝正常 Result。
@@ -1175,7 +1176,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 - [x] A1 实现 V1–V5 canonical state hash、workspace-bound Event 读取和连续 replay；单测与真实 PostgreSQL `server/internal/researchrun` 回归通过。
 - [x] A2a 实现 V1–V5 orchestrator contract golden manifest；五个版本的完整 Prompt、可接受 Plan 和新 schema 拒绝均有固定回归。
 - [x] A2b 实现当前状态机行为 golden manifest；证据接纳、报告物化、结构化评审缺陷传递、有界重试、取消确认和结果幂等恢复均由真实 PostgreSQL 场景固定。测试发现任务自身永久失败被错误写为 `blocked`，已改为 `failed`；只有依赖终态导致的任务使用 `blocked/dependency_terminal`。历史 V1–V5 的协议边界由 A2a 分版本固定。
-- [x] A3 把六类已发生生产故障映射到脱敏可执行回归；新增画布 Projection 内部身份唯一断言和真实 PostgreSQL 重复证据饱和测试，其余四类复用并标注现有生产路径回归。测试输入不含线上 workspace、Run、Agent、来源或用户内容。
+- [x] A3 把七类已发生生产故障映射到脱敏可执行回归；新增画布 Projection 内部身份唯一断言、真实 PostgreSQL 重复证据饱和测试，以及 `queued_expired` 首次 Attempt 不得提前失败 Task/Run 的分类 + PostgreSQL 回归；其余四类复用并标注现有生产路径回归。测试输入不含线上 workspace、Run、Agent、来源或用户内容。
 - [x] A4 实现 `internal/researcheval` 评测契约、八模式固定受控语料、三个确定性 grader、重复 seed Runner、版本化聚合 Report 和同语料对照。当前装置是离线评测基础，不宣称已把生产 Research Run 自动执行器、LLM judge、Episode 或 Strategy Promotion 接入；这些仍属于 M。
 - [x] A5 实现七个自主行为固定场景和 `AutonomyGrader`：Oracle 同时约束动作执行者、必需/禁用行为、30 种 Projection Node、typed edge、14 项节点详情、递归 stale、异质 probe、原作者 Contribution、一万节点分页及 gap resync。`go test ./internal/researcheval -count=1` 与 `go vet ./internal/researcheval` 通过；生产 Adapter 尚未接入，不能把 fixture 正例当作生产验收结果。
 - [x] B1 把 committed Event 的 outbox 消费、顺序投影、成功确认、失败退避和 500 条批次上限迁入 `projectionModule`；Module 的持久化输入仅包含三项 Projection 操作，Projection output 仍使用现有 `Projector` Adapter。新增成功、失败、批次上限和禁用输出测试；该项没有改变 canonical Event schema 或生产投影 payload。

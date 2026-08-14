@@ -1019,11 +1019,11 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
-D-lock-1 证据：Result acceptance 的 Manifest targets 以 kind、Artifact UUID、Version row UUID
-形成确定性全序，正向/反向输入及同 Artifact 异 Version 都归一到相同顺序；真实 PostgreSQL
-并发用例让两个共享完整 Manifest target 集合的 Attempt 以相反 Result payload 顺序提交，限定
-时间内无死锁，并验证每个 Attempt 恰好 terminal succeeded 且各自产生一个 Result Artifact。
-§15.20 已收口。
+D-access-4 证据：normal 与 evaluation grant 撤销后的 `TaskContextForAttempt` 现在同时返回
+稳定 `ErrArtifactAccessDenied` 和兼容 `ErrInvalidTransition`，冻结 Manifest/Entry 历史仍不可删；
+Agent HTTP surface 将该领域拒绝映射为不泄漏 Run/Attempt/Agent/Passport 身份的 403，而不是
+内部 500。普通 Agent、grader 与 HTTP 撤权路径已闭合；projector principal 的独立 surface
+及撤权矩阵仍未完成，因此 §15.23 保持 partial。
 
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 

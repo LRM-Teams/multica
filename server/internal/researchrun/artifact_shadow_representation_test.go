@@ -11,7 +11,10 @@ func shadowRepresentationFixture() RunSnapshot {
 		Sources:      []SourceSnapshotView{{ID: "source-1", CanonicalURL: "https://example.com/source", Metadata: json.RawMessage(`{"nested":{"rank":1}}`)}},
 		Observations: []Observation{{ID: "observation-1", SourceSnapshotID: "source-1", Quote: "fact"}},
 		Claims: []Claim{
-			{ID: "claim-1", Text: "claim one", Evidence: []ClaimEvidence{{ArtifactID: "evidence-1", ObservationID: "observation-1", Relation: "supports", Strength: 0.9, Rationale: "direct"}}},
+			{ID: "claim-1", Text: "claim one", Evidence: []ClaimEvidence{
+				{ArtifactID: "evidence-1", ObservationID: "observation-1", Relation: "supports", Strength: 0.9, Rationale: "direct"},
+				{ArtifactID: "evidence-2", ObservationID: "observation-1", Relation: "contradicts", Strength: 0.2, Rationale: "counter"},
+			}},
 			{ID: "claim-2", Text: "claim two", Evidence: []ClaimEvidence{}},
 		},
 	}
@@ -24,7 +27,7 @@ func TestFilterClaimsByManifestFiltersNestedEvidenceLinks(t *testing.T) {
 	if len(filtered) != 1 || len(filtered[0].Evidence) != 1 || filtered[0].Evidence[0].ArtifactID != "evidence-1" {
 		t.Fatalf("filtered=%+v", filtered)
 	}
-	if len(live.Claims[0].Evidence) != 2 {
+	if len(live.Claims[0].Evidence) != 3 {
 		t.Fatal("filter mutated the independently loaded live Claim")
 	}
 }
@@ -39,8 +42,15 @@ func TestCompareShadowSnapshotRepresentationsProvesBytesHashAndNesting(t *testin
 		"evidence bytes":      func(snapshot *RunSnapshot) { snapshot.Claims[0].Evidence[0].Rationale = "changed" },
 		"evidence parent": func(snapshot *RunSnapshot) {
 			evidence := snapshot.Claims[0].Evidence[0]
-			snapshot.Claims[0].Evidence = nil
+			snapshot.Claims[0].Evidence = snapshot.Claims[0].Evidence[1:]
 			snapshot.Claims[1].Evidence = []ClaimEvidence{evidence}
+		},
+		"evidence ordinal": func(snapshot *RunSnapshot) {
+			snapshot.Claims[0].Evidence[0], snapshot.Claims[0].Evidence[1] =
+				snapshot.Claims[0].Evidence[1], snapshot.Claims[0].Evidence[0]
+		},
+		"claim ordinal": func(snapshot *RunSnapshot) {
+			snapshot.Claims[0], snapshot.Claims[1] = snapshot.Claims[1], snapshot.Claims[0]
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -187,6 +188,32 @@ func TestExecutionModuleDispatchReadyCreatesRuntimeTaskAndAttachesIdentity(t *te
 	}
 	if store.acknowledgedAttemptID != request.AttemptID || store.acknowledgedInboxTaskID != "inbox-1" {
 		t.Fatalf("acknowledged attempt=%q inbox=%q", store.acknowledgedAttemptID, store.acknowledgedInboxTaskID)
+	}
+}
+
+func TestExecutionModuleDispatchReadyDoesNotConvertContractFailureIntoNoWork(t *testing.T) {
+	now := time.Date(2026, time.August, 14, 3, 1, 0, 0, time.UTC)
+	run := Run{SessionID: "session-1", WorkspaceID: "workspace-1", StateVersion: 1, GoalVersion: 1, PlanVersion: 1, OrchestratorVersion: OrchestratorVersionV1, Config: RunConfig{MaxParallelTasks: 1}}
+	task := Task{ID: "plan-1", Kind: TaskKindPlan, Status: TaskStatusReady, GoalVersion: 1, PlanVersion: 1, Priority: 1}
+	dispatchErr := fmt.Errorf("%w: manifest policy watermark CAS failed", ErrInvalidTransition)
+	store := &executionTestStore{taskSnapshot: RunSnapshot{Run: run, Tasks: []Task{task}}, createErrors: []error{dispatchErr}}
+	module := executionModule{store: store, dispatcher: &executionTestDispatcher{}, clock: executionFixedClock{now: now}, prompts: taskPromptModule{}}
+
+	outcome, err := module.DispatchReady(context.Background(), run, []Task{task}, nil, []FleetMember{{AgentID: "lead-1", Role: "lead", Status: "active", IsLead: true}})
+	if !errors.Is(err, ErrInvalidTransition) || outcome.Dispatched != 0 {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+}
+
+func TestHasUnfinishedCurrentWorkKeepsDeliveryGateBehindExecution(t *testing.T) {
+	run := Run{GoalVersion: 2, PlanVersion: 3}
+	for _, status := range []TaskStatus{TaskStatusPending, TaskStatusReady, TaskStatusDispatching, TaskStatusRunning} {
+		if !hasUnfinishedCurrentWork(run, []Task{{GoalVersion: 2, PlanVersion: 3, Status: status}}) {
+			t.Fatalf("status %s did not hold Delivery Gate", status)
+		}
+	}
+	if hasUnfinishedCurrentWork(run, []Task{{GoalVersion: 1, PlanVersion: 3, Status: TaskStatusReady}, {GoalVersion: 2, PlanVersion: 3, Status: TaskStatusFailed}}) {
+		t.Fatal("stale or terminal work held Delivery Gate")
 	}
 }
 

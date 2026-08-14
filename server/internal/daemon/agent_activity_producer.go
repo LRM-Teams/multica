@@ -11,11 +11,10 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func activityNarrativeEntry(activityKind, detailKind, text string) (protocol.AgentActivityEntry, error) {
+func activityNarrativeEntry(detailKind, text string) (protocol.AgentActivityEntry, error) {
 	body, err := json.Marshal(protocol.AgentActivityNarrativeBody{
-		Text:         text,
-		ActivityKind: activityKind,
-		DetailKind:   detailKind,
+		Text:       text,
+		DetailKind: detailKind,
 	})
 	if err != nil {
 		return protocol.AgentActivityEntry{}, err
@@ -58,6 +57,7 @@ type agentActivityProducerKey struct {
 
 type agentActivityProducerState struct {
 	snapshot           protocol.AgentActivitySnapshot
+	detail             string
 	status             protocol.AgentStatusPayload
 	session            protocol.AgentSessionPayload
 	connected          bool
@@ -188,7 +188,7 @@ func (p *agentActivityProducer) AttachTransport(send func(protocol.AgentActivity
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentStatus, Payload: state.status})
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentSession, Payload: state.session})
 		if !state.snapshot.ObservedAt.IsZero() {
-			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot}})
+			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot, Detail: state.detail}})
 		}
 	}
 	return p.transportGeneration, frames
@@ -238,7 +238,24 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 	if snapshot.ProducerFactID == "" {
 		snapshot.ProducerFactID = p.newID()
 	}
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Entries: entries}
+	detail := ""
+	if snapshot.DetailKind == state.snapshot.DetailKind {
+		detail = state.detail
+	}
+	for _, entry := range entries {
+		if entry.Kind != "narrative" {
+			continue
+		}
+		var body protocol.AgentActivityNarrativeBody
+		if json.Unmarshal(entry.Body, &body) == nil && body.Text != "" {
+			detail = body.Text
+			break
+		}
+	}
+	if detail == "" {
+		detail = defaultAgentActivityDetail(snapshot.DetailKind)
+	}
+	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: detail, Entries: entries}
 	if err := payload.Validate(); err != nil {
 		return err
 	}
@@ -246,6 +263,7 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 		return fmt.Errorf("Activity sequence regression: %d <= %d", snapshot.ClientSequence, state.lastClientSequence)
 	}
 	state.snapshot = snapshot
+	state.detail = detail
 	state.lastClientSequence = snapshot.ClientSequence
 	state.lastHeartbeatAt = snapshot.ObservedAt
 	if state.connected && p.send != nil {
@@ -276,7 +294,7 @@ func (p *agentActivityProducer) Tick() {
 		state.lastClientSequence = heartbeat.ClientSequence
 		state.lastHeartbeatAt = now
 		if state.connected && p.send != nil {
-			p.send(protocol.AgentActivityPayload{Snapshot: heartbeat})
+			p.send(protocol.AgentActivityPayload{Snapshot: heartbeat, Detail: state.detail, IsHeartbeat: true})
 		}
 	}
 }
@@ -298,7 +316,7 @@ func (p *agentActivityProducer) Probe(probe protocol.AgentActivityProbePayload) 
 	}
 	snapshot := state.snapshot
 	snapshot.ProbeID = probe.ProbeID
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot}
+	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: state.detail}
 	if err := payload.Validate(); err != nil {
 		return protocol.AgentActivityPayload{}, err
 	}
@@ -319,8 +337,31 @@ func (p *agentActivityProducer) ReconnectFrames() []agentActivityReconnectFrame 
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentStatus, Payload: state.status})
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentSession, Payload: state.session})
 		if !state.snapshot.ObservedAt.IsZero() {
-			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot}})
+			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot, Detail: state.detail}})
 		}
 	}
 	return frames
+}
+
+func defaultAgentActivityDetail(detailKind string) string {
+	switch detailKind {
+	case "idle", "ready":
+		return "Online"
+	case "starting", "runtime_starting":
+		return "Starting…"
+	case "thinking_started":
+		return "Thinking"
+	case "model_request_started", "model_response_started", "runtime_progress":
+		return "Working"
+	case "message_received":
+		return "Message received"
+	case "runtime_error", "runtime_crashed", "runtime_stalled":
+		return "Error"
+	case "runtime_unavailable", "runtime_interrupted", "machine_disconnected":
+		return "Offline"
+	case "stopped":
+		return "Stopped"
+	default:
+		return ""
+	}
 }

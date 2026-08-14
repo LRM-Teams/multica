@@ -475,12 +475,38 @@ func TestWorkspaceRunnerManagedStopClosesProviderAndInbox(t *testing.T) {
 	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
 	}
-	status, err := runner.stopManagedAgent(protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID})
-	if err != nil {
+	var published []string
+	var stopped protocol.AgentActivityPayload
+	transport, _ := runner.activity.AttachTransport(func(activity protocol.AgentActivityPayload) {
+		published = append(published, protocol.EventAgentActivity)
+		stopped = activity
+	})
+	defer runner.activity.DetachTransport(transport)
+	if err := runner.stopManagedAgent(protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID}, func(eventType string, payload any) error {
+		published = append(published, eventType)
+		status, ok := payload.(protocol.AgentStatusPayload)
+		if !ok || status.Status != protocol.AgentStatusInactive {
+			t.Fatalf("stop status = %#v", payload)
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("stop managed Agent: %v", err)
 	}
-	if status.Status != protocol.AgentStatusInactive || backend.forceKillCount() != 0 {
-		t.Fatalf("stop status=%+v force_kills=%d", status, backend.forceKillCount())
+	if want := []string{protocol.EventAgentStatus, protocol.EventAgentActivity}; !reflect.DeepEqual(published, want) {
+		t.Fatalf("stop publications = %v, want %v", published, want)
+	}
+	if stopped.Snapshot.ActivityKind != protocol.ActivityKindOffline || stopped.Snapshot.DetailKind != "stopped" || stopped.Snapshot.LaunchID != start.LaunchID {
+		t.Fatalf("terminal stop Activity = %+v", stopped)
+	}
+	if len(stopped.Entries) != 1 {
+		t.Fatalf("terminal stop entries = %+v", stopped.Entries)
+	}
+	var stoppedBody protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(stopped.Entries[0].Body, &stoppedBody); err != nil || stoppedBody.Text != "Stopped" {
+		t.Fatalf("terminal stop narrative = %+v err=%v", stoppedBody, err)
+	}
+	if backend.forceKillCount() != 0 {
+		t.Fatalf("stop force_kills=%d", backend.forceKillCount())
 	}
 	if _, _, found := runner.inboxes.Resolve(agentID); found {
 		t.Fatal("managed stop retained Agent Inbox")
@@ -488,9 +514,15 @@ func TestWorkspaceRunnerManagedStopClosesProviderAndInbox(t *testing.T) {
 	if _, found := runner.processes.Snapshot(agentID); found {
 		t.Fatal("managed stop retained APM launch")
 	}
+	runner.activity.mu.Lock()
+	activityStates := len(runner.activity.states)
+	runner.activity.mu.Unlock()
+	if activityStates != 0 {
+		t.Fatalf("managed stop retained %d Activity states", activityStates)
+	}
 }
 
-func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *testing.T) {
+func TestWorkspaceRunnerAttachmentDetachChangesOnlyDurableResponsibility(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, nil)
 	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
@@ -504,7 +536,9 @@ func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *te
 	if _, err := runner.applyAttachmentAttach(attach); err != nil {
 		t.Fatalf("apply Attachment attach: %v", err)
 	}
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1", StartDispatchID: "start-1" + "-dispatch", ReadinessPolicy: agentRuntimeReadinessFirstEvent}); err != nil {
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1", StartDispatchID: "start-1-dispatch"}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
 		t.Fatalf("start managed Agent for detach: %v", err)
 	}
 	detach := protocol.WorkspaceRunnerAgentDetachPayload{
@@ -517,11 +551,17 @@ func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *te
 	if _, found := d.attachmentRegistry().Resolve(workspaceID, agentID); found {
 		t.Fatal("detach retained durable Attachment")
 	}
-	if _, _, found := runner.inboxes.Resolve(agentID); found {
-		t.Fatal("detach retained in-memory Inbox")
+	if _, resolvedRuntimeID, found := runner.inboxes.Resolve(agentID); !found || resolvedRuntimeID != runtimeID {
+		t.Fatalf("detach changed Inbox: runtime=%q found=%v", resolvedRuntimeID, found)
 	}
-	if _, found := runner.processes.Snapshot(agentID); found {
-		t.Fatal("detach retained managed launch")
+	if launch, found := runner.processes.Snapshot(agentID); !found || launch.LaunchID != start.LaunchID {
+		t.Fatalf("detach changed managed launch: %+v found=%v", launch, found)
+	}
+	runner.activity.mu.Lock()
+	activityStates := len(runner.activity.states)
+	runner.activity.mu.Unlock()
+	if activityStates == 0 {
+		t.Fatal("detach removed managed Activity state")
 	}
 	if _, err := os.Stat(agentworkspace.Root(root, workspaceID, agentID)); err != nil {
 		t.Fatalf("detach removed durable AgentRoot: %v", err)
@@ -543,7 +583,7 @@ func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *te
 	if !found || attachment.AttachmentGeneration != 2 || attachment.RuntimeID != runtimeID {
 		t.Fatalf("stale detach removed newer Attachment: %+v found=%v", attachment, found)
 	}
-	if _, _, found := runner.inboxes.Resolve(agentID); found {
-		t.Fatal("reattach created an Inbox before agent:start")
+	if _, resolvedRuntimeID, found := runner.inboxes.Resolve(agentID); !found || resolvedRuntimeID != runtimeID {
+		t.Fatalf("reattach changed the existing Inbox: runtime=%q found=%v", resolvedRuntimeID, found)
 	}
 }

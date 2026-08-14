@@ -236,7 +236,8 @@ func toolActivityFact(tool string, input map[string]any) (detailKind, narrative 
 	}
 	semantic, known := canonicalToolSemantic(tool)
 	if !known {
-		// Raft: unknown tools are never silent — "Using <name>…".
+		// Raft v1.0.16 classifies unknown tools as `other`; the shared
+		// Activity fact boundary then drops that non-fact detail kind.
 		return "other", "Using " + truncateRunes(semantic, 40)
 	}
 	return toolDetailKind[semantic], summarizeToolInput(semantic, input)

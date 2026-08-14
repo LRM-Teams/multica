@@ -467,16 +467,12 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
 				continue
 			}
-			status, err := runner.stopManagedAgent(stop)
-			if err != nil {
+			if err := runner.stopManagedAgent(stop, writeFrame); err != nil {
 				if runner.logger != nil {
 					runner.logger.Warn("Workspace Runner stop rejected", "workspace_id", workspaceID, "agent_id", stop.AgentID, "launch_id", stop.LaunchID, "reason", "stop_rejected", "error", err)
 				}
 				failConnection(err)
 				continue
-			}
-			if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
-				return err
 			}
 		case protocol.EventAgentAttach:
 			var attach protocol.WorkspaceRunnerAgentAttachPayload

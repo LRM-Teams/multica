@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -229,5 +230,97 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	}
 	if journal, err := successorUpgrade.readJournal(); err != nil || journal != nil {
 		t.Fatalf("successor left Machine Upgrade journal = %+v, error=%v", journal, err)
+	}
+}
+
+func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
+	const controlToken = "owner-secret"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	previousJournalDir := filepath.Join(home, ".local", "share", "multica", "machine-upgrades")
+	if err := os.MkdirAll(previousJournalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousJournalPath := filepath.Join(previousJournalDir, "upgrade-a.json")
+	previousJournal := hostMachineUpgradeJournal{
+		ID: "upgrade-a", Generation: "generation-a", Source: "v1.0.0", Target: "v2.0.0",
+		RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"}, Phase: "handoff",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	data, err := json.Marshal(previousJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(previousJournalPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var reregistered atomic.Int32
+	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
+			http.Error(w, "unexpected child control request", http.StatusBadRequest)
+			return
+		}
+		reregistered.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer childControl.Close()
+	attested := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-a/attest" {
+			http.NotFound(w, r)
+			return
+		}
+		attested <- struct{}{}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	host, err := NewHost(HostConfig{
+		ControlToken: controlToken,
+		Spawn: func(string, int64) (BindingChild, error) {
+			return &readySupervisorChild{
+				supervisorTestChild: newSupervisorTestChild(8301), controlURL: childControl.URL,
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.Reconcile(context.Background(), []string{"workspace-a"})
+	waitForSupervisorLifecycle(t, host.supervisor, "workspace-a", RunnerLifecycleRunning)
+	record, pid, ok := host.Snapshot("workspace-a")
+	if !ok {
+		t.Fatal("missing successor Binding")
+	}
+	host.runtimeSets["workspace-a"] = hostBindingRuntimeSet{
+		Identity:    BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: record.Generation(), PID: pid},
+		Runtimes:    []hostBindingRuntime{{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"}},
+		DaemonToken: "runtime-token", ExpiresAt: time.Now().Add(time.Hour),
+	}
+	defer host.Stop()
+
+	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
+		identity: HostProcessIdentity{
+			ComputerID: "computer-a", ComputerGeneration: 251, Environment: "test",
+			Version: "v2.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+		},
+		residentRoot:                    filepath.Join(home, ".multica", "computer"),
+		previousPackageUpgradeBootstrap: true,
+	})
+	host.upgrade = upgrade
+	if err := upgrade.recoverSuccessor(context.Background()); err != nil {
+		t.Fatalf("recover previous-package successor: %v", err)
+	}
+	if got := reregistered.Load(); got != 1 {
+		t.Fatalf("successor re-registration calls = %d, want 1", got)
+	}
+	select {
+	case <-attested:
+	case <-time.After(time.Second):
+		t.Fatal("previous-package handoff was not attested")
+	}
+	if _, err := os.Stat(previousJournalPath); !os.IsNotExist(err) {
+		t.Fatalf("previous-package handoff journal remains after attestation: %v", err)
 	}
 }

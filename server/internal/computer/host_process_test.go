@@ -69,6 +69,43 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	}
 }
 
+func TestHostProcessProjectsPreviousPackageTakeoverUntilLauncherExits(t *testing.T) {
+	var sourceAlive atomic.Bool
+	sourceAlive.Store(true)
+	state := &hostProcessState{
+		identity: HostProcessIdentity{
+			ComputerID: "computer-a", ComputerGeneration: 251, Version: "v0.4.24-alpha.57",
+			MachineAttestationFrom: 57261,
+		},
+		startedAt: time.Now(), ready: true,
+		previousPackageUpgradeBootstrap: true,
+		sourceProcessAlive: func(pid int) (bool, bool) {
+			if pid != 57261 {
+				t.Fatalf("source pid = %d, want 57261", pid)
+			}
+			return sourceAlive.Load(), true
+		},
+	}
+	handler := (&Host{}).processHealthHandler(state)
+	readStatus := func() string {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+		var health map[string]any
+		if err := json.NewDecoder(recorder.Body).Decode(&health); err != nil {
+			t.Fatal(err)
+		}
+		status, _ := health["status"].(string)
+		return status
+	}
+	if got := readStatus(); got != "takeover_ready" {
+		t.Fatalf("previous launcher alive: status = %q, want takeover_ready", got)
+	}
+	sourceAlive.Store(false)
+	if got := readStatus(); got != "running" {
+		t.Fatalf("previous launcher exited: status = %q, want running", got)
+	}
+}
+
 func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	const token = "owner-secret"
 	reregistered := make(chan struct{}, 2)

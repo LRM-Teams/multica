@@ -266,6 +266,16 @@ func addComputerResidentFlags(cmd *cobra.Command) {
 	_ = f.MarkHidden("computer-generation")
 	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
 	_ = f.MarkHidden("machine-attestation-source-pid")
+	// v0.4.24-alpha.55 passes these two inputs when it launches an upgraded
+	// Computer. The marker gates the bounded previous-package adapter; neither
+	// value re-enters the current takeover proof or lifecycle state. The
+	// successor must accept this argv so that alpha.55 can self-upgrade.
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	f.Bool("machine-upgrade-detached-candidate", false, "Previous-package Machine Upgrade bootstrap marker")
+	_ = f.MarkHidden("machine-upgrade-detached-candidate")
+	f.String("machine-upgrade-takeover-protocol", "", "Previous-package Machine Upgrade takeover protocol")
+	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 }
 
 func requireComputerStoppedForIdentityChange() error {

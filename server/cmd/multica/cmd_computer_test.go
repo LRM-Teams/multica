@@ -134,6 +134,29 @@ func TestComputerServiceCommandIsHiddenResidentEntry(t *testing.T) {
 	}
 }
 
+func TestComputerServiceAcceptsPreviousPackageUpgradeBootstrap(t *testing.T) {
+	// v0.4.24-alpha.55 launches its detached upgrade successor with this exact
+	// argv shape. These are bootstrap compatibility inputs, not a request to
+	// restore the retired takeover state machine.
+	args := []string{
+		"computer", computer.ResidentServiceArg,
+		"--computer-generation", "251",
+		"--machine-upgrade-detached-candidate",
+		"--machine-upgrade-takeover-protocol", "machine-upgrade-takeover-v2:251",
+		"--machine-attestation-source-pid", "57261",
+	}
+	cmd, remaining, err := rootCmd.Find(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != computerServiceCmd {
+		t.Fatalf("previous-package successor resolved to %q, want computer %s", cmd.CommandPath(), computer.ResidentServiceArg)
+	}
+	if err := cmd.ParseFlags(remaining); err != nil {
+		t.Fatalf("previous-package successor bootstrap rejected: %v", err)
+	}
+}
+
 func TestComputerRunnerCommandIsHiddenBindingChild(t *testing.T) {
 	if got, want := computerRunnerCmd.Use, computer.ResidentRunnerArg; got != want {
 		t.Fatalf("computer runner use = %q, want %q", got, want)

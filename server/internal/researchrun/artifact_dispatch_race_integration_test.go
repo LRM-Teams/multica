@@ -272,6 +272,40 @@ func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 			},
 		},
 		{
+			name:        "missing_current_version",
+			wantInvalid: true,
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET current_version = current_version + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "version_access_level",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_version
+					SET access_level = 'verified_only'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "provenance_becomes_unknown",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET provenance_completeness = 'unknown'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
 			name: "withdrawn_lifecycle",
 			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
 				_, err := fx.pool.Exec(ctx, `

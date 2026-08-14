@@ -1019,6 +1019,13 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
+D-race-1 证据：Dispatch Request 预计算后先注入 before-commit rollback，确认旧 Attempt、
+Manifest、Entry/Omission、Grant、Input Reference、Outbox、Task transition 与 Event 全部不存在；
+随后以同一 Request 分别改变 eligibility、Run state、current version、Version access/content hash、
+provenance、lifecycle 与 unrelated policy watermark。重试必须从数据库事实重算，合法变化只提交
+一套 fresh 写集，缺失 current version/过期 Run state fail closed。§15.11 的 verification 与
+supersession 子矩阵仍保持 partial。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

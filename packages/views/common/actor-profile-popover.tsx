@@ -21,7 +21,7 @@ import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
 import {
   agentHonorOptions,
   memberProfileOptions,
-  useRunnerActivitySummary,
+  useRunnerActivity,
 } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import type { MemberProfile } from "@multica/core/types";
@@ -36,6 +36,10 @@ import {
 } from "@multica/core/identity";
 import { MemoryGrowthField } from "../agents/components/memory-growth-field";
 import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
+import {
+  RunnerActivityTimeline,
+  RunnerActivityTimelineLoading,
+} from "../agents/components/runner-activity-timeline";
 import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
 import { useHonorBadgeCopy } from "../honor/use-honor-badge-copy";
 import { useAgentAchievementCopy } from "../agents/hooks/use-agent-achievement-copy";
@@ -482,26 +486,34 @@ function ProfileSection({
   );
 }
 
-// The popover is a compact surface: it consumes the shared Workspace summary
-// projection and never mounts the per-Agent Timeline query. The Activity tab is
-// the only full-history consumer.
+const PROFILE_ACTIVITY_LIMIT = 5;
+
+// The popover reuses the Activity tab's timeline chrome, but keeps only the
+// latest five headings. Subtext, command bodies, tool targets, and Copy chrome
+// stay exclusive to the full Activity tab.
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function AgentRecentActivity({ agentId }: { agentId: string }) {
   const { t } = useT("channels");
   const workspaceId = useWorkspaceId();
-  const { data, isLoading } = useRunnerActivitySummary(workspaceId, agentId);
+  const { data, isLoading } = useRunnerActivity(workspaceId, agentId);
+  const timeline = (data?.timeline ?? []).slice(0, PROFILE_ACTIVITY_LIMIT).reverse();
   if (isLoading && !data) {
     return (
-      <div className="rounded-md bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground">
-        {t(($) => $.profile_popover.loading)}
-      </div>
+      <RunnerActivityTimelineLoading rows={3} testId="profile-activity-loading" />
     );
   }
-  if (!data || data.visibility !== "visible") {
+  if (timeline.length === 0) {
     return <p className="text-xs text-muted-foreground">{t(($) => $.profile_popover.no_recent_activity)}</p>;
   }
   return (
-    <p className="truncate text-xs text-muted-foreground">{data.label}</p>
+    <RunnerActivityTimeline
+      rows={timeline}
+      workspaceId={workspaceId}
+      showDetails={false}
+      testId="profile-activity-timeline"
+      spineTestId="profile-activity-timeline-spine"
+      rowTestId="profile-activity-row"
+    />
   );
 }
 

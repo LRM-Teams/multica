@@ -101,6 +101,8 @@ func rebindDispatchPromptForManifestTx(
 	}
 	request := in.Request
 	request.Prompt = prompt
+	request.ManifestID = manifestID
+	request.ManifestHash = manifestSet.Hash
 	return request, nil
 }
 

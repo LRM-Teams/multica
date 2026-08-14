@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestMigration374MaterializesReportSourceReferenceEdges(t *testing.T) {
-	up, err := os.ReadFile("../../migrations/374_research_report_source_reference_edges.up.sql")
+func TestMigration375MaterializesReportSourceReferenceEdges(t *testing.T) {
+	up, err := os.ReadFile("../../migrations/375_research_report_source_reference_edges.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,14 +26,14 @@ func TestMigration374MaterializesReportSourceReferenceEdges(t *testing.T) {
 		"research_artifact_scan_session_migration_diagnostics",
 	} {
 		if !strings.Contains(sql, required) {
-			t.Errorf("migration 374 missing %q", required)
+			t.Errorf("migration 375 missing %q", required)
 		}
 	}
-	down, err := os.ReadFile("../../migrations/374_research_report_source_reference_edges.down.sql")
+	down, err := os.ReadFile("../../migrations/375_research_report_source_reference_edges.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(down), "purpose='report_source_migration'") {
-		t.Error("migration 374 down must preserve production report-source edges")
+		t.Error("migration 375 down must preserve production report-source edges")
 	}
 }

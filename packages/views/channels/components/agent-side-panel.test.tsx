@@ -210,9 +210,6 @@ vi.mock("@multica/core/permissions", () => ({
     canViewSensitiveTabs: activityPermission,
   }),
 }));
-vi.mock("../../runtimes/components/shared", () => ({
-  useRuntimeHealthStateLabel: () => (state: string) => state,
-}));
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getAgentFleetRank: () => undefined,
@@ -234,14 +231,6 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
-  // Real staged-override behavior so the panel proves it consumes the shared
-  // presentation (update_state) rather than raw runtime_health.
-  deriveRuntimeHealthPresentation: (rt: { update_state?: string; runtime_health?: string }) =>
-    rt?.update_state === "ready_to_apply"
-      ? "ready_to_apply"
-      : rt?.update_state === "pending" || rt?.update_state === "running"
-        ? "updating"
-        : (rt?.runtime_health ?? "ok"),
   deriveRuntimeHealth: (rt: { status?: string }) =>
     rt?.status === "online" ? "online" : "offline",
   runtimeCurrentVersion: (rt: { current_version?: string | null }) =>
@@ -404,22 +393,12 @@ describe("AgentSidePanel", () => {
     mockRuntimes.current = [];
   });
 
-  it("shows the staged (ready_to_apply) presentation for the agent's runtime (#687)", () => {
-    // Staged projection: backend still reports health update_available, but the
-    // panel must present the ready_to_apply lifecycle via the shared derive
-    // (the label mock echoes the presentation it was handed).
+  it("renders no health or update status beside Runtime", () => {
     mockRuntimes.current = [
       { id: "runtime-1", status: "online", runtime_health: "update_available", update_state: "ready_to_apply" },
     ];
     renderPanel();
-    expect(screen.getByText("ready_to_apply")).toBeInTheDocument();
-  });
-
-  it("does not show update_available in the Agent Profile runtime summary (LRM-1430)", () => {
-    mockRuntimes.current = [
-      { id: "runtime-1", status: "online", runtime_health: "update_available", update_state: "idle" },
-    ];
-    renderPanel();
+    expect(screen.queryByText("ready_to_apply")).not.toBeInTheDocument();
     expect(screen.queryByText("update_available")).not.toBeInTheDocument();
   });
 
@@ -856,7 +835,7 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
   });
 
-  it("LRM-1351: trailing pencil opens Dialog; summary body is not a click target", () => {
+  it("LRM-1351: heading pencil opens Dialog; summary body is not a click target", () => {
     permission.allowed = true;
     renderPanel("user-other");
 
@@ -873,6 +852,9 @@ describe("AgentSidePanel", () => {
     );
     expect(edit.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
     expect(edit.closest("[data-testid='agent-profile-runtime-config']")).toBeTruthy();
+    expect(edit.parentElement).toContainElement(
+      screen.getByRole("heading", { name: "Runtime Config" }),
+    );
     expect(screen.getByTestId("runtime-picker").closest("button")).not.toBe(edit);
 
     fireEvent.click(screen.getByTestId("runtime-picker"));

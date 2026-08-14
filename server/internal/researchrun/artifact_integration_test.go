@@ -88,6 +88,7 @@ func TestDispatchManifestHashBindsAuthorizationScope(t *testing.T) {
 			VersionCount:         2,
 			InputReferenceCount:  4,
 			OutputReferenceCount: 5,
+			RelationshipHash:     "sha256:relationships",
 			Representation:       "full",
 			RepresentationHash:   "sha256:representation",
 		}},
@@ -114,6 +115,7 @@ func TestDispatchManifestHashBindsAuthorizationScope(t *testing.T) {
 		{"version count", func(in *dispatchManifestHashInput) { in.Entries[0].VersionCount++ }},
 		{"input count", func(in *dispatchManifestHashInput) { in.Entries[0].InputReferenceCount++ }},
 		{"output count", func(in *dispatchManifestHashInput) { in.Entries[0].OutputReferenceCount++ }},
+		{"relationship identity", func(in *dispatchManifestHashInput) { in.Entries[0].RelationshipHash = "sha256:different" }},
 		{"representation", func(in *dispatchManifestHashInput) { in.Entries[0].RepresentationHash = "different" }},
 	}
 	for _, tc := range tests {

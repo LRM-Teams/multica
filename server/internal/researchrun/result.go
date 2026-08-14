@@ -26,6 +26,7 @@ var (
 	ErrCapabilityUnavailable = errors.New("research run capability unavailable")
 	ErrBudgetExhausted       = errors.New("research run budget exhausted")
 	ErrControlTargetChanged  = errors.New("research control target changed")
+	ErrArtifactAccessDenied  = errors.New("research artifact access denied")
 	ErrInvalidContract       = errors.New("invalid research contract")
 	ErrUnsupportedVersion    = errors.New("unsupported research orchestrator version")
 )

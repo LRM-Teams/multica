@@ -1,6 +1,12 @@
 package researchrun
 
-import "testing"
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/google/uuid"
+)
 
 func TestResearchMessageArtifactContentCanonicalizesMetaAndBindsTarget(t *testing.T) {
 	first, err := ArtifactContentHash(ArtifactKindResearchMessage, researchMessageArtifactContent(
@@ -35,5 +41,23 @@ func TestResearchMessageArtifactContentCanonicalizesMetaAndBindsTarget(t *testin
 	}
 	if first == lineage {
 		t.Fatal("different Run Event lineage must not share a message hash")
+	}
+}
+
+func TestParseResearchMessageMatchDecisionRefsRejectsWrongOwnerAndDuplicateDecision(t *testing.T) {
+	messageID := uuid.NewString()
+	nodeID := uuid.NewString()
+	wrongOwner, _ := json.Marshal(map[string]any{
+		"utterance_id": uuid.NewString(), "matched_node_ids": []string{nodeID},
+	})
+	if _, err := parseResearchMessageMatchDecisionRefs(messageID, wrongOwner); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("wrong owner error=%v", err)
+	}
+	duplicate, _ := json.Marshal(map[string]any{
+		"utterance_id": messageID,
+		"decisions":    []map[string]any{{"node_id": nodeID}, {"node_id": nodeID}},
+	})
+	if _, err := parseResearchMessageMatchDecisionRefs(messageID, duplicate); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("duplicate decision error=%v", err)
 	}
 }

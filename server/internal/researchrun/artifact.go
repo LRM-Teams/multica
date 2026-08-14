@@ -308,6 +308,7 @@ func MigrationDiagnosticReasonCodes() []string {
 		"duplicate_local_key",
 		"invalid_match_decision",
 		"malformed_uuid",
+		"mismatched_reference",
 		"unknown_schema",
 		"unresolved_reference",
 	}
@@ -316,9 +317,7 @@ func MigrationDiagnosticReasonCodes() []string {
 // MigrationRelationshipParserNames lists migration 325 relationship parser registry.
 func MigrationRelationshipParserNames() []string {
 	return []string{
-		"research_claim_method_evidence_standard",
 		"research_message_match_decision",
-		"research_message_sender_principal",
 		"research_decision_inputs",
 		"research_decision_evaluation_local_references",
 		"research_graph_node_payload",
@@ -329,11 +328,23 @@ func MigrationRelationshipParserNames() []string {
 	}
 }
 
+// DecisionRelationshipSchemaNames lists the closed set of persisted Decision
+// schemas that Chapter D may inspect for typed artifact relationships.
+func DecisionRelationshipSchemaNames() []string {
+	return []string{
+		"budget_exhausted",
+		"citation_audit",
+		"information_gain",
+		"quality_gate",
+		"remediation_routing",
+		"research_method",
+		"selective_steering",
+	}
+}
+
 // ScopedRelationshipFKNames lists migration 326 composite relationship FKs.
 func ScopedRelationshipFKNames() []string {
 	return []string{
-		"research_message_run_event_scoped_fkey",
-		"research_message_target_agent_scoped_fkey",
 		"research_task_attempt_task_scoped_fkey",
 		"research_task_question_scoped_fkey",
 		"research_task_parent_task_scoped_fkey",

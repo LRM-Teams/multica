@@ -41,6 +41,7 @@ type artifactVersionCandidate struct {
 	VersionCount         int
 	InputReferenceCount  int
 	OutputReferenceCount int
+	RelationshipHash     string
 	OmissionReason       string
 	DomainStatus         string
 }
@@ -174,10 +175,10 @@ func hashManifestEntries(entries []artifactVersionCandidate) string {
 	parts := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		parts = append(parts, fmt.Sprintf(
-			"%s:%d:%d:%s:%s:%s:%s:%d:%d:%d",
+			"%s:%d:%d:%s:%s:%s:%s:%d:%d:%d:%s",
 			entry.ArtifactID, entry.Version, entry.EligibilityRevision,
 			entry.Representation, entry.RepresentationHash, entry.Lifecycle, entry.Provenance,
-			entry.VersionCount, entry.InputReferenceCount, entry.OutputReferenceCount,
+			entry.VersionCount, entry.InputReferenceCount, entry.OutputReferenceCount, entry.RelationshipHash,
 		))
 	}
 	sort.Strings(parts)
@@ -228,13 +229,17 @@ func hashDispatchManifest(in dispatchManifestHashInput) string {
 	entries := append([]artifactVersionCandidate(nil), in.Entries...)
 	sortManifestEntryCandidates(entries)
 	for ordinal, entry := range entries {
-		parts = append(parts, fmt.Sprintf(
+		entryPart := fmt.Sprintf(
 			"entry=%d:%s:%s:%d:%d:%s:%s:%s:%s:%s:%d:%d:%d:input",
 			ordinal, entry.VersionRowID, entry.ArtifactID, entry.Version,
 			entry.EligibilityRevision, entry.AccessLevel, entry.Representation, entry.RepresentationHash,
 			entry.Lifecycle, entry.Provenance, entry.VersionCount,
 			entry.InputReferenceCount, entry.OutputReferenceCount,
-		))
+		)
+		if entry.RelationshipHash != "" {
+			entryPart += ":relationships=" + entry.RelationshipHash
+		}
+		parts = append(parts, entryPart)
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -320,7 +325,20 @@ func loadArtifactVersionCandidates(
 		candidate.Provenance = ArtifactProvenanceCompleteness(provenanceRaw)
 		out = append(out, candidate)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	relationshipHashes, err := loadArtifactRelationshipHashesTx(ctx, tx, workspaceID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].RelationshipHash = relationshipHashes[out[i].VersionRowID]
+		if out[i].RelationshipHash == "" {
+			out[i].RelationshipHash = contentHashFromPayload(nil)
+		}
+	}
+	return out, nil
 }
 
 func auditManifestCandidateDispositions(
@@ -516,6 +534,11 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	if err := lockDispatchManifestCandidateRowsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
 	}
+	if err := casArtifactRelationshipHashesTx(
+		ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries,
+	); err != nil {
+		return dispatchManifestPlan{}, err
+	}
 
 	for _, entry := range plan.Entries {
 		if err := casPassportSelectionTx(
@@ -538,17 +561,18 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 			  artifact_version_id, eligibility_revision,
 			  representation, representation_bytes, representation_hash, use_kind,
 			  selection_lifecycle_status, selection_provenance_completeness,
-			  selection_version_count, selection_input_reference_count, selection_output_reference_count
+			  selection_version_count, selection_input_reference_count, selection_output_reference_count,
+			  selection_relationship_hash
 			) VALUES (
 			  $1::uuid, $2::uuid, $3::uuid, $4,
 			  $5::uuid, $6,
-			  $7, $8, $9, 'input', $10, $11, $12, $13, $14
+			  $7, $8, $9, 'input', $10, $11, $12, $13, $14, $15
 			)
 		`, in.WorkspaceID, in.SessionID, plan.ManifestID, ordinal,
 			entry.VersionRowID, entry.EligibilityRevision,
 			entry.Representation, entry.RepresentationBytes, entry.RepresentationHash,
 			entry.Lifecycle, entry.Provenance, entry.VersionCount,
-			entry.InputReferenceCount, entry.OutputReferenceCount); err != nil {
+			entry.InputReferenceCount, entry.OutputReferenceCount, entry.RelationshipHash); err != nil {
 			return dispatchManifestPlan{}, fmt.Errorf("insert manifest entry ordinal=%d: %w", ordinal, err)
 		}
 	}

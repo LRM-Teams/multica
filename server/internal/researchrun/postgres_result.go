@@ -58,15 +58,21 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	var lockedResult ResultEnvelope
 	var lockedHash string
 	if state.run.OrchestratorVersion == OrchestratorVersionV6 {
-		if state.task.Kind != TaskKindPlan {
+		if state.task.Kind == TaskKindPlan {
+			lockedPlan, planHash, decodeErr := DecodeAndValidateResearchV6PlanResult(in.Raw)
+			if decodeErr != nil {
+				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
+			}
+			in.V6Plan, lockedHash, lockedResult = &lockedPlan, planHash, researchV6PlanEnvelope(lockedPlan)
+		} else if isEvidenceTask(state.task.Kind) && state.task.ExpectedResult == "research_evidence_v6" {
+			lockedEvidence, evidenceHash, decodeErr := DecodeAndValidateV6EvidenceResult(in.Raw)
+			if decodeErr != nil {
+				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
+			}
+			in.V6Evidence, lockedHash, lockedResult = &lockedEvidence, evidenceHash, researchV6EvidenceEnvelope(lockedEvidence)
+		} else {
 			return AcceptResultOutcome{}, fmt.Errorf("%w: V6 task result adapter is not available for %s", ErrUnsupportedVersion, state.task.Kind)
 		}
-		lockedPlan, planHash, decodeErr := DecodeAndValidateResearchV6PlanResult(in.Raw)
-		if decodeErr != nil {
-			return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
-		}
-		in.V6Plan, lockedHash = &lockedPlan, planHash
-		lockedResult = researchV6PlanEnvelope(lockedPlan)
 	} else {
 		lockedResult, lockedHash, err = DecodeAndValidateResultForVersion(state.run.OrchestratorVersion, in.Raw, state.task, state.run.Config)
 		if err != nil {
@@ -123,7 +129,11 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 			return AcceptResultOutcome{}, err
 		}
 	}
-	measureGain := isEvidenceTask(state.task.Kind) && !state.stale
+	// V6 retrieval results contain screened candidates, not fetched Source
+	// Snapshots. Information gain is measured only after ingestion creates
+	// canonical evidence; counting candidates would trigger false low-gain
+	// replans and let links masquerade as evidence.
+	measureGain := isEvidenceTask(state.task.Kind) && !state.stale && in.V6Evidence == nil
 	var graphBefore researchGraphState
 	if measureGain {
 		graphBefore, err = s.loadResearchGraphState(ctx, tx, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
@@ -163,6 +173,11 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 			if err = materializeAcceptedV6PlanTx(ctx, tx, state, *in.V6Plan, in.AgentID, questionIDs); err != nil {
 				return AcceptResultOutcome{}, err
 			}
+		}
+	}
+	if in.V6Evidence != nil {
+		if err = materializeAcceptedV6EvidenceTx(ctx, tx, state, *in.V6Evidence, in.AgentID); err != nil {
+			return AcceptResultOutcome{}, err
 		}
 	}
 

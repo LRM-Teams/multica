@@ -28,6 +28,20 @@ func TestResultAcceptanceModuleRoutesV6PlanToAtomicAdapter(t *testing.T) {
 	}
 }
 
+func TestResultAcceptanceModuleRoutesV6EvidenceToAtomicAdapter(t *testing.T) {
+	store, submission := validResultAcceptanceFixture(t)
+	store.run.OrchestratorVersion = OrchestratorVersionV6
+	store.task.Kind, store.task.ExpectedResult = TaskKindDiscover, "research_evidence_v6"
+	submission.Raw = encodeV6EvidenceFixture(t, validV6EvidenceResultFixture())
+
+	if _, err := (resultAcceptanceModule{store: store}).Accept(context.Background(), submission); err != nil {
+		t.Fatal(err)
+	}
+	if store.accepted == nil || store.accepted.V6Evidence == nil || store.accepted.Result.SchemaVersion != 6 || len(store.accepted.V6Evidence.QueryExecutions) != 1 {
+		t.Fatalf("V6 evidence did not reach atomic adapter: %+v", store.accepted)
+	}
+}
+
 func TestResultAcceptanceModuleValidatesAndPassesCanonicalInput(t *testing.T) {
 	store, submission := validResultAcceptanceFixture(t)
 	module := resultAcceptanceModule{store: store}

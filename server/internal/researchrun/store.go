@@ -15,6 +15,7 @@ type AcceptResultInput struct {
 	Raw         json.RawMessage
 	Result      ResultEnvelope
 	V6Plan      *ResearchV6PlanResult
+	V6Evidence  *V6EvidenceResult
 	Hash        string
 }
 

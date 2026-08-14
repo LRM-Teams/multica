@@ -1,14 +1,21 @@
 package daemon
 
 import (
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestTaskWakeupURL(t *testing.T) {
@@ -109,32 +116,72 @@ func TestTaskWakeupDialer_ProxyAndNoProxyRouteContract(t *testing.T) {
 	}
 }
 
-// TestWSHeartbeatFreshnessSuppressesHTTP pins the WS-vs-HTTP coordination:
-// once a runtime acked over WS within the freshness window the HTTP
-// heartbeat loop must skip it to avoid duplicate DB writes.
-func TestWSHeartbeatFreshnessSuppressesHTTP(t *testing.T) {
-	d := New(Config{HeartbeatInterval: 15 * time.Second}, slog.Default())
+func TestLegacyRuntimeWakeSocketDoesNotExecuteControlAcknowledgements(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		ack, _ := json.Marshal(protocol.Message{
+			Type: protocol.EventDaemonHeartbeatAck,
+			Payload: marshalRaw(protocol.DaemonHeartbeatAckPayload{
+				RuntimeID: "runtime-1",
+				Status:    "ok",
+				PendingRestart: &protocol.DaemonHeartbeatPendingRestart{
+					ID: "must-not-run",
+				},
+			}),
+		})
+		if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+			t.Error(err)
+			return
+		}
+		wake, _ := json.Marshal(protocol.Message{
+			Type: protocol.EventDaemonTaskAvailable,
+			Payload: marshalRaw(protocol.TaskAvailablePayload{
+				RuntimeID: "runtime-1",
+				TaskID:    "task-1",
+			}),
+		})
+		if err := conn.WriteMessage(websocket.TextMessage, wake); err != nil {
+			t.Error(err)
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
 
-	if d.wsHeartbeatRecentlyAcked("runtime-1") {
-		t.Fatalf("expected unrecorded runtime to be stale")
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	d.recordWSHeartbeatAck("runtime-1")
-	if !d.wsHeartbeatRecentlyAcked("runtime-1") {
-		t.Fatalf("expected just-acked runtime to be fresh")
+	defer conn.Close()
+	d := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.restartBinary = "/tmp/must-not-restart"
+	var restarted atomic.Bool
+	d.cancelFunc = func() { restarted.Store(true) }
+	wakeups := make(chan taskWakeup, 1)
+	readDone := make(chan error, 1)
+	go func() {
+		readDone <- d.readTaskWakeupMessages(conn, wakeups, nil, nil)
+	}()
+	select {
+	case wake := <-wakeups:
+		if wake.runtimeID != "runtime-1" {
+			t.Fatalf("wake runtime = %q", wake.runtimeID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("task wake socket stopped after ignored control acknowledgement")
 	}
-
-	// Force the entry past the freshness window.
-	d.wsHBMu.Lock()
-	d.wsHBLastAck["runtime-1"] = time.Now().Add(-d.wsHeartbeatFreshness() - time.Second)
-	d.wsHBMu.Unlock()
-	if d.wsHeartbeatRecentlyAcked("runtime-1") {
-		t.Fatalf("expected aged runtime to be stale (HTTP heartbeat must resume)")
+	if restarted.Load() {
+		t.Fatal("legacy task wake socket executed a pending Restart")
 	}
-
-	d.recordWSHeartbeatAck("runtime-2")
-	d.clearWSHeartbeatAcks()
-	if d.wsHeartbeatRecentlyAcked("runtime-2") {
-		t.Fatalf("expected clearWSHeartbeatAcks to drop all entries")
+	_ = conn.Close()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("task wake reader did not stop")
 	}
 }

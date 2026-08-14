@@ -100,6 +100,34 @@ func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRace
 		t.Fatalf("rolled-back dispatch leaked attempt=%d passports=%d manifest=%d entries=%d omissions=%d grants=%d outbox=%d events=%d",
 			attempts, passports, manifests, entries, omissions, grants, outboxes, events)
 	}
+	var passportCount, manifestEntryCount, omissionCount, inputReferenceCount, grantCount, eventCount int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_passport
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		     AND (id = $3::uuid OR entity_kind = 'context_manifest')),
+		  (SELECT count(*)::int FROM research_artifact_context_entry
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_omission
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference ref
+		   WHERE ref.workspace_id = $1::uuid AND ref.session_id = $2::uuid
+		     AND ref.relation = 'manifest_input'),
+		  (SELECT count(*)::int FROM research_artifact_policy_grant
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_run_event
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		     AND idempotency_key = $4)
+	`, fx.fixture.workspaceID, fx.run.SessionID, fx.input.AttemptID, fx.input.Request.Key).Scan(
+		&passportCount, &manifestEntryCount, &omissionCount, &inputReferenceCount, &grantCount, &eventCount,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if passportCount != 0 || manifestEntryCount != 0 || omissionCount != 0 ||
+		inputReferenceCount != 0 || grantCount != 0 || eventCount != 0 {
+		t.Fatalf("rolled-back dispatch leaked passport=%d entry=%d omission=%d input=%d grant=%d event=%d",
+			passportCount, manifestEntryCount, omissionCount, inputReferenceCount, grantCount, eventCount)
+	}
 	var taskStatus string
 	if err := fx.pool.QueryRow(ctx, `
 		SELECT status FROM research_task WHERE id = $1::uuid
@@ -111,97 +139,65 @@ func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRace
 	}
 }
 
-func assertDispatchCommittedOnceWithFreshFacts(t *testing.T, ctx context.Context, fx dispatchRaceFixture, mutation string) {
-	t.Helper()
-	var attempts, manifests, outboxes, events int
-	if err := fx.pool.QueryRow(ctx, `
-		SELECT
-		  (SELECT count(*)::int FROM research_task_attempt WHERE id=$1::uuid),
-		  (SELECT count(*)::int FROM research_artifact_context_manifest
-		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid AND attempt_id=$1::uuid),
-		  (SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id=$1::uuid),
-		  (SELECT count(*)::int FROM research_run_event
-		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid
-		     AND event_type='task_dispatching' AND payload->>'attempt_id'=$1::text)
-	`, fx.input.AttemptID, fx.fixture.workspaceID, fx.run.SessionID).Scan(
-		&attempts, &manifests, &outboxes, &events,
-	); err != nil {
+func TestDispatchCASMismatchRollsBackCompleteWriteSet(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if attempts != 1 || manifests != 1 || outboxes != 1 || events != 1 {
-		t.Fatalf("fresh dispatch cardinality attempt=%d manifest=%d outbox=%d events=%d want all 1",
-			attempts, manifests, outboxes, events)
-	}
-	var taskStatus string
-	if err := fx.pool.QueryRow(ctx, `SELECT status FROM research_task WHERE id=$1::uuid`, fx.task.ID).Scan(&taskStatus); err != nil {
-		t.Fatal(err)
-	}
-	if taskStatus != string(TaskStatusDispatching) {
-		t.Fatalf("fresh dispatch task status=%q want %q", taskStatus, TaskStatusDispatching)
-	}
+	defer pool.Close()
 
-	switch mutation {
-	case "eligibility_revision":
-		var entryRevision, passportRevision int64
-		if err := fx.pool.QueryRow(ctx, `
-			SELECT e.eligibility_revision, p.eligibility_revision
-			FROM research_artifact_context_entry e
-			JOIN research_artifact_context_manifest m
-			  ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
-			JOIN research_artifact_version v
-			  ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
-			JOIN research_artifact_passport p
-			  ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id)
-			WHERE m.attempt_id=$1::uuid AND p.id=$2::uuid
-		`, fx.input.AttemptID, fx.claimID).Scan(&entryRevision, &passportRevision); err != nil {
-			t.Fatal(err)
-		}
-		if entryRevision <= 1 || entryRevision != passportRevision {
-			t.Fatalf("entry eligibility revision=%d passport=%d want matching advanced revision", entryRevision, passportRevision)
-		}
-	case "version_content_hash":
-		wantHash := contentHashFromPayload([]byte("mutated after dispatch preflight"))
-		var gotHash string
-		if err := fx.pool.QueryRow(ctx, `
-			SELECT v.content_hash
-			FROM research_artifact_context_entry e
-			JOIN research_artifact_context_manifest m
-			  ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
-			JOIN research_artifact_version v
-			  ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
-			WHERE m.attempt_id=$1::uuid AND v.artifact_id=$2::uuid
-		`, fx.input.AttemptID, fx.claimID).Scan(&gotHash); err != nil {
-			t.Fatal(err)
-		}
-		if gotHash != wantHash {
-			t.Fatalf("manifest version content hash=%q want fresh %q", gotHash, wantHash)
-		}
-	case "withdrawn_lifecycle":
-		var entries, omissions int
-		if err := fx.pool.QueryRow(ctx, `
-			SELECT
-			  (SELECT count(*)::int
-			   FROM research_artifact_context_entry e
-			   JOIN research_artifact_context_manifest m
-			     ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
-			   JOIN research_artifact_version v
-			     ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
-			   WHERE m.attempt_id=$1::uuid AND v.artifact_id=$2::uuid),
-			  (SELECT count(*)::int
-			   FROM research_artifact_context_omission o
-			   JOIN research_artifact_context_manifest m
-			     ON (m.workspace_id,m.session_id,m.id)=(o.workspace_id,o.session_id,o.manifest_id)
-			   JOIN research_artifact_version v
-			     ON (v.workspace_id,v.session_id,v.id)=(o.workspace_id,o.session_id,o.candidate_version_id)
-			   WHERE m.attempt_id=$1::uuid AND v.artifact_id=$2::uuid AND o.reason='lifecycle')
-		`, fx.input.AttemptID, fx.claimID).Scan(&entries, &omissions); err != nil {
-			t.Fatal(err)
-		}
-		if entries != 0 || omissions != 1 {
-			t.Fatalf("withdrawn claim entries=%d lifecycle omissions=%d want 0/1", entries, omissions)
-		}
-	default:
-		t.Fatalf("unhandled fresh-fact assertion for mutation %q", mutation)
+	for _, tc := range []struct {
+		name string
+		hook func(context.Context, dispatchRaceFixture, *dispatchManifestPlan) error
+	}{
+		{
+			name: "eligibility revision",
+			hook: func(ctx context.Context, fx dispatchRaceFixture, _ *dispatchManifestPlan) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET eligibility_revision = eligibility_revision + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "representation bytes hash",
+			hook: func(_ context.Context, fx dispatchRaceFixture, plan *dispatchManifestPlan) error {
+				entry, ok := manifestEntryForArtifact(*plan, fx.claimID)
+				if !ok {
+					return errors.New("claim missing from dispatch manifest plan")
+				}
+				for i := range plan.Entries {
+					if plan.Entries[i].ArtifactID == entry.ArtifactID {
+						plan.Entries[i].RepresentationBytes = append([]byte(nil), entry.RepresentationBytes...)
+						plan.Entries[i].RepresentationBytes = append(plan.Entries[i].RepresentationBytes, '!')
+						return nil
+					}
+				}
+				return errors.New("claim disappeared from dispatch manifest plan")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := setupDispatchRaceFixture(t, ctx, pool)
+			defer cleanupResearchRunFixture(pool, fx.fixture)
+			fx.store.dispatchManifestBeforeCASHook = func(ctx context.Context, plan *dispatchManifestPlan) error {
+				return tc.hook(ctx, fx, plan)
+			}
+			_, _, err := fx.store.CreateDispatchIntent(ctx, fx.input)
+			fx.store.dispatchManifestBeforeCASHook = nil
+			if !errors.Is(err, ErrInvalidTransition) {
+				t.Fatalf("CreateDispatchIntent err=%v want ErrInvalidTransition", err)
+			}
+			assertDispatchRolledBack(t, ctx, fx)
+		})
 	}
 }
 

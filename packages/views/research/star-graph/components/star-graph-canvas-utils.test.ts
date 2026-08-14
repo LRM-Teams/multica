@@ -4,6 +4,7 @@ import {
   centerCameraOnPoint,
   computeEntityBounds,
   fitCameraToBounds,
+  isEdgeLabelClear,
   quadraticEdgePath,
   relationEdgeClass,
   zoomCamera,
@@ -92,6 +93,24 @@ describe("star-graph-canvas-utils", () => {
     expect(zoomPercent(camera)).toBeGreaterThan(0);
   });
 
+  it("does not enlarge sparse graphs above their authored node scale", () => {
+    const camera = fitCameraToBounds(
+      {
+        minX: -48,
+        minY: -210,
+        maxX: 592,
+        maxY: 220,
+        width: 640,
+        height: 430,
+        centerX: 272,
+        centerY: 5,
+      },
+      { width: 1296, height: 900 },
+    );
+
+    expect(camera.zoom).toBeLessThanOrEqual(1);
+  });
+
   it("maps relation kinds to edge classes", () => {
     expect(relationEdgeClass("decompose", "leads_to")).toBe("sg-edge-decompose");
     expect(relationEdgeClass("support", "supports")).toBe("sg-edge-support");
@@ -119,6 +138,26 @@ describe("star-graph-canvas-utils", () => {
     expect(
       quadraticEdgePath({ x: 0, y: 0 }, { x: 100, y: 50 }),
     ).toMatch(/^M 0\.0 0\.0 Q .+ .+ 100\.0 50\.0$/);
+  });
+
+  it("suppresses an edge label when another node occupies its midpoint", () => {
+    const relation = {
+      fromNodeId: "from",
+      toNodeId: "to",
+      from: { x: 0, y: 0 },
+      to: { x: 200, y: 0 },
+    };
+
+    expect(
+      isEdgeLabelClear(relation, [
+        { id: "agent", x: 100, y: 9, radius: 29 },
+      ]),
+    ).toBe(false);
+    expect(
+      isEdgeLabelClear(relation, [
+        { id: "agent", x: 100, y: 100, radius: 29 },
+      ]),
+    ).toBe(true);
   });
 
   it("zooms around an anchor point", () => {

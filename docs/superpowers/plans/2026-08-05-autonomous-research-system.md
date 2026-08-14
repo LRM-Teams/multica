@@ -1019,6 +1019,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
   - [x] E2b-guard：migration 350 与 `inquiryModule` 冻结 Hypothesis/Branch/Insight 合法状态迁移，要求 Branch 终止理由，逐类验证多态端点，并禁止 `decomposes | depends_on | refines` 形成有向环；`dispute` 在 H 章实体落库前保持不可写。生产批量写命令、Artifact Passport 原子注册与 Run Event 仍待 E2b-write。
   - [x] E2b-write：`CreateInquiryGraph` 以 Serializable 单事务验证 Run state version 与真实 assigned Attempt/Agent，批量创建 Hypothesis/Branch/Insight/Inquiry Edge，按父分支拓扑落库，为每个实体注册 `research-run-v6` production hash、完整 provenance 与 Manifest 传播的 access level，并追加可恢复、可冲突检测的幂等 Run Event；四类实体进入 canonical-state crash/replay 哈希。V6 decoder/Adapter 接线仍由 E3 负责，默认版本保持 V5。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。
+  - [x] E3a：新增与 V1–V5 完全隔离的 `DecodeAndValidateResearchV6PlanResult`，严格拒绝未知字段、缺失 required、显式 null 与 trailing JSON；校验 client-key/typed reference、Question/Branch 父图、Inquiry 依赖图、Task DAG、每个 Task 的 Inquiry target、Branch 总预算和语义内容哈希。它不把 `research-run-v6` 加入生产 orchestrator allowlist；E3b 在 E2b-write 合并后负责 accepted Plan Result 的 ID 解析与原子持久化接线。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
 

@@ -308,6 +308,7 @@ func MigrationDiagnosticReasonCodes() []string {
 		"duplicate_local_key",
 		"invalid_match_decision",
 		"malformed_uuid",
+		"mismatched_reference",
 		"unknown_schema",
 		"unresolved_reference",
 	}
@@ -324,6 +325,20 @@ func MigrationRelationshipParserNames() []string {
 		"research_report_structured",
 		"research_run_event_payload",
 		"research_task_remediation_acceptance_criteria",
+	}
+}
+
+// DecisionRelationshipSchemaNames lists the closed set of persisted Decision
+// schemas that Chapter D may inspect for typed artifact relationships.
+func DecisionRelationshipSchemaNames() []string {
+	return []string{
+		"budget_exhausted",
+		"citation_audit",
+		"information_gain",
+		"quality_gate",
+		"remediation_routing",
+		"research_method",
+		"selective_steering",
 	}
 }
 

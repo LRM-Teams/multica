@@ -406,6 +406,7 @@ func mapResearchV6NodeWithSemantics(runID string, node ResearchGraphNodeResp, ty
 	if kind == "goal" {
 		projected.Level = "m"
 	}
+	projected.Detail = canonicalResearchV6Detail(kind, node.Status, node.ActorAgentID, detail)
 	return projected, nil
 }
 

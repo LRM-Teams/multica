@@ -19,6 +19,10 @@ type taskContractRaceCounts struct {
 	resultArtifacts int
 	acceptedEvents  int
 	passports       int
+	versions        int
+	inputReferences int
+	lifecycleEvents int
+	policyMutations int
 }
 
 func loadTaskContractRaceCounts(t *testing.T, ctx context.Context, fx acceptanceRaceFixture) taskContractRaceCounts {
@@ -32,10 +36,15 @@ func loadTaskContractRaceCounts(t *testing.T, ctx context.Context, fx acceptance
 		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid AND decision_kind = 'research_method'),
 		  (SELECT count(*)::int FROM research_result_artifact WHERE session_id = $1::uuid),
 		  (SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND event_type = 'task_result_accepted'),
-		  (SELECT count(*)::int FROM research_artifact_passport WHERE session_id = $1::uuid)
+		  (SELECT count(*)::int FROM research_artifact_passport WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_version WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_lifecycle_event WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_policy_mutation WHERE session_id = $1::uuid)
 	`, fx.run.SessionID).Scan(
 		&counts.questions, &counts.tasks, &counts.dependencies, &counts.methods,
 		&counts.resultArtifacts, &counts.acceptedEvents, &counts.passports,
+		&counts.versions, &counts.inputReferences, &counts.lifecycleEvents, &counts.policyMutations,
 	); err != nil {
 		t.Fatal(err)
 	}

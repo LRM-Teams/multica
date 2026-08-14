@@ -64,6 +64,7 @@ export const NODE_KIND_TO_FAMILY: ReadonlyMap<ResearchV6NodeKind, NodeKindFamily
   NodeKindFamily
 >([
   // F1 规划/结构 Structure — primary/brand · GitBranch/Workflow
+  [k("goal"), "structure"],
   [k("task"), "structure"],
   [k("search_plan"), "structure"],
   [k("branch"), "structure"],
@@ -154,7 +155,7 @@ export function classifyNodeFamily(
   };
 }
 
-/** All 30 kinds registered on the canonical V6 registry (for tests/demo). */
+/** All canonical V6 kinds registered for tests/demo. */
 export const KNOWN_NODE_KINDS: readonly ResearchV6NodeKind[] = [
   ...NODE_KIND_TO_FAMILY.keys(),
 ];

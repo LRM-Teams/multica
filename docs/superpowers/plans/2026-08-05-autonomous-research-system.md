@@ -1019,11 +1019,11 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
-D-backfill-1 证据：migration 319 区分 `legacy_stored`/`migration_recomputed` 并保留 malformed/
-partial/unknown 统计；325/351 对 Message match-decision 与 structured Report/Report-Claim 的全部
-不可 FK 引用输出精确 reason/path，同 scope control 无诊断，repair+rescan 清除。生产 Manifest
-candidate 现在读取 owner diagnostic，存在任一诊断即以 bounded `policy_denied` omission fail closed，
-不隐藏同 scope allowed control；诊断修复清除后重新准入。§15.6 已收口。
+D-access-4 证据：normal 与 evaluation grant 撤销后的 `TaskContextForAttempt` 现在同时返回
+稳定 `ErrArtifactAccessDenied` 和兼容 `ErrInvalidTransition`，冻结 Manifest/Entry 历史仍不可删；
+Agent HTTP surface 将该领域拒绝映射为不泄漏 Run/Attempt/Agent/Passport 身份的 403，而不是
+内部 500。普通 Agent、grader 与 HTTP 撤权路径已闭合；projector principal 的独立 surface
+及撤权矩阵仍未完成，因此 §15.23 保持 partial。
 
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 

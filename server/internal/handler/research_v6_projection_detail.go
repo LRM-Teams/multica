@@ -34,7 +34,7 @@ func canonicalResearchV6Detail(kind, status string, actor *string, payload map[s
 	detail["downstream"] = researchV6DetailNotRecorded
 
 	switch kind {
-	case runGraphKindRoot:
+	case runGraphKindRoot, "goal":
 		detail["purpose"] = "govern_research_run"
 		detail["objective"] = researchV6NestedValue(payload, "content", "goal")
 		detail["entry_condition"] = map[string]any{"run_status": payload["run_status"], "goal_version": payload["goal_version"]}

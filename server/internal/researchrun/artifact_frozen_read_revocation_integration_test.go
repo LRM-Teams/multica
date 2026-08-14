@@ -47,8 +47,8 @@ func TestTaskContextForAttemptRejectsRevokedGrantWithoutDeletingFrozenHistory(t 
 	}
 
 	revokeIntegrationManifestNormalGrant(t, ctx, pool, fixture.workspaceID, run.SessionID, attempt.ID)
-	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("revoked frozen read err=%v want ErrInvalidTransition", err)
+	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrArtifactAccessDenied) || !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("revoked frozen read err=%v want access denial and transition compatibility", err)
 	}
 	result, resultHash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, run.Config)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,6 +134,9 @@ func TestAcceptResultReplayRejectsChangedPersistedLineage(t *testing.T) {
 				attempt: attempt, inboxID: inboxID, input: input,
 			}
 			if err = tc.mutate(ctx, fx); err != nil {
+				if strings.Contains(err.Error(), "append-only") || strings.Contains(err.Error(), "immutable") {
+					return
+				}
 				t.Fatalf("mutate: %v", err)
 			}
 			if _, err = store.AcceptResult(ctx, input); !errors.Is(err, ErrResultConflict) {

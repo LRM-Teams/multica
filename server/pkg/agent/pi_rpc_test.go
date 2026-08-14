@@ -735,11 +735,22 @@ func TestWaitPiRPCResponsePrefersBufferedAckOverTerminalEvent(t *testing.T) {
 			done:     make(chan piRPCCompletion, 1),
 		}
 		turn.response <- piRPCResponse{ID: "multica-turn", Success: true}
-		turn.done <- piRPCCompletion{}
+		turn.done <- piRPCCompletion{messages: []json.RawMessage{json.RawMessage(`{"role":"assistant"}`)}}
 
 		response, completion, ok := waitPiRPCResponse(context.Background(), turn, "multica-turn")
 		if !ok || completion != nil || response.ID != "multica-turn" {
 			t.Fatalf("iteration %d: response=%+v completion=%+v ok=%v, want buffered ACK", i, response, completion, ok)
+		}
+		// executeTurn waits on turn.done after the prompt ACK. Preferring the
+		// ACK must not drop the already-received agent_end, or that wait hangs
+		// until the test's 2s timeout.
+		select {
+		case got := <-turn.done:
+			if len(got.messages) != 1 {
+				t.Fatalf("iteration %d: restored completion = %+v", i, got)
+			}
+		default:
+			t.Fatalf("iteration %d: preferring ACK discarded the already-received agent_end", i)
 		}
 	}
 }

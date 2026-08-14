@@ -8,7 +8,7 @@
  * the renderer laid it out. A client can therefore verify "same snapshot
  * recompute → same hash" without any layout involvement.
  */
-import type { CanvasEdge, CanvasNode, CanvasSnapshot } from "./canvas-types";
+import type { CanvasCluster, CanvasEdge, CanvasNode, CanvasSnapshot } from "./canvas-types";
 
 function encodeSimple(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -30,8 +30,32 @@ function nodeToken(n: CanvasNode): string {
     String(n.freshness),
     n.detailRef,
     n.actor ?? "",
+    n.level ?? "",
+    n.clusterId ?? "",
+    n.parentId ?? "",
+    n.round ?? "",
+    n.confidence ?? "",
+    n.documentCount ?? "",
+    n.conclusionCount ?? "",
+    n.derivedFrom ?? "",
+    (n.mergedFrom ?? []).slice().sort().join(","),
+    n.supersededBy ?? "",
+    n.restartOf ?? "",
+    n.invalidatedBy ?? "",
   ];
   return parts.map(encodeSimple).join("\u0001");
+}
+
+function clusterToken(cluster: CanvasCluster): string {
+  return [
+    cluster.id,
+    cluster.label,
+    cluster.clusterType,
+    cluster.memberNodeIds.slice().sort().join(","),
+    cluster.confidence ?? "",
+    cluster.documentCount ?? "",
+    cluster.conclusionCount ?? "",
+  ].map(encodeSimple).join("\u0001");
 }
 
 function edgeToken(e: CanvasEdge): string {
@@ -57,20 +81,24 @@ function fnv1a(input: string): string {
 export function computeGraphContentHash(
   nodes: Iterable<CanvasNode>,
   edges: Iterable<CanvasEdge>,
+  clusters: Iterable<CanvasCluster> = [],
 ): string {
   const nodeTokens: string[] = [];
   for (const n of nodes) nodeTokens.push(nodeToken(n));
   const edgeTokens: string[] = [];
   for (const e of edges) edgeTokens.push(edgeToken(e));
+  const clusterTokens: string[] = [];
+  for (const cluster of clusters) clusterTokens.push(clusterToken(cluster));
 
   const nodeSink = nodeTokens.sort().join("\u0002");
   const edgeSink = edgeTokens.sort().join("\u0002");
+  const clusterSink = clusterTokens.sort().join("\u0002");
   // Salt each section with its length so an empty edge-set never collapses
   // into a prefix of a non-empty one.
-  return `${fnv1a(`N:${nodeSink.length}:${nodeSink}`)}${fnv1a(`E:${edgeSink.length}:${edgeSink}`)}`;
+  return `${fnv1a(`N:${nodeSink.length}:${nodeSink}`)}${fnv1a(`E:${edgeSink.length}:${edgeSink}`)}${fnv1a(`C:${clusterSink.length}:${clusterSink}`)}`;
 }
 
 /** Recompute the content hash of a snapshot's current canonical state. */
 export function snapshotContentHash(snapshot: CanvasSnapshot): string {
-  return computeGraphContentHash(snapshot.nodes, snapshot.edges);
+  return computeGraphContentHash(snapshot.nodes, snapshot.edges, snapshot.clusters ?? []);
 }

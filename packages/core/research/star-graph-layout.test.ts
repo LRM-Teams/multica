@@ -122,6 +122,20 @@ describe("LRM-1514 star-graph layout — D5 baseline from algorithm", () => {
     expect(layout.clusters[0]?.memberIds).toEqual(["agent", "result"]);
     expect(layout.frontiers?.[0]?.memberIds).toEqual(["frontier"]);
   });
+
+  it("gives an unclustered goal-led graph enough world-space to remain legible", () => {
+    const layout = layoutStarGraph([
+      { id: "goal", tier: "m", nodeKind: "goal" },
+      { id: "finding-a", tier: "m", nodeKind: "finding" },
+      { id: "finding-b", tier: "m", nodeKind: "finding" },
+      { id: "finding-c", tier: "m", nodeKind: "finding" },
+      { id: "agent", tier: "s", nodeKind: "agent_activity", parentId: "finding-a" },
+    ]);
+    const minX = Math.min(...layout.nodes.map((node) => node.x - node.radius));
+    const maxX = Math.max(...layout.nodes.map((node) => node.x + node.radius));
+
+    expect(maxX - minX).toBeGreaterThanOrEqual(700);
+  });
 });
 
 describe("LRM-1514 quantitative hard gates", () => {

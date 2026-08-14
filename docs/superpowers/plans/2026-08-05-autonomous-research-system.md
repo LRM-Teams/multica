@@ -1060,6 +1060,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 - [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。
   - [x] G-derivation-1：新增服务端 `insightDerivationModule`，只接纳 2–128 个 accepted/fresh Claim/Insight Version，要求至少两个不同 Task 或 Branch origin，按 `1 + max(input Insight level)` 计算层级，并以排序后的 input version/content hash、scope hash 和 relation 生成稳定幂等指纹。没有服务端观察到的语义价值或只有单一 origin 时返回 `no_semantic_gain`；重复/自环/循环 derivation edge fail closed，Claim/Insight 失效按 DAG 递归产生确定性 stale Insight 集合。持久命令、状态写入与重新整合 Work Item 仍待后续切片。
 - [ ] 后续任务 Context 读取跨 Agent 的最新 Integration Snapshot。
+  - [x] G6a-context：`integration_context.go` 冻结 `research-integration-context-v1` 选择边界；只在当前 workspace/session、Goal/Plan 和 Manifest Event/State 水位内选择最新跨 Agent Snapshot 精确 Artifact Version，并把 Passport、content/input/canonical-state hash 与贡献 Agent 集合纳入审计指纹。最新 Snapshot stale、superseded、无权或 evaluation-private 时整体 omission，禁止回退到较旧结论；同一最新位置出现多个身份则 fail closed。持久表查询、representation 冻结与 `TaskContextForAttempt` 接线仍待 G6b。
 
 退出条件：两个以上 Agent 的结果会产生可引用的多层 Insight、更新 Frontier 并生成组合后的新工作；输入失效会使祖先 Insight 过期；Integrator prose 不能绕过服务端状态转换。
 

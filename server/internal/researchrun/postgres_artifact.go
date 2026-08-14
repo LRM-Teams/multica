@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -24,6 +25,7 @@ type registerArtifactPassportInput struct {
 	AccessLevel            ArtifactAccessLevel
 	HashOrigin             ArtifactHashOrigin
 	ContentHash            string
+	ProducedByTaskID       string
 	ProducedByAttemptID    string
 }
 
@@ -86,6 +88,9 @@ func recordVerificationPolicyMutationTx(ctx context.Context, tx pgx.Tx, workspac
 }
 
 func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtifactPassportInput) error {
+	if in.HashOrigin == ArtifactHashOriginProduction && in.ContentHash == "" {
+		return fmt.Errorf("%w: production artifact %s requires an explicit content hash", ErrInvalidContract, in.Kind)
+	}
 	if in.AccessLevel == "" {
 		in.AccessLevel = ArtifactAccessRaw
 	}
@@ -154,14 +159,14 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 			INSERT INTO research_artifact_version (
 				workspace_id, session_id, artifact_id, version, schema_name, schema_version,
 				canonicalization_version, content_hash, access_level, goal_version, plan_version,
-				hash_origin, produced_by_attempt_id
+				hash_origin, produced_by_task_id, produced_by_attempt_id
 			) VALUES (
 				$1::uuid, $2::uuid, $3::uuid, 1, $4, $5,
-				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid
+				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, NULLIF($13, '')::uuid
 			)
 		`, in.WorkspaceID, in.SessionID, in.EntityID, in.SchemaName, in.SchemaVersion,
 			ArtifactCanonicalizationVersion, contentHash, string(in.AccessLevel),
-			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByAttemptID); err != nil {
+			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByTaskID, in.ProducedByAttemptID); err != nil {
 			return err
 		}
 	}
@@ -188,34 +193,287 @@ func stringPtrValue(value *string) string {
 	return *value
 }
 
+func registerProductionDecisionPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, decisionID, producedByAttemptID string,
+	accessLevel ArtifactAccessLevel,
+) error {
+	var decisionKind, actorType, actorID, rationale string
+	var goalVersion, planVersion int32
+	var inputs, outcome []byte
+	var createdAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT decision_kind, actor_type, COALESCE(actor_id::text, ''),
+		       goal_version, plan_version, inputs, outcome, rationale, created_at
+		FROM research_decision
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, decisionID).Scan(
+		&decisionKind, &actorType, &actorID, &goalVersion, &planVersion,
+		&inputs, &outcome, &rationale, &createdAt,
+	)
+	if err != nil {
+		return err
+	}
+	kind := artifactKindForDecision(decisionKind)
+	contentHash, err := ArtifactContentHash(kind, decisionArtifactContent(
+		decisionKind, actorType, actorID, int(goalVersion), int(planVersion), inputs, outcome, rationale,
+	))
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: decisionID,
+		Kind: kind, SourceCreatedAt: &createdAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            &goalVersion, PlanVersion: &planVersion,
+		AccessLevel: accessLevel, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash, ProducedByAttemptID: producedByAttemptID,
+	})
+}
+
+func decisionArtifactContent(
+	decisionKind, actorType, actorID string,
+	goalVersion, planVersion int,
+	inputs, outcome []byte,
+	rationale string,
+) map[string]any {
+	return map[string]any{
+		"decision_kind": decisionKind,
+		"actor_type":    actorType,
+		"actor_id":      actorID,
+		"goal_version":  goalVersion,
+		"plan_version":  planVersion,
+		"inputs":        json.RawMessage(inputs),
+		"outcome":       json.RawMessage(outcome),
+		"rationale":     rationale,
+	}
+}
+
+func registerProductionTaskPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, taskID, producedByAttemptID string,
+	accessLevel ArtifactAccessLevel,
+) error {
+	var questionID, parentTaskID, clientKey, kind, objective, capability, expected string
+	var criteria []byte
+	var priority float64
+	var goalVersion, planVersion, maxAttempts, timeoutSeconds int32
+	var createdAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(question_id::text, ''), COALESCE(parent_task_id::text, ''),
+		       client_key, kind, objective, required_capability, expected_result,
+		       acceptance_criteria, priority, goal_version, plan_version,
+		       max_attempts, timeout_seconds, created_at
+		FROM research_task
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, taskID).Scan(
+		&questionID, &parentTaskID, &clientKey, &kind, &objective, &capability, &expected,
+		&criteria, &priority, &goalVersion, &planVersion, &maxAttempts, &timeoutSeconds, &createdAt,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT depends_on_task_id::text
+		FROM research_task_dependency
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND task_id = $3::uuid
+		ORDER BY depends_on_task_id
+	`, workspaceID, sessionID, taskID)
+	if err != nil {
+		return err
+	}
+	dependencies := make([]string, 0)
+	for rows.Next() {
+		var dependencyID string
+		if err = rows.Scan(&dependencyID); err != nil {
+			rows.Close()
+			return err
+		}
+		dependencies = append(dependencies, dependencyID)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	contentHash, err := ArtifactContentHash(ArtifactKindTask, taskArtifactContent(
+		questionID, parentTaskID, clientKey, kind, objective, capability, expected,
+		criteria, priority, int(goalVersion), int(planVersion), int(maxAttempts), int(timeoutSeconds), dependencies,
+	))
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: taskID,
+		Kind: ArtifactKindTask, SourceCreatedAt: &createdAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            &goalVersion, PlanVersion: &planVersion,
+		AccessLevel: accessLevel, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash, ProducedByAttemptID: producedByAttemptID,
+	})
+}
+
+func taskArtifactContent(
+	questionID, parentTaskID, clientKey, kind, objective, capability, expected string,
+	criteria []byte,
+	priority float64,
+	goalVersion, planVersion, maxAttempts, timeoutSeconds int,
+	dependencies []string,
+) map[string]any {
+	return map[string]any{
+		"question_id":         questionID,
+		"parent_task_id":      parentTaskID,
+		"client_key":          clientKey,
+		"kind":                kind,
+		"objective":           objective,
+		"required_capability": capability,
+		"expected_result":     expected,
+		"acceptance_criteria": json.RawMessage(criteria),
+		"priority":            priority,
+		"goal_version":        goalVersion,
+		"plan_version":        planVersion,
+		"max_attempts":        maxAttempts,
+		"timeout_seconds":     timeoutSeconds,
+		"dependencies":        dependencies,
+	}
+}
+
+func registerProductionQuestionPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, questionID, producedByAttemptID string,
+	accessLevel ArtifactAccessLevel,
+) error {
+	var parentID, createdByTaskID, clientKey, kind, question string
+	var required bool
+	var priority, impact, uncertainty, novelty, coverage float64
+	var goalVersion, planVersion int32
+	var createdAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(parent_question_id::text, ''), COALESCE(created_by_task_id::text, ''),
+		       client_key, kind, question, required, priority, impact, uncertainty, novelty,
+		       coverage, goal_version, plan_version, created_at
+		FROM research_question
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, questionID).Scan(
+		&parentID, &createdByTaskID, &clientKey, &kind, &question, &required,
+		&priority, &impact, &uncertainty, &novelty, &coverage,
+		&goalVersion, &planVersion, &createdAt,
+	)
+	if err != nil {
+		return err
+	}
+	contentHash, err := ArtifactContentHash(ArtifactKindQuestion, questionArtifactContent(
+		parentID, createdByTaskID, clientKey, kind, question, required,
+		priority, impact, uncertainty, novelty, coverage, int(goalVersion), int(planVersion),
+	))
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: questionID,
+		Kind: ArtifactKindQuestion, SourceCreatedAt: &createdAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            &goalVersion, PlanVersion: &planVersion,
+		AccessLevel: accessLevel, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash, ProducedByAttemptID: producedByAttemptID,
+	})
+}
+
+func questionArtifactContent(
+	parentID, createdByTaskID, clientKey, kind, question string,
+	required bool,
+	priority, impact, uncertainty, novelty, coverage float64,
+	goalVersion, planVersion int,
+) map[string]any {
+	return map[string]any{
+		"parent_question_id": parentID,
+		"created_by_task_id": createdByTaskID,
+		"client_key":         clientKey,
+		"kind":               kind,
+		"question":           question,
+		"required":           required,
+		"priority":           priority,
+		"impact":             impact,
+		"uncertainty":        uncertainty,
+		"novelty":            novelty,
+		"coverage":           coverage,
+		"goal_version":       goalVersion,
+		"plan_version":       planVersion,
+	}
+}
+
 func registerRunSessionArtifactTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, sourceCreatedAt time.Time) error {
+	var persistedJSON string
+	if err := tx.QueryRow(ctx, `
+		SELECT (
+			to_jsonb(session_row) - ARRAY[
+				'id', 'workspace_id', 'artifact_passport_enabled'
+			]
+		)::text
+		FROM research_session session_row
+		WHERE session_row.workspace_id = $1::uuid AND session_row.id = $2::uuid
+	`, workspaceID, sessionID).Scan(&persistedJSON); err != nil {
+		return fmt.Errorf("load initialized run session %s: %w", sessionID, err)
+	}
+	contentHash, err := ArtifactContentHash(
+		ArtifactKindRunSession,
+		runSessionArtifactContent(json.RawMessage(persistedJSON)),
+	)
+	if err != nil {
+		return err
+	}
 	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            workspaceID,
 		SessionID:              sessionID,
 		EntityID:               sessionID,
 		Kind:                   ArtifactKindRunSession,
 		SourceCreatedAt:        &sourceCreatedAt,
-		ProvenanceCompleteness: ArtifactProvenancePartial,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
 	})
+}
+
+func runSessionArtifactContent(persisted json.RawMessage) map[string]any {
+	return map[string]any{"persisted": persisted}
 }
 
 func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {
 	var contractID string
 	var contractCreatedAt time.Time
+	var contractGoalVersion int
+	var goal, audience, freshness, language, authoredBy, reason string
+	var scope, sourcePolicy, runLimits []byte
 	err := tx.QueryRow(ctx, `
-		SELECT id::text, created_at
+		SELECT id::text, goal_version, goal, scope, audience, freshness, language,
+		       source_policy, run_limits, authored_by::text, reason, created_at
 		FROM research_contract_revision
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND goal_version = 1
-	`, workspaceID, sessionID).Scan(&contractID, &contractCreatedAt)
+	`, workspaceID, sessionID).Scan(
+		&contractID, &contractGoalVersion, &goal, &scope, &audience, &freshness, &language,
+		&sourcePolicy, &runLimits, &authoredBy, &reason, &contractCreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	contractHash, err := ArtifactContentHash(ArtifactKindContractRevision, contractRevisionArtifactContent(
+		contractGoalVersion, goal, scope, audience, freshness, language, sourcePolicy, runLimits, authoredBy, reason,
+	))
 	if err != nil {
 		return err
 	}
 	goalVersion := int32(1)
-	planVersion := int32(1)
 	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: contractID,
 		Kind: ArtifactKindContractRevision, SourceCreatedAt: &contractCreatedAt,
-		GoalVersion: &goalVersion,
+		GoalVersion:            &goalVersion,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contractHash,
 	}); err != nil {
 		return err
 	}
@@ -230,11 +488,7 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 	`, workspaceID, sessionID).Scan(&questionID, &questionCreatedAt); err != nil {
 		return err
 	}
-	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
-		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: questionID,
-		Kind: ArtifactKindQuestion, SourceCreatedAt: &questionCreatedAt,
-		GoalVersion: &goalVersion, PlanVersion: &planVersion,
-	}); err != nil {
+	if err = registerProductionQuestionPassportTx(ctx, tx, workspaceID, sessionID, questionID, "", ArtifactAccessRaw); err != nil {
 		return err
 	}
 
@@ -248,11 +502,29 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 	`, workspaceID, sessionID).Scan(&taskID, &taskCreatedAt); err != nil {
 		return err
 	}
-	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
-		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: taskID,
-		Kind: ArtifactKindTask, SourceCreatedAt: &taskCreatedAt,
-		GoalVersion: &goalVersion, PlanVersion: &planVersion,
-	})
+	return registerProductionTaskPassportTx(ctx, tx, workspaceID, sessionID, taskID, "", ArtifactAccessRaw)
+}
+
+func contractRevisionArtifactContent(
+	goalVersion int,
+	goal string,
+	scope []byte,
+	audience, freshness, language string,
+	sourcePolicy, runLimits []byte,
+	authoredBy, reason string,
+) map[string]any {
+	return map[string]any{
+		"goal_version":  goalVersion,
+		"goal":          goal,
+		"scope":         json.RawMessage(scope),
+		"audience":      audience,
+		"freshness":     freshness,
+		"language":      language,
+		"source_policy": json.RawMessage(sourcePolicy),
+		"run_limits":    json.RawMessage(runLimits),
+		"authored_by":   authoredBy,
+		"reason":        reason,
+	}
 }
 
 func registerRunArtifactsAfterInitializationTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {

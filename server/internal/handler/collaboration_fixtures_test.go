@@ -16,9 +16,10 @@ import (
 // group channel with several channel-member agents online on distinct
 // runtimes.
 type channelAgentRuntimeSpec struct {
-	status         string
-	provider       string
-	omitCapability bool
+	status             string
+	provider           string
+	omitCapability     bool
+	localReminderInbox bool
 }
 
 type channelAgentRuntimeFixture struct {
@@ -66,6 +67,9 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID); err != nil {
 			protocol.DaemonCapabilityRestrictedExecution,
 			protocol.DaemonCapabilityReminderVersionedCache,
 			protocol.DaemonCapabilityReminderTransientInput,
+		}
+		if spec.localReminderInbox {
+			capabilities = append(capabilities, protocol.DaemonCapabilityReminderLocalInbox)
 		}
 		if spec.omitCapability {
 			capabilities = []string{}

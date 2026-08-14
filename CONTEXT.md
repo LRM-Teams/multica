@@ -9,9 +9,11 @@ documents use. It records product meaning, not package layout.
 
 The collaboration boundary in which human members and Agents work together.
 Its immutable `workspace_id` scopes memberships, Agents, and local execution
-bindings. A Workspace is not an individual Agent's filesystem working
-directory.
-_Avoid_: Agent workdir, machine directory
+bindings. This is the Raft 1.0.16 Server analogue: Computer attaches one
+DaemonCore per Workspace, the way Raft Computer attaches one DaemonCore per
+Server. A Workspace is not an individual Agent's filesystem working directory.
+_Avoid_: Agent workdir, machine directory, Raft Server as a second product
+entity, host, Computer
 
 ### Members Directory
 
@@ -77,18 +79,34 @@ _Avoid_: Workspace attachment, local Workspace
 
 The Computer's view of Workspaces that the signed-in user may access.
 Discovery follows membership changes but does not authorize local Agent
-execution or start a Workspace Runner.
+execution or start a DaemonCore.
 _Avoid_: Workspace synchronization, automatic binding
+
+### DaemonCore
+
+The Computer-supervised execution child for one Workspace Execution Binding.
+It is the Raft 1.0.16 `DaemonCore` analogue: one OS child per Binding
+(`computer __runner`), not a second Computer and not a provider runtime.
+At most one DaemonCore is active for a binding; the same Workspace may have
+other DaemonCores on other machines. The Host reconciles the child every 5s,
+backs off 2s after a crash, and degrades after 3 crashes in 60s. A previous
+child generation cannot mutate the live slot.
+_Avoid_: Binding child as a product name, Workspace daemon, profile daemon,
+second Computer, runtime
 
 ### Workspace Runner
 
-The machine-local execution owner for one Workspace Execution Binding. At most
-one Workspace Runner is active for a binding, while the same Workspace may have
-other Workspace Runners on other machines. The Computer host supervises one OS
-child per Binding (`computer __runner`) on a 5s reconcile, with a 2s crash
-backoff and a 3-crashes-in-60s degrade. A previous child generation cannot
-mutate the live slot.
-_Avoid_: Workspace owner, global Workspace runner
+The control-plane owner inside one DaemonCore: the live connection and command
+surface for that Binding. Presence is derived from this connection. It is not
+the OS child and not a RuntimeSession.
+_Avoid_: Workspace owner, global Workspace runner, DaemonCore, runtime
+
+### RuntimeSession
+
+One Agent's live provider execution session inside a DaemonCore: one Agent,
+one provider runtime, one session. Restarting or replacing it does not create
+a new Computer or a new DaemonCore.
+_Avoid_: Computer, DaemonCore, Workspace Runner, Agent Root
 
 ### Agent Attachment
 
@@ -344,10 +362,10 @@ _Avoid_: Agent creation draft, autonomous hire, executable suggestion
 
 ### Resident Agent Process
 
-The currently running provider process for one Agent on one runtime. While it
+The currently running provider OS process behind one RuntimeSession. While it
 is alive, later configuration changes do not replace it. A new process starts
 only after an explicit Agent Restart Mode or after the process has died.
-_Avoid_: fingerprint restart, implicit stop+start, hash-based recycle, one-shot slot
+_Avoid_: fingerprint restart, implicit stop+start, hash-based recycle, one-shot slot, RuntimeSession as the OS process
 
 ## Research
 

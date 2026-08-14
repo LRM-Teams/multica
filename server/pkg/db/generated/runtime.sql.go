@@ -1262,31 +1262,6 @@ func (q *Queries) SetAgentRuntimeOffline(ctx context.Context, arg SetAgentRuntim
 	return err
 }
 
-const markAgentRuntimesStarting = `-- name: MarkAgentRuntimesStarting :exec
-UPDATE agent_runtime
-SET starting_since = now()
-WHERE daemon_id = $1 AND workspace_id = $2
-`
-
-type MarkAgentRuntimesStartingParams struct {
-	DaemonID    pgtype.Text `json:"daemon_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-// Called once, best-effort, right before the daemon's cold-start agent CLI
-// version-probe loop (which can take ~20s on a cold cache) — the window
-// during which the server otherwise has no fact newer than whatever this
-// daemon's runtimes looked like before it stopped. Deliberately a no-op
-// when no rows match (e.g. a daemon that has never registered before has
-// no prior runtime row to attach "starting" to). Read-side treats
-// starting_since as stale after a short TTL, so letting this row sit unset
-// forever if register never follows is safe by construction, not merely
-// tolerated.
-func (q *Queries) MarkAgentRuntimesStarting(ctx context.Context, arg MarkAgentRuntimesStartingParams) error {
-	_, err := q.db.Exec(ctx, markAgentRuntimesStarting, arg.DaemonID, arg.WorkspaceID)
-	return err
-}
-
 const touchAgentRuntimeLastSeen = `-- name: TouchAgentRuntimeLastSeen :execrows
 UPDATE agent_runtime
 SET last_seen_at = now()

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // computerConnectionResponse is the Workspace-scoped Computer projection.
@@ -18,7 +17,7 @@ type computerConnectionResponse struct {
 	LastSeen  *string `json:"last_seen_at"`
 }
 
-func computerConnectionProjection(daemonID, ownerID string, lastSeen pgtype.Timestamptz, now time.Time) computerConnectionResponse {
+func computerConnectionProjection(daemonID, ownerID string, lastSeen pgtype.Timestamptz, runnerConnected bool) computerConnectionResponse {
 	var seen *string
 	if lastSeen.Valid {
 		value := lastSeen.Time.UTC().Format(time.RFC3339Nano)
@@ -27,7 +26,7 @@ func computerConnectionProjection(daemonID, ownerID string, lastSeen pgtype.Time
 	return computerConnectionResponse{
 		DaemonID:  daemonID,
 		OwnerID:   ownerID,
-		Connected: computerConnected(&db.DaemonHeartbeat{LastSeenAt: lastSeen}, now),
+		Connected: runnerConnected,
 		LastSeen:  seen,
 	}
 }
@@ -54,7 +53,6 @@ ORDER BY b.created_at, b.daemon_id`, parseUUID(workspaceID))
 	defer rows.Close()
 
 	result := make([]computerConnectionResponse, 0)
-	now := time.Now()
 	for rows.Next() {
 		var daemonID, ownerID string
 		var lastSeen pgtype.Timestamptz
@@ -62,7 +60,8 @@ ORDER BY b.created_at, b.daemon_id`, parseUUID(workspaceID))
 			writeError(w, http.StatusInternalServerError, "failed to read Computer connection")
 			return
 		}
-		result = append(result, computerConnectionProjection(daemonID, ownerID, lastSeen, now))
+		runnerConnected := h.DaemonHub != nil && h.DaemonHub.HasWorkspaceRunner(daemonID, workspaceID)
+		result = append(result, computerConnectionProjection(daemonID, ownerID, lastSeen, runnerConnected))
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list Computers")

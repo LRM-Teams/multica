@@ -9,13 +9,13 @@ import (
 
 func TestComputerConnectionProjectionDoesNotDependOnAgentRuntime(t *testing.T) {
 	now := time.Now().UTC()
-	connected := computerConnectionProjection("computer-1", "user-1", pgtype.Timestamptz{Time: now, Valid: true}, now)
+	connected := computerConnectionProjection("computer-1", "user-1", pgtype.Timestamptz{Time: now, Valid: true}, true)
 	if !connected.Connected || connected.LastSeen == nil {
 		t.Fatalf("fresh zero-Agent Computer projection = %+v", connected)
 	}
 
-	stale := computerConnectionProjection("computer-1", "user-1", pgtype.Timestamptz{Time: now.Add(-10 * time.Minute), Valid: true}, now)
-	if stale.Connected {
-		t.Fatalf("stale Computer heartbeat reported connected: %+v", stale)
+	disconnected := computerConnectionProjection("computer-1", "user-1", pgtype.Timestamptz{Time: now, Valid: true}, false)
+	if disconnected.Connected {
+		t.Fatalf("DaemonCore socket down must report disconnected even with a fresh last_seen: %+v", disconnected)
 	}
 }

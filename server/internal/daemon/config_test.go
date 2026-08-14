@@ -669,6 +669,29 @@ func TestLoadConfig_MissingCLIConfigIsNonFatal(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_NoAgentCLIStillSucceeds is the Computer V1 setup contract:
+// a machine with no detected agent CLI must still load and connect. Zero
+// runtimes is a valid connected Computer, not a configuration error.
+func TestLoadConfig_NoAgentCLIStillSucceeds(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SHELL", filepath.Join(t.TempDir(), "fish"))
+	t.Setenv("MULTICA_DAEMON_ID", "11111111-1111-1111-1111-111111111111")
+	pinNonCodexAgentsToMissingPaths(t)
+	t.Setenv("MULTICA_CODEX_PATH", filepath.Join(t.TempDir(), "missing-codex"))
+
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig with no agent CLI must succeed: %v", err)
+	}
+	if len(cfg.Agents) != 0 {
+		t.Fatalf("expected zero agents, got %#v", cfg.Agents)
+	}
+}
+
 // TestLoadConfig_MalformedCLIConfigIsNonFatal verifies the fail-soft contract
 // documented inline in LoadConfig: a corrupt config.json must not prevent
 // daemon startup. The daemon should log and proceed using env-var-only

@@ -963,6 +963,18 @@ func (h *Hub) IsCurrentWorkspaceRunner(daemonID, workspaceID, daemonInstanceID s
 	return c != nil && c.runnerDaemonInstanceID == daemonInstanceID
 }
 
+// HasWorkspaceRunner reports whether this Computer currently holds a live
+// DaemonCore / Workspace Runner socket for the Workspace. Socket presence is
+// Computer liveness: connect is online, disconnect is offline.
+func (h *Hub) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}] != nil
+}
+
 // WorkspaceRunnerSupportsCapability reports only the active ready connection's
 // declared capabilities. A replaced Runner cannot lend its protocol support to
 // its successor.

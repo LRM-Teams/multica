@@ -3,21 +3,20 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
-// TestRegisterRuntimesForWorkspace_CallsMarkStartingBeforeRegister pins the
-// ordering this feature depends on: MarkStarting must fire before the
-// (possibly ~20s on a cold cache) agent-CLI version-probe loop that precedes
-// the real register call, so the server has a "starting" fact to show during
-// exactly the window a machine coming back from a crash otherwise has none.
-func TestRegisterRuntimesForWorkspace_CallsMarkStartingBeforeRegister(t *testing.T) {
+// TestRegisterRuntimesForWorkspace_DoesNotCallStarting pins the Computer
+// V1 / Raft alignment: machine liveness is the DaemonCore Workspace Runner
+// socket, not a pre-register HTTP starting signal. Version probing may
+// still delay register; that must not resurrect /api/daemon/starting.
+func TestRegisterRuntimesForWorkspace_DoesNotCallStarting(t *testing.T) {
 	oldDetect := detectAgentVersion
 	oldCheck := checkAgentMinVersion
 	detectAgentVersion = func(context.Context, string) (string, error) { return "9.9.9", nil }
@@ -28,25 +27,12 @@ func TestRegisterRuntimesForWorkspace_CallsMarkStartingBeforeRegister(t *testing
 	})
 
 	var startingCalls, registerCalls atomic.Int32
-	var startingHappenedBeforeRegister atomic.Bool
-	startingHappenedBeforeRegister.Store(true)
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/daemon/starting":
 			startingCalls.Add(1)
-			if registerCalls.Load() != 0 {
-				startingHappenedBeforeRegister.Store(false)
-			}
-			var req struct {
-				WorkspaceID string `json:"workspace_id"`
-				DaemonID    string `json:"daemon_id"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req.WorkspaceID != "ws-1" || req.DaemonID != "daemon-1" {
-				t.Errorf("starting call body = %+v, want ws-1/daemon-1", req)
-			}
-			w.WriteHeader(http.StatusOK)
+			t.Errorf("retired /api/daemon/starting must not be called")
+			w.WriteHeader(http.StatusNotFound)
 		case "/api/daemon/register":
 			registerCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
@@ -81,46 +67,36 @@ func TestRegisterRuntimesForWorkspace_CallsMarkStartingBeforeRegister(t *testing
 	if _, err := d.registerRuntimesForWorkspace(context.Background(), "ws-1"); err != nil {
 		t.Fatalf("registerRuntimesForWorkspace: %v", err)
 	}
-	if got := startingCalls.Load(); got != 1 {
-		t.Fatalf("starting calls = %d, want 1", got)
+	if got := startingCalls.Load(); got != 0 {
+		t.Fatalf("starting calls = %d, want 0", got)
 	}
 	if got := registerCalls.Load(); got != 1 {
 		t.Fatalf("register calls = %d, want 1", got)
 	}
-	if !startingHappenedBeforeRegister.Load() {
-		t.Fatal("MarkStarting must be called before register, not after")
-	}
 }
 
-// TestRegisterRuntimesForWorkspace_MarkStartingFailureDoesNotBlockRegister
-// proves MarkStarting is genuinely best-effort: a server error on
-// /api/daemon/starting must not prevent registerRuntimesForWorkspace from
-// completing normally. Losing the "starting" display for one cycle is an
-// acceptable cost; failing startup over it is not.
-func TestRegisterRuntimesForWorkspace_MarkStartingFailureDoesNotBlockRegister(t *testing.T) {
+// TestRegisterRuntimesForWorkspace_ZeroRegisterableAgentsKeepsComputerConnected
+// is the Computer V1 contract: a Binding that detects agent CLIs but cannot
+// register any of them (too old / version probe failed) must stay connected
+// with an empty runtime set. Setup success is Computer connectivity, not
+// runtime count.
+func TestRegisterRuntimesForWorkspace_ZeroRegisterableAgentsKeepsComputerConnected(t *testing.T) {
 	oldDetect := detectAgentVersion
 	oldCheck := checkAgentMinVersion
-	detectAgentVersion = func(context.Context, string) (string, error) { return "9.9.9", nil }
-	checkAgentMinVersion = func(string, string) error { return nil }
+	detectAgentVersion = func(context.Context, string) (string, error) { return "0.0.1", nil }
+	checkAgentMinVersion = func(string, string) error { return fmt.Errorf("below minimum") }
 	t.Cleanup(func() {
 		detectAgentVersion = oldDetect
 		checkAgentMinVersion = oldCheck
 	})
 
+	var registerCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/daemon/starting":
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"error":"boom"}`))
 		case "/api/daemon/register":
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"runtimes": []map[string]string{{
-					"id":           "rt-1",
-					"workspace_id": "ws-1",
-					"provider":     "pi",
-				}},
-			})
+			registerCalls.Add(1)
+			t.Errorf("empty runtime set must not POST /api/daemon/register")
+			w.WriteHeader(http.StatusBadRequest)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -129,12 +105,11 @@ func TestRegisterRuntimesForWorkspace_MarkStartingFailureDoesNotBlockRegister(t 
 
 	c := NewClient(srv.URL)
 	c.SetToken("mul-profile")
-
 	d := &Daemon{
 		cfg: Config{
 			DaemonID: "daemon-1",
 			Agents: map[string]AgentEntry{
-				"pi": {Path: "pi"},
+				"claude": {Path: "claude"},
 			},
 		},
 		client:        c,
@@ -142,17 +117,17 @@ func TestRegisterRuntimesForWorkspace_MarkStartingFailureDoesNotBlockRegister(t 
 		agentVersions: make(map[string]string),
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := d.registerRuntimesForWorkspace(context.Background(), "ws-1")
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("registerRuntimesForWorkspace failed after a MarkStarting error: %v, want success (best-effort)", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("registerRuntimesForWorkspace did not return — a MarkStarting failure must not block it")
+	resp, err := d.registerRuntimesForWorkspace(context.Background(), "ws-1")
+	if err != nil {
+		t.Fatalf("zero registerable agents must keep the Computer connected: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected an empty RegisterResponse, got nil")
+	}
+	if len(resp.Runtimes) != 0 {
+		t.Fatalf("runtimes = %#v, want none", resp.Runtimes)
+	}
+	if got := registerCalls.Load(); got != 0 {
+		t.Fatalf("register calls = %d, want 0", got)
 	}
 }

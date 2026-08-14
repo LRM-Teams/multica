@@ -554,8 +554,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 		r.Post("/register", h.DaemonRegister)
 		r.Post("/deregister", h.DaemonDeregister)
-		r.Post("/starting", h.DaemonMarkStarting)
 		r.Post("/heartbeat", h.DaemonHeartbeat)
+		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+		// longer a supported direct self-upgrade source.
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
 		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
 		r.Post("/computer/machine-upgrades/{upgradeId}/takeover", h.CommitComputerMachineUpgradeTakeover)

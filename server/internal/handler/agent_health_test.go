@@ -396,10 +396,9 @@ func pgtimestamptz(t time.Time) pgtype.Timestamptz {
 }
 
 // TestAgentRuntimeDisplayStatus_FreshStartingSinceOverridesStaleConnectivity
-// pins the exact scenario "starting" exists for: a machine coming back from
-// a crash calls MarkAgentRuntimesStarting before it has refreshed
-// last_seen_at, so connectivity alone would still read Dead/Stale from
-// before the crash. starting_since must win in that window.
+// keeps leftover starting_since readable: an older daemon may still have
+// stamped the column, and connectivity alone would otherwise read Dead/Stale
+// from before the restart. starting_since must win in that window.
 func TestAgentRuntimeDisplayStatus_FreshStartingSinceOverridesStaleConnectivity(t *testing.T) {
 	now := time.Now()
 	rt := db.AgentRuntime{

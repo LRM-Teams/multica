@@ -2,7 +2,7 @@
 
 > 目标：对齐 Raft 的 **process ownership / fault containment**，但不照搬其业务 cardinality。
 >
-> 结论：Raft 的 isolation key 是 `serverId`；Multica 的 isolation key 是 immutable `workspace_id` in one Execution Binding。Multica 保留一个完整的 `Computer`，不新增 `computerhost` package。
+> 结论：Raft 的 isolation key 是 `serverId`；Multica 的对位 isolation key 是 immutable `workspace_id`。Workspace **等同于** Raft Server，不是另一套业务实体。Multica 保留一个完整的 `Computer`，不新增 `computerhost` package。
 
 ## Executive summary / 核心结论
 
@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | Machine owner | `raft-computer Service` | `internal/computer.Host` | 一个 machine-wide single writer |
 | Child cardinality | one child per attached Server | one child per Workspace Execution Binding | 对齐 ownership，不伪对齐业务实体 |
-| Child behavior | `DaemonCore + APM + RuntimeSession(s)` | `WorkspaceRunner + APM + Inbox + Activity + providers` | child 必须承载真实 behavior |
+| Child behavior | `DaemonCore + APM + RuntimeSession(s)` | `DaemonCore + Workspace Runner + APM + RuntimeSession(s)` | child 必须承载真实 behavior |
 | Generation fence | runner/process tenure semantics | `computer_generation + runner_generation + PID` | 字段名不要求一致，语义必须等价 |
 | Machine Upgrade | Service-owned orchestration | Computer-owned accept/journal/stage/verify/activation/attestation | `daemon` 不得成为第二 owner |
 | Package boundary | Service vs runner execution | `internal/computer` vs `internal/daemon` | CLI only composition/bootstrap |
@@ -33,13 +33,13 @@ flowchart LR
 ```mermaid
 flowchart LR
     H["Computer Host / internal/computer.Host"]
-    H --> A["Binding child A / WorkspaceRunner + APM / Inbox + Activity + providers"]
-    H --> B["Binding child B / same isolated execution owners"]
+    H --> A["DaemonCore A / Workspace Runner + APM + RuntimeSession(s)"]
+    H --> B["DaemonCore B / same isolated execution owners"]
 
     H --- HP["desired Binding set / generation + PID fence / capacity + upgrade + diagnostics"]
 ```
 
-关键差异：Raft child 对应 attached Server；Multica child 对应 Workspace Execution Binding。二者对齐的是 **one host → N real execution children**，不是领域对象名称。
+Raft child 对应 attached Server；Multica child 对应 attached Workspace。二者是同一层：一台 Computer 下每个协作边界一个 DaemonCore。产品名不同，槽位语义相同。
 
 ## 2. Shallow child → deep child
 
@@ -61,13 +61,13 @@ Computer / Daemon host process
 
 ```text
 Computer Host
-└── computer __runner --workspace-id {workspace-id}
-    ├── WorkspaceRunner.Run
+└── DaemonCore  (computer __runner --workspace-id {workspace-id})
+    ├── Workspace Runner
     ├── AgentProcessManager
     ├── Inbox / MessageCoordinator
     ├── Activity / Attachments / Reminder
     ├── child-local durable state
-    └── provider runtime processes
+    └── RuntimeSession(s) / provider processes
 ```
 
 删除 child 会同时删除完整 Binding behavior；fault containment、code locality 与 OS process boundary 对齐。

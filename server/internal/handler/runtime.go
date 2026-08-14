@@ -126,7 +126,7 @@ func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
 	daemonHeartbeat := h.daemonHeartbeatForRuntime(ctx, rt)
 	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
-	resp.ComputerConnected = computerConnected(daemonHeartbeat, time.Now())
+	resp.ComputerConnected = h.computerConnectedByRunner(runtimeDaemonKey(rt), uuidToString(rt.WorkspaceID), daemonHeartbeat, time.Now())
 	if daemonHeartbeat != nil {
 		resp.DaemonLastSeenAt = timestampToPtr(daemonHeartbeat.LastSeenAt)
 	}
@@ -1271,7 +1271,7 @@ func (h *Handler) agentRuntimeResponsesForList(ctx context.Context, runtimes []d
 		resp[i] = runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, autoUpdates[runtimeDaemonKey(rt)])
 		resp[i].MachineUpgrade = machineUpgrades[runtimeDaemonKey(rt)]
 		hb := daemonHeartbeats[runtimeDaemonKey(rt)]
-		resp[i].ComputerConnected = computerConnected(hb, now)
+		resp[i].ComputerConnected = h.computerConnectedByRunner(runtimeDaemonKey(rt), uuidToString(rt.WorkspaceID), hb, now)
 		if hb != nil {
 			resp[i].DaemonLastSeenAt = timestampToPtr(hb.LastSeenAt)
 		}

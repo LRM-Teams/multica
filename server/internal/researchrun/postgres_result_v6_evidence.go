@@ -205,7 +205,7 @@ func resolveV6EntityKeyTx(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		}
 		return id, nil
 	}
-	tables := map[string]string{"question": "research_question", "hypothesis": "research_hypothesis", "branch": "research_branch", "claim": "research_claim", "insight": "research_insight", "task": "research_task"}
+	tables := map[string]string{"question": "research_question", "hypothesis": "research_hypothesis", "branch": "research_branch", "claim": "research_claim", "insight": "research_insight", "dispute": "research_dispute", "task": "research_task"}
 	table := tables[ref.Kind]
 	if table == "" {
 		return "", fmt.Errorf("%w: unsupported V6 entity kind %q", ErrInvalidContract, ref.Kind)

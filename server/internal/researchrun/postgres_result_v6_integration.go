@@ -163,17 +163,159 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 			}
 		}
 	}
+	for _, dispute := range result.Disputes {
+		if dispute.Subject.Kind != "question" && dispute.Subject.Kind != "hypothesis" && dispute.Subject.Kind != "claim" && dispute.Subject.Kind != "insight" {
+			return fmt.Errorf("%w: Dispute subject must be Question, Hypothesis, Claim, or Insight", ErrInvalidContract)
+		}
+		subject, err := resolve(dispute.Subject)
+		if err != nil {
+			return err
+		}
+		disputeID := uuid.NewSHA1(namespace, []byte("integration-dispute/"+dispute.ClientKey)).String()
+		severity := "advisory"
+		if dispute.Materiality >= 0.75 {
+			severity = "blocking"
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO research_dispute
+			(id,workspace_id,session_id,subject_kind,subject_entity_id,dispute_kind,severity,materiality,status,resolution_request,created_by_attempt_id,client_key)
+			VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,'semantic',$6,$7,'open',$8,$9::uuid,$10)`, disputeID, state.workspaceID,
+			state.run.SessionID, dispute.Subject.Kind, subject.ID, severity, dispute.Materiality, strings.TrimSpace(dispute.ResolutionRequest), state.attemptID, dispute.ClientKey); err != nil {
+			return err
+		}
+		content := map[string]any{"client_key": dispute.ClientKey, "subject_kind": dispute.Subject.Kind, "subject_entity_id": subject.ID,
+			"dispute_kind": "semantic", "severity": severity, "materiality": dispute.Materiality, "status": "open",
+			"resolution_request": dispute.ResolutionRequest, "positions": dispute.Positions}
+		if err = registerAcceptedV6IntegrationArtifactTx(ctx, tx, state, disputeID, ArtifactKindDispute, content); err != nil {
+			return err
+		}
+		if err = persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, disputeID, ArtifactKindDispute,
+			subject.ID, ArtifactEntityKind(dispute.Subject.Kind), "disputes", "v6_integration", 0); err != nil {
+			return err
+		}
+		for ordinal, position := range dispute.Positions {
+			payload, marshalErr := json.Marshal(position)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			canonical, canonicalErr := MarshalArtifactCanonicalJSON(json.RawMessage(payload))
+			if canonicalErr != nil {
+				return canonicalErr
+			}
+			positionID := uuid.NewSHA1(namespace, []byte(fmt.Sprintf("dispute-position/%s/%d", dispute.ClientKey, ordinal))).String()
+			claimIDs := []string{}
+			if dispute.Subject.Kind == "claim" {
+				claimIDs = append(claimIDs, subject.ID)
+			}
+			encodedClaims, _ := json.Marshal(claimIDs)
+			if _, err = tx.Exec(ctx, `INSERT INTO research_dispute_position
+				(id,workspace_id,session_id,dispute_id,author_agent_id,statement,scope,claim_ids,evidence_ids,position_payload)
+				VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,'{}'::jsonb,$7::jsonb,'[]'::jsonb,$8::jsonb)`, positionID,
+				state.workspaceID, state.run.SessionID, disputeID, agentID, string(canonical), encodedClaims, payload); err != nil {
+				return err
+			}
+			positionContent := map[string]any{"dispute_id": disputeID, "author_agent_id": agentID, "position_payload": json.RawMessage(payload), "ordinal": ordinal}
+			if err = registerAcceptedV6IntegrationArtifactTx(ctx, tx, state, positionID, ArtifactKindDisputePosition, positionContent); err != nil {
+				return err
+			}
+			if err = persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, positionID, ArtifactKindDisputePosition,
+				disputeID, ArtifactKindDispute, "position_on", "v6_integration", 0); err != nil {
+				return err
+			}
+		}
+	}
 	if err := applyAcceptedV6StatusUpdatesTx(ctx, tx, state, result.StatusUpdates, agentID); err != nil {
 		return err
 	}
-	if len(result.Disputes) > 0 || len(result.ProposedTasks) > 0 {
-		return fmt.Errorf("%w: V6 Integration Dispute and follow-up Task persistence is not available", ErrUnsupportedVersion)
+	followUpQuestions := make([]QuestionProposal, 0)
+	for _, contribution := range result.IntegrationContributions {
+		for _, question := range contribution.FollowUpQuestions {
+			parent := ""
+			if question.ParentClientKey != nil {
+				parent = *question.ParentClientKey
+			}
+			followUpQuestions = append(followUpQuestions, QuestionProposal{ClientKey: question.ClientKey, ParentClientKey: parent,
+				Kind: QuestionKind(question.Kind), Text: question.Text, Required: question.Required, Priority: question.Priority,
+				Impact: question.Impact, Uncertainty: question.Uncertainty, Novelty: question.Novelty})
+		}
+	}
+	questionIDs, _, err := materializeQuestions(ctx, tx, state, ResultEnvelope{Questions: followUpQuestions})
+	if err != nil {
+		return err
+	}
+	taskProposals := make([]TaskProposal, 0, len(result.ProposedTasks))
+	for _, task := range result.ProposedTasks {
+		acceptanceCriteria := task.AcceptanceCriteria
+		if acceptanceCriteria == nil {
+			acceptanceCriteria = map[string]any{}
+		}
+		criteria, marshalErr := json.Marshal(acceptanceCriteria)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		questionKey := ""
+		for _, target := range task.Targets {
+			if target.Kind == "question" && questionKey == "" {
+				questionKey = target.Key
+			}
+		}
+		maxAttempts, timeout := 0, 0
+		if task.MaxAttempts != nil {
+			maxAttempts = *task.MaxAttempts
+		}
+		if task.TimeoutSeconds != nil {
+			timeout = *task.TimeoutSeconds
+		}
+		taskProposals = append(taskProposals, TaskProposal{ClientKey: task.ClientKey, QuestionKey: questionKey, Kind: TaskKind(task.Kind),
+			Objective: task.Objective, RequiredCapability: task.RequiredCapability, ExpectedResult: task.ExpectedResult,
+			AcceptanceCriteria: criteria, Priority: task.Priority, DependsOn: task.DependsOn, MaxAttempts: maxAttempts, TimeoutSeconds: timeout})
+	}
+	if _, err = materializeTasks(ctx, tx, state, ResultEnvelope{ProposedTasks: taskProposals}, questionIDs); err != nil {
+		return err
+	}
+	if len(result.ProposedTasks) > 0 {
+		taskIDs, loadErr := loadTaskIDs(ctx, tx, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
+		if loadErr != nil {
+			return loadErr
+		}
+		for _, task := range result.ProposedTasks {
+			taskID := taskIDs[task.ClientKey]
+			if taskID == "" {
+				return fmt.Errorf("%w: materialized V6 follow-up Task cannot be resolved", ErrResultConflict)
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO research_task_dependency(workspace_id,session_id,task_id,depends_on_task_id)
+				VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING`, state.workspaceID, state.run.SessionID, taskID, state.task.ID); err != nil {
+				return err
+			}
+			for ordinal, target := range task.Targets {
+				if target.Kind == "task" || target.Kind == "source" {
+					return fmt.Errorf("%w: follow-up Task target must be an Inquiry entity", ErrInvalidContract)
+				}
+				targetID, resolveErr := resolveV6EntityKeyTx(ctx, tx, state, target)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				if _, err = tx.Exec(ctx, `INSERT INTO research_task_inquiry_target
+					(workspace_id,session_id,task_id,target_kind,target_entity_id,goal_version,plan_version,bound_by_attempt_id)
+					VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,$7,$8::uuid) ON CONFLICT DO NOTHING`, state.workspaceID,
+					state.run.SessionID, taskID, target.Kind, targetID, state.run.GoalVersion, state.targetPlan, state.attemptID); err != nil {
+					return err
+				}
+				if err = persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, ArtifactKindTask,
+					targetID, ArtifactEntityKind(target.Kind), "targets", "v6_integration_follow_up", ordinal); err != nil {
+					return err
+				}
+			}
+			if err = persistMaterializedTaskRelationshipReferencesTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE research_integration_round SET status='accepted',updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, state.workspaceID, state.run.SessionID, roundID); err != nil {
 		return err
 	}
-	_, err := appendEvent(ctx, tx, state.workspaceID, state.run.SessionID, "v6_integration_materialized", "v6-integration:"+state.attemptID, "agent", agentID,
-		map[string]any{"attempt_id": state.attemptID, "integration_round_id": roundID, "contributions": len(result.IntegrationContributions), "insights": len(result.Insights)})
+	_, err = appendEvent(ctx, tx, state.workspaceID, state.run.SessionID, "v6_integration_materialized", "v6-integration:"+state.attemptID, "agent", agentID,
+		map[string]any{"attempt_id": state.attemptID, "integration_round_id": roundID, "contributions": len(result.IntegrationContributions),
+			"insights": len(result.Insights), "disputes": len(result.Disputes), "follow_up_questions": len(followUpQuestions), "follow_up_tasks": len(result.ProposedTasks)})
 	return err
 }
 

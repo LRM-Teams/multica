@@ -2,8 +2,34 @@ package handler
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/researchrun"
 )
+
+func TestResearchV6DeltaCarriesThroughSequenceSnapshotHash(t *testing.T) {
+	run := researchrun.RunSnapshot{
+		Run:      researchrun.Run{SessionID: "run-1", Goal: "goal", Status: researchrun.RunStatusRunning, StateVersion: 3, LastProgressAt: time.Unix(1_700_000_000, 0).UTC()},
+		Contract: researchrun.ResearchContract{Goal: "goal"},
+		Tasks:    []researchrun.Task{{ID: "task-1", Objective: "verify", Kind: researchrun.TaskKindVerify, Status: researchrun.TaskStatusReady}},
+	}
+	snapshot := buildResearchV6Snapshot("run-1", 7, run)
+	delta := researchV6DeltaForSnapshot(snapshot, 4)
+	if delta.FromSequenceExclusive != 4 || delta.ThroughSequence != 7 {
+		t.Fatalf("delta sequence = %d..%d", delta.FromSequenceExclusive, delta.ThroughSequence)
+	}
+	if !reflect.DeepEqual(delta.GraphContentHash, snapshot.GraphContentHash) {
+		t.Fatalf("delta hash = %v, snapshot hash = %v", delta.GraphContentHash, snapshot.GraphContentHash)
+	}
+	if delta.GraphContentHash["nodes"] == "" || delta.GraphContentHash["edges"] == "" {
+		t.Fatalf("delta hash is incomplete: %v", delta.GraphContentHash)
+	}
+	rebuilt := buildResearchV6Snapshot("run-1", 7, run)
+	if !reflect.DeepEqual(rebuilt.GraphContentHash, snapshot.GraphContentHash) {
+		t.Fatalf("same state rebuilt hash = %v, want %v", rebuilt.GraphContentHash, snapshot.GraphContentHash)
+	}
+}
 
 func TestMapResearchV6NodeBindsRunAndCanonicalEntity(t *testing.T) {
 	actor := "agent-1"
@@ -36,6 +62,62 @@ func TestMapResearchV6NodeDegradesUnknownKindToGeneric(t *testing.T) {
 	}
 	if detail, ok := got.Detail.(map[string]any); !ok || detail["kind"] != "future_private_kind" {
 		t.Fatalf("bounded opaque detail should preserve the source diagnostic: %#v", got.Detail)
+	}
+}
+
+func TestMapResearchV6NodeProjectsGoalAndTypedD5Semantics(t *testing.T) {
+	confidence := .84
+	clusterID, parentID := "cluster-1", "parent-source"
+	derivedFrom, supersededBy := "derived-source", "replacement-source"
+	typed := ResearchGraphTypedNodeResp{
+		ID: "display-goal", Level: "XXL", Round: 2, ClusterID: &clusterID, ParentID: &parentID,
+		Confidence: &confidence, DocumentCount: 46, ConclusionCount: 4,
+		DerivedFrom: &derivedFrom, MergedFrom: []string{"merge-source"}, SupersededBy: &supersededBy,
+	}
+	node := ResearchGraphNodeResp{
+		ID: "display-goal", NodeType: "goal", Title: "Research origin", Status: "failed",
+		Payload: json.RawMessage(`{"kind":"root"}`),
+	}
+	got := mapResearchV6NodeWithSemantics("run-1", node, &typed)
+	if got.NodeKind != "goal" || got.NodeSubtype != "goal" || got.Level != "m" || got.Status != "active" || got.Round != 2 {
+		t.Fatalf("goal semantics=%+v", got)
+	}
+	if got.ClusterID == nil || *got.ClusterID != clusterID || got.Confidence == nil || *got.Confidence != confidence ||
+		got.DocumentCount == nil || *got.DocumentCount != 46 || got.ConclusionCount == nil || *got.ConclusionCount != 4 {
+		t.Fatalf("typed metrics=%+v", got)
+	}
+
+	remapResearchV6NodeReferences(&got, map[string]string{
+		"parent-source": "run-1:insight:parent", "derived-source": "run-1:claim:derived",
+		"merge-source": "run-1:insight:merge", "replacement-source": "run-1:insight:replacement",
+	})
+	if got.ParentID == nil || *got.ParentID != "run-1:insight:parent" || got.DerivedFrom == nil ||
+		*got.DerivedFrom != "run-1:claim:derived" || len(got.MergedFrom) != 1 || got.SupersededBy == nil {
+		t.Fatalf("remapped lineage=%+v", got)
+	}
+}
+
+func TestProjectResearchV6ClustersUsesRealMembershipAndNullableMetrics(t *testing.T) {
+	clusterID := "cluster-1"
+	confidence := .82
+	restart := "old-node"
+	clusters := projectResearchV6Clusters(
+		[]ResearchGraphClusterResp{{ID: clusterID, Label: "New direction"}},
+		[]ResearchGraphTypedNodeResp{{ID: "source-node", ClusterID: &clusterID, Confidence: &confidence, RestartOf: &restart}},
+		map[string]string{"source-node": "run-1:branch:new"},
+	)
+	if len(clusters) != 1 || clusters[0].ClusterType != "new_frontier" || len(clusters[0].MemberNodeIDs) != 1 ||
+		clusters[0].Confidence == nil || clusters[0].DocumentCount != nil || clusters[0].ConclusionCount != nil {
+		t.Fatalf("clusters=%+v", clusters)
+	}
+}
+
+func TestProjectGoalStatusDoesNotInheritRuntimeFailure(t *testing.T) {
+	if got := projectGoalStatus(researchrun.RunStatusFailed); got != "active" {
+		t.Fatalf("failed Run changed goal status to %q", got)
+	}
+	if got := projectGoalStatus(researchrun.RunStatusCancelled); got != "abandoned" {
+		t.Fatalf("cancelled Run goal status=%q", got)
 	}
 }
 

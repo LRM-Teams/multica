@@ -18,8 +18,9 @@ If the prompt contains `## Durable Research Run task`, follow its task ID,
 attempt ID, versions, objective, acceptance criteria, and result contract.
 
 1. Read the attempt-bound snapshot before work. Agent data-plane reads require
-the dispatched Attempt ID so the server returns only the frozen manifest; an
-unscoped live-session read is rejected:
+the dispatched Attempt ID so the server returns only the frozen manifest. An
+active Fleet member without an Attempt may read only a bounded session/Fleet
+overview; it contains no goal, Run, artifact, message, report, hash, or grant data:
 
 ```bash
 multica research session get <session-id> --attempt-id <attempt-id> --output json
@@ -37,14 +38,35 @@ represented by a bounded excerpt plus content hash; exact Observation quotes
 were already checked against the immutable full snapshot at ingestion. V3–V5
 non-plan tasks inherit the accepted Method for the current goal/plan version.
 V4/V5 also expose the accepted Claim-level evidence standards.
+Contract, Method, Question, Task, and Attempt rows are the exact ordered values
+frozen when this Attempt was dispatched. Later replans, retries, assignment
+changes, runtime transitions, or terminal diagnostics do not rewrite this view.
+The top-level `session` and `fleet` families are compatibility headers rebuilt
+from the frozen Run and hashed principal roster. They intentionally omit live
+Agent profiles, runtime configuration, routing fields, timestamps, and roster
+changes made after this Attempt was dispatched.
+
+The snapshot's Attempt list is also frozen at dispatch. Later Inbox attachment,
+runtime heartbeat, cancellation, failure, or Result lifecycle changes are live
+operational facts for the scheduler, but they do not rewrite this Attempt's
+input context.
+
+`artifact_projection` is also bound to the Manifest selection point. Later
+passport lifecycle, provenance, version, or reference-count changes belong to
+the human live view and do not rewrite this Attempt's projection or hash.
 
 2. Perform the assigned investigation according to `run.method`. Explore
 beyond the first plausible answer. For V4/V5, each Claim references an accepted
 `evidence_standard_key`; every Source Snapshot records evidence traits and every
 Evidence Link records directness and method fit. Evaluate those fields against
-the Claim, not a universal source hierarchy. Preserve retrieved source text in
+the Claim, not a universal source hierarchy. Evidence Links are separately
+authorized manifest artifacts even though they appear nested under a Claim;
+the snapshot omits any link the assigned Attempt cannot read. Preserve retrieved source text in
 each source snapshot. Every quoted observation must be an exact substring of
-that snapshot. Execute required counter-search and record uncertainty.
+that snapshot. Execute required counter-search and record uncertainty. Source
+URLs must identify public resources and must never embed a username, password,
+token, or other credential; authenticated retrieval uses the provider's
+separate credential channel.
 
 3. Write one JSON result with the fields permitted by the assignment prompt.
 Use stable client keys and a globally unique `client_request_id`. Submit once:
@@ -62,12 +84,18 @@ assigned Agent must still be an active member of the session Fleet, and every
 manifest-bound policy grant must still be active at its exact revision,
 principal, purpose, policy version, and compartment when the result is
 accepted. A grant or membership change after dispatch therefore requires a new
-authorized attempt; the stale result fails closed.
+authorized attempt; the stale result fails closed. The server also seals every
+Manifest omission (candidate version, order, and exact policy reason) and
+revalidates that omission digest before accepting a result.
 
 4. Do not call `graph-append`, `source-upsert`, `report-patch`,
 `product-rounds/judgment`, or `stage-eval` for an assigned durable task. Those
 legacy mutations are rejected for initialized runs. Do not claim completion in
 chat before `task-result` succeeds.
+
+5. A task receives domain artifacts selected for its frozen manifest. Context
+Manifest internals and V6 inquiry artifacts are never admitted through the
+legacy V1–V5 compatibility policy.
 
 ## Result responsibilities
 
@@ -110,7 +138,8 @@ chat before `task-result` succeeds.
   reader structure (outline, sections, citations, sources, gaps, conclusion),
   repeats every section and conclusion exactly in `content_md`, and links
   normalized Claim keys to section IDs with exact `anchor_quote` prose. Each
-  linked section cites a stored source that verifiably supports that Claim. A
+  structured source ID must name a stored Source in the same Research session;
+  every linked section cites one of those sources and it verifiably supports that Claim. A
   V3–V5 report explains the applied Method, counterevidence, limitations,
   unresolved gaps, and decision consequence.
 - `quality_gate` / `citation_audit`: independent evaluation of the latest report

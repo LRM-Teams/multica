@@ -26,6 +26,16 @@ describe("research-v6 contract fixtures + schemas", () => {
     expect(parsed!.transition_kind).toBe("result_accepted");
   });
 
+  it("preserves a post-delta server hash and downgrades an omitted legacy hash to null", () => {
+    const delta = researchV6FixtureDelta();
+    const hashed = parseResearchV6Delta({
+      ...delta,
+      graph_content_hash: { nodes: "sha256:nodes", edges: "sha256:edges" },
+    });
+    expect(hashed?.graph_content_hash).toEqual({ nodes: "sha256:nodes", edges: "sha256:edges" });
+    expect(parseResearchV6Delta(delta)?.graph_content_hash).toBeNull();
+  });
+
   it("unknown future node_kind still parses (generic degrade, no client crash)", () => {
     const delta = researchV6FixtureDelta();
     const future = {

@@ -38,6 +38,33 @@ func TestHashManifestEntriesDeterministic(t *testing.T) {
 	}
 }
 
+func TestHashManifestOmissionsBindsFrozenDisposition(t *testing.T) {
+	base := []artifactVersionCandidate{
+		{VersionRowID: "version-1", OmissionReason: "lifecycle"},
+		{VersionRowID: "version-2", OmissionReason: "evaluation_compartment"},
+	}
+	want := hashManifestOmissions(base)
+	mutations := []struct {
+		name  string
+		value []artifactVersionCandidate
+	}{
+		{name: "removed", value: base[:1]},
+		{name: "reordered", value: []artifactVersionCandidate{base[1], base[0]}},
+		{name: "version", value: []artifactVersionCandidate{{VersionRowID: "changed", OmissionReason: "lifecycle"}, base[1]}},
+		{name: "reason", value: []artifactVersionCandidate{{VersionRowID: "version-1", OmissionReason: "policy_denied"}, base[1]}},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			if got := hashManifestOmissions(mutation.value); got == want {
+				t.Fatalf("omission hash did not bind %s", mutation.name)
+			}
+		})
+	}
+	if hashManifestOmissions(nil) != hashManifestOmissions([]artifactVersionCandidate{}) {
+		t.Fatal("empty omission set must have one canonical hash")
+	}
+}
+
 func TestDispatchManifestHashBindsAuthorizationScope(t *testing.T) {
 	base := dispatchManifestHashInput{
 		WorkspaceID:         "11111111-1111-1111-1111-111111111111",
@@ -49,13 +76,19 @@ func TestDispatchManifestHashBindsAuthorizationScope(t *testing.T) {
 		PolicyWatermark:     7,
 		ThroughStateVersion: 11,
 		Entries: []artifactVersionCandidate{{
-			VersionRowID:        "55555555-5555-5555-5555-555555555555",
-			ArtifactID:          "66666666-6666-6666-6666-666666666666",
-			Kind:                ArtifactKindClaim,
-			Version:             2,
-			EligibilityRevision: 3,
-			Representation:      "full",
-			RepresentationHash:  "sha256:representation",
+			VersionRowID:         "55555555-5555-5555-5555-555555555555",
+			ArtifactID:           "66666666-6666-6666-6666-666666666666",
+			Kind:                 ArtifactKindClaim,
+			Version:              2,
+			EligibilityRevision:  3,
+			AccessLevel:          ArtifactAccessRaw,
+			Lifecycle:            ArtifactLifecycleRegistered,
+			Provenance:           ArtifactProvenanceComplete,
+			VersionCount:         2,
+			InputReferenceCount:  4,
+			OutputReferenceCount: 5,
+			Representation:       "full",
+			RepresentationHash:   "sha256:representation",
 		}},
 	}
 	want := hashDispatchManifest(base)
@@ -73,6 +106,13 @@ func TestDispatchManifestHashBindsAuthorizationScope(t *testing.T) {
 		{"policy watermark", func(in *dispatchManifestHashInput) { in.PolicyWatermark++ }},
 		{"state watermark", func(in *dispatchManifestHashInput) { in.ThroughStateVersion++ }},
 		{"version row", func(in *dispatchManifestHashInput) { in.Entries[0].VersionRowID = "different" }},
+		{"selected version", func(in *dispatchManifestHashInput) { in.Entries[0].Version++ }},
+		{"access", func(in *dispatchManifestHashInput) { in.Entries[0].AccessLevel = ArtifactAccessRedacted }},
+		{"lifecycle", func(in *dispatchManifestHashInput) { in.Entries[0].Lifecycle = ArtifactLifecycleAccepted }},
+		{"provenance", func(in *dispatchManifestHashInput) { in.Entries[0].Provenance = ArtifactProvenancePartial }},
+		{"version count", func(in *dispatchManifestHashInput) { in.Entries[0].VersionCount++ }},
+		{"input count", func(in *dispatchManifestHashInput) { in.Entries[0].InputReferenceCount++ }},
+		{"output count", func(in *dispatchManifestHashInput) { in.Entries[0].OutputReferenceCount++ }},
 		{"representation", func(in *dispatchManifestHashInput) { in.Entries[0].RepresentationHash = "different" }},
 	}
 	for _, tc := range tests {
@@ -471,6 +511,71 @@ func TestTaskContextForAttemptExcludesPostDispatchArtifacts(t *testing.T) {
 	}
 	if frozen.AttemptContext == nil || !frozen.AttemptContext.ManifestFiltered {
 		t.Fatalf("attempt context=%+v", frozen.AttemptContext)
+	}
+}
+
+func TestTaskContextForAttemptRejectsTamperedFrozenRepresentation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Frozen read hash", Title: "Frozen read hash",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	claimID := uuid.NewString()
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "frozen-read-claim", "frozen read claim")
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	tamperedBytes := []byte(`{"id":"tampered"}`)
+	tamperedHash := contentHashFromPayload(tamperedBytes)
+	tag, err := pool.Exec(ctx, `
+		UPDATE research_artifact_context_entry entry
+		SET representation_bytes = $4,
+		    representation_hash = $5
+		FROM research_artifact_context_manifest manifest,
+		     research_artifact_version version,
+		     research_artifact_passport passport
+		WHERE (manifest.workspace_id, manifest.session_id, manifest.id) =
+		      (entry.workspace_id, entry.session_id, entry.manifest_id)
+		  AND (version.workspace_id, version.session_id, version.id) =
+		      (entry.workspace_id, entry.session_id, entry.artifact_version_id)
+		  AND (passport.workspace_id, passport.session_id, passport.id) =
+		      (version.workspace_id, version.session_id, version.artifact_id)
+		  AND manifest.workspace_id = $1::uuid
+		  AND manifest.session_id = $2::uuid
+		  AND manifest.attempt_id = $3::uuid
+		  AND passport.entity_kind = 'claim'
+	`, fixture.workspaceID, run.SessionID, attempt.ID, tamperedBytes, tamperedHash)
+	if err != nil {
+		t.Fatalf("tamper frozen representation: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("tampered rows=%d want 1", tag.RowsAffected())
+	}
+	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("TaskContextForAttempt err=%v want ErrInvalidTransition", err)
 	}
 }
 

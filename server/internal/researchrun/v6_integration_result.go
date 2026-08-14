@@ -5,19 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
-
-var v6KeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
-
-type V6EntityRef struct {
-	Kind string `json:"kind"`
-	Key  string `json:"key"`
-}
 
 type V6QuestionProposal struct {
 	ClientKey       string  `json:"client_key"`
@@ -449,13 +441,6 @@ func validateV6UniqueKey(name, value string, seen map[string]struct{}) error {
 	return nil
 }
 
-func validateV6Key(name, value string) error {
-	if len(value) == 0 || len(value) > 160 || !v6KeyPattern.MatchString(value) {
-		return fmt.Errorf("%w: %s is not a V6 key", ErrInvalidResult, name)
-	}
-	return nil
-}
-
 func validateV6Text(name, value string, max int) error {
 	if strings.TrimSpace(value) == "" || utf8.RuneCountInString(value) > max {
 		return fmt.Errorf("%w: %s is invalid", ErrInvalidResult, name)
@@ -470,15 +455,6 @@ func validateV6Texts(name string, values []string, max int) error {
 		}
 	}
 	return nil
-}
-
-func integrationOneOf(value string, allowed ...string) bool {
-	for _, candidate := range allowed {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
 }
 
 func presentJSON(raw json.RawMessage) bool {

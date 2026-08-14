@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -205,13 +206,30 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 		if err = rows.Scan(&reprBytes, &contentHash, &reprHash, &kind); err != nil {
 			t.Fatal(err)
 		}
-		if kind == string(ArtifactKindSourceSnapshot) || kind == string(ArtifactKindObservation) || kind == string(ArtifactKindClaim) {
+		switch ArtifactEntityKind(kind) {
+		case ArtifactKindContractRevision, ArtifactKindMethodDecision, ArtifactKindQuestion, ArtifactKindTask, ArtifactKindAttempt:
+			var decoded struct {
+				Order int            `json:"order"`
+				Value map[string]any `json:"value"`
+			}
+			if err = json.Unmarshal(reprBytes, &decoded); err != nil || len(decoded.Value) == 0 {
+				t.Fatalf("%s representation is not frozen ordered JSON: %q err=%v", kind, reprBytes, err)
+			}
+		case ArtifactKindRunSession, ArtifactKindSourceSnapshot, ArtifactKindObservation, ArtifactKindClaim:
 			var decoded map[string]any
-			if err = json.Unmarshal(reprBytes, &decoded); err != nil || decoded["id"] == "" {
+			if err = json.Unmarshal(reprBytes, &decoded); err != nil {
 				t.Fatalf("%s representation is not frozen wire JSON: %q err=%v", kind, reprBytes, err)
 			}
-		} else if string(reprBytes) != contentHash {
-			t.Fatalf("legacy %s representation_bytes=%q content_hash=%q", kind, reprBytes, contentHash)
+			if kind == string(ArtifactKindRunSession) && decoded["session_id"] != run.SessionID {
+				t.Fatalf("run session representation session_id=%v want=%s", decoded["session_id"], run.SessionID)
+			}
+			if kind != string(ArtifactKindRunSession) && decoded["id"] == "" {
+				t.Fatalf("%s representation has no id: %q", kind, reprBytes)
+			}
+		default:
+			if string(reprBytes) != contentHash {
+				t.Fatalf("legacy %s representation_bytes=%q content_hash=%q", kind, reprBytes, contentHash)
+			}
 		}
 		wantHash := contentHashFromPayload(reprBytes)
 		if reprHash != wantHash {
@@ -223,6 +241,51 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected manifest entries with representation bytes")
+	}
+	before, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt before mutation: %v", err)
+	}
+	if len(before.Questions) == 0 || len(before.Tasks) == 0 || len(before.Attempts) == 0 {
+		t.Fatalf("incomplete frozen durable context: questions=%d tasks=%d attempts=%d", len(before.Questions), len(before.Tasks), len(before.Attempts))
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_contract_revision SET goal='live-mutated-contract' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_question SET question='live-mutated-question' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task SET objective='live-mutated-task' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET diagnostics='live-mutated-attempt' WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt after mutation: %v", err)
+	}
+	if !reflect.DeepEqual(before.Contract, after.Contract) || !reflect.DeepEqual(before.Method, after.Method) ||
+		!reflect.DeepEqual(before.Questions, after.Questions) || !reflect.DeepEqual(before.Tasks, after.Tasks) ||
+		!reflect.DeepEqual(before.Attempts, after.Attempts) {
+		t.Fatalf("task-bound durable context changed after live mutation\nbefore=%+v\nafter=%+v", before, after)
+	}
+
+	if _, err = pool.Exec(ctx, `UPDATE research_session SET title='live-mutated-title', goal='live-mutated-goal' WHERE workspace_id=$1::uuid AND id=$2::uuid`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_fleet_member SET status='archived' WHERE workspace_id=$1::uuid AND fleet_id=$2::uuid AND agent_id=$3::uuid`, fixture.workspaceID, fixture.fleetID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt: %v", err)
+	}
+	if frozen.Run.Title != "Representation bytes" || frozen.Run.Goal != "Representation bytes" {
+		t.Fatalf("task-bound Run used live mutation: title=%q goal=%q", frozen.Run.Title, frozen.Run.Goal)
+	}
+	if len(frozen.PrincipalHeader) == 0 || frozen.PrincipalHeader[0].Status == "archived" {
+		t.Fatalf("task-bound principal header used live roster: %+v", frozen.PrincipalHeader)
 	}
 }
 
@@ -256,11 +319,12 @@ func TestDispatchFailsWhenPassportLifecycleWithdrawnBeforeDispatch(t *testing.T)
 	}
 	claimID := uuid.NewString()
 	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "withdraw-dispatch-claim", "withdrawn before dispatch")
-	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
-		UPDATE research_artifact_passport
-		SET lifecycle_status = 'withdrawn'
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, claimID)
+	if _, err = (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: uuid.NewString(), WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: claimID, Kind: artifactLifecycleWithdraw, Reason: "withdrawn before dispatch",
+	}); err != nil {
+		t.Fatalf("withdraw before dispatch: %v", err)
+	}
 
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
 	attempt, _, err := store.CreateDispatchIntent(ctx, input)
@@ -287,5 +351,21 @@ func TestDispatchFailsWhenPassportLifecycleWithdrawnBeforeDispatch(t *testing.T)
 	}
 	if included {
 		t.Fatal("withdrawn claim must not appear in manifest entries")
+	}
+	var versions, lifecycleEvents, mutations int
+	if err = pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_version
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_lifecycle_event
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_policy_mutation
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid
+		     AND mutation_kind='lifecycle')
+	`, fixture.workspaceID, run.SessionID, claimID).Scan(&versions, &lifecycleEvents, &mutations); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 1 || lifecycleEvents != 1 || mutations != 1 {
+		t.Fatalf("withdrawal audit versions=%d events=%d mutations=%d want 1/1/1", versions, lifecycleEvents, mutations)
 	}
 }

@@ -696,12 +696,8 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		}
 		return RunSnapshot{}, err
 	}
-	snapshot, err := s.TaskContext(ctx, taskID, workspaceID)
-	if err != nil {
-		return RunSnapshot{}, err
-	}
 	if !passportEnabled {
-		return snapshot, nil
+		return s.TaskContext(ctx, taskID, workspaceID)
 	}
 	allowed, ok, err := loadManifestAuthorizedArtifactIDsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
@@ -710,12 +706,34 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 	if !ok {
 		return RunSnapshot{}, fmt.Errorf("%w: attempt has no frozen artifact manifest", ErrInvalidTransition)
 	}
-	filtered := filterRunSnapshotByManifest(snapshot, allowed)
+	frozenRun, err := loadFrozenRunRepresentationPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered := RunSnapshot{Run: frozenRun}
+	frozenDurable, err := loadFrozenDurableContextPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.Contract = frozenDurable.Contract
+	filtered.Method = frozenDurable.Method
+	filtered.Questions = frozenDurable.Questions
+	filtered.Tasks = frozenDurable.Tasks
+	filtered.Attempts = frozenDurable.Attempts
+	filtered.PrincipalHeader, err = loadManifestPrincipalHeaderPool(ctx, s, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
 	privateEvaluations, err := loadFrozenEvaluationPrivatePool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
 	filtered.EvaluationPrivate = privateEvaluations
+	frozenLegacy, err := loadFrozenLegacyContextPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.LegacyContext = &frozenLegacy
 	frozenSources, frozenObservations, frozenClaims, err := loadFrozenEvidenceRepresentationsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return RunSnapshot{}, err
@@ -723,6 +741,14 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 	filtered.Sources = frozenSources
 	filtered.Observations = frozenObservations
 	filtered.Claims = frozenClaims
+	frozenAttempts, err := loadFrozenAttemptRepresentationsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.Attempts, err = applyFrozenAttempts(filtered.Attempts, frozenAttempts, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
 	manifestID, manifestHash, policyWatermark, _, summaryErr := loadAttemptManifestSummaryPool(
 		ctx, s.pool, workspaceID, sessionID, attemptID,
 	)
@@ -736,12 +762,7 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		PolicyWatermark:  policyWatermark,
 		ManifestFiltered: true,
 	}
-	if manifestID != "" {
-		allowed[manifestID] = struct{}{}
-	}
-	projection, projectionErr := (artifactProjectionModule{store: s}).Load(ctx, workspaceID, sessionID, artifactProjectionScope{
-		AllowedArtifactIDs: allowed, IncludeEvaluationPrivate: true,
-	})
+	projection, projectionErr := (artifactProjectionModule{store: s}).LoadManifest(ctx, workspaceID, sessionID, manifestID)
 	if projectionErr != nil {
 		return RunSnapshot{}, projectionErr
 	}

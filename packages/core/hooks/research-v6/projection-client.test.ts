@@ -70,11 +70,12 @@ export function makeSnapshot(through: number, nodes: ResearchV6ProjectionNode[],
 export function makeDelta(
   from: number,
   through: number,
-  opts: { nodes?: ResearchV6ProjectionNode[]; edges?: ResearchV6ProjectionEdge[]; nodeTombstones?: string[]; edgeTombstones?: string[] } = {},
+  opts: { nodes?: ResearchV6ProjectionNode[]; edges?: ResearchV6ProjectionEdge[]; nodeTombstones?: string[]; edgeTombstones?: string[]; graphContentHash?: { nodes: string; edges: string } | null } = {},
 ): ResearchV6Delta {
   return {
     from_sequence_exclusive: from,
     through_sequence: through,
+    graph_content_hash: opts.graphContentHash,
     node_upserts: opts.nodes ?? [],
     edge_upserts: opts.edges ?? [],
     node_tombstones: opts.nodeTombstones ?? [],
@@ -117,6 +118,29 @@ describe("ResearchV6ProjectionClient", () => {
 
   beforeEach(() => {
     scheduler = createFakeScheduler();
+  });
+
+  describe("server projection hash", () => {
+    it("advances to the through-sequence hash after a contiguous delta", () => {
+      const client = freshClient();
+      client.applySnapshot(makeSnapshot(0, [makeNode(0, "root")], []));
+
+      client.applyDelta(makeDelta(0, 1, {
+        nodes: [makeNode(1, "n1")],
+        graphContentHash: { nodes: "nodes-at-1", edges: "edges-at-1" },
+      }));
+
+      expect(client.getState().graphContentHash).toEqual({ nodes: "nodes-at-1", edges: "edges-at-1" });
+    });
+
+    it("clears a stale snapshot hash when an older server omits the delta hash", () => {
+      const client = freshClient();
+      client.applySnapshot(makeSnapshot(0, [makeNode(0, "root")], []));
+
+      client.applyDelta(makeDelta(0, 1, { nodes: [makeNode(1, "n1")] }));
+
+      expect(client.getState().graphContentHash).toBeNull();
+    });
   });
 
   describe("duplicate delta idempotency (AC #1)", () => {

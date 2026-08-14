@@ -15,7 +15,11 @@ import (
 // docs/notes-editor-worker-contract.md.
 var notesCmd = &cobra.Command{
 	Use:   "notes",
-	Short: "Read product notes (note_page) for the current agent task",
+	Short: "Read product notes (note_page) for the current Worker task",
+	Long: "Read one Worker-authorized product note page. There is no `notes write` command; " +
+		"`get` being the only subcommand does not mean product notes cannot be proposed. " +
+		"From a DM or channel, pipe cleaned markdown to `multica message send --target <target> --note-write`. " +
+		"Omit `--note-page-id` to create a note after human confirm.",
 }
 
 var notesGetCmd = &cobra.Command{

@@ -42,6 +42,8 @@ type MessageDraft struct {
 	SavedAt        time.Time `json:"saved_at"`
 	HoldCount      int       `json:"hold_count,omitempty"`
 	Kind           string    `json:"kind,omitempty"`
+	NoteWrite      bool      `json:"note_write,omitempty"`
+	NotePageID     string    `json:"note_page_id,omitempty"`
 }
 
 type messageDraftState struct {

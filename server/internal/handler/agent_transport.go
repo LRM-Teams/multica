@@ -56,6 +56,11 @@ type AgentTransportSendRequest struct {
 	// OutputEnvelope is the optional full machine-readable agent output contract.
 	// When Kind is empty, Envelope.Kind is used.
 	OutputEnvelope *protocol.AgentOutputEnvelope `json:"output_envelope,omitempty"`
+	// NoteWrite asks the Server to attach a note_write confirmation part.
+	// Agents never submit parts; this is the only way to propose a product-note write.
+	NoteWrite bool `json:"note_write,omitempty"`
+	// NotePageID is the optional existing note_page to target. Requires NoteWrite.
+	NotePageID string `json:"note_page_id,omitempty"`
 }
 
 // AgentTransportTargetRequest is an internal Credential Proxy preflight. It
@@ -328,6 +333,11 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	parts := agentTransportAttachmentMessageParts(content, attachmentIDs)
+	var okNoteWrite bool
+	parts, okNoteWrite = h.appendAgentNoteWritePart(w, r, source, parts, req.NoteWrite, req.NotePageID)
+	if !okNoteWrite {
+		return
+	}
 	if len([]rune(content)) > channelMessageMaxLen {
 		writeError(w, http.StatusBadRequest, "content is too long")
 		return
@@ -433,6 +443,48 @@ func agentTransportAttachmentMessageParts(content string, attachmentIDs []pgtype
 		parts = append(parts, protocol.MessagePart{Type: protocol.MessagePartTypeAttachment, AttachmentID: uuidToString(attachmentID)})
 	}
 	return parts
+}
+
+func (h *Handler) appendAgentNoteWritePart(
+	w http.ResponseWriter,
+	r *http.Request,
+	source agentTransportSource,
+	parts []protocol.MessagePart,
+	noteWrite bool,
+	notePageID string,
+) ([]protocol.MessagePart, bool) {
+	pageID := strings.TrimSpace(notePageID)
+	if !noteWrite {
+		if pageID != "" {
+			writeError(w, http.StatusBadRequest, "note_page_id requires note_write")
+			return nil, false
+		}
+		return parts, true
+	}
+	if pageID != "" {
+		pageUUID, ok := parseUUIDOrBadRequest(w, pageID, "note_page_id")
+		if !ok {
+			return nil, false
+		}
+		var exists bool
+		err := h.DB.QueryRow(r.Context(), `
+SELECT EXISTS (
+  SELECT 1 FROM note_page
+  WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+)`, pageUUID, source.origin.workspaceID).Scan(&exists)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to look up note page")
+			return nil, false
+		}
+		if !exists {
+			writeError(w, http.StatusBadRequest, "note page not found")
+			return nil, false
+		}
+	}
+	return append(parts, protocol.MessagePart{
+		Type:  protocol.MessagePartTypeNoteWrite,
+		RefID: pageID,
+	}), true
 }
 
 func (h *Handler) AgentTransportResolveMessageTarget(w http.ResponseWriter, r *http.Request) {

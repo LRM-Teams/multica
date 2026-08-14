@@ -123,6 +123,18 @@ export type MessagePart =
       label?: string;
       /** Note body snapshot at dispatch time */
       text?: string;
+    }
+  | {
+      /**
+       * Agent-proposed product-note write. Server-constructed from
+       * `message send --note-write`; the human confirms in the timeline.
+       * Omit `ref_id` to create a new page; set it to target an existing page.
+       */
+      type: "note_write";
+      /** Existing note_page id when the human specified a note. */
+      ref_id?: string;
+      /** Optional suggested title. */
+      label?: string;
     };
 
 /**

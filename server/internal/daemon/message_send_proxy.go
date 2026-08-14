@@ -31,6 +31,10 @@ type credentialProxyMessageSendRequest struct {
 	Anyway        bool     `json:"anyway,omitempty"`
 	// Kind is the optional structured agent output kind (LRM-1529).
 	Kind string `json:"kind,omitempty"`
+	// NoteWrite asks the Server to attach a note_write confirmation part.
+	NoteWrite bool `json:"note_write,omitempty"`
+	// NotePageID is the optional existing note_page to target. Requires NoteWrite.
+	NotePageID string `json:"note_page_id,omitempty"`
 }
 
 type credentialProxyMessageTargetResponse struct {
@@ -118,6 +122,14 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			upstreamRequest["kind"] = kind
 		} else if kind := strings.TrimSpace(request.Kind); kind != "" {
 			upstreamRequest["kind"] = kind
+		}
+		if draft.NoteWrite || request.NoteWrite {
+			upstreamRequest["note_write"] = true
+		}
+		if pageID := strings.TrimSpace(draft.NotePageID); pageID != "" {
+			upstreamRequest["note_page_id"] = pageID
+		} else if pageID := strings.TrimSpace(request.NotePageID); pageID != "" {
+			upstreamRequest["note_page_id"] = pageID
 		}
 		client := d.agentCredentialClient(credential.Token, request)
 		ctx, cancel := cli.APIContext(r.Context())
@@ -219,6 +231,12 @@ func (request *credentialProxyMessageSendRequest) validate() error {
 	if request.SendDraft && (strings.TrimSpace(request.Content) != "" || len(request.AttachmentIDs) != 0) {
 		return errors.New("--send-draft does not accept replacement message content or attachments")
 	}
+	if request.SendDraft && (request.NoteWrite || strings.TrimSpace(request.NotePageID) != "") {
+		return errors.New("--send-draft does not accept --note-write")
+	}
+	if strings.TrimSpace(request.NotePageID) != "" && !request.NoteWrite {
+		return errors.New("note_page_id requires note_write")
+	}
 	if !request.SendDraft && strings.TrimSpace(request.Content) == "" {
 		return errors.New("message content is required")
 	}
@@ -259,7 +277,8 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		saved, err := proxy.SaveNormalMessageDraft(request.WorkspaceID, request.AgentID, MessageDraft{
 			Target: request.Target, ContextTarget: contextTarget, Content: request.Content, AttachmentIDs: append([]string(nil), request.AttachmentIDs...),
 			IdempotencyKey: clientMessageID, SeenUpToSeq: seenUpToSeq,
-			Kind: strings.TrimSpace(request.Kind),
+			Kind:      strings.TrimSpace(request.Kind),
+			NoteWrite: request.NoteWrite, NotePageID: strings.TrimSpace(request.NotePageID),
 		}, now)
 		if err != nil {
 			return MessageDraft{}, http.StatusConflict, fmt.Errorf("save local Draft before send: %w", err)

@@ -20,6 +20,11 @@ const (
 	// Messages timeline (e.g. Note Worker 「按这篇做」). RefID is the note page
 	// id, Label is the title, Text is the note body at dispatch time.
 	MessagePartTypeNoteBrief = "note_brief"
+	// MessagePartTypeNoteWrite is a human-confirm product-note proposal on an
+	// agent Message. The Server constructs it from `message send --note-write`.
+	// RefID is optional: empty means create a new page; set it to target an
+	// existing note_page. Label may carry a suggested title.
+	MessagePartTypeNoteWrite = "note_write"
 	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
 	// L1). A pure confirmation carries no new information, no @-directive and no
 	// action, and must not wake any agent.

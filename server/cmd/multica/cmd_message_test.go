@@ -53,6 +53,14 @@ func TestRunAgentMessageSendDraftPathRejectsReplacementPayloadAndNormalAnyway(t 
 		t.Fatalf("send-draft replacement error = %v", err)
 	}
 
+	withNoteWrite := newMessageSendCmd()
+	_ = withNoteWrite.Flags().Set("target", "#one")
+	_ = withNoteWrite.Flags().Set("send-draft", "true")
+	_ = withNoteWrite.Flags().Set("note-write", "true")
+	if err := runAgentMessageSend(withNoteWrite, nil); err == nil || !strings.Contains(err.Error(), "does not accept --note-write") {
+		t.Fatalf("send-draft note-write error = %v", err)
+	}
+
 	normalAnyway := newMessageSendCmd()
 	_ = normalAnyway.Flags().Set("target", "#one")
 	_ = normalAnyway.Flags().Set("anyway", "true")
@@ -519,6 +527,53 @@ func TestRunAgentMessageSendPostsOpaqueAttachmentIDsInOrder(t *testing.T) {
 	}
 	if len(attachmentIDs) != 2 || attachmentIDs[0] != "att-a" || attachmentIDs[1] != "att-b" {
 		t.Fatalf("attachment_ids = %#v, want ordered opaque ids", attachmentIDs)
+	}
+}
+
+func TestRunAgentMessageSendPostsNoteWriteFlagWithoutParts(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/credential-proxy/messages/send" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action": "message_send", "created": true,
+			"message": map[string]any{"id": "msg-1"},
+		})
+	}))
+	defer srv.Close()
+	setMessageCredentialProxyEnv(t, srv.URL)
+
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("note-write", "true")
+	_ = cmd.Flags().Set("note-page-id", "11111111-1111-1111-1111-111111111111")
+	cmd.SetIn(strings.NewReader("proposed body"))
+	if err := runAgentMessageSend(cmd, nil); err != nil {
+		t.Fatalf("runAgentMessageSend: %v", err)
+	}
+	if _, has := body["parts"]; has {
+		t.Fatalf("Proxy request must not contain caller-built parts: %#v", body["parts"])
+	}
+	if body["note_write"] != true {
+		t.Fatalf("note_write = %#v, want true", body["note_write"])
+	}
+	if body["note_page_id"] != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("note_page_id = %#v", body["note_page_id"])
+	}
+}
+
+func TestRunAgentMessageSendRejectsNotePageIDWithoutNoteWrite(t *testing.T) {
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("note-page-id", "11111111-1111-1111-1111-111111111111")
+	cmd.SetIn(strings.NewReader("proposed body"))
+	if err := runAgentMessageSend(cmd, nil); err == nil || !strings.Contains(err.Error(), "requires --note-write") {
+		t.Fatalf("error = %v, want --note-page-id requires --note-write", err)
 	}
 }
 

@@ -71,3 +71,16 @@ describe("MessagePart choice contract", () => {
     expect(reply.option_id).toBe("yes");
   });
 });
+
+describe("MessagePart note_write contract", () => {
+  it("allows a create proposal without ref_id and a targeted write with one", () => {
+    const create = { type: "note_write" } satisfies MessagePart;
+    const existing = {
+      type: "note_write",
+      ref_id: "11111111-1111-1111-1111-111111111111",
+      label: "Weekly plan",
+    } satisfies MessagePart;
+    expect(create.ref_id).toBeUndefined();
+    expect(existing.ref_id).toBe("11111111-1111-1111-1111-111111111111");
+  });
+});

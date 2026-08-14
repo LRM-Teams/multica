@@ -46,6 +46,11 @@ from the frozen Run and hashed principal roster. They intentionally omit live
 Agent profiles, runtime configuration, routing fields, timestamps, and roster
 changes made after this Attempt was dispatched.
 
+The snapshot's Attempt list is also frozen at dispatch. Later Inbox attachment,
+runtime heartbeat, cancellation, failure, or Result lifecycle changes are live
+operational facts for the scheduler, but they do not rewrite this Attempt's
+input context.
+
 2. Perform the assigned investigation according to `run.method`. Explore
 beyond the first plausible answer. For V4/V5, each Claim references an accepted
 `evidence_standard_key`; every Source Snapshot records evidence traits and every

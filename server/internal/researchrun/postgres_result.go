@@ -361,19 +361,6 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 		return err
 	}
 	rationale := truncateBytes(method.MethodRationale, 8192)
-	var decisionID string
-	err = tx.QueryRow(ctx, `
-		INSERT INTO research_decision (
-			workspace_id, session_id, decision_kind, actor_type, actor_id,
-			goal_version, plan_version, inputs, outcome, rationale
-		) VALUES ($1::uuid, $2::uuid, 'research_method', 'agent', $3::uuid,
-		          $4, $5, $6, $7, $8)
-		RETURNING id::text
-	`, state.workspaceID, state.run.SessionID, agentID, state.run.GoalVersion,
-		state.targetPlan, inputs, outcome, rationale).Scan(&decisionID)
-	if err != nil {
-		return err
-	}
 	kind := artifactKindForDecision("research_method")
 	contentHash, err := ArtifactContentHash(kind, map[string]any{
 		"decision_kind": "research_method",

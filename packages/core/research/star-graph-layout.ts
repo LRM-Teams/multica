@@ -494,6 +494,7 @@ export function layoutStarGraph(
   // Each stable node gets an angle inside its group sector and a radial offset
   // that grows so big tiers sit further out and clear the root's own disc.
   const rootRadius = STAR_GRAPH_RADIUS[root.tier];
+  const hasCanonicalOrigin = root.nodeKind?.toLowerCase() === "goal";
   const reused = new Set<string>();
 
   const placeStableCluster = (nodesInGroup: EngineNode[], group: string | "__free__") => {
@@ -505,7 +506,10 @@ export function layoutStarGraph(
         STAR_GRAPH_RADIUS[b.tier] - STAR_GRAPH_RADIUS[a.tier] ||
         a.id.localeCompare(b.id),
     );
-    let radial = rootRadius + members[0]!.label.halfWidth * 0.5 + 46;
+    const firstRadius = STAR_GRAPH_RADIUS[members[0]!.tier];
+    let radial = hasCanonicalOrigin
+      ? rootRadius + firstRadius + 300
+      : rootRadius + members[0]!.label.halfWidth * 0.5 + 46;
     for (let i = 0; i < members.length; i += 1) {
       const n = members[i]!;
       // Reuse previous position when signature is stable.
@@ -531,6 +535,13 @@ export function layoutStarGraph(
       pos.set(n.id, { x: Math.cos(angle) * radial, y: Math.sin(angle) * radial });
       angleOf.set(n.id, angle);
       offsetOf.set(n.id, radial);
+      if (hasCanonicalOrigin) {
+        const directionalStep =
+          group === "__free__"
+            ? Math.max(220, r + prevRadius + 104)
+            : Math.max(64, (r + prevRadius + padding) * 0.42);
+        radial += directionalStep;
+      }
     }
   };
 

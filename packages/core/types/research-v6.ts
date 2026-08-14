@@ -11,6 +11,7 @@
 
 /** Stable Projection Node ID = `(run_id, entity_kind, entity_id)`. */
 export type ResearchV6NodeKind =
+  | "goal"
   | "task"
   | "attempt"
   | "result_artifact"
@@ -68,6 +69,7 @@ export type ResearchV6EdgeType =
   | "staffed_by"
   | "created_for"
   | "retired_after"
+  | "restart_of"
   | (string & {});
 
 export type ResearchV6TransitionKind =
@@ -100,6 +102,19 @@ export interface ResearchV6ProjectionNode {
   /** Bounded summary — never the source of canonical facts. */
   summary: string;
   status: string;
+  /** Server-owned D5 visual hierarchy; clients must not infer it from importance. */
+  level?: "xxl" | "xl" | "l" | "m" | "s";
+  cluster_id?: string | null;
+  parent_id?: string | null;
+  round?: number;
+  confidence?: number | null;
+  document_count?: number | null;
+  conclusion_count?: number | null;
+  derived_from?: string | null;
+  merged_from?: string[];
+  superseded_by?: string | null;
+  restart_of?: string | null;
+  invalidated_by?: string | null;
   importance: number;
   /** Opaque freshness token/sortable value set by the server. */
   freshness: string | null;
@@ -120,6 +135,16 @@ export interface ResearchV6ProjectionNode {
   created_sequence: number | null;
   updated_sequence: number | null;
   terminal_sequence: number | null;
+}
+
+export interface ResearchV6ProjectionCluster {
+  id: string;
+  label: string;
+  cluster_type: "stable_result" | "exploration" | "new_frontier";
+  member_node_ids: string[];
+  confidence: number | null;
+  document_count: number | null;
+  conclusion_count: number | null;
 }
 
 export interface ResearchV6ProjectionEdge {
@@ -152,6 +177,7 @@ export interface ResearchV6Snapshot {
   graph_content_hash: ResearchV6GraphContentHash;
   nodes: ResearchV6ProjectionNode[];
   edges: ResearchV6ProjectionEdge[];
+  clusters?: ResearchV6ProjectionCluster[];
   /** Stable pagination cursor for the next page of this same snapshot. */
   next_cursor: string | null;
 }
@@ -172,6 +198,8 @@ export interface ResearchV6Delta {
   /** Visibility tombstones (removed node/edge ids). */
   node_tombstones: string[];
   edge_tombstones: string[];
+  cluster_upserts?: ResearchV6ProjectionCluster[];
+  cluster_tombstones?: string[];
   /** Affected root node ids (for canvas invalidation). */
   affected_root_node_ids: string[];
   /** Semantic transition derived from canonical events. */

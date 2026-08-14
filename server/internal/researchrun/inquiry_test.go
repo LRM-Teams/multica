@@ -1,6 +1,7 @@
 package researchrun
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -30,6 +31,43 @@ func TestInquiryModuleStatusTransitionsFailClosed(t *testing.T) {
 		if !tt.allowed && !errors.Is(err, ErrInvalidTransition) {
 			t.Fatalf("%s %s -> %s err=%v want ErrInvalidTransition", tt.kind, tt.from, tt.to, err)
 		}
+	}
+}
+
+func TestInquiryModuleValidatesCreateBatch(t *testing.T) {
+	low, high := 0.2, 0.8
+	valid := CreateInquiryGraphInput{
+		WorkspaceID: "workspace", SessionID: "session", AttemptID: "attempt", AgentID: "agent",
+		IdempotencyKey: "inquiry:test", ExpectedStateVersion: 4,
+		Hypotheses: []InquiryHypothesisInput{{
+			ID: "hypothesis", QuestionID: "question", Statement: "A falsifiable statement",
+			Applicability: json.RawMessage(`{"market":"test"}`), ExpectedObservations: json.RawMessage(`["signal"]`),
+			WeakeningConditions: json.RawMessage(`["counter-signal"]`), ConfidenceLow: &low, ConfidenceHigh: &high,
+		}},
+	}
+	module := inquiryModule{}
+	if err := module.ValidateCreate(valid); err != nil {
+		t.Fatal(err)
+	}
+	invalidRange := valid
+	invalidRange.Hypotheses = append([]InquiryHypothesisInput(nil), valid.Hypotheses...)
+	invalidRange.Hypotheses[0].ConfidenceLow, invalidRange.Hypotheses[0].ConfidenceHigh = &high, &low
+	if err := module.ValidateCreate(invalidRange); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("confidence range err=%v", err)
+	}
+	duplicate := valid
+	duplicate.Edges = []InquiryEdgeInput{{
+		ID: "hypothesis", From: InquiryEndpoint{Kind: InquiryKindQuestion, ID: "question"},
+		To: InquiryEndpoint{Kind: InquiryKindHypothesis, ID: "hypothesis"}, Relation: InquiryRelationTests,
+	}}
+	if err := module.ValidateCreate(duplicate); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("duplicate id err=%v", err)
+	}
+	badJSON := valid
+	badJSON.Hypotheses = append([]InquiryHypothesisInput(nil), valid.Hypotheses...)
+	badJSON.Hypotheses[0].ExpectedObservations = json.RawMessage(`{}`)
+	if err := module.ValidateCreate(badJSON); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("array shape err=%v", err)
 	}
 }
 
@@ -63,22 +101,26 @@ func TestInquiryModuleEdgeVocabularyAndDAGRelations(t *testing.T) {
 	}
 }
 
-func TestInquiryModuleTaskTargetsFailClosed(t *testing.T) {
+func TestInquiryModuleTransitionBatchFailsClosedAndSorts(t *testing.T) {
 	module := inquiryModule{}
-	valid := []TaskInquiryTarget{{Kind: InquiryKindQuestion, EntityID: "question-1"}, {Kind: InquiryKindHypothesis, EntityID: "hypothesis-1"}}
-	if err := module.ValidateTaskTargets(valid); err != nil {
+	valid := InquiryTransitionInput{WorkspaceID: "workspace", SessionID: "session", AttemptID: "attempt", AgentID: "agent", IdempotencyKey: "transition:1", ExpectedStateVersion: 4,
+		Changes: []InquiryTransitionChange{{Kind: InquiryKindInsight, EntityID: "b", BeforeStatus: "proposed", AfterStatus: "accepted", Reason: "supported by synthesis"}, {Kind: InquiryKindHypothesis, EntityID: "a", BeforeStatus: "investigating", AfterStatus: "supported", Reason: "new evidence"}}}
+	if err := module.ValidateTransitionInput(valid); err != nil {
 		t.Fatal(err)
 	}
-	for name, targets := range map[string][]TaskInquiryTarget{
-		"empty":            nil,
-		"duplicate":        {valid[0], valid[0]},
-		"dispute before H": {{Kind: InquiryKindDispute, EntityID: "dispute-1"}},
-		"unknown":          {{Kind: InquiryEntityKind("search_plan"), EntityID: "search-1"}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := module.ValidateTaskTargets(targets); !errors.Is(err, ErrInvalidContract) {
-				t.Fatalf("err=%v", err)
-			}
-		})
+	sorted := canonicalInquiryTransitionChanges(valid.Changes)
+	if sorted[0].Kind != InquiryKindHypothesis || sorted[1].Kind != InquiryKindInsight {
+		t.Fatalf("sorted=%+v", sorted)
+	}
+	invalid := valid
+	invalid.Changes = append([]InquiryTransitionChange(nil), valid.Changes...)
+	invalid.Changes[0].AfterStatus = invalid.Changes[0].BeforeStatus
+	if err := module.ValidateTransitionInput(invalid); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("no-op err=%v", err)
+	}
+	duplicate := valid
+	duplicate.Changes = []InquiryTransitionChange{valid.Changes[0], valid.Changes[0]}
+	if err := module.ValidateTransitionInput(duplicate); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("duplicate err=%v", err)
 	}
 }

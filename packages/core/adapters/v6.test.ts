@@ -24,6 +24,22 @@ describe("adaptV6Snapshot — (§7.1) canonical projection contract", () => {
     expect(snapshot.nodes.find((n) => n.kind === "question")!.importance).toBe(0.5);
   });
 
+  it("preserves server-owned D5 hierarchy, lineage, metrics and clusters", () => {
+    const insight = snapshot.nodes.find((n) => n.kind === "insight")!;
+    expect(insight.level).toBe("xxl");
+    expect(insight.clusterId).toBe("cluster-cost");
+    expect(insight.round).toBe(2);
+    expect(insight.confidence).toBe(0.84);
+    expect(insight.documentCount).toBe(46);
+    expect(insight.conclusionCount).toBe(4);
+    expect(insight.mergedFrom).toHaveLength(2);
+    expect(snapshot.clusters?.[0]).toMatchObject({
+      id: "cluster-cost",
+      clusterType: "stable_result",
+      memberNodeIds: [insight.id],
+    });
+  });
+
   it("degrades unknown future node_kind to generic without dropping it", () => {
     const future = snapshot.nodes.find((n) => n.id.includes("u1"))!;
     expect(future.kind).toBe("generic");

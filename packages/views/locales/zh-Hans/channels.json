@@ -612,6 +612,7 @@
     "note_brief_toggle_aria": "展开或收起笔记「{{title}}」",
     "note_brief_untitled": "未命名笔记",
     "note_brief_empty": "（空笔记）",
+    "note_brief_open_note": "打开笔记",
     "note_worker_insert_below": "插入笔记下方",
     "note_worker_create_child": "新建子笔记",
     "note_worker_reply_title_fallback": "智能体回复",

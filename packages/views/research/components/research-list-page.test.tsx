@@ -363,7 +363,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(screen.getByText(enResearch.list.recent_heading)).toBeTruthy();
   });
 
-  it("LRM-1106: workbench max-w-[1240px]; no max-w-3xl on hero or list", () => {
+  it("research command center uses the wide workbench without a nested narrow shell", () => {
     setQuery({
       data: {
         sessions: [session({ id: "s-run", status: "running", title: "Alpha" })],
@@ -371,7 +371,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     });
     const { container } = render(<ResearchListPage />);
     const workbench = container.querySelector('[data-testid="research-list-workbench"]');
-    expect(workbench?.className).toContain("max-w-[1240px]");
+    expect(workbench?.className).toContain("max-w-screen-2xl");
     expect(screen.getByTestId("research-home-hero").className).not.toContain("max-w-3xl");
     const list = container.querySelector(
       '[data-testid="research-session-list-content"]',
@@ -381,7 +381,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(list?.querySelector('[role="radiogroup"]')).toBeTruthy();
   });
 
-  it("LRM-1144 Δ1–Δ3: workbench atmosphere, sunk desc, desktop textarea 88px", () => {
+  it("keeps the atmosphere at shell level and the compact composer above the fold", () => {
     setQuery({
       data: {
         sessions: [session({ id: "s-run", status: "running", title: "Alpha" })],
@@ -399,8 +399,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(desc.className).toContain("md:line-clamp-1");
 
     const goal = screen.getByTestId("research-create-goal");
-    expect(goal.className).toContain("min-h-[64px]");
-    expect(goal.className).toContain("md:min-h-[88px]");
+    expect(goal.className).toContain("min-h-10");
 
     setQuery({ data: undefined, isLoading: true });
     rerender(<ResearchListPage />);

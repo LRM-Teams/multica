@@ -808,9 +808,15 @@ func loadManifestEntryCandidatesForAttempt(
 		  p.entity_kind,
 		  v.version,
 		  e.eligibility_revision,
+		  v.access_level,
 		  v.content_hash,
 		  e.representation,
-		  e.representation_hash
+		  e.representation_hash,
+		  e.selection_lifecycle_status,
+		  e.selection_provenance_completeness,
+		  e.selection_version_count,
+		  e.selection_input_reference_count,
+		  e.selection_output_reference_count
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m
 		  ON m.workspace_id = e.workspace_id
@@ -837,10 +843,13 @@ func loadManifestEntryCandidatesForAttempt(
 	var entries []artifactVersionCandidate
 	for rows.Next() {
 		var entry artifactVersionCandidate
-		var kindRaw string
+		var kindRaw, accessRaw string
+		var lifecycleRaw, provenanceRaw *string
+		var versionCount, inputCount, outputCount *int
 		if err = rows.Scan(
 			&entry.VersionRowID, &entry.ArtifactID, &kindRaw, &entry.Version, &entry.EligibilityRevision,
-			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
+			&accessRaw, &entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
+			&lifecycleRaw, &provenanceRaw, &versionCount, &inputCount, &outputCount,
 		); err != nil {
 			return nil, dispatchManifestHashInput{}, "", err
 		}
@@ -848,6 +857,15 @@ func loadManifestEntryCandidatesForAttempt(
 		if err != nil {
 			return nil, dispatchManifestHashInput{}, "", err
 		}
+		if lifecycleRaw == nil || provenanceRaw == nil || versionCount == nil || inputCount == nil || outputCount == nil {
+			return nil, dispatchManifestHashInput{}, "", fmt.Errorf("%w: manifest entry lacks frozen projection metadata", ErrInvalidTransition)
+		}
+		entry.AccessLevel = ArtifactAccessLevel(accessRaw)
+		entry.Lifecycle = ArtifactLifecycleStatus(*lifecycleRaw)
+		entry.Provenance = ArtifactProvenanceCompleteness(*provenanceRaw)
+		entry.VersionCount = *versionCount
+		entry.InputReferenceCount = *inputCount
+		entry.OutputReferenceCount = *outputCount
 		entries = append(entries, entry)
 	}
 	if err = rows.Err(); err != nil {

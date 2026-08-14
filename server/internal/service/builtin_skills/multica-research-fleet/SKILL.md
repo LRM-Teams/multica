@@ -51,6 +51,10 @@ runtime heartbeat, cancellation, failure, or Result lifecycle changes are live
 operational facts for the scheduler, but they do not rewrite this Attempt's
 input context.
 
+`artifact_projection` is also bound to the Manifest selection point. Later
+passport lifecycle, provenance, version, or reference-count changes belong to
+the human live view and do not rewrite this Attempt's projection or hash.
+
 2. Perform the assigned investigation according to `run.method`. Explore
 beyond the first plausible answer. For V4/V5, each Claim references an accepted
 `evidence_standard_key`; every Source Snapshot records evidence traits and every

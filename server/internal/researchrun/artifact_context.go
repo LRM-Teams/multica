@@ -159,9 +159,10 @@ func hashManifestEntries(entries []artifactVersionCandidate) string {
 	parts := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		parts = append(parts, fmt.Sprintf(
-			"%s:%d:%d:%s:%s",
+			"%s:%d:%d:%s:%s:%s:%s:%d:%d:%d",
 			entry.ArtifactID, entry.Version, entry.EligibilityRevision,
-			entry.Representation, entry.RepresentationHash,
+			entry.Representation, entry.RepresentationHash, entry.Lifecycle, entry.Provenance,
+			entry.VersionCount, entry.InputReferenceCount, entry.OutputReferenceCount,
 		))
 	}
 	sort.Strings(parts)
@@ -213,9 +214,11 @@ func hashDispatchManifest(in dispatchManifestHashInput) string {
 	sortManifestEntryCandidates(entries)
 	for ordinal, entry := range entries {
 		parts = append(parts, fmt.Sprintf(
-			"entry=%d:%s:%s:%d:%d:%s:%s:input",
+			"entry=%d:%s:%s:%d:%d:%s:%s:%s:%s:%s:%d:%d:%d:input",
 			ordinal, entry.VersionRowID, entry.ArtifactID, entry.Version,
-			entry.EligibilityRevision, entry.Representation, entry.RepresentationHash,
+			entry.EligibilityRevision, entry.AccessLevel, entry.Representation, entry.RepresentationHash,
+			entry.Lifecycle, entry.Provenance, entry.VersionCount,
+			entry.InputReferenceCount, entry.OutputReferenceCount,
 		))
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
@@ -418,15 +421,19 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 			INSERT INTO research_artifact_context_entry (
 			  workspace_id, session_id, manifest_id, ordinal,
 			  artifact_version_id, eligibility_revision,
-			  representation, representation_bytes, representation_hash, use_kind
+			  representation, representation_bytes, representation_hash, use_kind,
+			  selection_lifecycle_status, selection_provenance_completeness,
+			  selection_version_count, selection_input_reference_count, selection_output_reference_count
 			) VALUES (
 			  $1::uuid, $2::uuid, $3::uuid, $4,
 			  $5::uuid, $6,
-			  $7, $8, $9, 'input'
+			  $7, $8, $9, 'input', $10, $11, $12, $13, $14
 			)
 		`, in.WorkspaceID, in.SessionID, plan.ManifestID, ordinal,
 			entry.VersionRowID, entry.EligibilityRevision,
-			entry.Representation, entry.RepresentationBytes, entry.RepresentationHash); err != nil {
+			entry.Representation, entry.RepresentationBytes, entry.RepresentationHash,
+			entry.Lifecycle, entry.Provenance, entry.VersionCount,
+			entry.InputReferenceCount, entry.OutputReferenceCount); err != nil {
 			return dispatchManifestPlan{}, fmt.Errorf("insert manifest entry ordinal=%d: %w", ordinal, err)
 		}
 	}

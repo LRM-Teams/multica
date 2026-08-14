@@ -107,6 +107,53 @@ func (m artifactProjectionModule) Load(ctx context.Context, workspaceID, session
 	return buildArtifactProjection(sessionID, projectionRows)
 }
 
+func (m artifactProjectionModule) LoadManifest(ctx context.Context, workspaceID, sessionID, manifestID string) (ArtifactProjection, error) {
+	if m.store == nil || m.store.pool == nil {
+		return ArtifactProjection{}, fmt.Errorf("artifact projection store is unavailable")
+	}
+	rows, err := m.store.pool.Query(ctx, `
+		SELECT v.artifact_id::text, p.entity_kind, v.version, e.eligibility_revision,
+		       e.selection_lifecycle_status, e.selection_provenance_completeness,
+		       v.schema_name, v.schema_version, v.access_level,
+		       v.goal_version, v.plan_version,
+		       COALESCE(v.produced_by_task_id::text,''), COALESCE(v.produced_by_attempt_id::text,''),
+		       COALESCE(v.produced_by_agent_id::text,''),
+		       e.selection_version_count, e.selection_input_reference_count,
+		       e.selection_output_reference_count
+		FROM research_artifact_context_entry e
+		JOIN research_artifact_version v
+		  ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
+		JOIN research_artifact_passport p
+		  ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id)
+		WHERE e.workspace_id=$1::uuid AND e.session_id=$2::uuid AND e.manifest_id=$3::uuid
+		ORDER BY e.ordinal
+	`, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return ArtifactProjection{}, err
+	}
+	defer rows.Close()
+	projectionRows := make([]artifactProjectionRow, 0)
+	for rows.Next() {
+		var row artifactProjectionRow
+		var version int
+		if err = rows.Scan(
+			&row.PassportID, &row.EntityKind, &version, &row.EligibilityRevision,
+			&row.LifecycleStatus, &row.Provenance, &row.SchemaName, &row.SchemaVersion,
+			&row.AccessLevel, &row.GoalVersion, &row.PlanVersion, &row.ProducedByTaskID,
+			&row.ProducedByAttemptID, &row.ProducedByAgentID, &row.VersionCount,
+			&row.InputCount, &row.OutputCount,
+		); err != nil {
+			return ArtifactProjection{}, fmt.Errorf("read frozen artifact projection: %w", err)
+		}
+		row.CurrentVersion = &version
+		projectionRows = append(projectionRows, row)
+	}
+	if err = rows.Err(); err != nil {
+		return ArtifactProjection{}, err
+	}
+	return buildArtifactProjection(sessionID, projectionRows)
+}
+
 func evaluationPrivateArtifactKindStrings() []string {
 	policy := ArtifactPolicy{}
 	private := make([]string, 0)

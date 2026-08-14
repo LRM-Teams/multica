@@ -162,6 +162,36 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 			},
 		},
 		{
+			name: "current_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					INSERT INTO research_artifact_version (
+					  workspace_id, session_id, artifact_id, version,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, access_level, goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					)
+					SELECT
+					  workspace_id, session_id, artifact_id, version + 1,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, access_level, goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					FROM research_artifact_version
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+					  AND artifact_id = $3::uuid AND version = 1;
+
+					UPDATE research_artifact_passport
+					SET current_version = 2
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
 			name: "withdrawn_lifecycle",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
 				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `

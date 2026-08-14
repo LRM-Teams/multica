@@ -190,6 +190,7 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	for _, edge := range edgeByID {
 		edges = append(edges, edge)
 	}
+	enrichResearchV6TopologyDetails(nodes, edges)
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
 	nodeBytes, _ := json.Marshal(nodes)

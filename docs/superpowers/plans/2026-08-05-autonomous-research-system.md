@@ -1031,9 +1031,11 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
   - [x] E2b-write：`CreateInquiryGraph` 以 Serializable 单事务验证 Run state version 与真实 assigned Attempt/Agent，批量创建 Hypothesis/Branch/Insight/Inquiry Edge，按父分支拓扑落库，为每个实体注册 `research-run-v6` production hash、完整 provenance 与 Manifest 传播的 access level，并追加可恢复、可冲突检测的幂等 Run Event；四类实体进入 canonical-state crash/replay 哈希。V6 decoder/Adapter 接线仍由 E3 负责，默认版本保持 V5。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。
   - [x] E3a：新增与 V1–V5 完全隔离的 `DecodeAndValidateResearchV6PlanResult`，严格拒绝未知字段、缺失 required、显式 null 与 trailing JSON；校验 client-key/typed reference、Question/Branch 父图、Inquiry 依赖图、Task DAG、每个 Task 的 Inquiry target、Branch 总预算和语义内容哈希。它不把 `research-run-v6` 加入生产 orchestrator allowlist；E3b 在 E2b-write 合并后负责 accepted Plan Result 的 ID 解析与原子持久化接线。
+  - [x] E3b-target：migration 355 建立 append-only、workspace/session scoped 的 Task–Inquiry Target canonical ledger；生产绑定命令要求真实 assigned Attempt/Agent、current state version、同一 Goal/Plan version 和已解析的同 Run Inquiry UUID，并以语义幂等 Event 记录 provenance。选择性 steering 状态读取只消费显式 Branch target，绝不从 Task objective 猜测归属。accepted V6 Plan 的 client-key→UUID 原子 adapter 仍待 E3b-write，PostgreSQL steering mutation 与 typed HTTP 输入仍待 E5b。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
   - [x] E5a：建立按 current state version fencing 的 selective steering 影响规划器；显式 affected branch 根扩展为后代闭包，只选择相交的 pending/ready/running Task，区分取消与允许完成，并保持终态 Branch/Task 为不可变历史。accepted Evidence 不属于可变计划输出。PostgreSQL 原子应用、typed HTTP 输入和 Event/Decision 仍待 E5b。
+  - [x] E5-prereq-target：选择性 steering 的 Task→Branch 输入已改为 migration 355 canonical 绑定，并提供事务内 state loader；未绑定 Branch 的 Task 仅能参与显式 full replan，局部 steering 不得通过文本或图布局推断其归属。
 
 退出条件：新证据能加强、削弱或推翻假设，创建/终止分支，并让后续任务引用这些持久对象。
 

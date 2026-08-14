@@ -256,6 +256,18 @@ func loadArtifactVersionCandidates(
 		  p.lifecycle_status,
 		  p.provenance_completeness,
 		  v.content_hash,
+		  (SELECT count(*)::int FROM research_artifact_version versions
+		   WHERE versions.workspace_id=p.workspace_id
+		     AND versions.session_id=p.session_id
+		     AND versions.artifact_id=p.id) AS version_count,
+		  (SELECT count(*)::int FROM research_artifact_input_reference refs
+		   WHERE refs.workspace_id=v.workspace_id
+		     AND refs.session_id=v.session_id
+		     AND refs.consumer_version_id=v.id) AS input_reference_count,
+		  (SELECT count(*)::int FROM research_artifact_input_reference refs
+		   WHERE refs.workspace_id=v.workspace_id
+		     AND refs.session_id=v.session_id
+		     AND refs.input_version_id=v.id) AS output_reference_count,
 		  COALESCE(CASE p.entity_kind
 		    WHEN 'task' THEN (SELECT t.status FROM research_task t
 		      WHERE (t.workspace_id,t.session_id,t.id)=(p.workspace_id,p.session_id,p.id))
@@ -292,7 +304,9 @@ func loadArtifactVersionCandidates(
 		if err = rows.Scan(
 			&candidate.VersionRowID, &candidate.ArtifactID, &kindRaw,
 			&candidate.Version, &candidate.EligibilityRevision,
-			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash, &candidate.DomainStatus,
+			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash,
+			&candidate.VersionCount, &candidate.InputReferenceCount, &candidate.OutputReferenceCount,
+			&candidate.DomainStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -516,6 +530,11 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		if err := casArtifactVersionSelectionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
 			entry.ContentHash, entry.AccessLevel, entry.RepresentationBytes, entry.RepresentationHash,
+		); err != nil {
+			return dispatchManifestPlan{}, err
+		}
+		if err := casArtifactRelationshipSelectionTx(
+			ctx, tx, in.WorkspaceID, in.SessionID, entry,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}

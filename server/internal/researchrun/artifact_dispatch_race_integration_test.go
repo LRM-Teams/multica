@@ -201,6 +201,39 @@ func TestDispatchCASMismatchRollsBackCompleteWriteSet(t *testing.T) {
 				return errors.New("claim disappeared from dispatch manifest plan")
 			},
 		},
+		{
+			name: "input reference projection",
+			hook: func(ctx context.Context, fx dispatchRaceFixture, _ *dispatchManifestPlan) error {
+				_, err := fx.pool.Exec(ctx, `
+					INSERT INTO research_artifact_input_reference(
+					  workspace_id,session_id,consumer_version_id,input_version_id,
+					  relation,explicitly_used,purpose,ordinal
+					)
+					SELECT
+					  consumer.workspace_id,consumer.session_id,consumer.id,input.id,
+					  'dispatch_race_reference',true,'task_execution',0
+					FROM research_artifact_passport consumer_passport
+					JOIN research_artifact_version consumer
+					  ON consumer.workspace_id=consumer_passport.workspace_id
+					 AND consumer.session_id=consumer_passport.session_id
+					 AND consumer.artifact_id=consumer_passport.id
+					 AND consumer.version=consumer_passport.current_version
+					JOIN research_artifact_passport input_passport
+					  ON input_passport.workspace_id=consumer_passport.workspace_id
+					 AND input_passport.session_id=consumer_passport.session_id
+					 AND input_passport.id=$4::uuid
+					JOIN research_artifact_version input
+					  ON input.workspace_id=input_passport.workspace_id
+					 AND input.session_id=input_passport.session_id
+					 AND input.artifact_id=input_passport.id
+					 AND input.version=input_passport.current_version
+					WHERE consumer_passport.workspace_id=$1::uuid
+					  AND consumer_passport.session_id=$2::uuid
+					  AND consumer_passport.id=$3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.task.ID, fx.claimID)
+				return err
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := setupDispatchRaceFixture(t, ctx, pool)

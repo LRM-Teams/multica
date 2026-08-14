@@ -4,183 +4,167 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
 
-var _ artifactLifecycleStore = (*PostgresStore)(nil)
+// WithdrawArtifact removes one passport from future ordinary admission while
+// retaining its immutable versions and domain history for authorized audit.
+func (s *PostgresStore) WithdrawArtifact(ctx context.Context, in WithdrawArtifactInput) (receipt ArtifactWithdrawal, err error) {
+	if err = in.validate(); err != nil {
+		return ArtifactWithdrawal{}, err
+	}
+	in.WorkspaceID = strings.TrimSpace(in.WorkspaceID)
+	in.SessionID = strings.TrimSpace(in.SessionID)
+	in.ArtifactID = strings.TrimSpace(in.ArtifactID)
+	in.DecisionID = strings.TrimSpace(in.DecisionID)
+	in.ActorID = strings.TrimSpace(in.ActorID)
+	in.Reason = strings.TrimSpace(in.Reason)
 
-func (s *PostgresStore) ApplyArtifactLifecycleChange(ctx context.Context, change artifactLifecycleChange) (artifactLifecycleOutcome, error) {
-	tx, err := s.beginResearchTx(ctx, txOpArtifactLifecycleChange, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpArtifactWithdraw, pgx.TxOptions{})
 	if err != nil {
-		return artifactLifecycleOutcome{}, err
+		return ArtifactWithdrawal{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	if err = lockRunForMutation(ctx, tx, change.SessionID, change.WorkspaceID); err != nil {
-		return artifactLifecycleOutcome{}, err
+	if _, err = loadRunForUpdate(ctx, tx, in.SessionID, in.WorkspaceID); err != nil {
+		return ArtifactWithdrawal{}, err
 	}
-	ids := []string{change.ArtifactID}
-	if change.SuccessorArtifactID != "" {
-		ids = append(ids, change.SuccessorArtifactID)
+	if err = ensureSessionPolicyStateTx(ctx, tx, in.WorkspaceID, in.SessionID); err != nil {
+		return ArtifactWithdrawal{}, fmt.Errorf("ensure withdrawal policy state: %w", err)
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		if err = lockArtifactPassportRowTx(ctx, tx, change.WorkspaceID, change.SessionID, id); err != nil {
-			return artifactLifecycleOutcome{}, err
-		}
+	if _, err = tx.Exec(ctx, `
+		SELECT 1
+		FROM research_artifact_policy_state
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		FOR UPDATE
+	`, in.WorkspaceID, in.SessionID); err != nil {
+		return ArtifactWithdrawal{}, fmt.Errorf("lock withdrawal policy state: %w", err)
 	}
-
-	replayed, outcome, err := loadArtifactLifecycleReplayTx(ctx, tx, change)
-	if err != nil {
-		return artifactLifecycleOutcome{}, err
-	}
-	if replayed {
-		if err = s.commitResearchTx(ctx, txOpArtifactLifecycleChange, tx); err != nil {
-			return artifactLifecycleOutcome{}, err
-		}
-		outcome.Replayed = true
-		return outcome, nil
+	if _, err = tx.Exec(ctx, `
+		SELECT id
+		FROM research_artifact_policy_grant
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		ORDER BY id
+		FOR UPDATE
+	`, in.WorkspaceID, in.SessionID); err != nil {
+		return ArtifactWithdrawal{}, fmt.Errorf("lock withdrawal policy grants: %w", err)
 	}
 
-	var oldLifecycle string
-	var currentVersion int32
-	var oldRevision int64
-	if err = tx.QueryRow(ctx, `
-		SELECT lifecycle_status, current_version, eligibility_revision
+	receipt.ArtifactID = in.ArtifactID
+	receipt.NewLifecycle = ArtifactLifecycleWithdrawn
+	err = tx.QueryRow(ctx, `
+		SELECT entity_kind, lifecycle_status, eligibility_revision
 		FROM research_artifact_passport
-		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
-	`, change.WorkspaceID, change.SessionID, change.ArtifactID).Scan(&oldLifecycle, &currentVersion, &oldRevision); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return artifactLifecycleOutcome{}, ErrRunNotFound
-		}
-		return artifactLifecycleOutcome{}, err
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+		FOR UPDATE
+	`, in.WorkspaceID, in.SessionID, in.ArtifactID).Scan(
+		&receipt.EntityKind, &receipt.OldLifecycle, &receipt.OldEligibilityRevision,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ArtifactWithdrawal{}, fmt.Errorf("%w: artifact passport not found", ErrInvalidTransition)
 	}
-	if oldLifecycle != string(ArtifactLifecycleRegistered) && oldLifecycle != string(ArtifactLifecycleAccepted) {
-		return artifactLifecycleOutcome{}, fmt.Errorf("%w: artifact lifecycle is %s", ErrInvalidTransition, oldLifecycle)
+	if err != nil {
+		return ArtifactWithdrawal{}, fmt.Errorf("lock withdrawal passport: %w", err)
+	}
+	if receipt.OldLifecycle == ArtifactLifecycleWithdrawn {
+		var decisionID *string
+		err = tx.QueryRow(ctx, `
+			SELECT id::text, old_status, new_status,
+			       old_eligibility_revision, new_eligibility_revision,
+			       policy_watermark, decision_id::text
+			FROM research_artifact_lifecycle_event
+			WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			  AND artifact_id = $3::uuid AND new_status = 'withdrawn'
+			ORDER BY new_eligibility_revision DESC
+			LIMIT 1
+		`, in.WorkspaceID, in.SessionID, in.ArtifactID).Scan(
+			&receipt.LifecycleEventID, &receipt.OldLifecycle, &receipt.NewLifecycle,
+			&receipt.OldEligibilityRevision, &receipt.NewEligibilityRevision,
+			&receipt.PolicyWatermark, &decisionID,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ArtifactWithdrawal{}, fmt.Errorf("%w: withdrawn passport has no lifecycle event", ErrInvalidTransition)
+		}
+		if err != nil {
+			return ArtifactWithdrawal{}, fmt.Errorf("read existing withdrawal receipt: %w", err)
+		}
+		if decisionID != nil {
+			receipt.DecisionID = *decisionID
+		}
+		if err = s.commitResearchTx(ctx, txOpArtifactWithdraw, tx); err != nil {
+			return ArtifactWithdrawal{}, err
+		}
+		return receipt, nil
+	}
+	if _, err = ParseArtifactEntityKind(string(receipt.EntityKind)); err != nil {
+		return ArtifactWithdrawal{}, err
+	}
+	if in.DecisionID != "" {
+		var exists bool
+		if err = tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM research_decision
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+			)
+		`, in.WorkspaceID, in.SessionID, in.DecisionID).Scan(&exists); err != nil {
+			return ArtifactWithdrawal{}, fmt.Errorf("read withdrawal decision: %w", err)
+		}
+		if !exists {
+			return ArtifactWithdrawal{}, fmt.Errorf("%w: withdrawal decision not found", ErrInvalidTransition)
+		}
+		receipt.DecisionID = in.DecisionID
 	}
 
-	var watermark int64
-	if err = tx.QueryRow(ctx, `SELECT research_artifact_policy_watermark_for_tx($1::uuid,$2::uuid)`, change.WorkspaceID, change.SessionID).Scan(&watermark); err != nil {
-		return artifactLifecycleOutcome{}, err
+	if err = tx.QueryRow(ctx, `
+		SELECT research_artifact_policy_watermark_for_tx($1::uuid, $2::uuid)
+	`, in.WorkspaceID, in.SessionID).Scan(&receipt.PolicyWatermark); err != nil {
+		return ArtifactWithdrawal{}, fmt.Errorf("reserve withdrawal policy watermark: %w", err)
 	}
-	newRevision := oldRevision + 1
-	target := ArtifactLifecycleWithdrawn
-	mutationKind := "lifecycle"
-	if change.Kind == artifactLifecycleSupersede {
-		target = ArtifactLifecycleSuperseded
-		mutationKind = "supersession"
-	}
+	receipt.NewEligibilityRevision = receipt.OldEligibilityRevision + 1
 	tag, err := tx.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET lifecycle_status=$4, eligibility_revision=$5
-		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
-		  AND lifecycle_status=$6 AND eligibility_revision=$7 AND current_version=$8
-	`, change.WorkspaceID, change.SessionID, change.ArtifactID, target, newRevision, oldLifecycle, oldRevision, currentVersion)
+		SET lifecycle_status = 'withdrawn', eligibility_revision = $4
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+		  AND lifecycle_status = $5 AND eligibility_revision = $6
+	`, in.WorkspaceID, in.SessionID, in.ArtifactID, receipt.NewEligibilityRevision,
+		string(receipt.OldLifecycle), receipt.OldEligibilityRevision)
 	if err != nil {
-		return artifactLifecycleOutcome{}, err
+		return ArtifactWithdrawal{}, fmt.Errorf("withdraw artifact passport: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return artifactLifecycleOutcome{}, fmt.Errorf("%w: artifact lifecycle changed concurrently", ErrInvalidTransition)
-	}
-	if change.Kind == artifactLifecycleWithdraw {
-		if err = insertArtifactWithdrawalLedgerTx(ctx, tx, change, oldLifecycle, oldRevision, newRevision, watermark); err != nil {
-			return artifactLifecycleOutcome{}, err
-		}
-	} else if err = insertArtifactSupersessionLedgerTx(ctx, tx, change, oldRevision, newRevision, watermark); err != nil {
-		return artifactLifecycleOutcome{}, err
-	}
-	newLifecycle := ""
-	if change.Kind == artifactLifecycleWithdraw {
-		newLifecycle = string(target)
+		return ArtifactWithdrawal{}, fmt.Errorf("%w: withdrawal passport changed", ErrInvalidTransition)
 	}
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_artifact_policy_mutation (
-		  workspace_id,session_id,watermark,mutation_kind,artifact_id,
-		  old_eligibility_revision,new_eligibility_revision,
-		  old_lifecycle_status,new_lifecycle_status
-		) VALUES ($1::uuid,$2::uuid,$3,$4,$5::uuid,$6,$7,$8,NULLIF($9,''))
-	`, change.WorkspaceID, change.SessionID, watermark, mutationKind, change.ArtifactID,
-		oldRevision, newRevision, oldLifecycle, newLifecycle); err != nil {
-		return artifactLifecycleOutcome{}, err
+			workspace_id, session_id, watermark, mutation_kind, artifact_id,
+			old_eligibility_revision, new_eligibility_revision,
+			old_lifecycle_status, new_lifecycle_status, eligibility_reason
+		) VALUES ($1::uuid, $2::uuid, $3, 'lifecycle', $4::uuid, $5, $6, $7, 'withdrawn', $8)
+	`, in.WorkspaceID, in.SessionID, receipt.PolicyWatermark, in.ArtifactID,
+		receipt.OldEligibilityRevision, receipt.NewEligibilityRevision,
+		string(receipt.OldLifecycle), in.Reason); err != nil {
+		return ArtifactWithdrawal{}, fmt.Errorf("record withdrawal policy mutation: %w", err)
 	}
-	if err = s.commitResearchTx(ctx, txOpArtifactLifecycleChange, tx); err != nil {
-		return artifactLifecycleOutcome{}, err
-	}
-	return artifactLifecycleOutcome{ArtifactID: change.ArtifactID, Lifecycle: target, EligibilityRevision: newRevision, PolicyWatermark: watermark}, nil
-}
-
-func insertArtifactWithdrawalLedgerTx(ctx context.Context, tx pgx.Tx, change artifactLifecycleChange, oldLifecycle string, oldRevision, newRevision, watermark int64) error {
-	_, err := tx.Exec(ctx, `
+	if err = tx.QueryRow(ctx, `
 		INSERT INTO research_artifact_lifecycle_event (
-		  id,workspace_id,session_id,artifact_id,old_status,new_status,
-		  old_eligibility_revision,new_eligibility_revision,policy_watermark,
-		  actor_type,actor_id,reason
-		) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'withdrawn',$6,$7,$8,$9,NULLIF($10,'')::uuid,$11)
-	`, change.OperationID, change.WorkspaceID, change.SessionID, change.ArtifactID, oldLifecycle,
-		oldRevision, newRevision, watermark, change.ActorType, change.ActorID, change.Reason)
-	return err
-}
+			workspace_id, session_id, artifact_id, old_status, new_status,
+			old_eligibility_revision, new_eligibility_revision, policy_watermark,
+			decision_id, actor_type, actor_id, reason
+		) VALUES (
+			$1::uuid, $2::uuid, $3::uuid, $4, 'withdrawn', $5, $6, $7,
+			NULLIF($8, '')::uuid, $9, NULLIF($10, '')::uuid, $11
+		)
+		RETURNING id::text
+	`, in.WorkspaceID, in.SessionID, in.ArtifactID, string(receipt.OldLifecycle),
+		receipt.OldEligibilityRevision, receipt.NewEligibilityRevision, receipt.PolicyWatermark,
+		in.DecisionID, in.ActorType, in.ActorID, in.Reason).Scan(&receipt.LifecycleEventID); err != nil {
+		return ArtifactWithdrawal{}, fmt.Errorf("record withdrawal lifecycle event: %w", err)
+	}
 
-func insertArtifactSupersessionLedgerTx(ctx context.Context, tx pgx.Tx, change artifactLifecycleChange, oldRevision, newRevision, watermark int64) error {
-	var oldVersionID, successorVersionID string
-	if err := tx.QueryRow(ctx, `
-		SELECT id::text FROM research_artifact_version
-		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=(
-		  SELECT current_version FROM research_artifact_passport
-		  WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)
-	`, change.WorkspaceID, change.SessionID, change.ArtifactID).Scan(&oldVersionID); err != nil {
-		return err
+	if err = s.commitResearchTx(ctx, txOpArtifactWithdraw, tx); err != nil {
+		return ArtifactWithdrawal{}, err
 	}
-	if err := tx.QueryRow(ctx, `
-		SELECT id::text FROM research_artifact_version
-		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=(
-		  SELECT current_version FROM research_artifact_passport
-		  WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid)
-	`, change.WorkspaceID, change.SessionID, change.SuccessorArtifactID).Scan(&successorVersionID); err != nil {
-		return err
-	}
-	_, err := tx.Exec(ctx, `
-		INSERT INTO research_artifact_supersession (
-		  id,workspace_id,session_id,successor_version_id,superseded_version_id,
-		  superseded_artifact_id,reason,decision_id,policy_watermark,
-		  old_eligibility_revision,new_eligibility_revision
-		) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7,$8::uuid,$9,$10,$11)
-	`, change.OperationID, change.WorkspaceID, change.SessionID, successorVersionID, oldVersionID,
-		change.ArtifactID, change.Reason, change.DecisionID, watermark, oldRevision, newRevision)
-	return err
-}
-
-func loadArtifactLifecycleReplayTx(ctx context.Context, tx pgx.Tx, change artifactLifecycleChange) (bool, artifactLifecycleOutcome, error) {
-	var artifactID, lifecycle string
-	var revision, watermark int64
-	query := `
-		SELECT event.artifact_id::text, passport.lifecycle_status, passport.eligibility_revision, event.policy_watermark
-		FROM research_artifact_lifecycle_event event
-		JOIN research_artifact_passport passport
-		  ON passport.workspace_id=event.workspace_id AND passport.session_id=event.session_id AND passport.id=event.artifact_id
-		WHERE event.workspace_id=$1::uuid AND event.session_id=$2::uuid AND event.id=$3::uuid
-		  AND event.artifact_id=$4::uuid AND event.new_status='withdrawn' AND event.reason=$5`
-	args := []any{change.WorkspaceID, change.SessionID, change.OperationID, change.ArtifactID, change.Reason}
-	if change.Kind == artifactLifecycleSupersede {
-		query = `
-			SELECT edge.superseded_artifact_id::text, passport.lifecycle_status, passport.eligibility_revision, edge.policy_watermark
-			FROM research_artifact_supersession edge
-			JOIN research_artifact_version successor ON successor.id=edge.successor_version_id
-			JOIN research_artifact_passport passport
-			  ON passport.workspace_id=edge.workspace_id AND passport.session_id=edge.session_id AND passport.id=edge.superseded_artifact_id
-			WHERE edge.workspace_id=$1::uuid AND edge.session_id=$2::uuid AND edge.id=$3::uuid
-			  AND edge.superseded_artifact_id=$4::uuid AND successor.artifact_id=$5::uuid
-			  AND edge.decision_id=$6::uuid AND edge.reason=$7`
-		args = []any{change.WorkspaceID, change.SessionID, change.OperationID, change.ArtifactID, change.SuccessorArtifactID, change.DecisionID, change.Reason}
-	}
-	err := tx.QueryRow(ctx, query, args...).Scan(&artifactID, &lifecycle, &revision, &watermark)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, artifactLifecycleOutcome{}, nil
-	}
-	if err != nil {
-		return false, artifactLifecycleOutcome{}, err
-	}
-	return true, artifactLifecycleOutcome{ArtifactID: artifactID, Lifecycle: ArtifactLifecycleStatus(lifecycle), EligibilityRevision: revision, PolicyWatermark: watermark}, nil
+	return receipt, nil
 }

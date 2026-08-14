@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -103,11 +104,10 @@ func (s *TaskService) mirrorResearchChatReply(ctx context.Context, task db.Agent
 		)
 		return
 	}
-	if _, err = tx.Exec(ctx, `
-		SELECT research_artifact_backfill_registered(
-			$1::uuid, $2::uuid, $3::uuid, 'research_message', now(), NULL, NULL
-		)
-	`, researchSession.WorkspaceID, researchSession.ID, row.ID); err != nil {
+	if err = researchrun.RegisterProductionResearchMessageTx(
+		ctx, tx, util.UUIDToString(researchSession.WorkspaceID),
+		util.UUIDToString(researchSession.ID), util.UUIDToString(row.ID),
+	); err != nil {
 		slog.Warn("research chat mirror: register message passport failed",
 			"research_session_id", sessionIDStr,
 			"error", err,

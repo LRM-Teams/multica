@@ -28,7 +28,16 @@ const (
 	ArtifactDenyEvaluationCompartment ArtifactDenyReason = "evaluation_compartment"
 	ArtifactDenyLifecycle             ArtifactDenyReason = "lifecycle"
 	ArtifactDenyMissingPassport       ArtifactDenyReason = "missing_passport"
+	ArtifactDenyLegacyIneligible      ArtifactDenyReason = "legacy_ineligible"
+	ArtifactDenyDomainFact            ArtifactDenyReason = "domain_fact"
 )
+
+type legacyAdmissionFacts struct {
+	Kind         ArtifactEntityKind
+	Lifecycle    ArtifactLifecycleStatus
+	Provenance   ArtifactProvenanceCompleteness
+	DomainStatus string
+}
 
 // ArtifactPolicy implements the section 6 access lattice and legacy admission gate.
 type ArtifactPolicy struct{}
@@ -102,6 +111,14 @@ func (ArtifactPolicy) LegacyAdmissionAllowed(
 	if _, err := ParseArtifactEntityKind(string(kind)); err != nil {
 		return false, ArtifactDenyUnknownKind
 	}
+	switch kind {
+	case ArtifactKindContextManifest,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindInquiryEdge:
+		return false, ArtifactDenyLegacyIneligible
+	}
 	switch lifecycle {
 	case ArtifactLifecycleRegistered, ArtifactLifecycleAccepted:
 	default:
@@ -115,6 +132,49 @@ func (ArtifactPolicy) LegacyAdmissionAllowed(
 	return true, ""
 }
 
+func (policy ArtifactPolicy) LegacyAdmissionAllowedFacts(facts legacyAdmissionFacts) (bool, ArtifactDenyReason) {
+	if allowed, deny := policy.LegacyAdmissionAllowed(facts.Kind, facts.Lifecycle, facts.Provenance); !allowed {
+		return false, deny
+	}
+	status := facts.DomainStatus
+	switch facts.Kind {
+	case ArtifactKindTask:
+		switch TaskStatus(status) {
+		case TaskStatusPending, TaskStatusReady, TaskStatusDispatching, TaskStatusRunning,
+			TaskStatusSucceeded, TaskStatusFailed, TaskStatusBlocked, TaskStatusObsolete, TaskStatusCancelled:
+			return true, ""
+		default:
+			return false, ArtifactDenyDomainFact
+		}
+	case ArtifactKindAttempt:
+		switch AttemptStatus(status) {
+		case AttemptStatusDispatching, AttemptStatusRunning, AttemptStatusCancelling,
+			AttemptStatusSucceeded, AttemptStatusFailed, AttemptStatusCancelled, AttemptStatusLost:
+			return true, ""
+		default:
+			return false, ArtifactDenyDomainFact
+		}
+	case ArtifactKindClaim:
+		switch ClaimStatus(status) {
+		case ClaimStatusProposed, ClaimStatusSupported, ClaimStatusDisputed, ClaimStatusRefuted, ClaimStatusUnresolved:
+			return true, ""
+		default:
+			return false, ArtifactDenyDomainFact
+		}
+	case ArtifactKindSourceSnapshot, ArtifactKindObservation, ArtifactKindEvidenceLink:
+		switch status {
+		case "pending", "verified":
+			return true, ""
+		default:
+			return false, ArtifactDenyDomainFact
+		}
+	case ArtifactKindContextManifest:
+		return false, ArtifactDenyDomainFact
+	default:
+		return true, ""
+	}
+}
+
 func (ArtifactPolicy) ManifestOmissionReason(deny ArtifactDenyReason) string {
 	switch deny {
 	case ArtifactDenyInsufficientClearance:
@@ -123,6 +183,8 @@ func (ArtifactPolicy) ManifestOmissionReason(deny ArtifactDenyReason) string {
 		return "evaluation_compartment"
 	case ArtifactDenyLifecycle:
 		return "lifecycle"
+	case ArtifactDenyLegacyIneligible:
+		return "policy_denied"
 	default:
 		return "policy_denied"
 	}

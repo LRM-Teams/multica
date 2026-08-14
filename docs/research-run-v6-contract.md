@@ -69,6 +69,13 @@ transactions enforce the following referential and state rules:
    frozen at dispatch, assesses every canonical Position exactly once, and
    cites a Claim or Source Snapshot from that Attempt's sealed context for
    every assessment. Director authority alone is never resolution evidence.
+   Every Integration-created Position also carries a closed `conflict_basis`.
+   Logical, unit, version, and same-Source interpretation conflicts include a
+   normalized entity/metric/time/scope/proposition fact and are recomputed by
+   the server; an Agent label cannot establish their kind. Scope, method, and
+   semantic candidates instead carry an explicit reason and resolved Claim
+   references. Position passports retain typed lineage to all cited Claims and
+   Source Snapshots.
 8. Divergence runs in an isolated context and has bounded probe budget.
    Unverified perspectives create only Question, Hypothesis, Branch, or probe
    Task proposals; they cannot create supported Claims or report facts.

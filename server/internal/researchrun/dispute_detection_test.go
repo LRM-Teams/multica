@@ -57,3 +57,16 @@ func TestDetectDeterministicConflictsRejectsUnnormalizedFacts(t *testing.T) {
 		t.Fatalf("err=%v want ErrInvalidContract", err)
 	}
 }
+
+func TestValidateDeclaredDeterministicConflictRejectsAgentMisclassification(t *testing.T) {
+	base := ConflictFact{EntityKey: "company", MetricKey: "revenue", TimeWindowKey: "2025", ScopeHash: "scope", PropositionHash: "p", Polarity: ConflictPolarityAffirms}
+	left, right := base, base
+	left.ClaimID, left.UnitKey = "a", "USD"
+	right.ClaimID, right.UnitKey = "b", "EUR"
+	if err := ValidateDeclaredDeterministicConflict(DisputeKindUnit, []ConflictFact{left, right}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateDeclaredDeterministicConflict(DisputeKindLogical, []ConflictFact{left, right}); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("misclassified err=%v", err)
+	}
+}

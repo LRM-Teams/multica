@@ -176,18 +176,33 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 			return err
 		}
 		disputeID := uuid.NewSHA1(namespace, []byte("integration-dispute/"+dispute.ClientKey)).String()
+		positionSeeds := make([]V6DisputePositionSeed, 0, len(dispute.Positions))
+		for _, position := range dispute.Positions {
+			seed, seedErr := decodeV6DisputePositionSeed(position)
+			if seedErr != nil {
+				return seedErr
+			}
+			if !integrationAgents[seed.AuthorAgentID] {
+				return fmt.Errorf("%w: Dispute Position author has no accepted Integration input", ErrInvalidContract)
+			}
+			positionSeeds = append(positionSeeds, seed)
+		}
+		disputeKind, err := validateV6DisputeConflictBasisTx(ctx, tx, state, positionSeeds)
+		if err != nil {
+			return err
+		}
 		severity := "advisory"
 		if dispute.Materiality >= 0.75 {
 			severity = "blocking"
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO research_dispute
 			(id,workspace_id,session_id,subject_kind,subject_entity_id,dispute_kind,severity,materiality,status,resolution_request,created_by_attempt_id,client_key)
-			VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,'semantic',$6,$7,'open',$8,$9::uuid,$10)`, disputeID, state.workspaceID,
-			state.run.SessionID, dispute.Subject.Kind, subject.ID, severity, dispute.Materiality, strings.TrimSpace(dispute.ResolutionRequest), state.attemptID, dispute.ClientKey); err != nil {
+			VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,$7,$8,'open',$9,$10::uuid,$11)`, disputeID, state.workspaceID,
+			state.run.SessionID, dispute.Subject.Kind, subject.ID, disputeKind, severity, dispute.Materiality, strings.TrimSpace(dispute.ResolutionRequest), state.attemptID, dispute.ClientKey); err != nil {
 			return err
 		}
 		content := map[string]any{"client_key": dispute.ClientKey, "subject_kind": dispute.Subject.Kind, "subject_entity_id": subject.ID,
-			"dispute_kind": "semantic", "severity": severity, "materiality": dispute.Materiality, "status": "open",
+			"dispute_kind": disputeKind, "severity": severity, "materiality": dispute.Materiality, "status": "open",
 			"resolution_request": dispute.ResolutionRequest, "positions": dispute.Positions}
 		if err = registerAcceptedV6IntegrationArtifactTx(ctx, tx, state, disputeID, ArtifactKindDispute, content); err != nil {
 			return err
@@ -197,13 +212,7 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 			return err
 		}
 		for ordinal, position := range dispute.Positions {
-			seed, seedErr := decodeV6DisputePositionSeed(position)
-			if seedErr != nil {
-				return seedErr
-			}
-			if !integrationAgents[seed.AuthorAgentID] {
-				return fmt.Errorf("%w: Dispute Position author has no accepted Integration input", ErrInvalidContract)
-			}
+			seed := positionSeeds[ordinal]
 			payload, marshalErr := json.Marshal(position)
 			if marshalErr != nil {
 				return marshalErr
@@ -246,6 +255,22 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 			if err = persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, positionID, ArtifactKindDisputePosition,
 				disputeID, ArtifactKindDispute, "position_on", "v6_integration", 0); err != nil {
 				return err
+			}
+			for claimOrdinal, claimID := range claimIDs {
+				if err = persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, positionID, ArtifactKindDisputePosition,
+					claimID, ArtifactKindClaim, "states_position_on", "v6_integration", claimOrdinal); err != nil {
+					return err
+				}
+			}
+			for evidenceOrdinal, evidenceID := range evidenceIDs {
+				evidenceKind := ArtifactKindClaim
+				if seed.EvidenceRefs[evidenceOrdinal].Kind == "source" {
+					evidenceKind = ArtifactKindSourceSnapshot
+				}
+				if err = persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, positionID, ArtifactKindDisputePosition,
+					evidenceID, evidenceKind, "supported_by", "v6_integration", evidenceOrdinal); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -343,6 +368,48 @@ func materializeAcceptedV6IntegrationTx(ctx context.Context, tx pgx.Tx, state ac
 		map[string]any{"attempt_id": state.attemptID, "integration_round_id": roundID, "contributions": len(result.IntegrationContributions),
 			"insights": len(result.Insights), "disputes": len(result.Disputes), "follow_up_questions": len(followUpQuestions), "follow_up_tasks": len(result.ProposedTasks)})
 	return err
+}
+
+func validateV6DisputeConflictBasisTx(ctx context.Context, tx pgx.Tx, state acceptedResultState, seeds []V6DisputePositionSeed) (DisputeKind, error) {
+	if len(seeds) < 2 {
+		return "", fmt.Errorf("%w: Dispute requires at least two conflict positions", ErrInvalidContract)
+	}
+	mode, kind := seeds[0].ConflictBasis.DetectionMode, seeds[0].ConflictBasis.Kind
+	for _, seed := range seeds[1:] {
+		if seed.ConflictBasis.DetectionMode != mode || seed.ConflictBasis.Kind != kind {
+			return "", fmt.Errorf("%w: all Dispute Positions must use one conflict mode and kind", ErrInvalidContract)
+		}
+	}
+	if mode == "agent_candidate" {
+		return kind, nil
+	}
+	facts := make([]ConflictFact, 0, len(seeds))
+	for _, seed := range seeds {
+		claimID, err := resolveV6EntityKeyTx(ctx, tx, state, seed.ClaimRefs[0])
+		if err != nil {
+			return "", err
+		}
+		fact := *seed.ConflictBasis.Fact
+		if fact.SourceSnapshotID != "" {
+			found := false
+			for _, ref := range seed.EvidenceRefs {
+				if ref.Kind == "source" && ref.Key == fact.SourceSnapshotID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return "", fmt.Errorf("%w: conflict Source Snapshot must be cited by its Position", ErrInvalidContract)
+			}
+		}
+		facts = append(facts, ConflictFact{ClaimID: claimID, EntityKey: fact.EntityKey, MetricKey: fact.MetricKey, TimeWindowKey: fact.TimeWindowKey,
+			ScopeHash: fact.ScopeHash, PropositionHash: fact.PropositionHash, Polarity: fact.Polarity, UnitKey: fact.UnitKey, VersionKey: fact.VersionKey,
+			SourceSnapshotID: fact.SourceSnapshotID, CitationMeaningHash: fact.CitationMeaningHash})
+	}
+	if err := ValidateDeclaredDeterministicConflict(kind, facts); err != nil {
+		return "", err
+	}
+	return kind, nil
 }
 
 func registerAcceptedV6IntegrationArtifactTx(ctx context.Context, tx pgx.Tx, state acceptedResultState, entityID string, kind ArtifactEntityKind, content map[string]any) error {

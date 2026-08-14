@@ -167,4 +167,22 @@ func TestAcceptedSourceAndObservationVersionsBindCanonicalContentAndAttempt(t *t
 			observationVersionHash, wantObservationHash, observationOrigin,
 			observationProvenance, observationAttemptID, sourceAttemptID)
 	}
+	var projectionEdges, observationEdges int
+	if err = pool.QueryRow(ctx, `
+		SELECT
+		  count(*) FILTER (WHERE reference.relation='projects')::int,
+		  count(*) FILTER (WHERE reference.relation='observes')::int
+		FROM research_artifact_input_reference reference
+		JOIN research_artifact_version input_version
+		  ON input_version.workspace_id=reference.workspace_id
+		 AND input_version.session_id=reference.session_id
+		 AND input_version.id=reference.input_version_id
+		WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
+		  AND input_version.artifact_id=$3::uuid
+	`, fixture.workspaceID, fixture.sessionID, sourceID).Scan(&projectionEdges, &observationEdges); err != nil {
+		t.Fatal(err)
+	}
+	if projectionEdges != 1 || observationEdges == 0 {
+		t.Fatalf("source lineage projects=%d want=1 observes=%d want>0", projectionEdges, observationEdges)
+	}
 }

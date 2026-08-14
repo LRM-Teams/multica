@@ -1213,6 +1213,13 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			}); err != nil {
 				return nil, 0, err
 			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				legacySourceID, ArtifactKindLegacySource, id, ArtifactKindSourceSnapshot,
+				"projects", "source_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
 			if err = state.checkpointAfter(ctx, txResultAfterLegacySource); err != nil {
 				return nil, 0, err
 			}
@@ -1321,6 +1328,13 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 			}); err != nil {
 				return nil, 0, err
 			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				id, ArtifactKindObservation, sourceID, ArtifactKindSourceSnapshot,
+				"observes", "observation_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
 			if err = state.checkpointAfter(ctx, txResultAfterObservation); err != nil {
 				return nil, 0, err
 			}
@@ -1330,6 +1344,57 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 		}
 	}
 	return ids, created, nil
+}
+
+func persistTypedArtifactInputReferenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, consumerID string,
+	consumerKind ArtifactEntityKind,
+	inputID string,
+	inputKind ArtifactEntityKind,
+	relation, purpose string,
+	ordinal int,
+) error {
+	var inserted int
+	err := tx.QueryRow(ctx, `
+		WITH consumer AS (
+			SELECT version.id
+			FROM research_artifact_passport passport
+			JOIN research_artifact_version version
+			  ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+			     (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+			WHERE passport.workspace_id = $1::uuid AND passport.session_id = $2::uuid
+			  AND passport.id = $3::uuid AND passport.entity_kind = $4
+		), input AS (
+			SELECT version.id
+			FROM research_artifact_passport passport
+			JOIN research_artifact_version version
+			  ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+			     (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+			WHERE passport.workspace_id = $1::uuid AND passport.session_id = $2::uuid
+			  AND passport.id = $5::uuid AND passport.entity_kind = $6
+		), inserted AS (
+			INSERT INTO research_artifact_input_reference (
+				workspace_id, session_id, consumer_version_id, input_version_id,
+				relation, explicitly_used, purpose, ordinal
+			)
+			SELECT $1::uuid, $2::uuid, consumer.id, input.id, $7, true, $8, $9
+			FROM consumer CROSS JOIN input
+			RETURNING 1
+		)
+		SELECT count(*)::int FROM inserted
+	`, workspaceID, sessionID, consumerID, string(consumerKind), inputID, string(inputKind), relation, purpose, ordinal).Scan(&inserted)
+	if err != nil {
+		return err
+	}
+	if inserted != 1 {
+		return fmt.Errorf(
+			"%w: %s %s could not resolve %s %s for %s lineage",
+			ErrInvalidResult, consumerKind, consumerID, inputKind, inputID, relation,
+		)
+	}
+	return nil
 }
 
 func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState, result ResultEnvelope, observationIDs map[string]string) (map[string]string, int, error) {

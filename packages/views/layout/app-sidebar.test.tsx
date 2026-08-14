@@ -72,7 +72,9 @@ vi.mock("@multica/ui/components/ui/dropdown-menu", () => ({
   DropdownMenuTrigger: ({ render }: { render: React.ReactNode }) => <>{render}</>,
 }));
 vi.mock("@multica/ui/components/ui/collapsible", () => ({
-  Collapsible: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Collapsible: ({ children, className }: { children: React.ReactNode; className?: string }) => (
+    <div data-testid="pinned-collapsible" className={className}>{children}</div>
+  ),
   CollapsibleContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   CollapsibleTrigger: () => <button type="button" />,
 }));
@@ -228,5 +230,16 @@ describe("AppSidebar navigation", () => {
     const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
     expect(badge).not.toBeNull();
     expect(badge).toHaveTextContent("3");
+  });
+
+  it("centers the collapsed icon rail chrome", () => {
+    const { container } = renderSidebar();
+    const searchWrap = container.querySelector("div.px-2.pt-2");
+    const helpRow = container.querySelector("div.flex.justify-end");
+    expect(searchWrap?.className).toContain("group-data-[collapsible=icon]:justify-center");
+    expect(helpRow?.className).toContain("group-data-[collapsible=icon]:justify-center");
+    expect(screen.getByTestId("pinned-collapsible").className).toContain(
+      "group-data-[collapsible=icon]:hidden",
+    );
   });
 });

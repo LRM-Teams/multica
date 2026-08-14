@@ -259,6 +259,57 @@ func mapResearchV6Graph(runID string, legacyNodes []ResearchGraphNodeResp, legac
 	return nodes, edges
 }
 
+// mapResearchV6GraphStrict is the integrity boundary between the compatibility
+// projection and V6. A Snapshot must never conceal ambiguous identity or a
+// broken topology: clients use its hashes as proof of one rebuildable graph.
+func mapResearchV6GraphStrict(runID string, legacyNodes []ResearchGraphNodeResp, legacyEdges []ResearchGraphEdgeResp) ([]researchV6ProjectionNode, []researchV6ProjectionEdge, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, nil, fmt.Errorf("research V6 projection run identity is empty")
+	}
+	nodeIDs := make(map[string]string, len(legacyNodes))
+	canonicalNodeIDs := make(map[string]string, len(legacyNodes))
+	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
+	for _, node := range legacyNodes {
+		if strings.TrimSpace(node.ID) == "" {
+			return nil, nil, fmt.Errorf("research V6 projection contains an empty source node identity")
+		}
+		if _, duplicate := nodeIDs[node.ID]; duplicate {
+			return nil, nil, fmt.Errorf("research V6 projection contains duplicate source node %q", node.ID)
+		}
+		mapped := mapResearchV6Node(runID, node)
+		if prior, duplicate := canonicalNodeIDs[mapped.ID]; duplicate {
+			return nil, nil, fmt.Errorf("research V6 projection nodes %q and %q collapse to canonical identity %q", prior, node.ID, mapped.ID)
+		}
+		nodeIDs[node.ID] = mapped.ID
+		canonicalNodeIDs[mapped.ID] = node.ID
+		nodes = append(nodes, mapped)
+	}
+	edgeIDs := make(map[string]string, len(legacyEdges))
+	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
+	for _, edge := range legacyEdges {
+		if strings.TrimSpace(edge.ID) == "" {
+			return nil, nil, fmt.Errorf("research V6 projection contains an empty source edge identity")
+		}
+		canonicalID := runID + ":edge:" + edge.ID
+		if prior, duplicate := edgeIDs[canonicalID]; duplicate {
+			return nil, nil, fmt.Errorf("research V6 projection edges %q and %q collapse to canonical identity %q", prior, edge.ID, canonicalID)
+		}
+		from, fromOK := nodeIDs[edge.FromNodeID]
+		to, toOK := nodeIDs[edge.ToNodeID]
+		if !fromOK || !toOK {
+			return nil, nil, fmt.Errorf("research V6 projection edge %q has a dangling endpoint", edge.ID)
+		}
+		if strings.TrimSpace(edge.EdgeType) == "" {
+			return nil, nil, fmt.Errorf("research V6 projection edge %q has an empty type", edge.ID)
+		}
+		edgeIDs[canonicalID] = edge.ID
+		edges = append(edges, researchV6ProjectionEdge{ID: canonicalID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: edge.EdgeType})
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges, nil
+}
+
 func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6ProjectionNode {
 	return mapResearchV6NodeWithSemantics(runID, node, nil)
 }

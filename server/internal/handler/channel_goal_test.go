@@ -65,6 +65,12 @@ func TestChannelGoalLifecycleAndCompletionGate(t *testing.T) {
 	if goal == nil || goal.Version != 1 || len(goal.SuccessCriteria) != 2 {
 		t.Fatalf("created goal = %#v", goal)
 	}
+	if goal.CurrentStep != initialChannelGoalStep {
+		t.Fatalf("initial current_step = %q, want control-plane setup", goal.CurrentStep)
+	}
+	if goal.Coordination == nil || goal.Coordination.ExecutionAdmission == "" {
+		t.Fatalf("created goal missing coordination summary: %#v", goal.Coordination)
+	}
 
 	duplicate := httptest.NewRecorder()
 	testHandler.CreateChannelGoal(duplicate, goalRequest(t, testUserID, http.MethodPost, channel.ID, createBody))
@@ -133,6 +139,28 @@ func TestChannelGoalLifecycleAndCompletionGate(t *testing.T) {
 	testHandler.GetChannelGoal(current, goalRequest(t, testUserID, http.MethodGet, channel.ID, nil))
 	if current.Code != http.StatusOK || decodeGoalEnvelope(t, current).Goal != nil {
 		t.Fatalf("terminal goal remained current: %d %s", current.Code, current.Body.String())
+	}
+}
+
+func TestChannelGoalExecutionAdmission(t *testing.T) {
+	tests := []struct {
+		name string
+		in   channelGoalCoordinationSummary
+		want string
+	}{
+		{name: "single agent direct", in: channelGoalCoordinationSummary{AgentMemberCount: 1}, want: "direct"},
+		{name: "project required", in: channelGoalCoordinationSummary{AgentMemberCount: 2}, want: "project_required"},
+		{name: "git required", in: channelGoalCoordinationSummary{AgentMemberCount: 2, ProjectID: "project-1"}, want: "git_required"},
+		{name: "issues required", in: channelGoalCoordinationSummary{AgentMemberCount: 2, ProjectID: "project-1", GitRepositoryBound: true}, want: "issues_required"},
+		{name: "ready", in: channelGoalCoordinationSummary{AgentMemberCount: 2, ProjectID: "project-1", GitRepositoryBound: true, ChannelProjectIssueTotal: 1, ProjectIssueTotal: 2, OpenProjectIssueTotal: 1}, want: "ready"},
+		{name: "acceptance required", in: channelGoalCoordinationSummary{AgentMemberCount: 2, ProjectID: "project-1", GitRepositoryBound: true, ChannelProjectIssueTotal: 1, ProjectIssueTotal: 2}, want: "acceptance_required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := channelGoalExecutionAdmission(tt.in); got != tt.want {
+				t.Fatalf("admission = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -254,6 +282,31 @@ func TestAgentGoalManagerCreateExecutorCheckpointAndIntentGuard(t *testing.T) {
 		t.Fatalf("agent-created goal = %#v", createdGoal)
 	}
 
+	bootstrap := httptest.NewRecorder()
+	testHandler.BootstrapAgentChannelGoalControlPlane(bootstrap, agentGoalRequest(
+		t, managerID, http.MethodPost, "/api/agent/channels/"+channel.ID+"/goal/bootstrap", channel.ID,
+		map[string]any{
+			"project_title": "Goal delivery project", "repository_url": "https://github.com/multica-ai/goal-delivery.git",
+			"default_branch_hint": "dev",
+		},
+	))
+	if bootstrap.Code != http.StatusCreated {
+		t.Fatalf("manager bootstrap = %d: %s", bootstrap.Code, bootstrap.Body.String())
+	}
+	var bootstrapped BootstrapAgentChannelGoalControlPlaneResponse
+	if err := json.Unmarshal(bootstrap.Body.Bytes(), &bootstrapped); err != nil {
+		t.Fatalf("decode bootstrap: %v", err)
+	}
+	if !bootstrapped.Created || bootstrapped.Project.ID == "" || bootstrapped.Resource.ResourceType != "github_repo" {
+		t.Fatalf("bootstrap response = %#v", bootstrapped)
+	}
+	if bootstrapped.Goal.Coordination == nil || bootstrapped.Goal.Coordination.ExecutionAdmission != "issues_required" {
+		t.Fatalf("bootstrap admission = %#v", bootstrapped.Goal.Coordination)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, parseUUID(bootstrapped.Project.ID))
+	})
+
 	checkpoint := httptest.NewRecorder()
 	testHandler.CheckpointAgentChannelGoal(checkpoint, agentGoalRequest(
 		t, executorID, http.MethodPost, "/api/agent/channels/"+channel.ID+"/goal/checkpoint", channel.ID,
@@ -287,8 +340,8 @@ func TestAgentGoalManagerCreateExecutorCheckpointAndIntentGuard(t *testing.T) {
 		t, managerID, http.MethodPatch, "/api/agent/channels/"+channel.ID+"/goal", channel.ID,
 		map[string]any{"expected_version": checkpointGoal.Version, "status": "completed"},
 	))
-	if revised.Code != http.StatusOK {
-		t.Fatalf("manager completion = %d: %s", revised.Code, revised.Body.String())
+	if revised.Code != http.StatusConflict {
+		t.Fatalf("manager completion without project Issues = %d: %s", revised.Code, revised.Body.String())
 	}
 }
 

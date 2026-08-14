@@ -776,6 +776,9 @@ export function useRealtimeSync(
       const wsId = getCurrentWsId();
       if (wsId) {
         onIssueUpdated(qc, wsId, issue);
+        // Active Goal cards expose Project/Issue/review admission counters.
+        // Any Issue status or Project move can change that server-owned summary.
+        qc.invalidateQueries({ queryKey: channelGoalKeys.all() });
         if (issue.status) {
           onInboxIssueStatusChanged(qc, wsId, issue.id, issue.status);
         }
@@ -786,7 +789,10 @@ export function useRealtimeSync(
       const { issue } = p as IssueCreatedPayload;
       if (!issue) return;
       const wsId = getCurrentWsId();
-      if (wsId) onIssueCreated(qc, wsId, issue);
+      if (wsId) {
+        onIssueCreated(qc, wsId, issue);
+        qc.invalidateQueries({ queryKey: channelGoalKeys.all() });
+      }
     });
 
     const unsubIssueDeleted = ws.on("issue:deleted", (p) => {
@@ -795,6 +801,7 @@ export function useRealtimeSync(
       const wsId = getCurrentWsId();
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
+        qc.invalidateQueries({ queryKey: channelGoalKeys.all() });
         onInboxIssueDeleted(qc, wsId, issue_id);
       }
     });

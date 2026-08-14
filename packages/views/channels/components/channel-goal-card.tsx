@@ -14,6 +14,8 @@ import {
   Pause,
   Pencil,
   Play,
+  ShieldAlert,
+  ShieldCheck,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { ChannelGoal, UpdateChannelGoalRequest } from "@multica/core/types";
@@ -358,11 +360,30 @@ export function ChannelGoalCard({
 
   const completed = new Set(goal.completed_criteria);
   const allCompleted = goal.success_criteria.every((criterion) => completed.has(criterion));
+  const coordination = goal.coordination;
+  const coordinationReady =
+    !coordination ||
+    coordination.execution_admission === "direct" ||
+    coordination.execution_admission === "ready" ||
+    coordination.execution_admission === "acceptance_required";
+  const coordinationComplete =
+    !coordination ||
+    coordination.execution_admission === "direct" ||
+    (Boolean(coordination.project_id) &&
+      coordination.git_repository_bound &&
+      coordination.channel_project_issue_total > 0 &&
+      coordination.project_issue_total > 0 &&
+      coordination.open_project_issue_total === 0);
   const canComplete =
-    allCompleted && goal.evidence_refs.length > 0 && openSubgoalCount === 0 &&
+    allCompleted &&
+    goal.evidence_refs.length > 0 &&
+    openSubgoalCount === 0 &&
+    coordinationComplete &&
     (!goal.work_graph || (goal.work_graph.completed === goal.work_graph.total && goal.work_graph.stale === 0));
   const completeDisabledReason =
-    openSubgoalCount > 0
+    !coordinationComplete
+      ? t(($) => $.goal.control_plane_complete_blocked)
+      : openSubgoalCount > 0
       ? t(($) => $.goal.subgoals_complete_blocked, { count: openSubgoalCount })
       : t(($) => $.goal.complete_disabled);
   const workGraphSummary = goal.work_graph
@@ -379,6 +400,12 @@ export function ChannelGoalCard({
               <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{goal.completed_criteria.length}/{goal.success_criteria.length}</Badge>
               {goal.status === "paused" ? <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{t(($) => $.goal.paused)}</Badge> : null}
               {goal.blocker ? <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">{t(($) => $.goal.blocked)}</Badge> : null}
+              {coordination && (coordination.agent_member_count > 1 || coordination.execution_admission === "unavailable") ? (
+                <Badge variant={coordinationReady ? "outline" : "destructive"} className="h-5 gap-1 px-1.5 text-[10px]" data-testid="channel-goal-control-plane-badge">
+                  {coordinationReady ? <ShieldCheck className="size-3" /> : <ShieldAlert className="size-3" />}
+                  {coordinationReady ? t(($) => $.goal.control_plane_ready) : t(($) => $.goal.control_plane_blocked)}
+                </Badge>
+              ) : null}
               {goal.work_graph ? (
                 <Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px]" data-testid="channel-goal-work-graph-summary">
                   <ListTodo className="size-3" />
@@ -489,6 +516,20 @@ export function ChannelGoalCard({
         {expanded ? (
           <div className="space-y-3 border-t border-border/40 px-4 py-3 text-sm">
             <p className="text-muted-foreground">{goal.objective}</p>
+            {coordination && (coordination.agent_member_count > 1 || coordination.execution_admission === "unavailable") ? (
+              <div className={cn("rounded-lg border p-3 text-xs", coordinationReady ? "border-border bg-muted/30" : "border-destructive/30 bg-destructive/5")} data-testid="channel-goal-control-plane">
+                <div className="mb-2 flex items-center gap-2 font-medium">
+                  {coordinationReady ? <ShieldCheck className="size-4 text-primary" /> : <ShieldAlert className="size-4 text-destructive" />}
+                  {t(($) => $.goal.control_plane)}
+                </div>
+                <div className="grid gap-1 text-muted-foreground sm:grid-cols-2">
+                  <span>{t(($) => $.goal.control_plane_project)}: {coordination.project_id || t(($) => $.goal.none)}</span>
+                  <span>{t(($) => $.goal.control_plane_git)}: {coordination.git_repository_bound ? t(($) => $.goal.control_plane_bound) : t(($) => $.goal.control_plane_missing)}</span>
+                  <span>{t(($) => $.goal.control_plane_issues)}: {coordination.open_project_issue_total}/{coordination.project_issue_total}</span>
+                  <span>{t(($) => $.goal.control_plane_review)}: {coordination.in_review_project_issue_total}</span>
+                </div>
+              </div>
+            ) : null}
             <div className="space-y-1.5">
               {goal.success_criteria.map((criterion) => (
                 <div key={criterion} className="flex items-start gap-2">

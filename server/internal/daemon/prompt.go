@@ -156,6 +156,45 @@ func channelGoalStateSlot(task Task) string {
 		fmt.Fprintf(&b, "- Work Graph: %s version=%d status=%s completed=%d running=%d waiting=%d stale=%d\n", goal.WorkGraph.ID, goal.WorkGraph.Version, goal.WorkGraph.Status, goal.WorkGraph.Completed, goal.WorkGraph.Running, goal.WorkGraph.Waiting, goal.WorkGraph.Stale)
 		b.WriteString("Treat this graph delta as current server state. Do not redo completed child work; act only on newly ready, failed, stale, blocked, or gated work assigned to you.\n")
 	}
+	if c := goal.Coordination; c != nil {
+		fmt.Fprintf(&b, "- Delivery control plane: admission=%s agents=%d project=%q git=%t channel_issues=%d linked_project_issues=%d project_issues=%d open=%d in_review=%d subgoals=%d open_subgoals=%d\n",
+			c.ExecutionAdmission, c.AgentMemberCount, c.ProjectID, c.GitRepositoryBound,
+			c.ChannelIssueTotal, c.ChannelProjectIssueTotal, c.ProjectIssueTotal, c.OpenProjectIssueTotal,
+			c.InReviewProjectIssueTotal, c.SubgoalTotal, c.OpenSubgoalTotal)
+		if c.AgentMemberCount > 1 || c.ExecutionAdmission == "unavailable" {
+			isManager := agentManagesChannel(task.Agent, task.ChannelID)
+			if strings.TrimSpace(task.IssueID) == "" {
+				b.WriteString("EXECUTION GATE: this multi-agent Goal is not a code assignment. Do not edit shared project files, create a code branch or commit, push, open/merge a PR, or deploy from this chat task. Only durable control-plane setup and status/review coordination are admitted until this agent is claimed on a channel-linked Issue in the bound Project.\n")
+				if isManager {
+					b.WriteString("As group manager, establish the delivery chain in order: run `multica goal bootstrap --channel <id> --project-title <title> --repository-url <url>` to create/bind one Project and its canonical github_repo; create a channel-linked parent Issue in that Project; decompose non-overlapping child Issues for parallel agents; create one manager-owned integration/release Issue and set metadata `delivery_role=integration`; require implementers to submit in_review and an independent reviewer or human to approve before done. Never assign the same deliverable to two agents.\n")
+				} else {
+					b.WriteString("You have no server-owned code deliverable this wake. You may analyze and propose a bounded Issue to the group manager, then wait for assignment; do not start an independent implementation.\n")
+				}
+			} else if c.ProjectID == "" || strings.TrimSpace(task.ProjectID) == "" || task.ProjectID != c.ProjectID {
+				b.WriteString("EXECUTION GATE: this Issue claim is not aligned with the Goal's bound Project. Do not mutate the repository; ask the group manager to correct the Project/Issue binding.\n")
+			} else if isManager && goalIssueDeliveryRole(task) == "integration" {
+				b.WriteString("Execution admitted on the canonical integration/release Issue. Do not author a competing feature implementation. Integrate only independently reviewed Issue branches, require green CI, deploy the resulting canonical commit, and verify the deployed artifact against every Goal criterion before recording evidence.\n")
+			} else {
+				b.WriteString("Execution admitted only for this claimed implementation Issue. Acquire the Issue's executor work lease, use its canonical non-main branch and bounded paths, and stop at in_review; never merge, deploy, or mark your own implementation done. A separate manager-owned Issue with metadata `delivery_role=integration` owns canonical merge and release.\n")
+			}
+			switch c.ExecutionAdmission {
+			case "project_required":
+				b.WriteString("Control-plane blocker: the channel has no bound Project.\n")
+			case "git_required":
+				b.WriteString("Control-plane blocker: the bound Project has no github_repo resource.\n")
+			case "issues_required":
+				b.WriteString("Control-plane blocker: no channel-linked Issue belongs to the bound Project.\n")
+			case "acceptance_required":
+				b.WriteString("All Project Issues are terminal. Reconcile review/CI/deployment evidence against every Goal criterion; complete the Goal only if the shipped version satisfies it, otherwise open corrective Issues.\n")
+			case "unavailable":
+				b.WriteString("Control-plane blocker: the server could not verify Project/Git/Issue ownership. Fail closed and retry after the control plane is readable.\n")
+			}
+			if isManager && c.OpenProjectIssueTotal > 0 {
+				b.WriteString("Long-running manager duty: ensure exactly one self-owned recurring Goal follow-up Reminder exists (list active reminders first; schedule with `multica reminder schedule --title \"Goal follow-up: <goal-id>\" --repeat every:15m --msg-id <current-source-message-id>` only when absent). On each wake, inspect channel-linked Project Issues, unblock or reassign stale work, dispatch newly-ready parallel Issues, drive in_review to independent review, and checkpoint the Goal. Cancel the Reminder when the Goal becomes terminal.\n")
+			}
+			b.WriteString("Long-running delivery is durable across turns: use parallel Issue runs, Issue comments/status, Goal checkpoints, and Reminder wakes. Do not keep one chat turn alive as the scheduler and do not redo terminal Issue work after resume.\n")
+		}
+	}
 	b.WriteString("Advance only the work requested in this turn toward the goal. Preserve the objective and success standard; do not revise or lower the parent goal.\n")
 	fmt.Fprintf(&b, "After concrete progress, checkpoint it with `multica goal checkpoint --channel %s --expected-version %d --progress \"...\" --current-step \"...\"` plus repeatable `--evidence`, `--completed-criterion`, or `--blocker` flags as needed. If the command reports a stale version, run `multica goal get --channel %s` and reconcile before retrying.\n", task.ChannelID, goal.Version, task.ChannelID)
 	if len(goal.Subgoals) > 0 {
@@ -177,6 +216,30 @@ func channelGoalStateSlot(task Task) string {
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+func agentManagesChannel(agent *AgentData, channelID string) bool {
+	if agent == nil {
+		return false
+	}
+	for _, channel := range agent.ManagerChannels {
+		if channel.ID == channelID {
+			return true
+		}
+	}
+	return false
+}
+
+func goalIssueDeliveryRole(task Task) string {
+	if task.AssignmentSnapshot == nil || task.AssignmentSnapshot.Metadata == nil {
+		return ""
+	}
+	role, _ := task.AssignmentSnapshot.Metadata["delivery_role"].(string)
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "release" {
+		return "integration"
+	}
+	return role
 }
 
 func buildAssignmentPrompt(task Task) string {

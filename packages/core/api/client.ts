@@ -143,6 +143,7 @@ import type {
   ChannelMentionCandidatesResponse,
   ChannelMemberManagementCapabilities,
   ChannelMessage,
+  ChannelMessageQuoteInput,
   ChannelMessagesPage,
   MarkChannelReadResult,
   ChannelReaction,
@@ -4150,7 +4151,7 @@ export class ApiClient {
       parts?: MessagePart[];
       replyToMessageId?: string | null;
       clientMessageId?: string | null;
-      quoteMessageId?: string | null;
+      quote?: ChannelMessageQuoteInput | null;
     },
   ): Promise<ChannelMessage> {
     // Channel attachments bind from structured `parts` (type: "attachment").
@@ -4158,15 +4159,18 @@ export class ApiClient {
     const body: {
       content: string;
       reply_to_message_id?: string;
-      quote_message_id?: string;
+      quote?: { message_id: string; selected_text?: string };
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content: input.content };
     if (input.replyToMessageId) {
       body.reply_to_message_id = input.replyToMessageId;
     }
-    if (input.quoteMessageId) {
-      body.quote_message_id = input.quoteMessageId;
+    if (input.quote) {
+      body.quote = { message_id: input.quote.messageId };
+      if (input.quote.selectedText) {
+        body.quote.selected_text = input.quote.selectedText;
+      }
     }
     if (input.parts && input.parts.length > 0) {
       body.parts = input.parts;
@@ -4232,22 +4236,25 @@ export class ApiClient {
       parts?: MessagePart[];
       replyToMessageId?: string | null;
       clientMessageId?: string | null;
-      quoteMessageId?: string | null;
+      quote?: ChannelMessageQuoteInput | null;
     },
   ): Promise<ChannelMessage> {
     // Same as sendChannelMessage: attachment truth is `parts`, not attachment_ids.
     const body: {
       content: string;
       reply_to_message_id?: string;
-      quote_message_id?: string;
+      quote?: { message_id: string; selected_text?: string };
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content: input.content };
     if (input.replyToMessageId) {
       body.reply_to_message_id = input.replyToMessageId;
     }
-    if (input.quoteMessageId) {
-      body.quote_message_id = input.quoteMessageId;
+    if (input.quote) {
+      body.quote = { message_id: input.quote.messageId };
+      if (input.quote.selectedText) {
+        body.quote.selected_text = input.quote.selectedText;
+      }
     }
     if (input.parts && input.parts.length > 0) {
       body.parts = input.parts;

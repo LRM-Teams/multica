@@ -47,7 +47,6 @@ import { useWorkspaceSlug } from "@multica/core/paths";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Attachment, NoteAIEditResult, NoteAIJobStatus } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
-import { Slice } from "@tiptap/pm/model";
 import {
   parseMarkdownChunked,
   MARKDOWN_CHUNK_THRESHOLD,
@@ -197,8 +196,6 @@ interface ContentEditorRef {
   hasActiveUploads: () => boolean;
   /** Insert plain text at the current selection and focus the editor. */
   insertText: (text: string) => void;
-  /** Append an editable literal quote line plus an empty response paragraph. */
-  insertQuoteText: (text: string) => void;
   /** Insert an empty paragraph before the first body block and focus it. */
   insertBlankLineAtStart: () => void;
   /** Focus the editor and open the issue reference `#` picker. */
@@ -208,14 +205,6 @@ interface ContentEditorRef {
   /** Insert or replace the selection with an issueReference chip. */
   insertIssueReference: (attrs: { id: string; label: string }) => void;
   insertRunReference: (attrs: { id: string; label: string; agentId?: string | null }) => void;
-  /**
-   * LRM-695 — append Markdown at the end of the document, parsing it through
-   * the same `@tiptap/markdown` pipeline as paste so block syntax (e.g. a `>`
-   * blockquote) becomes a real node instead of literal text. The caret lands at
-   * the end; nothing is sent. Falls back to plain-text insertion when the
-   * Markdown parser is unavailable (readonly/legacy mounts).
-   */
-  insertMarkdown: (md: string) => void;
   /**
    * Open the in-note Editor AI prompt (S3-A4). Uses the current empty paragraph
    * when possible; otherwise appends one at the end. Returns false when page AI
@@ -618,22 +607,6 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       insertText: (text: string) => {
         editor?.chain().focus().insertContent(text).run();
       },
-      insertQuoteText: (text: string) => {
-        if (!editor) return;
-        const quoteContent = text.split("\n").flatMap((line, index) => [
-          ...(index > 0 ? [{ type: "hardBreak" }] : []),
-          ...(line ? [{ type: "text", text: line }] : []),
-        ]);
-        editor
-          .chain()
-          .focus("end")
-          .insertContent([
-            { type: "paragraph", content: quoteContent },
-            { type: "paragraph" },
-          ])
-          .focus("end")
-          .run();
-      },
       insertBlankLineAtStart: () => {
         if (!editor) return;
         editor
@@ -688,28 +661,6 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           return;
         }
         editor.chain().focus().insertContentAt({ from, to }, content).run();
-      },
-      insertMarkdown: (md: string) => {
-        if (!editor) return;
-        // No Markdown parser (readonly/legacy) → insert as plain text at end.
-        if (!editor.markdown) {
-          editor.chain().focus("end").insertContent(md).run();
-          return;
-        }
-        const json = editor.markdown.parse(md);
-        const node = editor.schema.nodeFromJSON(json);
-        // maxOpen lets ProseMirror stitch the block content in at the caret;
-        // mirrors the proven markdown-paste path (extensions/markdown-paste.ts).
-        const slice = Slice.maxOpen(node.content);
-        editor
-          .chain()
-          .focus("end")
-          .command(({ tr }) => {
-            tr.replaceSelection(slice);
-            return true;
-          })
-          .focus("end")
-          .run();
       },
       openPageAI: () => {
         if (!editor || !onEditPageWithAIRef.current) return false;

@@ -1,4 +1,5 @@
 import { cn } from "@multica/ui/lib/utils";
+import type { ChannelMessageQuoteInput } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import type { VoiceRecordingAttachment } from "../lib/voice-audio";
 
@@ -27,6 +28,8 @@ export interface PendingVoiceState {
   threadRootId?: string;
   durationMs: number;
   attachment: VoiceRecordingAttachment;
+  /** Structured quote captured with the original send, replayed unchanged. */
+  quote?: ChannelMessageQuoteInput;
 }
 
 /** `0:07` — seconds only; recordings are capped at 60s (MAX_VOICE_RECORDING_MS). */

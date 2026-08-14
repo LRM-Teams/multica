@@ -125,12 +125,19 @@ import { Composer, ConversationHeader } from "./conversation-surface";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { ThreadFollowButton } from "./thread-follow-button";
-import { buildEditableMessageQuoteText } from "./message-quote";
+import {
+  ComposerQuotePreview,
+  createComposerMessageQuoteTarget,
+} from "./message-quote";
 import { mentionResolverFrom } from "./message-preview";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 import { ComposerAgentActivityStrip } from "./composer-agent-activity-strip";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
+import {
+  composerQuotePayloadScope,
+  useComposerQuote,
+} from "../hooks/use-composer-quote";
 
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
@@ -597,9 +604,9 @@ function DmChannelConversation({
     ...memberListOptions(wsId),
     enabled: !!selectedAgentPanelId || !!selectedMemberPanelId,
   });
-  const buildEditableQuote = useCallback(
+  const buildComposerQuote = useCallback(
     (message: ChannelMessage) =>
-      buildEditableMessageQuoteText(
+      createComposerMessageQuoteTarget(
         message,
         {
           attachment: t(($) => $.quote.attachment_summary),
@@ -612,14 +619,25 @@ function DmChannelConversation({
       ),
     [getActorName, t],
   );
+  const dmQuote = useComposerQuote(channelId);
+  const threadQuote = useComposerQuote(
+    `${channelId}:thread:${openThreadRoot?.id ?? ""}`,
+  );
+  const selectDmQuote = dmQuote.select;
+  const selectThreadQuote = threadQuote.select;
   const handleQuoteMessage = useCallback(
-    (message: ChannelMessage) => editorRef.current?.insertQuoteText(buildEditableQuote(message)),
-    [buildEditableQuote],
+    (message: ChannelMessage) => {
+      selectDmQuote(buildComposerQuote(message));
+      editorRef.current?.focus();
+    },
+    [buildComposerQuote, selectDmQuote],
   );
   const handleThreadQuoteMessage = useCallback(
-    (message: ChannelMessage) =>
-      threadEditorRef.current?.insertQuoteText(buildEditableQuote(message)),
-    [buildEditableQuote],
+    (message: ChannelMessage) => {
+      selectThreadQuote(buildComposerQuote(message));
+      threadEditorRef.current?.focus();
+    },
+    [buildComposerQuote, selectThreadQuote],
   );
 
   const { mutate: markChannelRead } = useMarkChannelRead();
@@ -739,10 +757,30 @@ function DmChannelConversation({
   const editorRef = useRef<ContentEditorRef>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const dmMessageAreaRef = useRef<HTMLDivElement>(null);
-  // LRM-695 — text-selection Quote/Copy over the DM message area (desktop).
+  const dmThreadMessageAreaRef = useRef<HTMLDivElement>(null);
   const dmSelectionMenu = useSelectionQuoteMenu({
     containerRef: dmMessageAreaRef,
-    onQuote: (md: string) => editorRef.current?.insertMarkdown(md),
+    onQuote: (selection) => {
+      dmQuote.select({
+        messageId: selection.messageId,
+        selectedText: selection.text,
+        author: selection.author ?? t(($) => $.quote.type_unknown),
+        summary: selection.text,
+      });
+      editorRef.current?.focus();
+    },
+  });
+  const dmThreadSelectionMenu = useSelectionQuoteMenu({
+    containerRef: dmThreadMessageAreaRef,
+    onQuote: (selection) => {
+      threadQuote.select({
+        messageId: selection.messageId,
+        selectedText: selection.text,
+        author: selection.author ?? t(($) => $.quote.type_unknown),
+        summary: selection.text,
+      });
+      threadEditorRef.current?.focus();
+    },
   });
   // #772 send-failure → composer-restore (main + thread composers). The failed
   // text is restored into the composer (or kept-back when the composer already
@@ -1113,15 +1151,22 @@ function DmChannelConversation({
     const parts = buildChatMessageParts(content, dmPending.readyAttachmentParts);
     if (parts.length === 0) return;
     const attachmentIds = dmPending.readyAttachmentParts.map((p) => p.attachment_id);
+    const quoteTarget = dmQuote.target;
+    const quote = dmQuote.input;
     // Stop typing before the send lock so a dropped (held-Enter) trigger still
     // clears the indicator.
     const dispatched = dmSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds),
+      payloadKey: composePayloadKey(
+        content,
+        attachmentIds,
+        composerQuotePayloadScope(channelId, quoteTarget),
+      ),
       buildVars: (clientMessageId) => ({
         channelId,
         content,
         parts,
         clientMessageId,
+        quote,
       }),
       mutate: sendMessage.mutate,
       // #1276 INV-1: clear the persisted draft ONLY on confirmed success, never on
@@ -1129,6 +1174,7 @@ function DmChannelConversation({
       // destroys the text before the restore can put it back.
       onCommitted: () => {
         restore.clear();
+        dmQuote.clear(quoteTarget);
         onDraftClear?.();
       },
       onVisibleError: (kind) => {
@@ -1164,16 +1210,23 @@ function DmChannelConversation({
     if (!draftEmpty || dmPending.pending.length > 0) return false;
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
+    const quoteTarget = dmQuote.target;
+    const quote = dmQuote.input;
     const dispatched = dmSend.send({
-      payloadKey: composePayloadKey(content, [attachment.id], "voice"),
+      payloadKey: composePayloadKey(
+        content,
+        [attachment.id],
+        composerQuotePayloadScope("voice", quoteTarget),
+      ),
       buildVars: (clientMessageId) => ({
         channelId,
         content,
         parts,
         clientMessageId,
+        quote,
       }),
       mutate: sendMessage.mutate,
-      onCommitted: () => {},
+      onCommitted: () => dmQuote.clear(quote),
       onVisibleError: (kind) => {
         if (kind === "conflict") showErrorToast(t(($) => $.composer.send_failed));
       },
@@ -1196,17 +1249,27 @@ function DmChannelConversation({
     const parts = buildChatMessageParts(content, threadPending.readyAttachmentParts);
     if (parts.length === 0) return;
     const attachmentIds = threadPending.readyAttachmentParts.map((p) => p.attachment_id);
+    const quoteTarget = threadQuote.target;
+    const quote = threadQuote.input;
     const dispatched = threadSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, threadRoot.id),
+      payloadKey: composePayloadKey(
+        content,
+        attachmentIds,
+        composerQuotePayloadScope(threadRoot.id, quoteTarget),
+      ),
       buildVars: (clientMessageId) => ({
         channelId,
         messageId: threadRoot.id,
         content,
         parts,
         clientMessageId,
+        quote,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => threadRestore.clear(),
+      onCommitted: () => {
+        threadRestore.clear();
+        threadQuote.clear(quoteTarget);
+      },
       onVisibleError: (kind) => {
         // #772 (thread): restore the failed text into the thread composer (via
         // the editor's `defaultValue` + remount) unless it already holds new
@@ -1235,11 +1298,13 @@ function DmChannelConversation({
     if (!threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
+    const quoteTarget = threadQuote.target;
+    const quote = threadQuote.input;
     const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,
         [attachment.id],
-        `${threadRoot.id}:voice`,
+        composerQuotePayloadScope(`${threadRoot.id}:voice`, quoteTarget),
       ),
       buildVars: (clientMessageId) => ({
         channelId,
@@ -1247,9 +1312,10 @@ function DmChannelConversation({
         content,
         parts,
         clientMessageId,
+        quote,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => {},
+      onCommitted: () => threadQuote.clear(quote),
       onVisibleError: (kind) => {
         if (kind === "conflict") showErrorToast(t(($) => $.thread.send_failed));
       },
@@ -1270,7 +1336,12 @@ function DmChannelConversation({
           messageId: message.thread_root_message_id,
           content: message.content,
           parts: message.parts,
-          quoteMessageId: message.quote_message_id ?? undefined,
+          quote: message.quote_message_id
+            ? {
+                messageId: message.quote_message_id,
+                selectedText: message.quote?.snapshot?.selectedText ?? undefined,
+              }
+            : undefined,
           clientMessageId: message.client_message_id,
         });
         return;
@@ -1279,7 +1350,12 @@ function DmChannelConversation({
         channelId,
         content: message.content,
         parts: message.parts,
-        quoteMessageId: message.quote_message_id ?? undefined,
+        quote: message.quote_message_id
+          ? {
+              messageId: message.quote_message_id,
+              selectedText: message.quote?.snapshot?.selectedText ?? undefined,
+            }
+          : undefined,
         clientMessageId: message.client_message_id,
       });
     },
@@ -1384,6 +1460,7 @@ function DmChannelConversation({
             </>
           }
         />
+        <div ref={dmThreadMessageAreaRef} className="contents">
         <ChannelMessageList
           key={`thread:${threadSurfaceRoot.id}`}
           messages={threadReplies}
@@ -1415,6 +1492,8 @@ function DmChannelConversation({
           onOpenAgent={handleOpenAgentPanel}
           onOpenMember={handleOpenMemberPanel}
         />
+        {!readOnly ? dmThreadSelectionMenu.menu : null}
+        </div>
         <Composer
           surface="thread"
           readOnly={readOnly}
@@ -1442,8 +1521,14 @@ function DmChannelConversation({
           onVoiceSend={handleThreadVoiceSend}
           isMobile={isMobile}
           // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-          prefix={threadRestore.error ? (
+          prefix={threadQuote.target || threadRestore.error ? (
             <>
+              {threadQuote.target ? (
+                <ComposerQuotePreview
+                  target={threadQuote.target}
+                  onCancel={threadQuote.cancel}
+                />
+              ) : null}
               <ComposerSendErrorBar
                 error={threadRestore.error}
                 onRetry={handleThreadSend}
@@ -1697,8 +1782,14 @@ function DmChannelConversation({
         onVoiceSend={handleVoiceSend}
         isMobile={isMobile}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-        prefix={restore.error ? (
+        prefix={dmQuote.target || restore.error ? (
           <>
+            {dmQuote.target ? (
+              <ComposerQuotePreview
+                target={dmQuote.target}
+                onCancel={dmQuote.cancel}
+              />
+            ) : null}
             <ComposerSendErrorBar
               error={restore.error}
               onRetry={handleSend}

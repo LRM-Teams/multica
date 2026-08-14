@@ -208,7 +208,11 @@ func formatChannelMessageReplyLine(msg ChannelMessageReply) string {
 }
 
 func formatChannelMessageQuoteSnapshotLine(msg ChannelMessageQuoteSnapshot) string {
-	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.Type, truncateChannelHistoryContent(msg.Content))
+	content := msg.Content
+	if msg.SelectedText != nil {
+		content = *msg.SelectedText
+	}
+	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.Type, truncateChannelHistoryContent(content))
 }
 
 func truncateChannelHistoryContent(content string) string {

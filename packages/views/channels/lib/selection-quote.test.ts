@@ -1,56 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildSelectionQuoteMarkdown,
   isFinePointerViewport,
   resolveMessageSelection,
 } from "./selection-quote";
-
-describe("buildSelectionQuoteMarkdown", () => {
-  it("prefixes the first line with the author and `>`", () => {
-    expect(buildSelectionQuoteMarkdown("Alice", "hello world")).toBe(
-      "> Alice: hello world",
-    );
-  });
-
-  it("keeps `>` on every line for a multi-line selection (one quote block)", () => {
-    expect(buildSelectionQuoteMarkdown("Bob", "line1\nline2\nline3")).toBe(
-      "> Bob: line1\n> line2\n> line3",
-    );
-  });
-
-  it("omits the author prefix when none is provided", () => {
-    expect(buildSelectionQuoteMarkdown(null, "anon")).toBe("> anon");
-  });
-
-  it("omits the author prefix when the author is blank", () => {
-    expect(buildSelectionQuoteMarkdown("   ", "anon")).toBe("> anon");
-  });
-
-  it("trims the author name", () => {
-    expect(buildSelectionQuoteMarkdown("  Alice  ", "hi")).toBe("> Alice: hi");
-  });
-
-  it("trims a trailing blank line a triple-click selection grabs", () => {
-    expect(buildSelectionQuoteMarkdown("Alice", "hi\n")).toBe("> Alice: hi");
-    expect(buildSelectionQuoteMarkdown("Alice", "hi\n\n")).toBe("> Alice: hi");
-  });
-
-  it("preserves intentional internal blank lines", () => {
-    expect(buildSelectionQuoteMarkdown("Alice", "a\n\nb")).toBe(
-      "> Alice: a\n> \n> b",
-    );
-  });
-
-  it("normalizes CRLF to LF", () => {
-    expect(buildSelectionQuoteMarkdown("Alice", "a\r\nb")).toBe(
-      "> Alice: a\n> b",
-    );
-  });
-
-  it("still prefixes `>` on an empty selection body", () => {
-    expect(buildSelectionQuoteMarkdown("Alice", "")).toBe("> Alice: ");
-  });
-});
 
 describe("isFinePointerViewport", () => {
   afterEach(() => {
@@ -239,13 +191,10 @@ describe("resolveMessageSelection", () => {
     expect(resolveMessageSelection(window.getSelection(), container)).toBeNull();
   });
 
-  it("omits the author when the bubble has no author stamp", () => {
+  it("rejects a selection whose message has no stable id", () => {
     const { container, body } = setupMessageDOM("", "");
     stubSelection(body, 0, 5, rect(50, 100, 40, 16));
-    const result = resolveMessageSelection(window.getSelection(), container);
-    expect(result?.author).toBeNull();
-    expect(result?.messageId).toBeNull();
-    expect(result?.text).toBe("hello");
+    expect(resolveMessageSelection(window.getSelection(), container)).toBeNull();
   });
 
   it("returns null for a cross-message selection (endpoints in different bodies) — AC#7", () => {

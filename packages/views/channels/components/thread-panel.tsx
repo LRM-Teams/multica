@@ -8,6 +8,7 @@ import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
+import type { ResolvedMessageSelection } from "../lib/selection-quote";
 import {
   ComposerSendErrorBar,
   type ComposerSendErrorState,
@@ -45,11 +46,8 @@ export interface ThreadPanelProps {
   onRetry?: () => void;
   onReact?: (message: ChannelMessage, emoji: string) => void;
   onQuoteMessage?: (message: ChannelMessage) => void;
-  /**
-   * LRM-695 — append a selection-quote markdown block (`>` blockquote) to the
-   * thread composer. Owned by the surface (channels-page holds threadEditorRef).
-   */
-  onInsertSelectionQuote?: (markdown: string) => void;
+  /** Set a structured quote target from a selection in this thread. */
+  onQuoteSelection?: (selection: ResolvedMessageSelection) => void;
   /** Retry a failed optimistic send (reuses `client_message_id`). */
   onRetrySend?: (message: ChannelMessage) => void;
   /** Click an agent author's avatar/name → open the agent side panel (parity
@@ -122,7 +120,7 @@ export function ThreadPanel({
   onRetry,
   onReact,
   onQuoteMessage,
-  onInsertSelectionQuote,
+  onQuoteSelection,
   onRetrySend,
   onOpenAgent,
   onOpenMember,
@@ -148,7 +146,7 @@ export function ThreadPanel({
   const threadMessageAreaRef = useRef<HTMLDivElement>(null);
   const threadSelectionMenu = useSelectionQuoteMenu({
     containerRef: threadMessageAreaRef,
-    onQuote: (md: string) => onInsertSelectionQuote?.(md),
+    onQuote: (selection) => onQuoteSelection?.(selection),
   });
 
   // `leading` / `actions` on ConversationHeader and `leadingActions` on

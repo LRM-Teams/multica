@@ -338,7 +338,7 @@ describe("ApiClient", () => {
     await client.sendChannelThreadMessage("ch-1", "root-1", {
       content: "hello",
       clientMessageId: "client-1",
-      quoteMessageId: "quote-1",
+      quote: { messageId: "quote-1" },
     });
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
@@ -346,12 +346,12 @@ describe("ApiClient", () => {
     expect(bodies[0]).toMatchObject({
       content: "hello",
       client_message_id: "client-1",
-      quote_message_id: "quote-1",
+      quote: { message_id: "quote-1" },
     });
     expect(bodies[0]).not.toHaveProperty("show_in_channel");
   });
 
-  it("sends quote_message_id for channel and thread quoted messages", async () => {
+  it("sends structured quotes for channel and thread quoted messages", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ id: "m-1" }), {
         status: 200,
@@ -365,24 +365,24 @@ describe("ApiClient", () => {
     await client.sendChannelMessage("ch-1", {
       content: "hello",
       clientMessageId: "client-1",
-      quoteMessageId: "quote-1",
+      quote: { messageId: "quote-1", selectedText: "chosen excerpt" },
     });
     await client.sendChannelThreadMessage("ch-1", "root-1", {
       content: "reply",
       clientMessageId: "client-2",
-      quoteMessageId: "quote-2",
+      quote: { messageId: "quote-2" },
     });
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
     expect(bodies[0]).toMatchObject({
       content: "hello",
       client_message_id: "client-1",
-      quote_message_id: "quote-1",
+      quote: { message_id: "quote-1", selected_text: "chosen excerpt" },
     });
     expect(bodies[1]).toMatchObject({
       content: "reply",
       client_message_id: "client-2",
-      quote_message_id: "quote-2",
+      quote: { message_id: "quote-2" },
     });
     expect(bodies[0]).not.toHaveProperty("reply_to_message_id");
     expect(bodies[1]).not.toHaveProperty("reply_to_message_id");

@@ -1021,7 +1021,10 @@ func sortAcceptanceManifestLockTargets(targets []acceptanceManifestLockTarget) {
 		if targets[i].Kind != targets[j].Kind {
 			return targets[i].Kind < targets[j].Kind
 		}
-		return targets[i].ArtifactID < targets[j].ArtifactID
+		if targets[i].ArtifactID != targets[j].ArtifactID {
+			return targets[i].ArtifactID < targets[j].ArtifactID
+		}
+		return targets[i].VersionRowID < targets[j].VersionRowID
 	})
 }
 

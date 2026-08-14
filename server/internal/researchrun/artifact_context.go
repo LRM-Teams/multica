@@ -266,6 +266,7 @@ type persistDispatchManifestInput struct {
 	Plan              dispatchManifestPlan
 	ExpectedWatermark int64
 	Purpose           ArtifactPurpose
+	BeforeCASHook     func(context.Context, *dispatchManifestPlan) error
 }
 
 func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) (dispatchManifestPlan, error) {
@@ -348,6 +349,11 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		plan.NormalGrantID, plan.NormalGrantRevision, plan.EvaluationGrantID, plan.EvaluationGrantRevision, plan.ManifestHash); err != nil {
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
 	}
+	if in.BeforeCASHook != nil {
+		if err := in.BeforeCASHook(ctx, &plan); err != nil {
+			return dispatchManifestPlan{}, err
+		}
+	}
 
 	if err := lockDispatchManifestCandidateRowsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
@@ -362,7 +368,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		}
 		if err := casArtifactVersionRepresentationTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
-			entry.ContentHash, entry.RepresentationHash,
+			entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}

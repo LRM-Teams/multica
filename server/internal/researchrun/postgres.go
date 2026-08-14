@@ -15,8 +15,9 @@ import (
 )
 
 type PostgresStore struct {
-	pool        *pgxpool.Pool
-	txFaultHook researchTxFaultHook
+	pool                          *pgxpool.Pool
+	txFaultHook                   researchTxFaultHook
+	dispatchManifestBeforeCASHook func(context.Context, *dispatchManifestPlan) error
 }
 
 var (

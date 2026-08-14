@@ -872,6 +872,45 @@ func TestMachineUpgradeRollbackRequiresRestoredFullSiblingSet(t *testing.T) {
 	}
 }
 
+func TestMachineUpgradeRollbackAllowsRetiredProviderGap(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	claudeID, retiredID, daemonID := createMachineUpgradeRuntimesWithProviders(t, testUserID, "claude", "antigravity")
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
+	claudeRuntime := getMachineUpgradeRuntime(t, claudeID)
+	if _, _, err := testHandler.processHeartbeat(context.Background(), claudeRuntime, false, false, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := testHandler.MachineUpgradeStore.Accept(
+		context.Background(), daemonID, created.ID, "generation-target", "v9.9.9", "v10.0.0",
+	)
+	if err != nil {
+		t.Fatalf("accept machine upgrade: %v", err)
+	}
+	if !sameMachineRuntimeSet(accepted.AcceptedRuntimeIDs, []string{claudeID, retiredID}) {
+		t.Fatalf("accepted Runtimes = %v", accepted.AcceptedRuntimeIDs)
+	}
+	for _, phase := range []MachineUpgradePhase{MachineUpgradeVerifying, MachineUpgradeHandoff} {
+		if _, err := testHandler.MachineUpgradeStore.Progress(context.Background(), daemonID, created.ID, phase, "", ""); err != nil {
+			t.Fatalf("advance %s: %v", phase, err)
+		}
+	}
+	if _, err := testHandler.MachineUpgradeStore.BeginRollback(
+		context.Background(), daemonID, created.ID, "generation-rollback", "candidate_takeover_failed", "candidate did not bind",
+	); err != nil {
+		t.Fatalf("begin rollback: %v", err)
+	}
+
+	rolledBack, err := testHandler.MachineUpgradeStore.AttestRollback(
+		context.Background(), daemonID, created.ID, "generation-rollback", claudeID, "v9.9.9", []string{claudeID},
+	)
+	if err != nil || rolledBack == nil || rolledBack.Phase != MachineUpgradeRolledBack ||
+		!sameMachineRuntimeSet(rolledBack.RollbackRuntimeIDs, []string{claudeID}) {
+		t.Fatalf("retired-provider rollback proof = %+v err=%v", rolledBack, err)
+	}
+}
+
 func TestMachineUpgradeFailedRollbackRetainsGenerationAndIsIdempotent(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

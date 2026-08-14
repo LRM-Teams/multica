@@ -6,6 +6,34 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("posts an explicit Goal delivery bootstrap and fails malformed responses closed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ goal: { id: 42, status: "future-state" } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.bootstrapChannelGoalControlPlane("channel-1", {
+      project_title: "Minecraft delivery",
+      repository_url: "https://github.com/LRM-Teams/minecraft",
+      default_branch_hint: "dev",
+    })).resolves.toEqual({ goal: null });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/channels/channel-1/goal/bootstrap",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          project_title: "Minecraft delivery",
+          repository_url: "https://github.com/LRM-Teams/minecraft",
+          default_branch_hint: "dev",
+        }),
+      }),
+    );
+  });
+
   it("loads one Workspace Runner Activity summary projection and fails closed on drift", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ items: [{ agent_id: 42, summary: null }] }), {

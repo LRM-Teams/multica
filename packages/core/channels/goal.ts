@@ -1,6 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api";
 import type {
+  BootstrapChannelGoalControlPlaneRequest,
   ClearChannelGoalSubgoalWaitingOnRequest,
   CreateChannelGoalRequest,
   CreateChannelGoalSubgoalRequest,
@@ -79,6 +80,16 @@ export function useCreateChannelGoal(channelId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CreateChannelGoalRequest) => api.createChannelGoal(channelId, input),
+    onSuccess: (data) => queryClient.setQueryData(channelGoalKeys.detail(channelId), data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: channelGoalKeys.detail(channelId) }),
+  });
+}
+
+export function useBootstrapChannelGoalControlPlane(channelId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BootstrapChannelGoalControlPlaneRequest) =>
+      api.bootstrapChannelGoalControlPlane(channelId, input),
     onSuccess: (data) => queryClient.setQueryData(channelGoalKeys.detail(channelId), data),
     onSettled: () => queryClient.invalidateQueries({ queryKey: channelGoalKeys.detail(channelId) }),
   });

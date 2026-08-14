@@ -419,10 +419,34 @@ func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedStateAdvan
 		t.Run(tc.name, func(t *testing.T) {
 			fx := setupPlanAcceptanceRaceFixture(t, ctx, pool)
 			defer cleanupResearchRunFixture(pool, fx.fixture)
+			var initialWatermark int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&initialWatermark); err != nil {
+				t.Fatalf("read initial policy watermark: %v", err)
+			}
 			invokeAcceptWithBeforeCommitFault(t, ctx, fx)
 			assertAcceptanceRolledBack(t, ctx, fx)
+			var rolledBackWatermark int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&rolledBackWatermark); err != nil {
+				t.Fatalf("read rolled-back policy watermark: %v", err)
+			}
+			if rolledBackWatermark != initialWatermark {
+				t.Fatalf("rolled-back watermark=%d want initial=%d", rolledBackWatermark, initialWatermark)
+			}
 			if err = tc.mutate(ctx, fx); err != nil {
 				t.Fatalf("advance unrelated state: %v", err)
+			}
+			var beforeRetryWatermark int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&beforeRetryWatermark); err != nil {
+				t.Fatalf("read pre-retry policy watermark: %v", err)
 			}
 			outcome, acceptErr := fx.store.AcceptResult(ctx, fx.input)
 			if acceptErr != nil {
@@ -432,14 +456,28 @@ func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedStateAdvan
 				t.Fatalf("outcome=%+v", outcome)
 			}
 			var resultArtifacts int
+			var acceptanceWatermark int64
 			if err = pool.QueryRow(ctx, `
-				SELECT count(*)::int FROM research_result_artifact
+				SELECT count(*)::int, max(acceptance_policy_watermark)::bigint FROM research_result_artifact
 				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-			`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&resultArtifacts); err != nil {
+			`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&resultArtifacts, &acceptanceWatermark); err != nil {
 				t.Fatal(err)
 			}
 			if resultArtifacts != 1 {
 				t.Fatalf("result artifacts=%d want 1", resultArtifacts)
+			}
+			var finalWatermark int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&finalWatermark); err != nil {
+				t.Fatalf("read final policy watermark: %v", err)
+			}
+			if finalWatermark != beforeRetryWatermark+1 {
+				t.Fatalf("final watermark=%d want retry reservation=%d", finalWatermark, beforeRetryWatermark+1)
+			}
+			if acceptanceWatermark != finalWatermark {
+				t.Fatalf("result acceptance watermark=%d want final reserved=%d", acceptanceWatermark, finalWatermark)
 			}
 		})
 	}

@@ -57,6 +57,15 @@ type dispatchManifestPlan struct {
 	Purpose                 ArtifactPurpose
 }
 
+func isDispatchManifestCandidateKind(kind ArtifactEntityKind) bool {
+	switch kind {
+	case ArtifactKindAttempt, ArtifactKindContextManifest, ArtifactKindResultArtifact:
+		return false
+	default:
+		return true
+	}
+}
+
 func (m ArtifactContextModule) PlanDispatchManifest(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -113,6 +122,9 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		candidate.RepresentationBytes = []byte(candidate.ContentHash)
 		candidate.RepresentationHash = contentHashFromPayload(candidate.RepresentationBytes)
 		entries = append(entries, candidate)
+	}
+	if err = auditManifestCandidateDispositions(candidates, entries, omissions, clearance, purpose, m.policy); err != nil {
+		return dispatchManifestPlan{}, err
 	}
 	sortManifestEntryCandidates(entries)
 
@@ -283,6 +295,9 @@ func loadArtifactVersionCandidates(
 		}
 		kind, parseErr := ParseArtifactEntityKind(kindRaw)
 		if parseErr != nil {
+			return nil, parseErr
+		}
+		if !isDispatchManifestCandidateKind(kind) {
 			continue
 		}
 		candidate.Kind = kind
@@ -292,6 +307,91 @@ func loadArtifactVersionCandidates(
 		out = append(out, candidate)
 	}
 	return out, rows.Err()
+}
+
+func auditManifestCandidateDispositions(
+	candidates, entries, omissions []artifactVersionCandidate,
+	clearance ArtifactClearance,
+	purpose ArtifactPurpose,
+	policy ArtifactPolicy,
+) error {
+	want := make(map[string]artifactVersionCandidate, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.VersionRowID == "" {
+			return fmt.Errorf("%w: Manifest candidate has empty version identity", ErrInvalidTransition)
+		}
+		if _, duplicate := want[candidate.VersionRowID]; duplicate {
+			return fmt.Errorf("%w: duplicate Manifest candidate version %s", ErrInvalidTransition, candidate.VersionRowID)
+		}
+		want[candidate.VersionRowID] = candidate
+	}
+
+	seen := make(map[string]string, len(candidates))
+	check := func(candidate artifactVersionCandidate, disposition string) error {
+		original, ok := want[candidate.VersionRowID]
+		if !ok || original.ArtifactID != candidate.ArtifactID {
+			return fmt.Errorf("%w: Manifest %s references a non-candidate version %s", ErrInvalidTransition, disposition, candidate.VersionRowID)
+		}
+		if prior, duplicate := seen[candidate.VersionRowID]; duplicate {
+			return fmt.Errorf("%w: Manifest candidate version %s has both %s and %s dispositions", ErrInvalidTransition, candidate.VersionRowID, prior, disposition)
+		}
+		seen[candidate.VersionRowID] = disposition
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.OmissionReason != "" {
+			return fmt.Errorf("%w: admitted Manifest entry has omission reason", ErrInvalidTransition)
+		}
+		if err := check(entry, "entry"); err != nil {
+			return err
+		}
+	}
+	for _, omission := range omissions {
+		if omission.OmissionReason == "" {
+			return fmt.Errorf("%w: omitted Manifest candidate has no reason", ErrInvalidTransition)
+		}
+		if err := check(omission, "omission"); err != nil {
+			return err
+		}
+	}
+	if len(seen) != len(want) {
+		missing := make([]string, 0, len(want)-len(seen))
+		for versionID := range want {
+			if _, ok := seen[versionID]; !ok {
+				missing = append(missing, versionID)
+			}
+		}
+		sort.Strings(missing)
+		return fmt.Errorf("%w: Manifest candidates lack disposition: %s", ErrInvalidTransition, strings.Join(missing, ","))
+	}
+
+	for versionID, candidate := range want {
+		expected := "entry"
+		expectedReason := ""
+		if policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
+			expected = "omission"
+			expectedReason = policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
+		} else if admitted, deny := policy.LegacyAdmissionAllowed(candidate.Kind, candidate.Lifecycle, candidate.Provenance); !admitted {
+			expected = "omission"
+			expectedReason = policy.ManifestOmissionReason(deny)
+		} else if allowed, deny := policy.CanReadNormal(
+			clearance, candidate.AccessLevel, purpose, policy.EvaluationPrivateKind(candidate.Kind),
+		); !allowed {
+			expected = "omission"
+			expectedReason = policy.ManifestOmissionReason(deny)
+		}
+		if seen[versionID] != expected {
+			return fmt.Errorf("%w: Manifest candidate version %s disposition=%s want=%s", ErrInvalidTransition, versionID, seen[versionID], expected)
+		}
+		if expected == "omission" {
+			for _, omission := range omissions {
+				if omission.VersionRowID == versionID && omission.OmissionReason != expectedReason {
+					return fmt.Errorf("%w: Manifest candidate version %s omission reason=%s want=%s", ErrInvalidTransition, versionID, omission.OmissionReason, expectedReason)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 type persistDispatchManifestInput struct {

@@ -45,6 +45,7 @@ const (
 	ArtifactKindDeliberation             ArtifactEntityKind = "deliberation"
 	ArtifactKindDeliberationTurn         ArtifactEntityKind = "deliberation_turn"
 	ArtifactKindResearchDirectorIdentity ArtifactEntityKind = "research_director_identity"
+	ArtifactKindAdjudicationDecision     ArtifactEntityKind = "adjudication_decision"
 )
 
 var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
@@ -84,6 +85,7 @@ var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
 	ArtifactKindDeliberation:             {},
 	ArtifactKindDeliberationTurn:         {},
 	ArtifactKindResearchDirectorIdentity: {},
+	ArtifactKindAdjudicationDecision:     {},
 }
 
 // ArtifactLifecycleStatus is passport admissibility, not domain status.

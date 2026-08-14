@@ -35,9 +35,27 @@ type V6DeliberationTurn struct {
 }
 
 type V6DeliberationResult struct {
-	Envelope V6IntegrationResult
-	Dispute  V6DisputeProposal
-	Turns    []V6DeliberationTurn
+	Envelope     V6IntegrationResult
+	Dispute      V6DisputeProposal
+	Turns        []V6DeliberationTurn
+	Adjudication *V6DirectorAdjudication
+}
+
+type V6AdjudicationAssessment struct {
+	PositionID   string        `json:"position_id"`
+	Disposition  string        `json:"disposition"`
+	Rationale    string        `json:"rationale"`
+	EvidenceRefs []V6EntityRef `json:"evidence_refs"`
+}
+
+type V6DirectorAdjudication struct {
+	ActorAgentID            string                     `json:"actor_agent_id"`
+	DirectorIdentityVersion int                        `json:"director_identity_version"`
+	Decision                string                     `json:"decision"`
+	Rationale               string                     `json:"rationale"`
+	Conditions              []string                   `json:"conditions"`
+	ResidualUncertainty     string                     `json:"residual_uncertainty"`
+	PositionAssessments     []V6AdjudicationAssessment `json:"position_assessments"`
 }
 
 func DecodeAndValidateV6DeliberationResult(raw []byte) (V6DeliberationResult, string, error) {
@@ -64,7 +82,14 @@ func DecodeAndValidateV6DeliberationResult(raw []byte) (V6DeliberationResult, st
 		len(envelope.Disputes) != 1 || len(envelope.ProposedTasks) != 0 || presentJSON(envelope.Divergence) || presentJSON(envelope.Report) || presentJSON(envelope.Evaluation) {
 		return V6DeliberationResult{}, "", fmt.Errorf("%w: deliberation result contains fields owned by another task kind", ErrInvalidResult)
 	}
-	if err := envelope.Disputes[0].validate(0, map[string]struct{}{}); err != nil {
+	isAdjudication := len(envelope.Disputes[0].Positions) == 1 && envelope.Disputes[0].Positions[0]["decision"] != nil
+	if !isAdjudication {
+		if err := envelope.Disputes[0].validate(0, map[string]struct{}{}); err != nil {
+			return V6DeliberationResult{}, "", err
+		}
+	} else if err := validateV6Key("dispute.client_key", envelope.Disputes[0].ClientKey); err != nil {
+		return V6DeliberationResult{}, "", err
+	} else if err := validateV6Ref("dispute.subject", envelope.Disputes[0].Subject); err != nil {
 		return V6DeliberationResult{}, "", err
 	}
 	if len(envelope.StatusUpdates) != 1 || envelope.StatusUpdates[0].Target.Kind != "dispute" || envelope.StatusUpdates[0].Target.Key != envelope.Disputes[0].ClientKey {
@@ -72,6 +97,19 @@ func DecodeAndValidateV6DeliberationResult(raw []byte) (V6DeliberationResult, st
 	}
 	if err := envelope.StatusUpdates[0].validate(0); err != nil {
 		return V6DeliberationResult{}, "", err
+	}
+	if isAdjudication {
+		if _, adjudication := envelope.Disputes[0].Positions[0]["decision"]; adjudication {
+			value, err := decodeV6DirectorAdjudication(envelope.Disputes[0].Positions[0])
+			if err != nil {
+				return V6DeliberationResult{}, "", err
+			}
+			canonical, err := MarshalArtifactCanonicalJSON(json.RawMessage(raw))
+			if err != nil {
+				return V6DeliberationResult{}, "", err
+			}
+			return V6DeliberationResult{Envelope: envelope, Dispute: envelope.Disputes[0], Adjudication: &value}, ArtifactContentHashFromCanonicalJSON(canonical), nil
+		}
 	}
 	turns := make([]V6DeliberationTurn, 0, len(envelope.Disputes[0].Positions))
 	seenActors := map[string]bool{}
@@ -110,6 +148,49 @@ func DecodeAndValidateV6DeliberationResult(raw []byte) (V6DeliberationResult, st
 		return V6DeliberationResult{}, "", err
 	}
 	return V6DeliberationResult{Envelope: envelope, Dispute: envelope.Disputes[0], Turns: turns}, ArtifactContentHashFromCanonicalJSON(canonical), nil
+}
+
+func decodeV6DirectorAdjudication(position map[string]any) (V6DirectorAdjudication, error) {
+	raw, err := json.Marshal(position)
+	if err != nil {
+		return V6DirectorAdjudication{}, err
+	}
+	var shape map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &shape); err != nil {
+		return V6DirectorAdjudication{}, err
+	}
+	if err = requireV6Fields("director adjudication", shape, "actor_agent_id", "director_identity_version", "decision", "rationale", "conditions", "residual_uncertainty", "position_assessments"); err != nil {
+		return V6DirectorAdjudication{}, err
+	}
+	var value V6DirectorAdjudication
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&value); err != nil {
+		return value, fmt.Errorf("%w: director adjudication: %v", ErrInvalidResult, err)
+	}
+	if _, err = uuid.Parse(value.ActorAgentID); err != nil || value.DirectorIdentityVersion < 1 || strings.TrimSpace(value.Rationale) == "" || len(value.Rationale) > 32768 || value.Conditions == nil || value.PositionAssessments == nil || len(value.PositionAssessments) == 0 || len(value.ResidualUncertainty) > 32768 {
+		return value, fmt.Errorf("%w: director adjudication identity or content is invalid", ErrInvalidResult)
+	}
+	if value.Decision != "resolved" && value.Decision != "conditionally_resolved" && value.Decision != "irreducible" {
+		return value, fmt.Errorf("%w: director adjudication decision is invalid", ErrInvalidResult)
+	}
+	seen := map[string]bool{}
+	for i, assessment := range value.PositionAssessments {
+		if _, err = uuid.Parse(assessment.PositionID); err != nil || seen[assessment.PositionID] || strings.TrimSpace(assessment.Rationale) == "" || len(assessment.EvidenceRefs) == 0 {
+			return value, fmt.Errorf("%w: director adjudication assessment[%d] is invalid", ErrInvalidResult, i)
+		}
+		seen[assessment.PositionID] = true
+		if assessment.Disposition != "retained" && assessment.Disposition != "conditioned" && assessment.Disposition != "rejected" {
+			return value, fmt.Errorf("%w: director adjudication assessment[%d] disposition is invalid", ErrInvalidResult, i)
+		}
+		if err = validateV6Refs("director adjudication evidence_refs", assessment.EvidenceRefs, 1, 128); err != nil {
+			return value, err
+		}
+	}
+	if value.Decision == "conditionally_resolved" && len(value.Conditions) == 0 {
+		return value, fmt.Errorf("%w: conditional adjudication requires conditions", ErrInvalidResult)
+	}
+	return value, nil
 }
 
 func validateV6DeliberationTurn(turn V6DeliberationTurn) error {

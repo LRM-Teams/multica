@@ -118,7 +118,7 @@ func expectedLegacyAdmission(
 		return false, ArtifactDenyUnknownKind
 	}
 	switch kind {
-	case ArtifactKindContextManifest, ArtifactKindHypothesis, ArtifactKindBranch, ArtifactKindInsight, ArtifactKindIntegrationContribution, ArtifactKindIntegrationRound, ArtifactKindDispute, ArtifactKindDisputePosition, ArtifactKindDeliberation, ArtifactKindDeliberationTurn, ArtifactKindResearchDirectorIdentity, ArtifactKindInquiryEdge:
+	case ArtifactKindContextManifest, ArtifactKindHypothesis, ArtifactKindBranch, ArtifactKindInsight, ArtifactKindIntegrationContribution, ArtifactKindIntegrationRound, ArtifactKindDispute, ArtifactKindDisputePosition, ArtifactKindDeliberation, ArtifactKindDeliberationTurn, ArtifactKindResearchDirectorIdentity, ArtifactKindAdjudicationDecision, ArtifactKindInquiryEdge:
 		return false, ArtifactDenyLegacyIneligible
 	}
 	if lifecycle != ArtifactLifecycleRegistered && lifecycle != ArtifactLifecycleAccepted {
@@ -145,6 +145,7 @@ func TestArtifactPolicyLegacyAdmissionDeniesDAndFutureOnlyKinds(t *testing.T) {
 		ArtifactKindDisputePosition,
 		ArtifactKindDeliberation,
 		ArtifactKindDeliberationTurn,
+		ArtifactKindAdjudicationDecision,
 		ArtifactKindResearchDirectorIdentity,
 		ArtifactKindInquiryEdge,
 	} {

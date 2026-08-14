@@ -17,6 +17,9 @@ func materializeAcceptedV6DeliberationTx(ctx context.Context, tx pgx.Tx, state a
 	if state.stale {
 		return fmt.Errorf("%w: stale Deliberation Result cannot mutate canonical state", ErrInvalidTransition)
 	}
+	if result.Adjudication != nil {
+		return materializeAcceptedV6DirectorAdjudicationTx(ctx, tx, state, result, agentID)
+	}
 	var disputeID, disputeStatus, subjectKind, subjectID string
 	if err := tx.QueryRow(ctx, `SELECT dispute.id::text,dispute.status,dispute.subject_kind,dispute.subject_entity_id::text
 		FROM research_dispute dispute
@@ -166,6 +169,11 @@ func createDirectorAdjudicationTaskTx(ctx context.Context, tx pgx.Tx, state acce
 		}
 		return "", err
 	}
+	var directorIdentityID string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM research_director_identity WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+		AND identity_version=$3 AND agent_id=$4::uuid`, state.workspaceID, state.run.SessionID, identityVersion, directorID).Scan(&directorIdentityID); err != nil {
+		return "", err
+	}
 	taskID := uuid.NewSHA1(uuid.MustParse(disputeID), []byte(fmt.Sprintf("director-adjudication/%d", identityVersion))).String()
 	clientKey := "lead-adjudication:" + disputeID
 	criteria, _ := json.Marshal(map[string]any{"mode": "director_adjudication", "dispute_id": disputeID, "deliberation_id": deliberationID,
@@ -195,6 +203,33 @@ func createDirectorAdjudicationTaskTx(ctx context.Context, tx pgx.Tx, state acce
 	}
 	if err := persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, ArtifactKindTask,
 		deliberationID, ArtifactKindDeliberation, "reviews_deadlock", "director_adjudication", 1); err != nil {
+		return "", err
+	}
+	if err := persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, ArtifactKindTask,
+		directorIdentityID, ArtifactKindResearchDirectorIdentity, "authorized_director", "director_adjudication", 2); err != nil {
+		return "", err
+	}
+	positionRows, err := tx.Query(ctx, `SELECT id::text FROM research_dispute_position WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+		AND dispute_id=$3::uuid ORDER BY id::text`, state.workspaceID, state.run.SessionID, disputeID)
+	if err != nil {
+		return "", err
+	}
+	ordinal := 3
+	for positionRows.Next() {
+		var positionID string
+		if err = positionRows.Scan(&positionID); err != nil {
+			positionRows.Close()
+			return "", err
+		}
+		if err = persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, ArtifactKindTask,
+			positionID, ArtifactKindDisputePosition, "adjudicates_position", "director_adjudication", ordinal); err != nil {
+			positionRows.Close()
+			return "", err
+		}
+		ordinal++
+	}
+	positionRows.Close()
+	if err = positionRows.Err(); err != nil {
 		return "", err
 	}
 	if err := persistMaterializedTaskRelationshipReferencesTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID); err != nil {

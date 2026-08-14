@@ -1136,7 +1136,7 @@ func (h *Hub) register(c *client) {
 }
 
 func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerReadyPayload) bool {
-	if c == nil || ready.Validate() != nil || ready.WorkspaceID != c.identity.WorkspaceID {
+	if c == nil || !validWorkspaceRunnerReady(ready) || ready.WorkspaceID != c.identity.WorkspaceID {
 		return false
 	}
 	key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
@@ -1158,6 +1158,35 @@ func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerRead
 	}
 	c.startRunnerWatchdog()
 	return true
+}
+
+func validWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
+	return ready.Validate() == nil || validLegacyUpgradeWorkspaceRunnerReady(ready)
+}
+
+// validLegacyUpgradeWorkspaceRunnerReady is a server-only rolling-upgrade
+// adapter for the immediately preceding Computer release. That release can
+// carry machine upgrade actions over the Runner control plane but advertises
+// the retired Attachment capability instead of the current Agent process one.
+// Validate a copy with the current capability added, then retain the original
+// capability set on the connection so new Agent process commands stay fenced.
+func validLegacyUpgradeWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
+	const legacyWorkspaceRunnerAttachmentCapability = "workspace_runner_attachment_v1"
+	var supportsLegacyAttachment, supportsControlPlane bool
+	for _, capability := range ready.ActiveCapabilities {
+		switch capability {
+		case legacyWorkspaceRunnerAttachmentCapability:
+			supportsLegacyAttachment = true
+		case protocol.DaemonCapabilityWorkspaceRunnerControlPlane:
+			supportsControlPlane = true
+		}
+	}
+	if !supportsLegacyAttachment || !supportsControlPlane {
+		return false
+	}
+	compatible := ready
+	compatible.ActiveCapabilities = append(append([]string(nil), ready.ActiveCapabilities...), protocol.DaemonCapabilityWorkspaceRunnerAgentProcess)
+	return compatible.Validate() == nil
 }
 
 func (h *Hub) isCurrentWorkspaceRunner(c *client) bool {

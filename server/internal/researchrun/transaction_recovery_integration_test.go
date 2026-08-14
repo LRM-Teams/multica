@@ -1240,6 +1240,57 @@ func TestMarkEventProjectedTransactionRecovery(t *testing.T) {
 	})
 }
 
+func TestArtifactLifecycleChangeTransactionRecovery(t *testing.T) {
+	runTransactionRecoveryMatrix(t, txOpArtifactLifecycleChange, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+		artifactID := uuid.NewString()
+		seedIntegrationClaimArtifact(
+			t, run.ctx, run.pool, run.fixture.workspaceID, run.fixture.sessionID,
+			artifactID, "recovery-withdrawal", "withdrawal transaction recovery",
+		)
+		change := artifactLifecycleChange{
+			OperationID: uuid.NewString(), WorkspaceID: run.fixture.workspaceID,
+			SessionID: run.fixture.sessionID, ArtifactID: artifactID,
+			Kind: artifactLifecycleWithdraw, Reason: "recovery withdrawal",
+		}
+		invoke := func() error {
+			_, err := (artifactLifecycleModule{store: run.store}).Change(run.ctx, change)
+			return err
+		}
+		assertState := func(wantLifecycle string, wantLedger int) {
+			t.Helper()
+			var lifecycle string
+			var revision int64
+			var events, mutations int
+			if err := run.pool.QueryRow(run.ctx, `
+				SELECT lifecycle_status, eligibility_revision
+				FROM research_artifact_passport
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+			`, run.fixture.workspaceID, run.fixture.sessionID, artifactID).Scan(&lifecycle, &revision); err != nil {
+				t.Fatal(err)
+			}
+			if err := run.pool.QueryRow(run.ctx, `
+				SELECT
+				  (SELECT count(*)::int FROM research_artifact_lifecycle_event
+				   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid),
+				  (SELECT count(*)::int FROM research_artifact_policy_mutation
+				   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$4::uuid
+				     AND mutation_kind='lifecycle')
+			`, run.fixture.workspaceID, run.fixture.sessionID, change.OperationID, artifactID).Scan(&events, &mutations); err != nil {
+				t.Fatal(err)
+			}
+			if lifecycle != wantLifecycle || events != wantLedger || mutations != wantLedger {
+				t.Fatalf("lifecycle=%q revision=%d events=%d mutations=%d want=%q/*/%d/%d", lifecycle, revision, events, mutations, wantLifecycle, wantLedger, wantLedger)
+			}
+		}
+		return transactionRecoveryOperation{
+			invoke:           invoke,
+			assertRolledBack: func() { assertState("registered", 0) },
+			assertCommitted:  func() { assertState("withdrawn", 1) },
+			recover:          invoke,
+		}
+	})
+}
+
 func TestClaimRunTransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpReconcileLeaseClaim, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		token := uuid.NewString()

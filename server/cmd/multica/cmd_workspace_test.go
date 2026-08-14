@@ -645,6 +645,122 @@ func TestRunWorkspaceInfo(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceInfoAgentTokenUsesDedicatedSurface(t *testing.T) {
+	const wsID = "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff"
+	const agentID = "8f04317a-0000-0000-0000-000000000001"
+
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		if r.URL.Path != "/api/agent/workspace-info" {
+			http.Error(w, `{"error":"agent must use dedicated /api/agent/* route"}`, http.StatusForbidden)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"workspace": map[string]any{
+				"id": wsID, "name": "LRM-team", "slug": "lrm-team",
+			},
+			"agents": []map[string]any{
+				{
+					"id": agentID, "name": "alice", "display_name": "Alice",
+					"status": "idle", "runtime_status": "online",
+					"runtime_display_status": "online", "runtime_name": "s144",
+				},
+			},
+			"computers": []map[string]any{
+				{
+					"id": "rt1", "name": "s144", "provider": "codex",
+					"status": "online", "runtime_health": "ok",
+				},
+			},
+			"tasks": []map[string]any{},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_TOKEN", "mat_test-agent-token")
+	t.Setenv("MULTICA_WORKSPACE_ID", wsID)
+
+	cmd := newWorkspaceInfoTestCmd()
+	_ = cmd.Flags().Set("agents", "true")
+
+	if err := runWorkspaceInfo(cmd, nil); err != nil {
+		t.Fatalf("runWorkspaceInfo with agent token: %v (paths: %v)", err, paths)
+	}
+	if len(paths) != 1 || paths[0] != "GET /api/agent/workspace-info" {
+		t.Fatalf("paths = %v, want one dedicated agent workspace-info request", paths)
+	}
+}
+
+func TestRunWorkspaceInfoAgentTokenProjectsUseDedicatedSurface(t *testing.T) {
+	const wsID = "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff"
+
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/api/agent/workspace-info":
+			json.NewEncoder(w).Encode(map[string]any{
+				"workspace": map[string]any{"id": wsID, "name": "LRM-team", "slug": "lrm-team"},
+				"agents":    []map[string]any{},
+				"computers": []map[string]any{},
+				"tasks":     []map[string]any{},
+			})
+		case "/api/agent/projects":
+			if r.URL.Query().Get("include_resources") != "true" {
+				t.Fatalf("include_resources=%q want true", r.URL.Query().Get("include_resources"))
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{
+					{
+						"id": "proj-1", "title": "Agent UX", "status": "in_progress",
+						"resources": []map[string]any{
+							{"id": "res-1", "resource_type": "github_repo", "resource_ref": map[string]any{"url": "https://github.com/org/agent-ux"}},
+						},
+					},
+				},
+				"total": 1,
+			})
+		default:
+			http.Error(w, `{"error":"agent must use dedicated /api/agent/* route"}`, http.StatusForbidden)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_TOKEN", "mat_test-agent-token")
+	t.Setenv("MULTICA_WORKSPACE_ID", wsID)
+
+	cmd := newWorkspaceInfoTestCmd()
+	_ = cmd.Flags().Set("projects", "true")
+	if err := runWorkspaceInfo(cmd, nil); err != nil {
+		t.Fatalf("runWorkspaceInfo --projects with agent token: %v (paths: %v)", err, paths)
+	}
+	want := []string{"GET /api/agent/workspace-info", "GET /api/agent/projects"}
+	if strings.Join(paths, "|") != strings.Join(want, "|") {
+		t.Fatalf("paths = %v, want dedicated agent paths %v", paths, want)
+	}
+}
+
+func newWorkspaceInfoTestCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "info"}
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("output", "table", "")
+	cmd.Flags().Bool("include-archived", false, "")
+	cmd.Flags().Bool("agents", false, "")
+	cmd.Flags().Bool("computers", false, "")
+	cmd.Flags().Bool("projects", false, "")
+	cmd.Flags().String("query", "", "")
+	cmd.Flags().Int("limit", 0, "")
+	cmd.Flags().Int("offset", 0, "")
+	return cmd
+}
+
 func TestFilterAndPageWorkspaceInfo(t *testing.T) {
 	agents := []workspaceInfoAgentRow{
 		{Name: "alice", Status: "idle", Error: "quota"},

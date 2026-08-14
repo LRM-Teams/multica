@@ -500,6 +500,7 @@ type RunSnapshot struct {
 	Observations       []Observation              `json:"observations"`
 	Claims             []Claim                    `json:"claims"`
 	EvaluationPrivate  []EvaluationPrivateContext `json:"evaluation_private,omitempty"`
+	LegacyContext      *FrozenLegacyContext       `json:"-"`
 	Gate               GateResult                 `json:"gate"`
 	AttemptContext     *AttemptArtifactContext    `json:"attempt_context,omitempty"`
 	ArtifactProjection *ArtifactProjection        `json:"artifact_projection,omitempty"`
@@ -507,6 +508,76 @@ type RunSnapshot struct {
 	// Context Manifest. It is handler-only compatibility metadata, not another
 	// Research artifact family.
 	PrincipalHeader []FleetMember `json:"-"`
+}
+
+// FrozenLegacyContext retains V1-V5 compatibility families selected into one
+// Attempt manifest. Values are dispatch-time representations, never live rows.
+type FrozenLegacyContext struct {
+	Sources           []FrozenLegacySource        `json:"sources"`
+	Messages          []FrozenResearchMessage     `json:"messages"`
+	ProductRounds     []FrozenProductRound        `json:"product_rounds"`
+	ThoughtStrategies []FrozenThoughtStrategyNode `json:"thought_strategy_nodes"`
+	Report            *FrozenResearchReport       `json:"report,omitempty"`
+}
+
+type FrozenLegacySource struct {
+	ID                string          `json:"id"`
+	SessionID         string          `json:"session_id"`
+	URL               string          `json:"url"`
+	Title             string          `json:"title"`
+	SourceClass       string          `json:"source_class"`
+	CredibilityWeight float64         `json:"credibility_weight"`
+	Stance            string          `json:"stance"`
+	Relevance         float64         `json:"relevance"`
+	Summary           string          `json:"summary"`
+	Excerpt           string          `json:"excerpt"`
+	Payload           json.RawMessage `json:"payload"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+}
+
+type FrozenResearchMessage struct {
+	ID            string          `json:"id"`
+	SessionID     string          `json:"session_id"`
+	SenderType    string          `json:"sender_type"`
+	SenderID      string          `json:"sender_id,omitempty"`
+	TargetAgentID string          `json:"target_agent_id,omitempty"`
+	Body          string          `json:"body"`
+	CardKind      string          `json:"card_kind"`
+	Meta          json.RawMessage `json:"meta"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+type FrozenProductRound struct {
+	ID                string          `json:"id"`
+	SessionID         string          `json:"session_id"`
+	RoundNumber       int32           `json:"round_number"`
+	Decision          string          `json:"decision"`
+	CoverageGaps      json.RawMessage `json:"coverage_gaps"`
+	ConfidenceNote    string          `json:"confidence_note"`
+	BudgetUsed        int32           `json:"budget_used"`
+	BudgetRemaining   int32           `json:"budget_remaining"`
+	GoalPatchProposal string          `json:"goal_patch_proposal,omitempty"`
+	NextRoundFocus    string          `json:"next_round_focus,omitempty"`
+	DecidedByAgentID  string          `json:"decided_by_agent_id,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+}
+
+type FrozenThoughtStrategyNode struct {
+	ID        string          `json:"id"`
+	SessionID string          `json:"session_id"`
+	Payload   json.RawMessage `json:"payload"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type FrozenResearchReport struct {
+	ID         string          `json:"id"`
+	SessionID  string          `json:"session_id"`
+	Revision   int32           `json:"revision"`
+	ContentMD  string          `json:"content_md"`
+	Structured json.RawMessage `json:"structured"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
 // ArtifactProjection is the bounded, hash-stable passport read model. It never

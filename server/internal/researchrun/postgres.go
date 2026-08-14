@@ -729,6 +729,11 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		return RunSnapshot{}, err
 	}
 	filtered.EvaluationPrivate = privateEvaluations
+	frozenLegacy, err := loadFrozenLegacyContextPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.LegacyContext = &frozenLegacy
 	frozenSources, frozenObservations, frozenClaims, err := loadFrozenEvidenceRepresentationsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return RunSnapshot{}, err

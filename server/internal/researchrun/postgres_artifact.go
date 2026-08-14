@@ -193,6 +193,96 @@ func stringPtrValue(value *string) string {
 	return *value
 }
 
+func registerProductionTaskPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, taskID, producedByAttemptID string,
+	accessLevel ArtifactAccessLevel,
+) error {
+	var questionID, parentTaskID, clientKey, kind, objective, capability, expected string
+	var criteria []byte
+	var priority float64
+	var goalVersion, planVersion, maxAttempts, timeoutSeconds int32
+	var createdAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(question_id::text, ''), COALESCE(parent_task_id::text, ''),
+		       client_key, kind, objective, required_capability, expected_result,
+		       acceptance_criteria, priority, goal_version, plan_version,
+		       max_attempts, timeout_seconds, created_at
+		FROM research_task
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, taskID).Scan(
+		&questionID, &parentTaskID, &clientKey, &kind, &objective, &capability, &expected,
+		&criteria, &priority, &goalVersion, &planVersion, &maxAttempts, &timeoutSeconds, &createdAt,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT depends_on_task_id::text
+		FROM research_task_dependency
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND task_id = $3::uuid
+		ORDER BY depends_on_task_id
+	`, workspaceID, sessionID, taskID)
+	if err != nil {
+		return err
+	}
+	dependencies := make([]string, 0)
+	for rows.Next() {
+		var dependencyID string
+		if err = rows.Scan(&dependencyID); err != nil {
+			rows.Close()
+			return err
+		}
+		dependencies = append(dependencies, dependencyID)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	contentHash, err := ArtifactContentHash(ArtifactKindTask, taskArtifactContent(
+		questionID, parentTaskID, clientKey, kind, objective, capability, expected,
+		criteria, priority, int(goalVersion), int(planVersion), int(maxAttempts), int(timeoutSeconds), dependencies,
+	))
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: taskID,
+		Kind: ArtifactKindTask, SourceCreatedAt: &createdAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            &goalVersion, PlanVersion: &planVersion,
+		AccessLevel: accessLevel, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash, ProducedByAttemptID: producedByAttemptID,
+	})
+}
+
+func taskArtifactContent(
+	questionID, parentTaskID, clientKey, kind, objective, capability, expected string,
+	criteria []byte,
+	priority float64,
+	goalVersion, planVersion, maxAttempts, timeoutSeconds int,
+	dependencies []string,
+) map[string]any {
+	return map[string]any{
+		"question_id":         questionID,
+		"parent_task_id":      parentTaskID,
+		"client_key":          clientKey,
+		"kind":                kind,
+		"objective":           objective,
+		"required_capability": capability,
+		"expected_result":     expected,
+		"acceptance_criteria": json.RawMessage(criteria),
+		"priority":            priority,
+		"goal_version":        goalVersion,
+		"plan_version":        planVersion,
+		"max_attempts":        maxAttempts,
+		"timeout_seconds":     timeoutSeconds,
+		"dependencies":        dependencies,
+	}
+}
+
 func registerProductionQuestionPassportTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -356,11 +446,7 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 	`, workspaceID, sessionID).Scan(&taskID, &taskCreatedAt); err != nil {
 		return err
 	}
-	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
-		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: taskID,
-		Kind: ArtifactKindTask, SourceCreatedAt: &taskCreatedAt,
-		GoalVersion: &goalVersion, PlanVersion: &planVersion,
-	})
+	return registerProductionTaskPassportTx(ctx, tx, workspaceID, sessionID, taskID, "", ArtifactAccessRaw)
 }
 
 func contractRevisionArtifactContent(

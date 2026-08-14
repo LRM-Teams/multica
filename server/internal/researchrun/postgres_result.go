@@ -737,6 +737,7 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 		return 0, fmt.Errorf("%w: proposed tasks exceed remaining run budget", ErrInvalidResult)
 	}
 	created := 0
+	createdTaskIDs := make([]string, 0, missing)
 	for _, proposal := range proposals {
 		questionID := ""
 		if proposal.QuestionKey != "" {
@@ -802,9 +803,7 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 		} else if err == nil {
 			created++
 			taskIDs[proposal.ClientKey] = id
-			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindTask, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
-				return 0, err
-			}
+			createdTaskIDs = append(createdTaskIDs, id)
 		}
 		if err != nil {
 			return 0, err
@@ -846,6 +845,14 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 		return 0, err
 	} else if cyclic {
 		return 0, fmt.Errorf("%w: persisted task dependency graph contains a cycle", ErrInvalidResult)
+	}
+	for _, taskID := range createdTaskIDs {
+		if err = registerProductionTaskPassportTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, taskID,
+			state.attemptID, state.outputAccess,
+		); err != nil {
+			return 0, err
+		}
 	}
 	return created, nil
 }

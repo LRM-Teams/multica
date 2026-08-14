@@ -403,13 +403,13 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	}
 
 	for _, entry := range plan.Entries {
-		if err := casPassportEligibilityRevisionTx(
+		if err := casPassportSelectionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.ArtifactID,
-			entry.Version, entry.EligibilityRevision, entry.Lifecycle,
+			entry.Kind, entry.Version, entry.EligibilityRevision, entry.Lifecycle, entry.Provenance,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}
-		if err := casArtifactVersionRepresentationTx(
+		if err := casArtifactVersionSelectionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
 			entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
 		); err != nil {

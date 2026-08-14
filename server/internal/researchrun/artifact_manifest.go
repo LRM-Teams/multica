@@ -22,13 +22,15 @@ func readPolicyWatermarkTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionI
 	return watermark, err
 }
 
-func casPassportEligibilityRevisionTx(
+func casPassportSelectionTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, artifactID string,
+	kind ArtifactEntityKind,
 	currentVersion int32,
 	eligibilityRevision int64,
 	lifecycle ArtifactLifecycleStatus,
+	provenance ArtifactProvenanceCompleteness,
 ) error {
 	// Passport has no updated_at column (318 schema). CAS is a pure predicate
 	// match: rewrite a column to itself so RowsAffected reports the lock result.
@@ -38,10 +40,12 @@ func casPassportEligibilityRevisionTx(
 		WHERE workspace_id = $1::uuid
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid
-		  AND current_version = $4
-		  AND eligibility_revision = $5
-		  AND lifecycle_status = $6
-	`, workspaceID, sessionID, artifactID, currentVersion, eligibilityRevision, lifecycle)
+		  AND entity_kind = $4
+		  AND current_version = $5
+		  AND eligibility_revision = $6
+		  AND lifecycle_status = $7
+		  AND provenance_completeness = $8
+	`, workspaceID, sessionID, artifactID, kind, currentVersion, eligibilityRevision, lifecycle, provenance)
 	if err != nil {
 		return err
 	}
@@ -51,7 +55,7 @@ func casPassportEligibilityRevisionTx(
 	return nil
 }
 
-func casArtifactVersionRepresentationTx(
+func casArtifactVersionSelectionTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, versionRowID string,
@@ -70,7 +74,8 @@ func casArtifactVersionRepresentationTx(
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid
 		  AND content_hash = $4
-	`, workspaceID, sessionID, versionRowID, contentHash).Scan(&matched)
+		  AND access_level = $5
+	`, workspaceID, sessionID, versionRowID, contentHash, accessLevel).Scan(&matched)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: artifact version representation CAS failed", ErrInvalidTransition)
 	}

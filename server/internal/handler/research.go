@@ -194,6 +194,55 @@ func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
 	return resp
 }
 
+// taskBoundResearchSessionResponse retains the V1-V5 compatibility family but
+// projects only fields frozen in the manifested Run representation. Live
+// routing, activity, handoff, timestamps, and unattended counters are absent.
+func taskBoundResearchSessionResponse(run researchrun.Run) ResearchSessionResponse {
+	return ResearchSessionResponse{
+		ID:           run.SessionID,
+		WorkspaceID:  run.WorkspaceID,
+		FleetID:      run.FleetID,
+		CreatedBy:    run.CreatedBy,
+		Title:        run.Title,
+		Goal:         run.Goal,
+		Status:       string(run.Status),
+		CurrentStage: run.CurrentStage,
+		DepthTier:    run.DepthTier,
+	}
+}
+
+// taskBoundResearchFleetResponse rebuilds the compatibility shape exclusively
+// from the hashed principal header. Member-row IDs, mutable Agent profiles,
+// runtime configuration, and Fleet timestamps are deliberately unavailable.
+func taskBoundResearchFleetResponse(run researchrun.Run, members []researchrun.FleetMember) ResearchFleetResponse {
+	response := ResearchFleetResponse{
+		ID:          run.FleetID,
+		WorkspaceID: run.WorkspaceID,
+		Members:     make([]ResearchFleetMemberResp, 0, len(members)),
+	}
+	seenRoles := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		if member.Status == "archived" {
+			continue
+		}
+		if _, duplicate := seenRoles[member.Role]; duplicate {
+			continue
+		}
+		seenRoles[member.Role] = struct{}{}
+		response.Members = append(response.Members, ResearchFleetMemberResp{
+			AgentID: member.AgentID,
+			Role:    member.Role,
+			Status:  member.Status,
+			IsLead:  member.IsLead,
+		})
+		if member.IsLead && response.LeadAgentID == nil {
+			agentID := member.AgentID
+			response.LeadAgentID = &agentID
+		}
+	}
+	return response
+}
+
 func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
@@ -405,40 +454,49 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "attempt_id is only available on the Agent research route")
 		return
 	}
-	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{
-		ID:          sessionID,
-		WorkspaceID: wsUUID,
-	})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "research session not found")
-		return
-	}
-	fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "research fleet missing")
-		return
-	}
-	members, _ := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
-		FleetID:     fleet.ID,
-		WorkspaceID: wsUUID,
-	})
-	nodes, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	edges, _ := h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	sources, _ := h.Queries.ListResearchSources(r.Context(), db.ListResearchSourcesParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	evals, _ := h.Queries.ListResearchStageEvals(r.Context(), db.ListResearchStageEvalsParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	messages, _ := h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	productRounds, _ := h.Queries.ListResearchProductRoundCards(r.Context(), db.ListResearchProductRoundCardsParams{SessionID: sessionID, WorkspaceID: wsUUID})
-
+	var sessionResponse ResearchSessionResponse
+	var fleetResponse ResearchFleetResponse
+	var nodes []db.ResearchGraphNode
+	var edges []db.ResearchGraphEdge
+	var sources []db.ResearchSource
+	var evals []db.ResearchStageEval
+	var messages []db.ResearchMessage
+	var productRounds []db.ResearchProductRoundCard
 	var report *ResearchReportResp
-	if rep, err := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); err == nil {
-		rr := researchReportToResp(rep)
-		report = &rr
+	if !agentAttemptScoped {
+		session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "research session not found")
+			return
+		}
+		fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "research fleet missing")
+			return
+		}
+		members, _ := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{FleetID: fleet.ID, WorkspaceID: wsUUID})
+		sessionResponse = researchSessionToResponse(session)
+		fleetResponse = h.researchFleetToResponse(r.Context(), fleet, members)
+		nodes, _ = h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		edges, _ = h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		sources, _ = h.Queries.ListResearchSources(r.Context(), db.ListResearchSourcesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		evals, _ = h.Queries.ListResearchStageEvals(r.Context(), db.ListResearchStageEvalsParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		messages, _ = h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		productRounds, _ = h.Queries.ListResearchProductRoundCards(r.Context(), db.ListResearchProductRoundCardsParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		if rep, reportErr := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); reportErr == nil {
+			rr := researchReportToResp(rep)
+			report = &rr
+		}
 	}
 	var loadedRun *researchrun.RunSnapshot
-	durableRun, ownershipErr := h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
-	if ownershipErr != nil {
-		writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
-		return
+	durableRun := agentAttemptScoped
+	if !agentAttemptScoped {
+		var ownershipErr error
+		durableRun, ownershipErr = h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
+		if ownershipErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
+			return
+		}
 	}
 	if durableRun {
 		if h.ResearchRun == nil {
@@ -465,6 +523,10 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		loadedRun = &snapshot
+		if agentAttemptScoped {
+			sessionResponse = taskBoundResearchSessionResponse(snapshot.Run)
+			fleetResponse = taskBoundResearchFleetResponse(snapshot.Run, snapshot.PrincipalHeader)
+		}
 	}
 
 	graphNodes := mapGraphNodes(nodes, edges)
@@ -492,8 +554,8 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
-		Session:           researchSessionToResponse(session),
-		Fleet:             h.researchFleetToResponse(r.Context(), fleet, members),
+		Session:           sessionResponse,
+		Fleet:             fleetResponse,
 		Nodes:             graphNodes,
 		Edges:             graphEdges,
 		Sources:           mappedSources,

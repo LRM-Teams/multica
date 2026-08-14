@@ -48,4 +48,7 @@ func TestReminderOwnerInputPayloadJSONGolden(t *testing.T) {
 	if DaemonCapabilityReminderTransientInput != "reminder_transient_owner_input_v1" {
 		t.Fatalf("capability = %q", DaemonCapabilityReminderTransientInput)
 	}
+	if DaemonCapabilityReminderLocalInbox != "reminder_local_inbox_v1" {
+		t.Fatalf("local Inbox capability = %q", DaemonCapabilityReminderLocalInbox)
+	}
 }

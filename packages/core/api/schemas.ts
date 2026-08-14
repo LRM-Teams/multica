@@ -75,7 +75,7 @@ import type { RawReminderPage } from "../agents/reminder-view-model";
 import type { ConversationHandleLookup } from "../conversations/types";
 
 export const NotePageIssueRefSchema: z.ZodType<NotePageIssueRef> = z.object({
-  type: z.enum(["issue", "agent", "run"]).catch("issue"),
+  type: z.enum(["issue", "agent", "run", "channel"]).catch("issue"),
   id: z.string().default(""),
   label: z.string().nullable().optional(),
   accessible: z.boolean().default(false),

@@ -185,4 +185,37 @@ func TestAcceptedSourceAndObservationVersionsBindCanonicalContentAndAttempt(t *t
 	if projectionEdges != 1 || observationEdges == 0 {
 		t.Fatalf("source lineage projects=%d want=1 observes=%d want>0", projectionEdges, observationEdges)
 	}
+	var expectedClaimEdges, expectedStandardEdges, expectedEvidenceEdges int
+	var actualClaimEdges, actualStandardEdges, actualEvidenceEdges int
+	if err = pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_claim
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid),
+		  (SELECT count(*)::int FROM research_claim
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+		     AND evidence_standard_key<>''),
+		  (SELECT (count(*)*2 + count(*) FILTER (WHERE verified_by_task_id IS NOT NULL))::int
+		   FROM research_claim_evidence
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+		     AND relation='claim_producer'),
+		  (SELECT count(*)::int FROM research_artifact_input_reference
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+		     AND relation='claim_evidence_standard'),
+		  (SELECT count(*)::int FROM research_artifact_input_reference
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+		     AND relation IN ('evidence_claim','evidence_observation','evidence_verifier'))
+	`, fixture.workspaceID, fixture.sessionID).Scan(
+		&expectedClaimEdges, &expectedStandardEdges, &expectedEvidenceEdges,
+		&actualClaimEdges, &actualStandardEdges, &actualEvidenceEdges,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if actualClaimEdges != expectedClaimEdges || actualStandardEdges != expectedStandardEdges ||
+		actualEvidenceEdges != expectedEvidenceEdges {
+		t.Fatalf("claim/evidence lineage claim=%d want=%d standard=%d want=%d evidence=%d want=%d",
+			actualClaimEdges, expectedClaimEdges, actualStandardEdges, expectedStandardEdges,
+			actualEvidenceEdges, expectedEvidenceEdges)
+	}
 }

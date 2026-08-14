@@ -4,7 +4,18 @@ import { useId } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
 import type { StarRelationView } from "../lib/star-canvas-view-model";
-import { quadraticEdgePath, relationEdgeClass } from "./star-graph-canvas-utils";
+import {
+  isEdgeLabelClear,
+  quadraticEdgePath,
+  relationEdgeClass,
+} from "./star-graph-canvas-utils";
+
+const EMPTY_LABEL_OBSTACLES: readonly {
+  id: string;
+  x: number;
+  y: number;
+  radius: number;
+}[] = [];
 
 export function StarGraphEdges({
   relations,
@@ -12,12 +23,14 @@ export function StarGraphEdges({
   height,
   lensHints,
   relationLabels,
+  labelObstacles = EMPTY_LABEL_OBSTACLES,
 }: {
   relations: readonly StarRelationView[];
   width: number;
   height: number;
   lensHints?: D5LensDisplayHints;
   relationLabels?: Partial<Record<StarRelationView["kind"], string>>;
+  labelObstacles?: readonly { id: string; x: number; y: number; radius: number }[];
 }) {
   const idPrefix = useId().replaceAll(":", "");
   if (relations.length === 0 || width <= 0 || height <= 0) return null;
@@ -76,7 +89,10 @@ export function StarGraphEdges({
               )}
               d={path}
             />
-            {labelKind && labelIndexes.has(index) && relationLabels?.[labelKind] ? (
+            {labelKind &&
+              labelIndexes.has(index) &&
+              relationLabels?.[labelKind] &&
+              isEdgeLabelClear(relation, labelObstacles) ? (
               <text className="sg-edge-label">
                 <textPath href={`#${pathId}`} startOffset="50%" textAnchor="middle">
                   {relationLabels[labelKind]}

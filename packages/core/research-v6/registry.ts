@@ -30,6 +30,7 @@ import type {
  * -------------------------------------------------------------------------- */
 
 export const RESEARCH_V6_NODE_KINDS = [
+  "goal",
   // Execution
   "task",
   "attempt",
@@ -95,6 +96,7 @@ export interface ResearchV6NodeKindMeta {
 }
 
 const NODE_META: Record<ResearchV6NodeKind, Omit<ResearchV6NodeKindMeta, "kind">> = {
+  goal: { label: "研究目标", group: "run" },
   task: { label: "任务", group: "execution" },
   attempt: { label: "尝试", group: "execution" },
   result_artifact: { label: "结果工件", group: "execution" },
@@ -165,6 +167,7 @@ export const RESEARCH_V6_EDGE_TYPES = [
   "staffed_by",
   "created_for",
   "retired_after",
+  "restart_of",
 ] as const satisfies readonly ResearchV6EdgeType[];
 
 export type ResearchV6EdgeFamily =
@@ -203,6 +206,7 @@ const EDGE_META: Record<
   staffed_by: { type: "staffed_by", label: "由…配置", family: "lifecycle" },
   created_for: { type: "created_for", label: "为之创建", family: "lifecycle" },
   retired_after: { type: "retired_after", label: "之后退役", family: "lifecycle" },
+  restart_of: { type: "restart_of", label: "重新开始自", family: "lifecycle" },
 };
 
 export const RESEARCH_V6_EDGE_REGISTRY: ReadonlyMap<

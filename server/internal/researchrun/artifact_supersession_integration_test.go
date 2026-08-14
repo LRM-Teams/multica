@@ -38,9 +38,25 @@ func TestWithdrawnPassportExcludedFromDispatchManifestPlan(t *testing.T) {
 	claimID := uuid.NewString()
 	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "withdrawn-claim", "withdrawn claim")
 
-	oldRevision, newRevision, withdrawalWatermark := withdrawIntegrationArtifact(
-		t, ctx, pool, fixture.workspaceID, run.SessionID, claimID,
-	)
+	operationID := uuid.NewString()
+	outcome, err := (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: operationID, WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: claimID, Kind: artifactLifecycleWithdraw, Reason: "integration withdrawal",
+	})
+	if err != nil {
+		t.Fatalf("withdraw through lifecycle module: %v", err)
+	}
+	replayed, err := (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: operationID, WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: claimID, Kind: artifactLifecycleWithdraw, Reason: "integration withdrawal",
+	})
+	if err != nil || !replayed.Replayed || replayed != (artifactLifecycleOutcome{
+		ArtifactID: outcome.ArtifactID, Lifecycle: outcome.Lifecycle,
+		EligibilityRevision: outcome.EligibilityRevision, PolicyWatermark: outcome.PolicyWatermark, Replayed: true,
+	}) {
+		t.Fatalf("withdraw replay=%+v err=%v initial=%+v", replayed, err, outcome)
+	}
+	oldRevision, newRevision, withdrawalWatermark := outcome.EligibilityRevision-1, outcome.EligibilityRevision, outcome.PolicyWatermark
 	var lifecycleEvents, policyMutations int
 	if err = pool.QueryRow(ctx, `
 		SELECT

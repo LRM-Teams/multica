@@ -22,13 +22,14 @@ type recordingResearchRunEngine struct {
 	snapshotAttemptID           string
 	snapshot                    researchrun.RunSnapshot
 	snapshotForAttemptErr       error
+	snapshotForProjectionErr    error
 }
 
 func (f *recordingResearchRunEngine) SnapshotForProjection(_ context.Context, sessionID, workspaceID string) (researchrun.RunSnapshot, error) {
 	f.snapshotForProjectionCalled = true
 	f.snapshotSessionID = sessionID
 	f.snapshotWorkspaceID = workspaceID
-	return f.snapshot, nil
+	return f.snapshot, f.snapshotForProjectionErr
 }
 
 func (f *recordingResearchRunEngine) Create(context.Context, researchrun.StartInput) (researchrun.Run, error) {

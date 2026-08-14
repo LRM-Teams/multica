@@ -385,6 +385,14 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	if h == nil {
 		return errors.New("research projector is unavailable")
 	}
+	projectionReader, ok := h.ResearchRun.(researchProjectionSnapshotReader)
+	if !ok {
+		return errors.New("research projection snapshot reader is unavailable")
+	}
+	snap, err := projectionReader.SnapshotForProjection(ctx, event.SessionID, event.WorkspaceID)
+	if err != nil {
+		return fmt.Errorf("load authorized research projection snapshot: %w", err)
+	}
 	workspaceID := parseUUID(event.WorkspaceID)
 	sessionID := parseUUID(event.SessionID)
 	session, err := h.Queries.GetResearchSession(ctx, db.GetResearchSessionParams{ID: sessionID, WorkspaceID: workspaceID})
@@ -396,59 +404,13 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 		_ = json.Unmarshal(event.Payload, &payload)
 	}
 
-	// LRM-1401: canvas truth is the run-v2 ledger projection. Keep writing
-	// event→node rows only as recoverable audit fallback; live WS carries the
-	// deterministic semantic graph so the UI stops treating dispatch events as
-	// the research map.
-	if h.ResearchRun != nil {
-		projectionReader, ok := h.ResearchRun.(researchProjectionSnapshotReader)
-		if !ok {
-			return errors.New("research projection snapshot reader is unavailable")
-		}
-		if snap, snapErr := projectionReader.SnapshotForProjection(ctx, event.SessionID, event.WorkspaceID); snapErr == nil {
-			nodes, edges := projectRunV2Graph(snap)
-			typedGraph := projectRunV2TypedGraph(snap, 0, 0, false)
-			if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Type, event.Sequence, nodes, edges, typedGraph); err != nil {
-				return err
-			}
-		} else {
-			// Snapshot unavailable: retain legacy single-event node insert.
-			if nodeType, title, summary, status := projectResearchEvent(event, session, payload); nodeType != "" {
-				actorAgentID := projectedResearchActorAgentID(event, payload)
-				nodePayload := map[string]any{
-					"run_event_id": event.ID,
-					"event_type":   event.Type,
-					"sequence":     event.Sequence,
-					"details":      payload,
-				}
-				encoded, _ := json.Marshal(nodePayload)
-				node, insertErr := h.insertProjectedResearchNode(ctx, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
-				if insertErr != nil {
-					return insertErr
-				}
-				if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
-					return err
-				}
-				h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
-			}
-		}
-	} else if nodeType, title, summary, status := projectResearchEvent(event, session, payload); nodeType != "" {
-		actorAgentID := projectedResearchActorAgentID(event, payload)
-		nodePayload := map[string]any{
-			"run_event_id": event.ID,
-			"event_type":   event.Type,
-			"sequence":     event.Sequence,
-			"details":      payload,
-		}
-		encoded, _ := json.Marshal(nodePayload)
-		node, insertErr := h.insertProjectedResearchNode(ctx, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
-		if insertErr != nil {
-			return insertErr
-		}
-		if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
-			return err
-		}
-		h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
+	// Canvas truth is the least-privilege run snapshot. Projection must stop when
+	// that authorized view is unavailable; synthesizing event-shaped fallback
+	// nodes would create graph state that the canonical snapshot cannot prove.
+	nodes, edges := projectRunV2Graph(snap)
+	typedGraph := projectRunV2TypedGraph(snap, 0, 0, false)
+	if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Type, event.Sequence, nodes, edges, typedGraph); err != nil {
+		return err
 	}
 
 	if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {

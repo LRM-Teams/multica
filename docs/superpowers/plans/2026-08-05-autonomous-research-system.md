@@ -1039,12 +1039,6 @@ normal/evaluation grant 撤销后 Agent route 返回稳定 403 且历史不删�
 Source/Observation/private/Attempt/Artifact representation。Claim/Evidence nesting继续由同一 bounded
 projection 生成。§15.23 已收口。
 
-D-access-4 证据：normal 与 evaluation grant 撤销后的 `TaskContextForAttempt` 现在同时返回
-稳定 `ErrArtifactAccessDenied` 和兼容 `ErrInvalidTransition`，冻结 Manifest/Entry 历史仍不可删；
-Agent HTTP surface 将该领域拒绝映射为不泄漏 Run/Attempt/Agent/Passport 身份的 403，而不是
-内部 500。普通 Agent、grader 与 HTTP 撤权路径已闭合；projector principal 的独立 surface
-及撤权矩阵仍未完成，因此 §15.23 保持 partial。
-
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

@@ -1074,6 +1074,7 @@ projection 生成。§15.23 已收口。
   - [x] F3a：`ComputeCorpusDedupDecisions` 对 canonical URL 与 content hash 建立确定性闭包，输出稳定 duplicate cluster、canonical candidate、effective independence family、disposition、rule 和 reason。跨 URL 同内容按 mirror 合并且不能冒充独立支持；同 URL 不同 hash fail closed 为 review；同 family 的不同内容保留但继续共享 family。持久 Screening Decision 接线和跨历史批次查询仍属于 F3b。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
   - [x] F4a-ingestion：`source_ingestion.go` 冻结五类摄入意图（screened retrieval、Agent direct evidence、user attachment、workspace artifact、API dataset）及确定性审计指纹。检索摄入必须绑定完整 Search Plan → Query Execution → Source Candidate → accepted Screening Decision 谱系；所有非检索类型禁止伪造任何 Search/Screening 标识，URL 凭据、非法哈希和未来采集时间 fail closed。该切片只完成接纳前合同；持久化 ingestion kind、数据库约束和 Result materialization 接线仍待后续切片，不能据此宣称 Source Snapshot 写入链已经闭合。
+  - [x] F4b-screened-fetch：`FetchAndIngestScreenedSource` 从 accepted Screening Decision 反查并冻结 Search Plan → Query Execution → Source Candidate → Screening Decision 谱系，在数据库事务外调用注入的 Retrieval Adapter，严格验证 canonical identity、MIME、大小、重定向/DNS/安全扫描和内容哈希；写事务重新锁定并比对谱系后才创建不可变 Source Snapshot。Source Snapshot 持久化 `screened_retrieval` 与 decision 外键，注册 production Passport、五条 typed input reference、verification policy mutation 和幂等 Event；相同内容仅允许同一 decision 重放，任何不同摄入谱系 fail closed。PostgreSQL 集成用例覆盖 Plan → Evidence → accepted Screening → Fetch → Source Snapshot 的完整反查；具体 provider Adapter 与非检索 ingestion kind 的生产入口仍待后续切片。
 
 退出条件：报告中的每个来源可反向追到查询和筛选；重复镜像不能冒充独立支持；失败查询可被定向改写。
 

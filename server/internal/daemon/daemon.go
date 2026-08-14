@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -128,15 +127,13 @@ type Daemon struct {
 	versionsMu    sync.RWMutex      // guards agentVersions
 	agentVersions map[string]string // provider -> detected CLI version (set during registration)
 
-	wsHBMu      sync.RWMutex         // guards wsHBLastAck
-	wsHBLastAck map[string]time.Time // runtime_id -> last successful WS heartbeat ack timestamp
-
 	// wsConnState is the task-wakeup WebSocket lifecycle label for internal
 	// observability (connecting|open|backoff|closed). Not user-facing Activity.
 	wsConnStateMu sync.RWMutex
 	wsConnState   string
 
 	reminderCache                    *reminderCache
+	localReminderInbox               *LocalReminderInbox
 	agentAttachments                 *localAgentAttachmentRegistry
 	reminderWSMu                     sync.RWMutex
 	reminderWrites                   chan<- []byte
@@ -149,7 +146,7 @@ type Daemon struct {
 	reminderPendingSnapshots         map[string]struct{}
 
 	// runtimeGoneMu guards runtimeGoneInflight, reregisterNextAttempt, and
-	// reregisterLastCompletedAt. The state lets heartbeat / poller / WS-ack
+	// reregisterLastCompletedAt. The state lets the Runner control plane and poller
 	// handlers converge on a single recovery path when they each detect that a
 	// runtime row was deleted server-side without three of them stampeding
 	// registerRuntimesForWorkspace.
@@ -185,7 +182,7 @@ type Daemon struct {
 	// ReleaseManifestBaseURL seen on a heartbeat ack (task #815 step 2: the
 	// server-dispatched top layer over the daemon-side env var from #1526).
 	// atomic.Value (not a mutex+field) because reads by explicit Machine
-	// Upgrade execution and writes by the heartbeat loop never need a compound read-then-write; a plain
+	// Upgrade execution and control-plane writes never need a compound read-then-write; a plain
 	// swap/load is sufficient. Holds only string, or is unset (zero Value)
 	// before the first heartbeat ack arrives. A later ack that omits the
 	// field intentionally does NOT clear a previously cached value — a
@@ -289,7 +286,6 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		runtimeIndex:              make(map[string]Runtime),
 		runtimeSet:                newRuntimeSetWatcher(),
 		agentVersions:             make(map[string]string),
-		wsHBLastAck:               make(map[string]time.Time),
 		agentWakeSlots:            make(map[string]chan struct{}),
 		runtimeGoneInflight:       make(map[string]struct{}),
 		reregisterNextAttempt:     make(map[string]time.Time),
@@ -344,9 +340,11 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, nil)
-	d.reminderCache.onFireDelivery = d.onReminderTimer
-	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
 	d.agentAttachments = newLocalAgentAttachmentRegistry(cfg.WorkspacesRoot, logger)
+	d.localReminderInbox = &LocalReminderInbox{daemon: d}
+	d.reminderCache.onFireDelivery = d.localReminderInbox.AcceptDue
+	d.reminderCache.onFireReceipt = d.queueReminderFireReceipt
+	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	d.machineUpgradeStageFn = d.runStageUpdate
@@ -535,8 +533,8 @@ func (d *Daemon) recordRegisterCompletion(workspaceID string, completedAt time.T
 }
 
 // recoveryContext returns the daemon root context for long-running recovery
-// HTTP calls (re-register, recover-orphans) that must survive the heartbeat
-// loop tearing down a per-runtime context. Falls back to Background when the
+// HTTP calls (re-register, recover-orphans) that must survive a Runner socket
+// generation ending. Falls back to Background when the
 // daemon was not started via Run(), e.g. unit-test fixtures.
 func (d *Daemon) recoveryContext() context.Context {
 	if d.rootCtx != nil {
@@ -546,7 +544,7 @@ func (d *Daemon) recoveryContext() context.Context {
 }
 
 // removeStaleRuntime drops a runtime ID from its owning workspace's runtimeIDs
-// list, the daemon-level runtimeIndex, and the WS heartbeat freshness map.
+// list and the daemon-level runtimeIndex.
 // Returns the workspace ID and true if the runtime was tracked, "" and false
 // otherwise.
 //
@@ -579,9 +577,6 @@ func (d *Daemon) removeStaleRuntime(runtimeID string) (string, bool) {
 	d.client.ClearRuntimeDaemonToken(runtimeID)
 	d.mu.Unlock()
 
-	d.wsHBMu.Lock()
-	delete(d.wsHBLastAck, runtimeID)
-	d.wsHBMu.Unlock()
 	if d.reminderCache != nil {
 		d.reminderCache.suspend()
 	}
@@ -671,7 +666,7 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 }
 
 // runtimeSetWatcher is a tiny pub/sub for runtime-set changes. It exists
-// because more than one supervisor (taskWakeupLoop, heartbeatLoop, pollLoop)
+// because more than one supervisor (taskWakeupLoop, Workspace Runners, pollLoop)
 // needs to react to runtime-set changes; a single buffered channel would
 // race so only the first listener would learn about each change.
 //
@@ -711,52 +706,6 @@ func (w *runtimeSetWatcher) notify() {
 		default:
 		}
 	}
-}
-
-// wsHeartbeatFreshness defines how long a WS heartbeat ack is considered
-// "fresh enough" to suppress the HTTP heartbeat for that runtime. The window
-// is 2× HeartbeatInterval so a single dropped WS ack still keeps HTTP
-// suppressed, but two missed acks (~30s of WS silence) re-enable HTTP — well
-// inside the server-side 45s offline threshold.
-func (d *Daemon) wsHeartbeatFreshness() time.Duration {
-	if d.cfg.HeartbeatInterval <= 0 {
-		return 30 * time.Second
-	}
-	return 2 * d.cfg.HeartbeatInterval
-}
-
-// recordWSHeartbeatAck stamps the runtime as having received a fresh WS
-// heartbeat ack from the server. Called by the WS read pump.
-func (d *Daemon) recordWSHeartbeatAck(runtimeID string) {
-	if runtimeID == "" {
-		return
-	}
-	d.wsHBMu.Lock()
-	d.wsHBLastAck[runtimeID] = time.Now()
-	d.wsHBMu.Unlock()
-}
-
-// wsHeartbeatRecentlyAcked reports whether the runtime received a WS
-// heartbeat ack inside the freshness window. The HTTP heartbeat loop uses
-// this to skip duplicate work when WS is already keeping the runtime alive.
-func (d *Daemon) wsHeartbeatRecentlyAcked(runtimeID string) bool {
-	d.wsHBMu.RLock()
-	last, ok := d.wsHBLastAck[runtimeID]
-	d.wsHBMu.RUnlock()
-	if !ok {
-		return false
-	}
-	return time.Since(last) < d.wsHeartbeatFreshness()
-}
-
-// clearWSHeartbeatAcks drops all WS heartbeat freshness records. Called on
-// WS disconnect so HTTP heartbeats resume on the next tick.
-func (d *Daemon) clearWSHeartbeatAcks() {
-	d.wsHBMu.Lock()
-	for k := range d.wsHBLastAck {
-		delete(d.wsHBLastAck, k)
-	}
-	d.wsHBMu.Unlock()
 }
 
 // Run starts the daemon: resolves auth, registers runtimes, then polls for tasks.
@@ -889,7 +838,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.workspaceRunnerLoop(ctx)
 	go d.diagnosticsCleanupLoop(ctx)
-	go d.heartbeatLoop(ctx)
 	go d.residentCrashWatchLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
@@ -901,7 +849,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// readiness wait blocks on, so success is reported only after startup
 	// actually completed, not merely because the health port came up.
 	d.ready.Store(true)
-	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, token-renewal, shared-skills, release-detection); machine upgrades are explicit-only; health now reporting ready")
+	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, workspace-runner, gc, token-renewal, shared-skills, release-detection); machine upgrades are explicit-only; health now reporting ready")
 	err = d.pollLoop(ctx, taskWakeups)
 	d.logger.Debug("daemon main loop returning", "error", err)
 	return err
@@ -1027,6 +975,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityMemoryCrossDeviceSync,
 		protocol.DaemonCapabilityRestrictedExecution,
 		protocol.DaemonCapabilityReminderVersionedCache,
+		protocol.DaemonCapabilityReminderLocalInbox,
 		protocol.DaemonCapabilityReminderTransientInput,
 		protocol.DaemonCapabilityAgentLifecycleActions,
 		protocol.DaemonCapabilityMachineUpgrade,
@@ -1498,139 +1447,8 @@ func (d *Daemon) configuredWorkspaceBindings() (map[string]computer.WorkspaceBin
 	return out, nil
 }
 
-// heartbeatLoop supervises per-runtime HTTP heartbeat goroutines. Each runtime
-// gets an independent ticker so a slow heartbeat for one runtime cannot block
-// heartbeats for any other runtime — this matters when a single daemon serves
-// multiple workspaces, because the previous shared loop would serialize an
-// up-to-30s HTTP timeout across every runtime in the set.
-func (d *Daemon) heartbeatLoop(ctx context.Context) {
-	runtimeSetCh, unsub := d.runtimeSet.Subscribe()
-	defer unsub()
-
-	cancels := make(map[string]context.CancelFunc)
-	defer func() {
-		for _, cancel := range cancels {
-			cancel()
-		}
-	}()
-
-	sync := func() {
-		want := make(map[string]struct{})
-		for _, rid := range d.allRuntimeIDs() {
-			want[rid] = struct{}{}
-		}
-		for rid, cancel := range cancels {
-			if _, ok := want[rid]; !ok {
-				cancel()
-				delete(cancels, rid)
-			}
-		}
-		for rid := range want {
-			if _, ok := cancels[rid]; ok {
-				continue
-			}
-			rctx, rcancel := context.WithCancel(ctx)
-			cancels[rid] = rcancel
-			go d.runRuntimeHeartbeat(rctx, rid)
-		}
-	}
-
-	sync()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-runtimeSetCh:
-			sync()
-		}
-	}
-}
-
-// runRuntimeHeartbeat owns the HTTP heartbeat schedule for a single runtime.
-// The first tick fires after a small jittered delay (up to one full interval)
-// to avoid a thundering herd when the daemon registers many runtimes at once.
-func (d *Daemon) runRuntimeHeartbeat(ctx context.Context, rid string) {
-	interval := d.cfg.HeartbeatInterval
-	if interval <= 0 {
-		interval = 15 * time.Second
-	}
-	// Jittered initial delay; cap at the interval so the first beat still
-	// happens within one period.
-	if jitter := time.Duration(rand.Int63n(int64(interval))); jitter > 0 {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(jitter):
-		}
-	}
-
-	var updateChanged <-chan struct{}
-	unsubscribe := func() {}
-	if d.updateObservation != nil {
-		updateChanged, unsubscribe = d.updateObservation.Subscribe()
-	}
-	defer unsubscribe()
-
-	d.runHeartbeatTick(ctx, rid)
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-updateChanged:
-			d.runHeartbeatTick(ctx, rid)
-		case <-ticker.C:
-			d.runHeartbeatTick(ctx, rid)
-		}
-	}
-}
-
-func (d *Daemon) runHeartbeatTick(ctx context.Context, rid string) {
-	// Skip HTTP heartbeat for runtimes that successfully acked a recent
-	// WebSocket heartbeat. The WS path keeps last_seen_at fresh and delivers
-	// actions, so the HTTP write would be a duplicate DB update. If the WS
-	// heartbeat goes silent the freshness window expires and HTTP resumes
-	// automatically on the next tick — that is the fallback the WS path
-	// relies on.
-	if d.wsHeartbeatRecentlyAcked(rid) {
-		d.logger.Debug("heartbeat: skipping HTTP tick, WS recently acked", "runtime_id", rid)
-		return
-	}
-	d.logger.Debug("heartbeat: HTTP tick", "runtime_id", rid)
-	var observation *protocol.DaemonUpdateObservation
-	if d.updateObservation != nil {
-		observation = d.updateObservation.PublishedSnapshot()
-	}
-	resp, err := d.client.SendHeartbeat(ctx, rid, d.activeMemoryCurationRun(rid), observation)
-	if err != nil {
-		if ctx.Err() == nil {
-			if isRuntimeNotFoundError(err) {
-				// Server says this runtime is gone — recover instead of
-				// looping on the dead UUID. handleRuntimeGone coalesces
-				// concurrent callers and runs the recovery HTTP call under
-				// the daemon root context so notifyRuntimeSetChanged
-				// tearing down this heartbeat goroutine cannot abort it.
-				go d.handleRuntimeGone(rid)
-				return
-			}
-			d.logger.Warn("heartbeat failed", "runtime_id", rid, "error", err)
-		}
-		return
-	}
-	if resp != nil && resp.RuntimeGone {
-		// The WS path returns a successful ack with RuntimeGone=true for the
-		// same scenario; treat it the same way here in case HTTP starts
-		// surfacing this signal too.
-		go d.handleRuntimeGone(rid)
-		return
-	}
-	d.handleHeartbeatActions(ctx, rid, resp)
-}
-
-// handleHeartbeatActions dispatches the pending-action set returned by either
-// transport (HTTP POST /api/daemon/heartbeat or WS daemon:heartbeat_ack).
+// handleHeartbeatActions dispatches the pending-action set returned by the
+// current Workspace Runner control plane.
 // Each action is dispatched in its own goroutine so a slow handler cannot
 // block subsequent heartbeats.
 func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {

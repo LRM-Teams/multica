@@ -26,23 +26,24 @@ func NewArtifactContextModule() ArtifactContextModule {
 }
 
 type artifactVersionCandidate struct {
-	VersionRowID         string
-	ArtifactID           string
-	Kind                 ArtifactEntityKind
-	Version              int32
-	EligibilityRevision  int64
-	AccessLevel          ArtifactAccessLevel
-	Lifecycle            ArtifactLifecycleStatus
-	Provenance           ArtifactProvenanceCompleteness
-	ContentHash          string
-	Representation       string
-	RepresentationBytes  []byte
-	RepresentationHash   string
-	VersionCount         int
-	InputReferenceCount  int
-	OutputReferenceCount int
-	OmissionReason       string
-	DomainStatus         string
+	VersionRowID           string
+	ArtifactID             string
+	Kind                   ArtifactEntityKind
+	Version                int32
+	EligibilityRevision    int64
+	AccessLevel            ArtifactAccessLevel
+	Lifecycle              ArtifactLifecycleStatus
+	Provenance             ArtifactProvenanceCompleteness
+	ContentHash            string
+	Representation         string
+	RepresentationBytes    []byte
+	RepresentationHash     string
+	VersionCount           int
+	InputReferenceCount    int
+	OutputReferenceCount   int
+	OmissionReason         string
+	DomainStatus           string
+	HasMigrationDiagnostic bool
 }
 
 type dispatchManifestPlan struct {
@@ -101,6 +102,11 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 	var entries []artifactVersionCandidate
 	var omissions []artifactVersionCandidate
 	for _, candidate := range candidates {
+		if candidate.HasMigrationDiagnostic {
+			candidate.OmissionReason = m.policy.ManifestOmissionReason(ArtifactDenyLegacyIneligible)
+			omissions = append(omissions, candidate)
+			continue
+		}
 		private := m.policy.EvaluationPrivateKind(candidate.Kind)
 		if private && purpose == ArtifactPurposeTaskExecution {
 			candidate.OmissionReason = m.policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
@@ -268,7 +274,14 @@ func loadArtifactVersionCandidates(
 		    WHEN 'evidence_link' THEN (SELECT e.verification_status FROM research_claim_evidence e
 		      WHERE (e.workspace_id,e.session_id,e.id)=(p.workspace_id,p.session_id,p.id))
 		    ELSE ''
-		  END, '') AS domain_status
+		  END, '') AS domain_status,
+		  EXISTS (
+		    SELECT 1 FROM research_artifact_migration_diagnostic diagnostic
+		    WHERE diagnostic.workspace_id=p.workspace_id
+		      AND diagnostic.session_id=p.session_id
+		      AND diagnostic.owner_kind=p.entity_kind
+		      AND diagnostic.owner_id=p.id
+		  ) AS has_migration_diagnostic
 		FROM research_artifact_passport p
 		JOIN research_artifact_version v
 		  ON v.workspace_id = p.workspace_id
@@ -293,6 +306,7 @@ func loadArtifactVersionCandidates(
 			&candidate.VersionRowID, &candidate.ArtifactID, &kindRaw,
 			&candidate.Version, &candidate.EligibilityRevision,
 			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash, &candidate.DomainStatus,
+			&candidate.HasMigrationDiagnostic,
 		); err != nil {
 			return nil, err
 		}
@@ -371,7 +385,10 @@ func auditManifestCandidateDispositions(
 	for versionID, candidate := range want {
 		expected := "entry"
 		expectedReason := ""
-		if policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
+		if candidate.HasMigrationDiagnostic {
+			expected = "omission"
+			expectedReason = policy.ManifestOmissionReason(ArtifactDenyLegacyIneligible)
+		} else if policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
 			expected = "omission"
 			expectedReason = policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
 		} else if admitted, deny := policy.LegacyAdmissionAllowed(candidate.Kind, candidate.Lifecycle, candidate.Provenance); !admitted {

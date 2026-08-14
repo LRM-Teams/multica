@@ -5,19 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
-
-var v6KeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
-
-type V6EntityRef struct {
-	Kind string `json:"kind"`
-	Key  string `json:"key"`
-}
 
 type V6QuestionProposal struct {
 	ClientKey       string  `json:"client_key"`
@@ -446,13 +438,6 @@ func validateV6UniqueKey(name, value string, seen map[string]struct{}) error {
 		return fmt.Errorf("%w: duplicate V6 key %q", ErrInvalidResult, value)
 	}
 	seen[value] = struct{}{}
-	return nil
-}
-
-func validateV6Key(name, value string) error {
-	if len(value) == 0 || len(value) > 160 || !v6KeyPattern.MatchString(value) {
-		return fmt.Errorf("%w: %s is not a V6 key", ErrInvalidResult, name)
-	}
 	return nil
 }
 

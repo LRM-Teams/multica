@@ -544,13 +544,21 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	mappedThoughtStrategies := mapThoughtStrategies(nodes)
 	if agentAttemptScoped {
 		// Durable Agent reads consume only the manifest-filtered canonical Run.
-		// Legacy presentation rows are session-wide and are not authorized inputs.
+		// Session-wide legacy rows are not authorized; only dispatch-time frozen
+		// representations recorded in the attempt manifest may be returned.
 		mappedSources = []ResearchSourceResp{}
 		mappedEvals = []ResearchStageEvalResp{}
 		mappedMessages = []ResearchMessageResp{}
 		mappedProductRounds = []ResearchProductRoundCardResp{}
 		mappedThoughtStrategies = []ResearchThoughtStrategyResp{}
 		report = nil
+		if loadedRun != nil && loadedRun.LegacyContext != nil {
+			mappedSources = mapFrozenLegacySources(loadedRun.LegacyContext.Sources)
+			mappedMessages = mapFrozenResearchMessages(loadedRun.LegacyContext.Messages)
+			mappedProductRounds = mapFrozenProductRounds(loadedRun.LegacyContext.ProductRounds)
+			mappedThoughtStrategies = mapFrozenThoughtStrategies(loadedRun.LegacyContext.ThoughtStrategies)
+			report = mapFrozenResearchReport(loadedRun.LegacyContext.Report)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{

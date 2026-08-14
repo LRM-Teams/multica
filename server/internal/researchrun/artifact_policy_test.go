@@ -60,6 +60,7 @@ func TestArtifactPolicyLegacyDomainAdmissionMatrix(t *testing.T) {
 		name, status string
 		kind         ArtifactEntityKind
 		wantOK       bool
+		wantDeny     ArtifactDenyReason
 	}{
 		{name: "task pending", kind: ArtifactKindTask, status: "pending", wantOK: true},
 		{name: "task ready", kind: ArtifactKindTask, status: "ready", wantOK: true},
@@ -91,7 +92,7 @@ func TestArtifactPolicyLegacyDomainAdmissionMatrix(t *testing.T) {
 		{name: "source rejected", kind: ArtifactKindSourceSnapshot, status: "rejected"},
 		{name: "observation unknown", kind: ArtifactKindObservation, status: "unknown"},
 		{name: "evidence verified", kind: ArtifactKindEvidenceLink, status: "verified", wantOK: true},
-		{name: "context manifest never legacy admitted", kind: ArtifactKindContextManifest},
+		{name: "context manifest never legacy admitted", kind: ArtifactKindContextManifest, wantDeny: ArtifactDenyLegacyIneligible},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,8 +103,14 @@ func TestArtifactPolicyLegacyDomainAdmissionMatrix(t *testing.T) {
 			if ok != tc.wantOK {
 				t.Fatalf("ok=%v deny=%q want ok=%v", ok, deny, tc.wantOK)
 			}
-			if !tc.wantOK && deny != ArtifactDenyDomainFact {
-				t.Fatalf("deny=%q want %q", deny, ArtifactDenyDomainFact)
+			if !tc.wantOK {
+				wantDeny := tc.wantDeny
+				if wantDeny == "" {
+					wantDeny = ArtifactDenyDomainFact
+				}
+				if deny != wantDeny {
+					t.Fatalf("deny=%q want %q", deny, wantDeny)
+				}
 			}
 		})
 	}
@@ -116,6 +123,14 @@ func expectedLegacyAdmission(
 ) (bool, ArtifactDenyReason) {
 	if _, ok := registeredArtifactEntityKinds[kind]; !ok {
 		return false, ArtifactDenyUnknownKind
+	}
+	switch kind {
+	case ArtifactKindContextManifest,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindInquiryEdge:
+		return false, ArtifactDenyLegacyIneligible
 	}
 	if lifecycle != ArtifactLifecycleRegistered && lifecycle != ArtifactLifecycleAccepted {
 		return false, ArtifactDenyLifecycle

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -13,8 +12,6 @@ import (
 )
 
 const ResearchV6PlanContractKind = "plan_result"
-
-var researchV6KeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 
 type ResearchV6EntityRef struct {
 	Kind string `json:"kind"`
@@ -311,9 +308,6 @@ func validateV6InquiryDAG(edges []ResearchV6InquiryEdge) error {
 	return nil
 }
 
-func validV6Key(value string) bool {
-	return utf8.RuneCountInString(value) >= 1 && utf8.RuneCountInString(value) <= 160 && researchV6KeyPattern.MatchString(value)
-}
 func optionalV6Key(value string) bool { return value == "" || validV6Key(value) }
 func validV6Text(value string) bool {
 	return utf8.RuneCountInString(value) >= 1 && utf8.RuneCountInString(value) <= 32768 && strings.TrimSpace(value) != ""

@@ -161,6 +161,8 @@ func TestIntegrityGuardTriggerNames(t *testing.T) {
 
 func TestLinkPolicyGuardTriggerNames(t *testing.T) {
 	want := []string{
+		"research_artifact_supersession_cycle_guard",
+		"research_artifact_supersession_append_only_guard",
 		"research_artifact_supersession_to_policy_guard",
 		"research_artifact_policy_mutation_to_supersession_guard",
 		"research_artifact_lifecycle_event_to_policy_guard",

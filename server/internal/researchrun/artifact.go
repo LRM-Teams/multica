@@ -109,6 +109,42 @@ const ArtifactCanonicalizationVersion = "research-artifact-c14n-v1"
 // LegacyV1V5CompatPolicy is the named ordinary-task admission exception for backfilled rows.
 const LegacyV1V5CompatPolicy = "legacy-v1-v5-compat-v1"
 
+type SupersedeArtifactInput struct {
+	WorkspaceID         string
+	SessionID           string
+	SuccessorVersionID  string
+	SupersededVersionID string
+	DecisionID          string
+	Reason              string
+}
+
+type ArtifactSupersession struct {
+	ID                     string
+	SuccessorVersionID     string
+	SupersededVersionID    string
+	SupersededArtifactID   string
+	OldEligibilityRevision int64
+	NewEligibilityRevision int64
+	PolicyWatermark        int64
+	DecisionID             string
+	Reason                 string
+}
+
+func (in SupersedeArtifactInput) validate() error {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.SessionID) == "" ||
+		strings.TrimSpace(in.SuccessorVersionID) == "" || strings.TrimSpace(in.SupersededVersionID) == "" ||
+		strings.TrimSpace(in.DecisionID) == "" {
+		return fmt.Errorf("%w: supersession scope, versions, and decision are required", ErrInvalidContract)
+	}
+	if strings.TrimSpace(in.Reason) == "" {
+		return fmt.Errorf("%w: supersession reason is required", ErrInvalidContract)
+	}
+	if in.SuccessorVersionID == in.SupersededVersionID {
+		return fmt.Errorf("%w: an artifact version cannot supersede itself", ErrInvalidContract)
+	}
+	return nil
+}
+
 // WithdrawArtifactInput identifies one passport whose future ordinary
 // admission is being revoked. DecisionID is optional because a lifecycle event
 // is the canonical reciprocal fact for withdrawal; callers may bind a scoped
@@ -232,6 +268,8 @@ func IntegrityGuardTriggerNames() []string {
 // LinkPolicyGuardTriggerNames lists migration 324 supersession/lifecycle policy guards.
 func LinkPolicyGuardTriggerNames() []string {
 	return []string{
+		"research_artifact_supersession_cycle_guard",
+		"research_artifact_supersession_append_only_guard",
 		"research_artifact_supersession_to_policy_guard",
 		"research_artifact_policy_mutation_to_supersession_guard",
 		"research_artifact_lifecycle_event_to_policy_guard",

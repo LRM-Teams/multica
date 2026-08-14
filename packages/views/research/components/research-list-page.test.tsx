@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import enResearch from "../../locales/en/research.json";
+import { RESEARCH_LIST_FILTER_STORAGE_KEY } from "../lib/research-list-persist";
 
 const sessionsQueryRef = vi.hoisted(() => ({
   current: {
@@ -165,6 +166,7 @@ function setQuery(partial: Partial<typeof sessionsQueryRef.current>) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
   mutationRef.current = { mutate: vi.fn(), isPending: false, isError: false, error: null, reset: vi.fn() };
   fleetQueryRef.current = {
@@ -175,6 +177,24 @@ beforeEach(() => {
     error: null,
     refetch: vi.fn(),
   };
+});
+
+describe("ResearchListPage one-time return restoration", () => {
+  it("consumes a zero-scroll detail return so a later sidebar entry starts at top", () => {
+    sessionStorage.setItem(
+      RESEARCH_LIST_FILTER_STORAGE_KEY,
+      JSON.stringify({ q: "", status: null, scroll: 0, sessionId: "session-1" }),
+    );
+    setQuery({ data: { sessions: [] } });
+
+    const first = render(<ResearchListPage />);
+    expect(sessionStorage.getItem(RESEARCH_LIST_FILTER_STORAGE_KEY)).toBeNull();
+    first.unmount();
+
+    const second = render(<ResearchListPage />);
+    expect(screen.getByTestId("research-list-page").scrollTop).toBe(0);
+    second.unmount();
+  });
 });
 
 describe("ResearchListPage list states (LRM-789)", () => {
@@ -497,7 +517,17 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     expect(desc).toBeInTheDocument();
     expect(desc.className).not.toContain("sr-only");
     expect(screen.getByTestId("research-home-composer")).toBeInTheDocument();
+    expect(screen.getByTestId("research-home-constellation")).toHaveAccessibleName(
+      enResearch.home_overview.constellation_label,
+    );
     expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
+  });
+
+  it("keeps the approved local dark constellation world independent of app theme", () => {
+    render(<ResearchListPage />);
+    const page = screen.getByTestId("research-list-page");
+    expect(page.className).toContain("research-home-theme");
+    expect(page.className).toContain("dark");
   });
 
   it("wires hero CTA micro-interaction tokens (LRM-837)", () => {

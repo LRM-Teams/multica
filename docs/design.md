@@ -7,6 +7,10 @@
 > 可点对照：[`visual-tokens-spec.html`](./assets/design/visual-tokens-spec.html) · [`visual-tokens-compare.html`](./assets/design/visual-tokens-compare.html)  
 > （Frank：颜色定稿后全站一致；本期实现可小步；设计文档入库为规范源。）
 
+## Research Constellation 局部视觉世界
+
+调研首页与调研星图工作台构成一个连续的操作空间，固定使用局部深色主题，即使应用全局主题为浅色也不得退化为白底通用卡片。页面采用深海蓝背景、冷蓝 1px 描边和低密度星空材质；青色表示探索或运行，绿色表示稳定结果，琥珀色表示风险或需要处理，紫色表示新方向。首页背景基准、真实数据星图和首屏容量合同见 [`superpowers/specs/2026-08-14-research-home-command-center-spec.zh-CN.md`](./superpowers/specs/2026-08-14-research-home-command-center-spec.zh-CN.md)。这是一项有意的产品表面例外，不得被全局浅色 token 或普通 dashboard 卡片模式覆盖。
+
 ---
 
 ## 1. 设计哲学

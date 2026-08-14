@@ -618,7 +618,7 @@
   },
   "home": {
     "composer_label": "Create a research session",
-    "hero_title": "Research Constellation",
+    "hero_title": "Turn one question into a research constellation.",
     "hero_desc": "Ask a question worth understanding. The fleet branches, gathers evidence, validates conflicts, and delivers a research map.",
     "composer_hint": "⌘⏎ to start · stages S1–S4 stay visible",
     "creating": "Assembling fleet…",
@@ -637,6 +637,11 @@
     "template_prompt_reset": "Restore default",
     "template_prompt_cancel": "Cancel",
     "template_prompt_apply": "Apply changes"
+  },
+  "home_header": {
+    "subtitle": "Research home · multi-session constellation",
+    "working": "Research fleet online · {{count}} Agents working",
+    "standby": "Research fleet standing by"
   },
   "home_preview": {
     "title": "Launch preview",
@@ -657,6 +662,7 @@
   "home_overview": {
     "active": "In progress",
     "agents": "Agents working",
+    "agent_short": "Agents",
     "today_evidence": "Evidence · last 24h",
     "attention": "Needs attention",
     "focus_heading": "Focused research",
@@ -670,6 +676,9 @@
     "evidence_count": "{{count}} evidence",
     "evidence_short": "evidence",
     "open_questions": "{{count}} open questions",
+    "open_questions_short": "Open questions",
+    "constellation_label": "Current research workspace constellation overview",
+    "constellation_empty": "Waiting for the first research goal",
     "enter": "Enter research workspace",
     "read_report": "Read research report",
     "handle_confirmation": "Handle confirmation",

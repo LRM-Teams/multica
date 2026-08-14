@@ -618,7 +618,7 @@
   },
   "home": {
     "composer_label": "创建调研会话",
-    "hero_title": "Research Constellation",
+    "hero_title": "从一个问题，生成一张研究星图。",
     "hero_desc": "提出一个值得认真弄明白的问题，调研团会分解方向、多源取证、验证冲突并交付研究星图。",
     "composer_hint": "⌘⏎ 发起 · 阶段 S1–S4 全程可见",
     "creating": "组建舰队中…",
@@ -637,6 +637,11 @@
     "template_prompt_reset": "恢复默认",
     "template_prompt_cancel": "取消",
     "template_prompt_apply": "应用更改"
+  },
+  "home_header": {
+    "subtitle": "调研主页 · 多任务星图总览",
+    "working": "调研团在线 · {{count}} 位智能体工作中",
+    "standby": "调研团待命"
   },
   "home_preview": {
     "title": "启动预览",
@@ -657,6 +662,7 @@
   "home_overview": {
     "active": "正在推进",
     "agents": "工作中智能体",
+    "agent_short": "智能体",
     "today_evidence": "近 24 小时证据",
     "attention": "等待处理",
     "focus_heading": "重点调研",
@@ -670,6 +676,9 @@
     "evidence_count": "{{count}} 条证据",
     "evidence_short": "证据",
     "open_questions": "{{count}} 个开放问题",
+    "open_questions_short": "开放问题",
+    "constellation_label": "当前调研工作区星图概览",
+    "constellation_empty": "等待第一个调研目标",
     "enter": "进入研究现场",
     "read_report": "查看研究报告",
     "handle_confirmation": "处理待确认",

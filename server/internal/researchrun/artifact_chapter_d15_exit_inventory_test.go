@@ -36,7 +36,7 @@ var chapterD15Coverage = map[int]string{
 	19: "covered", // unrelated advance reauthorization + affected eligibility denial + final acceptance watermark
 	20: "partial", // result lock-order concurrency + normalized manifest locks
 	21: "covered", // payload + manifest ID/hash + exact input-version set + producer/watermark lineage replay
-	22: "partial", // plan+evidence semantic points and tx recovery covered; report/evaluation semantic points open
+	22: "covered", // all 19 semantic checkpoints + begin/commit/unknown recovery + D ledger atomicity guards
 	23: "partial", // human/assigned/unbound/unassigned/cross-workspace/header-spoof HTTP matrix; evaluator/projector surfaces open
 	24: "partial", // withdrawal/acceptance ledger + revoked frozen-read denial/history preservation
 	25: "covered", // stable passport-ID/hash projection + frozen Attempt scope + enum/FE fallback

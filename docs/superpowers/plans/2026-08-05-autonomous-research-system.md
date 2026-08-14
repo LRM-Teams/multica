@@ -1019,12 +1019,11 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
-D-recovery-1 证据：`txOpResultAccept` 的 Plan semantic checkpoints 已逐点证明完整回滚；
-Evidence 路径进一步在 Source Snapshot、legacy Source projection、Observation、Claim 与 Evidence
-Link 每个 create 后注入故障，并将 domain rows、Result、Passport/Version、Input Reference、
-Lifecycle/Policy ledger、Event、Attempt/Task terminal 状态与故障前基线逐项比较。§15.22 的
-Report/Report-Claim 与 Evaluation/Decision semantic checkpoints 仍保持 partial。
-
+D-recovery-2 证据：`txOpResultAccept` 的 19 个 semantic checkpoints 已按真实 Plan、Evidence、
+Report/Report-Claim 与 Evaluation/Decision 路径全部触发；每个路径都将 domain rows、Result、
+Passport/Version、Input Reference、Lifecycle/Policy ledger、Event、Attempt/Task terminal 状态与
+故障前基线比较。通用 after-begin/before-commit/after-commit-unknown 恢复矩阵、幂等重放和 D ledger
+immediate/ordinary-commit 结构守卫保持覆盖，§15.22 已收口。
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

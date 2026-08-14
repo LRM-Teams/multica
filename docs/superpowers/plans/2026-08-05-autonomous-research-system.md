@@ -1100,6 +1100,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 
 - [ ] 生成不含跨租户私有内容的 Research Episode。
 - [ ] 实现评测任务、环境、grader、重复运行和对照报告。
+  - [x] M2a：`researcheval.SealedSubjectInput` 冻结 Executor 可见的 Task、受控 Environment 与 seed，结构上不存在 Oracle 字段；strict decoder 拒绝 `oracle`/未知字段、尾随 JSON、schema 漂移和 hash 篡改。Document/tool/tag/trait/fault 顺序与重复先规范化再做 SHA-256，文档数量、单文档和总内容均有界，Fault 只能引用同 Environment 的 Document。该合同是后续 Passport version 的原始字节边界；尚未完成数据库 Passport 注册、Attempt Manifest 注入和真实 Run Executor。
 - [ ] 实现 Strategy Candidate、Promotion Decision、新 Run 固定版本和回退。
 - [ ] 建立线上质量/成本越界监测；禁止运行中自改 Prompt 或策略。
 

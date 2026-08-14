@@ -74,11 +74,32 @@ describe("Research list/bootstrap response boundaries", () => {
             task_running: 3,
             task_blocked: 1,
             evidence_count: 18,
+            today_evidence_count: 4,
             node_count: 6,
             open_question_count: 2,
             awaiting_user_action: false,
+            attention_kind: "blocked_tasks",
+            recoverable: true,
             last_progress_at: "2026-08-14T08:41:00Z",
           },
+          active_assignments: [
+            {
+              agent_id: "a1",
+              role: "validator",
+              task_id: "t1",
+              task_title: "Verify pricing evidence",
+              state: "running",
+            },
+          ],
+          latest_outcomes: [
+            {
+              id: "o1",
+              kind: "claim",
+              title: "Pricing is usage based",
+              verification_state: "supported",
+              created_at: "2026-08-14T08:40:00Z",
+            },
+          ],
         },
         session("s2"),
       ],
@@ -86,7 +107,12 @@ describe("Research list/bootstrap response boundaries", () => {
 
     await expect(client.listResearchSessions("ws1")).resolves.toMatchObject({
       sessions: [
-        { id: "s1", list_progress: { task_completed: 5, evidence_count: 18 } },
+        {
+          id: "s1",
+          list_progress: { task_completed: 5, evidence_count: 18 },
+          active_assignments: [{ task_id: "t1" }],
+          latest_outcomes: [{ id: "o1", kind: "claim" }],
+        },
         { id: "s2" },
       ],
     });

@@ -64,7 +64,8 @@ WITH task_progress AS (
     AND t.plan_version = s.plan_version
   GROUP BY t.session_id
 ), evidence_progress AS (
-  SELECT session_id, count(*) AS evidence_count
+  SELECT session_id, count(*) AS evidence_count,
+    count(*) FILTER (WHERE created_at >= date_trunc('day', now())) AS today_evidence_count
   FROM research_observation
   WHERE workspace_id = $1 AND verification_status <> 'rejected'
   GROUP BY session_id
@@ -90,14 +91,17 @@ SELECT
   COALESCE(tp.task_running, 0)::bigint AS task_running,
   COALESCE(tp.task_blocked, 0)::bigint AS task_blocked,
   COALESCE(ep.evidence_count, 0)::bigint AS evidence_count,
+  COALESCE(ep.today_evidence_count, 0)::bigint AS today_evidence_count,
   COALESCE(np.node_count, 0)::bigint AS node_count,
   COALESCE(qp.open_question_count, 0)::bigint AS open_question_count,
   (s.status = 'awaiting_user_confirm') AS awaiting_user_action,
-  CASE
-    WHEN s.status = 'awaiting_user_confirm' THEN 'awaiting_user_confirm'
+  COALESCE((CASE
+    WHEN s.status = 'awaiting_user_confirm' THEN 'user_confirmation'
     WHEN COALESCE(tp.task_blocked, 0) > 0 THEN 'blocked_tasks'
+    WHEN s.status = 'failed' AND length(s.last_error) > 0 THEN 'recoverable_failure'
     ELSE NULL
-  END::text AS attention_reason,
+  END)::text, '')::text AS attention_kind,
+  COALESCE((s.status = 'failed' AND length(s.last_error) > 0) OR COALESCE(tp.task_blocked, 0) > 0, false)::boolean AS recoverable,
   s.last_progress_at
 FROM research_session s
 LEFT JOIN task_progress tp ON tp.session_id = s.id
@@ -106,6 +110,56 @@ LEFT JOIN node_progress np ON np.session_id = s.id
 LEFT JOIN question_progress qp ON qp.session_id = s.id
 WHERE s.workspace_id = $1
 ORDER BY s.updated_at DESC;
+
+-- name: ListResearchActiveAssignments :many
+WITH ranked AS (
+  SELECT
+    t.session_id,
+    t.assigned_agent_id AS agent_id,
+    COALESCE(fm.role, '')::text AS role,
+    t.id AS task_id,
+    t.objective AS task_title,
+    t.status AS state,
+    row_number() OVER (PARTITION BY t.session_id ORDER BY t.priority DESC, t.started_at DESC NULLS LAST, t.created_at DESC) AS position
+  FROM research_task t
+  JOIN research_session s ON s.id = t.session_id
+  LEFT JOIN research_fleet_member fm ON fm.fleet_id = s.fleet_id AND fm.agent_id = t.assigned_agent_id
+  WHERE t.workspace_id = $1
+    AND t.goal_version = s.goal_version
+    AND t.plan_version = s.plan_version
+    AND t.status IN ('dispatching', 'running')
+    AND t.assigned_agent_id IS NOT NULL
+)
+SELECT session_id, agent_id, role, task_id, task_title, state
+FROM ranked
+WHERE position <= 4
+ORDER BY session_id, position;
+
+-- name: ListResearchLatestOutcomes :many
+WITH outcomes AS (
+  SELECT c.session_id, c.id, 'claim'::text AS kind, c.claim_text AS title,
+    NULLIF(c.resolution, '')::text AS summary, c.status AS verification_state, c.created_at
+  FROM research_claim c
+  JOIN research_session s ON s.id = c.session_id
+  WHERE c.workspace_id = $1 AND c.goal_version = s.goal_version AND c.plan_version = s.plan_version AND c.status = 'supported'
+  UNION ALL
+  SELECT o.session_id, o.id, 'observation'::text, COALESCE(NULLIF(o.interpretation, ''), NULLIF(o.quote, ''), 'Verified observation'),
+    NULLIF(o.quote, '')::text, o.verification_status, o.created_at
+  FROM research_observation o
+  WHERE o.workspace_id = $1 AND o.verification_status = 'verified'
+  UNION ALL
+  SELECT t.session_id, t.id, 'task'::text, t.objective, NULLIF(t.terminal_reason, '')::text, t.status, t.completed_at
+  FROM research_task t
+  JOIN research_session s ON s.id = t.session_id
+  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version AND t.status = 'succeeded' AND t.completed_at IS NOT NULL
+), ranked AS (
+  SELECT outcomes.*, row_number() OVER (PARTITION BY session_id ORDER BY created_at DESC, id) AS position
+  FROM outcomes
+)
+SELECT session_id, id, kind, title, COALESCE(summary, '')::text AS summary, verification_state, created_at
+FROM ranked
+WHERE position <= 3
+ORDER BY session_id, position;
 
 -- name: GetResearchSession :one
 SELECT * FROM research_session

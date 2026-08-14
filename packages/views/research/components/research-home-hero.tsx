@@ -13,11 +13,9 @@ import { useT } from "../../i18n/use-t";
  */
 export function ResearchHomeHero({
   children,
-  aside,
   className,
 }: {
   children?: ReactNode;
-  aside?: ReactNode;
   className?: string;
 }) {
   const { t } = useT("research");
@@ -45,12 +43,7 @@ export function ResearchHomeHero({
             </p>
           </div>
         </div>
-        {aside ? (
-          <div className="grid items-stretch gap-3 lg:grid-cols-[minmax(0,1.65fr)_minmax(280px,0.75fr)]">
-            {children}
-            {aside}
-          </div>
-        ) : children}
+        {children}
       </div>
     </section>
   );

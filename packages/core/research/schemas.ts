@@ -66,13 +66,38 @@ export const ResearchSessionSchema = z
         task_running: z.number().optional().default(0),
         task_blocked: z.number().optional().default(0),
         evidence_count: z.number().optional().default(0),
+        today_evidence_count: z.number().optional().default(0),
         node_count: z.number().optional().default(0),
         open_question_count: z.number().optional().default(0),
         awaiting_user_action: z.boolean().optional().default(false),
-        attention_reason: z.string().nullable().optional(),
+        attention_kind: z.string().nullable().optional(),
+        recoverable: z.boolean().optional().default(false),
         last_progress_at: z.string().nullable().optional(),
       })
       .passthrough()
+      .optional(),
+    active_assignments: z
+      .array(
+        z.object({
+          agent_id: z.string(),
+          role: z.string().optional().default(""),
+          task_id: z.string(),
+          task_title: z.string().optional().default(""),
+          state: z.string().optional().default("running"),
+        }).passthrough(),
+      )
+      .optional(),
+    latest_outcomes: z
+      .array(
+        z.object({
+          id: z.string(),
+          kind: z.string(),
+          title: z.string().optional().default(""),
+          summary: z.string().nullable().optional(),
+          verification_state: z.string().optional().default(""),
+          created_at: z.string().optional().default(""),
+        }).passthrough(),
+      )
       .optional(),
   })
   .passthrough();

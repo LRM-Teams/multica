@@ -131,6 +131,8 @@ export interface ResearchSession {
   product_round?: number;
   product_round_budget?: number;
   list_progress?: ResearchSessionListProgress;
+  active_assignments?: ResearchActiveAssignment[];
+  latest_outcomes?: ResearchLatestOutcome[];
 }
 
 export interface ResearchSessionListProgress {
@@ -139,11 +141,30 @@ export interface ResearchSessionListProgress {
   task_running: number;
   task_blocked: number;
   evidence_count: number;
+  today_evidence_count: number;
   node_count: number;
   open_question_count: number;
   awaiting_user_action: boolean;
-  attention_reason?: string | null;
+  attention_kind?: string | null;
+  recoverable: boolean;
   last_progress_at?: string | null;
+}
+
+export interface ResearchActiveAssignment {
+  agent_id: string;
+  role: string;
+  task_id: string;
+  task_title: string;
+  state: string;
+}
+
+export interface ResearchLatestOutcome {
+  id: string;
+  kind: string;
+  title: string;
+  summary?: string | null;
+  verification_state: string;
+  created_at: string;
 }
 export interface ResearchGraphNode {
   id: string;

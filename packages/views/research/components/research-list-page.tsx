@@ -59,7 +59,6 @@ import { ResearchCreateParamsPanel } from "./research-create-params-panel";
 import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchHomeHero } from "./research-home-hero";
 import { ResearchHomeOverview } from "./research-home-overview";
-import { ResearchLaunchPreview } from "./research-launch-preview";
 import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
@@ -542,14 +541,7 @@ export function ResearchListPage() {
           ) : null}
           {/* LRM-783 / LRM-784 / LRM-1106: brand-hero + full-width composer (12 cols). */}
           <div ref={composerCardRef} className="relative z-[1]">
-            <ResearchHomeHero
-              aside={
-                <ResearchLaunchPreview
-                  params={createParams}
-                  fleet={fleetQuery.data}
-                />
-              }
-            >
+            <ResearchHomeHero>
               <div
                 className={cn(
                   "w-full overflow-hidden rounded-2xl border bg-card",

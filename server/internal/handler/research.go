@@ -49,8 +49,10 @@ type ResearchFleetPreviewMember struct {
 // ResearchSessionListItem extends the session row with a workspace fleet preview.
 type ResearchSessionListItem struct {
 	ResearchSessionResponse
-	FleetPreview []ResearchFleetPreviewMember `json:"fleet_preview"`
-	ListProgress *ResearchSessionListProgress `json:"list_progress,omitempty"`
+	FleetPreview      []ResearchFleetPreviewMember `json:"fleet_preview"`
+	ListProgress      *ResearchSessionListProgress `json:"list_progress,omitempty"`
+	ActiveAssignments []ResearchActiveAssignment   `json:"active_assignments"`
+	LatestOutcomes    []ResearchLatestOutcome      `json:"latest_outcomes"`
 }
 
 type ResearchSessionListProgress struct {
@@ -59,11 +61,30 @@ type ResearchSessionListProgress struct {
 	TaskRunning        int64   `json:"task_running"`
 	TaskBlocked        int64   `json:"task_blocked"`
 	EvidenceCount      int64   `json:"evidence_count"`
+	TodayEvidenceCount int64   `json:"today_evidence_count"`
 	NodeCount          int64   `json:"node_count"`
 	OpenQuestionCount  int64   `json:"open_question_count"`
 	AwaitingUserAction bool    `json:"awaiting_user_action"`
-	AttentionReason    *string `json:"attention_reason,omitempty"`
+	AttentionKind      *string `json:"attention_kind,omitempty"`
+	Recoverable        bool    `json:"recoverable"`
 	LastProgressAt     *string `json:"last_progress_at,omitempty"`
+}
+
+type ResearchActiveAssignment struct {
+	AgentID   string `json:"agent_id"`
+	Role      string `json:"role"`
+	TaskID    string `json:"task_id"`
+	TaskTitle string `json:"task_title"`
+	State     string `json:"state"`
+}
+
+type ResearchLatestOutcome struct {
+	ID                string  `json:"id"`
+	Kind              string  `json:"kind"`
+	Title             string  `json:"title"`
+	Summary           *string `json:"summary,omitempty"`
+	VerificationState string  `json:"verification_state"`
+	CreatedAt         string  `json:"created_at"`
 }
 
 type ResearchSessionSnapshot struct {
@@ -298,16 +319,44 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 			TaskRunning:        row.TaskRunning,
 			TaskBlocked:        row.TaskBlocked,
 			EvidenceCount:      row.EvidenceCount,
+			TodayEvidenceCount: row.TodayEvidenceCount,
 			NodeCount:          row.NodeCount,
 			OpenQuestionCount:  row.OpenQuestionCount,
 			AwaitingUserAction: row.AwaitingUserAction,
+			Recoverable:        row.Recoverable,
 		}
-		if row.AttentionReason.Valid {
-			progress.AttentionReason = &row.AttentionReason.String
+		if row.AttentionKind != "" {
+			progress.AttentionKind = &row.AttentionKind
 		}
 		lastProgressAt := timestampToString(row.LastProgressAt)
 		progress.LastProgressAt = &lastProgressAt
 		progressBySession[sessionID] = progress
+	}
+	assignmentRows, err := h.Queries.ListResearchActiveAssignments(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load research assignments")
+		return
+	}
+	assignmentsBySession := make(map[string][]ResearchActiveAssignment)
+	for _, row := range assignmentRows {
+		sessionID := uuidToString(row.SessionID)
+		assignmentsBySession[sessionID] = append(assignmentsBySession[sessionID], ResearchActiveAssignment{
+			AgentID: uuidToString(row.AgentID), Role: row.Role, TaskID: uuidToString(row.TaskID), TaskTitle: row.TaskTitle, State: row.State,
+		})
+	}
+	outcomeRows, err := h.Queries.ListResearchLatestOutcomes(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load research outcomes")
+		return
+	}
+	outcomesBySession := make(map[string][]ResearchLatestOutcome)
+	for _, row := range outcomeRows {
+		sessionID := uuidToString(row.SessionID)
+		outcome := ResearchLatestOutcome{ID: uuidToString(row.ID), Kind: row.Kind, Title: row.Title, VerificationState: row.VerificationState, CreatedAt: timestampToString(row.CreatedAt)}
+		if row.Summary != "" {
+			outcome.Summary = &row.Summary
+		}
+		outcomesBySession[sessionID] = append(outcomesBySession[sessionID], outcome)
 	}
 	out := make([]ResearchSessionListItem, 0, len(rows))
 	for _, row := range rows {
@@ -316,6 +365,8 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 			ResearchSessionResponse: researchSessionToResponse(row),
 			FleetPreview:            preview,
 			ListProgress:            progressBySession[sessionID],
+			ActiveAssignments:       assignmentsBySession[sessionID],
+			LatestOutcomes:          outcomesBySession[sessionID],
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})

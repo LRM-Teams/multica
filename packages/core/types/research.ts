@@ -711,9 +711,16 @@ export interface ResearchAttemptArtifactContext {
 }
 
 export interface SteerResearchRunRequest {
-  goal: string;
+  /** Required for legacy full Goal replacement; omitted for V6 branch steering. */
+  goal?: string;
   reason?: string;
   allow_running_finish?: boolean;
+  /** Optimistic fence required by V6 selective/full-plan steering. */
+  expected_state_version?: number;
+  /** Canonical Branch UUID roots. Descendants are resolved by the server. */
+  affected_branch_ids?: string[];
+  /** Replan every current Branch without replacing the durable Goal. */
+  full_replan?: boolean;
   scope?: Record<string, unknown>;
   audience?: string;
   freshness?: string;

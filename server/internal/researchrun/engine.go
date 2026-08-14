@@ -409,6 +409,26 @@ func (e *Engine) ListFleetMembers(ctx context.Context, sessionID, workspaceID st
 }
 
 func (e *Engine) Steer(ctx context.Context, in SteerInput) (Run, error) {
+	if isSelectiveSteer(in) {
+		outcome, err := e.store.ApplySelectiveSteering(ctx, in)
+		if err != nil {
+			return Run{}, err
+		}
+		if len(outcome.Plan.CancelRunningTaskIDs) > 0 {
+			if _, err = e.cancelPendingAttempts(ctx, outcome.Run, "research_selective_steering"); err != nil {
+				return outcome.Run, err
+			}
+		}
+		objective := "Replan only the explicitly affected Inquiry Branches: " + strings.Join(outcome.Plan.ImpactedBranchIDs, ", ") +
+			". Preserve all other current-plan Tasks and every accepted Evidence artifact. Steering reason: " + strings.TrimSpace(in.Reason)
+		if _, _, err = e.store.CreateControlTask(ctx, ControlTaskInput{
+			SessionID: in.SessionID, Kind: TaskKindReplan, Objective: truncateBytes(objective, maxTaskObjectiveBytes),
+			Capability: "lead", Priority: 1, Rationale: "The user selectively redirected canonical Inquiry branches.",
+		}); err != nil {
+			return outcome.Run, err
+		}
+		return outcome.Run, reconcileHandoff(e.ReconcileSession(ctx, in.SessionID))
+	}
 	run, _, _, err := e.store.Steer(ctx, in)
 	if err != nil {
 		return Run{}, err

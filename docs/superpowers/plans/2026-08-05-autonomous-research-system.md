@@ -1037,6 +1037,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
   - [x] E5a：建立按 current state version fencing 的 selective steering 影响规划器；显式 affected branch 根扩展为后代闭包，只选择相交的 pending/ready/running Task，区分取消与允许完成，并保持终态 Branch/Task 为不可变历史。accepted Evidence 不属于可变计划输出。PostgreSQL 原子应用、typed HTTP 输入和 Event/Decision 仍待 E5b。
   - [x] E5-prereq-target：选择性 steering 的 Task→Branch 输入已改为 migration 355 canonical 绑定，并提供事务内 state loader；未绑定 Branch 的 Task 仅能参与显式 full replan，局部 steering 不得通过文本或图布局推断其归属。
+  - [x] E5b：`/steer` 增加 `expected_state_version + affected_branch_ids | full_replan` 严格模式，同时保留旧 Goal replacement 入口。`ApplySelectiveSteering` 在 Serializable 单事务从 migration 355 ledger 重建当前 Goal/Plan 的 Branch/Task scope，计算后代闭包，仅 obsolete 命中的非终态 Branch/Task，只把命中的 active Attempt 转为 cancelling，保留其余运行 Task 和全部 accepted Evidence；选择、保留、取消集合写 `selective_steering` Decision 与语义幂等 Event。Engine 只为实际命中的 Attempt 调用 durable cancellation，并创建带 canonical Branch UUID 的 replan Task。
 
 退出条件：新证据能加强、削弱或推翻假设，创建/终止分支，并让后续任务引用这些持久对象。
 

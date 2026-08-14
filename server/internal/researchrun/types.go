@@ -383,18 +383,21 @@ type StartInput struct {
 }
 
 type SteerInput struct {
-	SessionID          string
-	WorkspaceID        string
-	UserID             string
-	Goal               string
-	Reason             string
-	AllowRunningFinish bool
-	Scope              json.RawMessage
-	Audience           *string
-	Freshness          *string
-	Language           *string
-	SourcePolicy       json.RawMessage
-	RunLimits          json.RawMessage
+	SessionID            string
+	WorkspaceID          string
+	UserID               string
+	Goal                 string
+	Reason               string
+	AllowRunningFinish   bool
+	ExpectedStateVersion int64
+	AffectedBranchIDs    []string
+	FullReplan           bool
+	Scope                json.RawMessage
+	Audience             *string
+	Freshness            *string
+	Language             *string
+	SourcePolicy         json.RawMessage
+	RunLimits            json.RawMessage
 }
 
 type DispatchRequest struct {

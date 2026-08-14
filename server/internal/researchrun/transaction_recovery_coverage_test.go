@@ -18,6 +18,7 @@ func TestResearchTransactionRecoveryMatrixCoversRegistry(t *testing.T) {
 	bespoke := map[researchTxOperation]string{
 		txOpDispatchIntentCreate:   "TestCreateDispatchIntentTransactionRecovery",
 		txOpInquiryStatusUpdate:    "TestUpdateInquiryStatusTransactionRecovery",
+		txOpRunSelectiveSteer:      "TestApplySelectiveSteeringTransactionRecovery",
 		txOpStrategyPromotion:      "TestPersistStrategyPromotionTransactionRecovery",
 		txOpTaskInquiryTargetsBind: "TestBindTaskInquiryTargetsTransactionRecovery",
 	}

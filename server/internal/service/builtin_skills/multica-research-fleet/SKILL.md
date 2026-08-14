@@ -88,6 +88,13 @@ chat before `task-result` succeeds.
   source declares evidence traits and each Claim declares its accepted evidence
   standard. A question-scoped result that increases coverage sets
   `answer_claim_key` to a Claim included in that result.
+  When a task screens retrieval candidates, preserve the exact versioned
+  inclusion/exclusion criterion IDs, reviewer identity and time, substantive
+  reason, and inspectable facts with locators. Accepted candidates must match an
+  inclusion criterion and no exclusion criterion. Excluded candidates must
+  match an exclusion criterion. Duplicates point to a different canonical
+  candidate and carry its canonical URL or SHA-256 content hash; prose-only
+  similarity is not duplicate evidence.
 - `verify` / `counter_search`: independent corroboration, contradictory
   evidence, and explicit claim resolutions. Agreement without source evidence
   is not verification. Include the source, observation, claim, and evidence

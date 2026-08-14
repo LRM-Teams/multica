@@ -1028,6 +1028,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 ### F. Search 与 Corpus 谱系
 
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
+- [x] F3b-policy：冻结 `research-screening-v1` 筛选合同。每个决定必须携带版本化纳排标准、`accepted | excluded | duplicate` 的合法命中矩阵、审查主体与时间、结构化事实和稳定 SHA-256 指纹；重复项必须指向另一候选并以 canonical URL 或 content hash 证明同一性。持久化接线仍随 F1/F3 后续切片完成，不能仅凭本项宣称来源谱系已闭环。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。

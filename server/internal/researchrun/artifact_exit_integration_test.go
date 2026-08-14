@@ -168,6 +168,18 @@ func TestHistoricalTaskContextAdvancesWhileFrozenManifestStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskContextForAttempt before: %v", err)
 	}
+	if len(frozenBefore.Questions) == 0 || len(frozenBefore.Tasks) == 0 {
+		t.Fatalf("frozen core fixture is incomplete: questions=%d tasks=%d", len(frozenBefore.Questions), len(frozenBefore.Tasks))
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_session SET goal='live goal changed after dispatch' WHERE id=$1::uuid`, run.SessionID); err != nil {
+		t.Fatalf("mutate live run: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_question SET question='live question changed after dispatch' WHERE id=$1::uuid`, frozenBefore.Questions[0].ID); err != nil {
+		t.Fatalf("mutate live question: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task SET objective='live task changed after dispatch' WHERE id=$1::uuid`, frozenBefore.Tasks[0].ID); err != nil {
+		t.Fatalf("mutate live task: %v", err)
+	}
 	sourceID := uuid.NewString()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -205,6 +217,15 @@ func TestHistoricalTaskContextAdvancesWhileFrozenManifestStable(t *testing.T) {
 	}
 	if len(frozenAfter.Sources) != len(frozenBefore.Sources) {
 		t.Fatalf("frozen sources changed before=%d after=%d", len(frozenBefore.Sources), len(frozenAfter.Sources))
+	}
+	if live.Run.Goal == frozenBefore.Run.Goal || frozenAfter.Run.Goal != frozenBefore.Run.Goal {
+		t.Fatalf("run goal live=%q frozen_before=%q frozen_after=%q", live.Run.Goal, frozenBefore.Run.Goal, frozenAfter.Run.Goal)
+	}
+	if live.Questions[0].Question == frozenBefore.Questions[0].Question || frozenAfter.Questions[0].Question != frozenBefore.Questions[0].Question {
+		t.Fatalf("question live=%q frozen_before=%q frozen_after=%q", live.Questions[0].Question, frozenBefore.Questions[0].Question, frozenAfter.Questions[0].Question)
+	}
+	if live.Tasks[0].Objective == frozenBefore.Tasks[0].Objective || frozenAfter.Tasks[0].Objective != frozenBefore.Tasks[0].Objective {
+		t.Fatalf("task live=%q frozen_before=%q frozen_after=%q", live.Tasks[0].Objective, frozenBefore.Tasks[0].Objective, frozenAfter.Tasks[0].Objective)
 	}
 }
 

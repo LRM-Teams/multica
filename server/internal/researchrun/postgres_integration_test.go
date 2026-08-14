@@ -931,6 +931,37 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if err != nil || len(tasks) != 6 || !discoverReady {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
+	var expectedTaskLineage, actualTaskLineage int
+	if err = pool.QueryRow(ctx, `
+		WITH created_version AS (
+		  SELECT version.id,version.artifact_id
+		  FROM research_artifact_version version
+		  JOIN research_artifact_passport passport
+		    ON (passport.workspace_id,passport.session_id,passport.id,passport.current_version)=
+		       (version.workspace_id,version.session_id,version.artifact_id,version.version)
+		  WHERE version.workspace_id=$1::uuid AND version.session_id=$2::uuid
+		    AND version.produced_by_attempt_id=$3::uuid AND passport.entity_kind='task'
+		), expected AS (
+		  SELECT
+		    count(*) FILTER (WHERE task.question_id IS NOT NULL)+
+		    count(*) FILTER (WHERE task.parent_task_id IS NOT NULL)+
+		    (SELECT count(*) FROM research_task_dependency dependency
+		     WHERE dependency.workspace_id=$1::uuid AND dependency.session_id=$2::uuid
+		       AND dependency.task_id IN (SELECT artifact_id FROM created_version)) AS value
+		  FROM research_task task WHERE task.id IN (SELECT artifact_id FROM created_version)
+		), actual AS (
+		  SELECT count(*) AS value FROM research_artifact_input_reference reference
+		  WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
+		    AND reference.consumer_version_id IN (SELECT id FROM created_version)
+		    AND reference.relation IN ('task_question','task_parent','task_dependency')
+		)
+		SELECT expected.value::int,actual.value::int FROM expected CROSS JOIN actual
+	`, fixture.workspaceID, fixture.sessionID, attempt.ID).Scan(&expectedTaskLineage, &actualTaskLineage); err != nil {
+		t.Fatal(err)
+	}
+	if expectedTaskLineage == 0 || actualTaskLineage != expectedTaskLineage {
+		t.Fatalf("task typed lineage=%d want=%d", actualTaskLineage, expectedTaskLineage)
+	}
 	run, err = store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || run.Stats.AcceptedResults != 1 {
 		t.Fatalf("run stats=%+v err=%v", run.Stats, err)

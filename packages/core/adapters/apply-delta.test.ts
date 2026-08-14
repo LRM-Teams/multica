@@ -117,4 +117,32 @@ describe("applyCanvasDelta — (§7.2) idempotent, sequence-framed", () => {
     // Content changed → hash changes.
     expect(applied.snapshot.graphContentHash).not.toBe(snap.graphContentHash);
   });
+
+  it("applies cluster upserts and tombstones as canonical graph content", () => {
+    const snap = base();
+    const before = snap.graphContentHash;
+    const delta: CanvasDelta = {
+      fromSequenceExclusive: snap.throughEventSequence,
+      throughSequence: snap.throughEventSequence + 1,
+      upsertNodes: [],
+      upsertEdges: [],
+      tombstoneNodeIds: [],
+      tombstoneEdgeIds: [],
+      upsertClusters: [{
+        id: "cluster-frontier",
+        label: "New frontier",
+        clusterType: "new_frontier",
+        memberNodeIds: [],
+        confidence: null,
+        documentCount: null,
+        conclusionCount: null,
+      }],
+      tombstoneClusterIds: ["cluster-cost"],
+      affectedRootIds: [],
+      transitionKind: "branch_spawned",
+    };
+    const applied = applyCanvasDelta(snap, delta);
+    expect(applied.snapshot.clusters?.map((cluster) => cluster.id)).toEqual(["cluster-frontier"]);
+    expect(applied.snapshot.graphContentHash).not.toBe(before);
+  });
 });

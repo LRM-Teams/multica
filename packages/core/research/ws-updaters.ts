@@ -8,6 +8,22 @@ import { researchKeys, type ResearchPresenceMap } from "./queries";
 import { ResearchProductRoundCardSchema } from "./schemas";
 import { applyTypedGraphWsPatch } from "./typed-graph-cache";
 
+const listRefreshTimers = new WeakMap<QueryClient, Map<string, ReturnType<typeof setTimeout>>>();
+
+function scheduleSessionListRefresh(qc: QueryClient, wsId: string) {
+  let timers = listRefreshTimers.get(qc);
+  if (!timers) {
+    timers = new Map();
+    listRefreshTimers.set(qc, timers);
+  }
+  if (timers.has(wsId)) return;
+  const timer = setTimeout(() => {
+    timers?.delete(wsId);
+    void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+  }, 1000);
+  timers.set(wsId, timer);
+}
+
 function sessionIdFromPayload(payload: Record<string, unknown>): string | null {
   if (typeof payload.session_id === "string") return payload.session_id;
   const session = payload.session as { id?: string } | undefined;
@@ -66,9 +82,12 @@ export function applyResearchWSEvent(
 ) {
   const payload = (message.payload ?? {}) as Record<string, unknown>;
   const sessionId = sessionIdFromPayload(payload);
+  if (message.type.startsWith("research_session:")) {
+    scheduleSessionListRefresh(qc, wsId);
+  }
   if (!sessionId) {
     if (message.type === "research_session:status_changed") {
-      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      scheduleSessionListRefresh(qc, wsId);
     }
     return;
   }
@@ -240,7 +259,6 @@ export function applyResearchWSEvent(
         qc.removeQueries({
           queryKey: researchKeys.productRounds(wsId, sessionId),
         });
-        void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
         break;
       }
       const session = payload.session as ResearchSessionSnapshot["session"] | undefined;
@@ -255,7 +273,6 @@ export function applyResearchWSEvent(
       if (session) {
         patchSnapshot(qc, wsId, sessionId, (prev) => ({ ...prev, session }));
       }
-      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
       break;
     }
     case "research_session:presence": {

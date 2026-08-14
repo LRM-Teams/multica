@@ -19,6 +19,7 @@ type recordingResearchRunEngine struct {
 	snapshotSessionID        string
 	snapshotWorkspaceID      string
 	snapshotAttemptID        string
+	snapshot                 researchrun.RunSnapshot
 }
 
 func (f *recordingResearchRunEngine) Create(context.Context, researchrun.StartInput) (researchrun.Run, error) {
@@ -29,7 +30,7 @@ func (f *recordingResearchRunEngine) Snapshot(_ context.Context, sessionID, work
 	f.snapshotCalled = true
 	f.snapshotSessionID = sessionID
 	f.snapshotWorkspaceID = workspaceID
-	return researchrun.RunSnapshot{}, nil
+	return f.snapshot, nil
 }
 
 func (f *recordingResearchRunEngine) SnapshotForAttempt(_ context.Context, sessionID, workspaceID, attemptID string) (researchrun.RunSnapshot, error) {
@@ -37,7 +38,7 @@ func (f *recordingResearchRunEngine) SnapshotForAttempt(_ context.Context, sessi
 	f.snapshotSessionID = sessionID
 	f.snapshotWorkspaceID = workspaceID
 	f.snapshotAttemptID = attemptID
-	return researchrun.RunSnapshot{}, nil
+	return f.snapshot, nil
 }
 
 func (f *recordingResearchRunEngine) ListFleetMembers(context.Context, string, string) ([]researchrun.FleetMember, error) {

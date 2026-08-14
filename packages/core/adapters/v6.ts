@@ -15,12 +15,13 @@
  */
 import type {
   ResearchV6Delta,
+  ResearchV6ProjectionCluster,
   ResearchV6ProjectionEdge,
   ResearchV6ProjectionNode,
   ResearchV6Snapshot,
 } from "../types/research-v6";
 import { RESEARCH_V6_NODE_KINDS } from "../research-v6/registry";
-import type { CanvasDelta, CanvasEdge, CanvasNode, CanvasSnapshot } from "./canvas-types";
+import type { CanvasCluster, CanvasDelta, CanvasEdge, CanvasNode, CanvasSnapshot } from "./canvas-types";
 import { computeGraphContentHash } from "./snapshot-hash";
 
 /** Stable projection node id for a canonical entity (§7.1). */
@@ -56,6 +57,18 @@ function mapNode(n: ResearchV6ProjectionNode): CanvasNode {
     title: n.title,
     summary: n.summary,
     status: n.status,
+    level: n.level,
+    clusterId: n.cluster_id ?? null,
+    parentId: n.parent_id ?? null,
+    round: n.round,
+    confidence: n.confidence ?? null,
+    documentCount: n.document_count ?? null,
+    conclusionCount: n.conclusion_count ?? null,
+    derivedFrom: n.derived_from ?? null,
+    mergedFrom: n.merged_from ?? [],
+    supersededBy: n.superseded_by ?? null,
+    restartOf: n.restart_of ?? null,
+    invalidatedBy: n.invalidated_by ?? null,
     // Verbatim canonical importance/freshness — never recomputed or guessed.
     importance: n.importance,
     freshness: n.freshness,
@@ -67,6 +80,18 @@ function mapNode(n: ResearchV6ProjectionNode): CanvasNode {
     payload: (n.detail ?? {}) as Record<string, unknown>,
     createdAt: n.created_at,
     updatedAt: n.updated_at,
+  };
+}
+
+function mapCluster(cluster: ResearchV6ProjectionCluster): CanvasCluster {
+  return {
+    id: cluster.id,
+    label: cluster.label,
+    clusterType: cluster.cluster_type,
+    memberNodeIds: cluster.member_node_ids.slice(),
+    confidence: cluster.confidence ?? null,
+    documentCount: cluster.document_count ?? null,
+    conclusionCount: cluster.conclusion_count ?? null,
   };
 }
 
@@ -86,6 +111,7 @@ function mapEdge(e: ResearchV6ProjectionEdge): CanvasEdge | null {
 /** Build a unified canvas snapshot from a canonical V6 projection snapshot. */
 export function adaptV6Snapshot(input: ResearchV6Snapshot): CanvasSnapshot {
   const nodes = input.nodes.map(mapNode);
+  const clusters = (input.clusters ?? []).map(mapCluster);
   const edges: CanvasEdge[] = [];
   for (const e of input.edges) {
     const mapped = mapEdge(e);
@@ -94,9 +120,10 @@ export function adaptV6Snapshot(input: ResearchV6Snapshot): CanvasSnapshot {
   return {
     snapshotId: input.snapshot_id,
     throughEventSequence: input.through_event_sequence,
-    graphContentHash: computeGraphContentHash(nodes, edges),
+    graphContentHash: computeGraphContentHash(nodes, edges, clusters),
     nodes,
     edges,
+    clusters,
   };
 }
 
@@ -115,6 +142,8 @@ export function adaptV6Delta(input: ResearchV6Delta): CanvasDelta {
     upsertEdges,
     tombstoneNodeIds: input.node_tombstones,
     tombstoneEdgeIds: input.edge_tombstones,
+    upsertClusters: (input.cluster_upserts ?? []).map(mapCluster),
+    tombstoneClusterIds: input.cluster_tombstones ?? [],
     affectedRootIds: input.affected_root_node_ids,
     transitionKind: input.transition_kind as CanvasDelta["transitionKind"],
   };

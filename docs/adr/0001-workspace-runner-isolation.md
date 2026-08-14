@@ -33,11 +33,15 @@ module.
 A capable current Runner also owns the management heartbeat and consumes its
 acknowledgements on that same fenced socket. It derives the current Runtime set
 from its Workspace binding on every send; Server authorization rechecks both
-Workspace and Computer ownership. The legacy runtime-multiplexed socket remains
-a data, Reminder, task-wakeup, and liveness transport, and the current daemon
-does not start the HTTP heartbeat loop. Those legacy Server endpoints continue
-to accept older released daemons during rolling deployment, but they are not a
-second control carrier inside a capable daemon process.
+Workspace and Computer ownership. Attachment replay treats the request cursor
+set as that mutable current Runtime set and authorizes each member; it does not
+require equality with every historical Runtime row retained for the Computer,
+because an offline row for an uninstalled provider is not current Runner
+membership. The legacy runtime-multiplexed socket remains a data, Reminder,
+task-wakeup, and liveness transport, and the current daemon does not start the
+HTTP heartbeat loop. Those legacy Server endpoints continue to accept older
+released daemons during rolling deployment, but they are not a second control
+carrier inside a capable daemon process.
 
 Each live Runner connection also owns its per-Agent Delivery dispatcher and
 current-socket Message callbacks. Deliveries are FIFO for one Agent and may run

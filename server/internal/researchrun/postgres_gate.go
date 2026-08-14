@@ -578,7 +578,7 @@ func (s *PostgresStore) RecordBudgetExhausted(ctx context.Context, sessionID, bu
 	`, workspaceID, sessionID, goalVersion, planVersion, inputs, truncateBytes(details, 4096)).Scan(&decisionID); err != nil {
 		return RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("budget_exhausted"), workspaceID, sessionID, decisionID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
+	if err = registerProductionDecisionPassportTx(ctx, tx, workspaceID, sessionID, decisionID, "", ArtifactAccessRaw); err != nil {
 		return RunEvent{}, err
 	}
 	if _, err = tx.Exec(ctx, `

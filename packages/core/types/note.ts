@@ -124,8 +124,8 @@ export interface NoteWorkerJob {
   updated_at: string;
 }
 
-/** Stable note → target link (S1-R1 / S1-R3 / S2-R1). */
-export type NotePageRefType = "issue" | "agent" | "run";
+/** Stable note → target link (S1-R1 / S1-R3 / S2-R1 / N2-A1). */
+export type NotePageRefType = "issue" | "agent" | "run" | "channel";
 
 export interface NotePageIssueRef {
   type: NotePageRefType | string;
@@ -140,6 +140,10 @@ export interface NotePageIssueRef {
   /** Present on accessible run refs (S2-R1). */
   agent_id?: string;
   workspace_id?: string;
+  /**
+   * Issue identifier (e.g. MUL-12), or for channel refs the kind
+   * (`worker` | `coordination`).
+   */
   identifier?: string;
   title?: string;
   number?: number;
@@ -160,6 +164,12 @@ export interface CreateNotePageAgentRefRequest {
 
 export interface CreateNotePageRunRefRequest {
   run_id: string;
+}
+
+export interface CreateNotePageChannelRefRequest {
+  channel_id: string;
+  /** Defaults to worker on the server. */
+  kind?: "worker" | "coordination";
 }
 
 export interface CreateNotePageIssueRequest {

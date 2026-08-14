@@ -44,7 +44,7 @@ export function ResearchTemplateChipRow({
       aria-label={t(($) => $.home.templates_label)}
       data-testid="research-template-chip-row"
       className={cn(
-        "flex gap-1.5 overflow-x-auto border-b border-border/60 px-3 pb-2.5 pt-2.5 md:flex-wrap md:overflow-visible md:px-3.5",
+        "flex gap-1.5 overflow-x-auto border-b border-border/60 px-3 py-1.5 md:flex-wrap md:overflow-visible md:px-3.5",
         className,
       )}
     >

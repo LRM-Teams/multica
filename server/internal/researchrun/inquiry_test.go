@@ -1,6 +1,7 @@
 package researchrun
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -30,6 +31,43 @@ func TestInquiryModuleStatusTransitionsFailClosed(t *testing.T) {
 		if !tt.allowed && !errors.Is(err, ErrInvalidTransition) {
 			t.Fatalf("%s %s -> %s err=%v want ErrInvalidTransition", tt.kind, tt.from, tt.to, err)
 		}
+	}
+}
+
+func TestInquiryModuleValidatesCreateBatch(t *testing.T) {
+	low, high := 0.2, 0.8
+	valid := CreateInquiryGraphInput{
+		WorkspaceID: "workspace", SessionID: "session", AttemptID: "attempt", AgentID: "agent",
+		IdempotencyKey: "inquiry:test", ExpectedStateVersion: 4,
+		Hypotheses: []InquiryHypothesisInput{{
+			ID: "hypothesis", QuestionID: "question", Statement: "A falsifiable statement",
+			Applicability: json.RawMessage(`{"market":"test"}`), ExpectedObservations: json.RawMessage(`["signal"]`),
+			WeakeningConditions: json.RawMessage(`["counter-signal"]`), ConfidenceLow: &low, ConfidenceHigh: &high,
+		}},
+	}
+	module := inquiryModule{}
+	if err := module.ValidateCreate(valid); err != nil {
+		t.Fatal(err)
+	}
+	invalidRange := valid
+	invalidRange.Hypotheses = append([]InquiryHypothesisInput(nil), valid.Hypotheses...)
+	invalidRange.Hypotheses[0].ConfidenceLow, invalidRange.Hypotheses[0].ConfidenceHigh = &high, &low
+	if err := module.ValidateCreate(invalidRange); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("confidence range err=%v", err)
+	}
+	duplicate := valid
+	duplicate.Edges = []InquiryEdgeInput{{
+		ID: "hypothesis", From: InquiryEndpoint{Kind: InquiryKindQuestion, ID: "question"},
+		To: InquiryEndpoint{Kind: InquiryKindHypothesis, ID: "hypothesis"}, Relation: InquiryRelationTests,
+	}}
+	if err := module.ValidateCreate(duplicate); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("duplicate id err=%v", err)
+	}
+	badJSON := valid
+	badJSON.Hypotheses = append([]InquiryHypothesisInput(nil), valid.Hypotheses...)
+	badJSON.Hypotheses[0].ExpectedObservations = json.RawMessage(`{}`)
+	if err := module.ValidateCreate(badJSON); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("array shape err=%v", err)
 	}
 }
 

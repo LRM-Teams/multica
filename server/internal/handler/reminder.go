@@ -1159,21 +1159,31 @@ func (h *Handler) HandleDaemonReminderSnapshot(ctx context.Context, identity dae
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	jobs := make([]protocol.ReminderTimerJob, 0)
+	reminders := make([]agentReminder, 0)
 	for rows.Next() {
 		reminder, err := scanAgentReminder(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
+		reminders = append(reminders, reminder)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	// Drain the outer cursor before buildReminderTimerJob performs its own DB
+	// reads. With a bounded pool, nesting those reads while rows remains open
+	// can deadlock every connection under concurrent reconnect snapshots.
+	jobs := make([]protocol.ReminderTimerJob, 0, len(reminders))
+	for _, reminder := range reminders {
 		job, err := buildReminderTimerJob(ctx, h.DB, reminder, uuidToString(reminder.AgentID))
 		if err != nil {
 			return nil, err
 		}
 		jobs = append(jobs, job)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	return &protocol.ReminderSnapshotPayload{RuntimeID: payload.RuntimeID, Reminders: jobs}, nil
 }

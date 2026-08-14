@@ -14,12 +14,20 @@ import (
 )
 
 type recordingResearchRunEngine struct {
-	snapshotCalled           bool
-	snapshotForAttemptCalled bool
-	snapshotSessionID        string
-	snapshotWorkspaceID      string
-	snapshotAttemptID        string
-	snapshot                 researchrun.RunSnapshot
+	snapshotCalled              bool
+	snapshotForProjectionCalled bool
+	snapshotForAttemptCalled    bool
+	snapshotSessionID           string
+	snapshotWorkspaceID         string
+	snapshotAttemptID           string
+	snapshot                    researchrun.RunSnapshot
+}
+
+func (f *recordingResearchRunEngine) SnapshotForProjection(_ context.Context, sessionID, workspaceID string) (researchrun.RunSnapshot, error) {
+	f.snapshotForProjectionCalled = true
+	f.snapshotSessionID = sessionID
+	f.snapshotWorkspaceID = workspaceID
+	return f.snapshot, nil
 }
 
 func (f *recordingResearchRunEngine) Create(context.Context, researchrun.StartInput) (researchrun.Run, error) {

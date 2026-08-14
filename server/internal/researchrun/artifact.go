@@ -132,6 +132,7 @@ const ArtifactCanonicalizationVersion = "research-artifact-c14n-v1"
 
 // LegacyV1V5CompatPolicy is the named ordinary-task admission exception for backfilled rows.
 const LegacyV1V5CompatPolicy = "legacy-v1-v5-compat-v1"
+const ResearchV6ContextPolicy = "research-v6-context-v1"
 
 type SupersedeArtifactInput struct {
 	WorkspaceID         string

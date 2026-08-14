@@ -212,6 +212,21 @@ func TestArtifactPolicyAccessMatrix(t *testing.T) {
 	}
 }
 
+func TestV6ContextPolicyAdmitsCompleteV6ArtifactsOnly(t *testing.T) {
+	policy := ArtifactPolicy{}
+	facts := legacyAdmissionFacts{Kind: ArtifactKindDisputePosition, Lifecycle: ArtifactLifecycleAccepted, Provenance: ArtifactProvenanceComplete}
+	if allowed, deny := policy.AdmissionAllowedFacts(ResearchV6ContextPolicy, facts); !allowed || deny != "" {
+		t.Fatalf("complete V6 position allowed=%t deny=%s", allowed, deny)
+	}
+	facts.Provenance = ArtifactProvenancePartial
+	if allowed, deny := policy.AdmissionAllowedFacts(ResearchV6ContextPolicy, facts); allowed || deny != ArtifactDenyMissingPassport {
+		t.Fatalf("partial V6 position allowed=%t deny=%s", allowed, deny)
+	}
+	if allowed, _ := policy.AdmissionAllowedFacts(LegacyV1V5CompatPolicy, legacyAdmissionFacts{Kind: ArtifactKindDisputePosition, Lifecycle: ArtifactLifecycleAccepted, Provenance: ArtifactProvenanceComplete}); allowed {
+		t.Fatal("legacy policy admitted V6-only position")
+	}
+}
+
 func TestArtifactPolicyManifestOmissionReasons(t *testing.T) {
 	policy := ArtifactPolicy{}
 	if policy.ManifestOmissionReason(ArtifactDenyLifecycle) != "lifecycle" {

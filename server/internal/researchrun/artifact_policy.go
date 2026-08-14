@@ -144,6 +144,23 @@ func (policy ArtifactPolicy) LegacyAdmissionAllowedFacts(facts legacyAdmissionFa
 	if allowed, deny := policy.LegacyAdmissionAllowed(facts.Kind, facts.Lifecycle, facts.Provenance); !allowed {
 		return false, deny
 	}
+	return policy.admissionDomainFactsAllowed(facts)
+}
+
+func (policy ArtifactPolicy) V6AdmissionAllowedFacts(facts legacyAdmissionFacts) (bool, ArtifactDenyReason) {
+	if _, err := ParseArtifactEntityKind(string(facts.Kind)); err != nil {
+		return false, ArtifactDenyUnknownKind
+	}
+	if facts.Lifecycle != ArtifactLifecycleRegistered && facts.Lifecycle != ArtifactLifecycleAccepted {
+		return false, ArtifactDenyLifecycle
+	}
+	if facts.Provenance != ArtifactProvenanceComplete {
+		return false, ArtifactDenyMissingPassport
+	}
+	return policy.admissionDomainFactsAllowed(facts)
+}
+
+func (policy ArtifactPolicy) admissionDomainFactsAllowed(facts legacyAdmissionFacts) (bool, ArtifactDenyReason) {
 	status := facts.DomainStatus
 	switch facts.Kind {
 	case ArtifactKindTask:
@@ -181,6 +198,13 @@ func (policy ArtifactPolicy) LegacyAdmissionAllowedFacts(facts legacyAdmissionFa
 	default:
 		return true, ""
 	}
+}
+
+func (policy ArtifactPolicy) AdmissionAllowedFacts(policyVersion string, facts legacyAdmissionFacts) (bool, ArtifactDenyReason) {
+	if policyVersion == ResearchV6ContextPolicy {
+		return policy.V6AdmissionAllowedFacts(facts)
+	}
+	return policy.LegacyAdmissionAllowedFacts(facts)
 }
 
 func (ArtifactPolicy) ManifestOmissionReason(deny ArtifactDenyReason) string {

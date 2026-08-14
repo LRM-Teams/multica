@@ -37,10 +37,16 @@ follow the frozen Question/Hypothesis/Branch/Insight transition tables, provide
 a substantive reason, and cite one to 128 distinct resolved evidence objects.
 An answered Question may return to `in_progress` or `unresolved` when new
 evidence changes the frontier; `obsolete` remains terminal. Dispute references
-remain invalid until Chapter H creates their canonical store.
+resolve only through the canonical Chapter H store and its typed Task target.
 
 JSON Schema validates shape; the Research Run modules and PostgreSQL
 transactions enforce the following referential and state rules:
+
+V6 dispatch uses `research-v6-context-v1`, distinct from the V1–V5 legacy
+compatibility policy. It admits only current `registered | accepted` artifacts
+with complete provenance; evaluation-private artifacts remain compartmented.
+The policy version is bound into the Manifest, grant, hash, and acceptance
+verification.
 
 1. Client keys are unique within their kind and resolve only inside the same
    workspace, Run, goal version, and plan version. UUID references must already
@@ -76,6 +82,13 @@ transactions enforce the following referential and state rules:
    semantic candidates instead carry an explicit reason and resolved Claim
    references. Position passports retain typed lineage to all cited Claims and
    Source Snapshots.
+   On creation, each Position receives an independent verification Task; a
+   method conflict also receives a Methodologist Task, and every Dispute gets
+   a distinguishing-evidence search. Position authors are hard-excluded from
+   routing. Each review Attempt Manifest contains only the Run/Contract/Method
+   foundation plus the assigned Dispute, Position, Claims, and cited evidence;
+   unrelated positions and private evaluation artifacts are frozen as
+   omissions rather than exposed to the reviewer.
 8. Divergence runs in an isolated context and has bounded probe budget.
    Unverified perspectives create only Question, Hypothesis, Branch, or probe
    Task proposals; they cannot create supported Claims or report facts.

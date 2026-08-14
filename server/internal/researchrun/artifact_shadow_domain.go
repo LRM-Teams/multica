@@ -27,6 +27,7 @@ func loadLegacyShadowDomainProjectionTx(
 	tx pgx.Tx,
 	workspaceID, sessionID string,
 	purpose ArtifactPurpose,
+	policyVersion string,
 	excludedContextManifestID string,
 ) ([]shadowDomainProjectionRecord, error) {
 	rows, err := tx.Query(ctx, `
@@ -55,6 +56,18 @@ func loadLegacyShadowDomainProjectionTx(
 		  UNION ALL SELECT 'branch', entity.id FROM research_branch entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
 		  UNION ALL SELECT 'insight', entity.id FROM research_insight entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
 		  UNION ALL SELECT 'inquiry_edge', entity.id FROM research_inquiry_edge entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'search_plan', entity.id FROM research_search_plan entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'query_execution', entity.id FROM research_query_execution entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'source_candidate', entity.id FROM research_source_candidate entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'screening_decision', entity.id FROM research_screening_decision entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'integration_round', entity.id FROM research_integration_round entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'integration_contribution', entity.id FROM research_integration_contribution entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'dispute', entity.id FROM research_dispute entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'dispute_position', entity.id FROM research_dispute_position entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'deliberation', entity.id FROM research_deliberation entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'deliberation_turn', entity.id FROM research_deliberation_turn entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'research_director_identity', entity.id FROM research_director_identity entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
+		  UNION ALL SELECT 'adjudication_decision', entity.id FROM research_adjudication_decision entity WHERE entity.workspace_id=$1::uuid AND entity.session_id=$2::uuid
 		)
 		SELECT domain_ref.kind, domain_ref.artifact_id::text,
 		       COALESCE(passport.entity_kind, ''), COALESCE(passport.lifecycle_status, ''),
@@ -130,7 +143,7 @@ func loadLegacyShadowDomainProjectionTx(
 			disposition = policy.ManifestOmissionReason(ArtifactDenyLegacyIneligible)
 		} else if private && purpose == ArtifactPurposeTaskExecution {
 			disposition = policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
-		} else if admitted, deny := policy.LegacyAdmissionAllowedFacts(legacyAdmissionFacts{
+		} else if admitted, deny := policy.AdmissionAllowedFacts(policyVersion, legacyAdmissionFacts{
 			Kind: domainKind, Lifecycle: ArtifactLifecycleStatus(lifecycleRaw.String),
 			Provenance:   ArtifactProvenanceCompleteness(provenanceRaw.String),
 			DomainStatus: domainStatusRaw.String,

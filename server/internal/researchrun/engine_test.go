@@ -22,6 +22,18 @@ func TestSelectAgentRequiresMatchingIdleCapability(t *testing.T) {
 	}
 }
 
+func TestSelectAgentEnforcesTaskIndependenceExclusions(t *testing.T) {
+	task := Task{RequiredCapability: "validator", AcceptanceCriteria: []byte(`{"routing":{"excluded_agent_ids":["author"]}}`)}
+	members := []FleetMember{{AgentID: "author", Role: "validator", Status: "active"}, {AgentID: "independent", Role: "validator", Status: "active"}}
+	if got := selectAgent(task, members, map[string]int{}); got != "independent" {
+		t.Fatalf("selected=%q", got)
+	}
+	task.AssignedAgentID = "author"
+	if got := selectAgent(task, members, map[string]int{}); got != "independent" {
+		t.Fatalf("sticky exclusion bypass selected=%q", got)
+	}
+}
+
 func TestBusyMatchingAgentIsCapacityPressureNotMissingCapability(t *testing.T) {
 	task := Task{Kind: TaskKindVerify, RequiredCapability: "validator"}
 	members := []FleetMember{{AgentID: "busy-validator", Role: "validator", Status: "active"}}

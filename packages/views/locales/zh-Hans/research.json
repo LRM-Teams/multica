@@ -639,6 +639,7 @@
     "template_prompt_apply": "应用更改"
   },
   "home_header": {
+    "title": "调研星图",
     "subtitle": "调研主页 · 多任务星图总览",
     "working": "调研团在线 · {{count}} 位智能体工作中",
     "standby": "调研团待命"

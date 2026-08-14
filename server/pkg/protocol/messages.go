@@ -330,6 +330,12 @@ type ListWorkdirFilesRequestPayload struct {
 	RelPath    string `json:"rel_path"`
 	MaxEntries int    `json:"max_entries,omitempty"`
 	MaxDepth   int    `json:"max_depth,omitempty"`
+	// DirPath is a subdirectory of RelPath. Empty or "." lists RelPath itself.
+	// Only used when OneLevel is true (agent Files tab).
+	DirPath string `json:"dir_path,omitempty"`
+	// OneLevel lists only immediate children of RelPath/DirPath using Raft
+	// visibility rules. The recursive 2000/12 walk stays for machine scan.
+	OneLevel bool `json:"one_level,omitempty"`
 	// HideDotfiles skips files/directories whose basename starts with ".".
 	// Project file browsing leaves this false; agent config browsing toggles it
 	// from the UI's "show hidden files" eye button.
@@ -352,9 +358,12 @@ type WorkdirFileNode struct {
 type ListWorkdirFilesResponsePayload struct {
 	RequestID string            `json:"request_id"`
 	Nodes     []WorkdirFileNode `json:"nodes,omitempty"`
-	Missing   bool              `json:"missing,omitempty"`
-	Truncated bool              `json:"truncated,omitempty"`
-	Error     string            `json:"error,omitempty"`
+	// RootPath is the daemon-absolute path of RelPath (the agent root for
+	// Files). Always the workdir root, not the currently listed DirPath.
+	RootPath  string `json:"root_path,omitempty"`
+	Missing   bool   `json:"missing,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // ReadWorkdirFileRequestPayload is pushed server→daemon to read one file from a

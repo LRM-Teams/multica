@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/google/uuid"
@@ -91,6 +92,23 @@ func TestListAgentFilesDevProfileAccessAllowsWorkspaceMembers(t *testing.T) {
 				t.Fatalf("expected dev member read 200, got %d: %s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestAgentFileContentRefusesSecretPaths(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "false")
+	agentID := createHandlerTestAgent(t, "agent-files-secret-preview", nil)
+
+	for _, path := range []string{".env", "api-token.json", "my-secret.md", "db-credentials.yaml", ".ssh/id_rsa"} {
+		req := withURLParam(newRequestAs(testUserID, http.MethodGet, "/api/agents/"+agentID+"/files/content?path="+url.QueryEscape(path), nil), "id", agentID)
+		w := httptest.NewRecorder()
+		testHandler.GetAgentFileContent(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("path %q: expected 400, got %d: %s", path, w.Code, w.Body.String())
+		}
 	}
 }
 

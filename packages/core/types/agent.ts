@@ -917,6 +917,13 @@ export interface AgentFileNode {
   size?: number;
 }
 
+/** Query params for GET /api/agents/:id/files — one directory at a time. */
+export interface ListAgentFilesParams {
+  include_hidden?: boolean;
+  /** Relative directory under the agent root. Omit or empty for the root. */
+  path?: string;
+}
+
 export type AgentFilesStatus = "ok" | "offline" | "missing" | "error";
 
 export interface AgentFilesResponse {
@@ -924,6 +931,8 @@ export interface AgentFilesResponse {
   status: AgentFilesStatus;
   nodes: AgentFileNode[];
   truncated: boolean;
+  /** Daemon-absolute agent root. Absent when the runtime is offline. */
+  root_path?: string;
 }
 
 export interface AgentFileContentResponse {

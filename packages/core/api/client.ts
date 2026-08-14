@@ -18,6 +18,7 @@ import type {
   ComputerConnection,
   AgentFileContentResponse,
   AgentFilesResponse,
+  ListAgentFilesParams,
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
@@ -1752,9 +1753,10 @@ export class ApiClient {
     });
   }
 
-  async listAgentFiles(id: string, params?: { include_hidden?: boolean }): Promise<AgentFilesResponse> {
+  async listAgentFiles(id: string, params?: ListAgentFilesParams): Promise<AgentFilesResponse> {
     const search = new URLSearchParams();
     if (params?.include_hidden) search.set("include_hidden", "true");
+    if (params?.path) search.set("path", params.path);
     const suffix = search.toString() ? `?${search}` : "";
     const raw = await this.fetch<unknown>(`/api/members/agents/${id}/files${suffix}`);
     return parseWithFallback(raw, AgentFilesResponseSchema, EMPTY_AGENT_FILES_RESPONSE, {

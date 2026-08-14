@@ -2177,6 +2177,7 @@ export const AgentFilesResponseSchema = z.object({
   status: z.string().default("error"),
   nodes: z.array(AgentFileNodeSchema),
   truncated: z.boolean().default(false),
+  root_path: z.string().optional().default(""),
 }).loose();
 
 export const EMPTY_AGENT_FILES_RESPONSE: AgentFilesResponse = {
@@ -2184,6 +2185,7 @@ export const EMPTY_AGENT_FILES_RESPONSE: AgentFilesResponse = {
   status: "error",
   nodes: [],
   truncated: false,
+  root_path: "",
 };
 
 export const AgentFileContentResponseSchema = z.object({

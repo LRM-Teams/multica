@@ -19,7 +19,7 @@ export function ResearchHomeHeader({ sessions }: { sessions: ResearchSession[] }
       <div className="flex min-w-0 items-center gap-3">
         <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-brand/35 bg-brand/10 text-sm font-medium text-brand" aria-hidden>M</span>
         <div className="min-w-0">
-          <h1 className="truncate text-base font-medium text-foreground">Research Constellation</h1>
+          <h1 className="truncate text-base font-medium text-foreground">{t(($) => $.home_header.title)}</h1>
           <p className="truncate text-xs text-muted-foreground">{t(($) => $.home_header.subtitle)}</p>
         </div>
       </div>

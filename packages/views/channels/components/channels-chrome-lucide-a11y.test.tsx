@@ -22,6 +22,8 @@ describe("channels chrome lucide a11y (LRM-1305)", () => {
     expect(src).toMatch(/<Eye\b[\s\S]{0,60}aria-hidden/);
     expect(src).toMatch(/<EyeOff\b[\s\S]{0,60}aria-hidden/);
     expect(src).toMatch(/<Save\b[\s\S]{0,60}aria-hidden/);
+    expect(src).toMatch(/<Copy\b[\s\S]{0,60}aria-hidden/);
+    expect(src).toMatch(/<RefreshCw\b[\s\S]{0,60}aria-hidden/);
     // Both close affordances (panel + editor).
     const xMatches = [...src.matchAll(/<X\b[\s\S]{0,60}aria-hidden/g)];
     expect(xMatches.length).toBeGreaterThanOrEqual(2);

@@ -21,7 +21,7 @@ var chapterD15Coverage = map[int]string{
 	4:  "partial", // deferred guard tests in migration suite
 	5:  "partial", // immutability/watermark CAS tests
 	6:  "partial", // backfill diagnostic tests in migration 319
-	7:  "partial", // artifact_policy legacy admission matrix
+	7:  "covered", // exhaustive registered/unknown kind × lifecycle × provenance legacy admission matrix
 	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered
 	9:  "covered", // closed normal-clearance/purpose/evaluation matrix + output taint permutations
 	10: "covered", // structural subject isolation + real subject/grader frozen-manifest dispatch

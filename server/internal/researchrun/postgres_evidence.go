@@ -99,7 +99,7 @@ func (s *PostgresStore) ListClaims(ctx context.Context, sessionID string) ([]Cla
 	rows.Close()
 
 	evidenceRows, err := s.pool.Query(ctx, `
-		SELECT claim_id::text, observation_id::text, relation, strength, directness, method_fit,
+		SELECT id::text, claim_id::text, observation_id::text, relation, strength, directness, method_fit,
 		       verification_status, COALESCE(verified_by_task_id::text, ''), rationale
 		FROM research_claim_evidence
 		WHERE session_id = $1::uuid
@@ -113,7 +113,7 @@ func (s *PostgresStore) ListClaims(ctx context.Context, sessionID string) ([]Cla
 		var claimID string
 		var item ClaimEvidence
 		if err = evidenceRows.Scan(
-			&claimID, &item.ObservationID, &item.Relation, &item.Strength, &item.Directness, &item.MethodFit,
+			&item.ArtifactID, &claimID, &item.ObservationID, &item.Relation, &item.Strength, &item.Directness, &item.MethodFit,
 			&item.VerificationStatus, &item.VerifiedByTaskID, &item.Rationale,
 		); err != nil {
 			return nil, err

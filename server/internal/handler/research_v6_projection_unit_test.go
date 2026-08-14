@@ -3,6 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
 func TestMapResearchV6NodeBindsRunAndCanonicalEntity(t *testing.T) {
@@ -39,6 +41,62 @@ func TestMapResearchV6NodeDegradesUnknownKindToGeneric(t *testing.T) {
 	}
 }
 
+func TestMapResearchV6NodeProjectsGoalAndTypedD5Semantics(t *testing.T) {
+	confidence := .84
+	clusterID, parentID := "cluster-1", "parent-source"
+	derivedFrom, supersededBy := "derived-source", "replacement-source"
+	typed := ResearchGraphTypedNodeResp{
+		ID: "display-goal", Level: "XXL", Round: 2, ClusterID: &clusterID, ParentID: &parentID,
+		Confidence: &confidence, DocumentCount: 46, ConclusionCount: 4,
+		DerivedFrom: &derivedFrom, MergedFrom: []string{"merge-source"}, SupersededBy: &supersededBy,
+	}
+	node := ResearchGraphNodeResp{
+		ID: "display-goal", NodeType: "goal", Title: "Research origin", Status: "failed",
+		Payload: json.RawMessage(`{"kind":"root"}`),
+	}
+	got := mapResearchV6NodeWithSemantics("run-1", node, &typed)
+	if got.NodeKind != "goal" || got.NodeSubtype != "goal" || got.Level != "m" || got.Status != "active" || got.Round != 2 {
+		t.Fatalf("goal semantics=%+v", got)
+	}
+	if got.ClusterID == nil || *got.ClusterID != clusterID || got.Confidence == nil || *got.Confidence != confidence ||
+		got.DocumentCount == nil || *got.DocumentCount != 46 || got.ConclusionCount == nil || *got.ConclusionCount != 4 {
+		t.Fatalf("typed metrics=%+v", got)
+	}
+
+	remapResearchV6NodeReferences(&got, map[string]string{
+		"parent-source": "run-1:insight:parent", "derived-source": "run-1:claim:derived",
+		"merge-source": "run-1:insight:merge", "replacement-source": "run-1:insight:replacement",
+	})
+	if got.ParentID == nil || *got.ParentID != "run-1:insight:parent" || got.DerivedFrom == nil ||
+		*got.DerivedFrom != "run-1:claim:derived" || len(got.MergedFrom) != 1 || got.SupersededBy == nil {
+		t.Fatalf("remapped lineage=%+v", got)
+	}
+}
+
+func TestProjectResearchV6ClustersUsesRealMembershipAndNullableMetrics(t *testing.T) {
+	clusterID := "cluster-1"
+	confidence := .82
+	restart := "old-node"
+	clusters := projectResearchV6Clusters(
+		[]ResearchGraphClusterResp{{ID: clusterID, Label: "New direction"}},
+		[]ResearchGraphTypedNodeResp{{ID: "source-node", ClusterID: &clusterID, Confidence: &confidence, RestartOf: &restart}},
+		map[string]string{"source-node": "run-1:branch:new"},
+	)
+	if len(clusters) != 1 || clusters[0].ClusterType != "new_frontier" || len(clusters[0].MemberNodeIDs) != 1 ||
+		clusters[0].Confidence == nil || clusters[0].DocumentCount != nil || clusters[0].ConclusionCount != nil {
+		t.Fatalf("clusters=%+v", clusters)
+	}
+}
+
+func TestProjectGoalStatusDoesNotInheritRuntimeFailure(t *testing.T) {
+	if got := projectGoalStatus(researchrun.RunStatusFailed); got != "active" {
+		t.Fatalf("failed Run changed goal status to %q", got)
+	}
+	if got := projectGoalStatus(researchrun.RunStatusCancelled); got != "abandoned" {
+		t.Fatalf("cancelled Run goal status=%q", got)
+	}
+}
+
 func TestResearchV6RootIDsUsesGoalSubtypeForCompatibilityRoot(t *testing.T) {
 	roots := researchV6RootIDs([]researchV6ProjectionNode{{ID: "root", EntityKind: "generic", NodeSubtype: "goal"}, {ID: "task", EntityKind: "task"}})
 	if len(roots) != 1 || roots[0] != "root" {
@@ -46,63 +104,26 @@ func TestResearchV6RootIDsUsesGoalSubtypeForCompatibilityRoot(t *testing.T) {
 	}
 }
 
-func TestMapResearchV6GraphUsesSnapshotIdentitiesForRealtimeEdges(t *testing.T) {
-	nodes := []ResearchGraphNodeResp{
-		{ID: "legacy-task", NodeType: "probe", Payload: json.RawMessage(`{"kind":"task","task_id":"task-1"}`)},
-		{ID: "legacy-attempt", NodeType: "agent_activity", Payload: json.RawMessage(`{"kind":"attempt","attempt_id":"attempt-1"}`)},
+func TestResearchV6ResumeRequiresResyncFencesSnapshotAndRetention(t *testing.T) {
+	current := researchV6Snapshot{SnapshotID: "sha256:current", ThroughEventSequence: 20}
+	tests := []struct {
+		name          string
+		cursor        researchV6ResumeCursor
+		firstRetained int64
+		want          bool
+	}{
+		{name: "contiguous", cursor: researchV6ResumeCursor{SnapshotID: "sha256:current", LastConfirmedSequence: 10}, firstRetained: 11},
+		{name: "legacy client remains compatible", cursor: researchV6ResumeCursor{LastConfirmedSequence: 10}, firstRetained: 11},
+		{name: "snapshot changed", cursor: researchV6ResumeCursor{SnapshotID: "sha256:old", LastConfirmedSequence: 10}, firstRetained: 11, want: true},
+		{name: "cursor ahead", cursor: researchV6ResumeCursor{SnapshotID: "sha256:current", LastConfirmedSequence: 21}, firstRetained: 1, want: true},
+		{name: "history expired", cursor: researchV6ResumeCursor{SnapshotID: "sha256:current", LastConfirmedSequence: 10}, firstRetained: 13, want: true},
+		{name: "initial baseline history expired", cursor: researchV6ResumeCursor{SnapshotID: "sha256:current", LastConfirmedSequence: 0}, firstRetained: 13, want: true},
 	}
-	edges := []ResearchGraphEdgeResp{{ID: "legacy-edge", FromNodeID: "legacy-task", ToNodeID: "legacy-attempt", EdgeType: "attempted_by"}}
-
-	gotNodes, gotEdges := mapResearchV6Graph("run-1", nodes, edges)
-	if len(gotNodes) != 2 || len(gotEdges) != 1 {
-		t.Fatalf("nodes=%+v edges=%+v", gotNodes, gotEdges)
-	}
-	if gotEdges[0].ID != "run-1:edge:legacy-edge" || gotEdges[0].RunID != "run-1" {
-		t.Fatalf("unexpected edge identity: %+v", gotEdges[0])
-	}
-	if gotEdges[0].FromNodeID != "run-1:task:task-1" || gotEdges[0].ToNodeID != "run-1:attempt:attempt-1" {
-		t.Fatalf("edge endpoints do not use V6 node identities: %+v", gotEdges[0])
-	}
-}
-
-func TestResearchV6TransitionKindForCommittedRunEvent(t *testing.T) {
-	tests := map[string]string{
-		"task_dispatched":      "task_dispatched",
-		"task_result_accepted": "result_accepted",
-		"dispute_opened":       "dispute_opened",
-		"report_revised":       "report_revised",
-	}
-	for eventType, want := range tests {
-		got := researchV6TransitionKindForEvent(eventType)
-		if got == nil || *got != want {
-			t.Fatalf("event=%q transition=%v want=%q", eventType, got, want)
-		}
-	}
-	if got := researchV6TransitionKindForEvent("run_started"); got != nil {
-		t.Fatalf("non-animated event transition=%q, want nil", *got)
-	}
-}
-
-func TestBuildResearchV6ProjectedGraphEnvelopeFramesCommittedEvent(t *testing.T) {
-	nodes := []ResearchGraphNodeResp{{
-		ID: "goal", NodeType: "goal", Payload: json.RawMessage(`{"kind":"root"}`),
-	}}
-	edges := []ResearchGraphEdgeResp{}
-
-	got := buildResearchV6ProjectedGraphEnvelope("run-1", "task_dispatched", 7, nodes, edges)
-	if got.RunID != "run-1" || got.Delta.FromSequenceExclusive != 6 || got.Delta.ThroughSequence != 7 {
-		t.Fatalf("unexpected envelope framing: %+v", got)
-	}
-	if len(got.Delta.NodeUpserts) != 1 || got.Delta.NodeUpserts[0].RunID != "run-1" {
-		t.Fatalf("unexpected node upserts: %+v", got.Delta.NodeUpserts)
-	}
-	if len(got.Delta.EdgeUpserts) != 0 || got.Delta.EdgeUpserts == nil || got.Delta.NodeTombstones == nil || got.Delta.EdgeTombstones == nil {
-		t.Fatalf("delta collections must be explicit arrays: %+v", got.Delta)
-	}
-	if len(got.Delta.AffectedRootNodeIDs) != 1 || got.Delta.AffectedRootNodeIDs[0] != got.Delta.NodeUpserts[0].ID {
-		t.Fatalf("affected roots=%v nodes=%+v", got.Delta.AffectedRootNodeIDs, got.Delta.NodeUpserts)
-	}
-	if got.Delta.TransitionKind == nil || *got.Delta.TransitionKind != "task_dispatched" {
-		t.Fatalf("transition=%v", got.Delta.TransitionKind)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := researchV6ResumeRequiresResync(tt.cursor, current, tt.firstRetained); got != tt.want {
+				t.Fatalf("got=%v want=%v", got, tt.want)
+			}
+		})
 	}
 }

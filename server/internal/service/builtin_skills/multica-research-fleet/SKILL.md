@@ -26,6 +26,11 @@ overview; it contains no goal, Run, artifact, message, report, hash, or grant da
 multica research session get <session-id> --attempt-id <attempt-id> --output json
 ```
 
+The durable dispatch carries the same Manifest ID and hash in its Inbox
+context. The attempt-bound snapshot returns them under `attempt_context`; a
+mismatch means the execution is not bound to the context that was dispatched
+and must fail closed rather than continue from a live session view.
+
 The snapshot's `run.contract`, `run.method`, `run.sources`,
 `run.observations`, and `run.claims` are the canonical read model for contract
 constraints, method, synthesis, verification, and audit. Source text is
@@ -89,6 +94,13 @@ chat before `task-result` succeeds.
   source declares evidence traits and each Claim declares its accepted evidence
   standard. A question-scoped result that increases coverage sets
   `answer_claim_key` to a Claim included in that result.
+  When a task screens retrieval candidates, preserve the exact versioned
+  inclusion/exclusion criterion IDs, reviewer identity and time, substantive
+  reason, and inspectable facts with locators. Accepted candidates must match an
+  inclusion criterion and no exclusion criterion. Excluded candidates must
+  match an exclusion criterion. Duplicates point to a different canonical
+  candidate and carry its canonical URL or SHA-256 content hash; prose-only
+  similarity is not duplicate evidence.
 - `verify` / `counter_search`: independent corroboration, contradictory
   evidence, and explicit claim resolutions. Agreement without source evidence
   is not verification. Include the source, observation, claim, and evidence
@@ -133,6 +145,11 @@ run. Information gain comes from server-observed evidence-graph changes:
 verified answer coverage, verification, independent evidence, counterevidence,
 resolution, and diminishing graph novelty. Do not inflate it by minting new
 keys for duplicate content or by self-reporting coverage.
+
+An Inbox delivery that expires before any worker claims it is terminal only for
+that delivery. The server preserves the Research Task's bounded attempt budget
+and re-resolves an available execution target; do not duplicate the Task or
+change its method to recover from this delivery failure.
 
 Every `required_capability` in a proposed task must exactly match an active
 fleet role. When a real specialty is missing, the lead must hire it, optimize

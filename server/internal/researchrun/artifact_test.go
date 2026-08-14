@@ -174,6 +174,20 @@ func TestLinkPolicyGuardTriggerNames(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyGuardTriggerNames(t *testing.T) {
+	want := []string{
+		"research_artifact_version_immutable_guard",
+		"research_artifact_policy_mutation_append_only_guard",
+		"research_artifact_lifecycle_event_append_only_guard",
+	}
+	got := AppendOnlyGuardTriggerNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("append-only guard triggers=%v want=%v", got, want)
+	}
+}
+
 func TestMigrationDiagnosticReasonCodes(t *testing.T) {
 	want := []string{
 		"cross_scope_reference",

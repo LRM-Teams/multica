@@ -1160,6 +1160,11 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 		return nil, fmt.Errorf("runtime not in connection workspace")
 	}
 	if rt.DaemonID.Valid {
+		dynamicRunner := len(identity.RuntimeIDs) == 0 && identity.WorkspaceID != ""
+		if (dynamicRunner && identity.DaemonID != rt.DaemonID.String) ||
+			(!dynamicRunner && identity.DaemonID != "" && identity.DaemonID != rt.DaemonID.String) {
+			return nil, fmt.Errorf("runtime not assigned to connection Computer")
+		}
 		if err := h.checkCurrentComputerGeneration(ctx, rt.DaemonID.String, payload.ComputerGeneration, payload.ComputerGeneration > 0); err != nil {
 			return nil, err
 		}
@@ -1174,9 +1179,6 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	// be active for a given connection generation.
 	if h.DaemonHub != nil && h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
 		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
-			return nil, err
-		}
-		if err := h.dispatchPendingRunnerStops(ctx, identity); err != nil {
 			return nil, err
 		}
 	}

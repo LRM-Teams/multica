@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,7 +48,11 @@ func lockReminderOwnerCapability(ctx context.Context, tx pgx.Tx, workspaceID, ag
 
 	var capable bool
 	err = tx.QueryRow(ctx, `
-		SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1","reminder_transient_owner_input_v1"]'::jsonb, false)
+		SELECT COALESCE(
+		  (metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb
+		  AND ((metadata->'capabilities') @> '["reminder_local_inbox_v1"]'::jsonb
+		       OR (metadata->'capabilities') @> '["reminder_transient_owner_input_v1"]'::jsonb),
+		  false)
 		FROM agent_runtime
 		WHERE id = $1 AND workspace_id = $2
 		FOR SHARE`, runtimeID, workspaceID).Scan(&capable)
@@ -976,6 +981,10 @@ func (h *Handler) projectReminderUpsert(ctx context.Context, reminder agentRemin
 	if err != nil {
 		return
 	}
+	event.Reminder, err = buildReminderTimerJob(ctx, h.DB, reminder, uuidToString(reminder.AgentID))
+	if err != nil {
+		return
+	}
 	// A timer projection is only meaningful after the daemon has learned the
 	// authoritative owner generation. Re-publishing the current start is
 	// idempotent for a healthy residency, repairs locally bootstrapped
@@ -983,6 +992,85 @@ func (h *Handler) projectReminderUpsert(ctx context.Context, reminder agentRemin
 	// snapshot if the projection was already ACKed or arrives out of order.
 	h.projectReminderOwnerStart(ctx, event.AgentID, event.RuntimeID)
 	h.ReminderNotifier.NotifyReminderProjection(event.RuntimeID, event)
+}
+
+func buildReminderTimerJob(ctx context.Context, exec dbExecutor, reminder agentReminder, ownerAgentID string) (protocol.ReminderTimerJob, error) {
+	job := protocol.ReminderTimerJob{
+		ReminderID:   uuidToString(reminder.ID),
+		OwnerAgentID: ownerAgentID,
+		Version:      reminder.Version,
+		FireAt:       reminder.FireAt.Time.UTC().Format(time.RFC3339Nano),
+		LocalInput: &protocol.ReminderLocalInputPayload{
+			Title: reminder.Title,
+			Occurrence: protocol.ReminderLocalInputOccurrence{
+				OccurrenceID: uuidToString(reminder.ID) + ":" + strconv.FormatInt(reminder.Version, 10),
+				ScheduledFor: reminder.FireAt.Time.UTC().Format(time.RFC3339Nano),
+				DueAt:        reminder.FireAt.Time.UTC().Format(time.RFC3339Nano),
+			},
+		},
+	}
+	if reminder.Cadence.Valid {
+		job.LocalInput.Occurrence.Cadence = reminder.Cadence.String
+	}
+	if reminder.ScheduleTimezone.Valid {
+		job.LocalInput.Occurrence.Timezone = reminder.ScheduleTimezone.String
+	}
+	anchor, err := loadAuthorizedReminderAnchor(ctx, exec, reminder, pgtype.UUID{})
+	if err != nil {
+		return protocol.ReminderTimerJob{}, err
+	}
+	if !anchor.Available {
+		return job, nil
+	}
+	threadRoot := uuidPtr(reminder.AnchorThreadRootMessageID)
+	channel := ChannelResponse{
+		ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID),
+		Name: anchor.ChannelName, Kind: anchor.ChannelKind,
+	}
+	message := ChannelMessageResponse{
+		ID: anchor.MessageID, ChannelID: channel.ID, WorkspaceID: channel.WorkspaceID,
+		ThreadRootMessageID: threadRoot,
+	}
+	replyTarget, err := canonicalMessageReplyTarget(ctx, exec, channel, message, reminder.AgentID)
+	if err != nil {
+		return protocol.ReminderTimerJob{}, err
+	}
+	job.LocalInput.Anchor = protocol.ReminderOwnerInputAnchor{
+		Available:           true,
+		ChannelID:           channel.ID,
+		MessageID:           anchor.MessageID,
+		ThreadRootMessageID: stringValue(threadRoot),
+		Target:              canonicalMessageDeliveryTarget(channel, message),
+		ReplyTarget:         replyTarget,
+		Excerpt:             truncateReminderOwnerInputExcerpt(anchor.Content),
+	}
+	return job, nil
+}
+
+func (h *Handler) enrichReminderProjection(ctx context.Context, event protocol.ReminderProjectionEvent) (protocol.ReminderProjectionEvent, error) {
+	if event.Terminal || strings.TrimSpace(event.ReminderID) == "" {
+		return event, nil
+	}
+	reminderID, err := util.ParseUUID(event.ReminderID)
+	if err != nil || !reminderID.Valid {
+		return event, nil
+	}
+	reminder, err := scanAgentReminder(h.DB.QueryRow(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return event, nil
+		}
+		return event, err
+	}
+	if reminder.Version != event.Version || reminder.Status != "scheduled" {
+		return event, nil
+	}
+	job, err := buildReminderTimerJob(ctx, h.DB, reminder, event.AgentID)
+	if err != nil {
+		return event, err
+	}
+	event.Reminder = job
+	return event, nil
 }
 
 func (h *Handler) projectReminderCancel(ctx context.Context, reminder agentReminder) {
@@ -1168,21 +1256,25 @@ func (h *Handler) HandleDaemonReminderSnapshot(ctx context.Context, identity dae
 		return nil, err
 	}
 	defer rows.Close()
-	jobs := make([]protocol.ReminderTimerJob, 0)
+	reminders := make([]agentReminder, 0)
 	for rows.Next() {
 		reminder, err := scanAgentReminder(rows)
 		if err != nil {
 			return nil, err
 		}
-		jobs = append(jobs, protocol.ReminderTimerJob{
-			ReminderID:   uuidToString(reminder.ID),
-			OwnerAgentID: payload.AgentID,
-			Version:      reminder.Version,
-			FireAt:       reminder.FireAt.Time.UTC().Format(time.RFC3339Nano),
-		})
+		reminders = append(reminders, reminder)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	rows.Close()
+	jobs := make([]protocol.ReminderTimerJob, 0, len(reminders))
+	for _, reminder := range reminders {
+		job, err := buildReminderTimerJob(ctx, tx, reminder, payload.AgentID)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -1249,6 +1341,7 @@ func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity d
 		if err != nil {
 			return nil, protocol.ReminderProjectionReplayEndPayload{}, err
 		}
+		start := len(events)
 		for rows.Next() {
 			event, err := scanReminderProjection(rows)
 			if err != nil {
@@ -1262,6 +1355,13 @@ func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity d
 			return nil, protocol.ReminderProjectionReplayEndPayload{}, err
 		}
 		rows.Close()
+		for i := start; i < len(events); i++ {
+			event, err := h.enrichReminderProjection(ctx, events[i])
+			if err != nil {
+				return nil, protocol.ReminderProjectionReplayEndPayload{}, err
+			}
+			events[i] = event
+		}
 		endCursors[runtimeID] = latest
 	}
 	return events, protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: endCursors, RuntimeResets: resets}, nil
@@ -1325,19 +1425,27 @@ func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemon
 				if err != nil {
 					return protocol.ReminderRuntimeReset{}, err
 				}
+				reminders := make([]agentReminder, 0)
 				for rows.Next() {
 					reminder, err := scanAgentReminder(rows)
 					if err != nil {
 						rows.Close()
 						return protocol.ReminderRuntimeReset{}, err
 					}
-					owner.Reminders = append(owner.Reminders, protocol.ReminderTimerJob{ReminderID: uuidToString(reminder.ID), OwnerAgentID: residency.AgentID, Version: reminder.Version, FireAt: reminder.FireAt.Time.UTC().Format(time.RFC3339Nano)})
+					reminders = append(reminders, reminder)
 				}
 				if err := rows.Err(); err != nil {
 					rows.Close()
 					return protocol.ReminderRuntimeReset{}, err
 				}
 				rows.Close()
+				for _, reminder := range reminders {
+					job, err := buildReminderTimerJob(ctx, tx, reminder, residency.AgentID)
+					if err != nil {
+						return protocol.ReminderRuntimeReset{}, err
+					}
+					owner.Reminders = append(owner.Reminders, job)
+				}
 			}
 		}
 		owners = append(owners, owner)
@@ -1416,6 +1524,17 @@ func (h *Handler) enqueueReminderFireResultTx(ctx context.Context, tx pgx.Tx, ru
 	return scanReminderProjection(tx.QueryRow(ctx, `SELECT `+reminderProjectionSelectColumns()+` FROM agent_reminder_daemon_projection_event WHERE seq = $1`, seq))
 }
 
+func reminderFireResult(payload protocol.ReminderFireAttemptPayload, projection protocol.ReminderProjectionEvent) *protocol.ReminderFireResultPayload {
+	return &protocol.ReminderFireResultPayload{
+		Ack: protocol.ReminderFireAckPayload{
+			AgentID:    payload.AgentID,
+			ReminderID: payload.ReminderID,
+			Version:    payload.Version,
+		},
+		Projection: projection,
+	}
+}
+
 func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error) {
 	agentID, err := util.ParseUUID(strings.TrimSpace(payload.AgentID))
 	if err != nil || !agentID.Valid {
@@ -1470,15 +1589,17 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 		}
 		return nil, &daemonws.ReminderOwnerGoneError{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, PlacementGeneration: placementGeneration}
 	}
-	var fireCapable bool
+	var versionedCacheCapable, localInboxCapable, transientInputCapable bool
 	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1","reminder_transient_owner_input_v1"]'::jsonb, false)
+		SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false),
+		       COALESCE((metadata->'capabilities') @> '["reminder_local_inbox_v1"]'::jsonb, false),
+		       COALESCE((metadata->'capabilities') @> '["reminder_transient_owner_input_v1"]'::jsonb, false)
 		FROM agent_runtime
 		WHERE id = $1 AND workspace_id = $2
-		FOR SHARE`, runtimeID, workspaceID).Scan(&fireCapable); err != nil {
+		FOR SHARE`, runtimeID, workspaceID).Scan(&versionedCacheCapable, &localInboxCapable, &transientInputCapable); err != nil {
 		return nil, err
 	}
-	if !fireCapable {
+	if !versionedCacheCapable || (!localInboxCapable && !transientInputCapable) {
 		return nil, errReminderDaemonOutdated
 	}
 	reminder, err := scanAgentReminder(tx.QueryRow(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 FOR UPDATE`, reminderID))
@@ -1491,7 +1612,7 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 			if err := tx.Commit(ctx); err != nil {
 				return nil, err
 			}
-			return &protocol.ReminderFireResultPayload{Projection: event}, nil
+			return reminderFireResult(payload, event), nil
 		}
 		return nil, err
 	}
@@ -1507,7 +1628,7 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
-		return &protocol.ReminderFireResultPayload{Projection: event}, nil
+		return reminderFireResult(payload, event), nil
 	}
 	cadenceSlot := reminder.FireAt
 	if reminder.CadenceNextAt.Valid {
@@ -1531,7 +1652,7 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
-		return &protocol.ReminderFireResultPayload{Projection: event}, nil
+		return reminderFireResult(payload, event), nil
 	}
 	if err != nil {
 		return nil, err
@@ -1544,12 +1665,12 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 	}
 	reminder.Status = "firing"
 	reminder.CurrentOccurrenceID = occurrenceID
-	committedFire, err := h.fireReminderOccurrenceWithTx(ctx, tx, reminder, occurrenceID, runtimeID, placementGeneration, payload.Version)
+	committedFire, err := h.fireReminderOccurrenceWithTx(ctx, tx, reminder, occurrenceID, runtimeID, placementGeneration, payload.Version, !localInboxCapable)
 	if err != nil {
 		return nil, err
 	}
 	if committedFire != nil {
-		if h.ReminderOwnerInputNotifier != nil {
+		if !localInboxCapable && h.ReminderOwnerInputNotifier != nil {
 			h.ReminderOwnerInputNotifier.NotifyReminderOwnerInput(uuidToString(workspaceID), identity.DaemonID, committedFire.OwnerInput)
 		}
 		h.publishAgentReminderChanged(ctx, committedFire.Reminder.WorkspaceID, committedFire.Reminder.AgentID)
@@ -1563,10 +1684,16 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 	if err != nil {
 		return nil, err
 	}
-	return &protocol.ReminderFireResultPayload{Projection: event}, nil
+	if !event.Terminal && committedFire != nil {
+		event.Reminder, err = buildReminderTimerJob(ctx, h.DB, committedFire.Reminder, payload.AgentID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return reminderFireResult(payload, event), nil
 }
 
-func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID, runtimeID pgtype.UUID, placementGeneration, fireVersion int64) (*reminderFireCommit, error) {
+func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID, runtimeID pgtype.UUID, placementGeneration, fireVersion int64, buildLegacyOwnerInput bool) (*reminderFireCommit, error) {
 	var occurrenceStatus string
 	var cadenceSlot pgtype.Timestamptz
 	var persistedFireVersion int64
@@ -1637,12 +1764,6 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		}
 		return nil, err
 	}
-	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
-
-	anchor, err := loadAuthorizedReminderAnchor(ctx, tx, reminder, pgtype.UUID{})
-	if err != nil {
-		return nil, err
-	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_reminder_occurrence
 		SET status = 'fired', fired_at = now(), updated_at = now()
@@ -1697,45 +1818,53 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		resultingState, lifecycleReason, lifecycleDetails); err != nil {
 		return nil, err
 	}
-	ownerInput := protocol.ReminderOwnerInputPayload{
-		WorkspaceID:         uuidToString(reminder.WorkspaceID),
-		AgentID:             uuidToString(reminder.AgentID),
-		RuntimeID:           uuidToString(runtimeID),
-		PlacementGeneration: placementGeneration,
-		ReminderID:          uuidToString(reminder.ID),
-		Version:             fireVersion,
-		Title:               reminder.Title,
-		Occurrence: protocol.ReminderOwnerInputOccurrence{
-			OccurrenceID: uuidToString(occurrenceID),
-			ScheduledFor: cadenceSlot.Time.UTC().Format(time.RFC3339Nano),
-			DueAt:        reminder.FireAt.Time.UTC().Format(time.RFC3339Nano),
-		},
-	}
-	if reminder.Cadence.Valid {
-		ownerInput.Occurrence.Cadence = reminder.Cadence.String
-	}
-	if reminder.ScheduleTimezone.Valid {
-		ownerInput.Occurrence.Timezone = reminder.ScheduleTimezone.String
-	}
-	if anchor.Available {
-		message := ChannelMessageResponse{
-			ID:                  anchor.MessageID,
-			ChannelID:           ch.ID,
-			WorkspaceID:         ch.WorkspaceID,
-			ThreadRootMessageID: uuidPtr(reminder.AnchorThreadRootMessageID),
+	var ownerInput protocol.ReminderOwnerInputPayload
+	if buildLegacyOwnerInput {
+		ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
+		anchor, err := loadAuthorizedReminderAnchor(ctx, tx, reminder, pgtype.UUID{})
+		if err != nil {
+			return nil, err
 		}
-		replyTarget, replyErr := canonicalMessageReplyTarget(ctx, tx, ch, message, reminder.AgentID)
-		if replyErr != nil {
-			return nil, replyErr
+		ownerInput = protocol.ReminderOwnerInputPayload{
+			WorkspaceID:         uuidToString(reminder.WorkspaceID),
+			AgentID:             uuidToString(reminder.AgentID),
+			RuntimeID:           uuidToString(runtimeID),
+			PlacementGeneration: placementGeneration,
+			ReminderID:          uuidToString(reminder.ID),
+			Version:             fireVersion,
+			Title:               reminder.Title,
+			Occurrence: protocol.ReminderOwnerInputOccurrence{
+				OccurrenceID: uuidToString(occurrenceID),
+				ScheduledFor: cadenceSlot.Time.UTC().Format(time.RFC3339Nano),
+				DueAt:        reminder.FireAt.Time.UTC().Format(time.RFC3339Nano),
+			},
 		}
-		ownerInput.Anchor = protocol.ReminderOwnerInputAnchor{
-			Available:           true,
-			ChannelID:           ch.ID,
-			MessageID:           anchor.MessageID,
-			ThreadRootMessageID: stringValue(message.ThreadRootMessageID),
-			Target:              canonicalMessageDeliveryTarget(ch, message),
-			ReplyTarget:         replyTarget,
-			Excerpt:             truncateReminderOwnerInputExcerpt(anchor.Content),
+		if reminder.Cadence.Valid {
+			ownerInput.Occurrence.Cadence = reminder.Cadence.String
+		}
+		if reminder.ScheduleTimezone.Valid {
+			ownerInput.Occurrence.Timezone = reminder.ScheduleTimezone.String
+		}
+		if anchor.Available {
+			message := ChannelMessageResponse{
+				ID:                  anchor.MessageID,
+				ChannelID:           ch.ID,
+				WorkspaceID:         ch.WorkspaceID,
+				ThreadRootMessageID: uuidPtr(reminder.AnchorThreadRootMessageID),
+			}
+			replyTarget, replyErr := canonicalMessageReplyTarget(ctx, tx, ch, message, reminder.AgentID)
+			if replyErr != nil {
+				return nil, replyErr
+			}
+			ownerInput.Anchor = protocol.ReminderOwnerInputAnchor{
+				Available:           true,
+				ChannelID:           ch.ID,
+				MessageID:           anchor.MessageID,
+				ThreadRootMessageID: stringValue(message.ThreadRootMessageID),
+				Target:              canonicalMessageDeliveryTarget(ch, message),
+				ReplyTarget:         replyTarget,
+				Excerpt:             truncateReminderOwnerInputExcerpt(anchor.Content),
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/researchrun"
@@ -193,6 +192,55 @@ func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
 		resp.LastUserActivityAt = &ts
 	}
 	return resp
+}
+
+// taskBoundResearchSessionResponse retains the V1-V5 compatibility family but
+// projects only fields frozen in the manifested Run representation. Live
+// routing, activity, handoff, timestamps, and unattended counters are absent.
+func taskBoundResearchSessionResponse(run researchrun.Run) ResearchSessionResponse {
+	return ResearchSessionResponse{
+		ID:           run.SessionID,
+		WorkspaceID:  run.WorkspaceID,
+		FleetID:      run.FleetID,
+		CreatedBy:    run.CreatedBy,
+		Title:        run.Title,
+		Goal:         run.Goal,
+		Status:       string(run.Status),
+		CurrentStage: run.CurrentStage,
+		DepthTier:    run.DepthTier,
+	}
+}
+
+// taskBoundResearchFleetResponse rebuilds the compatibility shape exclusively
+// from the hashed principal header. Member-row IDs, mutable Agent profiles,
+// runtime configuration, and Fleet timestamps are deliberately unavailable.
+func taskBoundResearchFleetResponse(run researchrun.Run, members []researchrun.FleetMember) ResearchFleetResponse {
+	response := ResearchFleetResponse{
+		ID:          run.FleetID,
+		WorkspaceID: run.WorkspaceID,
+		Members:     make([]ResearchFleetMemberResp, 0, len(members)),
+	}
+	seenRoles := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		if member.Status == "archived" {
+			continue
+		}
+		if _, duplicate := seenRoles[member.Role]; duplicate {
+			continue
+		}
+		seenRoles[member.Role] = struct{}{}
+		response.Members = append(response.Members, ResearchFleetMemberResp{
+			AgentID: member.AgentID,
+			Role:    member.Role,
+			Status:  member.Status,
+			IsLead:  member.IsLead,
+		})
+		if member.IsLead && response.LeadAgentID == nil {
+			agentID := member.AgentID
+			response.LeadAgentID = &agentID
+		}
+	}
+	return response
 }
 
 func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
@@ -406,23 +454,8 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "attempt_id is only available on the Agent research route")
 		return
 	}
-	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{
-		ID:          sessionID,
-		WorkspaceID: wsUUID,
-	})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "research session not found")
-		return
-	}
-	fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "research fleet missing")
-		return
-	}
-	members, _ := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
-		FleetID:     fleet.ID,
-		WorkspaceID: wsUUID,
-	})
+	var sessionResponse ResearchSessionResponse
+	var fleetResponse ResearchFleetResponse
 	var nodes []db.ResearchGraphNode
 	var edges []db.ResearchGraphEdge
 	var sources []db.ResearchSource
@@ -431,22 +464,39 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	var productRounds []db.ResearchProductRoundCard
 	var report *ResearchReportResp
 	if !agentAttemptScoped {
+		session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "research session not found")
+			return
+		}
+		fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "research fleet missing")
+			return
+		}
+		members, _ := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{FleetID: fleet.ID, WorkspaceID: wsUUID})
+		sessionResponse = researchSessionToResponse(session)
+		fleetResponse = h.researchFleetToResponse(r.Context(), fleet, members)
 		nodes, _ = h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: sessionID, WorkspaceID: wsUUID})
 		edges, _ = h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: sessionID, WorkspaceID: wsUUID})
 		sources, _ = h.Queries.ListResearchSources(r.Context(), db.ListResearchSourcesParams{SessionID: sessionID, WorkspaceID: wsUUID})
 		evals, _ = h.Queries.ListResearchStageEvals(r.Context(), db.ListResearchStageEvalsParams{SessionID: sessionID, WorkspaceID: wsUUID})
 		messages, _ = h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: sessionID, WorkspaceID: wsUUID})
 		productRounds, _ = h.Queries.ListResearchProductRoundCards(r.Context(), db.ListResearchProductRoundCardsParams{SessionID: sessionID, WorkspaceID: wsUUID})
-		if rep, err := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); err == nil {
+		if rep, reportErr := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); reportErr == nil {
 			rr := researchReportToResp(rep)
 			report = &rr
 		}
 	}
 	var loadedRun *researchrun.RunSnapshot
-	durableRun, ownershipErr := h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
-	if ownershipErr != nil {
-		writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
-		return
+	durableRun := agentAttemptScoped
+	if !agentAttemptScoped {
+		var ownershipErr error
+		durableRun, ownershipErr = h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
+		if ownershipErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
+			return
+		}
 	}
 	if durableRun {
 		if h.ResearchRun == nil {
@@ -473,6 +523,10 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		loadedRun = &snapshot
+		if agentAttemptScoped {
+			sessionResponse = taskBoundResearchSessionResponse(snapshot.Run)
+			fleetResponse = taskBoundResearchFleetResponse(snapshot.Run, snapshot.PrincipalHeader)
+		}
 	}
 
 	graphNodes := mapGraphNodes(nodes, edges)
@@ -497,18 +551,11 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		mappedProductRounds = []ResearchProductRoundCardResp{}
 		mappedThoughtStrategies = []ResearchThoughtStrategyResp{}
 		report = nil
-		if loadedRun != nil && loadedRun.LegacyContext != nil {
-			mappedSources = mapFrozenLegacySources(loadedRun.LegacyContext.Sources)
-			mappedMessages = mapFrozenResearchMessages(loadedRun.LegacyContext.Messages)
-			mappedProductRounds = mapFrozenProductRounds(loadedRun.LegacyContext.ProductRounds)
-			mappedThoughtStrategies = mapFrozenThoughtStrategies(loadedRun.LegacyContext.ThoughtStrategies)
-			report = mapFrozenResearchReport(loadedRun.LegacyContext.Report)
-		}
 	}
 
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
-		Session:           researchSessionToResponse(session),
-		Fleet:             h.researchFleetToResponse(r.Context(), fleet, members),
+		Session:           sessionResponse,
+		Fleet:             fleetResponse,
 		Nodes:             graphNodes,
 		Edges:             graphEdges,
 		Sources:           mappedSources,
@@ -519,83 +566,6 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		ThoughtStrategies: mappedThoughtStrategies,
 		Run:               loadedRun,
 	})
-}
-
-func mapFrozenLegacySources(rows []researchrun.FrozenLegacySource) []ResearchSourceResp {
-	out := make([]ResearchSourceResp, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, ResearchSourceResp{
-			ID: row.ID, SessionID: row.SessionID, URL: row.URL, Title: row.Title,
-			SourceClass: row.SourceClass, CredibilityWeight: row.CredibilityWeight,
-			Stance: row.Stance, Relevance: row.Relevance, Summary: row.Summary,
-			Excerpt: row.Excerpt, Payload: row.Payload,
-			CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339Nano),
-			UpdatedAt: row.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		})
-	}
-	return out
-}
-
-func mapFrozenResearchMessages(rows []researchrun.FrozenResearchMessage) []ResearchMessageResp {
-	out := make([]ResearchMessageResp, 0, len(rows))
-	for _, row := range rows {
-		cardKind := row.CardKind
-		if cardKind == "" {
-			cardKind = "chat"
-		}
-		meta := row.Meta
-		if len(meta) == 0 {
-			meta = json.RawMessage(`{}`)
-		}
-		out = append(out, ResearchMessageResp{
-			ID: row.ID, SessionID: row.SessionID, SenderType: row.SenderType,
-			SenderID: optionalFrozenString(row.SenderID), TargetAgentID: optionalFrozenString(row.TargetAgentID),
-			Body: row.Body, CardKind: cardKind, Meta: meta,
-			MatchDecision: extractMatchDecisionFromMeta(meta, row.ID),
-			CreatedAt:     row.CreatedAt.UTC().Format(time.RFC3339Nano),
-		})
-	}
-	return out
-}
-
-func mapFrozenProductRounds(rows []researchrun.FrozenProductRound) []ResearchProductRoundCardResp {
-	out := make([]ResearchProductRoundCardResp, 0, len(rows))
-	for _, row := range rows {
-		gaps := row.CoverageGaps
-		if len(gaps) == 0 {
-			gaps = json.RawMessage(`[]`)
-		}
-		out = append(out, ResearchProductRoundCardResp{
-			ID: row.ID, SessionID: row.SessionID, RoundNumber: row.RoundNumber,
-			Decision: row.Decision, CoverageGaps: gaps, ConfidenceNote: row.ConfidenceNote,
-			BudgetUsed: row.BudgetUsed, BudgetRemaining: row.BudgetRemaining,
-			GoalPatchProposal: optionalFrozenString(row.GoalPatchProposal),
-			NextRoundFocus:    optionalFrozenString(row.NextRoundFocus),
-			DecidedByAgentID:  optionalFrozenString(row.DecidedByAgentID),
-			CreatedAt:         row.CreatedAt.UTC().Format(time.RFC3339Nano),
-		})
-	}
-	return out
-}
-
-func mapFrozenResearchReport(row *researchrun.FrozenResearchReport) *ResearchReportResp {
-	if row == nil {
-		return nil
-	}
-	return &ResearchReportResp{
-		ID: row.ID, SessionID: row.SessionID, Revision: row.Revision,
-		ContentMD: row.ContentMD, Structured: row.Structured,
-		CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339Nano),
-		UpdatedAt: row.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	}
-}
-
-func optionalFrozenString(value string) *string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	return &value
 }
 
 func confidenceFromPayload(payload json.RawMessage) *float64 {

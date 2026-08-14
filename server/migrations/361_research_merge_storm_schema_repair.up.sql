@@ -285,7 +285,7 @@ BEGIN
     WHERE m.workspace_id = p_workspace_id
       AND m.session_id = p_session_id
       AND m.artifact_id = p_entity_id
-      AND m.mutation_kind = 'verification'
+      AND m.mutation_kind IN ('verification', 'current_version')
       AND m.old_eligibility_revision = v_revision - 1
       AND m.new_eligibility_revision = v_revision
       AND m.watermark = v_watermark

@@ -836,12 +836,39 @@ func insertResultArtifactRowTx(
 		  id, workspace_id, session_id, attempt_id,
 		  orchestrator_version, result_schema_version, result,
 		  client_request_id, content_hash, acceptance_policy_watermark, accepted_at,
-		  manifest_id, manifest_hash, input_version_set_hash
-		) VALUES (
+		  manifest_id, manifest_hash, input_version_set_hash,
+		  acceptance_manifest_id, acceptance_manifest_hash,
+		  resolved_input_versions, acceptance_lineage
+		)
+		SELECT
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
 		  $5, $6, $7::jsonb, $8, $9, $10, now(),
-		  $11::uuid, $12, $13
-		)
+		  $11::uuid, $12, $13,
+		  $11::uuid, $12,
+		  COALESCE((
+		    SELECT jsonb_agg(version_id ORDER BY version_id)
+		    FROM (
+		      SELECT DISTINCT entry.artifact_version_id::text AS version_id
+		      FROM research_artifact_context_entry entry
+		      WHERE entry.workspace_id = $2::uuid
+		        AND entry.session_id = $3::uuid
+		        AND entry.manifest_id = $11::uuid
+		    ) versions
+		  ), '[]'::jsonb),
+		  COALESCE((
+		    SELECT jsonb_agg(jsonb_build_object(
+		      'input_version_id', entry.artifact_version_id::text,
+		      'relation', 'acceptance_input',
+		      'manifest_id', entry.manifest_id::text,
+		      'explicitly_used', true,
+		      'purpose', 'result_acceptance',
+		      'ordinal', entry.ordinal
+		    ) ORDER BY entry.ordinal, entry.artifact_version_id::text)
+		    FROM research_artifact_context_entry entry
+		    WHERE entry.workspace_id = $2::uuid
+		      AND entry.session_id = $3::uuid
+		      AND entry.manifest_id = $11::uuid
+		  ), '[]'::jsonb)
 		ON CONFLICT (workspace_id, session_id, attempt_id) DO NOTHING
 	`, resultID, workspaceID, sessionID, attemptID,
 		orchestratorVersion, fmt.Sprintf("%d", result.SchemaVersion), resultJSON,

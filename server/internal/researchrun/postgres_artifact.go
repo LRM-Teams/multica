@@ -194,7 +194,7 @@ func recordVerificationPolicyMutationTx(ctx context.Context, tx pgx.Tx, workspac
 				WHERE mutation.workspace_id = p.workspace_id
 				  AND mutation.session_id = p.session_id
 				  AND mutation.artifact_id = p.id
-				  AND mutation.mutation_kind = 'verification'
+				  AND mutation.mutation_kind IN ('verification', 'current_version')
 				  AND mutation.watermark = watermark.value
 			  )
 			RETURNING p.eligibility_revision, watermark.value

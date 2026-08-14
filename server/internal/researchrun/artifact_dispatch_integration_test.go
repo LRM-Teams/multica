@@ -207,7 +207,7 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch ArtifactEntityKind(kind) {
-		case ArtifactKindContractRevision, ArtifactKindMethodDecision, ArtifactKindQuestion, ArtifactKindTask, ArtifactKindAttempt, ArtifactKindGraphNode, ArtifactKindLegacySource, ArtifactKindResearchMessage, ArtifactKindProductRoundDecision, ArtifactKindReportRevision:
+		case ArtifactKindContractRevision, ArtifactKindMethodDecision, ArtifactKindQuestion, ArtifactKindTask, ArtifactKindAttempt, ArtifactKindGraphNode, ArtifactKindLegacySource, ArtifactKindResearchMessage, ArtifactKindProductRoundDecision:
 			var decoded struct {
 				Order int            `json:"order"`
 				Value map[string]any `json:"value"`
@@ -215,7 +215,7 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 			if err = json.Unmarshal(reprBytes, &decoded); err != nil || len(decoded.Value) == 0 {
 				t.Fatalf("%s representation is not frozen ordered JSON: %q err=%v", kind, reprBytes, err)
 			}
-		case ArtifactKindRunSession, ArtifactKindSourceSnapshot, ArtifactKindObservation, ArtifactKindClaim:
+		case ArtifactKindRunSession, ArtifactKindSourceSnapshot, ArtifactKindObservation, ArtifactKindClaim, ArtifactKindReportRevision:
 			var decoded map[string]any
 			if err = json.Unmarshal(reprBytes, &decoded); err != nil {
 				t.Fatalf("%s representation is not frozen wire JSON: %q err=%v", kind, reprBytes, err)

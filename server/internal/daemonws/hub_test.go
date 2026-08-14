@@ -1040,6 +1040,128 @@ func TestHeartbeatRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerControlPlaneHeartbeatRoundTrip(t *testing.T) {
+	M.Reset()
+	defer M.Reset()
+
+	hub := NewHub()
+	var calls atomic.Int32
+	hub.SetHeartbeatHandler(func(_ context.Context, identity ClientIdentity, payload protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
+		calls.Add(1)
+		if identity.DaemonID != "computer-1" || identity.WorkspaceID != "workspace-1" {
+			t.Errorf("identity = %+v, want current Computer and Workspace Runner", identity)
+		}
+		return &protocol.DaemonHeartbeatAckPayload{RuntimeID: payload.RuntimeID, Status: "ok"}, nil
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "computer-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	readyFrame, err := json.Marshal(protocol.Message{
+		Type: protocol.EventWorkspaceRunnerReady,
+		Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{
+			WorkspaceID:      "workspace-1",
+			DaemonInstanceID: "instance-1",
+			ActiveCapabilities: []string{
+				protocol.DaemonCapabilityWorkspaceRunnerAttachment,
+				protocol.DaemonCapabilityWorkspaceRunnerControlPlane,
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("marshal ready: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, readyFrame); err != nil {
+		t.Fatalf("write ready: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for !hub.IsCurrentWorkspaceRunner("computer-1", "workspace-1", "instance-1") {
+		if time.Now().After(deadline) {
+			t.Fatal("Workspace Runner did not become current")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	heartbeatFrame, err := json.Marshal(protocol.Message{
+		Type: protocol.EventDaemonHeartbeat,
+		Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{
+			RuntimeID: "runtime-1", ComputerGeneration: 7,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("marshal heartbeat: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, heartbeatFrame); err != nil {
+		t.Fatalf("write heartbeat: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read Workspace Runner heartbeat ack: %v", err)
+	}
+	var message protocol.Message
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("unmarshal heartbeat ack: %v", err)
+	}
+	if message.Type != protocol.EventDaemonHeartbeatAck {
+		t.Fatalf("message type = %q, want %q", message.Type, protocol.EventDaemonHeartbeatAck)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("HeartbeatHandler calls = %d, want 1", got)
+	}
+}
+
+func TestLivenessProbeAcknowledgesWithoutInvokingHeartbeatActions(t *testing.T) {
+	M.Reset()
+	defer M.Reset()
+
+	hub := NewHub()
+	var heartbeatCalls atomic.Int32
+	hub.SetHeartbeatHandler(func(context.Context, ClientIdentity, protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
+		heartbeatCalls.Add(1)
+		return &protocol.DaemonHeartbeatAckPayload{Status: "ok"}, nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	probe, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonLivenessProbe})
+	if err := conn.WriteMessage(websocket.TextMessage, probe); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ack protocol.Message
+	if json.Unmarshal(raw, &ack) != nil || ack.Type != protocol.EventDaemonLivenessAck {
+		t.Fatalf("liveness response = %s", raw)
+	}
+	if calls := heartbeatCalls.Load(); calls != 0 {
+		t.Fatalf("liveness probe invoked HeartbeatHandler %d times", calls)
+	}
+}
+
 // TestHeartbeatHandlerCtxNotTimeBounded pins the PopPending invariant: the
 // hub must not wrap the handler ctx with a short WithTimeout, otherwise the
 // Redis Lua claim script can be cancelled mid-flight after its side effects

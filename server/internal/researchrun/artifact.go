@@ -323,6 +323,7 @@ func MigrationRelationshipParserNames() []string {
 		"research_legacy_source_payload",
 		"research_report_structured",
 		"research_run_event_payload",
+		"research_task_remediation_acceptance_criteria",
 	}
 }
 

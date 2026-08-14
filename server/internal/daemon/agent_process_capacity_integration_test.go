@@ -42,7 +42,7 @@ func TestManagedCapacityMultiWorkspaceFIFOAndRunnerRemoval(t *testing.T) {
 	}
 }
 
-func TestManagedCapacityQueuedDetachAndCrashReplacementFence(t *testing.T) {
+func TestManagedCapacityQueuedDetachRequiresFormalStopAndCrashReplacementFence(t *testing.T) {
 	d := New(Config{DaemonID: "daemon-1", WorkspacesRoot: t.TempDir(), MaxAgentProcesses: 1}, nil)
 	for _, runtime := range []Runtime{
 		{ID: "runtime-a", WorkspaceID: "workspace-a"},
@@ -69,6 +69,12 @@ func TestManagedCapacityQueuedDetachAndCrashReplacementFence(t *testing.T) {
 		AgentID: "agent-b", RuntimeID: "runtime-b", AttachmentGeneration: 1, LifecycleSeq: 2,
 	}); err != nil {
 		t.Fatalf("detach queued launch: %v", err)
+	}
+	if launch, found := second.processes.Snapshot("agent-b"); !found || launch.LaunchID != secondAck.LaunchID {
+		t.Fatalf("Attachment detach changed queued launch: %+v found=%v", launch, found)
+	}
+	if err := second.processes.Stop(agentProcessCallback{AgentID: "agent-b", LaunchID: secondAck.LaunchID}); err != nil {
+		t.Fatalf("formal stop of detached queued launch: %v", err)
 	}
 	thirdAck := startManagedForCapacityTest(t, third, "agent-c", "runtime-c", "dispatch-c")
 	if thirdAck.QueueState != protocol.AgentStartQueueQueued {

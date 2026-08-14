@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -264,8 +265,12 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 					t.Error(err)
 					return
 				}
-				sawStartingActivity = sawStartingActivity || activity.Snapshot.ActivityKind == protocol.ActivityKindWorking && activity.Snapshot.DetailKind == "starting"
-				sawOnlineActivity = sawOnlineActivity || activity.Snapshot.ActivityKind == protocol.ActivityKindOnline && activity.Snapshot.DetailKind == "idle"
+				if activity.Snapshot.ActivityKind != "" {
+					t.Errorf("Raft Activity wire leaked daemon presentation kind %q", activity.Snapshot.ActivityKind)
+					return
+				}
+				sawStartingActivity = sawStartingActivity || activity.Snapshot.DetailKind == "starting"
+				sawOnlineActivity = sawOnlineActivity || activity.Snapshot.DetailKind == "idle"
 			}
 			frames <- msg
 		}
@@ -345,10 +350,13 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				if err := json.Unmarshal(msg.Payload, &activity); err != nil {
 					t.Fatal(err)
 				}
-				switch {
-				case activity.Snapshot.ActivityKind == protocol.ActivityKindWorking && activity.Snapshot.DetailKind == "starting":
+				if activity.Snapshot.ActivityKind != "" {
+					t.Fatalf("Raft Activity wire leaked daemon presentation kind %q", activity.Snapshot.ActivityKind)
+				}
+				switch activity.Snapshot.DetailKind {
+				case "starting":
 					sawStartingActivity = true
-				case activity.Snapshot.ActivityKind == protocol.ActivityKindOnline && activity.Snapshot.DetailKind == "idle":
+				case "idle":
 					sawOnlineActivity = true
 				default:
 					t.Fatalf("managed start/stop invented unexpected Activity: %+v", activity)
@@ -386,6 +394,260 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		t.Fatalf("inactive status=%+v, want launch %q", stopped, accepted.LaunchID)
 	}
 	<-errCh
+}
+
+func TestWorkspaceRunnerRuntimeReplacementStopsOldLaunchBeforeNewActivity(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	serverResult := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverResult <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(4 * time.Second))
+
+		readFrame := func(want func(protocol.Message) bool) (protocol.Message, error) {
+			for {
+				_, raw, err := conn.ReadMessage()
+				if err != nil {
+					return protocol.Message{}, err
+				}
+				var frame protocol.Message
+				if json.Unmarshal(raw, &frame) == nil && want(frame) {
+					return frame, nil
+				}
+			}
+		}
+		writeCommand := func(eventType string, payload any) error {
+			raw, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
+			if err != nil {
+				return err
+			}
+			return conn.WriteMessage(websocket.TextMessage, raw)
+		}
+		waitForType := func(eventType string) (protocol.Message, error) {
+			return readFrame(func(frame protocol.Message) bool { return frame.Type == eventType })
+		}
+
+		if _, err := waitForType(protocol.EventWorkspaceRunnerReady); err != nil {
+			serverResult <- fmt.Errorf("read Runner ready: %w", err)
+			return
+		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			serverResult <- err
+			return
+		}
+
+		oldAttach := protocol.WorkspaceRunnerAgentAttachPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-codex", AttachmentGeneration: 1, LifecycleSeq: 1,
+		}
+		if err := writeCommand(protocol.EventAgentAttach, oldAttach); err != nil {
+			serverResult <- err
+			return
+		}
+		if _, err := waitForType(protocol.EventAgentAttached); err != nil {
+			serverResult <- fmt.Errorf("wait for Codex Attachment receipt: %w", err)
+			return
+		}
+
+		oldStart := protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-codex", LaunchID: "launch-codex", StartDispatchID: "dispatch-codex",
+		}
+		if err := writeCommand(protocol.EventDaemonAgentStart, oldStart); err != nil {
+			serverResult <- err
+			return
+		}
+		var oldAck, oldActive, oldActivity bool
+		for !oldAck || !oldActive || !oldActivity {
+			_, err := readFrame(func(frame protocol.Message) bool {
+				switch frame.Type {
+				case protocol.EventAgentStartAck:
+					var ack protocol.AgentStartAckPayload
+					if json.Unmarshal(frame.Payload, &ack) == nil && ack.LaunchID == oldStart.LaunchID {
+						oldAck = true
+					}
+				case protocol.EventAgentStatus:
+					var status protocol.AgentStatusPayload
+					if json.Unmarshal(frame.Payload, &status) == nil && status.LaunchID == oldStart.LaunchID && status.Status == protocol.AgentStatusActive {
+						oldActive = true
+					}
+				case protocol.EventAgentActivity:
+					var activity protocol.AgentActivityPayload
+					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.LaunchID == oldStart.LaunchID {
+						oldActivity = true
+					}
+				}
+				return oldAck && oldActive && oldActivity
+			})
+			if err != nil {
+				serverResult <- fmt.Errorf("wait for Codex launch: %w", err)
+				return
+			}
+		}
+
+		oldDetach := protocol.WorkspaceRunnerAgentDetachPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-codex", AttachmentGeneration: 2, LifecycleSeq: 2,
+		}
+		if err := writeCommand(protocol.EventAgentDetach, oldDetach); err != nil {
+			serverResult <- err
+			return
+		}
+		if _, err := waitForType(protocol.EventAgentDetached); err != nil {
+			serverResult <- fmt.Errorf("wait for Codex detach receipt: %w", err)
+			return
+		}
+
+		newAttach := protocol.WorkspaceRunnerAgentAttachPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-grok", AttachmentGeneration: 2, LifecycleSeq: 1,
+		}
+		if err := writeCommand(protocol.EventAgentAttach, newAttach); err != nil {
+			serverResult <- err
+			return
+		}
+		if _, err := waitForType(protocol.EventAgentAttached); err != nil {
+			serverResult <- fmt.Errorf("wait for Grok Attachment receipt: %w", err)
+			return
+		}
+
+		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.WorkspaceRunnerAgentStopPayload{
+			AgentID: oldStart.AgentID, LaunchID: oldStart.LaunchID,
+		}); err != nil {
+			serverResult <- err
+			return
+		}
+		var oldInactive, oldStopped bool
+		var stopOrderingErr error
+		for !oldInactive || !oldStopped {
+			_, err := readFrame(func(frame protocol.Message) bool {
+				switch frame.Type {
+				case protocol.EventAgentStatus:
+					var status protocol.AgentStatusPayload
+					if json.Unmarshal(frame.Payload, &status) == nil && status.LaunchID == oldStart.LaunchID && status.Status == protocol.AgentStatusInactive {
+						oldInactive = true
+					}
+				case protocol.EventAgentActivity:
+					var activity protocol.AgentActivityPayload
+					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.LaunchID == oldStart.LaunchID && activity.Snapshot.ActivityKind == "" && activity.Snapshot.DetailKind == "stopped" {
+						if !oldInactive {
+							stopOrderingErr = errors.New("Stopped Activity arrived before inactive status")
+							return true
+						}
+						oldStopped = true
+					}
+				}
+				return oldInactive && oldStopped
+			})
+			if err != nil {
+				serverResult <- fmt.Errorf("wait for Codex stop: %w", err)
+				return
+			}
+			if stopOrderingErr != nil {
+				serverResult <- stopOrderingErr
+				return
+			}
+		}
+
+		newStart := protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-grok", LaunchID: "launch-grok", StartDispatchID: "dispatch-grok",
+		}
+		if err := writeCommand(protocol.EventDaemonAgentStart, newStart); err != nil {
+			serverResult <- err
+			return
+		}
+		var newAck, newActive, newActivity bool
+		for !newAck || !newActive || !newActivity {
+			_, err := readFrame(func(frame protocol.Message) bool {
+				switch frame.Type {
+				case protocol.EventAgentStartAck:
+					var ack protocol.AgentStartAckPayload
+					if json.Unmarshal(frame.Payload, &ack) == nil && ack.LaunchID == newStart.LaunchID {
+						newAck = true
+					}
+				case protocol.EventAgentStatus:
+					var status protocol.AgentStatusPayload
+					if json.Unmarshal(frame.Payload, &status) == nil && status.LaunchID == newStart.LaunchID && status.Status == protocol.AgentStatusActive {
+						newActive = true
+					}
+				case protocol.EventAgentActivity:
+					var activity protocol.AgentActivityPayload
+					if json.Unmarshal(frame.Payload, &activity) == nil && activity.Snapshot.LaunchID == newStart.LaunchID {
+						newActivity = true
+					}
+				}
+				return newAck && newActive && newActivity
+			})
+			if err != nil {
+				serverResult <- fmt.Errorf("wait for Grok launch: %w", err)
+				return
+			}
+		}
+		if err := writeCommand(protocol.EventDaemonAgentStop, protocol.WorkspaceRunnerAgentStopPayload{
+			AgentID: oldStart.AgentID, LaunchID: oldStart.LaunchID,
+		}); err != nil {
+			serverResult <- err
+			return
+		}
+		ping := protocol.WorkspaceRunnerPingPayload{PingID: "after-stale-stop"}
+		if err := writeCommand(protocol.EventWorkspaceRunnerPing, ping); err != nil {
+			serverResult <- err
+			return
+		}
+		pongFrame, err := waitForType(protocol.EventWorkspaceRunnerPong)
+		if err != nil {
+			serverResult <- fmt.Errorf("wait for pong after stale stop: %w", err)
+			return
+		}
+		var pong protocol.WorkspaceRunnerPongPayload
+		if json.Unmarshal(pongFrame.Payload, &pong) != nil || pong.PingID != ping.PingID {
+			serverResult <- fmt.Errorf("pong after stale stop = %+v", pong)
+			return
+		}
+		serverResult <- nil
+	}))
+	defer server.Close()
+
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	for _, runtimeID := range []string{"runtime-codex", "runtime-grok"} {
+		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: "ws-1"}
+	}
+	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.Close()
+		runner.inboxes.Close()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	runnerDone := make(chan error, 1)
+	go func() { runnerDone <- runner.runConnection(ctx) }()
+
+	select {
+	case err := <-serverResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for Raft-aligned Runtime replacement")
+	}
+	if current, found := runner.processes.Snapshot("agent-1"); !found || current.LaunchID != "launch-grok" {
+		t.Fatalf("stale old stop changed replacement launch: %+v found=%v", current, found)
+	}
+	cancel()
+	select {
+	case <-runnerDone:
+	case <-time.After(time.Second):
+		t.Fatal("Workspace Runner did not stop after replacement test")
+	}
 }
 
 func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T) {

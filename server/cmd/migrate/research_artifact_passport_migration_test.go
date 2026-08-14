@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const researchArtifactPassportLegacySchema = `
@@ -310,7 +311,6 @@ func TestResearchArtifactReciprocalGuards320RoundTrips(t *testing.T) {
 	}
 	workspaceID := "10000000-0000-4000-8000-000000000001"
 	sessionID := "20000000-0000-4000-8000-000000000001"
-	taskID := "30000000-0000-4000-8000-000000000003"
 	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
@@ -327,55 +327,90 @@ func TestResearchArtifactReciprocalGuards320RoundTrips(t *testing.T) {
 		}
 	}
 
-	positiveTx, err := conn.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin positive tx: %v", err)
+	commitOrForce := func(t *testing.T, tx pgx.Tx, immediate bool) error {
+		t.Helper()
+		if immediate {
+			if _, constraintErr := tx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); constraintErr != nil {
+				return constraintErr
+			}
+		}
+		return tx.Commit(ctx)
 	}
-	if _, err = positiveTx.Exec(ctx, `
-		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
-		VALUES ($1::uuid, $2::uuid, 'legacy-v1-v5-compat-v1', 0)
-		ON CONFLICT (workspace_id, session_id) DO NOTHING
-	`, workspaceID, sessionID); err != nil {
-		positiveTx.Rollback(ctx)
-		t.Fatalf("insert policy state: %v", err)
-	}
-	if _, err = positiveTx.Exec(ctx, `
-		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'guard-positive', 1, 1)
-	`, taskID, workspaceID, sessionID); err != nil {
-		positiveTx.Rollback(ctx)
-		t.Fatalf("insert task: %v", err)
-	}
-	if _, err = positiveTx.Exec(ctx, `
-		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
-	`, workspaceID, sessionID, taskID); err != nil {
-		positiveTx.Rollback(ctx)
-		t.Fatalf("register task passport: %v", err)
-	}
-	if _, err = positiveTx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
-		positiveTx.Rollback(ctx)
-		t.Fatalf("set constraints immediate: %v", err)
-	}
-	if err = positiveTx.Commit(ctx); err != nil {
-		t.Fatalf("commit paired task insert: %v", err)
+	assertConstraint := func(t *testing.T, got error, want string) {
+		t.Helper()
+		pgErr, ok := got.(*pgconn.PgError)
+		if !ok || pgErr.ConstraintName != want {
+			t.Fatalf("constraint error=%v want=%s", got, want)
+		}
 	}
 
-	negativeTx, err := conn.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin negative tx: %v", err)
+	modes := []struct {
+		name      string
+		immediate bool
+		suffix    string
+	}{
+		{name: "immediate", immediate: true, suffix: "003"},
+		{name: "ordinary_commit", immediate: false, suffix: "004"},
 	}
-	orphanTaskID := "30000000-0000-4000-8000-000000000099"
-	if _, err = negativeTx.Exec(ctx, `
-		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'guard-negative', 1, 1)
-	`, orphanTaskID, workspaceID, sessionID); err != nil {
-		negativeTx.Rollback(ctx)
-		t.Fatalf("insert orphan task: %v", err)
-	}
-	if err = negativeTx.Commit(ctx); err == nil {
-		t.Fatal("expected orphan task insert to fail reciprocal guard on commit")
-	} else {
-		negativeTx.Rollback(ctx)
+	for _, mode := range modes {
+		mode := mode
+		t.Run(mode.name, func(t *testing.T) {
+			pairedTaskID := "30000000-0000-4000-8000-000000000" + mode.suffix
+			pairedTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin paired tx: %v", beginErr)
+			}
+			defer pairedTx.Rollback(ctx)
+			if _, execErr := pairedTx.Exec(ctx, `
+				INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+				VALUES ($1::uuid, $2::uuid, 'legacy-v1-v5-compat-v1', 0)
+				ON CONFLICT (workspace_id, session_id) DO NOTHING
+			`, workspaceID, sessionID); execErr != nil {
+				t.Fatalf("insert policy state: %v", execErr)
+			}
+			if _, execErr := pairedTx.Exec(ctx, `
+				INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+				VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 1, 1)
+			`, pairedTaskID, workspaceID, sessionID, "guard-positive-"+mode.name); execErr != nil {
+				t.Fatalf("insert paired task: %v", execErr)
+			}
+			if _, execErr := pairedTx.Exec(ctx, `
+				SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
+			`, workspaceID, sessionID, pairedTaskID); execErr != nil {
+				t.Fatalf("register paired task passport: %v", execErr)
+			}
+			if commitErr := commitOrForce(t, pairedTx, mode.immediate); commitErr != nil {
+				t.Fatalf("commit paired task and passport: %v", commitErr)
+			}
+
+			domainOnlyTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin domain-only tx: %v", beginErr)
+			}
+			defer domainOnlyTx.Rollback(ctx)
+			if _, execErr := domainOnlyTx.Exec(ctx, `
+				INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+				VALUES ('30000000-0000-4000-8000-000000000099'::uuid, $1::uuid, $2::uuid, $3, 1, 1)
+			`, workspaceID, sessionID, "guard-domain-only-"+mode.name); execErr != nil {
+				t.Fatalf("insert domain-only task: %v", execErr)
+			}
+			assertConstraint(t, commitOrForce(t, domainOnlyTx, mode.immediate), "research_task_artifact_passport_guard")
+
+			passportOnlyTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin passport-only tx: %v", beginErr)
+			}
+			defer passportOnlyTx.Rollback(ctx)
+			if _, execErr := passportOnlyTx.Exec(ctx, `
+				SELECT research_artifact_backfill_registered(
+				  $1::uuid, $2::uuid, '30000000-0000-4000-8000-000000000098'::uuid,
+				  'task', now(), 1, 1
+				)
+			`, workspaceID, sessionID); execErr != nil {
+				t.Fatalf("insert passport-only task registration: %v", execErr)
+			}
+			assertConstraint(t, commitOrForce(t, passportOnlyTx, mode.immediate), "research_artifact_passport_domain_guard")
+		})
 	}
 
 	if _, err = conn.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, workspaceID); err != nil {

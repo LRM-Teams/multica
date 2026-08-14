@@ -56,6 +56,19 @@ func TestResultAcceptanceModuleRoutesV6IntegrationToAtomicAdapter(t *testing.T) 
 	}
 }
 
+func TestResultAcceptanceModuleRoutesV6DeliberationToAtomicAdapter(t *testing.T) {
+	store, submission := validResultAcceptanceFixture(t)
+	store.run.OrchestratorVersion = OrchestratorVersionV6
+	store.task.Kind, store.task.ExpectedResult = TaskKindDeliberate, "research_deliberation_v6"
+	submission.Raw = validV6DeliberationResultJSON(t)
+	if _, err := (resultAcceptanceModule{store: store}).Accept(context.Background(), submission); err != nil {
+		t.Fatal(err)
+	}
+	if store.accepted == nil || store.accepted.V6Deliberation == nil || len(store.accepted.V6Deliberation.Turns) != 2 {
+		t.Fatalf("V6 deliberation did not reach atomic adapter: %+v", store.accepted)
+	}
+}
+
 func TestResultAcceptanceModuleValidatesAndPassesCanonicalInput(t *testing.T) {
 	store, submission := validResultAcceptanceFixture(t)
 	module := resultAcceptanceModule{store: store}

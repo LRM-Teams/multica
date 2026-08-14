@@ -357,6 +357,11 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	outcome.Event = event
+	if state.run.OrchestratorVersion == OrchestratorVersionV6 && !state.stale {
+		if err = reserveReadyV6IntegrationRoundsTx(ctx, tx, state, event.Sequence); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
 	if err = state.checkpointAfter(ctx, txResultAfterEvent); err != nil {
 		return AcceptResultOutcome{}, err
 	}

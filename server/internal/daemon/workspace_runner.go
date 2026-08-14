@@ -104,6 +104,26 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			if err := writeFrame(protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
 				return err
 			}
+		case protocol.EventComputerUpgrade, protocol.EventComputerRestart:
+			var command protocol.ComputerUpgradePayload
+			if message.Type == protocol.EventComputerRestart {
+				var restart protocol.ComputerRestartPayload
+				if json.Unmarshal(message.Payload, &restart) != nil || restart.Validate() != nil {
+					continue
+				}
+				command = protocol.ComputerUpgradePayload{RequestID: restart.RequestID, OperationID: restart.OperationID}
+			} else if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
+				continue
+			}
+			if runner.handleComputerControl == nil {
+				if runner.logger != nil {
+					runner.logger.Info("ignoring Computer control; Host callback is unavailable", "workspace_id", workspaceID, "action", message.Type)
+				}
+				continue
+			}
+			if err := runner.handleComputerControl(connection.ctx, message.Type, command); err != nil && runner.logger != nil {
+				runner.logger.Warn("forward Computer control to Host failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
+			}
 		case protocol.EventDaemonHeartbeatAck:
 			var ack HeartbeatResponse
 			if json.Unmarshal(message.Payload, &ack) != nil || ack.RuntimeID == "" || !runner.ownsRuntime(ack.RuntimeID) {

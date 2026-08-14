@@ -47,7 +47,7 @@ type workspaceRunnerDependencies struct {
 	openInbox                   inboxCoordinatorFactory
 	runtimeSet                  func() AgentAttachmentRuntimeSet
 	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
-	configureProviderSession    func(string, string, *string) error
+	configureProviderSession    func(string, string, string) error
 	currentProviderSession      func(string, string) (string, error)
 	recordProviderSession       func(string, string, string)
 	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
@@ -85,7 +85,7 @@ type WorkspaceRunner struct {
 
 	runtimeSet                  func() AgentAttachmentRuntimeSet
 	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
-	configureProviderSession    func(string, string, *string) error
+	configureProviderSession    func(string, string, string) error
 	currentProviderSession      func(string, string) (string, error)
 	recordProviderSession       func(string, string, string)
 	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
@@ -381,14 +381,12 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 			return d.attachmentRuntimeSet(workspaceID)
 		},
 		ensureResidentRuntime: d.ensureResidentMessageRuntime,
-		configureProviderSession: func(agentID, runtimeID string, providerSessionID *string) error {
-			if providerSessionID != nil {
-				if d.agentRuntimeSessions == nil {
-					return errors.New("Agent provider session store is unavailable")
-				}
-				if err := d.agentRuntimeSessions.Put(agentID, runtimeID, *providerSessionID); err != nil {
-					return fmt.Errorf("apply Agent provider session: %w", err)
-				}
+		configureProviderSession: func(agentID, runtimeID, providerSessionID string) error {
+			if d.agentRuntimeSessions == nil {
+				return errors.New("Agent provider session store is unavailable")
+			}
+			if err := d.agentRuntimeSessions.Put(agentID, runtimeID, providerSessionID); err != nil {
+				return fmt.Errorf("apply Agent provider session: %w", err)
 			}
 			return nil
 		},

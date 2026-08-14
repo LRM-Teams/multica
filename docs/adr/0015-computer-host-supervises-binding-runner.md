@@ -57,7 +57,7 @@ Machine-Upgrade-related daemon behavior is child-local prepare/release and
 Runtime re-registration requested by the Computer.
 
 The CLI is composition only. A Computer Host must not construct provider
-runtimes, Inbox/Activity owners, Agent lifecycle executor, Attachment registry,
+runtimes, Inbox/Activity owners, Agent Restart executor, Attachment registry,
 Reminder cache, or Binding draft/outbox state.
 
 ## Bootstrap, Ready, and local control

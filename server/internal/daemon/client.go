@@ -660,14 +660,6 @@ func (c *Client) ReportMemoryCurationResult(ctx context.Context, runtimeID, runI
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/memory-curation/%s/result", runtimeID, runID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
-// ResetAgentRuntimeSession clears every server-owned provider resume pointer
-// for this agent and runtime. The operation ID makes retries idempotent.
-func (c *Client) ResetAgentRuntimeSession(ctx context.Context, operationID, agentID, runtimeID string) error {
-	return c.postJSONWithToken(ctx,
-		fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/session/reset", runtimeID, agentID),
-		map[string]any{"operation_id": operationID}, nil, c.tokenForRuntime(runtimeID))
-}
-
 // ReportAgentProviderCrashed tells the server an idle resident provider
 // process for this agent was found dead (task #42② / Raft status ②).
 // Best-effort: callers should log and continue on error.

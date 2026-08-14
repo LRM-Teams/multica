@@ -16,7 +16,6 @@ import (
 )
 
 func TestReduceRunnerLaunchesConvergesRaftDesiredAndRunningState(t *testing.T) {
-	freshSession := ""
 	tests := []struct {
 		name     string
 		desired  []runnerDesiredLaunch
@@ -29,7 +28,8 @@ func TestReduceRunnerLaunchesConvergesRaftDesiredAndRunningState(t *testing.T) {
 		{name: "runtime move stops mismatched accepted start before replacement", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", launchID: "launch-old", status: "accepted"}}, want: []runnerReconcileAction{
 			{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}},
 		}},
-		{name: "reset reconnect preserves explicit fresh session", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new", sessionID: &freshSession}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", SessionID: &freshSession}}}},
+		{name: "restart reconnect preserves Raft session config", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new", sessionID: "provider-session"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: "provider-session"}}}}},
+		{name: "reset reconnect preserves fresh Raft config", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", Config: protocol.WorkspaceRunnerAgentStartConfig{}}}}},
 		{name: "runtime move stops old before a later reconcile starts new", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", launchID: "launch-old", status: protocol.AgentStatusActive}}, want: []runnerReconcileAction{
 			{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}},
 		}},

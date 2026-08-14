@@ -17,7 +17,7 @@ type runnerDesiredLaunch struct {
 	runtimeID       string
 	launchID        string
 	startDispatchID string
-	sessionID       *string
+	sessionID       string
 }
 
 type runnerObservedLaunch struct {
@@ -32,7 +32,7 @@ type runnerReconcileAction struct {
 	payload   any
 }
 
-// reduceRunnerLaunches is the pure desired-vs-observed lifecycle module. Its
+// reduceRunnerLaunches is the pure desired-vs-observed launch reducer. Its
 // interface contains only Raft's placement and residency facts; database,
 // websocket, setup, reconnect, and runtime-update details stay in adapters.
 func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObservedLaunch) []runnerReconcileAction {
@@ -74,7 +74,7 @@ func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObserv
 		// dispatch the desired start only after an inactive report removes it
 		// from the observed set on the next reconcile.
 		if wanted && !mismatched && !running {
-			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: want.agentID, RuntimeID: want.runtimeID, LaunchID: want.launchID, StartDispatchID: want.startDispatchID, SessionID: want.sessionID}})
+			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: want.agentID, RuntimeID: want.runtimeID, LaunchID: want.launchID, StartDispatchID: want.startDispatchID, Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: want.sessionID}}})
 		}
 	}
 	if len(actions) == 0 {
@@ -126,9 +126,9 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	rows.Close()
 	for _, action := range reduceRunnerLaunches(desired, observed) {
 		if !h.DaemonHub.NotifyWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, action.eventType, action.payload) {
-			return errors.New("current Workspace Runner unavailable during lifecycle reconcile")
+			return errors.New("current Workspace Runner unavailable during launch reconcile")
 		}
-		slog.Debug("Workspace Runner lifecycle reconciled", "workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID, "event_type", action.eventType, "outcome", "sent", "reason", "desired_running_mismatch")
+		slog.Debug("Workspace Runner launch reconciled", "workspace_id", identity.WorkspaceID, "daemon_id", identity.DaemonID, "event_type", action.eventType, "outcome", "sent", "reason", "desired_running_mismatch")
 	}
 	return nil
 }
@@ -137,10 +137,14 @@ func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemon
 	rows, err := h.DB.Query(ctx, `
 		SELECT desired.agent_id::text, desired.runtime_id::text,
 		       desired.launch_id::text, desired.start_dispatch_id::text,
-		       COALESCE(launch_operation.action_kind <> 'restart'
-		                AND launch_operation.status <> 'succeeded', false)
+		       CASE
+		         WHEN launch_operation.action_kind <> 'restart' THEN ''
+		         ELSE COALESCE(runtime_state.provider_session_id, '')
+		       END
 		FROM agent_runner_launch_projection desired
 		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
+		LEFT JOIN agent_runtime_state runtime_state
+		  ON runtime_state.agent_id = desired.agent_id AND runtime_state.runtime_id = desired.runtime_id
 		LEFT JOIN agent_lifecycle_operation active_operation
 		  ON active_operation.agent_id = desired.agent_id AND active_operation.status = 'running'
 		LEFT JOIN agent_lifecycle_operation launch_operation
@@ -162,14 +166,9 @@ func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemon
 	desired := make([]runnerDesiredLaunch, 0)
 	for rows.Next() {
 		var launch runnerDesiredLaunch
-		var freshSession bool
-		if err := rows.Scan(&launch.agentID, &launch.runtimeID, &launch.launchID, &launch.startDispatchID, &freshSession); err != nil {
+		if err := rows.Scan(&launch.agentID, &launch.runtimeID, &launch.launchID, &launch.startDispatchID, &launch.sessionID); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan desired Runner launch: %w", err)
-		}
-		if freshSession {
-			fresh := ""
-			launch.sessionID = &fresh
 		}
 		desired = append(desired, launch)
 	}
@@ -213,7 +212,7 @@ func (h *Handler) reconcileConnectedRuntimes(ctx context.Context, workspaceID st
 	sort.Strings(daemonIDs)
 	for _, daemonID := range daemonIDs {
 		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identities[daemonID]); err != nil {
-			slog.Warn("Workspace Runner lifecycle reconcile after placement change failed", "workspace_id", workspaceID, "daemon_id", daemonID, "error", err)
+			slog.Warn("Workspace Runner launch reconcile after placement change failed", "workspace_id", workspaceID, "daemon_id", daemonID, "error", err)
 		}
 	}
 }

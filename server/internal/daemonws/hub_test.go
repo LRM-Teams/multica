@@ -249,7 +249,7 @@ func TestWorkspaceRunnerCapabilityBelongsOnlyToCurrentReadyConnection(t *testing
 	hub := NewHub()
 	key := workspaceRunnerKey{daemonID: "daemon-1", workspaceID: "workspace-1"}
 	old := &client{runnerCapabilities: map[string]struct{}{protocol.DaemonCapabilityWorkspaceRunnerAttachment: {}}}
-	current := &client{runnerCapabilities: map[string]struct{}{protocol.DaemonCapabilityAgentLifecycleActions: {}}}
+	current := &client{runnerCapabilities: map[string]struct{}{protocol.DaemonCapabilityWorkspaceRunnerAgentReset: {}}}
 	hub.mu.Lock()
 	hub.byRunner[key] = old
 	hub.mu.Unlock()
@@ -262,7 +262,7 @@ func TestWorkspaceRunnerCapabilityBelongsOnlyToCurrentReadyConnection(t *testing
 	if hub.WorkspaceRunnerSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
 		t.Fatal("replaced Runner lent its Attachment capability to the current connection")
 	}
-	if !hub.WorkspaceRunnerSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityAgentLifecycleActions) {
+	if !hub.WorkspaceRunnerSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityWorkspaceRunnerAgentReset) {
 		t.Fatal("current Runner capability was not visible")
 	}
 }
@@ -1626,7 +1626,7 @@ func TestWorkspaceRunnerAgentResetCommandAndReceiptUseCurrentCapableRunner(t *te
 	command := protocol.WorkspaceRunnerAgentResetWorkspacePayload{
 		OperationID: "operation-1", AgentID: "agent-1",
 	}
-	if !hub.NotifyAgentLifecycleCommand("workspace-1", "daemon-1", protocol.EventDaemonAgentResetWorkspace, command.OperationID, command) {
+	if !hub.NotifyAgentRestartCommand("workspace-1", "daemon-1", protocol.EventDaemonAgentResetWorkspace, command.OperationID, command) {
 		t.Fatal("reset command was not delivered")
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))

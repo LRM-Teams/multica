@@ -263,13 +263,11 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	} else {
 		ack.QueueState = current.QueueState
 	}
-	if payload.SessionID != nil {
-		if runner.configureProviderSession == nil {
-			return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_session_unavailable"), errors.New("managed start provider session owner is unavailable")
-		}
-		if err := runner.configureProviderSession(payload.AgentID, payload.RuntimeID, payload.SessionID); err != nil {
-			return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_session_failed"), fmt.Errorf("configure managed Agent provider session: %w", err)
-		}
+	if runner.configureProviderSession == nil {
+		return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_session_unavailable"), errors.New("managed start provider session owner is unavailable")
+	}
+	if err := runner.configureProviderSession(payload.AgentID, payload.RuntimeID, payload.Config.SessionID); err != nil {
+		return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_session_failed"), fmt.Errorf("configure managed Agent provider session: %w", err)
 	}
 	if err := runner.ensureResidentRuntime(ctx, payload.AgentID, payload.RuntimeID, nil); err != nil {
 		return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_spawn_failed"), fmt.Errorf("start managed Agent provider: %w", err)
@@ -290,10 +288,10 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 		providerSessionID, err := runner.currentProviderSession(payload.AgentID, payload.RuntimeID)
 		if err == nil {
 			session.ProviderSessionID = providerSessionID
-		} else if payload.SessionID != nil {
-			// The explicit Raft config.sessionId is still authoritative when a
-			// rolling-upgrade test/adapter has no durable local session store.
-			session.ProviderSessionID = *payload.SessionID
+		} else {
+			// Raft config.sessionId remains authoritative when a test adapter has
+			// no durable local session store.
+			session.ProviderSessionID = payload.Config.SessionID
 		}
 	}
 	return managedAgentStartOutcome{status: status, session: session}, nil

@@ -730,12 +730,12 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityReminderVersionedCache,
 		protocol.DaemonCapabilityReminderLocalInbox,
 		protocol.DaemonCapabilityReminderTransientInput,
+		protocol.DaemonCapabilityWorkspaceRunnerAttachment,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
 		// Binding children advertise the wire capability so the server can
 		// deliver the machine action. They only forward it to Computer Host;
 		// acceptance and execution do not live in this package.
 		protocol.DaemonCapabilityMachineUpgrade,
-		protocol.DaemonCapabilityAgentSessionReset,
 	}
 	if includeCredentialTransport {
 		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)

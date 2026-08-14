@@ -191,15 +191,37 @@ sequenceDiagram
 
 Failure rule：任一 child prepare 失败，Host 必须 release 所有已经 prepared 的 siblings；child 不得自行 swap machine binary。
 
+## 6.1 Agent Restart parity / 三种重启模式
+
+Raft Web 的产品入口是 `resetAgent(agentId, mode)`，mode 为 `restart | session | full`；Raft Computer 接收离散 `agent:stop`、`agent:reset-workspace`、`agent:start`。Multica 已对齐这组命名和行为，保留自身通用 `{type, payload}` WebSocket envelope。
+
+```mermaid
+flowchart LR
+    UI["resetAgent(agentId, mode)"] --> API["POST /api/members/agents/:id/reset\n{ mode }"]
+    API --> STOP["agent:stop\nexact old launchId"]
+    STOP --> MODE{"mode"}
+    MODE -->|restart| RESUME["agent:start\nconfig.sessionId = canonical session"]
+    MODE -->|session| CLEAR["clear canonical session"]
+    CLEAR --> FRESH["agent:start\nconfig = {}"]
+    MODE -->|full| CLEAR2["clear canonical session"]
+    CLEAR2 --> RESET["agent:reset-workspace"]
+    RESET --> PROOF["terminal reset result\nsame operationId"]
+    PROOF --> FRESH2["agent:start\nconfig = {}"]
+```
+
+Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action_kind`、`execution_mode` 或 scheduling mode。`AgentRestartOperation` 是 durable business record；旧表名 `agent_lifecycle_operation` 只保留作物理存储兼容。
+
+两项有意 stronger-than-Raft 的 correctness proof：Stop 只接受 exact `launch_id` 的 inactive fact；Full Reset 必须等同 operation 的 terminal reset receipt 才能 start。断线重连重放同一 operation/launch/start-dispatch fence，不生成第二套 restart owner。Agent Restart 不产生专属 toast。
+
 ## 7. Generation model / 两级任期
 
 | Identity | Multica meaning | Raft v1.0.16 relation |
 | --- | --- | --- |
 | `computer_generation` | 整机 Computer resident tenure；successor replaces predecessor | 语义对应 Service replacement / handoff tenure；未验证 Raft 使用同名字段 |
 | `runner_generation` | 一个 Binding slot 每次 spawn 的独立 tenure；与 PID 共同 fence child | 语义对应 current runner process generation / inactive-process fence |
-| `launch_id` / process identity | child 内 Agent lifecycle 与 provider process identity | Raft APM 同样区分 external launch identity 与 per-process instance identity |
+| `launch_id` / process identity | child 内 Agent process launch tenure 与 provider process identity | Raft APM 同样区分 external launch identity 与 per-process instance identity |
 
-因此，Raft 未被声称拥有 `computer_generation` 或 `runner_generation` 这两个同名字段。这里对齐的是 lifecycle semantics，不是 wire field spelling。
+因此，Raft 未被声称拥有 `computer_generation` 或 `runner_generation` 这两个同名字段。这里对齐的是 process-tenure semantics，不是 wire field spelling。
 
 ## 8. Isolation acceptance matrix / 隔离验收
 
@@ -214,8 +236,8 @@ Failure rule：任一 child prepare 失败，Host 必须 release 所有已经 pr
 
 ## 9. Architecture findings / 后续优先级
 
-1. **Agent lifecycle single owner — Strong**
-   旧 Lifecycle Operation 与 Runner desired/observed reconcile 仍可能形成 competing owners。应 hard cut 到一条 control path，不增加 adapter dual-write。
+1. **Agent Restart single owner — Implemented**
+   Product operation 只编排 Raft 三个离散 child command；Runner desired/observed reconcile 仅在 persisted `starting` step 重放同一 launch fence，不再存在 composite dispatch、heartbeat queue 或第二套 stop/start owner。
 
 2. **Machine lifecycle deep module — Implemented**
    Upgrade/restart phase ordering、durable journal 与 successor attestation 已归 `internal/computer`；CLI 仅保留 process-launch adapter。
@@ -247,6 +269,12 @@ Failure rule：任一 child prepare 失败，Host 必须 release 所有已经 pr
 - `server/internal/computer/binding_child_protocol.go`
 - `server/internal/daemon/binding_child_runtime.go`
 - `server/internal/daemon/binding_drain.go`
+- `server/internal/handler/agent_restart.go`
+- `server/internal/handler/agent_restart_orchestrator.go`
+- `server/internal/handler/agent_restart_test.go`
+- `server/pkg/protocol/workspace_runner_activity.go`
+- `packages/core/agents/agent-restart.ts`
+- `packages/core/agents/use-agent-restart.ts`
 - `server/internal/computer/architecture_boundary_test.go`
 - `server/internal/daemon/architecture_boundary_test.go`
 

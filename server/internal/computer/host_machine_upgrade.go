@@ -152,7 +152,7 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	if !ok {
 		return errors.New("machine action Runtime belongs to another Binding child")
 	}
-	if ack.RuntimeGone || ack.PendingModelList != nil || ack.PendingLocalSkills != nil || ack.PendingLocalSkillImport != nil || len(ack.PendingLocalSkillImports) > 0 || ack.PendingMemoryCuration != nil || len(ack.PendingAgentLifecycleOperations) > 0 {
+	if ack.RuntimeGone || ack.PendingModelList != nil || ack.PendingLocalSkills != nil || ack.PendingLocalSkillImport != nil || len(ack.PendingLocalSkillImports) > 0 || ack.PendingMemoryCuration != nil {
 		return errors.New("Binding child attempted to forward a Workspace execution action")
 	}
 	upgrade.mu.Lock()

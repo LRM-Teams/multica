@@ -70,7 +70,7 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
-		if err := h.resumeAgentLifecycleOperations(ctx, identity); err != nil {
+		if err := h.resumeAgentRestartOperations(ctx, identity); err != nil {
 			return err
 		}
 		// Raft establishes APM ownership before it offers durable deliveries.
@@ -94,7 +94,7 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status); err != nil {
 			return err
 		}
-		handled, err := h.advanceAgentLifecycleFromStatus(ctx, identity, status)
+		handled, err := h.advanceAgentRestartFromStatus(ctx, identity, status)
 		if err != nil {
 			return err
 		}

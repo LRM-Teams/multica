@@ -7,7 +7,7 @@ import type { Agent, UpdateAgentRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import {
   agentDetailKeys,
-  agentLifecycleActionState,
+  agentRestartModeState,
 } from "@multica/core/agents";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { useT } from "../../i18n";
@@ -47,7 +47,7 @@ function touchesExecutionConfig(data: Record<string, unknown>): boolean {
  *    agent and leave Runtime Config stale until a hard reload — LRM-296).
  *    List is still invalidated so directory consumers converge.
  *  - When the patch touches runtime/model/thinking (execution config), also
- *    kick the existing agent lifecycle `restart` (same path as Restart
+ *    call Raft's `restart` mode (same path as the Restart
  *    button — Parker A2) so the new config applies immediately (Frank
  *    2026-08-04 / Raft). Preflight gates offline / unsupported (A3/A4);
  *    restart failure does not roll back the saved config.
@@ -133,36 +133,23 @@ export function useUpdateAgent(wsId: string) {
         return;
       }
 
-      // A1/A2/A3/A4 — save first, then reuse lifecycle restart when preflight allows.
+      // Save first, then reuse the same Raft restart mode as the profile action.
       try {
-        const preflight = await api.getAgentLifecyclePreflight(id);
-        const restartState = agentLifecycleActionState(preflight, "restart");
+        const preflight = await api.getAgentRestartPreflight(id);
+        const restartState = agentRestartModeState(preflight, "restart");
         // Same gate as the profile Restart button: capability + supported.
         const canForce =
           preflight.provider_capabilities?.force_restart === true;
         if (!canForce || !restartState.supported) {
-          toast.success(t(($) => $.detail.agent_updated_next_run_toast));
+          toast.success(t(($) => $.detail.agent_updated_toast));
           return;
         }
-        await api.startAgentLifecycleAction(
-          id,
-          "restart",
-          crypto.randomUUID(),
-        );
-        if (restartState.execution_mode === "after_current_run") {
-          // A3: scheduled after busy run — don't claim "already restarted".
-          toast.success(t(($) => $.detail.agent_updated_restart_scheduled_toast));
-        } else {
-          toast.success(t(($) => $.detail.agent_updated_toast));
-        }
-      } catch (restartErr) {
-        // Config already saved — surface restart failure without rolling back.
+        await api.resetAgent(id, "restart", crypto.randomUUID());
         toast.success(t(($) => $.detail.agent_updated_toast));
-        showErrorToast(
-          restartErr instanceof Error
-            ? restartErr.message
-            : t(($) => $.detail.restart_after_update_failed_toast),
-        );
+      } catch {
+        // Config already saved. Restart owns no toast surface; the explicit
+        // Restart modal / agent state remains the source of restart feedback.
+        toast.success(t(($) => $.detail.agent_updated_toast));
       }
     } catch (e) {
       if (prevAgentFromList || prevAgentFromDetail) {

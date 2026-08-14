@@ -898,8 +898,8 @@ func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID
 	}
 }
 
-func (h *Hub) NotifyAgentLifecycleCommand(workspaceID, daemonID, eventType, commandID string, payload any) bool {
-	if h == nil || workspaceID == "" || daemonID == "" || commandID == "" || !validAgentLifecycleCommand(eventType, payload) {
+func (h *Hub) NotifyAgentRestartCommand(workspaceID, computerID, eventType, commandID string, payload any) bool {
+	if h == nil || workspaceID == "" || computerID == "" || commandID == "" || !validAgentRestartCommand(eventType, payload) {
 		return false
 	}
 	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
@@ -910,7 +910,7 @@ func (h *Hub) NotifyAgentLifecycleCommand(workspaceID, daemonID, eventType, comm
 	if eventType == protocol.EventDaemonAgentResetWorkspace {
 		capability = protocol.DaemonCapabilityWorkspaceRunnerAgentReset
 	}
-	return h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, capability, frame)
+	return h.notifyCapableWorkspaceRunnerFrame(computerID, workspaceID, capability, frame)
 }
 
 func (h *Hub) notifyFrame(runtimeID string, data []byte, eventID string) (delivered bool, deduped bool) {

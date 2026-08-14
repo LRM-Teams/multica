@@ -117,9 +117,9 @@ import type {
   DashboardRunTimeDaily,
   MachineUpgrade,
   RuntimeRestart,
-  AgentLifecycleActionKind,
-  AgentLifecyclePreflight,
-  AgentLifecycleOperation,
+  AgentRestartMode,
+  AgentRestartPreflight,
+  AgentRestartOperation,
   RuntimeModelListRequest,
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
@@ -305,6 +305,8 @@ import {
   EMPTY_AGENT_FILE_CONTENT_RESPONSE,
   EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_AGENT_HEALTH_RESPONSE,
+  EMPTY_AGENT_RESTART_OPERATION,
+  EMPTY_AGENT_RESTART_PREFLIGHT,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
@@ -326,6 +328,8 @@ import {
   AgentFileContentResponseSchema,
   AgentFilesResponseSchema,
   AgentHealthResponseSchema,
+  AgentRestartOperationSchema,
+  AgentRestartPreflightSchema,
   RunnerActivityResponseSchema,
   EMPTY_RUNNER_ACTIVITY_RESPONSE,
   RunnerActivitySummariesResponseSchema,
@@ -1792,33 +1796,52 @@ export class ApiClient {
     return this.fetch(`/api/members/agents/${id}/restore`, { method: "POST" });
   }
 
-  // Agent lifecycle actions (#632/#633). Preflight is the server-authoritative
-  // source for per-action enable/disable + immediate-vs-scheduled — the FE never
+  // Raft-aligned Agent reset modes. Preflight is the server-authoritative
+  // source for per-mode enable/disable — the FE never
   // derives active/idle from `agent.status`.
-  async getAgentLifecyclePreflight(id: string): Promise<AgentLifecyclePreflight> {
-    return this.fetch(`/api/members/agents/${id}/lifecycle`);
+  async getAgentRestartPreflight(id: string): Promise<AgentRestartPreflight> {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/reset`);
+    return parseWithFallback(
+      raw,
+      AgentRestartPreflightSchema,
+      EMPTY_AGENT_RESTART_PREFLIGHT,
+      { endpoint: "GET /api/members/agents/{id}/reset" },
+    );
   }
 
-  // Client sends only `action_kind` (never a path/force/runtime_id). The UUID
-  // Idempotency-Key makes a resend return the same operation; a full_reset that
-  // is not executable-now is rejected here (never scheduled).
-  async startAgentLifecycleAction(
+  // Client sends only Raft's `mode` (never a path/force/runtime_id). The UUID
+  // Idempotency-Key makes a resend return the same operation.
+  async resetAgent(
     id: string,
-    actionKind: AgentLifecycleActionKind,
+    mode: AgentRestartMode,
     idempotencyKey: string,
-  ): Promise<AgentLifecycleOperation> {
-    return this.fetch(`/api/members/agents/${id}/lifecycle`, {
+  ): Promise<AgentRestartOperation> {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/reset`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ action_kind: actionKind }),
+      body: JSON.stringify({ mode }),
     });
+    return parseWithFallback(
+      raw,
+      AgentRestartOperationSchema,
+      EMPTY_AGENT_RESTART_OPERATION,
+      { endpoint: "POST /api/members/agents/{id}/reset" },
+    );
   }
 
-  async getAgentLifecycleOperation(
+  async getAgentRestartOperation(
     id: string,
     operationId: string,
-  ): Promise<AgentLifecycleOperation> {
-    return this.fetch(`/api/members/agents/${id}/lifecycle/${operationId}`);
+  ): Promise<AgentRestartOperation> {
+    const raw = await this.fetch<unknown>(
+      `/api/members/agents/${id}/reset/${operationId}`,
+    );
+    return parseWithFallback(
+      raw,
+      AgentRestartOperationSchema,
+      EMPTY_AGENT_RESTART_OPERATION,
+      { endpoint: "GET /api/members/agents/{id}/reset/{operationId}" },
+    );
   }
 
   // Bulk-cancel every active task (queued/dispatched/running) for the agent.

@@ -8,16 +8,16 @@ import type { Agent } from "@multica/core/types";
 import { agentDetailKeys } from "@multica/core/agents";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 
-// `api.updateAgent` is the save path; lifecycle preflight + startAgentLifecycle
-// cover the post-save restart orchestration (task #33 / Parker A1–A6).
+// `api.updateAgent` is the save path; reset preflight + `restart` mode cover
+// the post-save process replacement.
 const mockUpdateAgent = vi.hoisted(() => vi.fn());
 const mockGetPreflight = vi.hoisted(() => vi.fn());
 const mockStartLifecycle = vi.hoisted(() => vi.fn());
 vi.mock("@multica/core/api", () => ({
   api: {
     updateAgent: (...args: unknown[]) => mockUpdateAgent(...args),
-    getAgentLifecyclePreflight: (...args: unknown[]) => mockGetPreflight(...args),
-    startAgentLifecycleAction: (...args: unknown[]) => mockStartLifecycle(...args),
+    getAgentRestartPreflight: (...args: unknown[]) => mockGetPreflight(...args),
+    resetAgent: (...args: unknown[]) => mockStartLifecycle(...args),
   },
 }));
 
@@ -37,10 +37,6 @@ vi.mock("../../i18n", () => ({
         detail: {
           agent_updated_toast: string;
           update_failed_toast: string;
-          agent_updated_restart_toast: string;
-          agent_updated_restart_scheduled_toast: string;
-          agent_updated_next_run_toast: string;
-          restart_after_update_failed_toast: string;
         };
       }) => ReactNode,
     ) =>
@@ -48,35 +44,30 @@ vi.mock("../../i18n", () => ({
         detail: {
           agent_updated_toast: "Agent updated",
           update_failed_toast: "Update failed",
-          agent_updated_restart_toast: "Saved. Restarting…",
-          agent_updated_restart_scheduled_toast: "Saved. Restart scheduled…",
-          agent_updated_next_run_toast: "Saved. Next run…",
-          restart_after_update_failed_toast: "Restart failed",
         },
       }),
   }),
 }));
 
 import { useUpdateAgent } from "./use-update-agent";
-import type { AgentLifecyclePreflight } from "@multica/core/types";
+import type { AgentRestartPreflight } from "@multica/core/types";
 
-/** Default preflight: force_restart + immediate restart supported (happy path for execution-config saves). */
+/** Default preflight: force_restart + restart supported. */
 function makePreflight(
-  overrides: Partial<AgentLifecyclePreflight> & {
-    restart?: Partial<AgentLifecyclePreflight["actions"]["restart"]>;
+  overrides: Partial<AgentRestartPreflight> & {
+    restart?: Partial<AgentRestartPreflight["actions"]["restart"]>;
     force_restart?: boolean;
   } = {},
-): AgentLifecyclePreflight {
+): AgentRestartPreflight {
   const { restart: restartOverride, force_restart = true, ...rest } = overrides;
   return {
     actions: {
       restart: {
         supported: true,
-        execution_mode: "immediate",
         ...restartOverride,
       },
-      reset_session_restart: { supported: true, execution_mode: "immediate" },
-      full_reset_restart: { supported: true, execution_mode: "immediate" },
+      session: { supported: true },
+      full: { supported: true },
     },
     provider_capabilities: {
       force_restart,
@@ -235,8 +226,8 @@ describe("useUpdateAgent — agent detail cache (LRM-292 profile / panel)", () =
   });
 });
 
-describe("useUpdateAgent — restart after execution-config save (task #33 / A1–A6)", () => {
-  it("A1/A2: model change → preflight + lifecycle restart (same path as Restart button)", async () => {
+describe("useUpdateAgent — restart after execution-config save", () => {
+  it("model change → preflight + Raft restart mode", async () => {
     const { result } = setup([makeAgent()]);
     mockUpdateAgent.mockResolvedValue(makeAgent({ model: "claude-opus-4-8" }));
 
@@ -283,7 +274,7 @@ describe("useUpdateAgent — restart after execution-config save (task #33 / A1�
     );
   });
 
-  it("A4: force_restart false → save + next-run toast, no lifecycle start", async () => {
+  it("force_restart false → save normally, no restart-specific toast", async () => {
     const { result } = setup([makeAgent()]);
     mockUpdateAgent.mockResolvedValue(makeAgent({ model: "claude-opus-4-8" }));
     mockGetPreflight.mockResolvedValue(makePreflight({ force_restart: false }));
@@ -291,10 +282,10 @@ describe("useUpdateAgent — restart after execution-config save (task #33 / A1�
     await result.current("agent-1", { model: "claude-opus-4-8" });
 
     expect(mockStartLifecycle).not.toHaveBeenCalled();
-    expect(mockToastSuccess).toHaveBeenCalledWith("Saved. Next run…");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Agent updated");
   });
 
-  it("A4: restart unsupported → next-run toast", async () => {
+  it("A4: restart unsupported → save normally, no restart-specific toast", async () => {
     const { result } = setup([makeAgent()]);
     mockUpdateAgent.mockResolvedValue(makeAgent({ model: "claude-opus-4-8" }));
     mockGetPreflight.mockResolvedValue(
@@ -304,26 +295,10 @@ describe("useUpdateAgent — restart after execution-config save (task #33 / A1�
     await result.current("agent-1", { model: "claude-opus-4-8" });
 
     expect(mockStartLifecycle).not.toHaveBeenCalled();
-    expect(mockToastSuccess).toHaveBeenCalledWith("Saved. Next run…");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Agent updated");
   });
 
-  it("A3: after_current_run → scheduled toast (not 'already restarted')", async () => {
-    const { result } = setup([makeAgent()]);
-    mockUpdateAgent.mockResolvedValue(makeAgent({ model: "claude-opus-4-8" }));
-    mockGetPreflight.mockResolvedValue(
-      makePreflight({
-        restart: { supported: true, execution_mode: "after_current_run" },
-      }),
-    );
-
-    await result.current("agent-1", { model: "claude-opus-4-8" });
-
-    expect(mockStartLifecycle).toHaveBeenCalled();
-    expect(mockToastSuccess).toHaveBeenCalledWith("Saved. Restart scheduled…");
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("Saved. Restarting…");
-  });
-
-  it("restart failure after save: keeps config, surfaces error, does not throw", async () => {
+  it("restart failure after save: keeps config without restart toast or throw", async () => {
     const { qc, result } = setup([makeAgent()]);
     mockUpdateAgent.mockResolvedValue(makeAgent({ model: "claude-opus-4-8" }));
     mockStartLifecycle.mockRejectedValue(new Error("daemon offline"));
@@ -335,6 +310,6 @@ describe("useUpdateAgent — restart after execution-config save (task #33 / A1�
     // Config remains saved in cache.
     expect(cachedAgent(qc, "agent-1")!.model).toBe("claude-opus-4-8");
     expect(mockToastSuccess).toHaveBeenCalledWith("Agent updated");
-    expect(mockShowErrorToast).toHaveBeenCalledWith("daemon offline");
+    expect(mockShowErrorToast).not.toHaveBeenCalled();
   });
 });

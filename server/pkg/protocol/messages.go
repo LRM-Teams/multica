@@ -546,10 +546,6 @@ const (
 	// Reminder system input. Unlike canonical Message delivery, this transport
 	// is best-effort and creates no queue, receipt, or reconnect replay.
 	DaemonCapabilityReminderTransientInput = "reminder_transient_owner_input_v1"
-	// DaemonCapabilityAgentLifecycleActions is the retired heartbeat lifecycle
-	// transport capability. New daemons deliberately do not advertise it so a
-	// mixed-version server/daemon pair fails closed during rollout.
-	DaemonCapabilityAgentLifecycleActions = "agent_lifecycle_actions_v1"
 	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
 	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"
@@ -557,10 +553,6 @@ const (
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.
 	DaemonCapabilityMachineUpgrade = "machine_upgrade_v1"
-	// DaemonCapabilityAgentSessionReset gates the server-backed clearing of
-	// canonical and legacy provider resume pointers. Older daemons advertised
-	// lifecycle actions but only implemented plain process restart.
-	DaemonCapabilityAgentSessionReset = "agent_session_reset_v1"
 	// DaemonCapabilityWorkspaceRunnerAttachment selects the Runner Attachment
 	// command/replay contract. It is intentionally additive: all previously
 	// advertised daemon capabilities remain independently meaningful.

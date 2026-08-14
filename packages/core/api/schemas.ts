@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type {
   Agent,
+  AgentRestartOperation,
+  AgentRestartPreflight,
   AgentPresenceResponse,
   AgentFileContentResponse,
   AgentFilesResponse,
@@ -73,6 +75,60 @@ import type {
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 import type { ConversationHandleLookup } from "../conversations/types";
+
+const AgentRestartModeStateSchema = z.object({
+  supported: z.boolean().catch(false),
+  disabled_reason: z.string().nullish(),
+}).loose();
+
+/** Defensive desktop boundary for Raft's three Agent reset modes. */
+export const AgentRestartOperationSchema = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  runtime_id: z.string().nullable().default(null),
+  mode: z.enum(["restart", "session", "full"]).catch("restart"),
+  status: z.enum(["running", "succeeded", "failed"]).catch("failed"),
+  step: z.string().nullish(),
+  reason_code: z.string().nullish(),
+  created_at: z.string(),
+  started_at: z.string().nullish(),
+  finished_at: z.string().nullish(),
+}).loose();
+
+export const EMPTY_AGENT_RESTART_OPERATION: AgentRestartOperation = {
+  id: "",
+  agent_id: "",
+  runtime_id: null,
+  mode: "restart",
+  status: "failed",
+  reason_code: "invalid_server_response",
+  created_at: "",
+};
+
+export const AgentRestartPreflightSchema = z.object({
+  actions: z.object({
+    restart: AgentRestartModeStateSchema,
+    session: AgentRestartModeStateSchema,
+    full: AgentRestartModeStateSchema,
+  }),
+  active_operation: AgentRestartOperationSchema.nullish(),
+  provider_capabilities: z.object({
+    force_restart: z.boolean().catch(false),
+    custom_model_id: z.boolean().catch(false),
+    model_selection: z.boolean().catch(false),
+    thinking_discovery: z.boolean().catch(false),
+    canonical_resident: z.boolean().catch(false),
+    needs_inline_system_prompt: z.boolean().catch(false),
+  }).loose().optional(),
+}).loose();
+
+export const EMPTY_AGENT_RESTART_PREFLIGHT: AgentRestartPreflight = {
+  actions: {
+    restart: { supported: false, disabled_reason: "unavailable" },
+    session: { supported: false, disabled_reason: "unavailable" },
+    full: { supported: false, disabled_reason: "unavailable" },
+  },
+};
 
 export const NotePageIssueRefSchema: z.ZodType<NotePageIssueRef> = z.object({
   type: z.enum(["issue", "agent", "run", "channel"]).catch("issue"),

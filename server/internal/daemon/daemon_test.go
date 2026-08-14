@@ -49,18 +49,11 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
 		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
 	}
-	// The direct Runner capability replaces the old heartbeat lifecycle
-	// capability. During a rolling deploy, mixed old/new pairs fail closed
-	// instead of dispatching both control paths.
-	if containsString(legacy, protocol.DaemonCapabilityAgentLifecycleActions) || containsString(capable, protocol.DaemonCapabilityAgentLifecycleActions) {
-		t.Fatalf("registration retained legacy heartbeat lifecycle capability: legacy=%#v capable=%#v", legacy, capable)
+	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAttachment) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
+		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAttachment, legacy, capable)
 	}
 	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) {
 		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAgentReset, legacy, capable)
-	}
-	if !containsString(legacy, protocol.DaemonCapabilityAgentSessionReset) ||
-		!containsString(capable, protocol.DaemonCapabilityAgentSessionReset) {
-		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityAgentSessionReset, legacy, capable)
 	}
 }
 

@@ -68,11 +68,16 @@ multica computer upgrade --target-version <version>
 ```
 
 `computer upgrade` is the only local upgrade command. It first checks the
-machine-wide resident. A live resident receives the request through its
-owner-authenticated loopback control surface and owns download, verification,
-handoff, rollback, and convergence. If no resident owns the machine, the command
-may swap the on-PATH Computer (`$HOME/.local/bin/multica`) under the machine lock;
-that offline result is not proof of a running successor. Held resident ownership
+machine-wide resident. With a live resident, the CLI uses the saved human
+session to create the canonical server Machine Upgrade operation, then delivers
+that same operation ID through the owner-authenticated loopback surface. The
+server may concurrently deliver it over the DaemonCore WebSocket; Computer Host
+deduplicates both paths by operation ID and remains the sole owner of download,
+verification, handoff, rollback, and convergence. Host never uses a Workspace
+execution credential to create a human operation. If no resident owns the
+machine, the command may swap the on-PATH Computer (`$HOME/.local/bin/multica`)
+under the machine lock; that offline result is not proof of a running successor.
+Held resident ownership
 with unavailable control returns `upgrade_service_unreachable` and never falls
 back to offline activation. Omit `--target-version` to use the package selected
 by the active production or test environment. There is no top-level

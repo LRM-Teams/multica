@@ -350,6 +350,7 @@
 - 升级先把校验过的字节写到 ephemeral scratch，再 `SwapExecutable`：当前文件 rename 成 `.prev`，新文件落到同一 PATH。失败必须把 `.prev` 换回去。回滚只认 `.prev`，不再走 Previous generation CAS。
 - verify / recovery 只能 exec 那个 scratch 文件的 `--version`。`runStageUpdate` 的 status 字符串不是路径；journal `staged_path` 也必须是普通文件，缺失就 restage，不能拿 status 当可执行文件。
 - live resident 是唯一 mutation owner；无 resident 才允许离线 swap。Homebrew prefix 不自替换。
+- live CLI 先用保存的 human session 创建 canonical server operation，再把同一 operation ID 交给 Host loopback；server 的 `computer:upgrade` WS 派发与 loopback 可并发到达，Host 按 operation ID 去重。Workspace execution credential 只接受、推进和 attest 已有 operation，不能反调 human route 创建 operation。
 - **物**：`server/internal/cli/exec_swap.go`、`stage_release.go`、`lifecycle_upgrade.go`；`TestSwapExecutable*`、`TestCommitStagedActivationSwapsInstallPathAndKeepsPrev`、`TestVerifyStagedBinaryUsesScratchPathFromRunStageUpdateStatus`、`TestRecoverStagedJournal*`、offline `computer upgrade` subprocess 证明 PATH + `.prev`。
 
 ### 4.12 Daemon 更新观测必须是单调、持久、可降级的事实 — `可执行`（① PostgreSQL daemon scope + ② typed envelope + ③ daemon 单一 coordinator + ⑤重启/CAS 回归；owner: @Barry）

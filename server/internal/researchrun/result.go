@@ -619,6 +619,9 @@ func CanonicalURL(raw string) (string, error) {
 	if u.Hostname() == "" {
 		return "", errors.New("URL host is required")
 	}
+	if u.User != nil {
+		return "", errors.New("URL must not contain embedded credentials")
+	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	host := strings.ToLower(u.Hostname())
 	port := u.Port()

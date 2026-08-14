@@ -45,7 +45,7 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 	if rootTitle == "" {
 		rootTitle = "调研目标"
 	}
-	rootStatus := projectRunStatus(snap.Run.Status)
+	rootStatus := projectGoalStatus(snap.Run.Status)
 	rootPayload := runGraphPayload(map[string]any{
 		"projection":        "run_v2",
 		"kind":              runGraphKindRoot,
@@ -573,15 +573,16 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 	return nodes, edges
 }
 
-func sortedRunGraphClaimIDs(claims []researchrun.Claim) []string {
-	ids := make([]string, 0, len(claims))
-	for _, claim := range claims {
-		if id := strings.TrimSpace(claim.ID); id != "" {
-			ids = append(ids, id)
-		}
+// A Run failure is an execution outcome, not a lifecycle transition for the
+// research goal. Keep the goal active so a lost runtime cannot repaint the
+// origin and already accepted knowledge as failed.
+func projectGoalStatus(status researchrun.RunStatus) string {
+	switch status {
+	case researchrun.RunStatusCancelled, researchrun.RunStatusArchived:
+		return "abandoned"
+	default:
+		return "active"
 	}
-	sort.Strings(ids)
-	return ids
 }
 
 func applyRunGraphTreeFields(nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) {

@@ -26,6 +26,7 @@ type resultAcceptanceStore interface {
 	GetTask(context.Context, string, string) (Task, error)
 	ListAttempts(context.Context, string) ([]Attempt, error)
 	ListFleetMembers(context.Context, string, string) ([]FleetMember, error)
+	GetCurrentContract(context.Context, string, string) (ResearchContract, error)
 	AcceptResult(context.Context, AcceptResultInput) (AcceptResultOutcome, error)
 	SessionArtifactPassportEnabled(context.Context, string, string) (bool, error)
 	AttemptHasDispatchManifest(context.Context, string, string, string) (bool, error)
@@ -63,6 +64,13 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 	}
 	result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, submission.Raw, task, run.Config)
 	if err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	contract, err := module.store.GetCurrentContract(ctx, submission.SessionID, submission.WorkspaceID)
+	if err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	if err = validateEvaluationSubjectResult(contract.SourcePolicy, result); err != nil {
 		return AcceptResultOutcome{}, err
 	}
 	members, err := module.store.ListFleetMembers(ctx, submission.SessionID, submission.WorkspaceID)

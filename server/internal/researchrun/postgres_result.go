@@ -951,7 +951,80 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			return 0, err
 		}
 	}
+	for _, taskID := range createdTaskIDs {
+		if err = persistMaterializedTaskRelationshipReferencesTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, taskID,
+		); err != nil {
+			return 0, err
+		}
+	}
 	return created, nil
+}
+
+func persistMaterializedTaskRelationshipReferencesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, taskID string,
+) error {
+	var questionID, parentTaskID string
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(question_id::text, ''), COALESCE(parent_task_id::text, '')
+		FROM research_task
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+	`, workspaceID, sessionID, taskID).Scan(&questionID, &parentTaskID); err != nil {
+		return err
+	}
+	if questionID != "" {
+		if err := persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			taskID, ArtifactKindTask, questionID, ArtifactKindQuestion,
+			"task_question", "task_materialization", 0,
+		); err != nil {
+			return err
+		}
+	}
+	if parentTaskID != "" {
+		if err := persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			taskID, ArtifactKindTask, parentTaskID, ArtifactKindTask,
+			"task_parent", "task_materialization", 0,
+		); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT depends_on_task_id::text
+		FROM research_task_dependency
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND task_id=$3::uuid
+		ORDER BY depends_on_task_id
+	`, workspaceID, sessionID, taskID)
+	if err != nil {
+		return err
+	}
+	dependencies := make([]string, 0)
+	for rows.Next() {
+		var dependencyID string
+		if err = rows.Scan(&dependencyID); err != nil {
+			rows.Close()
+			return err
+		}
+		dependencies = append(dependencies, dependencyID)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for ordinal, dependencyID := range dependencies {
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			taskID, ArtifactKindTask, dependencyID, ArtifactKindTask,
+			"task_dependency", "task_materialization", ordinal,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateDeclaredTaskDependencies(

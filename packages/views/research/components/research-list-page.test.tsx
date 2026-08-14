@@ -107,6 +107,18 @@ vi.mock("./research-session-row", () => ({
   ),
 }));
 
+vi.mock("./research-home-overview", () => ({
+  ResearchHomeOverview: () => <div data-testid="research-home-overview" />,
+}));
+
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: () => <span data-testid="actor-avatar" />,
+}));
+
+vi.mock("../../i18n/time", () => ({
+  Time: () => <span data-testid="time" />,
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (fn: (dict: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
@@ -396,7 +408,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
 
     const desc = screen.getByText(enResearch.home.hero_desc);
     expect(desc.className).not.toContain("max-w-[36rem]");
-    expect(desc.className).toContain("md:line-clamp-1");
+    expect(desc.className).toContain("truncate");
 
     const goal = screen.getByTestId("research-create-goal");
     expect(goal.className).toContain("min-h-10");

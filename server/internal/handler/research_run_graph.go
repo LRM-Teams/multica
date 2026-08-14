@@ -628,15 +628,17 @@ func applyRunGraphTreeFields(nodes []ResearchGraphNodeResp, edges []ResearchGrap
 }
 
 func shouldProjectGate(snap researchrun.RunSnapshot) bool {
-	if snap.Gate.Passed || len(snap.Gate.Findings) > 0 {
+	if snap.Gate.Passed {
 		return true
 	}
 	switch snap.Run.Status {
 	case researchrun.RunStatusAwaitingUserConfirm, researchrun.RunStatusCompleted:
 		return true
-	default:
-		return false
 	}
+	// s4_delivery is the canonical stage at which the final quality gate is
+	// actionable. Earlier findings are readiness facts used internally by the
+	// scheduler, not failed evaluations that belong on the research graph.
+	return snap.Run.CurrentStage == "s4_delivery" && len(snap.Gate.Findings) > 0
 }
 
 func runGraphNodeID(sessionID, kind, entityID string) string {

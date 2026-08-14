@@ -144,11 +144,11 @@ func appendProducedArtifactVersionTx(
 		  old_access_level, new_access_level
 		) VALUES (
 		  $1::uuid,$2::uuid,$3,'current_version',$4::uuid,
-		  $5,$6,$7,$8,$9,$9
+		  $5,$6,$7,$8,NULL,NULL
 		)
 	`, workspaceID, sessionID, watermark, artifactID,
 		state.EligibilityRevision, state.EligibilityRevision+1,
-		state.Version, nextVersion, string(state.AccessLevel))
+		state.Version, nextVersion)
 	return err
 }
 
@@ -194,7 +194,7 @@ func recordVerificationPolicyMutationTx(ctx context.Context, tx pgx.Tx, workspac
 				WHERE mutation.workspace_id = p.workspace_id
 				  AND mutation.session_id = p.session_id
 				  AND mutation.artifact_id = p.id
-				  AND mutation.mutation_kind = 'verification'
+				  AND mutation.mutation_kind IN ('verification', 'current_version')
 				  AND mutation.watermark = watermark.value
 			  )
 			RETURNING p.eligibility_revision, watermark.value

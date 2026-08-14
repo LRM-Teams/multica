@@ -510,6 +510,7 @@
     "task_meta": "Task",
     "agent_legend": "Agent {{id}}",
     "kinds": {
+      "goal": "Goal",
       "task": "Task",
       "attempt": "Attempt",
       "result_artifact": "Result artifact",
@@ -1125,6 +1126,14 @@
     "projection": {
       "classic": "Classic",
       "classic_hint": "Classic projection view; live V6 projection is not available for this session"
+    },
+    "projection_contract": {
+      "title": "Backend projection conflicts with the research stage",
+      "body": "The session is still in {{stage}}, but the backend returned a failed final quality gate ({{codes}}). That gate is isolated from the canvas; real task and attempt failures remain visible.",
+      "details": "View backend-ready error details",
+      "copy": "Copy error details",
+      "copied": "Copied",
+      "copy_failed": "Copy failed because the browser denied clipboard access. Expand the error details and copy them manually."
     },
     "lens_group": "Display lenses",
     "lens": {

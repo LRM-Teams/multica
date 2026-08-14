@@ -400,7 +400,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
 				continue
 			}
-			ack, err := runner.registerManagedAgentStart(start)
+			ack, replayed, err := runner.registerManagedAgentStartOnce(start)
 			if err != nil {
 				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {
@@ -413,6 +413,23 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				return err
 			}
 			connection.deliveries.Resume(start.AgentID, start.LaunchID)
+			if replayed {
+				// A control cycle sends one heartbeat per Runtime, so the server
+				// may re-offer this immutable dispatch before the first async
+				// provider start reports Active. ACK every replay, but preserve
+				// Raft's hasStarting fence: only the first receipt owns startup.
+				// If startup already completed and its status was lost, re-drive
+				// the terminal status without spawning another provider.
+				if current, ok := runner.processes.Snapshot(start.AgentID); ok && current.LaunchID == start.LaunchID && current.QueueState == protocol.AgentStartQueueRunning {
+					status := protocol.AgentStatusPayload{AgentID: start.AgentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}
+					if err := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); err != nil {
+						failConnection(err)
+						continue
+					}
+					runner.publishManagedAgentStartActivity(start.AgentID, start.RuntimeID)
+				}
+				continue
+			}
 			go func() {
 				// Provider startup belongs to the Runner, not the socket that
 				// delivered agent:start. A Machine Upgrade successor can drop

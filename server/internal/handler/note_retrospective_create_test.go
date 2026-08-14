@@ -246,12 +246,11 @@ func TestCreateNoteRetrospectiveWeekUsesLayeredSummaries(t *testing.T) {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	now := time.Now().UTC()
-	// Anchor to a Wednesday so the week window is stable.
-	anchor := now
-	for anchor.Weekday() != time.Wednesday {
-		anchor = anchor.AddDate(0, 0, -1)
-	}
+	// Keep this window disjoint from current-day retrospective tests. Those
+	// tests intentionally create reusable day pages in the shared fixture
+	// workspace, which must not silently change this test from synthesis to
+	// reuse based on execution order.
+	anchor := time.Date(2040, time.January, 4, 0, 0, 0, 0, time.UTC)
 	dayLabel := anchor.Format("2006-01-02")
 
 	issueID, _ := createIssueForNoteRefTest(t, testWorkspaceID, "Week layered "+uuid.NewString())

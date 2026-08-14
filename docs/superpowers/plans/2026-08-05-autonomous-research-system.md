@@ -1019,6 +1019,13 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
+D-race-2 证据：Result preflight rollback 后分别改变 Run contract/state、Method、Question、Task
+hidden contract/dependency、Source/projection、Observation、Claim、Evidence Link version、Report、
+Evaluation/Decision、current version/access/verification/lifecycle/supersession、Manifest hash/
+representation/policy watermark；每个受影响事实都拒绝旧 Result，同 scope unrelated advance 则重新
+授权并记录 final acceptance watermark。失败重试的断言覆盖 domain rows、Result、Passport、Version、
+Input Reference、Lifecycle/Policy/Supersession ledger、Event 与 terminal state，§15.18 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

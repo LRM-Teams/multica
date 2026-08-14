@@ -1598,6 +1598,43 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				return nil, 0, err
 			}
 		}
+		var producedByTaskID string
+		if err = tx.QueryRow(ctx, `
+			SELECT produced_by_task_id::text FROM research_claim
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, state.workspaceID, state.run.SessionID, id).Scan(&producedByTaskID); err != nil {
+			return nil, 0, err
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, state.workspaceID, state.run.SessionID,
+			id, ArtifactKindClaim, producedByTaskID, ArtifactKindTask,
+			"claim_producer", "claim_materialization", 0,
+		); err != nil {
+			return nil, 0, err
+		}
+		if usesEvidenceFitnessContract(state.run.OrchestratorVersion) && claim.EvidenceStandardKey != "" {
+			var methodID string
+			if err = tx.QueryRow(ctx, `
+				SELECT id::text FROM research_decision
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+				  AND decision_kind='research_method' AND goal_version=$3 AND plan_version=$4
+				  AND EXISTS (
+				    SELECT 1 FROM jsonb_array_elements(outcome->'evidence_standards') standard
+				    WHERE standard->>'client_key'=$5
+				  )
+				ORDER BY created_at DESC,id DESC LIMIT 1
+			`, state.workspaceID, state.run.SessionID, state.task.GoalVersion,
+				state.targetPlan, claim.EvidenceStandardKey).Scan(&methodID); err != nil {
+				return nil, 0, err
+			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				id, ArtifactKindClaim, methodID, ArtifactKindMethodDecision,
+				"claim_evidence_standard", "claim_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
+		}
 		for _, evidence := range claim.Evidence {
 			observationID, ok := observationIDs[evidence.ObservationKey]
 			if !ok {
@@ -1735,6 +1772,37 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 					ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID,
 					evidenceID, state.attemptID, time.Now(), int32Ptr(int32(state.task.GoalVersion)),
 					int32Ptr(int32(state.targetPlan)), state.outputAccess, evidenceContent,
+				); err != nil {
+					return nil, 0, err
+				}
+			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				evidenceID, ArtifactKindEvidenceLink, id, ArtifactKindClaim,
+				"evidence_claim", "evidence_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				evidenceID, ArtifactKindEvidenceLink, observationID, ArtifactKindObservation,
+				"evidence_observation", "evidence_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
+			var persistedVerifierTaskID string
+			if err = tx.QueryRow(ctx, `
+				SELECT COALESCE(verified_by_task_id::text,'')
+				FROM research_claim_evidence
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+			`, state.workspaceID, state.run.SessionID, evidenceID).Scan(&persistedVerifierTaskID); err != nil {
+				return nil, 0, err
+			}
+			if persistedVerifierTaskID != "" {
+				if err = persistTypedArtifactInputReferenceTx(
+					ctx, tx, state.workspaceID, state.run.SessionID,
+					evidenceID, ArtifactKindEvidenceLink, persistedVerifierTaskID, ArtifactKindTask,
+					"evidence_verifier", "evidence_materialization", 0,
 				); err != nil {
 					return nil, 0, err
 				}

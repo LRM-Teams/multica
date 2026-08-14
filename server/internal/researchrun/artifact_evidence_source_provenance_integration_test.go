@@ -85,6 +85,42 @@ func TestAcceptedSourceAndObservationVersionsBindCanonicalContentAndAttempt(t *t
 		t.Fatalf("source version hash=%q want=%q origin=%q provenance=%q attempt=%q",
 			versionHash, wantSourceHash, hashOrigin, provenance, sourceAttemptID)
 	}
+	var legacyURL, legacyTitle, legacyClass, legacyStance, legacySummary, legacyExcerpt string
+	var legacySnapshotID, legacyAttemptID, legacyVersionHash, legacyOrigin, legacyProvenance string
+	var legacyWeight, legacyRelevance float64
+	var legacyPayload []byte
+	if err = pool.QueryRow(ctx, `
+		SELECT source.url, source.title, source.source_class, source.credibility_weight,
+		       source.stance, source.relevance, source.summary, source.excerpt, source.payload,
+		       source.source_snapshot_id::text, version.produced_by_attempt_id::text,
+		       version.content_hash, version.hash_origin, passport.provenance_completeness
+		FROM research_source source
+		JOIN research_artifact_passport passport
+		  ON (passport.workspace_id,passport.session_id,passport.id)=(source.workspace_id,source.session_id,source.id)
+		JOIN research_artifact_version version
+		  ON (version.workspace_id,version.session_id,version.artifact_id,version.version)=
+		     (passport.workspace_id,passport.session_id,passport.id,passport.current_version)
+		WHERE source.workspace_id=$1::uuid AND source.session_id=$2::uuid
+		  AND source.source_snapshot_id=$3::uuid
+	`, fixture.workspaceID, fixture.sessionID, sourceID).Scan(
+		&legacyURL, &legacyTitle, &legacyClass, &legacyWeight, &legacyStance, &legacyRelevance,
+		&legacySummary, &legacyExcerpt, &legacyPayload, &legacySnapshotID, &legacyAttemptID,
+		&legacyVersionHash, &legacyOrigin, &legacyProvenance,
+	); err != nil {
+		t.Fatal(err)
+	}
+	wantLegacyHash, err := ArtifactContentHash(ArtifactKindLegacySource, legacySourceArtifactContent(
+		legacyURL, legacyTitle, legacyClass, legacyWeight, legacyStance, legacyRelevance,
+		legacySummary, legacyExcerpt, legacyPayload, legacySnapshotID,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyVersionHash != wantLegacyHash || legacyOrigin != string(ArtifactHashOriginProduction) ||
+		legacyProvenance != string(ArtifactProvenanceComplete) || legacyAttemptID != sourceAttemptID {
+		t.Fatalf("legacy source hash=%q want=%q origin=%q provenance=%q attempt=%q sourceAttempt=%q",
+			legacyVersionHash, wantLegacyHash, legacyOrigin, legacyProvenance, legacyAttemptID, sourceAttemptID)
+	}
 
 	var (
 		observationTaskID, observationAttemptID, quote, locator, interpretation string

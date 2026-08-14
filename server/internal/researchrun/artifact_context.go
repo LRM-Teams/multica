@@ -39,6 +39,7 @@ type artifactVersionCandidate struct {
 	RepresentationBytes []byte
 	RepresentationHash  string
 	OmissionReason      string
+	DomainStatus        string
 }
 
 type dispatchManifestPlan struct {
@@ -48,6 +49,7 @@ type dispatchManifestPlan struct {
 	PolicyWatermark         int64
 	ThroughStateVersion     int64
 	ManifestHash            string
+	OmissionHash            string
 	NormalGrantID           string
 	NormalGrantRevision     int64
 	EvaluationGrantID       string
@@ -102,9 +104,7 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 			omissions = append(omissions, candidate)
 			continue
 		}
-		admitted, deny := m.policy.LegacyAdmissionAllowed(
-			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
-		)
+		admitted, deny := m.policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts())
 		if !admitted {
 			candidate.OmissionReason = m.policy.ManifestOmissionReason(deny)
 			omissions = append(omissions, candidate)
@@ -146,8 +146,16 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		PolicyWatermark:     watermark,
 		ThroughStateVersion: stateVersion,
 		ManifestHash:        manifestHash,
+		OmissionHash:        hashManifestOmissions(omissions),
 		Purpose:             purpose,
 	}, nil
+}
+
+func (candidate artifactVersionCandidate) legacyAdmissionFacts() legacyAdmissionFacts {
+	return legacyAdmissionFacts{
+		Kind: candidate.Kind, Lifecycle: candidate.Lifecycle,
+		Provenance: candidate.Provenance, DomainStatus: candidate.DomainStatus,
+	}
 }
 
 func sortManifestEntryCandidates(entries []artifactVersionCandidate) {
@@ -163,14 +171,27 @@ func hashManifestEntries(entries []artifactVersionCandidate) string {
 	parts := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		parts = append(parts, fmt.Sprintf(
-			"%s:%d:%d:%s:%s",
+			"%s:%d:%d:%s:%s:%s:%s:%d:%d:%d",
 			entry.ArtifactID, entry.Version, entry.EligibilityRevision,
-			entry.Representation, entry.RepresentationHash,
+			entry.Representation, entry.RepresentationHash, entry.Lifecycle, entry.Provenance,
+			entry.VersionCount, entry.InputReferenceCount, entry.OutputReferenceCount,
 		))
 	}
 	sort.Strings(parts)
 	payload := strings.Join(parts, "\n")
 	sum := sha256.Sum256([]byte(payload))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func hashManifestOmissions(omissions []artifactVersionCandidate) string {
+	parts := make([]string, 0, len(omissions))
+	for ordinal, omission := range omissions {
+		parts = append(parts, fmt.Sprintf(
+			"omission=%d:%s:%s",
+			ordinal, omission.VersionRowID, omission.OmissionReason,
+		))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
@@ -205,9 +226,11 @@ func hashDispatchManifest(in dispatchManifestHashInput) string {
 	sortManifestEntryCandidates(entries)
 	for ordinal, entry := range entries {
 		parts = append(parts, fmt.Sprintf(
-			"entry=%d:%s:%s:%d:%d:%s:%s:input",
+			"entry=%d:%s:%s:%d:%d:%s:%s:%s:%s:%s:%d:%d:%d:input",
 			ordinal, entry.VersionRowID, entry.ArtifactID, entry.Version,
-			entry.EligibilityRevision, entry.Representation, entry.RepresentationHash,
+			entry.EligibilityRevision, entry.AccessLevel, entry.Representation, entry.RepresentationHash,
+			entry.Lifecycle, entry.Provenance, entry.VersionCount,
+			entry.InputReferenceCount, entry.OutputReferenceCount,
 		))
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
@@ -229,7 +252,20 @@ func loadArtifactVersionCandidates(
 		  v.access_level,
 		  p.lifecycle_status,
 		  p.provenance_completeness,
-		  v.content_hash
+		  v.content_hash,
+		  COALESCE(CASE p.entity_kind
+		    WHEN 'task' THEN (SELECT t.status FROM research_task t
+		      WHERE (t.workspace_id,t.session_id,t.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'claim' THEN (SELECT c.status FROM research_claim c
+		      WHERE (c.workspace_id,c.session_id,c.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'source_snapshot' THEN (SELECT s.verification_status FROM research_source_snapshot s
+		      WHERE (s.workspace_id,s.session_id,s.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'observation' THEN (SELECT o.verification_status FROM research_observation o
+		      WHERE (o.workspace_id,o.session_id,o.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'evidence_link' THEN (SELECT e.verification_status FROM research_claim_evidence e
+		      WHERE (e.workspace_id,e.session_id,e.id)=(p.workspace_id,p.session_id,p.id))
+		    ELSE ''
+		  END, '') AS domain_status
 		FROM research_artifact_passport p
 		JOIN research_artifact_version v
 		  ON v.workspace_id = p.workspace_id
@@ -238,6 +274,7 @@ func loadArtifactVersionCandidates(
 		 AND v.version = p.current_version
 		WHERE p.workspace_id = $1::uuid
 		  AND p.session_id = $2::uuid
+		  AND p.entity_kind NOT IN ('context_manifest', 'result_artifact')
 		ORDER BY p.entity_kind, p.id::text
 	`, workspaceID, sessionID)
 	if err != nil {
@@ -252,7 +289,7 @@ func loadArtifactVersionCandidates(
 		if err = rows.Scan(
 			&candidate.VersionRowID, &candidate.ArtifactID, &kindRaw,
 			&candidate.Version, &candidate.EligibilityRevision,
-			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash,
+			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash, &candidate.DomainStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -365,6 +402,7 @@ type persistDispatchManifestInput struct {
 	Plan              dispatchManifestPlan
 	ExpectedWatermark int64
 	Purpose           ArtifactPurpose
+	BeforeCASHook     func(context.Context, *dispatchManifestPlan) error
 }
 
 func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) (dispatchManifestPlan, error) {
@@ -406,8 +444,13 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	authorized.Purpose = plan.Purpose
 	authorized.PolicyWatermark = plan.PolicyWatermark
 	plan = authorized
-	if err = freezeEvidenceRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
+	if err = freezeArtifactRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
+	}
+	if in.PlannedHook != nil {
+		if err = in.PlannedHook(ctx, plan); err != nil {
+			return dispatchManifestPlan{}, err
+		}
 	}
 	plan.ManifestHash = hashDispatchManifest(dispatchManifestHashInput{
 		WorkspaceID:         in.WorkspaceID,
@@ -429,6 +472,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		ProvenanceCompleteness: ArtifactProvenanceComplete,
 		AccessLevel:            ArtifactAccessRaw,
 		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            plan.ManifestHash,
 	}); err != nil {
 		return dispatchManifestPlan{}, err
 	}
@@ -436,15 +480,22 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		INSERT INTO research_artifact_context_manifest (
 		  id, workspace_id, session_id, attempt_id, task_id,
 		  purpose, policy_version, policy_watermark, through_state_version,
-		  normal_grant_id, normal_grant_revision, evaluation_grant_id, evaluation_grant_revision, manifest_hash
+		  normal_grant_id, normal_grant_revision, evaluation_grant_id, evaluation_grant_revision,
+		  manifest_hash, omission_hash
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
-		  $6, $7, $8, $9, $10::uuid, $11, NULLIF($12, '')::uuid, NULLIF($13, 0), $14
+		  $6, $7, $8, $9, $10::uuid, $11, NULLIF($12, '')::uuid, NULLIF($13, 0), $14, $15
 		)
 	`, plan.ManifestID, in.WorkspaceID, in.SessionID, in.AttemptID, in.TaskID,
 		plan.Purpose, LegacyV1V5CompatPolicy, plan.PolicyWatermark, plan.ThroughStateVersion,
-		plan.NormalGrantID, plan.NormalGrantRevision, plan.EvaluationGrantID, plan.EvaluationGrantRevision, plan.ManifestHash); err != nil {
+		plan.NormalGrantID, plan.NormalGrantRevision, plan.EvaluationGrantID, plan.EvaluationGrantRevision,
+		plan.ManifestHash, plan.OmissionHash); err != nil {
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
+	}
+	if in.BeforeCASHook != nil {
+		if err := in.BeforeCASHook(ctx, &plan); err != nil {
+			return dispatchManifestPlan{}, err
+		}
 	}
 
 	if err := lockDispatchManifestCandidateRowsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
@@ -452,15 +503,15 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	}
 
 	for _, entry := range plan.Entries {
-		if err := casPassportEligibilityRevisionTx(
+		if err := casPassportSelectionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.ArtifactID,
-			entry.Version, entry.EligibilityRevision, entry.Lifecycle,
+			entry.Kind, entry.Version, entry.EligibilityRevision, entry.Lifecycle, entry.Provenance,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}
-		if err := casArtifactVersionRepresentationTx(
+		if err := casArtifactVersionSelectionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
-			entry.ContentHash, entry.RepresentationHash,
+			entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}
@@ -470,15 +521,19 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 			INSERT INTO research_artifact_context_entry (
 			  workspace_id, session_id, manifest_id, ordinal,
 			  artifact_version_id, eligibility_revision,
-			  representation, representation_bytes, representation_hash, use_kind
+			  representation, representation_bytes, representation_hash, use_kind,
+			  selection_lifecycle_status, selection_provenance_completeness,
+			  selection_version_count, selection_input_reference_count, selection_output_reference_count
 			) VALUES (
 			  $1::uuid, $2::uuid, $3::uuid, $4,
 			  $5::uuid, $6,
-			  $7, $8, $9, 'input'
+			  $7, $8, $9, 'input', $10, $11, $12, $13, $14
 			)
 		`, in.WorkspaceID, in.SessionID, plan.ManifestID, ordinal,
 			entry.VersionRowID, entry.EligibilityRevision,
-			entry.Representation, entry.RepresentationBytes, entry.RepresentationHash); err != nil {
+			entry.Representation, entry.RepresentationBytes, entry.RepresentationHash,
+			entry.Lifecycle, entry.Provenance, entry.VersionCount,
+			entry.InputReferenceCount, entry.OutputReferenceCount); err != nil {
 			return dispatchManifestPlan{}, fmt.Errorf("insert manifest entry ordinal=%d: %w", ordinal, err)
 		}
 	}
@@ -647,11 +702,12 @@ func loadManifestGateSnapshotPool(
 	workspaceID, sessionID, attemptID string,
 ) (GateResult, bool, error) {
 	var raw []byte
+	var storedHash string
 	err := pool.QueryRow(ctx, `
-		SELECT gate_snapshot_bytes
+		SELECT gate_snapshot_bytes, gate_snapshot_hash
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, workspaceID, sessionID, attemptID).Scan(&raw)
+	`, workspaceID, sessionID, attemptID).Scan(&raw, &storedHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GateResult{}, false, nil
 	}
@@ -659,7 +715,13 @@ func loadManifestGateSnapshotPool(
 		return GateResult{}, false, err
 	}
 	if len(raw) == 0 {
+		if storedHash != "" {
+			return GateResult{}, false, fmt.Errorf("%w: empty frozen gate snapshot has a hash", ErrInvalidTransition)
+		}
 		return GateResult{}, false, nil
+	}
+	if storedHash == "" || storedHash != contentHashFromPayload(raw) {
+		return GateResult{}, false, fmt.Errorf("%w: frozen gate snapshot hash mismatch", ErrInvalidTransition)
 	}
 	var gate GateResult
 	if err = json.Unmarshal(raw, &gate); err != nil {
@@ -690,7 +752,7 @@ func loadAttemptManifestSummary(
 func persistAcceptedResultArtifactTx(
 	ctx context.Context,
 	tx pgx.Tx,
-	workspaceID, sessionID, attemptID, orchestratorVersion string,
+	workspaceID, sessionID, taskID, attemptID, orchestratorVersion string,
 	result ResultEnvelope,
 	resultJSON []byte,
 	contentHash string,
@@ -707,6 +769,7 @@ func persistAcceptedResultArtifactTx(
 		AccessLevel:            accessLevel,
 		HashOrigin:             ArtifactHashOriginProduction,
 		ContentHash:            contentHash,
+		ProducedByTaskID:       taskID,
 		ProducedByAttemptID:    attemptID,
 		SourceCreatedAt:        timePtr(time.Now()),
 		SchemaName:             string(ArtifactKindResultArtifact),
@@ -714,9 +777,22 @@ func persistAcceptedResultArtifactTx(
 	}); err != nil {
 		return "", err
 	}
+	var manifestID, manifestHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text, manifest_hash
+		FROM research_artifact_context_manifest
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&manifestID, &manifestHash); err != nil {
+		return "", err
+	}
+	inputVersionSetHash, err := manifestInputVersionSetHashTx(ctx, tx, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return "", err
+	}
 	if err := insertResultArtifactRowTx(
 		ctx, tx, resultID, workspaceID, sessionID, attemptID, orchestratorVersion,
 		result, resultJSON, contentHash, policyWatermark,
+		manifestID, manifestHash, inputVersionSetHash,
 	); err != nil {
 		return "", err
 	}
@@ -738,20 +814,24 @@ func insertResultArtifactRowTx(
 	resultJSON []byte,
 	contentHash string,
 	policyWatermark int64,
+	manifestID, manifestHash, inputVersionSetHash string,
 ) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO research_result_artifact (
 		  id, workspace_id, session_id, attempt_id,
 		  orchestrator_version, result_schema_version, result,
-		  client_request_id, content_hash, acceptance_policy_watermark, accepted_at
+		  client_request_id, content_hash, acceptance_policy_watermark, accepted_at,
+		  manifest_id, manifest_hash, input_version_set_hash
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
-		  $5, $6, $7::jsonb, $8, $9, $10, now()
+		  $5, $6, $7::jsonb, $8, $9, $10, now(),
+		  $11::uuid, $12, $13
 		)
 		ON CONFLICT (workspace_id, session_id, attempt_id) DO NOTHING
 	`, resultID, workspaceID, sessionID, attemptID,
 		orchestratorVersion, fmt.Sprintf("%d", result.SchemaVersion), resultJSON,
-		result.ClientRequestID, contentHash, policyWatermark)
+		result.ClientRequestID, contentHash, policyWatermark,
+		manifestID, manifestHash, inputVersionSetHash)
 	return err
 }
 

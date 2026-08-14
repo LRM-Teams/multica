@@ -57,6 +57,15 @@ type dispatchManifestPlan struct {
 	Purpose                 ArtifactPurpose
 }
 
+func isDispatchManifestCandidateKind(kind ArtifactEntityKind) bool {
+	switch kind {
+	case ArtifactKindAttempt, ArtifactKindContextManifest, ArtifactKindResultArtifact:
+		return false
+	default:
+		return true
+	}
+}
+
 func (m ArtifactContextModule) PlanDispatchManifest(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -114,6 +123,9 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		candidate.RepresentationHash = contentHashFromPayload(candidate.RepresentationBytes)
 		entries = append(entries, candidate)
 	}
+	if err = auditManifestCandidateDispositions(candidates, entries, omissions, clearance, purpose, m.policy); err != nil {
+		return dispatchManifestPlan{}, err
+	}
 	sortManifestEntryCandidates(entries)
 
 	var watermark int64
@@ -159,9 +171,10 @@ func hashManifestEntries(entries []artifactVersionCandidate) string {
 	parts := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		parts = append(parts, fmt.Sprintf(
-			"%s:%d:%d:%s:%s",
+			"%s:%d:%d:%s:%s:%s:%s:%d:%d:%d",
 			entry.ArtifactID, entry.Version, entry.EligibilityRevision,
-			entry.Representation, entry.RepresentationHash,
+			entry.Representation, entry.RepresentationHash, entry.Lifecycle, entry.Provenance,
+			entry.VersionCount, entry.InputReferenceCount, entry.OutputReferenceCount,
 		))
 	}
 	sort.Strings(parts)
@@ -213,9 +226,11 @@ func hashDispatchManifest(in dispatchManifestHashInput) string {
 	sortManifestEntryCandidates(entries)
 	for ordinal, entry := range entries {
 		parts = append(parts, fmt.Sprintf(
-			"entry=%d:%s:%s:%d:%d:%s:%s:input",
+			"entry=%d:%s:%s:%d:%d:%s:%s:%s:%s:%s:%d:%d:%d:input",
 			ordinal, entry.VersionRowID, entry.ArtifactID, entry.Version,
-			entry.EligibilityRevision, entry.Representation, entry.RepresentationHash,
+			entry.EligibilityRevision, entry.AccessLevel, entry.Representation, entry.RepresentationHash,
+			entry.Lifecycle, entry.Provenance, entry.VersionCount,
+			entry.InputReferenceCount, entry.OutputReferenceCount,
 		))
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
@@ -280,6 +295,9 @@ func loadArtifactVersionCandidates(
 		}
 		kind, parseErr := ParseArtifactEntityKind(kindRaw)
 		if parseErr != nil {
+			return nil, parseErr
+		}
+		if !isDispatchManifestCandidateKind(kind) {
 			continue
 		}
 		candidate.Kind = kind
@@ -289,6 +307,91 @@ func loadArtifactVersionCandidates(
 		out = append(out, candidate)
 	}
 	return out, rows.Err()
+}
+
+func auditManifestCandidateDispositions(
+	candidates, entries, omissions []artifactVersionCandidate,
+	clearance ArtifactClearance,
+	purpose ArtifactPurpose,
+	policy ArtifactPolicy,
+) error {
+	want := make(map[string]artifactVersionCandidate, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.VersionRowID == "" {
+			return fmt.Errorf("%w: Manifest candidate has empty version identity", ErrInvalidTransition)
+		}
+		if _, duplicate := want[candidate.VersionRowID]; duplicate {
+			return fmt.Errorf("%w: duplicate Manifest candidate version %s", ErrInvalidTransition, candidate.VersionRowID)
+		}
+		want[candidate.VersionRowID] = candidate
+	}
+
+	seen := make(map[string]string, len(candidates))
+	check := func(candidate artifactVersionCandidate, disposition string) error {
+		original, ok := want[candidate.VersionRowID]
+		if !ok || original.ArtifactID != candidate.ArtifactID {
+			return fmt.Errorf("%w: Manifest %s references a non-candidate version %s", ErrInvalidTransition, disposition, candidate.VersionRowID)
+		}
+		if prior, duplicate := seen[candidate.VersionRowID]; duplicate {
+			return fmt.Errorf("%w: Manifest candidate version %s has both %s and %s dispositions", ErrInvalidTransition, candidate.VersionRowID, prior, disposition)
+		}
+		seen[candidate.VersionRowID] = disposition
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.OmissionReason != "" {
+			return fmt.Errorf("%w: admitted Manifest entry has omission reason", ErrInvalidTransition)
+		}
+		if err := check(entry, "entry"); err != nil {
+			return err
+		}
+	}
+	for _, omission := range omissions {
+		if omission.OmissionReason == "" {
+			return fmt.Errorf("%w: omitted Manifest candidate has no reason", ErrInvalidTransition)
+		}
+		if err := check(omission, "omission"); err != nil {
+			return err
+		}
+	}
+	if len(seen) != len(want) {
+		missing := make([]string, 0, len(want)-len(seen))
+		for versionID := range want {
+			if _, ok := seen[versionID]; !ok {
+				missing = append(missing, versionID)
+			}
+		}
+		sort.Strings(missing)
+		return fmt.Errorf("%w: Manifest candidates lack disposition: %s", ErrInvalidTransition, strings.Join(missing, ","))
+	}
+
+	for versionID, candidate := range want {
+		expected := "entry"
+		expectedReason := ""
+		if policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
+			expected = "omission"
+			expectedReason = policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
+		} else if admitted, deny := policy.LegacyAdmissionAllowed(candidate.Kind, candidate.Lifecycle, candidate.Provenance); !admitted {
+			expected = "omission"
+			expectedReason = policy.ManifestOmissionReason(deny)
+		} else if allowed, deny := policy.CanReadNormal(
+			clearance, candidate.AccessLevel, purpose, policy.EvaluationPrivateKind(candidate.Kind),
+		); !allowed {
+			expected = "omission"
+			expectedReason = policy.ManifestOmissionReason(deny)
+		}
+		if seen[versionID] != expected {
+			return fmt.Errorf("%w: Manifest candidate version %s disposition=%s want=%s", ErrInvalidTransition, versionID, seen[versionID], expected)
+		}
+		if expected == "omission" {
+			for _, omission := range omissions {
+				if omission.VersionRowID == versionID && omission.OmissionReason != expectedReason {
+					return fmt.Errorf("%w: Manifest candidate version %s omission reason=%s want=%s", ErrInvalidTransition, versionID, omission.OmissionReason, expectedReason)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 type persistDispatchManifestInput struct {
@@ -400,13 +503,13 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	}
 
 	for _, entry := range plan.Entries {
-		if err := casPassportEligibilityRevisionTx(
+		if err := casPassportSelectionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.ArtifactID,
-			entry.Version, entry.EligibilityRevision, entry.Lifecycle,
+			entry.Kind, entry.Version, entry.EligibilityRevision, entry.Lifecycle, entry.Provenance,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}
-		if err := casArtifactVersionRepresentationTx(
+		if err := casArtifactVersionSelectionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
 			entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
 		); err != nil {
@@ -418,15 +521,19 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 			INSERT INTO research_artifact_context_entry (
 			  workspace_id, session_id, manifest_id, ordinal,
 			  artifact_version_id, eligibility_revision,
-			  representation, representation_bytes, representation_hash, use_kind
+			  representation, representation_bytes, representation_hash, use_kind,
+			  selection_lifecycle_status, selection_provenance_completeness,
+			  selection_version_count, selection_input_reference_count, selection_output_reference_count
 			) VALUES (
 			  $1::uuid, $2::uuid, $3::uuid, $4,
 			  $5::uuid, $6,
-			  $7, $8, $9, 'input'
+			  $7, $8, $9, 'input', $10, $11, $12, $13, $14
 			)
 		`, in.WorkspaceID, in.SessionID, plan.ManifestID, ordinal,
 			entry.VersionRowID, entry.EligibilityRevision,
-			entry.Representation, entry.RepresentationBytes, entry.RepresentationHash); err != nil {
+			entry.Representation, entry.RepresentationBytes, entry.RepresentationHash,
+			entry.Lifecycle, entry.Provenance, entry.VersionCount,
+			entry.InputReferenceCount, entry.OutputReferenceCount); err != nil {
 			return dispatchManifestPlan{}, fmt.Errorf("insert manifest entry ordinal=%d: %w", ordinal, err)
 		}
 	}

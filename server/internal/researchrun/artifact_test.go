@@ -43,6 +43,10 @@ func TestRegisteredArtifactEntityKindsMatchSpecInventory(t *testing.T) {
 		ArtifactKindBranch,
 		ArtifactKindInsight,
 		ArtifactKindInquiryEdge,
+		ArtifactKindSearchPlan,
+		ArtifactKindQueryExecution,
+		ArtifactKindSourceCandidate,
+		ArtifactKindScreeningDecision,
 	}
 	got := RegisteredArtifactEntityKinds()
 	slices.SortFunc(got, func(a, b ArtifactEntityKind) int {
@@ -107,6 +111,10 @@ func TestReciprocalArtifactPassportGuardTriggerNames(t *testing.T) {
 		"research_branch_artifact_passport_guard",
 		"research_insight_artifact_passport_guard",
 		"research_inquiry_edge_artifact_passport_guard",
+		"research_search_plan_artifact_passport_guard",
+		"research_query_execution_artifact_passport_guard",
+		"research_source_candidate_artifact_passport_guard",
+		"research_screening_decision_artifact_passport_guard",
 	}
 	got := ReciprocalArtifactPassportGuardTriggerNames()
 	slices.Sort(want)

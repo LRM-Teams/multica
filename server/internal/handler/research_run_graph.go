@@ -47,11 +47,21 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 	}
 	rootStatus := projectGoalStatus(snap.Run.Status)
 	rootPayload := runGraphPayload(map[string]any{
-		"projection":    "run_v2",
-		"kind":          runGraphKindRoot,
-		"state_version": snap.Run.StateVersion,
-		"goal_version":  snap.Run.GoalVersion,
-		"phase":         phase,
+		"projection":        "run_v2",
+		"kind":              runGraphKindRoot,
+		"created_by":        nullIfEmpty(snap.Run.CreatedBy),
+		"state_version":     snap.Run.StateVersion,
+		"goal_version":      snap.Run.GoalVersion,
+		"plan_version":      snap.Run.PlanVersion,
+		"phase":             phase,
+		"run_status":        string(snap.Run.Status),
+		"run_stats":         snap.Run.Stats,
+		"run_config":        snap.Run.Config,
+		"next_reconcile_at": snap.Run.NextReconcileAt,
+		"stop_reason":       nullIfEmpty(snap.Run.StopReason),
+		"last_error":        nullIfEmpty(snap.Run.LastError),
+		"contract":          snap.Contract,
+		"method":            snap.Method,
 		"content": map[string]any{
 			"goal": displayGoal,
 		},
@@ -74,6 +84,10 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 		UpdatedAt:    ts,
 	})
 
+	taskByID := make(map[string]researchrun.Task, len(snap.Tasks))
+	for _, task := range snap.Tasks {
+		taskByID[task.ID] = task
+	}
 	questionIDs := map[string]string{}
 	questions := append([]researchrun.Question(nil), snap.Questions...)
 	sort.SliceStable(questions, func(i, j int) bool {
@@ -94,37 +108,46 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 			title = "调研问题"
 		}
 		status := projectQuestionStatus(q.Status)
+		var actor *string
+		if task, ok := taskByID[q.CreatedByTaskID]; ok {
+			if aid := strings.TrimSpace(task.AssignedAgentID); aid != "" {
+				actor = &aid
+			}
+		}
 		payload := runGraphPayload(map[string]any{
-			"projection":         "run_v2",
-			"kind":               runGraphKindQuestion,
-			"question_id":        id,
-			"parent_question_id": nullIfEmpty(q.ParentQuestionID),
-			"created_by_task_id": nullIfEmpty(q.CreatedByTaskID),
-			"question_kind":      string(q.Kind),
-			"question_status":    string(q.Status),
-			"required":           q.Required,
-			"priority":           q.Priority,
-			"phase":              phase,
-			"theme_key":          "question:" + string(q.Kind),
+			"projection":           "run_v2",
+			"kind":                 runGraphKindQuestion,
+			"question_id":          id,
+			"parent_question_id":   nullIfEmpty(q.ParentQuestionID),
+			"created_by_task_id":   nullIfEmpty(q.CreatedByTaskID),
+			"question_kind":        string(q.Kind),
+			"question_status":      string(q.Status),
+			"required":             q.Required,
+			"priority":             q.Priority,
+			"answer_claim_id":      nullIfEmpty(q.AnswerClaimID),
+			"terminal_explanation": nullIfEmpty(q.TerminalExplanation),
+			"phase":                phase,
+			"theme_key":            "question:" + string(q.Kind),
 			"content": map[string]any{
 				"goal": title,
 			},
 		})
 		nodes = append(nodes, ResearchGraphNodeResp{
-			ID:         nodeID,
-			SessionID:  sessionID,
-			NodeType:   "subquestion",
-			Title:      truncateRunes(title, 120),
-			Summary:    truncateRunes(firstNonEmpty(q.TerminalExplanation, title), 240),
-			Status:     status,
-			Payload:    payload,
-			ThemeKey:   "question:" + string(q.Kind),
-			Phase:      phase,
-			Assessment: researchAssessmentPendingReview,
-			Content:    ResearchNodeContentFaces{Goal: title},
-			ChildIDs:   []string{},
-			CreatedAt:  ts,
-			UpdatedAt:  ts,
+			ID:           nodeID,
+			SessionID:    sessionID,
+			NodeType:     "subquestion",
+			Title:        truncateRunes(title, 120),
+			Summary:      truncateRunes(firstNonEmpty(q.TerminalExplanation, title), 240),
+			Status:       status,
+			ActorAgentID: actor,
+			Payload:      payload,
+			ThemeKey:     "question:" + string(q.Kind),
+			Phase:        phase,
+			Assessment:   researchAssessmentPendingReview,
+			Content:      ResearchNodeContentFaces{Goal: title},
+			ChildIDs:     []string{},
+			CreatedAt:    ts,
+			UpdatedAt:    ts,
 		})
 	}
 
@@ -159,18 +182,24 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 			nodeType = "finding"
 		}
 		payload := runGraphPayload(map[string]any{
-			"projection":        "run_v2",
-			"kind":              runGraphKindTask,
-			"task_id":           id,
-			"question_id":       nullIfEmpty(task.QuestionID),
-			"parent_task_id":    nullIfEmpty(task.ParentTaskID),
-			"task_kind":         string(task.Kind),
-			"task_status":       string(task.Status),
-			"assigned_agent_id": nullIfEmpty(task.AssignedAgentID),
-			"attempt_count":     task.AttemptCount,
-			"max_attempts":      task.MaxAttempts,
-			"expected_result":   task.ExpectedResult,
-			"phase":             phase,
+			"projection":          "run_v2",
+			"kind":                runGraphKindTask,
+			"task_id":             id,
+			"question_id":         nullIfEmpty(task.QuestionID),
+			"parent_task_id":      nullIfEmpty(task.ParentTaskID),
+			"task_kind":           string(task.Kind),
+			"task_status":         string(task.Status),
+			"assigned_agent_id":   nullIfEmpty(task.AssignedAgentID),
+			"attempt_count":       task.AttemptCount,
+			"max_attempts":        task.MaxAttempts,
+			"expected_result":     task.ExpectedResult,
+			"acceptance_criteria": json.RawMessage(task.AcceptanceCriteria),
+			"required_capability": task.RequiredCapability,
+			"terminal_reason":     nullIfEmpty(task.TerminalReason),
+			"ready_at":            task.ReadyAt,
+			"started_at":          task.StartedAt,
+			"completed_at":        task.CompletedAt,
+			"phase":               phase,
 			"details": map[string]any{
 				"task_id":           id,
 				"question_id":       nullIfEmpty(task.QuestionID),
@@ -255,6 +284,10 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 			"inbox_task_id":               nullIfEmpty(attempt.InboxTaskID),
 			"dispatch_key":                nullIfEmpty(attempt.DispatchKey),
 			"execution_target":            attempt.ExecutionTarget,
+			"task_objective":              taskByID[attempt.TaskID].Objective,
+			"task_expected_result":        taskByID[attempt.TaskID].ExpectedResult,
+			"task_acceptance_criteria":    json.RawMessage(taskByID[attempt.TaskID].AcceptanceCriteria),
+			"result_hash":                 nullIfEmpty(attempt.ResultHash),
 			"failure_class":               nullIfEmpty(attempt.FailureClass),
 			"source_failure_reason":       nullIfEmpty(attempt.SourceFailureReason),
 			"diagnostics":                 nullIfEmpty(attempt.Diagnostics),
@@ -347,15 +380,25 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 			title = "结论"
 		}
 		conf := claim.Confidence
+		var actor *string
+		if task, ok := taskByID[claim.ProducedByTaskID]; ok {
+			if aid := strings.TrimSpace(task.AssignedAgentID); aid != "" {
+				actor = &aid
+			}
+		}
 		payload := runGraphPayload(map[string]any{
-			"projection":          "run_v2",
-			"kind":                runGraphKindClaim,
-			"claim_id":            id,
-			"claim_status":        string(claim.Status),
-			"produced_by_task_id": nullIfEmpty(claim.ProducedByTaskID),
-			"confidence":          conf,
-			"phase":               phase,
-			"assessment":          claimAssessment(claim.Status),
+			"projection":            "run_v2",
+			"kind":                  runGraphKindClaim,
+			"claim_id":              id,
+			"claim_status":          string(claim.Status),
+			"produced_by_task_id":   nullIfEmpty(claim.ProducedByTaskID),
+			"confidence":            conf,
+			"significance":          nullIfEmpty(claim.Significance),
+			"resolution":            nullIfEmpty(claim.Resolution),
+			"evidence_standard_key": nullIfEmpty(claim.EvidenceStandardKey),
+			"evidence":              claim.Evidence,
+			"phase":                 phase,
+			"assessment":            claimAssessment(claim.Status),
 			"content": map[string]any{
 				"result": truncateRunes(title, 240),
 			},
@@ -364,21 +407,22 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 			},
 		})
 		nodes = append(nodes, ResearchGraphNodeResp{
-			ID:         nodeID,
-			SessionID:  sessionID,
-			NodeType:   nodeType,
-			Title:      truncateRunes(title, 120),
-			Summary:    truncateRunes(firstNonEmpty(claim.Resolution, claim.Significance, title), 240),
-			Status:     status,
-			Payload:    payload,
-			Confidence: &conf,
-			ThemeKey:   "type:" + nodeType,
-			Phase:      phase,
-			Assessment: claimAssessment(claim.Status),
-			Content:    ResearchNodeContentFaces{Result: truncateRunes(title, 240)},
-			ChildIDs:   []string{},
-			CreatedAt:  ts,
-			UpdatedAt:  ts,
+			ID:           nodeID,
+			SessionID:    sessionID,
+			NodeType:     nodeType,
+			Title:        truncateRunes(title, 120),
+			Summary:      truncateRunes(firstNonEmpty(claim.Resolution, claim.Significance, title), 240),
+			Status:       status,
+			ActorAgentID: actor,
+			Payload:      payload,
+			Confidence:   &conf,
+			ThemeKey:     "type:" + nodeType,
+			Phase:        phase,
+			Assessment:   claimAssessment(claim.Status),
+			Content:      ResearchNodeContentFaces{Result: truncateRunes(title, 240)},
+			ChildIDs:     []string{},
+			CreatedAt:    ts,
+			UpdatedAt:    ts,
 		})
 	}
 
@@ -409,6 +453,7 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 			"projection": "run_v2",
 			"kind":       runGraphKindGate,
 			"gate":       map[string]any{"passed": snap.Gate.Passed, "findings": findings},
+			"claim_ids":  sortedRunGraphClaimIDs(claims),
 			"phase":      phase,
 		})
 		nodes = append(nodes, ResearchGraphNodeResp{

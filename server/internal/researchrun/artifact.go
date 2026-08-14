@@ -34,6 +34,10 @@ const (
 	ArtifactKindBranch               ArtifactEntityKind = "branch"
 	ArtifactKindInsight              ArtifactEntityKind = "insight"
 	ArtifactKindInquiryEdge          ArtifactEntityKind = "inquiry_edge"
+	ArtifactKindSearchPlan           ArtifactEntityKind = "search_plan"
+	ArtifactKindQueryExecution       ArtifactEntityKind = "query_execution"
+	ArtifactKindSourceCandidate      ArtifactEntityKind = "source_candidate"
+	ArtifactKindScreeningDecision    ArtifactEntityKind = "screening_decision"
 )
 
 var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
@@ -62,6 +66,10 @@ var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
 	ArtifactKindBranch:               {},
 	ArtifactKindInsight:              {},
 	ArtifactKindInquiryEdge:          {},
+	ArtifactKindSearchPlan:           {},
+	ArtifactKindQueryExecution:       {},
+	ArtifactKindSourceCandidate:      {},
+	ArtifactKindScreeningDecision:    {},
 }
 
 // ArtifactLifecycleStatus is passport admissibility, not domain status.
@@ -234,6 +242,10 @@ func ReciprocalArtifactPassportGuardTriggerNames() []string {
 		"research_branch_artifact_passport_guard",
 		"research_insight_artifact_passport_guard",
 		"research_inquiry_edge_artifact_passport_guard",
+		"research_search_plan_artifact_passport_guard",
+		"research_query_execution_artifact_passport_guard",
+		"research_source_candidate_artifact_passport_guard",
+		"research_screening_decision_artifact_passport_guard",
 	}
 }
 

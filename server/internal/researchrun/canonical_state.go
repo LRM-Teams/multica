@@ -143,6 +143,10 @@ var canonicalStateQueries = []canonicalStateQuery{
 			WHERE task.session_id = $1::uuid AND task.workspace_id = $2::uuid
 		) rows`},
 	{name: "attempts", query: canonicalRowsQuery("research_task_attempt", "workspace_id, session_id, dispatched_at, started_at, runtime_started_at, runtime_last_observed_at, runtime_lease_expires_at, cancellation_requested_at, result_submitted_at, completed_at, cancellation_completed_at, created_at, updated_at")},
+	{name: "search_plans", query: canonicalRowsQuery("research_search_plan", "workspace_id, session_id, created_at")},
+	{name: "query_executions", query: canonicalRowsQuery("research_query_execution", "workspace_id, session_id, created_at")},
+	{name: "source_candidates", query: canonicalRowsQuery("research_source_candidate", "workspace_id, session_id, created_at")},
+	{name: "screening_decisions", query: canonicalRowsQuery("research_screening_decision", "workspace_id, session_id, created_at")},
 	{name: "source_snapshots", query: canonicalRowsQuery("research_source_snapshot", "workspace_id, session_id, created_at")},
 	{name: "observations", query: canonicalRowsQuery("research_observation", "workspace_id, session_id, created_at")},
 	{name: "claims", query: canonicalRowsQuery("research_claim", "workspace_id, session_id, created_at, updated_at")},

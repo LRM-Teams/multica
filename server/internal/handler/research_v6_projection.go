@@ -85,6 +85,10 @@ type researchV6Delta struct {
 	AffectedRootNodeIDs   []string                      `json:"affected_root_node_ids"`
 	TransitionKind        *string                       `json:"transition_kind"`
 }
+type researchV6DeltaEnvelope struct {
+	RunID string          `json:"run_id"`
+	Delta researchV6Delta `json:"delta"`
+}
 type researchV6Snapshot struct {
 	SnapshotID           string                        `json:"snapshot_id"`
 	RunID                string                        `json:"run_id"`
@@ -123,7 +127,6 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if err != nil {
 		return researchV6Snapshot{}, err
 	}
-	legacyNodes, legacyEdges := projectRunV2Graph(snap)
 	var sequence int64
 	if err = h.DB.QueryRow(r.Context(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err != nil {
 		return researchV6Snapshot{}, err
@@ -186,6 +189,7 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	for _, edge := range edgeByID {
 		edges = append(edges, edge)
 	}
+	enrichResearchV6TopologyDetails(nodes, edges)
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
 	nodeBytes, _ := json.Marshal(nodes)
@@ -227,6 +231,85 @@ func remapResearchV6NodeReferences(node *researchV6ProjectionNode, nodeIDs map[s
 	node.MergedFrom = merged
 }
 
+// mapResearchV6Graph is the single V5/run-v2 to V6 identity boundary used by
+// both HTTP snapshots and realtime deltas. Keeping it shared prevents a live
+// frame from naming a node or edge differently from the subsequent resync.
+func mapResearchV6Graph(runID string, legacyNodes []ResearchGraphNodeResp, legacyEdges []ResearchGraphEdgeResp) ([]researchV6ProjectionNode, []researchV6ProjectionEdge) {
+	nodeIDs := make(map[string]string, len(legacyNodes))
+	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
+	for _, node := range legacyNodes {
+		mapped := mapResearchV6Node(runID, node)
+		nodeIDs[node.ID] = mapped.ID
+		nodes = append(nodes, mapped)
+	}
+	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
+	for _, edge := range legacyEdges {
+		from, fromOK := nodeIDs[edge.FromNodeID]
+		to, toOK := nodeIDs[edge.ToNodeID]
+		if !fromOK || !toOK {
+			continue
+		}
+		edges = append(edges, researchV6ProjectionEdge{
+			ID: runID + ":edge:" + edge.ID, RunID: runID,
+			FromNodeID: from, ToNodeID: to, EdgeType: edge.EdgeType,
+		})
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges
+}
+
+// mapResearchV6GraphStrict is the integrity boundary between the compatibility
+// projection and V6. A Snapshot must never conceal ambiguous identity or a
+// broken topology: clients use its hashes as proof of one rebuildable graph.
+func mapResearchV6GraphStrict(runID string, legacyNodes []ResearchGraphNodeResp, legacyEdges []ResearchGraphEdgeResp) ([]researchV6ProjectionNode, []researchV6ProjectionEdge, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, nil, fmt.Errorf("research V6 projection run identity is empty")
+	}
+	nodeIDs := make(map[string]string, len(legacyNodes))
+	canonicalNodeIDs := make(map[string]string, len(legacyNodes))
+	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
+	for _, node := range legacyNodes {
+		if strings.TrimSpace(node.ID) == "" {
+			return nil, nil, fmt.Errorf("research V6 projection contains an empty source node identity")
+		}
+		if _, duplicate := nodeIDs[node.ID]; duplicate {
+			return nil, nil, fmt.Errorf("research V6 projection contains duplicate source node %q", node.ID)
+		}
+		mapped := mapResearchV6Node(runID, node)
+		if prior, duplicate := canonicalNodeIDs[mapped.ID]; duplicate {
+			return nil, nil, fmt.Errorf("research V6 projection nodes %q and %q collapse to canonical identity %q", prior, node.ID, mapped.ID)
+		}
+		nodeIDs[node.ID] = mapped.ID
+		canonicalNodeIDs[mapped.ID] = node.ID
+		nodes = append(nodes, mapped)
+	}
+	edgeIDs := make(map[string]string, len(legacyEdges))
+	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
+	for _, edge := range legacyEdges {
+		if strings.TrimSpace(edge.ID) == "" {
+			return nil, nil, fmt.Errorf("research V6 projection contains an empty source edge identity")
+		}
+		canonicalID := runID + ":edge:" + edge.ID
+		if prior, duplicate := edgeIDs[canonicalID]; duplicate {
+			return nil, nil, fmt.Errorf("research V6 projection edges %q and %q collapse to canonical identity %q", prior, edge.ID, canonicalID)
+		}
+		from, fromOK := nodeIDs[edge.FromNodeID]
+		to, toOK := nodeIDs[edge.ToNodeID]
+		if !fromOK || !toOK {
+			return nil, nil, fmt.Errorf("research V6 projection edge %q has a dangling endpoint", edge.ID)
+		}
+		if strings.TrimSpace(edge.EdgeType) == "" {
+			return nil, nil, fmt.Errorf("research V6 projection edge %q has an empty type", edge.ID)
+		}
+		edgeIDs[canonicalID] = edge.ID
+		edges = append(edges, researchV6ProjectionEdge{ID: canonicalID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: edge.EdgeType})
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return nodes, edges, nil
+}
+
 func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6ProjectionNode {
 	return mapResearchV6NodeWithSemantics(runID, node, nil)
 }
@@ -235,7 +318,9 @@ func mapResearchV6NodeWithSemantics(runID string, node ResearchGraphNodeResp, ty
 	kind := "generic"
 	entityID := node.ID
 	var detail map[string]any
-	_ = json.Unmarshal(node.Payload, &detail)
+	if len(node.Payload) == 0 || json.Unmarshal(node.Payload, &detail) != nil || detail == nil {
+		return researchV6ProjectionNode{}, fmt.Errorf("research V6 source node %q has malformed payload", node.ID)
+	}
 	if raw, ok := detail["kind"].(string); ok && raw != "" {
 		kind = normalizeResearchV6EntityKind(raw)
 	}

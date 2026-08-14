@@ -741,6 +741,14 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 	filtered.Sources = frozenSources
 	filtered.Observations = frozenObservations
 	filtered.Claims = frozenClaims
+	frozenAttempts, err := loadFrozenAttemptRepresentationsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.Attempts, err = applyFrozenAttempts(filtered.Attempts, frozenAttempts, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
 	manifestID, manifestHash, policyWatermark, _, summaryErr := loadAttemptManifestSummaryPool(
 		ctx, s.pool, workspaceID, sessionID, attemptID,
 	)
@@ -754,12 +762,7 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		PolicyWatermark:  policyWatermark,
 		ManifestFiltered: true,
 	}
-	if manifestID != "" {
-		allowed[manifestID] = struct{}{}
-	}
-	projection, projectionErr := (artifactProjectionModule{store: s}).Load(ctx, workspaceID, sessionID, artifactProjectionScope{
-		AllowedArtifactIDs: allowed, IncludeEvaluationPrivate: true,
-	})
+	projection, projectionErr := (artifactProjectionModule{store: s}).LoadManifest(ctx, workspaceID, sessionID, manifestID)
 	if projectionErr != nil {
 		return RunSnapshot{}, projectionErr
 	}

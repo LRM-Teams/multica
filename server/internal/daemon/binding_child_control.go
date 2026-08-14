@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type bindingChildControlIdentity = computer.BindingChildIdentity
@@ -39,6 +41,34 @@ func (client *bindingHostControlClient) recordLifecycleDiagnostic(ctx context.Co
 
 func (client *bindingHostControlClient) forwardMachineActions(ctx context.Context, ack HeartbeatResponse) error {
 	return client.client.ForwardMachineActions(ctx, ack)
+}
+
+// handleComputerControlCommand is the Raft 1.0.16 child callback: the
+// DaemonCore connect socket received computer:upgrade / computer:restart.
+// Binding children do not swap the machine binary; they forward the command
+// to Computer Host through the injected Host control seam.
+func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
+	if d == nil {
+		return errors.New("DaemonCore is unavailable")
+	}
+	ack := HeartbeatResponse{Status: "ok"}
+	switch action {
+	case protocol.EventComputerUpgrade:
+		ack.PendingMachineUpgrade = &PendingMachineUpgrade{ID: command.Operation(), TargetVersion: command.TargetVersion}
+	case protocol.EventComputerRestart:
+		ack.PendingRestart = &PendingRestart{ID: command.Operation()}
+	default:
+		return fmt.Errorf("unsupported Computer control action %q", action)
+	}
+	if d.bindingHostControl == nil {
+		return errors.New("Computer Host callback is unavailable")
+	}
+	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, ack); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (client *bindingHostControlClient) reportRuntimeSet(ctx context.Context, runtimes []Runtime, daemonToken, expiresAt string) error {

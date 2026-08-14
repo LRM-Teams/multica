@@ -1118,13 +1118,22 @@ func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, 
 			return nil, err
 		}
 	}
+	publicHost := resolveDockerPublicHost(c.cfg.DockerPublicHost)
+	gatewayPort := strings.TrimSpace(os.Getenv("CUBE_GATEWAY_PORT"))
+	if gatewayPort == "" {
+		gatewayPort = "9080"
+	}
+	// Prefer path-gateway URLs: office browsers cannot resolve *.cube.app, while
+	// docker run publishes a plain host port. Path gateway gives the same UX.
 	endpoint := map[string]any{
 		"kind":       "cube",
 		"sandbox_id": cube.SandboxID,
-		"novnc_url":  fmt.Sprintf("http://6080-%s.%s/vnc.html?autoconnect=1&encrypt=0", cube.SandboxID, c.cfg.CubeDomain),
-		"pi_web_url": fmt.Sprintf("http://6079-%s.%s/", cube.SandboxID, c.cfg.CubeDomain),
-		"term_url":   fmt.Sprintf("http://6079-%s.%s/term", cube.SandboxID, c.cfg.CubeDomain),
-		"code_url":   fmt.Sprintf("http://49999-%s.%s", cube.SandboxID, c.cfg.CubeDomain),
+		"novnc_url":  fmt.Sprintf("http://%s:%s/6080/%s/?autoconnect=true&resize=scale", publicHost, gatewayPort, cube.SandboxID),
+		"pi_web_url": fmt.Sprintf("http://%s:%s/6079/%s/", publicHost, gatewayPort, cube.SandboxID),
+		"term_url":   fmt.Sprintf("http://%s:%s/6079/%s/term", publicHost, gatewayPort, cube.SandboxID),
+		"code_url":   fmt.Sprintf("http://%s:%s/49999/%s/", publicHost, gatewayPort, cube.SandboxID),
+		"novnc_vhost_url": fmt.Sprintf("http://6080-%s.%s/vnc.html?autoconnect=1&encrypt=0", cube.SandboxID, c.cfg.CubeDomain),
+		"pi_web_vhost_url": fmt.Sprintf("http://6079-%s.%s/", cube.SandboxID, c.cfg.CubeDomain),
 		"proxy":      c.cfg.CubeProxyHTTP,
 	}
 	return map[string]any{

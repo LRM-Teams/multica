@@ -10,7 +10,6 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
-import { isRunningCommandActivityLabel } from "../../runner-activity-labels";
 import {
   foldActivityCommandPreview,
   isLongActivityCommand,
@@ -22,6 +21,7 @@ const TONE_DOT: Record<string, string> = {
   active: "bg-brand",
   info: "bg-blue-500",
   warning: "bg-amber-500",
+  running: "bg-running",
   error: "bg-destructive",
   success: "bg-emerald-500",
 };
@@ -106,14 +106,11 @@ function TimelineRow({
   const { t } = useT("agents");
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
-  // UI-first command readability: today's projection keeps the (often clipped)
-  // shell text in subtext with body empty. Prefer body when present; otherwise
-  // promote Running-command subtext into the mono + Copy block so the Activity
-  // tab is not stuck with a muted single-line-looking span.
+  // Commands are identified only by the server-owned body kind. Prefer body
+  // when present; otherwise promote command subtext into the mono + Copy block.
   const bodyText = row.body?.trim() ?? "";
-  const isRunningCommandTitle = /^Running command/.test(row.title ?? "");
   const commandFromSubtext =
-    !bodyText && (row.body_kind === "command" || isRunningCommandTitle)
+    !bodyText && row.body_kind === "command"
       ? (row.subtext?.trim() ?? "")
       : "";
   const displayCommand = bodyText || commandFromSubtext;
@@ -140,9 +137,7 @@ function TimelineRow({
         <span
           className={cn(
             "relative z-[1] mt-1.5 size-1.5 shrink-0 rounded-full",
-            isRunningCommandActivityLabel(row.title)
-              ? "bg-running"
-              : TONE_DOT[row.tone] ?? TONE_DOT.neutral,
+            TONE_DOT[row.tone] ?? TONE_DOT.neutral,
           )}
           aria-hidden
         />

@@ -23,7 +23,7 @@ describe("selectComposerAgentActivityRows", () => {
     const rows = selectComposerAgentActivityRows(agents, [
       item("agent-online", "Online", "success"),
       item("agent-idle", "Idle", "neutral"),
-      item("agent-run", "Running command...", "info"),
+      item("agent-run", "Command activity", "running"),
       item("agent-think", "Thinking...", "active"),
     ]);
 
@@ -35,7 +35,7 @@ describe("selectComposerAgentActivityRows", () => {
     });
     expect(rows[1]).toMatchObject({
       name: "Runner",
-      label: "Running command...",
+      label: "Command activity",
       dotClass: "bg-running",
     });
     expect(rows.some((row) => /Online|Idle/.test(row.label))).toBe(false);
@@ -64,5 +64,14 @@ describe("selectComposerAgentActivityRows", () => {
     expect(selectComposerAgentActivityRows([], [item("agent-think", "Thinking...", "active")])).toEqual([]);
     expect(selectComposerAgentActivityRows(agents, [])).toEqual([]);
     expect(selectComposerAgentActivityRows(agents, undefined)).toEqual([]);
+  });
+
+  it("does not infer the running tone from display copy", () => {
+    const rows = selectComposerAgentActivityRows(
+      [{ agentId: "agent-run", name: "Runner" }],
+      [item("agent-run", "Running command...", "warning")],
+    );
+
+    expect(rows[0]?.dotClass).toBe("bg-amber-500");
   });
 });

@@ -4,13 +4,13 @@ import { useMemo } from "react";
 import { useAgentPresence, useRunnerActivitySummary } from "@multica/core/agents";
 import { useT } from "../i18n/use-t";
 import { resolveAgentLiveStatus, type AgentLiveStatusView } from "./resolve-agent-live-status";
-import { isRunningCommandActivityLabel } from "./runner-activity-labels";
 
 const RUNNER_TONE_DOT_CLASS: Record<string, string> = {
   neutral: "bg-muted-foreground",
   active: "bg-brand",
   info: "bg-blue-500",
   warning: "bg-amber-500",
+  running: "bg-running",
   error: "bg-destructive",
   success: "bg-emerald-500",
 };
@@ -23,9 +23,7 @@ export function projectRunnerActivitySummary(
   return {
     label: summary.label,
     textClass: "text-foreground",
-    dotClass: isRunningCommandActivityLabel(summary.label)
-      ? "bg-running"
-      : RUNNER_TONE_DOT_CLASS[summary.tone] ?? "bg-muted-foreground",
+    dotClass: RUNNER_TONE_DOT_CLASS[summary.tone] ?? "bg-muted-foreground",
   };
 }
 

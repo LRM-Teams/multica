@@ -141,7 +141,7 @@ func TestShadowEquivalenceEvidenceTieOrderMatchesListClaims(t *testing.T) {
 	`, fixture.workspaceID, run.SessionID).Scan(&stateVersion); err != nil {
 		t.Fatal(err)
 	}
-	if err = verifyShadowEquivalenceTx(ctx, tx, fixture.workspaceID, run.SessionID, stateVersion); err != nil {
+	if err = verifyShadowEquivalenceTx(ctx, tx, fixture.workspaceID, run.SessionID, stateVersion, ArtifactPurposeTaskExecution); err != nil {
 		t.Fatalf("verifyShadowEquivalenceTx: %v", err)
 	}
 
@@ -302,7 +302,7 @@ func TestShadowEvidenceTieOrderPromptHashMatchesAfterDispatch(t *testing.T) {
 	`, fixture.workspaceID, run.SessionID).Scan(&stateVersion); err != nil {
 		t.Fatal(err)
 	}
-	if err = verifyShadowEquivalenceTx(ctx, tx, fixture.workspaceID, run.SessionID, stateVersion); err != nil {
+	if err = verifyShadowEquivalenceTx(ctx, tx, fixture.workspaceID, run.SessionID, stateVersion, ArtifactPurposeTaskExecution); err != nil {
 		t.Fatalf("verifyShadowEquivalenceTx after tie dispatch: %v", err)
 	}
 }

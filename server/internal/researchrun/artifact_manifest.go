@@ -60,9 +60,12 @@ func casArtifactVersionSelectionTx(
 	tx pgx.Tx,
 	workspaceID, sessionID, versionRowID string,
 	contentHash string,
-	accessLevel ArtifactAccessLevel,
+	representationBytes []byte,
 	representationHash string,
 ) error {
+	if contentHashFromPayload(representationBytes) != representationHash {
+		return fmt.Errorf("%w: artifact representation bytes/hash CAS failed", ErrInvalidTransition)
+	}
 	var matched bool
 	err := tx.QueryRow(ctx, `
 		SELECT true
@@ -79,7 +82,6 @@ func casArtifactVersionSelectionTx(
 	if err != nil {
 		return err
 	}
-	_ = representationHash
 	return nil
 }
 
@@ -184,6 +186,35 @@ func persistResultArtifactInputReferencesTx(
 	return err
 }
 
+func manifestInputVersionSetHashTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, manifestID string,
+) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT artifact_version_id::text
+		FROM research_artifact_context_entry
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND manifest_id=$3::uuid
+		ORDER BY artifact_version_id::text
+	`, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	return contentHashFromPayload([]byte(strings.Join(ids, "\n"))), nil
+}
+
 type manifestArtifactSet struct {
 	ArtifactIDs map[string]struct{}
 	Hash        string
@@ -284,6 +315,9 @@ func loadManifestAuthorizedArtifactIDsPool(
 		return nil, false, err
 	}
 	if err = verifyAttemptManifestReadGrantPool(ctx, pool, workspaceID, sessionID, attemptID); err != nil {
+		return nil, false, err
+	}
+	if err = verifyAttemptManifestHashPool(ctx, pool, workspaceID, sessionID, attemptID); err != nil {
 		return nil, false, err
 	}
 	rows, err := pool.Query(ctx, `
@@ -419,7 +453,14 @@ func filterClaimsByManifest(claims []Claim, allowed map[string]struct{}) []Claim
 	out := make([]Claim, 0, len(claims))
 	for _, c := range claims {
 		if _, ok := allowed[c.ID]; ok {
-			out = append(out, c)
+			filtered := c
+			filtered.Evidence = make([]ClaimEvidence, 0, len(c.Evidence))
+			for _, evidence := range c.Evidence {
+				if _, evidenceAllowed := allowed[evidence.ArtifactID]; evidenceAllowed {
+					filtered.Evidence = append(filtered.Evidence, evidence)
+				}
+			}
+			out = append(out, filtered)
 		}
 	}
 	return out
@@ -444,24 +485,30 @@ func verifyShadowEquivalenceTx(
 	tx pgx.Tx,
 	workspaceID, sessionID string,
 	stateVersion int64,
+	purpose ArtifactPurpose,
 ) error {
 	module := NewArtifactContextModule()
-	plan, err := module.PlanDispatchManifest(ctx, tx, workspaceID, sessionID, stateVersion)
+	plan, err := module.PlanDispatchManifestForPurpose(ctx, tx, workspaceID, sessionID, stateVersion, purpose)
 	if err != nil {
 		return err
 	}
-	liveIDs, err := loadLegacyManifestVisibleArtifactIDsTx(ctx, tx, workspaceID, sessionID)
+	return verifyShadowPlanEquivalenceTx(ctx, tx, workspaceID, sessionID, plan, "")
+}
+
+func verifyShadowPlanEquivalenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	plan dispatchManifestPlan,
+	excludedContextManifestID string,
+) error {
+	domainProjection, err := loadLegacyShadowDomainProjectionTx(
+		ctx, tx, workspaceID, sessionID, plan.Purpose, excludedContextManifestID,
+	)
 	if err != nil {
 		return err
 	}
-	manifestIDs := make(map[string]struct{}, len(plan.Entries))
-	for _, entry := range plan.Entries {
-		manifestIDs[entry.ArtifactID] = struct{}{}
-	}
-	return compareShadowManifestError(liveIDs, manifestArtifactSet{
-		ArtifactIDs: manifestIDs,
-		Hash:        plan.ManifestHash,
-	})
+	return compareShadowDomainProjection(domainProjection, projectManifestForShadow(plan), plan.ManifestHash)
 }
 
 func loadLegacyManifestVisibleArtifactIDsTx(
@@ -481,9 +528,7 @@ func loadLegacyManifestVisibleArtifactIDsTx(
 		if module.policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
 			continue
 		}
-		admitted, _ := module.policy.LegacyAdmissionAllowed(
-			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
-		)
+		admitted, _ := module.policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts())
 		if !admitted {
 			continue
 		}
@@ -691,6 +736,7 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 		    AND m.attempt_id = $3::uuid
 		    AND (
 		      e.eligibility_revision <> p.eligibility_revision
+		      OR v.version <> p.current_version
 		      OR p.lifecycle_status NOT IN ('registered', 'accepted')
 		    )
 		)
@@ -729,15 +775,20 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 	return nil
 }
 
-func loadManifestEntryCandidatesForAttemptTx(
+type artifactManifestQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func loadManifestEntryCandidatesForAttempt(
 	ctx context.Context,
-	tx pgx.Tx,
+	querier artifactManifestQuerier,
 	workspaceID, sessionID, attemptID string,
 ) ([]artifactVersionCandidate, dispatchManifestHashInput, string, error) {
 	var hashInput dispatchManifestHashInput
 	var purposeRaw string
 	var storedHash string
-	err := tx.QueryRow(ctx, `
+	err := querier.QueryRow(ctx, `
 		SELECT workspace_id::text, session_id::text, attempt_id::text, task_id::text,
 		       purpose, policy_version, policy_watermark, through_state_version,
 		       manifest_hash
@@ -755,16 +806,22 @@ func loadManifestEntryCandidatesForAttemptTx(
 	}
 	hashInput.Purpose = ArtifactPurpose(purposeRaw)
 
-	rows, err := tx.Query(ctx, `
+	rows, err := querier.Query(ctx, `
 		SELECT
 		  v.id::text,
 		  v.artifact_id::text,
 		  p.entity_kind,
 		  v.version,
 		  e.eligibility_revision,
+		  v.access_level,
 		  v.content_hash,
 		  e.representation,
-		  e.representation_hash
+		  e.representation_hash,
+		  e.selection_lifecycle_status,
+		  e.selection_provenance_completeness,
+		  e.selection_version_count,
+		  e.selection_input_reference_count,
+		  e.selection_output_reference_count
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m
 		  ON m.workspace_id = e.workspace_id
@@ -791,10 +848,13 @@ func loadManifestEntryCandidatesForAttemptTx(
 	var entries []artifactVersionCandidate
 	for rows.Next() {
 		var entry artifactVersionCandidate
-		var kindRaw string
+		var kindRaw, accessRaw string
+		var lifecycleRaw, provenanceRaw *string
+		var versionCount, inputCount, outputCount *int
 		if err = rows.Scan(
 			&entry.VersionRowID, &entry.ArtifactID, &kindRaw, &entry.Version, &entry.EligibilityRevision,
-			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
+			&accessRaw, &entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
+			&lifecycleRaw, &provenanceRaw, &versionCount, &inputCount, &outputCount,
 		); err != nil {
 			return nil, dispatchManifestHashInput{}, "", err
 		}
@@ -802,6 +862,15 @@ func loadManifestEntryCandidatesForAttemptTx(
 		if err != nil {
 			return nil, dispatchManifestHashInput{}, "", err
 		}
+		if lifecycleRaw == nil || provenanceRaw == nil || versionCount == nil || inputCount == nil || outputCount == nil {
+			return nil, dispatchManifestHashInput{}, "", fmt.Errorf("%w: manifest entry lacks frozen projection metadata", ErrInvalidTransition)
+		}
+		entry.AccessLevel = ArtifactAccessLevel(accessRaw)
+		entry.Lifecycle = ArtifactLifecycleStatus(*lifecycleRaw)
+		entry.Provenance = ArtifactProvenanceCompleteness(*provenanceRaw)
+		entry.VersionCount = *versionCount
+		entry.InputReferenceCount = *inputCount
+		entry.OutputReferenceCount = *outputCount
 		entries = append(entries, entry)
 	}
 	if err = rows.Err(); err != nil {
@@ -811,12 +880,30 @@ func loadManifestEntryCandidatesForAttemptTx(
 	return entries, hashInput, storedHash, nil
 }
 
+func verifyAttemptManifestHashPool(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID string,
+) error {
+	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttempt(ctx, pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(storedHash) == "" {
+		return fmt.Errorf("%w: attempt manifest hash missing", ErrInvalidTransition)
+	}
+	if hashDispatchManifest(hashInput) != storedHash {
+		return fmt.Errorf("%w: attempt manifest hash mismatch", ErrInvalidTransition)
+	}
+	return nil
+}
+
 func verifyAcceptanceManifestHashTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, attemptID string,
 ) error {
-	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttemptTx(ctx, tx, workspaceID, sessionID, attemptID)
+	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttempt(ctx, tx, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return err
 	}
@@ -825,6 +912,54 @@ func verifyAcceptanceManifestHashTx(
 	}
 	if hashDispatchManifest(hashInput) != storedHash {
 		return fmt.Errorf("%w: acceptance manifest hash mismatch", ErrInvalidTransition)
+	}
+	if err = verifyAcceptanceManifestOmissionHashTx(ctx, tx, workspaceID, sessionID, attemptID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyAcceptanceManifestOmissionHashTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var storedHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT omission_hash
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&storedHash); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT o.candidate_version_id::text, o.reason
+		FROM research_artifact_context_omission o
+		JOIN research_artifact_context_manifest m
+		  ON (m.workspace_id, m.session_id, m.id) =
+		     (o.workspace_id, o.session_id, o.manifest_id)
+		WHERE m.workspace_id = $1::uuid
+		  AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+		ORDER BY o.ordinal
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var omissions []artifactVersionCandidate
+	for rows.Next() {
+		var omission artifactVersionCandidate
+		if err = rows.Scan(&omission.VersionRowID, &omission.OmissionReason); err != nil {
+			return err
+		}
+		omissions = append(omissions, omission)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if storedHash == "" || hashManifestOmissions(omissions) != storedHash {
+		return fmt.Errorf("%w: acceptance Manifest omission hash mismatch", ErrInvalidTransition)
 	}
 	return nil
 }

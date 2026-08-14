@@ -33,7 +33,11 @@ type acceptanceRaceWriteSet struct {
 	tasks             int
 	acceptedEvents    int
 	producedPassports int
+	artifactVersions  int
 	inputReferences   int
+	lifecycleEvents   int
+	policyMutations   int
+	supersessions     int
 }
 
 func loadAcceptanceRaceWriteSet(t *testing.T, ctx context.Context, fx acceptanceRaceFixture) acceptanceRaceWriteSet {
@@ -51,10 +55,15 @@ func loadAcceptanceRaceWriteSet(t *testing.T, ctx context.Context, fx acceptance
 		     ON (passport.workspace_id, passport.session_id, passport.id) =
 		        (version.workspace_id, version.session_id, version.artifact_id)
 		   WHERE passport.session_id = $1::uuid AND version.produced_by_attempt_id = $2::uuid),
-		  (SELECT count(*)::int FROM research_artifact_input_reference WHERE session_id = $1::uuid)
+		  (SELECT count(*)::int FROM research_artifact_version WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_lifecycle_event WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_policy_mutation WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_supersession WHERE session_id = $1::uuid)
 	`, fx.run.SessionID, fx.attempt.ID).Scan(
 		&state.resultArtifacts, &state.methodDecisions, &state.questions, &state.tasks,
-		&state.acceptedEvents, &state.producedPassports, &state.inputReferences,
+		&state.acceptedEvents, &state.producedPassports, &state.artifactVersions,
+		&state.inputReferences, &state.lifecycleEvents, &state.policyMutations, &state.supersessions,
 	); err != nil {
 		t.Fatal(err)
 	}

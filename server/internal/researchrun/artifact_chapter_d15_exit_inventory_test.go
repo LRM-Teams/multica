@@ -32,7 +32,7 @@ var chapterD15Coverage = map[int]string{
 	15: "covered", // after-begin/before-commit/after-commit dispatch artifact recovery matrix
 	16: "covered", // historical live vs frozen manifest tests
 	17: "covered", // exact Gate bytes/hash + policy version + unchanged V1-V5 rubric on frozen Attempt context
-	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state + Task contract/dependencies after rollback
+	18: "covered", // full preflight race matrix + complete domain/passport/version/ledger rollback write-set assertions
 	19: "covered", // unrelated advance reauthorization + affected eligibility denial + final acceptance watermark
 	20: "covered", // kind/artifact/version total order + opposite-payload concurrent acceptance without deadlock
 	21: "covered", // payload + manifest ID/hash + exact input-version set + producer/watermark lineage replay

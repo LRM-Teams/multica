@@ -38,7 +38,7 @@ func loadArtifactRelationshipHashesTx(
 		), relationships AS (
 		  SELECT current.id AS owner_version_id, 'input'::text AS direction,
 		         reference.id, reference.input_version_id AS other_version_id,
-		         reference.relation, COALESCE(reference.manifest_id::text, ''),
+		         reference.relation, COALESCE(reference.manifest_id::text, '') AS manifest_id,
 		         reference.explicitly_used, reference.purpose, reference.ordinal
 		  FROM current_versions current
 		  JOIN research_artifact_input_reference reference

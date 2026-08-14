@@ -112,6 +112,15 @@ vi.mock("./research-home-overview", () => ({
   ResearchHomeOverview: () => <div data-testid="research-home-overview" />,
 }));
 
+vi.mock("./research-home-constellation-preview", () => ({
+  ResearchHomeConstellationPreview: () => (
+    <div
+      data-testid="research-home-constellation"
+      aria-label="Current research workspace constellation overview"
+    />
+  ),
+}));
+
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: () => <span data-testid="actor-avatar" />,
 }));
@@ -212,7 +221,9 @@ describe("ResearchListPage list states (LRM-789)", () => {
     const row = container.querySelector('[data-testid="research-session-row-skeleton"]');
     expect(row?.className).toContain("min-h-[58px]");
     expect(row?.className).not.toContain("border");
-    expect(screen.queryByText(enResearch.groups.in_progress)).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: new RegExp(enResearch.groups.in_progress) }),
+    ).toBeNull();
     expect(screen.queryByText(enResearch.empty_title)).toBeNull();
   });
 
@@ -428,7 +439,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
 
     const desc = screen.getByText(enResearch.home.hero_desc);
     expect(desc.className).not.toContain("max-w-[36rem]");
-    expect(desc.className).toContain("truncate");
+    expect(desc.className).toContain("line-clamp-1");
 
     const goal = screen.getByTestId("research-create-goal");
     expect(goal.className).toContain("min-h-10");

@@ -16,6 +16,26 @@ const (
 	txAfterBegin   researchTxFaultPoint = "after_begin"
 	txBeforeCommit researchTxFaultPoint = "before_commit"
 	txAfterCommit  researchTxFaultPoint = "after_commit"
+
+	txResultAfterMethod            researchTxFaultPoint = "result_after_method"
+	txResultAfterQuestion          researchTxFaultPoint = "result_after_question"
+	txResultAfterTask              researchTxFaultPoint = "result_after_task"
+	txResultAfterTaskDependency    researchTxFaultPoint = "result_after_task_dependency"
+	txResultAfterSourceSnapshot    researchTxFaultPoint = "result_after_source_snapshot"
+	txResultAfterLegacySource      researchTxFaultPoint = "result_after_legacy_source"
+	txResultAfterObservation       researchTxFaultPoint = "result_after_observation"
+	txResultAfterClaim             researchTxFaultPoint = "result_after_claim"
+	txResultAfterEvidenceLink      researchTxFaultPoint = "result_after_evidence_link"
+	txResultAfterReport            researchTxFaultPoint = "result_after_report"
+	txResultAfterReportClaim       researchTxFaultPoint = "result_after_report_claim"
+	txResultAfterEvaluation        researchTxFaultPoint = "result_after_evaluation_decision"
+	txResultAfterAttemptTerminal   researchTxFaultPoint = "result_after_attempt_terminal"
+	txResultAfterCircuitSettlement researchTxFaultPoint = "result_after_circuit_settlement"
+	txResultAfterResultArtifact    researchTxFaultPoint = "result_after_result_artifact"
+	txResultAfterArtifactLineage   researchTxFaultPoint = "result_after_artifact_lineage"
+	txResultAfterTaskTerminal      researchTxFaultPoint = "result_after_task_terminal"
+	txResultAfterRunUpdate         researchTxFaultPoint = "result_after_run_update"
+	txResultAfterEvent             researchTxFaultPoint = "result_after_event"
 )
 
 const (
@@ -55,6 +75,30 @@ const (
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error
+
+func resultAcceptanceSemanticFaultPoints() []researchTxFaultPoint {
+	return []researchTxFaultPoint{
+		txResultAfterMethod,
+		txResultAfterQuestion,
+		txResultAfterTask,
+		txResultAfterTaskDependency,
+		txResultAfterSourceSnapshot,
+		txResultAfterLegacySource,
+		txResultAfterObservation,
+		txResultAfterClaim,
+		txResultAfterEvidenceLink,
+		txResultAfterReport,
+		txResultAfterReportClaim,
+		txResultAfterEvaluation,
+		txResultAfterAttemptTerminal,
+		txResultAfterCircuitSettlement,
+		txResultAfterResultArtifact,
+		txResultAfterArtifactLineage,
+		txResultAfterTaskTerminal,
+		txResultAfterRunUpdate,
+		txResultAfterEvent,
+	}
+}
 
 type researchTxBeginFunc func(context.Context, pgx.TxOptions) (pgx.Tx, error)
 

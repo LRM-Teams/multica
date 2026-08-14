@@ -23,6 +23,14 @@ type acceptedResultState struct {
 	targetPlan   int
 	verified     bool
 	outputAccess ArtifactAccessLevel
+	checkpoint   func(context.Context, researchTxFaultPoint) error
+}
+
+func (state acceptedResultState) checkpointAfter(ctx context.Context, point researchTxFaultPoint) error {
+	if state.checkpoint == nil {
+		return nil
+	}
+	return state.checkpoint(ctx, point)
 }
 
 func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) (AcceptResultOutcome, error) {
@@ -47,6 +55,12 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	state.outputAccess = ArtifactAccessRaw
+	state.checkpoint = func(ctx context.Context, point researchTxFaultPoint) error {
+		if s.txFaultHook == nil {
+			return nil
+		}
+		return s.txFaultHook(ctx, txOpResultAccept, point)
+	}
 
 	artifactPassportEnabled, err := sessionArtifactPassportEnabled(ctx, tx, in.SessionID, state.workspaceID)
 	if err != nil {
@@ -176,7 +190,13 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	if command.RowsAffected() != 1 {
 		return AcceptResultOutcome{}, fmt.Errorf("%w: attempt changed while accepting result", ErrInvalidTransition)
 	}
+	if err = state.checkpointAfter(ctx, txResultAfterAttemptTerminal); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 	if err = settleAttemptCircuitSuccessTx(ctx, tx, in.AttemptID); err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	if err = state.checkpointAfter(ctx, txResultAfterCircuitSettlement); err != nil {
 		return AcceptResultOutcome{}, err
 	}
 	if artifactPassportEnabled {
@@ -187,6 +207,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		if persistErr != nil {
 			return AcceptResultOutcome{}, classifyResultConstraint(persistErr)
 		}
+		if err = state.checkpointAfter(ctx, txResultAfterResultArtifact); err != nil {
+			return AcceptResultOutcome{}, err
+		}
 		resultVersionRowID, versionErr := loadManifestVersionRowIDTx(ctx, tx, state.workspaceID, in.SessionID, resultID)
 		if versionErr != nil {
 			return AcceptResultOutcome{}, versionErr
@@ -194,12 +217,18 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		if err = persistResultArtifactInputReferencesTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID, resultVersionRowID); err != nil {
 			return AcceptResultOutcome{}, classifyResultConstraint(err)
 		}
+		if err = state.checkpointAfter(ctx, txResultAfterArtifactLineage); err != nil {
+			return AcceptResultOutcome{}, err
+		}
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task
 		SET status = 'succeeded', completed_at = now(), terminal_reason = '', updated_at = now()
 		WHERE id = $1::uuid
 	`, state.task.ID); err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	if err = state.checkpointAfter(ctx, txResultAfterTaskTerminal); err != nil {
 		return AcceptResultOutcome{}, err
 	}
 	if !state.stale {
@@ -242,6 +271,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		outcome.SourcesCreated, outcome.ObservationsCreated, outcome.ClaimsCreated); err != nil {
 		return AcceptResultOutcome{}, err
 	}
+	if err = state.checkpointAfter(ctx, txResultAfterRunUpdate); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 	event, err := appendEvent(ctx, tx, state.workspaceID, in.SessionID, "task_result_accepted", "result:"+in.AttemptID, "agent", in.AgentID, map[string]any{
 		"attempt_id":           in.AttemptID,
 		"task_id":              state.task.ID,
@@ -264,6 +296,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	outcome.Event = event
+	if err = state.checkpointAfter(ctx, txResultAfterEvent); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 	if err = s.commitResearchTx(ctx, txOpResultAccept, tx); err != nil {
 		return AcceptResultOutcome{}, err
 	}
@@ -343,7 +378,7 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 	if err != nil {
 		return err
 	}
-	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            state.workspaceID,
 		SessionID:              state.run.SessionID,
 		EntityID:               decisionID,
@@ -356,7 +391,10 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 		HashOrigin:             ArtifactHashOriginProduction,
 		ContentHash:            contentHash,
 		ProducedByAttemptID:    state.attemptID,
-	})
+	}); err != nil {
+		return err
+	}
+	return state.checkpointAfter(ctx, txResultAfterMethod)
 }
 
 func isEvidenceTask(kind TaskKind) bool {
@@ -637,6 +675,9 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		if !existed {
 			created++
 			createdIDs = append(createdIDs, id)
+			if err = state.checkpointAfter(ctx, txResultAfterQuestion); err != nil {
+				return nil, 0, err
+			}
 		}
 		ids[proposal.ClientKey] = id
 	}
@@ -804,6 +845,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			created++
 			taskIDs[proposal.ClientKey] = id
 			createdTaskIDs = append(createdTaskIDs, id)
+			if err = state.checkpointAfter(ctx, txResultAfterTask); err != nil {
+				return 0, err
+			}
 		}
 		if err != nil {
 			return 0, err
@@ -821,6 +865,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			`, state.workspaceID, state.run.SessionID, taskIDs[proposal.ClientKey], dependencyID); err != nil {
 				return 0, err
 			}
+			if err = state.checkpointAfter(ctx, txResultAfterTaskDependency); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if err = validateDeclaredTaskDependencies(ctx, tx, state.workspaceID, state.run.SessionID, proposals, taskIDs); err != nil {
@@ -832,6 +879,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 				INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
 				VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid) ON CONFLICT DO NOTHING
 			`, state.workspaceID, state.run.SessionID, taskIDs[proposal.ClientKey], state.task.ID); err != nil {
+				return 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterTaskDependency); err != nil {
 				return 0, err
 			}
 		}
@@ -1086,6 +1136,9 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			}); err != nil {
 				return nil, 0, err
 			}
+			if err = state.checkpointAfter(ctx, txResultAfterSourceSnapshot); err != nil {
+				return nil, 0, err
+			}
 		}
 		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
 			return nil, 0, err
@@ -1130,6 +1183,9 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 				AccessLevel:            state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
 				ContentHash: versionHash, ProducedByAttemptID: state.attemptID,
 			}); err != nil {
+				return nil, 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterLegacySource); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -1231,6 +1287,9 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 			}); err != nil {
 				return nil, 0, err
 			}
+			if err = state.checkpointAfter(ctx, txResultAfterObservation); err != nil {
+				return nil, 0, err
+			}
 		}
 		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
 			return nil, 0, err
@@ -1320,6 +1379,9 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			); err != nil {
 				return nil, 0, err
 			}
+			if err = state.checkpointAfter(ctx, txResultAfterClaim); err != nil {
+				return nil, 0, err
+			}
 		}
 		for _, evidence := range claim.Evidence {
 			observationID, ok := observationIDs[evidence.ObservationKey]
@@ -1373,6 +1435,9 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				return nil, 0, err
 			}
 			if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, evidenceID); err != nil {
+				return nil, 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterEvidenceLink); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -1454,6 +1519,9 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 	}); err != nil {
 		return "", err
 	}
+	if err = state.checkpointAfter(ctx, txResultAfterReport); err != nil {
+		return "", err
+	}
 	sections := map[string]reportStructuredSection{}
 	citations := map[string]reportStructuredCitation{}
 	if usesStructuredResultContract(state.run.OrchestratorVersion) {
@@ -1512,6 +1580,9 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6) ON CONFLICT DO NOTHING
 		`, state.workspaceID, state.run.SessionID, reportID, claimID,
 			truncateBytes(link.SectionID, 160), truncateBytes(link.AnchorQuote, 8192)); err != nil {
+			return "", err
+		}
+		if err = state.checkpointAfter(ctx, txResultAfterReportClaim); err != nil {
 			return "", err
 		}
 	}
@@ -1587,14 +1658,17 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	if err != nil {
 		return err
 	}
-	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: decisionID,
 		Kind: kind, SourceCreatedAt: timePtr(time.Now()),
 		ProvenanceCompleteness: ArtifactProvenanceComplete,
 		GoalVersion:            int32Ptr(int32(state.run.GoalVersion)), PlanVersion: int32Ptr(int32(state.targetPlan)),
 		AccessLevel: state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
 		ContentHash: contentHash, ProducedByAttemptID: state.attemptID,
-	})
+	}); err != nil {
+		return err
+	}
+	return state.checkpointAfter(ctx, txResultAfterEvaluation)
 }
 
 func evaluationDecisionArtifactContent(

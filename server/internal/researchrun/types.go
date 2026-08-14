@@ -329,6 +329,7 @@ type Observation struct {
 }
 
 type ClaimEvidence struct {
+	ArtifactID         string  `json:"-"`
 	ObservationID      string  `json:"observation_id"`
 	Relation           string  `json:"relation"`
 	Strength           float64 `json:"strength"`

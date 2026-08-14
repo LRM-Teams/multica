@@ -207,7 +207,7 @@ func TestManifestEntryRepresentationBytesAreFrozenAndHashBound(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch ArtifactEntityKind(kind) {
-		case ArtifactKindContractRevision, ArtifactKindMethodDecision, ArtifactKindQuestion, ArtifactKindTask, ArtifactKindAttempt:
+		case ArtifactKindContractRevision, ArtifactKindMethodDecision, ArtifactKindQuestion, ArtifactKindTask, ArtifactKindAttempt, ArtifactKindGraphNode, ArtifactKindLegacySource, ArtifactKindResearchMessage, ArtifactKindProductRoundDecision, ArtifactKindReportRevision:
 			var decoded struct {
 				Order int            `json:"order"`
 				Value map[string]any `json:"value"`

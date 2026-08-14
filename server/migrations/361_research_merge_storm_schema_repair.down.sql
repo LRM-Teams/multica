@@ -1,3 +1,5 @@
+DROP FUNCTION IF EXISTS research_search_lineage_entity_exists(UUID, UUID, TEXT, UUID);
+
 DROP TRIGGER IF EXISTS research_screening_decision_artifact_passport_delete_guard ON research_screening_decision;
 DROP TRIGGER IF EXISTS research_source_candidate_artifact_passport_delete_guard ON research_source_candidate;
 DROP TRIGGER IF EXISTS research_query_execution_artifact_passport_delete_guard ON research_query_execution;

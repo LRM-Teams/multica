@@ -107,6 +107,10 @@ vi.mock("./research-session-row", () => ({
   ),
 }));
 
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: () => <span data-testid="actor-avatar" />,
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (fn: (dict: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {

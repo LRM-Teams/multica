@@ -60,6 +60,163 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION research_search_lineage_entity_exists(
+  p_workspace_id UUID, p_session_id UUID, p_kind TEXT, p_id UUID
+) RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+BEGIN
+  CASE p_kind
+    WHEN 'search_plan' THEN
+      RETURN EXISTS (
+        SELECT 1 FROM research_search_plan entity
+        WHERE (entity.workspace_id, entity.session_id, entity.id) = (p_workspace_id, p_session_id, p_id)
+      );
+    WHEN 'query_execution' THEN
+      RETURN EXISTS (
+        SELECT 1 FROM research_query_execution entity
+        WHERE (entity.workspace_id, entity.session_id, entity.id) = (p_workspace_id, p_session_id, p_id)
+      );
+    WHEN 'source_candidate' THEN
+      RETURN EXISTS (
+        SELECT 1 FROM research_source_candidate entity
+        WHERE (entity.workspace_id, entity.session_id, entity.id) = (p_workspace_id, p_session_id, p_id)
+      );
+    WHEN 'screening_decision' THEN
+      RETURN EXISTS (
+        SELECT 1 FROM research_screening_decision entity
+        WHERE (entity.workspace_id, entity.session_id, entity.id) = (p_workspace_id, p_session_id, p_id)
+      );
+    ELSE
+      RETURN false;
+  END CASE;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION research_artifact_passport_class_guard_fn()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.entity_kind IN ('search_plan','query_execution','source_candidate','screening_decision') THEN
+    IF NOT research_search_lineage_entity_exists(NEW.workspace_id, NEW.session_id, NEW.entity_kind, NEW.id) THEN
+      RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard';
+    END IF;
+    RETURN NEW;
+  END IF;
+  CASE NEW.entity_kind
+    WHEN 'run_session' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_session s
+        WHERE s.workspace_id = NEW.workspace_id AND s.id = NEW.id AND s.id = NEW.session_id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'contract_revision' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_contract_revision r
+        WHERE r.workspace_id = NEW.workspace_id AND r.session_id = NEW.session_id AND r.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'method_decision' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_decision d
+        WHERE d.workspace_id = NEW.workspace_id AND d.session_id = NEW.session_id AND d.id = NEW.id
+          AND d.decision_kind = 'research_method'
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'evaluation_decision' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_decision d
+        WHERE d.workspace_id = NEW.workspace_id AND d.session_id = NEW.session_id AND d.id = NEW.id
+          AND d.decision_kind <> 'research_method'
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'question' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_question q
+        WHERE q.workspace_id = NEW.workspace_id AND q.session_id = NEW.session_id AND q.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'task' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_task t
+        WHERE t.workspace_id = NEW.workspace_id AND t.session_id = NEW.session_id AND t.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'attempt' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_task_attempt a
+        WHERE a.workspace_id = NEW.workspace_id AND a.session_id = NEW.session_id AND a.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'result_artifact' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_result_artifact r
+        WHERE r.workspace_id = NEW.workspace_id AND r.session_id = NEW.session_id AND r.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'legacy_source' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_source s
+        WHERE s.workspace_id = NEW.workspace_id AND s.session_id = NEW.session_id AND s.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'source_snapshot' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_source_snapshot s
+        WHERE s.workspace_id = NEW.workspace_id AND s.session_id = NEW.session_id AND s.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'observation' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_observation o
+        WHERE o.workspace_id = NEW.workspace_id AND o.session_id = NEW.session_id AND o.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'claim' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_claim c
+        WHERE c.workspace_id = NEW.workspace_id AND c.session_id = NEW.session_id AND c.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'evidence_link' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_claim_evidence e
+        WHERE e.workspace_id = NEW.workspace_id AND e.session_id = NEW.session_id AND e.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'report_revision' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_report r
+        WHERE r.workspace_id = NEW.workspace_id AND r.session_id = NEW.session_id AND r.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'stage_evaluation' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_stage_eval e
+        WHERE e.workspace_id = NEW.workspace_id AND e.session_id = NEW.session_id AND e.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'research_message' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_message m
+        WHERE m.workspace_id = NEW.workspace_id AND m.session_id = NEW.session_id AND m.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'product_round_decision' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_product_round_card p
+        WHERE p.workspace_id = NEW.workspace_id AND p.session_id = NEW.session_id AND p.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'context_manifest' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_artifact_context_manifest m
+        WHERE m.workspace_id = NEW.workspace_id AND m.session_id = NEW.session_id AND m.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'run_event' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_run_event e
+        WHERE e.workspace_id = NEW.workspace_id AND e.session_id = NEW.session_id AND e.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'graph_node' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_graph_node n
+        WHERE n.workspace_id = NEW.workspace_id AND n.session_id = NEW.session_id AND n.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    WHEN 'graph_edge' THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM research_graph_edge e
+        WHERE e.workspace_id = NEW.workspace_id AND e.session_id = NEW.session_id AND e.id = NEW.id
+      ) THEN RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard'; END IF;
+    ELSE
+      RAISE foreign_key_violation USING CONSTRAINT = 'research_artifact_passport_class_guard';
+  END CASE;
+  RETURN NEW;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION research_artifact_schema_family_allowed(
   p_schema_name TEXT,
   p_schema_version TEXT,

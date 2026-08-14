@@ -510,6 +510,7 @@
     "task_meta": "任务",
     "agent_legend": "Agent {{id}}",
     "kinds": {
+      "goal": "目标",
       "task": "任务",
       "attempt": "尝试",
       "result_artifact": "结果工件",

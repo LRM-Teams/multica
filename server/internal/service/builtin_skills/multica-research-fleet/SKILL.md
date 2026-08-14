@@ -18,12 +18,18 @@ If the prompt contains `## Durable Research Run task`, follow its task ID,
 attempt ID, versions, objective, acceptance criteria, and result contract.
 
 1. Read the attempt-bound snapshot before work. Agent data-plane reads require
-the dispatched Attempt ID so the server returns only the frozen manifest; an
-unscoped live-session read is rejected:
+the dispatched Attempt ID so the server returns only the frozen manifest. An
+active Fleet member without an Attempt may read only a bounded session/Fleet
+overview; it contains no goal, Run, artifact, message, report, hash, or grant data:
 
 ```bash
 multica research session get <session-id> --attempt-id <attempt-id> --output json
 ```
+
+The durable dispatch carries the same Manifest ID and hash in its Inbox
+context. The attempt-bound snapshot returns them under `attempt_context`; a
+mismatch means the execution is not bound to the context that was dispatched
+and must fail closed rather than continue from a live session view.
 
 The snapshot's `run.contract`, `run.method`, `run.sources`,
 `run.observations`, and `run.claims` are the canonical read model for contract
@@ -32,12 +38,21 @@ represented by a bounded excerpt plus content hash; exact Observation quotes
 were already checked against the immutable full snapshot at ingestion. V3–V5
 non-plan tasks inherit the accepted Method for the current goal/plan version.
 V4/V5 also expose the accepted Claim-level evidence standards.
+Contract, Method, Question, Task, and Attempt rows are the exact ordered values
+frozen when this Attempt was dispatched. Later replans, retries, assignment
+changes, runtime transitions, or terminal diagnostics do not rewrite this view.
+The top-level `session` and `fleet` families are compatibility headers rebuilt
+from the frozen Run and hashed principal roster. They intentionally omit live
+Agent profiles, runtime configuration, routing fields, timestamps, and roster
+changes made after this Attempt was dispatched.
 
 2. Perform the assigned investigation according to `run.method`. Explore
 beyond the first plausible answer. For V4/V5, each Claim references an accepted
 `evidence_standard_key`; every Source Snapshot records evidence traits and every
 Evidence Link records directness and method fit. Evaluate those fields against
-the Claim, not a universal source hierarchy. Preserve retrieved source text in
+the Claim, not a universal source hierarchy. Evidence Links are separately
+authorized manifest artifacts even though they appear nested under a Claim;
+the snapshot omits any link the assigned Attempt cannot read. Preserve retrieved source text in
 each source snapshot. Every quoted observation must be an exact substring of
 that snapshot. Execute required counter-search and record uncertainty. Source
 URLs must identify public resources and must never embed a username, password,
@@ -67,6 +82,10 @@ authorized attempt; the stale result fails closed.
 legacy mutations are rejected for initialized runs. Do not claim completion in
 chat before `task-result` succeeds.
 
+5. A task receives domain artifacts selected for its frozen manifest. Context
+Manifest internals and V6 inquiry artifacts are never admitted through the
+legacy V1–V5 compatibility policy.
+
 ## Result responsibilities
 
 - `plan` / `replan`: required questions, an explicit decision question and
@@ -91,6 +110,13 @@ chat before `task-result` succeeds.
   source declares evidence traits and each Claim declares its accepted evidence
   standard. A question-scoped result that increases coverage sets
   `answer_claim_key` to a Claim included in that result.
+  When a task screens retrieval candidates, preserve the exact versioned
+  inclusion/exclusion criterion IDs, reviewer identity and time, substantive
+  reason, and inspectable facts with locators. Accepted candidates must match an
+  inclusion criterion and no exclusion criterion. Excluded candidates must
+  match an exclusion criterion. Duplicates point to a different canonical
+  candidate and carry its canonical URL or SHA-256 content hash; prose-only
+  similarity is not duplicate evidence.
 - `verify` / `counter_search`: independent corroboration, contradictory
   evidence, and explicit claim resolutions. Agreement without source evidence
   is not verification. Include the source, observation, claim, and evidence
@@ -101,7 +127,8 @@ chat before `task-result` succeeds.
   reader structure (outline, sections, citations, sources, gaps, conclusion),
   repeats every section and conclusion exactly in `content_md`, and links
   normalized Claim keys to section IDs with exact `anchor_quote` prose. Each
-  linked section cites a stored source that verifiably supports that Claim. A
+  structured source ID must name a stored Source in the same Research session;
+  every linked section cites one of those sources and it verifiably supports that Claim. A
   V3–V5 report explains the applied Method, counterevidence, limitations,
   unresolved gaps, and decision consequence.
 - `quality_gate` / `citation_audit`: independent evaluation of the latest report
@@ -135,6 +162,11 @@ run. Information gain comes from server-observed evidence-graph changes:
 verified answer coverage, verification, independent evidence, counterevidence,
 resolution, and diminishing graph novelty. Do not inflate it by minting new
 keys for duplicate content or by self-reporting coverage.
+
+An Inbox delivery that expires before any worker claims it is terminal only for
+that delivery. The server preserves the Research Task's bounded attempt budget
+and re-resolves an available execution target; do not duplicate the Task or
+change its method to recover from this delivery failure.
 
 Every `required_capability` in a proposed task must exactly match an active
 fleet role. When a real specialty is missing, the lead must hire it, optimize

@@ -69,12 +69,24 @@ func TestAcceptResultAcceptsAfterUnrelatedPolicyWatermarkAdvance(t *testing.T) {
 	store := NewPostgresStore(pool)
 
 	attempt, inboxID, raw, run, task := setupRunningPlanAttempt(t, ctx, store, fixture)
-	if _, err = pool.Exec(ctx, `
+	var manifestWatermark, unrelatedWatermark int64
+	if err = pool.QueryRow(ctx, `
+		SELECT policy_watermark
+		FROM research_artifact_context_manifest
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&manifestWatermark); err != nil {
+		t.Fatalf("load dispatch manifest watermark: %v", err)
+	}
+	if err = pool.QueryRow(ctx, `
 		UPDATE research_artifact_policy_state
 		SET watermark = watermark + 1, updated_at = now()
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
-	`, fixture.workspaceID, run.SessionID); err != nil {
+		RETURNING watermark
+	`, fixture.workspaceID, run.SessionID).Scan(&unrelatedWatermark); err != nil {
 		t.Fatalf("advance unrelated policy watermark: %v", err)
+	}
+	if unrelatedWatermark <= manifestWatermark {
+		t.Fatalf("unrelated watermark=%d must advance manifest=%d", unrelatedWatermark, manifestWatermark)
 	}
 
 	result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, run.Config)
@@ -91,15 +103,49 @@ func TestAcceptResultAcceptsAfterUnrelatedPolicyWatermarkAdvance(t *testing.T) {
 	if outcome.TaskID != task.ID {
 		t.Fatalf("outcome=%+v", outcome)
 	}
-	var resultArtifacts int
+	var resultArtifacts, manifestEntries, acceptanceReferences int
+	var acceptanceWatermark, finalPolicyWatermark int64
 	if err = pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_result_artifact
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&resultArtifacts); err != nil {
+		WITH accepted_result AS (
+		  SELECT id, acceptance_policy_watermark
+		  FROM research_result_artifact
+		  WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid
+		), result_version AS (
+		  SELECT version.id
+		  FROM research_artifact_version version
+		  JOIN accepted_result ON accepted_result.id=version.artifact_id
+		  WHERE version.workspace_id=$1::uuid AND version.session_id=$2::uuid AND version.version=1
+		)
+		SELECT
+		  (SELECT count(*)::int FROM accepted_result),
+		  (SELECT acceptance_policy_watermark FROM accepted_result),
+		  (SELECT watermark FROM research_artifact_policy_state
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid),
+		  (SELECT count(DISTINCT entry.artifact_version_id)::int FROM research_artifact_context_entry entry
+		   JOIN research_artifact_context_manifest manifest
+		     ON (manifest.workspace_id,manifest.session_id,manifest.id)=
+		        (entry.workspace_id,entry.session_id,entry.manifest_id)
+		   WHERE manifest.workspace_id=$1::uuid AND manifest.session_id=$2::uuid
+		     AND manifest.attempt_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference reference
+		   JOIN result_version ON result_version.id=reference.consumer_version_id
+		   WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
+		     AND reference.relation='acceptance_input')
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&resultArtifacts, &acceptanceWatermark, &finalPolicyWatermark,
+		&manifestEntries, &acceptanceReferences,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if resultArtifacts != 1 {
 		t.Fatalf("result artifacts=%d want 1", resultArtifacts)
+	}
+	if acceptanceWatermark != unrelatedWatermark+1 || finalPolicyWatermark != acceptanceWatermark {
+		t.Fatalf("watermarks manifest=%d unrelated=%d acceptance=%d final=%d want acceptance/final=%d",
+			manifestWatermark, unrelatedWatermark, acceptanceWatermark, finalPolicyWatermark, unrelatedWatermark+1)
+	}
+	if manifestEntries == 0 || acceptanceReferences != manifestEntries {
+		t.Fatalf("reauthorized input lineage entries=%d references=%d", manifestEntries, acceptanceReferences)
 	}
 }
 

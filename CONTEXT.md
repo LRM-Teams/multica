@@ -354,34 +354,33 @@ _Avoid_: fingerprint restart, implicit stop+start, hash-based recycle, one-shot 
 ### Research Session
 
 The user-facing container opened from the Research module. It owns the title,
-current user-visible goal, fleet, chat, canvas, sources, reports, and optional
-handoff. The HTTP routes continue to use `research session` for compatibility.
+current user-visible goal, Director, run-scoped team, chat, canvas, sources,
+reports, and optional handoff. The HTTP routes continue to use
+`research session` for compatibility.
 
 ### Research Run
 
 The durable execution of one Research Session. A Research Run owns the current
-Research Contract version, plan version, task and progress ledgers, evidence,
-decisions, checkpoints, budgets, and recovery state. A process restart or Agent
-failure must not create a new Research Run or discard accepted work. At start it
-pins the Research Fleet lead as `research_director_agent_id`; changing the Fleet
-lead later does not silently change an active Run.
+Research Contract version, task and progress ledgers, evidence, decisions,
+checkpoints, team, and recovery state. A process restart, context rotation, or
+Agent failure must not create a new Research Run or discard accepted work. The
+user-selected Research Director remains pinned until the user replaces it.
 
 ### Research Director
 
-The lead Agent responsible for interpreting the current Contract and Method,
-proposing the next research portfolio, forming the run-scoped team, and
-adjudicating escalated disputes. A Research Director proposes actions but cannot
-override server evidence, permission, budget, or delivery invariants. In the
-sealed Research Fleet this identity is Ronaldo. Only the pinned Director may
-submit team-formation or lead-adjudication decisions. A human may explicitly
-replace an unavailable Director; the replacement is versioned and audited.
+The user-selected lead Agent responsible for interpreting the current Contract,
+creating and retiring the run-scoped team, assigning work, integrating results,
+adjudicating escalations, and accepting delivery. In Research this identity is
+Ronaldo. The Director may propose any Research action, while the server enforces
+identity, workspace, durability, graph, concurrency, and security invariants.
 
 ### Research Contract
 
-The versioned statement of what the user asked for: goal, scope, audience,
-freshness, delivery language, source policy, and execution limits. Only a human
-user may change the Research Contract. Every question, task, claim, decision,
-and report revision records the contract version under which it was produced.
+The versioned statement of the user's current intent: goal, scope, audience,
+freshness, delivery language, source policy, and execution limits. The user is
+the source of intent; the Research Director records whether each user message
+changes the Contract and materializes the resulting version. Every Research
+artifact records the Contract version under which it was produced.
 
 ### Research Question
 
@@ -404,35 +403,76 @@ evidence that changed that state. A confidence value alone cannot advance it.
 ### Research Branch
 
 A durable exploration direction with an objective, entry and exit conditions,
-budget allocation, parent branch, and terminal reason. It groups inquiry work;
-it does not duplicate Research Task execution state.
+parent branch, terminal reason, and a Branch Frontier. It groups inquiry work;
+it does not duplicate Research Task execution state. A Branch has at most one
+current XXL Insight, which may also be current for other Branches.
+
+### Branch Frontier
+
+The set of fresh, unabsorbed Research Results and Insights currently carrying
+one Research Branch. It may contain several incomparable nodes; successful
+Absorption removes its inputs and adds their canonical successor.
 
 ### Research Insight
 
-A versioned integration result that changes how the Research Run understands
-its questions, hypotheses, disputes, or next work. Every Research Insight cites
-accepted input entities. Integrator prose without valid references is not an
-Insight.
+An immutable M, L, XL, or XXL integration result that changes how the Research
+Run understands a Branch. Every Research Insight cites accepted input entities
+and stores persisted catalog, brief, and full representations. Revised content
+creates a successor Insight instead of mutating the accepted version.
+
+### Atomic Research Result
+
+An immutable S-level result accepted from one Research Task Attempt. It is
+distinct from the running Work and remains S until globally absorbed into one
+canonical successor or retained as an unabsorbed terminal result.
+
+### Research Node Tier
+
+The semantic compression level of Research content: S, M, L, XL, or XXL.
+Promotion requires at least two fresh same-tier inputs; assimilation may update
+a higher-tier Insight without increasing its tier.
+
+### Research Absorption
+
+The irreversible canonical succession of at least two input versions into one
+accepted Insight successor. Promotion uses at least two fresh same-tier inputs;
+assimilation uses an existing higher node plus at least one fresh supplement.
+Each input has at most one direct successor; other Branches reuse that successor
+instead of absorbing the input again.
+
+### Node Steward
+
+The Agent currently responsible for one fresh Research content node. Stewardship
+is transferable and audited; the Agent whose accepted work completes an
+integration becomes the successor's preferred Steward.
 
 ### Insight Derivation
 
 The directed acyclic provenance of one Research Insight. It records input
 Claims and lower-level Insights, server-computed level, integration round,
-semantic value, and freshness. Invalidating an input makes every dependent
-Insight stale until reintegration.
+semantic value, and freshness. Refuting an absorbed input challenges every
+dependent Insight and requires an explicit repair decision; it does not revive
+or silently delete historical nodes.
 
 ### Research Task
 
-A durable unit of delegated research work with an objective, kind, required
-capability, dependencies, expected result, acceptance criteria, priority, and
-budget. Research Tasks form a directed acyclic dependency graph; replanning may
-add a new graph version without deleting historical tasks.
+A durable unit of delegated research work with a Director-authored type,
+objective, optional capability requirements, dependencies, expected result,
+acceptance criteria, and priority. Research Tasks form a directed acyclic
+dependency graph; changed work creates new tasks without deleting history.
 
 ### Research Task Attempt
 
 One dispatch of a Research Task to an Agent. It links the task to the canonical
 Agent inbox execution and records assignment, retry number, result identity,
 failure classification, timing, and terminal outcome.
+
+### Research Work Item
+
+A persistent, leaseable execution envelope for Research, matching, Discussion,
+integration, Director, report, or review work. It references the typed domain
+object it advances and is recoverable without an Agent's previous conversation
+context.
 
 ### Team Formation Decision
 
@@ -444,8 +484,16 @@ and why the current team is insufficient.
 ### Research Team Membership
 
 The run-scoped relationship between an Agent and a Research Run. It records the
-formation decision, authorized role and capabilities, join and leave times, and
-terminal reason without deleting historical Agent attribution.
+formation decision, Director-authored mission, model and tool configuration,
+join and leave times, current availability, and terminal reason without deleting
+historical Agent attribution. A new Run begins with only its Director.
+
+### Director Brief
+
+The persisted, bounded context compiled for a Research Director cycle. Its
+Research Brief contains the current Contract and each Branch Frontier summary;
+its Control Brief contains steering, team, Work Item, Discussion, dispute,
+failure, and change-watermark facts.
 
 ### Source Snapshot
 
@@ -526,6 +574,18 @@ A bounded, structured discussion among Agents holding positions in a Research
 Dispute. Turns cite evidence and record challenges, concessions, scope changes,
 and server-observed progress. Deadlock escalates to the Research Director;
 messages alone cannot resolve the dispute.
+
+### Research Discussion
+
+A persistent, version-pinned conversation among the Stewards evaluating one
+match, fusion, assimilation, or dispute. Turns are user-visible, but structured
+votes and the accepted Decision—not hidden model reasoning—control state.
+
+### Research Report
+
+An immutable, rendered HTML delivery revision attached to the Goal. It records
+the exact Contract and Branch Frontier inputs used, does not absorb Research
+nodes, and becomes published only after the Research Director accepts it.
 
 ### Capability Observation
 

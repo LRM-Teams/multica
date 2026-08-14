@@ -1025,6 +1025,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
   - [x] E3a：新增与 V1–V5 完全隔离的 `DecodeAndValidateResearchV6PlanResult`，严格拒绝未知字段、缺失 required、显式 null 与 trailing JSON；校验 client-key/typed reference、Question/Branch 父图、Inquiry 依赖图、Task DAG、每个 Task 的 Inquiry target、Branch 总预算和语义内容哈希。它不把 `research-run-v6` 加入生产 orchestrator allowlist；E3b 在 E2b-write 合并后负责 accepted Plan Result 的 ID 解析与原子持久化接线。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
+  - [x] E5a：建立按 current state version fencing 的 selective steering 影响规划器；显式 affected branch 根扩展为后代闭包，只选择相交的 pending/ready/running Task，区分取消与允许完成，并保持终态 Branch/Task 为不可变历史。accepted Evidence 不属于可变计划输出。PostgreSQL 原子应用、typed HTTP 输入和 Event/Decision 仍待 E5b。
 
 退出条件：新证据能加强、削弱或推翻假设，创建/终止分支，并让后续任务引用这些持久对象。
 

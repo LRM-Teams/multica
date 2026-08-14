@@ -570,7 +570,7 @@ func TestDispatchFailsWhenArtifactVersionContentHashChanges(t *testing.T) {
 	`, fixture.workspaceID, run.SessionID, claimID, mutatedHash)
 	err = casArtifactVersionSelectionTx(
 		ctx, tx, fixture.workspaceID, run.SessionID, entry.VersionRowID,
-		entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
+		entry.ContentHash, entry.AccessLevel, entry.RepresentationBytes, entry.RepresentationHash,
 	)
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("representation CAS err=%v want ErrInvalidTransition", err)
@@ -652,7 +652,7 @@ func TestDispatchSelectionCASBindsAllAuthorizationFacts(t *testing.T) {
 			if tc.versionCAS {
 				err = casArtifactVersionSelectionTx(
 					ctx, tx, fixture.workspaceID, run.SessionID, entry.VersionRowID,
-					entry.ContentHash, entry.AccessLevel, entry.RepresentationHash,
+					entry.ContentHash, entry.AccessLevel, entry.RepresentationBytes, entry.RepresentationHash,
 				)
 			} else {
 				err = casPassportSelectionTx(
@@ -718,14 +718,16 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	}
 	var headerBytes []byte
 	var headerHash, policyVersion string
+	var policyWatermark int64
 	if err = pool.QueryRow(ctx, `
-		SELECT gate_snapshot_bytes, gate_snapshot_hash, policy_version
+		SELECT gate_snapshot_bytes, gate_snapshot_hash, policy_version, policy_watermark
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
 		&headerBytes,
 		&headerHash,
 		&policyVersion,
+		&policyWatermark,
 	); err != nil {
 		t.Fatalf("load gate snapshot: %v", err)
 	}

@@ -26,20 +26,23 @@ func NewArtifactContextModule() ArtifactContextModule {
 }
 
 type artifactVersionCandidate struct {
-	VersionRowID        string
-	ArtifactID          string
-	Kind                ArtifactEntityKind
-	Version             int32
-	EligibilityRevision int64
-	AccessLevel         ArtifactAccessLevel
-	Lifecycle           ArtifactLifecycleStatus
-	Provenance          ArtifactProvenanceCompleteness
-	ContentHash         string
-	Representation      string
-	RepresentationBytes []byte
-	RepresentationHash  string
-	OmissionReason      string
-	DomainStatus        string
+	VersionRowID         string
+	ArtifactID           string
+	Kind                 ArtifactEntityKind
+	Version              int32
+	EligibilityRevision  int64
+	AccessLevel          ArtifactAccessLevel
+	Lifecycle            ArtifactLifecycleStatus
+	Provenance           ArtifactProvenanceCompleteness
+	ContentHash          string
+	Representation       string
+	RepresentationBytes  []byte
+	RepresentationHash   string
+	VersionCount         int
+	InputReferenceCount  int
+	OutputReferenceCount int
+	OmissionReason       string
+	DomainStatus         string
 }
 
 type dispatchManifestPlan struct {
@@ -403,6 +406,7 @@ type persistDispatchManifestInput struct {
 	ExpectedWatermark int64
 	Purpose           ArtifactPurpose
 	BeforeCASHook     func(context.Context, *dispatchManifestPlan) error
+	PlannedHook       func(context.Context, dispatchManifestPlan) error
 }
 
 func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) (dispatchManifestPlan, error) {
@@ -511,7 +515,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		}
 		if err := casArtifactVersionSelectionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
-			entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
+			entry.ContentHash, entry.AccessLevel, entry.RepresentationBytes, entry.RepresentationHash,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}

@@ -18,6 +18,7 @@ type PostgresStore struct {
 	pool                          *pgxpool.Pool
 	txFaultHook                   researchTxFaultHook
 	dispatchManifestBeforeCASHook func(context.Context, *dispatchManifestPlan) error
+	dispatchManifestPlannedHook   func(context.Context, dispatchManifestPlan) error
 }
 
 var (
@@ -706,6 +707,7 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 	if !ok {
 		return RunSnapshot{}, fmt.Errorf("%w: attempt has no frozen artifact manifest", ErrInvalidTransition)
 	}
+	_ = allowed
 	frozenRun, err := loadFrozenRunRepresentationPool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return RunSnapshot{}, err

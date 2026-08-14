@@ -21,6 +21,23 @@ type dispatchRaceFixture struct {
 	input   CreateDispatchIntentInput
 }
 
+func assertDispatchCommittedOnceWithFreshFacts(t *testing.T, ctx context.Context, fx dispatchRaceFixture, mutation string) {
+	t.Helper()
+	var attempts, manifests, outboxes, events int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_task_attempt WHERE id=$1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_manifest WHERE workspace_id=$2::uuid AND session_id=$3::uuid AND attempt_id=$1::uuid),
+		  (SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id=$1::uuid),
+		  (SELECT count(*)::int FROM research_run_event WHERE workspace_id=$2::uuid AND session_id=$3::uuid AND event_type='task_dispatching' AND payload->>'attempt_id'=$1::text)
+	`, fx.input.AttemptID, fx.fixture.workspaceID, fx.run.SessionID).Scan(&attempts, &manifests, &outboxes, &events); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || manifests != 1 || outboxes != 1 || events != 1 {
+		t.Fatalf("fresh dispatch after %s: attempt=%d manifest=%d outbox=%d events=%d want all 1", mutation, attempts, manifests, outboxes, events)
+	}
+}
+
 func setupDispatchRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) dispatchRaceFixture {
 	t.Helper()
 	fixture := seedResearchRunFixture(t, ctx, pool)

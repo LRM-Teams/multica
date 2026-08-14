@@ -585,6 +585,17 @@ func projectGoalStatus(status researchrun.RunStatus) string {
 	}
 }
 
+func sortedRunGraphClaimIDs(claims []researchrun.Claim) []string {
+	ids := make([]string, 0, len(claims))
+	for _, claim := range claims {
+		if id := strings.TrimSpace(claim.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func applyRunGraphTreeFields(nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) {
 	parentOf := map[string]string{}
 	childrenOf := map[string][]string{}

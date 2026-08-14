@@ -76,6 +76,7 @@ type researchV6ProjectionEdge struct {
 type researchV6Delta struct {
 	FromSequenceExclusive int64                         `json:"from_sequence_exclusive"`
 	ThroughSequence       int64                         `json:"through_sequence"`
+	GraphContentHash      map[string]string             `json:"graph_content_hash"`
 	NodeUpserts           []researchV6ProjectionNode    `json:"node_upserts"`
 	EdgeUpserts           []researchV6ProjectionEdge    `json:"edge_upserts"`
 	NodeTombstones        []string                      `json:"node_tombstones"`
@@ -85,6 +86,33 @@ type researchV6Delta struct {
 	AffectedRootNodeIDs   []string                      `json:"affected_root_node_ids"`
 	TransitionKind        *string                       `json:"transition_kind"`
 }
+
+func buildResearchV6Snapshot(runID string, sequence int64, snap researchrun.RunSnapshot) researchV6Snapshot {
+	legacyNodes, legacyEdges := projectRunV2Graph(snap)
+	nodeIDs := make(map[string]string, len(legacyNodes))
+	nodes := make([]researchV6ProjectionNode, 0, len(legacyNodes))
+	for _, node := range legacyNodes {
+		mapped := mapResearchV6Node(runID, node)
+		nodeIDs[node.ID] = mapped.ID
+		nodes = append(nodes, mapped)
+	}
+	edges := make([]researchV6ProjectionEdge, 0, len(legacyEdges))
+	for _, edge := range legacyEdges {
+		from, fromOK := nodeIDs[edge.FromNodeID]
+		to, toOK := nodeIDs[edge.ToNodeID]
+		if fromOK && toOK {
+			edges = append(edges, researchV6ProjectionEdge{ID: runID + ":edge:" + edge.ID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: normalizeResearchV6EdgeType(edge.EdgeType)})
+		}
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	nodeBytes, _ := json.Marshal(nodes)
+	edgeBytes, _ := json.Marshal(edges)
+	nodeHash, edgeHash := sha256.Sum256(nodeBytes), sha256.Sum256(edgeBytes)
+	snapshotHash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%x:%x", runID, sequence, nodeHash, edgeHash)))
+	return researchV6Snapshot{SnapshotID: "sha256:" + hex.EncodeToString(snapshotHash[:]), RunID: runID, ThroughEventSequence: sequence, GraphContentHash: map[string]string{"nodes": "sha256:" + hex.EncodeToString(nodeHash[:]), "edges": "sha256:" + hex.EncodeToString(edgeHash[:])}, Nodes: nodes, Edges: edges, NextCursor: nil}
+}
+
 type researchV6DeltaEnvelope struct {
 	RunID string          `json:"run_id"`
 	Delta researchV6Delta `json:"delta"`
@@ -127,6 +155,7 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if err != nil {
 		return researchV6Snapshot{}, err
 	}
+	legacyNodes, legacyEdges := projectRunV2Graph(snap)
 	var sequence int64
 	if err = h.DB.QueryRow(r.Context(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err != nil {
 		return researchV6Snapshot{}, err
@@ -319,7 +348,7 @@ func mapResearchV6NodeWithSemantics(runID string, node ResearchGraphNodeResp, ty
 	entityID := node.ID
 	var detail map[string]any
 	if len(node.Payload) == 0 || json.Unmarshal(node.Payload, &detail) != nil || detail == nil {
-		return researchV6ProjectionNode{}, fmt.Errorf("research V6 source node %q has malformed payload", node.ID)
+		detail = map[string]any{}
 	}
 	if raw, ok := detail["kind"].(string); ok && raw != "" {
 		kind = normalizeResearchV6EntityKind(raw)
@@ -393,6 +422,10 @@ func normalizeResearchV6EdgeType(edgeType string) string {
 	default:
 		return edgeType
 	}
+}
+
+func researchV6DeltaForSnapshot(snapshot researchV6Snapshot, from int64) researchV6Delta {
+	return researchV6Delta{FromSequenceExclusive: from, ThroughSequence: snapshot.ThroughEventSequence, GraphContentHash: snapshot.GraphContentHash, NodeUpserts: snapshot.Nodes, EdgeUpserts: snapshot.Edges, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: researchV6RootIDs(snapshot.Nodes)}
 }
 
 func normalizeResearchV6EntityKind(raw string) string {

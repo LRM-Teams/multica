@@ -60,6 +60,7 @@ func casArtifactVersionSelectionTx(
 	tx pgx.Tx,
 	workspaceID, sessionID, versionRowID string,
 	contentHash string,
+	accessLevel ArtifactAccessLevel,
 	representationBytes []byte,
 	representationHash string,
 ) error {

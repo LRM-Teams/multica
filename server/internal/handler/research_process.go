@@ -36,16 +36,7 @@ func (h *Handler) publishResearchGraph(workspaceID string, actorType, actorID st
 		if snapshot, err := h.ResearchRun.Snapshot(context.Background(), runID, workspaceID); err == nil {
 			var sequence int64
 			if err = h.DB.QueryRow(context.Background(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err == nil {
-				upserts := make([]researchV6ProjectionNode, 0, len(nodes))
-				for _, projected := range nodes {
-					mapped, mapErr := mapResearchV6NodeStrict(runID, projected)
-					if mapErr != nil {
-						// Legacy V5 was already published. Fail the V6 frame closed;
-						// a later valid Snapshot/Delta resync remains authoritative.
-						return
-					}
-					upserts = append(upserts, mapped)
-				}
+				projection := buildResearchV6Snapshot(runID, sequence, snapshot)
 				from := sequence - 1
 				if from < 0 {
 					from = 0

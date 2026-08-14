@@ -3,6 +3,7 @@ package researchrun
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -109,6 +110,28 @@ type CreateInquiryGraphInput struct {
 }
 
 type InquiryGraphCreateResult struct {
+	Event RunEvent `json:"event"`
+}
+
+type InquiryTransitionInput struct {
+	WorkspaceID          string                    `json:"-"`
+	SessionID            string                    `json:"-"`
+	AttemptID            string                    `json:"attempt_id"`
+	AgentID              string                    `json:"agent_id"`
+	IdempotencyKey       string                    `json:"idempotency_key"`
+	ExpectedStateVersion int64                     `json:"expected_state_version"`
+	Changes              []InquiryTransitionChange `json:"changes"`
+}
+
+type InquiryTransitionChange struct {
+	Kind         InquiryEntityKind `json:"kind"`
+	EntityID     string            `json:"entity_id"`
+	BeforeStatus string            `json:"before_status"`
+	AfterStatus  string            `json:"after_status"`
+	Reason       string            `json:"reason"`
+}
+
+type InquiryTransitionResult struct {
 	Event RunEvent `json:"event"`
 }
 
@@ -273,6 +296,53 @@ func validConfidenceRange(low, high *float64) bool {
 		return false
 	}
 	return low == nil || high == nil || *low <= *high
+}
+
+func (module inquiryModule) ValidateTransitionInput(in InquiryTransitionInput) error {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.SessionID) == "" || strings.TrimSpace(in.AttemptID) == "" ||
+		strings.TrimSpace(in.AgentID) == "" || strings.TrimSpace(in.IdempotencyKey) == "" || len(in.IdempotencyKey) > 512 ||
+		in.ExpectedStateVersion < 1 || len(in.Changes) == 0 || len(in.Changes) > 256 {
+		return fmt.Errorf("%w: incomplete inquiry transition identity", ErrInvalidContract)
+	}
+	seen := make(map[string]bool, len(in.Changes))
+	for _, change := range in.Changes {
+		key := string(change.Kind) + ":" + change.EntityID
+		if strings.TrimSpace(change.EntityID) == "" || seen[key] || change.BeforeStatus == change.AfterStatus ||
+			strings.TrimSpace(change.Reason) == "" || len(change.Reason) > 32768 {
+			return fmt.Errorf("%w: invalid inquiry transition change %q", ErrInvalidContract, key)
+		}
+		if err := module.ValidateTransition(change.Kind, change.BeforeStatus, change.AfterStatus); err != nil {
+			return err
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func canonicalInquiryTransitionChanges(changes []InquiryTransitionChange) []InquiryTransitionChange {
+	result := append([]InquiryTransitionChange(nil), changes...)
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Kind == result[j].Kind {
+			return result[i].EntityID < result[j].EntityID
+		}
+		return result[i].Kind < result[j].Kind
+	})
+	return result
+}
+
+func (inquiryModule) ValidateTaskTargets(targets []TaskInquiryTarget) error {
+	if len(targets) == 0 || len(targets) > 32 {
+		return fmt.Errorf("%w: a Task requires 1..32 Inquiry targets", ErrInvalidContract)
+	}
+	seen := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		key := string(target.Kind) + ":" + target.EntityID
+		if !inquiryKinds[target.Kind] || target.Kind == InquiryKindDispute || strings.TrimSpace(target.EntityID) == "" || seen[key] {
+			return fmt.Errorf("%w: invalid Task Inquiry target %q", ErrInvalidContract, key)
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 func inquiryRelationMustBeAcyclic(relation InquiryRelation) bool {

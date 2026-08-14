@@ -1017,7 +1017,27 @@ D-access-3 证据：真实 PostgreSQL HTTP 矩阵同时保留同 scope human liv
 assigned active Agent Attempt projection 两个正向对照，并证明 unbound Fleet Agent、active
 但未分配 Agent、cross-workspace principal 与伪造 `X-Agent-ID` 均在 Run Snapshot 加载前
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
-grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
+grader、projector 与撤权后的完整 surface/revocation 组合由下述 D-access-4～6 收口。
+
+D-access-4 证据：normal 与 evaluation grant 撤销后的 `TaskContextForAttempt` 现在同时返回
+稳定 `ErrArtifactAccessDenied` 和兼容 `ErrInvalidTransition`，冻结 Manifest/Entry 历史仍不可删；
+Agent HTTP surface 将该领域拒绝映射为不泄漏 Run/Attempt/Agent/Passport 身份的 403，而不是
+内部 500。普通 Agent、grader 与 HTTP 撤权路径均 fail closed。
+
+D-access-5 证据：D5/V6 图 Projector 不再复用 human live `Snapshot`，而通过内部
+`SnapshotForProjection` capability 只读取 Run、Contract、Method、Question、Task、Attempt、
+Claim 与 Gate。其 Store seam 在编译期不具备 Source、Observation、evaluation-private、
+Attempt frozen context 或 Artifact representation 读取能力，返回模型也验证这些 surface
+始终为空；未提供该 capability 时 Projector fail closed。Projector 是无 Agent 身份的系统
+principal，当前没有 grant-bearing revocation 生命周期，因此其撤权要求通过 capability
+removal/fail-closed 表达，而不是伪造 Agent grant。
+
+D-access-6 证据：human live、historical Agent、D-enabled assigned Agent、unbound/unassigned/
+cross-workspace/header-spoof Agent、evaluation subject、grader 与 Projector 均有正向 surface 和
+非泄漏拒绝对照；subject 不含 evaluation-private ID/hash/metadata/content，grader 只见冻结授权版本，
+normal/evaluation grant 撤销后 Agent route 返回稳定 403 且历史不删除，Projector 编译期无法读取
+Source/Observation/private/Attempt/Artifact representation。Claim/Evidence nesting继续由同一 bounded
+projection 生成。§15.23 已收口。
 
 D-access-4 证据：normal 与 evaluation grant 撤销后的 `TaskContextForAttempt` 现在同时返回
 稳定 `ErrArtifactAccessDenied` 和兼容 `ErrInvalidTransition`，冻结 Manifest/Entry 历史仍不可删；

@@ -467,7 +467,6 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 		return err
 	}
 	goalVersion := int32(1)
-	planVersion := int32(1)
 	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: contractID,
 		Kind: ArtifactKindContractRevision, SourceCreatedAt: &contractCreatedAt,

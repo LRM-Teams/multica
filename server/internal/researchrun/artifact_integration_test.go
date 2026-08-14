@@ -337,12 +337,12 @@ func TestDispatchOutboxPromptMatchesManifestBoundRequestHash(t *testing.T) {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
 	var payload []byte
-	var storedHash string
+	var storedHash, storedManifestID, storedManifestHash string
 	if err = pool.QueryRow(ctx, `
-		SELECT request_payload, request_hash
+		SELECT request_payload, request_hash, manifest_id::text, manifest_hash
 		FROM research_dispatch_outbox
 		WHERE attempt_id = $1::uuid
-	`, attempt.ID).Scan(&payload, &storedHash); err != nil {
+	`, attempt.ID).Scan(&payload, &storedHash, &storedManifestID, &storedManifestHash); err != nil {
 		t.Fatalf("load outbox payload: %v", err)
 	}
 	var request DispatchRequest
@@ -361,6 +361,16 @@ func TestDispatchOutboxPromptMatchesManifestBoundRequestHash(t *testing.T) {
 	}
 	if request.Prompt == "test dispatch" {
 		t.Fatal("expected manifest rebound to replace placeholder test dispatch prompt")
+	}
+	if request.ManifestID == "" || request.ManifestID != storedManifestID || request.ManifestHash != storedManifestHash {
+		t.Fatalf("request manifest=%q/%q stored=%q/%q", request.ManifestID, request.ManifestHash, storedManifestID, storedManifestHash)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_dispatch_outbox SET manifest_hash=$2 WHERE attempt_id=$1::uuid`, attempt.ID,
+		"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"); err != nil {
+		t.Fatalf("tamper outbox manifest hash: %v", err)
+	}
+	if _, err = store.ClaimDispatchIntents(ctx, run.SessionID, uuid.NewString(), time.Minute, 1); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("claim tampered outbox err=%v", err)
 	}
 }
 

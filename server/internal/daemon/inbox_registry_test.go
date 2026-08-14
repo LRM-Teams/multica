@@ -3,35 +3,15 @@ package daemon
 import (
 	"context"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-type testInboxAttachmentResolver struct {
-	mu          sync.Mutex
-	attachments map[InboxKey]AgentAttachment
-}
-
-func (resolver *testInboxAttachmentResolver) Resolve(workspaceID, agentID string) (AgentAttachment, bool) {
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	attachment, ok := resolver.attachments[InboxKey{WorkspaceID: workspaceID, AgentID: agentID}]
-	return attachment, ok
-}
-
-func (resolver *testInboxAttachmentResolver) set(attachment AgentAttachment) {
-	resolver.mu.Lock()
-	resolver.attachments[InboxKey{WorkspaceID: attachment.WorkspaceID, AgentID: attachment.AgentID}] = attachment
-	resolver.mu.Unlock()
-}
-
-func newTestInboxRegistry(t *testing.T, workspaceID string, resolver inboxAttachmentResolver) *InboxRegistry {
+func newTestInboxRegistry(t *testing.T, workspaceID string, ownsRuntime func(string) bool) *InboxRegistry {
 	t.Helper()
 	registry, err := newInboxRegistry(workspaceID, inboxRegistryDependencies{
-		attachments: resolver,
-		ownsRuntime: func(string) bool { return true },
+		ownsRuntime: ownsRuntime,
 		open: func(key InboxKey, runtimeID string) (*MessageCoordinator, error) {
 			root := filepath.Join(t.TempDir(), key.WorkspaceID, key.AgentID, runtimeID)
 			if err := ensureMulticaAgentRoot(root); err != nil {
@@ -47,18 +27,15 @@ func newTestInboxRegistry(t *testing.T, workspaceID string, resolver inboxAttach
 }
 
 func TestInboxRegistryScopesSameAgentIdentityByWorkspace(t *testing.T) {
-	resolver := &testInboxAttachmentResolver{attachments: map[InboxKey]AgentAttachment{}}
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1})
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-2", AgentID: "agent-1", RuntimeID: "runtime-2", AttachmentGeneration: 1})
-	first := newTestInboxRegistry(t, "workspace-1", resolver)
-	second := newTestInboxRegistry(t, "workspace-2", resolver)
+	first := newTestInboxRegistry(t, "workspace-1", func(runtimeID string) bool { return runtimeID == "runtime-1" })
+	second := newTestInboxRegistry(t, "workspace-2", func(runtimeID string) bool { return runtimeID == "runtime-2" })
 	t.Cleanup(first.Close)
 	t.Cleanup(second.Close)
 
-	if created, err := first.Ensure("agent-1"); err != nil || !created {
+	if created, err := first.AcceptStart("agent-1", "runtime-1"); err != nil || !created {
 		t.Fatalf("open first Inbox: created=%v err=%v", created, err)
 	}
-	if created, err := second.Ensure("agent-1"); err != nil || !created {
+	if created, err := second.AcceptStart("agent-1", "runtime-2"); err != nil || !created {
 		t.Fatalf("open second Inbox: created=%v err=%v", created, err)
 	}
 	firstCoordinator, firstRuntime, firstOK := first.Resolve("agent-1")
@@ -66,62 +43,26 @@ func TestInboxRegistryScopesSameAgentIdentityByWorkspace(t *testing.T) {
 	if !firstOK || !secondOK || firstCoordinator == secondCoordinator {
 		t.Fatalf("Workspace-scoped resolution first=%v second=%v", firstOK, secondOK)
 	}
-	if !firstCoordinator.hasInboxKey(InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}) || firstRuntime != "runtime-1" {
-		t.Fatalf("first Inbox resolved outside Workspace: runtime=%q", firstRuntime)
-	}
-	if !secondCoordinator.hasInboxKey(InboxKey{WorkspaceID: "workspace-2", AgentID: "agent-1"}) || secondRuntime != "runtime-2" {
-		t.Fatalf("second Inbox resolved outside Workspace: runtime=%q", secondRuntime)
+	if firstRuntime != "runtime-1" || secondRuntime != "runtime-2" {
+		t.Fatalf("runtime scopes = %q/%q", firstRuntime, secondRuntime)
 	}
 }
 
-func TestInboxRegistryRejectsCreationWithoutScopedAttachmentOrRuntime(t *testing.T) {
-	resolver := &testInboxAttachmentResolver{attachments: map[InboxKey]AgentAttachment{}}
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-2", AgentID: "agent-1", RuntimeID: "runtime-2", AttachmentGeneration: 1})
-	registry := newTestInboxRegistry(t, "workspace-1", resolver)
+func TestInboxRegistryRejectsRuntimeOutsideWorkspace(t *testing.T) {
+	registry := newTestInboxRegistry(t, "workspace-1", func(runtimeID string) bool { return runtimeID == "runtime-1" })
 	t.Cleanup(registry.Close)
-
-	if created, err := registry.Ensure("agent-1"); err == nil || created {
-		t.Fatalf("cross-Workspace Attachment opened Inbox: created=%v err=%v", created, err)
+	if created, err := registry.AcceptStart("agent-1", "runtime-2"); err == nil || created {
+		t.Fatalf("foreign Runtime opened Inbox: created=%v err=%v", created, err)
 	}
 	if _, _, ok := registry.Resolve("agent-1"); ok {
-		t.Fatal("cross-Workspace Inbox became resolvable")
+		t.Fatal("foreign Runtime Inbox became resolvable")
 	}
 }
 
-func TestInboxRegistryCloseDoesNotCloseSiblingWorkspace(t *testing.T) {
-	resolver := &testInboxAttachmentResolver{attachments: map[InboxKey]AgentAttachment{}}
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1})
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-2", AgentID: "agent-2", RuntimeID: "runtime-2", AttachmentGeneration: 1})
-	first := newTestInboxRegistry(t, "workspace-1", resolver)
-	second := newTestInboxRegistry(t, "workspace-2", resolver)
-	t.Cleanup(second.Close)
-	if _, err := first.Ensure("agent-1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := second.Ensure("agent-2"); err != nil {
-		t.Fatal(err)
-	}
-	firstCoordinator, _, _ := first.Resolve("agent-1")
-	secondCoordinator, _, _ := second.Resolve("agent-2")
-
-	first.Close()
-	if firstCoordinator.hasInboxKey(InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}) {
-		t.Fatal("closed Runner retained an open Inbox")
-	}
-	if !secondCoordinator.hasInboxKey(InboxKey{WorkspaceID: "workspace-2", AgentID: "agent-2"}) {
-		t.Fatal("closing one Runner closed a sibling Workspace Inbox")
-	}
-	if _, _, ok := second.Resolve("agent-2"); !ok {
-		t.Fatal("sibling Workspace Inbox became unavailable")
-	}
-}
-
-func TestInboxRegistryAttachmentMoveReplacesOnlyMatchingRuntime(t *testing.T) {
-	resolver := &testInboxAttachmentResolver{attachments: map[InboxKey]AgentAttachment{}}
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1})
-	registry := newTestInboxRegistry(t, "workspace-1", resolver)
+func TestInboxRegistryAcceptedStartReplacesOnlyMatchingAgent(t *testing.T) {
+	registry := newTestInboxRegistry(t, "workspace-1", func(string) bool { return true })
 	t.Cleanup(registry.Close)
-	if _, err := registry.Ensure("agent-1"); err != nil {
+	if _, err := registry.AcceptStart("agent-1", "runtime-1"); err != nil {
 		t.Fatal(err)
 	}
 	previous, _, _ := registry.Resolve("agent-1")
@@ -129,16 +70,11 @@ func TestInboxRegistryAttachmentMoveReplacesOnlyMatchingRuntime(t *testing.T) {
 	if current, runtimeID, ok := registry.Resolve("agent-1"); !ok || current != previous || runtimeID != "runtime-1" {
 		t.Fatal("non-matching Runtime removed the Inbox")
 	}
-
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-2", AttachmentGeneration: 2})
-	if created, err := registry.Ensure("agent-1"); err != nil || !created {
+	if created, err := registry.AcceptStart("agent-1", "runtime-2"); err != nil || !created {
 		t.Fatalf("replace moved Inbox: created=%v err=%v", created, err)
 	}
 	current, runtimeID, ok := registry.Resolve("agent-1")
 	if !ok || current == previous || runtimeID != "runtime-2" {
 		t.Fatalf("moved Inbox current=%p previous=%p runtime=%q", current, previous, runtimeID)
-	}
-	if previous.hasInboxKey(InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}) {
-		t.Fatal("replaced coordinator remained open")
 	}
 }

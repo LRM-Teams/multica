@@ -306,8 +306,8 @@ func (p WorkspaceRunnerReadyPayload) Validate() error {
 		}
 		seen[capability] = struct{}{}
 	}
-	if _, supported := seen[DaemonCapabilityWorkspaceRunnerAttachment]; !supported {
-		return fmt.Errorf("Workspace Runner Attachment capability is required")
+	if _, supported := seen[DaemonCapabilityWorkspaceRunnerAgentProcess]; !supported {
+		return fmt.Errorf("Workspace Runner Agent process capability is required")
 	}
 	running := make(map[string]struct{}, len(p.RunningAgents))
 	for _, agentID := range p.RunningAgents {

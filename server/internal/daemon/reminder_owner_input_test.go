@@ -44,13 +44,12 @@ func (r *reminderOwnerInputFakeRuntime) snapshot() []agent.ResidentReminderInput
 
 func validReminderOwnerInputPayload() protocol.ReminderOwnerInputPayload {
 	return protocol.ReminderOwnerInputPayload{
-		WorkspaceID:         "workspace-a",
-		AgentID:             "agent-a",
-		RuntimeID:           "runtime-a",
-		PlacementGeneration: 3,
-		ReminderID:          "reminder-a",
-		Version:             4,
-		Title:               "Review the deployment",
+		WorkspaceID: "workspace-a",
+		AgentID:     "agent-a",
+		RuntimeID:   "runtime-a",
+		ReminderID:  "reminder-a",
+		Version:     4,
+		Title:       "Review the deployment",
 		Anchor: protocol.ReminderOwnerInputAnchor{
 			Available:   true,
 			ChannelID:   "channel-a",
@@ -80,11 +79,9 @@ func newReminderOwnerInputDaemon(t *testing.T, runtime *reminderOwnerInputFakeRu
 	d.runtimeIndex["runtime-a"] = Runtime{ID: "runtime-a", WorkspaceID: "workspace-a"}
 	d.workspaces["workspace-a"] = newWorkspaceState("workspace-a", []string{"runtime-a"}, capabilities...)
 	d.mu.Unlock()
-	if _, err := d.agentAttachments.Apply("workspace-a", AgentAttachmentEvent{
-		Kind: AgentAttachmentEventAttach, AgentID: "agent-a", RuntimeID: "runtime-a",
-		AttachmentGeneration: 3, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatalf("seed Reminder owner Attachment: %v", err)
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-a", nil)
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}); err != nil {
+		t.Fatalf("seed Reminder owner start: %v", err)
 	}
 	d.canonicalRuntimes.slots["agent-a\x00runtime-a"] = &canonicalAgentRuntimeSlot{
 		backend: runtime,
@@ -158,7 +155,6 @@ func TestReminderOwnerInputRejectsUnauthorizedStaleAndOversizedPayloads(t *testi
 	tests := map[string]func(*protocol.ReminderOwnerInputPayload){
 		"cross owner":     func(p *protocol.ReminderOwnerInputPayload) { p.AgentID = "agent-b" },
 		"cross workspace": func(p *protocol.ReminderOwnerInputPayload) { p.WorkspaceID = "workspace-b" },
-		"stale placement": func(p *protocol.ReminderOwnerInputPayload) { p.PlacementGeneration = 2 },
 		"oversized title": func(p *protocol.ReminderOwnerInputPayload) { p.Title = strings.Repeat("x", 501) },
 		"oversized excerpt": func(p *protocol.ReminderOwnerInputPayload) {
 			p.Anchor.Excerpt = strings.Repeat("x", reminderOwnerInputMaxExcerptBytes+1)

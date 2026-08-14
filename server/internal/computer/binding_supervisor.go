@@ -14,7 +14,7 @@ import (
 
 type BindingRunnerLauncher struct {
 	Executable         func() (string, error)
-	DaemonID           string
+	ComputerID         string
 	ComputerGeneration int64
 	Environment        string
 	Profile            string
@@ -35,7 +35,7 @@ func (launcher BindingRunnerLauncher) Spawn(workspaceID string, runnerGeneration
 	}
 	return StartBindingRunner(exe, BindingChildBootstrap{
 		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: workspaceID,
-		DaemonID: launcher.DaemonID, ComputerGeneration: launcher.ComputerGeneration,
+		ComputerID: launcher.ComputerID, ComputerGeneration: launcher.ComputerGeneration,
 		RunnerGeneration: runnerGeneration, Environment: launcher.Environment, Profile: launcher.Profile,
 		ServerBaseURL: launcher.ServerBaseURL, HostControlURL: launcher.HostControlURL,
 		BindingsRoot: launcher.BindingsRoot, WorkspacesRoot: launcher.WorkspacesRoot,

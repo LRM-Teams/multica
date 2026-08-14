@@ -602,6 +602,41 @@ func (p *canonicalAgentRuntimePool) hasLiveLease(agentID, runtimeID string) bool
 	return slot.running
 }
 
+// agentHasLiveRuntime reports whether any Runtime slot for agentID still owns
+// an active lease or a live resident provider process.
+func (p *canonicalAgentRuntimePool) agentHasLiveRuntime(agentID string) bool {
+	if p == nil {
+		return false
+	}
+	agentID = strings.TrimSpace(agentID)
+	p.mu.Lock()
+	slots := make([]*canonicalAgentRuntimeSlot, 0)
+	for key, slot := range p.slots {
+		candidate, _ := splitCanonicalSlotKey(key)
+		if candidate == agentID {
+			slots = append(slots, slot)
+		}
+	}
+	p.mu.Unlock()
+	for _, slot := range slots {
+		slot.mu.Lock()
+		running := slot.running
+		backend := slot.backend
+		slot.mu.Unlock()
+		if running {
+			return true
+		}
+		checker, ok := backend.(agent.ResidentRuntimeLivenessChecker)
+		if !ok {
+			continue
+		}
+		if alive, known := checker.RuntimeAlive(); known && alive {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *canonicalAgentRuntimePool) ensureResidentProcess(ctx context.Context, agentID, runtimeID string) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")

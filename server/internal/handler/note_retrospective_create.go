@@ -450,12 +450,12 @@ LIMIT 200`, workspaceID, userID, start, end)
 	out := make([]noteRetrospectiveRunFact, 0)
 	for rows.Next() {
 		var (
-			runID, agentID                         pgtype.UUID
+			runID, agentID                             pgtype.UUID
 			agentName, triggerSummary, outcome, status string
-			issueID                                pgtype.UUID
-			issueNumber                            pgtype.Int4
-			issueTitle, prefix                     string
-			happenedAt                             time.Time
+			issueID                                    pgtype.UUID
+			issueNumber                                pgtype.Int4
+			issueTitle, prefix                         string
+			happenedAt                                 time.Time
 		)
 		if err := rows.Scan(
 			&runID, &agentID, &agentName, &triggerSummary, &outcome, &status,

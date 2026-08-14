@@ -135,30 +135,6 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return fmt.Errorf("decode Runner Activity: %w", err)
 		}
 		return h.recordRunnerActivity(ctx, identity, daemonInstanceID, activity)
-	case protocol.EventAgentAttachmentReplayReq:
-		var request protocol.WorkspaceRunnerAttachmentReplayRequest
-		if err := json.Unmarshal(raw, &request); err != nil {
-			return fmt.Errorf("decode Attachment replay request: %w", err)
-		}
-		return h.replayAgentAttachmentCommands(ctx, identity, request)
-	case protocol.EventAgentAttached:
-		var receipt protocol.WorkspaceRunnerAgentAttachedPayload
-		if err := json.Unmarshal(raw, &receipt); err != nil {
-			return fmt.Errorf("decode Attachment attach receipt: %w", err)
-		}
-		return h.acknowledgeAgentAttachmentCommand(ctx, identity, eventType, receipt)
-	case protocol.EventAgentDetached:
-		var receipt protocol.WorkspaceRunnerAgentDetachedPayload
-		if err := json.Unmarshal(raw, &receipt); err != nil {
-			return fmt.Errorf("decode Attachment detach receipt: %w", err)
-		}
-		return h.acknowledgeAgentAttachmentCommand(ctx, identity, eventType, protocol.WorkspaceRunnerAgentAttachedPayload(receipt))
-	case protocol.EventAgentAttachmentReplayAck:
-		var acknowledgement protocol.WorkspaceRunnerAttachmentReplayAck
-		if err := json.Unmarshal(raw, &acknowledgement); err != nil {
-			return fmt.Errorf("decode Attachment replay acknowledgement: %w", err)
-		}
-		return h.acknowledgeAgentAttachmentReplay(ctx, identity, acknowledgement)
 	case protocol.EventMixedRunActivityTransition:
 		var transition protocol.MixedRunActivityTransitionPayload
 		if err := json.Unmarshal(raw, &transition); err != nil {

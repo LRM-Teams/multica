@@ -120,7 +120,7 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	}
 	defer conn.Close()
 	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-same", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-same", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
 	})
 	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {

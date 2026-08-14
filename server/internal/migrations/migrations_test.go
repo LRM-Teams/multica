@@ -300,45 +300,52 @@ func TestMigration218CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *
 	}
 }
 
-func TestCanonicalAgentRuntimeStateQueriesStayQueueIndependent(t *testing.T) {
+func TestMigration385HardCutsLegacyRuntimeStateAndLifecycleNaming(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
-	queryPath := filepath.Join(
-		filepath.Dir(thisFile),
-		"..", "..", "pkg", "db", "queries", "agent_runtime_state.sql",
-	)
-	body, err := os.ReadFile(queryPath)
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "385_agent_restart_state_hard_cut.up.sql"))
 	if err != nil {
-		t.Fatalf("read canonical runtime-state queries: %v", err)
+		t.Fatalf("read migration 385 up: %v", err)
 	}
-	contents := string(body)
+	contents := string(up)
 	for _, required := range []string{
-		"-- name: EnsureAgentRuntimeState :one",
-		"-- name: GetCurrentAgentRuntimeState :one",
-		"-- name: AdvanceAgentRuntimeStateCAS :one",
-		"-- name: ClearAgentRuntimeSessionCAS :one",
-		"state.generation = sqlc.arg('expected_generation')",
-		"state.generation + 1",
-		"current.runtime_id = state.runtime_id",
-		"sqlc.arg('notice_reason')::text = 'reset'",
-		"state.fresh_session_notice_reason = 'reset'",
-		"NULLIF(btrim(sqlc.narg('provider_session_id')::text), '') IS NOT NULL",
+		"ALTER TABLE agent_lifecycle_operation RENAME TO agent_restart_operation",
+		"ADD COLUMN start_session_id TEXT NOT NULL DEFAULT ''",
+		"DROP TABLE agent_runtime_state",
 	} {
 		if !strings.Contains(contents, required) {
-			t.Errorf("canonical runtime-state query contract missing %q", required)
+			t.Errorf("migration 385 up missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{
-		"agent_task_queue",
-		"chat_session",
-		"task_id",
-		"issue_id",
-		"channel_id",
+}
+
+func TestMigration386RemovesAttachmentAndReminderProjectionProtocols(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "386_remove_attachment_and_reminder_projection_protocol.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 386 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"DROP FUNCTION IF EXISTS project_agent_attachment_projection()",
+		"DROP TABLE IF EXISTS agent_attachment_projection_event",
+		"DROP FUNCTION IF EXISTS project_agent_reminder_daemon_owner_event()",
+		"CREATE OR REPLACE FUNCTION cancel_agent_reminders_on_archive()",
+		"CREATE TRIGGER cancel_agent_reminders_on_archive_trigger",
+		"DROP TABLE IF EXISTS agent_reminder_daemon_projection_event",
+		"DROP TABLE IF EXISTS agent_reminder_daemon_owner_event",
+		"DROP SEQUENCE IF EXISTS agent_reminder_placement_generation_seq",
 	} {
-		if strings.Contains(contents, forbidden) {
-			t.Errorf("canonical runtime state must not inherit wake/surface semantics; found %q", forbidden)
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 386 up missing %q", required)
 		}
 	}
 }

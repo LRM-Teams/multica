@@ -17,7 +17,7 @@ const BindingChildProtocolVersion = 1
 type BindingChildBootstrap struct {
 	ProtocolVersion    int    `json:"protocol_version"`
 	WorkspaceID        string `json:"workspace_id"`
-	DaemonID           string `json:"daemon_id"`
+	ComputerID         string `json:"computer_id"`
 	ComputerGeneration int64  `json:"computer_generation"`
 	RunnerGeneration   int64  `json:"runner_generation"`
 	Environment        string `json:"environment"`
@@ -30,7 +30,7 @@ type BindingChildBootstrap struct {
 
 func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {
 	b.WorkspaceID = strings.TrimSpace(b.WorkspaceID)
-	b.DaemonID = strings.TrimSpace(b.DaemonID)
+	b.ComputerID = strings.TrimSpace(b.ComputerID)
 	b.Environment = strings.TrimSpace(b.Environment)
 	b.Profile = strings.TrimSpace(b.Profile)
 	b.ServerBaseURL = strings.TrimSpace(b.ServerBaseURL)
@@ -46,8 +46,8 @@ func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {
 	if strings.ContainsAny(b.WorkspaceID, "/\\") || b.WorkspaceID == "." || b.WorkspaceID == ".." {
 		return BindingChildBootstrap{}, errors.New("Binding child workspace-id is not a safe local identity")
 	}
-	if b.DaemonID == "" {
-		return BindingChildBootstrap{}, errors.New("Binding child daemon-id is required")
+	if b.ComputerID == "" {
+		return BindingChildBootstrap{}, errors.New("Binding child computer-id is required")
 	}
 	if b.ComputerGeneration < 1 {
 		return BindingChildBootstrap{}, errors.New("Binding child Computer generation is required")

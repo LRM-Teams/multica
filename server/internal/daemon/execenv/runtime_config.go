@@ -255,11 +255,6 @@ func buildStartupKernelContent(provider string, ctx TaskContextForEnv) string {
 // therefore must never be cached in the process-scoped runtime file.
 func RenderTurnContext(ctx TaskContextForEnv) string {
 	var b strings.Builder
-	if reason := strings.TrimSpace(ctx.FreshSessionNoticeReason); reason != "" {
-		b.WriteString("## Current Provider Session\n\n")
-		b.WriteString("This provider session is new. Workspace files remain; retrieve older conclusions from the relevant Issue comments or Message history only when needed.\n\n")
-	}
-
 	if name := sanitizeNameForBriefMarkdown(ctx.InitiatorName); name != "" {
 		b.WriteString("## Current Task Initiator\n\n")
 		kind := "workspace member"
@@ -607,11 +602,6 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	b.WriteString("# Multica Agent Runtime\n\n")
 	b.WriteString("You are a coding agent in the Multica platform. Use the `multica` CLI to interact with the platform.\n\n")
-
-	if strings.TrimSpace(ctx.FreshSessionNoticeReason) != "" {
-		b.WriteString("## Fresh Provider Session\n\n")
-		b.WriteString("Your provider session is brand new. Historical sessions are archived read-only; your workspace files remain. Retrieve historical conclusions from issue comments or chat history when needed.\n\n")
-	}
 
 	// Always emit agent identity so the agent knows who it is, even when
 	// dispatched via @mention on an issue assigned to a different agent.

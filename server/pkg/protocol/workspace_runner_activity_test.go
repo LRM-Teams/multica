@@ -12,7 +12,7 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 	values := []any{
 		WorkspaceRunnerReadyPayload{
 			WorkspaceID: "workspace-1", DaemonInstanceID: "daemon-instance-1",
-			ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment},
+			ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAgentProcess},
 			RunningAgents:      []string{"agent-1"},
 		},
 		WorkspaceRunnerPingPayload{PingID: "ping-1"},
@@ -149,13 +149,13 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 func TestWorkspaceRunnerReadyCapabilityValidation(t *testing.T) {
 	valid := WorkspaceRunnerReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
-		ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityWorkspaceRunnerAgentReset},
+		ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAgentProcess, DaemonCapabilityWorkspaceRunnerAgentReset},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid ready capabilities: %v", err)
 	}
 	duplicate := valid
-	duplicate.ActiveCapabilities = []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityWorkspaceRunnerAttachment}
+	duplicate.ActiveCapabilities = []string{DaemonCapabilityWorkspaceRunnerAgentProcess, DaemonCapabilityWorkspaceRunnerAgentProcess}
 	if err := duplicate.Validate(); err == nil {
 		t.Fatal("duplicate ready capabilities were accepted")
 	}

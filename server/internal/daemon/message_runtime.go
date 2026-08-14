@@ -61,10 +61,9 @@ func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID st
 	return runner.ensureMessageInbox(agentID, runtimeID)
 }
 
-// ensureIdleMessageCoordinatorForDelivery repairs restart-time coordinator
-// loss from the daemon's durable Agent Attachment. Runtime routing remains out
-// of the Message envelope; the fixed Runner Workspace scope and a matching
-// Attachment are both required to recreate this receive-side projection.
+// ensureIdleMessageCoordinatorForDelivery repairs a missing coordinator only
+// from the Agent Process Manager's accepted agent:start. Message delivery never
+// invents placement and never consults a second ownership registry.
 func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID string) error {
 	workspaceID = strings.TrimSpace(workspaceID)
 	agentID = strings.TrimSpace(agentID)
@@ -75,56 +74,13 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	if runner == nil {
 		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
 	}
-	if runner.hasMessageInbox(agentID) {
-		return nil
-	}
-	registry := d.attachmentRegistry()
-	if registry == nil {
-		return fmt.Errorf("no durable Agent Attachment for %q in Workspace %q", agentID, workspaceID)
-	}
-	attachment, ok := registry.Resolve(workspaceID, agentID)
-	if !ok {
-		return fmt.Errorf("no durable Agent Attachment for %q in Workspace %q", agentID, workspaceID)
-	}
-	d.mu.Lock()
-	runtime, runtimeKnown := d.runtimeIndex[attachment.RuntimeID]
-	d.mu.Unlock()
-	if !runtimeKnown || runtime.WorkspaceID != workspaceID {
-		return fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, workspaceID)
-	}
-	_, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID)
-	if err != nil {
-		return fmt.Errorf("repair Agent Message coordinator: %w", err)
-	}
-	return nil
+	return runner.ensureMessageInboxForDelivery(agentID)
 }
 
 // restoreResidentAgents rebuilds durable Agent roots after a Computer process
-// restart. Attachment ownership alone does not create a Workspace Runner or a
-// Message coordinator; the supervised Binding child receives an explicit
-// managed start when work exists.
-func (d *Daemon) restoreResidentAgents() error {
-	if d == nil {
-		return nil
-	}
-	for _, attachment := range d.currentAttachments() {
-		if attachment.RuntimeID == "" || attachment.WorkspaceID == "" || attachment.AttachmentGeneration < 1 {
-			continue
-		}
-		d.mu.Lock()
-		runtime, runtimeKnown := d.runtimeIndex[attachment.RuntimeID]
-		d.mu.Unlock()
-		if !runtimeKnown || runtime.WorkspaceID != attachment.WorkspaceID {
-			continue
-		}
-		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, attachment.WorkspaceID, attachment.AgentID)
-		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
-			return fmt.Errorf("restore Agent root %q: %w", attachment.AgentID, err)
-		}
-	}
-	return nil
-}
-
+// restart. A durable root alone does not create a Workspace Runner or a Message
+// coordinator; the supervised Binding child receives an explicit managed start
+// when work exists.
 func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
 	if len(messages) == 0 || messages[0].RunID == "" || messages[0].RunAgentID == "" {
 		return "", "", "", false

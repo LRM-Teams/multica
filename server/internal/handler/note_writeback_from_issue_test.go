@@ -235,4 +235,3 @@ func TestIssueInProgressNoiseCreatesNoNoteWriteback(t *testing.T) {
 		t.Fatalf("expected no writebacks for noise statuses, got %#v", listed.Writebacks)
 	}
 }
-

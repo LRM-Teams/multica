@@ -42,7 +42,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
 			_ = json.NewEncoder(w).Encode(ResidentAgentRuntimeConfig{
-				WorkspaceID: workspaceID, RuntimeID: runtimeID, WorkspaceContext: "Workspace context", RuntimeStateGeneration: 1,
+				WorkspaceID: workspaceID, RuntimeID: runtimeID, WorkspaceContext: "Workspace context",
 				Agent: &AgentData{
 					ID: agentID, Name: "message-agent", Instructions: "Follow the workspace rules.",
 					CustomEnv: map[string]string{"MESSAGE_RUNTIME_SETTING": "enabled", "MULTICA_TASK_ID": "must-not-override"},
@@ -230,7 +230,7 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
 			_ = json.NewEncoder(w).Encode(ResidentAgentRuntimeConfig{
-				WorkspaceID: workspaceID, RuntimeID: runtimeID, RuntimeStateGeneration: 1,
+				WorkspaceID: workspaceID, RuntimeID: runtimeID,
 				Agent: &AgentData{ID: agentID, Name: "message-agent"},
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
@@ -312,7 +312,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
 			_ = json.NewEncoder(w).Encode(ResidentAgentRuntimeConfig{
-				WorkspaceID: workspaceID, RuntimeID: runtimeID, RuntimeStateGeneration: 1,
+				WorkspaceID: workspaceID, RuntimeID: runtimeID,
 				Agent: &AgentData{ID: agentID, Name: "message-agent"},
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
@@ -362,7 +362,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
 			_ = json.NewEncoder(w).Encode(ResidentAgentRuntimeConfig{
-				WorkspaceID: workspaceID, RuntimeID: runtimeID, RuntimeStateGeneration: 1,
+				WorkspaceID: workspaceID, RuntimeID: runtimeID,
 				Agent: &AgentData{ID: agentID, Name: "message-agent"},
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
@@ -547,7 +547,7 @@ func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID st
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
 			_ = json.NewEncoder(w).Encode(ResidentAgentRuntimeConfig{
-				WorkspaceID: workspaceID, RuntimeID: runtimeID, RuntimeStateGeneration: 1,
+				WorkspaceID: workspaceID, RuntimeID: runtimeID,
 				Agent: &AgentData{ID: agentID, Name: "message-agent"},
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":
@@ -589,7 +589,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/runtime-config":
 			_ = json.NewEncoder(w).Encode(ResidentAgentRuntimeConfig{
-				WorkspaceID: workspaceID, RuntimeID: runtimeID, RuntimeStateGeneration: 1,
+				WorkspaceID: workspaceID, RuntimeID: runtimeID,
 				Agent: &AgentData{ID: agentID, Name: "message-agent"},
 			})
 		case "POST /api/daemon/runtimes/" + runtimeID + "/agents/" + agentID + "/credential":

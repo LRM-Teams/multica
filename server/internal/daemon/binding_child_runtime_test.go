@@ -100,7 +100,7 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
 	bootstrap := computer.BindingChildBootstrap{
 		ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
-		DaemonID: computerID, ComputerGeneration: 11, RunnerGeneration: 1,
+		ComputerID: computerID, ComputerGeneration: 11, RunnerGeneration: 1,
 		Environment: "test", ServerBaseURL: server.URL, HostControlURL: hostServer.URL,
 		BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 	}
@@ -136,11 +136,16 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("real child never connected its Workspace Runner")
 	}
-	if err := child.Stop(); err != nil {
-		t.Fatalf("stop real Binding child: %v", err)
-	}
-	if class := child.Wait(); class != computer.RunnerExitGraceful {
-		t.Fatalf("real Binding child exit = %s, want graceful", class)
+	hostServer.Close()
+	exited := make(chan computer.RunnerExitClass, 1)
+	go func() { exited <- child.Wait() }()
+	select {
+	case class := <-exited:
+		if class != computer.RunnerExitCrash {
+			t.Fatalf("orphaned Binding child exit = %s, want crash", class)
+		}
+	case <-ctx.Done():
+		t.Fatal("Binding child survived its Computer Host")
 	}
 }
 
@@ -247,7 +252,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 		Spawn: func(workspaceID string, runnerGeneration int64) (computer.BindingChild, error) {
 			return computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, computer.BindingChildBootstrap{
 				ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
-				DaemonID: computerID, ComputerGeneration: 21, RunnerGeneration: runnerGeneration,
+				ComputerID: computerID, ComputerGeneration: 21, RunnerGeneration: runnerGeneration,
 				Environment: "test", ServerBaseURL: server.URL, HostControlURL: hostControlURL,
 				BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 			})
@@ -335,7 +340,7 @@ func TestRunBindingChildProcessHelper(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	err = RunBindingChild(context.Background(), BindingChildRunConfig{
 		Daemon: Config{
-			DaemonID: bootstrap.DaemonID, ComputerGeneration: bootstrap.ComputerGeneration,
+			DaemonID: bootstrap.ComputerID, ComputerGeneration: bootstrap.ComputerGeneration,
 			Environment: bootstrap.Environment, ServerBaseURL: bootstrap.ServerBaseURL,
 			BindingsRoot: bootstrap.BindingsRoot, WorkspacesRoot: bootstrap.WorkspacesRoot,
 			LocalControlToken: os.Getenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN"),
@@ -456,9 +461,8 @@ func TestBindingChildrenUseIsolatedDurableExecutionState(t *testing.T) {
 	second := newDaemonForRole(Config{WorkspacesRoot: workspacesRoot, BindingStateRoot: secondRoot, WorkspaceID: "workspace-b"}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
 
 	for label, pair := range map[string][2]string{
-		"Attachment registry": {first.agentAttachments.path, second.agentAttachments.path},
-		"Reminder cache":      {first.reminderCache.path, second.reminderCache.path},
-		"Activity outbox":     {first.mixedRunActivityOutbox.path, second.mixedRunActivityOutbox.path},
+		"Reminder cache":  {first.reminderCache.path, second.reminderCache.path},
+		"Activity outbox": {first.mixedRunActivityOutbox.path, second.mixedRunActivityOutbox.path},
 	} {
 		if pair[0] == "" || pair[1] == "" || pair[0] == pair[1] {
 			t.Fatalf("%s paths are not isolated: %q / %q", label, pair[0], pair[1])
@@ -466,11 +470,5 @@ func TestBindingChildrenUseIsolatedDurableExecutionState(t *testing.T) {
 		if !strings.HasPrefix(pair[0], firstRoot) || !strings.HasPrefix(pair[1], secondRoot) {
 			t.Fatalf("%s escaped Binding state roots: %q / %q", label, pair[0], pair[1])
 		}
-	}
-	if first.agentAttachments.workspacesRoot != workspacesRoot || second.agentAttachments.workspacesRoot != workspacesRoot {
-		t.Fatal("Binding state isolation changed the shared Agent checkout root")
-	}
-	if first.agentAttachments.workspaceScope != "workspace-a" || second.agentAttachments.workspaceScope != "workspace-b" {
-		t.Fatal("Binding Attachment registries are not fenced to their Workspace")
 	}
 }

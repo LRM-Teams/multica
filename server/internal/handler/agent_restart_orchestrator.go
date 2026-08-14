@@ -63,7 +63,7 @@ func (h *Handler) beginAgentRestartOperation(ctx context.Context, state activeAg
 			return fmt.Errorf("resolve Agent stop launch fence: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
-			UPDATE agent_lifecycle_operation SET stop_launch_id = $2, updated_at = now()
+			UPDATE agent_restart_operation SET stop_launch_id = $2, updated_at = now()
 			WHERE id = $1 AND status = 'running' AND step = $3
 		`, state.operationID, state.stopLaunchID, agentRestartStepStopping); err != nil {
 			return err
@@ -95,13 +95,13 @@ func (h *Handler) advanceAgentRestartAfterStop(ctx context.Context, state active
 	}
 	state = *locked
 	if state.storageKind == agentRestartStorageSession || state.storageKind == agentRestartStorageFull {
-		if err := clearAgentRuntimeSessionState(ctx, tx, state.operationID, state.agentID, state.runtimeID); err != nil {
+		if err := clearAgentRuntimeSessionState(ctx, tx, state.agentID, state.runtimeID); err != nil {
 			return err
 		}
 	}
 	if state.storageKind == agentRestartStorageFull {
 		if _, err := tx.Exec(ctx, `
-			UPDATE agent_lifecycle_operation SET step = $2, updated_at = now()
+			UPDATE agent_restart_operation SET step = $2, updated_at = now()
 			WHERE id = $1 AND status = 'running'
 		`, state.operationID, agentRestartStepResettingWorkspace); err != nil {
 			return err
@@ -156,11 +156,12 @@ func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentR
 	if state.storageKind == agentRestartStorageRestart {
 		err := tx.QueryRow(ctx, `
 			SELECT COALESCE(provider_session_id, '')
-			FROM agent_runtime_state
-			WHERE agent_id = $1 AND runtime_id = $2
-		`, state.agentID, state.runtimeID).Scan(&sessionID)
+			FROM agent_activity_launch
+			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
+			  AND daemon_id = $4 AND launch_id = $5
+		`, state.workspaceID, state.agentID, state.runtimeID, state.computerID, state.stopLaunchID).Scan(&sessionID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return protocol.WorkspaceRunnerAgentStartPayload{}, fmt.Errorf("load canonical provider session: %w", err)
+			return protocol.WorkspaceRunnerAgentStartPayload{}, fmt.Errorf("load stopped launch provider session: %w", err)
 		}
 	}
 	launchID := uuid.NewString()
@@ -176,9 +177,10 @@ func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentR
 		return protocol.WorkspaceRunnerAgentStartPayload{}, errors.New("desired Agent launch is unavailable")
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE agent_lifecycle_operation SET step = $2, updated_at = now()
+		UPDATE agent_restart_operation
+		SET step = $2, start_session_id = $3, updated_at = now()
 		WHERE id = $1 AND status = 'running'
-	`, state.operationID, agentRestartStepStarting); err != nil {
+	`, state.operationID, agentRestartStepStarting, sessionID); err != nil {
 		return protocol.WorkspaceRunnerAgentStartPayload{}, err
 	}
 	start := protocol.WorkspaceRunnerAgentStartPayload{
@@ -189,18 +191,9 @@ func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentR
 	return start, nil
 }
 
-func clearAgentRuntimeSessionState(ctx context.Context, tx pgx.Tx, operationID, agentID, runtimeID string) error {
-	if _, err := tx.Exec(ctx, `
-		UPDATE agent_runtime_state
-		SET provider_session_id = NULL, provider_config_fingerprint = NULL,
-		    generation = generation + 1, last_turn_id = $1,
-		    fresh_session_notice_reason = 'reset', updated_at = now()
-		WHERE agent_id = $2 AND runtime_id = $3
-	`, operationID, agentID, runtimeID); err != nil {
-		return fmt.Errorf("clear canonical provider session: %w", err)
-	}
+func clearAgentRuntimeSessionState(ctx context.Context, tx pgx.Tx, agentID, runtimeID string) error {
 	if _, err := tx.Exec(ctx, `UPDATE chat_session SET session_id = NULL, updated_at = now() WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeID); err != nil {
-		return fmt.Errorf("clear legacy chat session: %w", err)
+		return fmt.Errorf("clear chat provider sessions: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE agent_inbox_event SET session_id = NULL, updated_at = now() WHERE agent_id = $1 AND runtime_id = $2 AND session_id IS NOT NULL`, agentID, runtimeID); err != nil {
 		return fmt.Errorf("clear inbox provider sessions: %w", err)
@@ -214,7 +207,7 @@ func lockActiveAgentRestartState(ctx context.Context, tx pgx.Tx, operationID str
 		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
 		       operation.runtime_id::text, runtime.daemon_id::text,
 		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
-		FROM agent_lifecycle_operation operation
+		FROM agent_restart_operation operation
 		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
 		WHERE operation.id = $1 AND operation.status = 'running'
 		FOR UPDATE OF operation
@@ -254,9 +247,9 @@ func (h *Handler) advanceAgentRestartFromStatus(ctx context.Context, identity da
 			return false, nil
 		}
 		if status.Status == protocol.AgentStatusActive {
-			_, err = h.DB.Exec(ctx, `UPDATE agent_lifecycle_operation SET status = 'succeeded', step = '', reason_code = '', finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $2`, state.operationID, agentRestartStepStarting)
+			_, err = h.DB.Exec(ctx, `UPDATE agent_restart_operation SET status = 'succeeded', step = '', reason_code = '', finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $2`, state.operationID, agentRestartStepStarting)
 		} else {
-			_, err = h.DB.Exec(ctx, `UPDATE agent_lifecycle_operation SET status = 'failed', step = 'start', reason_code = 'replacement Agent failed to become active', finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $2`, state.operationID, agentRestartStepStarting)
+			_, err = h.DB.Exec(ctx, `UPDATE agent_restart_operation SET status = 'failed', step = 'start', reason_code = 'replacement Agent failed to become active', finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $2`, state.operationID, agentRestartStepStarting)
 		}
 		return true, err
 	default:
@@ -276,7 +269,7 @@ func (h *Handler) recordAgentWorkspaceResetResult(ctx context.Context, identity 
 		return nil
 	}
 	if result.Status == protocol.AgentResetWorkspaceFailed {
-		_, err := h.DB.Exec(ctx, `UPDATE agent_lifecycle_operation SET status = 'failed', step = 'reset_workspace', reason_code = $2, finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $3`, state.operationID, result.ReasonCode, agentRestartStepResettingWorkspace)
+		_, err := h.DB.Exec(ctx, `UPDATE agent_restart_operation SET status = 'failed', step = 'reset_workspace', reason_code = $2, finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $3`, state.operationID, result.ReasonCode, agentRestartStepResettingWorkspace)
 		return err
 	}
 	return h.advanceAgentRestartAfterWorkspaceReset(ctx, *state)
@@ -296,7 +289,7 @@ func (h *Handler) activeAgentRestartForRunner(ctx context.Context, identity daem
 		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
 		       operation.runtime_id::text, runtime.daemon_id::text,
 		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
-		FROM agent_lifecycle_operation operation
+		FROM agent_restart_operation operation
 		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
 		WHERE operation.workspace_id = $1 AND operation.agent_id = $2
 		  AND operation.status = 'running' AND runtime.daemon_id = $3
@@ -312,7 +305,7 @@ func (h *Handler) resumeAgentRestartOperations(ctx context.Context, identity dae
 		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
 		       operation.runtime_id::text, runtime.daemon_id::text,
 		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
-		FROM agent_lifecycle_operation operation
+		FROM agent_restart_operation operation
 		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
 		WHERE operation.workspace_id::text = $1 AND operation.status = 'running'
 		  AND runtime.daemon_id = $2

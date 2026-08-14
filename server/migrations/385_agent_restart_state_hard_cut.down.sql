@@ -1,0 +1,4 @@
+-- Irreversible hard cut: agent_runtime_state was never a complete production
+-- fact source, and reconstructing its provider session or generation would
+-- invent state. Restore an older application and database backup if rollback
+-- across this boundary is required.

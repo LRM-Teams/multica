@@ -428,7 +428,7 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 	}
 	defer conn.Close()
 	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
 	})
 	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
@@ -495,7 +495,7 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 	}
 	operationID := uuid.NewString()
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_lifecycle_operation (
+		INSERT INTO agent_restart_operation (
 			id, workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
 			action_kind, status, execution_mode, step, started_at
 		) VALUES ($1, $2, $3, $4, $5, $6, 'restart', 'running', 'immediate', 'stopping', now())`,
@@ -513,7 +513,7 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 	}
 	defer conn.Close()
 	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
 	})
 	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
@@ -521,7 +521,7 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 	}
 	deadline := time.Now().Add(time.Second)
 	for hub.WorkspaceRunnerConnectionCount(daemonID, testWorkspaceID) != 1 ||
-		!hub.WorkspaceRunnerSupportsCapability(daemonID, testWorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
+		!hub.WorkspaceRunnerSupportsCapability(daemonID, testWorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) {
 		if time.Now().After(deadline) {
 			t.Fatal("Runner did not become ready")
 		}

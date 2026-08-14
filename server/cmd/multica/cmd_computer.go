@@ -222,7 +222,7 @@ func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
 	cfg, err := daemon.LoadConfig(daemon.Overrides{
 		ServerURL:      bootstrap.ServerBaseURL,
 		WorkspacesRoot: bootstrap.WorkspacesRoot,
-		DaemonID:       bootstrap.DaemonID,
+		DaemonID:       bootstrap.ComputerID,
 		Profile:        bootstrap.Profile,
 	})
 	if err != nil {
@@ -231,7 +231,7 @@ func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
 	cfg.CLIVersion = version
 	cfg.Environment = bootstrap.Environment
 	cfg.ServerBaseURL = bootstrap.ServerBaseURL
-	cfg.DaemonID = bootstrap.DaemonID
+	cfg.DaemonID = bootstrap.ComputerID
 	cfg.ComputerGeneration = bootstrap.ComputerGeneration
 	cfg.BindingsRoot = bootstrap.BindingsRoot
 	cfg.WorkspacesRoot = bootstrap.WorkspacesRoot

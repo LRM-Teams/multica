@@ -41,11 +41,12 @@ func (d *Daemon) serveBindingCredentialProxy(ctx context.Context, listener net.L
 // Workspace Execution Binding child. The bootstrap fixes immutable identity;
 // Config supplies provider implementation settings inherited from the host.
 type BindingChildRunConfig struct {
-	Daemon       Config
-	Bootstrap    computer.BindingChildBootstrap
-	Logger       *slog.Logger
-	PublishReady func(computer.BindingChildReady) error
-	RefreshEvery time.Duration
+	Daemon         Config
+	Bootstrap      computer.BindingChildBootstrap
+	Logger         *slog.Logger
+	PublishReady   func(computer.BindingChildReady) error
+	RefreshEvery   time.Duration
+	HostLeaseEvery time.Duration
 }
 
 // RunBindingChild owns one Workspace Runner and all of its workspace-scoped
@@ -63,13 +64,18 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	bootstrap := config.Bootstrap
 	workspaceID := strings.TrimSpace(bootstrap.WorkspaceID)
-	if workspaceID == "" || strings.TrimSpace(config.Daemon.DaemonID) != strings.TrimSpace(bootstrap.DaemonID) {
+	if workspaceID == "" || strings.TrimSpace(config.Daemon.DaemonID) != strings.TrimSpace(bootstrap.ComputerID) {
 		return errors.New("Binding child identity does not match daemon config")
 	}
 	if config.Daemon.ComputerGeneration != bootstrap.ComputerGeneration || config.Daemon.Environment != bootstrap.Environment || config.Daemon.ServerBaseURL != bootstrap.ServerBaseURL || config.Daemon.BindingsRoot != bootstrap.BindingsRoot || config.Daemon.WorkspacesRoot != bootstrap.WorkspacesRoot {
 		return errors.New("Binding child bootstrap does not match daemon config")
 	}
 	config.Daemon.BindingStateRoot = filepath.Join(bootstrap.BindingsRoot, "binding-children", bootstrap.Environment, workspaceID)
+	bindingLease, err := computer.AcquireBindingChildLease(ctx, bootstrap.BindingsRoot, bootstrap.Environment, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer bindingLease.Close()
 	config.Daemon.WorkspaceID = workspaceID
 	d := newDaemonForRole(config.Daemon, config.Logger, daemonProcessBindingChild)
 	d.rootCtx = ctx
@@ -79,7 +85,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		PID:              os.Getpid(),
 	})
 	attestCtx, stopAttest := context.WithTimeout(ctx, 5*time.Second)
-	err := hostControl.AwaitAttest(attestCtx)
+	err = hostControl.AwaitAttest(attestCtx)
 	stopAttest()
 	if err != nil {
 		return err
@@ -146,10 +152,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			d.logger.Warn("Binding child orphan recovery failed", "workspace_id", workspaceID, "runtime_id", runtimeID, "error", err)
 		}
 	}
-	if err := d.restoreResidentAgents(); err != nil {
-		return fmt.Errorf("restore Binding child Agent roots: %w", err)
-	}
-
 	runner, err := d.newWorkspaceRunner(workspaceID)
 	if err != nil {
 		return err
@@ -188,6 +190,14 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	go func() {
 		refreshDone <- d.bindingWorkspaceRefreshLoop(runCtx, workspaceID, binding.Credential, refreshEvery)
 	}()
+	hostLeaseEvery := config.HostLeaseEvery
+	if hostLeaseEvery <= 0 {
+		hostLeaseEvery = time.Second
+	}
+	hostLeaseDone := make(chan error, 1)
+	go func() {
+		hostLeaseDone <- bindingHostLeaseLoop(runCtx, hostControl, hostLeaseEvery)
+	}()
 	runnerDone := make(chan struct{})
 	go func() {
 		defer close(runnerDone)
@@ -207,6 +217,12 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			<-runnerDone
 			return fmt.Errorf("Binding child membership refresh: %w", err)
 		}
+	case err := <-hostLeaseDone:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			cancel()
+			<-runnerDone
+			return fmt.Errorf("Binding child lost Computer Host lease: %w", err)
+		}
 	case <-runnerDone:
 		if readyErr != nil {
 			return fmt.Errorf("publish Binding child Ready: %w", readyErr)
@@ -221,6 +237,30 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		return fmt.Errorf("publish Binding child Ready: %w", readyErr)
 	}
 	return nil
+}
+
+func bindingHostLeaseLoop(ctx context.Context, host *bindingHostControlClient, interval time.Duration) error {
+	if host == nil {
+		return errors.New("Binding child Host control is unavailable")
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			attestCtx, cancel := context.WithTimeout(ctx, interval)
+			err := host.Attest(attestCtx)
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, initialCredential string, interval time.Duration) error {

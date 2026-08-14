@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -36,36 +37,33 @@ func (config WorkspaceRunnerConfig) validate() (WorkspaceRunnerConfig, error) {
 // workspaceRunnerDependencies are machine-wide owners. WorkspaceRunner keeps
 // their references but never copies their state or changes their lifetime.
 type workspaceRunnerDependencies struct {
-	client                      *Client
-	serverBaseURL               string
-	workspacesRoot              string
-	logger                      *slog.Logger
-	attachments                 *localAgentAttachmentRegistry
-	runtimes                    *canonicalAgentRuntimePool
-	processAdmission            agentProcessAdmission
-	diagnostics                 runnerDiagnosticSink
-	openInbox                   inboxCoordinatorFactory
-	runtimeSet                  func() AgentAttachmentRuntimeSet
-	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
-	configureProviderSession    func(string, string, string) error
-	currentProviderSession      func(string, string) (string, error)
-	recordProviderSession       func(string, string, string)
-	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
-	mixedRunActivityReplay      func(send func(string, any) error)
-	requestReminderSnapshot     func(string)
-	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
-	removeDetachedReminderAgent func(string) error
-	controlHeartbeatInterval    time.Duration
-	controlHeartbeatPayload     func(string) protocol.DaemonHeartbeatRequestPayload
-	controlHeartbeatAck         func(context.Context, *HeartbeatResponse)
-	controlHeartbeatChanges     func() (<-chan struct{}, func())
-	now                         func() time.Time
-	onTransition                func(agentLifecycleTransition)
+	client                   *Client
+	serverBaseURL            string
+	workspacesRoot           string
+	logger                   *slog.Logger
+	runtimes                 *canonicalAgentRuntimePool
+	processAdmission         agentProcessAdmission
+	diagnostics              runnerDiagnosticSink
+	openInbox                inboxCoordinatorFactory
+	runtimeIDs               func() []string
+	ensureResidentRuntime    func(context.Context, string, string, *agent.PiRunIdentity) error
+	configureProviderSession func(string, string, string) error
+	currentProviderSession   func(string, string) (string, error)
+	recordProviderSession    func(string, string, string)
+	mixedRunActivityAck      func(protocol.MixedRunActivityTransitionAckPayload) error
+	mixedRunActivityReplay   func(send func(string, any) error)
+	handleReminderInput      func(context.Context, protocol.ReminderOwnerInputPayload)
+	controlHeartbeatInterval time.Duration
+	controlHeartbeatPayload  func(string) protocol.DaemonHeartbeatRequestPayload
+	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
+	controlHeartbeatChanges  func() (<-chan struct{}, func())
+	now                      func() time.Time
+	onTransition             func(agentLifecycleTransition)
 }
 
 // WorkspaceRunner is one long-lived orchestration boundary for an
 // authenticated Computer-Workspace Binding. Callers interact through Runner
-// methods; its Inbox, process, Activity, Attachment, and socket state never
+// methods; its Inbox, process, Activity, and socket state never
 // escape to the machine-wide Daemon lifecycle owner.
 type WorkspaceRunner struct {
 	config WorkspaceRunnerConfig
@@ -79,24 +77,21 @@ type WorkspaceRunner struct {
 	activity  *agentActivityProducer
 	inboxes   *InboxRegistry
 
-	attachments *localAgentAttachmentRegistry
 	runtimes    *canonicalAgentRuntimePool
 	diagnostics runnerDiagnosticSink
 
-	runtimeSet                  func() AgentAttachmentRuntimeSet
-	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
-	configureProviderSession    func(string, string, string) error
-	currentProviderSession      func(string, string) (string, error)
-	recordProviderSession       func(string, string, string)
-	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
-	mixedRunActivityReplay      func(send func(string, any) error)
-	requestReminderSnapshot     func(string)
-	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
-	removeDetachedReminderAgent func(string) error
-	controlHeartbeatInterval    time.Duration
-	controlHeartbeatPayload     func(string) protocol.DaemonHeartbeatRequestPayload
-	controlHeartbeatAck         func(context.Context, *HeartbeatResponse)
-	controlHeartbeatChanges     func() (<-chan struct{}, func())
+	runtimeIDs               func() []string
+	ensureResidentRuntime    func(context.Context, string, string, *agent.PiRunIdentity) error
+	configureProviderSession func(string, string, string) error
+	currentProviderSession   func(string, string) (string, error)
+	recordProviderSession    func(string, string, string)
+	mixedRunActivityAck      func(protocol.MixedRunActivityTransitionAckPayload) error
+	mixedRunActivityReplay   func(send func(string, any) error)
+	handleReminderInput      func(context.Context, protocol.ReminderOwnerInputPayload)
+	controlHeartbeatInterval time.Duration
+	controlHeartbeatPayload  func(string) protocol.DaemonHeartbeatRequestPayload
+	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
+	controlHeartbeatChanges  func() (<-chan struct{}, func())
 
 	residency *agentResidencyStore
 	life      context.Context
@@ -119,17 +114,16 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 	if err != nil {
 		return nil, err
 	}
-	if dependencies.client == nil || dependencies.attachments == nil || dependencies.runtimes == nil || dependencies.processAdmission == nil || dependencies.openInbox == nil || dependencies.runtimeSet == nil || dependencies.ensureResidentRuntime == nil {
-		return nil, errors.New("Workspace Runner client, Attachment registry, Runtime pool, process admission, Inbox factory, Runtime scope, and resident Runtime are required")
+	if dependencies.client == nil || dependencies.runtimes == nil || dependencies.processAdmission == nil || dependencies.openInbox == nil || dependencies.runtimeIDs == nil || dependencies.ensureResidentRuntime == nil {
+		return nil, errors.New("Workspace Runner client, Runtime pool, process admission, Inbox factory, Runtime scope, and resident Runtime are required")
 	}
 	now := dependencies.now
 	if now == nil {
 		now = time.Now
 	}
 	inboxes, err := newInboxRegistry(config.WorkspaceID, inboxRegistryDependencies{
-		attachments: dependencies.attachments,
 		ownsRuntime: func(runtimeID string) bool {
-			for _, current := range dependencies.runtimeSet().RuntimeIDs {
+			for _, current := range dependencies.runtimeIDs() {
 				if current == runtimeID {
 					return true
 				}
@@ -155,28 +149,25 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 			now,
 			dependencies.onTransition,
 		),
-		activity:                    newAgentActivityProducer(config.DaemonInstanceID, now, nil),
-		inboxes:                     inboxes,
-		attachments:                 dependencies.attachments,
-		runtimes:                    dependencies.runtimes,
-		diagnostics:                 dependencies.diagnostics,
-		runtimeSet:                  dependencies.runtimeSet,
-		ensureResidentRuntime:       dependencies.ensureResidentRuntime,
-		configureProviderSession:    dependencies.configureProviderSession,
-		currentProviderSession:      dependencies.currentProviderSession,
-		recordProviderSession:       dependencies.recordProviderSession,
-		mixedRunActivityAck:         dependencies.mixedRunActivityAck,
-		mixedRunActivityReplay:      dependencies.mixedRunActivityReplay,
-		requestReminderSnapshot:     dependencies.requestReminderSnapshot,
-		handleReminderInput:         dependencies.handleReminderInput,
-		removeDetachedReminderAgent: dependencies.removeDetachedReminderAgent,
-		controlHeartbeatInterval:    dependencies.controlHeartbeatInterval,
-		controlHeartbeatPayload:     dependencies.controlHeartbeatPayload,
-		controlHeartbeatAck:         dependencies.controlHeartbeatAck,
-		controlHeartbeatChanges:     dependencies.controlHeartbeatChanges,
-		residency:                   newAgentResidencyStore(now),
-		life:                        life,
-		lifeStop:                    lifeStop,
+		activity:                 newAgentActivityProducer(config.DaemonInstanceID, now, nil),
+		inboxes:                  inboxes,
+		runtimes:                 dependencies.runtimes,
+		diagnostics:              dependencies.diagnostics,
+		runtimeIDs:               dependencies.runtimeIDs,
+		ensureResidentRuntime:    dependencies.ensureResidentRuntime,
+		configureProviderSession: dependencies.configureProviderSession,
+		currentProviderSession:   dependencies.currentProviderSession,
+		recordProviderSession:    dependencies.recordProviderSession,
+		mixedRunActivityAck:      dependencies.mixedRunActivityAck,
+		mixedRunActivityReplay:   dependencies.mixedRunActivityReplay,
+		handleReminderInput:      dependencies.handleReminderInput,
+		controlHeartbeatInterval: dependencies.controlHeartbeatInterval,
+		controlHeartbeatPayload:  dependencies.controlHeartbeatPayload,
+		controlHeartbeatAck:      dependencies.controlHeartbeatAck,
+		controlHeartbeatChanges:  dependencies.controlHeartbeatChanges,
+		residency:                newAgentResidencyStore(now),
+		life:                     life,
+		lifeStop:                 lifeStop,
 	}, nil
 }
 
@@ -346,7 +337,7 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 
 func (runner *WorkspaceRunner) activeCapabilities() []string {
 	capabilities := []string{
-		protocol.DaemonCapabilityWorkspaceRunnerAttachment,
+		protocol.DaemonCapabilityWorkspaceRunnerAgentProcess,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
 		protocol.DaemonCapabilityReminderTransientInput,
 	}
@@ -372,13 +363,21 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		serverBaseURL:    d.cfg.ServerBaseURL,
 		workspacesRoot:   d.cfg.WorkspacesRoot,
 		logger:           d.logger,
-		attachments:      d.attachmentRegistry(),
 		runtimes:         d.canonicalRuntimes,
 		processAdmission: d.processAdmission,
 		diagnostics:      d.runnerDiagnostics,
 		openInbox:        d.openMessageCoordinator,
-		runtimeSet: func() AgentAttachmentRuntimeSet {
-			return d.attachmentRuntimeSet(workspaceID)
+		runtimeIDs: func() []string {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			ids := make([]string, 0)
+			for runtimeID, runtime := range d.runtimeIndex {
+				if runtime.WorkspaceID == workspaceID {
+					ids = append(ids, runtimeID)
+				}
+			}
+			sort.Strings(ids)
+			return ids
 		},
 		ensureResidentRuntime: d.ensureResidentMessageRuntime,
 		configureProviderSession: func(agentID, runtimeID, providerSessionID string) error {
@@ -401,18 +400,14 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		mixedRunActivityReplay: func(send func(string, any) error) {
 			d.replayMixedRunActivity(workspaceID, send)
 		},
-		requestReminderSnapshot: func(agentID string) {
-			d.requestReminderSnapshot(workspaceID, agentID)
-		},
 		handleReminderInput: func(ctx context.Context, payload protocol.ReminderOwnerInputPayload) {
 			d.handleReminderOwnerInput(ctx, payload)
 		},
-		removeDetachedReminderAgent: d.removeDetachedReminderAgent,
-		controlHeartbeatInterval:    d.cfg.HeartbeatInterval,
-		controlHeartbeatPayload:     d.controlPlaneHeartbeatPayload,
-		controlHeartbeatAck:         d.handleWorkspaceRunnerControlAck,
-		controlHeartbeatChanges:     func() (<-chan struct{}, func()) { return nil, func() {} },
-		now:                         time.Now,
-		onTransition:                onTransition,
+		controlHeartbeatInterval: d.cfg.HeartbeatInterval,
+		controlHeartbeatPayload:  d.controlPlaneHeartbeatPayload,
+		controlHeartbeatAck:      d.handleWorkspaceRunnerControlAck,
+		controlHeartbeatChanges:  func() (<-chan struct{}, func()) { return nil, func() {} },
+		now:                      time.Now,
+		onTransition:             onTransition,
 	})
 }

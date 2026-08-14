@@ -76,7 +76,7 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 
 	logger := logger_pkg.NewLogger("computer")
 	launcher := computer.BindingRunnerLauncher{
-		DaemonID: computerID, ComputerGeneration: computerGeneration,
+		ComputerID: computerID, ComputerGeneration: computerGeneration,
 		Environment: string(serviceTarget.Environment), Profile: profile, ServerBaseURL: serviceTarget.Origin,
 		HostControlURL: fmt.Sprintf("http://127.0.0.1:%d", computer.HealthPort(profile)),
 		BindingsRoot:   bindingsRoot, WorkspacesRoot: workspacesRoot,

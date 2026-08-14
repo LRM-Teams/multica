@@ -15,11 +15,10 @@ import (
 // delivery, lease, execution, or session identity: those are Message lifecycle
 // facts and never process configuration.
 type DaemonAgentRuntimeConfigResponse struct {
-	WorkspaceID            string                  `json:"workspace_id"`
-	RuntimeID              string                  `json:"runtime_id"`
-	WorkspaceContext       string                  `json:"workspace_context,omitempty"`
-	RuntimeStateGeneration int64                   `json:"runtime_state_generation"`
-	Agent                  *DaemonAgentRuntimeData `json:"agent"`
+	WorkspaceID      string                  `json:"workspace_id"`
+	RuntimeID        string                  `json:"runtime_id"`
+	WorkspaceContext string                  `json:"workspace_context,omitempty"`
+	Agent            *DaemonAgentRuntimeData `json:"agent"`
 }
 
 // DaemonAgentRuntimeData is the stable Agent configuration exposed to a
@@ -105,13 +104,5 @@ func (h *Handler) DaemonGetAgentRuntimeConfig(w http.ResponseWriter, r *http.Req
 	if workspace, err := h.Queries.GetWorkspace(r.Context(), runtime.WorkspaceID); err == nil && workspace.Context.Valid {
 		response.WorkspaceContext = workspace.Context.String
 	}
-	state, err := h.Queries.EnsureAgentRuntimeState(r.Context(), db.EnsureAgentRuntimeStateParams{
-		AgentID: agent.ID, RuntimeID: runtime.ID,
-	})
-	if err != nil || state.Generation <= 0 {
-		writeError(w, http.StatusInternalServerError, "failed to load agent runtime state")
-		return
-	}
-	response.RuntimeStateGeneration = state.Generation
 	writeJSON(w, http.StatusOK, response)
 }

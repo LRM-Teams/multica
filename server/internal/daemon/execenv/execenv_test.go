@@ -699,7 +699,6 @@ func TestInjectRuntimeConfigNoSkills(t *testing.T) {
 	}
 }
 
-
 func TestWriteContextFilesOpencodeNativeSkills(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

@@ -133,18 +133,14 @@ type Daemon struct {
 	wsConnStateMu sync.RWMutex
 	wsConnState   string
 
-	reminderCache                    *reminderCache
-	localReminderInbox               *LocalReminderInbox
-	agentAttachments                 *localAgentAttachmentRegistry
-	reminderWSMu                     sync.RWMutex
-	reminderWrites                   chan<- []byte
-	reminderWSDone                   <-chan struct{}
-	reminderClose                    func() error
-	reminderGateMu                   sync.Mutex
-	reminderReplayComplete           bool
-	reminderProjectionReplayInFlight bool
-	reminderProjectionReplayPending  bool
-	reminderPendingSnapshots         map[string]struct{}
+	reminderCache            *reminderCache
+	localReminderInbox       *LocalReminderInbox
+	reminderWSMu             sync.RWMutex
+	reminderWrites           chan<- []byte
+	reminderWSDone           <-chan struct{}
+	reminderClose            func() error
+	reminderGateMu           sync.Mutex
+	reminderPendingSnapshots map[string]struct{}
 
 	// runtimeGoneMu guards runtimeGoneInflight, reregisterNextAttempt, and
 	// reregisterLastCompletedAt. The state lets the Runner control plane and poller
@@ -289,11 +285,6 @@ func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
 	d.agentRuntimeSessions = sessions
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, d.logger, nil)
-	if d.role == daemonProcessBindingChild {
-		d.agentAttachments = newLocalAgentAttachmentRegistryForBinding(bindingStateRoot, d.cfg.WorkspacesRoot, d.cfg.WorkspaceID, d.logger)
-	} else {
-		d.agentAttachments = newLocalAgentAttachmentRegistryAt(bindingStateRoot, d.cfg.WorkspacesRoot, d.logger)
-	}
 	d.localReminderInbox = &LocalReminderInbox{daemon: d}
 	d.reminderCache.onFireDelivery = d.localReminderInbox.AcceptDue
 	d.reminderCache.onFireReceipt = d.queueReminderFireReceipt
@@ -320,59 +311,9 @@ func (d *Daemon) notifyRuntimeSetChanged() {
 	d.runtimeSet.notify()
 }
 
-func (d *Daemon) removeDetachedReminderAgent(agentID string) error {
-	if d.reminderCache != nil {
-		if err := d.reminderCache.removeOwner(agentID); err != nil {
-			return err
-		}
-	}
-	d.reminderGateMu.Lock()
-	delete(d.reminderPendingSnapshots, agentID)
-	d.reminderGateMu.Unlock()
-	return nil
-}
-
-// reregisterCoalesceWindow caps how often the daemon re-registers a workspace
-// after detecting a runtime_not_found response. Many stale runtime IDs may be
-// reported within seconds of each other (one delete clears all of a daemon's
-// runtimes), and a single re-register call replaces every runtime in the
-// workspace, so concurrent recoveries must collapse to one API call.
 const reregisterCoalesceWindow = 30 * time.Second
-
-// reregisterFailureBackoff is the additional wait inserted before the next
-// re-register attempt when the previous one failed. This prevents heartbeat
-// ticks (~15s) from converting a server-side log flood into a re-register
-// flood when re-registration itself is failing (workspace removed, server
-// unreachable, ...).
 const reregisterFailureBackoff = 60 * time.Second
 
-// handleRuntimeGone is the single recovery entry point shared by the HTTP
-// heartbeat path, the runtime poller, and the WebSocket runtime_gone ack
-// handler. All three may notice the same stale runtime within a few ms of
-// each other, so this function:
-//
-//   - keys an in-flight set on runtimeID to drop concurrent calls for the same
-//     ID after the first one is already cleaning up;
-//   - keys a per-workspace next-attempt timestamp on workspaceID so that
-//     concurrent recoveries triggered by the SAME initial event coalesce to a
-//     single registerRuntimesForWorkspace call. The slot is cleared on success
-//     so a later distinct runtime deletion in the same workspace can trigger
-//     its own recovery without waiting for the coalesce window to expire; and
-//   - keys a per-workspace last-completed timestamp so that a straggler whose
-//     removeStaleRuntime took long enough that a sibling fully ran AND cleared
-//     the slot can still recognize itself as same-wave and bail. Without this,
-//     the success-case slot clear opens a race where the late caller re-claims
-//     an empty slot and double-registers.
-//
-// On failure of the underlying re-register, the next-attempt timestamp is
-// extended by reregisterFailureBackoff so we don't replace a server-side log
-// flood with a daemon-side register flood. workspaceSyncLoop will retry
-// independently every DefaultWorkspaceSyncInterval as a safety net.
-//
-// The recovery HTTP call uses the daemon root context, not the caller's. The
-// heartbeat path's per-runtime ctx is cancelled by notifyRuntimeSetChanged the
-// moment we prune the dead UUID, and if we forwarded that ctx the in-flight
-// register would self-cancel mid-flight.
 func (d *Daemon) handleRuntimeGone(runtimeID string) {
 	if runtimeID == "" {
 		return
@@ -730,7 +671,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityReminderVersionedCache,
 		protocol.DaemonCapabilityReminderLocalInbox,
 		protocol.DaemonCapabilityReminderTransientInput,
-		protocol.DaemonCapabilityWorkspaceRunnerAttachment,
+		protocol.DaemonCapabilityWorkspaceRunnerAgentProcess,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
 		// Binding children advertise the wire capability so the server can
 		// deliver the machine action. They only forward it to Computer Host;
@@ -2126,16 +2067,6 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 	ctx = executionCtx
 
-	if registry := d.attachmentRegistry(); registry != nil {
-		createdProvisional, observed := registry.observeTaskStarted(task.AgentID, task.RuntimeID, task.WorkspaceID)
-		if createdProvisional {
-			d.requestReminderSnapshot(task.WorkspaceID, task.AgentID)
-		}
-		if observed {
-			defer registry.observeTaskFinished(task.AgentID)
-		}
-	}
-
 	// Create a cancellable context so we can interrupt the running agent
 	// when the server signals the task should stop — either the task reached
 	// a terminal state (completed/failed/cancelled) or the task row is
@@ -2704,7 +2635,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		NewCommentsSince:                 task.NewCommentsSince,
 		AssignmentSnapshot:               task.AssignmentSnapshot,
 		PriorSessionResumed:              task.PriorSessionID != "",
-		FreshSessionNoticeReason:         task.FreshSessionNoticeReason,
 		AgentID:                          agentID,
 		AgentName:                        agentName,
 		ManagedRole:                      managedRole,

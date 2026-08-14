@@ -66,14 +66,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			return err
 		}
 	}
-	attachmentRuntimeSet := runner.attachmentRuntimeSet()
-	attachmentReplay, err := runner.attachmentReplayRequest(attachmentRuntimeSet)
-	if err != nil {
-		return err
-	}
-	if err := writeFrame(protocol.EventAgentAttachmentReplayReq, attachmentReplay); err != nil {
-		return err
-	}
 	var controlStarted bool
 	var stopControl context.CancelFunc
 	var controlDone chan struct{}
@@ -96,6 +88,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			<-controlDone
 		}
 	}()
+	startControl()
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -184,60 +177,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentResetWorkspaceResult, result); err != nil {
 				return err
 			}
-		case protocol.EventAgentAttach:
-			var attach protocol.WorkspaceRunnerAgentAttachPayload
-			if json.Unmarshal(message.Payload, &attach) != nil {
-				continue
-			}
-			receipt, err := runner.applyAttachmentAttach(attach)
-			if err != nil {
-				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner Attachment attach rejected", "workspace_id", workspaceID, "agent_id", attach.AgentID, "runtime_id", attach.RuntimeID, "reason", "attach_rejected", "error", err)
-				}
-				continue
-			}
-			if err := writeFrame(protocol.EventAgentAttached, receipt); err != nil {
-				return err
-			}
-			if runner.requestReminderSnapshot != nil {
-				runner.requestReminderSnapshot(attach.AgentID)
-			}
-		case protocol.EventAgentDetach:
-			var detach protocol.WorkspaceRunnerAgentDetachPayload
-			if json.Unmarshal(message.Payload, &detach) != nil {
-				continue
-			}
-			receipt, err := runner.applyAttachmentDetach(detach)
-			if err != nil {
-				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner Attachment detach rejected", "workspace_id", workspaceID, "agent_id", detach.AgentID, "runtime_id", detach.RuntimeID, "reason", "detach_rejected", "error", err)
-				}
-				continue
-			}
-			if err := writeFrame(protocol.EventAgentDetached, receipt); err != nil {
-				return err
-			}
-			if runner.removeDetachedReminderAgent != nil {
-				if err := runner.removeDetachedReminderAgent(detach.AgentID); err != nil {
-					return err
-				}
-			}
-		case protocol.EventAgentAttachmentReplayEnd:
-			var end protocol.WorkspaceRunnerAttachmentReplayEnd
-			if json.Unmarshal(message.Payload, &end) != nil {
-				continue
-			}
-			ack, err := runner.completeAttachmentReplay(attachmentRuntimeSet, end)
-			if err != nil {
-				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner Attachment replay rejected", "workspace_id", workspaceID, "reason", "invalid_replay_end", "error", err)
-				}
-				continue
-			}
-			if err := writeFrame(protocol.EventAgentAttachmentReplayAck, ack); err != nil {
-				return err
-			}
-			startControl()
 		case protocol.EventMixedRunActivityAck:
 			var activityAck protocol.MixedRunActivityTransitionAckPayload
 			if json.Unmarshal(message.Payload, &activityAck) != nil || activityAck.Validate() != nil {
@@ -286,10 +225,10 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 }
 
 func (runner *WorkspaceRunner) ownsRuntime(runtimeID string) bool {
-	if runner == nil || runner.runtimeSet == nil || runtimeID == "" {
+	if runner == nil || runner.runtimeIDs == nil || runtimeID == "" {
 		return false
 	}
-	for _, current := range runner.runtimeSet().RuntimeIDs {
+	for _, current := range runner.runtimeIDs() {
 		if current == runtimeID {
 			return true
 		}
@@ -312,10 +251,10 @@ func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, co
 	}
 	defer unsubscribe()
 	send := func() bool {
-		if runner.runtimeSet == nil {
+		if runner.runtimeIDs == nil {
 			return true
 		}
-		for _, runtimeID := range runner.runtimeSet().RuntimeIDs {
+		for _, runtimeID := range runner.runtimeIDs() {
 			if ctx.Err() != nil {
 				return false
 			}

@@ -570,7 +570,6 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 		       COALESCE(agent.runtime_id::text, ''), COALESCE(runtime.provider, ''),
 		       COALESCE(agent.model, ''), agent.runtime_mode,
 		       COALESCE(runtime.pinned_version, ''),
-		       COALESCE(runtime_state.provider_config_fingerprint, ''),
 		       COALESCE(agent.runtime_config::text, ''), COALESCE(agent.custom_env::text, ''),
 		       COALESCE(agent.custom_args::text, ''), COALESCE(agent.mcp_config::text, ''),
 		       COALESCE(agent.thinking_level, ''),
@@ -579,8 +578,6 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 		JOIN research_session s ON s.fleet_id = m.fleet_id
 		JOIN agent ON agent.id = m.agent_id AND agent.workspace_id = m.workspace_id
 		LEFT JOIN agent_runtime runtime ON runtime.id = agent.runtime_id AND runtime.workspace_id = m.workspace_id
-		LEFT JOIN agent_runtime_state runtime_state
-		  ON runtime_state.agent_id = agent.id AND runtime_state.runtime_id = agent.runtime_id
 		WHERE s.id = $1::uuid AND s.workspace_id = $2::uuid AND m.workspace_id = s.workspace_id
 		ORDER BY m.is_lead DESC, m.created_at, m.id
 	`, sessionID, workspaceID)
@@ -591,22 +588,22 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 	out := []FleetMember{}
 	for rows.Next() {
 		var item FleetMember
-		var runtimeMode, pinnedVersion, providerFingerprint string
+		var runtimeMode, pinnedVersion string
 		var runtimeConfig, customEnv, customArgs, mcpConfig, thinkingLevel string
 		var blockedUntil pgtype.Timestamptz
 		item.ExecutionTarget.Adapter = "agent_inbox"
 		if err := rows.Scan(&item.AgentID, &item.Role, &item.Status, &item.IsLead,
 			&item.ExecutionTarget.RuntimeID, &item.ExecutionTarget.Provider,
 			&item.ExecutionTarget.Model, &runtimeMode, &pinnedVersion,
-			&providerFingerprint, &runtimeConfig, &customEnv, &customArgs, &mcpConfig,
+			&runtimeConfig, &customEnv, &customArgs, &mcpConfig,
 			&thinkingLevel, &item.ProviderBlockDetail, &blockedUntil); err != nil {
 			return nil, err
 		}
 		item.ExecutionTarget.AgentID = item.AgentID
 		item.ExecutionTarget = FingerprintExecutionTarget(item.ExecutionTarget, ExecutionTargetConfigIdentity{
 			RuntimeMode: runtimeMode, RuntimePinnedVersion: pinnedVersion,
-			ProviderStateFingerprint: providerFingerprint, RuntimeConfig: runtimeConfig,
-			CustomEnv: customEnv, CustomArgs: customArgs, MCPConfig: mcpConfig,
+			RuntimeConfig: runtimeConfig,
+			CustomEnv:     customEnv, CustomArgs: customArgs, MCPConfig: mcpConfig,
 			ThinkingLevel: thinkingLevel,
 		})
 		if blockedUntil.Valid {

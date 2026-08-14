@@ -64,11 +64,11 @@ func TestAgentRestartContractPure(t *testing.T) {
 	if _, ok := agentRestartStorageForMode("delete_agent"); ok {
 		t.Fatal("unknown mode was accepted")
 	}
-	if !workspaceRunnerAttachmentCapabilityPresent([]string{"other", "workspace_runner_attachment_v1"}) {
-		t.Fatal("Workspace Runner attachment capability was not detected")
+	if !workspaceRunnerAgentProcessCapabilityPresent([]string{"other", "workspace_runner_agent_process_v1"}) {
+		t.Fatal("Workspace Runner Agent process capability was not detected")
 	}
-	if workspaceRunnerAttachmentCapabilityPresent([]string{"other"}) {
-		t.Fatal("missing Workspace Runner attachment capability was accepted")
+	if workspaceRunnerAgentProcessCapabilityPresent([]string{"other"}) {
+		t.Fatal("missing Workspace Runner Agent process capability was accepted")
 	}
 	if !workspaceRunnerResetCapabilityPresent([]string{"other", "workspace_runner_agent_reset_workspace_v1"}) {
 		t.Fatal("Workspace Runner reset capability was not detected")
@@ -227,7 +227,7 @@ func TestAgentRestartCreateIsIdempotentAndForceRestartsBusyAgent(t *testing.T) {
 
 	var count int
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_lifecycle_operation WHERE agent_id = $1
+		SELECT count(*) FROM agent_restart_operation WHERE agent_id = $1
 	`, agentID).Scan(&count); err != nil {
 		t.Fatalf("count restart operations: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestAgentRestartConcurrentDuplicateRequestReturnsOneOperation(t *testing.T)
 
 	var count int
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_lifecycle_operation WHERE agent_id = $1
+		SELECT count(*) FROM agent_restart_operation WHERE agent_id = $1
 	`, agentID).Scan(&count); err != nil {
 		t.Fatalf("count restart operations: %v", err)
 	}
@@ -385,16 +385,6 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	}
 	agentID, runtimeID := createAgentRestartFixture(t, true)
 	const providerSessionID = "provider-session-before-restart"
-	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO agent_runtime_state (agent_id, runtime_id, provider_session_id)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (agent_id, runtime_id) DO UPDATE
-		SET provider_session_id = EXCLUDED.provider_session_id,
-		    fresh_session_notice_reason = NULL,
-		    updated_at = now()
-	`, agentID, runtimeID, providerSessionID); err != nil {
-		t.Fatal(err)
-	}
 	var oldLaunchID string
 	if err := testPool.QueryRow(context.Background(), `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&oldLaunchID); err != nil {
 		t.Fatal(err)
@@ -404,6 +394,20 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 		VALUES ($1, $2, $3, 'agent-restart-test-daemon', 'runner-instance', $4, 'active')
 	`, testWorkspaceID, agentID, runtimeID, oldLaunchID); err != nil {
 		t.Fatal(err)
+	}
+	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	runnerHandler := *testHandler
+	runnerHandler.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"agent-restart-test-daemon/" + testWorkspaceID + "/runner-instance": true,
+	}}
+	sessionFrame, err := json.Marshal(protocol.AgentSessionPayload{
+		AgentID: agentID, LaunchID: oldLaunchID, ProviderSessionID: providerSessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runnerHandler.HandleWorkspaceRunnerFrame(context.Background(), identity, "runner-instance", protocol.EventAgentSession, sessionFrame); err != nil {
+		t.Fatalf("record live provider session: %v", err)
 	}
 	notifier := &capturedAgentRestartNotifier{}
 	previous := testHandler.AgentRestartNotifier
@@ -424,7 +428,6 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 		t.Fatalf("first restart command event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
 
-	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: uuid.NewString(), Status: protocol.AgentStatusInactive}); err != nil || handled {
 		t.Fatalf("stale inactive advanced stop fence: handled=%v err=%v", handled, err)
 	}
@@ -435,6 +438,18 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	start, ok := payload.(protocol.WorkspaceRunnerAgentStartPayload)
 	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.AgentID != agentID || start.RuntimeID != runtimeID || start.LaunchID == oldLaunchID || start.Config.SessionID != providerSessionID {
 		t.Fatalf("replacement restart command event=%q command=%q payload=%+v", eventType, commandID, payload)
+	}
+	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnectActions := reduceRunnerLaunches(desired, nil)
+	if len(reconnectActions) != 1 {
+		t.Fatalf("restart reconnect actions=%+v, want one start", reconnectActions)
+	}
+	reconnectStart, ok := reconnectActions[0].payload.(protocol.WorkspaceRunnerAgentStartPayload)
+	if !ok || reconnectActions[0].eventType != protocol.EventDaemonAgentStart || reconnectStart.LaunchID != start.LaunchID || reconnectStart.StartDispatchID != operation.ID || reconnectStart.Config.SessionID != providerSessionID {
+		t.Fatalf("restart reconnect start=%+v, want persisted session %q", reconnectActions, providerSessionID)
 	}
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance active handled=%v err=%v", handled, err)
@@ -450,12 +465,18 @@ func TestAgentRestartSessionClearsSessionThenStartsFresh(t *testing.T) {
 		t.Skip("database not available")
 	}
 	agentID, runtimeID := createAgentRestartFixture(t, true)
+	var chatSessionID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, session_id, runtime_id)
+		VALUES ($1, $2, $3, 'restart session reset', 'provider-session-before-reset', $4)
+		RETURNING id::text
+	`, testWorkspaceID, agentID, testUserID, runtimeID).Scan(&chatSessionID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO agent_runtime_state (agent_id, runtime_id, provider_session_id)
-		VALUES ($1, $2, 'provider-session-before-reset')
-		ON CONFLICT (agent_id, runtime_id) DO UPDATE
-		SET provider_session_id = EXCLUDED.provider_session_id, updated_at = now()
-	`, agentID, runtimeID); err != nil {
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, session_id)
+		VALUES ($1, $2, $3, 'completed', 0, 'provider-session-before-reset')
+	`, agentID, runtimeID, chatSessionID); err != nil {
 		t.Fatal(err)
 	}
 	notifier := &capturedAgentRestartNotifier{}
@@ -485,15 +506,17 @@ func TestAgentRestartSessionClearsSessionThenStartsFresh(t *testing.T) {
 	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.Config.SessionID != "" {
 		t.Fatalf("fresh session start event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
-	var providerSessionID *string
+	var chatProviderSessionID, inboxProviderSessionID *string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT provider_session_id FROM agent_runtime_state
-		WHERE agent_id = $1 AND runtime_id = $2
-	`, agentID, runtimeID).Scan(&providerSessionID); err != nil {
+		SELECT chat.session_id, inbox.session_id
+		FROM chat_session chat
+		JOIN agent_inbox_event inbox ON inbox.chat_session_id = chat.id
+		WHERE chat.id = $1
+	`, chatSessionID).Scan(&chatProviderSessionID, &inboxProviderSessionID); err != nil {
 		t.Fatal(err)
 	}
-	if providerSessionID != nil {
-		t.Fatalf("provider session after session reset=%q, want NULL", *providerSessionID)
+	if chatProviderSessionID != nil || inboxProviderSessionID != nil {
+		t.Fatalf("provider sessions after session reset = chat:%v inbox:%v, want both NULL", chatProviderSessionID, inboxProviderSessionID)
 	}
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance session active handled=%v err=%v", handled, err)
@@ -731,7 +754,7 @@ func TestAgentRestartCommandTimeoutFailsBusinessRecordOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_lifecycle_operation SET started_at = now() - interval '3 minutes' WHERE id = $1
+		UPDATE agent_restart_operation SET started_at = now() - interval '3 minutes' WHERE id = $1
 	`, operation.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -771,7 +794,7 @@ func TestTimedOutResetStartKeepsExplicitFreshSessionOnReconcile(t *testing.T) {
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance stop handled=%v err=%v", handled, err)
 	}
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_lifecycle_operation SET started_at = now() - interval '3 minutes' WHERE id = $1`, operation.ID); err != nil {
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_restart_operation SET started_at = now() - interval '3 minutes' WHERE id = $1`, operation.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := SweepTimedOutAgentRestartOperations(context.Background(), testPool); err != nil {
@@ -818,7 +841,7 @@ func TestTimedOutWorkspaceResetDoesNotResumePreResetDesiredLaunch(t *testing.T) 
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance stop handled=%v err=%v", handled, err)
 	}
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_lifecycle_operation SET started_at = now() - interval '3 minutes' WHERE id = $1`, operation.ID); err != nil {
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_restart_operation SET started_at = now() - interval '3 minutes' WHERE id = $1`, operation.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := SweepTimedOutAgentRestartOperations(context.Background(), testPool); err != nil {
@@ -931,7 +954,7 @@ func TestAgentRestartCreateRejectsStaleHeartbeatWithoutCreatingAnOperation(t *te
 
 	var count int
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_lifecycle_operation WHERE agent_id = $1
+		SELECT count(*) FROM agent_restart_operation WHERE agent_id = $1
 	`, agentID).Scan(&count); err != nil {
 		t.Fatalf("count operations: %v", err)
 	}
@@ -964,7 +987,7 @@ func createAgentRestartFixtureWithProvider(t *testing.T, capable bool, provider 
 	t.Helper()
 	capabilities := `[]`
 	if capable {
-		capabilities = `["workspace_runner_attachment_v1","workspace_runner_agent_reset_workspace_v1"]`
+		capabilities = `["workspace_runner_agent_process_v1","workspace_runner_agent_reset_workspace_v1"]`
 	}
 	ctx := context.Background()
 	if err := testPool.QueryRow(ctx, `
@@ -989,7 +1012,7 @@ func createAgentRestartFixtureWithProvider(t *testing.T, capable bool, provider 
 		t.Fatalf("create restart agent: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_lifecycle_operation WHERE agent_id = $1`, agentID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_restart_operation WHERE agent_id = $1`, agentID)
 		testPool.Exec(context.Background(), `DELETE FROM agent_execution WHERE agent_id = $1`, agentID)
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
 		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)

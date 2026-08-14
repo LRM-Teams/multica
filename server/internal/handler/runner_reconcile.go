@@ -90,7 +90,7 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	if h == nil || h.DB == nil || h.DaemonHub == nil {
 		return errors.New("Workspace Runner reconcile dependencies are unavailable")
 	}
-	if !h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
+	if !h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) {
 		return nil
 	}
 	desired, err := h.loadRunnerDesiredLaunches(ctx, identity)
@@ -102,7 +102,7 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 		FROM agent_activity_launch
 		WHERE workspace_id::text = $1 AND daemon_id = $2 AND status IN ('accepted', 'active')
 		  AND NOT EXISTS (
-			SELECT 1 FROM agent_lifecycle_operation operation
+			SELECT 1 FROM agent_restart_operation operation
 			WHERE operation.agent_id = agent_activity_launch.agent_id
 			  AND operation.status = 'running' AND operation.step <> 'starting'
 		  )
@@ -139,20 +139,18 @@ func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemon
 		       desired.launch_id::text, desired.start_dispatch_id::text,
 		       CASE
 		         WHEN launch_operation.action_kind <> 'restart' THEN ''
-		         ELSE COALESCE(runtime_state.provider_session_id, '')
+		         ELSE COALESCE(launch_operation.start_session_id, '')
 		       END
 		FROM agent_runner_launch_projection desired
 		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
-		LEFT JOIN agent_runtime_state runtime_state
-		  ON runtime_state.agent_id = desired.agent_id AND runtime_state.runtime_id = desired.runtime_id
-		LEFT JOIN agent_lifecycle_operation active_operation
+		LEFT JOIN agent_restart_operation active_operation
 		  ON active_operation.agent_id = desired.agent_id AND active_operation.status = 'running'
-		LEFT JOIN agent_lifecycle_operation launch_operation
+		LEFT JOIN agent_restart_operation launch_operation
 		  ON launch_operation.id = desired.start_dispatch_id
 		WHERE desired.workspace_id::text = $1 AND runtime.daemon_id = $2
 		  AND (active_operation.id IS NULL OR active_operation.step = 'starting')
 		  AND NOT EXISTS (
-			SELECT 1 FROM agent_lifecycle_operation failed_reset
+			SELECT 1 FROM agent_restart_operation failed_reset
 			WHERE failed_reset.agent_id = desired.agent_id
 			  AND failed_reset.status = 'failed'
 			  AND failed_reset.action_kind <> 'restart'

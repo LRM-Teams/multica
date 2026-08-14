@@ -185,7 +185,7 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op, err := scanAgentRestartOperation(tx.QueryRow(r.Context(), `
-		INSERT INTO agent_lifecycle_operation (
+		INSERT INTO agent_restart_operation (
 			workspace_id, agent_id, runtime_id, actor_user_id,
 			idempotency_key, action_kind, status, execution_mode,
 			step, started_at
@@ -249,7 +249,7 @@ func SweepTimedOutAgentRestartOperations(ctx context.Context, exec dbExecutor) (
 		return 0, errors.New("database is unavailable")
 	}
 	commandTag, err := exec.Exec(ctx, `
-		UPDATE agent_lifecycle_operation
+		UPDATE agent_restart_operation
 		SET status = 'failed', step = 'timeout',
 		    reason_code = 'workspace Runner command did not finish before timeout',
 		    finished_at = now()
@@ -353,7 +353,7 @@ func (h *Handler) agentRestartRuntimeSupport(ctx context.Context, agent db.Agent
 		time.Since(runtime.LastSeenAt.Time) >= agentHealthStaleThreshold {
 		return runtime, false, "agent_runtime_offline", nil
 	}
-	if !workspaceRunnerAttachmentCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime))) {
+	if !workspaceRunnerAgentProcessCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime))) {
 		return runtime, false, "unsupported_runtime_capability", nil
 	}
 	return runtime, true, "", nil
@@ -392,7 +392,7 @@ const agentRestartOperationSelect = `
 	SELECT
 		id, agent_id, runtime_id, action_kind, status, execution_mode,
 		step, reason_code, created_at, started_at, finished_at
-	FROM agent_lifecycle_operation
+	FROM agent_restart_operation
 `
 
 type restartScanner interface {
@@ -470,9 +470,9 @@ func agentRestartModeForStorage(action agentRestartStorageKind) AgentRestartMode
 	}
 }
 
-func workspaceRunnerAttachmentCapabilityPresent(capabilities []string) bool {
+func workspaceRunnerAgentProcessCapabilityPresent(capabilities []string) bool {
 	for _, capability := range capabilities {
-		if capability == protocol.DaemonCapabilityWorkspaceRunnerAttachment {
+		if capability == protocol.DaemonCapabilityWorkspaceRunnerAgentProcess {
 			return true
 		}
 	}

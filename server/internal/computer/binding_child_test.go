@@ -2,6 +2,7 @@ package computer
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -102,7 +103,7 @@ func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.
 	bootstrap := BindingChildBootstrap{
 		ProtocolVersion:    BindingChildProtocolVersion,
 		WorkspaceID:        "workspace-a",
-		DaemonID:           "computer-a",
+		ComputerID:         "computer-a",
 		ComputerGeneration: 11,
 		RunnerGeneration:   7,
 		Environment:        "test",
@@ -110,6 +111,13 @@ func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.
 		HostControlURL:     "http://127.0.0.1:19514",
 		BindingsRoot:       "/tmp/computer-a",
 		WorkspacesRoot:     "/tmp/workspaces-a",
+	}
+	raw, err := json.Marshal(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"computer_id":"computer-a"`) || strings.Contains(string(raw), `"daemon_id"`) {
+		t.Fatalf("Binding bootstrap identity wire = %s", raw)
 	}
 	child, err := StartBindingProcess(os.Args[0], []string{"-test.run=TestBindingChildProtocolHelper"}, bootstrap)
 	if err != nil {
@@ -139,7 +147,7 @@ func TestBindingChildReadyRejectsStaleGeneration(t *testing.T) {
 	bootstrap := BindingChildBootstrap{
 		ProtocolVersion:    BindingChildProtocolVersion,
 		WorkspaceID:        "workspace-a",
-		DaemonID:           "computer-a",
+		ComputerID:         "computer-a",
 		ComputerGeneration: 11,
 		RunnerGeneration:   7,
 		Environment:        "production",

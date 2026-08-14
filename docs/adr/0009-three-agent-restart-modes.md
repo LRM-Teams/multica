@@ -17,8 +17,8 @@ executable.
 The Web API uses `resetAgent(agentId, mode)` and sends only `{ "mode":
 "restart" | "session" | "full" }`. Runtime IDs, filesystem paths, and force
 flags are server-owned. The operation response is an `AgentRestartOperation`;
-the existing `agent_lifecycle_operation` table remains only as legacy physical
-storage so this semantic cut does not require a cosmetic data migration.
+the database table is also hard-cut to `agent_restart_operation`. There is no
+legacy lifecycle table or parallel storage contract.
 
 Raft Computer 1.0.16 accepts three discrete commands: `agent:stop`,
 `agent:reset-workspace`, and `agent:start`. It has no composite

@@ -18,19 +18,13 @@ func (runner *WorkspaceRunner) resetManagedAgentWorkspace(payload protocol.Works
 		result.ReasonCode = reason
 		return result
 	}
-	if runner == nil || runner.attachments == nil || runner.processes == nil || runner.runtimes == nil {
+	if runner == nil || runner.processes == nil || runner.runtimes == nil {
 		return fail("reset_dependencies_unavailable")
 	}
 	if err := payload.Validate(); err != nil {
 		return fail("invalid_reset_command")
 	}
-	attachment, attached := runner.attachments.Resolve(runner.config.WorkspaceID, payload.AgentID)
-	if !attached || !runner.hasRuntime(attachment.RuntimeID) {
-		return fail("attachment_unavailable")
-	}
-	if _, running := runner.processes.Snapshot(payload.AgentID); running ||
-		runner.runtimes.hasLiveLease(payload.AgentID, attachment.RuntimeID) ||
-		runner.runtimes.residentProcessAlive(payload.AgentID, attachment.RuntimeID) {
+	if _, running := runner.processes.Snapshot(payload.AgentID); running || runner.runtimes.agentHasLiveRuntime(payload.AgentID) {
 		return fail("agent_still_running")
 	}
 	layout, err := execenv.ResolveAgentWorkspaceLayout(runner.workspacesRoot, runner.config.WorkspaceID, payload.AgentID)

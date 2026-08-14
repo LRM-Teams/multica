@@ -14,6 +14,7 @@ type AcceptResultInput struct {
 	InboxTaskID string
 	Raw         json.RawMessage
 	Result      ResultEnvelope
+	V6Plan      *ResearchV6PlanResult
 	Hash        string
 }
 

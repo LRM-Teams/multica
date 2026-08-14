@@ -213,10 +213,12 @@ func validateResearchV6PlanResult(result ResearchV6PlanResult) error {
 	}
 	for _, task := range result.Tasks {
 		hasInquiryTarget := false
+		seenTargets := map[ResearchV6EntityRef]bool{}
 		for _, target := range task.Targets {
-			if !resolveV6InitialEntity(target, entities) {
+			if !resolveV6InitialEntity(target, entities) || seenTargets[target] {
 				return invalid("task %q has unresolved target %s:%s", task.ClientKey, target.Kind, target.Key)
 			}
+			seenTargets[target] = true
 			if target.Kind == "question" || target.Kind == "hypothesis" || target.Kind == "branch" {
 				hasInquiryTarget = true
 			}

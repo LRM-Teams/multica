@@ -816,6 +816,10 @@ func persistAcceptedResultArtifactTx(
 	accessLevel ArtifactAccessLevel,
 ) (string, error) {
 	resultID := uuid.NewString()
+	passportSchemaVersion := "legacy-v1"
+	if orchestratorVersion == OrchestratorVersionV6 {
+		passportSchemaVersion = OrchestratorVersionV6
+	}
 	if err := registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            workspaceID,
 		SessionID:              sessionID,
@@ -829,7 +833,7 @@ func persistAcceptedResultArtifactTx(
 		ProducedByAttemptID:    attemptID,
 		SourceCreatedAt:        timePtr(time.Now()),
 		SchemaName:             string(ArtifactKindResultArtifact),
-		SchemaVersion:          "legacy-v1",
+		SchemaVersion:          passportSchemaVersion,
 	}); err != nil {
 		return "", err
 	}

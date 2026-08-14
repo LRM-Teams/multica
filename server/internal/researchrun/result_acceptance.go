@@ -62,9 +62,24 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 	if !found {
 		return AcceptResultOutcome{}, ErrRunNotFound
 	}
-	result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, submission.Raw, task, run.Config)
-	if err != nil {
-		return AcceptResultOutcome{}, err
+	var result ResultEnvelope
+	var v6Plan *ResearchV6PlanResult
+	var hash string
+	if run.OrchestratorVersion == OrchestratorVersionV6 {
+		if task.Kind != TaskKindPlan {
+			return AcceptResultOutcome{}, fmt.Errorf("%w: V6 task result adapter is not available for %s", ErrUnsupportedVersion, task.Kind)
+		}
+		decoded, decodedHash, decodeErr := DecodeAndValidateResearchV6PlanResult(submission.Raw)
+		if decodeErr != nil {
+			return AcceptResultOutcome{}, decodeErr
+		}
+		v6Plan, hash = &decoded, decodedHash
+		result = researchV6PlanEnvelope(decoded)
+	} else {
+		result, hash, err = DecodeAndValidateResultForVersion(run.OrchestratorVersion, submission.Raw, task, run.Config)
+		if err != nil {
+			return AcceptResultOutcome{}, err
+		}
 	}
 	contract, err := module.store.GetCurrentContract(ctx, submission.SessionID, submission.WorkspaceID)
 	if err != nil {
@@ -102,7 +117,7 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 	return module.store.AcceptResult(ctx, AcceptResultInput{
 		SessionID: submission.SessionID, AttemptID: submission.AttemptID,
 		AgentID: submission.AgentID, InboxTaskID: submission.InboxTaskID,
-		Raw: submission.Raw, Result: result, Hash: hash,
+		Raw: submission.Raw, Result: result, V6Plan: v6Plan, Hash: hash,
 	})
 }
 

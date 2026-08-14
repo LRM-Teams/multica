@@ -11,6 +11,7 @@ const (
 	OrchestratorVersionV3 = "research-run-v3"
 	OrchestratorVersionV4 = "research-run-v4"
 	OrchestratorVersionV5 = "research-run-v5"
+	OrchestratorVersionV6 = "research-run-v6"
 	OrchestratorVersion   = OrchestratorVersionV5
 )
 

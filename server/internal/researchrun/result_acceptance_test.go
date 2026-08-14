@@ -6,7 +6,27 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
+
+func TestResultAcceptanceModuleRoutesV6PlanToAtomicAdapter(t *testing.T) {
+	store, submission := validResultAcceptanceFixture(t)
+	store.run.OrchestratorVersion = OrchestratorVersionV6
+	store.run.SessionID, store.run.WorkspaceID = uuid.NewString(), uuid.NewString()
+	store.task.SessionID, store.task.WorkspaceID = store.run.SessionID, store.run.WorkspaceID
+	store.task.ExpectedResult = "research_plan_v6"
+	store.members = []FleetMember{{AgentID: uuid.NewString(), Role: "researcher", Status: "active"}}
+	submission.SessionID, submission.WorkspaceID = store.run.SessionID, store.run.WorkspaceID
+	submission.Raw = encodeResearchV6PlanFixture(t, validResearchV6PlanFixture())
+
+	if _, err := (resultAcceptanceModule{store: store}).Accept(context.Background(), submission); err != nil {
+		t.Fatal(err)
+	}
+	if store.accepted == nil || store.accepted.V6Plan == nil || store.accepted.Result.SchemaVersion != 6 || len(store.accepted.Result.Plan.Tasks) != 1 {
+		t.Fatalf("V6 plan did not reach atomic adapter: %+v", store.accepted)
+	}
+}
 
 func TestResultAcceptanceModuleValidatesAndPassesCanonicalInput(t *testing.T) {
 	store, submission := validResultAcceptanceFixture(t)

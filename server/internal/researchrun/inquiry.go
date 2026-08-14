@@ -57,6 +57,7 @@ type inquiryStatusUpdateCommand struct {
 
 type InquiryHypothesisInput struct {
 	ID                   string          `json:"id"`
+	ClientKey            string          `json:"client_key,omitempty"`
 	QuestionID           string          `json:"question_id"`
 	Statement            string          `json:"statement"`
 	Applicability        json.RawMessage `json:"applicability"`
@@ -68,6 +69,7 @@ type InquiryHypothesisInput struct {
 
 type InquiryBranchInput struct {
 	ID              string          `json:"id"`
+	ClientKey       string          `json:"client_key,omitempty"`
 	ParentBranchID  string          `json:"parent_branch_id,omitempty"`
 	Objective       string          `json:"objective"`
 	EntryConditions json.RawMessage `json:"entry_conditions"`
@@ -85,6 +87,7 @@ type InquiryInsightInput struct {
 
 type InquiryEdgeInput struct {
 	ID        string          `json:"id"`
+	ClientKey string          `json:"client_key,omitempty"`
 	From      InquiryEndpoint `json:"from"`
 	To        InquiryEndpoint `json:"to"`
 	Relation  InquiryRelation `json:"relation"`

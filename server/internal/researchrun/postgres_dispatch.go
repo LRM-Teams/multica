@@ -46,7 +46,9 @@ func (s *PostgresStore) ClaimDispatchIntents(ctx context.Context, sessionID, tok
 		WHERE outbox.id = candidates.id
 		RETURNING outbox.id::text, outbox.attempt_id::text,
 		          outbox.session_id::text, outbox.request_payload,
-		          outbox.delivery_attempts
+		          outbox.delivery_attempts,
+		          COALESCE(outbox.manifest_id::text, ''),
+		          COALESCE(outbox.manifest_hash, '')
 	`, sessionID, token, lease.String(), limit)
 	if err != nil {
 		return nil, err
@@ -55,7 +57,8 @@ func (s *PostgresStore) ClaimDispatchIntents(ctx context.Context, sessionID, tok
 	for rows.Next() {
 		var intent DispatchIntent
 		var payload []byte
-		if err = rows.Scan(&intent.ID, &intent.AttemptID, &intent.SessionID, &payload, &intent.DeliveryAttempts); err != nil {
+		var manifestID, manifestHash string
+		if err = rows.Scan(&intent.ID, &intent.AttemptID, &intent.SessionID, &payload, &intent.DeliveryAttempts, &manifestID, &manifestHash); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(payload, &intent.Request); err != nil {
@@ -64,6 +67,9 @@ func (s *PostgresStore) ClaimDispatchIntents(ctx context.Context, sessionID, tok
 		hash, hashErr := HashDispatchRequest(intent.Request)
 		if hashErr != nil || hash != intent.Request.RequestHash {
 			return nil, fmt.Errorf("%w: dispatch intent %s request hash mismatch", ErrResultConflict, intent.ID)
+		}
+		if intent.Request.ManifestID != manifestID || intent.Request.ManifestHash != manifestHash {
+			return nil, fmt.Errorf("%w: dispatch intent %s manifest identity mismatch", ErrResultConflict, intent.ID)
 		}
 		intents = append(intents, intent)
 	}

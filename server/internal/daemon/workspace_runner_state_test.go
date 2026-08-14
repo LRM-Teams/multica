@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var _ interface{ Run(context.Context) } = (*WorkspaceRunner)(nil)
@@ -88,6 +89,107 @@ func TestWorkspaceRunnerConnectionSerializesConcurrentWrites(t *testing.T) {
 	writes.Wait()
 	if got := maximum.Load(); got != 1 {
 		t.Fatalf("maximum concurrent socket writes = %d, want 1", got)
+	}
+}
+
+func TestCurrentComputerDoesNotStartLegacyHTTPHeartbeatControlCarrier(t *testing.T) {
+	raw, err := os.ReadFile("daemon.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "go d.heartbeatLoop(ctx)") {
+		t.Fatal("Computer.Run still starts the legacy HTTP heartbeat control carrier")
+	}
+}
+
+func TestWorkspaceRunnerAdvertisesControlPlaneOnlyWithBothDirections(t *testing.T) {
+	hasControl := func(runner *WorkspaceRunner) bool {
+		for _, capability := range runner.activeCapabilities() {
+			if capability == protocol.DaemonCapabilityWorkspaceRunnerControlPlane {
+				return true
+			}
+		}
+		return false
+	}
+	tests := []struct {
+		name    string
+		runner  *WorkspaceRunner
+		control bool
+	}{
+		{name: "neither", runner: &WorkspaceRunner{}},
+		{name: "send only", runner: &WorkspaceRunner{controlHeartbeatPayload: func(string) protocol.DaemonHeartbeatRequestPayload { return protocol.DaemonHeartbeatRequestPayload{} }}},
+		{name: "ack only", runner: &WorkspaceRunner{controlHeartbeatAck: func(context.Context, *HeartbeatResponse) {}}},
+		{name: "both", runner: &WorkspaceRunner{
+			controlHeartbeatPayload: func(string) protocol.DaemonHeartbeatRequestPayload { return protocol.DaemonHeartbeatRequestPayload{} },
+			controlHeartbeatAck:     func(context.Context, *HeartbeatResponse) {},
+		}, control: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := hasControl(test.runner); got != test.control {
+				t.Fatalf("control capability = %v, want %v", got, test.control)
+			}
+		})
+	}
+}
+
+func TestWorkspaceRunnerControlHeartbeatUsesExactWorkspaceRuntimeSet(t *testing.T) {
+	d := New(Config{DaemonID: "computer-1", HeartbeatInterval: time.Hour}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.runtimeIndex["runtime-2"] = Runtime{ID: "runtime-2", WorkspaceID: "workspace-1"}
+	d.runtimeIndex["runtime-other"] = Runtime{ID: "runtime-other", WorkspaceID: "workspace-other"}
+	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner("workspace-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	type controlFrame struct {
+		eventType string
+		payload   any
+	}
+	frames := make(chan controlFrame, 3)
+	connection := &workspaceRunnerConnection{
+		workspaceID: "workspace-1",
+		ctx:         ctx,
+		cancel:      cancel,
+		write: func(eventType string, payload any) error {
+			frames <- controlFrame{eventType: eventType, payload: payload}
+			return nil
+		},
+		close: func() {},
+	}
+	runner.replaceConnection(connection)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runner.runControlPlaneHeartbeats(ctx, connection)
+	}()
+	got := make(map[string]bool)
+	for len(got) < 2 {
+		select {
+		case frame := <-frames:
+			if frame.eventType != protocol.EventDaemonHeartbeat {
+				t.Fatalf("control event type = %q", frame.eventType)
+			}
+			heartbeat, ok := frame.payload.(protocol.DaemonHeartbeatRequestPayload)
+			if !ok {
+				t.Fatalf("control payload type = %T", frame.payload)
+			}
+			got[heartbeat.RuntimeID] = true
+		case <-time.After(time.Second):
+			t.Fatalf("control heartbeats = %v, want both workspace-1 Runtimes", got)
+		}
+	}
+	if got["runtime-other"] || !got["runtime-1"] || !got["runtime-2"] {
+		t.Fatalf("control heartbeat Runtime scope = %v", got)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control heartbeat loop did not stop")
 	}
 }
 

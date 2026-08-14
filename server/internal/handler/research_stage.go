@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -137,7 +138,13 @@ func (h *Handler) evaluateResearchStage(ctx context.Context, workspaceID pgtype.
 	}
 
 	findingsJSON, _ := json.Marshal(findings)
-	eval, err := h.Queries.CreateResearchStageEval(ctx, db.CreateResearchStageEvalParams{
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.ResearchStageEval{}, "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	eval, err := h.Queries.WithTx(tx).CreateResearchStageEval(ctx, db.CreateResearchStageEvalParams{
 		WorkspaceID: workspaceID,
 		SessionID:   session.ID,
 		Stage:       stage,
@@ -147,6 +154,18 @@ func (h *Handler) evaluateResearchStage(ctx context.Context, workspaceID pgtype.
 		Remediation: remediation,
 	})
 	if err != nil {
+		return db.ResearchStageEval{}, "", err
+	}
+	if err := researchrun.RegisterProductionStageEvaluationTx(
+		ctx,
+		tx,
+		uuidToString(workspaceID),
+		uuidToString(session.ID),
+		uuidToString(eval.ID),
+	); err != nil {
+		return db.ResearchStageEval{}, "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return db.ResearchStageEval{}, "", err
 	}
 

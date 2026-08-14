@@ -98,19 +98,37 @@ func TestStartBindingRunnerRequiresWorkspace(t *testing.T) {
 	}
 }
 
+func TestPreviousPackageBindingBootstrapEndsWithLauncherProcess(t *testing.T) {
+	launcher := BindingRunnerLauncher{
+		PreviousPackageUpgradeBootstrap: true,
+		PreviousPackageUpgradeSourcePID: 42,
+		sourceProcessAlive: func(pid int) (bool, bool) {
+			return pid == 42, true
+		},
+	}
+	if !launcher.previousPackageBootstrapActive() {
+		t.Fatal("live previous-package launcher did not enable the bounded Binding bootstrap")
+	}
+	launcher.sourceProcessAlive = func(int) (bool, bool) { return false, true }
+	if launcher.previousPackageBootstrapActive() {
+		t.Fatal("previous-package Binding bootstrap remained enabled after launcher exit")
+	}
+}
+
 func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.T) {
 	t.Setenv("MULTICA_BINDING_CHILD_HELPER", "ready")
 	bootstrap := BindingChildBootstrap{
-		ProtocolVersion:    BindingChildProtocolVersion,
-		WorkspaceID:        "workspace-a",
-		ComputerID:         "computer-a",
-		ComputerGeneration: 11,
-		RunnerGeneration:   7,
-		Environment:        "test",
-		ServerBaseURL:      "https://test.example.com",
-		HostControlURL:     "http://127.0.0.1:19514",
-		BindingsRoot:       "/tmp/computer-a",
-		WorkspacesRoot:     "/tmp/workspaces-a",
+		ProtocolVersion:                 BindingChildProtocolVersion,
+		WorkspaceID:                     "workspace-a",
+		ComputerID:                      "computer-a",
+		ComputerGeneration:              11,
+		RunnerGeneration:                7,
+		Environment:                     "test",
+		ServerBaseURL:                   "https://test.example.com",
+		HostControlURL:                  "http://127.0.0.1:19514",
+		BindingsRoot:                    "/tmp/computer-a",
+		WorkspacesRoot:                  "/tmp/workspaces-a",
+		PreviousPackageUpgradeBootstrap: true,
 	}
 	raw, err := json.Marshal(bootstrap)
 	if err != nil {
@@ -118,6 +136,9 @@ func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.
 	}
 	if !strings.Contains(string(raw), `"computer_id":"computer-a"`) || strings.Contains(string(raw), `"daemon_id"`) {
 		t.Fatalf("Binding bootstrap identity wire = %s", raw)
+	}
+	if !strings.Contains(string(raw), `"previous_package_upgrade_bootstrap":true`) {
+		t.Fatalf("previous-package bootstrap marker was not forwarded to the Binding child: %s", raw)
 	}
 	child, err := StartBindingProcess(os.Args[0], []string{"-test.run=TestBindingChildProtocolHelper"}, bootstrap)
 	if err != nil {

@@ -684,21 +684,28 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 	return capabilities
 }
 
-func (d *Daemon) applyRegisterDaemonToken(workspaceID string, resp *RegisterResponse) bool {
+func (d *Daemon) applyRegisterDaemonToken(workspaceID string, resp *RegisterResponse) (bool, error) {
 	if resp == nil || resp.DaemonToken == "" || resp.DaemonTokenExpiresAt == "" {
-		return false
+		return false, nil
 	}
 	expiresAt, err := time.Parse(time.RFC3339Nano, resp.DaemonTokenExpiresAt)
 	if err != nil {
 		d.logger.Warn("register response carried invalid daemon token expiry", "workspace_id", workspaceID, "error", err)
-		return false
+		return false, nil
+	}
+	if strings.TrimSpace(d.cfg.BindingsRoot) != "" {
+		if err := computer.NewBindingsStore(d.cfg.BindingsRoot).RefreshCredential(
+			d.cfg.Environment, workspaceID, d.cfg.DaemonID, resp.DaemonToken, expiresAt,
+		); err != nil {
+			return false, fmt.Errorf("persist refreshed Workspace Binding credential: %w", err)
+		}
 	}
 	d.client.SetWorkspaceDaemonToken(workspaceID, resp.DaemonToken, expiresAt)
 	for _, rt := range resp.Runtimes {
 		d.client.SetRuntimeDaemonToken(rt.ID, resp.DaemonToken, expiresAt)
 	}
 	d.logger.Debug("daemon token cached for workspace", "workspace_id", workspaceID, "runtimes", len(resp.Runtimes), "expires_at", expiresAt)
-	return true
+	return true, nil
 }
 
 func (d *Daemon) clearDaemonTokensForWorkspace(workspaceID string) {
@@ -780,7 +787,11 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 			return nil, fmt.Errorf("register runtimes: %w", err)
 		}
 	}
-	if d.applyRegisterDaemonToken(workspaceID, resp) && !includeCredentialTransport {
+	tokenApplied, err := d.applyRegisterDaemonToken(workspaceID, resp)
+	if err != nil {
+		return nil, err
+	}
+	if tokenApplied && !includeCredentialTransport {
 		legacyResp := resp
 		req["capabilities"] = daemonRegistrationCapabilities(true)
 		resp, err = d.client.RegisterForWorkspace(ctx, workspaceID, req)
@@ -792,7 +803,9 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 			d.logger.Warn("daemon-token re-register failed; continuing without credential transport capability", "workspace_id", workspaceID, "error", err)
 			resp = legacyResp
 		} else {
-			d.applyRegisterDaemonToken(workspaceID, resp)
+			if _, err := d.applyRegisterDaemonToken(workspaceID, resp); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if len(resp.Runtimes) == 0 {

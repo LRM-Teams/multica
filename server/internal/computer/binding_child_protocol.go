@@ -26,6 +26,9 @@ type BindingChildBootstrap struct {
 	HostControlURL     string `json:"host_control_url"`
 	BindingsRoot       string `json:"bindings_root"`
 	WorkspacesRoot     string `json:"workspaces_root"`
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	PreviousPackageUpgradeBootstrap bool `json:"previous_package_upgrade_bootstrap,omitempty"`
 }
 
 func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {

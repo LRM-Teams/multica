@@ -115,18 +115,30 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if !ok {
 		return fmt.Errorf("Workspace Binding %q is not active for this Computer generation", workspaceID)
 	}
-	if binding.Credential == "" || !binding.CredentialExpiresAt.After(time.Now()) {
-		return fmt.Errorf("Workspace Binding %q has no live execution credential", workspaceID)
+	temporaryProfileAuth, err := d.prepareBindingExecutionCredential(binding, bootstrap.PreviousPackageUpgradeBootstrap)
+	if err != nil {
+		return err
 	}
-	d.client.SetWorkspaceDaemonToken(workspaceID, binding.Credential, binding.CredentialExpiresAt)
 	response := &RegisterResponse{
 		DaemonToken: binding.Credential, DaemonTokenExpiresAt: binding.CredentialExpiresAt.UTC().Format(time.RFC3339Nano),
 	}
-	if len(d.cfg.Agents) > 0 {
-		response, err = d.registerRuntimesForWorkspace(ctx, workspaceID)
-		if err != nil {
-			return err
+	response, err = func() (*RegisterResponse, error) {
+		if temporaryProfileAuth {
+			defer d.client.SetToken("")
 		}
+		if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil {
+			return nil, fmt.Errorf("validate Workspace Binding %q: %w", workspaceID, err)
+		}
+		if len(d.cfg.Agents) == 0 {
+			if temporaryProfileAuth {
+				return nil, fmt.Errorf("repair previous-package Workspace Binding %q: no provider Runtime can rotate its credential", workspaceID)
+			}
+			return response, nil
+		}
+		return d.registerRuntimesForWorkspace(ctx, workspaceID)
+	}()
+	if err != nil {
+		return err
 	}
 	runtimeIDs := make([]string, 0, len(response.Runtimes))
 	d.mu.Lock()
@@ -189,7 +201,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	refreshDone := make(chan error, 1)
 	go func() {
-		refreshDone <- d.bindingWorkspaceRefreshLoop(runCtx, workspaceID, binding.Credential, refreshEvery)
+		refreshDone <- d.bindingWorkspaceRefreshLoop(runCtx, workspaceID, response.DaemonToken, refreshEvery)
 	}()
 	hostLeaseEvery := config.HostLeaseEvery
 	if hostLeaseEvery <= 0 {
@@ -238,6 +250,34 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		return fmt.Errorf("publish Binding child Ready: %w", readyErr)
 	}
 	return nil
+}
+
+func (d *Daemon) prepareBindingExecutionCredential(binding computer.WorkspaceBinding, previousPackageBootstrap bool) (bool, error) {
+	workspaceID := strings.TrimSpace(binding.WorkspaceID)
+	if strings.TrimSpace(binding.Credential) == "" {
+		return false, fmt.Errorf("Workspace Binding %q has no live execution credential", workspaceID)
+	}
+	if binding.CredentialExpiresAt.After(time.Now()) {
+		d.client.SetWorkspaceDaemonToken(workspaceID, binding.Credential, binding.CredentialExpiresAt)
+		return false, nil
+	}
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source. alpha.55 refreshed scoped
+	// credentials only in memory, so its successor may see an expired persisted
+	// credential. Use profile auth only for this marked bootstrap, rotate and
+	// persist the scoped credential, then clear profile auth before Runner Ready.
+	if !previousPackageBootstrap {
+		return false, fmt.Errorf("Workspace Binding %q has no live execution credential", workspaceID)
+	}
+	if d.client.Token() == "" {
+		if err := d.resolveAuth(); err != nil {
+			return false, fmt.Errorf("repair previous-package Workspace Binding %q: %w", workspaceID, err)
+		}
+	}
+	if d.client.Token() == "" {
+		return false, fmt.Errorf("repair previous-package Workspace Binding %q: profile auth is unavailable", workspaceID)
+	}
+	return true, nil
 }
 
 func bindingHostLeaseLoop(ctx context.Context, host *bindingHostControlClient, interval time.Duration) error {

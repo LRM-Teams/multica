@@ -22,6 +22,11 @@ type BindingRunnerLauncher struct {
 	HostControlURL     string
 	BindingsRoot       string
 	WorkspacesRoot     string
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	PreviousPackageUpgradeBootstrap bool
+	PreviousPackageUpgradeSourcePID int
+	sourceProcessAlive              func(int) (bool, bool)
 }
 
 func (launcher BindingRunnerLauncher) Spawn(workspaceID string, runnerGeneration int64) (BindingChild, error) {
@@ -39,7 +44,20 @@ func (launcher BindingRunnerLauncher) Spawn(workspaceID string, runnerGeneration
 		RunnerGeneration: runnerGeneration, Environment: launcher.Environment, Profile: launcher.Profile,
 		ServerBaseURL: launcher.ServerBaseURL, HostControlURL: launcher.HostControlURL,
 		BindingsRoot: launcher.BindingsRoot, WorkspacesRoot: launcher.WorkspacesRoot,
+		PreviousPackageUpgradeBootstrap: launcher.previousPackageBootstrapActive(),
 	})
+}
+
+func (launcher BindingRunnerLauncher) previousPackageBootstrapActive() bool {
+	if !launcher.PreviousPackageUpgradeBootstrap || launcher.PreviousPackageUpgradeSourcePID < 1 {
+		return false
+	}
+	alive := launcher.sourceProcessAlive
+	if alive == nil {
+		alive = processAlive
+	}
+	isAlive, known := alive(launcher.PreviousPackageUpgradeSourcePID)
+	return isAlive || !known
 }
 
 type BindingChildSpawner func(workspaceID string, runnerGeneration int64) (BindingChild, error)

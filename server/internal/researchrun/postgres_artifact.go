@@ -439,6 +439,172 @@ func persistDecisionInputReferencesTx(
 			}
 		}
 	}
+	if decisionKind == ArtifactKindEvaluationDecision {
+		if err := persistEvaluationDecisionLocalReferencesTx(
+			ctx, tx, workspaceID, sessionID, decisionID, inputs, outcome,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type evaluationDecisionDefectReferences struct {
+	ClaimKeys  []string `json:"claim_keys"`
+	SectionIDs []string `json:"section_ids"`
+}
+
+func persistEvaluationDecisionLocalReferencesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, decisionID string,
+	inputs, outcome map[string]json.RawMessage,
+) error {
+	reportID, present, err := decisionReferenceID(inputs, "report_id")
+	if err != nil || !present {
+		return err
+	}
+	var reviewedClaimKeys, reviewedSectionIDs []string
+	if raw, ok := outcome["reviewed_claim_keys"]; ok && string(raw) != "null" {
+		if err = json.Unmarshal(raw, &reviewedClaimKeys); err != nil {
+			return fmt.Errorf("%w: Decision has invalid reviewed_claim_keys", ErrInvalidContract)
+		}
+	}
+	if raw, ok := outcome["reviewed_section_ids"]; ok && string(raw) != "null" {
+		if err = json.Unmarshal(raw, &reviewedSectionIDs); err != nil {
+			return fmt.Errorf("%w: Decision has invalid reviewed_section_ids", ErrInvalidContract)
+		}
+	}
+	var defects []evaluationDecisionDefectReferences
+	if raw, ok := outcome["defects"]; ok && string(raw) != "null" {
+		if err = json.Unmarshal(raw, &defects); err != nil {
+			return fmt.Errorf("%w: Decision has invalid defects", ErrInvalidContract)
+		}
+	}
+	for _, claimKey := range reviewedClaimKeys {
+		if err = persistEvaluationClaimKeyReferenceTx(
+			ctx, tx, workspaceID, sessionID, decisionID, reportID,
+			claimKey, "decision_reviewed_claim", 0,
+		); err != nil {
+			return err
+		}
+	}
+	defectSectionIDs := make([]string, 0)
+	for _, defect := range defects {
+		for _, claimKey := range defect.ClaimKeys {
+			if err = persistEvaluationClaimKeyReferenceTx(
+				ctx, tx, workspaceID, sessionID, decisionID, reportID,
+				claimKey, "decision_defect_claim", 0,
+			); err != nil {
+				return err
+			}
+		}
+		defectSectionIDs = append(defectSectionIDs, defect.SectionIDs...)
+	}
+	if err = validateEvaluationReportSectionKeysTx(
+		ctx, tx, workspaceID, sessionID, reportID, reviewedSectionIDs,
+	); err != nil {
+		return err
+	}
+	if len(reviewedSectionIDs) > 0 {
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			decisionID, ArtifactKindEvaluationDecision,
+			reportID, ArtifactKindReportRevision,
+			"decision_reviewed_report_section", "decision_materialization", 0,
+		); err != nil {
+			return err
+		}
+	}
+	if err = validateEvaluationReportSectionKeysTx(
+		ctx, tx, workspaceID, sessionID, reportID, defectSectionIDs,
+	); err != nil {
+		return err
+	}
+	if len(defectSectionIDs) > 0 {
+		return persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			decisionID, ArtifactKindEvaluationDecision,
+			reportID, ArtifactKindReportRevision,
+			"decision_defect_report_section", "decision_materialization", 0,
+		)
+	}
+	return nil
+}
+
+func persistEvaluationClaimKeyReferenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, decisionID, reportID, claimKey, relation string,
+	ordinal int,
+) error {
+	var claimIDs []string
+	rows, err := tx.Query(ctx, `
+		SELECT DISTINCT claim.id::text
+		FROM research_report_claim link
+		JOIN research_claim claim
+		  ON claim.workspace_id=link.workspace_id AND claim.session_id=link.session_id
+		 AND claim.id=link.claim_id
+		WHERE link.workspace_id=$1::uuid AND link.session_id=$2::uuid
+		  AND link.report_id=$3::uuid AND claim.client_key=$4
+		ORDER BY claim.id::text
+	`, workspaceID, sessionID, reportID, claimKey)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var claimID string
+		if err = rows.Scan(&claimID); err != nil {
+			rows.Close()
+			return err
+		}
+		claimIDs = append(claimIDs, claimID)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(claimIDs) != 1 {
+		return fmt.Errorf(
+			"%w: evaluation Claim key %q resolved to %d report Claims",
+			ErrInvalidResult, claimKey, len(claimIDs),
+		)
+	}
+	return persistTypedArtifactInputReferenceTx(
+		ctx, tx, workspaceID, sessionID,
+		decisionID, ArtifactKindEvaluationDecision,
+		claimIDs[0], ArtifactKindClaim, relation, "decision_materialization", ordinal,
+	)
+}
+
+func validateEvaluationReportSectionKeysTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, reportID string,
+	sectionIDs []string,
+) error {
+	for _, sectionID := range sectionIDs {
+		var matches int
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*)::int
+			FROM research_report report
+			CROSS JOIN LATERAL jsonb_array_elements(
+			  CASE WHEN jsonb_typeof(report.structured->'sections')='array'
+			    THEN report.structured->'sections' ELSE '[]'::jsonb END
+			) section
+			WHERE report.workspace_id=$1::uuid AND report.session_id=$2::uuid
+			  AND report.id=$3::uuid AND section->>'id'=$4
+		`, workspaceID, sessionID, reportID, sectionID).Scan(&matches); err != nil {
+			return err
+		}
+		if matches != 1 {
+			return fmt.Errorf(
+				"%w: evaluation section id %q resolved to %d report sections",
+				ErrInvalidResult, sectionID, matches,
+			)
+		}
+	}
 	return nil
 }
 

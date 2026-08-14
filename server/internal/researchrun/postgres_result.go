@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -54,11 +55,23 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		}
 		return AcceptResultOutcome{}, err
 	}
-	lockedResult, lockedHash, err := DecodeAndValidateResultForVersion(
-		state.run.OrchestratorVersion, in.Raw, state.task, state.run.Config,
-	)
-	if err != nil {
-		return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, err)
+	var lockedResult ResultEnvelope
+	var lockedHash string
+	if state.run.OrchestratorVersion == OrchestratorVersionV6 {
+		if state.task.Kind != TaskKindPlan {
+			return AcceptResultOutcome{}, fmt.Errorf("%w: V6 task result adapter is not available for %s", ErrUnsupportedVersion, state.task.Kind)
+		}
+		lockedPlan, planHash, decodeErr := DecodeAndValidateResearchV6PlanResult(in.Raw)
+		if decodeErr != nil {
+			return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
+		}
+		in.V6Plan, lockedHash = &lockedPlan, planHash
+		lockedResult = researchV6PlanEnvelope(lockedPlan)
+	} else {
+		lockedResult, lockedHash, err = DecodeAndValidateResultForVersion(state.run.OrchestratorVersion, in.Raw, state.task, state.run.Config)
+		if err != nil {
+			return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, err)
+		}
 	}
 	if normalizeArtifactContentHash(lockedHash) != in.Hash {
 		return AcceptResultOutcome{}, fmt.Errorf("%w: result hash changed under locked run/task contract", ErrResultConflict)
@@ -95,6 +108,13 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		if err != nil {
 			return AcceptResultOutcome{}, err
 		}
+	}
+	if in.V6Plan != nil {
+		prepared, prepareErr := prepareResearchV6PlanMaterialization(state.run.SessionID, state.attemptID, in.AgentID, state.run.StateVersion, *in.V6Plan)
+		if prepareErr != nil {
+			return AcceptResultOutcome{}, prepareErr
+		}
+		in.Result = prepared.Result
 	}
 
 	if !state.stale && state.task.Kind == TaskKindReplan {
@@ -139,6 +159,11 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 			return AcceptResultOutcome{}, err
 		}
 		outcome.TasksCreated = created
+		if in.V6Plan != nil {
+			if err = materializeAcceptedV6PlanTx(ctx, tx, state, *in.V6Plan, in.AgentID, questionIDs); err != nil {
+				return AcceptResultOutcome{}, err
+			}
+		}
 	}
 
 	sourceIDs, created, err := materializeSources(ctx, tx, state, in.Result)
@@ -183,7 +208,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		}
 	}
 
-	resultJSON, err := json.Marshal(in.Result)
+	resultJSON, err := acceptedResultJSON(in, state.run.OrchestratorVersion)
 	if err != nil {
 		return AcceptResultOutcome{}, err
 	}
@@ -524,7 +549,7 @@ func verifyAcceptedResultReplayLineageTx(
 	state acceptedResultState,
 	in AcceptResultInput,
 ) error {
-	resultJSON, err := json.Marshal(in.Result)
+	resultJSON, err := acceptedResultJSON(in, state.run.OrchestratorVersion)
 	if err != nil {
 		return err
 	}
@@ -630,6 +655,16 @@ func verifyAcceptedResultReplayLineageTx(
 	return nil
 }
 
+func acceptedResultJSON(in AcceptResultInput, orchestratorVersion string) ([]byte, error) {
+	if orchestratorVersion == OrchestratorVersionV6 {
+		if !json.Valid(in.Raw) {
+			return nil, fmt.Errorf("%w: invalid stored V6 result JSON", ErrInvalidResult)
+		}
+		return append([]byte(nil), in.Raw...), nil
+	}
+	return json.Marshal(in.Result)
+}
+
 func prepareReplan(ctx context.Context, tx pgx.Tx, state acceptedResultState) error {
 	if _, err := tx.Exec(ctx, `
 		UPDATE research_task
@@ -669,13 +704,21 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 	createdIDs := make([]string, 0, len(questions))
 	for _, proposal := range questions {
 		var id string
+		requestedID := ""
+		if state.run.OrchestratorVersion == OrchestratorVersionV6 {
+			namespace, parseErr := uuid.Parse(state.run.SessionID)
+			if parseErr != nil {
+				return nil, 0, parseErr
+			}
+			requestedID = uuid.NewSHA1(namespace, []byte("research-run-v6/question/"+proposal.ClientKey)).String()
+		}
 		_, existed := ids[proposal.ClientKey]
 		err = tx.QueryRow(ctx, `
 			INSERT INTO research_question (
-				workspace_id, session_id, created_by_task_id, client_key, kind,
+				id, workspace_id, session_id, created_by_task_id, client_key, kind,
 				question, required, status, priority, impact, uncertainty, novelty,
 				goal_version, plan_version
-			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 'open',
+			) VALUES (COALESCE(NULLIF($14, '')::uuid, gen_random_uuid()), $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 'open',
 			          $8, $9, $10, $11, $12, $13)
 			ON CONFLICT (session_id, goal_version, plan_version, client_key)
 			DO UPDATE SET
@@ -692,7 +735,7 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		`, state.workspaceID, state.run.SessionID, state.task.ID, proposal.ClientKey,
 			proposal.Kind, strings.TrimSpace(proposal.Text), proposal.Required,
 			proposal.Priority, proposal.Impact, proposal.Uncertainty, proposal.Novelty,
-			state.run.GoalVersion, state.targetPlan).Scan(&id)
+			state.run.GoalVersion, state.targetPlan, requestedID).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, 0, fmt.Errorf("%w: question key %q was reused for different content", ErrResultConflict, proposal.ClientKey)
 		}

@@ -40,6 +40,8 @@ const (
 	ArtifactKindScreeningDecision       ArtifactEntityKind = "screening_decision"
 	ArtifactKindIntegrationContribution ArtifactEntityKind = "integration_contribution"
 	ArtifactKindIntegrationRound        ArtifactEntityKind = "integration_round"
+	ArtifactKindDispute                 ArtifactEntityKind = "dispute"
+	ArtifactKindDisputePosition         ArtifactEntityKind = "dispute_position"
 )
 
 var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
@@ -74,6 +76,8 @@ var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
 	ArtifactKindScreeningDecision:       {},
 	ArtifactKindIntegrationContribution: {},
 	ArtifactKindIntegrationRound:        {},
+	ArtifactKindDispute:                 {},
+	ArtifactKindDisputePosition:         {},
 }
 
 // ArtifactLifecycleStatus is passport admissibility, not domain status.

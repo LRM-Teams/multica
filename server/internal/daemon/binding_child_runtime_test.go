@@ -407,6 +407,83 @@ func TestBindingChildCredentialProxyHasAChildOwnedListener(t *testing.T) {
 	}
 }
 
+func TestPreviousPackageBootstrapRepairsExpiredBindingCredential(t *testing.T) {
+	const workspaceID = "workspace-a"
+	root := t.TempDir()
+	providerPath := filepath.Join(root, "fake-pi")
+	if err := os.WriteFile(providerPath, []byte("#!/bin/sh\necho 9.9.9\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := computer.NewBindingsStore(root)
+	expired := computer.WorkspaceBinding{
+		Environment: "test", WorkspaceID: workspaceID, ComputerID: "computer-a",
+		Credential: "expired-binding-token", CredentialExpiresAt: time.Now().Add(-time.Hour), Active: true,
+	}
+	if err := store.AddOrRepair(expired); err != nil {
+		t.Fatal(err)
+	}
+	var registerAuth []string
+	rotatedExpiry := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Microsecond)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/daemon/starting":
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/daemon/register":
+			registerAuth = append(registerAuth, r.Header.Get("Authorization"))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"runtimes":     []map[string]any{{"id": "runtime-a", "workspace_id": workspaceID, "provider": "pi"}},
+				"daemon_token": "rotated-binding-token", "daemon_token_expires_at": rotatedExpiry.Format(time.RFC3339Nano),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	d := newDaemonForRole(Config{
+		ServerBaseURL: server.URL, Environment: "test", BindingsRoot: root,
+		DaemonID: "computer-a", Agents: map[string]AgentEntry{"pi": {Path: providerPath}},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	d.client.SetToken("machine-session")
+
+	temporaryProfileAuth, err := d.prepareBindingExecutionCredential(expired, true)
+	if err != nil {
+		t.Fatalf("prepare previous-package Binding: %v", err)
+	}
+	if !temporaryProfileAuth {
+		t.Fatal("expired previous-package Binding did not enter the bounded profile-auth repair path")
+	}
+	if _, err := d.registerRuntimesForWorkspace(context.Background(), workspaceID); err != nil {
+		t.Fatalf("repair previous-package Binding: %v", err)
+	}
+	d.client.SetToken("")
+
+	reloaded, ok, err := store.GetForEnvironment("test", workspaceID)
+	if err != nil || !ok {
+		t.Fatalf("reload repaired Binding: ok=%v err=%v", ok, err)
+	}
+	if reloaded.Credential != "rotated-binding-token" || !reloaded.CredentialExpiresAt.Equal(rotatedExpiry) {
+		t.Fatalf("repaired Binding credential = %q until %s", reloaded.Credential, reloaded.CredentialExpiresAt)
+	}
+	if len(registerAuth) != 2 || !strings.Contains(registerAuth[0], "machine-session") || !strings.Contains(registerAuth[1], "rotated-binding-token") {
+		t.Fatalf("bootstrap/register auth sequence = %v", registerAuth)
+	}
+	if d.client.Token() != "" {
+		t.Fatal("temporary profile auth remained available after Binding repair")
+	}
+}
+
+func TestCurrentBindingBootstrapRejectsExpiredCredential(t *testing.T) {
+	d := newDaemonForRole(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	d.client.SetToken("machine-session")
+	_, err := d.prepareBindingExecutionCredential(computer.WorkspaceBinding{
+		WorkspaceID: "workspace-a", ComputerID: "computer-a",
+		Credential: "expired-binding-token", CredentialExpiresAt: time.Now().Add(-time.Hour), Active: true,
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "no live execution credential") {
+		t.Fatalf("current-package expired Binding error = %v", err)
+	}
+}
+
 func TestBindingChildMembershipRefreshStopsRevokedBinding(t *testing.T) {
 	const workspaceID = "workspace-a"
 	root := t.TempDir()

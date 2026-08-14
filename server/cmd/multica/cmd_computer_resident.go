@@ -83,6 +83,10 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		Environment: string(serviceTarget.Environment), Profile: profile, ServerBaseURL: serviceTarget.Origin,
 		HostControlURL: fmt.Sprintf("http://127.0.0.1:%d", computer.HealthPort(profile)),
 		BindingsRoot:   bindingsRoot, WorkspacesRoot: workspacesRoot,
+		// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+		// longer a supported direct self-upgrade source.
+		PreviousPackageUpgradeBootstrap: previousPackageUpgradeBootstrap,
+		PreviousPackageUpgradeSourcePID: machineAttestationSourcePID,
 	}
 	host, err := computer.NewHost(computer.HostConfig{
 		Spawn: launcher.Spawn, Logger: logger, ControlToken: controlToken,

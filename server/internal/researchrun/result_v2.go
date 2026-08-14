@@ -244,6 +244,8 @@ func validateStructuredReportV2(report ReportProposal, policy reportDepthPolicy)
 	}
 
 	outlineIDs := map[string]struct{}{}
+	outlineChildren := make(map[string][]string, len(structured.Outline))
+	outlineParents := make(map[string]string, len(structured.Outline))
 	for _, item := range structured.Outline {
 		if _, exists := sections[item.ID]; !exists {
 			return structured, fmt.Errorf("%w: report outline references unknown section %q", ErrInvalidResult, item.ID)
@@ -252,14 +254,49 @@ func validateStructuredReportV2(report ReportProposal, policy reportDepthPolicy)
 			return structured, fmt.Errorf("%w: duplicate report outline item %q", ErrInvalidResult, item.ID)
 		}
 		outlineIDs[item.ID] = struct{}{}
+		childIDs := make(map[string]struct{}, len(item.Children))
 		for _, child := range item.Children {
 			if _, exists := sections[child]; !exists {
 				return structured, fmt.Errorf("%w: report outline child references unknown section %q", ErrInvalidResult, child)
 			}
+			if _, duplicate := childIDs[child]; duplicate {
+				return structured, fmt.Errorf("%w: report outline item %q repeats child %q", ErrInvalidResult, item.ID, child)
+			}
+			childIDs[child] = struct{}{}
+			if parent, duplicate := outlineParents[child]; duplicate {
+				return structured, fmt.Errorf("%w: report outline section %q has multiple parents %q and %q", ErrInvalidResult, child, parent, item.ID)
+			}
+			outlineParents[child] = item.ID
 		}
+		outlineChildren[item.ID] = append([]string(nil), item.Children...)
 	}
 	if len(outlineIDs) != len(sections) {
 		return structured, fmt.Errorf("%w: report outline must cover every section", ErrInvalidResult)
+	}
+	visiting := make(map[string]bool, len(outlineChildren))
+	visited := make(map[string]bool, len(outlineChildren))
+	var visitOutline func(string) bool
+	visitOutline = func(sectionID string) bool {
+		if visiting[sectionID] {
+			return true
+		}
+		if visited[sectionID] {
+			return false
+		}
+		visiting[sectionID] = true
+		for _, childID := range outlineChildren[sectionID] {
+			if visitOutline(childID) {
+				return true
+			}
+		}
+		visiting[sectionID] = false
+		visited[sectionID] = true
+		return false
+	}
+	for sectionID := range outlineChildren {
+		if visitOutline(sectionID) {
+			return structured, fmt.Errorf("%w: report outline contains a cycle at section %q", ErrInvalidResult, sectionID)
+		}
 	}
 
 	sourceIDs := map[string]struct{}{}

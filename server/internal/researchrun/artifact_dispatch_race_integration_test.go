@@ -93,6 +93,34 @@ func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRace
 		t.Fatalf("rolled-back dispatch leaked attempt=%d manifest=%d outbox=%d",
 			attemptCount, manifestCount, outboxCount)
 	}
+	var passportCount, manifestEntryCount, omissionCount, inputReferenceCount, grantCount, eventCount int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_passport
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		     AND (id = $3::uuid OR entity_kind = 'context_manifest')),
+		  (SELECT count(*)::int FROM research_artifact_context_entry
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_omission
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference ref
+		   WHERE ref.workspace_id = $1::uuid AND ref.session_id = $2::uuid
+		     AND ref.relation = 'manifest_input'),
+		  (SELECT count(*)::int FROM research_artifact_policy_grant
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_run_event
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		     AND idempotency_key = $4)
+	`, fx.fixture.workspaceID, fx.run.SessionID, fx.input.AttemptID, fx.input.Request.Key).Scan(
+		&passportCount, &manifestEntryCount, &omissionCount, &inputReferenceCount, &grantCount, &eventCount,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if passportCount != 0 || manifestEntryCount != 0 || omissionCount != 0 ||
+		inputReferenceCount != 0 || grantCount != 0 || eventCount != 0 {
+		t.Fatalf("rolled-back dispatch leaked passport=%d entry=%d omission=%d input=%d grant=%d event=%d",
+			passportCount, manifestEntryCount, omissionCount, inputReferenceCount, grantCount, eventCount)
+	}
 	var taskStatus string
 	if err := fx.pool.QueryRow(ctx, `
 		SELECT status FROM research_task WHERE id = $1::uuid
@@ -101,6 +129,68 @@ func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRace
 	}
 	if taskStatus != string(TaskStatusReady) && taskStatus != string(TaskStatusPending) {
 		t.Fatalf("task status=%q want ready or pending after rolled-back dispatch", taskStatus)
+	}
+}
+
+func TestDispatchCASMismatchRollsBackCompleteWriteSet(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	for _, tc := range []struct {
+		name string
+		hook func(context.Context, dispatchRaceFixture, *dispatchManifestPlan) error
+	}{
+		{
+			name: "eligibility revision",
+			hook: func(ctx context.Context, fx dispatchRaceFixture, _ *dispatchManifestPlan) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET eligibility_revision = eligibility_revision + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "representation bytes hash",
+			hook: func(_ context.Context, fx dispatchRaceFixture, plan *dispatchManifestPlan) error {
+				entry, ok := manifestEntryForArtifact(*plan, fx.claimID)
+				if !ok {
+					return errors.New("claim missing from dispatch manifest plan")
+				}
+				for i := range plan.Entries {
+					if plan.Entries[i].ArtifactID == entry.ArtifactID {
+						plan.Entries[i].RepresentationBytes = append([]byte(nil), entry.RepresentationBytes...)
+						plan.Entries[i].RepresentationBytes = append(plan.Entries[i].RepresentationBytes, '!')
+						return nil
+					}
+				}
+				return errors.New("claim disappeared from dispatch manifest plan")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := setupDispatchRaceFixture(t, ctx, pool)
+			defer cleanupResearchRunFixture(pool, fx.fixture)
+			fx.store.dispatchManifestBeforeCASHook = func(ctx context.Context, plan *dispatchManifestPlan) error {
+				return tc.hook(ctx, fx, plan)
+			}
+			_, _, err := fx.store.CreateDispatchIntent(ctx, fx.input)
+			fx.store.dispatchManifestBeforeCASHook = nil
+			if !errors.Is(err, ErrInvalidTransition) {
+				t.Fatalf("CreateDispatchIntent err=%v want ErrInvalidTransition", err)
+			}
+			assertDispatchRolledBack(t, ctx, fx)
+		})
 	}
 }
 

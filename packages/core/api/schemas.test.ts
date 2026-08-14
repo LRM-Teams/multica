@@ -220,8 +220,19 @@ describe("Agent file schemas", () => {
       status: "ok",
       nodes: [{ path: "memory/MEMORY.md", is_dir: false, size: 42 }],
       truncated: false,
+      root_path: "/home/u/.multica/workspaces/ws/agents/agent-1",
     });
     expect(parsed.nodes[0]?.path).toBe("memory/MEMORY.md");
+    expect(parsed.root_path).toBe("/home/u/.multica/workspaces/ws/agents/agent-1");
+  });
+
+  it("defaults a missing root_path so older daemons still parse", () => {
+    const parsed = AgentFilesResponseSchema.parse({
+      agent_id: "agent-1",
+      status: "ok",
+      nodes: [],
+    });
+    expect(parsed.root_path).toBe("");
   });
 
   it("falls back when file tree response is malformed", () => {

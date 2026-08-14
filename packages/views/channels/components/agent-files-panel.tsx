@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import CodeMirror from "@uiw/react-codemirror";
 import { css } from "@codemirror/lang-css";
 import { go } from "@codemirror/lang-go";
@@ -10,9 +10,10 @@ import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { yaml } from "@codemirror/lang-yaml";
-import { Eye, EyeOff, Save, X } from "lucide-react";
+import { Copy, Eye, EyeOff, RefreshCw, Save, X } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { api } from "@multica/core/api";
 import { useAgentPresence } from "@multica/core/agents";
 import type { Agent, AgentFileContentResponse, MemberWithUser } from "@multica/core/types";
@@ -30,8 +31,9 @@ import { formatPresenceStatus } from "../../agents/presence";
 import { FileTree } from "./file-tree";
 import { buildFileTree, fileLanguage, type FileTreeNode } from "./file-tree-utils";
 
-const agentFilesQueryKey = (agentId: string, includeHidden: boolean) =>
-  ["agent-files", agentId, includeHidden] as const;
+const AGENT_FILES_QUERY_ROOT = "agent-files";
+const agentFilesQueryKey = (agentId: string, dirPath: string, includeHidden: boolean) =>
+  [AGENT_FILES_QUERY_ROOT, agentId, dirPath, includeHidden] as const;
 const agentFileContentQueryKey = (agentId: string, path: string | null) =>
   ["agent-file-content", agentId, path ?? ""] as const;
 
@@ -44,7 +46,10 @@ const OWNER_ONLY_FILES_MESSAGE =
   "Only the creator can view and edit this agent's configuration files.";
 const FILES_LABEL = "Files";
 const NO_FILES_FOUND = "No files found.";
-const FILE_LIST_TRUNCATED = "File list truncated.";
+const COPY_PATH_LABEL = "Copy path";
+const REFRESH_LABEL = "Refresh";
+const PATH_COPIED = "Path copied";
+const PATH_COPY_FAILED = "Failed to copy path";
 function ownerName(agent: Agent, members: readonly MemberWithUser[]): string {
   if (!agent.owner_id) return "Unknown";
   const member = members.find((m) => m.user_id === agent.owner_id);
@@ -216,8 +221,7 @@ function AgentFileEditorForm({
       }
       toast.success("File saved");
       await Promise.all([
-        qc.invalidateQueries({ queryKey: agentFilesQueryKey(agentId, false) }),
-        qc.invalidateQueries({ queryKey: agentFilesQueryKey(agentId, true) }),
+        qc.invalidateQueries({ queryKey: [AGENT_FILES_QUERY_ROOT, agentId] }),
         qc.invalidateQueries({ queryKey: agentFileContentQueryKey(agentId, path) }),
       ]);
     },
@@ -289,6 +293,7 @@ export function AgentFilesPanel({
   hideHeader?: boolean;
 }) {
   const { t } = useT("agents");
+  const qc = useQueryClient();
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const canRead = canReadFiles ?? isOwner;
   const canEdit = canEditFiles ?? isOwner;
@@ -299,16 +304,30 @@ export function AgentFilesPanel({
   const statusLabel = formatPresenceStatus(presence, t) ?? "—";
   const [includeHidden, setIncludeHidden] = useState(false);
   // Start with a quiet Files tab: directories reveal their contents only when
-  // the reader asks. Tracking the exceptional *expanded* paths also keeps
-  // directories discovered by a later refetch collapsed by default.
+  // the reader asks. Expanding a folder fetches that directory only.
   const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const { data, isPending } = useQuery({
-    queryKey: agentFilesQueryKey(agent.id, includeHidden),
+    queryKey: agentFilesQueryKey(agent.id, "", includeHidden),
     queryFn: () => api.listAgentFiles(agent.id, { include_hidden: includeHidden }),
     enabled: canRead,
   });
-  const tree = useMemo(() => buildFileTree(data?.nodes ?? []), [data?.nodes]);
+  const expandedList = useMemo(
+    () => Array.from(expandedDirectories).sort(),
+    [expandedDirectories],
+  );
+  const childQueries = useQueries({
+    queries: expandedList.map((dirPath) => ({
+      queryKey: agentFilesQueryKey(agent.id, dirPath, includeHidden),
+      queryFn: () =>
+        api.listAgentFiles(agent.id, { include_hidden: includeHidden, path: dirPath }),
+      enabled: canRead,
+    })),
+  });
+  const tree = buildFileTree([
+    ...(data?.nodes ?? []),
+    ...childQueries.flatMap((q) => q.data?.nodes ?? []),
+  ]);
   const collapsed = useMemo(
     () => new Set(directoryPaths(tree).filter((path) => !expandedDirectories.has(path))),
     [tree, expandedDirectories],
@@ -322,6 +341,18 @@ export function AgentFilesPanel({
     });
 
   const status = data?.status ?? "error";
+  const rootPath = data?.root_path?.trim() ?? "";
+
+  const copyRootPath = async () => {
+    if (!rootPath) return;
+    const ok = await copyText(rootPath);
+    if (ok) toast.success(PATH_COPIED);
+    else showErrorToast(PATH_COPY_FAILED);
+  };
+
+  const refreshListing = () => {
+    void qc.invalidateQueries({ queryKey: [AGENT_FILES_QUERY_ROOT, agent.id] });
+  };
 
   const body = (
     <>
@@ -337,20 +368,35 @@ export function AgentFilesPanel({
         <CenteredNote>{OWNER_ONLY_FILES_MESSAGE}</CenteredNote>
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {rootPath ? (
+            <div className="flex min-w-0 items-center gap-1 border-b bg-muted/30 px-3 py-2">
+              <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={rootPath}>
+                {rootPath}
+              </code>
+              <Button type="button" variant="ghost" size="icon" aria-label={COPY_PATH_LABEL} onClick={() => void copyRootPath()} className="size-7 shrink-0">
+                <Copy className="size-3.5" aria-hidden />
+              </Button>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between border-b px-3 py-2">
             <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {FILES_LABEL}
             </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={includeHidden ? "Hide hidden files" : "Show hidden files"}
-              onClick={() => setIncludeHidden((v) => !v)}
-              className={cn("size-7", includeHidden && "text-primary")}
-            >
-              {includeHidden ? <Eye className="size-4" aria-hidden /> : <EyeOff className="size-4" aria-hidden />}
-            </Button>
+            <div className="flex items-center">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={includeHidden ? "Hide hidden files" : "Show hidden files"}
+                onClick={() => setIncludeHidden((v) => !v)}
+                className={cn("size-7", includeHidden && "text-primary")}
+              >
+                {includeHidden ? <Eye className="size-4" aria-hidden /> : <EyeOff className="size-4" aria-hidden />}
+              </Button>
+              <Button type="button" variant="ghost" size="icon" aria-label={REFRESH_LABEL} onClick={refreshListing} className="size-7">
+                <RefreshCw className="size-3.5" aria-hidden />
+              </Button>
+            </div>
           </div>
           <div className="min-h-0 min-w-0 flex-1 overflow-auto p-2">
             {isPending ? (
@@ -370,14 +416,7 @@ export function AgentFilesPanel({
             ) : tree.length === 0 ? (
               <CenteredNote>{NO_FILES_FOUND}</CenteredNote>
             ) : (
-              <>
-                <FileTree tree={tree} collapsed={collapsed} onToggle={toggle} onOpenFile={setSelectedPath} />
-                {data?.truncated && (
-                  <p className="mt-1 px-2 py-1 text-[11px] text-muted-foreground">
-                    {FILE_LIST_TRUNCATED}
-                  </p>
-                )}
-              </>
+              <FileTree tree={tree} collapsed={collapsed} onToggle={toggle} onOpenFile={setSelectedPath} />
             )}
           </div>
         </div>

@@ -493,6 +493,32 @@ describe("ApiClient", () => {
     expect(String(fetchMock.mock.calls[0]![0])).not.toContain("source_channel_id");
   });
 
+  it("sends path and include_hidden as query params on listAgentFiles, and omits them when unset", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ agent_id: "agent-1", status: "ok", nodes: [], truncated: false }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    await client.listAgentFiles("agent-1", { include_hidden: true, path: "memory" });
+    const listed = String(fetchMock.mock.calls[0]![0]);
+    expect(listed).toContain("/api/agents/agent-1/files?");
+    expect(listed).toContain("include_hidden=true");
+    expect(listed).toContain("path=memory");
+
+    fetchMock.mockClear();
+    await client.listAgentFiles("agent-1");
+    const root = String(fetchMock.mock.calls[0]![0]);
+    expect(root).toContain("/api/agents/agent-1/files");
+    expect(root).not.toContain("include_hidden");
+    expect(root).not.toContain("path=");
+  });
+
   it("uses the group-local source-issue projection endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ issues: [], total: 0 }), {

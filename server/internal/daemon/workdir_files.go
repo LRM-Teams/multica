@@ -106,6 +106,12 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 		return
 	}
 
+	if reason := agentworkspace.PreviewDeniedReason(req.FilePath); reason != "" {
+		resp.Error = reason
+		d.sendDaemonFrame(protocol.EventDaemonReadFileResponse, resp, req.RequestID, writes)
+		return
+	}
+
 	switch {
 	case req.FilePath == "" || target == root:
 		resp.Error = "invalid path"
@@ -245,11 +251,10 @@ func (d *Daemon) handleDeleteDirRequest(req protocol.DeleteWorkdirDirRequestPayl
 	d.sendDaemonFrame(protocol.EventDaemonDeleteDirResponse, resp, req.RequestID, writes)
 }
 
-// handleListFilesRequest resolves a project workdir under WorkspacesRoot, walks
-// it, and writes the response frame back over the wakeup socket. Runs inline on
-// the read loop — the walk is bounded (entry/depth caps) and projects are
-// small, so it returns quickly. The path is confined to WorkspacesRoot so a
-// crafted rel_path can't escape onto the rest of the host filesystem.
+// handleListFilesRequest resolves a project workdir under WorkspacesRoot and
+// writes the response frame back over the wakeup socket. Agent Files uses
+// OneLevel (immediate children only). Machine scan still uses the bounded
+// recursive walk. The path is confined to WorkspacesRoot.
 func (d *Daemon) handleListFilesRequest(req protocol.ListWorkdirFilesRequestPayload, writes chan<- []byte) {
 	resp := protocol.ListWorkdirFilesResponsePayload{RequestID: req.RequestID}
 
@@ -260,17 +265,27 @@ func (d *Daemon) handleListFilesRequest(req protocol.ListWorkdirFilesRequestPayl
 		target, _ := filepath.Abs(filepath.Join(base, filepath.FromSlash(req.RelPath)))
 		if target != base && !strings.HasPrefix(target, base+string(os.PathSeparator)) {
 			resp.Error = "invalid path"
-		} else if info, statErr := os.Stat(target); statErr != nil || !info.IsDir() {
-			resp.Missing = true
 		} else {
-			nodes, truncated, walkErr := walkWorkdirFilesWithOptions(target, req.MaxEntries, req.MaxDepth, workdirWalkOptions{
-				HideDotfiles: req.HideDotfiles,
-			})
-			if walkErr != nil {
-				resp.Error = "failed to read directory"
+			resp.RootPath = target
+			if info, statErr := os.Stat(target); statErr != nil || !info.IsDir() {
+				resp.Missing = true
+			} else if req.OneLevel {
+				nodes, listErr := listWorkdirChildrenOneLevel(target, req.DirPath, !req.HideDotfiles)
+				if listErr != nil {
+					resp.Error = "failed to read directory"
+				} else {
+					resp.Nodes = nodes
+				}
 			} else {
-				resp.Nodes = nodes
-				resp.Truncated = truncated
+				nodes, truncated, walkErr := walkWorkdirFilesWithOptions(target, req.MaxEntries, req.MaxDepth, workdirWalkOptions{
+					HideDotfiles: req.HideDotfiles,
+				})
+				if walkErr != nil {
+					resp.Error = "failed to read directory"
+				} else {
+					resp.Nodes = nodes
+					resp.Truncated = truncated
+				}
 			}
 		}
 	}
@@ -288,6 +303,72 @@ func (d *Daemon) handleListFilesRequest(req protocol.ListWorkdirFilesRequestPayl
 	case <-time.After(5 * time.Second):
 		d.logger.Debug("list files response dropped: write buffer full", "request_id", req.RequestID)
 	}
+}
+
+// listWorkdirChildrenOneLevel lists one directory under root (RelPath). Paths
+// in the result are relative to root using forward slashes. It does not walk
+// descendants — a large sibling such as codex-home is one directory node.
+func listWorkdirChildrenOneLevel(root, dirPath string, includeHidden bool) ([]protocol.WorkdirFileNode, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	relDir := strings.Trim(filepath.ToSlash(dirPath), "/")
+	if relDir == "." {
+		relDir = ""
+	}
+	if agentworkspace.ListDirDenied(relDir, includeHidden) {
+		return []protocol.WorkdirFileNode{}, nil
+	}
+	target := rootAbs
+	if relDir != "" {
+		resolved, resolveErr := filepath.Abs(filepath.Join(rootAbs, filepath.FromSlash(relDir)))
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if resolved != rootAbs && !strings.HasPrefix(resolved, rootAbs+string(os.PathSeparator)) {
+			return []protocol.WorkdirFileNode{}, nil
+		}
+		target = resolved
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return []protocol.WorkdirFileNode{}, nil
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		iDir, jDir := entries[i].IsDir(), entries[j].IsDir()
+		if iDir != jDir {
+			return iDir
+		}
+		return entries[i].Name() < entries[j].Name()
+	})
+	nodes := make([]protocol.WorkdirFileNode, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == agentworkspace.WorkspaceNodeModulesName {
+			continue
+		}
+		isHidden := strings.HasPrefix(name, ".")
+		if isHidden && (!includeHidden || agentworkspace.IsNeverVisibleHiddenEntry(name)) {
+			continue
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			continue
+		}
+		rel := name
+		if relDir != "" {
+			rel = relDir + "/" + name
+		}
+		isDir := entry.IsDir()
+		var size int64
+		if !isDir {
+			if info, infoErr := entry.Info(); infoErr == nil {
+				size = info.Size()
+			}
+		}
+		nodes = append(nodes, protocol.WorkdirFileNode{Path: rel, IsDir: isDir, Size: size})
+	}
+	return nodes, nil
 }
 
 // workdirIgnoredDirs are directory names skipped when listing a project

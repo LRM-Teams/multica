@@ -25,7 +25,6 @@ func freshDaemon(serverURL string) *Daemon {
 		runtimeIndex:              make(map[string]Runtime),
 		runtimeSet:                newRuntimeSetWatcher(),
 		agentVersions:             make(map[string]string),
-		wsHBLastAck:               make(map[string]time.Time),
 		runtimeGoneInflight:       make(map[string]struct{}),
 		reregisterNextAttempt:     make(map[string]time.Time),
 		reregisterLastCompletedAt: make(map[string]time.Time),
@@ -66,7 +65,6 @@ func TestRemoveStaleRuntime_PrunesAllLocalState(t *testing.T) {
 	d.runtimeIndex["rt-1"] = Runtime{ID: "rt-1"}
 	d.runtimeIndex["rt-2"] = Runtime{ID: "rt-2"}
 	d.runtimeIndex["rt-3"] = Runtime{ID: "rt-3"}
-	d.wsHBLastAck["rt-2"] = time.Now()
 
 	workspaceID, removed := d.removeStaleRuntime("rt-2")
 	if !removed {
@@ -80,9 +78,6 @@ func TestRemoveStaleRuntime_PrunesAllLocalState(t *testing.T) {
 	}
 	if _, ok := d.runtimeIndex["rt-2"]; ok {
 		t.Fatalf("runtimeIndex still contains rt-2")
-	}
-	if _, ok := d.wsHBLastAck["rt-2"]; ok {
-		t.Fatalf("wsHBLastAck still contains rt-2")
 	}
 }
 
@@ -175,7 +170,6 @@ func TestHandleRuntimeGone_PrunesAndReregisters(t *testing.T) {
 	d := fx.daemon
 	d.workspaces["ws-1"] = &workspaceState{workspaceID: "ws-1", runtimeIDs: []string{"rt-old"}}
 	d.runtimeIndex["rt-old"] = Runtime{ID: "rt-old"}
-	d.wsHBLastAck["rt-old"] = time.Now()
 
 	d.handleRuntimeGone("rt-old")
 
@@ -187,9 +181,6 @@ func TestHandleRuntimeGone_PrunesAndReregisters(t *testing.T) {
 	}
 	if got := d.workspaces["ws-1"].runtimeIDs; len(got) != 1 || got[0] != "rt-new" {
 		t.Fatalf("workspace runtimeIDs after recovery = %v, want [rt-new]", got)
-	}
-	if _, ok := d.wsHBLastAck["rt-old"]; ok {
-		t.Fatalf("wsHBLastAck not cleared for rt-old")
 	}
 	if got := fx.registerCount.Load(); got != 1 {
 		t.Fatalf("register endpoint called %d times, want 1", got)
@@ -269,15 +260,12 @@ func TestHandleRuntimeGone_BackoffOnFailure(t *testing.T) {
 }
 
 func TestHandleWSHeartbeatAck_RuntimeGoneTriggersRecovery(t *testing.T) {
-	// The WS path's twin of an HTTP 404 "runtime not found". When the server
-	// flags a runtime as gone, the daemon must NOT record a freshness mark
-	// — doing so would tell the HTTP heartbeat to skip its tick and let the
-	// daemon keep believing the runtime is alive.
+	// A Workspace Runner heartbeat acknowledgement is the runtime-gone
+	// recovery signal for the current control plane.
 	fx := newHandleRuntimeGoneFixture(t)
 	d := fx.daemon
 	d.workspaces["ws-1"] = &workspaceState{workspaceID: "ws-1", runtimeIDs: []string{"rt-old"}}
 	d.runtimeIndex["rt-old"] = Runtime{ID: "rt-old"}
-	d.wsHBLastAck["rt-old"] = time.Now()
 
 	d.handleWSHeartbeatAck(context.Background(), &HeartbeatResponse{
 		RuntimeID:   "rt-old",
@@ -301,22 +289,6 @@ func TestHandleWSHeartbeatAck_RuntimeGoneTriggersRecovery(t *testing.T) {
 	if _, stillOld := d.runtimeIndex["rt-old"]; stillOld {
 		t.Fatalf("rt-old not pruned after RuntimeGone ack")
 	}
-	if _, ok := d.wsHBLastAck["rt-old"]; ok {
-		t.Fatalf("WS freshness mark not cleared for gone runtime — HTTP heartbeat would skip its tick")
-	}
-}
-
-func TestHandleWSHeartbeatAck_NormalAckRecordsFreshness(t *testing.T) {
-	t.Parallel()
-
-	d := freshDaemon("")
-	d.handleWSHeartbeatAck(context.Background(), &HeartbeatResponse{
-		RuntimeID: "rt-1",
-		Status:    "ok",
-	})
-	if !d.wsHeartbeatRecentlyAcked("rt-1") {
-		t.Fatalf("normal ack should record WS freshness for rt-1")
-	}
 }
 
 func TestHandleWSHeartbeatAck_EmptyAckIgnored(t *testing.T) {
@@ -325,10 +297,7 @@ func TestHandleWSHeartbeatAck_EmptyAckIgnored(t *testing.T) {
 	d := freshDaemon("")
 	d.handleWSHeartbeatAck(context.Background(), nil)
 	d.handleWSHeartbeatAck(context.Background(), &HeartbeatResponse{RuntimeID: ""})
-	// Should not panic, should not record any state.
-	if len(d.wsHBLastAck) != 0 {
-		t.Fatalf("empty ack recorded state: %v", d.wsHBLastAck)
-	}
+	// Should not panic or execute an action.
 }
 
 func TestWorkspaceNeedsRuntimeRecovery(t *testing.T) {

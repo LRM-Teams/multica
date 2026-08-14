@@ -1,6 +1,7 @@
 package researchrun
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -51,6 +52,64 @@ type inquiryStatusUpdateCommand struct {
 	After        string
 	Reason       string
 	EvidenceRefs []inquiryStatusEvidenceRef
+}
+
+type InquiryHypothesisInput struct {
+	ID                   string          `json:"id"`
+	QuestionID           string          `json:"question_id"`
+	Statement            string          `json:"statement"`
+	Applicability        json.RawMessage `json:"applicability"`
+	ExpectedObservations json.RawMessage `json:"expected_observations"`
+	WeakeningConditions  json.RawMessage `json:"weakening_conditions"`
+	ConfidenceLow        *float64        `json:"confidence_low,omitempty"`
+	ConfidenceHigh       *float64        `json:"confidence_high,omitempty"`
+}
+
+type InquiryBranchInput struct {
+	ID              string          `json:"id"`
+	ParentBranchID  string          `json:"parent_branch_id,omitempty"`
+	Objective       string          `json:"objective"`
+	EntryConditions json.RawMessage `json:"entry_conditions"`
+	ExitConditions  json.RawMessage `json:"exit_conditions"`
+	BudgetShare     float64         `json:"budget_share"`
+}
+
+type InquiryInsightInput struct {
+	ID         string  `json:"id"`
+	Title      string  `json:"title"`
+	Summary    string  `json:"summary"`
+	Importance float64 `json:"importance"`
+	Level      int     `json:"level"`
+}
+
+type InquiryEdgeInput struct {
+	ID        string          `json:"id"`
+	From      InquiryEndpoint `json:"from"`
+	To        InquiryEndpoint `json:"to"`
+	Relation  InquiryRelation `json:"relation"`
+	Rationale string          `json:"rationale,omitempty"`
+}
+
+type InquiryEndpoint struct {
+	Kind InquiryEntityKind `json:"kind"`
+	ID   string            `json:"id"`
+}
+
+type CreateInquiryGraphInput struct {
+	WorkspaceID          string                   `json:"-"`
+	SessionID            string                   `json:"-"`
+	AttemptID            string                   `json:"attempt_id"`
+	AgentID              string                   `json:"agent_id"`
+	IdempotencyKey       string                   `json:"idempotency_key"`
+	ExpectedStateVersion int64                    `json:"expected_state_version"`
+	Hypotheses           []InquiryHypothesisInput `json:"hypotheses"`
+	Branches             []InquiryBranchInput     `json:"branches"`
+	Insights             []InquiryInsightInput    `json:"insights"`
+	Edges                []InquiryEdgeInput       `json:"edges"`
+}
+
+type InquiryGraphCreateResult struct {
+	Event RunEvent `json:"event"`
 }
 
 // inquiryModule is the internal seam for Inquiry Graph invariants. Callers
@@ -126,6 +185,94 @@ func (inquiryModule) ValidateEdge(command inquiryEdgeCommand) error {
 		return fmt.Errorf("%w: inquiry edge rationale is too large", ErrInvalidContract)
 	}
 	return nil
+}
+
+func (module inquiryModule) ValidateCreate(in CreateInquiryGraphInput) error {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.SessionID) == "" ||
+		strings.TrimSpace(in.AttemptID) == "" || strings.TrimSpace(in.AgentID) == "" ||
+		strings.TrimSpace(in.IdempotencyKey) == "" || len(in.IdempotencyKey) > 512 || in.ExpectedStateVersion < 1 {
+		return fmt.Errorf("%w: incomplete inquiry graph identity", ErrInvalidContract)
+	}
+	if len(in.Hypotheses)+len(in.Branches)+len(in.Insights)+len(in.Edges) == 0 {
+		return fmt.Errorf("%w: inquiry graph mutation is empty", ErrInvalidContract)
+	}
+	ids := make(map[string]struct{})
+	claimID := func(id string) error {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("%w: inquiry entity id is empty", ErrInvalidContract)
+		}
+		if _, exists := ids[id]; exists {
+			return fmt.Errorf("%w: duplicate inquiry entity id %q", ErrInvalidContract, id)
+		}
+		ids[id] = struct{}{}
+		return nil
+	}
+	for _, item := range in.Hypotheses {
+		if err := claimID(item.ID); err != nil {
+			return err
+		}
+		if strings.TrimSpace(item.QuestionID) == "" || strings.TrimSpace(item.Statement) == "" || len(item.Statement) > 32768 ||
+			!validJSONObject(item.Applicability) || !validJSONArray(item.ExpectedObservations) || !validJSONArray(item.WeakeningConditions) ||
+			!validConfidenceRange(item.ConfidenceLow, item.ConfidenceHigh) {
+			return fmt.Errorf("%w: invalid hypothesis %q", ErrInvalidContract, item.ID)
+		}
+	}
+	for _, item := range in.Branches {
+		if err := claimID(item.ID); err != nil {
+			return err
+		}
+		if strings.TrimSpace(item.Objective) == "" || len(item.Objective) > 32768 || item.BudgetShare < 0 || item.BudgetShare > 1 ||
+			!validJSONArray(item.EntryConditions) || !validJSONArray(item.ExitConditions) {
+			return fmt.Errorf("%w: invalid branch %q", ErrInvalidContract, item.ID)
+		}
+	}
+	for _, item := range in.Insights {
+		if err := claimID(item.ID); err != nil {
+			return err
+		}
+		if strings.TrimSpace(item.Title) == "" || len(item.Title) > 4096 || strings.TrimSpace(item.Summary) == "" || len(item.Summary) > 32768 ||
+			item.Importance < 0 || item.Importance > 1 || item.Level < 1 {
+			return fmt.Errorf("%w: invalid insight %q", ErrInvalidContract, item.ID)
+		}
+	}
+	for _, item := range in.Edges {
+		if err := claimID(item.ID); err != nil {
+			return err
+		}
+		if err := module.ValidateEdge(inquiryEdgeCommand{
+			From: inquiryEndpoint{Kind: item.From.Kind, ID: item.From.ID}, To: inquiryEndpoint{Kind: item.To.Kind, ID: item.To.ID},
+			Relation: item.Relation, Rationale: item.Rationale,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validJSONObject(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var value map[string]any
+	return json.Unmarshal(raw, &value) == nil && value != nil
+}
+
+func validJSONArray(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var value []any
+	return json.Unmarshal(raw, &value) == nil && value != nil
+}
+
+func validConfidenceRange(low, high *float64) bool {
+	if low != nil && (*low < 0 || *low > 1) {
+		return false
+	}
+	if high != nil && (*high < 0 || *high > 1) {
+		return false
+	}
+	return low == nil || high == nil || *low <= *high
 }
 
 func inquiryRelationMustBeAcyclic(relation InquiryRelation) bool {

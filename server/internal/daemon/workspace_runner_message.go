@@ -318,7 +318,7 @@ func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
 		AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive,
 	})
 	now := time.Now().UTC()
-	entry, err := activityNarrativeEntry(protocol.ActivityKindOffline, "runtime_unavailable", "Process unavailable; restart required")
+	entry, err := activityNarrativeEntry("runtime_unavailable", "Process unavailable; restart required")
 	if err != nil {
 		return
 	}
@@ -333,6 +333,7 @@ func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
 			ActivityKind:     protocol.ActivityKindOffline,
 			DetailKind:       "runtime_unavailable",
 		},
+		Detail:  "Process unavailable; restart required",
 		Entries: []protocol.AgentActivityEntry{entry},
 	})
 }

@@ -94,6 +94,25 @@ var workingDetailLabels = map[string]string{
 	"collaborating": "Collaborating...",
 }
 
+// ActivityKindFromDetailKind is the one server-owned reduction from Raft's
+// execution fact vocabulary to Multica's compact lifecycle vocabulary. The
+// daemon may track an ActivityKind locally for heartbeat scheduling, but that
+// presentation state never crosses the Workspace Runner wire.
+func ActivityKindFromDetailKind(detailKind string) string {
+	switch detailKind {
+	case "idle", "ready":
+		return protocol.ActivityKindOnline
+	case "thinking_started":
+		return protocol.ActivityKindThinking
+	case "runtime_error", "runtime_crashed", "runtime_stalled", "computer_operation_failed":
+		return protocol.ActivityKindError
+	case "runtime_unavailable", "runtime_interrupted", "machine_disconnected", "computer_restarted", "computer_upgraded", "stopped":
+		return protocol.ActivityKindOffline
+	default:
+		return protocol.ActivityKindWorking
+	}
+}
+
 // ProjectSummary deliberately never reads command text, paths, tool input,
 // prompts, stderr, or Entry bodies. Those facts cannot reach compact surfaces.
 func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
@@ -145,16 +164,17 @@ func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) Ti
 
 func projectNarrativeTimelineRow(body protocol.AgentActivityNarrativeBody, fallback Summary) TimelineRow {
 	text := boundedText(body.Text)
-	if !knownActivityKind(body.ActivityKind) {
+	if strings.TrimSpace(body.DetailKind) == "" {
 		return TimelineRow{Title: fallback.Label, Subtext: text, Tone: fallback.Tone, BodyKind: "none"}
 	}
 
+	activityKind := ActivityKindFromDetailKind(body.DetailKind)
 	summary := ProjectSummary(protocol.AgentActivitySnapshot{
-		ActivityKind: body.ActivityKind,
+		ActivityKind: activityKind,
 		DetailKind:   body.DetailKind,
 	})
 	row := TimelineRow{Title: strings.TrimSuffix(summary.Label, "..."), Tone: summary.Tone, BodyKind: "none"}
-	switch body.ActivityKind {
+	switch activityKind {
 	case protocol.ActivityKindError:
 		row.Title = "Error"
 		row.Subtext = text
@@ -188,15 +208,6 @@ func projectNarrativeTimelineRow(body protocol.AgentActivityNarrativeBody, fallb
 		}
 	}
 	return row
-}
-
-func knownActivityKind(kind string) bool {
-	switch kind {
-	case protocol.ActivityKindOnline, protocol.ActivityKindThinking, protocol.ActivityKindWorking, protocol.ActivityKindError, protocol.ActivityKindOffline:
-		return true
-	default:
-		return false
-	}
 }
 
 func boundedText(value string) string {

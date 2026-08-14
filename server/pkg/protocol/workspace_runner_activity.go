@@ -34,6 +34,42 @@ const (
 	ActivityKindOffline  = "offline"
 )
 
+// agentActivityFactDetailKinds is Raft v1.0.16's fact vocabulary plus the
+// Multica tool facts that use the same contract. Deliberately excluded Raft
+// display/diagnostic placeholders (none, daemon_activity, external_activity,
+// slock_action, other) must never cross the agent:activity boundary.
+var agentActivityFactDetailKinds = map[string]struct{}{
+	"message_received": {}, "freshness_hold": {}, "starting": {}, "runtime_starting": {},
+	"idle": {}, "running_command": {}, "checking_messages": {}, "compacting_context": {},
+	"compaction_finished": {}, "compaction_stale": {}, "reviewing_changes": {},
+	"review_finished": {}, "review_stale": {}, "runtime_reconnecting": {},
+	"runtime_error": {}, "runtime_crashed": {}, "runtime_unavailable": {},
+	"runtime_stalled": {}, "stalled_recovery": {}, "stopped": {}, "ready": {},
+	"runtime_interrupted": {}, "machine_disconnected": {}, "computer_started": {},
+	"computer_restarted": {}, "computer_upgraded": {}, "computer_operation_failed": {},
+	"synthetic_repair": {}, "system_message": {}, "runtime_progress": {},
+	"model_request_started": {}, "model_response_started": {}, "tool_started": {},
+	"tool_end": {}, "thinking_started": {}, "thinking_end": {}, "subagent_activity": {},
+
+	"reading_file": {}, "writing_file": {}, "editing_file": {}, "searching_files": {},
+	"searching_code": {}, "fetching_url": {}, "searching_web": {}, "updating_tasks": {},
+	"sending_message": {}, "waiting_for_message": {}, "reading_history": {},
+	"searching_messages": {}, "listing_server": {}, "listing_tasks": {},
+	"creating_tasks": {}, "claiming_task": {}, "unclaiming_task": {},
+	"updating_task_status": {}, "adding_channel_member": {}, "joining_channel": {},
+	"leaving_channel": {}, "uploading_file": {}, "viewing_file": {},
+	"listing_issues": {}, "getting_issue": {}, "searching_issues": {},
+	"listing_issue_comments": {}, "commenting_issue": {}, "deleting_issue_comment": {},
+	"scheduling_reminder": {}, "listing_reminders": {}, "canceling_reminder": {},
+	"snoozing_reminder": {}, "updating_reminder": {}, "logging_reminder": {},
+	"collaborating": {},
+}
+
+func IsAgentActivityFactDetailKind(detailKind string) bool {
+	_, ok := agentActivityFactDetailKinds[detailKind]
+	return ok
+}
+
 const (
 	maxWorkspaceRunnerIdentityLength = 200
 	maxActivityDetailKindLength      = 120
@@ -107,20 +143,21 @@ type AgentSessionPayload struct {
 	RuntimeGeneration int64  `json:"runtimeGeneration"`
 }
 
-// AgentActivitySnapshot is replaceable current presentation evidence. Entries
-// are narrative facts and are intentionally separate so an outage may retain
-// only this latest Snapshot without inventing an Entry backlog.
+// AgentActivitySnapshot is the server's replaceable current presentation
+// evidence. The daemon keeps the same shape internally for heartbeat and
+// reconnect state, but AgentActivityPayload's JSON boundary sends only Raft
+// execution facts; ActivityKind is derived by the server from DetailKind.
 type AgentActivitySnapshot struct {
-	AgentID           string    `json:"agentId"`
-	LaunchID          string    `json:"launchId"`
-	DaemonInstanceID  string    `json:"daemonInstanceId"`
-	ClientSequence    int64     `json:"clientSequence"`
-	ProducerFactID    string    `json:"producerFactId"`
-	ObservedAt        time.Time `json:"observedAt"`
-	ActivityKind      string    `json:"activityKind"`
-	DetailKind        string    `json:"detailKind,omitempty"`
-	ProbeID           string    `json:"probeId,omitempty"`
-	ProcessInstanceID string    `json:"processInstanceId,omitempty"`
+	AgentID           string    `json:"-"`
+	LaunchID          string    `json:"-"`
+	DaemonInstanceID  string    `json:"-"`
+	ClientSequence    int64     `json:"-"`
+	ProducerFactID    string    `json:"-"`
+	ObservedAt        time.Time `json:"-"`
+	ActivityKind      string    `json:"-"`
+	DetailKind        string    `json:"-"`
+	ProbeID           string    `json:"-"`
+	ProcessInstanceID string    `json:"-"`
 }
 
 // AgentActivityEntry keeps its body as an open envelope. The transport only
@@ -132,13 +169,12 @@ type AgentActivityEntry struct {
 	Body     json.RawMessage `json:"body"`
 }
 
-// AgentActivityNarrativeBody retains the lifecycle state that was current
-// when a narrative fact occurred. The latest Snapshot is replaceable, so a
-// historical Entry cannot safely borrow its state during presentation.
+// AgentActivityNarrativeBody carries only the event-local fact. The server
+// derives its lifecycle presentation from DetailKind; the daemon must not
+// serialize a competing ActivityKind into timeline history.
 type AgentActivityNarrativeBody struct {
-	Text         string `json:"text"`
-	ActivityKind string `json:"activity_kind,omitempty"`
-	DetailKind   string `json:"detail_kind,omitempty"`
+	Text       string `json:"text"`
+	DetailKind string `json:"detail_kind"`
 }
 
 // AgentActivitySystemBody is a bounded, user-visible runtime diagnostic. It
@@ -149,8 +185,72 @@ type AgentActivitySystemBody struct {
 }
 
 type AgentActivityPayload struct {
-	Snapshot AgentActivitySnapshot `json:"snapshot"`
-	Entries  []AgentActivityEntry  `json:"entries,omitempty"`
+	Snapshot    AgentActivitySnapshot `json:"-"`
+	Detail      string                `json:"-"`
+	Entries     []AgentActivityEntry  `json:"-"`
+	IsHeartbeat bool                  `json:"-"`
+}
+
+// agentActivityWirePayload is Raft v1.0.16's fact-only agent:activity body.
+// It intentionally has no snapshot, activityKind, or processInstanceId.
+type agentActivityWirePayload struct {
+	AgentID          string               `json:"agentId"`
+	Detail           string               `json:"detail"`
+	DetailKind       string               `json:"detailKind"`
+	Entries          []AgentActivityEntry `json:"entries,omitempty"`
+	LaunchID         string               `json:"launchId,omitempty"`
+	DaemonInstanceID string               `json:"daemonInstanceId,omitempty"`
+	ProbeID          string               `json:"probeId,omitempty"`
+	ClientSeq        int64                `json:"clientSeq,omitempty"`
+	ProducerFactID   string               `json:"producerFactId,omitempty"`
+	ObservedAtMS     *int64               `json:"observedAtMs,omitempty"`
+	IsHeartbeat      bool                 `json:"isHeartbeat"`
+}
+
+func (p AgentActivityPayload) MarshalJSON() ([]byte, error) {
+	var observedAtMS *int64
+	if !p.Snapshot.ObservedAt.IsZero() {
+		value := p.Snapshot.ObservedAt.UnixMilli()
+		observedAtMS = &value
+	}
+	return json.Marshal(agentActivityWirePayload{
+		AgentID:          p.Snapshot.AgentID,
+		Detail:           p.Detail,
+		DetailKind:       p.Snapshot.DetailKind,
+		Entries:          p.Entries,
+		LaunchID:         p.Snapshot.LaunchID,
+		DaemonInstanceID: p.Snapshot.DaemonInstanceID,
+		ProbeID:          p.Snapshot.ProbeID,
+		ClientSeq:        p.Snapshot.ClientSequence,
+		ProducerFactID:   p.Snapshot.ProducerFactID,
+		ObservedAtMS:     observedAtMS,
+		IsHeartbeat:      p.IsHeartbeat,
+	})
+}
+
+func (p *AgentActivityPayload) UnmarshalJSON(data []byte) error {
+	var wire agentActivityWirePayload
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	observedAt := time.Time{}
+	if wire.ObservedAtMS != nil {
+		observedAt = time.UnixMilli(*wire.ObservedAtMS).UTC()
+	}
+	p.Snapshot = AgentActivitySnapshot{
+		AgentID:          wire.AgentID,
+		LaunchID:         wire.LaunchID,
+		DaemonInstanceID: wire.DaemonInstanceID,
+		ClientSequence:   wire.ClientSeq,
+		ProducerFactID:   wire.ProducerFactID,
+		ObservedAt:       observedAt,
+		DetailKind:       wire.DetailKind,
+		ProbeID:          wire.ProbeID,
+	}
+	p.Detail = wire.Detail
+	p.Entries = wire.Entries
+	p.IsHeartbeat = wire.IsHeartbeat
+	return nil
 }
 
 // AgentActivityProbePayload asks a Manager for an actual current observation.
@@ -239,6 +339,9 @@ func (p AgentActivityPayload) Validate() error {
 	if err := p.Snapshot.Validate(); err != nil {
 		return err
 	}
+	if len(p.Detail) > maxActivityEntryBytes {
+		return fmt.Errorf("activity detail exceeds %d bytes", maxActivityEntryBytes)
+	}
 	if len(p.Entries) > maxActivityEntriesPerFrame {
 		return fmt.Errorf("too many activity entries: %d", len(p.Entries))
 	}
@@ -260,11 +363,17 @@ func (p AgentActivitySnapshot) Validate() error {
 	if p.ObservedAt.IsZero() {
 		return fmt.Errorf("activity observation time is required")
 	}
-	if !isOneOf(p.ActivityKind, ActivityKindOnline, ActivityKindThinking, ActivityKindWorking, ActivityKindError, ActivityKindOffline) {
+	if p.ActivityKind != "" && !isOneOf(p.ActivityKind, ActivityKindOnline, ActivityKindThinking, ActivityKindWorking, ActivityKindError, ActivityKindOffline) {
 		return fmt.Errorf("invalid activity kind %q", p.ActivityKind)
+	}
+	if strings.TrimSpace(p.DetailKind) == "" {
+		return fmt.Errorf("activity detail kind is required")
 	}
 	if len(p.DetailKind) > maxActivityDetailKindLength {
 		return fmt.Errorf("activity detail kind exceeds %d bytes", maxActivityDetailKindLength)
+	}
+	if !IsAgentActivityFactDetailKind(p.DetailKind) {
+		return fmt.Errorf("invalid or non-fact activity detail kind %q", p.DetailKind)
 	}
 	return validateOptionalIDs(p.DetailKind, p.ProbeID, p.ProcessInstanceID)
 }

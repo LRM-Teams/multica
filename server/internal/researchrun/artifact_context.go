@@ -285,6 +285,7 @@ type persistDispatchManifestInput struct {
 	Plan              dispatchManifestPlan
 	ExpectedWatermark int64
 	Purpose           ArtifactPurpose
+	BeforeCASHook     func(context.Context, *dispatchManifestPlan) error
 }
 
 func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) (dispatchManifestPlan, error) {
@@ -349,6 +350,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		ProvenanceCompleteness: ArtifactProvenanceComplete,
 		AccessLevel:            ArtifactAccessRaw,
 		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            plan.ManifestHash,
 	}); err != nil {
 		return dispatchManifestPlan{}, err
 	}
@@ -366,6 +368,11 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		plan.NormalGrantID, plan.NormalGrantRevision, plan.EvaluationGrantID, plan.EvaluationGrantRevision, plan.ManifestHash); err != nil {
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
 	}
+	if in.BeforeCASHook != nil {
+		if err := in.BeforeCASHook(ctx, &plan); err != nil {
+			return dispatchManifestPlan{}, err
+		}
+	}
 
 	if err := lockDispatchManifestCandidateRowsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
@@ -380,7 +387,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		}
 		if err := casArtifactVersionRepresentationTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
-			entry.ContentHash, entry.RepresentationHash,
+			entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
 		); err != nil {
 			return dispatchManifestPlan{}, err
 		}
@@ -610,7 +617,7 @@ func loadAttemptManifestSummary(
 func persistAcceptedResultArtifactTx(
 	ctx context.Context,
 	tx pgx.Tx,
-	workspaceID, sessionID, attemptID, orchestratorVersion string,
+	workspaceID, sessionID, taskID, attemptID, orchestratorVersion string,
 	result ResultEnvelope,
 	resultJSON []byte,
 	contentHash string,
@@ -627,6 +634,7 @@ func persistAcceptedResultArtifactTx(
 		AccessLevel:            accessLevel,
 		HashOrigin:             ArtifactHashOriginProduction,
 		ContentHash:            contentHash,
+		ProducedByTaskID:       taskID,
 		ProducedByAttemptID:    attemptID,
 		SourceCreatedAt:        timePtr(time.Now()),
 		SchemaName:             string(ArtifactKindResultArtifact),
@@ -634,9 +642,22 @@ func persistAcceptedResultArtifactTx(
 	}); err != nil {
 		return "", err
 	}
+	var manifestID, manifestHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text, manifest_hash
+		FROM research_artifact_context_manifest
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&manifestID, &manifestHash); err != nil {
+		return "", err
+	}
+	inputVersionSetHash, err := manifestInputVersionSetHashTx(ctx, tx, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return "", err
+	}
 	if err := insertResultArtifactRowTx(
 		ctx, tx, resultID, workspaceID, sessionID, attemptID, orchestratorVersion,
 		result, resultJSON, contentHash, policyWatermark,
+		manifestID, manifestHash, inputVersionSetHash,
 	); err != nil {
 		return "", err
 	}
@@ -658,20 +679,24 @@ func insertResultArtifactRowTx(
 	resultJSON []byte,
 	contentHash string,
 	policyWatermark int64,
+	manifestID, manifestHash, inputVersionSetHash string,
 ) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO research_result_artifact (
 		  id, workspace_id, session_id, attempt_id,
 		  orchestrator_version, result_schema_version, result,
-		  client_request_id, content_hash, acceptance_policy_watermark, accepted_at
+		  client_request_id, content_hash, acceptance_policy_watermark, accepted_at,
+		  manifest_id, manifest_hash, input_version_set_hash
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
-		  $5, $6, $7::jsonb, $8, $9, $10, now()
+		  $5, $6, $7::jsonb, $8, $9, $10, now(),
+		  $11::uuid, $12, $13
 		)
 		ON CONFLICT (workspace_id, session_id, attempt_id) DO NOTHING
 	`, resultID, workspaceID, sessionID, attemptID,
 		orchestratorVersion, fmt.Sprintf("%d", result.SchemaVersion), resultJSON,
-		result.ClientRequestID, contentHash, policyWatermark)
+		result.ClientRequestID, contentHash, policyWatermark,
+		manifestID, manifestHash, inputVersionSetHash)
 	return err
 }
 

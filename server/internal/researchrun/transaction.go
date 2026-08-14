@@ -75,6 +75,7 @@ const (
 	txOpArtifactSupersede         researchTxOperation = "artifact.supersede"
 	txOpArtifactWithdraw          researchTxOperation = "artifact.withdraw"
 	txOpInquiryGraphCreate        researchTxOperation = "inquiry_graph.create"
+	txOpInquiryStatusUpdate       researchTxOperation = "inquiry_status.update"
 	txOpStrategyPromotion         researchTxOperation = "strategy.promote"
 	txOpTaskInquiryTargetsBind    researchTxOperation = "task_inquiry_targets.bind"
 )

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1908,6 +1909,8 @@ ALTER TABLE research_graph_edge
 ALTER TABLE research_decision
   ADD COLUMN IF NOT EXISTS actor_type TEXT NOT NULL DEFAULT 'system',
   ADD COLUMN IF NOT EXISTS inputs JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE research_run_event
+  ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb;
 `
 
 const researchArtifact329TestDDL = `
@@ -1956,6 +1959,7 @@ func TestResearchArtifactPassportDCompletion328RoundTrips(t *testing.T) {
 	otherSessionID := "20000000-0000-4000-8000-000000000002"
 	taskID := "30000000-0000-4000-8000-000000000003"
 	decisionID := "30000000-0000-4000-8000-000000000010"
+	eventID := "30000000-0000-4000-8000-000000000011"
 	foreignTaskID := "30000000-0000-4000-8000-000000000099"
 
 	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
@@ -1989,6 +1993,12 @@ func TestResearchArtifactPassportDCompletion328RoundTrips(t *testing.T) {
 	`, decisionID, workspaceID, sessionID, fmt.Sprintf(`{"task_id":"%s"}`, foreignTaskID)); err != nil {
 		t.Fatalf("insert decision: %v", err)
 	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_run_event (id,workspace_id,session_id,payload)
+		VALUES ($1::uuid,$2::uuid,$3::uuid,$4::jsonb)
+	`, eventID, workspaceID, sessionID, fmt.Sprintf(`{"task_id":"%s"}`, foreignTaskID)); err != nil {
+		t.Fatalf("insert run event: %v", err)
+	}
 
 	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
 	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
@@ -2016,6 +2026,74 @@ func TestResearchArtifactPassportDCompletion328RoundTrips(t *testing.T) {
 	}
 	if diagnosticCount != 1 {
 		t.Fatalf("decision diagnostic count=%d want 1", diagnosticCount)
+	}
+	if err = conn.QueryRow(ctx, `
+		SELECT research_artifact_scan_research_run_event_migration_diagnostics($1::uuid,$2::uuid,$3::uuid)
+	`, workspaceID, sessionID, eventID).Scan(&diagnosticCount); err != nil {
+		t.Fatalf("scan run event diagnostics: %v", err)
+	}
+	if diagnosticCount != 1 {
+		t.Fatalf("run event diagnostic count=%d want 1", diagnosticCount)
+	}
+
+	type diagnosticFact struct {
+		ownerKind    string
+		fieldPath    string
+		expectedKind string
+		reference    string
+		reason       string
+	}
+	rows, err := conn.Query(ctx, `
+		SELECT owner_kind,field_path,expected_target_kind,reference_value,reason_code
+		FROM research_artifact_migration_diagnostic
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND owner_id IN ($3::uuid,$4::uuid)
+		ORDER BY owner_kind
+	`, workspaceID, sessionID, decisionID, eventID)
+	if err != nil {
+		t.Fatalf("query diagnostic facts: %v", err)
+	}
+	var facts []diagnosticFact
+	for rows.Next() {
+		var fact diagnosticFact
+		if err = rows.Scan(&fact.ownerKind, &fact.fieldPath, &fact.expectedKind, &fact.reference, &fact.reason); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		facts = append(facts, fact)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	wantFacts := []diagnosticFact{
+		{ownerKind: "method_decision", fieldPath: "/inputs/task_id", expectedKind: "task", reference: foreignTaskID, reason: "cross_scope_reference"},
+		{ownerKind: "run_event", fieldPath: "/payload/task_id", expectedKind: "task", reference: foreignTaskID, reason: "cross_scope_reference"},
+	}
+	if !reflect.DeepEqual(facts, wantFacts) {
+		t.Fatalf("diagnostic facts=%+v want=%+v", facts, wantFacts)
+	}
+
+	if _, err = conn.Exec(ctx, `UPDATE research_decision SET inputs=jsonb_build_object('task_id',$1::text) WHERE id=$2::uuid`, taskID, decisionID); err != nil {
+		t.Fatalf("repair decision input: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `UPDATE research_run_event SET payload=jsonb_build_object('task_id',$1::text) WHERE id=$2::uuid`, taskID, eventID); err != nil {
+		t.Fatalf("repair event payload: %v", err)
+	}
+	if err = conn.QueryRow(ctx, `SELECT research_artifact_scan_research_decision_migration_diagnostics($1::uuid,$2::uuid,$3::uuid)`, workspaceID, sessionID, decisionID).Scan(&diagnosticCount); err != nil || diagnosticCount != 0 {
+		t.Fatalf("rescan repaired decision diagnostics=%d err=%v", diagnosticCount, err)
+	}
+	if err = conn.QueryRow(ctx, `SELECT research_artifact_scan_research_run_event_migration_diagnostics($1::uuid,$2::uuid,$3::uuid)`, workspaceID, sessionID, eventID).Scan(&diagnosticCount); err != nil || diagnosticCount != 0 {
+		t.Fatalf("rescan repaired event diagnostics=%d err=%v", diagnosticCount, err)
+	}
+	var remainingDiagnostics int
+	if err = conn.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_artifact_migration_diagnostic
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND owner_id IN ($3::uuid,$4::uuid)
+	`, workspaceID, sessionID, decisionID, eventID).Scan(&remainingDiagnostics); err != nil {
+		t.Fatal(err)
+	}
+	if remainingDiagnostics != 0 {
+		t.Fatalf("repaired owners retain %d diagnostics", remainingDiagnostics)
 	}
 
 	var enabled bool

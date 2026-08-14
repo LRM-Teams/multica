@@ -368,6 +368,15 @@ func TestUpdateDownloadTimeoutOrDefault(t *testing.T) {
 	}
 }
 
+// Release metadata is fetched on the same potentially slow network path as
+// the archive. A shorter hidden timeout makes a valid upgrade fail before the
+// caller's documented download budget is reached.
+func TestReleaseMetadataTimeoutMatchesUpgradeDownloadBudget(t *testing.T) {
+	if got, want := releaseMetadataTimeout, DefaultUpdateDownloadTimeout; got != want {
+		t.Fatalf("release metadata timeout = %s, want upgrade download budget %s", got, want)
+	}
+}
+
 func TestUpdateTargetPathUsesStableBrewSymlink(t *testing.T) {
 	got := updateTargetPathFromResolved("/opt/homebrew/Cellar/multica/0.3.35/bin/multica")
 	want := "/opt/homebrew/bin/multica"

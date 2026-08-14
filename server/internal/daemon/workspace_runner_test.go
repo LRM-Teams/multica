@@ -491,6 +491,129 @@ func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T
 	}
 }
 
+func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
+	// One Workspace control cycle carries a heartbeat per Runtime. Until the
+	// first start reports Active, the server can therefore replay the same
+	// immutable start dispatch several times in one burst. Raft's hasStarting
+	// fence acknowledges those replays without starting the provider again.
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	twoAcks := make(chan struct{})
+	active := make(chan protocol.AgentStatusPayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			t.Error(err)
+			return
+		}
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+		})})
+		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
+			t.Error(err)
+			return
+		}
+		acks := 0
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var frame protocol.Message
+			if json.Unmarshal(raw, &frame) != nil {
+				continue
+			}
+			switch frame.Type {
+			case protocol.EventAgentStartAck:
+				acks++
+				if acks == 2 {
+					close(twoAcks)
+				}
+			case protocol.EventAgentStatus:
+				var status protocol.AgentStatusPayload
+				if json.Unmarshal(frame.Payload, &status) == nil && status.Status == protocol.AgentStatusActive {
+					active <- status
+					return
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerStarts := make(chan struct{}, 2)
+	releaseProvider := make(chan struct{})
+	providerReleased := false
+	defer func() {
+		if !providerReleased {
+			close(releaseProvider)
+		}
+	}()
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		providerStarts <- struct{}{}
+		<-releaseProvider
+		return nil
+	}
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatalf("attach Agent: %v", err)
+	}
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go runner.runConnection(ctx)
+	select {
+	case <-twoAcks:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for duplicate start acknowledgements")
+	}
+	select {
+	case <-providerStarts:
+	case <-ctx.Done():
+		t.Fatal("provider start did not begin")
+	}
+	select {
+	case <-providerStarts:
+		t.Fatal("duplicate start dispatch spawned the provider twice")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(releaseProvider)
+	providerReleased = true
+	select {
+	case status := <-active:
+		if status.AgentID != "agent-1" || status.LaunchID != "launch-1" {
+			t.Fatalf("active status = %+v", status)
+		}
+	case <-ctx.Done():
+		t.Fatal("deduplicated start did not settle Active")
+	}
+}
+
 func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(t *testing.T) {
 	// An accepted start that never becomes Active must not look like residency.
 	// After upgrade the server keeps the desired launch; inactive is what

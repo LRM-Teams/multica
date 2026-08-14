@@ -24,11 +24,11 @@ func (h *Handler) GetAgentNotePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, _, ok := h.loadAgentAccessibleNote(w, r, principal, chi.URLParam(r, "id"))
+	page, viewerID, ok := h.loadAgentAccessibleNote(w, r, principal, chi.URLParam(r, "id"))
 	if !ok {
 		return
 	}
-	refs, err := h.loadNotePageRefs(r.Context(), page.ID, page.WorkspaceID)
+	refs, err := h.loadNotePageRefs(r.Context(), page.ID, page.WorkspaceID, viewerID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load note page refs")
 		return

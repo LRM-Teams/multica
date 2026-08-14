@@ -34,6 +34,18 @@ describe("NotePageIssueRefSchema (S1-R3)", () => {
       }).agent_id,
     ).toBe("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
   });
+
+  it("accepts channel refs (N2-A1)", () => {
+    const parsed = NotePageIssueRefSchema.parse({
+      type: "channel",
+      id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      accessible: true,
+      label: "sprint-room",
+      identifier: "worker",
+    });
+    expect(parsed.type).toBe("channel");
+    expect(parsed.identifier).toBe("worker");
+  });
 });
 
 describe("NotePageSchema refs", () => {

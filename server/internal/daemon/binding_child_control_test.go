@@ -13,6 +13,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type bindingControlTestCurrentSet struct {
@@ -229,6 +230,46 @@ func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
 	}
 	if sink.workspaceID != "workspace-a" || sink.event.Name != event.Name || sink.event.Component != event.Component {
 		t.Fatalf("Host diagnostic = workspace %q event %+v", sink.workspaceID, sink.event)
+	}
+}
+
+func TestBindingChildForwardsConnectSocketUpgradeToHost(t *testing.T) {
+	const controlToken = "host-control-token"
+	forwarded := make(chan HeartbeatResponse, 1)
+	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{
+		MachineActions: func(_ context.Context, identity computer.BindingChildIdentity, raw json.RawMessage) error {
+			if identity.WorkspaceID != "workspace-a" {
+				t.Errorf("Host machine action workspace = %q", identity.WorkspaceID)
+			}
+			var ack HeartbeatResponse
+			if err := json.Unmarshal(raw, &ack); err != nil {
+				return err
+			}
+			forwarded <- ack
+			return nil
+		},
+	})
+	installLiveBindingChild(t, host, "workspace-a", 101)
+	mux := http.NewServeMux()
+	host.host.RegisterRoutes(mux)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	child.bindingHostControl = newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	if err := child.handleComputerControlCommand(context.Background(), protocol.EventComputerUpgrade, protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v9.9.9",
+	}); err != nil {
+		t.Fatalf("handleComputerControlCommand: %v", err)
+	}
+
+	select {
+	case ack := <-forwarded:
+		if ack.PendingMachineUpgrade == nil || ack.PendingMachineUpgrade.ID != "upgrade-a" || ack.PendingMachineUpgrade.TargetVersion != "v9.9.9" {
+			t.Fatalf("Host machine action = %+v", ack)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DaemonCore connect-socket upgrade was not forwarded to Host")
 	}
 }
 

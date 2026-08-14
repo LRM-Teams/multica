@@ -356,8 +356,36 @@ func (h *Handler) createMachineUpgrade(
 	}
 	if created {
 		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
+		h.dispatchComputerUpgradeToRunners(r.Context(), runtimeDaemonKey(rt), op)
 	}
 	return op, created, nil
+}
+
+// dispatchComputerUpgradeToRunners is the Raft 1.0.16 connect-socket path:
+// command goes to the current DaemonCore socket. The child forwards it to
+// Computer Host; Host still owns the swap. Heartbeat claim remains for older
+// packages that do not understand computer:upgrade.
+func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computerID string, op *MachineUpgrade) {
+	if h == nil || h.DaemonHub == nil || op == nil || strings.TrimSpace(computerID) == "" {
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT workspace_id
+		FROM computer_workspace_bindings
+		WHERE daemon_id = $1 AND active = TRUE AND revoked_at IS NULL
+		ORDER BY workspace_id`, computerID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	payload := protocol.ComputerUpgradePayload{RequestID: op.ID, OperationID: op.ID, TargetVersion: op.RequestedTarget}
+	for rows.Next() {
+		var workspaceID pgtype.UUID
+		if err := rows.Scan(&workspaceID); err != nil {
+			return
+		}
+		_ = h.DaemonHub.NotifyWorkspaceRunner(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload)
+	}
 }
 
 type machineUpgradeInputError struct {

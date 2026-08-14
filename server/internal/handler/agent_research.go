@@ -7,7 +7,20 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+type agentResearchFleetOverviewSession struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	CurrentStage string `json:"current_stage"`
+}
+
+type agentResearchFleetOverview struct {
+	Session agentResearchFleetOverviewSession `json:"session"`
+	Fleet   []ResearchFleetPreviewMember      `json:"fleet"`
+}
 
 const agentResearchAttemptAuthorizationQuery = `
 	SELECT a.task_id::text, COALESCE(a.inbox_task_id::text, '')
@@ -74,7 +87,7 @@ func (h *Handler) GetAgentResearchSessionSnapshot(w http.ResponseWriter, r *http
 	}
 	attemptID := strings.TrimSpace(r.URL.Query().Get("attempt_id"))
 	if attemptID == "" {
-		writeError(w, http.StatusBadRequest, "attempt_id is required")
+		h.getAgentResearchFleetOverview(w, r, workspaceID)
 		return
 	}
 	if _, valid = parseUUIDOrBadRequest(w, attemptID, "attempt_id"); !valid {
@@ -111,6 +124,38 @@ func researchAttemptCredentialMatches(expectedInboxTaskID, boundInboxTaskID stri
 	expectedInboxTaskID = strings.TrimSpace(expectedInboxTaskID)
 	boundInboxTaskID = strings.TrimSpace(boundInboxTaskID)
 	return expectedInboxTaskID != "" && expectedInboxTaskID == boundInboxTaskID
+}
+
+func (h *Handler) getAgentResearchFleetOverview(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID) {
+	sessionID, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "id")), "id")
+	if !ok {
+		return
+	}
+	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{
+		ID: sessionID, WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
+	fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), workspaceID)
+	if err != nil || fleet.ID != session.FleetID {
+		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
+	members, err := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
+		FleetID: fleet.ID, WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load research fleet overview")
+		return
+	}
+	writeJSON(w, http.StatusOK, agentResearchFleetOverview{
+		Session: agentResearchFleetOverviewSession{
+			ID: uuidToString(session.ID), Status: session.Status, CurrentStage: session.CurrentStage,
+		},
+		Fleet: h.researchFleetPreview(r.Context(), fleet, members, 8),
+	})
 }
 
 func (h *Handler) AppendAgentResearchGraphNode(w http.ResponseWriter, r *http.Request) {

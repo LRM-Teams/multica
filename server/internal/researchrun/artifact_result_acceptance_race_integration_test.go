@@ -9,19 +9,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type acceptanceRaceFixture struct {
-	pool    *pgxpool.Pool
-	store   *PostgresStore
-	fixture researchRunFixture
-	run     Run
-	task    Task
-	attempt Attempt
-	inboxID string
-	claimID string
-	input   AcceptResultInput
+	pool     *pgxpool.Pool
+	store    *PostgresStore
+	fixture  researchRunFixture
+	run      Run
+	task     Task
+	attempt  Attempt
+	inboxID  string
+	claimID  string
+	sourceID string
+	input    AcceptResultInput
 }
 
 func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) acceptanceRaceFixture {
@@ -46,6 +48,28 @@ func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgx
 		t, ctx, pool, fixture.workspaceID, run.SessionID,
 		claimID, "accept-race-claim", "claim referenced by manifest",
 	)
+	sourceID := uuid.NewString()
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, insertErr := tx.Exec(ctx, `
+			INSERT INTO research_source_snapshot (
+			  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
+			  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text,
+			  metadata, verification_status
+			) VALUES (
+			  $1::uuid, $2::uuid, $3::uuid, 'https://example.test/accept-race',
+			  'Acceptance race source', 'example.test', 'official', '{}'::text[],
+			  'accept-race-source', now(), 'sha256:accept-race', 'frozen source body',
+			  '{}'::jsonb, 'pending'
+			)
+		`, sourceID, fixture.workspaceID, run.SessionID); insertErr != nil {
+			return insertErr
+		}
+		backfillIntegrationArtifactPassport(
+			t, ctx, tx, fixture.workspaceID, run.SessionID, sourceID,
+			string(ArtifactKindSourceSnapshot), nil, nil,
+		)
+		return nil
+	})
 
 	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, task.ID, fixture.agentID))
 	if err != nil {
@@ -65,7 +89,7 @@ func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgx
 	}
 	return acceptanceRaceFixture{
 		pool: pool, store: store, fixture: fixture, run: run, task: task,
-		attempt: attempt, inboxID: inboxID, claimID: claimID,
+		attempt: attempt, inboxID: inboxID, claimID: claimID, sourceID: sourceID,
 		input: AcceptResultInput{
 			SessionID: run.SessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
 			InboxTaskID: inboxID, Raw: raw, Result: result, Hash: hash,
@@ -157,6 +181,89 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 					UPDATE research_artifact_passport
 					SET eligibility_revision = eligibility_revision + 1
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "access_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_policy_state
+					SET watermark = watermark + 1, updated_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid;
+
+					INSERT INTO research_artifact_version (
+					  workspace_id, session_id, artifact_id, version,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, access_level, goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					)
+					SELECT
+					  workspace_id, session_id, artifact_id, version + 1,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, 'redacted', goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					FROM research_artifact_version
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+					  AND artifact_id = $3::uuid AND version = 1;
+
+					UPDATE research_artifact_passport
+					SET current_version = 2, eligibility_revision = eligibility_revision + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "verification_status",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_policy_state
+					SET watermark = watermark + 1, updated_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid;
+
+					UPDATE research_source_snapshot
+					SET verification_status = 'rejected'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+
+					UPDATE research_artifact_passport
+					SET eligibility_revision = eligibility_revision + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.sourceID)
+				return nil
+			},
+		},
+		{
+			name: "current_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					INSERT INTO research_artifact_version (
+					  workspace_id, session_id, artifact_id, version,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, access_level, goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					)
+					SELECT
+					  workspace_id, session_id, artifact_id, version + 1,
+					  schema_name, schema_version, canonicalization_version,
+					  content_hash, access_level, goal_version, plan_version,
+					  contract_revision_id, strategy_version_id,
+					  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+					  model, provider, execution_adapter, hash_origin
+					FROM research_artifact_version
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+					  AND artifact_id = $3::uuid AND version = 1;
+
+					UPDATE research_artifact_passport
+					SET current_version = 2
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
 				return nil
 			},

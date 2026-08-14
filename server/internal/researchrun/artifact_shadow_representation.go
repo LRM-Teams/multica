@@ -10,6 +10,7 @@ type shadowRepresentationRecord struct {
 	Kind       ArtifactEntityKind `json:"kind"`
 	ArtifactID string             `json:"artifact_id"`
 	ParentID   string             `json:"parent_id,omitempty"`
+	Ordinal    int                `json:"ordinal"`
 	Bytes      []byte             `json:"bytes"`
 	Hash       string             `json:"hash"`
 }
@@ -34,6 +35,7 @@ func compareShadowSnapshotRepresentations(live, filtered RunSnapshot) error {
 			if liveProjection[i].Kind != filteredProjection[i].Kind ||
 				liveProjection[i].ArtifactID != filteredProjection[i].ArtifactID ||
 				liveProjection[i].ParentID != filteredProjection[i].ParentID ||
+				liveProjection[i].Ordinal != filteredProjection[i].Ordinal ||
 				liveProjection[i].Hash != filteredProjection[i].Hash ||
 				string(liveProjection[i].Bytes) != string(filteredProjection[i].Bytes) {
 				match = false
@@ -72,6 +74,7 @@ func collectSnapshotRepresentationIDs(snapshot RunSnapshot) map[string]struct{} 
 
 func projectSnapshotRepresentations(snapshot RunSnapshot, allowed map[string]struct{}, selectAllowed bool) ([]shadowRepresentationRecord, error) {
 	records := make([]shadowRepresentationRecord, 0, len(allowed))
+	ordinals := make(map[string]int)
 	appendRecord := func(kind ArtifactEntityKind, id, parent string, value any) error {
 		if id == "" {
 			return fmt.Errorf("%w: shadow representation has no artifact ID", ErrInvalidTransition)
@@ -87,7 +90,13 @@ func projectSnapshotRepresentations(snapshot RunSnapshot, allowed map[string]str
 		if err != nil {
 			return fmt.Errorf("encode shadow representation %s/%s: %w", kind, id, err)
 		}
-		records = append(records, shadowRepresentationRecord{Kind: kind, ArtifactID: id, ParentID: parent, Bytes: encoded, Hash: contentHashFromPayload(encoded)})
+		ordinalKey := string(kind) + "\x00" + parent
+		ordinal := ordinals[ordinalKey]
+		ordinals[ordinalKey] = ordinal + 1
+		records = append(records, shadowRepresentationRecord{
+			Kind: kind, ArtifactID: id, ParentID: parent, Ordinal: ordinal,
+			Bytes: encoded, Hash: contentHashFromPayload(encoded),
+		})
 		return nil
 	}
 	for _, source := range snapshot.Sources {
@@ -118,6 +127,9 @@ func projectSnapshotRepresentations(snapshot RunSnapshot, allowed map[string]str
 		}
 		if records[i].ParentID != records[j].ParentID {
 			return records[i].ParentID < records[j].ParentID
+		}
+		if records[i].Ordinal != records[j].Ordinal {
+			return records[i].Ordinal < records[j].Ordinal
 		}
 		return records[i].ArtifactID < records[j].ArtifactID
 	})

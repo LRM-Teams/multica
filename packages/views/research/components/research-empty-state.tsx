@@ -21,7 +21,7 @@ function EmptyResearchPath() {
   ] as const;
   return (
     <div className="mb-3 grid w-full max-w-xl grid-cols-2 gap-2 sm:grid-cols-4" aria-label={t(($) => $.home_empty.path)}>
-      {steps.map(([Icon, label], index) => <div key={label} className="relative flex flex-col items-center gap-2 rounded-lg border border-border/75 bg-card/70 px-2 py-3 text-xs text-muted-foreground">{index > 0 ? <span className="absolute right-1/2 top-5 hidden h-px w-full bg-border sm:block" aria-hidden /> : null}<span className="relative z-[1] flex size-8 items-center justify-center rounded-full border border-brand/40 bg-card text-brand"><Icon className="size-4" aria-hidden /></span><span className="relative z-[1] text-center">{label}</span></div>)}
+      {steps.map(([Icon, label], index) => <div key={label} className="relative flex flex-col items-center gap-2 rounded-lg border border-border/75 bg-card/70 px-2 py-3 text-xs text-muted-foreground">{index > 0 ? <span className="absolute right-1/2 top-5 hidden h-px w-full bg-border md:block" aria-hidden /> : null}<span className="relative z-[1] flex size-8 items-center justify-center rounded-full border border-brand/40 bg-card text-brand"><Icon className="size-4" aria-hidden /></span><span className="relative z-[1] text-center">{label}</span></div>)}
     </div>
   );
 }

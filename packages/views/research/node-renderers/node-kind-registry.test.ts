@@ -14,6 +14,7 @@ import {
 } from "./node-kind-registry";
 
 const RECOGNISED = [
+  "goal",
   "task",
   "attempt",
   "result_artifact",
@@ -46,14 +47,14 @@ const RECOGNISED = [
   "episode",
 ];
 
-describe("node-kind-registry — 30 kinds → family mapping (AC1)", () => {
-  it("registers exactly 30 canonical kinds from the real V6 registry", () => {
-    expect(RESEARCH_V6_NODE_KINDS).toHaveLength(30);
-    expect(new Set(RESEARCH_V6_NODE_KINDS).size).toBe(30);
-    expect(RECOGNISED).toHaveLength(30);
+describe("node-kind-registry — V6 kinds → family mapping (AC1)", () => {
+  it("registers every canonical kind from the real V6 registry", () => {
+    expect(RESEARCH_V6_NODE_KINDS).toHaveLength(31);
+    expect(new Set(RESEARCH_V6_NODE_KINDS).size).toBe(31);
+    expect(RECOGNISED).toHaveLength(31);
   });
 
-  it("every one of the 30 kinds maps to a non-generic family", () => {
+  it("every recognised kind maps to a non-generic family", () => {
     for (const kind of RECOGNISED) {
       const family = familyForNodeKind(kind);
       expect(NODE_KIND_FAMILIES).toContain(family);
@@ -61,7 +62,7 @@ describe("node-kind-registry — 30 kinds → family mapping (AC1)", () => {
     }
   });
 
-  it("KNOWN_NODE_KINDS mirrors the canonical 30-kind set", () => {
+  it("KNOWN_NODE_KINDS mirrors the canonical V6 kind set", () => {
     expect(new Set(KNOWN_NODE_KINDS)).toEqual(new Set(RESEARCH_V6_NODE_KINDS));
   });
 

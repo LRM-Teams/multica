@@ -20,6 +20,7 @@ const (
 func TestSortAcceptanceManifestLockTargetsNormalizesKindAndUUID(t *testing.T) {
 	targets := []acceptanceManifestLockTarget{
 		{Kind: ArtifactKindSourceSnapshot, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-3"},
+		{Kind: ArtifactKindSourceSnapshot, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-0"},
 		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-2"},
 		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimLowID, VersionRowID: "version-1"},
 	}
@@ -27,11 +28,19 @@ func TestSortAcceptanceManifestLockTargetsNormalizesKindAndUUID(t *testing.T) {
 	want := []acceptanceManifestLockTarget{
 		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimLowID, VersionRowID: "version-1"},
 		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-2"},
+		{Kind: ArtifactKindSourceSnapshot, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-0"},
 		{Kind: ArtifactKindSourceSnapshot, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-3"},
 	}
 	for i := range want {
 		if targets[i] != want[i] {
 			t.Fatalf("target[%d]=%+v want %+v", i, targets[i], want[i])
+		}
+	}
+	reversed := []acceptanceManifestLockTarget{want[3], want[2], want[1], want[0]}
+	sortAcceptanceManifestLockTargets(reversed)
+	for i := range want {
+		if reversed[i] != want[i] {
+			t.Fatalf("reverse target[%d]=%+v want %+v", i, reversed[i], want[i])
 		}
 	}
 }

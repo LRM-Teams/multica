@@ -17,7 +17,7 @@ func TestDispatchManifestCandidateKindsPartitionEntireRegistry(t *testing.T) {
 			t.Fatalf("kind=%s candidate=%t want=%t", kind, got, want)
 		}
 	}
-	if len(registeredArtifactEntityKinds) != 25 {
+	if len(registeredArtifactEntityKinds) != 29 {
 		t.Fatalf("registered kinds=%d; update the full-domain disposition matrix", len(registeredArtifactEntityKinds))
 	}
 }
@@ -56,6 +56,9 @@ func TestManifestCandidateDispositionAuditCoversEveryCandidateFamily(t *testing.
 			if policy.EvaluationPrivateKind(candidate.Kind) {
 				candidate.OmissionReason = "evaluation_compartment"
 				omissions = append(omissions, candidate)
+			} else if admitted, deny := policy.LegacyAdmissionAllowed(candidate.Kind, candidate.Lifecycle, candidate.Provenance); !admitted {
+				candidate.OmissionReason = policy.ManifestOmissionReason(deny)
+				omissions = append(omissions, candidate)
 			} else {
 				entries = append(entries, candidate)
 			}
@@ -76,7 +79,7 @@ func TestManifestCandidateDispositionAuditCoversEveryCandidateFamily(t *testing.
 		{name: "duplicate", entries: append(append([]artifactVersionCandidate{}, entries...), entries[0]), omissions: omissions},
 		{name: "both", entries: entries, omissions: append(append([]artifactVersionCandidate{}, omissions...), entries[0])},
 		{name: "wrong bucket", entries: append(append([]artifactVersionCandidate{}, entries...), omissions[0]), omissions: omissions[1:]},
-		{name: "wrong reason", entries: entries, omissions: mutateDispositionReason(omissions, 0, "policy_denied")},
+		{name: "wrong reason", entries: entries, omissions: mutateDispositionReason(omissions, len(omissions)-1, "policy_denied")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

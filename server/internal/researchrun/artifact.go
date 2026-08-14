@@ -347,6 +347,8 @@ func DecisionRelationshipSchemaNames() []string {
 // ScopedRelationshipFKNames lists migration 326 composite relationship FKs.
 func ScopedRelationshipFKNames() []string {
 	return []string{
+		"research_message_run_event_scoped_fkey",
+		"research_message_target_agent_scoped_fkey",
 		"research_task_attempt_task_scoped_fkey",
 		"research_task_question_scoped_fkey",
 		"research_task_parent_task_scoped_fkey",

@@ -288,15 +288,15 @@ func loadArtifactVersionCandidates(
 		      AND diagnostic.owner_id=p.id
 		  ) AS has_migration_diagnostic,
 		  (SELECT count(*)::int FROM research_artifact_version all_v
-		    WHERE (all_v.workspace_id,all_v.session_id,all_v.artifact_id)=(p.workspace_id,p.session_id,p.id)),
+		    WHERE (all_v.workspace_id,all_v.session_id,all_v.artifact_id)=(p.workspace_id,p.session_id,p.id)) AS version_count,
 		  (SELECT count(*)::int FROM research_artifact_input_reference input_ref
 		    JOIN research_artifact_version input_v
 		      ON (input_v.workspace_id,input_v.session_id,input_v.id)=(input_ref.workspace_id,input_ref.session_id,input_ref.input_version_id)
-		    WHERE (input_v.workspace_id,input_v.session_id,input_v.artifact_id)=(p.workspace_id,p.session_id,p.id)),
+		    WHERE (input_v.workspace_id,input_v.session_id,input_v.artifact_id)=(p.workspace_id,p.session_id,p.id)) AS input_reference_count,
 		  (SELECT count(*)::int FROM research_artifact_input_reference output_ref
 		    JOIN research_artifact_version output_v
 		      ON (output_v.workspace_id,output_v.session_id,output_v.id)=(output_ref.workspace_id,output_ref.session_id,output_ref.consumer_version_id)
-		    WHERE (output_v.workspace_id,output_v.session_id,output_v.artifact_id)=(p.workspace_id,p.session_id,p.id))
+		    WHERE (output_v.workspace_id,output_v.session_id,output_v.artifact_id)=(p.workspace_id,p.session_id,p.id)) AS output_reference_count
 		FROM research_artifact_passport p
 		JOIN research_artifact_version v
 		  ON v.workspace_id = p.workspace_id

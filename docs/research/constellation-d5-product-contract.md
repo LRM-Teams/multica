@@ -53,6 +53,19 @@ state, cluster, and lineage must come from projection facts. The frontend must
 never manufacture a summary, confidence, source count, conclusion count, or
 relationship to make the canvas resemble the prototype.
 
+The V6 node contract therefore carries `level`, nullable `cluster_id` and
+`parent_id`, `round`, and nullable `confidence`, `document_count`, and
+`conclusion_count`. Missing metrics are `null`, never a fabricated zero.
+`importance` and `confidence` remain canonical ratios in `[0,1]`; visual size
+comes exclusively from `level`, not from a client-side numeric threshold.
+
+The origin is always a distinct `{node_kind: "goal", level: "m"}` node. A
+master synthesis is emitted only for a uniquely highest, accepted Insight with
+canonical derivation inputs, as `{node_kind: "insight", node_subtype:
+"master_synthesis", level: "xxl"}`. Run failure does not repaint either node:
+Goal remains active unless the Run is cancelled/archived, while completed or
+accepted historical facts retain their own lifecycle states.
+
 States use shape/glyph/text as well as colour: default, selected, running,
 stable, pending review, conflict, failed/abandoned, and restarting. Historical
 dead ends, superseded results, and absorbed inputs remain inspectable.
@@ -81,6 +94,13 @@ therefore progress left-to-right through result clusters instead of placing the
 largest node at the centre of a generic 360-degree radial map. S-tier Agent
 nodes remain inside the visual territory of their parent result. A New Frontier
 territory is rendered only when a canonical new-direction relation exists.
+
+V6 snapshots include `clusters`; deltas include `cluster_upserts` and
+`cluster_tombstones`. Each cluster has stable identity, label, one of
+`stable_result | exploration | new_frontier`, canonical member node IDs, and
+nullable aggregate metrics. Node lineage is carried by `derived_from`,
+`merged_from`, `superseded_by`, `restart_of`, and `invalidated_by`, with stable
+edge relations retained when the canonical graph supplies them.
 
 ## 5. Conversation-driven graph changes
 

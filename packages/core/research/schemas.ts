@@ -40,6 +40,46 @@ export const ResearchFleetSchema = z
   })
   .passthrough();
 
+const ResearchSessionListProgressSchema = z.object({
+  task_total: z.number().optional().default(0),
+  task_completed: z.number().optional().default(0),
+  task_running: z.number().optional().default(0),
+  task_blocked: z.number().optional().default(0),
+  evidence_count: z.number().optional().default(0),
+  today_evidence_count: z.number().optional().default(0),
+  node_count: z.number().optional().default(0),
+  open_question_count: z.number().optional().default(0),
+  awaiting_user_action: z.boolean().optional().default(false),
+  attention_kind: z.string().nullable().optional(),
+  recoverable: z.boolean().optional().default(false),
+  last_progress_at: z.string().nullable().optional(),
+}).passthrough();
+
+const ResearchActiveAssignmentsSchema = z.array(z.object({
+  agent_id: z.string(),
+  role: z.string().optional().default(""),
+  task_id: z.string(),
+  task_title: z.string().optional().default(""),
+  state: z.string().optional().default("running"),
+}).passthrough());
+
+const ResearchLatestOutcomesSchema = z.array(z.object({
+  id: z.string(),
+  kind: z.string(),
+  title: z.string().optional().default(""),
+  summary: z.string().nullable().optional(),
+  verification_state: z.string().optional().default(""),
+  created_at: z.string().optional().default(""),
+}).passthrough());
+
+function safeOptionalProjection<T extends z.ZodTypeAny>(schema: T) {
+  return z.unknown().transform((value): z.output<T> | undefined => {
+    if (value == null) return undefined;
+    const parsed = schema.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
+  });
+}
+
 export const ResearchSessionSchema = z
   .object({
     id: z.string(),
@@ -59,6 +99,9 @@ export const ResearchSessionSchema = z
     depth_tier: z.string().optional(),
     product_round: z.number().optional(),
     product_round_budget: z.number().optional(),
+    list_progress: safeOptionalProjection(ResearchSessionListProgressSchema),
+    active_assignments: safeOptionalProjection(ResearchActiveAssignmentsSchema),
+    latest_outcomes: safeOptionalProjection(ResearchLatestOutcomesSchema),
   })
   .passthrough();
 

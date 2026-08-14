@@ -100,6 +100,7 @@ func validResultAcceptanceFixture(t *testing.T) (*resultAcceptanceTestStore, res
 		attempts: []Attempt{{ID: "attempt-1", TaskID: "task-1", InboxTaskID: "inbox-1"}},
 		members:  []FleetMember{{AgentID: "scout-agent", Role: "scout", Status: "active"}},
 		outcome:  AcceptResultOutcome{TaskID: "task-1", TaskKind: TaskKindPlan},
+		contract: ResearchContract{SourcePolicy: json.RawMessage(`{}`)},
 	}
 	return store, resultSubmission{
 		SessionID: "session-1", WorkspaceID: "workspace-1", TaskID: "task-1",
@@ -108,13 +109,14 @@ func validResultAcceptanceFixture(t *testing.T) (*resultAcceptanceTestStore, res
 }
 
 type resultAcceptanceTestStore struct {
-	run              Run
-	task             Task
-	attempts         []Attempt
-	members          []FleetMember
-	outcome          AcceptResultOutcome
-	accepted         *AcceptResultInput
-	passportEnabled  bool
+	run                 Run
+	task                Task
+	attempts            []Attempt
+	members             []FleetMember
+	outcome             AcceptResultOutcome
+	contract            ResearchContract
+	accepted            *AcceptResultInput
+	passportEnabled     bool
 	hasDispatchManifest bool
 }
 
@@ -132,6 +134,10 @@ func (store *resultAcceptanceTestStore) ListAttempts(context.Context, string) ([
 
 func (store *resultAcceptanceTestStore) ListFleetMembers(context.Context, string, string) ([]FleetMember, error) {
 	return append([]FleetMember(nil), store.members...), nil
+}
+
+func (store *resultAcceptanceTestStore) GetCurrentContract(context.Context, string, string) (ResearchContract, error) {
+	return store.contract, nil
 }
 
 func (store *resultAcceptanceTestStore) AcceptResult(_ context.Context, input AcceptResultInput) (AcceptResultOutcome, error) {

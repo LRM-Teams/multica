@@ -432,6 +432,7 @@ export type {
   WorkGraphDetail,
   ChannelGoalEnvelope,
   CreateChannelGoalRequest,
+  BootstrapChannelGoalControlPlaneRequest,
   UpdateChannelGoalRequest,
   ChannelGoalProcessMarkdown,
   ChannelGoalProcessEnvelope,

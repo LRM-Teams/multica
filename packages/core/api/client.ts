@@ -154,6 +154,7 @@ import type {
   ChannelProjectFileContent,
   ChannelGoalEnvelope,
   CreateChannelGoalRequest,
+  BootstrapChannelGoalControlPlaneRequest,
   UpdateChannelGoalRequest,
   ChannelGoalProcessEnvelope,
   ChannelGoalProcessListEnvelope,
@@ -4309,6 +4310,19 @@ export class ApiClient {
     });
     return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
       endpoint: "POST /api/channels/:id/goal",
+    });
+  }
+
+  async bootstrapChannelGoalControlPlane(
+    channelId: string,
+    input: BootstrapChannelGoalControlPlaneRequest,
+  ): Promise<ChannelGoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal/bootstrap`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
+      endpoint: "POST /api/channels/:id/goal/bootstrap",
     });
   }
 

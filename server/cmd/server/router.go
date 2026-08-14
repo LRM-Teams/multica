@@ -1541,6 +1541,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/goal", h.GetChannelGoal)
 					r.Post("/goal", h.CreateChannelGoal)
 					r.Patch("/goal", h.UpdateChannelGoal)
+					r.Post("/goal/bootstrap", h.BootstrapChannelGoalControlPlane)
 					r.Get("/goal/subgoals", h.ListChannelGoalSubgoals)
 					r.Post("/goal/subgoals", h.CreateChannelGoalSubgoal)
 					r.Post("/goal/subgoals/batch", h.BatchCreateChannelGoalSubgoals)

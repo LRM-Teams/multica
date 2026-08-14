@@ -9,6 +9,7 @@ import {
   Circle,
   FileText,
   Flag,
+  FolderGit2,
   ListChecks,
   ListTodo,
   Pause,
@@ -26,6 +27,7 @@ import {
   channelMemberRole,
   channelMembersOptions,
   useCreateChannelGoal,
+  useBootstrapChannelGoalControlPlane,
   useUpdateChannelGoal,
   workGraphOptions,
 } from "@multica/core/channels";
@@ -61,6 +63,7 @@ import { useT } from "../../i18n";
 import { GOAL_PROCESS_PANEL_ID, GoalProcessPanel } from "./goal-process-panel";
 import { GoalSubgoalPanel } from "./goal-subgoal-panel";
 import { countOpenSubgoals, GOAL_SUBGOAL_PANEL_ID } from "./goal-subgoal-utils";
+import { githubRepositoryFromEvidence } from "./goal-bootstrap-utils";
 import { GoalMiniGraph } from "./goal-mini-graph";
 
 interface ChannelGoalCardProps {
@@ -83,20 +86,99 @@ type GoalProgressDraft = {
   completedCriteria: string[];
 };
 
+type GoalBootstrapDraft = {
+  projectTitle: string;
+  repositoryUrl: string;
+  defaultBranchHint: string;
+};
+
 type GoalCardUIState = {
   expanded: boolean;
   intentMode: "create" | "edit" | null;
   progressOpen: boolean;
+  bootstrapOpen: boolean;
   confirmAction: "complete" | "cancel" | null;
   actionError: string | null;
 };
 
 const emptyIntent: GoalIntentDraft = { title: "", objective: "", criteriaText: "" };
+
 function lines(value: string): string[] {
   return [...new Set(value.split("\n").flatMap((item) => {
     const trimmed = item.trim();
     return trimmed ? [trimmed] : [];
   }))];
+}
+
+function GoalBootstrapDialog({
+  goal,
+  open,
+  onOpenChange,
+  pending,
+  error,
+  onSubmit,
+}: {
+  goal: ChannelGoal;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pending: boolean;
+  error: string | null;
+  onSubmit: (draft: GoalBootstrapDraft) => void;
+}) {
+  const { t } = useT("channels");
+  const [draft, setDraft] = useReducer(mergeState<GoalBootstrapDraft>, {
+    projectTitle: goal.title,
+    repositoryUrl: githubRepositoryFromEvidence(goal.evidence_refs),
+    defaultBranchHint: "",
+  });
+  const valid = draft.projectTitle.trim() !== "" && draft.repositoryUrl.trim() !== "";
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t(($) => $.goal.bootstrap_title)}</DialogTitle>
+          <DialogDescription>{t(($) => $.goal.bootstrap_description)}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="goal-bootstrap-project-title">{t(($) => $.goal.bootstrap_project_title)}</Label>
+            <Input
+              id="goal-bootstrap-project-title"
+              value={draft.projectTitle}
+              maxLength={240}
+              onChange={(event) => setDraft({ projectTitle: event.target.value })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="goal-bootstrap-repository-url">{t(($) => $.goal.bootstrap_repository_url)}</Label>
+            <Input
+              id="goal-bootstrap-repository-url"
+              type="url"
+              value={draft.repositoryUrl}
+              placeholder="https://github.com/owner/repository"
+              onChange={(event) => setDraft({ repositoryUrl: event.target.value })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="goal-bootstrap-default-branch">{t(($) => $.goal.bootstrap_default_branch)}</Label>
+            <Input
+              id="goal-bootstrap-default-branch"
+              value={draft.defaultBranchHint}
+              placeholder="dev"
+              onChange={(event) => setDraft({ defaultBranchHint: event.target.value })}
+            />
+          </div>
+          {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t(($) => $.goal.cancel)}</Button>
+          <Button disabled={pending || !valid} onClick={() => onSubmit(draft)}>
+            {t(($) => $.goal.bootstrap_confirm)}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function mergeState<State>(state: State, patch: Partial<State>): State {
@@ -249,10 +331,11 @@ export function ChannelGoalCard({
     expanded: false,
     intentMode: null,
     progressOpen: false,
+    bootstrapOpen: false,
     confirmAction: null,
     actionError: null,
   });
-  const { expanded, intentMode, progressOpen, confirmAction, actionError } = ui;
+  const { expanded, intentMode, progressOpen, bootstrapOpen, confirmAction, actionError } = ui;
   const { data: members = [] } = useQuery(channelMembersOptions(channelId));
   const { data: processesData } = useQuery({
     ...channelGoalProcessesOptions(channelId),
@@ -284,6 +367,7 @@ export function ChannelGoalCard({
     !processOpen && (processesData?.processes.some((doc) => doc.content.trim()) ?? false);
   const openSubgoalCount = countOpenSubgoals(subgoalsData?.subgoals ?? []);
   const createGoal = useCreateChannelGoal(channelId);
+  const bootstrapGoal = useBootstrapChannelGoalControlPlane(channelId);
   const updateGoal = useUpdateChannelGoal(channelId);
   const runUpdate = (input: Omit<UpdateChannelGoalRequest, "expected_version">, close?: () => void) => {
     if (!goal) return;
@@ -528,6 +612,25 @@ export function ChannelGoalCard({
                   <span>{t(($) => $.goal.control_plane_issues)}: {coordination.open_project_issue_total}/{coordination.project_issue_total}</span>
                   <span>{t(($) => $.goal.control_plane_review)}: {coordination.in_review_project_issue_total}</span>
                 </div>
+                {canManage && !archived && (coordination.execution_admission === "project_required" || coordination.execution_admission === "git_required") ? (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
+                    <p className="min-w-0 flex-1 text-muted-foreground">{t(($) => $.goal.bootstrap_hint)}</p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5"
+                      onClick={() => setUI({ bootstrapOpen: true, actionError: null })}
+                    >
+                      <FolderGit2 className="size-3.5" />
+                      {t(($) => $.goal.bootstrap_action)}
+                    </Button>
+                  </div>
+                ) : null}
+                {coordination.execution_admission === "issues_required" ? (
+                  <p className="mt-3 border-t border-border/60 pt-3 text-muted-foreground">
+                    {t(($) => $.goal.bootstrap_issues_next)}
+                  </p>
+                ) : null}
               </div>
             ) : null}
             <div className="space-y-1.5">
@@ -621,6 +724,30 @@ export function ChannelGoalCard({
             evidence_refs: lines(draft.evidenceText),
             completed_criteria: draft.completedCriteria,
           }, () => setUI({ progressOpen: false }))}
+        />
+      ) : null}
+      {bootstrapOpen ? (
+        <GoalBootstrapDialog
+          key={`bootstrap-goal-${goal.id}`}
+          goal={goal}
+          open
+          onOpenChange={(open) => !open && setUI({ bootstrapOpen: false, actionError: null })}
+          pending={bootstrapGoal.isPending}
+          error={actionError}
+          onSubmit={(draft) => {
+            setUI({ actionError: null });
+            bootstrapGoal.mutate(
+              {
+                project_title: draft.projectTitle.trim(),
+                repository_url: draft.repositoryUrl.trim(),
+                default_branch_hint: draft.defaultBranchHint.trim(),
+              },
+              {
+                onSuccess: () => setUI({ bootstrapOpen: false, actionError: null }),
+                onError: () => setUI({ actionError: t(($) => $.goal.bootstrap_failed) }),
+              },
+            );
+          }}
         />
       ) : null}
       <AlertDialog open={confirmAction !== null} onOpenChange={(open) => !open && setUI({ confirmAction: null })}>

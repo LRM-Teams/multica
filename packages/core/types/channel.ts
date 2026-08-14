@@ -90,6 +90,12 @@ export interface CreateChannelGoalRequest {
   success_criteria: string[];
 }
 
+export interface BootstrapChannelGoalControlPlaneRequest {
+  project_title: string;
+  repository_url: string;
+  default_branch_hint?: string;
+}
+
 export interface UpdateChannelGoalRequest {
   expected_version: number;
   title?: string;

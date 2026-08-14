@@ -3,7 +3,9 @@ package handler
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -30,6 +32,7 @@ type ResearchThoughtStrategyResp struct {
 // Inclusion:
 //   - both rationale + expected_outcome non-empty → include
 //   - OR explicit state=drafting (partial OK) → include as drafting
+//
 // Missing both faces and not drafting → omit. Never invent from title/summary.
 func mapThoughtStrategies(rows []db.ResearchGraphNode) []ResearchThoughtStrategyResp {
 	out := make([]ResearchThoughtStrategyResp, 0)
@@ -44,7 +47,25 @@ func mapThoughtStrategies(rows []db.ResearchGraphNode) []ResearchThoughtStrategy
 }
 
 func thoughtStrategyFromNode(n db.ResearchGraphNode) (ResearchThoughtStrategyResp, bool) {
-	payload := json.RawMessage(n.Payload)
+	return thoughtStrategyFromFrozenFields(
+		uuidToString(n.ID), json.RawMessage(n.Payload), timestampToString(n.UpdatedAt),
+	)
+}
+
+func mapFrozenThoughtStrategies(rows []researchrun.FrozenThoughtStrategyNode) []ResearchThoughtStrategyResp {
+	out := make([]ResearchThoughtStrategyResp, 0)
+	for _, row := range rows {
+		item, ok := thoughtStrategyFromFrozenFields(
+			row.ID, row.Payload, row.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		)
+		if ok {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func thoughtStrategyFromFrozenFields(nodeID string, payload json.RawMessage, updatedAt string) (ResearchThoughtStrategyResp, bool) {
 	obj := payloadObject(payload)
 	nested := thoughtStrategyObject(obj)
 
@@ -72,13 +93,12 @@ func thoughtStrategyFromNode(n db.ResearchGraphNode) (ResearchThoughtStrategyRes
 	if rev == nil {
 		rev = optionalTrimmedString(obj, "strategy_revision", "strategyRevision")
 	}
-	updatedAt := timestampToString(n.UpdatedAt)
 	if rev == nil && (label != nil || hasBoth) && updatedAt != "" {
 		rev = &updatedAt
 	}
 
 	return ResearchThoughtStrategyResp{
-		NodeID:           uuidToString(n.ID),
+		NodeID:           nodeID,
 		Rationale:        rationale,
 		ExpectedOutcome:  expected,
 		StrategyLabel:    label,

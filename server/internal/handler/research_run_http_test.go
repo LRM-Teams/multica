@@ -50,7 +50,7 @@ func TestDecodeResearchJSON(t *testing.T) {
 
 // Production regression: a correctly leased research Agent used to receive a
 // 403 while submitting its structured task result through the Agent route.
-func TestResolveResearchResultInboxTaskIDAllowsActiveAgentCredentialDelivery(t *testing.T) {
+func TestResolveResearchAttemptInboxTaskIDAllowsActiveAgentCredentialDelivery(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -82,7 +82,7 @@ func TestResolveResearchResultInboxTaskIDAllowsActiveAgentCredentialDelivery(t *
 		AgentID: fixture.agentID, WorkspaceID: testWorkspaceID, ActorSource: "agent_credential",
 	}
 	recorder := httptest.NewRecorder()
-	got, ok := testHandler.resolveResearchResultInboxTaskID(recorder, req, principal, sessionID, taskID, attemptID)
+	got, ok := testHandler.resolveResearchAttemptInboxTaskID(recorder, req, principal, sessionID, taskID, attemptID)
 	if !ok {
 		t.Fatalf("active research delivery rejected: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -91,7 +91,7 @@ func TestResolveResearchResultInboxTaskIDAllowsActiveAgentCredentialDelivery(t *
 	}
 }
 
-func TestResolveResearchResultInboxTaskIDRejectsMismatchedResearchContext(t *testing.T) {
+func TestResolveResearchAttemptInboxTaskIDRejectsMismatchedResearchContext(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -123,7 +123,7 @@ func TestResolveResearchResultInboxTaskIDRejectsMismatchedResearchContext(t *tes
 		AgentID: fixture.agentID, WorkspaceID: testWorkspaceID, ActorSource: "agent_credential",
 	}
 	recorder := httptest.NewRecorder()
-	if _, ok := testHandler.resolveResearchResultInboxTaskID(recorder, req, principal, sessionID, taskID, attemptID); ok {
+	if _, ok := testHandler.resolveResearchAttemptInboxTaskID(recorder, req, principal, sessionID, taskID, attemptID); ok {
 		t.Fatal("mismatched research attempt context was accepted")
 	}
 	if recorder.Code != http.StatusForbidden {
@@ -131,7 +131,7 @@ func TestResolveResearchResultInboxTaskIDRejectsMismatchedResearchContext(t *tes
 	}
 }
 
-func TestResolveResearchResultInboxTaskIDRejectsExpiredAgentCredentialDelivery(t *testing.T) {
+func TestResolveResearchAttemptInboxTaskIDRejectsExpiredAgentCredentialDelivery(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -170,7 +170,7 @@ func TestResolveResearchResultInboxTaskIDRejectsExpiredAgentCredentialDelivery(t
 		AgentID: fixture.agentID, WorkspaceID: testWorkspaceID, ActorSource: "agent_credential",
 	}
 	recorder := httptest.NewRecorder()
-	if _, ok := testHandler.resolveResearchResultInboxTaskID(recorder, req, principal, sessionID, taskID, attemptID); ok {
+	if _, ok := testHandler.resolveResearchAttemptInboxTaskID(recorder, req, principal, sessionID, taskID, attemptID); ok {
 		t.Fatal("expired research delivery was accepted")
 	}
 	if recorder.Code != http.StatusConflict {

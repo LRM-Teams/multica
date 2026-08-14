@@ -82,7 +82,7 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.redeliverUnacknowledgedStandaloneChat(ctx, identity); err != nil {
 			return err
 		}
-		return h.dispatchPendingRunnerStops(ctx, identity)
+		return nil
 	case protocol.EventAgentStatus:
 		var status protocol.AgentStatusPayload
 		if err := json.Unmarshal(raw, &status); err != nil {

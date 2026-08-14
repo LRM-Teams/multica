@@ -17,6 +17,25 @@ const (
 	lockOrderClaimHighID = "20000000-0000-4000-8000-000000000002"
 )
 
+func TestSortAcceptanceManifestLockTargetsNormalizesKindAndUUID(t *testing.T) {
+	targets := []acceptanceManifestLockTarget{
+		{Kind: ArtifactKindSourceSnapshot, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-3"},
+		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-2"},
+		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimLowID, VersionRowID: "version-1"},
+	}
+	sortAcceptanceManifestLockTargets(targets)
+	want := []acceptanceManifestLockTarget{
+		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimLowID, VersionRowID: "version-1"},
+		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-2"},
+		{Kind: ArtifactKindSourceSnapshot, ArtifactID: lockOrderClaimHighID, VersionRowID: "version-3"},
+	}
+	for i := range want {
+		if targets[i] != want[i] {
+			t.Fatalf("target[%d]=%+v want %+v", i, targets[i], want[i])
+		}
+	}
+}
+
 func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -209,41 +228,28 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 			t.Fatalf("attempt[%d] result artifacts=%d want 1", i, resultArtifacts)
 		}
 	}
-	var succeededAttempts, resultArtifacts int
+	var terminalAttempts, resultArtifacts int
 	if err = pool.QueryRow(ctx, `
-		SELECT
-		  (SELECT count(*)::int FROM research_task_attempt attempt
-		   WHERE attempt.workspace_id=$1::uuid AND attempt.session_id=$2::uuid
-		     AND attempt.id=ANY($3::uuid[]) AND attempt.status='succeeded'),
-		  (SELECT count(*)::int FROM research_result_artifact result
-		   WHERE result.workspace_id=$1::uuid AND result.session_id=$2::uuid
-		     AND result.attempt_id=ANY($3::uuid[]))
-	`, fixture.workspaceID, run.SessionID, []string{jobs[0].attemptID, jobs[1].attemptID}).Scan(
-		&succeededAttempts, &resultArtifacts,
-	); err != nil {
-		t.Fatal(err)
+		SELECT count(*)::int
+		FROM research_task_attempt
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		  AND id = ANY($3::uuid[]) AND status = 'succeeded'
+	`, fixture.workspaceID, run.SessionID, []string{jobs[0].attemptID, jobs[1].attemptID}).Scan(&terminalAttempts); err != nil {
+		t.Fatalf("count terminal attempts: %v", err)
 	}
-	if succeededAttempts != 2 || resultArtifacts != 2 {
-		t.Fatalf("succeeded attempts=%d Result Artifacts=%d want 2/2", succeededAttempts, resultArtifacts)
+	if terminalAttempts != len(jobs) {
+		t.Fatalf("terminal attempts=%d want %d", terminalAttempts, len(jobs))
 	}
-}
-
-func TestAcceptanceManifestLockTargetsUseCanonicalKindAndUUIDOrder(t *testing.T) {
-	targets := []acceptanceManifestLockTarget{
-		{Kind: ArtifactKindTask, ArtifactID: lockOrderClaimLowID, VersionRowID: "z"},
-		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimHighID, VersionRowID: "x"},
-		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimLowID, VersionRowID: "y"},
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int
+		FROM research_result_artifact
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		  AND attempt_id = ANY($3::uuid[])
+	`, fixture.workspaceID, run.SessionID, []string{jobs[0].attemptID, jobs[1].attemptID}).Scan(&resultArtifacts); err != nil {
+		t.Fatalf("count result artifacts: %v", err)
 	}
-	sortAcceptanceManifestLockTargets(targets)
-	want := []acceptanceManifestLockTarget{
-		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimLowID, VersionRowID: "y"},
-		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimHighID, VersionRowID: "x"},
-		{Kind: ArtifactKindTask, ArtifactID: lockOrderClaimLowID, VersionRowID: "z"},
-	}
-	for i := range want {
-		if targets[i] != want[i] {
-			t.Fatalf("target[%d]=%+v want %+v", i, targets[i], want[i])
-		}
+	if resultArtifacts != len(jobs) {
+		t.Fatalf("result artifacts=%d want %d", resultArtifacts, len(jobs))
 	}
 }
 

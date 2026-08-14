@@ -67,6 +67,11 @@ func (runner *Runner) Run(ctx context.Context, corpus Corpus, options RunOptions
 				report.Trials = append(report.Trials, trial)
 				continue
 			}
+			trial.ArtifactHash, err = canonicalEvaluationHash(artifact)
+			if err != nil {
+				return Report{}, fmt.Errorf("hash task %q seed %d artifact: %w", evaluationCase.Task.ID, seed, err)
+			}
+			trial.Artifact = &artifact
 			allPassed := true
 			for _, grader := range runner.graders {
 				grade, gradeErr := grader.Grade(ctx, evaluationCase, artifact)

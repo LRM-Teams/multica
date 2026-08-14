@@ -50,6 +50,20 @@ type ResearchFleetPreviewMember struct {
 type ResearchSessionListItem struct {
 	ResearchSessionResponse
 	FleetPreview []ResearchFleetPreviewMember `json:"fleet_preview"`
+	ListProgress *ResearchSessionListProgress `json:"list_progress,omitempty"`
+}
+
+type ResearchSessionListProgress struct {
+	TaskTotal          int64   `json:"task_total"`
+	TaskCompleted      int64   `json:"task_completed"`
+	TaskRunning        int64   `json:"task_running"`
+	TaskBlocked        int64   `json:"task_blocked"`
+	EvidenceCount      int64   `json:"evidence_count"`
+	NodeCount          int64   `json:"node_count"`
+	OpenQuestionCount  int64   `json:"open_question_count"`
+	AwaitingUserAction bool    `json:"awaiting_user_action"`
+	AttentionReason    *string `json:"attention_reason,omitempty"`
+	LastProgressAt     *string `json:"last_progress_at,omitempty"`
 }
 
 type ResearchSessionSnapshot struct {
@@ -270,11 +284,38 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list research sessions")
 		return
 	}
+	progressRows, err := h.Queries.ListResearchSessionProgress(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load research session progress")
+		return
+	}
+	progressBySession := make(map[string]*ResearchSessionListProgress, len(progressRows))
+	for _, row := range progressRows {
+		sessionID := uuidToString(row.SessionID)
+		progress := &ResearchSessionListProgress{
+			TaskTotal:          row.TaskTotal,
+			TaskCompleted:      row.TaskCompleted,
+			TaskRunning:        row.TaskRunning,
+			TaskBlocked:        row.TaskBlocked,
+			EvidenceCount:      row.EvidenceCount,
+			NodeCount:          row.NodeCount,
+			OpenQuestionCount:  row.OpenQuestionCount,
+			AwaitingUserAction: row.AwaitingUserAction,
+		}
+		if row.AttentionReason.Valid {
+			progress.AttentionReason = &row.AttentionReason.String
+		}
+		lastProgressAt := timestampToString(row.LastProgressAt)
+		progress.LastProgressAt = &lastProgressAt
+		progressBySession[sessionID] = progress
+	}
 	out := make([]ResearchSessionListItem, 0, len(rows))
 	for _, row := range rows {
+		sessionID := uuidToString(row.ID)
 		out = append(out, ResearchSessionListItem{
 			ResearchSessionResponse: researchSessionToResponse(row),
 			FleetPreview:            preview,
+			ListProgress:            progressBySession[sessionID],
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})

@@ -130,6 +130,20 @@ export interface ResearchSession {
   depth_tier?: ResearchDepthTier;
   product_round?: number;
   product_round_budget?: number;
+  list_progress?: ResearchSessionListProgress;
+}
+
+export interface ResearchSessionListProgress {
+  task_total: number;
+  task_completed: number;
+  task_running: number;
+  task_blocked: number;
+  evidence_count: number;
+  node_count: number;
+  open_question_count: number;
+  awaiting_user_action: boolean;
+  attention_reason?: string | null;
+  last_progress_at?: string | null;
 }
 export interface ResearchGraphNode {
   id: string;

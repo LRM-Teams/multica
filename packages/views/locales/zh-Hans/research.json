@@ -633,6 +633,37 @@
     "template_prompt_cancel": "取消",
     "template_prompt_apply": "应用更改"
   },
+  "home_preview": {
+    "title": "启动预览",
+    "subtitle": "创建后，调研团会按这套方法展开工作",
+    "lead": "主理智能体",
+    "fleet": "调研团",
+    "auto_assign": "自动分配",
+    "agent_count": "{{count}} 位 Agent",
+    "depth": "调研深度",
+    "depth_shallow": "快速 · 2 轮内",
+    "depth_standard": "标准 · 3 轮内",
+    "depth_deep": "深入 · 5 轮内",
+    "source_policy": "来源策略",
+    "primary_sources": "权威源优先",
+    "stages": "调研阶段",
+    "evidence_note": "多源取证与独立验证已开启"
+  },
+  "home_overview": {
+    "total": "全部调研",
+    "active": "正在推进",
+    "agents": "工作中 Agent",
+    "evidence": "累计证据",
+    "attention": "等待处理",
+    "heading": "活跃调研星系",
+    "subtitle": "按需要介入的优先级排列，快速判断每项研究走到了哪里",
+    "live": "实时同步",
+    "stage_progress": "S1 到 S4 阶段进度",
+    "tasks": "{{done}}/{{total}} task",
+    "evidence_count": "{{count}} 条证据",
+    "blocked": "{{count}} 项阻塞",
+    "progress_unavailable": "阶段进度可见，详细计数暂不可用"
+  },
   "ring": {
     "title": "节点操作",
     "detail": "详情",

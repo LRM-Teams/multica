@@ -62,6 +62,36 @@ describe("Research list/bootstrap response boundaries", () => {
     );
   });
 
+  it("accepts homepage progress and remains compatible when it is absent", async () => {
+    const client = new ApiClient("https://api.example.test");
+    stubResponse({
+      sessions: [
+        {
+          ...session("s1"),
+          list_progress: {
+            task_total: 12,
+            task_completed: 5,
+            task_running: 3,
+            task_blocked: 1,
+            evidence_count: 18,
+            node_count: 6,
+            open_question_count: 2,
+            awaiting_user_action: false,
+            last_progress_at: "2026-08-14T08:41:00Z",
+          },
+        },
+        session("s2"),
+      ],
+    });
+
+    await expect(client.listResearchSessions("ws1")).resolves.toMatchObject({
+      sessions: [
+        { id: "s1", list_progress: { task_completed: 5, evidence_count: 18 } },
+        { id: "s2" },
+      ],
+    });
+  });
+
   it("accepts a self-consistent fleet and rejects synthetic empty fallback", async () => {
     const client = new ApiClient("https://api.example.test");
     stubResponse({

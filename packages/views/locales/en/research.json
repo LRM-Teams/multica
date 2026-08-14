@@ -633,6 +633,37 @@
     "template_prompt_cancel": "Cancel",
     "template_prompt_apply": "Apply changes"
   },
+  "home_preview": {
+    "title": "Launch preview",
+    "subtitle": "The fleet will follow this method after creation",
+    "lead": "Lead Agent",
+    "fleet": "Research fleet",
+    "auto_assign": "Auto assign",
+    "agent_count": "{{count}} Agents",
+    "depth": "Depth",
+    "depth_shallow": "Quick · up to 2 rounds",
+    "depth_standard": "Standard · up to 3 rounds",
+    "depth_deep": "Deep · up to 5 rounds",
+    "source_policy": "Source policy",
+    "primary_sources": "primary sources",
+    "stages": "Research stages",
+    "evidence_note": "Multi-source evidence and independent verification enabled"
+  },
+  "home_overview": {
+    "total": "All research",
+    "active": "In progress",
+    "agents": "Agents working",
+    "evidence": "Evidence",
+    "attention": "Needs attention",
+    "heading": "Active research constellation",
+    "subtitle": "Prioritized by where your attention is needed next",
+    "live": "Live sync",
+    "stage_progress": "S1 through S4 stage progress",
+    "tasks": "{{done}}/{{total}} tasks",
+    "evidence_count": "{{count}} evidence",
+    "blocked": "{{count}} blocked",
+    "progress_unavailable": "Stage is available; detailed counts are unavailable"
+  },
   "ring": {
     "title": "Node actions",
     "detail": "Details",

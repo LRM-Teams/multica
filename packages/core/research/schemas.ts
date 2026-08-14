@@ -59,6 +59,21 @@ export const ResearchSessionSchema = z
     depth_tier: z.string().optional(),
     product_round: z.number().optional(),
     product_round_budget: z.number().optional(),
+    list_progress: z
+      .object({
+        task_total: z.number().optional().default(0),
+        task_completed: z.number().optional().default(0),
+        task_running: z.number().optional().default(0),
+        task_blocked: z.number().optional().default(0),
+        evidence_count: z.number().optional().default(0),
+        node_count: z.number().optional().default(0),
+        open_question_count: z.number().optional().default(0),
+        awaiting_user_action: z.boolean().optional().default(false),
+        attention_reason: z.string().nullable().optional(),
+        last_progress_at: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 

@@ -1220,6 +1220,79 @@ func (q *Queries) ListResearchSessions(ctx context.Context, workspaceID pgtype.U
 	return items, nil
 }
 
+const listResearchSessionProgress = `-- name: ListResearchSessionProgress :many
+WITH task_progress AS (
+  SELECT t.session_id, count(*) FILTER (WHERE t.status <> 'obsolete') AS task_total,
+    count(*) FILTER (WHERE t.status = 'succeeded') AS task_completed,
+    count(*) FILTER (WHERE t.status IN ('dispatching', 'running')) AS task_running,
+    count(*) FILTER (WHERE t.status IN ('blocked', 'failed')) AS task_blocked
+  FROM research_task t JOIN research_session s ON s.id = t.session_id
+  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version
+  GROUP BY t.session_id
+), evidence_progress AS (
+  SELECT session_id, count(*) AS evidence_count FROM research_observation
+  WHERE workspace_id = $1 AND verification_status <> 'rejected' GROUP BY session_id
+), node_progress AS (
+  SELECT session_id, count(*) AS node_count FROM research_graph_node WHERE workspace_id = $1 GROUP BY session_id
+), question_progress AS (
+  SELECT q.session_id, count(*) AS open_question_count
+  FROM research_question q JOIN research_session s ON s.id = q.session_id
+  WHERE q.workspace_id = $1 AND q.goal_version = s.goal_version AND q.plan_version = s.plan_version
+    AND q.status IN ('open', 'in_progress', 'unresolved') GROUP BY q.session_id
+)
+SELECT s.id AS session_id, COALESCE(tp.task_total, 0)::bigint AS task_total,
+  COALESCE(tp.task_completed, 0)::bigint AS task_completed,
+  COALESCE(tp.task_running, 0)::bigint AS task_running,
+  COALESCE(tp.task_blocked, 0)::bigint AS task_blocked,
+  COALESCE(ep.evidence_count, 0)::bigint AS evidence_count,
+  COALESCE(np.node_count, 0)::bigint AS node_count,
+  COALESCE(qp.open_question_count, 0)::bigint AS open_question_count,
+  (s.status = 'awaiting_user_confirm') AS awaiting_user_action,
+  CASE WHEN s.status = 'awaiting_user_confirm' THEN 'awaiting_user_confirm'
+    WHEN COALESCE(tp.task_blocked, 0) > 0 THEN 'blocked_tasks' ELSE NULL END::text AS attention_reason,
+  s.last_progress_at
+FROM research_session s
+LEFT JOIN task_progress tp ON tp.session_id = s.id
+LEFT JOIN evidence_progress ep ON ep.session_id = s.id
+LEFT JOIN node_progress np ON np.session_id = s.id
+LEFT JOIN question_progress qp ON qp.session_id = s.id
+WHERE s.workspace_id = $1 ORDER BY s.updated_at DESC
+`
+
+type ListResearchSessionProgressRow struct {
+	SessionID          pgtype.UUID        `json:"session_id"`
+	TaskTotal          int64              `json:"task_total"`
+	TaskCompleted      int64              `json:"task_completed"`
+	TaskRunning        int64              `json:"task_running"`
+	TaskBlocked        int64              `json:"task_blocked"`
+	EvidenceCount      int64              `json:"evidence_count"`
+	NodeCount          int64              `json:"node_count"`
+	OpenQuestionCount  int64              `json:"open_question_count"`
+	AwaitingUserAction bool               `json:"awaiting_user_action"`
+	AttentionReason    pgtype.Text        `json:"attention_reason"`
+	LastProgressAt     pgtype.Timestamptz `json:"last_progress_at"`
+}
+
+func (q *Queries) ListResearchSessionProgress(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchSessionProgressRow, error) {
+	rows, err := q.db.Query(ctx, listResearchSessionProgress, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListResearchSessionProgressRow{}
+	for rows.Next() {
+		var i ListResearchSessionProgressRow
+		if err := rows.Scan(&i.SessionID, &i.TaskTotal, &i.TaskCompleted, &i.TaskRunning, &i.TaskBlocked, &i.EvidenceCount, &i.NodeCount, &i.OpenQuestionCount, &i.AwaitingUserAction, &i.AttentionReason, &i.LastProgressAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listResearchSources = `-- name: ListResearchSources :many
 SELECT id, workspace_id, session_id, url, title, source_class, credibility_weight, stance, relevance, summary, excerpt, payload, created_at, updated_at FROM research_source
 WHERE session_id = $1 AND workspace_id = $2

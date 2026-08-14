@@ -293,6 +293,124 @@ func TestAcceptResultReplayRequiresMatchingHash(t *testing.T) {
 	}
 }
 
+func TestAcceptResultReplayRequiresExactArtifactBinding(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *AcceptResultInput, researchRunFixture)
+	}{
+		{
+			name: "agent lineage",
+			mutate: func(_ *testing.T, input *AcceptResultInput, _ researchRunFixture) {
+				input.AgentID = uuid.NewString()
+			},
+		},
+		{
+			name: "inbox lineage",
+			mutate: func(_ *testing.T, input *AcceptResultInput, _ researchRunFixture) {
+				input.InboxTaskID = uuid.NewString()
+			},
+		},
+		{
+			name: "manifest hash",
+			mutate: func(t *testing.T, input *AcceptResultInput, fixture researchRunFixture) {
+				if _, err := pool.Exec(ctx, `
+					UPDATE research_artifact_context_manifest
+					SET manifest_hash = $4
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+				`, fixture.workspaceID, input.SessionID, input.AttemptID,
+					contentHashFromPayload([]byte("changed replay manifest"))); err != nil {
+					t.Fatalf("change manifest hash: %v", err)
+				}
+			},
+		},
+		{
+			name: "manifest id",
+			mutate: func(t *testing.T, input *AcceptResultInput, fixture researchRunFixture) {
+				command, err := pool.Exec(ctx, `
+					UPDATE research_artifact_input_reference ref
+					SET manifest_id = NULL
+					FROM research_artifact_version rv, research_result_artifact r
+					WHERE rv.workspace_id = r.workspace_id
+					  AND rv.session_id = r.session_id
+					  AND rv.artifact_id = r.id
+					  AND ref.workspace_id = r.workspace_id
+					  AND ref.session_id = r.session_id
+					  AND ref.consumer_version_id = rv.id
+					  AND ref.relation = 'acceptance_input'
+					  AND r.workspace_id = $1::uuid AND r.session_id = $2::uuid
+					  AND r.attempt_id = $3::uuid
+				`, fixture.workspaceID, input.SessionID, input.AttemptID)
+				if err != nil {
+					t.Fatalf("change input manifest id: %v", err)
+				}
+				if command.RowsAffected() == 0 {
+					t.Fatal("expected at least one accepted input reference")
+				}
+			},
+		},
+		{
+			name: "resolved version set",
+			mutate: func(t *testing.T, input *AcceptResultInput, fixture researchRunFixture) {
+				command, err := pool.Exec(ctx, `
+					DELETE FROM research_artifact_input_reference ref
+					USING research_artifact_version rv, research_result_artifact r
+					WHERE rv.workspace_id = r.workspace_id
+					  AND rv.session_id = r.session_id
+					  AND rv.artifact_id = r.id
+					  AND ref.workspace_id = r.workspace_id
+					  AND ref.session_id = r.session_id
+					  AND ref.consumer_version_id = rv.id
+					  AND ref.relation = 'acceptance_input'
+					  AND r.workspace_id = $1::uuid AND r.session_id = $2::uuid
+					  AND r.attempt_id = $3::uuid
+				`, fixture.workspaceID, input.SessionID, input.AttemptID)
+				if err != nil {
+					t.Fatalf("remove resolved version binding: %v", err)
+				}
+				if command.RowsAffected() == 0 {
+					t.Fatal("expected at least one accepted input reference")
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := seedResearchRunFixture(t, ctx, pool)
+			defer cleanupResearchRunFixture(pool, fixture)
+			store := NewPostgresStore(pool)
+			attempt, inboxID, raw, run, task := setupRunningPlanAttempt(t, ctx, store, fixture)
+			result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, run.Config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := AcceptResultInput{
+				SessionID: run.SessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
+				InboxTaskID: inboxID, Raw: raw, Result: result, Hash: hash,
+			}
+			if _, err = store.AcceptResult(ctx, input); err != nil {
+				t.Fatalf("first AcceptResult: %v", err)
+			}
+			tc.mutate(t, &input, fixture)
+			if _, err = store.AcceptResult(ctx, input); !errors.Is(err, ErrResultConflict) {
+				t.Fatalf("replay err=%v want ErrResultConflict", err)
+			}
+		})
+	}
+}
+
 func TestAcceptResultRejectsWhenManifestEntryEligibilityAdvances(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {

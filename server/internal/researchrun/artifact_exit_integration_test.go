@@ -482,7 +482,7 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
-	originalPrompt := loadIntegrationDispatchPrompt(t, ctx, pool, attempt.ID)
+	_ = loadIntegrationDispatchPrompt(t, ctx, pool, attempt.ID)
 	var headerBytes []byte
 	var headerHash, policyVersion string
 	if err = pool.QueryRow(ctx, `

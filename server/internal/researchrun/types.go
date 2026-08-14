@@ -503,6 +503,10 @@ type RunSnapshot struct {
 	Gate               GateResult                 `json:"gate"`
 	AttemptContext     *AttemptArtifactContext    `json:"attempt_context,omitempty"`
 	ArtifactProjection *ArtifactProjection        `json:"artifact_projection,omitempty"`
+	// PrincipalHeader is the bounded Fleet roster frozen into the Attempt's
+	// Context Manifest. It is handler-only compatibility metadata, not another
+	// Research artifact family.
+	PrincipalHeader []FleetMember `json:"-"`
 }
 
 // ArtifactProjection is the bounded, hash-stable passport read model. It never

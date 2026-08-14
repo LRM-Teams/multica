@@ -813,7 +813,7 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	`, workspaceID, in.SessionID, goalVersion, planVersion, decisionInputs, decisionOutcome, in.Rationale).Scan(&decisionID); err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("remediation_routing"), workspaceID, in.SessionID, decisionID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
+	if err = registerProductionDecisionPassportTx(ctx, tx, workspaceID, in.SessionID, decisionID, "", ArtifactAccessRaw); err != nil {
 		return Task{}, RunEvent{}, err
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "control_task_created", "control-task:"+taskID, "system", "", map[string]any{

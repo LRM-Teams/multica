@@ -75,13 +75,16 @@ func (s *PostgresStore) loadScreenedCandidateFetchState(ctx context.Context, in 
 	err := s.pool.QueryRow(ctx, `SELECT plan.id::text,execution.id::text,candidate.id::text,decision.id::text,
 		plan.task_id::text,plan.created_by_attempt_id::text,attempt.assigned_agent_id::text,
 		execution.adapter,candidate.canonical_url,candidate.canonical_identity,candidate.title,
-		decision.effective_independence_family,candidate.content_hash,passport.content_hash
+		decision.effective_independence_family,candidate.content_hash,decision_version.content_hash
 		FROM research_source_candidate candidate
 		JOIN research_query_execution execution ON (execution.workspace_id,execution.session_id,execution.id)=(candidate.workspace_id,candidate.session_id,candidate.query_execution_id)
 		JOIN research_search_plan plan ON (plan.workspace_id,plan.session_id,plan.id)=(execution.workspace_id,execution.session_id,execution.search_plan_id)
 		JOIN research_screening_decision decision ON (decision.workspace_id,decision.session_id,decision.query_execution_id,decision.source_candidate_id)=(candidate.workspace_id,candidate.session_id,candidate.query_execution_id,candidate.id)
 		JOIN research_task_attempt attempt ON (attempt.workspace_id,attempt.session_id,attempt.id,attempt.task_id)=(plan.workspace_id,plan.session_id,plan.created_by_attempt_id,plan.task_id)
 		JOIN research_artifact_passport passport ON (passport.workspace_id,passport.session_id,passport.id)=(decision.workspace_id,decision.session_id,decision.id)
+		JOIN research_artifact_version decision_version ON
+		  (decision_version.workspace_id,decision_version.session_id,decision_version.artifact_id,decision_version.version)=
+		  (passport.workspace_id,passport.session_id,passport.id,passport.current_version)
 		WHERE candidate.workspace_id=$1::uuid AND candidate.session_id=$2::uuid AND candidate.id=$3::uuid AND decision.disposition='accepted'`,
 		in.WorkspaceID, in.SessionID, in.CandidateID).Scan(&state.PlanID, &state.QueryID, &state.CandidateID, &state.DecisionID,
 		&state.TaskID, &state.AttemptID, &state.AgentID, &state.Adapter, &state.URL, &state.Identity, &state.Title,
@@ -102,15 +105,18 @@ func (s *PostgresStore) persistFetchedScreenedSource(ctx context.Context, in Fet
 	err = tx.QueryRow(ctx, `SELECT plan.id::text,execution.id::text,candidate.id::text,decision.id::text,
 		plan.task_id::text,plan.created_by_attempt_id::text,attempt.assigned_agent_id::text,
 		execution.adapter,candidate.canonical_url,candidate.canonical_identity,candidate.title,
-		decision.effective_independence_family,candidate.content_hash,passport.content_hash
+		decision.effective_independence_family,candidate.content_hash,decision_version.content_hash
 		FROM research_source_candidate candidate
 		JOIN research_query_execution execution ON (execution.workspace_id,execution.session_id,execution.id)=(candidate.workspace_id,candidate.session_id,candidate.query_execution_id)
 		JOIN research_search_plan plan ON (plan.workspace_id,plan.session_id,plan.id)=(execution.workspace_id,execution.session_id,execution.search_plan_id)
 		JOIN research_screening_decision decision ON (decision.workspace_id,decision.session_id,decision.query_execution_id,decision.source_candidate_id)=(candidate.workspace_id,candidate.session_id,candidate.query_execution_id,candidate.id)
 		JOIN research_task_attempt attempt ON (attempt.workspace_id,attempt.session_id,attempt.id,attempt.task_id)=(plan.workspace_id,plan.session_id,plan.created_by_attempt_id,plan.task_id)
 		JOIN research_artifact_passport passport ON (passport.workspace_id,passport.session_id,passport.id)=(decision.workspace_id,decision.session_id,decision.id)
+		JOIN research_artifact_version decision_version ON
+		  (decision_version.workspace_id,decision_version.session_id,decision_version.artifact_id,decision_version.version)=
+		  (passport.workspace_id,passport.session_id,passport.id,passport.current_version)
 		WHERE candidate.workspace_id=$1::uuid AND candidate.session_id=$2::uuid AND candidate.id=$3::uuid AND decision.disposition='accepted'
-		FOR UPDATE OF candidate,execution,plan,decision,attempt,passport`, in.WorkspaceID, in.SessionID, in.CandidateID).Scan(
+		FOR UPDATE OF candidate,execution,plan,decision,attempt,passport,decision_version`, in.WorkspaceID, in.SessionID, in.CandidateID).Scan(
 		&locked.PlanID, &locked.QueryID, &locked.CandidateID, &locked.DecisionID, &locked.TaskID, &locked.AttemptID, &locked.AgentID,
 		&locked.Adapter, &locked.URL, &locked.Identity, &locked.Title, &locked.IndependenceFamily, &locked.CandidateHash, &locked.DecisionHash)
 	if errors.Is(err, pgx.ErrNoRows) {

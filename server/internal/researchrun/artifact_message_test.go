@@ -33,6 +33,15 @@ func TestResearchMessageArtifactContentCanonicalizesMetaAndBindsTarget(t *testin
 	if first == changed {
 		t.Fatal("different target Agents must not share a message hash")
 	}
+	lineage, err := ArtifactContentHash(ArtifactKindResearchMessage, researchMessageArtifactContent(
+		"agent", "agent-1", "agent-2", "event-1", "body", "chat", []byte(`{"a":1,"b":2}`),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == lineage {
+		t.Fatal("different Run Event lineage must not share a message hash")
+	}
 }
 
 func TestParseResearchMessageMatchDecisionRefsRejectsWrongOwnerAndDuplicateDecision(t *testing.T) {

@@ -1103,6 +1103,7 @@ projection 生成。§15.23 已收口。
 - [ ] 实现确定性冲突检测和 Agent 冲突候选协议。
 - [ ] 实现盲复核、Methodologist、区分任务和 Adjudicator 输入隔离。
 - [ ] 实现 Research Deliberation Turn、进展水位、轮次/成本限制、deadlock 和 Research Director 自动升级。
+  - [x] H4a-deliberation-result：在不改写冻结 V6 JSON Schema 的前提下，`research_deliberation_v6` 使用既有单一 Dispute 的开放 `positions` object 承载严格 Turn；独立 decoder 要求完整 actor/statement/scope/Claim/Evidence/challenge/concession/action/canonical delta/resolution proposal/unavailable participant/elapsed-token-tool cost，拒绝未知字段和跨 Task payload。普通入口与 PostgreSQL `AcceptResult` 均锁定重解码/哈希；事务要求 Task canonical target 正是该 Dispute、subject/status 未变、初始 Position 至少来自两个拥有 accepted Integration input 的原 Agent。服务端按 `research-deliberation-limits-v1` 推进 canonical watermark、no-progress/round/time/token/tool budget，写 Deliberation/Turn、production Passport 和 Event，并把 consensus/evidence wait/deadlock 映射为受约束的 Dispute 状态。deadlock 已产生稳定 Director escalation payload；自动创建隔离的 Adjudicator Task 与 Director principal fencing 仍待 H4b/J4。
 - [ ] Gate 阻止未处理的阻断级争议，报告展示条件化和不可消解争议。
   - [x] H5a-delivery-obligation：`dispute_delivery_gate.go` 对一个不可变 Report Revision 聚合验收完整 Dispute 集。blocking `open | investigating`、待确认 human gate、缺少当前修订披露或披露与 canonical condition/residual uncertainty/impact 不一致都会产生稳定 finding 并阻断；输入顺序不改变审计指纹。该切片只完成 Gate 决策合同；Dispute/Report 持久读取、现有 deliveryGateModule 接线和 finding 补救路由仍待后续切片。
 

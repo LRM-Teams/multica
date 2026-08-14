@@ -8,6 +8,10 @@ import (
 
 func shadowRepresentationFixture() RunSnapshot {
 	return RunSnapshot{
+		Run:          Run{SessionID: "run-1", Goal: "goal", StateVersion: 1},
+		Questions:    []Question{{ID: "question-1", Question: "question one"}},
+		Tasks:        []Task{{ID: "task-1", QuestionID: "question-1", Objective: "task one"}},
+		Attempts:     []Attempt{{ID: "attempt-1", TaskID: "task-1", AttemptNumber: 1}},
 		Sources:      []SourceSnapshotView{{ID: "source-1", CanonicalURL: "https://example.com/source", Metadata: json.RawMessage(`{"nested":{"rank":1}}`)}},
 		Observations: []Observation{{ID: "observation-1", SourceSnapshotID: "source-1", Quote: "fact"}},
 		Claims: []Claim{
@@ -38,6 +42,10 @@ func TestCompareShadowSnapshotRepresentationsProvesBytesHashAndNesting(t *testin
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*RunSnapshot){
+		"run bytes":           func(snapshot *RunSnapshot) { snapshot.Run.StateVersion++ },
+		"question relation":   func(snapshot *RunSnapshot) { snapshot.Questions[0].ParentQuestionID = "question-parent" },
+		"task relation":       func(snapshot *RunSnapshot) { snapshot.Tasks[0].QuestionID = "question-other" },
+		"attempt relation":    func(snapshot *RunSnapshot) { snapshot.Attempts[0].TaskID = "task-other" },
 		"nested source bytes": func(snapshot *RunSnapshot) { snapshot.Sources[0].Metadata = json.RawMessage(`{"nested":{"rank":2}}`) },
 		"evidence bytes":      func(snapshot *RunSnapshot) { snapshot.Claims[0].Evidence[0].Rationale = "changed" },
 		"evidence parent": func(snapshot *RunSnapshot) {
@@ -65,12 +73,32 @@ func TestCompareShadowSnapshotRepresentationsProvesBytesHashAndNesting(t *testin
 
 func TestManifestPromptShadowAllowsAuthorizedNestedEvidenceOmission(t *testing.T) {
 	live := shadowRepresentationFixture()
-	allowed := map[string]struct{}{"source-1": {}, "observation-1": {}, "claim-1": {}, "claim-2": {}}
+	allowed := map[string]struct{}{
+		"run-1": {}, "question-1": {}, "task-1": {}, "attempt-1": {},
+		"source-1": {}, "observation-1": {}, "claim-1": {}, "claim-2": {},
+	}
 	filtered := filterRunSnapshotByManifest(live, allowed)
 	if len(filtered.Claims[0].Evidence) != 0 {
 		t.Fatal("omitted Evidence Link remained nested in filtered Claim")
 	}
 	if err := verifyManifestPromptShadow("live prompt", "manifest prompt", live, filtered); err != nil {
 		t.Fatalf("authorized Evidence Link omission rejected: %v", err)
+	}
+}
+
+func TestFilterRunSnapshotByManifestExcludesUnauthorizedControlArtifacts(t *testing.T) {
+	live := shadowRepresentationFixture()
+	allowed := map[string]struct{}{"run-1": {}, "question-1": {}, "task-1": {}}
+	filtered := filterRunSnapshotByManifest(live, allowed)
+	if filtered.Run.SessionID != "run-1" || len(filtered.Questions) != 1 || len(filtered.Tasks) != 1 {
+		t.Fatalf("allowed control surface missing: %+v", filtered)
+	}
+	if len(filtered.Attempts) != 0 || len(filtered.Sources) != 0 || len(filtered.Observations) != 0 || len(filtered.Claims) != 0 {
+		t.Fatalf("unauthorized artifact remained in filtered snapshot: %+v", filtered)
+	}
+
+	withoutRun := filterRunSnapshotByManifest(live, map[string]struct{}{})
+	if withoutRun.Run.SessionID != "" {
+		t.Fatalf("unauthorized Run remained in filtered snapshot: %+v", withoutRun.Run)
 	}
 }

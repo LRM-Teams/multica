@@ -1,3 +1,4 @@
+import { useImperativeHandle, type Ref } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -146,10 +147,15 @@ vi.mock("../../navigation/context", () => ({
 // Expose `plainUrls` so a test can assert the channel composer opts into
 // plain-text URLs (#542) — the miss-surface root cause was this prop never
 // reaching the web channel composer.
+const insertQuoteTextMock = vi.hoisted(() => vi.fn());
 vi.mock("../../editor/lazy-content-editor", () => ({
-  ContentEditor: (props: { plainUrls?: boolean }) => (
-    <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />
-  ),
+  ContentEditor: function MockContentEditor(props: {
+    plainUrls?: boolean;
+    ref?: Ref<{ insertQuoteText: (text: string) => void }>;
+  }) {
+    useImperativeHandle(props.ref, () => ({ insertQuoteText: insertQuoteTextMock }));
+    return <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />;
+  },
 }));
 
 vi.mock("../../common/project-picker-button", () => ({
@@ -169,12 +175,14 @@ const listProps = vi.hoisted(() => ({
   current: null as {
     onEditMessage?: (m: ChannelMessage, content: string) => void;
     onOpenThread?: (m: ChannelMessage) => void;
+    onQuoteMessage?: (m: ChannelMessage) => void;
   } | null,
 }));
 vi.mock("./channel-message-list", () => ({
   ChannelMessageList: (props: {
     onEditMessage?: (m: ChannelMessage, content: string) => void;
     onOpenThread?: (m: ChannelMessage) => void;
+    onQuoteMessage?: (m: ChannelMessage) => void;
   }) => {
     listProps.current = props;
     return <div data-testid="message-list" />;
@@ -211,6 +219,7 @@ function renderPage() {
 describe("ChannelsPage — project picker relocated to group settings (#576)", () => {
   beforeEach(() => {
     listProps.current = null;
+    insertQuoteTextMock.mockReset();
     channelFixture.current = {
       id: "chan-1",
       workspace_id: "ws-1",
@@ -232,6 +241,28 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     // The mocked ProjectPickerButton renders as a plain button labeled
     // "project" — it must not appear until the settings surface is opened.
     expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+  });
+
+  it("inserts a message quote as literal editable composer text", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+
+    listProps.current?.onQuoteMessage?.({
+      id: "message-1",
+      channel_id: "chan-1",
+      workspace_id: "ws-1",
+      seq: 1,
+      type: "user",
+      author_id: "user-2",
+      author_name: "Bob",
+      content: "Quoted message",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: null,
+      created_at: "2026-06-17T09:15:00Z",
+    });
+
+    expect(insertQuoteTextMock).toHaveBeenCalledWith("> Quoted message");
   });
 
   it("reveals the project picker inside Channel details → Settings", async () => {

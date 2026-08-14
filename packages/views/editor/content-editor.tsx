@@ -197,6 +197,8 @@ interface ContentEditorRef {
   hasActiveUploads: () => boolean;
   /** Insert plain text at the current selection and focus the editor. */
   insertText: (text: string) => void;
+  /** Append an editable literal quote line plus an empty response paragraph. */
+  insertQuoteText: (text: string) => void;
   /** Insert an empty paragraph before the first body block and focus it. */
   insertBlankLineAtStart: () => void;
   /** Focus the editor and open the issue reference `#` picker. */
@@ -615,6 +617,22 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       },
       insertText: (text: string) => {
         editor?.chain().focus().insertContent(text).run();
+      },
+      insertQuoteText: (text: string) => {
+        if (!editor) return;
+        const quoteContent = text.split("\n").flatMap((line, index) => [
+          ...(index > 0 ? [{ type: "hardBreak" }] : []),
+          ...(line ? [{ type: "text", text: line }] : []),
+        ]);
+        editor
+          .chain()
+          .focus("end")
+          .insertContent([
+            { type: "paragraph", content: quoteContent },
+            { type: "paragraph" },
+          ])
+          .focus("end")
+          .run();
       },
       insertBlankLineAtStart: () => {
         if (!editor) return;

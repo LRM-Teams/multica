@@ -1,6 +1,5 @@
 "use client";
 
-import { X } from "lucide-react";
 import type { Attachment, ChannelMessage, ChannelMessageQuote, ChannelMessageReply } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -15,7 +14,7 @@ import {
   formatMessagePartsPreview,
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
-import type { QuoteTarget } from "./message-quote-types";
+import { buildSelectionQuoteMarkdown } from "../lib/selection-quote";
 
 type QuoteMessage = Pick<
   ChannelMessage | ChannelMessageReply,
@@ -119,6 +118,21 @@ function quoteSummary(
   );
 }
 
+// react-doctor-disable-next-line react-doctor/only-export-components -- quote summary generation shares the exact historical-card projection rules below.
+export function buildEditableMessageQuoteText(
+  message: Pick<QuoteMessage, "content" | "parts" | "attachments">,
+  labels: {
+    attachment: string;
+    attachments: (count: number) => string;
+    image: string;
+    images: (count: number) => string;
+    empty: string;
+  },
+  resolveMention: MentionPreviewResolver,
+): string {
+  return buildSelectionQuoteMarkdown(null, quoteSummary(message, labels, resolveMention));
+}
+
 function quoteTypeLabel(type: QuoteMessage["type"], labels: {
   user: string;
   agent: string;
@@ -184,53 +198,6 @@ function messageFromSnapshot(quote: ChannelMessageQuote): QuoteMessage | null {
     parts: quote.snapshot.parts,
     created_at: quote.snapshot.createdAt,
   };
-}
-
-export function ComposerQuotePreview({
-  quote,
-  onCancel,
-  cancelLabel,
-}: {
-  quote: QuoteTarget;
-  onCancel: () => void;
-  cancelLabel: string;
-}) {
-  const { t } = useT("channels");
-  const { getActorName } = useActorName();
-  const summary = quoteSummary(
-    quote,
-    {
-      attachment: t(($) => $.quote.attachment_summary),
-      attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
-      image: t(($) => $.quote.image_summary),
-      images: (count) => t(($) => $.quote.images_summary, { count }),
-      empty: t(($) => $.quote.empty_summary),
-    },
-    mentionResolverFrom(getActorName),
-  );
-
-  return (
-    <div
-      className="flex items-start gap-2 border-b border-border/35 px-3 py-1.5"
-      data-testid="composer-quote-preview"
-    >
-      <p className="min-w-0 flex-1 truncate text-xs leading-5 text-muted-foreground">
-        <span className="select-none text-muted-foreground/80">{"> "}</span>
-        <span className="font-medium text-foreground/75">{quote.author_name}</span>
-        <span>{": "}</span>
-        <span>{summary}</span>
-      </p>
-      <button
-        type="button"
-        onClick={onCancel}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        aria-label={cancelLabel}
-        title={cancelLabel}
-      >
-        <X className="size-3.5" />
-      </button>
-    </div>
-  );
 }
 
 function AvailableMessageQuoteCard({

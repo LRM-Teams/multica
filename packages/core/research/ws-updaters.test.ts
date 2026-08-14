@@ -28,7 +28,7 @@ describe("applyResearchWSEvent", () => {
     vi.useFakeTimers();
     const qc = makeQc(EMPTY_RESEARCH_SNAPSHOT);
     const event = {
-      type: "research_session:status_changed",
+      type: "research_session:status_changed" as const,
       payload: { session_id: "s1" },
     };
 
@@ -66,7 +66,7 @@ describe("applyResearchWSEvent", () => {
       edges: [],
     });
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:graph_updated",
+      type: "research_session:graph_updated" as const,
       payload: {
         session_id: "s1",
         node: { id: "n2", session_id: "s1", node_type: "probe", title: "p", summary: "", status: "active", actor_agent_id: null, payload: {}, created_at: "", updated_at: "" },
@@ -126,7 +126,7 @@ describe("applyResearchWSEvent", () => {
     } as unknown as QueryClient & { getData: () => unknown };
 
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:graph_updated",
+      type: "research_session:graph_updated" as const,
       payload: {
         session_id: "s1",
         graph_version: 3,
@@ -161,7 +161,7 @@ describe("applyResearchWSEvent", () => {
       nodes: [],
     });
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:graph_updated",
+      type: "research_session:graph_updated" as const,
       payload: {
         session_id: "s1",
         node: { id: "foreign", session_id: "s2", title: "Other session" },
@@ -185,7 +185,7 @@ describe("applyResearchWSEvent", () => {
       messages: [],
     });
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:message",
+      type: "research_session:message" as const,
       payload: {
         session_id: "s1",
         message: { id: "foreign", session_id: "s2", body: "Wrong session" },
@@ -207,11 +207,11 @@ describe("applyResearchWSEvent", () => {
       messages: [],
     });
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:graph_updated",
+      type: "research_session:graph_updated" as const,
       payload: { session_id: "s1", node: { id: "missing-kind" } },
     });
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:message",
+      type: "research_session:message" as const,
       payload: { session_id: "s1", message: { body: "missing id" } },
     });
 
@@ -229,7 +229,7 @@ describe("applyResearchWSEvent", () => {
       session: { ...EMPTY_RESEARCH_SNAPSHOT.session, id: "s1" },
     });
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:status_changed",
+      type: "research_session:status_changed" as const,
       payload: { session_id: "s1", deleted: true },
     });
     expect(qc.getData()).toBeUndefined();
@@ -261,7 +261,7 @@ describe("applyResearchWSEvent", () => {
       invalidateQueries: vi.fn(),
     } as unknown as QueryClient;
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:presence",
+      type: "research_session:presence" as const,
       payload: { session_id: "s1", agent_id: "a1", activity: "reading RFC", updated_at: 100 },
     });
     const presence = store.get(JSON.stringify(researchKeys.presence("ws", "s1"))) as {
@@ -286,7 +286,7 @@ describe("applyResearchWSEvent", () => {
       invalidateQueries: vi.fn(),
     } as unknown as QueryClient;
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:presence",
+      type: "research_session:presence" as const,
       payload: { session_id: "s1", agent_id: "a1", activity: "reading RFC", updated_at: 100 },
     });
     expect(store.get(JSON.stringify(researchKeys.presence("ws", "s1")))).toEqual({
@@ -313,7 +313,7 @@ describe("applyResearchWSEvent", () => {
       ],
     });
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:message",
+      type: "research_session:message" as const,
       payload: {
         session_id: "s1",
         message: {
@@ -351,7 +351,7 @@ describe("applyResearchWSEvent", () => {
       invalidateQueries: vi.fn(),
     } as unknown as QueryClient;
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:presence",
+      type: "research_session:presence" as const,
       payload: { session_id: "s1", agent_id: "a1", activity: "", updated_at: 2 },
     });
     const presence = store.get(JSON.stringify(researchKeys.presence("ws", "s1"))) as Record<
@@ -378,14 +378,14 @@ describe("applyResearchWSEvent", () => {
     } as unknown as QueryClient;
 
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:product_round",
+      type: "research_session:product_round" as const,
       payload: {
         session_id: "s1",
         card: { id: "round-1", round_number: 1, decision: "continue" },
       },
     });
     applyResearchWSEvent(qc, "ws", {
-      type: "research_session:product_round",
+      type: "research_session:product_round" as const,
       payload: {
         session_id: "s1",
         card: { id: "round-1", round_number: 1, decision: "stop_enough" },

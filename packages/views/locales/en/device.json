@@ -6,6 +6,21 @@
     "title": "Link expired or invalid",
     "description": "Go back to your terminal and run \"multica login\" again, or click the link it prints one more time."
   },
+  "enter": {
+    "title": "Enter the code shown on your device",
+    "description": "Type the code from your terminal, then continue.",
+    "label": "Device code",
+    "placeholder": "XXXX-XXXX",
+    "submit": "Continue",
+    "submitting": "Checking...",
+    "invalid": "That code is invalid or expired. Check the terminal and try again."
+  },
+  "match": {
+    "title": "Confirm this device",
+    "code_label": "Code",
+    "instruction": "Check that this matches the code shown on your device.",
+    "checkbox": "This matches the code on my device"
+  },
   "main": {
     "title": "Confirm sign-in",
     "requested_from": "Requested from {{client_hint}}",

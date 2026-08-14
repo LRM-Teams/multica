@@ -74,9 +74,11 @@ Three endpoints, `server/internal/handler/device_auth.go` (new file):
 
 ### `POST /api/device/code` — no auth required
 
-CLI calls this to start a login. Request body: `{}` (optionally
-`{"client_hint": "<hostname>"}` for display purposes only, never trusted for
-authorization).
+RFC 8628 §3.1. `Content-Type: application/x-www-form-urlencoded`.
+Required `client_id` (the official public client is `multica-cli`);
+optional `scope` is accepted and ignored. Missing `client_id` is
+`invalid_request`; unknown `client_id` is `invalid_client`. JSON bodies
+are rejected — there is no `{client_hint}` compatibility.
 
 Generates:
 - `device_code` — 32 random bytes, base64url-encoded (~43 chars). Long,
@@ -101,9 +103,8 @@ TTL), returns:
   "interval": 5
 }
 ```
-Field names match RFC 8628 §3.2 exactly — this is the one place worth being
-literally standard-compliant, since it's the contract a future non-Multica
-device-flow client library could in principle speak against.
+Field names match RFC 8628 §3.2 exactly. The confirmation page stores
+`client_hint` as the official client display name (`Multica CLI`).
 
 ### `GET /api/device/pending?user_code=XXXX-XXXX` — auth required (any logged-in user)
 
@@ -129,8 +130,10 @@ button/double-click shouldn't surface a scary failure.
 
 ### `POST /api/device/token` — no auth required
 
-Body: `{"device_code": "…"}`. CLI polls this. Response mirrors RFC 8628
-§3.5's error vocabulary:
+RFC 8628 §3.4. `Content-Type: application/x-www-form-urlencoded` with
+`grant_type=urn:ietf:params:oauth:grant-type:device_code`, `device_code`,
+and `client_id`. Wrong grant is `unsupported_grant_type`. CLI polls this.
+Response mirrors RFC 8628 §3.5's error vocabulary:
 - `status='pending'` → `400 {"error": "authorization_pending"}`
 - polled again within `interval` seconds of the last poll on this row →
   `400 {"error": "slow_down"}` (and the server-tracked interval backs off,
@@ -138,7 +141,12 @@ Body: `{"device_code": "…"}`. CLI polls this. Response mirrors RFC 8628
   new table.
 - `status='denied'` → `400 {"error": "access_denied"}`
 - expired → `400 {"error": "expired_token"}`
-- `status='approved'` and not yet claimed → `200 {"token": "mul_...", "expires_in_days": 90}`, and the row is marked `claimed_at = now()` — **single-claim**: a second call after a successful claim returns `expired_token`, not the token again. Matches PAT-adjacent secret-handling discipline elsewhere in the codebase (a raw PAT is only ever returned once, at creation) and closes the replay window if `device_code` ever leaked from CLI-side logs.
+- `status='approved'` and not yet claimed → RFC 6749 success
+  `200 {"access_token": "mul_...", "token_type": "Bearer", "expires_in": 7776000}`,
+  and the row is marked `claimed_at = now()` — **single-claim**: a second
+  call after a successful claim returns `expired_token`, not the token
+  again. `access_token` is the existing user PAT. There is no
+  `{token, expires_in_days}` compatibility body.
 
 ## Schema
 
@@ -171,15 +179,15 @@ persisted. `/api/device/token` looks up by `HashToken(device_code)`.
 - New `runAuthLoginDevice(cmd)` replaces `runAuthLoginBrowser` as the
   **default** path for `multica login` (no flags) — this is the fix for
   Frank's actual complaint, not an opt-in third mode.
-  - `POST /api/device/code`, print `user_code` formatted for readability,
-    open `verification_uri_complete` in a browser same as today
-    (`openBrowser`), print the URL as a fallback for headless machines
-    exactly like the existing flow already does for the workspace-creation
-    wait.
-  - Poll `POST /api/device/token` on `interval` (honoring `slow_down` by
-    increasing the local interval, same idea as the workspace-creation
-    poll's `pollRequestTimeout` floor), deadline = `expires_in`.
-  - On success: same save-and-verify tail as today
+  - `POST /api/device/code` as form-urlencoded `client_id=multica-cli`,
+    print `verification_uri` + `user_code` (RFC figure 2), open
+    `verification_uri_complete` as the §3.3.1 shortcut, print the URL as
+    a fallback for headless machines.
+  - Poll `POST /api/device/token` as form-urlencoded
+    `grant_type=urn:ietf:params:oauth:grant-type:device_code` +
+    `device_code` + `client_id` on `interval` (honoring `slow_down` by
+    increasing the local interval), deadline = `expires_in`.
+  - On success: persist `access_token` via the same save-and-verify tail
     (`cli.SaveCLIConfigForProfile` + `GET /api/me`).
 - `--token` flag path (`runAuthLoginToken`) is **kept as-is** — still the
   right answer for CI/scripted/non-interactive setups where there's no human
@@ -200,13 +208,14 @@ persisted. `/api/device/token` looks up by `HashToken(device_code)`.
 
 ## Frontend (coordination point, not this PR)
 
-A confirmation page at `/device` (query param `user_code` pre-fills the
-input when arriving via `verification_uri_complete`): `GET
-/api/device/pending?user_code=...` to show "CLI on `<client_hint>` wants to
-sign in", Confirm/Deny buttons hitting `POST /api/device/confirm`. This is
-Felix/Wren's side — flagging the exact contract here so it can be built
-against these three response shapes without waiting on backend to land
-first (all three endpoints' shapes are frozen in this spec).
+A confirmation page at `/device`:
+- Bare `verification_uri` (no query): the user types `user_code` and
+  submits (RFC 8628 §3.3).
+- `verification_uri_complete`: the page displays the `user_code` and
+  requires the user to confirm it matches the device before Approve/Deny
+  (RFC 8628 §3.3.1 / §5.4).
+`GET /api/device/pending?user_code=...` loads display info; Confirm/Deny
+hit `POST /api/device/confirm`.
 
 ## Security notes
 

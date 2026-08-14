@@ -1455,6 +1455,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/projects", h.ListAgentProjects)
 				r.Get("/projects/{id}/resources", h.ListAgentProjectResources)
 				r.Get("/workspace", h.GetAgentWorkspace)
+				r.Get("/workspace-info", h.GetAgentWorkspaceInfo)
 				r.Get("/workspaces/{id}", h.GetAgentWorkspaceByID)
 				r.Get("/agents", h.ListAgentDirectoryAgents)
 				// Squad retired (Frank 2026-07-28): no /api/agent/squads*.

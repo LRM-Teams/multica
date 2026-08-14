@@ -46,7 +46,7 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/daemon/deregister":
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/api/daemon/ws" && r.URL.Query().Get("workspace_id") == workspaceID:
+		case r.URL.Path == "/api/daemon/connect" && r.URL.Query().Get("workspace_id") == workspaceID:
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
@@ -186,7 +186,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/daemon/deregister":
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/api/daemon/ws":
+		case r.URL.Path == "/api/daemon/connect":
 			workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
@@ -339,7 +339,7 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *te
 		case r.URL.Path == "/api/daemon/register":
 			registerCalls.Add(1)
 			http.Error(w, `{"error":"at least one runtime is required"}`, http.StatusBadRequest)
-		case r.URL.Path == "/api/daemon/ws":
+		case r.URL.Path == "/api/daemon/connect":
 			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {

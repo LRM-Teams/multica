@@ -14,7 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// DaemonConnection is the Raft 1.0.16 analogue: one live /api/daemon/ws
+// DaemonConnection is the Raft 1.0.16 analogue: one live /api/daemon/connect
 // socket for one DaemonCore / Workspace Binding. Socket open is Computer
 // liveness for this Workspace. WorkspaceRunner owns commands on top of it.
 type DaemonConnection struct {
@@ -95,7 +95,7 @@ func daemonConnectionURL(baseURL, workspaceID string) (string, error) {
 	default:
 		return "", fmt.Errorf("daemon server URL must use http, https, ws, or wss")
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/ws"
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/connect"
 	q := u.Query()
 	q.Set("workspace_id", workspaceID)
 	u.RawQuery = q.Encode()

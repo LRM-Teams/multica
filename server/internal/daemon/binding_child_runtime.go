@@ -126,9 +126,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		if temporaryProfileAuth {
 			defer d.client.SetToken("")
 		}
-		if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil {
-			return nil, fmt.Errorf("validate Workspace Binding %q: %w", workspaceID, err)
-		}
 		if len(d.cfg.Agents) == 0 {
 			if temporaryProfileAuth {
 				return nil, fmt.Errorf("repair previous-package Workspace Binding %q: no provider Runtime can rotate its credential", workspaceID)

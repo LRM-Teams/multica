@@ -179,6 +179,25 @@ func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http
 		writeResearchV6Error(w, err)
 		return
 	}
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		limit, parseErr := strconv.Atoi(rawLimit)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "snapshot limit must be an integer")
+			return
+		}
+		snap, err = paginateResearchV6Snapshot(snap, limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+		if err != nil {
+			if strings.Contains(err.Error(), "resync") {
+				writeError(w, http.StatusConflict, err.Error())
+			} else {
+				writeError(w, http.StatusBadRequest, err.Error())
+			}
+			return
+		}
+	} else if strings.TrimSpace(r.URL.Query().Get("cursor")) != "" {
+		writeError(w, http.StatusBadRequest, "snapshot cursor requires limit")
+		return
+	}
 	writeJSON(w, 200, snap)
 }
 func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.Request) {

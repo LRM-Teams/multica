@@ -249,6 +249,32 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 	case <-time.After(time.Second):
 		t.Fatal("legacy control-plane Runner could not become ready to receive its machine upgrade")
 	}
+	replayRequest, err := json.Marshal(protocol.Message{Type: "agent:attachment.replay_request", Payload: mustMarshalRaw(struct {
+		RuntimeCursors map[string]int64 `json:"runtimeCursors"`
+	}{RuntimeCursors: map[string]int64{"runtime-1": 3}})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, replayRequest); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("legacy control-plane Runner did not finish its retired replay handshake: %v", err)
+	}
+	var replayEnd protocol.Message
+	if err := json.Unmarshal(raw, &replayEnd); err != nil {
+		t.Fatal(err)
+	}
+	var replayEndPayload struct {
+		RuntimeCursors map[string]int64 `json:"runtimeCursors"`
+	}
+	if replayEnd.Type != "agent:attachment.replay_end" || json.Unmarshal(replayEnd.Payload, &replayEndPayload) != nil || replayEndPayload.RuntimeCursors["runtime-1"] != 3 {
+		t.Fatalf("replay end = %s, want echoed legacy cursor", raw)
+	}
 	heartbeat, err := json.Marshal(protocol.Message{Type: protocol.EventDaemonHeartbeat, Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{
 		RuntimeID: "runtime-1", ComputerGeneration: 7,
 	})})
@@ -261,7 +287,7 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	_, raw, err := conn.ReadMessage()
+	_, raw, err = conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("legacy control-plane Runner did not receive machine upgrade: %v", err)
 	}

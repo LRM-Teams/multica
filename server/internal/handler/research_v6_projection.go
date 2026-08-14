@@ -318,7 +318,9 @@ func mapResearchV6NodeWithSemantics(runID string, node ResearchGraphNodeResp, ty
 	kind := "generic"
 	entityID := node.ID
 	var detail map[string]any
-	_ = json.Unmarshal(node.Payload, &detail)
+	if len(node.Payload) == 0 || json.Unmarshal(node.Payload, &detail) != nil || detail == nil {
+		return researchV6ProjectionNode{}, fmt.Errorf("research V6 source node %q has malformed payload", node.ID)
+	}
 	if raw, ok := detail["kind"].(string); ok && raw != "" {
 		kind = normalizeResearchV6EntityKind(raw)
 	}

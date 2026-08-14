@@ -76,6 +76,7 @@ const (
 	txOpArtifactWithdraw          researchTxOperation = "artifact.withdraw"
 	txOpInquiryGraphCreate        researchTxOperation = "inquiry_graph.create"
 	txOpStrategyPromotion         researchTxOperation = "strategy.promote"
+	txOpTaskInquiryTargetsBind    researchTxOperation = "task_inquiry_targets.bind"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

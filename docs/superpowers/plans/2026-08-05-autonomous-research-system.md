@@ -1091,6 +1091,7 @@ surface 矩阵仍未完成。
 
 ### N. 全量迁移、投影与生产验收
 
+- [x] N-gate-1：建立 V6 生产激活审计 seam，要求 Inquiry、Corpus、Integration、Dispute、Portfolio、Team Formation、Report/Evaluation、production decoder、canonical persistence、恢复、完整 Projection、隐藏 Oracle 系统评测、影子流量对照和已演练的 V5 previous version 全部提交带 ID/版本的证据；一次返回稳定排序的完整缺口。该审计只报告是否允许激活，不修改 V5 默认值或 supported decoder，实际 V6 激活仍待全部退出证据完成后的独立变更。
 - [ ] 每个 schema 改动都有 up/down migration、新库迁移和 down/up 回放。
 - [ ] 为历史 V1–V5 Run 建立只读投影和可恢复路径；不伪造历史 Inquiry/Search/Dispute 数据。
 - [ ] 更新 Run Snapshot，使前端能展示 Question、Hypothesis、Branch、Integration、Dispute、Search 和修订详情。

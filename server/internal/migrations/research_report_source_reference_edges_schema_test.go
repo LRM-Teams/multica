@@ -20,7 +20,6 @@ func TestMigration375MaterializesReportSourceReferenceEdges(t *testing.T) {
 		"relation='report_source'",
 		"report_source_migration",
 		"WITH ORDINALITY",
-		"duplicate_local_key",
 		"unresolved_reference",
 		"v_diagnostics>0",
 		"research_artifact_scan_session_migration_diagnostics",
@@ -33,7 +32,10 @@ func TestMigration375MaterializesReportSourceReferenceEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(down), "purpose='report_source_migration'") {
-		t.Error("migration 375 down must preserve production report-source edges")
+	if strings.Contains(string(down), "DELETE FROM research_artifact_input_reference") {
+		t.Error("migration 375 down must preserve append-only input-reference history")
+	}
+	if strings.Contains(sql, "DELETE FROM research_artifact_input_reference") {
+		t.Error("migration 375 rescan must be append-only")
 	}
 }

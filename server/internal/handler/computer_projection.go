@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // computerConnectionResponse is the Workspace-scoped Computer projection.
@@ -60,8 +61,9 @@ ORDER BY b.created_at, b.daemon_id`, parseUUID(workspaceID))
 			writeError(w, http.StatusInternalServerError, "failed to read Computer connection")
 			return
 		}
-		runnerConnected := h.DaemonHub != nil && h.DaemonHub.HasWorkspaceRunner(daemonID, workspaceID)
-		result = append(result, computerConnectionProjection(daemonID, ownerID, lastSeen, runnerConnected))
+		hb := &db.DaemonHeartbeat{LastSeenAt: lastSeen}
+		connected := h.computerConnectedByRunner(daemonID, workspaceID, hb, time.Now())
+		result = append(result, computerConnectionProjection(daemonID, ownerID, lastSeen, connected))
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list Computers")

@@ -16,9 +16,10 @@ func computerConnected(hb *db.DaemonHeartbeat, now time.Time) bool {
 	return service.DaemonConnected(hb, now)
 }
 
-// computerConnectedByRunner is Raft 1.0.16 liveness: the current DaemonCore
-// Workspace Runner socket for this Computer/Workspace. HTTP heartbeat freshness
-// remains only for older residents.
+// computerConnectedByRunner is the one Computer liveness decision for both
+// Computer list and runtime projections. A current DaemonCore Workspace Runner
+// socket is authoritative; HTTP heartbeat freshness is only the fallback when
+// Hub or identity is unavailable (legacy / test composition).
 func (h *Handler) computerConnectedByRunner(daemonID, workspaceID string, hb *db.DaemonHeartbeat, now time.Time) bool {
 	if h != nil && h.DaemonHub != nil && strings.TrimSpace(daemonID) != "" && strings.TrimSpace(workspaceID) != "" {
 		return h.DaemonHub.HasWorkspaceRunner(daemonID, workspaceID)

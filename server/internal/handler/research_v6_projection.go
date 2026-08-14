@@ -120,6 +120,38 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 		}
 		edges = append(edges, researchV6ProjectionEdge{ID: runID + ":edge:" + e.ID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: e.EdgeType})
 	}
+	canonicalNodes, canonicalEdges, err := h.loadResearchV6InquiryProjection(r.Context(), workspaceID, runID)
+	if err != nil {
+		return researchV6Snapshot{}, err
+	}
+	nodeByID := make(map[string]researchV6ProjectionNode, len(nodes)+len(canonicalNodes))
+	for _, node := range nodes {
+		nodeByID[node.ID] = node
+	}
+	for _, node := range canonicalNodes {
+		nodeByID[node.ID] = node
+	}
+	nodes = nodes[:0]
+	for _, node := range nodeByID {
+		nodes = append(nodes, node)
+	}
+	edgeByID := make(map[string]researchV6ProjectionEdge, len(edges)+len(canonicalEdges))
+	for _, edge := range edges {
+		edgeByID[edge.ID] = edge
+	}
+	for _, edge := range canonicalEdges {
+		if _, fromOK := nodeByID[edge.FromNodeID]; !fromOK {
+			continue
+		}
+		if _, toOK := nodeByID[edge.ToNodeID]; !toOK {
+			continue
+		}
+		edgeByID[edge.ID] = edge
+	}
+	edges = edges[:0]
+	for _, edge := range edgeByID {
+		edges = append(edges, edge)
+	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
 	nodeBytes, _ := json.Marshal(nodes)

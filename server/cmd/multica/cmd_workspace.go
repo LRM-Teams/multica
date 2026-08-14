@@ -611,42 +611,60 @@ func runWorkspaceInfo(cmd *cobra.Command, args []string) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
-	// Workspace header.
-	var ws map[string]any
-	wsPath := "/api/workspaces/" + wsID
+	var (
+		ws       map[string]any
+		agents   []map[string]any
+		runtimes []map[string]any
+		tasks    []map[string]any
+	)
+	includeArchived, _ := cmd.Flags().GetBool("include-archived")
 	if isAgentAPIToken(cmd) {
-		wsPath = "/api/agent/workspace"
-	}
-	if err := client.GetJSON(ctx, wsPath, &ws); err != nil {
-		return fmt.Errorf("get workspace: %w", err)
-	}
+		// Agent credentials cannot borrow their owner's human permissions.
+		// Fetch the whole narrow operational snapshot from one dedicated,
+		// read-only data-plane endpoint instead of touching human APIs.
+		params := url.Values{}
+		if includeArchived {
+			params.Set("include_archived", "true")
+		}
+		path := "/api/agent/workspace-info"
+		if query := params.Encode(); query != "" {
+			path += "?" + query
+		}
+		var overview struct {
+			Workspace map[string]any   `json:"workspace"`
+			Agents    []map[string]any `json:"agents"`
+			Computers []map[string]any `json:"computers"`
+			Tasks     []map[string]any `json:"tasks"`
+		}
+		if err := client.GetJSON(ctx, path, &overview); err != nil {
+			return fmt.Errorf("get workspace info: %w", err)
+		}
+		ws, agents, runtimes, tasks = overview.Workspace, overview.Agents, overview.Computers, overview.Tasks
+	} else {
+		if err := client.GetJSON(ctx, "/api/workspaces/"+wsID, &ws); err != nil {
+			return fmt.Errorf("get workspace: %w", err)
+		}
 
-	// Agents (member-scoped; every workspace member can list).
-	var agents []map[string]any
-	agentParams := url.Values{}
-	agentParams.Set("workspace_id", wsID)
-	if v, _ := cmd.Flags().GetBool("include-archived"); v {
-		agentParams.Set("include_archived", "true")
-	}
-	agentPath := "/api/agents?" + agentParams.Encode()
-	if err := client.GetJSON(ctx, agentPath, &agents); err != nil {
-		return fmt.Errorf("list agents: %w", err)
-	}
+		// Agents (member-scoped; every human workspace member can list).
+		agentParams := url.Values{}
+		agentParams.Set("workspace_id", wsID)
+		if includeArchived {
+			agentParams.Set("include_archived", "true")
+		}
+		if err := client.GetJSON(ctx, "/api/agents?"+agentParams.Encode(), &agents); err != nil {
+			return fmt.Errorf("list agents: %w", err)
+		}
 
-	// Computers / runtimes (visible set for this member — private runtimes
-	// owned by others are omitted by the server; that is intentional).
-	var runtimes []map[string]any
-	if err := client.GetJSON(ctx, "/api/runtimes", &runtimes); err != nil {
-		return fmt.Errorf("list runtimes: %w", err)
-	}
+		// Computers / runtimes use the human member's existing visibility set.
+		if err := client.GetJSON(ctx, "/api/runtimes", &runtimes); err != nil {
+			return fmt.Errorf("list runtimes: %w", err)
+		}
 
-	// Sticky failure text: latest failed outcome per agent when no active
-	// task. Soft-fail — if the snapshot endpoint is unavailable on an older
-	// server we still print agents/computers without error columns filled.
-	var tasks []map[string]any
-	if err := client.GetJSON(ctx, "/api/agent-task-snapshot", &tasks); err != nil {
-		// Keep going; sticky errors just stay empty.
-		tasks = nil
+		// Sticky failure text is decorative for the human path. Older servers
+		// may not expose the snapshot yet, so preserve the existing soft-fail.
+		if err := client.GetJSON(ctx, "/api/agent-task-snapshot", &tasks); err != nil {
+			tasks = nil
+		}
 	}
 	sticky := stickyTaskErrorsByAgent(tasks)
 

@@ -1,6 +1,9 @@
 package researchrun
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ArtifactEntityKind identifies one canonical Research artifact passport.
 type ArtifactEntityKind string
@@ -114,6 +117,88 @@ const ArtifactCanonicalizationVersion = "research-artifact-c14n-v1"
 // LegacyV1V5CompatPolicy is the named ordinary-task admission exception for backfilled rows.
 const LegacyV1V5CompatPolicy = "legacy-v1-v5-compat-v1"
 
+type SupersedeArtifactInput struct {
+	WorkspaceID         string
+	SessionID           string
+	SuccessorVersionID  string
+	SupersededVersionID string
+	DecisionID          string
+	Reason              string
+}
+
+type ArtifactSupersession struct {
+	ID                     string
+	SuccessorVersionID     string
+	SupersededVersionID    string
+	SupersededArtifactID   string
+	OldEligibilityRevision int64
+	NewEligibilityRevision int64
+	PolicyWatermark        int64
+	DecisionID             string
+	Reason                 string
+}
+
+func (in SupersedeArtifactInput) validate() error {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.SessionID) == "" ||
+		strings.TrimSpace(in.SuccessorVersionID) == "" || strings.TrimSpace(in.SupersededVersionID) == "" ||
+		strings.TrimSpace(in.DecisionID) == "" {
+		return fmt.Errorf("%w: supersession scope, versions, and decision are required", ErrInvalidContract)
+	}
+	if strings.TrimSpace(in.Reason) == "" {
+		return fmt.Errorf("%w: supersession reason is required", ErrInvalidContract)
+	}
+	if in.SuccessorVersionID == in.SupersededVersionID {
+		return fmt.Errorf("%w: an artifact version cannot supersede itself", ErrInvalidContract)
+	}
+	return nil
+}
+
+// WithdrawArtifactInput identifies one passport whose future ordinary
+// admission is being revoked. DecisionID is optional because a lifecycle event
+// is the canonical reciprocal fact for withdrawal; callers may bind a scoped
+// Decision when the owning workflow has one.
+type WithdrawArtifactInput struct {
+	WorkspaceID string
+	SessionID   string
+	ArtifactID  string
+	DecisionID  string
+	ActorType   string
+	ActorID     string
+	Reason      string
+}
+
+// ArtifactWithdrawal is the durable receipt for one lifecycle transition.
+type ArtifactWithdrawal struct {
+	ArtifactID             string
+	EntityKind             ArtifactEntityKind
+	OldLifecycle           ArtifactLifecycleStatus
+	NewLifecycle           ArtifactLifecycleStatus
+	OldEligibilityRevision int64
+	NewEligibilityRevision int64
+	PolicyWatermark        int64
+	LifecycleEventID       string
+	DecisionID             string
+}
+
+func (in WithdrawArtifactInput) validate() error {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.SessionID) == "" || strings.TrimSpace(in.ArtifactID) == "" {
+		return fmt.Errorf("%w: withdrawal scope is required", ErrInvalidContract)
+	}
+	if strings.TrimSpace(in.Reason) == "" {
+		return fmt.Errorf("%w: withdrawal reason is required", ErrInvalidContract)
+	}
+	switch in.ActorType {
+	case "system":
+	case "user", "agent":
+		if strings.TrimSpace(in.ActorID) == "" {
+			return fmt.Errorf("%w: withdrawal actor id is required", ErrInvalidContract)
+		}
+	default:
+		return fmt.Errorf("%w: invalid withdrawal actor type %q", ErrInvalidContract, in.ActorType)
+	}
+	return nil
+}
+
 func ParseArtifactEntityKind(raw string) (ArtifactEntityKind, error) {
 	kind := ArtifactEntityKind(raw)
 	if _, ok := registeredArtifactEntityKinds[kind]; !ok {
@@ -195,6 +280,8 @@ func IntegrityGuardTriggerNames() []string {
 // LinkPolicyGuardTriggerNames lists migration 324 supersession/lifecycle policy guards.
 func LinkPolicyGuardTriggerNames() []string {
 	return []string{
+		"research_artifact_supersession_cycle_guard",
+		"research_artifact_supersession_append_only_guard",
 		"research_artifact_supersession_to_policy_guard",
 		"research_artifact_policy_mutation_to_supersession_guard",
 		"research_artifact_lifecycle_event_to_policy_guard",
@@ -202,10 +289,23 @@ func LinkPolicyGuardTriggerNames() []string {
 	}
 }
 
+// AppendOnlyGuardTriggerNames lists the stable immutable ledger guards.
+func AppendOnlyGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_version_immutable_guard",
+		"research_artifact_policy_mutation_append_only_guard",
+		"research_artifact_lifecycle_event_append_only_guard",
+	}
+}
+
 // MigrationDiagnosticReasonCodes lists migration 325 diagnostic reason registry.
 func MigrationDiagnosticReasonCodes() []string {
 	return []string{
+		"ambiguous_local_key",
 		"cross_scope_reference",
+		"cyclic_local_reference",
+		"dangling_local_key",
+		"duplicate_local_key",
 		"invalid_match_decision",
 		"malformed_uuid",
 		"unknown_schema",
@@ -218,6 +318,7 @@ func MigrationRelationshipParserNames() []string {
 	return []string{
 		"research_message_match_decision",
 		"research_decision_inputs",
+		"research_report_structured",
 		"research_run_event_payload",
 	}
 }

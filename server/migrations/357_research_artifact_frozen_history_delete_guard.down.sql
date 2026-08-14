@@ -1,0 +1,11 @@
+DROP TRIGGER IF EXISTS research_artifact_input_reference_delete_guard
+  ON research_artifact_input_reference;
+DROP TRIGGER IF EXISTS research_artifact_context_omission_delete_guard
+  ON research_artifact_context_omission;
+DROP TRIGGER IF EXISTS research_artifact_context_entry_delete_guard
+  ON research_artifact_context_entry;
+DROP TRIGGER IF EXISTS research_artifact_context_manifest_delete_guard
+  ON research_artifact_context_manifest;
+DROP TRIGGER IF EXISTS research_artifact_policy_grant_delete_guard
+  ON research_artifact_policy_grant;
+DROP FUNCTION IF EXISTS research_artifact_frozen_history_delete_guard_fn();

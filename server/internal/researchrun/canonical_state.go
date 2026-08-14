@@ -151,6 +151,10 @@ var canonicalStateQueries = []canonicalStateQuery{
 	{name: "observations", query: canonicalRowsQuery("research_observation", "workspace_id, session_id, created_at")},
 	{name: "claims", query: canonicalRowsQuery("research_claim", "workspace_id, session_id, created_at, updated_at")},
 	{name: "claim_evidence", query: canonicalRowsQuery("research_claim_evidence", "workspace_id, session_id, created_at, updated_at")},
+	{name: "hypotheses", query: canonicalRowsQuery("research_hypothesis", "workspace_id, session_id, created_at, updated_at")},
+	{name: "branches", query: canonicalRowsQuery("research_branch", "workspace_id, session_id, created_at, updated_at")},
+	{name: "insights", query: canonicalRowsQuery("research_insight", "workspace_id, session_id, created_at, updated_at")},
+	{name: "inquiry_edges", query: canonicalRowsQuery("research_inquiry_edge", "workspace_id, session_id, created_at")},
 	{name: "decisions", query: canonicalRowsQuery("research_decision", "id, workspace_id, session_id, created_at")},
 	{name: "reports", query: canonicalRowsQuery("research_report", "workspace_id, session_id, created_at, updated_at")},
 	{name: "report_claims", query: `

@@ -1220,6 +1220,178 @@ func (q *Queries) ListResearchSessions(ctx context.Context, workspaceID pgtype.U
 	return items, nil
 }
 
+const listResearchSessionProgress = `-- name: ListResearchSessionProgress :many
+WITH task_progress AS (
+  SELECT t.session_id, count(*) FILTER (WHERE t.status <> 'obsolete') AS task_total,
+    count(*) FILTER (WHERE t.status = 'succeeded') AS task_completed,
+    count(*) FILTER (WHERE t.status IN ('dispatching', 'running')) AS task_running,
+    count(*) FILTER (WHERE t.status IN ('blocked', 'failed')) AS task_blocked
+  FROM research_task t JOIN research_session s ON s.id = t.session_id
+  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version
+  GROUP BY t.session_id
+), evidence_progress AS (
+  SELECT session_id, count(*) AS evidence_count,
+    count(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS today_evidence_count FROM research_observation
+  WHERE workspace_id = $1 AND verification_status <> 'rejected' GROUP BY session_id
+), node_progress AS (
+  SELECT session_id, count(*) AS node_count FROM research_graph_node WHERE workspace_id = $1 GROUP BY session_id
+), question_progress AS (
+  SELECT q.session_id, count(*) AS open_question_count
+  FROM research_question q JOIN research_session s ON s.id = q.session_id
+  WHERE q.workspace_id = $1 AND q.goal_version = s.goal_version AND q.plan_version = s.plan_version
+    AND q.status IN ('open', 'in_progress', 'unresolved') GROUP BY q.session_id
+)
+SELECT s.id AS session_id, COALESCE(tp.task_total, 0)::bigint AS task_total,
+  COALESCE(tp.task_completed, 0)::bigint AS task_completed,
+  COALESCE(tp.task_running, 0)::bigint AS task_running,
+  COALESCE(tp.task_blocked, 0)::bigint AS task_blocked,
+  COALESCE(ep.evidence_count, 0)::bigint AS evidence_count,
+  COALESCE(ep.today_evidence_count, 0)::bigint AS today_evidence_count,
+  COALESCE(np.node_count, 0)::bigint AS node_count,
+  COALESCE(qp.open_question_count, 0)::bigint AS open_question_count,
+  (s.status = 'awaiting_user_confirm') AS awaiting_user_action,
+  COALESCE((CASE WHEN s.status = 'awaiting_user_confirm' THEN 'user_confirmation'
+    WHEN COALESCE(tp.task_blocked, 0) > 0 THEN 'blocked_tasks'
+    WHEN s.status = 'failed' AND length(s.last_error) > 0 THEN 'recoverable_failure'
+    WHEN s.status = 'running' AND COALESCE(tp.task_running, 0) = 0 AND s.last_progress_at < now() - interval '15 minutes' THEN 'stalled' ELSE NULL END)::text, '')::text AS attention_kind,
+  COALESCE((s.status = 'failed' AND length(s.last_error) > 0) OR COALESCE(tp.task_blocked, 0) > 0, false)::boolean AS recoverable,
+  s.last_progress_at
+FROM research_session s
+LEFT JOIN task_progress tp ON tp.session_id = s.id
+LEFT JOIN evidence_progress ep ON ep.session_id = s.id
+LEFT JOIN node_progress np ON np.session_id = s.id
+LEFT JOIN question_progress qp ON qp.session_id = s.id
+WHERE s.workspace_id = $1 ORDER BY s.updated_at DESC
+`
+
+type ListResearchSessionProgressRow struct {
+	SessionID          pgtype.UUID        `json:"session_id"`
+	TaskTotal          int64              `json:"task_total"`
+	TaskCompleted      int64              `json:"task_completed"`
+	TaskRunning        int64              `json:"task_running"`
+	TaskBlocked        int64              `json:"task_blocked"`
+	EvidenceCount      int64              `json:"evidence_count"`
+	TodayEvidenceCount int64              `json:"today_evidence_count"`
+	NodeCount          int64              `json:"node_count"`
+	OpenQuestionCount  int64              `json:"open_question_count"`
+	AwaitingUserAction bool               `json:"awaiting_user_action"`
+	AttentionKind      string             `json:"attention_kind"`
+	Recoverable        bool               `json:"recoverable"`
+	LastProgressAt     pgtype.Timestamptz `json:"last_progress_at"`
+}
+
+func (q *Queries) ListResearchSessionProgress(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchSessionProgressRow, error) {
+	rows, err := q.db.Query(ctx, listResearchSessionProgress, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListResearchSessionProgressRow{}
+	for rows.Next() {
+		var i ListResearchSessionProgressRow
+		if err := rows.Scan(&i.SessionID, &i.TaskTotal, &i.TaskCompleted, &i.TaskRunning, &i.TaskBlocked, &i.EvidenceCount, &i.TodayEvidenceCount, &i.NodeCount, &i.OpenQuestionCount, &i.AwaitingUserAction, &i.AttentionKind, &i.Recoverable, &i.LastProgressAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchActiveAssignments = `-- name: ListResearchActiveAssignments :many
+WITH ranked AS (
+  SELECT t.session_id, t.assigned_agent_id AS agent_id, COALESCE(fm.role, '')::text AS role,
+    t.id AS task_id, t.objective AS task_title, t.status AS state,
+    row_number() OVER (PARTITION BY t.session_id ORDER BY t.priority DESC, t.started_at DESC NULLS LAST, t.created_at DESC) AS position
+  FROM research_task t JOIN research_session s ON s.id = t.session_id
+  LEFT JOIN research_fleet_member fm ON fm.fleet_id = s.fleet_id AND fm.agent_id = t.assigned_agent_id
+  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version
+    AND t.status IN ('dispatching', 'running') AND t.assigned_agent_id IS NOT NULL
+)
+SELECT session_id, agent_id, role, task_id, task_title, state FROM ranked
+WHERE position <= 4 ORDER BY session_id, position
+`
+
+type ListResearchActiveAssignmentsRow struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	AgentID   pgtype.UUID `json:"agent_id"`
+	Role      string      `json:"role"`
+	TaskID    pgtype.UUID `json:"task_id"`
+	TaskTitle string      `json:"task_title"`
+	State     string      `json:"state"`
+}
+
+func (q *Queries) ListResearchActiveAssignments(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchActiveAssignmentsRow, error) {
+	rows, err := q.db.Query(ctx, listResearchActiveAssignments, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListResearchActiveAssignmentsRow{}
+	for rows.Next() {
+		var i ListResearchActiveAssignmentsRow
+		if err := rows.Scan(&i.SessionID, &i.AgentID, &i.Role, &i.TaskID, &i.TaskTitle, &i.State); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchLatestOutcomes = `-- name: ListResearchLatestOutcomes :many
+WITH outcomes AS (
+  SELECT c.session_id, c.id, 0 AS outcome_priority, 'claim'::text AS kind, c.claim_text AS title, NULLIF(c.resolution, '')::text AS summary, c.status AS verification_state, c.created_at
+  FROM research_claim c JOIN research_session s ON s.id = c.session_id
+  WHERE c.workspace_id = $1 AND c.goal_version = s.goal_version AND c.plan_version = s.plan_version AND c.status = 'supported'
+  UNION ALL
+  SELECT o.session_id, o.id, 1, 'observation'::text, COALESCE(NULLIF(o.interpretation, ''), NULLIF(o.quote, ''), 'Verified observation'), NULLIF(o.quote, '')::text, o.verification_status, o.created_at
+  FROM research_observation o WHERE o.workspace_id = $1 AND o.verification_status = 'verified'
+  UNION ALL
+  SELECT t.session_id, t.id, 2, 'task'::text, t.objective, NULLIF(t.terminal_reason, '')::text, t.status, t.completed_at
+  FROM research_task t JOIN research_session s ON s.id = t.session_id
+  WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version AND t.status = 'succeeded' AND t.completed_at IS NOT NULL
+), ranked AS (
+  SELECT outcomes.*, row_number() OVER (PARTITION BY session_id ORDER BY outcome_priority, created_at DESC, id) AS position FROM outcomes
+)
+SELECT session_id, id, kind, title, COALESCE(summary, '')::text AS summary, verification_state, created_at FROM ranked
+WHERE position <= 3 ORDER BY session_id, position
+`
+
+type ListResearchLatestOutcomesRow struct {
+	SessionID         pgtype.UUID        `json:"session_id"`
+	ID                pgtype.UUID        `json:"id"`
+	Kind              string             `json:"kind"`
+	Title             string             `json:"title"`
+	Summary           string             `json:"summary"`
+	VerificationState string             `json:"verification_state"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListResearchLatestOutcomes(ctx context.Context, workspaceID pgtype.UUID) ([]ListResearchLatestOutcomesRow, error) {
+	rows, err := q.db.Query(ctx, listResearchLatestOutcomes, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListResearchLatestOutcomesRow{}
+	for rows.Next() {
+		var i ListResearchLatestOutcomesRow
+		if err := rows.Scan(&i.SessionID, &i.ID, &i.Kind, &i.Title, &i.Summary, &i.VerificationState, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listResearchSources = `-- name: ListResearchSources :many
 SELECT id, workspace_id, session_id, url, title, source_class, credibility_weight, stance, relevance, summary, excerpt, payload, created_at, updated_at FROM research_source
 WHERE session_id = $1 AND workspace_id = $2

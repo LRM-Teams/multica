@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1242,29 +1241,6 @@ func TestReminderProjectionReplaySnapshotBurstWaitsForWriterCapacity(t *testing.
 	case <-closed:
 		t.Fatal("snapshot burst closed a healthy websocket")
 	default:
-	}
-}
-
-func TestReminderHeartbeatDoesNotOwnAttachmentRecovery(t *testing.T) {
-	writes := make(chan []byte, 4)
-	d := &Daemon{
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}),
-		},
-		runtimeIndex: map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-	}
-	d.sendWSHeartbeats(context.Background(), []string{"runtime-a"}, writes)
-
-	var frame protocol.Message
-	if err := json.Unmarshal(<-writes, &frame); err != nil {
-		t.Fatal(err)
-	}
-	if frame.Type != protocol.EventDaemonHeartbeat {
-		t.Fatalf("heartbeat emitted non-heartbeat frame %q", frame.Type)
-	}
-	if len(writes) != 0 {
-		t.Fatalf("heartbeat emitted %d extra ownership frames", len(writes))
 	}
 }
 

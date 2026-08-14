@@ -158,6 +158,18 @@ export function v6FixtureSnapshot(): ResearchV6Snapshot {
       entity_id: "i1",
       title: "Cost trade-off is volume-dependent",
       importance: 0.9,
+      level: "xxl",
+      cluster_id: "cluster-cost",
+      parent_id: null,
+      round: 2,
+      confidence: 0.84,
+      document_count: 46,
+      conclusion_count: 4,
+      derived_from: v6NodeId("claim", "c1"),
+      merged_from: [v6NodeId("claim", "c1"), v6NodeId("claim", "c2")],
+      superseded_by: null,
+      restart_of: null,
+      invalidated_by: null,
     }),
     v6Node({
       entity_kind: "unknown_future_kind",
@@ -181,6 +193,15 @@ export function v6FixtureSnapshot(): ResearchV6Snapshot {
     graph_content_hash: { nodes: "n", edges: "e" },
     nodes,
     edges,
+    clusters: [{
+      id: "cluster-cost",
+      label: "Cost evidence",
+      cluster_type: "stable_result",
+      member_node_ids: [v6NodeId("insight", "i1")],
+      confidence: 0.84,
+      document_count: 46,
+      conclusion_count: 4,
+    }],
     next_cursor: null,
   };
 }
@@ -207,6 +228,8 @@ export function v6FixtureDelta(): ResearchV6Delta {
     // the snapshot nodes), not bare entity refs.
     node_tombstones: [v6NodeId("claim", "c1")],
     edge_tombstones: ["e1", "e3", "e4", "e6"],
+    cluster_upserts: [],
+    cluster_tombstones: [],
     affected_root_node_ids: [v6NodeId("question", "q1"), v6NodeId("insight", "i1")],
     transition_kind: "insight_staled",
   };

@@ -9,79 +9,81 @@ import (
 type ArtifactEntityKind string
 
 const (
-	ArtifactKindRunSession              ArtifactEntityKind = "run_session"
-	ArtifactKindContractRevision        ArtifactEntityKind = "contract_revision"
-	ArtifactKindMethodDecision          ArtifactEntityKind = "method_decision"
-	ArtifactKindQuestion                ArtifactEntityKind = "question"
-	ArtifactKindTask                    ArtifactEntityKind = "task"
-	ArtifactKindAttempt                 ArtifactEntityKind = "attempt"
-	ArtifactKindResultArtifact          ArtifactEntityKind = "result_artifact"
-	ArtifactKindLegacySource            ArtifactEntityKind = "legacy_source"
-	ArtifactKindSourceSnapshot          ArtifactEntityKind = "source_snapshot"
-	ArtifactKindObservation             ArtifactEntityKind = "observation"
-	ArtifactKindClaim                   ArtifactEntityKind = "claim"
-	ArtifactKindEvidenceLink            ArtifactEntityKind = "evidence_link"
-	ArtifactKindReportRevision          ArtifactEntityKind = "report_revision"
-	ArtifactKindEvaluationDecision      ArtifactEntityKind = "evaluation_decision"
-	ArtifactKindStageEvaluation         ArtifactEntityKind = "stage_evaluation"
-	ArtifactKindResearchMessage         ArtifactEntityKind = "research_message"
-	ArtifactKindProductRoundDecision    ArtifactEntityKind = "product_round_decision"
-	ArtifactKindContextManifest         ArtifactEntityKind = "context_manifest"
-	ArtifactKindRunEvent                ArtifactEntityKind = "run_event"
-	ArtifactKindGraphNode               ArtifactEntityKind = "graph_node"
-	ArtifactKindGraphEdge               ArtifactEntityKind = "graph_edge"
-	ArtifactKindHypothesis              ArtifactEntityKind = "hypothesis"
-	ArtifactKindBranch                  ArtifactEntityKind = "branch"
-	ArtifactKindInsight                 ArtifactEntityKind = "insight"
-	ArtifactKindInquiryEdge             ArtifactEntityKind = "inquiry_edge"
-	ArtifactKindSearchPlan              ArtifactEntityKind = "search_plan"
-	ArtifactKindQueryExecution          ArtifactEntityKind = "query_execution"
-	ArtifactKindSourceCandidate         ArtifactEntityKind = "source_candidate"
-	ArtifactKindScreeningDecision       ArtifactEntityKind = "screening_decision"
-	ArtifactKindIntegrationContribution ArtifactEntityKind = "integration_contribution"
-	ArtifactKindIntegrationRound        ArtifactEntityKind = "integration_round"
-	ArtifactKindDispute                 ArtifactEntityKind = "dispute"
-	ArtifactKindDisputePosition         ArtifactEntityKind = "dispute_position"
-	ArtifactKindDeliberation            ArtifactEntityKind = "deliberation"
-	ArtifactKindDeliberationTurn        ArtifactEntityKind = "deliberation_turn"
+	ArtifactKindRunSession               ArtifactEntityKind = "run_session"
+	ArtifactKindContractRevision         ArtifactEntityKind = "contract_revision"
+	ArtifactKindMethodDecision           ArtifactEntityKind = "method_decision"
+	ArtifactKindQuestion                 ArtifactEntityKind = "question"
+	ArtifactKindTask                     ArtifactEntityKind = "task"
+	ArtifactKindAttempt                  ArtifactEntityKind = "attempt"
+	ArtifactKindResultArtifact           ArtifactEntityKind = "result_artifact"
+	ArtifactKindLegacySource             ArtifactEntityKind = "legacy_source"
+	ArtifactKindSourceSnapshot           ArtifactEntityKind = "source_snapshot"
+	ArtifactKindObservation              ArtifactEntityKind = "observation"
+	ArtifactKindClaim                    ArtifactEntityKind = "claim"
+	ArtifactKindEvidenceLink             ArtifactEntityKind = "evidence_link"
+	ArtifactKindReportRevision           ArtifactEntityKind = "report_revision"
+	ArtifactKindEvaluationDecision       ArtifactEntityKind = "evaluation_decision"
+	ArtifactKindStageEvaluation          ArtifactEntityKind = "stage_evaluation"
+	ArtifactKindResearchMessage          ArtifactEntityKind = "research_message"
+	ArtifactKindProductRoundDecision     ArtifactEntityKind = "product_round_decision"
+	ArtifactKindContextManifest          ArtifactEntityKind = "context_manifest"
+	ArtifactKindRunEvent                 ArtifactEntityKind = "run_event"
+	ArtifactKindGraphNode                ArtifactEntityKind = "graph_node"
+	ArtifactKindGraphEdge                ArtifactEntityKind = "graph_edge"
+	ArtifactKindHypothesis               ArtifactEntityKind = "hypothesis"
+	ArtifactKindBranch                   ArtifactEntityKind = "branch"
+	ArtifactKindInsight                  ArtifactEntityKind = "insight"
+	ArtifactKindInquiryEdge              ArtifactEntityKind = "inquiry_edge"
+	ArtifactKindSearchPlan               ArtifactEntityKind = "search_plan"
+	ArtifactKindQueryExecution           ArtifactEntityKind = "query_execution"
+	ArtifactKindSourceCandidate          ArtifactEntityKind = "source_candidate"
+	ArtifactKindScreeningDecision        ArtifactEntityKind = "screening_decision"
+	ArtifactKindIntegrationContribution  ArtifactEntityKind = "integration_contribution"
+	ArtifactKindIntegrationRound         ArtifactEntityKind = "integration_round"
+	ArtifactKindDispute                  ArtifactEntityKind = "dispute"
+	ArtifactKindDisputePosition          ArtifactEntityKind = "dispute_position"
+	ArtifactKindDeliberation             ArtifactEntityKind = "deliberation"
+	ArtifactKindDeliberationTurn         ArtifactEntityKind = "deliberation_turn"
+	ArtifactKindResearchDirectorIdentity ArtifactEntityKind = "research_director_identity"
 )
 
 var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
-	ArtifactKindRunSession:              {},
-	ArtifactKindContractRevision:        {},
-	ArtifactKindMethodDecision:          {},
-	ArtifactKindQuestion:                {},
-	ArtifactKindTask:                    {},
-	ArtifactKindAttempt:                 {},
-	ArtifactKindResultArtifact:          {},
-	ArtifactKindLegacySource:            {},
-	ArtifactKindSourceSnapshot:          {},
-	ArtifactKindObservation:             {},
-	ArtifactKindClaim:                   {},
-	ArtifactKindEvidenceLink:            {},
-	ArtifactKindReportRevision:          {},
-	ArtifactKindEvaluationDecision:      {},
-	ArtifactKindStageEvaluation:         {},
-	ArtifactKindResearchMessage:         {},
-	ArtifactKindProductRoundDecision:    {},
-	ArtifactKindContextManifest:         {},
-	ArtifactKindRunEvent:                {},
-	ArtifactKindGraphNode:               {},
-	ArtifactKindGraphEdge:               {},
-	ArtifactKindHypothesis:              {},
-	ArtifactKindBranch:                  {},
-	ArtifactKindInsight:                 {},
-	ArtifactKindInquiryEdge:             {},
-	ArtifactKindSearchPlan:              {},
-	ArtifactKindQueryExecution:          {},
-	ArtifactKindSourceCandidate:         {},
-	ArtifactKindScreeningDecision:       {},
-	ArtifactKindIntegrationContribution: {},
-	ArtifactKindIntegrationRound:        {},
-	ArtifactKindDispute:                 {},
-	ArtifactKindDisputePosition:         {},
-	ArtifactKindDeliberation:            {},
-	ArtifactKindDeliberationTurn:        {},
+	ArtifactKindRunSession:               {},
+	ArtifactKindContractRevision:         {},
+	ArtifactKindMethodDecision:           {},
+	ArtifactKindQuestion:                 {},
+	ArtifactKindTask:                     {},
+	ArtifactKindAttempt:                  {},
+	ArtifactKindResultArtifact:           {},
+	ArtifactKindLegacySource:             {},
+	ArtifactKindSourceSnapshot:           {},
+	ArtifactKindObservation:              {},
+	ArtifactKindClaim:                    {},
+	ArtifactKindEvidenceLink:             {},
+	ArtifactKindReportRevision:           {},
+	ArtifactKindEvaluationDecision:       {},
+	ArtifactKindStageEvaluation:          {},
+	ArtifactKindResearchMessage:          {},
+	ArtifactKindProductRoundDecision:     {},
+	ArtifactKindContextManifest:          {},
+	ArtifactKindRunEvent:                 {},
+	ArtifactKindGraphNode:                {},
+	ArtifactKindGraphEdge:                {},
+	ArtifactKindHypothesis:               {},
+	ArtifactKindBranch:                   {},
+	ArtifactKindInsight:                  {},
+	ArtifactKindInquiryEdge:              {},
+	ArtifactKindSearchPlan:               {},
+	ArtifactKindQueryExecution:           {},
+	ArtifactKindSourceCandidate:          {},
+	ArtifactKindScreeningDecision:        {},
+	ArtifactKindIntegrationContribution:  {},
+	ArtifactKindIntegrationRound:         {},
+	ArtifactKindDispute:                  {},
+	ArtifactKindDisputePosition:          {},
+	ArtifactKindDeliberation:             {},
+	ArtifactKindDeliberationTurn:         {},
+	ArtifactKindResearchDirectorIdentity: {},
 }
 
 // ArtifactLifecycleStatus is passport admissibility, not domain status.

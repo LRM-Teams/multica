@@ -835,12 +835,31 @@ func runSessionArtifactContent(persisted json.RawMessage) map[string]any {
 }
 
 func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {
+	var directorID, directorAgentID, directorAssignedBy, directorReason string
+	var directorVersion int32
+	var directorCreatedAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT id::text,identity_version,agent_id::text,assigned_by_user_id::text,reason,created_at
+		FROM research_director_identity WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND identity_version=1`, workspaceID, sessionID).Scan(
+		&directorID, &directorVersion, &directorAgentID, &directorAssignedBy, &directorReason, &directorCreatedAt); err != nil {
+		return err
+	}
+	directorHash, err := ArtifactContentHash(ArtifactKindResearchDirectorIdentity, map[string]any{"identity_version": directorVersion,
+		"agent_id": directorAgentID, "assigned_by_user_id": directorAssignedBy, "reason": directorReason})
+	if err != nil {
+		return err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{WorkspaceID: workspaceID, SessionID: sessionID, EntityID: directorID,
+		Kind: ArtifactKindResearchDirectorIdentity, SourceCreatedAt: &directorCreatedAt, GoalVersion: &directorVersion,
+		ProvenanceCompleteness: ArtifactProvenanceComplete, AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: directorHash, SchemaName: string(ArtifactKindResearchDirectorIdentity), SchemaVersion: OrchestratorVersionV6}); err != nil {
+		return err
+	}
 	var contractID string
 	var contractCreatedAt time.Time
 	var contractGoalVersion int
 	var goal, audience, freshness, language, authoredBy, reason string
 	var scope, sourcePolicy, runLimits []byte
-	err := tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT id::text, goal_version, goal, scope, audience, freshness, language,
 		       source_policy, run_limits, authored_by::text, reason, created_at
 		FROM research_contract_revision

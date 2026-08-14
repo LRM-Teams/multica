@@ -41,7 +41,9 @@ func materializeAcceptedV6DeliberationTx(ctx context.Context, tx pgx.Tx, state a
 		return err
 	}
 	var directorID string
-	if err = tx.QueryRow(ctx, `SELECT lead_agent_id::text FROM research_fleet WHERE workspace_id=$1::uuid AND id=$2::uuid`, state.workspaceID, state.run.FleetID).Scan(&directorID); err != nil {
+	var directorIdentityVersion int
+	if err = tx.QueryRow(ctx, `SELECT agent_id::text,identity_version FROM research_director_identity
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY identity_version DESC LIMIT 1 FOR UPDATE`, state.workspaceID, state.run.SessionID).Scan(&directorID, &directorIdentityVersion); err != nil {
 		return err
 	}
 	deliberationID := uuid.NewSHA1(uuid.MustParse(disputeID), []byte(deliberationLimitsPolicyV1)).String()
@@ -141,10 +143,64 @@ func materializeAcceptedV6DeliberationTx(ctx context.Context, tx pgx.Tx, state a
 		strings.TrimSpace(result.Envelope.StatusUpdates[0].Reason), state.workspaceID, state.run.SessionID, disputeID, disputeStatus); err != nil {
 		return err
 	}
+	adjudicationTaskID := ""
+	if escalation != nil {
+		adjudicationTaskID, err = createDirectorAdjudicationTaskTx(ctx, tx, state, disputeID, deliberationID, directorID, directorIdentityVersion, escalation.Reason)
+		if err != nil {
+			return err
+		}
+	}
 	_, err = appendEvent(ctx, tx, state.workspaceID, state.run.SessionID, "v6_deliberation_materialized", "v6-deliberation:"+state.attemptID, "agent", agentID,
 		map[string]any{"attempt_id": state.attemptID, "deliberation_id": deliberationID, "dispute_id": disputeID, "round_count": stateValue.Round,
-			"status": stateValue.Status, "dispute_status": after, "escalation": escalation})
+			"status": stateValue.Status, "dispute_status": after, "director_agent_id": directorID, "director_identity_version": directorIdentityVersion,
+			"escalation": escalation, "adjudication_task_id": adjudicationTaskID})
 	return err
+}
+
+func createDirectorAdjudicationTaskTx(ctx context.Context, tx pgx.Tx, state acceptedResultState, disputeID, deliberationID, directorID string, identityVersion int, reason string) (string, error) {
+	var role string
+	if err := tx.QueryRow(ctx, `SELECT role FROM research_fleet_member WHERE workspace_id=$1::uuid AND fleet_id=$2::uuid AND agent_id=$3::uuid
+		AND status='active' AND is_lead=true`, state.workspaceID, state.run.FleetID, directorID).Scan(&role); err != nil {
+		if err == pgx.ErrNoRows {
+			return "", fmt.Errorf("%w: pinned Research Director is not the active Fleet lead", ErrInvalidTransition)
+		}
+		return "", err
+	}
+	taskID := uuid.NewSHA1(uuid.MustParse(disputeID), []byte(fmt.Sprintf("director-adjudication/%d", identityVersion))).String()
+	clientKey := "lead-adjudication:" + disputeID
+	criteria, _ := json.Marshal(map[string]any{"mode": "director_adjudication", "dispute_id": disputeID, "deliberation_id": deliberationID,
+		"director_agent_id": directorID, "director_identity_version": identityVersion, "deadlock_reason": reason,
+		"required_result": "evidence_bound_adjudication"})
+	if _, err := tx.Exec(ctx, `INSERT INTO research_task
+		(id,workspace_id,session_id,parent_task_id,client_key,kind,objective,required_capability,expected_result,acceptance_criteria,priority,status,
+		 assigned_agent_id,goal_version,plan_version,max_attempts,timeout_seconds,ready_at)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'deliberate',$6,$7,'research_deliberation_v6',$8::jsonb,1,'ready',$9::uuid,$10,$11,1,$12,now())
+		ON CONFLICT (session_id,goal_version,plan_version,client_key) DO NOTHING`, taskID, state.workspaceID, state.run.SessionID, state.task.ID,
+		clientKey, "Adjudicate the deadlocked Dispute from canonical positions and evidence without overriding any position by authority alone. Deadlock reason: "+reason,
+		role, criteria, directorID, state.run.GoalVersion, state.targetPlan, state.run.Config.TaskTimeoutSeconds); err != nil {
+		return "", err
+	}
+	if err := registerProductionTaskPassportTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, state.attemptID, state.outputAccess); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO research_task_inquiry_target
+		(workspace_id,session_id,task_id,target_kind,target_entity_id,goal_version,plan_version,bound_by_attempt_id)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'dispute',$4::uuid,$5,$6,$7::uuid) ON CONFLICT DO NOTHING`, state.workspaceID,
+		state.run.SessionID, taskID, disputeID, state.run.GoalVersion, state.targetPlan, state.attemptID); err != nil {
+		return "", err
+	}
+	if err := persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, ArtifactKindTask,
+		disputeID, ArtifactKindDispute, "adjudicates", "director_adjudication", 0); err != nil {
+		return "", err
+	}
+	if err := persistTypedArtifactInputReferenceTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID, ArtifactKindTask,
+		deliberationID, ArtifactKindDeliberation, "reviews_deadlock", "director_adjudication", 1); err != nil {
+		return "", err
+	}
+	if err := persistMaterializedTaskRelationshipReferencesTx(ctx, tx, state.workspaceID, state.run.SessionID, taskID); err != nil {
+		return "", err
+	}
+	return taskID, nil
 }
 
 func loadDeliberationParticipantsTx(ctx context.Context, tx pgx.Tx, state acceptedResultState, disputeID string) ([]string, error) {

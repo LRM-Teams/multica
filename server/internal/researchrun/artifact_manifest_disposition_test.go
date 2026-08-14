@@ -17,7 +17,7 @@ func TestDispatchManifestCandidateKindsPartitionEntireRegistry(t *testing.T) {
 			t.Fatalf("kind=%s candidate=%t want=%t", kind, got, want)
 		}
 	}
-	if len(registeredArtifactEntityKinds) != 35 {
+	if len(registeredArtifactEntityKinds) != 36 {
 		t.Fatalf("registered kinds=%d; update the full-domain disposition matrix", len(registeredArtifactEntityKinds))
 	}
 }

@@ -177,6 +177,35 @@ func persistResultArtifactInputReferencesTx(
 	return err
 }
 
+func manifestInputVersionSetHashTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, manifestID string,
+) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT artifact_version_id::text
+		FROM research_artifact_context_entry
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND manifest_id=$3::uuid
+		ORDER BY artifact_version_id::text
+	`, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	return contentHashFromPayload([]byte(strings.Join(ids, "\n"))), nil
+}
+
 type manifestArtifactSet struct {
 	ArtifactIDs map[string]struct{}
 	Hash        string
@@ -684,6 +713,7 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 		    AND m.attempt_id = $3::uuid
 		    AND (
 		      e.eligibility_revision <> p.eligibility_revision
+		      OR v.version <> p.current_version
 		      OR p.lifecycle_status NOT IN ('registered', 'accepted')
 		    )
 		)

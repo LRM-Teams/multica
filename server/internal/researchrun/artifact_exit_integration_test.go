@@ -470,26 +470,54 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	if err != nil || len(tasks) == 0 {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
+	// This is the unchanged V1-V5 Gate rubric output before D freezes it. The
+	// manifest must authorize and preserve these exact bytes rather than run a
+	// second, D-specific rubric.
+	rubricGate, err := store.EvaluateGate(ctx, run.SessionID)
+	if err != nil {
+		t.Fatalf("EvaluateGate before dispatch: %v", err)
+	}
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
 	attempt, _, err := store.CreateDispatchIntent(ctx, input)
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
 	var headerBytes []byte
+	var headerHash, policyVersion string
 	if err = pool.QueryRow(ctx, `
-		SELECT gate_snapshot_bytes
+		SELECT gate_snapshot_bytes, gate_snapshot_hash, policy_version
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&headerBytes); err != nil {
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&headerBytes,
+		&headerHash,
+		&policyVersion,
+	); err != nil {
 		t.Fatalf("load gate snapshot: %v", err)
 	}
 	if len(headerBytes) == 0 {
 		t.Fatal("expected frozen gate snapshot bytes on manifest")
 	}
+	if headerHash != contentHashFromPayload(headerBytes) {
+		t.Fatalf("gate snapshot hash=%q want=%q", headerHash, contentHashFromPayload(headerBytes))
+	}
+	if policyVersion != LegacyV1V5CompatPolicy {
+		t.Fatalf("manifest policy version=%q want=%q", policyVersion, LegacyV1V5CompatPolicy)
+	}
+	var persistedGate GateResult
+	if err := json.Unmarshal(headerBytes, &persistedGate); err != nil {
+		t.Fatalf("decode persisted gate snapshot: %v", err)
+	}
+	if !gateResultsEqual(rubricGate, persistedGate) {
+		t.Fatalf("D changed V1-V5 gate rubric before=%+v frozen=%+v", rubricGate, persistedGate)
+	}
 
 	frozen, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
 	if err != nil {
 		t.Fatalf("TaskContextForAttempt: %v", err)
+	}
+	if !gateResultsEqual(persistedGate, frozen.Gate) {
+		t.Fatalf("task context did not use manifest gate bytes persisted=%+v context=%+v", persistedGate, frozen.Gate)
 	}
 	frozenCount, ok := gateFindingCount(frozen.Gate, "tasks_incomplete")
 	if !ok {

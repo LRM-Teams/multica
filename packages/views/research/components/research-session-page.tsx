@@ -72,6 +72,7 @@ import {
   dimensionFamilyOf,
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
+import { guardPrematureGateProjection } from "../lib/research-projection-contract";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
 import {
@@ -115,6 +116,7 @@ import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
+import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
 import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionBoundary } from "./research-session-boundary";
 import {
@@ -248,7 +250,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       },
     },
   });
-  const displayTypedGraph = useMemo(
+  const rawDisplayTypedGraph = useMemo(
     () => {
       if (projectionGateway.status === "error") return undefined;
       return projectionGateway.source === "v6" && projectionGateway.canvas
@@ -264,6 +266,13 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       typedGraph,
     ],
   );
+  const guardedProjection = guardPrematureGateProjection({
+    graph: rawDisplayTypedGraph,
+    runId: sessionId,
+    stage: data?.session.current_stage ?? "",
+    sessionStatus: data?.session.status ?? "",
+  });
+  const displayTypedGraph = guardedProjection.graph;
   const canvasUsesV5 = projectionGateway.status === "v5";
   const canvasLoading =
     projectionGateway.status === "probing" ||
@@ -931,6 +940,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           phase={interruptPhase}
           onRetry={retrySessionInterrupt}
         />
+      ) : null}
+
+      {guardedProjection.diagnostic ? (
+        <ResearchProjectionContractNotice diagnostic={guardedProjection.diagnostic} />
       ) : null}
 
       {/* LRM-1112: S1–S4 timeline lives inside the single header surface (L2). */}

@@ -1019,13 +1019,11 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
-D-access-5 证据：D5/V6 图 Projector 不再复用 human live `Snapshot`，而通过内部
-`SnapshotForProjection` capability 只读取 Run、Contract、Method、Question、Task、Attempt、
-Claim 与 Gate。其 Store seam 在编译期不具备 Source、Observation、evaluation-private、
-Attempt frozen context 或 Artifact representation 读取能力，返回模型也验证这些 surface
-始终为空；未提供该 capability 时 Projector fail closed。Projector 是无 Agent 身份的系统
-principal，当前没有 grant-bearing revocation 生命周期，因此 §15.23 的 evaluator 与完整撤权
-矩阵仍保持 partial，不以本切片冒充全部收口。
+D-access-4 证据：normal 与 evaluation grant 撤销后的 `TaskContextForAttempt` 现在同时返回
+稳定 `ErrArtifactAccessDenied` 和兼容 `ErrInvalidTransition`，冻结 Manifest/Entry 历史仍不可删；
+Agent HTTP surface 将该领域拒绝映射为不泄漏 Run/Attempt/Agent/Passport 身份的 403，而不是
+内部 500。普通 Agent、grader 与 HTTP 撤权路径已闭合；projector principal 的独立 surface
+及撤权矩阵仍未完成，因此 §15.23 保持 partial。
 
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 

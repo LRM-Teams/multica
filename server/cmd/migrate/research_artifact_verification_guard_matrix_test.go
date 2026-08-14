@@ -129,6 +129,19 @@ func TestResearchArtifactVerificationGuards321BothConstraintModes(t *testing.T) 
 	`, workspaceID, sessionID); err != nil {
 		t.Fatalf("seed policy state: %v", err)
 	}
+	if _, err = conn.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET eligibility_revision = eligibility_revision + 10
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, workspaceID, sessionID); err != nil {
+		t.Fatalf("detach backfill mutations from verification coupling: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		DELETE FROM research_artifact_policy_mutation
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, workspaceID, sessionID); err != nil {
+		t.Fatalf("clear backfill mutations: %v", err)
+	}
 
 	commitOrForce := func(tx pgx.Tx, immediate bool) error {
 		if immediate {
@@ -213,6 +226,7 @@ func TestResearchArtifactVerificationGuards321BothConstraintModes(t *testing.T) 
 					t.Fatalf("update verification without policy transition: %v", execErr)
 				}
 				assertConstraint(t, commitOrForce(domainOnlyTx, mode.immediate), fixture.domainConstraint)
+				_ = domainOnlyTx.Rollback(ctx)
 
 				ledgerOnlyTx, beginErr := conn.Begin(ctx)
 				if beginErr != nil {

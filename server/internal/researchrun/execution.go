@@ -383,9 +383,6 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 				ProbeLeaseDuration:   probeLeaseDuration(currentTask, snapshot.Run.Config),
 				ExpectedStateVersion: snapshot.Run.StateVersion, Request: request,
 			})
-			if errors.Is(err, ErrInvalidTransition) {
-				break
-			}
 			if errors.Is(err, ErrCircuitUnavailable) {
 				health, err = module.store.EvaluateExecutionTargets(ctx, run.WorkspaceID, members)
 				if err != nil {
@@ -399,6 +396,9 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 				continue
 			}
 			if err != nil {
+				// A dispatch contract failure is not evidence that the current
+				// research plan has finished. Propagate it so reconcile retries or
+				// applies failure policy instead of falling through to Delivery Gate.
 				return outcome, err
 			}
 			activeByAgent[agentID]++

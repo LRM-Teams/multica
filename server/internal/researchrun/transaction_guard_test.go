@@ -113,7 +113,7 @@ func TestMigratedTransactionsUseResearchTransactionRunner(t *testing.T) {
 		{file: "postgres_gate.go", function: "RecordBudgetExhausted", wantBegins: 1, wantCommits: 2},
 		{file: "postgres_gate.go", function: "MarkEventProjected", wantBegins: 1, wantCommits: 1},
 		{file: "postgres_gate.go", function: "MarkEventProjectionFailed", wantBegins: 1, wantCommits: 1},
-		{file: "postgres_artifact_lifecycle.go", function: "ApplyArtifactLifecycleChange", wantBegins: 1, wantCommits: 2},
+		{file: "postgres_artifact_lifecycle_module.go", function: "ApplyArtifactLifecycleChange", wantBegins: 1, wantCommits: 2},
 		{file: "postgres_gate.go", function: "reconcileAttemptRuntime", wantBegins: 1, wantCommits: 3},
 		{file: "postgres_circuit_routing.go", function: "DeferTaskForExecutionTarget", wantBegins: 1, wantCommits: 2},
 		{file: "postgres_circuit.go", function: "RecordCircuitFailure", wantBegins: 1, wantCommits: 2},

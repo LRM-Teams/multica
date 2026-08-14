@@ -40,6 +40,13 @@ vi.mock("../../i18n/use-t", () => ({
           q4: "Example four",
         },
         empty_cta: "Start research",
+        home_empty: {
+          path: "Research path",
+          ask: "Ask",
+          assign: "Assign",
+          verify: "Verify",
+          deliver: "Deliver",
+        },
         node: { goal: "Goal", probe: "Probe" },
         logic: { lane: { source: "Source" } },
         session_page: {

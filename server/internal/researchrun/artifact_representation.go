@@ -355,8 +355,8 @@ func freezeArtifactRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID
 	return nil
 }
 
-func loadFrozenLegacyContextPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (FrozenLegacyContext, error) {
-	rows, err := pool.Query(ctx, `
+func loadFrozenLegacyContext(ctx context.Context, query frozenRepresentationQuerier, workspaceID, sessionID, attemptID string) (FrozenLegacyContext, error) {
+	rows, err := query.Query(ctx, `
 		SELECT p.entity_kind, e.representation_bytes, e.representation_hash
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
@@ -467,6 +467,14 @@ func loadFrozenLegacyContextPool(ctx context.Context, pool *pgxpool.Pool, worksp
 		out.Report = &report
 	}
 	return out, nil
+}
+
+func loadFrozenLegacyContextPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (FrozenLegacyContext, error) {
+	return loadFrozenLegacyContext(ctx, pool, workspaceID, sessionID, attemptID)
+}
+
+func loadFrozenLegacyContextTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, attemptID string) (FrozenLegacyContext, error) {
+	return loadFrozenLegacyContext(ctx, tx, workspaceID, sessionID, attemptID)
 }
 
 type frozenDurableContext struct {
@@ -726,8 +734,8 @@ func loadFrozenEvaluationPrivateTx(ctx context.Context, tx pgx.Tx, workspaceID, 
 	return out, rows.Err()
 }
 
-func loadFrozenEvidenceRepresentationsPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]SourceSnapshotView, []Observation, []Claim, error) {
-	rows, err := pool.Query(ctx, `SELECT p.entity_kind, e.representation, e.representation_bytes, e.representation_hash FROM research_artifact_context_entry e JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id) JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id) JOIN research_artifact_passport p ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id) WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.attempt_id=$3::uuid AND p.entity_kind IN ('source_snapshot','observation','claim') ORDER BY e.ordinal`, workspaceID, sessionID, attemptID)
+func loadFrozenEvidenceRepresentations(ctx context.Context, query frozenRepresentationQuerier, workspaceID, sessionID, attemptID string) ([]SourceSnapshotView, []Observation, []Claim, error) {
+	rows, err := query.Query(ctx, `SELECT p.entity_kind, e.representation, e.representation_bytes, e.representation_hash FROM research_artifact_context_entry e JOIN research_artifact_context_manifest m ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id) JOIN research_artifact_version v ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id) JOIN research_artifact_passport p ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id) WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.attempt_id=$3::uuid AND p.entity_kind IN ('source_snapshot','observation','claim') ORDER BY e.ordinal`, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -765,6 +773,14 @@ func loadFrozenEvidenceRepresentationsPool(ctx context.Context, pool *pgxpool.Po
 		}
 	}
 	return sources, observations, claims, rows.Err()
+}
+
+func loadFrozenEvidenceRepresentationsPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]SourceSnapshotView, []Observation, []Claim, error) {
+	return loadFrozenEvidenceRepresentations(ctx, pool, workspaceID, sessionID, attemptID)
+}
+
+func loadFrozenEvidenceRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, attemptID string) ([]SourceSnapshotView, []Observation, []Claim, error) {
+	return loadFrozenEvidenceRepresentations(ctx, tx, workspaceID, sessionID, attemptID)
 }
 
 func decodeFrozenRepresentation(representation string, encoded []byte, storedHash string, target any) error {

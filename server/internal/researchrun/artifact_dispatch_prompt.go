@@ -97,6 +97,22 @@ func rebindDispatchPromptForManifestTx(
 	filtered.Questions = frozenDurable.Questions
 	filtered.Tasks = frozenDurable.Tasks
 	filtered.Attempts = frozenDurable.Attempts
+	frozenSources, frozenObservations, frozenClaims, err := loadFrozenEvidenceRepresentationsTx(
+		ctx, tx, workspaceID, in.SessionID, attempt.ID,
+	)
+	if err != nil {
+		return DispatchRequest{}, err
+	}
+	filtered.Sources = frozenSources
+	filtered.Observations = frozenObservations
+	filtered.Claims = frozenClaims
+	frozenLegacy, err := loadFrozenLegacyContextTx(
+		ctx, tx, workspaceID, in.SessionID, attempt.ID,
+	)
+	if err != nil {
+		return DispatchRequest{}, err
+	}
+	filtered.LegacyContext = &frozenLegacy
 	filtered.EvaluationPrivate, err = loadFrozenEvaluationPrivateTx(ctx, tx, workspaceID, in.SessionID, manifestID)
 	if err != nil {
 		return DispatchRequest{}, err

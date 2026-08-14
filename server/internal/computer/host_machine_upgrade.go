@@ -225,6 +225,11 @@ func (upgrade *hostMachineUpgrade) execute(ctx context.Context, runtime hostBind
 			return
 		}
 		succeeded = true
+		upgrade.mu.Lock()
+		if upgrade.activeID == pending.ID {
+			upgrade.activeID = ""
+		}
+		upgrade.mu.Unlock()
 		return
 	}
 	journal := hostMachineUpgradeJournal{
@@ -625,8 +630,12 @@ func (upgrade *hostMachineUpgrade) currentRuntime(identity BindingChildIdentity,
 	if !ok || report.Identity != identity || report.DaemonToken == "" || (!report.ExpiresAt.IsZero() && time.Now().After(report.ExpiresAt)) {
 		return hostBindingRuntime{}, "", false
 	}
+	requestedRuntimeID := strings.TrimSpace(runtimeID)
 	for _, runtime := range report.Runtimes {
-		if runtime.ID == strings.TrimSpace(runtimeID) && runtime.WorkspaceID == identity.WorkspaceID {
+		// Connect-socket machine actions are scoped to the authenticated Binding,
+		// not to one Runtime heartbeat. Resolve an omitted Runtime ID only within
+		// that current child; an explicit ID must still match exactly.
+		if runtime.WorkspaceID == identity.WorkspaceID && (requestedRuntimeID == "" || runtime.ID == requestedRuntimeID) {
 			return runtime, report.DaemonToken, true
 		}
 	}

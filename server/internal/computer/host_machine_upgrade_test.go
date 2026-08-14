@@ -63,20 +63,23 @@ func TestHostMachineUpgradeAcceptanceRequiresCompleteComputerSet(t *testing.T) {
 func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testing.T) {
 	const controlToken = "owner-secret"
 	var humanIntentCalls atomic.Int32
-	attested := make(chan struct{}, 1)
+	attested := make(chan string, 2)
 	acceptedGeneration := "generation-a"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/daemons/computer-a/upgrades":
 			humanIntentCalls.Add(1)
 			http.Error(w, "Host must not create human lifecycle intents", http.StatusForbidden)
-		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept",
+			"/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-b/accept":
+			operationID := strings.Split(r.URL.Path, "/")[6]
 			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
-				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
+				ID: operationID, Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
 				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
 			})
-		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
-			attested <- struct{}{}
+		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest",
+			"/api/daemon/computer/machine-upgrades/upgrade-b/attest":
+			attested <- strings.Split(r.URL.Path, "/")[5]
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.NotFound(w, r)
@@ -120,26 +123,67 @@ func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testi
 	}})
 	host.upgrade = upgrade
 
-	body, err := json.Marshal(protocol.ComputerUpgradePayload{
-		RequestID: "request-a", OperationID: "upgrade-a", TargetVersion: "v1.0.0",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPost, "/machine-upgrades", bytes.NewReader(body))
-	request.Header.Set("X-Multica-Control-Token", controlToken)
-	response := httptest.NewRecorder()
-	upgrade.localRequestHandler()(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("local delivery status = %d body=%s", response.Code, response.Body.String())
-	}
-	select {
-	case <-attested:
-	case <-time.After(time.Second):
-		t.Fatal("local delivery did not execute and attest the server operation")
+	for _, operationID := range []string{"upgrade-a", "upgrade-b"} {
+		body, err := json.Marshal(protocol.ComputerUpgradePayload{
+			RequestID: "request-" + operationID, OperationID: operationID, TargetVersion: "v1.0.0",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/machine-upgrades", bytes.NewReader(body))
+		request.Header.Set("X-Multica-Control-Token", controlToken)
+		response := httptest.NewRecorder()
+		upgrade.localRequestHandler()(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("local delivery %s status = %d body=%s", operationID, response.Code, response.Body.String())
+		}
+		select {
+		case got := <-attested:
+			if got != operationID {
+				t.Fatalf("attested operation = %q, want %q", got, operationID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("local delivery did not execute and attest %s", operationID)
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			upgrade.mu.Lock()
+			activeID := upgrade.activeID
+			upgrade.mu.Unlock()
+			if activeID == "" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("active Machine Upgrade %q was not released after attesting %s", activeID, operationID)
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 	if got := humanIntentCalls.Load(); got != 0 {
 		t.Fatalf("Host created %d human lifecycle intents, want zero", got)
+	}
+}
+
+func TestHostMachineUpgradeEmptyRuntimeUsesCurrentBindingRuntime(t *testing.T) {
+	identity := BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 3, PID: 8051}
+	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
+		"workspace-a": {
+			Identity: identity,
+			Runtimes: []hostBindingRuntime{
+				{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
+			},
+			DaemonToken: "runtime-token",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	}}
+	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+
+	runtime, token, ok := upgrade.currentRuntime(identity, "")
+	if !ok {
+		t.Fatal("current Binding child could not resolve its runtime for a connect-socket machine action")
+	}
+	if runtime.ID != "runtime-a" || token != "runtime-token" {
+		t.Fatalf("resolved runtime = %+v token=%q", runtime, token)
 	}
 }
 

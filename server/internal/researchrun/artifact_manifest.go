@@ -398,7 +398,7 @@ func verifyAttemptManifestReadGrantPool(
 		return fmt.Errorf("verify attempt manifest read grant: %w", err)
 	}
 	if !authorized {
-		return fmt.Errorf("%w: attempt manifest grant no longer authorizes task context", ErrInvalidTransition)
+		return fmt.Errorf("%w: %w: attempt manifest grant no longer authorizes task context", ErrArtifactAccessDenied, ErrInvalidTransition)
 	}
 	return nil
 }

@@ -1405,27 +1405,116 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				verificationStatus = "verified"
 				verifiedBy = state.task.ID
 			}
-			var evidenceID string
-			if err = tx.QueryRow(ctx, `
-				INSERT INTO research_claim_evidence (
-					workspace_id, session_id, claim_id, observation_id, relation,
-					strength, directness, method_fit, verification_status, verified_by_task_id, rationale
-				) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9,
-				          NULLIF($10, '')::uuid, $11)
-				ON CONFLICT (claim_id, observation_id, relation)
-				DO UPDATE SET
-				  strength = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.strength ELSE GREATEST(research_claim_evidence.strength, EXCLUDED.strength) END,
-				  directness = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.directness ELSE GREATEST(research_claim_evidence.directness, EXCLUDED.directness) END,
-				  method_fit = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.method_fit ELSE GREATEST(research_claim_evidence.method_fit, EXCLUDED.method_fit) END,
-				  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_claim_evidence.verification_status END,
-				  verified_by_task_id = COALESCE(EXCLUDED.verified_by_task_id, research_claim_evidence.verified_by_task_id),
-				  rationale = CASE WHEN EXCLUDED.rationale <> '' THEN EXCLUDED.rationale ELSE research_claim_evidence.rationale END,
-				  updated_at = now()
-				RETURNING id::text
-			`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation,
-				evidence.Strength, evidence.Directness, evidence.MethodFit, verificationStatus, verifiedBy,
-				truncateBytes(evidence.Rationale, 4096), usesEvidenceFitnessContract(state.run.OrchestratorVersion)).Scan(&evidenceID); err != nil {
+			rationale := truncateBytes(evidence.Rationale, 4096)
+			var (
+				evidenceID                                               string
+				currentStrength, currentDirectness, currentMethodFit     float64
+				currentVerification, currentVerifiedBy, currentRationale string
+			)
+			err = tx.QueryRow(ctx, `
+				SELECT id::text, strength, directness, method_fit, verification_status,
+				       COALESCE(verified_by_task_id::text,''), rationale
+				FROM research_claim_evidence
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+				  AND claim_id=$3::uuid AND observation_id=$4::uuid AND relation=$5
+				FOR UPDATE
+			`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation).Scan(
+				&evidenceID, &currentStrength, &currentDirectness, &currentMethodFit,
+				&currentVerification, &currentVerifiedBy, &currentRationale,
+			)
+			existedEvidence := err == nil
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return nil, 0, err
+			}
+			if !existedEvidence {
+				err = tx.QueryRow(ctx, `
+					INSERT INTO research_claim_evidence (
+						workspace_id, session_id, claim_id, observation_id, relation,
+						strength, directness, method_fit, verification_status, verified_by_task_id, rationale
+					) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9,
+					          NULLIF($10, '')::uuid, $11)
+					ON CONFLICT (claim_id, observation_id, relation) DO NOTHING
+					RETURNING id::text
+				`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation,
+					evidence.Strength, evidence.Directness, evidence.MethodFit, verificationStatus,
+					verifiedBy, rationale).Scan(&evidenceID)
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil, 0, fmt.Errorf("%w: evidence link was created concurrently", ErrResultConflict)
+				}
+				if err != nil {
+					return nil, 0, err
+				}
+			} else {
+				version, versionErr := lockMutableArtifactVersionForAttemptTx(
+					ctx, tx, state.workspaceID, state.run.SessionID, evidenceID,
+					state.attemptID, ArtifactKindEvidenceLink, state.outputAccess,
+				)
+				if versionErr != nil {
+					return nil, 0, versionErr
+				}
+				currentContent := map[string]any{
+					"claim_id": id, "observation_id": observationID, "relation": evidence.Relation,
+					"strength": currentStrength, "directness": currentDirectness, "method_fit": currentMethodFit,
+					"verification_status": currentVerification, "verified_by_task_id": currentVerifiedBy,
+					"rationale": currentRationale,
+				}
+				currentHash, hashErr := ArtifactContentHash(ArtifactKindEvidenceLink, currentContent)
+				if hashErr != nil {
+					return nil, 0, hashErr
+				}
+				if version.HashOrigin != ArtifactHashOriginProduction || version.ContentHash != currentHash {
+					return nil, 0, fmt.Errorf("%w: evidence link canonical state no longer matches its frozen version", ErrResultConflict)
+				}
+
+				nextStrength := max(currentStrength, evidence.Strength)
+				nextDirectness := max(currentDirectness, evidence.Directness)
+				nextMethodFit := max(currentMethodFit, evidence.MethodFit)
+				if usesEvidenceFitnessContract(state.run.OrchestratorVersion) && verificationStatus == "verified" {
+					nextStrength, nextDirectness, nextMethodFit = evidence.Strength, evidence.Directness, evidence.MethodFit
+				}
+				nextVerification := currentVerification
+				if verificationStatus == "verified" {
+					nextVerification = verificationStatus
+				}
+				nextVerifiedBy := currentVerifiedBy
+				if verifiedBy != "" {
+					nextVerifiedBy = verifiedBy
+				}
+				nextRationale := currentRationale
+				if rationale != "" {
+					nextRationale = rationale
+				}
+				changed := nextStrength != currentStrength || nextDirectness != currentDirectness ||
+					nextMethodFit != currentMethodFit || nextVerification != currentVerification ||
+					nextVerifiedBy != currentVerifiedBy || nextRationale != currentRationale
+				if changed {
+					if _, err = tx.Exec(ctx, `
+						UPDATE research_claim_evidence
+						SET strength=$4, directness=$5, method_fit=$6, verification_status=$7,
+						    verified_by_task_id=NULLIF($8,'')::uuid, rationale=$9, updated_at=now()
+						WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+					`, state.workspaceID, state.run.SessionID, evidenceID, nextStrength, nextDirectness,
+						nextMethodFit, nextVerification, nextVerifiedBy, nextRationale); err != nil {
+						return nil, 0, err
+					}
+					nextContent := map[string]any{
+						"claim_id": id, "observation_id": observationID, "relation": evidence.Relation,
+						"strength": nextStrength, "directness": nextDirectness, "method_fit": nextMethodFit,
+						"verification_status": nextVerification, "verified_by_task_id": nextVerifiedBy,
+						"rationale": nextRationale,
+					}
+					nextHash, nextHashErr := ArtifactContentHash(ArtifactKindEvidenceLink, nextContent)
+					if nextHashErr != nil {
+						return nil, 0, nextHashErr
+					}
+					if err = appendProducedArtifactVersionTx(
+						ctx, tx, state.workspaceID, state.run.SessionID, evidenceID,
+						state.task.ID, state.attemptID, state.task.GoalVersion, state.targetPlan,
+						version, nextHash,
+					); err != nil {
+						return nil, 0, err
+					}
+				}
 			}
 			evidenceContent := map[string]any{
 				"claim_id":            id,
@@ -1436,14 +1525,16 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				"method_fit":          evidence.MethodFit,
 				"verification_status": verificationStatus,
 				"verified_by_task_id": verifiedBy,
-				"rationale":           truncateBytes(evidence.Rationale, 4096),
+				"rationale":           rationale,
 			}
-			if err = ensureProducedDomainArtifactPassportWithAccessTx(
-				ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID,
-				evidenceID, state.attemptID, time.Now(), int32Ptr(int32(state.task.GoalVersion)),
-				int32Ptr(int32(state.targetPlan)), state.outputAccess, evidenceContent,
-			); err != nil {
-				return nil, 0, err
+			if !existedEvidence {
+				if err = ensureProducedDomainArtifactPassportWithAccessTx(
+					ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID,
+					evidenceID, state.attemptID, time.Now(), int32Ptr(int32(state.task.GoalVersion)),
+					int32Ptr(int32(state.targetPlan)), state.outputAccess, evidenceContent,
+				); err != nil {
+					return nil, 0, err
+				}
 			}
 			if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, evidenceID); err != nil {
 				return nil, 0, err

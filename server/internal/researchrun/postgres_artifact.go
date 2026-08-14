@@ -29,6 +29,128 @@ type registerArtifactPassportInput struct {
 	ProducedByAttemptID    string
 }
 
+type mutableArtifactVersion struct {
+	Version             int32
+	EligibilityRevision int64
+	ContentHash         string
+	AccessLevel         ArtifactAccessLevel
+	HashOrigin          ArtifactHashOrigin
+	SchemaName          string
+	SchemaVersion       string
+}
+
+func lockMutableArtifactVersionForAttemptTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, artifactID, attemptID string,
+	kind ArtifactEntityKind,
+	requiredAccess ArtifactAccessLevel,
+) (mutableArtifactVersion, error) {
+	var state mutableArtifactVersion
+	var accessLevel, hashOrigin string
+	var authorized bool
+	err := tx.QueryRow(ctx, `
+		SELECT p.current_version, p.eligibility_revision, v.content_hash,
+		       v.access_level, v.hash_origin, v.schema_name, v.schema_version,
+		       EXISTS (
+		         SELECT 1
+		         FROM research_artifact_context_manifest manifest
+		         JOIN research_artifact_context_entry entry
+		           ON entry.workspace_id=manifest.workspace_id
+		          AND entry.session_id=manifest.session_id
+		          AND entry.manifest_id=manifest.id
+		         WHERE manifest.workspace_id=p.workspace_id
+		           AND manifest.session_id=p.session_id
+		           AND manifest.attempt_id=$4::uuid
+		           AND entry.artifact_version_id=v.id
+		       )
+		FROM research_artifact_passport p
+		JOIN research_artifact_version v
+		  ON (v.workspace_id,v.session_id,v.artifact_id,v.version)=
+		     (p.workspace_id,p.session_id,p.id,p.current_version)
+		WHERE p.workspace_id=$1::uuid AND p.session_id=$2::uuid
+		  AND p.id=$3::uuid AND p.entity_kind=$5
+		  AND p.lifecycle_status IN ('registered','accepted')
+		FOR UPDATE OF p
+	`, workspaceID, sessionID, artifactID, attemptID, string(kind)).Scan(
+		&state.Version, &state.EligibilityRevision, &state.ContentHash,
+		&accessLevel, &hashOrigin, &state.SchemaName, &state.SchemaVersion, &authorized,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return mutableArtifactVersion{}, fmt.Errorf("%w: mutable artifact %s has no admissible current version", ErrResultConflict, artifactID)
+	}
+	if err != nil {
+		return mutableArtifactVersion{}, err
+	}
+	if !authorized {
+		return mutableArtifactVersion{}, fmt.Errorf("%w: mutable artifact %s was not frozen into attempt context", ErrResultConflict, artifactID)
+	}
+	state.AccessLevel = ArtifactAccessLevel(accessLevel)
+	state.HashOrigin = ArtifactHashOrigin(hashOrigin)
+	if !(ArtifactPolicy{}).NormalAccessDominates(state.AccessLevel, requiredAccess) {
+		return mutableArtifactVersion{}, fmt.Errorf("%w: existing artifact access %q cannot accept %q-tainted revision", ErrInvalidTransition, state.AccessLevel, requiredAccess)
+	}
+	return state, nil
+}
+
+func appendProducedArtifactVersionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, artifactID, taskID, attemptID string,
+	goalVersion, planVersion int,
+	state mutableArtifactVersion,
+	contentHash string,
+) error {
+	nextVersion := state.Version + 1
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO research_artifact_version (
+		  workspace_id, session_id, artifact_id, version, schema_name, schema_version,
+		  canonicalization_version, content_hash, access_level, goal_version, plan_version,
+		  produced_by_task_id, produced_by_attempt_id, hash_origin
+		) VALUES (
+		  $1::uuid,$2::uuid,$3::uuid,$4,$5,$6,
+		  $7,$8,$9,$10,$11,$12::uuid,$13::uuid,'production'
+		)
+	`, workspaceID, sessionID, artifactID, nextVersion, state.SchemaName, state.SchemaVersion,
+		ArtifactCanonicalizationVersion, contentHash, string(state.AccessLevel), goalVersion, planVersion,
+		taskID, attemptID); err != nil {
+		return err
+	}
+	var watermark int64
+	if err := tx.QueryRow(ctx, `
+		SELECT research_artifact_policy_watermark_for_tx($1::uuid,$2::uuid)
+	`, workspaceID, sessionID).Scan(&watermark); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET current_version=$6, eligibility_revision=eligibility_revision+1,
+		    provenance_completeness='complete'
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		  AND current_version=$4 AND eligibility_revision=$5
+	`, workspaceID, sessionID, artifactID, state.Version, state.EligibilityRevision, nextVersion)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("%w: artifact version CAS failed", ErrResultConflict)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision,
+		  old_current_version, new_current_version,
+		  old_access_level, new_access_level
+		) VALUES (
+		  $1::uuid,$2::uuid,$3,'current_version',$4::uuid,
+		  $5,$6,$7,$8,$9,$9
+		)
+	`, workspaceID, sessionID, watermark, artifactID,
+		state.EligibilityRevision, state.EligibilityRevision+1,
+		state.Version, nextVersion, string(state.AccessLevel))
+	return err
+}
+
 func migrationArtifactContentHash(kind ArtifactEntityKind, workspaceID, sessionID, entityID string) string {
 	payload := fmt.Sprintf(
 		"research-artifact-migration:%s:%s:%s:%s",

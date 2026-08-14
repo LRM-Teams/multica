@@ -54,7 +54,19 @@ func compareShadowSnapshotRepresentations(live, filtered RunSnapshot) error {
 }
 
 func collectSnapshotRepresentationIDs(snapshot RunSnapshot) map[string]struct{} {
-	ids := make(map[string]struct{}, len(snapshot.Sources)+len(snapshot.Observations)+len(snapshot.Claims))
+	ids := make(map[string]struct{}, 1+len(snapshot.Questions)+len(snapshot.Tasks)+len(snapshot.Attempts)+len(snapshot.Sources)+len(snapshot.Observations)+len(snapshot.Claims))
+	if snapshot.Run.SessionID != "" {
+		ids[snapshot.Run.SessionID] = struct{}{}
+	}
+	for _, question := range snapshot.Questions {
+		ids[question.ID] = struct{}{}
+	}
+	for _, task := range snapshot.Tasks {
+		ids[task.ID] = struct{}{}
+	}
+	for _, attempt := range snapshot.Attempts {
+		ids[attempt.ID] = struct{}{}
+	}
 	for _, source := range snapshot.Sources {
 		ids[source.ID] = struct{}{}
 	}
@@ -98,6 +110,26 @@ func projectSnapshotRepresentations(snapshot RunSnapshot, allowed map[string]str
 			Bytes: encoded, Hash: contentHashFromPayload(encoded),
 		})
 		return nil
+	}
+	if snapshot.Run.SessionID != "" {
+		if err := appendRecord(ArtifactKindRunSession, snapshot.Run.SessionID, "", snapshot.Run); err != nil {
+			return nil, err
+		}
+	}
+	for _, question := range snapshot.Questions {
+		if err := appendRecord(ArtifactKindQuestion, question.ID, question.ParentQuestionID, question); err != nil {
+			return nil, err
+		}
+	}
+	for _, task := range snapshot.Tasks {
+		if err := appendRecord(ArtifactKindTask, task.ID, task.ParentTaskID, task); err != nil {
+			return nil, err
+		}
+	}
+	for _, attempt := range snapshot.Attempts {
+		if err := appendRecord(ArtifactKindAttempt, attempt.ID, attempt.TaskID, attempt); err != nil {
+			return nil, err
+		}
 	}
 	for _, source := range snapshot.Sources {
 		if err := appendRecord(ArtifactKindSourceSnapshot, source.ID, "", source); err != nil {

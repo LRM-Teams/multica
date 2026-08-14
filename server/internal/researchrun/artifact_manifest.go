@@ -459,10 +459,46 @@ func loadAttemptManifestSummaryPool(
 
 func filterRunSnapshotByManifest(snapshot RunSnapshot, allowed map[string]struct{}) RunSnapshot {
 	filtered := snapshot
+	if _, ok := allowed[snapshot.Run.SessionID]; !ok {
+		filtered.Run = Run{}
+	}
+	filtered.Questions = filterQuestionsByManifest(snapshot.Questions, allowed)
+	filtered.Tasks = filterTasksByManifest(snapshot.Tasks, allowed)
+	filtered.Attempts = filterAttemptsByManifest(snapshot.Attempts, allowed)
 	filtered.Sources = filterSourcesByManifest(snapshot.Sources, allowed)
 	filtered.Observations = filterObservationsByManifest(snapshot.Observations, allowed)
 	filtered.Claims = filterClaimsByManifest(snapshot.Claims, allowed)
 	return filtered
+}
+
+func filterQuestionsByManifest(questions []Question, allowed map[string]struct{}) []Question {
+	out := make([]Question, 0, len(questions))
+	for _, question := range questions {
+		if _, ok := allowed[question.ID]; ok {
+			out = append(out, question)
+		}
+	}
+	return out
+}
+
+func filterTasksByManifest(tasks []Task, allowed map[string]struct{}) []Task {
+	out := make([]Task, 0, len(tasks))
+	for _, task := range tasks {
+		if _, ok := allowed[task.ID]; ok {
+			out = append(out, task)
+		}
+	}
+	return out
+}
+
+func filterAttemptsByManifest(attempts []Attempt, allowed map[string]struct{}) []Attempt {
+	out := make([]Attempt, 0, len(attempts))
+	for _, attempt := range attempts {
+		if _, ok := allowed[attempt.ID]; ok {
+			out = append(out, attempt)
+		}
+	}
+	return out
 }
 
 func filterSourcesByManifest(sources []SourceSnapshotView, allowed map[string]struct{}) []SourceSnapshotView {

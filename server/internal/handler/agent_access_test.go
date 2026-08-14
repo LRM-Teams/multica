@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -22,16 +23,19 @@ func privateAgentTestFixture(t *testing.T) (agentID, ownerID, memberID string) {
 	t.Helper()
 
 	ctx := context.Background()
+	fixtureID := uuid.NewString()
+	ownerEmail := "private-agent-owner-" + fixtureID + "@multica.test"
+	memberEmail := "plain-member-" + fixtureID + "@multica.test"
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email)
-		VALUES ('Private Agent Owner', 'private-agent-owner@multica.test')
+		VALUES ('Private Agent Owner', $1)
 		RETURNING id
-	`).Scan(&ownerID); err != nil {
+	`, ownerEmail).Scan(&ownerID); err != nil {
 		t.Fatalf("create owner user: %v", err)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(),
-			`DELETE FROM "user" WHERE email = 'private-agent-owner@multica.test'`)
+			`DELETE FROM "user" WHERE id = $1`, ownerID)
 	})
 
 	if _, err := testPool.Exec(ctx, `
@@ -43,14 +47,14 @@ func privateAgentTestFixture(t *testing.T) (agentID, ownerID, memberID string) {
 
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email)
-		VALUES ('Plain Member', 'plain-member@multica.test')
+		VALUES ('Plain Member', $1)
 		RETURNING id
-	`).Scan(&memberID); err != nil {
+	`, memberEmail).Scan(&memberID); err != nil {
 		t.Fatalf("create plain member user: %v", err)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(),
-			`DELETE FROM "user" WHERE email = 'plain-member@multica.test'`)
+			`DELETE FROM "user" WHERE id = $1`, memberID)
 	})
 
 	if _, err := testPool.Exec(ctx, `
@@ -63,9 +67,9 @@ func privateAgentTestFixture(t *testing.T) (agentID, ownerID, memberID string) {
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
-		, model) VALUES ($1, 'private-access-test-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb, 'composer-1.5')
+			, model) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, 'composer-1.5')
 		RETURNING id
-	`, testWorkspaceID, handlerTestRuntimeID(t), ownerID).Scan(&agentID); err != nil {
+	`, testWorkspaceID, "private-access-test-agent-"+fixtureID, handlerTestRuntimeID(t), ownerID).Scan(&agentID); err != nil {
 		t.Fatalf("create private agent: %v", err)
 	}
 	t.Cleanup(func() {

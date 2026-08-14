@@ -43,6 +43,9 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(legacy, protocol.DaemonCapabilityReminderTransientInput) {
 		t.Fatalf("registration missing %q: %#v", protocol.DaemonCapabilityReminderTransientInput, legacy)
 	}
+	if !containsString(legacy, protocol.DaemonCapabilityReminderLocalInbox) {
+		t.Fatalf("registration missing %q: %#v", protocol.DaemonCapabilityReminderLocalInbox, legacy)
+	}
 
 	capable := daemonRegistrationCapabilities(true)
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {

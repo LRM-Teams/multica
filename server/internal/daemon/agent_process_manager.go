@@ -47,6 +47,11 @@ type agentProcessStartRequest struct {
 	DeliveryMode    string
 }
 
+type agentProcessStartResult struct {
+	Acknowledgement protocol.AgentStartAckPayload
+	Replayed        bool
+}
+
 const (
 	agentRuntimeReadinessFirstEvent  = "first_event"
 	agentRuntimeReadinessInitialTurn = "initial_turn"
@@ -141,31 +146,40 @@ func (m *agentProcessManager) Close() {
 }
 
 func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.AgentStartAckPayload, error) {
+	result, err := m.startWithDisposition(request)
+	return result.Acknowledgement, err
+}
+
+// startWithDisposition keeps the idempotency receipt inside the process
+// manager while telling the Workspace Runner whether it owns provider startup.
+// A replay must still return the original wire ACK, but it must not create a
+// second asynchronous provider-start callback for the same immutable dispatch.
+func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequest) (agentProcessStartResult, error) {
 	if err := validateAgentProcessStartRequest(request); err != nil {
-		return protocol.AgentStartAckPayload{}, err
+		return agentProcessStartResult{}, err
 	}
 	request = canonicalAgentProcessStartRequest(request)
 	if m == nil {
-		return protocol.AgentStartAckPayload{}, errors.New("agent process manager is not configured")
+		return agentProcessStartResult{}, errors.New("agent process manager is not configured")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if receipt, replayed := m.dispatches[request.StartDispatchID]; replayed {
 		if receipt.acknowledgement.AgentID != request.AgentID || receipt.acknowledgement.LaunchID != request.LaunchID || receipt.runtimeID != request.RuntimeID {
-			return protocol.AgentStartAckPayload{}, errors.New("start dispatch identity conflicts with its accepted receipt")
+			return agentProcessStartResult{}, errors.New("start dispatch identity conflicts with its accepted receipt")
 		}
-		return receipt.acknowledgement, nil
+		return agentProcessStartResult{Acknowledgement: receipt.acknowledgement, Replayed: true}, nil
 	}
 
 	if existing := m.agents[request.AgentID]; existing != nil && existing.managed {
 		if existing.runtimeID != request.RuntimeID {
-			return protocol.AgentStartAckPayload{}, errors.New("managed Agent must stop its current Runtime before starting another")
+			return agentProcessStartResult{}, errors.New("managed Agent must stop its current Runtime before starting another")
 		} else {
 			if existing.launchID == request.LaunchID {
-				return m.rememberAcceptanceLocked(request, m.acceptanceLocked(existing, existing.queueState)), nil
+				return agentProcessStartResult{Acknowledgement: m.rememberAcceptanceLocked(request, m.acceptanceLocked(existing, existing.queueState))}, nil
 			}
 			m.rebindLaunchLocked(existing, request.LaunchID)
-			return m.rememberAcceptanceLocked(request, m.acceptanceLocked(existing, protocol.AgentStartQueueRebound)), nil
+			return agentProcessStartResult{Acknowledgement: m.rememberAcceptanceLocked(request, m.acceptanceLocked(existing, protocol.AgentStartQueueRebound))}, nil
 		}
 	}
 
@@ -182,7 +196,7 @@ func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.
 	} else {
 		m.beginProcessLocked(managed)
 	}
-	return m.rememberAcceptanceLocked(request, m.acceptanceLocked(managed, managed.queueState)), nil
+	return agentProcessStartResult{Acknowledgement: m.rememberAcceptanceLocked(request, m.acceptanceLocked(managed, managed.queueState))}, nil
 }
 
 // RestoreIdle re-creates a managed launch after the process is gone without a

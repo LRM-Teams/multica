@@ -90,8 +90,10 @@ func failureDisposition(class FailureClass) FailureDisposition {
 }
 
 // ClassifyInboxFailure maps the durable Agent Inbox reason to the executor
-// policy. runtimeRetryable is an additional terminal fact (for example the
-// Agent already emitted user-visible output) and may only remove retryability.
+// policy. runtimeRetryable is normally an additional terminal fact (for
+// example the Agent already emitted user-visible output) that may only remove
+// retryability. queued_expired is the deliberate exception: false terminates
+// the unclaimed Inbox delivery, while the Research Task retains its own budget.
 func ClassifyInboxFailure(reason string, runtimeRetryable bool) FailureDisposition {
 	class := FailureUnknown
 	switch taskfailure.Reason(reason) {
@@ -119,7 +121,12 @@ func ClassifyInboxFailure(reason string, runtimeRetryable bool) FailureDispositi
 		class = FailureContractBlocked
 	}
 	disposition := failureDisposition(class)
-	if !runtimeRetryable {
+	// queued_expired terminates that durable Inbox delivery, so its generic
+	// retryable flag is false. The Agent never claimed the work, however, and
+	// the Research Task still owns its independent attempt budget. Preserve the
+	// task-level retry so execution can re-resolve an available target instead
+	// of failing the Run after its first unconsumed delivery.
+	if !runtimeRetryable && taskfailure.Reason(reason) != taskfailure.ReasonQueuedExpired {
 		disposition.Retryable = false
 	}
 	// Runtime installation/version defects cannot be repaired by another

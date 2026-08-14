@@ -2,11 +2,14 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // createTestAgentRuntimeWithDaemonID inserts a minimal agent_runtime row
@@ -161,5 +164,21 @@ func TestRecordHeartbeat_WritesDaemonHeartbeatOnFirstCall(t *testing.T) {
 	}
 	if time.Since(hb.LastSeenAt.Time) > 10*time.Second {
 		t.Fatalf("daemon_heartbeat.last_seen_at = %v, expected it to be freshly written", hb.LastSeenAt.Time)
+	}
+}
+
+func TestWorkspaceRunnerHeartbeatRejectsRuntimeAssignedToAnotherComputer(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	rt := createTestAgentRuntimeWithDaemonID(t, "computer-owner-"+randomID())
+	for _, daemonID := range []string{"", "computer-other-" + randomID()} {
+		_, err := testHandler.HandleDaemonWSHeartbeat(context.Background(), daemonws.ClientIdentity{
+			DaemonID:    daemonID,
+			WorkspaceID: testWorkspaceID,
+		}, protocol.DaemonHeartbeatRequestPayload{RuntimeID: uuidToString(rt.ID)})
+		if err == nil || !strings.Contains(err.Error(), "runtime not assigned to connection Computer") {
+			t.Fatalf("Workspace Runner daemon_id %q error = %v", daemonID, err)
+		}
 	}
 }

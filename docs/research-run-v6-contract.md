@@ -31,6 +31,14 @@ versioned validator before production enablement.
 
 ## Cross-object invariants
 
+Inquiry `status_updates` are resolved to same-session canonical IDs before the
+Inquiry module accepts them. They must change (not repeat) the recorded status,
+follow the frozen Question/Hypothesis/Branch/Insight transition tables, provide
+a substantive reason, and cite one to 128 distinct resolved evidence objects.
+An answered Question may return to `in_progress` or `unresolved` when new
+evidence changes the frontier; `obsolete` remains terminal. Dispute references
+remain invalid until Chapter H creates their canonical store.
+
 JSON Schema validates shape; the Research Run modules and PostgreSQL
 transactions enforce the following referential and state rules:
 
@@ -40,8 +48,9 @@ transactions enforce the following referential and state rules:
 2. `confidence_low <= confidence_high`. Branch budget shares are bounded by the
    server-authorized exploration budget; Agent sums do not authorize spend.
 3. Inquiry edges resolve both endpoints. `decomposes`, `depends_on`, and
-   `refines` remain acyclic. Hypothesis, Branch, and Insight status updates must
-   match the stored `before` value and migration-350 transition table.
+   `refines` remain acyclic. Question, Hypothesis, Branch, and Insight status
+   updates must match the stored `before` value and the frozen transition
+   tables; every update cites resolved evidence.
 4. A Query Execution belongs to one accepted Search Plan. A Source Candidate
    can become a Source Snapshot only after an `include` Screening Decision.
    URL, content hash, independence family, mirror relationship, cursor, cost,
@@ -78,3 +87,9 @@ transactions enforce the following referential and state rules:
   `OrchestratorVersion`, or accepting schema version 6 is a separate activation
   change and is forbidden until the production decoder, persistence modules,
   recovery, projection, hidden-oracle evaluation, and E–K gates are complete.
+- `researchrun.AssessV6Activation` is the executable release-audit seam. Every
+  gate result must carry a durable evidence identity and revision; a bare pass
+  boolean is insufficient. It reports all missing gates in canonical order and
+  requires an exercised `research-run-v5` previous version. A successful audit
+  does not itself add V6 to the decoder or change the default, so activation
+  remains an explicit, reviewable change after the audit is complete.

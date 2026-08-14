@@ -85,7 +85,7 @@ func TestPostgresStoreReconcileLeaseFencesExpiredWorker(t *testing.T) {
 	`, fixture.sessionID).Scan(&staleEvents); err != nil || staleEvents != 0 {
 		t.Fatalf("stale events=%d err=%v", staleEvents, err)
 	}
-	if err = store.ReleaseRun(ctx, first, time.Now().UTC()); !errors.Is(err, ErrRunLeaseLost) {
+	if err = store.ReleaseRun(ctx, first, time.Now().UTC(), "stale worker must not overwrite diagnostics"); !errors.Is(err, ErrRunLeaseLost) {
 		t.Fatalf("stale release err=%v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestPostgresStoreReconcileLeaseFencesExpiredWorker(t *testing.T) {
 	if _, err = store.RecordBudgetExhausted(secondCtx, fixture.sessionID, "current_worker", "must commit"); err != nil {
 		t.Fatal(err)
 	}
-	if err = store.ReleaseRun(ctx, second, time.Now().UTC()); err != nil {
+	if err = store.ReleaseRun(ctx, second, time.Now().UTC(), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,8 +107,69 @@ func TestPostgresStoreReconcileLeaseFencesExpiredWorker(t *testing.T) {
 	if _, err = store.RenewRunLease(ctx, third, time.Minute); !errors.Is(err, ErrRunLeaseLost) {
 		t.Fatalf("user mutation did not revoke lease: %v", err)
 	}
-	if err = store.ReleaseRun(ctx, third, time.Now().UTC()); !errors.Is(err, ErrRunLeaseLost) {
+	if err = store.ReleaseRun(ctx, third, time.Now().UTC(), "revoked worker must not overwrite diagnostics"); !errors.Is(err, ErrRunLeaseLost) {
 		t.Fatalf("revoked release err=%v", err)
+	}
+}
+
+func TestEngineReconcilePersistsFailureAndClearsItAfterRecovery(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	if _, _, err = store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Persist reconcile diagnostics",
+		Title: "Reconcile diagnostics", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard")); err != nil {
+		t.Fatal(err)
+	}
+
+	injected := errors.New("injected manifest dispatch rollback")
+	fault := &oneShotResearchTxFault{
+		operation: txOpDispatchIntentCreate,
+		point:     txBeforeCommit,
+		err:       injected,
+	}
+	store.txFaultHook = fault.hook
+	engine := newEngine(store, &recordingCancellationDispatcher{}, nil)
+	if err = engine.ReconcileSession(ctx, fixture.sessionID); !errors.Is(err, injected) {
+		t.Fatalf("ReconcileSession error=%v want injected dispatch rollback", err)
+	}
+	if !fault.fired {
+		t.Fatal("dispatch transaction fault did not fire")
+	}
+	failed, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != RunStatusRunning || failed.LastError != injected.Error() {
+		t.Fatalf("failed run status=%q last_error=%q", failed.Status, failed.LastError)
+	}
+	if attempts, listErr := store.ListAttempts(ctx, fixture.sessionID); listErr != nil || len(attempts) != 0 {
+		t.Fatalf("rolled-back attempts=%+v err=%v", attempts, listErr)
+	}
+
+	store.txFaultHook = nil
+	if err = engine.ReconcileSession(ctx, fixture.sessionID); err != nil {
+		t.Fatalf("reconcile recovery: %v", err)
+	}
+	recovered, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.LastError != "" {
+		t.Fatalf("recovered last_error=%q want empty", recovered.LastError)
 	}
 }
 
@@ -278,7 +339,7 @@ func TestEngineReconcileCancelsWorkWhenLeaseIsTakenOver(t *testing.T) {
 	if err = store.AssertRunLease(withRunLease(ctx, successor), fixture.sessionID); err != nil {
 		t.Fatalf("stale release cleared successor: %v", err)
 	}
-	if err = store.ReleaseRun(ctx, successor, time.Now().UTC()); err != nil {
+	if err = store.ReleaseRun(ctx, successor, time.Now().UTC(), ""); err != nil {
 		t.Fatal(err)
 	}
 }

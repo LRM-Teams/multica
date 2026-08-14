@@ -331,6 +331,53 @@ func TestRaftRestartModesForceInterruptBusyTurn(t *testing.T) {
 	}
 }
 
+func TestLifecycleForceRestartFencesInterruptedTurnCompletion(t *testing.T) {
+	fx := newRaftRestartFixture(t)
+	fx.acquireBusy(t)
+
+	const interruptedGeneration = uint64(17)
+	key := fx.agentID + "\x00" + fx.runtimeID
+	fx.pool.mu.Lock()
+	slot := fx.pool.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	fx.pool.mu.Unlock()
+	if slot == nil {
+		t.Fatal("busy runtime slot missing")
+	}
+	slot.messageInputGeneration = interruptedGeneration
+	slot.messageInputDone = make(chan error)
+	slot.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- fx.executor.Execute(context.Background(), fx.request(agentLifecycleActionResetSessionRestart))
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for fx.backend.forceKillCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("ForceKill was never called")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	fx.lease.release(false)
+	if err := <-done; err != nil {
+		t.Fatalf("reset_session_restart: %v", err)
+	}
+	slot.mu.Lock()
+	slot.messageInputDone = nil
+	slot.mu.Unlock()
+
+	published := false
+	if fx.pool.publishIfMessageTurnStillIdle(fx.agentID, fx.runtimeID, interruptedGeneration, func() {
+		published = true
+	}) || published {
+		t.Fatal("interrupted old turn published a terminal failure after replacement start")
+	}
+}
+
 func TestProductionStartAppliesComposerSessionToAcquire(t *testing.T) {
 	fx := newRaftRestartFixture(t)
 	var lastResume string

@@ -27,6 +27,9 @@ const (
 	agentDeliveryRetryInterval = time.Second
 	runnerInboundWatchdog      = 70 * time.Second
 	runnerPingInterval         = 20 * time.Second
+	legacyRunnerAttachmentCap  = "workspace_runner_attachment_v1"
+	legacyAttachmentReplayReq  = "agent:attachment.replay_request"
+	legacyAttachmentReplayEnd  = "agent:attachment.replay_end"
 )
 
 // ClientIdentity captures the already-authenticated daemon connection scope.
@@ -64,6 +67,13 @@ func (c *client) supportsRunnerCapability(capability string) bool {
 	}
 	_, supported := c.runnerCapabilities[capability]
 	return supported
+}
+
+func (c *client) isLegacyUpgradeRunner() bool {
+	return c != nil &&
+		c.supportsRunnerCapability(legacyRunnerAttachmentCap) &&
+		c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerControlPlane) &&
+		!c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerAgentProcess)
 }
 
 const eventDedupCapacity = 128
@@ -1171,11 +1181,10 @@ func validWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool 
 // Validate a copy with the current capability added, then retain the original
 // capability set on the connection so new Agent process commands stay fenced.
 func validLegacyUpgradeWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
-	const legacyWorkspaceRunnerAttachmentCapability = "workspace_runner_attachment_v1"
 	var supportsLegacyAttachment, supportsControlPlane bool
 	for _, capability := range ready.ActiveCapabilities {
 		switch capability {
-		case legacyWorkspaceRunnerAttachmentCapability:
+		case legacyRunnerAttachmentCap:
 			supportsLegacyAttachment = true
 		case protocol.DaemonCapabilityWorkspaceRunnerControlPlane:
 			supportsControlPlane = true
@@ -1413,6 +1422,8 @@ func (c *client) handleFrame(raw []byte) {
 			c.hub.unregister(c)
 			_ = c.conn.Close()
 		}
+	case legacyAttachmentReplayReq:
+		c.handleLegacyUpgradeReplayRequest(msg.Payload)
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
 	case protocol.EventDaemonLivenessProbe:
@@ -1472,6 +1483,41 @@ func (c *client) handleFrame(raw []byte) {
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.
+	}
+}
+
+// handleLegacyUpgradeReplayRequest completes the immediately preceding
+// Computer release's retired startup handshake without replaying or mutating
+// Attachment state. Echoing its validated cursors lets that client start the
+// current control-plane heartbeat and receive its pending machine upgrade.
+func (c *client) handleLegacyUpgradeReplayRequest(raw json.RawMessage) {
+	if c == nil || !c.hub.isCurrentWorkspaceRunner(c) || !c.isLegacyUpgradeRunner() {
+		return
+	}
+	var request struct {
+		RuntimeCursors map[string]int64 `json:"runtimeCursors"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil || request.RuntimeCursors == nil {
+		return
+	}
+	for runtimeID, cursor := range request.RuntimeCursors {
+		if strings.TrimSpace(runtimeID) == "" || len(runtimeID) > 200 || cursor < 0 {
+			return
+		}
+	}
+	frame, err := json.Marshal(protocol.Message{
+		Type:    legacyAttachmentReplayEnd,
+		Payload: mustMarshalRaw(request),
+	})
+	if err != nil {
+		return
+	}
+	c.runnerLastInbound.Store(time.Now().UnixNano())
+	select {
+	case c.send <- frame:
+	default:
+		c.hub.unregister(c)
+		_ = c.conn.Close()
 	}
 }
 

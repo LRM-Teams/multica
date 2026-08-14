@@ -16,28 +16,28 @@ const chapterD15EnforceComplete = false
 //   - missing: no meaningful executable coverage yet
 var chapterD15Coverage = map[int]string{
 	1:  "partial", // migration 318–330 roundtrip tests
-	2:  "partial", // trigger/constraint name inventory tests
+	2:  "covered", // live catalog scope/FK/revision-uniqueness/complete stable guard inventory
 	3:  "partial", // migration FK negative fixtures
 	4:  "partial", // deferred guard tests in migration suite
-	5:  "covered", // immutable Version + current-version/eligibility/mutation/watermark reciprocal guards
+	5:  "partial", // version/lifecycle/policy-ledger update+delete guards and watermark/passport CAS; remaining revision/concurrency matrix open
 	6:  "partial", // backfill diagnostic tests in migration 319
-	7:  "partial", // artifact_policy legacy admission matrix
+	7:  "covered", // exhaustive registered/unknown kind × lifecycle × provenance legacy admission matrix
 	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered
 	9:  "covered", // closed normal-clearance/purpose/evaluation matrix + output taint permutations
 	10: "covered", // structural subject isolation + real subject/grader frozen-manifest dispatch
 	11: "partial", // dispatch race: eligibility/state/hash/lifecycle after rolled-back intent
-	12: "partial", // dispatch normalized locks + concurrent shared-candidate test
+	12: "covered", // canonical candidate locks + concurrent shared candidates + stable entry ordinals
 	13: "partial", // eligibility + representation CAS
 	14: "covered", // replay/prompt/outbox binding tests
-	15: "partial", // dispatch transaction recovery matrix
+	15: "covered", // after-begin/before-commit/after-commit dispatch artifact recovery matrix
 	16: "covered", // historical live vs frozen manifest tests
-	17: "partial", // frozen gate snapshot on TaskContextForAttempt
-	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state after rollback
-	19: "partial", // unrelated watermark advance after rolled-back accept
+	17: "covered", // exact Gate bytes/hash + policy version + unchanged V1-V5 rubric on frozen Attempt context
+	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state + Task contract/dependencies after rollback
+	19: "covered", // unrelated advance reauthorization + affected eligibility denial + final acceptance watermark
 	20: "partial", // result lock-order concurrency + normalized manifest locks
-	21: "partial", // accept replay hash/lineage conflict
+	21: "covered", // payload + manifest ID/hash + exact input-version set + producer/watermark lineage replay
 	22: "partial", // result accept transaction recovery matrix
-	23: "partial", // cross-workspace 404 + Fleet principal/header binding; full surface matrix open
+	23: "partial", // human/assigned/unbound/unassigned/cross-workspace/header-spoof HTTP matrix; evaluator/projector surfaces open
 	24: "partial", // withdrawal/acceptance ledger + revoked frozen-read denial/history preservation
 	25: "covered", // stable passport-ID/hash projection + frozen Attempt scope + enum/FE fallback
 	26: "covered", // transaction structural guard tests

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,12 +70,24 @@ func TestAcceptResultAcceptsAfterUnrelatedPolicyWatermarkAdvance(t *testing.T) {
 	store := NewPostgresStore(pool)
 
 	attempt, inboxID, raw, run, task := setupRunningPlanAttempt(t, ctx, store, fixture)
-	if _, err = pool.Exec(ctx, `
+	var manifestWatermark, unrelatedWatermark int64
+	if err = pool.QueryRow(ctx, `
+		SELECT policy_watermark
+		FROM research_artifact_context_manifest
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&manifestWatermark); err != nil {
+		t.Fatalf("load dispatch manifest watermark: %v", err)
+	}
+	if err = pool.QueryRow(ctx, `
 		UPDATE research_artifact_policy_state
 		SET watermark = watermark + 1, updated_at = now()
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
-	`, fixture.workspaceID, run.SessionID); err != nil {
+		RETURNING watermark
+	`, fixture.workspaceID, run.SessionID).Scan(&unrelatedWatermark); err != nil {
 		t.Fatalf("advance unrelated policy watermark: %v", err)
+	}
+	if unrelatedWatermark <= manifestWatermark {
+		t.Fatalf("unrelated watermark=%d must advance manifest=%d", unrelatedWatermark, manifestWatermark)
 	}
 
 	result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, run.Config)
@@ -91,15 +104,49 @@ func TestAcceptResultAcceptsAfterUnrelatedPolicyWatermarkAdvance(t *testing.T) {
 	if outcome.TaskID != task.ID {
 		t.Fatalf("outcome=%+v", outcome)
 	}
-	var resultArtifacts int
+	var resultArtifacts, manifestEntries, acceptanceReferences int
+	var acceptanceWatermark, finalPolicyWatermark int64
 	if err = pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_result_artifact
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&resultArtifacts); err != nil {
+		WITH accepted_result AS (
+		  SELECT id, acceptance_policy_watermark
+		  FROM research_result_artifact
+		  WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND attempt_id=$3::uuid
+		), result_version AS (
+		  SELECT version.id
+		  FROM research_artifact_version version
+		  JOIN accepted_result ON accepted_result.id=version.artifact_id
+		  WHERE version.workspace_id=$1::uuid AND version.session_id=$2::uuid AND version.version=1
+		)
+		SELECT
+		  (SELECT count(*)::int FROM accepted_result),
+		  (SELECT acceptance_policy_watermark FROM accepted_result),
+		  (SELECT watermark FROM research_artifact_policy_state
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid),
+		  (SELECT count(DISTINCT entry.artifact_version_id)::int FROM research_artifact_context_entry entry
+		   JOIN research_artifact_context_manifest manifest
+		     ON (manifest.workspace_id,manifest.session_id,manifest.id)=
+		        (entry.workspace_id,entry.session_id,entry.manifest_id)
+		   WHERE manifest.workspace_id=$1::uuid AND manifest.session_id=$2::uuid
+		     AND manifest.attempt_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference reference
+		   JOIN result_version ON result_version.id=reference.consumer_version_id
+		   WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
+		     AND reference.relation='acceptance_input')
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&resultArtifacts, &acceptanceWatermark, &finalPolicyWatermark,
+		&manifestEntries, &acceptanceReferences,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if resultArtifacts != 1 {
 		t.Fatalf("result artifacts=%d want 1", resultArtifacts)
+	}
+	if acceptanceWatermark != unrelatedWatermark+1 || finalPolicyWatermark != acceptanceWatermark {
+		t.Fatalf("watermarks manifest=%d unrelated=%d acceptance=%d final=%d want acceptance/final=%d",
+			manifestWatermark, unrelatedWatermark, acceptanceWatermark, finalPolicyWatermark, unrelatedWatermark+1)
+	}
+	if manifestEntries == 0 || acceptanceReferences != manifestEntries {
+		t.Fatalf("reauthorized input lineage entries=%d references=%d", manifestEntries, acceptanceReferences)
 	}
 }
 
@@ -250,6 +297,89 @@ func TestAcceptResultReplayRequiresMatchingHash(t *testing.T) {
 	})
 	if !errors.Is(err, ErrResultConflict) {
 		t.Fatalf("changed replay err=%v want ErrResultConflict", err)
+	}
+
+	var resultArtifactID, manifestID, manifestHash string
+	var resolvedVersions, lineage []byte
+	if err = pool.QueryRow(ctx, `
+		SELECT id::text, acceptance_manifest_id::text, acceptance_manifest_hash,
+		       resolved_input_versions, acceptance_lineage
+		FROM research_result_artifact
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&resultArtifactID, &manifestID, &manifestHash, &resolvedVersions, &lineage,
+	); err != nil {
+		t.Fatalf("load accepted replay binding: %v", err)
+	}
+	if manifestID == "" || manifestHash == "" || string(resolvedVersions) == "null" || string(lineage) == "null" {
+		t.Fatalf("incomplete replay binding manifest=%q hash=%q versions=%s lineage=%s", manifestID, manifestHash, resolvedVersions, lineage)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_result_artifact
+		SET acceptance_manifest_id = $4::uuid,
+		    acceptance_manifest_hash = 'sha256:forbidden-binding-rewrite'
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, resultArtifactID, uuid.NewString()); err == nil ||
+		!strings.Contains(err.Error(), "research_result_artifact_replay_binding_immutable_guard") {
+		t.Fatalf("replay binding rewrite err=%v want immutable guard", err)
+	}
+
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_context_manifest
+		SET manifest_hash = 'sha256:changed-after-acceptance'
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, manifestID); err != nil {
+		t.Fatalf("mutate accepted manifest hash: %v", err)
+	}
+	if _, err = store.AcceptResult(ctx, input); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("manifest-bound replay err=%v want ErrResultConflict", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_context_manifest SET manifest_hash = $4
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, manifestID, manifestHash); err != nil {
+		t.Fatalf("restore accepted manifest hash: %v", err)
+	}
+
+	var referenceID string
+	if err = pool.QueryRow(ctx, `
+		SELECT reference.id::text
+		FROM research_artifact_input_reference reference
+		JOIN research_artifact_version version
+		  ON version.workspace_id = reference.workspace_id
+		 AND version.session_id = reference.session_id
+		 AND version.id = reference.consumer_version_id
+		WHERE version.workspace_id = $1::uuid
+		  AND version.session_id = $2::uuid
+		  AND version.artifact_id = $3::uuid
+		ORDER BY reference.ordinal, reference.id
+		LIMIT 1
+	`, fixture.workspaceID, run.SessionID, resultArtifactID).Scan(&referenceID); err != nil {
+		t.Fatalf("load accepted input reference: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_input_reference SET explicitly_used = false
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, referenceID); err != nil {
+		t.Fatalf("mutate accepted lineage: %v", err)
+	}
+	if _, err = store.AcceptResult(ctx, input); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("lineage-bound replay err=%v want ErrResultConflict", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_input_reference SET explicitly_used = true
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, referenceID); err != nil {
+		t.Fatalf("restore accepted lineage: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		DELETE FROM research_artifact_input_reference
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, referenceID); err != nil {
+		t.Fatalf("remove accepted input version: %v", err)
+	}
+	if _, err = store.AcceptResult(ctx, input); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("version-set-bound replay err=%v want ErrResultConflict", err)
 	}
 }
 
@@ -431,7 +561,7 @@ func TestAcceptResultRejectsWhenManifestEntryRepresentationChanges(t *testing.T)
 	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
-	if _, err = pool.Exec(ctx, `
+	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
 		UPDATE research_artifact_context_entry e
 		SET representation_bytes = convert_to('sha256:tampered-representation', 'UTF8')
 		FROM research_artifact_context_manifest m
@@ -439,9 +569,7 @@ func TestAcceptResultRejectsWhenManifestEntryRepresentationChanges(t *testing.T)
 		  AND m.workspace_id = $1::uuid
 		  AND m.session_id = $2::uuid
 		  AND m.attempt_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, attempt.ID); err != nil {
-		t.Fatalf("tamper representation bytes: %v", err)
-	}
+	`, fixture.workspaceID, run.SessionID, attempt.ID)
 
 	raw, err := json.Marshal(upgradeResultToV5(validV4PlanResult(t)))
 	if err != nil {

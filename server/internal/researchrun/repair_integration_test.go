@@ -30,6 +30,49 @@ func elapseTaskRetryBackoff(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}
 }
 
+// A queued_expired Inbox row is terminal because that delivery may not be
+// replayed, not because the owning Research Task exhausted its attempt budget.
+// The production incident fixed by this regression failed an initial plan Run
+// after attempt 1/3 when an offline Runtime never claimed the queued delivery.
+func TestQueuedExpiredInboxTerminalRetriesResearchTask(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchCircuitFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 3)
+	attempt := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
+	disposition := ClassifyInboxFailure("queued_expired", false)
+	if _, err = store.FailAttempt(ctx, AttemptFailure{
+		AttemptID: attempt.ID, FailureClass: string(disposition.Class), SourceReason: "queued_expired",
+		Diagnostics: "queued delivery expired before claim", Retryable: disposition.Retryable,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var taskStatus, runStatus string
+	var completedAt *time.Time
+	if err = pool.QueryRow(ctx, `
+		SELECT task.status, session.status, task.completed_at
+		FROM research_task task
+		JOIN research_session session ON session.id = task.session_id
+		WHERE task.id = $1::uuid
+	`, tasks[0].ID).Scan(&taskStatus, &runStatus, &completedAt); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != string(TaskStatusReady) || completedAt != nil || runStatus != string(RunStatusRunning) {
+		t.Fatalf("queued expiry settled task=%s completed_at=%v run=%s, want ready/nil/running", taskStatus, completedAt, runStatus)
+	}
+}
+
 // A repeated identical failure must reuse one repair decision. Before the
 // repair record existed, every recomputed failure of the same cause was free to
 // open a fresh remediation path, which is how one broken target turned into a

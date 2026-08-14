@@ -37,7 +37,7 @@ var chapterD15Coverage = map[int]string{
 	20: "partial", // result lock-order concurrency + normalized manifest locks
 	21: "covered", // payload + manifest ID/hash + exact input-version set + producer/watermark lineage replay
 	22: "partial", // result accept transaction recovery matrix
-	23: "partial", // human/assigned/unbound/unassigned/cross-workspace/header-spoof HTTP matrix; evaluator/projector surfaces open
+	23: "covered", // human/Agent/evaluator/grader/projector/cross-scope surfaces + revocation + non-leaking denial matrix
 	24: "partial", // withdrawal/acceptance ledger + revoked frozen-read denial/history preservation
 	25: "covered", // stable passport-ID/hash projection + frozen Attempt scope + enum/FE fallback
 	26: "covered", // transaction structural guard tests

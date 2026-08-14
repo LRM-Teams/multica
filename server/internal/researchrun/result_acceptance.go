@@ -65,6 +65,7 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 	var result ResultEnvelope
 	var v6Plan *ResearchV6PlanResult
 	var v6Evidence *V6EvidenceResult
+	var v6Integration *V6IntegrationResult
 	var hash string
 	if run.OrchestratorVersion == OrchestratorVersionV6 {
 		if task.Kind == TaskKindPlan {
@@ -79,6 +80,12 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 				return AcceptResultOutcome{}, decodeErr
 			}
 			v6Evidence, hash, result = &decoded, decodedHash, researchV6EvidenceEnvelope(decoded)
+		} else if task.Kind == TaskKindIntegrate && task.ExpectedResult == "research_integration_v6" {
+			decoded, decodedHash, decodeErr := decodeAndHashV6IntegrationResult(submission.Raw)
+			if decodeErr != nil {
+				return AcceptResultOutcome{}, decodeErr
+			}
+			v6Integration, hash, result = &decoded, decodedHash, researchV6IntegrationEnvelope(decoded)
 		} else {
 			return AcceptResultOutcome{}, fmt.Errorf("%w: V6 task result adapter is not available for %s", ErrUnsupportedVersion, task.Kind)
 		}
@@ -124,7 +131,7 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 	return module.store.AcceptResult(ctx, AcceptResultInput{
 		SessionID: submission.SessionID, AttemptID: submission.AttemptID,
 		AgentID: submission.AgentID, InboxTaskID: submission.InboxTaskID,
-		Raw: submission.Raw, Result: result, V6Plan: v6Plan, V6Evidence: v6Evidence, Hash: hash,
+		Raw: submission.Raw, Result: result, V6Plan: v6Plan, V6Evidence: v6Evidence, V6Integration: v6Integration, Hash: hash,
 	})
 }
 

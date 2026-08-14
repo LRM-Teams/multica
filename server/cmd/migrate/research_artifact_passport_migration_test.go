@@ -895,26 +895,74 @@ func TestResearchArtifactPolicyLedgerGuards322RoundTrips(t *testing.T) {
 		t.Fatalf("artifact_create mutations=%d err=%v", mutationCount, err)
 	}
 
-	negativeTx, err := conn.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin negative tx: %v", err)
-	}
-	orphanID := "30000000-0000-4000-8000-000000000099"
-	if _, err = negativeTx.Exec(ctx, `
-		INSERT INTO research_artifact_passport (
-		  id, workspace_id, session_id, entity_kind, current_version, eligibility_revision,
-		  lifecycle_status, provenance_completeness, registered_at
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'task', 1, 1, 'registered', 'partial', now()
-		)
-	`, orphanID, workspaceID, sessionID); err != nil {
-		negativeTx.Rollback(ctx)
-		t.Fatalf("insert orphan passport: %v", err)
-	}
-	if err = negativeTx.Commit(ctx); err == nil {
-		t.Fatal("expected orphan passport insert without artifact_create mutation to fail")
-	} else {
-		negativeTx.Rollback(ctx)
+	for index, mode := range artifactConstraintModes {
+		t.Run("artifact_create_one_sided/"+mode.name, func(t *testing.T) {
+			negativeTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin negative tx: %v", beginErr)
+			}
+			defer negativeTx.Rollback(ctx)
+			orphanID := fmt.Sprintf("30000000-0000-4000-8000-%012d", 90+index)
+			if _, execErr := negativeTx.Exec(ctx, `
+				INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+				VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 1, 1);
+				INSERT INTO research_artifact_passport (
+				  id, workspace_id, session_id, entity_kind, eligibility_revision,
+				  lifecycle_status, provenance_completeness, registered_at
+				) VALUES (
+				  $1::uuid, $2::uuid, $3::uuid, 'task', 1, 'registered', 'partial', now()
+				);
+			`, orphanID, workspaceID, sessionID, "ledger-orphan-"+mode.name); execErr != nil {
+				t.Fatalf("insert paired domain/passport without ledger: %v", execErr)
+			}
+			assertArtifactConstraint(t,
+				commitOrForceArtifactConstraints(ctx, negativeTx, mode.immediate),
+				"research_artifact_passport_to_policy_mutation_guard",
+			)
+		})
+
+		t.Run("eligibility_passport_only/"+mode.name, func(t *testing.T) {
+			tx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatal(beginErr)
+			}
+			defer tx.Rollback(ctx)
+			if _, execErr := tx.Exec(ctx, `
+				UPDATE research_artifact_passport
+				SET eligibility_revision=2
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+			`, workspaceID, sessionID, taskID); execErr != nil {
+				t.Fatalf("update passport without eligibility ledger: %v", execErr)
+			}
+			assertArtifactConstraint(t,
+				commitOrForceArtifactConstraints(ctx, tx, mode.immediate),
+				"research_artifact_passport_to_policy_mutation_guard",
+			)
+		})
+
+		t.Run("eligibility_ledger_only/"+mode.name, func(t *testing.T) {
+			tx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatal(beginErr)
+			}
+			defer tx.Rollback(ctx)
+			var mutationWatermark int64
+			if queryErr := tx.QueryRow(ctx, `SELECT research_artifact_reserve_policy_watermark($1::uuid,$2::uuid)`, workspaceID, sessionID).Scan(&mutationWatermark); queryErr != nil {
+				t.Fatal(queryErr)
+			}
+			if _, execErr := tx.Exec(ctx, `
+				INSERT INTO research_artifact_policy_mutation (
+				  workspace_id,session_id,watermark,mutation_kind,artifact_id,
+				  old_eligibility_revision,new_eligibility_revision
+				) VALUES ($1::uuid,$2::uuid,$4,'eligibility',$3::uuid,1,2)
+			`, workspaceID, sessionID, taskID, mutationWatermark); execErr != nil {
+				t.Fatalf("insert eligibility ledger without passport change: %v", execErr)
+			}
+			assertArtifactConstraint(t,
+				commitOrForceArtifactConstraints(ctx, tx, mode.immediate),
+				"research_artifact_policy_mutation_to_passport_guard",
+			)
+		})
 	}
 
 	if _, err = conn.Exec(ctx, down322); err != nil {
@@ -1090,30 +1138,52 @@ func TestResearchArtifactIntegrityGuards323RoundTrips(t *testing.T) {
 		t.Fatalf("commit projection guard tx: %v", err)
 	}
 
-	badProducerTx, err := conn.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin bad producer tx: %v", err)
-	}
-	if _, err = badProducerTx.Exec(ctx, `
-		INSERT INTO research_artifact_version (
-		  workspace_id, session_id, artifact_id, version,
-		  schema_name, schema_version, canonicalization_version,
-		  content_hash, access_level, goal_version, plan_version, hash_origin,
-		  produced_by_task_id, produced_by_attempt_id
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 3,
-		  'task', 'legacy-v1', 'research-artifact-c14n-v1',
-		  'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'raw', 1, 1, 'production',
-		  $4::uuid, $5::uuid
-		)
-	`, workspaceID, sessionID, taskID, otherTaskID, attemptID); err != nil {
-		badProducerTx.Rollback(ctx)
-		t.Fatalf("insert mismatched producer version: %v", err)
-	}
-	if err = badProducerTx.Commit(ctx); err == nil {
-		t.Fatal("expected producer guard to reject mismatched task_id")
-	} else {
-		badProducerTx.Rollback(ctx)
+	for _, mode := range artifactConstraintModes {
+		t.Run("producer_attempt_task_mismatch/"+mode.name, func(t *testing.T) {
+			badProducerTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin bad producer tx: %v", beginErr)
+			}
+			defer badProducerTx.Rollback(ctx)
+			if _, execErr := badProducerTx.Exec(ctx, `
+				INSERT INTO research_artifact_version (
+				  workspace_id, session_id, artifact_id, version,
+				  schema_name, schema_version, canonicalization_version,
+				  content_hash, access_level, goal_version, plan_version, hash_origin,
+				  produced_by_task_id, produced_by_attempt_id
+				) VALUES (
+				  $1::uuid, $2::uuid, $3::uuid, 3,
+				  'task', 'legacy-v1', 'research-artifact-c14n-v1',
+				  'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'raw', 1, 1, 'production',
+				  $4::uuid, $5::uuid
+				)
+			`, workspaceID, sessionID, taskID, otherTaskID, attemptID); execErr != nil {
+				t.Fatalf("insert mismatched producer version: %v", execErr)
+			}
+			assertArtifactConstraint(t,
+				commitOrForceArtifactConstraints(ctx, badProducerTx, mode.immediate),
+				"research_artifact_version_producer_guard",
+			)
+		})
+
+		t.Run("result_attempt_projection_mismatch/"+mode.name, func(t *testing.T) {
+			badProjectionTx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatalf("begin bad projection tx: %v", beginErr)
+			}
+			defer badProjectionTx.Rollback(ctx)
+			if _, execErr := badProjectionTx.Exec(ctx, `
+				UPDATE research_result_artifact
+				SET content_hash = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+			`, workspaceID, sessionID, resultID); execErr != nil {
+				t.Fatalf("update mismatched result projection: %v", execErr)
+			}
+			assertArtifactConstraint(t,
+				commitOrForceArtifactConstraints(ctx, badProjectionTx, mode.immediate),
+				"research_result_attempt_projection_guard",
+			)
+		})
 	}
 
 	if _, err = conn.Exec(ctx, down323); err != nil {
@@ -1351,24 +1421,134 @@ func TestResearchArtifactLinkPolicyGuards324RoundTrips(t *testing.T) {
 		t.Fatalf("commit lifecycle guard tx: %v", err)
 	}
 
-	orphanLifecycleTx, err := conn.Begin(ctx)
+	orphanSupersessionTaskID := "30000000-0000-4000-8000-000000000006"
+	orphanLifecycleTaskID := "30000000-0000-4000-8000-000000000007"
+	orphanSeedTx, err := conn.Begin(ctx)
 	if err != nil {
-		t.Fatalf("begin orphan lifecycle tx: %v", err)
+		t.Fatalf("begin one-sided fixture seed: %v", err)
 	}
-	if _, err = orphanLifecycleTx.Exec(ctx, `
-		INSERT INTO research_artifact_lifecycle_event (
-		  workspace_id, session_id, artifact_id,
-		  old_status, new_status, old_eligibility_revision, new_eligibility_revision,
-		  policy_watermark, reason
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'accepted', 'rejected', 2, 3, 999, 'orphan')
-	`, workspaceID, sessionID, lifecycleTaskID); err != nil {
-		orphanLifecycleTx.Rollback(ctx)
-		t.Fatalf("insert orphan lifecycle event: %v", err)
+	defer orphanSeedTx.Rollback(ctx)
+	if _, err = orphanSeedTx.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES
+		  ($1::uuid, $3::uuid, $4::uuid, 'orphan-supersession-task', 1, 1),
+		  ($2::uuid, $3::uuid, $4::uuid, 'orphan-lifecycle-task', 1, 1)
+	`, orphanSupersessionTaskID, orphanLifecycleTaskID, workspaceID, sessionID); err != nil {
+		t.Fatalf("insert one-sided fixture tasks: %v", err)
 	}
-	if err = orphanLifecycleTx.Commit(ctx); err == nil {
-		t.Fatal("expected lifecycle guard to reject orphan lifecycle event")
-	} else {
-		orphanLifecycleTx.Rollback(ctx)
+	for _, artifactID := range []string{orphanSupersessionTaskID, orphanLifecycleTaskID} {
+		if _, err = orphanSeedTx.Exec(ctx, `
+			SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
+		`, workspaceID, sessionID, artifactID); err != nil {
+			t.Fatalf("register one-sided fixture passport: %v", err)
+		}
+	}
+	if err = orphanSeedTx.Commit(ctx); err != nil {
+		t.Fatalf("commit one-sided fixture seed: %v", err)
+	}
+	var orphanSupersededVersionID string
+	if err = conn.QueryRow(ctx, `
+		SELECT id::text FROM research_artifact_version
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1
+	`, workspaceID, sessionID, orphanSupersessionTaskID).Scan(&orphanSupersededVersionID); err != nil {
+		t.Fatalf("load one-sided supersession version: %v", err)
+	}
+
+	for _, mode := range artifactConstraintModes {
+		t.Run("supersession_edge_only/"+mode.name, func(t *testing.T) {
+			tx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatal(beginErr)
+			}
+			defer tx.Rollback(ctx)
+			if _, execErr := tx.Exec(ctx, `
+				INSERT INTO research_artifact_supersession (
+				  workspace_id, session_id, successor_version_id, superseded_version_id,
+				  superseded_artifact_id, reason, decision_id, policy_watermark,
+				  old_eligibility_revision, new_eligibility_revision
+				) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'one-sided',$6::uuid,999,1,2)
+			`, workspaceID, sessionID, successorVersionID, orphanSupersededVersionID, orphanSupersessionTaskID, decisionID); execErr != nil {
+				t.Fatalf("insert edge-only supersession: %v", execErr)
+			}
+			assertArtifactConstraintOneOf(t,
+				commitOrForceArtifactConstraints(ctx, tx, mode.immediate),
+				"research_artifact_supersession_policy_mutation_fkey",
+				"research_artifact_supersession_to_policy_guard",
+			)
+		})
+
+		t.Run("supersession_ledger_only/"+mode.name, func(t *testing.T) {
+			tx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatal(beginErr)
+			}
+			defer tx.Rollback(ctx)
+			var mutationWatermark int64
+			if queryErr := tx.QueryRow(ctx, `SELECT research_artifact_reserve_policy_watermark($1::uuid,$2::uuid)`, workspaceID, sessionID).Scan(&mutationWatermark); queryErr != nil {
+				t.Fatal(queryErr)
+			}
+			if _, execErr := tx.Exec(ctx, `
+				UPDATE research_artifact_passport SET eligibility_revision=2,lifecycle_status='superseded'
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid;
+				INSERT INTO research_artifact_policy_mutation (
+				  workspace_id,session_id,watermark,mutation_kind,artifact_id,
+				  old_eligibility_revision,new_eligibility_revision
+				) VALUES ($1::uuid,$2::uuid,$4,'supersession',$3::uuid,1,2);
+			`, workspaceID, sessionID, orphanSupersessionTaskID, mutationWatermark); execErr != nil {
+				t.Fatalf("insert ledger-only supersession: %v", execErr)
+			}
+			assertArtifactConstraint(t,
+				commitOrForceArtifactConstraints(ctx, tx, mode.immediate),
+				"research_artifact_policy_mutation_to_supersession_guard",
+			)
+		})
+
+		t.Run("lifecycle_event_only/"+mode.name, func(t *testing.T) {
+			tx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatal(beginErr)
+			}
+			defer tx.Rollback(ctx)
+			if _, execErr := tx.Exec(ctx, `
+				INSERT INTO research_artifact_lifecycle_event (
+				  workspace_id,session_id,artifact_id,old_status,new_status,
+				  old_eligibility_revision,new_eligibility_revision,policy_watermark,reason
+				) VALUES ($1::uuid,$2::uuid,$3::uuid,'registered','accepted',1,2,999,'one-sided')
+			`, workspaceID, sessionID, orphanLifecycleTaskID); execErr != nil {
+				t.Fatalf("insert event-only lifecycle: %v", execErr)
+			}
+			assertArtifactConstraintOneOf(t,
+				commitOrForceArtifactConstraints(ctx, tx, mode.immediate),
+				"research_artifact_lifecycle_event_policy_mutation_fkey",
+				"research_artifact_lifecycle_event_to_policy_guard",
+			)
+		})
+
+		t.Run("lifecycle_ledger_only/"+mode.name, func(t *testing.T) {
+			tx, beginErr := conn.Begin(ctx)
+			if beginErr != nil {
+				t.Fatal(beginErr)
+			}
+			defer tx.Rollback(ctx)
+			var mutationWatermark int64
+			if queryErr := tx.QueryRow(ctx, `SELECT research_artifact_reserve_policy_watermark($1::uuid,$2::uuid)`, workspaceID, sessionID).Scan(&mutationWatermark); queryErr != nil {
+				t.Fatal(queryErr)
+			}
+			if _, execErr := tx.Exec(ctx, `
+				UPDATE research_artifact_passport SET eligibility_revision=2,lifecycle_status='accepted'
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid;
+				INSERT INTO research_artifact_policy_mutation (
+				  workspace_id,session_id,watermark,mutation_kind,artifact_id,
+				  old_eligibility_revision,new_eligibility_revision,old_lifecycle_status,new_lifecycle_status
+				) VALUES ($1::uuid,$2::uuid,$4,'lifecycle',$3::uuid,1,2,'registered','accepted');
+			`, workspaceID, sessionID, orphanLifecycleTaskID, mutationWatermark); execErr != nil {
+				t.Fatalf("insert ledger-only lifecycle: %v", execErr)
+			}
+			assertArtifactConstraint(t,
+				commitOrForceArtifactConstraints(ctx, tx, mode.immediate),
+				"research_artifact_policy_mutation_to_lifecycle_event_guard",
+			)
+		})
 	}
 
 	if _, err = conn.Exec(ctx, down324); err != nil {

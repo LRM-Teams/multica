@@ -1,5 +1,4 @@
-.research-home-theme,
-body:has(.research-home-theme) {
+.research-home-theme {
   --page-bg: #08121c;
   --surface: #0d1723;
   --surface-raised: #101d2a;
@@ -7,19 +6,17 @@ body:has(.research-home-theme) {
   --ink-2: #a6b6c5;
   --ink-3: #8293a7;
   --line: #26384c;
-  --sidebar: #08121c;
-  --sidebar-foreground: #edf4fb;
-  --sidebar-primary: #48d3e4;
-  --sidebar-primary-foreground: #041018;
-  --sidebar-accent: #112434;
-  --sidebar-accent-foreground: #edf4fb;
-  --sidebar-border: #172738;
-  --sidebar-ring: #48d3e4;
 }
 
 body:has(.research-home-theme) {
-  color-scheme: dark;
-  background: #07111b;
+  --sidebar: #f6f6f4;
+  --sidebar-foreground: #1d1c1d;
+  --sidebar-primary: #1d1c1d;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ffffff;
+  --sidebar-accent-foreground: #1d1c1d;
+  --sidebar-border: #e8e8e8;
+  --sidebar-ring: #868686;
 }
 
 .research-home-theme {
@@ -132,6 +129,7 @@ body:has(.research-home-theme) {
   color: #dcecf4;
   text-align: center;
   background: radial-gradient(circle at 50% 35%, #163145, #0b1925 72%);
+  overflow: hidden;
 }
 
 .research-home-node-main {

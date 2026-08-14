@@ -9,7 +9,7 @@
 
 ## Research Constellation 局部视觉世界
 
-调研首页与调研星图工作台构成一个连续的操作空间，固定使用局部深色主题，即使应用全局主题为浅色也不得退化为白底通用卡片。页面采用深海蓝背景、冷蓝 1px 描边和低密度星空材质；青色表示探索或运行，绿色表示稳定结果，琥珀色表示风险或需要处理，紫色表示新方向。首页背景基准、真实数据星图和首屏容量合同见 [`superpowers/specs/2026-08-14-research-home-command-center-spec.zh-CN.md`](./superpowers/specs/2026-08-14-research-home-command-center-spec.zh-CN.md)。这是一项有意的产品表面例外，不得被全局浅色 token 或普通 dashboard 卡片模式覆盖。
+调研首页与调研星图工作台构成一个连续的操作空间，固定使用内容区局部深色主题，即使应用全局主题为浅色也不得退化为白底通用卡片；左侧应用导航不属于该局部主题，继续跟随全局浅色样式。页面采用深海蓝背景、冷蓝 1px 描边和低密度星空材质；青色表示探索或运行，绿色表示稳定结果，琥珀色表示风险或需要处理，紫色表示新方向。首页背景基准、真实数据星图和首屏容量合同见 [`superpowers/specs/2026-08-14-research-home-command-center-spec.zh-CN.md`](./superpowers/specs/2026-08-14-research-home-command-center-spec.zh-CN.md)。这是一项有意的产品表面例外，不得被全局浅色 token 或普通 dashboard 卡片模式覆盖。
 
 ---
 

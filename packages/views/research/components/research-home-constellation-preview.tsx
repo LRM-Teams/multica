@@ -39,9 +39,9 @@ export function ResearchHomeConstellationPreview({ sessions, selectedId }: { ses
         <path className={`research-home-edge ${attention > 0 ? "research-home-edge-risk" : ""}`} d="M227 138 C 179 160, 138 177, 92 184" />
       </svg>
       <div className="research-home-node research-home-node-main">
-        <span className="max-w-20">
+        <span className="w-[76px] min-w-0 overflow-hidden">
           <span className="block text-xs font-medium uppercase tracking-wide text-success">{t(($) => $.stage_short[stage as keyof typeof $.stage_short] ?? stage)}</span>
-          <span className="mt-1 hidden line-clamp-2 text-xs font-medium text-foreground sm:block">{focus?.title || focus?.goal || t(($) => $.home_overview.constellation_empty)}</span>
+          <span className="mt-1 hidden truncate text-xs font-medium text-foreground sm:block" title={focus?.title || focus?.goal}>{focus?.title || focus?.goal || t(($) => $.home_overview.constellation_empty)}</span>
           <span className="mt-1 block text-xs tabular-nums text-muted-foreground">{progress ? t(($) => $.home_overview.tasks, { done: progress.task_completed, total: progress.task_total }) : "—"}</span>
         </span>
       </div>

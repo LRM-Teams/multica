@@ -26,6 +26,37 @@ type acceptanceRaceFixture struct {
 	input    AcceptResultInput
 }
 
+type acceptanceRaceWriteSet struct {
+	resultArtifacts   int
+	methodDecisions   int
+	questions         int
+	tasks             int
+	acceptedEvents    int
+	producedPassports int
+	inputReferences   int
+}
+
+func loadAcceptanceRaceWriteSet(t *testing.T, ctx context.Context, fx acceptanceRaceFixture) acceptanceRaceWriteSet {
+	t.Helper()
+	var state acceptanceRaceWriteSet
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_result_artifact WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid AND decision_kind = 'research_method'),
+		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND event_type = 'task_result_accepted'),
+		  (SELECT count(*)::int FROM research_artifact_passport WHERE session_id = $1::uuid AND produced_by_attempt_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference WHERE session_id = $1::uuid)
+	`, fx.run.SessionID, fx.attempt.ID).Scan(
+		&state.resultArtifacts, &state.methodDecisions, &state.questions, &state.tasks,
+		&state.acceptedEvents, &state.producedPassports, &state.inputReferences,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
 func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) acceptanceRaceFixture {
 	t.Helper()
 	fixture := seedResearchRunFixture(t, ctx, pool)
@@ -173,6 +204,7 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 	cases := []struct {
 		name   string
 		mutate func(context.Context, acceptanceRaceFixture) error
+		want   error
 	}{
 		{
 			name: "run_orchestrator_version",
@@ -389,10 +421,18 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 			if err := tc.mutate(ctx, fx); err != nil {
 				t.Fatalf("mutate: %v", err)
 			}
-			if _, err = fx.store.AcceptResult(ctx, fx.input); !errors.Is(err, ErrInvalidTransition) {
-				t.Fatalf("AcceptResult after mutation err=%v want ErrInvalidTransition", err)
+			beforeRetry := loadAcceptanceRaceWriteSet(t, ctx, fx)
+			want := tc.want
+			if want == nil {
+				want = ErrInvalidTransition
+			}
+			if _, err = fx.store.AcceptResult(ctx, fx.input); !errors.Is(err, want) {
+				t.Fatalf("AcceptResult after mutation err=%v want %v", err, want)
 			}
 			assertAcceptanceRolledBack(t, ctx, fx)
+			if afterRetry := loadAcceptanceRaceWriteSet(t, ctx, fx); afterRetry != beforeRetry {
+				t.Fatalf("failed retry changed acceptance write set before=%+v after=%+v", beforeRetry, afterRetry)
+			}
 		})
 	}
 }

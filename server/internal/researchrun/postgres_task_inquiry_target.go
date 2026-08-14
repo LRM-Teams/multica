@@ -139,15 +139,23 @@ func loadMatchingTaskInquiryTargetsEvent(ctx context.Context, tx pgx.Tx, in Bind
 // on them; selective steering never guesses their ownership.
 func loadSelectiveSteeringStateTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) (selectiveSteeringState, error) {
 	var state selectiveSteeringState
-	if err := tx.QueryRow(ctx, `SELECT state_version FROM research_session
-		WHERE workspace_id=$1::uuid AND id=$2::uuid FOR UPDATE`, workspaceID, sessionID).Scan(&state.StateVersion); err != nil {
+	var goalVersion, planVersion int32
+	if err := tx.QueryRow(ctx, `SELECT state_version,goal_version,plan_version FROM research_session
+		WHERE workspace_id=$1::uuid AND id=$2::uuid FOR UPDATE`, workspaceID, sessionID).Scan(
+		&state.StateVersion, &goalVersion, &planVersion,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return selectiveSteeringState{}, ErrRunNotFound
 		}
 		return selectiveSteeringState{}, err
 	}
-	branchRows, err := tx.Query(ctx, `SELECT id::text,COALESCE(parent_branch_id::text,''),status
-		FROM research_branch WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY id`, workspaceID, sessionID)
+	branchRows, err := tx.Query(ctx, `SELECT branch.id::text,COALESCE(branch.parent_branch_id::text,''),branch.status
+		FROM research_branch branch
+		JOIN research_task creator
+		  ON creator.workspace_id=branch.workspace_id AND creator.session_id=branch.session_id AND creator.id=branch.created_by_task_id
+		WHERE branch.workspace_id=$1::uuid AND branch.session_id=$2::uuid
+		  AND creator.goal_version=$3 AND creator.plan_version=$4
+		ORDER BY branch.id`, workspaceID, sessionID, goalVersion, planVersion)
 	if err != nil {
 		return selectiveSteeringState{}, err
 	}
@@ -169,9 +177,10 @@ func loadSelectiveSteeringStateTx(ctx context.Context, tx pgx.Tx, workspaceID, s
 		FROM research_task task
 		LEFT JOIN research_task_inquiry_target target
 		  ON target.workspace_id=task.workspace_id AND target.session_id=task.session_id AND target.task_id=task.id
-		 AND target.target_kind='branch'
+		 AND target.target_kind='branch' AND target.goal_version=$3 AND target.plan_version=$4
 		WHERE task.workspace_id=$1::uuid AND task.session_id=$2::uuid
-		ORDER BY task.id,target.target_entity_id`, workspaceID, sessionID)
+		  AND task.goal_version=$3 AND task.plan_version=$4
+		ORDER BY task.id,target.target_entity_id`, workspaceID, sessionID, goalVersion, planVersion)
 	if err != nil {
 		return selectiveSteeringState{}, err
 	}

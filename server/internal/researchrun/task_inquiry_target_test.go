@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +76,23 @@ func TestBindTaskInquiryTargetsTransactionRecovery(t *testing.T) {
 	calls := inspectTransactionBoundaryCalls(t, source, "BindTaskInquiryTargets")
 	if len(calls.direct) != 0 || calls.runner["beginResearchTx"] != 1 || calls.runner["commitResearchTx"] != 2 {
 		t.Fatalf("transaction boundaries=%+v", calls)
+	}
+}
+
+func TestSelectiveSteeringStateLoaderUsesCurrentCanonicalVersions(t *testing.T) {
+	source, err := os.ReadFile("postgres_task_inquiry_target.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := string(source)
+	for _, required := range []string{
+		"SELECT state_version,goal_version,plan_version FROM research_session",
+		"creator.goal_version=$3 AND creator.plan_version=$4",
+		"target.goal_version=$3 AND target.plan_version=$4",
+		"task.goal_version=$3 AND task.plan_version=$4",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Fatalf("selective steering loader missing %q", required)
+		}
 	}
 }

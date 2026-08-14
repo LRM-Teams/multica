@@ -1103,6 +1103,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 ### K. 报告整合、修订谱系与交付 Gate
 
 - [ ] Reporter 只消费最新 Integration Snapshot 和允许的 verified 工件。
+  - [x] K1a：`ValidateReporterInput` 对单个 Reporter Attempt 联合冻结当前 workspace/session、goal/plan、canonical state、Integration 水位和完整输入集合；只接纳 latest + completed Integration Snapshot 及其精确 `input_set_hash` 所引用的 accepted、verified、task-readable、非 evaluation-private 工件版本，并生成顺序稳定的 manifest fingerprint。当前仅完成准入合同；canonical 查询、dispatch manifest 持久化/绑定和 Report Revision 物化仍待后续 K 切片。
 - [ ] 报告保存完整版本、输入工件、Claim anchor、争议和修订理由。
 - [ ] 扩充 Evaluation Defect：方法遵循、范围偏移、证据充分度、冲突处理、校准、决策可用性和新鲜度。
 - [ ] Quality/Citation 评审覆盖全部 Claim/section，修订逐项关闭缺陷。

@@ -28,6 +28,7 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 import { NoteShareSummary } from "./note-share-summary";
 import { NoteWritebackReview } from "./note-writeback-review";
+import { NoteChannelAnchors } from "./note-channel-anchors";
 import { NoteIntentEntry, type NoteIntentKind } from "./note-intent-entry";
 import { NoteRetrospectiveDialog } from "./note-retrospective-dialog";
 import { NoteWorkerRunDialog } from "./note-worker-run-dialog";
@@ -1048,6 +1049,7 @@ function NoteEditor({
           }));
         }}
       />
+      <NoteChannelAnchors page={selected} />
       <textarea
         ref={titleTextareaRef}
         rows={1}
@@ -1571,7 +1573,15 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           defaultAgentId={configuredAiAgentId}
           open={workerOpen}
           onOpenChange={(open) => setUiState((current) => ({ ...current, workerOpen: open }))}
-          onDispatched={(job) => setUiState((current) => ({ ...current, workerJobId: job.id }))}
+          onDispatched={(job) => {
+            setUiState((current) => ({ ...current, workerJobId: job.id }));
+            // N2-A2: Worker may have written a channel anchor — refresh detail refs.
+            if (selected.id) {
+              void queryClient.invalidateQueries({
+                queryKey: noteDetailOptions(wsId, selected.id).queryKey,
+              });
+            }
+          }}
         />
       ) : null}
       <ExportDialog page={selected} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />

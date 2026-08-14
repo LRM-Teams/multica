@@ -150,6 +150,34 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 			hash:      hash,
 		})
 	}
+	if string(jobs[0].raw) == string(jobs[1].raw) {
+		t.Fatal("opposite-order payload fixtures unexpectedly encode identically")
+	}
+	for i, job := range jobs {
+		var sharedClaims, totalEntries int
+		if err = pool.QueryRow(ctx, `
+			SELECT count(*) FILTER (WHERE passport.id IN ($4::uuid,$5::uuid))::int,
+			       count(*)::int
+			FROM research_artifact_context_manifest manifest
+			JOIN research_artifact_context_entry entry
+			  ON (entry.workspace_id,entry.session_id,entry.manifest_id)=
+			     (manifest.workspace_id,manifest.session_id,manifest.id)
+			JOIN research_artifact_version version
+			  ON (version.workspace_id,version.session_id,version.id)=
+			     (entry.workspace_id,entry.session_id,entry.artifact_version_id)
+			JOIN research_artifact_passport passport
+			  ON (passport.workspace_id,passport.session_id,passport.id)=
+			     (version.workspace_id,version.session_id,version.artifact_id)
+			WHERE manifest.workspace_id=$1::uuid AND manifest.session_id=$2::uuid
+			  AND manifest.attempt_id=$3::uuid
+		`, fixture.workspaceID, run.SessionID, job.attemptID,
+			lockOrderClaimLowID, lockOrderClaimHighID).Scan(&sharedClaims, &totalEntries); err != nil {
+			t.Fatalf("inspect manifest[%d]: %v", i, err)
+		}
+		if sharedClaims != 2 || totalEntries < sharedClaims {
+			t.Fatalf("manifest[%d] shared claims=%d total entries=%d want both lock targets", i, sharedClaims, totalEntries)
+		}
+	}
 
 	errs := make([]error, len(jobs))
 	var wg sync.WaitGroup

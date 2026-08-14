@@ -46,6 +46,9 @@ type workspaceRunnerDependencies struct {
 	openInbox                   inboxCoordinatorFactory
 	runtimeSet                  func() AgentAttachmentRuntimeSet
 	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
+	configureProviderSession    func(string, string, *string) error
+	currentProviderSession      func(string, string) (string, error)
+	recordProviderSession       func(string, string, string)
 	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
 	mixedRunActivityReplay      func(send func(string, any) error)
 	requestReminderSnapshot     func(string)
@@ -81,6 +84,9 @@ type WorkspaceRunner struct {
 
 	runtimeSet                  func() AgentAttachmentRuntimeSet
 	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
+	configureProviderSession    func(string, string, *string) error
+	currentProviderSession      func(string, string) (string, error)
+	recordProviderSession       func(string, string, string)
 	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
 	mixedRunActivityReplay      func(send func(string, any) error)
 	requestReminderSnapshot     func(string)
@@ -154,6 +160,9 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		diagnostics:                 dependencies.diagnostics,
 		runtimeSet:                  dependencies.runtimeSet,
 		ensureResidentRuntime:       dependencies.ensureResidentRuntime,
+		configureProviderSession:    dependencies.configureProviderSession,
+		currentProviderSession:      dependencies.currentProviderSession,
+		recordProviderSession:       dependencies.recordProviderSession,
 		mixedRunActivityAck:         dependencies.mixedRunActivityAck,
 		mixedRunActivityReplay:      dependencies.mixedRunActivityReplay,
 		requestReminderSnapshot:     dependencies.requestReminderSnapshot,
@@ -333,6 +342,7 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 func (runner *WorkspaceRunner) activeCapabilities() []string {
 	capabilities := []string{
 		protocol.DaemonCapabilityWorkspaceRunnerAttachment,
+		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
 		protocol.DaemonCapabilityReminderTransientInput,
 	}
 	if runner != nil && runner.controlHeartbeatPayload != nil && runner.controlHeartbeatAck != nil {
@@ -371,6 +381,24 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 			return d.attachmentRuntimeSet(workspaceID)
 		},
 		ensureResidentRuntime: d.ensureResidentMessageRuntime,
+		configureProviderSession: func(agentID, runtimeID string, providerSessionID *string) error {
+			if providerSessionID != nil {
+				if d.agentRuntimeSessions == nil {
+					return errors.New("Agent provider session store is unavailable")
+				}
+				if err := d.agentRuntimeSessions.Put(agentID, runtimeID, *providerSessionID); err != nil {
+					return fmt.Errorf("apply Agent provider session: %w", err)
+				}
+			}
+			return nil
+		},
+		currentProviderSession: func(agentID, runtimeID string) (string, error) {
+			if d.agentRuntimeSessions == nil {
+				return "", errors.New("Agent provider session store is unavailable")
+			}
+			return d.agentRuntimeSessions.Get(agentID, runtimeID)
+		},
+		recordProviderSession: d.recordProviderSession,
 		mixedRunActivityAck:   d.ackMixedRunActivity,
 		mixedRunActivityReplay: func(send func(string, any) error) {
 			d.replayMixedRunActivity(workspaceID, send)

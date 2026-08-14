@@ -210,9 +210,6 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		data := observation.Data.(AgentDraftSentObservationData)
 		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
 		entry, err = activitySystemEntry(messageSendDraftSentTitle(), messageSendDraftSentSubtext(data.Target, data.Anyway))
-	case AgentObservationLifecycleStopped:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindOffline, "stopped"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Stopped")
 	case AgentObservationError:
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID

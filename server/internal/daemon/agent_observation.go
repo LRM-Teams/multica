@@ -25,7 +25,6 @@ const (
 	AgentObservationMessageBodyAccepted    AgentObservationKind = "message_body_accepted"
 	AgentObservationFreshnessHeld          AgentObservationKind = "freshness_held"
 	AgentObservationDraftSent              AgentObservationKind = "draft_sent"
-	AgentObservationLifecycleStopped       AgentObservationKind = "lifecycle_stopped"
 	AgentObservationError                  AgentObservationKind = "error"
 	AgentObservationOffline                AgentObservationKind = "offline"
 )
@@ -86,14 +85,6 @@ type AgentDraftSentObservationData struct {
 }
 
 func (AgentDraftSentObservationData) agentObservationData() {}
-
-type AgentLifecycleStoppedObservationData struct {
-	RuntimeID   string
-	ActionKind  agentLifecycleActionKind
-	Interrupted bool
-}
-
-func (AgentLifecycleStoppedObservationData) agentObservationData() {}
 
 type AgentErrorObservationData struct {
 	RuntimeID         string
@@ -192,21 +183,6 @@ func (observation AgentObservation) Validate() error {
 			return errors.New("Agent Draft send Runtime and target are required")
 		}
 		return nil
-
-	case AgentObservationLifecycleStopped:
-		if err := observation.validateLaunchID(); err != nil {
-			return err
-		}
-		data, ok := observation.Data.(AgentLifecycleStoppedObservationData)
-		if !ok || strings.TrimSpace(data.RuntimeID) == "" {
-			return observationDataTypeError(observation.Kind)
-		}
-		switch data.ActionKind {
-		case agentLifecycleActionRestart, agentLifecycleActionResetSessionRestart, agentLifecycleActionFullResetRestart:
-			return nil
-		default:
-			return errors.New("Agent lifecycle stop action kind is invalid")
-		}
 
 	case AgentObservationError, AgentObservationOffline:
 		if err := observation.validateLaunchID(); err != nil {

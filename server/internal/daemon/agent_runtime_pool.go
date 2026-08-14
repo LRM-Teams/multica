@@ -1321,6 +1321,27 @@ func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID st
 	return killable.ForceKill()
 }
 
+// awaitSessionQuiescence turns ForceKill's request receipt into Raft's stop
+// completion boundary: no inactive status may be emitted while the old turn
+// still owns its lease or the resident provider process is still alive.
+func (p *canonicalAgentRuntimePool) awaitSessionQuiescence(ctx context.Context, agentID, runtimeID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if !p.hasLiveLease(agentID, runtimeID) && !p.residentProcessAlive(agentID, runtimeID) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // revokeResidentPiRunIdentity retires only the requested run binding. A stale
 // rollback can therefore never kill a newer run that reused the same
 // Agent×runtime slot. Busy native input is force-killed and fenced for detach

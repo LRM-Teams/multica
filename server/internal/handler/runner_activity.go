@@ -70,6 +70,9 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
+		if err := h.resumeAgentLifecycleOperations(ctx, identity); err != nil {
+			return err
+		}
 		// Raft establishes APM ownership before it offers durable deliveries.
 		// The Computer can then accept messages into the Agent's starting Inbox
 		// and ACK them without requiring the Provider to be ready yet.
@@ -91,6 +94,13 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status); err != nil {
 			return err
 		}
+		handled, err := h.advanceAgentLifecycleFromStatus(ctx, identity, status)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
 		if status.Status == protocol.AgentStatusInactive && h.DaemonHub != nil {
 			return h.reconcileWorkspaceRunnerLaunches(ctx, identity)
 		}
@@ -107,6 +117,12 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		// were rejected_no_process while the Agent was down — same ledger
 		// as Runner ready, not a fake ACK.
 		return h.redeliverUnacknowledgedStandaloneChat(ctx, identity)
+	case protocol.EventAgentResetWorkspaceResult:
+		var result protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return fmt.Errorf("decode Agent workspace reset result: %w", err)
+		}
+		return h.recordAgentWorkspaceResetResult(ctx, identity, result)
 	case protocol.EventAgentSession:
 		var session protocol.AgentSessionPayload
 		if err := json.Unmarshal(raw, &session); err != nil {

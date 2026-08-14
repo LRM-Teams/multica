@@ -142,6 +142,13 @@ One of three explicit ways to restart an Agent runtime:
 
 All three preserve the server-side Agent identity, configuration, chat history,
 and Issues.
+
+The server operation is the durable product orchestrator. It advances only
+through Raft 1.0.16's discrete Runner boundaries: `agent:stop`, inactive
+status, optional session clear, optional `agent:reset-workspace`, then
+`agent:start(config.sessionId)`. A replacement is complete only after the new
+launch reports active. The Runner never receives a composite restart action;
+heartbeat lifecycle queues and parallel stop/start paths remain retired.
 _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
 
 ## Standalone Agent Chat

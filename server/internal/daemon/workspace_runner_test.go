@@ -105,7 +105,7 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			for _, capability := range got.ready.ActiveCapabilities {
 				capabilities[capability] = true
 			}
-			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAttachment] || !capabilities[protocol.DaemonCapabilityReminderTransientInput] {
+			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAttachment] || !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAgentReset] || !capabilities[protocol.DaemonCapabilityReminderTransientInput] {
 				t.Fatalf("Runner capabilities = %v, want Attachment and Reminder transient input", got.ready.ActiveCapabilities)
 			}
 		case <-ctx.Done():

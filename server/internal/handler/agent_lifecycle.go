@@ -25,6 +25,8 @@ const (
 	agentLifecycleFullResetRestart    AgentLifecycleActionKind = "full_reset_restart"
 )
 
+const agentLifecycleCommandTimeout = 120 * time.Second
+
 const (
 	agentLifecycleScheduled = "scheduled"
 	agentLifecycleRunning   = "running"
@@ -209,22 +211,43 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to create agent lifecycle operation")
 		return
 	}
-	// Always immediate now (#112): dispatch every accepted create. The old
-	// scheduled/after_current_run branch is gone — it never auto-fired.
-	if status == agentLifecycleRunning && h.AgentLifecycleDispatchStore != nil {
-		if _, err := h.AgentLifecycleDispatchStore.Create(
-			r.Context(), op.ID, uuidToString(lockedAgent.ID), uuidToString(runtime.ID),
-			uuidToString(lockedAgent.WorkspaceID), string(req.ActionKind),
-		); err != nil {
-			// The operation row is already committed; a dispatch failure
-			// here must not roll that back or the client sees a phantom
-			// "running" operation nobody will ever act on. Log-and-continue:
-			// the operation sits at status=running until GetAgentLifecycleOperation
-			// polling eventually shows it stuck, which is visible, not silent.
-			slog.Warn("failed to create agent lifecycle dispatch", "operation_id", op.ID, "error", err)
+	// Product actions are server-owned state machines. The daemon sees only
+	// Raft's discrete stop/reset-workspace/start commands and reports the
+	// process facts that advance this durable operation.
+	if runtime.DaemonID.Valid {
+		state := lifecycleStateFromOperation(op, uuidToString(lockedAgent.WorkspaceID), runtime.DaemonID.String)
+		if err := h.beginAgentLifecycleOperation(r.Context(), state); err != nil {
+			// Relay publication and socket acceptance are not completion proof.
+			// Keep the operation resumable until Runner ready or timeout instead
+			// of fabricating a terminal result at the transport boundary.
+			slog.Warn("Agent lifecycle command not yet delivered", "operation_id", op.ID, "step", op.Step, "error", err)
 		}
 	}
+	if latest, loadErr := getAgentLifecycleOperation(r.Context(), h.DB, lockedAgent.ID, parseUUID(op.ID)); loadErr == nil && latest != nil {
+		op = latest
+	}
 	writeJSON(w, http.StatusAccepted, op)
+}
+
+// SweepTimedOutAgentLifecycleOperations is a business-record backstop, not a
+// delivery scheduler. It only clears a visible running operation whose Runner
+// status/reset facts never advanced it to a terminal state.
+func SweepTimedOutAgentLifecycleOperations(ctx context.Context, exec dbExecutor) (int64, error) {
+	if exec == nil {
+		return 0, errors.New("database is unavailable")
+	}
+	commandTag, err := exec.Exec(ctx, `
+		UPDATE agent_lifecycle_operation
+		SET status = 'failed', step = 'timeout',
+		    reason_code = 'workspace Runner command did not finish before timeout',
+		    finished_at = now()
+		WHERE status = 'running'
+		  AND started_at < now() - ($1 * interval '1 second')
+	`, int64(agentLifecycleCommandTimeout/time.Second))
+	if err != nil {
+		return 0, err
+	}
+	return commandTag.RowsAffected(), nil
 }
 
 func (h *Handler) GetAgentLifecycleOperation(w http.ResponseWriter, r *http.Request) {
@@ -457,12 +480,12 @@ func agentLifecycleInitialStep(status string) string {
 	if status == agentLifecycleScheduled {
 		return "waiting_for_current_run"
 	}
-	return "starting"
+	return agentLifecycleStepStopping
 }
 
 func agentLifecycleCapabilityPresent(capabilities []string) bool {
 	for _, capability := range capabilities {
-		if capability == protocol.DaemonCapabilityAgentLifecycleActions {
+		if capability == protocol.DaemonCapabilityWorkspaceRunnerAgentReset {
 			return true
 		}
 	}

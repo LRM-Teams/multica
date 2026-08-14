@@ -537,17 +537,13 @@ const (
 	// Reminder system input. Unlike canonical Message delivery, this transport
 	// is best-effort and creates no queue, receipt, or reconnect replay.
 	DaemonCapabilityReminderTransientInput = "reminder_transient_owner_input_v1"
-	// DaemonCapabilityAgentLifecycleActions gates the restart/reset-session/
-	// full-reset lifecycle actions (task #62). Advertised as of the
-	// atomic.Pointer deadlock fix + real end-to-end verification (busy
-	// resident agent → restart → ForceKill → crash recovery → operation
-	// succeeded, confirmed against a live database, not mocked).
-	//
-	// Minimum daemon release that advertises this capability is currently
-	// v0.3.95. If that floor moves, also update the hardcoded
-	// unsupported_runtime_capability copy in
-	// packages/core/agents/agent-lifecycle.ts (FE points back here).
+	// DaemonCapabilityAgentLifecycleActions is the retired heartbeat lifecycle
+	// transport capability. New daemons deliberately do not advertise it so a
+	// mixed-version server/daemon pair fails closed during rollout.
 	DaemonCapabilityAgentLifecycleActions = "agent_lifecycle_actions_v1"
+	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
+	// agent:reset-workspace command plus Multica's terminal reset receipt.
+	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"
 	// DaemonCapabilityMachineUpgrade gates the machine-scoped upgrade
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.
@@ -1026,15 +1022,6 @@ type DaemonHeartbeatAckPayload struct {
 	// (task #43), independent of any CLI update — e.g. a stuck/unresponsive
 	// daemon a workspace admin restarts remotely from the web UI.
 	PendingRestart *DaemonHeartbeatPendingRestart `json:"pending_restart,omitempty"`
-	// PendingAgentLifecycleOperations are queued /api/agents/{id}/lifecycle
-	// operations (restart / reset_session_restart / full_reset_restart,
-	// task #52) — narrower than PendingRestart, which restarts the whole
-	// daemon process. One runtime (machine) can host several agents sharing
-	// the daemon's canonical resident pool, so this is a slice: a single
-	// heartbeat can deliver operations for more than one of them at once.
-	// The daemon executes each via agentLifecycleExecutor and reports the
-	// result back via ReportAgentLifecycleOperationResult.
-	PendingAgentLifecycleOperations []DaemonHeartbeatPendingAgentLifecycleOperation `json:"pending_agent_lifecycle_operations,omitempty"`
 	// ReleaseManifestBaseURL, when non-empty, is the server's current opinion
 	// of where the daemon should download CLI update artifacts from. It takes
 	// precedence over the daemon's own MULTICA_RELEASE_MANIFEST_BASE_URL env
@@ -1069,18 +1056,6 @@ type DaemonHeartbeatPendingMachineUpgrade struct {
 // request the daemon should act on for this runtime.
 type DaemonHeartbeatPendingRestart struct {
 	ID string `json:"id"`
-}
-
-// DaemonHeartbeatPendingAgentLifecycleOperation describes one queued
-// /api/agents/{id}/lifecycle operation the daemon should execute via
-// agentLifecycleExecutor (task #52). ActionKind is one of "restart",
-// "reset_session_restart", "full_reset_restart".
-type DaemonHeartbeatPendingAgentLifecycleOperation struct {
-	OperationID string `json:"operation_id"`
-	AgentID     string `json:"agent_id"`
-	RuntimeID   string `json:"runtime_id"`
-	WorkspaceID string `json:"workspace_id"`
-	ActionKind  string `json:"action_kind"`
 }
 
 // DaemonHeartbeatPendingModelList describes a request for the daemon to

@@ -51,14 +51,14 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
 		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
 	}
-	// Task #62: advertised as of the atomic.Pointer deadlock fix + real
-	// end-to-end verification. Both legacy and credential-capable daemons
-	// advertise it — it does not depend on includeCredentialTransport.
-	if !containsString(legacy, protocol.DaemonCapabilityAgentLifecycleActions) {
-		t.Fatalf("legacy capabilities missing %q: %#v", protocol.DaemonCapabilityAgentLifecycleActions, legacy)
+	// The direct Runner capability replaces the old heartbeat lifecycle
+	// capability. During a rolling deploy, mixed old/new pairs fail closed
+	// instead of dispatching both control paths.
+	if containsString(legacy, protocol.DaemonCapabilityAgentLifecycleActions) || containsString(capable, protocol.DaemonCapabilityAgentLifecycleActions) {
+		t.Fatalf("registration retained legacy heartbeat lifecycle capability: legacy=%#v capable=%#v", legacy, capable)
 	}
-	if !containsString(capable, protocol.DaemonCapabilityAgentLifecycleActions) {
-		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentLifecycleActions, capable)
+	if !containsString(legacy, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) || !containsString(capable, protocol.DaemonCapabilityWorkspaceRunnerAgentReset) {
+		t.Fatalf("registration missing %q: legacy=%#v capable=%#v", protocol.DaemonCapabilityWorkspaceRunnerAgentReset, legacy, capable)
 	}
 	if !containsString(legacy, protocol.DaemonCapabilityAgentSessionReset) ||
 		!containsString(capable, protocol.DaemonCapabilityAgentSessionReset) {
@@ -3437,7 +3437,7 @@ func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var got string
 	for time.Now().Before(deadline) {
-		got, err = d.agentLifecycleExecutor.sessions.Get(agentID, runtimeID)
+		got, err = d.agentRuntimeSessions.Get(agentID, runtimeID)
 		if err != nil {
 			t.Fatalf("read session store: %v", err)
 		}

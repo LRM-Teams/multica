@@ -258,14 +258,7 @@ type Daemon struct {
 	// #42②) so a resident process stuck crash-looping is flagged terminal
 	// instead of silently retried forever.
 	residentCrashBackoff *residentCrashBackoffTracker
-	// agentLifecycleExecutor carries out dispatched /api/agents/{id}/lifecycle
-	// operations (task #52). The daemon client clears server-owned provider
-	// resume pointers before the runtime is recreated.
-	agentLifecycleExecutor *agentLifecycleExecutor
-	// agentLifecycleOperations coalesces at-least-once server delivery while
-	// one operation is executing. Terminal replays remain safe through the
-	// durable command ledger and can re-report a result lost during an outage.
-	agentLifecycleOperations sync.Map
+	agentRuntimeSessions *agentRuntimeSessionStore
 	// canonicalResidentFactoryOverride is test-only; production uses
 	// defaultCanonicalRuntimeFactory for resident Message adapters.
 	canonicalResidentFactoryOverride canonicalRuntimeBackendFactory
@@ -322,22 +315,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	}
 	d.machineUpgradeLog = newMachineUpgradeEventLog(time.Now)
 	sessions := newAgentRuntimeSessionStore(cfg.WorkspacesRoot)
-	d.agentLifecycleExecutor = &agentLifecycleExecutor{
-		workspacesRoot: cfg.WorkspacesRoot,
-		runtimes:       d.canonicalRuntimes,
-		sessionReset:   d.client,
-		sessions:       sessions,
-		commands:       newAgentLifecycleCommandLedger(cfg.WorkspacesRoot),
-		starter: agentLifecycleResumeStarter{
-			runtimes: d.canonicalRuntimes,
-			sessions: sessions,
-			start: func(ctx context.Context, req agentLifecycleStartRequest) error {
-				return d.ensureResidentMessageRuntime(ctx, req.AgentID, req.RuntimeID, nil)
-			},
-		},
-		activity: daemonAgentLifecycleActivityObserver{daemon: d},
-		logger:   logger,
-	}
+	d.agentRuntimeSessions = sessions
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, nil)
 	d.agentAttachments = newLocalAgentAttachmentRegistry(cfg.WorkspacesRoot, logger)
@@ -977,7 +955,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityReminderVersionedCache,
 		protocol.DaemonCapabilityReminderLocalInbox,
 		protocol.DaemonCapabilityReminderTransientInput,
-		protocol.DaemonCapabilityAgentLifecycleActions,
+		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
 		protocol.DaemonCapabilityMachineUpgrade,
 		protocol.DaemonCapabilityAgentSessionReset,
 	}
@@ -1461,7 +1439,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.ReleaseManifestBaseURL != "" {
 		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
 	}
-	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 {
+	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
@@ -1471,7 +1449,6 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 			"local_skill_import", resp.PendingLocalSkillImport != nil,
 			"memory_curation", resp.PendingMemoryCuration != nil,
 			"restart", resp.PendingRestart != nil,
-			"agent_lifecycle_operations", len(resp.PendingAgentLifecycleOperations),
 		)
 	}
 	if resp.PendingUpdate != nil {
@@ -1483,9 +1460,6 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.PendingRestart != nil {
 		d.logger.Info("remote restart requested", "runtime_id", runtimeID, "restart_id", resp.PendingRestart.ID)
 		d.triggerRestart()
-	}
-	for _, pending := range resp.PendingAgentLifecycleOperations {
-		go d.handleAgentLifecycleOperation(ctx, pending)
 	}
 	if resp.PendingModelList != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {

@@ -1390,38 +1390,6 @@ func (h *Handler) processHeartbeat(
 		}
 	}
 
-	// Probe then claim pending agent lifecycle operations (task #52 — the
-	// missing transport between /api/agents/{id}/lifecycle's operation
-	// record and the daemon's already-built agentLifecycleExecutor). Like
-	// the local-skill-import batch, this can deliver more than one
-	// operation per heartbeat — several agents on the same runtime may each
-	// have one queued.
-	probeLifecycleCtx, cancelProbeLifecycle := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
-	hasLifecycleDispatch, probeLifecycleErr := h.AgentLifecycleDispatchStore.HasPending(probeLifecycleCtx, runtimeID)
-	cancelProbeLifecycle()
-	switch {
-	case probeLifecycleErr == nil && hasLifecycleDispatch:
-		pendingLifecycleDispatches, popLifecycleErr := h.AgentLifecycleDispatchStore.PopAllPending(ctx, runtimeID)
-		if popLifecycleErr != nil {
-			slog.Warn("agent lifecycle dispatch PopAllPending failed", "error", popLifecycleErr, "runtime_id", runtimeID)
-		}
-		for _, pending := range pendingLifecycleDispatches {
-			ack.PendingAgentLifecycleOperations = append(ack.PendingAgentLifecycleOperations, protocol.DaemonHeartbeatPendingAgentLifecycleOperation{
-				OperationID: pending.OperationID,
-				AgentID:     pending.AgentID,
-				RuntimeID:   pending.RuntimeID,
-				WorkspaceID: pending.WorkspaceID,
-				ActionKind:  pending.ActionKind,
-			})
-		}
-	case probeLifecycleErr != nil:
-		if errors.Is(probeLifecycleErr, context.DeadlineExceeded) || errors.Is(probeLifecycleErr, context.Canceled) {
-			slog.Warn("agent lifecycle dispatch HasPending timed out", "runtime_id", runtimeID)
-		} else {
-			slog.Warn("agent lifecycle dispatch HasPending failed", "error", probeLifecycleErr, "runtime_id", runtimeID)
-		}
-	}
-
 	// Probe then claim the model list queue. Same pattern as the local-skill
 	// queues below — a slow shared store cannot stall the heartbeat on
 	// empty-queue ticks, but the claim itself runs unbounded because its

@@ -3,9 +3,11 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -106,7 +108,9 @@ func TestWorkspaceRunnerAttachmentReplaySupportsWorkspaceWithoutRuntimes(t *test
 func TestWorkspaceRunnerAttachmentAttachPersistsOwnershipWithoutLaunchingLifecycle(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, nil)
-	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	workspaceID := "11111111-1111-4111-8111-111111111111"
+	runtimeID := "22222222-2222-4222-8222-222222222222"
+	agentID := "33333333-3333-4333-8333-333333333333"
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
@@ -174,6 +178,59 @@ func TestWorkspaceRunnerManagedStartCreatesInboxWithoutAttachment(t *testing.T) 
 	launch, ok := runner.processes.Snapshot(agentID)
 	if !ok || launch.QueueState != protocol.AgentStartQueueRunning {
 		t.Fatalf("after provider start APM = %+v exists=%v, want running", launch, ok)
+	}
+}
+
+func TestWorkspaceRunnerResetWorkspaceRequiresStoppedLaunchAndPreservesAttachment(t *testing.T) {
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root}, nil)
+	workspaceID := "11111111-1111-4111-8111-111111111111"
+	runtimeID := "22222222-2222-4222-8222-222222222222"
+	agentID := "33333333-3333-4333-8333-333333333333"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	attach := protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
+	}
+	if _, err := runner.applyAttachmentAttach(attach); err != nil {
+		t.Fatalf("attach Agent before reset: %v", err)
+	}
+	marker := filepath.Join(agentworkspace.Root(root, workspaceID, agentID), "reset-me")
+	if err := os.WriteFile(marker, []byte("old workspace"), 0o600); err != nil {
+		t.Fatalf("seed Agent workspace: %v", err)
+	}
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	start := protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
+		t.Fatalf("start managed Agent: %v", err)
+	}
+	reset := protocol.WorkspaceRunnerAgentResetWorkspacePayload{OperationID: "44444444-4444-4444-8444-444444444444", AgentID: agentID}
+	if result := runner.resetManagedAgentWorkspace(reset); result.Status != protocol.AgentResetWorkspaceFailed || result.ReasonCode != "agent_still_running" {
+		t.Fatalf("reset while running = %+v, want agent_still_running", result)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("rejected reset changed Agent workspace: %v", err)
+	}
+	if err := runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID}, nil, func(string, any) error { return nil }); err != nil {
+		t.Fatalf("stop managed Agent: %v", err)
+	}
+	result := runner.resetManagedAgentWorkspace(reset)
+	if result.Status != protocol.AgentResetWorkspaceSucceeded || result.ReasonCode != "" {
+		t.Fatalf("reset after stop = %+v, want succeeded", result)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("reset retained old Agent workspace marker: %v", err)
+	}
+	if _, err := os.Stat(agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+		t.Fatalf("reset did not reprovision AgentRoot: %v", err)
+	}
+	attachment, found := d.attachmentRegistry().Resolve(workspaceID, agentID)
+	if !found || attachment.RuntimeID != runtimeID {
+		t.Fatalf("reset changed Attachment: %+v found=%v", attachment, found)
 	}
 }
 
@@ -441,7 +498,7 @@ func TestWorkspaceRunnerManagedStopAcknowledgesAbsentLaunchInactive(t *testing.T
 	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
 	payload := protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-1", LaunchID: "launch-failed"}
 	var published []protocol.AgentStatusPayload
-	if err := runner.stopManagedAgent(payload, func(eventType string, raw any) error {
+	if err := runner.stopManagedAgent(context.Background(), payload, nil, func(eventType string, raw any) error {
 		if eventType != protocol.EventAgentStatus {
 			t.Fatalf("absent stop event = %q", eventType)
 		}
@@ -505,7 +562,7 @@ func TestWorkspaceRunnerManagedStopClosesProviderAndInbox(t *testing.T) {
 		stopped = activity
 	})
 	defer runner.activity.DetachTransport(transport)
-	if err := runner.stopManagedAgent(protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID}, func(eventType string, payload any) error {
+	if err := runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID}, nil, func(eventType string, payload any) error {
 		published = append(published, eventType)
 		status, ok := payload.(protocol.AgentStatusPayload)
 		if !ok || status.Status != protocol.AgentStatusInactive {
@@ -542,6 +599,391 @@ func TestWorkspaceRunnerManagedStopClosesProviderAndInbox(t *testing.T) {
 	runner.activity.mu.Unlock()
 	if activityStates != 0 {
 		t.Fatalf("managed stop retained %d Activity states", activityStates)
+	}
+}
+
+func TestWorkspaceRunnerStaleManagedStopDoesNotPauseOrOverwriteReplacement(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-stale-stop"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-new", StartDispatchID: "dispatch-new"}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
+		t.Fatalf("start replacement Agent: %v", err)
+	}
+	paused, published := false, false
+	if err := runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: "launch-old"}, func() {
+		paused = true
+	}, func(string, any) error {
+		published = true
+		return nil
+	}); err != nil {
+		t.Fatalf("stale stop: %v", err)
+	}
+	if paused || published {
+		t.Fatalf("stale stop side effects: paused=%v published=%v", paused, published)
+	}
+	current, ok := runner.processes.Snapshot(agentID)
+	if !ok || current.LaunchID != start.LaunchID {
+		t.Fatalf("replacement launch after stale stop = %+v, exists=%v", current, ok)
+	}
+}
+
+func TestWorkspaceRunnerAcceptedStartOwnsStartupBeforeAckPublication(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-ack-failure"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	inactive := make(chan struct{}, 1)
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(eventType string, payload any) error {
+		if status, ok := payload.(protocol.AgentStatusPayload); ok && eventType == protocol.EventAgentStatus && status.Status == protocol.AgentStatusInactive {
+			inactive <- struct{}{}
+		}
+		return nil
+	})
+	providerEntered := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		close(providerEntered)
+		<-releaseProvider
+		return errors.New("provider failed")
+	}
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}
+	_, replayed, releasePublication, startupSettled, _, err := runner.acceptManagedAgentStart(workspaceID, start, nil)
+	if err != nil || replayed || releasePublication == nil {
+		t.Fatalf("accept managed start replayed=%v release=%v err=%v", replayed, releasePublication != nil, err)
+	}
+	select {
+	case <-providerEntered:
+		// The provider owner exists even though the simulated ACK write has not
+		// succeeded and terminal publication remains fenced.
+	case <-time.After(time.Second):
+		t.Fatal("accepted start did not begin provider startup before ACK publication")
+	}
+	close(releaseProvider)
+	select {
+	case <-startupSettled:
+	case <-time.After(time.Second):
+		t.Fatal("failed provider start did not settle locally")
+	}
+	select {
+	case <-inactive:
+		t.Fatal("failed provider start published inactive before the ACK attempt completed")
+	default:
+	}
+	releasePublication() // Simulate the ACK write attempt completing with error.
+	select {
+	case <-inactive:
+	case <-time.After(time.Second):
+		t.Fatal("accepted start did not settle after failed ACK publication")
+	}
+}
+
+func TestWorkspaceRunnerStopWaitsForFailedAcceptedStartPublication(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-failed-publication-fence"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	events := make(chan string, 4)
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(eventType string, payload any) error {
+		if status, ok := payload.(protocol.AgentStatusPayload); ok && eventType == protocol.EventAgentStatus {
+			events <- status.Status
+		}
+		return nil
+	})
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		return errors.New("provider failed")
+	}
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}
+	_, replayed, releasePublication, startupSettled, _, err := runner.acceptManagedAgentStart(workspaceID, start, nil)
+	if err != nil || replayed || releasePublication == nil {
+		t.Fatalf("accept managed start replayed=%v release=%v err=%v", replayed, releasePublication != nil, err)
+	}
+	select {
+	case <-startupSettled:
+	case <-time.After(time.Second):
+		t.Fatal("failed provider start did not settle locally")
+	}
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID}, nil, func(eventType string, payload any) error {
+			if status, ok := payload.(protocol.AgentStatusPayload); ok && eventType == protocol.EventAgentStatus {
+				events <- status.Status
+			}
+			return nil
+		})
+	}()
+	select {
+	case event := <-events:
+		t.Fatalf("status %q published before the failed start publication gate released", event)
+	case <-time.After(30 * time.Millisecond):
+	}
+	releasePublication()
+	select {
+	case got := <-events:
+		if got != protocol.AgentStatusInactive {
+			t.Fatalf("status=%q, want %q", got, protocol.AgentStatusInactive)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stopped status")
+	}
+	if err := <-stopDone; err != nil {
+		t.Fatalf("stop after failed accepted start publication: %v", err)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("late failed-start status %q published after stop completed", event)
+	case <-time.After(30 * time.Millisecond):
+	}
+}
+
+func TestWorkspaceRunnerStopWaitsForAcceptedStartPublication(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-publication-fence"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	events := make(chan string, 4)
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(eventType string, payload any) error {
+		if status, ok := payload.(protocol.AgentStatusPayload); ok && eventType == protocol.EventAgentStatus {
+			events <- status.Status
+		}
+		return nil
+	})
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}
+	_, replayed, releasePublication, startupSettled, _, err := runner.acceptManagedAgentStart(workspaceID, start, nil)
+	if err != nil || replayed || releasePublication == nil {
+		t.Fatalf("accept managed start replayed=%v release=%v err=%v", replayed, releasePublication != nil, err)
+	}
+	select {
+	case <-startupSettled:
+	case <-time.After(time.Second):
+		t.Fatal("accepted start did not reach its publication fence")
+	}
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID}, nil, func(eventType string, payload any) error {
+			if status, ok := payload.(protocol.AgentStatusPayload); ok && eventType == protocol.EventAgentStatus {
+				events <- status.Status
+			}
+			return nil
+		})
+	}()
+	select {
+	case event := <-events:
+		t.Fatalf("status %q published before the start publication gate released", event)
+	case <-time.After(30 * time.Millisecond):
+	}
+	releasePublication()
+	for index, want := range []string{protocol.AgentStatusActive, protocol.AgentStatusInactive} {
+		select {
+		case got := <-events:
+			if got != want {
+				t.Fatalf("status[%d]=%q, want %q", index, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for status[%d]=%q", index, want)
+		}
+	}
+	if err := <-stopDone; err != nil {
+		t.Fatalf("stop after accepted start publication: %v", err)
+	}
+}
+
+func TestWorkspaceRunnerManagedStopWaitsForBusyProviderLeaseBeforeInactive(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-busy"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-busy", StartDispatchID: "dispatch-busy"}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
+		t.Fatalf("start managed Agent: %v", err)
+	}
+	backend := &canonicalRuntimeTestBackend{}
+	slot := &canonicalAgentRuntimeSlot{backend: backend, running: true}
+	d.canonicalRuntimes.mu.Lock()
+	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = slot
+	d.canonicalRuntimes.mu.Unlock()
+
+	inactive := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID}, nil, func(eventType string, _ any) error {
+			if eventType == protocol.EventAgentStatus {
+				inactive <- struct{}{}
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-inactive:
+		t.Fatal("inactive published before the busy provider lease released")
+	case <-time.After(30 * time.Millisecond):
+	}
+	if backend.forceKillCount() != 1 {
+		t.Fatalf("busy provider force kills=%d, want 1", backend.forceKillCount())
+	}
+	slot.mu.Lock()
+	slot.running = false
+	slot.closeBackend()
+	slot.mu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("stop managed Agent: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop did not finish after provider lease release")
+	}
+	select {
+	case <-inactive:
+	default:
+		t.Fatal("stop completed without inactive status")
+	}
+}
+
+func TestWorkspaceRunnerManagedStopWithoutAPMWaitsForResidentProvider(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-resident-only"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	launchID := "launch-resident-only"
+	runner.residency.rememberIdle(agentID, runtimeID, launchID, "dispatch-resident-only")
+	backend := &canonicalRuntimeTestBackend{}
+	slot := &canonicalAgentRuntimeSlot{backend: backend, running: true}
+	d.canonicalRuntimes.mu.Lock()
+	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = slot
+	d.canonicalRuntimes.mu.Unlock()
+
+	paused := make(chan struct{}, 1)
+	inactive := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: launchID}, func() {
+			paused <- struct{}{}
+		}, func(eventType string, _ any) error {
+			if eventType == protocol.EventAgentStatus {
+				inactive <- struct{}{}
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-paused:
+	case <-time.After(time.Second):
+		t.Fatal("admitted stop did not pause delivery")
+	}
+	select {
+	case <-inactive:
+		t.Fatal("inactive published before resident-only provider released")
+	case <-time.After(30 * time.Millisecond):
+	}
+	if backend.forceKillCount() != 1 {
+		t.Fatalf("resident-only provider force kills=%d, want 1", backend.forceKillCount())
+	}
+	slot.mu.Lock()
+	slot.running = false
+	slot.closeBackend()
+	slot.mu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("stop resident-only provider: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop did not finish after resident-only provider release")
+	}
+	select {
+	case <-inactive:
+	default:
+		t.Fatal("resident-only stop completed without inactive status")
+	}
+}
+
+func TestWorkspaceRunnerManagedStopFencesLateProviderStartupBeforeInactive(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-starting"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	prematureInactive := make(chan struct{}, 1)
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(eventType string, payload any) error {
+		if status, ok := payload.(protocol.AgentStatusPayload); ok && eventType == protocol.EventAgentStatus && status.Status == protocol.AgentStatusInactive {
+			prematureInactive <- struct{}{}
+		}
+		return nil
+	})
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-starting", StartDispatchID: "dispatch-starting"}
+	ack, err := runner.registerManagedAgentStart(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ensureEntered := make(chan struct{})
+	releaseEnsure := make(chan struct{})
+	backend := &canonicalRuntimeTestBackend{}
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		close(ensureEntered)
+		<-releaseEnsure
+		d.canonicalRuntimes.mu.Lock()
+		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
+		d.canonicalRuntimes.mu.Unlock()
+		return nil
+	}
+	startDone := make(chan error, 1)
+	go func() {
+		defer runner.processes.completeManagedStart(agentProcessCallback{AgentID: start.AgentID, LaunchID: start.LaunchID})
+		_, err := runner.completeManagedAgentStart(context.Background(), start, ack)
+		startDone <- err
+	}()
+	<-ensureEntered
+	inactive := make(chan struct{}, 1)
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID}, nil, func(eventType string, _ any) error {
+			if eventType == protocol.EventAgentStatus {
+				inactive <- struct{}{}
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-inactive:
+		t.Fatal("inactive published while provider startup was still in flight")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseEnsure)
+	if err := <-startDone; err == nil {
+		t.Fatal("late provider startup was not fenced by stop")
+	}
+	select {
+	case <-prematureInactive:
+		t.Fatal("late provider startup published inactive outside the stop quiescence fence")
+	default:
+	}
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop did not settle after late startup cleanup")
+	}
+	d.canonicalRuntimes.mu.Lock()
+	slot := d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID]
+	d.canonicalRuntimes.mu.Unlock()
+	if slot != nil && slot.backend != nil {
+		t.Fatal("late provider backend survived the stop fence")
 	}
 }
 

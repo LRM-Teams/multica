@@ -20,6 +20,8 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1"},
 		AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: AgentStartQueueQueued},
 		WorkspaceRunnerAgentStopPayload{AgentID: "agent-1", LaunchID: "launch-1"},
+		WorkspaceRunnerAgentResetWorkspacePayload{OperationID: "operation-1", AgentID: "agent-1"},
+		WorkspaceRunnerAgentResetWorkspaceResultPayload{OperationID: "operation-1", AgentID: "agent-1", Status: AgentResetWorkspaceSucceeded},
 		AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: AgentStatusActive},
 		AgentSessionPayload{AgentID: "agent-1", LaunchID: "launch-1", ProviderSessionID: "session-1", RuntimeGeneration: 2},
 		AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started"}},
@@ -44,6 +46,28 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		if strings.Contains(wire, field) {
 			t.Fatalf("runner Activity wire %s contains HTTP field %s", wire, field)
 		}
+	}
+}
+
+func TestWorkspaceRunnerStartDistinguishesResumeCompatibilityFromExplicitFresh(t *testing.T) {
+	resumeCompatible, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(resumeCompatible), `"sessionId"`) {
+		t.Fatalf("compatibility start unexpectedly forced session behavior: %s", resumeCompatible)
+	}
+	fresh := ""
+	explicitFresh, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", SessionID: &fresh,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(explicitFresh), `"sessionId":""`) {
+		t.Fatalf("fresh start lost explicit empty Raft sessionId: %s", explicitFresh)
 	}
 }
 
@@ -124,7 +148,7 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 func TestWorkspaceRunnerReadyCapabilityValidation(t *testing.T) {
 	valid := WorkspaceRunnerReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
-		ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityAgentLifecycleActions},
+		ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityWorkspaceRunnerAgentReset},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid ready capabilities: %v", err)

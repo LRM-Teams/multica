@@ -205,7 +205,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if rdb != nil {
 		h.ModelListStore = handler.NewRedisModelListStore(rdb)
 		h.RestartStore = handler.NewRedisRestartStore(rdb)
-		h.AgentLifecycleDispatchStore = handler.NewRedisAgentLifecycleDispatchStore(rdb, h.DB)
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
@@ -582,7 +581,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
 		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
 		r.Post("/runtimes/{runtimeId}/memory-curation/{runId}/result", h.ReportMemoryCurationRunResult)
-		r.Post("/runtimes/{runtimeId}/agent-lifecycle/{operationId}/result", h.ReportAgentLifecycleOperationResult)
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)

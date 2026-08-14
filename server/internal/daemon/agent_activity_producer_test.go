@@ -329,6 +329,71 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	}
 }
 
+func TestResidentRuntimeEventPersistsProviderSessionWithoutManagedActivity(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner.observeResidentMessageRuntime("agent-1", "runtime-1", agent.Message{Type: agent.MessageText, SessionID: "provider-session-1"})
+
+	got, err := d.agentRuntimeSessions.Get("agent-1", "runtime-1")
+	if err != nil {
+		t.Fatalf("read recorded provider session: %v", err)
+	}
+	if got != "provider-session-1" {
+		t.Fatalf("recorded provider session = %q, want provider-session-1", got)
+	}
+}
+
+func TestResidentRuntimeEventProjectsChangedProviderSession(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	sessions := make(chan protocol.AgentSessionPayload, 2)
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, payload any) error {
+		if session, ok := payload.(protocol.AgentSessionPayload); ok && eventType == protocol.EventAgentSession {
+			sessions <- session
+		}
+		return nil
+	})
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.activity.SetManaged(
+		protocol.AgentStatusPayload{AgentID: "agent-1", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-1", LaunchID: ack.LaunchID},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	message := agent.Message{Type: agent.MessageText, SessionID: "provider-session-1"}
+	runner.observeResidentMessageRuntime("agent-1", "runtime-1", message)
+	runner.observeResidentMessageRuntime("agent-1", "runtime-1", message)
+	select {
+	case got := <-sessions:
+		if got.ProviderSessionID != message.SessionID || got.LaunchID != ack.LaunchID {
+			t.Fatalf("projected provider session = %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("changed provider session was not published")
+	}
+	select {
+	case duplicate := <-sessions:
+		t.Fatalf("unchanged provider session was republished: %+v", duplicate)
+	default:
+	}
+	frames := runner.activity.ReconnectFrames()
+	found := false
+	for _, frame := range frames {
+		if session, ok := frame.Payload.(protocol.AgentSessionPayload); ok && frame.EventType == protocol.EventAgentSession && session.AgentID == "agent-1" {
+			found = session.ProviderSessionID == message.SessionID
+		}
+	}
+	if !found {
+		t.Fatalf("reconnect frames did not retain provider session: %+v", frames)
+	}
+}
+
 func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(t *testing.T) {
 	now := time.Date(2026, time.August, 11, 6, 0, 0, 0, time.UTC)
 	var activities []protocol.AgentActivityPayload

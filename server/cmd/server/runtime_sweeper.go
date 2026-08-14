@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
@@ -92,7 +93,7 @@ const (
 // hot heartbeat path; the DB is allowed to lag up to runtimeHeartbeatDBFlushInterval).
 // When liveness is unavailable or errors, we fall back to trusting the DB
 // stale window — that is the original behavior.
-func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus, agentLifecycleDispatches handler.AgentLifecycleDispatchStore) {
+func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus, agentLifecycleDB *pgxpool.Pool) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 
@@ -108,29 +109,22 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handle
 			sweepQueuedTasksOnOfflineRuntimes(ctx, queries, taskSvc)
 			gcRuntimes(ctx, queries, bus)
 			gcExpiredAgentCredentials(ctx, queries)
-			sweepTimedOutAgentLifecycleDispatches(ctx, agentLifecycleDispatches)
+			sweepTimedOutAgentLifecycleOperations(ctx, agentLifecycleDB)
 		}
 	}
 }
 
-// sweepTimedOutAgentLifecycleDispatches is the reachable-regardless-of-heartbeat
-// trigger for AgentLifecycleDispatchStore's timeout (task #52 review, Alice):
-// HasPending/PopAllPending only evaluate a runtime's own dispatches when that
-// runtime's daemon heartbeats, so a daemon that goes offline and never comes
-// back would otherwise leave its stuck operation at status=running forever.
-// Same constant, same function as the heartbeat path — this is a different
-// trigger, not a second clock.
-func sweepTimedOutAgentLifecycleDispatches(ctx context.Context, store handler.AgentLifecycleDispatchStore) {
-	if store == nil {
+func sweepTimedOutAgentLifecycleOperations(ctx context.Context, exec *pgxpool.Pool) {
+	if exec == nil {
 		return
 	}
-	swept, err := store.SweepTimedOut(ctx)
+	swept, err := handler.SweepTimedOutAgentLifecycleOperations(ctx, exec)
 	if err != nil {
-		slog.Warn("sweep timed-out agent lifecycle dispatches failed", "error", err)
+		slog.Warn("sweep timed-out Agent lifecycle operations failed", "error", err)
 		return
 	}
 	if swept > 0 {
-		slog.Info("swept timed-out agent lifecycle dispatches", "count", swept)
+		slog.Info("swept timed-out Agent lifecycle operations", "count", swept)
 	}
 }
 

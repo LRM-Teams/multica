@@ -1,0 +1,353 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/protocol"
+)
+
+const (
+	agentLifecycleStepStopping           = "stopping"
+	agentLifecycleStepResettingWorkspace = "resetting_workspace"
+	agentLifecycleStepStarting           = "starting"
+)
+
+type activeAgentLifecycleState struct {
+	operationID  string
+	workspaceID  string
+	agentID      string
+	runtimeID    string
+	daemonID     string
+	actionKind   AgentLifecycleActionKind
+	step         string
+	stopLaunchID string
+}
+
+// beginAgentLifecycleOperation starts the server-owned product operation at
+// Raft's first discrete boundary. An observed launch must produce inactive
+// before session/workspace mutation or replacement start can advance.
+func (h *Handler) beginAgentLifecycleOperation(ctx context.Context, state activeAgentLifecycleState) error {
+	if h.TxStarter == nil {
+		return errors.New("Agent lifecycle transaction store is unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	locked, err := lockActiveAgentLifecycleState(ctx, tx, state.operationID)
+	if err != nil || locked == nil || locked.step != agentLifecycleStepStopping {
+		return err
+	}
+	state = *locked
+	if state.stopLaunchID == "" {
+		err = tx.QueryRow(ctx, `
+			SELECT launch_id::text
+			FROM agent_activity_launch
+			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
+			  AND daemon_id = $4 AND status IN ('accepted', 'active')
+		`, state.workspaceID, state.agentID, state.runtimeID, state.daemonID).Scan(&state.stopLaunchID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = tx.QueryRow(ctx, `
+				SELECT launch_id::text FROM agent_runner_launch_projection
+				WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
+			`, state.workspaceID, state.agentID, state.runtimeID).Scan(&state.stopLaunchID)
+		}
+		if err != nil {
+			return fmt.Errorf("resolve Agent stop launch fence: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE agent_lifecycle_operation SET stop_launch_id = $2, updated_at = now()
+			WHERE id = $1 AND status = 'running' AND step = $3
+		`, state.operationID, state.stopLaunchID, agentLifecycleStepStopping); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return h.sendAgentLifecycleCommand(state, protocol.EventDaemonAgentStop,
+		protocol.WorkspaceRunnerAgentStopPayload{AgentID: state.agentID, LaunchID: state.stopLaunchID})
+}
+
+func (h *Handler) advanceAgentLifecycleAfterStop(ctx context.Context, state activeAgentLifecycleState) error {
+	if h.TxStarter == nil {
+		return errors.New("Agent lifecycle transaction store is unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	locked, err := lockActiveAgentLifecycleState(ctx, tx, state.operationID)
+	if err != nil {
+		return err
+	}
+	if locked == nil || locked.step != agentLifecycleStepStopping {
+		return nil
+	}
+	state = *locked
+	if state.actionKind == agentLifecycleResetSessionRestart || state.actionKind == agentLifecycleFullResetRestart {
+		if err := clearAgentRuntimeSessionState(ctx, tx, state.operationID, state.agentID, state.runtimeID); err != nil {
+			return err
+		}
+	}
+	if state.actionKind == agentLifecycleFullResetRestart {
+		if _, err := tx.Exec(ctx, `
+			UPDATE agent_lifecycle_operation SET step = $2, updated_at = now()
+			WHERE id = $1 AND status = 'running'
+		`, state.operationID, agentLifecycleStepResettingWorkspace); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		state.step = agentLifecycleStepResettingWorkspace
+		return h.sendAgentLifecycleCommand(state, protocol.EventDaemonAgentResetWorkspace,
+			protocol.WorkspaceRunnerAgentResetWorkspacePayload{OperationID: state.operationID, AgentID: state.agentID})
+	}
+
+	start, err := prepareAgentLifecycleStart(ctx, tx, state)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return h.sendAgentLifecycleCommand(state, protocol.EventDaemonAgentStart, start)
+}
+
+func (h *Handler) advanceAgentLifecycleAfterWorkspaceReset(ctx context.Context, state activeAgentLifecycleState) error {
+	if h.TxStarter == nil {
+		return errors.New("Agent lifecycle transaction store is unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	locked, err := lockActiveAgentLifecycleState(ctx, tx, state.operationID)
+	if err != nil {
+		return err
+	}
+	if locked == nil || locked.step != agentLifecycleStepResettingWorkspace {
+		return nil
+	}
+	state = *locked
+	start, err := prepareAgentLifecycleStart(ctx, tx, state)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return h.sendAgentLifecycleCommand(state, protocol.EventDaemonAgentStart, start)
+}
+
+func prepareAgentLifecycleStart(ctx context.Context, tx pgx.Tx, state activeAgentLifecycleState) (protocol.WorkspaceRunnerAgentStartPayload, error) {
+	launchID := uuid.NewString()
+	command, err := tx.Exec(ctx, `
+		UPDATE agent_runner_launch_projection
+		SET launch_id = $1, start_dispatch_id = $2, updated_at = now()
+		WHERE workspace_id = $3 AND agent_id = $4 AND runtime_id = $5
+	`, launchID, state.operationID, state.workspaceID, state.agentID, state.runtimeID)
+	if err != nil {
+		return protocol.WorkspaceRunnerAgentStartPayload{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return protocol.WorkspaceRunnerAgentStartPayload{}, errors.New("desired Agent launch is unavailable")
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_lifecycle_operation SET step = $2, updated_at = now()
+		WHERE id = $1 AND status = 'running'
+	`, state.operationID, agentLifecycleStepStarting); err != nil {
+		return protocol.WorkspaceRunnerAgentStartPayload{}, err
+	}
+	start := protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: state.agentID, RuntimeID: state.runtimeID,
+		LaunchID: launchID, StartDispatchID: state.operationID,
+	}
+	if state.actionKind != agentLifecycleRestart {
+		fresh := ""
+		start.SessionID = &fresh
+	}
+	return start, nil
+}
+
+func clearAgentRuntimeSessionState(ctx context.Context, tx pgx.Tx, operationID, agentID, runtimeID string) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_runtime_state
+		SET provider_session_id = NULL, provider_config_fingerprint = NULL,
+		    generation = generation + 1, last_turn_id = $1,
+		    fresh_session_notice_reason = 'reset', updated_at = now()
+		WHERE agent_id = $2 AND runtime_id = $3
+	`, operationID, agentID, runtimeID); err != nil {
+		return fmt.Errorf("clear canonical provider session: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE chat_session SET session_id = NULL, updated_at = now() WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeID); err != nil {
+		return fmt.Errorf("clear legacy chat session: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_inbox_event SET session_id = NULL, updated_at = now() WHERE agent_id = $1 AND runtime_id = $2 AND session_id IS NOT NULL`, agentID, runtimeID); err != nil {
+		return fmt.Errorf("clear inbox provider sessions: %w", err)
+	}
+	return nil
+}
+
+func lockActiveAgentLifecycleState(ctx context.Context, tx pgx.Tx, operationID string) (*activeAgentLifecycleState, error) {
+	var state activeAgentLifecycleState
+	err := tx.QueryRow(ctx, `
+		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
+		       operation.runtime_id::text, runtime.daemon_id::text,
+		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
+		FROM agent_lifecycle_operation operation
+		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
+		WHERE operation.id = $1 AND operation.status = 'running'
+		FOR UPDATE OF operation
+	`, operationID).Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.daemonID, &state.actionKind, &state.step, &state.stopLaunchID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &state, err
+}
+
+func (h *Handler) sendAgentLifecycleCommand(state activeAgentLifecycleState, eventType string, payload any) error {
+	if h.AgentLifecycleNotifier == nil || !h.AgentLifecycleNotifier.NotifyAgentLifecycleCommand(
+		state.workspaceID, state.daemonID, eventType, state.operationID, payload,
+	) {
+		return errors.New("current Workspace Runner unavailable during Agent lifecycle operation")
+	}
+	return nil
+}
+
+// advanceAgentLifecycleFromStatus consumes Raft's process facts. It returns
+// true when the status belonged to an active lifecycle operation, allowing the
+// caller to avoid a parallel generic reconcile in the same frame.
+func (h *Handler) advanceAgentLifecycleFromStatus(ctx context.Context, identity daemonws.ClientIdentity, status protocol.AgentStatusPayload) (bool, error) {
+	state, err := h.activeAgentLifecycleForRunner(ctx, identity, status.AgentID)
+	if err != nil || state == nil {
+		return false, err
+	}
+	switch {
+	case state.step == agentLifecycleStepStopping && status.Status == protocol.AgentStatusInactive && status.LaunchID == state.stopLaunchID:
+		return true, h.advanceAgentLifecycleAfterStop(ctx, *state)
+	case state.step == agentLifecycleStepStarting:
+		var desiredLaunchID string
+		if err := h.DB.QueryRow(ctx, `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1 AND runtime_id = $2`, state.agentID, state.runtimeID).Scan(&desiredLaunchID); err != nil {
+			return true, err
+		}
+		if desiredLaunchID != status.LaunchID {
+			return false, nil
+		}
+		if status.Status == protocol.AgentStatusActive {
+			_, err = h.DB.Exec(ctx, `UPDATE agent_lifecycle_operation SET status = 'succeeded', step = '', reason_code = '', finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $2`, state.operationID, agentLifecycleStepStarting)
+		} else {
+			_, err = h.DB.Exec(ctx, `UPDATE agent_lifecycle_operation SET status = 'failed', step = 'start', reason_code = 'replacement Agent failed to become active', finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $2`, state.operationID, agentLifecycleStepStarting)
+		}
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
+func (h *Handler) recordAgentWorkspaceResetResult(ctx context.Context, identity daemonws.ClientIdentity, result protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload) error {
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	state, err := h.activeAgentLifecycleForRunner(ctx, identity, result.AgentID)
+	if err != nil || state == nil {
+		return err
+	}
+	if state.operationID != result.OperationID || state.step != agentLifecycleStepResettingWorkspace {
+		return nil
+	}
+	if result.Status == protocol.AgentResetWorkspaceFailed {
+		_, err := h.DB.Exec(ctx, `UPDATE agent_lifecycle_operation SET status = 'failed', step = 'reset_workspace', reason_code = $2, finished_at = now(), updated_at = now() WHERE id = $1 AND status = 'running' AND step = $3`, state.operationID, result.ReasonCode, agentLifecycleStepResettingWorkspace)
+		return err
+	}
+	return h.advanceAgentLifecycleAfterWorkspaceReset(ctx, *state)
+}
+
+func (h *Handler) activeAgentLifecycleForRunner(ctx context.Context, identity daemonws.ClientIdentity, agentID string) (*activeAgentLifecycleState, error) {
+	workspaceID, err := util.ParseUUID(identity.WorkspaceID)
+	if err != nil {
+		return nil, errors.New("invalid Runner workspace identity")
+	}
+	agentUUID, err := util.ParseUUID(agentID)
+	if err != nil {
+		return nil, errors.New("invalid Agent lifecycle agent_id")
+	}
+	var state activeAgentLifecycleState
+	err = h.DB.QueryRow(ctx, `
+		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
+		       operation.runtime_id::text, runtime.daemon_id::text,
+		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
+		FROM agent_lifecycle_operation operation
+		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
+		WHERE operation.workspace_id = $1 AND operation.agent_id = $2
+		  AND operation.status = 'running' AND runtime.daemon_id = $3
+	`, workspaceID, agentUUID, identity.DaemonID).Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.daemonID, &state.actionKind, &state.step, &state.stopLaunchID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &state, err
+}
+
+func (h *Handler) resumeAgentLifecycleOperations(ctx context.Context, identity daemonws.ClientIdentity) error {
+	rows, err := h.DB.Query(ctx, `
+		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
+		       operation.runtime_id::text, runtime.daemon_id::text,
+		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
+		FROM agent_lifecycle_operation operation
+		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
+		WHERE operation.workspace_id::text = $1 AND operation.status = 'running'
+		  AND runtime.daemon_id = $2
+		ORDER BY operation.created_at, operation.id
+	`, identity.WorkspaceID, identity.DaemonID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var states []activeAgentLifecycleState
+	for rows.Next() {
+		var state activeAgentLifecycleState
+		if err := rows.Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.daemonID, &state.actionKind, &state.step, &state.stopLaunchID); err != nil {
+			return err
+		}
+		states = append(states, state)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, state := range states {
+		switch state.step {
+		case agentLifecycleStepStopping:
+			if err := h.beginAgentLifecycleOperation(ctx, state); err != nil {
+				return err
+			}
+		case agentLifecycleStepResettingWorkspace:
+			if err := h.sendAgentLifecycleCommand(state, protocol.EventDaemonAgentResetWorkspace,
+				protocol.WorkspaceRunnerAgentResetWorkspacePayload{OperationID: state.operationID, AgentID: state.agentID}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func lifecycleStateFromOperation(op *AgentLifecycleOperation, workspaceID, daemonID string) activeAgentLifecycleState {
+	state := activeAgentLifecycleState{
+		operationID: op.ID, workspaceID: workspaceID, agentID: op.AgentID,
+		daemonID: daemonID, actionKind: op.ActionKind, step: op.Step,
+	}
+	if op.RuntimeID != nil {
+		state.runtimeID = *op.RuntimeID
+	}
+	return state
+}

@@ -168,8 +168,8 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	}
 
 	resumeSessionID := ""
-	if d.agentLifecycleExecutor != nil && d.agentLifecycleExecutor.sessions != nil {
-		if stored, err := d.agentLifecycleExecutor.sessions.Get(agentID, runtimeID); err == nil {
+	if d.agentRuntimeSessions != nil {
+		if stored, err := d.agentRuntimeSessions.Get(agentID, runtimeID); err == nil {
 			resumeSessionID = stored
 		}
 	}
@@ -181,11 +181,12 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			Env:            agentEnv,
 			Logger:         d.logger,
 			ResidentOptions: agent.ExecOptions{
-				Cwd:           env.AgentRoot,
-				Model:         model,
-				CustomArgs:    append([]string(nil), config.Agent.CustomArgs...),
-				McpConfig:     append([]byte(nil), config.Agent.McpConfig...),
-				ThinkingLevel: thinking,
+				Cwd:             env.AgentRoot,
+				Model:           model,
+				CustomArgs:      append([]string(nil), config.Agent.CustomArgs...),
+				McpConfig:       append([]byte(nil), config.Agent.McpConfig...),
+				ThinkingLevel:   thinking,
+				ResumeSessionID: resumeSessionID,
 			},
 		},
 		Factory: d.canonicalResidentMessageFactory(runtime.Provider),

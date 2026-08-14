@@ -21,13 +21,18 @@ type workspaceRunnerDeliveryDispatcher struct {
 	mu      sync.Mutex
 	queues  map[string][]protocol.AgentDeliverPayload
 	running map[string]bool
-	paused  map[string]string
+	paused  map[string]workspaceRunnerDeliveryPause
+}
+
+type workspaceRunnerDeliveryPause struct {
+	launchID string
+	stop     bool
 }
 
 func newWorkspaceRunnerDeliveryDispatcher(ctx context.Context, handle func(context.Context, protocol.AgentDeliverPayload)) *workspaceRunnerDeliveryDispatcher {
 	return &workspaceRunnerDeliveryDispatcher{
 		ctx: ctx, handle: handle,
-		queues: make(map[string][]protocol.AgentDeliverPayload), running: make(map[string]bool), paused: make(map[string]string),
+		queues: make(map[string][]protocol.AgentDeliverPayload), running: make(map[string]bool), paused: make(map[string]workspaceRunnerDeliveryPause),
 	}
 }
 
@@ -39,21 +44,28 @@ func (d *workspaceRunnerDeliveryDispatcher) Pause(agentID, launchID string) bool
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.ctx.Err() != nil || d.paused[agentID] == launchID {
+	current, paused := d.paused[agentID]
+	if d.ctx.Err() != nil || paused && current.stop && current.launchID == launchID {
 		return false
 	}
-	d.paused[agentID] = launchID
+	if paused && !current.stop && current.launchID == launchID {
+		// The same immutable dispatch may be replayed before startup settles.
+		// Keep the buffer paused while allowing the socket reader to ACK it.
+		return true
+	}
+	d.paused[agentID] = workspaceRunnerDeliveryPause{launchID: launchID}
 	return true
 }
 
 // Resume releases deliveries in their original order after agent:start has
-// been accepted. No delivery can be ACKed before that point.
+// published Active, provider session, and initial Activity. No delivery can
+// race those lifecycle facts onto the wire.
 func (d *workspaceRunnerDeliveryDispatcher) Resume(agentID, launchID string) {
 	if d == nil {
 		return
 	}
 	d.mu.Lock()
-	if d.paused[agentID] != launchID {
+	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.launchID != launchID {
 		d.mu.Unlock()
 		return
 	}
@@ -65,6 +77,18 @@ func (d *workspaceRunnerDeliveryDispatcher) Resume(agentID, launchID string) {
 	d.mu.Unlock()
 }
 
+// FenceStop supersedes a start pause with a stop-owned token. A late startup
+// completion can therefore never Resume deliveries after stop has begun.
+func (d *workspaceRunnerDeliveryDispatcher) FenceStop(agentID, launchID string) {
+	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(launchID) == "" {
+		return
+	}
+	d.mu.Lock()
+	d.paused[agentID] = workspaceRunnerDeliveryPause{launchID: launchID, stop: true}
+	delete(d.queues, agentID)
+	d.mu.Unlock()
+}
+
 // RejectStart forgets only the volatile buffer. The server still owns every
 // unACKed delivery and will replay it after a later successful start.
 func (d *workspaceRunnerDeliveryDispatcher) RejectStart(agentID, launchID string) {
@@ -72,7 +96,7 @@ func (d *workspaceRunnerDeliveryDispatcher) RejectStart(agentID, launchID string
 		return
 	}
 	d.mu.Lock()
-	if d.paused[agentID] != launchID {
+	if pause, ok := d.paused[agentID]; !ok || pause.stop || pause.launchID != launchID {
 		d.mu.Unlock()
 		return
 	}
@@ -91,7 +115,7 @@ func (d *workspaceRunnerDeliveryDispatcher) Enqueue(delivery protocol.AgentDeliv
 		return false
 	}
 	d.queues[delivery.AgentID] = append(d.queues[delivery.AgentID], delivery)
-	if d.paused[delivery.AgentID] == "" && !d.running[delivery.AgentID] {
+	if _, paused := d.paused[delivery.AgentID]; !paused && !d.running[delivery.AgentID] {
 		d.running[delivery.AgentID] = true
 		go d.drain(delivery.AgentID)
 	}
@@ -108,7 +132,7 @@ func (d *workspaceRunnerDeliveryDispatcher) drain(agentID string) {
 			return
 		}
 		queue := d.queues[agentID]
-		if d.paused[agentID] != "" {
+		if _, paused := d.paused[agentID]; paused {
 			delete(d.running, agentID)
 			d.mu.Unlock()
 			return

@@ -31,6 +31,13 @@ type AgentDeliveryNotifier interface {
 	NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool
 }
 
+// AgentLifecycleNotifier transports only Raft's discrete Workspace Runner
+// lifecycle commands. Product-level restart/reset orchestration stays on the
+// server and advances from Runner status/reset facts.
+type AgentLifecycleNotifier interface {
+	NotifyAgentLifecycleCommand(workspaceID, daemonID, eventType, commandID string, payload any) bool
+}
+
 // RelayNotifier sends task wakeups to the local daemon hub and, when Redis is
 // configured, publishes the same wakeup through the shared realtime relay so
 // every API node can attempt local delivery.
@@ -96,6 +103,42 @@ func (n *RelayNotifier) NotifyWorkspaceAgentDelivery(workspaceID, daemonID strin
 		}
 	}
 	return delivered
+}
+
+func (n *RelayNotifier) NotifyAgentLifecycleCommand(workspaceID, daemonID, eventType, commandID string, payload any) bool {
+	if workspaceID == "" || daemonID == "" || commandID == "" || !validAgentLifecycleCommand(eventType, payload) {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	delivered := false
+	if n.local != nil {
+		delivered = n.local.NotifyAgentLifecycleCommand(workspaceID, daemonID, eventType, commandID, payload)
+	}
+	if n.relay != nil {
+		scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
+		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, "agent-lifecycle:"+commandID+":"+eventType); err != nil {
+			slog.Warn("workspace Runner lifecycle command publish failed", "workspace_id", workspaceID, "daemon_id", daemonID, "command_id", commandID, "event_type", eventType, "error", err)
+		} else {
+			delivered = true
+		}
+	}
+	return delivered
+}
+
+func validAgentLifecycleCommand(eventType string, payload any) bool {
+	switch command := payload.(type) {
+	case protocol.WorkspaceRunnerAgentStopPayload:
+		return eventType == protocol.EventDaemonAgentStop && command.Validate() == nil
+	case protocol.WorkspaceRunnerAgentResetWorkspacePayload:
+		return eventType == protocol.EventDaemonAgentResetWorkspace && command.Validate() == nil
+	case protocol.WorkspaceRunnerAgentStartPayload:
+		return eventType == protocol.EventDaemonAgentStart && command.Validate() == nil
+	default:
+		return false
+	}
 }
 
 func NewRelayNotifier(local *Hub, relay realtime.RelayPublisher) *RelayNotifier {

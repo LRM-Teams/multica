@@ -990,6 +990,43 @@ func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerDeliveryStopFenceRejectsLateStartResume(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handled := make(chan string, 2)
+	dispatcher := newWorkspaceRunnerDeliveryDispatcher(ctx, func(_ context.Context, delivery protocol.AgentDeliverPayload) {
+		handled <- delivery.DeliveryID
+	})
+	if !dispatcher.Pause("agent-1", "launch-1") {
+		t.Fatal("pause start deliveries")
+	}
+	if !dispatcher.Enqueue(protocol.AgentDeliverPayload{AgentID: "agent-1", DeliveryID: "old-delivery"}) {
+		t.Fatal("enqueue old delivery")
+	}
+	dispatcher.FenceStop("agent-1", "launch-1")
+	dispatcher.Resume("agent-1", "launch-1")
+	select {
+	case deliveryID := <-handled:
+		t.Fatalf("late start Resume released %q after stop fence", deliveryID)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if !dispatcher.Pause("agent-1", "launch-2") {
+		t.Fatal("pause replacement start deliveries")
+	}
+	if !dispatcher.Enqueue(protocol.AgentDeliverPayload{AgentID: "agent-1", DeliveryID: "new-delivery"}) {
+		t.Fatal("enqueue replacement delivery")
+	}
+	dispatcher.Resume("agent-1", "launch-2")
+	select {
+	case deliveryID := <-handled:
+		if deliveryID != "new-delivery" {
+			t.Fatalf("replacement delivery=%q, want new-delivery", deliveryID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement delivery remained fenced")
+	}
+}
+
 func TestRestoreResidentAgentsRebuildsRootWithoutMessageLifecycle(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-4111-8111-111111111111"

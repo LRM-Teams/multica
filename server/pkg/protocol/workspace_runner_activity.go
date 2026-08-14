@@ -107,6 +107,9 @@ type WorkspaceRunnerAgentStartPayload struct {
 	RuntimeID       string `json:"runtimeId"`
 	LaunchID        string `json:"launchId"`
 	StartDispatchID string `json:"startDispatchId"`
+	// SessionID mirrors Raft config.sessionId. Nil preserves rolling-upgrade
+	// behavior; a non-nil empty value explicitly starts fresh.
+	SessionID *string `json:"sessionId,omitempty"`
 }
 
 // AgentStartAckPayload is an idempotent acceptance receipt. QueueState never
@@ -123,6 +126,29 @@ type AgentStartAckPayload struct {
 type WorkspaceRunnerAgentStopPayload struct {
 	AgentID  string `json:"agentId"`
 	LaunchID string `json:"launchId"`
+}
+
+// WorkspaceRunnerAgentResetWorkspacePayload mirrors Raft's
+// agent:reset-workspace command. OperationID is Multica's correlation fence;
+// Workspace identity remains owned by the authenticated Runner connection.
+type WorkspaceRunnerAgentResetWorkspacePayload struct {
+	OperationID string `json:"operationId"`
+	AgentID     string `json:"agentId"`
+}
+
+const (
+	AgentResetWorkspaceSucceeded = "succeeded"
+	AgentResetWorkspaceFailed    = "failed"
+)
+
+// WorkspaceRunnerAgentResetWorkspaceResultPayload is Multica's terminal
+// receipt extension for Raft's fire-and-forget reset command. The server must
+// observe success before it is allowed to issue the replacement agent:start.
+type WorkspaceRunnerAgentResetWorkspaceResultPayload struct {
+	OperationID string `json:"operationId"`
+	AgentID     string `json:"agentId"`
+	Status      string `json:"status"`
+	ReasonCode  string `json:"reasonCode,omitempty"`
 }
 
 // AgentStatusPayload is lifecycle management state, not a user Activity
@@ -313,6 +339,26 @@ func (p AgentStartAckPayload) Validate() error {
 
 func (p WorkspaceRunnerAgentStopPayload) Validate() error {
 	return validateRequiredIDs(p.AgentID, p.LaunchID)
+}
+
+func (p WorkspaceRunnerAgentResetWorkspacePayload) Validate() error {
+	return validateRequiredIDs(p.OperationID, p.AgentID)
+}
+
+func (p WorkspaceRunnerAgentResetWorkspaceResultPayload) Validate() error {
+	if err := validateRequiredIDs(p.OperationID, p.AgentID); err != nil {
+		return err
+	}
+	if !isOneOf(p.Status, AgentResetWorkspaceSucceeded, AgentResetWorkspaceFailed) {
+		return fmt.Errorf("invalid Agent workspace reset status %q", p.Status)
+	}
+	if p.Status == AgentResetWorkspaceSucceeded && strings.TrimSpace(p.ReasonCode) != "" {
+		return fmt.Errorf("successful Agent workspace reset must not include a reason code")
+	}
+	if p.Status == AgentResetWorkspaceFailed && strings.TrimSpace(p.ReasonCode) == "" {
+		return fmt.Errorf("failed Agent workspace reset requires a reason code")
+	}
+	return validateOptionalIDs(p.ReasonCode)
 }
 
 func (p AgentStatusPayload) Validate() error {

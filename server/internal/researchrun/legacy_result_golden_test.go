@@ -278,6 +278,24 @@ func goldenLegacyReportResult(t *testing.T, version string) ResultEnvelope {
 	}
 }
 
+func TestStructuredReportRejectsOutlineCycle(t *testing.T) {
+	result := goldenLegacyReportResult(t, OrchestratorVersionV2)
+	var structured reportStructuredV1
+	if err := json.Unmarshal(result.Report.Structured, &structured); err != nil {
+		t.Fatal(err)
+	}
+	structured.Outline[0].Children = []string{structured.Outline[1].ID}
+	structured.Outline[1].Children = []string{structured.Outline[0].ID}
+	raw, err := json.Marshal(structured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Report.Structured = raw
+	if _, err = validateStructuredReportV2(*result.Report, reportPolicyForDepth("shallow")); err == nil || !strings.Contains(err.Error(), "outline contains a cycle") {
+		t.Fatalf("cycle validation error=%v", err)
+	}
+}
+
 func goldenLegacyEvaluationResult(version, reviewKind string) ResultEnvelope {
 	schemaVersion := goldenLegacySchemaVersion(version)
 	evaluation := EvaluationProposal{

@@ -1041,6 +1041,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 ### G. 持续 Integration Round
 
 - [ ] 实现 E 中已冻结的 V6 Integration Result schema 和严格校验，不在 G 中改写协议。
+  - [x] G-contract-1：新增独立 `DecodeAndValidateV6IntegrationResult`，严格消费冻结 V6 `task_result`，拒绝未知/缺失/null/trailing 字段、非 Integration-owned payload、越界集合、无 Contribution、非法引用/枚举/分数、重复同类 key 和不完整嵌套对象；支持 Contribution、Inquiry status update、Insight、Dispute 与 follow-up Task proposal，但不启用 V6 默认生产 Run。后续持久化切片仍须校验 scope 内 UUID、前置版本、原 Agent 作者身份与 accepted Artifact。
 - [ ] 实现触发策略、固定输入版本、幂等执行和状态变化应用。
 - [ ] 实现每 Result 的 Assimilation Check、peer_synthesis、原 Agent Integration Contribution 和离线/退出参与者处理。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。

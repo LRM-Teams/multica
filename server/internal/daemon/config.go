@@ -245,9 +245,8 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if e, ok := probe("MULTICA_GROK_PATH", "grok", "MULTICA_GROK_MODEL"); ok {
 		agents["grok"] = e
 	}
-	if len(agents) == 0 {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, opencode, pi, cursor-agent, kiro-cli, or grok and ensure it is on PATH")
-	}
+	// Zero detected agent CLIs is a valid Computer. Setup and Binding child
+	// connectivity are proven by the Workspace connection, not by runtime count.
 
 	claudeArgs, err := shellArgsFromEnv("MULTICA_CLAUDE_ARGS")
 	if err != nil {

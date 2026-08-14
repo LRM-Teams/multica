@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 var errStaleComputerGeneration = errors.New("stale Computer generation")
@@ -137,9 +138,12 @@ type computerHeartbeatRequest struct {
 	Generation  int64  `json:"generation"`
 }
 
-// ComputerHeartbeat is independent of Agent runtimes, so a zero-Agent
-// Workspace still has truthful connectivity. Claiming the monotonic generation
-// fences every older resident before this heartbeat is published.
+// ComputerHeartbeat is a compatibility writer for older residents that still
+// publish HTTP liveness. Current DaemonCore liveness is the Workspace Runner
+// socket (connect = alive), matching Raft 1.0.16 /daemon/connect.
+//
+// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+// longer a supported direct self-upgrade source.
 func (h *Handler) ComputerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req computerHeartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -170,19 +174,35 @@ func (h *Handler) ComputerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if err := h.claimComputerGeneration(r.Context(), req.DaemonID, req.Generation); err != nil {
-		writeCodedError(w, http.StatusConflict, "stale_computer_generation", err.Error())
+	if err := h.recordComputerConnected(r.Context(), req.DaemonID, req.WorkspaceID, req.Generation); err != nil {
+		if errors.Is(err, errStaleComputerGeneration) {
+			writeCodedError(w, http.StatusConflict, "stale_computer_generation", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to record Computer connection")
 		return
 	}
-	_, err := h.DB.Exec(r.Context(), `
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "generation": req.Generation})
+}
+
+// recordComputerConnected writes last_seen for older HTTP-heartbeat
+// residents. Current Computers do not use this as liveness.
+//
+// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+// longer a supported direct self-upgrade source.
+func (h *Handler) recordComputerConnected(ctx context.Context, daemonID, workspaceID string, generation int64) error {
+	if err := h.claimComputerGeneration(ctx, daemonID, generation); err != nil {
+		return err
+	}
+	workspaceUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return err
+	}
+	_, err = h.DB.Exec(ctx, `
 INSERT INTO daemon_heartbeat (workspace_id, daemon_id, computer_generation, last_seen_at, updated_at)
 VALUES ($1, $2, $3, now(), now())
 ON CONFLICT (workspace_id, daemon_id) DO UPDATE
 SET computer_generation=EXCLUDED.computer_generation, last_seen_at=now(), updated_at=now()
-WHERE daemon_heartbeat.computer_generation <= EXCLUDED.computer_generation`, workspaceUUID, req.DaemonID, req.Generation)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record Computer heartbeat")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "generation": req.Generation})
+WHERE daemon_heartbeat.computer_generation <= EXCLUDED.computer_generation`, workspaceUUID, daemonID, generation)
+	return err
 }

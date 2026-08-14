@@ -635,6 +635,9 @@ type (
 	PendingRestart          = protocol.DaemonHeartbeatPendingRestart
 )
 
+// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+// longer a supported direct self-upgrade source. Current DaemonCore liveness
+// is the Workspace Runner socket, not this HTTP heartbeat.
 func (c *Client) ComputerHeartbeat(ctx context.Context, workspaceID, daemonID string, generation int64) error {
 	return c.postJSONWithToken(ctx, "/api/daemon/computer/heartbeat", map[string]any{
 		"workspace_id": workspaceID, "daemon_id": daemonID, "generation": generation,
@@ -729,20 +732,6 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error) {
 func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
 	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
 		"runtime_ids": runtimeIDs,
-	}, nil)
-}
-
-// MarkStarting tells the server this daemon is up and about to probe its
-// agent CLIs' versions (a step that can take ~20s on a cold cache), so any
-// runtime rows already registered under this daemon_id can show "starting"
-// instead of whatever they looked like before this process started. It is a
-// no-op on the server for a daemon_id with no existing runtime rows (first
-// registration ever), and best-effort by design — callers should log and
-// continue on error rather than fail startup over it.
-func (c *Client) MarkStarting(ctx context.Context, workspaceID, daemonID string) error {
-	return c.postJSON(ctx, "/api/daemon/starting", map[string]any{
-		"workspace_id": workspaceID,
-		"daemon_id":    daemonID,
 	}, nil)
 }
 

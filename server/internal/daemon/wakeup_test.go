@@ -31,19 +31,19 @@ func TestTaskWakeupURL(t *testing.T) {
 			name:       "http base",
 			baseURL:    "http://localhost:8080",
 			runtimeIDs: []string{"runtime-b", "runtime-a"},
-			want:       "ws://localhost:8080/api/daemon/ws?runtime_ids=runtime-a%2Cruntime-b",
+			want:       "ws://localhost:8080/api/daemon/connect?runtime_ids=runtime-a%2Cruntime-b",
 		},
 		{
 			name:       "https base",
 			baseURL:    "https://api.example.com",
 			runtimeIDs: []string{"runtime-1"},
-			want:       "wss://api.example.com/api/daemon/ws?runtime_ids=runtime-1",
+			want:       "wss://api.example.com/api/daemon/connect?runtime_ids=runtime-1",
 		},
 		{
 			name:       "base path",
 			baseURL:    "https://api.example.com/multica",
 			runtimeIDs: []string{"runtime-1"},
-			want:       "wss://api.example.com/multica/api/daemon/ws?runtime_ids=runtime-1",
+			want:       "wss://api.example.com/multica/api/daemon/connect?runtime_ids=runtime-1",
 		},
 	}
 

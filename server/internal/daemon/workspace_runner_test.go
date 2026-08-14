@@ -22,7 +22,7 @@ func TestWorkspaceRunnerURLIsScopedWithoutRuntimeIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "wss://api.example.com/multica/api/daemon/ws?workspace_id=workspace-1"
+	const want = "wss://api.example.com/multica/api/daemon/connect?workspace_id=workspace-1"
 	if got != want {
 		t.Fatalf("workspaceRunnerURL() = %q, want %q", got, want)
 	}

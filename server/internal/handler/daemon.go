@@ -879,63 +879,6 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// DaemonMarkStarting records that a daemon is up and probing its agent CLIs,
-// before it has finished the (possibly ~20s) version-detection loop that
-// precedes a full DaemonRegister call. Best-effort and deliberately narrow:
-// it only touches runtime rows that already exist for this daemon_id (see
-// MarkAgentRuntimesStarting) — a daemon that has never registered before has
-// nothing to mark "starting" yet, and goes straight from nonexistent to
-// online on its first successful register, same as today.
-func (h *Handler) DaemonMarkStarting(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		WorkspaceID string `json:"workspace_id"`
-		DaemonID    string `json:"daemon_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	req.WorkspaceID = strings.TrimSpace(req.WorkspaceID)
-	req.DaemonID = strings.TrimSpace(req.DaemonID)
-	if req.DaemonID == "" {
-		writeError(w, http.StatusBadRequest, "daemon_id is required")
-		return
-	}
-	if req.WorkspaceID == "" {
-		writeError(w, http.StatusBadRequest, "workspace_id is required")
-		return
-	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, req.WorkspaceID, "workspace_id")
-	if !ok {
-		return
-	}
-	req.WorkspaceID = uuidToString(wsUUID)
-
-	// Same dual auth path as DaemonRegister: a daemon token (mdt_) proves
-	// workspace access directly; a PAT/JWT requires a membership check. In
-	// practice this call always arrives before any daemon token exists for
-	// the current process (in-memory only, never persisted across restarts —
-	// see applyRegisterDaemonToken), but mirroring the same check keeps this
-	// endpoint's auth semantics identical to register's rather than assuming.
-	if daemonWsID := middleware.DaemonWorkspaceIDFromContext(r.Context()); daemonWsID != "" {
-		if daemonWsID != req.WorkspaceID {
-			writeError(w, http.StatusNotFound, "workspace not found")
-			return
-		}
-	} else if _, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found"); !ok {
-		return
-	}
-
-	if err := h.Queries.MarkAgentRuntimesStarting(r.Context(), db.MarkAgentRuntimesStartingParams{
-		DaemonID:    strToText(req.DaemonID),
-		WorkspaceID: wsUUID,
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to mark runtimes starting")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
 type DaemonHeartbeatRequest struct {
 	RuntimeID                 string                            `json:"runtime_id"`
 	SupportsBatchImport       bool                              `json:"supports_batch_import,omitempty"`

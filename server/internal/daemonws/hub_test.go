@@ -528,6 +528,9 @@ func TestWorkspaceRunnerDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T
 	if !hub.IsCurrentWorkspaceRunner("daemon-1", "workspace-1", "instance-1") {
 		t.Fatal("first ready connection was not current")
 	}
+	if !hub.HasWorkspaceRunner("daemon-1", "workspace-1") {
+		t.Fatal("current Runner socket must count as Computer/Workspace liveness")
+	}
 
 	second := dial()
 	defer second.Close()
@@ -558,6 +561,9 @@ func TestWorkspaceRunnerDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T
 	}
 	if hub.IsCurrentWorkspaceRunner("daemon-1", "workspace-1", "instance-2") {
 		t.Fatal("closed Runner remained current")
+	}
+	if hub.HasWorkspaceRunner("daemon-1", "workspace-1") {
+		t.Fatal("closed Runner socket must count as Computer/Workspace offline")
 	}
 }
 

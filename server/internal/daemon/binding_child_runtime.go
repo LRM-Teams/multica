@@ -126,9 +126,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		if temporaryProfileAuth {
 			defer d.client.SetToken("")
 		}
-		if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil {
-			return nil, fmt.Errorf("validate Workspace Binding %q: %w", workspaceID, err)
-		}
 		if len(d.cfg.Agents) == 0 {
 			if temporaryProfileAuth {
 				return nil, fmt.Errorf("repair previous-package Workspace Binding %q: no provider Runtime can rotate its credential", workspaceID)
@@ -171,7 +168,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		readyOnce sync.Once
 		readyErr  error
 	)
-	runner.onReady = func() {
+	publishReady := func() {
 		readyOnce.Do(func() {
 			readyErr = config.PublishReady(computer.BindingChildReady{
 				ProtocolVersion: computer.BindingChildProtocolVersion,
@@ -183,6 +180,10 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			}
 		})
 	}
+	// DaemonCore liveness is the Workspace Runner socket, matching Raft
+	// /daemon/connect. Ready waits for that connect, including zero-runtime
+	// Computers.
+	runner.onReady = publishReady
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(runCtx, taskWakeups)
 	go d.residentCrashWatchLoop(runCtx)
@@ -334,6 +335,9 @@ func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, i
 				lastBindingCredential = strings.TrimSpace(binding.Credential)
 				continue
 			}
+			// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+			// longer a supported direct self-upgrade source. Socket ownership
+			// is liveness; this HTTP probe only refreshes leftover last_seen.
 			if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil && d.logger != nil {
 				d.logger.Warn("Binding child heartbeat failed; will retry", "workspace_id", workspaceID, "error", err)
 			}
@@ -441,8 +445,11 @@ func (d *Daemon) reregisterBindingWorkspace(ctx context.Context, workspaceID str
 		return fmt.Errorf("Workspace Binding %q has no live execution credential", workspaceID)
 	}
 	d.client.SetWorkspaceDaemonToken(workspaceID, binding.Credential, binding.CredentialExpiresAt)
-	if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil {
-		return fmt.Errorf("validate Workspace Binding %q: %w", workspaceID, err)
+	// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source. Binding validity is
+	// the credential plus the Runner socket, not this HTTP probe.
+	if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil && d.logger != nil {
+		d.logger.Warn("Binding child heartbeat failed during Runtime refresh", "workspace_id", workspaceID, "error", err)
 	}
 	if len(d.cfg.Agents) > 0 {
 		return d.reregisterWorkspaceAfterRuntimeGone(ctx, workspaceID)

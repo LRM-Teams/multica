@@ -738,7 +738,7 @@ func taskWakeupURL(baseURL string, runtimeIDs []string) (string, error) {
 		return "", fmt.Errorf("daemon server URL must use http, https, ws, or wss")
 	}
 
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/ws"
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/connect"
 	u.RawPath = ""
 	q := u.Query()
 	ids := append([]string(nil), runtimeIDs...)

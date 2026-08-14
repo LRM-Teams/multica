@@ -21,13 +21,13 @@ func testDiscardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// startFakeTaskWakeupServer upgrades /api/daemon/ws and records client frames.
+// startFakeTaskWakeupServer upgrades /api/daemon/connect and records client frames.
 // onMessage may push server frames; return false to stop reading.
 func startFakeTaskWakeupServer(t *testing.T, onClientFrame func(protocol.Message), serverFrames <-chan []byte) *httptest.Server {
 	t.Helper()
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/api/daemon/ws") {
+		if !strings.HasSuffix(r.URL.Path, "/api/daemon/connect") {
 			http.NotFound(w, r)
 			return
 		}

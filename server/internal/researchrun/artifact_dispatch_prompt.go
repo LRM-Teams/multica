@@ -80,6 +80,23 @@ func rebindDispatchPromptForManifestTx(
 		return DispatchRequest{}, err
 	}
 	filtered := filterRunSnapshotByManifest(liveSnapshot, manifestSet.ArtifactIDs)
+	filtered.Run, err = loadFrozenRunRepresentationTx(
+		ctx, tx, workspaceID, in.SessionID, attempt.ID,
+	)
+	if err != nil {
+		return DispatchRequest{}, err
+	}
+	frozenDurable, err := loadFrozenDurableContextTx(
+		ctx, tx, workspaceID, in.SessionID, attempt.ID,
+	)
+	if err != nil {
+		return DispatchRequest{}, err
+	}
+	filtered.Contract = frozenDurable.Contract
+	filtered.Method = frozenDurable.Method
+	filtered.Questions = frozenDurable.Questions
+	filtered.Tasks = frozenDurable.Tasks
+	filtered.Attempts = frozenDurable.Attempts
 	filtered.EvaluationPrivate, err = loadFrozenEvaluationPrivateTx(ctx, tx, workspaceID, in.SessionID, manifestID)
 	if err != nil {
 		return DispatchRequest{}, err

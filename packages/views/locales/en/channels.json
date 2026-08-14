@@ -612,6 +612,7 @@
     "note_brief_toggle_aria": "Expand or collapse note “{{title}}”",
     "note_brief_untitled": "Untitled note",
     "note_brief_empty": "(empty note)",
+    "note_brief_open_note": "Open note",
     "note_worker_insert_below": "Insert below note",
     "note_worker_create_child": "Create child note",
     "note_worker_reply_title_fallback": "Agent reply",

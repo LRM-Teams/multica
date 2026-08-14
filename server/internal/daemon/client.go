@@ -622,9 +622,8 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (string, erro
 	return resp.Status, nil
 }
 
-// HeartbeatResponse, PendingUpdate, etc. alias the wire types so HTTP and WS
-// heartbeat paths share a single type and a single decoder shape. Aliases
-// (rather than wrappers) keep call sites unchanged.
+// HeartbeatResponse and pending-action aliases keep the Workspace Runner wire
+// contract readable inside the daemon action coordinator.
 type (
 	HeartbeatResponse       = protocol.DaemonHeartbeatAckPayload
 	PendingUpdate           = protocol.DaemonHeartbeatPendingUpdate
@@ -635,24 +634,6 @@ type (
 	PendingMemoryCuration   = protocol.DaemonHeartbeatPendingMemoryCuration
 	PendingRestart          = protocol.DaemonHeartbeatPendingRestart
 )
-
-func (c *Client) SendHeartbeat(
-	ctx context.Context,
-	runtimeID, activeMemoryCurationRunID string,
-	updateObservation *protocol.DaemonUpdateObservation,
-) (*HeartbeatResponse, error) {
-	var resp HeartbeatResponse
-	if err := c.postJSONWithToken(ctx, "/api/daemon/heartbeat", map[string]any{
-		"runtime_id":                    runtimeID,
-		"supports_batch_import":         true,
-		"supports_memory_curation":      true,
-		"active_memory_curation_run_id": activeMemoryCurationRunID,
-		"auto_update":                   updateObservation,
-	}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
 
 // MachineUpgradeReceipt is the immutable server acceptance snapshot needed by
 // the daemon before any local release mutation.

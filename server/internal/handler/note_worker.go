@@ -212,6 +212,8 @@ func (h *Handler) CreateNoteWorkerJob(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Explicit group destination from the request (not the auto-resolved agent DM).
+	explicitGroupChannel := strings.TrimSpace(req.ChannelID) != ""
 
 	jobID := uuid.New()
 	jobUUID := parseUUID(jobID.String())
@@ -285,6 +287,19 @@ SET task_id = $1, channel_message_id = $2, status = 'dispatched', updated_at = n
 WHERE id = $3`, task.ID, parseUUID(msg.ID), jobUUID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to link note Worker task")
 		return
+	}
+
+	// N2-A2: best-effort collaboration anchor for explicit group destinations.
+	// Failures must not roll back an already-dispatched Worker job.
+	if explicitGroupChannel && ch.Kind != "dm" {
+		h.bestEffortUpsertNotePageChannelRef(
+			r.Context(),
+			page.ID,
+			parseUUID(ch.ID),
+			page.WorkspaceID,
+			userID,
+			notePageChannelRefKindWorker,
+		)
 	}
 
 	resp, err := h.noteWorkerJobResponse(r.Context(), page.WorkspaceID, userID, jobUUID)

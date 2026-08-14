@@ -28,7 +28,7 @@ describe("applyResearchWSEvent", () => {
     vi.useFakeTimers();
     const qc = makeQc(EMPTY_RESEARCH_SNAPSHOT);
     const event = {
-      type: "research_session:status_changed",
+      type: "research_session:status_changed" as const,
       payload: { session_id: "s1" },
     };
 

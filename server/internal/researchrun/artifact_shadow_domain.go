@@ -87,6 +87,9 @@ func loadLegacyShadowDomainProjectionTx(
 		if parseErr != nil {
 			return nil, parseErr
 		}
+		if !isDispatchManifestCandidateKind(domainKind) {
+			continue
+		}
 		if !passportKindRaw.Valid || passportKindRaw.String == "" {
 			return nil, fmt.Errorf("%w: shadow domain artifact %s/%s is missing passport", ErrInvalidTransition, domainKind, artifactID)
 		}

@@ -15,9 +15,9 @@ const chapterD15EnforceComplete = false
 //   - partial: some but not all required fixtures/matrix rows
 //   - missing: no meaningful executable coverage yet
 var chapterD15Coverage = map[int]string{
-	1:  "partial", // migration 318–330 roundtrip tests
+	1:  "covered", // aggregate 318–330 fresh up, reverse down/up, lint, reconciliation, and no fabricated E–N rows
 	2:  "covered", // live catalog scope/FK/revision-uniqueness/complete stable guard inventory
-	3:  "partial", // migration FK negative fixtures
+	3:  "covered", // legacy domain + normalized D same-scope/cross-session/cross-workspace direct FK matrices
 	4:  "partial", // deferred guard tests in migration suite
 	5:  "partial", // version/lifecycle/policy-ledger update+delete guards and watermark/passport CAS; remaining revision/concurrency matrix open
 	6:  "partial", // backfill diagnostic tests in migration 319

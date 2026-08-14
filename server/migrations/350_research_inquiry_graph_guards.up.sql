@@ -40,7 +40,7 @@ BEGIN
   END IF;
   IF TG_ARGV[0] = 'branch'
      AND NEW.status = 'terminated'
-     AND btrim(NEW.termination_reason) = '' THEN
+     AND btrim(COALESCE(to_jsonb(NEW)->>'termination_reason', '')) = '' THEN
     RAISE check_violation USING CONSTRAINT = 'research_branch_termination_reason_guard';
   END IF;
   RETURN NEW;

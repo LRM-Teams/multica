@@ -30,12 +30,12 @@ func setupEvaluationAcceptanceRaceFixture(t *testing.T, ctx context.Context, poo
 	evidence := upgradeResultToV5(e2eVerifiedEvidenceV4())
 	evidence.AnswerClaimKey = "answer-claim"
 	for index, key := range []string{"verify-1", "verify-2", "verify-3"} {
-		evidence.ClientRequestID = fmt.Sprintf("evaluation-race-evidence-%d", index+1)
+		evidence.ClientRequestID = fmt.Sprintf("evaluation-race-evidence-%d-%s", index+1, uuid.NewString())
 		submitStoreTask(t, ctx, pool, store, fixture, key, evidence, run.Config)
 	}
 	report := e2eStructuredReport(t, ctx, pool, fixture.sessionID)
 	submitStoreTask(t, ctx, pool, store, fixture, "synthesize", ResultEnvelope{
-		SchemaVersion: 5, ClientRequestID: "evaluation-race-report",
+		SchemaVersion: 5, ClientRequestID: "evaluation-race-report-" + uuid.NewString(),
 		Summary: "report", Confidence: 0.9, Report: &report,
 	}, run.Config)
 	if _, err = store.ActivateReadyTasks(ctx, fixture.sessionID); err != nil {
@@ -68,12 +68,11 @@ func setupEvaluationAcceptanceRaceFixture(t *testing.T, ctx context.Context, poo
 	evaluation := EvaluationProposal{
 		Passed: true, FactualGrounding: 0.9, Coverage: 0.9, AnalyticalDepth: 0.9,
 		SourceQuality: 0.9, ContradictionHandling: 0.9, InstructionAdherence: 0.9, Readability: 0.9,
-		Findings:          []string{"The report passes the complete independent review."},
 		DimensionFindings: e2eDimensionFindings(), ReviewedClaimKeys: []string{"answer-claim"},
 		ReviewedSectionIDs: []string{"executive-summary", "method", "finding", "limitations", "conclusion"},
 	}
 	raw, err := json.Marshal(ResultEnvelope{
-		SchemaVersion: 5, ClientRequestID: "evaluation-race-result",
+		SchemaVersion: 5, ClientRequestID: "evaluation-race-result-" + uuid.NewString(),
 		Summary: "quality evaluation", Confidence: 0.9, Evaluation: &evaluation,
 	})
 	if err != nil {

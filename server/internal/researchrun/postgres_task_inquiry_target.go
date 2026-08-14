@@ -72,8 +72,13 @@ func (s *PostgresStore) BindTaskInquiryTargets(ctx context.Context, in BindTaskI
 			return BindTaskInquiryTargetsResult{}, fmt.Errorf("%w: Task Inquiry target crosses Goal or Plan versions", ErrInvalidTransition)
 		}
 		command, execErr := tx.Exec(ctx, `INSERT INTO research_task_inquiry_target
-			(workspace_id,session_id,task_id,target_kind,target_entity_id,goal_version,plan_version,bound_by_attempt_id)
-			VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,$7,$8::uuid)
+			(workspace_id,session_id,task_id,target_kind,target_entity_id,goal_version,plan_version,bound_by_attempt_id,ordinal)
+			SELECT $1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,$7,$8::uuid,
+			       COALESCE((
+			         SELECT max(existing.ordinal)+1
+			         FROM research_task_inquiry_target existing
+			         WHERE existing.workspace_id=$1::uuid AND existing.session_id=$2::uuid AND existing.task_id=$3::uuid
+			       ), 0)
 			ON CONFLICT (workspace_id,session_id,task_id,target_kind,target_entity_id) DO NOTHING`,
 			in.WorkspaceID, in.SessionID, target.TaskID, string(target.Kind), target.EntityID, goalVersion, planVersion, in.AttemptID)
 		if execErr != nil {

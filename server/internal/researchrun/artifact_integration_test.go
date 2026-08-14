@@ -474,6 +474,71 @@ func TestTaskContextForAttemptExcludesPostDispatchArtifacts(t *testing.T) {
 	}
 }
 
+func TestTaskContextForAttemptRejectsTamperedFrozenRepresentation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Frozen read hash", Title: "Frozen read hash",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	claimID := uuid.NewString()
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "frozen-read-claim", "frozen read claim")
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	tamperedBytes := []byte(`{"id":"tampered"}`)
+	tamperedHash := contentHashFromPayload(tamperedBytes)
+	tag, err := pool.Exec(ctx, `
+		UPDATE research_artifact_context_entry entry
+		SET representation_bytes = $4,
+		    representation_hash = $5
+		FROM research_artifact_context_manifest manifest,
+		     research_artifact_version version,
+		     research_artifact_passport passport
+		WHERE (manifest.workspace_id, manifest.session_id, manifest.id) =
+		      (entry.workspace_id, entry.session_id, entry.manifest_id)
+		  AND (version.workspace_id, version.session_id, version.id) =
+		      (entry.workspace_id, entry.session_id, entry.artifact_version_id)
+		  AND (passport.workspace_id, passport.session_id, passport.id) =
+		      (version.workspace_id, version.session_id, version.artifact_id)
+		  AND manifest.workspace_id = $1::uuid
+		  AND manifest.session_id = $2::uuid
+		  AND manifest.attempt_id = $3::uuid
+		  AND passport.entity_kind = 'claim'
+	`, fixture.workspaceID, run.SessionID, attempt.ID, tamperedBytes, tamperedHash)
+	if err != nil {
+		t.Fatalf("tamper frozen representation: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("tampered rows=%d want 1", tag.RowsAffected())
+	}
+	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("TaskContextForAttempt err=%v want ErrInvalidTransition", err)
+	}
+}
+
 func TestAcceptResultRequiresDispatchManifest(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {

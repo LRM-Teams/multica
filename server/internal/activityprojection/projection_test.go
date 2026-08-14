@@ -74,6 +74,7 @@ func TestProjectSummaryUsesLifecycleToneVocabulary(t *testing.T) {
 	}{
 		{protocol.ActivityKindOnline, "idle", "success"},
 		{protocol.ActivityKindWorking, "message_received", "warning"},
+		{protocol.ActivityKindWorking, "running_command", "running"},
 		{protocol.ActivityKindError, "runtime_error", "error"},
 		{protocol.ActivityKindOffline, "machine_disconnected", "neutral"},
 	}
@@ -99,7 +100,7 @@ func TestTimelineRowFromSnapshotHasNoProviderBody(t *testing.T) {
 		ActivityKind: protocol.ActivityKindWorking,
 		DetailKind:   "running_command",
 	})
-	if row.Title != "Running command..." || row.BodyKind != "none" || row.Body != "" || row.Subtext != "" {
+	if row.Title != "Running command..." || row.Tone != "running" || row.BodyKind != "none" || row.Body != "" || row.Subtext != "" {
 		t.Fatalf("snapshot row = %+v, want bounded presentation without provider detail", row)
 	}
 }
@@ -134,13 +135,13 @@ func TestProjectTimelineEntryUsesEventLocalLifecycleInsteadOfLatestSnapshot(t *t
 
 func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
 	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"pnpm test","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
-	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "warning" || row.BodyKind != "none" {
+	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "running" || row.BodyKind != "command" {
 		t.Fatalf("command row = %+v, want title Running command with the command as subtext", row)
 	}
 	// The generic label narrative (no command in the tool input) must not
 	// echo the title as its own subtext.
 	plain := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Running command","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
-	if plain.Title != "Running command" || plain.Subtext != "" {
+	if plain.Title != "Running command" || plain.Subtext != "" || plain.Tone != "running" || plain.BodyKind != "command" {
 		t.Fatalf("generic command row = %+v, want no subtext", plain)
 	}
 }

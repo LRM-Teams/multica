@@ -21,6 +21,7 @@ export type ComposerActivityRow = {
 
 const TONE_RANK: Record<string, number> = {
   active: 0,
+  running: 1,
   info: 1,
   warning: 2,
   error: 3,

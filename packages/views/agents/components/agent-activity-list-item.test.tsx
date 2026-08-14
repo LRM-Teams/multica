@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   availability: "online" as "online" | "offline",
   summary: {
-    label: "Running command...",
-    tone: "warning",
+    label: "Command activity",
+    tone: "running",
     visibility: "visible",
   } as { label: string; tone: string; visibility: string } | null,
 }));
@@ -38,25 +38,26 @@ describe("AgentActivityStatus", () => {
   beforeEach(() => {
     state.availability = "online";
     state.summary = {
-      label: "Running command...",
-      tone: "warning",
+      label: "Command activity",
+      tone: "running",
       visibility: "visible",
     };
   });
 
-  it("shows a yellow pulse for dynamic work while the Agent is online", () => {
+  it("uses the server-projected running tone regardless of label", () => {
     const { container } = render(<AgentActivityStatus agentId="agent-1" />);
     expect(screen.getByTestId("agent-activity-status")).toHaveTextContent(
-      "Running command...",
+      "Command activity",
     );
     expect(container.querySelector(".animate-ping")).not.toBeNull();
+    expect(container.querySelector(".bg-running")).not.toBeNull();
   });
 
   it("shows Offline instead of stale work as soon as presence disconnects", () => {
     state.availability = "offline";
     render(<AgentActivityStatus agentId="agent-1" />);
     expect(screen.getByTestId("agent-activity-status")).toHaveTextContent("Offline");
-    expect(screen.queryByText("Running command...")).toBeNull();
+    expect(screen.queryByText("Command activity")).toBeNull();
   });
 
   it("uses binary presence for non-dynamic Online summaries", () => {
@@ -71,5 +72,12 @@ describe("AgentActivityStatus", () => {
     expect(screen.getByTestId("agent-activity-status")).toHaveTextContent("Thinking...");
     expect(container.querySelector(".animate-ping")).not.toBeNull();
     expect(screen.getByTestId("agent-activity-status").querySelector(".bg-warning")).not.toBeNull();
+  });
+
+  it("does not infer the running tone from display copy", () => {
+    state.summary = { label: "Running command...", tone: "warning", visibility: "visible" };
+    const { container } = render(<AgentActivityStatus agentId="agent-1" />);
+    expect(container.querySelector(".bg-running")).toBeNull();
+    expect(container.querySelector(".bg-warning")).not.toBeNull();
   });
 });

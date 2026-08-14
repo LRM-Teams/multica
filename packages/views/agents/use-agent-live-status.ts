@@ -10,6 +10,7 @@ const RUNNER_TONE_DOT_CLASS: Record<string, string> = {
   active: "bg-brand",
   info: "bg-blue-500",
   warning: "bg-amber-500",
+  running: "bg-running",
   error: "bg-destructive",
   success: "bg-emerald-500",
 };

@@ -12,8 +12,10 @@ import { resolveAgentLiveStatus } from "../resolve-agent-live-status";
 
 const activityToneDotClass: Record<string, string> = {
   neutral: "bg-muted-foreground/40",
-  info: "bg-blue-500",
+  active: "bg-warning",
+  info: "bg-warning",
   warning: "bg-warning",
+  running: "bg-running",
   error: "bg-destructive",
   success: "bg-success",
 };
@@ -146,10 +148,11 @@ function AgentActivityStatusView({
     );
   }
   const isWorkingTone =
-    summary.tone === "warning" || summary.tone === "info" || summary.tone === "active";
-  const dotClass = isWorkingTone
-    ? "bg-warning"
-    : activityToneDotClass[summary.tone] ?? "bg-muted-foreground";
+    summary.tone === "warning" ||
+    summary.tone === "info" ||
+    summary.tone === "active" ||
+    summary.tone === "running";
+  const dotClass = activityToneDotClass[summary.tone] ?? "bg-muted-foreground";
   const pulses = isWorkingTone;
   return (
     <span

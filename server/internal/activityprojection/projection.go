@@ -130,7 +130,11 @@ func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
 		return Summary{Label: "Offline", Tone: "neutral", Visibility: "visible"}
 	case protocol.ActivityKindWorking:
 		if label, ok := workingDetailLabels[snapshot.DetailKind]; ok {
-			return Summary{Label: label, Tone: "warning", Visibility: "visible"}
+			tone := "warning"
+			if snapshot.DetailKind == "running_command" {
+				tone = "running"
+			}
+			return Summary{Label: label, Tone: tone, Visibility: "visible"}
 		}
 		return Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
 	default:
@@ -190,6 +194,11 @@ func projectNarrativeTimelineRow(body protocol.AgentActivityNarrativeBody, fallb
 		row.Subtext = text
 	case protocol.ActivityKindWorking:
 		switch body.DetailKind {
+		case "running_command":
+			row.BodyKind = "command"
+			if text != "" && text != row.Title {
+				row.Subtext = text
+			}
 		case "message_received", "compacting_context", "compaction_finished":
 			// Round lifecycle facts share the same timeline grammar: Working is
 			// the stable action heading and the event-specific fact is subtext.

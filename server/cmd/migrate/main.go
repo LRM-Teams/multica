@@ -49,6 +49,7 @@ var preMigrationHooks = map[string]preMigrationHook{
 	"229_agent_delete_cascade_fk_indexes":              runAgentDeleteCascadeFKIndexesHook,
 	"245_research_fleet_agent_indexes":                 runResearchFleetAgentIndexesHook,
 	"337_env_dispatch_delivery_obligation_agent_index": runAgentDeleteFKIndexesHook,
+	"384_research_message_target_agent_scoped_index":   runAgentDeleteFKIndexesHook,
 }
 
 type concurrentIndexSpec struct {
@@ -67,6 +68,7 @@ var agentDeleteIndexOptionalRelations = map[string]string{
 	"note_worker_job_task_idx":                                    "note_worker_job",
 	"idx_agent_chat_delivery_message":                             "agent_chat_delivery",
 	"idx_agent_chat_delivery_chat_session":                        "agent_chat_delivery",
+	"idx_research_message_workspace_target_agent":                 "research_message",
 }
 
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
@@ -98,6 +100,7 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_agent_creation_draft_used_agent", `CREATE INDEX CONCURRENTLY idx_agent_creation_draft_used_agent ON agent_creation_draft (used_agent_id)`},
 		{"idx_agent_workspace_source_agent", `CREATE INDEX CONCURRENTLY idx_agent_workspace_source_agent ON agent (workspace_id, source_agent_id) WHERE source_agent_id IS NOT NULL`},
 		{"env_dispatch_delivery_obligation_source_recipient_agent_idx", `CREATE INDEX CONCURRENTLY env_dispatch_delivery_obligation_source_recipient_agent_idx ON env_dispatch_delivery_obligation (source_recipient_agent_id)`},
+		{"idx_research_message_workspace_target_agent", `CREATE INDEX CONCURRENTLY idx_research_message_workspace_target_agent ON research_message (workspace_id, target_agent_id) WHERE target_agent_id IS NOT NULL`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

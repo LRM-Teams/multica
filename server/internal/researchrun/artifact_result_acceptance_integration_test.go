@@ -477,7 +477,7 @@ func TestAcceptResultRejectsWhenManifestEntryRepresentationChanges(t *testing.T)
 	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
-	if _, err = pool.Exec(ctx, `
+	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
 		UPDATE research_artifact_context_entry e
 		SET representation_bytes = convert_to('sha256:tampered-representation', 'UTF8')
 		FROM research_artifact_context_manifest m
@@ -485,9 +485,7 @@ func TestAcceptResultRejectsWhenManifestEntryRepresentationChanges(t *testing.T)
 		  AND m.workspace_id = $1::uuid
 		  AND m.session_id = $2::uuid
 		  AND m.attempt_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, attempt.ID); err != nil {
-		t.Fatalf("tamper representation bytes: %v", err)
-	}
+	`, fixture.workspaceID, run.SessionID, attempt.ID)
 
 	raw, err := json.Marshal(upgradeResultToV5(validV4PlanResult(t)))
 	if err != nil {

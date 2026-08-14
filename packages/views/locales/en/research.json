@@ -639,6 +639,7 @@
     "template_prompt_apply": "Apply changes"
   },
   "home_header": {
+    "title": "Research Constellation",
     "subtitle": "Research home · multi-session constellation",
     "working": "Research fleet online · {{count}} Agents working",
     "standby": "Research fleet standing by"

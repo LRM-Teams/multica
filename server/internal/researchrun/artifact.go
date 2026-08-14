@@ -326,6 +326,20 @@ func MigrationRelationshipParserNames() []string {
 	}
 }
 
+// DecisionRelationshipSchemaNames lists the closed set of persisted Decision
+// schemas that Chapter D may inspect for typed artifact relationships.
+func DecisionRelationshipSchemaNames() []string {
+	return []string{
+		"budget_exhausted",
+		"citation_audit",
+		"information_gain",
+		"quality_gate",
+		"remediation_routing",
+		"research_method",
+		"selective_steering",
+	}
+}
+
 // ScopedRelationshipFKNames lists migration 326 composite relationship FKs.
 func ScopedRelationshipFKNames() []string {
 	return []string{

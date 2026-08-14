@@ -6,6 +6,21 @@
     "title": "链接已失效或无效",
     "description": "请回到终端重新运行 \"multica login\"，或者再次点击它打印出来的链接。"
   },
+  "enter": {
+    "title": "输入设备上显示的代码",
+    "description": "输入终端里显示的代码，然后继续。",
+    "label": "设备代码",
+    "placeholder": "XXXX-XXXX",
+    "submit": "继续",
+    "submitting": "正在检查...",
+    "invalid": "代码无效或已过期。请核对终端后重试。"
+  },
+  "match": {
+    "title": "确认此设备",
+    "code_label": "代码",
+    "instruction": "请确认这与设备上显示的代码一致。",
+    "checkbox": "这与我设备上的代码一致"
+  },
   "main": {
     "title": "确认登录",
     "requested_from": "来自 {{client_hint}} 的请求",

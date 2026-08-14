@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/json"
+	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -12,6 +13,18 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+// Official public client for the Multica CLI. RFC 8628 requires a client_id;
+// we have no OAuth client registry, so this well-known public client is the
+// only accepted value on the device-authorization and token endpoints.
+const deviceAuthClientID = "multica-cli"
+
+// Display name stored on the authorization row and shown on /device.
+const deviceAuthPublicClientName = "Multica CLI"
+
+// RFC 8628 §3.4 grant type. Token polls that do not send this exact value
+// are rejected as unsupported_grant_type.
+const deviceAuthGrantType = "urn:ietf:params:oauth:grant-type:device_code"
 
 // deviceAuthorizationTTL matches the existing email verification-code TTL —
 // no new expiry policy to justify (see design doc).
@@ -57,6 +70,65 @@ func generateUserCode() (string, error) {
 	return sb.String(), nil
 }
 
+// normalizeUserCode applies RFC 8628 §6.1 input hygiene: uppercase, strip
+// dashes/spaces/other punctuation, then re-insert the XXXX-XXXX grouping
+// used at rest. Returns "" when the cleaned value is not 8 alphabet chars.
+func normalizeUserCode(raw string) string {
+	var cleaned strings.Builder
+	for _, r := range strings.ToUpper(raw) {
+		if strings.ContainsRune(deviceUserCodeAlphabet, r) {
+			cleaned.WriteRune(r)
+		}
+	}
+	out := cleaned.String()
+	if len(out) != 8 {
+		return ""
+	}
+	return out[:4] + "-" + out[4:]
+}
+
+func isFormURLEncoded(r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	if ct == "" {
+		return false
+	}
+	media, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	return media == "application/x-www-form-urlencoded"
+}
+
+func writeOAuthError(w http.ResponseWriter, code string) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": code})
+}
+
+func parseDeviceForm(w http.ResponseWriter, r *http.Request) bool {
+	if !isFormURLEncoded(r) {
+		writeOAuthError(w, "invalid_request")
+		return false
+	}
+	if err := r.ParseForm(); err != nil {
+		writeOAuthError(w, "invalid_request")
+		return false
+	}
+	return true
+}
+
+func requireDeviceClientID(w http.ResponseWriter, r *http.Request) bool {
+	clientID := strings.TrimSpace(r.PostForm.Get("client_id"))
+	if clientID == "" {
+		writeOAuthError(w, "invalid_request")
+		return false
+	}
+	if clientID != deviceAuthClientID {
+		writeOAuthError(w, "invalid_client")
+		return false
+	}
+	return true
+}
+
 type deviceCodeResponse struct {
 	DeviceCode              string `json:"device_code"`
 	UserCode                string `json:"user_code"`
@@ -66,15 +138,16 @@ type deviceCodeResponse struct {
 	Interval                int    `json:"interval"`
 }
 
-type requestDeviceCodeRequest struct {
-	ClientHint string `json:"client_hint"`
-}
-
 // RequestDeviceCode starts an RFC 8628 device authorization flow. No auth
 // required — this is the entry point a not-yet-logged-in CLI calls.
 func (h *Handler) RequestDeviceCode(w http.ResponseWriter, r *http.Request) {
-	var req requestDeviceCodeRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if !parseDeviceForm(w, r) {
+		return
+	}
+	if !requireDeviceClientID(w, r) {
+		return
+	}
+	// scope is accepted and ignored — scoped grants are a non-goal.
 
 	rawDeviceCode, err := generateDeviceCode()
 	if err != nil {
@@ -91,7 +164,7 @@ func (h *Handler) RequestDeviceCode(w http.ResponseWriter, r *http.Request) {
 	_, err = h.Queries.CreateDeviceAuthorization(r.Context(), db.CreateDeviceAuthorizationParams{
 		DeviceCodeHash: auth.HashToken(rawDeviceCode),
 		UserCode:       userCode,
-		ClientHint:     strings.TrimSpace(req.ClientHint),
+		ClientHint:     deviceAuthPublicClientName,
 		ExpiresAt:      expiresAt,
 	})
 	if err != nil {
@@ -101,6 +174,7 @@ func (h *Handler) RequestDeviceCode(w http.ResponseWriter, r *http.Request) {
 
 	appURL := deviceAuthAppURL()
 	verificationURI := appURL + "/device"
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, deviceCodeResponse{
 		DeviceCode:              rawDeviceCode,
 		UserCode:                userCode,
@@ -134,7 +208,7 @@ func (h *Handler) GetPendingDeviceAuthorization(w http.ResponseWriter, r *http.R
 	if _, ok := requireUserID(w, r); !ok {
 		return
 	}
-	userCode := strings.TrimSpace(r.URL.Query().Get("user_code"))
+	userCode := normalizeUserCode(r.URL.Query().Get("user_code"))
 	if userCode == "" {
 		writeError(w, http.StatusBadRequest, "user_code is required")
 		return
@@ -180,7 +254,7 @@ func (h *Handler) ConfirmDeviceAuthorization(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	userCode := strings.TrimSpace(req.UserCode)
+	userCode := normalizeUserCode(req.UserCode)
 	if userCode == "" {
 		writeError(w, http.StatusBadRequest, "user_code is required")
 		return
@@ -217,13 +291,10 @@ func (h *Handler) ConfirmDeviceAuthorization(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, confirmDeviceAuthorizationResponse{Status: "approved"})
 }
 
-type issueDeviceTokenRequest struct {
-	DeviceCode string `json:"device_code"`
-}
-
 type issueDeviceTokenResponse struct {
-	Token         string `json:"token"`
-	ExpiresInDays int    `json:"expires_in_days"`
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
 }
 
 // IssueDeviceToken is the CLI's poll endpoint. No auth required — the
@@ -234,20 +305,26 @@ type issueDeviceTokenResponse struct {
 // persisted in raw form and this handler never returns it again after this
 // call.
 func (h *Handler) IssueDeviceToken(w http.ResponseWriter, r *http.Request) {
-	var req issueDeviceTokenRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !parseDeviceForm(w, r) {
 		return
 	}
-	rawDeviceCode := strings.TrimSpace(req.DeviceCode)
+	grantType := strings.TrimSpace(r.PostForm.Get("grant_type"))
+	if grantType != deviceAuthGrantType {
+		writeOAuthError(w, "unsupported_grant_type")
+		return
+	}
+	if !requireDeviceClientID(w, r) {
+		return
+	}
+	rawDeviceCode := strings.TrimSpace(r.PostForm.Get("device_code"))
 	if rawDeviceCode == "" {
-		writeError(w, http.StatusBadRequest, "device_code is required")
+		writeOAuthError(w, "invalid_request")
 		return
 	}
 
 	da, err := h.Queries.GetDeviceAuthorizationByDeviceCodeHash(r.Context(), auth.HashToken(rawDeviceCode))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expired_token"})
+		writeOAuthError(w, "expired_token")
 		return
 	}
 
@@ -257,16 +334,16 @@ func (h *Handler) IssueDeviceToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if polled.PreviousPolledAt.Valid && time.Since(polled.PreviousPolledAt.Time) < deviceAuthPollInterval*time.Second {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slow_down"})
+		writeOAuthError(w, "slow_down")
 		return
 	}
 
 	switch da.Status {
 	case "denied":
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_denied"})
+		writeOAuthError(w, "access_denied")
 		return
 	case "pending":
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "authorization_pending"})
+		writeOAuthError(w, "authorization_pending")
 		return
 	}
 
@@ -307,12 +384,14 @@ func (h *Handler) IssueDeviceToken(w http.ResponseWriter, r *http.Request) {
 		// race. The PAT minted just above is orphaned but harmless (it's
 		// simply never revealed to a caller and can be reaped like any
 		// other unused PAT); the loser must not retry with a stale success.
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expired_token"})
+		writeOAuthError(w, "expired_token")
 		return
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, issueDeviceTokenResponse{
-		Token:         rawToken,
-		ExpiresInDays: deviceAuthPATExpiryDays,
+		AccessToken: rawToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   deviceAuthPATExpiryDays * 24 * 3600,
 	})
 }

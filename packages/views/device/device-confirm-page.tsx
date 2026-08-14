@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useReducer, type FormEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, type DevicePending } from "@multica/core/api";
 import { useLogout } from "../auth";
@@ -9,105 +9,167 @@ import { Time } from "../i18n/time";
 import { useT } from "../i18n";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
+import { Checkbox } from "@multica/ui/components/ui/checkbox";
+import { Input } from "@multica/ui/components/ui/input";
+import { Label } from "@multica/ui/components/ui/label";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { LogOut, MonitorSmartphone, ShieldAlert } from "lucide-react";
 
 export interface DeviceConfirmPageProps {
   /**
-   * `user_code` read from the CLI-printed link (`?user_code=XXXX-XXXX`).
-   * Null when the link is missing/malformed the code entirely — the page
-   * has no manual-entry fallback (Frank/Parker 2026-07-31: zero input,
-   * ever; the recovery path is re-running the CLI command, not typing).
+   * `user_code` from `verification_uri_complete` (`?user_code=XXXX-XXXX`).
+   * Null when the user opened the bare `verification_uri` and must type
+   * the code (RFC 8628 §3.3).
    */
   userCode: string | null;
 }
 
 type ConfirmOutcome = "approved" | "denied";
 
+type DeviceConfirmState = {
+  typedCode: string;
+  submittedCode: string | null;
+  lookupAttempt: number;
+  matchesDevice: boolean;
+  outcome: ConfirmOutcome | null;
+  confirming: ConfirmOutcome | null;
+  confirmError: string | null;
+  raceExpired: boolean;
+};
+
+type DeviceConfirmAction =
+  | { type: "type"; value: string }
+  | { type: "submit" }
+  | { type: "match"; value: boolean }
+  | { type: "confirming"; value: ConfirmOutcome }
+  | { type: "confirmed"; value: ConfirmOutcome }
+  | { type: "confirm-error"; value: string }
+  | { type: "race-expired" };
+
+const initialState: DeviceConfirmState = {
+  typedCode: "",
+  submittedCode: null,
+  lookupAttempt: 0,
+  matchesDevice: false,
+  outcome: null,
+  confirming: null,
+  confirmError: null,
+  raceExpired: false,
+};
+
+function reduceDeviceConfirm(
+  state: DeviceConfirmState,
+  action: DeviceConfirmAction,
+): DeviceConfirmState {
+  switch (action.type) {
+    case "type":
+      return { ...state, typedCode: action.value, submittedCode: null };
+    case "submit": {
+      const next = state.typedCode.trim();
+      if (!next) return state;
+      return {
+        ...state,
+        submittedCode: next,
+        lookupAttempt: state.lookupAttempt + 1,
+      };
+    }
+    case "match":
+      return { ...state, matchesDevice: action.value };
+    case "confirming":
+      return { ...state, confirming: action.value, confirmError: null };
+    case "confirmed":
+      return { ...state, outcome: action.value, confirming: null };
+    case "confirm-error":
+      return { ...state, confirmError: action.value, confirming: null };
+    case "race-expired":
+      return { ...state, raceExpired: true, confirming: null };
+  }
+}
+
+function formatUserCode(raw: string): string {
+  const cleaned = raw.toUpperCase().replace(/[^A-Z2-9]/g, "");
+  if (cleaned.length === 8) return `${cleaned.slice(0, 4)}-${cleaned.slice(4)}`;
+  return raw.trim();
+}
+
 /**
- * `/device` — RFC 8628 device-code confirmation (task #36). The CLI opens
- * this page with the code already in the URL; the only interaction is
- * Approve/Deny. There is deliberately no code-entry UI (see userCode prop
- * doc) — every failure mode routes back to "re-run the CLI command."
+ * `/device` — RFC 8628 device-code confirmation. Two start states:
+ * type-in at `verification_uri`, or display-and-confirm-match when the
+ * user arrived via `verification_uri_complete`.
  */
 export function DeviceConfirmPage({ userCode }: DeviceConfirmPageProps) {
   const { t } = useT("device");
-  const [outcome, setOutcome] = useState<ConfirmOutcome | null>(null);
-  const [confirming, setConfirming] = useState<ConfirmOutcome | null>(null);
-  const [confirmError, setConfirmError] = useState<string | null>(null);
-  // Set when a confirm click 404s (code expired/consumed between page load
-  // and click) — same terminal "expired" UI as a 404 on the initial fetch,
-  // tracked separately from react-query state since setQueryData(key,
-  // undefined) is a documented no-op (an updater returning undefined means
-  // "don't change the cache", not "clear it").
-  const [raceExpired, setRaceExpired] = useState(false);
+  const fromCompleteURI = !!userCode;
+  const [state, dispatch] = useReducer(reduceDeviceConfirm, initialState);
+  const lookupCode = userCode ?? state.submittedCode;
 
   const {
     data: pending,
     isLoading,
     error: fetchError,
   } = useQuery<DevicePending>({
-    queryKey: ["device-pending", userCode],
-    queryFn: () => api.getDevicePending(userCode as string),
-    enabled: !!userCode,
+    queryKey: ["device-pending", lookupCode, state.lookupAttempt],
+    queryFn: () => api.getDevicePending(lookupCode as string),
+    enabled: !!lookupCode,
     retry: false,
   });
 
-  const notFound =
-    !userCode ||
-    raceExpired ||
-    (fetchError instanceof ApiError && fetchError.status === 404);
+  const lookupNotFound =
+    !!lookupCode &&
+    (state.raceExpired ||
+      (fetchError instanceof ApiError && fetchError.status === 404));
+
+  const handleEnter = (e: FormEvent) => {
+    e.preventDefault();
+    dispatch({ type: "submit" });
+  };
 
   const handleConfirm = async (approve: boolean) => {
-    if (!userCode) return;
+    if (!lookupCode) return;
     const kind: ConfirmOutcome = approve ? "approved" : "denied";
-    setConfirming(kind);
-    setConfirmError(null);
+    dispatch({ type: "confirming", value: kind });
     try {
-      const res = await api.confirmDevice(userCode, approve);
-      setOutcome(res.status);
+      const res = await api.confirmDevice(lookupCode, approve);
+      dispatch({ type: "confirmed", value: res.status });
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        // The code expired/was consumed between page load and click —
-        // same "go re-run the CLI" recovery as the initial fetch 404.
-        setRaceExpired(true);
+        dispatch({ type: "race-expired" });
       } else {
-        setConfirmError(
-          e instanceof Error ? e.message : t(($) => $.errors.confirm_failed),
-        );
+        dispatch({
+          type: "confirm-error",
+          value: e instanceof Error ? e.message : t(($) => $.errors.confirm_failed),
+        });
       }
-    } finally {
-      setConfirming(null);
     }
   };
 
-  if (outcome) {
+  if (state.outcome) {
     return (
       <DeviceShell>
         <Card className="w-full max-w-md">
           <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
             <div
               className={
-                outcome === "approved"
+                state.outcome === "approved"
                   ? "flex h-12 w-12 items-center justify-center rounded-full bg-primary/10"
                   : "flex h-12 w-12 items-center justify-center rounded-full bg-muted"
               }
             >
               <MonitorSmartphone
                 className={
-                  outcome === "approved"
+                  state.outcome === "approved"
                     ? "h-6 w-6 text-primary"
                     : "h-6 w-6 text-muted-foreground"
                 }
               />
             </div>
             <h2 className="text-lg font-semibold">
-              {outcome === "approved"
+              {state.outcome === "approved"
                 ? t(($) => $.done.approved_title)
                 : t(($) => $.done.denied_title)}
             </h2>
             <p className="text-sm text-muted-foreground">
-              {outcome === "approved"
+              {state.outcome === "approved"
                 ? t(($) => $.done.approved_description)
                 : t(($) => $.done.denied_description)}
             </p>
@@ -117,7 +179,21 @@ export function DeviceConfirmPage({ userCode }: DeviceConfirmPageProps) {
     );
   }
 
-  if (isLoading && userCode) {
+  if (!lookupCode) {
+    return (
+      <DeviceShell>
+        <EnterCodeCard
+          typedCode={state.typedCode}
+          onTypedCodeChange={(value) => dispatch({ type: "type", value })}
+          onSubmit={handleEnter}
+          error={null}
+          submitting={false}
+        />
+      </DeviceShell>
+    );
+  }
+
+  if (isLoading) {
     return (
       <DeviceShell>
         <Card className="w-full max-w-md">
@@ -131,7 +207,20 @@ export function DeviceConfirmPage({ userCode }: DeviceConfirmPageProps) {
     );
   }
 
-  if (notFound || !pending) {
+  if (lookupNotFound || !pending) {
+    if (!fromCompleteURI) {
+      return (
+        <DeviceShell>
+          <EnterCodeCard
+            typedCode={state.typedCode}
+            onTypedCodeChange={(value) => dispatch({ type: "type", value })}
+            onSubmit={handleEnter}
+            error={t(($) => $.enter.invalid)}
+            submitting={false}
+          />
+        </DeviceShell>
+      );
+    }
     return (
       <DeviceShell>
         <Card className="w-full max-w-md">
@@ -149,6 +238,9 @@ export function DeviceConfirmPage({ userCode }: DeviceConfirmPageProps) {
     );
   }
 
+  const actionsDisabled =
+    state.confirming !== null || (fromCompleteURI && !state.matchesDevice);
+
   return (
     <DeviceShell>
       <Card className="w-full max-w-md">
@@ -158,7 +250,9 @@ export function DeviceConfirmPage({ userCode }: DeviceConfirmPageProps) {
           </div>
 
           <div className="text-center space-y-2">
-            <h2 className="text-xl font-semibold">{t(($) => $.main.title)}</h2>
+            <h2 className="text-xl font-semibold">
+              {fromCompleteURI ? t(($) => $.match.title) : t(($) => $.main.title)}
+            </h2>
             <p className="text-sm text-muted-foreground">
               {pending.client_hint
                 ? t(($) => $.main.requested_from, { client_hint: pending.client_hint })
@@ -169,26 +263,54 @@ export function DeviceConfirmPage({ userCode }: DeviceConfirmPageProps) {
             </p>
           </div>
 
+          {fromCompleteURI && (
+            <div className="w-full space-y-3">
+              <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-center">
+                <p className="text-xs text-muted-foreground">{t(($) => $.match.code_label)}</p>
+                <p className="mt-1 font-mono text-2xl tracking-[0.2em]">
+                  {formatUserCode(lookupCode)}
+                </p>
+              </div>
+              <p className="text-sm text-muted-foreground text-center">
+                {t(($) => $.match.instruction)}
+              </p>
+              <label className="flex items-start gap-3 text-sm">
+                <Checkbox
+                  checked={state.matchesDevice}
+                  onCheckedChange={(next) =>
+                    dispatch({ type: "match", value: next === true })
+                  }
+                  aria-label={t(($) => $.match.checkbox)}
+                />
+                <span>{t(($) => $.match.checkbox)}</span>
+              </label>
+            </div>
+          )}
+
           <div className="flex gap-3 w-full">
             <Button
               variant="outline"
               className="flex-1"
               onClick={() => handleConfirm(false)}
-              disabled={confirming !== null}
+              disabled={actionsDisabled}
             >
-              {confirming === "denied" ? t(($) => $.main.denying) : t(($) => $.main.deny)}
+              {state.confirming === "denied"
+                ? t(($) => $.main.denying)
+                : t(($) => $.main.deny)}
             </Button>
             <Button
               className="flex-1"
               onClick={() => handleConfirm(true)}
-              disabled={confirming !== null}
+              disabled={actionsDisabled}
             >
-              {confirming === "approved" ? t(($) => $.main.approving) : t(($) => $.main.approve)}
+              {state.confirming === "approved"
+                ? t(($) => $.main.approving)
+                : t(($) => $.main.approve)}
             </Button>
           </div>
 
-          {confirmError && (
-            <p className="text-sm text-destructive text-center">{confirmError}</p>
+          {state.confirmError && (
+            <p className="text-sm text-destructive text-center">{state.confirmError}</p>
           )}
         </CardContent>
       </Card>
@@ -196,7 +318,54 @@ export function DeviceConfirmPage({ userCode }: DeviceConfirmPageProps) {
   );
 }
 
-function DeviceShell({ children }: { children: React.ReactNode }) {
+function EnterCodeCard({
+  typedCode,
+  onTypedCodeChange,
+  onSubmit,
+  error,
+  submitting,
+}: {
+  typedCode: string;
+  onTypedCodeChange: (value: string) => void;
+  onSubmit: (e: FormEvent) => void;
+  error: string | null;
+  submitting: boolean;
+}) {
+  const { t } = useT("device");
+  return (
+    <Card className="w-full max-w-md">
+      <CardContent className="flex flex-col gap-6 py-12">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
+            <MonitorSmartphone className="h-7 w-7 text-primary" />
+          </div>
+          <h2 className="text-xl font-semibold">{t(($) => $.enter.title)}</h2>
+          <p className="text-sm text-muted-foreground">{t(($) => $.enter.description)}</p>
+        </div>
+        <form className="space-y-4" onSubmit={onSubmit}>
+          <div className="space-y-2">
+            <Label htmlFor="device-user-code">{t(($) => $.enter.label)}</Label>
+            <Input
+              id="device-user-code"
+              name="user_code"
+              autoComplete="one-time-code"
+              value={typedCode}
+              onChange={(e) => onTypedCodeChange(e.target.value)}
+              placeholder={t(($) => $.enter.placeholder)}
+              aria-invalid={error ? true : undefined}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button type="submit" className="w-full" disabled={submitting || !typedCode.trim()}>
+            {submitting ? t(($) => $.enter.submitting) : t(($) => $.enter.submit)}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DeviceShell({ children }: { children: ReactNode }) {
   const { t } = useT("device");
   const logout = useLogout();
   return (

@@ -370,6 +370,31 @@ func (c *APIClient) PostJSON(ctx context.Context, path string, body any, out any
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// PostForm performs a POST request with an application/x-www-form-urlencoded body.
+func (c *APIClient) PostForm(ctx context.Context, path string, form url.Values, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	c.setHeaders(req)
+
+	resp, err := c.HTTPClient.Do(req)
+	err = wrapTransport(req, err)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return newHTTPError(http.MethodPost, path, resp)
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 // PutJSON performs a PUT request with a JSON body.
 func (c *APIClient) PutJSON(ctx context.Context, path string, body any, out any) error {
 	data, err := json.Marshal(body)

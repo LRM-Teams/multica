@@ -139,11 +139,13 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 			TimeoutSeconds:     1800,
 			AcceptanceCriteria: criteria,
 		},
-		AttemptID: attemptID,
-		AgentID:   uuidToString(agentID),
-		Target:    target,
-		Prompt:    "Return the research plan through the task-result command.",
-		Key:       dispatchKey,
+		AttemptID:    attemptID,
+		AgentID:      uuidToString(agentID),
+		Target:       target,
+		Prompt:       "Return the research plan through the task-result command.",
+		Key:          dispatchKey,
+		ManifestID:   "40000000-0000-4000-8000-000000000004",
+		ManifestHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
 	result, err := dispatcher.Dispatch(ctx, request)
 	if err != nil {
@@ -153,7 +155,7 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 		t.Fatal("dispatch returned an empty inbox task ID")
 	}
 
-	var gotKey, gotRequestHash, gotSessionID, gotTaskID, gotAttemptID, timeoutJSONType, criteriaJSONType string
+	var gotKey, gotRequestHash, gotSessionID, gotTaskID, gotAttemptID, gotManifestID, gotManifestHash, timeoutJSONType, criteriaJSONType string
 	var gotTimeout int
 	if err = testPool.QueryRow(ctx, `
 		SELECT context->>'research_dispatch_key',
@@ -161,19 +163,24 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 		       context->>'research_session_id',
 		       context->>'research_task_id',
 		       context->>'research_attempt_id',
+		       context->>'research_manifest_id',
+		       context->>'research_manifest_hash',
 		       (context->>'research_task_timeout_seconds')::int,
 		       jsonb_typeof(context->'research_task_timeout_seconds'),
 		       jsonb_typeof(context->'research_task_acceptance_criteria')
 		FROM agent_inbox_event
 		WHERE id = $1::uuid
 	`, result.InboxTaskID).Scan(
-		&gotKey, &gotRequestHash, &gotSessionID, &gotTaskID, &gotAttemptID,
+		&gotKey, &gotRequestHash, &gotSessionID, &gotTaskID, &gotAttemptID, &gotManifestID, &gotManifestHash,
 		&gotTimeout, &timeoutJSONType, &criteriaJSONType,
 	); err != nil {
 		t.Fatalf("load dispatched inbox context: %v", err)
 	}
 	if gotKey != dispatchKey || gotSessionID != uuidToString(sessionID) || gotTaskID != researchTaskID || gotAttemptID != attemptID {
 		t.Fatalf("dispatch context IDs = %q %q %q %q", gotKey, gotSessionID, gotTaskID, gotAttemptID)
+	}
+	if gotManifestID != request.ManifestID || gotManifestHash != request.ManifestHash {
+		t.Fatalf("dispatch context manifest=%q/%q want=%q/%q", gotManifestID, gotManifestHash, request.ManifestID, request.ManifestHash)
 	}
 	wantRequestHash, hashErr := researchrun.HashDispatchRequest(request)
 	if hashErr != nil || gotRequestHash != wantRequestHash {

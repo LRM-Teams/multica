@@ -317,7 +317,9 @@ func MigrationDiagnosticReasonCodes() []string {
 // MigrationRelationshipParserNames lists migration 325 relationship parser registry.
 func MigrationRelationshipParserNames() []string {
 	return []string{
+		"research_claim_method_evidence_standard",
 		"research_message_match_decision",
+		"research_message_sender_principal",
 		"research_decision_inputs",
 		"research_decision_evaluation_local_references",
 		"research_graph_node_payload",

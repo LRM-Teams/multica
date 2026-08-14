@@ -16,22 +16,22 @@ func RegisterProductionResearchMessageTx(
 	tx pgx.Tx,
 	workspaceID, sessionID, messageID string,
 ) error {
-	var senderType, senderID, targetAgentID, body, cardKind string
+	var senderType, senderID, targetAgentID, runEventID, body, cardKind string
 	var meta []byte
 	var createdAt time.Time
 	err := tx.QueryRow(ctx, `
 		SELECT sender_type, COALESCE(sender_id::text, ''), COALESCE(target_agent_id::text, ''),
-		       body, card_kind, meta, created_at
+		       COALESCE(run_event_id::text, ''), body, card_kind, meta, created_at
 		FROM research_message
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 	`, workspaceID, sessionID, messageID).Scan(
-		&senderType, &senderID, &targetAgentID, &body, &cardKind, &meta, &createdAt,
+		&senderType, &senderID, &targetAgentID, &runEventID, &body, &cardKind, &meta, &createdAt,
 	)
 	if err != nil {
 		return err
 	}
 	contentHash, err := ArtifactContentHash(ArtifactKindResearchMessage, researchMessageArtifactContent(
-		senderType, senderID, targetAgentID, body, cardKind, meta,
+		senderType, senderID, targetAgentID, runEventID, body, cardKind, meta,
 	))
 	if err != nil {
 		return err
@@ -45,8 +45,8 @@ func RegisterProductionResearchMessageTx(
 	})
 }
 
-func researchMessageArtifactContent(senderType, senderID, targetAgentID, body, cardKind string, meta []byte) map[string]any {
-	return map[string]any{
+func researchMessageArtifactContent(senderType, senderID, targetAgentID, runEventID, body, cardKind string, meta []byte) map[string]any {
+	content := map[string]any{
 		"sender_type":     senderType,
 		"sender_id":       senderID,
 		"target_agent_id": targetAgentID,
@@ -54,4 +54,10 @@ func researchMessageArtifactContent(senderType, senderID, targetAgentID, body, c
 		"card_kind":       cardKind,
 		"meta":            json.RawMessage(meta),
 	}
+	// Preserve historical null-lineage hashes while binding the typed Run Event
+	// relationship whenever it is present.
+	if runEventID != "" {
+		content["run_event_id"] = runEventID
+	}
+	return content
 }

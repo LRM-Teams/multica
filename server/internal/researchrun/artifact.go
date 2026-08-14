@@ -316,16 +316,24 @@ func MigrationDiagnosticReasonCodes() []string {
 // MigrationRelationshipParserNames lists migration 325 relationship parser registry.
 func MigrationRelationshipParserNames() []string {
 	return []string{
+		"research_claim_method_evidence_standard",
 		"research_message_match_decision",
+		"research_message_sender_principal",
 		"research_decision_inputs",
+		"research_decision_evaluation_local_references",
+		"research_graph_node_payload",
+		"research_legacy_source_payload",
 		"research_report_structured",
 		"research_run_event_payload",
+		"research_task_remediation_acceptance_criteria",
 	}
 }
 
 // ScopedRelationshipFKNames lists migration 326 composite relationship FKs.
 func ScopedRelationshipFKNames() []string {
 	return []string{
+		"research_message_run_event_scoped_fkey",
+		"research_message_target_agent_scoped_fkey",
 		"research_task_attempt_task_scoped_fkey",
 		"research_task_question_scoped_fkey",
 		"research_task_parent_task_scoped_fkey",

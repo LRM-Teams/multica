@@ -1,5 +1,18 @@
 package daemon
 
+// This file is the leftover runtime wake / reminder socket.
+//
+// Computer liveness and computer:upgrade travel on DaemonConnection
+// (Workspace Runner, /api/daemon/connect?workspace_id=...). This file is
+// not that path. It keeps the older runtime-multiplexed socket
+// (/api/daemon/connect?runtime_ids=...) for reminder snapshot/fire and
+// leftover control-plane heartbeat until those move onto the Runner.
+// Zero-runtime Computers do not use it.
+//
+// TODO(computer-liveness): Remove this leftover wake socket after
+// v0.4.24-alpha.55 is no longer a supported direct self-upgrade source
+// and reminder transport lives on the Workspace Runner.
+
 import (
 	"context"
 	"encoding/json"
@@ -333,74 +346,12 @@ func (d *Daemon) runWSWriter(conn *websocket.Conn, writes <-chan []byte, done ch
 	}
 }
 
-func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
-	return protocol.DaemonHeartbeatRequestPayload{
-		RuntimeID:                 runtimeID,
-		ComputerGeneration:        d.cfg.ComputerGeneration,
-		SupportsBatchImport:       true,
-		SupportsMemoryCuration:    true,
-		ActiveMemoryCurationRunID: d.activeMemoryCurationRun(runtimeID),
-	}
-}
-
 func marshalRaw(v any) json.RawMessage {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return nil
 	}
 	return data
-}
-
-// handleWSHeartbeatAck dispatches one heartbeat acknowledgement received by
-// the current Workspace Runner control plane.
-//
-// A RuntimeGone=true acknowledgement means the runtime row was deleted
-// server-side and routes through the same self-heal entry point as polling.
-//
-// handleRuntimeGone uses the daemon root context for its register call, so
-// this function can safely pass any caller context here.
-func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
-	if ack == nil || ack.RuntimeID == "" {
-		return
-	}
-	if ack.RuntimeGone {
-		go d.handleRuntimeGone(ack.RuntimeID)
-		return
-	}
-	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
-}
-
-func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *HeartbeatResponse) {
-	if d == nil || ack == nil {
-		return
-	}
-	if d.bindingHostControl == nil {
-		d.handleWSHeartbeatAck(ctx, ack)
-		return
-	}
-	local := *ack
-	local.PendingUpdate = nil
-	local.PendingMachineUpgrade = nil
-	local.PendingRestart = nil
-	local.ReleaseManifestBaseURL = ""
-	d.handleWSHeartbeatAck(ctx, &local)
-
-	machine := HeartbeatResponse{
-		RuntimeID:              ack.RuntimeID,
-		Status:                 ack.Status,
-		PendingUpdate:          ack.PendingUpdate,
-		PendingMachineUpgrade:  ack.PendingMachineUpgrade,
-		PendingRestart:         ack.PendingRestart,
-		ReleaseManifestBaseURL: ack.ReleaseManifestBaseURL,
-	}
-	if machine.PendingUpdate == nil && machine.PendingMachineUpgrade == nil && machine.PendingRestart == nil && machine.ReleaseManifestBaseURL == "" {
-		return
-	}
-	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, machine); err != nil && d.logger != nil {
-		d.logger.Warn("forward Binding child machine action to Host failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
-	}
 }
 
 // taskWakeupReadLimit must stay aligned with daemonws hub SetReadLimit.

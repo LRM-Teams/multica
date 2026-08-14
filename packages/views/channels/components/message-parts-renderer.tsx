@@ -69,6 +69,9 @@ export function MessagePartsRenderer({
         if (part.type === "note_brief") {
           return <NoteBriefPart key={key} part={part} />;
         }
+        if (part.type === "note_write") {
+          return null;
+        }
         if (part.type === "reference") {
           if (part.ref_type === "agent:create" && choiceContext?.messageId) {
             return (
@@ -209,6 +212,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `choice-reply-${part.choice_id}-${part.option_id}`;
   } else if (part.type === "note_brief") {
     base = `note-brief-${part.ref_id}-${hashString(part.label ?? "")}`;
+  } else if (part.type === "note_write") {
+    base = `note-write-${part.ref_id ?? "create"}-${hashString(part.label ?? "")}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }

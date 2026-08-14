@@ -1,5 +1,13 @@
 import type { ChannelMessage, MessagePart } from "../types";
 
+const NOTE_PAGE_IN_PATH =
+  /(?:^|\/)notes\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b/gi;
+
+/** Timeline confirmation for an agent reply that may write a product note. */
+export type NoteWriteConfirmation =
+  | { mode: "existing"; pageId: string }
+  | { mode: "create" };
+
 /** Max chars kept for a derived note / section title from an agent reply. */
 export const NOTE_WORKER_REPLY_TITLE_MAX = 80;
 
@@ -48,6 +56,104 @@ export function noteWorkerReplyPlainText(message: Pick<ChannelMessage, "content"
   return (message.content ?? "").trim();
 }
 
+/** Pull note page ids from `/notes/<uuid>` links in visible message text. */
+export function extractNotePageIdsFromText(text: string): string[] {
+  if (!text) return [];
+  const ids: string[] = [];
+  NOTE_PAGE_IN_PATH.lastIndex = 0;
+  for (const match of text.matchAll(NOTE_PAGE_IN_PATH)) {
+    const id = match[1]?.trim();
+    if (id) ids.push(id.toLowerCase());
+  }
+  return ids;
+}
+
+function noteBriefPageId(message: Pick<ChannelMessage, "parts">): string | null {
+  const brief = message.parts?.find(
+    (part): part is Extract<MessagePart, { type: "note_brief" }> => part.type === "note_brief",
+  );
+  const id = brief?.ref_id?.trim();
+  return id ? id : null;
+}
+
+function noteWritePart(
+  message: Pick<ChannelMessage, "parts">,
+): Extract<MessagePart, { type: "note_write" }> | null {
+  return (
+    message.parts?.find(
+      (part): part is Extract<MessagePart, { type: "note_write" }> => part.type === "note_write",
+    ) ?? null
+  );
+}
+
+/**
+ * True when the human asked to write/insert a product note, or asked for the
+ * confirm button. Ordinary chat ("write a poem") does not match.
+ */
+export function isProductNoteWriteRequest(text: string): boolean {
+  const value = text.trim();
+  if (!value) return false;
+  if (/(写入|插入|写进|写到|存到|记到|新建|创建|保存).{0,12}笔记/.test(value)) return true;
+  if (/(给我|弹出|出示).{0,12}按钮/.test(value)) return true;
+  if (/按钮.{0,12}(插入|写入|笔记)/.test(value)) return true;
+  return /\b(?:write|insert|save|create)\b.{0,32}\bnotes?\b/i.test(value);
+}
+
+/**
+ * True when an agent reply looks like note payload rather than a one-line ack.
+ * Used with {@link isProductNoteWriteRequest} so "insert this" still shows a
+ * confirm button if the agent forgot `--note-write`.
+ */
+export function looksLikeNoteProposal(text: string): boolean {
+  const value = text.trim();
+  if (!value) return false;
+  if (value.length >= 80) return true;
+  if (/^#{1,6}\s+\S/m.test(value)) return true;
+  return value.split(/\r?\n/).filter((line) => line.trim().length > 0).length >= 3;
+}
+
+/**
+ * For each agent message, decide the human-confirm note write action.
+ * `--note-write` always opts that send in. A human insert/write-note request
+ * also opts in the next agent replies that look like a proposal, so a forgotten
+ * flag still shows Create note. Ordinary chat stays button-free.
+ */
+export function buildNoteWriteConfirmationByMessageId(
+  messages: readonly ChannelMessage[],
+): Map<string, NoteWriteConfirmation> {
+  const map = new Map<string, NoteWriteConfirmation>();
+  let stickyPageId: string | null = null;
+  let precedingUserNotePageId: string | null = null;
+  let precedingUserAskedWrite = false;
+  for (const message of messages) {
+    const briefId = noteBriefPageId(message);
+    if (briefId) stickyPageId = briefId;
+
+    const write = noteWritePart(message);
+    const writePageId = write?.ref_id?.trim() || "";
+    if (writePageId) stickyPageId = writePageId;
+
+    if (message.type === "user" && !message.deleted_at) {
+      const fromText = extractNotePageIdsFromText(message.content ?? "");
+      precedingUserNotePageId = fromText.length > 0 ? fromText[fromText.length - 1]! : null;
+      precedingUserAskedWrite = isProductNoteWriteRequest(message.content ?? "");
+    }
+
+    if (message.type !== "agent" || message.deleted_at) continue;
+    const proposing =
+      Boolean(write) ||
+      (precedingUserAskedWrite && looksLikeNoteProposal(noteWorkerReplyPlainText(message)));
+    if (!proposing) continue;
+    const pageId = writePageId || stickyPageId || precedingUserNotePageId;
+    if (pageId) {
+      map.set(message.id, { mode: "existing", pageId });
+    } else {
+      map.set(message.id, { mode: "create" });
+    }
+  }
+  return map;
+}
+
 /**
  * For each agent message, map to the most recent preceding `note_brief` page id
  * in timeline order (Worker 「按这篇做」 trigger).
@@ -56,17 +162,8 @@ export function buildNoteWorkerPageIdByMessageId(
   messages: readonly ChannelMessage[],
 ): Map<string, string> {
   const map = new Map<string, string>();
-  let activePageId: string | null = null;
-  for (const message of messages) {
-    const brief = message.parts?.find(
-      (part): part is Extract<MessagePart, { type: "note_brief" }> => part.type === "note_brief",
-    );
-    if (brief?.ref_id?.trim()) {
-      activePageId = brief.ref_id.trim();
-    }
-    if (message.type === "agent" && !message.deleted_at && activePageId) {
-      map.set(message.id, activePageId);
-    }
+  for (const [id, confirmation] of buildNoteWriteConfirmationByMessageId(messages)) {
+    if (confirmation.mode === "existing") map.set(id, confirmation.pageId);
   }
   return map;
 }

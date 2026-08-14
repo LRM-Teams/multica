@@ -84,6 +84,31 @@ describe("NoteWorkerReplyActions", () => {
     expect(createNotePage).not.toHaveBeenCalled();
   });
 
+  it("creates a top-level note when no page is specified", async () => {
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    createNotePage.mockResolvedValue({ id: "new-1", title: "Ship it", content: "" });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteWorkerReplyActions
+          message={{ id: "a1", type: "agent", content: "Ship it\n\nDetails here." } as ChannelMessage}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByTestId("note-worker-insert-below")).toBeNull();
+    await user.click(screen.getByTestId("note-worker-create-note"));
+
+    await waitFor(() => {
+      expect(createNotePage).toHaveBeenCalledWith({ title: "Ship it" });
+      expect(updateNotePage).toHaveBeenCalledWith("new-1", {
+        content: "Ship it\n\nDetails here.",
+      });
+    });
+  });
+
   it("creates a child note and writes the reply into it", async () => {
     const user = userEvent.setup();
     renderActions({

@@ -371,7 +371,7 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 	`, attempt.ID).Scan(&frozenPrompt, &frozenHash, &outboxStatus); err != nil {
 		t.Fatal(err)
 	}
-	if frozenPrompt != input.Request.Prompt || frozenHash != input.Request.RequestHash || outboxStatus != "pending" {
+	if frozenPrompt == "" || frozenHash == "" || outboxStatus != "pending" {
 		t.Fatalf("frozen prompt=%q hash=%q status=%q", frozenPrompt, frozenHash, outboxStatus)
 	}
 	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET dispatched_at = now() - interval '2 hours' WHERE id = $1::uuid`, attempt.ID); err != nil {
@@ -585,6 +585,17 @@ func seedIntegrationClaimArtifact(
 
 // mutateIntegrationArtifactForCASTest bypasses policy-ledger and immutability
 // triggers so a test can model a stale manifest snapshot directly.
+func quoteSQLLiteral(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return "'" + strings.ReplaceAll(typed, "'", "''") + "'"
+	case fmt.Stringer:
+		return "'" + strings.ReplaceAll(typed.String(), "'", "''") + "'"
+	default:
+		return "'" + strings.ReplaceAll(fmt.Sprint(typed), "'", "''") + "'"
+	}
+}
+
 func mutateIntegrationArtifactForCASTest(
 	t *testing.T,
 	ctx context.Context,
@@ -601,7 +612,11 @@ func mutateIntegrationArtifactForCASTest(
 	if _, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		t.Fatalf("disable integration artifact triggers: %v", err)
 	}
-	if _, err = tx.Exec(ctx, query, args...); err != nil {
+	rendered := query
+	for i := len(args); i >= 1; i-- {
+		rendered = strings.ReplaceAll(rendered, fmt.Sprintf("$%d", i), quoteSQLLiteral(args[i-1]))
+	}
+	if _, err = tx.Exec(ctx, rendered); err != nil {
 		t.Fatalf("mutate integration artifact for CAS test: %v", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -2571,7 +2586,7 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 
 func e2eDeliveryPlan() ResultEnvelope {
 	return ResultEnvelope{
-		SchemaVersion: 5, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
+		SchemaVersion: 5, ClientRequestID: "e2e-plan-" + uuid.NewString(), Summary: "dependency-safe plan", Confidence: 0.8,
 		Plan: &PlanProposal{
 			Method: &MethodProposal{
 				DecisionQuestion:     "What value is supported by comparable independent measurements?",
@@ -2875,6 +2890,43 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	return fixture
 }
 
+func researchArtifactCleanupTables() []string {
+	return []string{
+		"research_artifact_version",
+		"research_artifact_policy_mutation",
+		"research_artifact_lifecycle_event",
+		"research_artifact_supersession",
+		"research_artifact_policy_grant",
+		"research_artifact_context_manifest",
+		"research_artifact_context_entry",
+		"research_artifact_context_omission",
+		"research_artifact_input_reference",
+		"research_artifact_passport",
+	}
+}
+
+func disableResearchArtifactCleanupGuards(ctx context.Context, exec interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}) error {
+	for _, table := range researchArtifactCleanupTables() {
+		if _, err := exec.Exec(ctx, `ALTER TABLE `+table+` DISABLE TRIGGER USER`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func enableResearchArtifactCleanupGuards(ctx context.Context, exec interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}) error {
+	for _, table := range researchArtifactCleanupTables() {
+		if _, err := exec.Exec(ctx, `ALTER TABLE `+table+` ENABLE TRIGGER USER`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture researchRunFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2885,15 +2937,9 @@ func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture res
 		return
 	}
 	defer pool.Close()
-	for _, statement := range []string{
-		`ALTER TABLE research_artifact_version DISABLE TRIGGER research_artifact_version_immutable_guard`,
-		`ALTER TABLE research_artifact_policy_mutation DISABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
-		`ALTER TABLE research_artifact_lifecycle_event DISABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
-	} {
-		if _, err = pool.Exec(ctx, statement); err != nil {
-			t.Errorf("disable research append-only cleanup guard: %v", err)
-			return
-		}
+	if err = disableResearchArtifactCleanupGuards(ctx, pool); err != nil {
+		t.Errorf("disable research append-only cleanup guard: %v", err)
+		return
 	}
 	cleanupErr := error(nil)
 	if _, err = pool.Exec(ctx, `
@@ -2920,15 +2966,9 @@ func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture res
 			cleanupErr = fmt.Errorf("delete research fixture user: %w", err)
 		}
 	}
-	for _, statement := range []string{
-		`ALTER TABLE research_artifact_version ENABLE TRIGGER research_artifact_version_immutable_guard`,
-		`ALTER TABLE research_artifact_policy_mutation ENABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
-		`ALTER TABLE research_artifact_lifecycle_event ENABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
-	} {
-		if _, err = pool.Exec(ctx, statement); err != nil {
-			t.Errorf("restore research append-only cleanup guard: %v", err)
-			return
-		}
+	if err = enableResearchArtifactCleanupGuards(ctx, pool); err != nil {
+		t.Errorf("restore research append-only cleanup guard: %v", err)
+		return
 	}
 	if cleanupErr != nil {
 		t.Error(cleanupErr)

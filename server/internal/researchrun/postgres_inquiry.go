@@ -69,8 +69,8 @@ func (s *PostgresStore) CreateInquiryGraph(ctx context.Context, in CreateInquiry
 		weakening := jsonOrDefault(item.WeakeningConditions, `[]`)
 		if _, err = tx.Exec(ctx, `INSERT INTO research_hypothesis
 			(id,workspace_id,session_id,question_id,statement,applicability,expected_observations,weakening_conditions,
-			 confidence_low,confidence_high,created_by_task_id,created_by_attempt_id,created_at,updated_at)
-			SELECT $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8,$9,$10,task_id,id,$11,$11
+			 confidence_low,confidence_high,created_by_task_id,created_by_attempt_id,created_at,updated_at,client_key)
+			SELECT $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8,$9,$10,task_id,id,$11,$11,'legacy:'||$1::text
 			FROM research_task_attempt WHERE workspace_id=$2::uuid AND session_id=$3::uuid AND id=$12::uuid`,
 			item.ID, in.WorkspaceID, in.SessionID, item.QuestionID, strings.TrimSpace(item.Statement), applicability, expected, weakening,
 			item.ConfidenceLow, item.ConfidenceHigh, createdAt, in.AttemptID); err != nil {
@@ -88,8 +88,8 @@ func (s *PostgresStore) CreateInquiryGraph(ctx context.Context, in CreateInquiry
 	for _, item := range in.Insights {
 		createdAt := time.Now().UTC()
 		if _, err = tx.Exec(ctx, `INSERT INTO research_insight
-			(id,workspace_id,session_id,title,summary,importance,level,created_by_attempt_id,created_at,updated_at)
-			VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::uuid,$9,$9)`, item.ID, in.WorkspaceID, in.SessionID,
+			(id,workspace_id,session_id,title,summary,importance,level,created_by_attempt_id,created_at,updated_at,client_key)
+			VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::uuid,$9,$9,'legacy:'||$1::text)`, item.ID, in.WorkspaceID, in.SessionID,
 			strings.TrimSpace(item.Title), strings.TrimSpace(item.Summary), item.Importance, item.Level, in.AttemptID, createdAt); err != nil {
 			return InquiryGraphCreateResult{}, err
 		}
@@ -101,8 +101,8 @@ func (s *PostgresStore) CreateInquiryGraph(ctx context.Context, in CreateInquiry
 	for _, item := range in.Edges {
 		createdAt := time.Now().UTC()
 		if _, err = tx.Exec(ctx, `INSERT INTO research_inquiry_edge
-			(id,workspace_id,session_id,from_kind,from_entity_id,to_kind,to_entity_id,relation,rationale,created_by_attempt_id,created_at)
-			VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,$7::uuid,$8,$9,$10::uuid,$11)`, item.ID, in.WorkspaceID, in.SessionID,
+			(id,workspace_id,session_id,from_kind,from_entity_id,to_kind,to_entity_id,relation,rationale,created_by_attempt_id,created_at,client_key)
+			VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,$7::uuid,$8,$9,$10::uuid,$11,'legacy:'||$1::text)`, item.ID, in.WorkspaceID, in.SessionID,
 			string(item.From.Kind), item.From.ID, string(item.To.Kind), item.To.ID, string(item.Relation), strings.TrimSpace(item.Rationale), in.AttemptID, createdAt); err != nil {
 			return InquiryGraphCreateResult{}, err
 		}
@@ -169,8 +169,8 @@ func createInquiryBranchesTx(ctx context.Context, tx pgx.Tx, in CreateInquiryGra
 			entry := jsonOrDefault(item.EntryConditions, `[]`)
 			exit := jsonOrDefault(item.ExitConditions, `[]`)
 			if _, err := tx.Exec(ctx, `INSERT INTO research_branch
-				(id,workspace_id,session_id,parent_branch_id,objective,entry_conditions,exit_conditions,budget_share,created_by_task_id,created_at,updated_at)
-				SELECT $1::uuid,$2::uuid,$3::uuid,NULLIF($4,'')::uuid,$5,$6,$7,$8,task_id,$9,$9 FROM research_task_attempt
+				(id,workspace_id,session_id,parent_branch_id,objective,entry_conditions,exit_conditions,budget_share,created_by_task_id,created_at,updated_at,client_key)
+				SELECT $1::uuid,$2::uuid,$3::uuid,NULLIF($4,'')::uuid,$5,$6,$7,$8,task_id,$9,$9,'legacy:'||$1::text FROM research_task_attempt
 				WHERE workspace_id=$2::uuid AND session_id=$3::uuid AND id=$10::uuid`, item.ID, in.WorkspaceID, in.SessionID, item.ParentBranchID,
 				strings.TrimSpace(item.Objective), entry, exit, item.BudgetShare, createdAt, in.AttemptID); err != nil {
 				return err

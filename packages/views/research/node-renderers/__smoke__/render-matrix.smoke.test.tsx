@@ -1,5 +1,5 @@
 /**
- * LRM-1475 AC1/AC2 — fixture-driven render matrix: all 30 kinds + all 8 states
+ * LRM-1475 AC1/AC2 — fixture-driven render matrix: all known kinds + all 8 states
  * render without crashing, and unknown kinds degrade to generic.
  */
 import { describe, expect, it } from "vitest";
@@ -9,10 +9,10 @@ import { NodeRenderer } from "../node-renderer";
 import { NodeCardShell } from "../node-card-shell";
 import { UI01_FIXTURE_NODES, UI01_STATE_NODES } from "../__fixtures__/ui01-contract-fixture";
 import { NODE_CARD_STATES } from "../node-state-matrix";
-import { NODE_KIND_FAMILIES } from "../node-kind-registry";
+import { KNOWN_NODE_KINDS, NODE_KIND_FAMILIES } from "../node-kind-registry";
 
-describe("render matrix — all 30 kinds (AC1)", () => {
-  it("every fixture node (30 kinds + 1 unknown) renders without throwing", () => {
+describe("render matrix — all known kinds (AC1)", () => {
+  it("every fixture node (known kinds + 1 unknown) renders without throwing", () => {
     for (const node of UI01_FIXTURE_NODES) {
       const diagnostics: ResearchV6UnknownKindDiagnostic[] = [];
       expect(() =>
@@ -22,13 +22,12 @@ describe("render matrix — all 30 kinds (AC1)", () => {
     }
   });
 
-  it("all 30 known kinds render known cards, unknown renders generic card", () => {
+  it("all known kinds render known cards, unknown renders generic card", () => {
     const diagnostics: ResearchV6UnknownKindDiagnostic[] = [];
     const known = UI01_FIXTURE_NODES.filter((n) => n.node_kind !== "some_future_kind");
     const unknown = UI01_FIXTURE_NODES.find((n) => n.node_kind === "some_future_kind")!;
 
-    // 30 known kinds → known card
-    expect(known).toHaveLength(30);
+    expect(known).toHaveLength(KNOWN_NODE_KINDS.length);
     for (const node of known) {
       const { queryByTestId } = render(<NodeRenderer node={node} diagnostics={diagnostics} />);
       expect(queryByTestId("generic-node-card")).toBeNull();

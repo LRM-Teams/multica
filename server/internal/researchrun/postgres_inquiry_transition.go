@@ -115,10 +115,11 @@ func lockInquiryVersionState(ctx context.Context, tx pgx.Tx, in InquiryTransitio
 		FROM research_artifact_passport passport
 		JOIN research_artifact_version version ON (version.workspace_id,version.session_id,version.artifact_id,version.version)=
 		 (passport.workspace_id,passport.session_id,passport.id,passport.current_version)
-		JOIN research_artifact_context_entry entry ON entry.workspace_id=version.workspace_id AND entry.session_id=version.session_id AND entry.artifact_version_id=version.id
-		JOIN research_artifact_context_manifest manifest ON manifest.workspace_id=entry.workspace_id AND manifest.session_id=entry.session_id AND manifest.id=entry.manifest_id
+		JOIN research_artifact_context_manifest manifest
+		  ON manifest.workspace_id=passport.workspace_id AND manifest.session_id=passport.session_id
+		 AND manifest.attempt_id=$5::uuid
 		WHERE passport.workspace_id=$1::uuid AND passport.session_id=$2::uuid AND passport.id=$3::uuid
-		 AND passport.entity_kind=$4 AND manifest.attempt_id=$5::uuid FOR UPDATE OF passport,version`, in.WorkspaceID, in.SessionID, change.EntityID, string(change.Kind), in.AttemptID).Scan(
+		 AND passport.entity_kind=$4 FOR UPDATE OF passport,version`, in.WorkspaceID, in.SessionID, change.EntityID, string(change.Kind), in.AttemptID).Scan(
 		&state.passportVersion, &state.eligibility, &state.versionRowID, &access, &state.goalVersion, &state.planVersion, &state.manifestID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return state, fmt.Errorf("%w: inquiry artifact %s:%s is absent from the frozen Attempt manifest", ErrInvalidTransition, change.Kind, change.EntityID)
@@ -209,6 +210,6 @@ func appendInquiryArtifactVersionTx(ctx context.Context, tx pgx.Tx, in InquiryTr
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO research_artifact_policy_mutation(workspace_id,session_id,watermark,mutation_kind,artifact_id,
 		old_eligibility_revision,new_eligibility_revision,old_current_version,new_current_version,old_access_level,new_access_level,eligibility_reason)
-		VALUES($1::uuid,$2::uuid,$3,'current_version',$4::uuid,$5,$6,$7,$8,$9,$9,$10)`, in.WorkspaceID, in.SessionID, watermark, change.EntityID, state.eligibility, state.eligibility+1, state.passportVersion, next, string(state.access), strings.TrimSpace(change.Reason))
+		VALUES($1::uuid,$2::uuid,$3,'current_version',$4::uuid,$5,$6,$7,$8,NULL,NULL,$9)`, in.WorkspaceID, in.SessionID, watermark, change.EntityID, state.eligibility, state.eligibility+1, state.passportVersion, next, strings.TrimSpace(change.Reason))
 	return err
 }

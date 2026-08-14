@@ -186,10 +186,10 @@ func (s *PostgresStore) SupersedeArtifact(ctx context.Context, in SupersedeArtif
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_artifact_policy_mutation (
 		 workspace_id,session_id,watermark,mutation_kind,artifact_id,
-		 old_eligibility_revision,new_eligibility_revision,old_lifecycle_status,new_lifecycle_status,eligibility_reason
-		) VALUES ($1::uuid,$2::uuid,$3,'supersession',$4::uuid,$5,$6,$7,'superseded',$8)
+		 old_eligibility_revision,new_eligibility_revision,eligibility_reason
+		) VALUES ($1::uuid,$2::uuid,$3,'supersession',$4::uuid,$5,$6,$7)
 	`, in.WorkspaceID, in.SessionID, receipt.PolicyWatermark, superseded.artifactID,
-		receipt.OldEligibilityRevision, receipt.NewEligibilityRevision, string(superseded.lifecycle), in.Reason); err != nil {
+		receipt.OldEligibilityRevision, receipt.NewEligibilityRevision, in.Reason); err != nil {
 		return ArtifactSupersession{}, fmt.Errorf("record supersession policy mutation: %w", err)
 	}
 	if err = tx.QueryRow(ctx, `

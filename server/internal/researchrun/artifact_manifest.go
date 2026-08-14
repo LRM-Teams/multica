@@ -55,8 +55,13 @@ func casArtifactVersionRepresentationTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, versionRowID string,
-	contentHash, representationHash string,
+	contentHash string,
+	representationBytes []byte,
+	representationHash string,
 ) error {
+	if contentHashFromPayload(representationBytes) != representationHash {
+		return fmt.Errorf("%w: artifact representation bytes/hash CAS failed", ErrInvalidTransition)
+	}
 	var matched bool
 	err := tx.QueryRow(ctx, `
 		SELECT true
@@ -72,7 +77,6 @@ func casArtifactVersionRepresentationTx(
 	if err != nil {
 		return err
 	}
-	_ = representationHash
 	return nil
 }
 
@@ -175,6 +179,35 @@ func persistResultArtifactInputReferencesTx(
 		ON CONFLICT (workspace_id, session_id, consumer_version_id, input_version_id, relation) DO NOTHING
 	`, workspaceID, sessionID, manifestID, resultVersionRowID)
 	return err
+}
+
+func manifestInputVersionSetHashTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, manifestID string,
+) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT artifact_version_id::text
+		FROM research_artifact_context_entry
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND manifest_id=$3::uuid
+		ORDER BY artifact_version_id::text
+	`, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	return contentHashFromPayload([]byte(strings.Join(ids, "\n"))), nil
 }
 
 type manifestArtifactSet struct {
@@ -415,7 +448,14 @@ func filterClaimsByManifest(claims []Claim, allowed map[string]struct{}) []Claim
 	out := make([]Claim, 0, len(claims))
 	for _, c := range claims {
 		if _, ok := allowed[c.ID]; ok {
-			out = append(out, c)
+			filtered := c
+			filtered.Evidence = make([]ClaimEvidence, 0, len(c.Evidence))
+			for _, evidence := range c.Evidence {
+				if _, evidenceAllowed := allowed[evidence.ArtifactID]; evidenceAllowed {
+					filtered.Evidence = append(filtered.Evidence, evidence)
+				}
+			}
+			out = append(out, filtered)
 		}
 	}
 	return out
@@ -440,24 +480,30 @@ func verifyShadowEquivalenceTx(
 	tx pgx.Tx,
 	workspaceID, sessionID string,
 	stateVersion int64,
+	purpose ArtifactPurpose,
 ) error {
 	module := NewArtifactContextModule()
-	plan, err := module.PlanDispatchManifest(ctx, tx, workspaceID, sessionID, stateVersion)
+	plan, err := module.PlanDispatchManifestForPurpose(ctx, tx, workspaceID, sessionID, stateVersion, purpose)
 	if err != nil {
 		return err
 	}
-	liveIDs, err := loadLegacyManifestVisibleArtifactIDsTx(ctx, tx, workspaceID, sessionID)
+	return verifyShadowPlanEquivalenceTx(ctx, tx, workspaceID, sessionID, plan, "")
+}
+
+func verifyShadowPlanEquivalenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	plan dispatchManifestPlan,
+	excludedContextManifestID string,
+) error {
+	domainProjection, err := loadLegacyShadowDomainProjectionTx(
+		ctx, tx, workspaceID, sessionID, plan.Purpose, excludedContextManifestID,
+	)
 	if err != nil {
 		return err
 	}
-	manifestIDs := make(map[string]struct{}, len(plan.Entries))
-	for _, entry := range plan.Entries {
-		manifestIDs[entry.ArtifactID] = struct{}{}
-	}
-	return compareShadowManifestError(liveIDs, manifestArtifactSet{
-		ArtifactIDs: manifestIDs,
-		Hash:        plan.ManifestHash,
-	})
+	return compareShadowDomainProjection(domainProjection, projectManifestForShadow(plan), plan.ManifestHash)
 }
 
 func loadLegacyManifestVisibleArtifactIDsTx(
@@ -477,9 +523,7 @@ func loadLegacyManifestVisibleArtifactIDsTx(
 		if module.policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
 			continue
 		}
-		admitted, _ := module.policy.LegacyAdmissionAllowed(
-			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
-		)
+		admitted, _ := module.policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts())
 		if !admitted {
 			continue
 		}
@@ -687,6 +731,7 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 		    AND m.attempt_id = $3::uuid
 		    AND (
 		      e.eligibility_revision <> p.eligibility_revision
+		      OR v.version <> p.current_version
 		      OR p.lifecycle_status NOT IN ('registered', 'accepted')
 		    )
 		)

@@ -364,6 +364,20 @@ func TestCanonicalURLNormalizesWithoutLosingQuery(t *testing.T) {
 	}
 }
 
+func TestCanonicalURLRejectsEmbeddedCredentials(t *testing.T) {
+	for _, raw := range []string{
+		"https://user@example.com/source",
+		"https://user:password@example.com/source",
+		"https://token%40tenant@example.com/source",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := CanonicalURL(raw); err == nil {
+				t.Fatalf("CanonicalURL(%q) accepted embedded credentials", raw)
+			}
+		})
+	}
+}
+
 func validPlanResult(t *testing.T) ResultEnvelope {
 	t.Helper()
 	return ResultEnvelope{

@@ -20,6 +20,11 @@ import (
 
 const DefaultUpdateDownloadTimeout = 120 * time.Second
 
+// Release metadata is fetched from the same public feed as the archive and
+// must honor the same caller-visible network budget. A shorter hidden timeout
+// can reject a healthy release before the archive download is even attempted.
+const releaseMetadataTimeout = DefaultUpdateDownloadTimeout
+
 // DefaultReleaseManifestBaseURL is the read-only, publicly served release
 // feed. It is hosted alongside the app (not GitHub) because the CLI/daemon
 // have no credential that can read the private LRM-Teams/multica repo: an
@@ -155,7 +160,7 @@ func verifyAssetSHA256(data []byte, expectedHex, assetName string) error {
 
 // fetchManifest GETs and JSON-decodes a ReleaseManifest from url.
 func fetchManifest(url string) (*ReleaseManifest, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: releaseMetadataTimeout}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -183,7 +188,7 @@ func fetchManifest(url string) (*ReleaseManifest, error) {
 }
 
 func fetchReleaseMetainfo(url string) (*ReleaseMetainfo, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: releaseMetadataTimeout}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

@@ -1,0 +1,7 @@
+DROP TRIGGER IF EXISTS research_artifact_policy_mutation_to_current_version_guard
+  ON research_artifact_policy_mutation;
+DROP FUNCTION IF EXISTS research_artifact_policy_mutation_to_current_version_guard_fn();
+
+DROP TRIGGER IF EXISTS research_artifact_current_version_to_policy_guard
+  ON research_artifact_passport;
+DROP FUNCTION IF EXISTS research_artifact_current_version_to_policy_guard_fn();

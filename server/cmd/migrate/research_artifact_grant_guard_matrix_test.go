@@ -153,6 +153,7 @@ func TestResearchArtifactGrantGuards321BothConstraintModes(t *testing.T) {
 				t.Fatalf("insert grant without mutation: %v", execErr)
 			}
 			assertConstraint(t, commitOrForce(grantOnlyTx, mode.immediate), "research_artifact_policy_grant_to_mutation_guard")
+			_ = grantOnlyTx.Rollback(ctx)
 
 			mutationOnlyTx, beginErr := conn.Begin(ctx)
 			if beginErr != nil {

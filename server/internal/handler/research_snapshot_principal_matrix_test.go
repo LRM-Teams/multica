@@ -15,11 +15,15 @@ import (
 
 type researchSnapshotPrincipalFixture struct {
 	sessionID         string
+	taskID            string
 	attemptID         string
 	assignedAgentID   string
 	unassignedAgentID string
 	unboundAgentID    string
 	passportID        string
+	inboxEventID      string
+	inboxDeliveryID   string
+	inboxLeaseToken   string
 }
 
 func seedResearchSnapshotPrincipalFixture(t *testing.T) researchSnapshotPrincipalFixture {
@@ -75,11 +79,7 @@ func seedResearchSnapshotPrincipalFixture(t *testing.T) researchSnapshotPrincipa
 	`, testWorkspaceID, sessionID, "principal-matrix-"+uuid.NewString(), assignedAgentID).Scan(&taskID); err != nil {
 		t.Fatalf("create principal matrix task: %v", err)
 	}
-	if _, err = tx.Exec(ctx, `
-		INSERT INTO research_artifact_passport (
-			id, workspace_id, session_id, entity_kind, provenance_completeness
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'task', 'complete')
-	`, taskID, testWorkspaceID, sessionID); err != nil {
+	if err = backfillArtifactPassportTx(ctx, tx, parseUUID(testWorkspaceID), sessionID, taskID, "task"); err != nil {
 		t.Fatalf("create task passport: %v", err)
 	}
 
@@ -93,25 +93,85 @@ func seedResearchSnapshotPrincipalFixture(t *testing.T) researchSnapshotPrincipa
 	`, testWorkspaceID, sessionID, taskID, assignedAgentID, "principal-matrix-"+uuid.NewString()).Scan(&attemptID); err != nil {
 		t.Fatalf("create principal matrix attempt: %v", err)
 	}
-	if _, err = tx.Exec(ctx, `
-		INSERT INTO research_artifact_passport (
-			id, workspace_id, session_id, entity_kind, provenance_completeness
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'attempt', 'complete')
-	`, attemptID, testWorkspaceID, sessionID); err != nil {
+	if err = backfillArtifactPassportTx(ctx, tx, parseUUID(testWorkspaceID), sessionID, attemptID, "attempt"); err != nil {
 		t.Fatalf("create attempt passport: %v", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatalf("commit principal matrix fixture: %v", err)
 	}
 
-	return researchSnapshotPrincipalFixture{
+	fixture := researchSnapshotPrincipalFixture{
 		sessionID:         uuidToString(sessionID),
+		taskID:            uuidToString(taskID),
 		attemptID:         uuidToString(attemptID),
 		assignedAgentID:   assignedAgentID,
 		unassignedAgentID: unassignedAgentID,
 		unboundAgentID:    unboundAgentID,
 		passportID:        uuid.NewString(),
 	}
+	fixture.inboxEventID, fixture.inboxDeliveryID, fixture.inboxLeaseToken =
+		seedResearchAttemptInboxDelivery(t, assignedAgentID, fixture.sessionID, fixture.taskID, fixture.attemptID)
+	return fixture
+}
+
+func seedResearchAttemptInboxDelivery(t *testing.T, agentID, sessionID, taskID, attemptID string) (eventID, deliveryID, leaseToken string) {
+	t.Helper()
+	ctx := context.Background()
+	var runtimeID, agentSessionID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT runtime_id::text FROM agent WHERE id = $1::uuid
+	`, agentID).Scan(&runtimeID); err != nil {
+		t.Fatalf("load assigned agent runtime: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_session (
+		  workspace_id, agent_id, runtime_id, scope, status
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'direct_chat', 'active')
+		RETURNING id::text
+	`, testWorkspaceID, agentID, runtimeID).Scan(&agentSessionID); err != nil {
+		t.Fatalf("create assigned agent session: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+		  workspace_id, agent_session_id, runtime_id, agent_id,
+		  reason, requires_wake, status, priority, seq_from, seq_to, context
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
+		  'dm', true, 'draining', 10, 1, 1,
+		  jsonb_build_object(
+		    'type', 'research_run_task',
+		    'research_session_id', $5::text,
+		    'research_task_id', $6::text,
+		    'research_attempt_id', $7::text
+		  )
+		) RETURNING id::text
+	`, testWorkspaceID, agentSessionID, runtimeID, agentID, sessionID, taskID, attemptID).Scan(&eventID); err != nil {
+		t.Fatalf("create assigned research inbox event: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_event_delivery (
+		  workspace_id, agent_session_id, inbox_event_id, runtime_id,
+		  status, lease_expires_at
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
+		  'leased', now() + interval '10 minutes'
+		) RETURNING id::text, lease_token::text
+	`, testWorkspaceID, agentSessionID, eventID, runtimeID).Scan(&deliveryID, &leaseToken); err != nil {
+		t.Fatalf("create assigned research inbox delivery: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE research_task_attempt
+		SET inbox_task_id = $1::uuid
+		WHERE id = $2::uuid
+	`, eventID, attemptID); err != nil {
+		t.Fatalf("bind attempt inbox task: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_event_delivery WHERE inbox_event_id = $1::uuid`, eventID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1::uuid`, eventID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_session WHERE id = $1::uuid`, agentSessionID)
+	})
+	return eventID, deliveryID, leaseToken
 }
 
 func principalMatrixSnapshot(f researchSnapshotPrincipalFixture) researchrun.RunSnapshot {
@@ -161,7 +221,11 @@ func TestResearchSnapshotPrincipalSurfaceMatrix(t *testing.T) {
 		useResearchRunEngine(t, engine)
 		path := fmt.Sprintf("/api/agent/research/sessions/%s?snapshot=1&attempt_id=%s", fixture.sessionID, fixture.attemptID)
 		req := withURLParam(newRequest(http.MethodGet, path, nil), "id", fixture.sessionID)
+		req = withChatTestWorkspaceCtx(t, req)
 		req = withAgentPrincipal(req, fixture.assignedAgentID, testWorkspaceID, testUserID)
+		req.Header.Set("X-Agent-Inbox-Event-ID", fixture.inboxEventID)
+		req.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.inboxDeliveryID)
+		req.Header.Set("X-Agent-Inbox-Lease-Token", fixture.inboxLeaseToken)
 		recorder := httptest.NewRecorder()
 
 		testHandler.GetAgentResearchSessionSnapshot(recorder, req)
@@ -177,6 +241,27 @@ func TestResearchSnapshotPrincipalSurfaceMatrix(t *testing.T) {
 		}
 		if !strings.Contains(recorder.Body.String(), fixture.passportID) {
 			t.Fatalf("assigned Agent response omitted allowed passport %q", fixture.passportID)
+		}
+	})
+
+	t.Run("revoked manifest grant denies Agent surface without leaking projection", func(t *testing.T) {
+		engine := &recordingResearchRunEngine{
+			snapshot:              principalMatrixSnapshot(fixture),
+			snapshotForAttemptErr: researchrun.ErrArtifactAccessDenied,
+		}
+		useResearchRunEngine(t, engine)
+		path := fmt.Sprintf("/api/agent/research/sessions/%s?attempt_id=%s", fixture.sessionID, fixture.attemptID)
+		req := withURLParam(newRequest(http.MethodGet, path, nil), "id", fixture.sessionID)
+		req = withAgentPrincipal(req, fixture.assignedAgentID, testWorkspaceID, testUserID)
+		recorder := httptest.NewRecorder()
+
+		testHandler.GetAgentResearchSessionSnapshot(recorder, req)
+
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		if !engine.snapshotForAttemptCalled || strings.Contains(recorder.Body.String(), fixture.passportID) {
+			t.Fatalf("revoked surface call=%v body=%q", engine.snapshotForAttemptCalled, recorder.Body.String())
 		}
 	})
 

@@ -224,6 +224,7 @@ describe("applyResearchWSEvent", () => {
   });
 
   it("removes snapshot cache when session is deleted", () => {
+    vi.useFakeTimers();
     const qc = makeQc({
       ...EMPTY_RESEARCH_SNAPSHOT,
       session: { ...EMPTY_RESEARCH_SNAPSHOT.session, id: "s1" },
@@ -245,7 +246,9 @@ describe("applyResearchWSEvent", () => {
     expect(qc.removeQueries).toHaveBeenCalledWith({
       queryKey: researchKeys.productRounds("ws", "s1"),
     });
+    vi.advanceTimersByTime(1000);
     expect(qc.invalidateQueries).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it("stores ephemeral presence by agent", () => {

@@ -1,4 +1,4 @@
-CREATE TABLE research_task_inquiry_target (
+CREATE TABLE IF NOT EXISTS research_task_inquiry_target (
   workspace_id UUID NOT NULL,
   session_id UUID NOT NULL,
   task_id UUID NOT NULL,

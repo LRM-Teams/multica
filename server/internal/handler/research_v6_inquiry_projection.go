@@ -82,7 +82,26 @@ func (h *Handler) loadResearchV6InquiryProjection(ctx context.Context, workspace
 	}
 	rows.Close()
 
-	rows, err = h.DB.Query(ctx, `SELECT id::text,title,summary,status,importance,level,COALESCE(created_by_attempt_id::text,''),created_at,updated_at FROM research_insight WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY id`, workspaceID, runID)
+	rows, err = h.DB.Query(ctx, `
+		SELECT i.id::text,i.title,i.summary,i.status,i.importance,i.level,
+		       COALESCE(i.created_by_attempt_id::text,''),i.created_at,i.updated_at,
+		       i.status='accepted'
+		       AND EXISTS (
+		         SELECT 1 FROM research_insight_derivation d
+		         WHERE d.workspace_id=i.workspace_id AND d.session_id=i.session_id AND d.insight_id=i.id
+		       )
+		       AND i.level=(
+		         SELECT max(i2.level) FROM research_insight i2
+		         WHERE i2.workspace_id=i.workspace_id AND i2.session_id=i.session_id AND i2.status='accepted'
+		       )
+		       AND 1=(
+		         SELECT count(*) FROM research_insight i3
+		         WHERE i3.workspace_id=i.workspace_id AND i3.session_id=i.session_id
+		           AND i3.status='accepted' AND i3.level=i.level
+		       ) AS master_synthesis
+		FROM research_insight i
+		WHERE i.workspace_id=$1::uuid AND i.session_id=$2::uuid ORDER BY i.id
+	`, workspaceID, runID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -90,13 +109,20 @@ func (h *Handler) loadResearchV6InquiryProjection(ctx context.Context, workspace
 		var id, title, summary, status, attemptID string
 		var importance float64
 		var level int
+		var masterSynthesis bool
 		var createdAt, updatedAt time.Time
-		if err = rows.Scan(&id, &title, &summary, &status, &importance, &level, &attemptID, &createdAt, &updatedAt); err != nil {
+		if err = rows.Scan(&id, &title, &summary, &status, &importance, &level, &attemptID, &createdAt, &updatedAt, &masterSynthesis); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
-		detail := map[string]any{"summary": summary, "level": level, "created_by_attempt_id": attemptID}
-		nodes = append(nodes, canonicalResearchV6InquiryNode(runID, "insight", id, "insight", title, status, importance, 0, 0, createdAt, updatedAt, detail))
+		detail := map[string]any{"summary": summary, "insight_level": level, "created_by_attempt_id": attemptID, "master_synthesis": masterSynthesis}
+		node := canonicalResearchV6InquiryNode(runID, "insight", id, "insight", title, status, importance, 0, 0, createdAt, updatedAt, detail)
+		node.Summary = summary
+		if masterSynthesis {
+			node.NodeSubtype = "master_synthesis"
+			node.Level = "xxl"
+		}
+		nodes = append(nodes, node)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -140,7 +166,11 @@ func canonicalResearchV6InquiryNode(runID, kind, id, subtype, title, status stri
 		plan = &value
 	}
 	freshness := "fresh"
-	return researchV6ProjectionNode{ID: runID + ":" + kind + ":" + id, RunID: runID, EntityKind: kind, EntityID: id, NodeKind: kind, NodeSubtype: subtype, SchemaVersion: 6, Title: title, Summary: title, Status: status, Importance: importance, Freshness: &freshness, ContractVersion: goal, PlanVersion: plan, CreatedAt: &created, UpdatedAt: &updated, Detail: detail}
+	level := "m"
+	if kind == "insight" {
+		level = "l"
+	}
+	return researchV6ProjectionNode{ID: runID + ":" + kind + ":" + id, RunID: runID, EntityKind: kind, EntityID: id, NodeKind: kind, NodeSubtype: subtype, SchemaVersion: 6, Title: title, Summary: title, Status: status, Importance: importance, Level: level, Round: 1, MergedFrom: []string{}, Freshness: &freshness, ContractVersion: goal, PlanVersion: plan, CreatedAt: &created, UpdatedAt: &updated, Detail: detail}
 }
 
 func jsonValue(raw json.RawMessage) any {

@@ -194,13 +194,6 @@ func validInquiryTextList(values []string) bool {
 	return true
 }
 
-func validConfidenceRange(low, high *float64) bool {
-	if low != nil && (*low < 0 || *low > 1) || high != nil && (*high < 0 || *high > 1) {
-		return false
-	}
-	return low == nil || high == nil || *low <= *high
-}
-
 func validInquiryInsightRelation(value string) bool {
 	switch value {
 	case "integrates", "explains", "conditions", "resolves", "distinguishes":

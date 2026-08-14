@@ -33,7 +33,7 @@ func paginateResearchV6Snapshot(snapshot researchV6Snapshot, limit int, encodedC
 	if end > total {
 		end = total
 	}
-	page := researchV6Snapshot{SnapshotID: snapshot.SnapshotID, RunID: snapshot.RunID, ThroughEventSequence: snapshot.ThroughEventSequence, GraphContentHash: snapshot.GraphContentHash, Nodes: []researchV6ProjectionNode{}, Edges: []researchV6ProjectionEdge{}}
+	page := researchV6Snapshot{SnapshotID: snapshot.SnapshotID, RunID: snapshot.RunID, ThroughEventSequence: snapshot.ThroughEventSequence, GraphContentHash: snapshot.GraphContentHash, Nodes: []researchV6ProjectionNode{}, Edges: []researchV6ProjectionEdge{}, Clusters: snapshot.Clusters}
 	for index := offset; index < end; index++ {
 		if index < len(snapshot.Nodes) {
 			page.Nodes = append(page.Nodes, snapshot.Nodes[index])

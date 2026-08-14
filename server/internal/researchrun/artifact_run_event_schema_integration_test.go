@@ -59,7 +59,17 @@ func TestRunEventRelationshipSchemaDiagnostics(t *testing.T) {
 		return event.ID
 	}
 	validID := appendFixtureEvent("control_task_created", "schema-valid", map[string]any{"question_id": questionID})
-	malformedID := appendFixtureEvent("control_task_created", "schema-malformed", map[string]any{"question_id": "not-a-uuid"})
+	malformedTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, appendErr := appendEvent(
+		ctx, malformedTx, fixture.workspaceID, run.SessionID, "control_task_created",
+		"schema-malformed", "system", "", map[string]any{"question_id": "not-a-uuid"},
+	); appendErr == nil {
+		t.Fatal("malformed production Run Event reference was accepted")
+	}
+	_ = malformedTx.Rollback(ctx)
 	unknownID := appendFixtureEvent("future_unregistered_event", "schema-unknown", map[string]any{})
 
 	for _, tc := range []struct {
@@ -67,7 +77,6 @@ func TestRunEventRelationshipSchemaDiagnostics(t *testing.T) {
 		want                  int
 	}{
 		{name: "valid", eventID: validID, want: 0},
-		{name: "malformed question", eventID: malformedID, reason: "malformed_uuid", want: 1},
 		{name: "unknown schema", eventID: unknownID, reason: "unknown_schema", want: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,5 +93,20 @@ func TestRunEventRelationshipSchemaDiagnostics(t *testing.T) {
 				t.Fatalf("diagnostic count=%d want=%d", count, tc.want)
 			}
 		})
+	}
+	var referenceCount int
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int
+		FROM research_artifact_input_reference reference
+		JOIN research_artifact_version version
+		  ON version.workspace_id=reference.workspace_id
+		 AND version.session_id=reference.session_id
+		 AND version.id=reference.consumer_version_id
+		WHERE version.artifact_id=$1::uuid AND reference.relation='event_question'
+	`, validID).Scan(&referenceCount); err != nil {
+		t.Fatal(err)
+	}
+	if referenceCount != 1 {
+		t.Fatalf("Run Event question lineage=%d want=1", referenceCount)
 	}
 }

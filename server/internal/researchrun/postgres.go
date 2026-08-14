@@ -1014,6 +1014,9 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 		if existing.Type != eventType || existing.ActorType != actorType || existing.ActorID != actorID || !semanticJSONEqual(existing.Payload, encoded) {
 			return RunEvent{}, fmt.Errorf("%w: event idempotency key %q was reused for different content", ErrResultConflict, key)
 		}
+		if err = persistRunEventInputReferencesTx(ctx, tx, existing); err != nil {
+			return RunEvent{}, err
+		}
 		return existing, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -1057,7 +1060,45 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	}); err != nil {
 		return RunEvent{}, err
 	}
+	if err = persistRunEventInputReferencesTx(ctx, tx, event); err != nil {
+		return RunEvent{}, err
+	}
 	return event, nil
+}
+
+func persistRunEventInputReferencesTx(ctx context.Context, tx pgx.Tx, event RunEvent) error {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("%w: decode run event payload lineage: %v", ErrInvalidContract, err)
+	}
+	type eventReference struct {
+		field    string
+		kind     ArtifactEntityKind
+		relation string
+	}
+	for _, reference := range []eventReference{
+		{field: "task_id", kind: ArtifactKindTask, relation: "event_task"},
+		{field: "attempt_id", kind: ArtifactKindAttempt, relation: "event_attempt"},
+		{field: "question_id", kind: ArtifactKindQuestion, relation: "event_question"},
+		{field: "report_id", kind: ArtifactKindReportRevision, relation: "event_report"},
+	} {
+		raw, ok := payload[reference.field]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+		var artifactID string
+		if err := json.Unmarshal(raw, &artifactID); err != nil || strings.TrimSpace(artifactID) == "" {
+			return fmt.Errorf("%w: run event %s has invalid %s reference", ErrInvalidContract, event.Type, reference.field)
+		}
+		if err := persistTypedArtifactInputReferenceTx(
+			ctx, tx, event.WorkspaceID, event.SessionID,
+			event.ID, ArtifactKindRunEvent, artifactID, reference.kind,
+			reference.relation, "run_event_materialization", 0,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runEventArtifactContent(event RunEvent) map[string]any {

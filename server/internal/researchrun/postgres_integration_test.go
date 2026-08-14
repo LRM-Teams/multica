@@ -89,6 +89,7 @@ func TestPostgresStoreCreateRunIsAtomic(t *testing.T) {
 		"contract_revision": 1,
 		"question":          1,
 		"task":              1,
+		"run_event":         1,
 	} {
 		var got int
 		if err = pool.QueryRow(ctx, `
@@ -129,6 +130,28 @@ func TestPostgresStoreCreateRunIsAtomic(t *testing.T) {
 	}
 	if contractID == "" || contractHash != wantContractHash || contractHashOrigin != string(ArtifactHashOriginProduction) || contractProvenance != string(ArtifactProvenanceComplete) {
 		t.Fatalf("contract id=%q hash=%q want=%q origin=%q provenance=%q", contractID, contractHash, wantContractHash, contractHashOrigin, contractProvenance)
+	}
+	wantEventHash, err := ArtifactContentHash(ArtifactKindRunEvent, runEventArtifactContent(event))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var provenance, hashOrigin, contentHash string
+	if err = pool.QueryRow(ctx, `
+		SELECT p.provenance_completeness, v.hash_origin, v.content_hash
+		FROM research_artifact_passport p
+		JOIN research_artifact_version v
+		  ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+		     (p.workspace_id, p.session_id, p.id, p.current_version)
+		WHERE p.workspace_id = $1::uuid AND p.session_id = $2::uuid
+		  AND p.id = $3::uuid AND p.entity_kind = 'run_event'
+	`, fixture.workspaceID, run.SessionID, event.ID).Scan(&provenance, &hashOrigin, &contentHash); err != nil {
+		t.Fatal(err)
+	}
+	if provenance != string(ArtifactProvenanceComplete) || hashOrigin != string(ArtifactHashOriginProduction) {
+		t.Fatalf("run event provenance=%q hash_origin=%q", provenance, hashOrigin)
+	}
+	if contentHash != wantEventHash {
+		t.Fatalf("run event content_hash=%q want=%q", contentHash, wantEventHash)
 	}
 }
 

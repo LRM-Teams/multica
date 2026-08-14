@@ -14,22 +14,28 @@ import (
 // extension: nil marshals to the exact historical fingerprint, while every new
 // target field participates in the request hash.
 type dispatchRequestFingerprintV1 struct {
-	WorkspaceID         string           `json:"workspace_id"`
-	SessionID           string           `json:"session_id"`
-	RunGoalVersion      int              `json:"run_goal_version"`
-	RunPlanVersion      int              `json:"run_plan_version"`
-	OrchestratorVersion string           `json:"orchestrator_version"`
-	TaskID              string           `json:"task_id"`
-	TaskKind            TaskKind         `json:"task_kind"`
-	TaskGoalVersion     int              `json:"task_goal_version"`
-	TaskPlanVersion     int              `json:"task_plan_version"`
-	TimeoutSeconds      int              `json:"timeout_seconds"`
-	AcceptanceCriteria  json.RawMessage  `json:"acceptance_criteria"`
-	AttemptID           string           `json:"attempt_id"`
-	AgentID             string           `json:"agent_id"`
-	Prompt              string           `json:"prompt"`
-	Key                 string           `json:"key"`
-	Target              *ExecutionTarget `json:"target,omitempty"`
+	WorkspaceID         string                       `json:"workspace_id"`
+	SessionID           string                       `json:"session_id"`
+	RunGoalVersion      int                          `json:"run_goal_version"`
+	RunPlanVersion      int                          `json:"run_plan_version"`
+	OrchestratorVersion string                       `json:"orchestrator_version"`
+	TaskID              string                       `json:"task_id"`
+	TaskKind            TaskKind                     `json:"task_kind"`
+	TaskGoalVersion     int                          `json:"task_goal_version"`
+	TaskPlanVersion     int                          `json:"task_plan_version"`
+	TimeoutSeconds      int                          `json:"timeout_seconds"`
+	AcceptanceCriteria  json.RawMessage              `json:"acceptance_criteria"`
+	AttemptID           string                       `json:"attempt_id"`
+	AgentID             string                       `json:"agent_id"`
+	Prompt              string                       `json:"prompt"`
+	Key                 string                       `json:"key"`
+	Target              *ExecutionTarget             `json:"target,omitempty"`
+	Manifest            *dispatchManifestFingerprint `json:"manifest,omitempty"`
+}
+
+type dispatchManifestFingerprint struct {
+	ID   string `json:"id"`
+	Hash string `json:"hash"`
 }
 
 // HashDispatchRequest fingerprints the immutable request body without its own
@@ -50,6 +56,15 @@ func HashDispatchRequest(request DispatchRequest) (string, error) {
 		}
 		target := request.Target
 		fingerprint.Target = &target
+	}
+	if request.ManifestID != "" || request.ManifestHash != "" {
+		if request.ManifestID == "" || request.ManifestHash == "" ||
+			request.ManifestID != strings.TrimSpace(request.ManifestID) ||
+			request.ManifestHash != strings.TrimSpace(request.ManifestHash) ||
+			!strings.HasPrefix(request.ManifestHash, "sha256:") {
+			return "", fmt.Errorf("invalid dispatch manifest identity")
+		}
+		fingerprint.Manifest = &dispatchManifestFingerprint{ID: request.ManifestID, Hash: request.ManifestHash}
 	}
 	encoded, err := json.Marshal(fingerprint)
 	if err != nil {

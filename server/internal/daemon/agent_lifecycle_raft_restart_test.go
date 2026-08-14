@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // recordingLifecycleStarter is a narrow I/O stand-in for "start the agent
@@ -214,6 +215,64 @@ func TestRaftRestartModesIsolateSessionAndWorkspace(t *testing.T) {
 	})
 }
 
+func TestRaftRestartModesPublishStoppedStartingIdleActivity(t *testing.T) {
+	kinds := []agentLifecycleActionKind{
+		agentLifecycleActionRestart,
+		agentLifecycleActionResetSessionRestart,
+		agentLifecycleActionFullResetRestart,
+	}
+	for _, kind := range kinds {
+		t.Run(string(kind), func(t *testing.T) {
+			root := t.TempDir()
+			workspaceID, agentID, runtimeID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+			d := New(Config{WorkspacesRoot: root}, nil)
+			d.mu.Lock()
+			d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+			d.mu.Unlock()
+			runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+			runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+			if _, err := execenv.ProvisionAgentWorkspace(root, workspaceID, agentID, nil); err != nil {
+				t.Fatalf("provision workspace: %v", err)
+			}
+
+			var activities []protocol.AgentActivityPayload
+			runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) {
+				activities = append(activities, payload)
+			})
+			if _, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+				AgentID: agentID, RuntimeID: runtimeID, LaunchID: uuid.NewString(), StartDispatchID: uuid.NewString(),
+			}); err != nil {
+				t.Fatalf("seed managed launch: %v", err)
+			}
+			activities = nil
+			d.agentLifecycleExecutor.sessionReset = nil
+			d.agentLifecycleExecutor.starter = &recordingLifecycleStarter{}
+
+			if err := d.agentLifecycleExecutor.Execute(context.Background(), agentLifecycleExecutionRequest{
+				OperationID: uuid.NewString(), WorkspaceID: workspaceID, AgentID: agentID,
+				RuntimeID: runtimeID, ActionKind: kind,
+			}); err != nil {
+				t.Fatalf("%s: %v", kind, err)
+			}
+
+			want := []struct{ activity, detail string }{
+				{protocol.ActivityKindOffline, "stopped"},
+				{protocol.ActivityKindWorking, "starting"},
+				{protocol.ActivityKindOnline, "idle"},
+			}
+			if len(activities) != len(want) {
+				t.Fatalf("%s Activity count = %d, want %d: %+v", kind, len(activities), len(want), activities)
+			}
+			for i, expected := range want {
+				got := activities[i].Snapshot
+				if got.ActivityKind != expected.activity || got.DetailKind != expected.detail {
+					t.Fatalf("%s Activity[%d] = %s/%s, want %s/%s", kind, i, got.ActivityKind, got.DetailKind, expected.activity, expected.detail)
+				}
+			}
+		})
+	}
+}
+
 func TestRaftRestartModesForceInterruptBusyTurn(t *testing.T) {
 	kinds := []agentLifecycleActionKind{
 		agentLifecycleActionRestart,
@@ -269,6 +328,53 @@ func TestRaftRestartModesForceInterruptBusyTurn(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLifecycleForceRestartFencesInterruptedTurnCompletion(t *testing.T) {
+	fx := newRaftRestartFixture(t)
+	fx.acquireBusy(t)
+
+	const interruptedGeneration = uint64(17)
+	key := fx.agentID + "\x00" + fx.runtimeID
+	fx.pool.mu.Lock()
+	slot := fx.pool.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	fx.pool.mu.Unlock()
+	if slot == nil {
+		t.Fatal("busy runtime slot missing")
+	}
+	slot.messageInputGeneration = interruptedGeneration
+	slot.messageInputDone = make(chan error)
+	slot.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- fx.executor.Execute(context.Background(), fx.request(agentLifecycleActionResetSessionRestart))
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for fx.backend.forceKillCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("ForceKill was never called")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	fx.lease.release(false)
+	if err := <-done; err != nil {
+		t.Fatalf("reset_session_restart: %v", err)
+	}
+	slot.mu.Lock()
+	slot.messageInputDone = nil
+	slot.mu.Unlock()
+
+	published := false
+	if fx.pool.publishIfMessageTurnStillIdle(fx.agentID, fx.runtimeID, interruptedGeneration, func() {
+		published = true
+	}) || published {
+		t.Fatal("interrupted old turn published a terminal failure after replacement start")
 	}
 }
 

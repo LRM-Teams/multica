@@ -1220,7 +1220,7 @@ type aliveNonStarterBackend struct {
 	canonicalRuntimeTestBackend
 }
 
-func (aliveNonStarterBackend) RuntimeAlive() (bool, bool) { return true, true }
+func (*aliveNonStarterBackend) RuntimeAlive() (bool, bool) { return true, true }
 
 func TestCanonicalAgentRuntimePoolIsActivatedByWorkspaceRunnerMessageDelivery(t *testing.T) {
 	// Resident Runtime activation belongs to the same Runner method that owns

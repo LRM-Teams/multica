@@ -140,7 +140,8 @@ import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
  *
  * Agent Activity compact strip sits above the main composer for a 1:1 agent
  * peer (Runner summary projection only — workspace-batched, no per-agent
- * timeline REST). Group channels keep typing-only ConversationActivityStrip.
+ * timeline REST). Group channels reuse the same strip for member agents,
+ * with live verbs first, plus typing-only ConversationActivityStrip.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member

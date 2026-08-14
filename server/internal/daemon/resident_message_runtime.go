@@ -39,11 +39,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if d.canonicalRuntimes.hasResidentBackend(agentID, runtimeID) {
 		if runIdentity != nil {
 			if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err == nil {
-				if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
-					_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
-					return fmt.Errorf("start resident provider process: %w", err)
-				}
-				return nil
+				return d.ensureResidentProviderProcess(ctx, agentID, runtimeID)
 			} else if !errors.Is(err, agent.ErrPiRPCRunIdentityRequiresFreshSession) {
 				return fmt.Errorf("bind resident Pi run identity: %w", err)
 			}
@@ -54,11 +50,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 				return fmt.Errorf("rotate resident Pi run identity: %w", err)
 			}
 		} else {
-			if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
-				_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
-				return fmt.Errorf("start resident provider process: %w", err)
-			}
-			return nil
+			return d.ensureResidentProviderProcess(ctx, agentID, runtimeID)
 		}
 	}
 	if d.client == nil {
@@ -211,6 +203,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			if err != nil {
 				return nil, err
 			}
+			environment[AgentProxyCLIWrapperEnv] = transport.wrapperPath
 			environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
 			return func() { _ = transport.Close() }, nil
 		},
@@ -229,6 +222,25 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
 		_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 		return fmt.Errorf("start resident provider process: %w", err)
+	}
+	return nil
+}
+
+// ensureResidentProviderProcess keeps Raft's failed-start cleanup invariant:
+// a provider that did not start cannot remain registered as resident. Idle
+// backends detach immediately. If an older turn is still draining, force the
+// provider process to exit and let that turn's owner detach the fenced backend.
+func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, runtimeID string) error {
+	if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
+		startErr := fmt.Errorf("start resident provider process: %w", err)
+		cleanupErr := d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
+		if errors.Is(cleanupErr, ErrCanonicalAgentRuntimeBusy) {
+			cleanupErr = d.canonicalRuntimes.forceInvalidateSession(agentID, runtimeID)
+		}
+		if cleanupErr != nil {
+			return errors.Join(startErr, fmt.Errorf("retire failed resident provider process: %w", cleanupErr))
+		}
+		return startErr
 	}
 	return nil
 }

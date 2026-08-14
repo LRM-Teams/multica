@@ -66,36 +66,48 @@ func (runner *WorkspaceRunner) startManagedAgent(ctx context.Context, payload pr
 		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
 	}
 	status, session, err := runner.completeManagedAgentStart(ctx, payload, ack)
+	if err == nil {
+		runner.publishManagedAgentStartActivity(payload.AgentID, payload.RuntimeID)
+	}
 	return ack, status, session, err
 }
 
 // registerManagedAgentStart runs on the socket reader before a later stop or
 // replacement command can overtake this launch. Provider startup stays async.
 func (runner *WorkspaceRunner) registerManagedAgentStart(payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, error) {
+	ack, _, err := runner.registerManagedAgentStartOnce(payload)
+	return ack, err
+}
+
+func (runner *WorkspaceRunner) registerManagedAgentStartOnce(payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, bool, error) {
 	if runner == nil || runner.attachments == nil || runner.processes == nil || runner.activity == nil {
-		return protocol.AgentStartAckPayload{}, errors.New("Workspace Runner launch dependencies are unavailable")
+		return protocol.AgentStartAckPayload{}, false, errors.New("Workspace Runner launch dependencies are unavailable")
 	}
 	if err := payload.Validate(); err != nil {
-		return protocol.AgentStartAckPayload{}, fmt.Errorf("validate managed start: %w", err)
+		return protocol.AgentStartAckPayload{}, false, fmt.Errorf("validate managed start: %w", err)
 	}
 	if !runner.hasRuntime(payload.RuntimeID) {
-		return protocol.AgentStartAckPayload{}, errors.New("managed start Runtime is outside Workspace Runner scope")
+		return protocol.AgentStartAckPayload{}, false, errors.New("managed start Runtime is outside Workspace Runner scope")
 	}
-	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, LaunchID: payload.LaunchID, StartDispatchID: payload.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
+	result, err := runner.processes.startWithDisposition(agentProcessStartRequest{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, LaunchID: payload.LaunchID, StartDispatchID: payload.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
 	if err != nil {
-		return protocol.AgentStartAckPayload{}, fmt.Errorf("start managed Agent: %w", err)
+		return protocol.AgentStartAckPayload{}, false, fmt.Errorf("start managed Agent: %w", err)
+	}
+	ack := result.Acknowledgement
+	if result.Replayed {
+		return ack, true, nil
 	}
 	// Raft lifecycle authority is the server-provided start command. Register
 	// it before changing the Inbox so a cross-Runtime start that omitted its
 	// required stop fails without corrupting the current launch's routing.
 	if _, err := runner.inboxes.AcceptStart(payload.AgentID, payload.RuntimeID); err != nil {
 		_ = runner.processes.Stop(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
-		return protocol.AgentStartAckPayload{}, fmt.Errorf("prepare managed Agent Inbox: %w", err)
+		return protocol.AgentStartAckPayload{}, false, fmt.Errorf("prepare managed Agent Inbox: %w", err)
 	}
 	if runner.residency != nil {
 		runner.residency.rememberLaunch(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
 	}
-	return ack, nil
+	return ack, false, nil
 }
 
 func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, payload protocol.WorkspaceRunnerAgentStartPayload, ack protocol.AgentStartAckPayload) (protocol.AgentStatusPayload, protocol.AgentSessionPayload, error) {
@@ -127,18 +139,39 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	if err := runner.activity.SetManaged(status, session); err != nil {
 		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("record managed start: %w", err)
 	}
-	runner.observeRuntimeStarting(payload.AgentID, payload.RuntimeID, "Managed start")
 	if runner.residency != nil {
 		runner.residency.rememberIdle(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
 	}
 	if coordinator, runtimeID, ok := runner.messageCoordinator(payload.AgentID); ok && runtimeID == payload.RuntimeID {
 		if _, err := coordinator.flushWithResult(ctx, true); err != nil {
 			if runner.logger != nil {
-				runner.logger.Warn("Workspace Runner buffered Message flush deferred", "workspace_id", runner.config.WorkspaceID, "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID, "launch_id", payload.LaunchID, "start_dispatch_id", payload.StartDispatchID, "error", err)
+				if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+					runner.logger.Debug("Workspace Runner buffered Message flush deferred", runner.managedStartLogAttrs(payload, ack.QueueState, "runtime_busy", "deferred", err)...)
+				} else {
+					runner.logger.Warn("Workspace Runner buffered Message flush failed", runner.managedStartLogAttrs(payload, ack.QueueState, "message_flush_failed", "failed", err)...)
+				}
 			}
 		}
 	}
 	return status, session, nil
+}
+
+func (runner *WorkspaceRunner) managedStartLogAttrs(payload protocol.WorkspaceRunnerAgentStartPayload, queueState, reason, outcome string, err error) []any {
+	args := []any{
+		"computer_id", runner.config.DaemonID,
+		"workspace_id", runner.config.WorkspaceID,
+		"agent_id", payload.AgentID,
+		"runtime_id", payload.RuntimeID,
+		"launch_id", payload.LaunchID,
+		"start_dispatch_id", payload.StartDispatchID,
+		"queue_state", queueState,
+		"reason", reason,
+		"outcome", outcome,
+	}
+	if err != nil {
+		args = append(args, "error", err)
+	}
+	return args
 }
 
 // admitManagedProviderProcess is Raft's this.agents.set after spawn: the

@@ -659,6 +659,7 @@ export function StarGraphCanvas({
         />
         <StarGraphEdges
           relations={visibleRelations}
+          labelObstacles={visibleEntities}
           width={worldSize.width}
           height={worldSize.height}
           lensHints={focusedLensHints}

@@ -59,6 +59,9 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	machineAttestationSourcePID, _ := cmd.Flags().GetInt("machine-attestation-source-pid")
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	previousPackageUpgradeBootstrap, _ := cmd.Flags().GetBool("machine-upgrade-detached-candidate")
 	controlToken, err := computer.EnsureControlToken(profile)
 	if err != nil {
 		return err
@@ -112,7 +115,8 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 			Version: version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
 			MachineAttestationFrom: machineAttestationSourcePID,
 		},
-		ReleaseManifestURL: os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),
+		ReleaseManifestURL:              os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),
+		PreviousPackageUpgradeBootstrap: previousPackageUpgradeBootstrap,
 		DesiredWorkspaceIDs: func() ([]string, error) {
 			bindings, err := bindingStore.AllActiveForEnvironment(string(serviceTarget.Environment))
 			if err != nil {

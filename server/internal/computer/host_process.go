@@ -44,6 +44,9 @@ type HostProcessConfig struct {
 	Changes             <-chan struct{}
 	ReadyTimeout        time.Duration
 	ReleaseManifestURL  string
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	PreviousPackageUpgradeBootstrap bool
 }
 
 type hostProcessState struct {
@@ -53,6 +56,10 @@ type hostProcessState struct {
 	ready     bool
 	desired   []string
 	cancel    context.CancelFunc
+	// TODO(previous-package-bootstrap): Remove these two fields with the
+	// v0.4.24-alpha.55 health projection.
+	previousPackageUpgradeBootstrap bool
+	sourceProcessAlive              func(int) (bool, bool)
 }
 
 // RunProcess owns the resident Computer control plane around Host. The
@@ -96,7 +103,8 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	defer cancel()
 	state := &hostProcessState{
 		identity: config.Identity, startedAt: time.Now(), desired: append([]string(nil), initial...),
-		cancel: cancel,
+		cancel: cancel, previousPackageUpgradeBootstrap: config.PreviousPackageUpgradeBootstrap,
+		sourceProcessAlive: processAlive,
 	}
 	host.processIdentity = config.Identity
 	if strings.TrimSpace(config.ResidentRoot) != "" {
@@ -114,6 +122,7 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{
 		identity: config.Identity, releaseManifestURL: config.ReleaseManifestURL,
 		residentRoot: config.ResidentRoot, cancel: cancel,
+		previousPackageUpgradeBootstrap: config.PreviousPackageUpgradeBootstrap,
 	})
 
 	loadDesired := func() []string {
@@ -228,10 +237,24 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 		startedAt := state.startedAt
 		ready := state.ready
 		desired := append([]string(nil), state.desired...)
+		previousPackageUpgradeBootstrap := state.previousPackageUpgradeBootstrap
+		sourceProcessAlive := state.sourceProcessAlive
 		state.mu.RUnlock()
 		status := "starting"
 		if ready {
 			status = "running"
+			// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55
+			// is no longer a supported direct self-upgrade source.
+			// v0.4.24-alpha.55 waits for this historical readiness spelling
+			// before it accepts the successor's machine attestation. Keep the
+			// projection only while that exact launcher process is still alive;
+			// after it releases the child and exits, normal health is "running".
+			if previousPackageUpgradeBootstrap && identity.MachineAttestationFrom > 0 && sourceProcessAlive != nil {
+				alive, known := sourceProcessAlive(identity.MachineAttestationFrom)
+				if alive || !known {
+					status = "takeover_ready"
+				}
+			}
 		}
 		workspaces := make([]map[string]any, 0, len(desired))
 		for _, workspaceID := range desired {

@@ -28,6 +28,9 @@ type hostMachineUpgradeConfig struct {
 	releaseManifestURL string
 	residentRoot       string
 	cancel             context.CancelFunc
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	previousPackageUpgradeBootstrap bool
 }
 
 type hostMachineUpgrade struct {
@@ -326,8 +329,23 @@ func sameHostStringSet(left, right []string) bool {
 
 func (upgrade *hostMachineUpgrade) recoverSuccessor(ctx context.Context) error {
 	journal, err := upgrade.readJournal()
-	if err != nil || journal == nil {
+	if err != nil {
 		return err
+	}
+	previousPackageJournalPath := ""
+	if journal == nil && upgrade.config.previousPackageUpgradeBootstrap {
+		// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is
+		// no longer a supported direct self-upgrade source.
+		journal, previousPackageJournalPath, err = upgrade.readPreviousPackageJournal()
+		if err != nil {
+			return err
+		}
+		if journal == nil {
+			return errors.New("previous-package Computer successor has no matching handoff journal")
+		}
+	}
+	if journal == nil {
+		return nil
 	}
 	if journal.Phase != "activated" {
 		if versionsMatch(upgrade.config.identity.Version, journal.Source) {
@@ -352,7 +370,63 @@ func (upgrade *hostMachineUpgrade) recoverSuccessor(ctx context.Context) error {
 	if err := upgrade.attestJournal(ctx, *journal); err != nil {
 		return err
 	}
+	if previousPackageJournalPath != "" {
+		if err := os.Remove(previousPackageJournalPath); err != nil && !os.IsNotExist(err) && upgrade.host != nil && upgrade.host.logger != nil {
+			upgrade.host.logger.Warn("could not remove previous-package Machine Upgrade handoff journal after attestation",
+				"path", previousPackageJournalPath, "error", err)
+		}
+		return nil
+	}
 	return upgrade.removeJournal()
+}
+
+// readPreviousPackageJournal translates only the active handoff written by the
+// immediately previous package. It is used solely when that package launches
+// this process with its bootstrap marker; ordinary current Host startup never
+// reads the retired journal directory.
+// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no longer
+// a supported direct self-upgrade source.
+func (upgrade *hostMachineUpgrade) readPreviousPackageJournal() (*hostMachineUpgradeJournal, string, error) {
+	root, err := cli.MachineStateRoot()
+	if err != nil {
+		return nil, "", err
+	}
+	dir := filepath.Join(root, "machine-upgrades")
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	var newest *hostMachineUpgradeJournal
+	newestPath := ""
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			continue
+		}
+		var candidate hostMachineUpgradeJournal
+		if json.Unmarshal(data, &candidate) != nil || candidate.Phase != "handoff" ||
+			!versionsMatch(upgrade.config.identity.Version, candidate.Target) {
+			continue
+		}
+		if strings.TrimSpace(candidate.ID) == "" || strings.TrimSpace(candidate.Generation) == "" ||
+			len(candidate.RuntimeIDs) == 0 || len(candidate.WorkspaceIDs) == 0 {
+			return nil, "", fmt.Errorf("previous-package Machine Upgrade handoff journal %s is incomplete", path)
+		}
+		if newest == nil || candidate.UpdatedAt > newest.UpdatedAt {
+			copy := candidate
+			copy.Phase = "activated"
+			newest = &copy
+			newestPath = path
+		}
+	}
+	return newest, newestPath, nil
 }
 
 func (upgrade *hostMachineUpgrade) attestJournal(ctx context.Context, journal hostMachineUpgradeJournal) error {

@@ -83,15 +83,20 @@ if [ ! -x "$MULTICA_BIN" ]; then
   exit 1
 fi
 
+# Launch this checkout's binary, not ~/.local/bin/multica. Without this,
+# `daemon start` re-execs the installed Computer and agents never see the
+# brief compiled in server/bin/multica.
+export MULTICA_COMPUTER_LAUNCH_BIN="$MULTICA_BIN"
+
 daemon_cmd=( "$MULTICA_BIN" "${profile_args[@]}" daemon )
 
 stop_running_daemon() {
-  if "${daemon_cmd[@]}" status 2>&1 | grep -q 'running'; then
-    echo "==> Stopping running daemon"
-    "${daemon_cmd[@]}" stop
-  else
-    echo "==> No daemon running for this profile"
-  fi
+  # Always ask stop. `daemon/computer status` exits non-zero when the resident
+  # is alive but disconnected from the backend (typical after a prod restart),
+  # so grepping status with `set -o pipefail` used to skip stop, then start
+  # failed with "already running" and start-prod tore down the whole stack.
+  echo "==> Stopping running daemon (if any)"
+  "${daemon_cmd[@]}" stop
 }
 
 if [ "$RESTART" = true ]; then
@@ -105,6 +110,7 @@ fi
 
 if [ "$RESTART" = true ]; then
   echo "==> Starting daemon ($MULTICA_BIN)"
+  echo "    launch binary: $MULTICA_COMPUTER_LAUNCH_BIN"
   "${daemon_cmd[@]}" start
 else
   echo "==> Starting daemon ($MULTICA_BIN)"
@@ -115,7 +121,9 @@ else
 fi
 
 echo ""
-"${daemon_cmd[@]}" status
+# Status exits non-zero while the Computer is still connecting; do not fail
+# the start script after a successful launch.
+"${daemon_cmd[@]}" status || true
 echo ""
 echo "Logs:  ${daemon_cmd[*]} logs -f"
 echo "Stop:  ${daemon_cmd[*]} stop"

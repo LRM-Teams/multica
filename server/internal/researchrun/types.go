@@ -397,14 +397,16 @@ type SteerInput struct {
 }
 
 type DispatchRequest struct {
-	Run         Run             `json:"run"`
-	Task        Task            `json:"task"`
-	AttemptID   string          `json:"attempt_id"`
-	AgentID     string          `json:"agent_id"`
-	Target      ExecutionTarget `json:"target,omitempty"`
-	Prompt      string          `json:"prompt"`
-	Key         string          `json:"key"`
-	RequestHash string          `json:"request_hash"`
+	Run          Run             `json:"run"`
+	Task         Task            `json:"task"`
+	AttemptID    string          `json:"attempt_id"`
+	AgentID      string          `json:"agent_id"`
+	Target       ExecutionTarget `json:"target,omitempty"`
+	ManifestID   string          `json:"manifest_id,omitempty"`
+	ManifestHash string          `json:"manifest_hash,omitempty"`
+	Prompt       string          `json:"prompt"`
+	Key          string          `json:"key"`
+	RequestHash  string          `json:"request_hash"`
 }
 
 type ExecutionTarget struct {

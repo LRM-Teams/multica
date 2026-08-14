@@ -46,6 +46,36 @@ func TestManifestEntryOrdinalFollowsCanonicalKindAndIDOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
+	wantAttemptHash, err := ArtifactContentHash(ArtifactKindAttempt, attemptArtifactContent(attempt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var provenance, hashOrigin, contentHash string
+	var artifactGoalVersion, artifactPlanVersion int
+	if err = pool.QueryRow(ctx, `
+		SELECT p.provenance_completeness, v.hash_origin, v.content_hash,
+		       v.goal_version, v.plan_version
+		FROM research_artifact_passport p
+		JOIN research_artifact_version v
+		  ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+		     (p.workspace_id, p.session_id, p.id, p.current_version)
+		WHERE p.workspace_id = $1::uuid AND p.session_id = $2::uuid
+		  AND p.id = $3::uuid AND p.entity_kind = 'attempt'
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&provenance, &hashOrigin, &contentHash, &artifactGoalVersion, &artifactPlanVersion,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if provenance != string(ArtifactProvenanceComplete) || hashOrigin != string(ArtifactHashOriginProduction) {
+		t.Fatalf("attempt provenance=%q hash_origin=%q", provenance, hashOrigin)
+	}
+	if contentHash != wantAttemptHash {
+		t.Fatalf("attempt content_hash=%q want=%q", contentHash, wantAttemptHash)
+	}
+	if artifactGoalVersion != input.Request.Task.GoalVersion || artifactPlanVersion != input.Request.Task.PlanVersion {
+		t.Fatalf("attempt goal/plan=%d/%d want=%d/%d", artifactGoalVersion, artifactPlanVersion,
+			input.Request.Task.GoalVersion, input.Request.Task.PlanVersion)
+	}
 
 	type orderedEntry struct {
 		ordinal    int

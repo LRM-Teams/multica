@@ -15,8 +15,9 @@ import (
 )
 
 type PostgresStore struct {
-	pool        *pgxpool.Pool
-	txFaultHook researchTxFaultHook
+	pool                          *pgxpool.Pool
+	txFaultHook                   researchTxFaultHook
+	dispatchManifestBeforeCASHook func(context.Context, *dispatchManifestPlan) error
 }
 
 var (
@@ -846,7 +847,7 @@ func (s *PostgresStore) RenewRunLease(ctx context.Context, lease RunLease, durat
 	return renewed, nil
 }
 
-func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time) error {
+func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time, lastError string) error {
 	tx, err := s.beginResearchTx(ctx, txOpReconcileLeaseRelease, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -855,12 +856,12 @@ func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next tim
 	command, err := tx.Exec(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_token = NULL, reconcile_lease_expires_at = NULL,
-		    next_reconcile_at = $4, updated_at = now()
+		    next_reconcile_at = $4, last_error = $5, updated_at = now()
 		WHERE id = $1::uuid
 		  AND reconcile_lease_token = $2::uuid
 		  AND reconcile_lease_generation = $3
 		  AND reconcile_lease_expires_at > now()
-	`, lease.SessionID, lease.Token, lease.Generation, next)
+	`, lease.SessionID, lease.Token, lease.Generation, next, truncateBytes(lastError, 4096))
 	if err != nil {
 		return err
 	}
@@ -1028,10 +1029,32 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindRunEvent, workspaceID, sessionID, event.ID, event.CreatedAt, nil, nil); err != nil {
+	contentHash, err := ArtifactContentHash(ArtifactKindRunEvent, runEventArtifactContent(event))
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: event.ID,
+		Kind: ArtifactKindRunEvent, SourceCreatedAt: &event.CreatedAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
+	}); err != nil {
 		return RunEvent{}, err
 	}
 	return event, nil
+}
+
+func runEventArtifactContent(event RunEvent) map[string]any {
+	return map[string]any{
+		"sequence":        event.Sequence,
+		"event_type":      event.Type,
+		"idempotency_key": event.IdempotencyKey,
+		"actor_type":      event.ActorType,
+		"actor_id":        event.ActorID,
+		"payload":         json.RawMessage(event.Payload),
+	}
 }
 
 func semanticJSONEqual(left, right []byte) bool {

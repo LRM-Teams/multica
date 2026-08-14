@@ -240,6 +240,7 @@ import type {
   CreateNotePageIssueRefRequest,
   CreateNotePageAgentRefRequest,
   CreateNotePageRunRefRequest,
+  CreateNotePageChannelRefRequest,
   CreateNotePageIssueRequest,
   CreateNotePageIssueResponse,
   NoteWriteback,
@@ -1203,6 +1204,29 @@ export class ApiClient {
 
   async deleteNotePageRunRef(pageId: string, runId: string): Promise<void> {
     await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/run-refs/${encodeURIComponent(runId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listNotePageChannelRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/channel-refs`);
+    return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/channel-refs",
+    });
+  }
+
+  async createNotePageChannelRef(pageId: string, data: CreateNotePageChannelRefRequest): Promise<NotePageIssueRef> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/channel-refs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageIssueRefSchema, EMPTY_NOTE_PAGE_ISSUE_REF, {
+      endpoint: "POST /api/notes/pages/{id}/channel-refs",
+    });
+  }
+
+  async deleteNotePageChannelRef(pageId: string, channelId: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/channel-refs/${encodeURIComponent(channelId)}`, {
       method: "DELETE",
     });
   }

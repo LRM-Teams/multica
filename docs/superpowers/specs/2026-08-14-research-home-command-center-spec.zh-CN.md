@@ -1,8 +1,10 @@
 # 调研首页指挥台开发规格
 
-状态：已确认，实施中  
-日期：2026-08-14  
-目标分支：`agent/research-homepage`  
+状态：已确认，实施中
+
+日期：2026-08-14
+
+目标分支：`agent/research-homepage`
 视觉基准：`/Users/xxx/Desktop/Multica调研主页-星图配套版/index.html`
 
 ## 1. 产品定义

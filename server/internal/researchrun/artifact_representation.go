@@ -16,10 +16,11 @@ type frozenOrderedRepresentation[T any] struct {
 	Value T   `json:"value"`
 }
 
-// freezeManifestRepresentationsTx replaces the legacy hash placeholder with
-// the exact bounded wire representation supplied to an Agent. Only already
-// authorized entries are read here.
-func freezeManifestRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, entries []artifactVersionCandidate) error {
+// freezeArtifactRepresentationsTx replaces hash placeholders with exact bounded
+// wire representations supplied to an Agent. Only already-authorized entries
+// are read here. Kinds not yet projected retain their legacy placeholder and
+// must not be used as frozen task response content.
+func freezeArtifactRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, entries []artifactVersionCandidate) error {
 	authorized := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		authorized[entry.ArtifactID] = struct{}{}
@@ -27,6 +28,12 @@ func freezeManifestRepresentationsTx(ctx context.Context, tx pgx.Tx, workspaceID
 	for i := range entries {
 		var value any
 		switch entries[i].Kind {
+		case ArtifactKindRunSession:
+			item, err := loadRun(ctx, tx, sessionID, workspaceID, false)
+			if err != nil {
+				return fmt.Errorf("freeze run session representation: %w", err)
+			}
+			value = item
 		case ArtifactKindContractRevision:
 			var item ResearchContract
 			err := tx.QueryRow(ctx, `SELECT goal_version, goal, scope, audience, freshness, language, source_policy, run_limits, reason, created_at FROM research_contract_revision WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid`, workspaceID, sessionID, entries[i].ArtifactID).Scan(&item.GoalVersion, &item.Goal, &item.Scope, &item.Audience, &item.Freshness, &item.Language, &item.SourcePolicy, &item.RunLimits, &item.Reason, &item.CreatedAt)
@@ -271,6 +278,37 @@ func loadFrozenDurableContextPool(ctx context.Context, pool *pgxpool.Pool, works
 		out.Attempts = append(out.Attempts, item.Value)
 	}
 	return out, nil
+}
+
+func loadFrozenRunRepresentationPool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) (Run, error) {
+	var encoded []byte
+	var storedHash string
+	err := pool.QueryRow(ctx, `
+		SELECT e.representation_bytes, e.representation_hash
+		FROM research_artifact_context_entry e
+		JOIN research_artifact_context_manifest m
+		  ON (m.workspace_id,m.session_id,m.id)=(e.workspace_id,e.session_id,e.manifest_id)
+		JOIN research_artifact_version v
+		  ON (v.workspace_id,v.session_id,v.id)=(e.workspace_id,e.session_id,e.artifact_version_id)
+		JOIN research_artifact_passport p
+		  ON (p.workspace_id,p.session_id,p.id)=(v.workspace_id,v.session_id,v.artifact_id)
+		WHERE m.workspace_id=$1::uuid AND m.session_id=$2::uuid AND m.attempt_id=$3::uuid
+		  AND p.entity_kind='run_session'
+	`, workspaceID, sessionID, attemptID).Scan(&encoded, &storedHash)
+	if err != nil {
+		return Run{}, fmt.Errorf("load frozen run session representation: %w", err)
+	}
+	if len(encoded) == 0 || contentHashFromPayload(encoded) != storedHash {
+		return Run{}, fmt.Errorf("%w: frozen run session representation missing or invalid", ErrInvalidTransition)
+	}
+	var run Run
+	if err = json.Unmarshal(encoded, &run); err != nil {
+		return Run{}, fmt.Errorf("decode frozen run session representation: %w", err)
+	}
+	if run.SessionID != sessionID || run.WorkspaceID != workspaceID {
+		return Run{}, fmt.Errorf("%w: frozen run session scope mismatch", ErrInvalidTransition)
+	}
+	return run, nil
 }
 
 func loadFrozenEvaluationPrivatePool(ctx context.Context, pool *pgxpool.Pool, workspaceID, sessionID, attemptID string) ([]EvaluationPrivateContext, error) {

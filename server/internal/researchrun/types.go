@@ -397,14 +397,16 @@ type SteerInput struct {
 }
 
 type DispatchRequest struct {
-	Run         Run             `json:"run"`
-	Task        Task            `json:"task"`
-	AttemptID   string          `json:"attempt_id"`
-	AgentID     string          `json:"agent_id"`
-	Target      ExecutionTarget `json:"target,omitempty"`
-	Prompt      string          `json:"prompt"`
-	Key         string          `json:"key"`
-	RequestHash string          `json:"request_hash"`
+	Run          Run             `json:"run"`
+	Task         Task            `json:"task"`
+	AttemptID    string          `json:"attempt_id"`
+	AgentID      string          `json:"agent_id"`
+	Target       ExecutionTarget `json:"target,omitempty"`
+	ManifestID   string          `json:"manifest_id,omitempty"`
+	ManifestHash string          `json:"manifest_hash,omitempty"`
+	Prompt       string          `json:"prompt"`
+	Key          string          `json:"key"`
+	RequestHash  string          `json:"request_hash"`
 }
 
 type ExecutionTarget struct {
@@ -501,6 +503,10 @@ type RunSnapshot struct {
 	Gate               GateResult                 `json:"gate"`
 	AttemptContext     *AttemptArtifactContext    `json:"attempt_context,omitempty"`
 	ArtifactProjection *ArtifactProjection        `json:"artifact_projection,omitempty"`
+	// PrincipalHeader is the bounded Fleet roster frozen into the Attempt's
+	// Context Manifest. It is handler-only compatibility metadata, not another
+	// Research artifact family.
+	PrincipalHeader []FleetMember `json:"-"`
 }
 
 // ArtifactProjection is the bounded, hash-stable passport read model. It never

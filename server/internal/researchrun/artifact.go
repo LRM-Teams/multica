@@ -190,6 +190,15 @@ func LinkPolicyGuardTriggerNames() []string {
 	}
 }
 
+// AppendOnlyGuardTriggerNames lists the stable immutable ledger guards.
+func AppendOnlyGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_version_immutable_guard",
+		"research_artifact_policy_mutation_append_only_guard",
+		"research_artifact_lifecycle_event_append_only_guard",
+	}
+}
+
 // MigrationDiagnosticReasonCodes lists migration 325 diagnostic reason registry.
 func MigrationDiagnosticReasonCodes() []string {
 	return []string{

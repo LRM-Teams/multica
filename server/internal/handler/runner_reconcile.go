@@ -59,17 +59,20 @@ func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObserv
 	for _, agentID := range ordered {
 		want, wanted := desiredByAgent[agentID]
 		have, observed := observedByAgent[agentID]
-		// ACK / accepted is transport residency, not a live process. Only
-		// Active counts as running so an upgrade successor re-sends start.
-		running := observed && have.status == protocol.AgentStatusActive
-		mismatched := running && (!wanted || have.runtimeID != want.runtimeID || have.launchID != want.launchID)
+		// ACK / accepted is not a live process, but it still occupies the
+		// server launch fence. A mismatched accepted start must therefore be
+		// stopped before the replacement can be admitted. A matching accepted
+		// start is re-driven below so an upgrade successor can finish startup.
+		occupiesFence := observed && (have.status == "accepted" || have.status == protocol.AgentStatusActive)
+		running := occupiesFence && have.status == protocol.AgentStatusActive
+		mismatched := occupiesFence && (!wanted || have.runtimeID != want.runtimeID || have.launchID != want.launchID)
 		if mismatched {
 			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: have.agentID, LaunchID: have.launchID}})
 		}
 		// Runtime replacement is two phase: stop the observed launch first and
 		// dispatch the desired start only after an inactive report removes it
 		// from the observed set on the next reconcile.
-		if wanted && !running {
+		if wanted && !mismatched && !running {
 			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: want.agentID, RuntimeID: want.runtimeID, LaunchID: want.launchID, StartDispatchID: want.startDispatchID}})
 		}
 	}

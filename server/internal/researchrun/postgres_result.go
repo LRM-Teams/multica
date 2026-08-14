@@ -1710,6 +1710,33 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 		return err
 	}
 	rationale := truncateBytes(strings.Join(evaluation.Findings, "\n"), 8192)
+	rows, err := tx.Query(ctx, `
+		SELECT decision.id::text
+		FROM research_decision decision
+		JOIN research_artifact_passport passport
+		  ON passport.workspace_id = decision.workspace_id AND passport.session_id = decision.session_id
+		 AND passport.id = decision.id
+		JOIN research_artifact_version version
+		  ON version.workspace_id = passport.workspace_id AND version.session_id = passport.session_id
+		 AND version.artifact_id = passport.id AND version.version = passport.current_version
+		WHERE decision.workspace_id = $1::uuid AND decision.session_id = $2::uuid
+		  AND decision.decision_kind IN ('quality_gate', 'citation_audit')
+		  AND version.produced_by_attempt_id = $3::uuid
+		ORDER BY decision.created_at, decision.id
+		FOR UPDATE OF decision
+	`, state.workspaceID, state.run.SessionID, state.attemptID)
+	if err != nil {
+		return err
+	}
+	if rows.Next() {
+		rows.Close()
+		return fmt.Errorf("%w: attempt already owns an evaluation decision", ErrResultConflict)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 	var decisionID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (

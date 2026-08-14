@@ -171,6 +171,10 @@ func TestWorkspaceRunnerManagedStartCreatesInboxWithoutAttachment(t *testing.T) 
 	if ack.AgentID != agentID || ack.LaunchID == "" || status.LaunchID != ack.LaunchID || session.LaunchID != ack.LaunchID {
 		t.Fatalf("managed start result ack=%+v status=%+v session=%+v", ack, status, session)
 	}
+	launch, ok := runner.processes.Snapshot(agentID)
+	if !ok || launch.QueueState != protocol.AgentStartQueueRunning {
+		t.Fatalf("after provider start APM = %+v exists=%v, want running", launch, ok)
+	}
 }
 
 func TestWorkspaceRunnerProviderSpawnFailureReportsInactiveAndOffline(t *testing.T) {

@@ -1054,6 +1054,7 @@ grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23
 - [ ] 实现 E 中已冻结的 V6 Integration Result schema 和严格校验，不在 G 中改写协议。
   - [x] G-contract-1：新增独立 `DecodeAndValidateV6IntegrationResult`，严格消费冻结 V6 `task_result`，拒绝未知/缺失/null/trailing 字段、非 Integration-owned payload、越界集合、无 Contribution、非法引用/枚举/分数、重复同类 key 和不完整嵌套对象；支持 Contribution、Inquiry status update、Insight、Dispute 与 follow-up Task proposal，但不启用 V6 默认生产 Run。后续持久化切片仍须校验 scope 内 UUID、前置版本、原 Agent 作者身份与 accepted Artifact。
 - [ ] 实现触发策略、固定输入版本、幂等执行和状态变化应用。
+  - [x] G2a-trigger：`integration_trigger.go` 冻结 `research-integration-trigger-v1` 的确定性触发决定；仅消费当前 Event 水位之后的 accepted Result Artifact 精确版本，至少两个原 Agent 参与，并按阻断冲突、待交付、结果数和信息增益触发。活动轮次、无新结果、阈值不足和轮次/成本预算均返回明确不触发原因；相同水位、Policy 和输入版本生成相同 Round Key。持久 Integration Round 的原子预留、执行和状态应用仍待 G2b，不能仅凭本项宣称持续整合已运行。
 - [ ] 实现每 Result 的 Assimilation Check、peer_synthesis、原 Agent Integration Contribution 和离线/退出参与者处理。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。
 - [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。

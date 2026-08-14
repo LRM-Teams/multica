@@ -83,6 +83,10 @@ vi.mock("../../i18n/use-t", () => ({
           updated_at: "Updated",
           duration: "Duration",
           input: "Input",
+          raw_input_expand: "Expand raw input",
+          raw_input_collapse: "Collapse raw input",
+          objective_expand: "Expand full objective",
+          objective_collapse: "Collapse full objective",
           gate_blocker: "Gate blocked",
           next_steps: "Next steps",
           next_step_actions: {
@@ -714,8 +718,39 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
 
     const inputBlock = screen.getByTestId("node-detail-input");
     expect(inputBlock).toHaveTextContent("Input");
-    expect(inputBlock).toHaveTextContent("minimum_independent_sources");
+    expect(inputBlock).toHaveTextContent("minimum independent sources");
     expect(inputBlock).toHaveTextContent("2");
+    expect(inputBlock.querySelector("dl")).not.toBeNull();
+    expect(inputBlock.querySelector("pre")).toBeNull();
+  });
+
+  it("distills long task objectives and keeps the full text progressively available", () => {
+    const longObjective = "Investigate the market. ".repeat(30);
+    const objectiveNode: ResearchGraphNode = {
+      ...node,
+      payload: { details: { task_id: "task-long" } },
+    };
+    const run = {
+      tasks: [
+        {
+          id: "task-long",
+          client_key: "long",
+          kind: "discover",
+          objective: longObjective,
+          required_capability: "scout",
+          status: "in_flight",
+          attempt_count: 1,
+          goal_version: 1,
+          plan_version: 1,
+        },
+      ],
+      attempts: [], sources: [], observations: [], claims: [], questions: [],
+    } as unknown as ResearchRunSnapshot;
+
+    render(<ResearchNodeDetail node={objectiveNode} sources={[]} run={run} open />);
+
+    expect(screen.getByText("Expand full objective")).toBeInTheDocument();
+    expect(screen.getByText("Collapse full objective")).toBeInTheDocument();
   });
 
   it("LRM-1410 residual: stage_gate node surfaces real run gate findings with severity", () => {

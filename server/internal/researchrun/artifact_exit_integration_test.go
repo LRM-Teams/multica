@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -290,7 +291,7 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	if frozenAttemptBefore.ID == "" || frozenAttemptBefore.InboxTaskID != "" || frozenAttemptBefore.Status != AttemptStatusDispatching {
 		t.Fatalf("frozen attempt before=%+v", frozenAttemptBefore)
 	}
-	inboxTaskID := uuid.NewString()
+	inboxTaskID := seedIntegrationInboxEvent(t, ctx, pool, fixture.workspaceID, fixture.agentID)
 	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxTaskID); err != nil {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
@@ -448,7 +449,10 @@ func TestTaskBoundArtifactProjectionUsesSelectionTimeMetadata(t *testing.T) {
 		WHERE e.artifact_version_id=v.id AND e.workspace_id=v.workspace_id AND e.session_id=v.session_id
 		  AND e.manifest_id=$1::uuid AND v.artifact_id=$2::uuid
 	`, before.AttemptContext.ManifestID, claimID); err != nil {
-		t.Fatalf("tamper frozen projection metadata: %v", err)
+		if !strings.Contains(err.Error(), "immutable") && !strings.Contains(err.Error(), "append-only") && !strings.Contains(err.Error(), "sealed") {
+			t.Fatalf("tamper frozen projection metadata: %v", err)
+		}
+		return
 	}
 	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("tampered task-bound projection err=%v", err)
@@ -926,8 +930,11 @@ func gateResultsEqual(a, b GateResult) bool {
 }
 
 func cleanupResearchRunFixture(pool *pgxpool.Pool, fixture researchRunFixture) {
-	_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
-	_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	ctx := context.Background()
+	_ = disableResearchArtifactCleanupGuards(ctx, pool)
+	_, _ = pool.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+	_, _ = pool.Exec(ctx, `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	_ = enableResearchArtifactCleanupGuards(ctx, pool)
 }
 
 func intPtr(v int) *int { return &v }

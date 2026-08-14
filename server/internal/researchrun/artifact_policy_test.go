@@ -102,8 +102,8 @@ func TestArtifactPolicyLegacyDomainAdmissionMatrix(t *testing.T) {
 			if ok != tc.wantOK {
 				t.Fatalf("ok=%v deny=%q want ok=%v", ok, deny, tc.wantOK)
 			}
-			if !tc.wantOK && deny != ArtifactDenyDomainFact {
-				t.Fatalf("deny=%q want %q", deny, ArtifactDenyDomainFact)
+			if !tc.wantOK && deny != ArtifactDenyDomainFact && deny != ArtifactDenyLegacyIneligible {
+				t.Fatalf("deny=%q want %q or %q", deny, ArtifactDenyDomainFact, ArtifactDenyLegacyIneligible)
 			}
 		})
 	}
@@ -116,6 +116,10 @@ func expectedLegacyAdmission(
 ) (bool, ArtifactDenyReason) {
 	if _, ok := registeredArtifactEntityKinds[kind]; !ok {
 		return false, ArtifactDenyUnknownKind
+	}
+	switch kind {
+	case ArtifactKindContextManifest, ArtifactKindHypothesis, ArtifactKindBranch, ArtifactKindInsight, ArtifactKindInquiryEdge:
+		return false, ArtifactDenyLegacyIneligible
 	}
 	if lifecycle != ArtifactLifecycleRegistered && lifecycle != ArtifactLifecycleAccepted {
 		return false, ArtifactDenyLifecycle

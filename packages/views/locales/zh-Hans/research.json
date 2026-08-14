@@ -417,6 +417,10 @@
     "updated_at": "更新",
     "duration": "时长",
     "input": "输入",
+    "raw_input_expand": "展开原始输入",
+    "raw_input_collapse": "收起原始输入",
+    "objective_expand": "展开完整目标",
+    "objective_collapse": "收起完整目标",
     "gate_blocker": "门禁阻塞",
     "next_steps": "下一步",
     "next_step_actions": {
@@ -510,6 +514,7 @@
     "task_meta": "任务",
     "agent_legend": "Agent {{id}}",
     "kinds": {
+      "goal": "目标",
       "task": "任务",
       "attempt": "尝试",
       "result_artifact": "结果工件",
@@ -1125,6 +1130,14 @@
     "projection": {
       "classic": "经典投影",
       "classic_hint": "当前会话暂不支持 V6 实时投影，正在使用经典投影视图"
+    },
+    "projection_contract": {
+      "title": "后端星图投影与调研阶段不一致",
+      "body": "当前仍处于 {{stage}}，后端却返回了最终质量门槛失败（{{codes}}）。该 Gate 已从画布隔离，真实的任务和尝试失败仍会保留。",
+      "details": "查看可发给后端的错误信息",
+      "copy": "复制错误信息",
+      "copied": "已复制",
+      "copy_failed": "复制失败：浏览器拒绝访问剪贴板。请展开错误信息后手动复制。"
     },
     "lens_group": "显示 Lens",
     "lens": {

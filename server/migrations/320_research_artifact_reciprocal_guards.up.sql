@@ -44,9 +44,18 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  PERFORM research_artifact_require_matching_passport(
-    TG_ARGV[0], NEW.workspace_id, NEW.session_id, NEW.id
-  );
+  IF NOT research_artifact_entity_kind_allowed(TG_ARGV[0]) THEN
+    RAISE foreign_key_violation USING CONSTRAINT = TG_NAME;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM research_artifact_passport p
+    WHERE p.workspace_id = NEW.workspace_id
+      AND p.session_id = NEW.session_id
+      AND p.id = NEW.id
+      AND p.entity_kind = TG_ARGV[0]
+  ) THEN
+    RAISE foreign_key_violation USING CONSTRAINT = TG_NAME;
+  END IF;
   RETURN NEW;
 END;
 $$;

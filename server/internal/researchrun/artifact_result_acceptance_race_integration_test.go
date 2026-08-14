@@ -50,7 +50,11 @@ func loadAcceptanceRaceWriteSet(t *testing.T, ctx context.Context, fx acceptance
 		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid),
 		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid),
 		  (SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND event_type = 'task_result_accepted'),
-		  (SELECT count(*)::int FROM research_artifact_passport WHERE session_id = $1::uuid AND produced_by_attempt_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_version version
+		   JOIN research_artifact_passport passport
+		     ON (passport.workspace_id, passport.session_id, passport.id) =
+		        (version.workspace_id, version.session_id, version.artifact_id)
+		   WHERE passport.session_id = $1::uuid AND version.produced_by_attempt_id = $2::uuid),
 		  (SELECT count(*)::int FROM research_artifact_version WHERE session_id = $1::uuid),
 		  (SELECT count(*)::int FROM research_artifact_input_reference WHERE session_id = $1::uuid),
 		  (SELECT count(*)::int FROM research_artifact_lifecycle_event WHERE session_id = $1::uuid),

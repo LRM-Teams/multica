@@ -1,17 +1,11 @@
 "use client";
 
 import { Hash } from "lucide-react";
-import type { NotePage, NotePageIssueRef } from "@multica/core/types";
+import type { NotePage } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { AppLink } from "../navigation";
 import { useT } from "../i18n/use-t";
-
-export function notePageChannelRefs(page: NotePage | null | undefined): NotePageIssueRef[] {
-  const refs = page?.refs ?? [];
-  return refs.filter(
-    (ref) => ref.type === "channel" && ref.accessible === true && !!ref.id,
-  );
-}
+import { notePageChannelRefs } from "./note-channel-refs";
 
 /**
  * Compact list of collaboration channels anchored to this note (N2-A3).

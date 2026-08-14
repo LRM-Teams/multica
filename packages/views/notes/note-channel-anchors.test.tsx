@@ -5,7 +5,8 @@ import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { NotePage } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
-import { NoteChannelAnchors, notePageChannelRefs } from "./note-channel-anchors";
+import { NoteChannelAnchors } from "./note-channel-anchors";
+import { notePageChannelRefs } from "./note-channel-refs";
 
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({

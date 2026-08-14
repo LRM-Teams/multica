@@ -13,6 +13,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestSortManifestEntryCandidatesCanonicalizesInverseUUIDOrder(t *testing.T) {
+	forward := []artifactVersionCandidate{
+		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimLowID},
+		{Kind: ArtifactKindClaim, ArtifactID: lockOrderClaimHighID},
+	}
+	reverse := []artifactVersionCandidate{forward[1], forward[0]}
+	sortManifestEntryCandidates(forward)
+	sortManifestEntryCandidates(reverse)
+	for i := range forward {
+		if forward[i].Kind != reverse[i].Kind || forward[i].ArtifactID != reverse[i].ArtifactID {
+			t.Fatalf("normalized[%d] differs: forward=%+v reverse=%+v", i, forward[i], reverse[i])
+		}
+	}
+	if forward[0].ArtifactID != lockOrderClaimLowID || forward[1].ArtifactID != lockOrderClaimHighID {
+		t.Fatalf("canonical claim order=%q,%q", forward[0].ArtifactID, forward[1].ArtifactID)
+	}
+}
+
 func TestDispatchConcurrentSharedCandidatesNoDeadlock(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -228,6 +246,7 @@ func assertManifestEntryCanonicalOrder(
 
 	var prevKind ArtifactEntityKind
 	var prevArtifactID string
+	var sharedClaimIDs []string
 	first := true
 	for rows.Next() {
 		var kind ArtifactEntityKind
@@ -242,9 +261,15 @@ func assertManifestEntryCanonicalOrder(
 		}
 		prevKind = kind
 		prevArtifactID = artifactID
+		if kind == ArtifactKindClaim && (artifactID == lockOrderClaimLowID || artifactID == lockOrderClaimHighID) {
+			sharedClaimIDs = append(sharedClaimIDs, artifactID)
+		}
 		first = false
 	}
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
+	}
+	if len(sharedClaimIDs) != 2 || sharedClaimIDs[0] != lockOrderClaimLowID || sharedClaimIDs[1] != lockOrderClaimHighID {
+		t.Fatalf("shared claim order=%v want [%s %s]", sharedClaimIDs, lockOrderClaimLowID, lockOrderClaimHighID)
 	}
 }

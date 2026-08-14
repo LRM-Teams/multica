@@ -60,3 +60,31 @@ func TestDecodeAndValidateV6DeliberationResultRejectsOpenObjectEscape(t *testing
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestDecodeAndValidateV6DirectorAdjudicationRequiresEvidencePerPosition(t *testing.T) {
+	var fixture map[string]any
+	if err := json.Unmarshal(validV6DeliberationResultJSON(t), &fixture); err != nil {
+		t.Fatal(err)
+	}
+	dispute := fixture["disputes"].([]any)[0].(map[string]any)
+	dispute["positions"] = []any{map[string]any{
+		"actor_agent_id": "22222222-2222-4222-8222-222222222222", "director_identity_version": 1,
+		"decision": "resolved", "rationale": "The primary record resolves the contradiction.", "conditions": []any{}, "residual_uncertainty": "",
+		"position_assessments": []any{map[string]any{
+			"position_id": "44444444-4444-4444-8444-444444444444", "disposition": "retained", "rationale": "Supported by the primary record.",
+			"evidence_refs": []any{map[string]any{"kind": "source", "key": "55555555-5555-4555-8555-555555555555"}},
+		}},
+	}}
+	fixture["status_updates"] = []any{map[string]any{"target": map[string]any{"kind": "dispute", "key": "dispute-1"}, "before": "irreducible", "after": "resolved", "reason": "Evidence-bound adjudication.", "evidence_refs": []any{map[string]any{"kind": "source", "key": "55555555-5555-4555-8555-555555555555"}}}}
+	raw, _ := json.Marshal(fixture)
+	result, _, err := DecodeAndValidateV6DeliberationResult(raw)
+	if err != nil || result.Adjudication == nil {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	assessment := dispute["positions"].([]any)[0].(map[string]any)["position_assessments"].([]any)[0].(map[string]any)
+	assessment["evidence_refs"] = []any{}
+	raw, _ = json.Marshal(fixture)
+	if _, _, err = DecodeAndValidateV6DeliberationResult(raw); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("authority-only adjudication err=%v", err)
+	}
+}

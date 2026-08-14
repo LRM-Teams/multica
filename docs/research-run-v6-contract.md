@@ -64,7 +64,11 @@ transactions enforce the following referential and state rules:
    idempotency identity. Stale inputs recursively stale all ancestors.
 7. A Dispute has at least two evidence-linked Positions. Deliberation changes
    Position/evidence/scope; prose agreement alone cannot resolve it. Director
-   adjudication remains constrained by the active Evidence Standard.
+   adjudication remains constrained by the active Evidence Standard. A
+   Director adjudication Result is principal-fenced to the identity version
+   frozen at dispatch, assesses every canonical Position exactly once, and
+   cites a Claim or Source Snapshot from that Attempt's sealed context for
+   every assessment. Director authority alone is never resolution evidence.
 8. Divergence runs in an isolated context and has bounded probe budget.
    Unverified perspectives create only Question, Hypothesis, Branch, or probe
    Task proposals; they cannot create supported Claims or report facts.

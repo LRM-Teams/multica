@@ -25,10 +25,17 @@ func (runner *WorkspaceRunner) messageRuntimeID(agentID string) string {
 }
 
 func (runner *WorkspaceRunner) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {
-	if runner == nil || runner.inboxes == nil {
+	if runner == nil || runner.inboxes == nil || runner.processes == nil {
 		return false, errors.New("Workspace Runner Inbox registry is unavailable")
 	}
-	created, err := runner.inboxes.Ensure(agentID)
+	launch, ok := runner.processes.Snapshot(agentID)
+	if !ok || !launch.Managed || launch.RuntimeID == "" {
+		return false, fmt.Errorf("no accepted agent:start for Agent %q", agentID)
+	}
+	if expectedRuntimeID != "" && launch.RuntimeID != expectedRuntimeID {
+		return false, fmt.Errorf("Workspace Runner Inbox Runtime mismatch for Agent %q", agentID)
+	}
+	created, err := runner.inboxes.AcceptStart(agentID, launch.RuntimeID)
 	if err != nil {
 		return false, err
 	}
@@ -43,6 +50,31 @@ func (runner *WorkspaceRunner) ensureMessageInbox(agentID, expectedRuntimeID str
 func (runner *WorkspaceRunner) hasMessageInbox(agentID string) bool {
 	_, _, ok := runner.messageCoordinator(agentID)
 	return ok
+}
+
+func (runner *WorkspaceRunner) hasAcceptedStart(agentID, runtimeID string) bool {
+	if runner == nil || runner.processes == nil {
+		return false
+	}
+	launch, ok := runner.processes.Snapshot(agentID)
+	return ok && launch.Managed && launch.RuntimeID == runtimeID
+}
+
+func (runner *WorkspaceRunner) ensureMessageInboxForDelivery(agentID string) error {
+	if runner == nil || runner.inboxes == nil || runner.processes == nil {
+		return errors.New("Workspace Runner Message lifecycle is unavailable")
+	}
+	if runner.hasMessageInbox(agentID) {
+		return nil
+	}
+	launch, ok := runner.processes.Snapshot(agentID)
+	if !ok || !launch.Managed || launch.RuntimeID == "" {
+		return fmt.Errorf("no accepted agent:start for %q", agentID)
+	}
+	if _, err := runner.inboxes.AcceptStart(agentID, launch.RuntimeID); err != nil {
+		return fmt.Errorf("repair Agent Message coordinator: %w", err)
+	}
+	return nil
 }
 
 func (runner *WorkspaceRunner) messageContextBoundary(agentID, target string) (int64, bool, error) {
@@ -452,10 +484,10 @@ func (runner *WorkspaceRunner) sendAgentFrame(eventType string, payload any) boo
 }
 
 func (runner *WorkspaceRunner) hasRuntime(runtimeID string) bool {
-	if runner == nil || runner.runtimeSet == nil {
+	if runner == nil || runner.runtimeIDs == nil {
 		return false
 	}
-	for _, current := range runner.runtimeSet().RuntimeIDs {
+	for _, current := range runner.runtimeIDs() {
 		if current == strings.TrimSpace(runtimeID) {
 			return true
 		}

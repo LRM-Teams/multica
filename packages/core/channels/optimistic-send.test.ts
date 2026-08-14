@@ -27,6 +27,44 @@ function seedPage(qc: QueryClient, channelId: string, messages: ChannelMessage[]
 }
 
 describe("optimistic send cache (LRM-222)", () => {
+  it("renders a selected quote immediately from the source snapshot", () => {
+    const source = {
+      id: "source-1",
+      channel_id: "c1",
+      workspace_id: "w1",
+      seq: 1,
+      type: "user",
+      author_id: "u2",
+      author_name: "Bob",
+      content: "the complete source message",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: null,
+      created_at: "2026-07-09T00:00:00Z",
+    } satisfies ChannelMessage;
+    const optimistic = buildOptimisticChannelMessage({
+      channelId: "c1",
+      workspaceId: "w1",
+      clientMessageId: "client-quote-1",
+      content: "reply",
+      authorId: "u1",
+      authorName: "Alice",
+      quote: { messageId: "source-1", selectedText: "source excerpt" },
+      siblings: [source],
+    });
+
+    expect(optimistic.quote_message_id).toBe("source-1");
+    expect(optimistic.quote).toMatchObject({
+      messageId: "source-1",
+      status: "active",
+      snapshot: {
+        authorName: "Bob",
+        content: "the complete source message",
+        selectedText: "source excerpt",
+      },
+    });
+  });
+
   it("hydrates a voice recording attachment in the optimistic bubble", () => {
     const optimistic = buildOptimisticChannelMessage({
       channelId: "c1",

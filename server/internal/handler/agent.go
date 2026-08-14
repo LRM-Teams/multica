@@ -353,15 +353,7 @@ type AgentTaskResponse struct {
 	CreatedAt      string             `json:"created_at"`
 	PriorSessionID string             `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
 	PriorWorkDir   string             `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
-	// RuntimeStateGeneration is the D6-1a wire contract from agent_runtime_state:
-	// inbox claim ensures the row and fills generation only. FreshSessionNoticeReason
-	// stays empty on the claim path until D6-2 completes canonical archive/read-switch
-	// (shipping cutover/reset notice while PriorSessionID still resumes legacy chat/issue
-	// sessions would inject a false "brand new / history archived" brief). omitempty
-	// keeps older daemons happy.
-	RuntimeStateGeneration   int64  `json:"runtime_state_generation,omitempty"`
-	FreshSessionNoticeReason string `json:"fresh_session_notice_reason,omitempty"`
-	WorkDir                  string `json:"work_dir,omitempty"` // local working directory pinned for this task; populated once the daemon reports it
+	WorkDir        string             `json:"work_dir,omitempty"`         // local working directory pinned for this task; populated once the daemon reports it
 	// RelativeWorkDir is a privacy-safe display form of WorkDir intended for
 	// the UI. For current tasks it strips the daemon's workspace root so the
 	// user sees `<workspaceUUID>/agents/<agentUUID>`; for legacy/external paths we strip
@@ -1748,9 +1740,8 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, updated, map[string]any{"agent": broadcastAgentResponse(resp)})
 	if existing.RuntimeID.Valid && updated.RuntimeID.Valid && existing.RuntimeID != updated.RuntimeID {
-		if h.ReminderNotifier != nil {
-			h.projectReminderOwnerStop(r.Context(), uuidToString(updated.ID), uuidToString(existing.RuntimeID))
-			h.projectReminderOwnerStart(r.Context(), uuidToString(updated.ID), uuidToString(updated.RuntimeID))
+		if err := h.reconcileAgentReminderRuntime(r.Context(), updated.ID, existing.RuntimeID, updated.RuntimeID); err != nil {
+			slog.Warn("reconcile reminders after Agent Runtime move", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
 		}
 		// agent_inbox_event.runtime_id is snapshotted at enqueue and is not
 		// rewritten by UpdateAgent itself. Move still-claimable events onto the
@@ -1958,7 +1949,9 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	if archived.RuntimeID.Valid {
-		h.projectReminderOwnerStop(r.Context(), uuidToString(archived.ID), uuidToString(archived.RuntimeID))
+		if err := h.reconcileAgentReminderRuntime(r.Context(), archived.ID, archived.RuntimeID, pgtype.UUID{}); err != nil {
+			slog.Warn("cancel reminders after Agent archive", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+		}
 	}
 	redactAgentResponseForActor(&resp, actorType)
 	result = "success"
@@ -2008,7 +2001,9 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	if restored.RuntimeID.Valid {
-		h.projectReminderOwnerStart(r.Context(), uuidToString(restored.ID), uuidToString(restored.RuntimeID))
+		if err := h.reconcileAgentReminderRuntime(r.Context(), restored.ID, pgtype.UUID{}, restored.RuntimeID); err != nil {
+			slog.Warn("restore reminders after Agent restore", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+		}
 	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)

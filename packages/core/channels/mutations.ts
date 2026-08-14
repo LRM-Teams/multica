@@ -20,7 +20,13 @@ import {
 import { dmKeys } from "../dm/queries";
 import { invalidateConversations } from "../conversations";
 import type { DMItem } from "../dm/types";
-import type { Channel, ChannelNotifyLevel, ChannelThreadMessagesPage, MessagePart } from "../types";
+import type {
+  Channel,
+  ChannelMessageQuoteInput,
+  ChannelNotifyLevel,
+  ChannelThreadMessagesPage,
+  MessagePart,
+} from "../types";
 import { userActivityKeys } from "../user-activity/queries";
 import {
   optimisticallyMarkActivityThreadRead,
@@ -167,7 +173,7 @@ export function useSendChannelMessage() {
       replyToMessageId,
       parts,
       clientMessageId,
-      quoteMessageId,
+      quote,
     }: {
       channelId: string;
       content: string;
@@ -175,14 +181,14 @@ export function useSendChannelMessage() {
       /** Structured parts; attachment bind uses `{ type: "attachment", attachment_id }`. */
       parts?: MessagePart[];
       clientMessageId?: string | null;
-      quoteMessageId?: string | null;
+      quote?: ChannelMessageQuoteInput | null;
     }) =>
       api.sendChannelMessage(channelId, {
         content,
         parts,
         replyToMessageId,
         clientMessageId,
-        quoteMessageId,
+        quote,
       }),
     onMutate: (vars) => {
       if (!vars.clientMessageId) return;
@@ -197,7 +203,7 @@ export function useSendChannelMessage() {
         parts: vars.parts,
         authorId: author.authorId,
         authorName: author.authorName,
-        quoteMessageId: vars.quoteMessageId,
+        quote: vars.quote,
         siblings,
         status: "pending",
       });
@@ -275,7 +281,7 @@ export function useSendChannelThreadMessage() {
       replyToMessageId,
       parts,
       clientMessageId,
-      quoteMessageId,
+      quote,
     }: {
       channelId: string;
       messageId: string;
@@ -284,14 +290,14 @@ export function useSendChannelThreadMessage() {
       /** Structured parts; attachment bind uses `{ type: "attachment", attachment_id }`. */
       parts?: MessagePart[];
       clientMessageId?: string | null;
-      quoteMessageId?: string | null;
+      quote?: ChannelMessageQuoteInput | null;
     }) =>
       api.sendChannelThreadMessage(channelId, messageId, {
         content,
         parts,
         replyToMessageId,
         clientMessageId,
-        quoteMessageId,
+        quote,
       }),
     onMutate: (vars) => {
       if (!vars.clientMessageId) return;
@@ -306,7 +312,7 @@ export function useSendChannelThreadMessage() {
         parts: vars.parts,
         authorId: author.authorId,
         authorName: author.authorName,
-        quoteMessageId: vars.quoteMessageId,
+        quote: vars.quote,
         threadRootMessageId: vars.messageId,
         siblings,
         status: "pending",

@@ -106,4 +106,3 @@ func TestCreateIssuePositionBelowExplicitMinimum(t *testing.T) {
 			newIssue.Position, simulatedMinPos)
 	}
 }
-

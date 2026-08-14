@@ -1,0 +1,30 @@
+{
+  "contract_kind": "work_manifest",
+  "schema_version": 6,
+  "manifest_id": "00000000-0000-4000-8000-000000000211",
+  "manifest_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "work_item_id": "00000000-0000-4000-8000-000000000212",
+  "attempt_id": "00000000-0000-4000-8000-000000000213",
+  "assigned_agent_id": "00000000-0000-4000-8000-000000000009",
+  "goal": {
+    "goal_version": 2,
+    "goal": "判断目标技术是否适合生产环境，并给出有证据的采用建议。",
+    "scope": { "market": "CN", "time_horizon": "2026" },
+    "audience": "技术负责人",
+    "freshness": "优先使用最近十二个月材料",
+    "language": "zh-CN",
+    "source_policy": { "prefer_primary": true }
+  },
+  "branch_refs": [],
+  "runtime_protocol_version": "research-runtime-v6.1",
+  "mission_prompt": "审阅本轮 Director Brief，决定下一组可审计动作；没有必要动作时提交 no-op。",
+  "expected_result_schema": "research.director_action_proposal.v1",
+  "task_specific_schema": {
+    "$ref": "research.director_action_proposal.v1"
+  },
+  "artifacts": [],
+  "through_state_version": 13,
+  "through_event_sequence": 47
+}

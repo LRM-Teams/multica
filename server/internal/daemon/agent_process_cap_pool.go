@@ -7,6 +7,63 @@ import (
 	"time"
 )
 
+func (p *canonicalAgentRuntimePool) setMachineProcessAdmission(workspaceID string, admission agentProcessAdmission) {
+	if p == nil {
+		return
+	}
+	p.machineWorkspaceID = strings.TrimSpace(workspaceID)
+	p.machineAdmission = admission
+}
+
+func (p *canonicalAgentRuntimePool) reserveMachineProcessCapacity(ctx context.Context, agentID, runtimeID string) (agentProcessCapacityGrant, error) {
+	if p == nil || p.machineAdmission == nil {
+		return agentProcessCapacityGrant{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	workspaceID := strings.TrimSpace(p.machineWorkspaceID)
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	if workspaceID == "" || agentID == "" || runtimeID == "" {
+		return agentProcessCapacityGrant{}, fmt.Errorf("machine process capacity identity is incomplete")
+	}
+	granted := make(chan agentProcessCapacityGrant, 1)
+	launchID := "provider:" + workspaceID + ":" + agentID + ":" + runtimeID
+	grant, admitted := p.machineAdmission.Acquire(agentProcessCapacityRequest{
+		WorkspaceID: workspaceID,
+		AgentID:     agentID,
+		RuntimeID:   runtimeID,
+		LaunchID:    launchID,
+		Waiter: func(grant agentProcessCapacityGrant) {
+			select {
+			case granted <- grant:
+			default:
+			}
+		},
+	})
+	if admitted {
+		return grant, nil
+	}
+	select {
+	case <-ctx.Done():
+		p.machineAdmission.Cancel(grant)
+		return agentProcessCapacityGrant{}, fmt.Errorf("machine process capacity wait: %w", ctx.Err())
+	case grant = <-granted:
+		if !p.machineAdmission.Active(grant) {
+			return agentProcessCapacityGrant{}, fmt.Errorf("machine process capacity grant is no longer active")
+		}
+		return grant, nil
+	}
+}
+
+func (p *canonicalAgentRuntimePool) releaseMachineProcessCapacity(grant agentProcessCapacityGrant) {
+	if p == nil || p.machineAdmission == nil || grant.LaunchID == "" {
+		return
+	}
+	go p.machineAdmission.Release(grant)
+}
+
 // reserveAgentProcessCapacity implements #35 for resident acquires:
 //  1. Close idle other-runtime slots for this agent (rebind → one live process).
 //  2. If this agent already has a live backend (or a pending create), no new

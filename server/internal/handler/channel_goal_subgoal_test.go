@@ -268,7 +268,9 @@ func TestChannelGoalSubgoalSourceMessageIDSameChannel(t *testing.T) {
 	`, channel.ID, testWorkspaceID, testUserID).Scan(&messageID); err != nil {
 		t.Fatalf("seed channel message: %v", err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel_message WHERE id=$1`, messageID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_message WHERE id=$1`, messageID)
+	})
 
 	otherChannel := createGoalTestChannel(t)
 	var otherMessageID string
@@ -279,15 +281,17 @@ func TestChannelGoalSubgoalSourceMessageIDSameChannel(t *testing.T) {
 	`, otherChannel.ID, testWorkspaceID, testUserID).Scan(&otherMessageID); err != nil {
 		t.Fatalf("seed other-channel message: %v", err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel_message WHERE id=$1`, otherMessageID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_message WHERE id=$1`, otherMessageID)
+	})
 
 	// Cross-channel source rejected.
 	bad := httptest.NewRecorder()
 	testHandler.CreateChannelGoalSubgoal(bad, subgoalRequest(t, http.MethodPost, channel.ID, "", map[string]any{
-		"title":              "Bad source",
-		"purpose":            "Must reject foreign message",
-		"responsible":        map[string]any{"type": "agent", "id": agentID},
-		"source_message_id":  otherMessageID,
+		"title":             "Bad source",
+		"purpose":           "Must reject foreign message",
+		"responsible":       map[string]any{"type": "agent", "id": agentID},
+		"source_message_id": otherMessageID,
 	}))
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("cross-channel source = %d: %s", bad.Code, bad.Body.String())

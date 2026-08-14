@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
@@ -203,7 +202,7 @@ func TestReminderFireResultAcknowledgesOnlyItsAttemptedOccurrence(t *testing.T) 
 			ReminderID: first.ReminderID,
 			Version:    first.Version,
 		},
-		Projection: reminderProjection(3, "test", "upsert", third, false),
+		Upsert: &protocol.ReminderUpsertPayload{RuntimeID: "test", AgentID: "owner-a", Reminder: third},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -228,27 +227,21 @@ func TestReminderCacheSnapshotKeepsInFlightReceipt(t *testing.T) {
 		t.Fatal("expected a persisted due receipt before snapshot")
 	}
 
-	installed, err := cache.snapshot("runtime-a", "owner-a", 3, []protocol.ReminderTimerJob{job})
-	if err != nil {
+	if err := cache.replaceRuntime("runtime-a", []protocol.ReminderTimerJob{job}); err != nil {
 		t.Fatal(err)
 	}
-	_ = installed
 	receipts := cache.pendingFireReceipts()
 	if len(receipts) != 1 || receipts[0].Job.ReminderID != "r-due" || receipts[0].Job.Version != 3 {
-		t.Fatalf("snapshot dropped in-flight receipt: installed=%d receipts=%+v", installed, receipts)
+		t.Fatalf("snapshot dropped in-flight receipt: receipts=%+v", receipts)
 	}
 
-	otherInstalled, err := cache.snapshot("runtime-b", "owner-b", 1, []protocol.ReminderTimerJob{
-		reminderJob("cross", "owner-a", 9, now.Add(time.Hour)),
-	})
-	if err != nil {
+	if err := cache.replaceRuntime("runtime-b", []protocol.ReminderTimerJob{
+		reminderJob("other", "owner-b", 9, now.Add(time.Hour)),
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if otherInstalled != 0 {
-		t.Fatalf("cross-owner snapshot installed = %d, want 0", otherInstalled)
-	}
-	if _, ok := cache.get("cross"); ok {
-		t.Fatal("cross-owner snapshot armed a foreign job")
+	if _, ok := cache.get("other"); !ok {
+		t.Fatal("second Runtime snapshot did not install its job")
 	}
 	if got := cache.pendingFireReceipts(); len(got) != 1 || got[0].Job.OwnerAgentID != "owner-a" {
 		t.Fatalf("cross-owner snapshot disturbed owner-a receipt: %+v", got)
@@ -319,116 +312,6 @@ func TestReminderCacheAckConvergesOnlyAfterWakeAndServerAck(t *testing.T) {
 	}
 }
 
-func TestOnReminderTimerDoesNotSendFireAttemptUntilOwnerWakeEnqueued(t *testing.T) {
-	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
-	clock := &fakeReminderClock{now: now}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newLocalAgentAttachmentRegistry("", logger)
-	cache := newReminderCache(clock, logger, nil)
-	writes := make(chan []byte, 4)
-	var d *Daemon
-	cache.fireRetryDelay = time.Second
-	cache.onFireDelivery = func(job protocol.ReminderTimerJob) bool { return d.onReminderTimer(job) }
-	d = &Daemon{
-		logger: logger, agentAttachments: mgr, reminderCache: cache,
-		runtimeIndex: map[string]Runtime{"runtime-x": {ID: "runtime-x", WorkspaceID: "workspace-x"}},
-	}
-	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
-	cache.resume()
-
-	job := reminderJob("r1", "agent-x", 1, now.Add(-time.Minute))
-	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-x", "upsert", job, false)); err != nil || !applied {
-		t.Fatalf("apply due job = %v, %v", applied, err)
-	}
-	clock.fire(0)
-	select {
-	case frame := <-writes:
-		t.Fatalf("fire_attempt sent before owner wake: %s", frame)
-	default:
-	}
-	if got := cache.pendingFireReceipts(); len(got) != 1 || got[0].WakeEnqueued {
-		t.Fatalf("missing-owner receipts = %+v, want one unenqueued due fact", got)
-	}
-	if len(clock.timers) < 2 {
-		t.Fatal("missing owner did not schedule a wake retry")
-	}
-
-	if _, err := mgr.Apply("workspace-x", AgentAttachmentEvent{
-		Kind: AgentAttachmentEventAttach, AgentID: "agent-x", RuntimeID: "runtime-x",
-		AttachmentGeneration: 1, LifecycleSeq: 1,
-	}); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	clock.fire(len(clock.timers) - 1)
-	select {
-	case frame := <-writes:
-		var msg protocol.Message
-		if err := json.Unmarshal([]byte(frame), &msg); err != nil || msg.Type != protocol.EventReminderFireAttempt {
-			t.Fatalf("post-wake frame = %s, want fire_attempt", frame)
-		}
-	default:
-		t.Fatal("owner wake did not send fire_attempt")
-	}
-	if got := cache.pendingFireReceipts(); len(got) != 1 || !got[0].WakeEnqueued || got[0].ServerAcked {
-		t.Fatalf("post-wake receipts = %+v, want wake enqueued and server unacked", got)
-	}
-}
-
-func TestOnReminderTimerDoesNotMarkWakeWhenWebsocketUnavailable(t *testing.T) {
-	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	assertUnenqueuedRetry := func(t *testing.T, label string, setup func(*fakeReminderClock, *reminderCache, *Daemon)) {
-		t.Helper()
-		clock := &fakeReminderClock{now: now}
-		mgr := newLocalAgentAttachmentRegistry("", logger)
-		cache := newReminderCache(clock, logger, nil)
-		cache.fireRetryDelay = time.Second
-		var d *Daemon
-		cache.onFireDelivery = func(job protocol.ReminderTimerJob) bool { return d.onReminderTimer(job) }
-		d = &Daemon{
-			logger: logger, agentAttachments: mgr, reminderCache: cache,
-			runtimeIndex: map[string]Runtime{"runtime-x": {ID: "runtime-x", WorkspaceID: "workspace-x"}},
-		}
-		if _, err := mgr.Apply("workspace-x", AgentAttachmentEvent{
-			Kind: AgentAttachmentEventAttach, AgentID: "agent-x", RuntimeID: "runtime-x",
-			AttachmentGeneration: 1, LifecycleSeq: 1,
-		}); err != nil {
-			t.Fatalf("%s Apply: %v", label, err)
-		}
-		setup(clock, cache, d)
-		job := reminderJob("r-ws", "agent-x", 1, now.Add(-time.Minute))
-		if applied, err := cache.applyProjection(reminderProjection(1, "runtime-x", "upsert", job, false)); err != nil || !applied {
-			t.Fatalf("%s apply due job = %v, %v", label, applied, err)
-		}
-		clock.fire(len(clock.timers) - 1)
-		if got := cache.pendingFireReceipts(); len(got) != 1 || got[0].WakeEnqueued || got[0].Job.ReminderID != "r-ws" {
-			t.Fatalf("%s receipts = %+v, want one unenqueued due fact", label, got)
-		}
-		retryTimers := 0
-		for _, timer := range clock.timers {
-			if !timer.stopped {
-				retryTimers++
-			}
-		}
-		if retryTimers == 0 {
-			t.Fatalf("%s dropped the wake retry after a failed enqueue", label)
-		}
-	}
-
-	t.Run("nil writes", func(t *testing.T) {
-		assertUnenqueuedRetry(t, "nil writes", func(*fakeReminderClock, *reminderCache, *Daemon) {})
-	})
-	t.Run("closed writes", func(t *testing.T) {
-		assertUnenqueuedRetry(t, "closed writes", func(clock *fakeReminderClock, cache *reminderCache, d *Daemon) {
-			done := make(chan struct{})
-			close(done)
-			d.setReminderWS(make(chan []byte), done, func() error { return nil })
-			cache.resume()
-		})
-	})
-}
-
 func TestReminderDueTimerAcceptsLocalInboxWithoutServerTransport(t *testing.T) {
 	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
 	clock := &fakeReminderClock{now: now}
@@ -456,7 +339,7 @@ func TestReminderDueTimerAcceptsLocalInboxWithoutServerTransport(t *testing.T) {
 			},
 		},
 	}
-	if !d.reminderCache.upsert(job) {
+	if applied, err := d.reminderCache.upsertForRuntime("runtime-a", job); err != nil || !applied {
 		t.Fatal("upsert rejected")
 	}
 	clock.fire(0)
@@ -505,7 +388,7 @@ func TestReminderDueTimerRetainsLocalInboxItemUntilResidentIsIdle(t *testing.T) 
 			},
 		},
 	}
-	if !d.reminderCache.upsert(job) {
+	if applied, err := d.reminderCache.upsertForRuntime("runtime-a", job); err != nil || !applied {
 		t.Fatal("upsert rejected")
 	}
 	clock.fire(0)

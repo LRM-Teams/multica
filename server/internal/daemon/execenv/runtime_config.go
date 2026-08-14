@@ -255,11 +255,6 @@ func buildStartupKernelContent(provider string, ctx TaskContextForEnv) string {
 // therefore must never be cached in the process-scoped runtime file.
 func RenderTurnContext(ctx TaskContextForEnv) string {
 	var b strings.Builder
-	if reason := strings.TrimSpace(ctx.FreshSessionNoticeReason); reason != "" {
-		b.WriteString("## Current Provider Session\n\n")
-		b.WriteString("This provider session is new. Workspace files remain; retrieve older conclusions from the relevant Issue comments or Message history only when needed.\n\n")
-	}
-
 	if name := sanitizeNameForBriefMarkdown(ctx.InitiatorName); name != "" {
 		b.WriteString("## Current Task Initiator\n\n")
 		kind := "workspace member"
@@ -608,11 +603,6 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("# Multica Agent Runtime\n\n")
 	b.WriteString("You are a coding agent in the Multica platform. Use the `multica` CLI to interact with the platform.\n\n")
 
-	if strings.TrimSpace(ctx.FreshSessionNoticeReason) != "" {
-		b.WriteString("## Fresh Provider Session\n\n")
-		b.WriteString("Your provider session is brand new. Historical sessions are archived read-only; your workspace files remain. Retrieve historical conclusions from issue comments or chat history when needed.\n\n")
-	}
-
 	// Always emit agent identity so the agent knows who it is, even when
 	// dispatched via @mention on an issue assigned to a different agent.
 	if ctx.AgentName != "" || ctx.AgentID != "" {
@@ -726,7 +716,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("You are running in one durable workspace owned by this Agent ID. It is both your canonical root and your current working directory. Memory, skills, notes, project context, and other agent-owned state stay below it as ordinary relative paths; Multica does not expose a separate environment variable for every subdirectory. Live Multica agent instructions remain authoritative; managed memory supplements them and does not override task policy or user instructions.\n\n")
 		fmt.Fprintf(&b, "- Agent workspace (`MULTICA_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
 		b.WriteString("- Relative layout: `memory/`, `skills/`, `notes/`, `users/`, `projects/`, and `channels/`.\n")
-		b.WriteString("\nThis workspace is also where code checkouts live. Use it for memory, notes, artifacts, and git clones as ordinary relative paths; treat the layout as flexible rather than a fixed schema.\n")
+		b.WriteString("\nThis workspace is also where code checkouts live. Use it for agent-private memory, artifacts, and git clones as ordinary relative paths; treat the layout as flexible rather than a fixed schema. The `notes/` folder is agent-private collaboration files, not the workspace Notes UI — never write `notes/*.md` when the human asks to insert or save a note.\n")
 		b.WriteString("When working in a repository, first choose the specific project directory or worktree inside this workspace, then run git or package-manager commands there. Do not run git against the workspace root. Do not check out repositories outside this workspace.\n")
 		b.WriteString("\nWhen asked where your memory or skills live, resolve those relative paths below `MULTICA_AGENT_ROOT`. Do not use provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
 		b.WriteString("### Harness boundary (kernel vs shell)\n\n")
@@ -748,6 +738,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("### Core\n")
 	b.WriteString("- `multica issue get <id> --output json` — Get full issue details.\n")
 	b.WriteString("- `multica notes get <page-id> --output json` — Read one product note page authorized for this Worker task (not local memory notes).\n")
+	b.WriteString("- Product-note writes from chat: `multica message send --target <target> --note-write` — only when THIS send is the cleaned note body the human asked to keep. Omit `--note-page-id` unless they gave a UUID. Do not silent-edit `note_page`.\n")
 	b.WriteString("- `multica issue comment list <issue-id> [--thread <comment-id> [--tail N] | --recent N] [--before <ts> --before-id <uuid>] [--since <RFC3339>] --output json` — full timeline (cap 2000) or bounded threads; follow `Next reply cursor` / `Next thread cursor` for older pages.\n")
 	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--acceptance-criteria \"<criterion>\" ...] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--channel <group-id-or-name>] [--due-date <RFC3339>] [--source-channel <uuid> --source-message <uuid>] [--attachment-id <uuid>]` — `--project` and `--channel` are independent; use both source flags for discussion-derived work. From chat with images: always bind reference screenshots on the MAIN issue (`--attachment-id` and/or description embeds); never leave the main issue image-less with only an attachment-carrier sub-issue.\n")
 	b.WriteString("- `multica issue channel <issue-id> <group-id-or-name>` / `multica issue channel <issue-id> --clear` — explicit group association; never inferred; project stays independent.\n")
@@ -1040,14 +1031,14 @@ func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
 func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("### Memory Operating Guide (v0.12)\n\n")
 	b.WriteString("All memory and skills move with this agent workspace. Resolve every path below relative to `MULTICA_AGENT_ROOT`; do not depend on separate memory, project, channel, user, device, or skill directory environment variables.\n\n")
-	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily notes → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`.\n")
+	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily log → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`. This map is agent-private files only. Never treat `notes/*.md` as the workspace Notes UI. Workspace product notes (`note_page`) are proposed with `multica message send --note-write` (see Product notes).\n")
 	b.WriteString("- **Scope and privacy**: source is provenance, not scope. Keep user, project, channel, and agent-wide facts separate. Never inspect another member's directory, invent IDs from display names, copy secrets, or broaden a private fact into shared memory. Project paths exist only for an explicitly bound project.\n")
 	if isChatLikeContext(ctx) {
 		b.WriteString("- **Recall before action**: use only the member identity supplied by the current Message context when reading `users/<member-id>/`.\n")
 	}
 	b.WriteString("- **Durability bar**: record supported preferences, ownership, handoffs, corrections, reusable fixes, and standing process rules when they are likely to matter in a future run. Skip greetings, acknowledgements, jokes, raw transcripts, transient logs, guesses, and secrets. Prefer updating an existing entry over duplicating it.\n")
 	fmt.Fprintf(b, "- **Concision budget**: memory is an index, not a transcript. For one substantive closeout, append only 1-%d Daily bullets, each at most %d characters, covering outcome, durable decision, and next risk/action; omit steps, command output, file lists, and repeated context. Canonical memory uses one fact or rule per bullet, at most %d characters. Merge by topic instead of appending a near-duplicate. Keep detail in the source task/message and preserve only a short source reference when needed.\n", memorypolicy.DailyMaxNewEntriesPerTurn, memorypolicy.DailyEntryMaxRunes, memorypolicy.DurableEntryMaxRunes)
-	b.WriteString("- **Claiming memory**: say that you remembered something only after writing the intended durable path and then re-reading or stat-checking that exact path successfully. Daily-only notes do not count for a standing rule. Human and peer-agent durable instructions use the same bar.\n")
+	b.WriteString("- **Claiming memory**: say that you remembered something only after writing the intended durable path and then re-reading or stat-checking that exact path successfully. Daily-only notes do not count for a standing rule. Human and peer-agent durable instructions use the same bar. This bar is for agent-private memory files only. Proposing a product note with `--note-write` is not claiming memory and does not require a durable path.\n")
 	b.WriteString("- **Problem closeout**: after a meaningful bug, investigation, or outage, save reusable cause, fix, and commands under the bound project path; use agent-wide `memory/MEMORY.md` or `notes/` only when the lesson genuinely applies across projects.\n")
 	b.WriteString("- **Current state**: project blockers belong in `projects/<project-id>/STATE.md`; only cross-project state belongs in `memory/STATE.md`. Channel files contain non-secret purpose, language, routing, and collaboration defaults, not transcripts or private user facts.\n")
 	b.WriteString("- **Collective requests**: each addressed agent writes its own local memory. Create governed shared candidates under `sync_queue/` only when the speaker explicitly includes agents beyond the current recipients or identifies canonical workspace-wide knowledge.\n\n")
@@ -1076,6 +1067,7 @@ func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx Task
 	b.WriteString("Common capability index — use these forms directly when they fit; inspect help only when a needed flag is missing:\n")
 	b.WriteString("- Delivery boundary: only successful chat send/react commands deliver visible chat output. Text outside those commands, including final assistant output, is never delivered.\n")
 	b.WriteString("- Chat output: pipe a non-empty body to `multica message send --target <target>` with an explicit target (`#channel`, `#channel:<threadId>`, `dm:@handle`, or `dm:@handle:<threadId>`), for example `printf '%s\\n' 'short text' | multica message send --target <target>`. For multiline or shell-special text, use a quoted heredoc on stdin. Add repeatable `--attachment-id <id>` only after `multica attachment upload --path <file> --target <target>` completed for that exact target; attachment-only sends are rejected. Agents never submit message Parts, stickers, or voice markers: the Server constructs canonical Parts and preserves an applicable voice delivery modality. Do not synthesize, encode, upload, or attach an audio file as a voice reply. After a successful send, do not duplicate the reply in final output.\n")
+	b.WriteString("- Product notes: when the human asks to insert/write/save a note, do NOT Write or create a local file (`notes/*.md`, Daily, MEMORY.md). They will not see that in the Notes UI. Pipe ONLY the cleaned markdown to `printf '%s\\n' '<markdown>' | multica message send --target <target> --note-write` so a confirm button appears. Never claim the note was saved; they click the button. `multica notes get` is Worker-read only and does not block this. No page id is required. Add `--note-page-id` only if they gave a UUID or `/notes/<uuid>`. Never silent-edit `note_page`.\n")
 	b.WriteString("- Chat @mentions: run `multica workspace member list --output json` or `multica workspace info --agents --output json`, take the recipient's exact `name` field, and write it as `@handle` in the message body. To reference a channel, run `multica channel list --output json`, take the channel UUID, and write `[#ChannelName](mention://channel/<uuid>)`.\n")
 	b.WriteString("- Proactive human DM: pipe a non-empty body to `multica message send --target dm:@<human-handle>` (for example, `printf '%s\\n' 'hello' | multica message send --target dm:@<human-handle>`). The human handle is always explicit: there is no recipient fallback. Unknown or agent handles are rejected; to reach another agent, post in a group and @-mention it. Treat a DM as sent only after the command exits 0 and its JSON response contains `message.id`; a freshness `held` result exits non-zero and is not a sent message.\n")
 	b.WriteString("- Reactions: use a reaction for a pure acknowledgement when it fits; Agent message sends do not accept sticker parts.\n")

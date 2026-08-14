@@ -16,28 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
-
-type recordingReminderNotifier struct {
-	starts      []protocol.WorkspaceRunnerAgentAttachPayload
-	stops       []protocol.WorkspaceRunnerAgentDetachPayload
-	projections []protocol.ReminderProjectionEvent
-	order       []string
-}
-
-func (n *recordingReminderNotifier) NotifyReminderProjection(_ string, payload protocol.ReminderProjectionEvent) {
-	n.projections = append(n.projections, payload)
-	n.order = append(n.order, "projection")
-}
-func (n *recordingReminderNotifier) NotifyAgentAttachmentAdded(_, _ string, payload protocol.WorkspaceRunnerAgentAttachPayload) {
-	n.starts = append(n.starts, payload)
-	n.order = append(n.order, "start")
-}
-func (n *recordingReminderNotifier) NotifyAgentAttachmentRemoved(_, _ string, payload protocol.WorkspaceRunnerAgentDetachPayload) {
-	n.stops = append(n.stops, payload)
-	n.order = append(n.order, "stop")
-}
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:
 // every active task (queued/dispatched/running) PLUS each agent's most recent
@@ -1817,11 +1796,6 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	previousNotifier := testHandler.ReminderNotifier
-	notifier := &recordingReminderNotifier{}
-	testHandler.ReminderNotifier = notifier
-	t.Cleanup(func() { testHandler.ReminderNotifier = previousNotifier })
-
 	agentID := createHandlerTestAgent(t, "archive-preserves-skills-agent", nil)
 	testDaemonID := uuid.NewString()
 	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET daemon_id = $2 WHERE id = (SELECT runtime_id FROM agent WHERE id = $1)`, agentID, testDaemonID); err != nil {
@@ -1866,9 +1840,6 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 	}
 	if len(restored.Skills) != 1 || restored.Skills[0].ID != skillID {
 		t.Errorf("RestoreAgent: expected 1 skill %s, got %+v", skillID, restored.Skills)
-	}
-	if len(notifier.starts) != 1 || notifier.starts[0].AgentID != agentID || notifier.starts[0].LifecycleSeq < 1 || notifier.starts[0].AttachmentGeneration < 1 {
-		t.Fatalf("RestoreAgent owner start projection = %+v", notifier.starts)
 	}
 }
 

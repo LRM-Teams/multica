@@ -561,6 +561,30 @@ func TestNormalizeNoteBriefPart(t *testing.T) {
 	}
 }
 
+func TestNormalizeNoteWritePart(t *testing.T) {
+	content, parts, err := Normalize("proposed note body", []protocol.MessagePart{{
+		Type: protocol.MessagePartTypeNoteWrite,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "proposed note body" || len(parts) != 1 || parts[0].Type != protocol.MessagePartTypeNoteWrite || parts[0].RefID != "" {
+		t.Fatalf("create proposal = content %q parts %+v", content, parts)
+	}
+
+	_, targeted, err := Normalize("proposed note body", []protocol.MessagePart{{
+		Type:  protocol.MessagePartTypeNoteWrite,
+		RefID: " 11111111-1111-1111-1111-111111111111 ",
+		Label: " Weekly ",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targeted) != 1 || targeted[0].RefID != "11111111-1111-1111-1111-111111111111" || targeted[0].Label != "Weekly" || targeted[0].Text != "" {
+		t.Fatalf("targeted proposal = %+v", targeted[0])
+	}
+}
+
 func TestUnwrapStructuredMessageSendLeavesNoteAIEditJSONAlone(t *testing.T) {
 	for _, raw := range []string{
 		`{"action":"insert","markdown":"hi","target":null,"title":null,"rationale":"x"}`,

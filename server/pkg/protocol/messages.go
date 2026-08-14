@@ -20,6 +20,11 @@ const (
 	// Messages timeline (e.g. Note Worker 「按这篇做」). RefID is the note page
 	// id, Label is the title, Text is the note body at dispatch time.
 	MessagePartTypeNoteBrief = "note_brief"
+	// MessagePartTypeNoteWrite is a human-confirm product-note proposal on an
+	// agent Message. The Server constructs it from `message send --note-write`.
+	// RefID is optional: empty means create a new page; set it to target an
+	// existing note_page. Label may carry a suggested title.
+	MessagePartTypeNoteWrite = "note_write"
 	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
 	// L1). A pure confirmation carries no new information, no @-directive and no
 	// action, and must not wake any agent.
@@ -546,10 +551,6 @@ const (
 	// Reminder system input. Unlike canonical Message delivery, this transport
 	// is best-effort and creates no queue, receipt, or reconnect replay.
 	DaemonCapabilityReminderTransientInput = "reminder_transient_owner_input_v1"
-	// DaemonCapabilityAgentLifecycleActions is the retired heartbeat lifecycle
-	// transport capability. New daemons deliberately do not advertise it so a
-	// mixed-version server/daemon pair fails closed during rollout.
-	DaemonCapabilityAgentLifecycleActions = "agent_lifecycle_actions_v1"
 	// DaemonCapabilityWorkspaceRunnerAgentReset gates Raft's discrete
 	// agent:reset-workspace command plus Multica's terminal reset receipt.
 	DaemonCapabilityWorkspaceRunnerAgentReset = "workspace_runner_agent_reset_workspace_v1"
@@ -557,14 +558,9 @@ const (
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.
 	DaemonCapabilityMachineUpgrade = "machine_upgrade_v1"
-	// DaemonCapabilityAgentSessionReset gates the server-backed clearing of
-	// canonical and legacy provider resume pointers. Older daemons advertised
-	// lifecycle actions but only implemented plain process restart.
-	DaemonCapabilityAgentSessionReset = "agent_session_reset_v1"
-	// DaemonCapabilityWorkspaceRunnerAttachment selects the Runner Attachment
-	// command/replay contract. It is intentionally additive: all previously
-	// advertised daemon capabilities remain independently meaningful.
-	DaemonCapabilityWorkspaceRunnerAttachment = "workspace_runner_attachment_v1"
+	// DaemonCapabilityWorkspaceRunnerAgentProcess selects the Raft-shaped
+	// agent:start / agent:stop process-control boundary.
+	DaemonCapabilityWorkspaceRunnerAgentProcess = "workspace_runner_agent_process_v1"
 	// DaemonCapabilityWorkspaceRunnerControlPlane selects the current ready
 	// Workspace Runner as the sole carrier for heartbeat actions belonging to
 	// that Workspace. Runtime-multiplexed WS and HTTP heartbeats remain legacy
@@ -603,89 +599,33 @@ type ReminderLocalInputOccurrence struct {
 }
 
 type ReminderUpsertPayload struct {
-	AgentID  string           `json:"agent_id"`
-	Reminder ReminderTimerJob `json:"reminder"`
+	RuntimeID string           `json:"runtime_id"`
+	AgentID   string           `json:"agent_id"`
+	Reminder  ReminderTimerJob `json:"reminder"`
 }
 
 type ReminderCancelPayload struct {
+	RuntimeID  string `json:"runtime_id"`
 	AgentID    string `json:"agent_id"`
 	ReminderID string `json:"reminder_id"`
 	Version    int64  `json:"version"`
 }
 
 type ReminderSnapshotRequestPayload struct {
-	AgentID             string `json:"agent_id"`
-	RuntimeID           string `json:"runtime_id"`
-	PlacementGeneration int64  `json:"placement_generation"`
+	RuntimeID string `json:"runtime_id"`
 }
 
 type ReminderSnapshotPayload struct {
-	AgentID             string             `json:"agent_id"`
-	RuntimeID           string             `json:"runtime_id"`
-	PlacementGeneration int64              `json:"placement_generation"`
-	ProjectionWatermark int64              `json:"projection_watermark"`
-	Reminders           []ReminderTimerJob `json:"reminders"`
+	RuntimeID string             `json:"runtime_id"`
+	Reminders []ReminderTimerJob `json:"reminders"`
 }
 
 type ReminderFireAttemptPayload struct {
-	AgentID             string `json:"agent_id"`
-	RuntimeID           string `json:"runtime_id"`
-	PlacementGeneration int64  `json:"placement_generation"`
-	ReminderID          string `json:"reminder_id"`
-	Version             int64  `json:"version"`
-	FiredAtClient       string `json:"fired_at_client"`
-}
-
-// ReminderProjectionEvent is the sole ordered timer mutation envelope. Live
-// hints and durable replay use the same Seq; daemon ACKs only after applying
-// and persisting the version fence for this event.
-type ReminderProjectionEvent struct {
-	Seq                 int64            `json:"seq"`
-	PrevSeq             int64            `json:"prev_seq"`
-	RuntimeID           string           `json:"runtime_id"`
-	AgentID             string           `json:"agent_id"`
-	PlacementGeneration int64            `json:"placement_generation"`
-	EventType           string           `json:"event_type"`
-	ReminderID          string           `json:"reminder_id"`
-	Version             int64            `json:"version"`
-	FireAt              string           `json:"fire_at,omitempty"`
-	Terminal            bool             `json:"terminal"`
-	Reminder            ReminderTimerJob `json:"reminder"`
-}
-
-type ReminderProjectionRequestPayload struct {
-	RuntimeCursors       map[string]int64                      `json:"runtime_cursors"`
-	RuntimeResidencies   map[string][]ReminderRuntimeResidency `json:"runtime_residencies,omitempty"`
-	RuntimeResetRequired map[string]bool                       `json:"runtime_reset_required,omitempty"`
-}
-
-type ReminderProjectionReplayEndPayload struct {
-	RuntimeCursors map[string]int64                `json:"runtime_cursors"`
-	RuntimeResets  map[string]ReminderRuntimeReset `json:"runtime_resets,omitempty"`
-}
-
-// ReminderRuntimeResidency is daemon-local ownership submitted only when a
-// projection cursor must be reset after server-side ACK/GC. The server
-// validates this set; it never inventories additional owners into the daemon.
-type ReminderRuntimeResidency struct {
-	AgentID             string `json:"agent_id"`
-	PlacementGeneration int64  `json:"placement_generation"`
-}
-
-type ReminderRuntimeResetOwner struct {
-	AgentID             string             `json:"agent_id"`
-	PlacementGeneration int64              `json:"placement_generation"`
-	Terminal            bool               `json:"terminal"`
-	Reminders           []ReminderTimerJob `json:"reminders,omitempty"`
-}
-
-type ReminderRuntimeReset struct {
-	ProjectionWatermark int64                       `json:"projection_watermark"`
-	Owners              []ReminderRuntimeResetOwner `json:"owners"`
-}
-
-type ReminderProjectionAckPayload struct {
-	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+	AgentID       string `json:"agent_id"`
+	RuntimeID     string `json:"runtime_id"`
+	ReminderID    string `json:"reminder_id"`
+	Version       int64  `json:"version"`
+	FiredAtClient string `json:"fired_at_client"`
 }
 
 type ReminderFireAckPayload struct {
@@ -695,8 +635,9 @@ type ReminderFireAckPayload struct {
 }
 
 type ReminderFireResultPayload struct {
-	Ack        ReminderFireAckPayload  `json:"ack"`
-	Projection ReminderProjectionEvent `json:"projection"`
+	Ack    ReminderFireAckPayload `json:"ack"`
+	Upsert *ReminderUpsertPayload `json:"upsert,omitempty"`
+	Cancel *ReminderCancelPayload `json:"cancel,omitempty"`
 }
 
 // AgentTransientDeliverPayload is the non-durable branch of the Workspace
@@ -715,15 +656,14 @@ const AgentTransientDeliverKindReminder = "reminder"
 // the current owner placement. It is deliberately not a Message projection and
 // carries no delivery identity or acknowledgement contract.
 type ReminderOwnerInputPayload struct {
-	WorkspaceID         string                       `json:"workspace_id"`
-	AgentID             string                       `json:"agent_id"`
-	RuntimeID           string                       `json:"runtime_id"`
-	PlacementGeneration int64                        `json:"placement_generation"`
-	ReminderID          string                       `json:"reminder_id"`
-	Version             int64                        `json:"version"`
-	Title               string                       `json:"title"`
-	Anchor              ReminderOwnerInputAnchor     `json:"anchor"`
-	Occurrence          ReminderOwnerInputOccurrence `json:"occurrence"`
+	WorkspaceID string                       `json:"workspace_id"`
+	AgentID     string                       `json:"agent_id"`
+	RuntimeID   string                       `json:"runtime_id"`
+	ReminderID  string                       `json:"reminder_id"`
+	Version     int64                        `json:"version"`
+	Title       string                       `json:"title"`
+	Anchor      ReminderOwnerInputAnchor     `json:"anchor"`
+	Occurrence  ReminderOwnerInputOccurrence `json:"occurrence"`
 }
 
 // ReminderOwnerInputAnchor is the already-authorized return surface and a
@@ -748,51 +688,6 @@ type ReminderOwnerInputOccurrence struct {
 	DueAt        string `json:"due_at"`
 	Cadence      string `json:"cadence,omitempty"`
 	Timezone     string `json:"timezone,omitempty"`
-}
-
-// DaemonAgentStopPayload is the legacy wake-socket detach shape retained for
-// historical migration fixtures. Production Attachment ownership is carried
-// by the Workspace Runner attach/detach contract.
-type DaemonAgentStopPayload struct {
-	AgentID             string `json:"agent_id"`
-	RuntimeID           string `json:"runtime_id"`
-	PlacementGeneration int64  `json:"placement_generation"`
-	LifecycleSeq        int64  `json:"lifecycle_seq,omitempty"`
-	Replay              bool   `json:"replay,omitempty"`
-}
-
-// DaemonAgentStartPayload is the legacy wake-socket attach/move shape. The
-// daemon maps placement_generation to AttachmentGeneration and routes live and
-// replay frames through the AgentAttachmentRegistry before requesting the
-// Agent's Reminder snapshot.
-type DaemonAgentStartPayload struct {
-	AgentID             string `json:"agent_id"`
-	RuntimeID           string `json:"runtime_id"`
-	WorkspaceID         string `json:"workspace_id"`
-	PlacementGeneration int64  `json:"placement_generation"`
-	LifecycleSeq        int64  `json:"lifecycle_seq,omitempty"`
-	Replay              bool   `json:"replay,omitempty"`
-}
-
-type DaemonAgentLifecycleRequestPayload struct {
-	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
-}
-
-type DaemonAgentLifecycleReplayEndPayload struct {
-	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
-}
-
-type DaemonAgentLifecycleAckPayload struct {
-	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
-}
-
-type DaemonAgentLifecycleEvent struct {
-	EventType           string `json:"event_type"`
-	AgentID             string `json:"agent_id"`
-	RuntimeID           string `json:"runtime_id"`
-	WorkspaceID         string `json:"workspace_id"`
-	LifecycleSeq        int64  `json:"lifecycle_seq"`
-	PlacementGeneration int64  `json:"placement_generation"`
 }
 
 const (

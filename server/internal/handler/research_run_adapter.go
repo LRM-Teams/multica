@@ -81,7 +81,7 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		return researchrun.DispatchResult{}, fmt.Errorf("ensure research agent model: %w", err)
 	}
 	if request.Target != (researchrun.ExecutionTarget{}) {
-		currentTarget, targetErr := researchExecutionTarget(ctx, h, agent, runtime)
+		currentTarget, targetErr := researchExecutionTarget(agent, runtime)
 		if targetErr != nil {
 			return researchrun.DispatchResult{}, targetErr
 		}
@@ -227,16 +227,7 @@ func classifyResearchDispatchError(err error) error {
 	return err
 }
 
-func researchExecutionTarget(ctx context.Context, h *Handler, agent db.Agent, runtime db.AgentRuntime) (researchrun.ExecutionTarget, error) {
-	providerFingerprint := ""
-	err := h.DB.QueryRow(ctx, `
-		SELECT COALESCE(provider_config_fingerprint, '')
-		FROM agent_runtime_state
-		WHERE agent_id = $1 AND runtime_id = $2
-	`, agent.ID, runtime.ID).Scan(&providerFingerprint)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return researchrun.ExecutionTarget{}, fmt.Errorf("load research target configuration: %w", err)
-	}
+func researchExecutionTarget(agent db.Agent, runtime db.AgentRuntime) (researchrun.ExecutionTarget, error) {
 	target := researchrun.ExecutionTarget{
 		Adapter:   "agent_inbox",
 		AgentID:   uuidToString(agent.ID),
@@ -246,8 +237,8 @@ func researchExecutionTarget(ctx context.Context, h *Handler, agent db.Agent, ru
 	}
 	return researchrun.FingerprintExecutionTarget(target, researchrun.ExecutionTargetConfigIdentity{
 		RuntimeMode: agent.RuntimeMode, RuntimePinnedVersion: runtime.PinnedVersion.String,
-		ProviderStateFingerprint: providerFingerprint, RuntimeConfig: string(agent.RuntimeConfig),
-		CustomEnv: string(agent.CustomEnv), CustomArgs: string(agent.CustomArgs),
+		RuntimeConfig: string(agent.RuntimeConfig),
+		CustomEnv:     string(agent.CustomEnv), CustomArgs: string(agent.CustomArgs),
 		MCPConfig: string(agent.McpConfig), ThinkingLevel: agent.ThinkingLevel.String,
 	}), nil
 }

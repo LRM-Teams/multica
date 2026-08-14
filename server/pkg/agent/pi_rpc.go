@@ -992,9 +992,11 @@ func waitPiRPCResponse(ctx context.Context, turn *piRPCTurn, id string) (piRPCRe
 			// readEvents delivers lines serially. If the matching ACK and a
 			// terminal event were both buffered, the ACK was observed first on
 			// stdout even though select may choose done. Preserve that ordering.
+			// Put agent_end back so executeTurn's later <-turn.done still sees it.
 			select {
 			case response := <-turn.response:
 				if response.ID == id {
+					trySendPiRPCCompletion(turn.done, completion)
 					return response, nil, true
 				}
 			default:

@@ -20,7 +20,7 @@ const goal: ChannelGoal = {
   progress_summary: "Implementation started",
   current_step: "Build the graph",
   blocker: "",
-  evidence_refs: [],
+  evidence_refs: ["https://github.com/LRM-Teams/minecraft/pull/13"],
   completed_criteria: [],
   created_by_type: "user",
   created_by_id: "user-1",
@@ -91,6 +91,7 @@ const graph: WorkGraphDetail = {
 
 const state = vi.hoisted(() => ({
   graphQuery: vi.fn(async () => graph),
+  bootstrapMutate: vi.fn(),
 }));
 
 vi.mock("@multica/core/channels", async (importOriginal) => ({
@@ -117,6 +118,10 @@ vi.mock("@multica/core/channels", async (importOriginal) => ({
   }),
   useCreateChannelGoal: () => ({ mutate: vi.fn(), isPending: false }),
   useUpdateChannelGoal: () => ({ mutate: vi.fn(), isPending: false }),
+  useBootstrapChannelGoalControlPlane: () => ({
+    mutate: state.bootstrapMutate,
+    isPending: false,
+  }),
 }));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
@@ -137,6 +142,7 @@ function renderCard() {
 describe("ChannelGoalCard work graph", () => {
   beforeEach(() => {
     state.graphQuery.mockClear();
+    state.bootstrapMutate.mockClear();
   });
 
   it("loads the graph only after expansion and renders live node states", async () => {
@@ -162,5 +168,29 @@ describe("ChannelGoalCard work graph", () => {
         "3 2",
       );
     });
+  });
+
+  it("lets a channel manager recover a legacy goal with an explicit repository confirmation", async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(await screen.findByRole("button", { name: "Expand goal" }));
+    await user.click(screen.getByRole("button", { name: "Set up delivery" }));
+
+    expect(screen.getByRole("dialog", { name: "Set up delivery control plane" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Project title")).toHaveValue(goal.title);
+    expect(screen.getByLabelText("GitHub repository URL")).toHaveValue(
+      "https://github.com/LRM-Teams/minecraft",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Create and bind" }));
+    expect(state.bootstrapMutate).toHaveBeenCalledWith(
+      {
+        project_title: goal.title,
+        repository_url: "https://github.com/LRM-Teams/minecraft",
+        default_branch_hint: "",
+      },
+      expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
+    );
   });
 });

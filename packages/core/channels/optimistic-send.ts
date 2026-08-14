@@ -1,5 +1,11 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
-import type { Attachment, ChannelMessage, ChannelMessagesPage, MessagePart } from "../types";
+import type {
+  Attachment,
+  ChannelMessage,
+  ChannelMessageQuoteInput,
+  ChannelMessagesPage,
+  MessagePart,
+} from "../types";
 import {
   channelKeys,
   flattenChannelMessagePages,
@@ -72,7 +78,7 @@ export interface BuildOptimisticChannelMessageArgs {
   parts?: MessagePart[];
   authorId: string;
   authorName: string;
-  quoteMessageId?: string | null;
+  quote?: ChannelMessageQuoteInput | null;
   threadRootMessageId?: string | null;
   /** Existing cache rows used to pick the next local seq. */
   siblings?: readonly ChannelMessage[];
@@ -85,6 +91,24 @@ export function buildOptimisticChannelMessage(
 ): ChannelMessage {
   const createdAt = new Date().toISOString();
   const status = args.status ?? "pending";
+  const quoteSource = args.quote
+    ? args.siblings?.find((message) => message.id === args.quote?.messageId)
+    : undefined;
+  const quote = args.quote && quoteSource
+    ? {
+        messageId: args.quote.messageId,
+        status: "active" as const,
+        snapshot: {
+          type: quoteSource.type,
+          authorId: quoteSource.author_id,
+          authorName: quoteSource.author_name,
+          content: quoteSource.content,
+          parts: quoteSource.parts,
+          createdAt: quoteSource.created_at,
+          selectedText: args.quote.selectedText,
+        },
+      }
+    : undefined;
   return {
     id: args.clientMessageId,
     channel_id: args.channelId,
@@ -98,7 +122,8 @@ export function buildOptimisticChannelMessage(
     source: "multica",
     external_message_id: null,
     client_message_id: args.clientMessageId,
-    quote_message_id: args.quoteMessageId ?? null,
+    quote_message_id: args.quote?.messageId ?? null,
+    quote,
     thread_root_message_id: args.threadRootMessageId ?? null,
     attachments: stubAttachmentsFromParts(args.parts, args.workspaceId, args.authorId, createdAt),
     created_at: createdAt,

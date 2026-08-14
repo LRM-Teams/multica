@@ -51,7 +51,6 @@ DELETE FROM daemon_update_status;
 DELETE FROM daemon_runtime_update_intent;
 DELETE FROM daemon_runtime_update;
 DELETE FROM daemon_registration_tombstone;
-DELETE FROM agent_runtime_state;
 
 UPDATE agent_runtime
    SET status = 'offline',
@@ -338,7 +337,6 @@ UNION ALL SELECT 'active_agent_credentials', count(*) FROM agent_credential WHER
 UNION ALL SELECT 'agent_inbox_tokens', count(*) FROM agent_inbox_token
 UNION ALL SELECT 'task_tokens', count(*) FROM task_token
 UNION ALL SELECT 'online_runtimes', count(*) FROM agent_runtime WHERE status = 'online'
-UNION ALL SELECT 'runtime_session_state', count(*) FROM agent_runtime_state
 UNION ALL SELECT 'active_agent_sessions', count(*) FROM agent_session WHERE status = 'active'
 UNION ALL SELECT 'executable_inbox_events', count(*) FROM agent_inbox_event WHERE status IN ('pending', 'draining', 'failed')
 UNION ALL SELECT 'active_event_deliveries', count(*) FROM agent_event_delivery WHERE status IN ('leased', 'processing')

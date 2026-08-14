@@ -58,11 +58,11 @@ type webPushSubscriptionResponse struct {
 // path (VAPID → push service → SW showNotification) so Frank can self-verify
 // closed-page OS banners without needing a second device to DM him.
 type webPushTestResponse struct {
-	OK         bool `json:"ok"`
-	Delivered  int  `json:"delivered"`
-	Failed     int  `json:"failed"`
-	Gone       int  `json:"gone"`
-	Attempted  int  `json:"attempted"`
+	OK        bool `json:"ok"`
+	Delivered int  `json:"delivered"`
+	Failed    int  `json:"failed"`
+	Gone      int  `json:"gone"`
+	Attempted int  `json:"attempted"`
 }
 
 func (h *Handler) GetWebPushPublicKey(w http.ResponseWriter, _ *http.Request) {

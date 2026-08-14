@@ -12,7 +12,7 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 	values := []any{
 		WorkspaceRunnerReadyPayload{
 			WorkspaceID: "workspace-1", DaemonInstanceID: "daemon-instance-1",
-			ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment},
+			ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAgentProcess},
 			RunningAgents:      []string{"agent-1"},
 		},
 		WorkspaceRunnerPingPayload{PingID: "ping-1"},
@@ -49,25 +49,26 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerStartDistinguishesResumeCompatibilityFromExplicitFresh(t *testing.T) {
-	resumeCompatible, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
+func TestWorkspaceRunnerStartUsesRaftSessionConfig(t *testing.T) {
+	resume, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+		Config: WorkspaceRunnerAgentStartConfig{SessionID: "provider-session"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(resumeCompatible), `"sessionId"`) {
-		t.Fatalf("compatibility start unexpectedly forced session behavior: %s", resumeCompatible)
+	if !strings.Contains(string(resume), `"config":{"sessionId":"provider-session"}`) {
+		t.Fatalf("resume start lost Raft config.sessionId: %s", resume)
 	}
-	fresh := ""
-	explicitFresh, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", SessionID: &fresh,
+	fresh, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+		Config: WorkspaceRunnerAgentStartConfig{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(explicitFresh), `"sessionId":""`) {
-		t.Fatalf("fresh start lost explicit empty Raft sessionId: %s", explicitFresh)
+	if !strings.Contains(string(fresh), `"config":{}`) || strings.Contains(string(fresh), `"sessionId"`) {
+		t.Fatalf("fresh start must use empty Raft config without sessionId: %s", fresh)
 	}
 }
 
@@ -148,13 +149,13 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 func TestWorkspaceRunnerReadyCapabilityValidation(t *testing.T) {
 	valid := WorkspaceRunnerReadyPayload{
 		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
-		ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityWorkspaceRunnerAgentReset},
+		ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAgentProcess, DaemonCapabilityWorkspaceRunnerAgentReset},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid ready capabilities: %v", err)
 	}
 	duplicate := valid
-	duplicate.ActiveCapabilities = []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityWorkspaceRunnerAttachment}
+	duplicate.ActiveCapabilities = []string{DaemonCapabilityWorkspaceRunnerAgentProcess, DaemonCapabilityWorkspaceRunnerAgentProcess}
 	if err := duplicate.Validate(); err == nil {
 		t.Fatal("duplicate ready capabilities were accepted")
 	}

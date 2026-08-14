@@ -1,0 +1,72 @@
+{
+  "contract_kind": "projection_snapshot",
+  "schema_version": 6,
+  "snapshot_id": "00000000-0000-4000-8000-000000000601",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "through_event_sequence": 47,
+  "projection_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "slice_key": "default:page:1",
+  "nodes": [
+    {
+      "id": "goal:00000000-0000-4000-8000-000000000003",
+      "kind": "goal",
+      "tier": "GOAL",
+      "canonical_ref": {
+        "kind": "goal",
+        "id": "00000000-0000-4000-8000-000000000003",
+        "revision": 2
+      },
+      "branch_ids": [],
+      "state": {
+        "execution": "succeeded",
+        "conclusion": "accepted",
+        "integration": "unmatched"
+      },
+      "title": "生产采用建议",
+      "catalog_summary": "当前 Goal；点击查看报告和历史版本。",
+      "absorbed": false,
+      "terminal": false,
+      "expandable": true,
+      "hidden_child_count": 3,
+      "updated_at": "2026-08-14T08:00:00Z"
+    },
+    {
+      "id": "insight:00000000-0000-4000-8000-000000000306",
+      "kind": "insight",
+      "tier": "M",
+      "canonical_ref": {
+        "kind": "insight",
+        "id": "00000000-0000-4000-8000-000000000306",
+        "version_id": "00000000-0000-4000-8000-000000000307",
+        "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "branch_ids": ["00000000-0000-4000-8000-000000000005"],
+      "state": {
+        "execution": "succeeded",
+        "conclusion": "accepted",
+        "integration": "unmatched"
+      },
+      "title": "并发负载下的延迟边界",
+      "catalog_summary": "三个独立测试支持同一尾延迟拐点。",
+      "absorbed": false,
+      "terminal": false,
+      "expandable": true,
+      "hidden_child_count": 2,
+      "updated_at": "2026-08-14T08:01:00Z"
+    }
+  ],
+  "edges": [
+    {
+      "id": "collapsed_path:goal:insight-306",
+      "kind": "collapsed_path",
+      "from_node_id": "goal:00000000-0000-4000-8000-000000000003",
+      "to_node_id": "insight:00000000-0000-4000-8000-000000000306",
+      "canonical": false,
+      "hidden_count": 1,
+      "expandable": true
+    }
+  ],
+  "density_bins": [],
+  "has_more": false
+}

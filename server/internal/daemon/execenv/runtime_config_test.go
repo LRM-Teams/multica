@@ -553,6 +553,11 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"--attachment-id <id>",
 		"Agent message sends do not accept sticker parts",
 		"Agents never submit message Parts, stickers, or voice markers",
+		"--note-write",
+		"--note-page-id",
+		"do NOT Write or create a local file",
+		"Never claim the note was saved",
+		"confirm button appears",
 		"Do not synthesize, encode, upload, or attach an audio file",
 		"Reactions: use a reaction for a pure acknowledgement",
 		"Freshness holds:",
@@ -642,6 +647,25 @@ func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
 	}
 }
 
+func TestChatRuntimeBriefPinsProductNoteWritePath(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChannelID:       "channel-1",
+		MessageDelivery: true,
+	})
+	for _, want := range []string{
+		"--note-write",
+		"do NOT Write or create a local file",
+		"Never claim the note was saved",
+		"confirm button appears",
+		"They will not see that in the Notes UI",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("chat brief missing product-note write path %q\n---\n%s", want, out)
+		}
+	}
+}
+
 func TestMessageRuntimeBriefHasNoTaskOrSessionDeliveryContract(t *testing.T) {
 	brief := buildMetaSkillContent("codex", TaskContextForEnv{MessageDelivery: true})
 	for _, want := range []string{
@@ -702,49 +726,6 @@ func TestChatRuntimeBriefPinsReminderDecisionBoundary(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestRuntimeBriefMakesFreshCanonicalSessionExplicit(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		reason string
-		ctx    TaskContextForEnv
-	}{
-		{
-			name:   "cutover issue wake",
-			reason: "cutover",
-			ctx:    TaskContextForEnv{IssueID: "issue-1"},
-		},
-		{
-			name:   "reset chat wake",
-			reason: "reset",
-			ctx:    TaskContextForEnv{ChannelID: "channel-1"},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.ctx.FreshSessionNoticeReason = tc.reason
-			out := buildMetaSkillContent("pi", tc.ctx)
-			for _, want := range []string{
-				"## Fresh Provider Session",
-				"Your provider session is brand new.",
-				"Historical sessions are archived read-only",
-				"your workspace files remain",
-				"Retrieve historical conclusions from issue comments or chat history when needed.",
-			} {
-				if !strings.Contains(out, want) {
-					t.Errorf("fresh-session brief missing %q\n---\n%s", want, out)
-				}
-			}
-			if strings.Count(out, "## Fresh Provider Session") != 1 {
-				t.Errorf("fresh-session notice must render exactly once\n---\n%s", out)
-			}
-		})
-	}
-
-	out := buildMetaSkillContent("pi", TaskContextForEnv{IssueID: "issue-1"})
-	if strings.Contains(out, "## Fresh Provider Session") {
-		t.Errorf("ordinary wake must not receive fresh-session notice\n---\n%s", out)
 	}
 }
 
@@ -1174,6 +1155,7 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 		"## Multica Agent Memory Scope",
 		"Agent workspace (`MULTICA_AGENT_ROOT`): `/tmp/multica/workspace-1/agents/agent-1`",
 		"Relative layout: `memory/`, `skills/`, `notes/`, `users/`, `projects/`, and `channels/`",
+		"not the workspace Notes UI",
 		"does not expose a separate environment variable for every subdirectory",
 		"Do not use provider-global memory directories",
 		"### Harness boundary (kernel vs shell)",
@@ -1258,6 +1240,8 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"source is provenance, not scope",
 		"Claiming memory",
 		"Human and peer-agent durable instructions use the same bar",
+		"Workspace product notes",
+		"Proposing a product note with `--note-write` is not claiming memory",
 		"Problem closeout",
 		"memory/STATE.md",
 		"memory/REVIEW.md",

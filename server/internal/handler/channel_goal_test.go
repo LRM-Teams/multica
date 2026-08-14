@@ -185,6 +185,85 @@ func TestChannelGoalWriteRequiresChannelAuthority(t *testing.T) {
 	}
 }
 
+func TestHumanChannelManagerCanBootstrapGoalControlPlane(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	channel := createGoalTestChannel(t)
+	for index := 0; index < 2; index++ {
+		agentID := createHandlerTestAgent(t, "Legacy goal agent "+uuid.NewString()[:8], nil)
+		if _, err := testPool.Exec(context.Background(), `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+			VALUES ($1, $2, 'agent', $3, 'member')`,
+			parseUUID(channel.ID), parseUUID(testWorkspaceID), parseUUID(agentID)); err != nil {
+			t.Fatalf("add goal agent %d: %v", index, err)
+		}
+	}
+	created := httptest.NewRecorder()
+	testHandler.CreateChannelGoal(created, goalRequest(t, testUserID, http.MethodPost, channel.ID, map[string]any{
+		"title": "Recover legacy delivery", "objective": "Bind the canonical repository",
+		"success_criteria": []string{"Control plane ready"},
+	}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("CreateChannelGoal = %d: %s", created.Code, created.Body.String())
+	}
+
+	bootstrap := httptest.NewRecorder()
+	testHandler.BootstrapChannelGoalControlPlane(bootstrap, goalRequest(
+		t, testUserID, http.MethodPost, channel.ID,
+		map[string]any{
+			"project_title":       "Recovered delivery project",
+			"repository_url":      "https://github.com/multica-ai/legacy-" + uuid.NewString(),
+			"default_branch_hint": "dev",
+		},
+	))
+	if bootstrap.Code != http.StatusCreated {
+		t.Fatalf("human bootstrap = %d: %s", bootstrap.Code, bootstrap.Body.String())
+	}
+	goal := decodeGoalEnvelope(t, bootstrap).Goal
+	if goal == nil || goal.Coordination == nil || goal.Coordination.ProjectID == "" ||
+		!goal.Coordination.GitRepositoryBound || goal.Coordination.ExecutionAdmission != "issues_required" {
+		t.Fatalf("human bootstrap goal = %#v", goal)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, parseUUID(goal.Coordination.ProjectID))
+	})
+}
+
+func TestHumanChannelMemberCannotBootstrapGoalControlPlane(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	channel := createGoalTestChannel(t)
+	created := httptest.NewRecorder()
+	testHandler.CreateChannelGoal(created, goalRequest(t, testUserID, http.MethodPost, channel.ID, map[string]any{
+		"title": "Protected delivery", "objective": "Keep repository authority scoped",
+		"success_criteria": []string{"Only managers can bind"},
+	}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("CreateChannelGoal = %d: %s", created.Code, created.Body.String())
+	}
+
+	memberID := seedWorkspaceUserForTransportTargetTest(t, "goal-bootstrap-member-"+uuid.NewString())
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1, $2, 'user', $3, 'member')`,
+		parseUUID(channel.ID), parseUUID(testWorkspaceID), parseUUID(memberID)); err != nil {
+		t.Fatalf("add ordinary member: %v", err)
+	}
+	bootstrap := httptest.NewRecorder()
+	testHandler.BootstrapChannelGoalControlPlane(bootstrap, goalRequest(
+		t, memberID, http.MethodPost, channel.ID,
+		map[string]any{
+			"project_title":  "Unauthorized project",
+			"repository_url": "https://github.com/multica-ai/unauthorized-" + uuid.NewString(),
+		},
+	))
+	if bootstrap.Code != http.StatusForbidden {
+		t.Fatalf("ordinary member bootstrap = %d: %s", bootstrap.Code, bootstrap.Body.String())
+	}
+}
+
 func TestGoalCriteriaRevisionDropsOrphanedCompletion(t *testing.T) {
 	current := []string{"A", "B"}
 	revised := []string{"B", "C"}

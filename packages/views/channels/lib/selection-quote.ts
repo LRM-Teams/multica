@@ -8,10 +8,8 @@
  *  - Select text inside a message → float a 2-item 「引用 / 复制」 menu and
  *    suppress the browser's native long context menu WHILE a selection exists.
  *    No selection → right-click stays native (don't break copy-link etc.).
- *  - Quote: wrap the selection line-by-line in a `>` blockquote, prefix once
- *    with the original author as PLAIN text (never an @mention → no wake),
- *    and append it to the composer via the editor's markdown pipeline. The
- *    caret lands at the end; nothing is sent.
+ *  - Quote: set a structured composer quote target with the source message id
+ *    and selected excerpt. The excerpt never enters the editable message body.
  *  - Copy: copy the selection as plain text (keep newlines) + toast.
  *  - Desktop (fine pointer) only this cut; mobile keeps the OS selection menu.
  *  - Cross-message selection is REJECTED (AC#7 / Frank DM lock 2026-07-29):
@@ -32,34 +30,13 @@ export function isFinePointerViewport(): boolean {
   return window.innerWidth >= 768;
 }
 
-/**
- * Wrap selected text as a Markdown blockquote, prefixing the first line once
- * with the original author as plain text. Multi-line selections keep `>` on
- * every line so the whole selection renders as a single quote block.
- *
- * Trailing blank lines a triple/double-click selection often grabs are trimmed
- * (but intentional internal blank lines are preserved).
- */
-export function buildSelectionQuoteMarkdown(author: string | null, text: string): string {
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  while (lines.length > 1 && lines[lines.length - 1] === "") {
-    lines.pop();
-  }
-  const body = lines.length > 0 ? lines : [""];
-  const prefix = author && author.trim() ? `${author.trim()}: ` : "";
-  const quoted = body.map((line, index) => {
-    return index === 0 ? `> ${prefix}${line}` : `> ${line}`;
-  });
-  return quoted.join("\n");
-}
-
 export interface ResolvedMessageSelection {
   /** Selection text, plain (browser ordering, newlines preserved). */
   text: string;
   /** Original author display name (plain text, no mention). */
   author: string | null;
-  /** Stable message id of the bubble the selection starts in (if stamped). */
-  messageId: string | null;
+  /** Stable message id of the bubble containing the selection. */
+  messageId: string;
   /** Viewport-relative rect of the selection range, for menu positioning. */
   rect: DOMRect;
 }
@@ -113,6 +90,7 @@ export function resolveMessageSelection(
   const rawAuthor = bubble?.getAttribute(MESSAGE_AUTHOR_ATTR) ?? null;
   const author = rawAuthor && rawAuthor.trim() ? rawAuthor : null;
   const messageId = bubble?.getAttribute(MESSAGE_ID_ATTR) ?? null;
+  if (!messageId) return null;
 
   let rect: DOMRect;
   try {

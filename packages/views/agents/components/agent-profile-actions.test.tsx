@@ -38,15 +38,15 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@multica/core/agents", () => ({
-  agentLifecyclePreflightOptions: (agentId: string, enabled: boolean) => ({
+  agentRestartPreflightOptions: (agentId: string, enabled: boolean) => ({
     agentId,
     enabled,
   }),
-  agentLifecycleActionState: (
+  agentRestartModeState: (
     preflight: { actions?: Record<string, { supported: boolean; disabled_reason?: string | null }> } | null | undefined,
     kind: string,
   ) => preflight?.actions?.[kind] ?? { supported: false, disabled_reason: "unavailable" },
-  resolveLifecycleDisabledReasonKey: (reason: string | null | undefined) =>
+  resolveRestartDisabledReasonKey: (reason: string | null | undefined) =>
     reason ?? "unavailable",
 }));
 
@@ -58,7 +58,7 @@ vi.mock("sonner", () => ({
 }));
 
 // #633: the three-tier restart modal has its own test; stub it here so this
-// suite only exercises the actions stack (the modal mounts a real lifecycle
+// suite only exercises the actions stack (the modal mounts a real restart
 // hook we don't need to wire for these assertions).
 vi.mock("./agent-restart-modal", () => ({
   AgentRestartModal: () => null,
@@ -247,7 +247,7 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
 
   // The provider-level gate (forceRestartSupported) only says the provider
   // CAN be force-restarted in principle — the daemon it's actually running
-  // on might still be too old (pre-agent_lifecycle_actions_v1). This is
+  // on might still be too old for the Workspace Runner reset contract. This is
   // that second, daemon-side gate: button visible, but disabled with a
   // standing reason instead of a click that silently no-ops.
   it("disables the trigger with a standing reason when the daemon preflight says unsupported", () => {

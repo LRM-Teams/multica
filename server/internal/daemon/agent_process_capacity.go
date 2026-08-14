@@ -1,5 +1,7 @@
 package daemon
 
+import "github.com/multica-ai/multica/server/internal/computer"
+
 // agentProcessAdmission is the machine-wide capacity seam for a managed
 // launch. Queue policy is intentionally hidden behind this small interface.
 type agentProcessAdmission interface {
@@ -17,12 +19,7 @@ type agentProcessCapacityRequest struct {
 	Waiter      agentProcessCapacityWaiter
 }
 
-type agentProcessCapacityGrant struct {
-	ID        string
-	LaunchID  string
-	AgentID   string
-	RuntimeID string
-}
+type agentProcessCapacityGrant = computer.ProcessCapacityGrant
 
 // agentProcessCapacityWaiter is registered by a Runner while it owns a queued
 // launch. The Pool invokes it only after atomically recording the grant.

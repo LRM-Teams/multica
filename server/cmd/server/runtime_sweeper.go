@@ -93,7 +93,7 @@ const (
 // hot heartbeat path; the DB is allowed to lag up to runtimeHeartbeatDBFlushInterval).
 // When liveness is unavailable or errors, we fall back to trusting the DB
 // stale window — that is the original behavior.
-func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus, agentLifecycleDB *pgxpool.Pool) {
+func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus, agentRestartDB *pgxpool.Pool) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 
@@ -109,22 +109,22 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handle
 			sweepQueuedTasksOnOfflineRuntimes(ctx, queries, taskSvc)
 			gcRuntimes(ctx, queries, bus)
 			gcExpiredAgentCredentials(ctx, queries)
-			sweepTimedOutAgentLifecycleOperations(ctx, agentLifecycleDB)
+			sweepTimedOutAgentRestartOperations(ctx, agentRestartDB)
 		}
 	}
 }
 
-func sweepTimedOutAgentLifecycleOperations(ctx context.Context, exec *pgxpool.Pool) {
+func sweepTimedOutAgentRestartOperations(ctx context.Context, exec *pgxpool.Pool) {
 	if exec == nil {
 		return
 	}
-	swept, err := handler.SweepTimedOutAgentLifecycleOperations(ctx, exec)
+	swept, err := handler.SweepTimedOutAgentRestartOperations(ctx, exec)
 	if err != nil {
-		slog.Warn("sweep timed-out Agent lifecycle operations failed", "error", err)
+		slog.Warn("sweep timed-out Agent restart operations failed", "error", err)
 		return
 	}
 	if swept > 0 {
-		slog.Info("swept timed-out Agent lifecycle operations", "count", swept)
+		slog.Info("swept timed-out Agent restart operations", "count", swept)
 	}
 }
 

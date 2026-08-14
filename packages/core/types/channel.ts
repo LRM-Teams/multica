@@ -90,6 +90,12 @@ export interface CreateChannelGoalRequest {
   success_criteria: string[];
 }
 
+export interface BootstrapChannelGoalControlPlaneRequest {
+  project_title: string;
+  repository_url: string;
+  default_branch_hint?: string;
+}
+
 export interface UpdateChannelGoalRequest {
   expected_version: number;
   title?: string;
@@ -440,12 +446,18 @@ export interface ChannelMessageQuoteSnapshot {
   content: string;
   parts?: MessagePart[];
   createdAt: string;
+  selectedText?: string | null;
 }
 
 export interface ChannelMessageQuote {
   messageId: string;
   snapshot?: ChannelMessageQuoteSnapshot | null;
   status: "active" | "deleted" | "inaccessible" | (string & {});
+}
+
+export interface ChannelMessageQuoteInput {
+  messageId: string;
+  selectedText?: string;
 }
 
 export interface ChannelMessageSearchResult {

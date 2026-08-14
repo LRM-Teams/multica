@@ -19,17 +19,15 @@ import (
 var _ interface{ Run(context.Context) } = (*WorkspaceRunner)(nil)
 
 func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
-	registry := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
 	runtimes := newCanonicalAgentRuntimePool()
 	base := WorkspaceRunnerConfig{
 		DaemonID: "daemon-1", DaemonInstanceID: "daemon-instance-1", WorkspaceID: "workspace-1",
 	}
 	dependencies := workspaceRunnerDependencies{
-		client: NewClient(""), attachments: registry, runtimes: runtimes,
-		openInbox: func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
-		runtimeSet: func() AgentAttachmentRuntimeSet {
-			return AgentAttachmentRuntimeSet{WorkspaceID: "workspace-1"}
-		},
+		client: NewClient(""), runtimes: runtimes,
+		processAdmission:      runtimes.managedProcessAdmission(),
+		openInbox:             func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
+		runtimeIDs:            func() []string { return []string{"runtime-1"} },
 		ensureResidentRuntime: func(context.Context, string, string, *agent.PiRunIdentity) error { return nil },
 	}
 	for name, mutate := range map[string]func(*WorkspaceRunnerConfig){
@@ -46,12 +44,12 @@ func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
 		})
 	}
 	for name, mutate := range map[string]func(*workspaceRunnerDependencies){
-		"client":           func(dependencies *workspaceRunnerDependencies) { dependencies.client = nil },
-		"attachments":      func(dependencies *workspaceRunnerDependencies) { dependencies.attachments = nil },
-		"runtimes":         func(dependencies *workspaceRunnerDependencies) { dependencies.runtimes = nil },
-		"Inbox factory":    func(dependencies *workspaceRunnerDependencies) { dependencies.openInbox = nil },
-		"Runtime scope":    func(dependencies *workspaceRunnerDependencies) { dependencies.runtimeSet = nil },
-		"resident Runtime": func(dependencies *workspaceRunnerDependencies) { dependencies.ensureResidentRuntime = nil },
+		"client":            func(dependencies *workspaceRunnerDependencies) { dependencies.client = nil },
+		"runtimes":          func(dependencies *workspaceRunnerDependencies) { dependencies.runtimes = nil },
+		"process admission": func(dependencies *workspaceRunnerDependencies) { dependencies.processAdmission = nil },
+		"Inbox factory":     func(dependencies *workspaceRunnerDependencies) { dependencies.openInbox = nil },
+		"Runtime scope":     func(dependencies *workspaceRunnerDependencies) { dependencies.runtimeIDs = nil },
+		"resident Runtime":  func(dependencies *workspaceRunnerDependencies) { dependencies.ensureResidentRuntime = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := dependencies
@@ -221,22 +219,27 @@ func TestWorkspaceRunnerReconnectReplacesConnectionContextAndWriter(t *testing.T
 	}
 }
 
-func TestDaemonStartsWorkspaceRunnerWithoutOwningSocketInternals(t *testing.T) {
-	raw, err := os.ReadFile("workspace_runner.go")
+func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceRunner(t *testing.T) {
+	daemonRaw, err := os.ReadFile("workspace_runner.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := string(raw)
-	if !strings.Contains(source, "runner.Run(ctx)") || !strings.Contains(source, "superviseWorkspaceRunner") {
-		t.Fatal("Daemon does not start WorkspaceRunner through Run(ctx)")
+	childRaw, err := os.ReadFile("binding_child_runtime.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, forbidden := range []string{
-		"func (d *Daemon) runWorkspaceRunner(",
-		"func (d *Daemon) runWorkspaceRunnerConnection(",
-	} {
-		if strings.Contains(source, forbidden) {
-			t.Fatalf("Daemon still owns Workspace Runner socket lifecycle %q", forbidden)
-		}
+	supervisorRaw, err := os.ReadFile("../computer/binding_supervisor.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(daemonRaw), "superviseWorkspaceRunner") || strings.Contains(string(daemonRaw), "workspaceRunnerChildren") {
+		t.Fatal("daemon package still contains Computer Host process supervision")
+	}
+	if !strings.Contains(string(childRaw), "runner.Run(runCtx)") {
+		t.Fatal("Binding child does not own WorkspaceRunner.Run")
+	}
+	if !strings.Contains(string(supervisorRaw), "type BindingSupervisor struct") || !strings.Contains(string(supervisorRaw), "child.Wait()") {
+		t.Fatal("computer package does not own Binding child supervision")
 	}
 }
 
@@ -303,16 +306,14 @@ func TestWorkspaceRunnerInternalsDoNotEscapeRunnerModule(t *testing.T) {
 }
 
 func TestWorkspaceRunnerOwnsLocalStateAndSharesMachineDependencies(t *testing.T) {
-	attachments := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
 	runtimes := newCanonicalAgentRuntimePool()
 	diagnostics := &runnerDiagnosticRegistry{}
 	dependencies := workspaceRunnerDependencies{
-		client: NewClient(""), attachments: attachments, runtimes: runtimes,
-		diagnostics: diagnostics,
-		openInbox:   func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
-		runtimeSet: func() AgentAttachmentRuntimeSet {
-			return AgentAttachmentRuntimeSet{WorkspaceID: "workspace-1"}
-		},
+		client: NewClient(""), runtimes: runtimes,
+		processAdmission:      runtimes.managedProcessAdmission(),
+		diagnostics:           diagnostics,
+		openInbox:             func(InboxKey, string) (*MessageCoordinator, error) { return nil, nil },
+		runtimeIDs:            func() []string { return []string{"runtime-1"} },
 		ensureResidentRuntime: func(context.Context, string, string, *agent.PiRunIdentity) error { return nil },
 	}
 	first, err := newWorkspaceRunner(WorkspaceRunnerConfig{
@@ -327,7 +328,7 @@ func TestWorkspaceRunnerOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.attachments != attachments || first.runtimes != runtimes || first.diagnostics != diagnostics {
+	if first.runtimes != runtimes || first.diagnostics != diagnostics {
 		t.Fatal("Runner copied or replaced a machine-wide dependency")
 	}
 	if first.processes == nil || first.activity == nil || first.inboxes == nil {
@@ -352,7 +353,7 @@ func TestDaemonBuildsWorkspaceRunnerFromSharedOwners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runner.attachments != d.agentAttachments || runner.runtimes != d.canonicalRuntimes || runner.diagnostics != d.runnerDiagnostics {
+	if runner.runtimes != d.canonicalRuntimes || runner.diagnostics != d.runnerDiagnostics {
 		t.Fatal("Daemon did not inject its machine-wide owners")
 	}
 	if runner.processes.admission == nil {

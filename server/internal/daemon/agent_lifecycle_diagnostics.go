@@ -57,11 +57,11 @@ func (w *lifecycleDiagnosticWriter) Record(transition agentLifecycleTransition) 
 	return w.appendLine(append(encoded, '\n'))
 }
 
-// diagnosticsCleanupLoop repeats the writers' best-effort cleanup once a day.
-// Diagnostic and upgrade-history retention is never allowed to block daemon
-// startup, process management, or shutdown.
+// diagnosticsCleanupLoop repeats the writer's best-effort cleanup once a day.
+// Diagnostic retention is never allowed to block Binding execution, process
+// management, or shutdown.
 func (d *Daemon) diagnosticsCleanupLoop(ctx context.Context) {
-	if d == nil || (d.lifecycleDiagnostics == nil && d.machineUpgradeLog == nil) {
+	if d == nil || d.lifecycleDiagnostics == nil {
 		return
 	}
 	ticker := time.NewTicker(lifecycleDiagnosticCleanupInterval)
@@ -76,11 +76,25 @@ func (d *Daemon) diagnosticsCleanupLoop(ctx context.Context) {
 					d.logger.Debug("lifecycle diagnostic cleanup failed", "error", err)
 				}
 			}
-			if d.machineUpgradeLog != nil {
-				if err := d.machineUpgradeLog.Cleanup(); err != nil && d.logger != nil {
-					d.logger.Debug("machine upgrade log cleanup failed", "error", err)
-				}
-			}
 		}
+	}
+}
+
+func (d *Daemon) recordAgentLifecycleTransition(transition agentLifecycleTransition) {
+	if d == nil {
+		return
+	}
+	if d.bindingDiagnostics != nil {
+		if err := d.bindingDiagnostics.recordLifecycle(transition); err != nil && d.logger != nil {
+			d.logger.Debug("Host lifecycle diagnostic aggregation failed", "reason", "queue_unavailable")
+		}
+		return
+	}
+	if d.lifecycleDiagnostics == nil {
+		return
+	}
+	if err := d.lifecycleDiagnostics.Record(transition); err != nil && d.logger != nil {
+		// Local diagnostics are intentionally non-blocking for lifecycle.
+		d.logger.Debug("agent lifecycle diagnostic write failed", "error", err)
 	}
 }

@@ -319,13 +319,13 @@ func loadMemberManagementCapabilityRoster(
 	roster := make([]memberManagementCapabilityRosterTarget, 0)
 	for rows.Next() {
 		var (
-			memberType   string
-			memberID     pgtype.UUID
-			displayName  string
-			avatarURL    pgtype.Text
-			role         string
-			addedByType  pgtype.Text
-			addedByID    pgtype.UUID
+			memberType  string
+			memberID    pgtype.UUID
+			displayName string
+			avatarURL   pgtype.Text
+			role        string
+			addedByType pgtype.Text
+			addedByID   pgtype.UUID
 		)
 		if err := rows.Scan(
 			&memberType,

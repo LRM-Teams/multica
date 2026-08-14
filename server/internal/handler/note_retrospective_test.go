@@ -153,12 +153,12 @@ func TestClassifyNoteRetrospectiveIssueAttribution(t *testing.T) {
 	other := "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
 	cases := []struct {
-		name       string
-		actorType  string
-		actorID    string
-		action     string
-		details    string
-		want       string
+		name      string
+		actorType string
+		actorID   string
+		action    string
+		details   string
+		want      string
 	}{
 		{"my status", "member", viewer, "status_changed", `{"from":"todo","to":"done"}`, noteRetrospectiveAttrHandsOn},
 		{"my assign agent", "member", viewer, "assignee_changed", `{"to_type":"agent","to_id":"` + agent + `"}`, noteRetrospectiveAttrDelegated},
@@ -239,17 +239,17 @@ func TestBuildNoteRetrospectiveLayeredMarkdownFromDayDigests(t *testing.T) {
 		Issues: []noteRetrospectiveIssueFact{
 			{
 				IssueID: issueID, Identifier: "MUL-9", Title: "Ship",
-				At: time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC),
+				At:          time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC),
 				Attribution: noteRetrospectiveAttrHandsOn,
 			},
 			{
 				IssueID: issueID, Identifier: "MUL-9", Title: "Ship",
-				At: time.Date(2026, 8, 11, 9, 0, 0, 0, time.UTC),
+				At:          time.Date(2026, 8, 11, 9, 0, 0, 0, time.UTC),
 				Attribution: noteRetrospectiveAttrHandsOn, Detail: "todo → done",
 			},
 			{
 				IssueID: issueID, Identifier: "MUL-9", Title: "Ship",
-				At: time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC),
+				At:          time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC),
 				Attribution: noteRetrospectiveAttrHandsOn, Detail: "done → todo",
 			},
 		},
@@ -289,7 +289,7 @@ func TestComposeNoteRetrospectivePrefersExistingDayNote(t *testing.T) {
 	facts := noteRetrospectiveFacts{
 		Issues: []noteRetrospectiveIssueFact{{
 			IssueID: issueID, Identifier: "MUL-9", Title: "Ship",
-			At: time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC),
+			At:          time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC),
 			Attribution: noteRetrospectiveAttrHandsOn,
 		}},
 	}
@@ -327,12 +327,12 @@ func TestComposeMonthPrefersWeekNotesOverDayRaw(t *testing.T) {
 		Issues: []noteRetrospectiveIssueFact{
 			{
 				IssueID: issueID, Identifier: "MUL-1", Title: "A",
-				At: time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+				At:          time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
 				Attribution: noteRetrospectiveAttrHandsOn,
 			},
 			{
 				IssueID: issueID, Identifier: "MUL-1", Title: "A",
-				At: time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC),
+				At:          time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC),
 				Attribution: noteRetrospectiveAttrHandsOn,
 			},
 		},

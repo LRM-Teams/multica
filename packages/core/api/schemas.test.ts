@@ -611,6 +611,7 @@ describe("Channel message pagination schemas", () => {
               authorAvatarUrl: "/legacy/quote.png",
               content: "parent",
               createdAt: "2026-07-03T00:00:00Z",
+              selectedText: "chosen excerpt",
             },
           },
         },
@@ -622,6 +623,9 @@ describe("Channel message pagination schemas", () => {
     expect(message.reply_to).not.toHaveProperty("author_avatar_url");
     expect((message.quote as { snapshot: Record<string, unknown> }).snapshot).not.toHaveProperty(
       "authorAvatarUrl",
+    );
+    expect((message.quote as { snapshot: Record<string, unknown> }).snapshot.selectedText).toBe(
+      "chosen excerpt",
     );
   });
 
@@ -685,6 +689,38 @@ describe("Channel message pagination schemas", () => {
   it("rejects malformed message lists so callers can fall back", () => {
     expect(ChannelMessagesPageSchema.safeParse({ messages: null }).success).toBe(false);
     expect(ChannelThreadMessagesPageSchema.safeParse({ messages: null }).success).toBe(false);
+  });
+
+  it("rejects malformed selected quote text", () => {
+    const result = ChannelMessagesPageSchema.safeParse({
+      messages: [{
+        id: "msg-1",
+        channel_id: "channel-1",
+        workspace_id: "ws-1",
+        type: "user",
+        author_id: "user-1",
+        author_name: "Ada",
+        content: "reply",
+        source: "multica",
+        external_message_id: null,
+        created_at: "2026-07-03T00:00:00Z",
+        quote_message_id: "msg-0",
+        quote: {
+          messageId: "msg-0",
+          status: "active",
+          snapshot: {
+            type: "user",
+            authorId: "user-2",
+            authorName: "Bob",
+            content: "source",
+            createdAt: "2026-07-03T00:00:00Z",
+            selectedText: 42,
+          },
+        },
+      }],
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 

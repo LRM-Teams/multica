@@ -99,17 +99,22 @@ type WorkspaceRunnerPongPayload struct {
 	PingID string `json:"pingId"`
 }
 
+// WorkspaceRunnerAgentStartConfig mirrors Raft's agent:start config boundary.
+// A non-empty SessionID resumes that provider session; an omitted SessionID
+// starts fresh.
+type WorkspaceRunnerAgentStartConfig struct {
+	SessionID string `json:"sessionId,omitempty"`
+}
+
 // WorkspaceRunnerAgentStartPayload is the server command accepted by a local
 // Agent Process Manager. LaunchID is the server-owned launch epoch and remains
 // stable when the same desired launch is retried after reconnect.
 type WorkspaceRunnerAgentStartPayload struct {
-	AgentID         string `json:"agentId"`
-	RuntimeID       string `json:"runtimeId"`
-	LaunchID        string `json:"launchId"`
-	StartDispatchID string `json:"startDispatchId"`
-	// SessionID mirrors Raft config.sessionId. Nil preserves rolling-upgrade
-	// behavior; a non-nil empty value explicitly starts fresh.
-	SessionID *string `json:"sessionId,omitempty"`
+	AgentID         string                          `json:"agentId"`
+	RuntimeID       string                          `json:"runtimeId"`
+	LaunchID        string                          `json:"launchId"`
+	StartDispatchID string                          `json:"startDispatchId"`
+	Config          WorkspaceRunnerAgentStartConfig `json:"config"`
 }
 
 // AgentStartAckPayload is an idempotent acceptance receipt. QueueState never
@@ -301,8 +306,8 @@ func (p WorkspaceRunnerReadyPayload) Validate() error {
 		}
 		seen[capability] = struct{}{}
 	}
-	if _, supported := seen[DaemonCapabilityWorkspaceRunnerAttachment]; !supported {
-		return fmt.Errorf("Workspace Runner Attachment capability is required")
+	if _, supported := seen[DaemonCapabilityWorkspaceRunnerAgentProcess]; !supported {
+		return fmt.Errorf("Workspace Runner Agent process capability is required")
 	}
 	running := make(map[string]struct{}, len(p.RunningAgents))
 	for _, agentID := range p.RunningAgents {

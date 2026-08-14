@@ -6,6 +6,17 @@ import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 const mockFocus = vi.hoisted(() => vi.fn());
 const mockSetContent = vi.hoisted(() => vi.fn());
 const mockSetTextSelection = vi.hoisted(() => vi.fn());
+const mockInsertContent = vi.hoisted(() => vi.fn());
+const editorChain = vi.hoisted(() => {
+  const chain: Record<string, ReturnType<typeof vi.fn>> = {};
+  chain.focus = vi.fn(() => chain);
+  chain.insertContent = vi.fn((content: unknown) => {
+    mockInsertContent(content);
+    return chain;
+  });
+  chain.run = vi.fn(() => true);
+  return chain;
+});
 const editorState = vi.hoisted(() => ({
   isFocused: false,
   isDestroyed: false,
@@ -101,6 +112,7 @@ vi.mock("@tiptap/react", () => ({
           setContent: mockSetContent,
           setTextSelection: mockSetTextSelection,
         },
+        chain: () => editorChain,
         getMarkdown: () => editorState.markdown,
         view: { dom: document.createElement("div") },
         state: {

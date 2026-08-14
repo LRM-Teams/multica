@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	issueStageKeyImplicit          = "implicit"
-	issueStageStatusOpen           = "open"
-	issueStageStatusClosed         = "closed"
-	issueStageBarrierEventClosed   = "closed"
+	issueStageKeyImplicit        = "implicit"
+	issueStageStatusOpen         = "open"
+	issueStageStatusClosed       = "closed"
+	issueStageBarrierEventClosed = "closed"
 )
 
 // issueStageBarrierDecision is the gate between "a child finished" and

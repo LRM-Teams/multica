@@ -106,6 +106,7 @@ export {
   channelGoalProcessOptions,
   channelGoalSubgoalsOptions,
   useCreateChannelGoal,
+  useBootstrapChannelGoalControlPlane,
   useUpdateChannelGoal,
   useCreateChannelGoalSubgoal,
   useUpdateChannelGoalSubgoal,

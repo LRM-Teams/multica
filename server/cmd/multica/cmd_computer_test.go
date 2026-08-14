@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"strings"
 	"testing"
 
@@ -50,6 +51,64 @@ func TestCommandTestsDoNotConstructRealComputerLifecycle(t *testing.T) {
 				}
 				return true
 			})
+		}
+	}
+}
+
+func TestComputerResidentConstructsComputerHostWithoutDaemonContainer(t *testing.T) {
+	packages, err := parser.ParseDir(token.NewFileSet(), ".", func(info fs.FileInfo) bool {
+		return strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundComputerHost bool
+	for _, pkg := range packages {
+		for filename, file := range pkg.Files {
+			ast.Inspect(file, func(node ast.Node) bool {
+				declaration, ok := node.(*ast.FuncDecl)
+				if !ok || declaration.Name.Name != "runComputerResident" {
+					return true
+				}
+				ast.Inspect(declaration.Body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					selector, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					owner, ok := selector.X.(*ast.Ident)
+					if !ok {
+						return true
+					}
+					if owner.Name == "daemon" {
+						t.Errorf("%s: Computer resident must not depend on internal/daemon (%s)", filename, selector.Sel.Name)
+					}
+					if owner.Name == "computer" && selector.Sel.Name == "NewHost" {
+						foundComputerHost = true
+					}
+					return true
+				})
+				return false
+			})
+		}
+	}
+	if !foundComputerHost {
+		t.Fatal("Computer resident does not construct computer.Host")
+	}
+}
+
+func TestComputerMachineLifecycleDoesNotDependOnDaemon(t *testing.T) {
+	for _, filename := range []string{"cmd_computer_resident.go", "machine_upgrade_detached.go", "cmd_daemon.go"} {
+		body, err := os.ReadFile(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		if strings.Contains(text, "internal/daemon") || strings.Contains(text, "daemon.") {
+			t.Errorf("%s mixes the Computer machine lifecycle with internal/daemon", filename)
 		}
 	}
 }

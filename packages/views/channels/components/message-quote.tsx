@@ -1,9 +1,9 @@
 "use client";
 
-import { X } from "lucide-react";
 import type { Attachment, ChannelMessage, ChannelMessageQuote, ChannelMessageReply } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { X } from "lucide-react";
 import { useT } from "../../i18n/use-t";
 import {
   mentionResolverFrom,
@@ -15,13 +15,14 @@ import {
   formatMessagePartsPreview,
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
-import type { QuoteTarget } from "./message-quote-types";
+import type { ComposerQuoteTarget } from "../hooks/use-composer-quote";
 
 type QuoteMessage = Pick<
   ChannelMessage | ChannelMessageReply,
   "id" | "type" | "author_id" | "author_name" | "content" | "parts" | "created_at"
 > & {
   attachments?: Attachment[];
+  selectedText?: string | null;
 };
 
 function normalizePreview(value: string): string {
@@ -119,6 +120,60 @@ function quoteSummary(
   );
 }
 
+// react-doctor-disable-next-line react-doctor/only-export-components -- composer and rendered quote cards share one preview projection.
+export function createComposerMessageQuoteTarget(
+  message: Pick<
+    QuoteMessage,
+    "id" | "type" | "author_id" | "author_name" | "content" | "parts" | "attachments"
+  >,
+  labels: {
+    attachment: string;
+    attachments: (count: number) => string;
+    image: string;
+    images: (count: number) => string;
+    empty: string;
+  },
+  resolveMention: MentionPreviewResolver,
+  selectedText?: string,
+): ComposerQuoteTarget {
+  return {
+    messageId: message.id,
+    selectedText,
+    author: resolveChannelAuthorDisplayName(message, { getActorName: resolveMention }),
+    summary: selectedText ?? quoteSummary(message, labels, resolveMention),
+  };
+}
+
+export function ComposerQuotePreview({
+  target,
+  onCancel,
+}: {
+  target: ComposerQuoteTarget;
+  onCancel: () => void;
+}) {
+  const { t } = useT("channels");
+  return (
+    <div
+      data-testid="composer-quote-preview"
+      className="flex min-w-0 items-center gap-2 border-b border-border/70 px-3 py-2"
+    >
+      <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+        <span className="font-medium text-foreground/75">{target.author}</span>
+        <span>{": "}</span>
+        <span>{target.summary}</span>
+      </div>
+      <button
+        type="button"
+        onClick={onCancel}
+        aria-label={t(($) => $.quote.cancel)}
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
 function quoteTypeLabel(type: QuoteMessage["type"], labels: {
   user: string;
   agent: string;
@@ -159,17 +214,19 @@ function useQuotePresentation(
     system: t(($) => $.quote.type_system),
     unknown: t(($) => $.quote.type_unknown),
   });
-  const summary = quoteSummary(
-    message,
-    {
-      attachment: t(($) => $.quote.attachment_summary),
-      attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
-      image: t(($) => $.quote.image_summary),
-      images: (count) => t(($) => $.quote.images_summary, { count }),
-      empty: t(($) => $.quote.empty_summary),
-    },
-    mentionResolverFrom(getActorName),
-  );
+  const summary = message.selectedText
+    ? normalizePreview(message.selectedText)
+    : quoteSummary(
+        message,
+        {
+          attachment: t(($) => $.quote.attachment_summary),
+          attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
+          image: t(($) => $.quote.image_summary),
+          images: (count) => t(($) => $.quote.images_summary, { count }),
+          empty: t(($) => $.quote.empty_summary),
+        },
+        mentionResolverFrom(getActorName),
+      );
   return { author, typeLabel, summary };
 }
 
@@ -183,54 +240,8 @@ function messageFromSnapshot(quote: ChannelMessageQuote): QuoteMessage | null {
     content: quote.snapshot.content,
     parts: quote.snapshot.parts,
     created_at: quote.snapshot.createdAt,
+    selectedText: quote.snapshot.selectedText,
   };
-}
-
-export function ComposerQuotePreview({
-  quote,
-  onCancel,
-  cancelLabel,
-}: {
-  quote: QuoteTarget;
-  onCancel: () => void;
-  cancelLabel: string;
-}) {
-  const { t } = useT("channels");
-  const { getActorName } = useActorName();
-  const summary = quoteSummary(
-    quote,
-    {
-      attachment: t(($) => $.quote.attachment_summary),
-      attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
-      image: t(($) => $.quote.image_summary),
-      images: (count) => t(($) => $.quote.images_summary, { count }),
-      empty: t(($) => $.quote.empty_summary),
-    },
-    mentionResolverFrom(getActorName),
-  );
-
-  return (
-    <div
-      className="flex items-start gap-2 border-b border-border/35 px-3 py-1.5"
-      data-testid="composer-quote-preview"
-    >
-      <p className="min-w-0 flex-1 truncate text-xs leading-5 text-muted-foreground">
-        <span className="select-none text-muted-foreground/80">{"> "}</span>
-        <span className="font-medium text-foreground/75">{quote.author_name}</span>
-        <span>{": "}</span>
-        <span>{summary}</span>
-      </p>
-      <button
-        type="button"
-        onClick={onCancel}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        aria-label={cancelLabel}
-        title={cancelLabel}
-      >
-        <X className="size-3.5" />
-      </button>
-    </div>
-  );
 }
 
 function AvailableMessageQuoteCard({

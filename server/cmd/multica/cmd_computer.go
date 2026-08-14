@@ -11,6 +11,8 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
+	"github.com/multica-ai/multica/server/internal/daemon"
+	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
 )
 
 var computerCmd = &cobra.Command{
@@ -210,10 +212,45 @@ func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(workspaceID) == "" {
 		return fmt.Errorf("workspace-id is required")
 	}
+	bootstrap, err := computer.ReadBindingChildBootstrap(os.Stdin)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(workspaceID) != bootstrap.WorkspaceID {
+		return fmt.Errorf("workspace-id %q does not match Binding child bootstrap %q", workspaceID, bootstrap.WorkspaceID)
+	}
+	cfg, err := daemon.LoadConfig(daemon.Overrides{
+		ServerURL:      bootstrap.ServerBaseURL,
+		WorkspacesRoot: bootstrap.WorkspacesRoot,
+		DaemonID:       bootstrap.ComputerID,
+		Profile:        bootstrap.Profile,
+	})
+	if err != nil {
+		return err
+	}
+	cfg.CLIVersion = version
+	cfg.Environment = bootstrap.Environment
+	cfg.ServerBaseURL = bootstrap.ServerBaseURL
+	cfg.DaemonID = bootstrap.ComputerID
+	cfg.ComputerGeneration = bootstrap.ComputerGeneration
+	cfg.BindingsRoot = bootstrap.BindingsRoot
+	cfg.WorkspacesRoot = bootstrap.WorkspacesRoot
+	controlToken, err := computer.ReadControlToken(bootstrap.Profile)
+	if err != nil {
+		return fmt.Errorf("read Computer Host control token: %w", err)
+	}
+	cfg.LocalControlToken = controlToken
 	ctx, stop := notifyShutdownContext(context.Background())
 	defer stop()
-	<-ctx.Done()
-	return nil
+	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID, "runner_generation", bootstrap.RunnerGeneration)
+	return daemon.RunBindingChild(ctx, daemon.BindingChildRunConfig{
+		Daemon:    cfg,
+		Bootstrap: bootstrap,
+		Logger:    logger,
+		PublishReady: func(ready computer.BindingChildReady) error {
+			return computer.WriteBindingChildReady(os.Stdout, ready)
+		},
+	})
 }
 
 func addComputerResidentFlags(cmd *cobra.Command) {
@@ -227,10 +264,6 @@ func addComputerResidentFlags(cmd *cobra.Command) {
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
 	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
 	_ = f.MarkHidden("computer-generation")
-	f.Bool("machine-upgrade-detached-candidate", false, "Internal detached Machine Upgrade candidate marker")
-	_ = f.MarkHidden("machine-upgrade-detached-candidate")
-	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
-	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
 	_ = f.MarkHidden("machine-attestation-source-pid")
 }

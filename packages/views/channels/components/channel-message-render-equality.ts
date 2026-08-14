@@ -1,4 +1,5 @@
 import type { ChannelMessage } from "@multica/core/types";
+import type { NoteWriteConfirmation } from "@multica/core/notes/worker-reply-actions";
 
 /** Stable JSON for optional nested message fields used in render. */
 function stableJson(value: unknown): string {
@@ -46,7 +47,7 @@ export type ChannelMessageBubbleMemoProps = {
   collapseLongContent?: boolean;
   compact?: boolean;
   groupEnd?: boolean;
-  noteWorkerPageId?: string | null;
+  noteWriteConfirmation?: NoteWriteConfirmation | null;
   onOpenThread?: unknown;
   onScrollTo?: unknown;
   onReact?: unknown;
@@ -74,7 +75,14 @@ export function areChannelMessageBubblePropsEqual(
   // LRM-1227: the joined shell's bottom edge flips when a later message extends
   // or ends the group, so this must invalidate the memo like `compact` does.
   if (prev.groupEnd !== next.groupEnd) return false;
-  if (prev.noteWorkerPageId !== next.noteWorkerPageId) return false;
+  if (prev.noteWriteConfirmation?.mode !== next.noteWriteConfirmation?.mode) return false;
+  if (
+    prev.noteWriteConfirmation?.mode === "existing" &&
+    next.noteWriteConfirmation?.mode === "existing" &&
+    prev.noteWriteConfirmation.pageId !== next.noteWriteConfirmation.pageId
+  ) {
+    return false;
+  }
   if (prev.onOpenThread !== next.onOpenThread) return false;
   if (prev.onScrollTo !== next.onScrollTo) return false;
   if (prev.onReact !== next.onReact) return false;

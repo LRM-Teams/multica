@@ -20,20 +20,25 @@ func (inbox *LocalReminderInbox) AcceptDue(job protocol.ReminderTimerJob) bool {
 		return false
 	}
 	d := inbox.daemon
-	attachment, ok := d.currentAttachmentForAgent(job.OwnerAgentID)
+	runtimeID, ok := d.reminderCache.runtimeFor(job)
 	if !ok {
+		return false
+	}
+	d.mu.Lock()
+	runtime, known := d.runtimeIndex[runtimeID]
+	d.mu.Unlock()
+	if !known || runtime.WorkspaceID == "" {
 		return false
 	}
 	local := job.LocalInput
 	payload := protocol.ReminderOwnerInputPayload{
-		WorkspaceID:         attachment.WorkspaceID,
-		AgentID:             job.OwnerAgentID,
-		RuntimeID:           attachment.RuntimeID,
-		PlacementGeneration: int64(attachment.AttachmentGeneration),
-		ReminderID:          job.ReminderID,
-		Version:             job.Version,
-		Title:               local.Title,
-		Anchor:              local.Anchor,
+		WorkspaceID: runtime.WorkspaceID,
+		AgentID:     job.OwnerAgentID,
+		RuntimeID:   runtimeID,
+		ReminderID:  job.ReminderID,
+		Version:     job.Version,
+		Title:       local.Title,
+		Anchor:      local.Anchor,
 		Occurrence: protocol.ReminderOwnerInputOccurrence{
 			OccurrenceID: local.Occurrence.OccurrenceID,
 			ScheduledFor: local.Occurrence.ScheduledFor,

@@ -26,11 +26,6 @@ type TaskContextForEnv struct {
 	NewCommentsSince    string // RFC3339 anchor (last run's started_at) the count is measured from; empty on cold start
 	PriorSessionResumed bool   // true when the daemon will resume an existing provider session for this task
 	AssignmentSnapshot  *protocol.IssueAssignmentSnapshot
-	// FreshSessionNoticeReason is non-empty when the canonical provider
-	// session is intentionally new (for example, during cutover or after an
-	// explicit reset). The reason is a transport signal; the rendered brief
-	// uses one stable user-facing explanation for every reason.
-	FreshSessionNoticeReason string
 
 	AgentID           string // unique ID of the dispatched agent
 	AgentName         string

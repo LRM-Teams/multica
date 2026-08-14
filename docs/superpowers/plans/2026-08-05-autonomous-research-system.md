@@ -1055,6 +1055,7 @@ projection 生成。§15.23 已收口。
   - [x] E3b-write：`resultAcceptanceModule` 与 PostgreSQL `AcceptResult` 在锁定 Run/Task/Attempt 后按其不可变 `research-run-v6` 版本重新严格解码初始 `plan_result`；同一 Result 接收事务以确定性 UUID 解析 Question/Hypothesis/Branch/Inquiry Edge client key，按父图顺序写 canonical Inquiry、注册 production Passport、创建依赖有序的 Execution Task、保存 Search Plan 到冻结 Task contract、绑定 typed Task–Inquiry Target，并保存完整原始 V6 Result 与 `v6_plan_materialized` Event。任一端点、外键、Passport、依赖或 target 失败会连同 Attempt 成功状态整体回滚；V6 默认值和非 Plan Result 仍保持关闭，等待 F–N 退出证据。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
   - [x] E4a：`TransitionInquiry` 以 Run state-version 与 entity before-status 双 CAS、真实 assigned Attempt/Agent 和冻结 Manifest 当前版本授权为边界，批量迁移 Hypothesis/Branch/Insight；每项变更保存结构化 before/after/reason，生成 `research-run-v6` production Artifact Version、`revises` Input Reference、current-version policy mutation/eligibility revision，并与幂等 `inquiry_state_changed` Run Event 同事务提交。Question 状态更新与 V6 accepted Task Result 自动调用仍待 E4b。
+  - [x] E4b：严格 V6 Evidence Result 接收在锁定 Result 事务内把 typed client-key target/evidence reference 解析为同 Run canonical UUID，复用 Question/Hypothesis/Branch/Insight 状态机和 before-status CAS，写结构化 transition、evidence ledger 与 `inquiry_status_updated` Event；缺失 Source Snapshot 的 Candidate key 不能冒充 Evidence，任一解析或状态冲突会回滚整个 Result。后续 Fetch Adapter 创建 Source Snapshot 后，同一协议才能引用该 Source 更新 Inquiry。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
   - [x] E5a：建立按 current state version fencing 的 selective steering 影响规划器；显式 affected branch 根扩展为后代闭包，只选择相交的 pending/ready/running Task，区分取消与允许完成，并保持终态 Branch/Task 为不可变历史。accepted Evidence 不属于可变计划输出。PostgreSQL 原子应用、typed HTTP 输入和 Event/Decision 仍待 E5b。
   - [x] E5-prereq-target：选择性 steering 的 Task→Branch 输入已改为 migration 355 canonical 绑定，并提供事务内 state loader；未绑定 Branch 的 Task 仅能参与显式 full replan，局部 steering 不得通过文本或图布局推断其归属。
@@ -1065,6 +1066,7 @@ projection 生成。§15.23 已收口。
 ### F. Search 与 Corpus 谱系
 
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
+  - [x] F1-write：新增独立严格 `DecodeAndValidateV6EvidenceResult`，按冻结 `task_result` 拒绝未知/缺失/null/trailing 字段、跨 Task-kind payload、未绑定 Query、失败 Query 候选、未按 Plan 审查、credential/非 canonical URL、非法 hash/outcome/failure；`AcceptResult` 在同一事务验证 Query 只引用 Task 冻结 Search Plan 且 Adapter 未改变，写 Search Plan、Query Execution、Source Candidate、Screening Decision、四类 production Passport 和审计 Event。`include` 只表示筛选通过，不创建 Source Snapshot；Fetch Adapter/ingestion 写接线仍待 F2/F4。
 - [x] F3b-policy：冻结 `research-screening-v1` 筛选合同。每个决定必须携带版本化纳排标准、`accepted | excluded | duplicate` 的合法命中矩阵、审查主体与时间、结构化事实和稳定 SHA-256 指纹；重复项必须指向另一候选并以 canonical URL 或 content hash 证明同一性。持久化接线仍随 F1/F3 后续切片完成，不能仅凭本项宣称来源谱系已闭环。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
   - [x] F2a：冻结 `RetrievalAdapter` Search/Fetch seam 与统一请求/响应、游标、全文、成本、失败和安全事实 contract；Research Run 对 canonical URL/identity、内容 hash、大小/MIME、redirect、DNS 地址、credential forwarding、scan disposition 和 retry policy fail closed。具体 provider Adapter、Corpus 持久化及 SSRF transport 测试仍属于 F2b/F2c，不能以本项替代。

@@ -79,4 +79,71 @@ func TestAcceptV6PlanMaterializesInquiryTasksAndTargetsAtomically(t *testing.T) 
 	if questions != 1 || hypotheses != 1 || branches != 1 || edges != 1 || executionTasks != 1 || targets != 1 || graphEvents != 1 {
 		t.Fatalf("q=%d h=%d b=%d e=%d tasks=%d targets=%d events=%d", questions, hypotheses, branches, edges, executionTasks, targets, graphEvents)
 	}
+
+	// Dispatch is still production-gated at V5 until F-N exits are complete;
+	// use the frozen V5 dispatcher only to create the real Attempt/Manifest,
+	// then prove the immutable V6 result adapter and transaction.
+	if _, err = pool.Exec(ctx, `UPDATE research_session SET orchestrator_version=$2 WHERE id=$1::uuid`, run.SessionID, OrchestratorVersionV5); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err = store.ListTasks(ctx, run.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidenceTask Task
+	for _, task := range tasks {
+		if task.ClientKey == "task.discover" {
+			evidenceTask = task
+		}
+	}
+	if evidenceTask.ID == "" {
+		t.Fatal("V6 evidence task is missing")
+	}
+	evidenceAttempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, evidenceTask.ID, fixture.agentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidenceInboxID := seedIntegrationInboxEvent(t, ctx, pool, fixture.workspaceID, fixture.agentID)
+	if _, _, err = store.AttachInboxTask(ctx, evidenceAttempt.ID, evidenceInboxID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_session SET orchestrator_version=$2 WHERE id=$1::uuid`, run.SessionID, OrchestratorVersionV6); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task SET status='running',started_at=now() WHERE id=$1::uuid`, evidenceTask.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET status='running',started_at=now() WHERE id=$1::uuid`, evidenceAttempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	evidenceFixture := validV6EvidenceResultFixture()
+	evidenceFixture["status_updates"] = []any{map[string]any{
+		"target": map[string]any{"kind": "hypothesis", "key": "h.primary"}, "before": "proposed", "after": "investigating",
+		"reason": "The screened query establishes a concrete verification path", "evidence_refs": []any{map[string]any{"kind": "task", "key": "task.discover"}},
+	}}
+	evidenceRaw := encodeV6EvidenceFixture(t, evidenceFixture)
+	evidenceResult, evidenceHash, err := DecodeAndValidateV6EvidenceResult(evidenceRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AcceptResult(ctx, AcceptResultInput{SessionID: run.SessionID, AttemptID: evidenceAttempt.ID, AgentID: fixture.agentID,
+		InboxTaskID: evidenceInboxID, Raw: evidenceRaw, Result: researchV6EvidenceEnvelope(evidenceResult), V6Evidence: &evidenceResult, Hash: evidenceHash}); err != nil {
+		t.Fatal(err)
+	}
+	var searchPlans, queries, candidates, decisions, searchPassports, transitions int
+	var hypothesisStatus string
+	if err = pool.QueryRow(ctx, `SELECT
+		(SELECT count(*)::int FROM research_search_plan WHERE session_id=$1::uuid),
+		(SELECT count(*)::int FROM research_query_execution WHERE session_id=$1::uuid),
+		(SELECT count(*)::int FROM research_source_candidate WHERE session_id=$1::uuid),
+		(SELECT count(*)::int FROM research_screening_decision WHERE session_id=$1::uuid),
+		(SELECT count(*)::int FROM research_artifact_passport WHERE session_id=$1::uuid AND entity_kind IN ('search_plan','query_execution','source_candidate','screening_decision')),
+		(SELECT count(*)::int FROM research_inquiry_status_transition WHERE session_id=$1::uuid),
+		(SELECT status FROM research_hypothesis WHERE session_id=$1::uuid AND client_key='h.primary')`, run.SessionID).Scan(
+		&searchPlans, &queries, &candidates, &decisions, &searchPassports, &transitions, &hypothesisStatus); err != nil {
+		t.Fatal(err)
+	}
+	if searchPlans != 1 || queries != 1 || candidates != 1 || decisions != 1 || searchPassports != 4 || transitions != 1 || hypothesisStatus != "investigating" {
+		t.Fatalf("plans=%d queries=%d candidates=%d decisions=%d passports=%d transitions=%d hypothesis=%s", searchPlans, queries, candidates, decisions, searchPassports, transitions, hypothesisStatus)
+	}
 }

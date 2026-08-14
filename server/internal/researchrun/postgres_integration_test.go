@@ -902,6 +902,27 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if err != nil || len(questions) != 2 {
 		t.Fatalf("questions=%+v err=%v", questions, err)
 	}
+	var questionLineageCount int
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int
+		FROM research_artifact_input_reference reference
+		JOIN research_artifact_version consumer
+		  ON consumer.workspace_id=reference.workspace_id
+		 AND consumer.session_id=reference.session_id
+		 AND consumer.id=reference.consumer_version_id
+		WHERE consumer.workspace_id=$1::uuid AND consumer.session_id=$2::uuid
+		  AND consumer.artifact_id=(
+			SELECT id FROM research_question
+			WHERE session_id=$2::uuid AND client_key<>'root'
+			ORDER BY id LIMIT 1
+		  )
+		  AND reference.relation IN ('question_parent','created_by_task')
+	`, fixture.workspaceID, fixture.sessionID).Scan(&questionLineageCount); err != nil {
+		t.Fatal(err)
+	}
+	if questionLineageCount != 2 {
+		t.Fatalf("question typed lineage count=%d want=2", questionLineageCount)
+	}
 	tasks, err = store.ListTasks(ctx, fixture.sessionID)
 	discoverReady := false
 	for _, task := range tasks {

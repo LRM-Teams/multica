@@ -19,7 +19,7 @@ var chapterD15Coverage = map[int]string{
 	2:  "covered", // live catalog scope/FK/revision-uniqueness/complete stable guard inventory
 	3:  "partial", // migration FK negative fixtures
 	4:  "partial", // deferred guard tests in migration suite
-	5:  "partial", // version/lifecycle/policy-ledger update+delete guards and watermark/passport CAS; remaining revision/concurrency matrix open
+	5:  "covered", // immutable versions + reciprocal/append-only ledgers + exact revision/watermark guards + concurrent writer convergence
 	6:  "partial", // backfill diagnostic tests in migration 319
 	7:  "covered", // exhaustive registered/unknown kind × lifecycle × provenance legacy admission matrix
 	8:  "partial", // full-family shadow + evidence tie-order + omission mutation; prompt hash covered

@@ -1019,6 +1019,12 @@ assigned active Agent Attempt projection 两个正向对照，并证明 unbound 
 fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
 grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
+D-version-1 证据：Version update/delete、current-version FK/CAS、revision skip/no-op、错误 mutation
+kind/fact columns、reciprocal lifecycle/access/eligibility/grant/supersession ledger、append-only guard 与
+target+new-revision uniqueness 已由真实 catalog/negative fixture 覆盖；新增两个生产 version writer
+并发推进同一 Question，验证只留下连续 1→2→3 Version、唯一 current/eligibility revision、两个唯一
+target revision、连续单调 policy watermark，且 current hash 与最终 domain row 一致。§15.5 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

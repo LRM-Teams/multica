@@ -123,6 +123,7 @@ func TestMigratedTransactionsUseResearchTransactionRunner(t *testing.T) {
 		{file: "postgres_artifact_supersession.go", function: "SupersedeArtifact", wantBegins: 1, wantCommits: 2},
 		{file: "postgres_artifact_lifecycle.go", function: "WithdrawArtifact", wantBegins: 1, wantCommits: 2},
 		{file: "postgres_task_inquiry_target.go", function: "BindTaskInquiryTargets", wantBegins: 1, wantCommits: 2},
+		{file: "postgres_inquiry_status.go", function: "UpdateInquiryStatus", wantBegins: 1, wantCommits: 2},
 	}
 
 	for _, test := range tests {

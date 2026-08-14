@@ -38,6 +38,33 @@ func TestHashManifestEntriesDeterministic(t *testing.T) {
 	}
 }
 
+func TestHashManifestOmissionsBindsFrozenDisposition(t *testing.T) {
+	base := []artifactVersionCandidate{
+		{VersionRowID: "version-1", OmissionReason: "lifecycle"},
+		{VersionRowID: "version-2", OmissionReason: "evaluation_compartment"},
+	}
+	want := hashManifestOmissions(base)
+	mutations := []struct {
+		name  string
+		value []artifactVersionCandidate
+	}{
+		{name: "removed", value: base[:1]},
+		{name: "reordered", value: []artifactVersionCandidate{base[1], base[0]}},
+		{name: "version", value: []artifactVersionCandidate{{VersionRowID: "changed", OmissionReason: "lifecycle"}, base[1]}},
+		{name: "reason", value: []artifactVersionCandidate{{VersionRowID: "version-1", OmissionReason: "policy_denied"}, base[1]}},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			if got := hashManifestOmissions(mutation.value); got == want {
+				t.Fatalf("omission hash did not bind %s", mutation.name)
+			}
+		})
+	}
+	if hashManifestOmissions(nil) != hashManifestOmissions([]artifactVersionCandidate{}) {
+		t.Fatal("empty omission set must have one canonical hash")
+	}
+}
+
 func TestDispatchManifestHashBindsAuthorizationScope(t *testing.T) {
 	base := dispatchManifestHashInput{
 		WorkspaceID:         "11111111-1111-1111-1111-111111111111",

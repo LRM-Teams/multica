@@ -890,6 +890,54 @@ func verifyAcceptanceManifestHashTx(
 	if hashDispatchManifest(hashInput) != storedHash {
 		return fmt.Errorf("%w: acceptance manifest hash mismatch", ErrInvalidTransition)
 	}
+	if err = verifyAcceptanceManifestOmissionHashTx(ctx, tx, workspaceID, sessionID, attemptID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyAcceptanceManifestOmissionHashTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var storedHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT omission_hash
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&storedHash); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT o.candidate_version_id::text, o.reason
+		FROM research_artifact_context_omission o
+		JOIN research_artifact_context_manifest m
+		  ON (m.workspace_id, m.session_id, m.id) =
+		     (o.workspace_id, o.session_id, o.manifest_id)
+		WHERE m.workspace_id = $1::uuid
+		  AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+		ORDER BY o.ordinal
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var omissions []artifactVersionCandidate
+	for rows.Next() {
+		var omission artifactVersionCandidate
+		if err = rows.Scan(&omission.VersionRowID, &omission.OmissionReason); err != nil {
+			return err
+		}
+		omissions = append(omissions, omission)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if storedHash == "" || hashManifestOmissions(omissions) != storedHash {
+		return fmt.Errorf("%w: acceptance Manifest omission hash mismatch", ErrInvalidTransition)
+	}
 	return nil
 }
 

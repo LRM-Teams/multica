@@ -72,6 +72,38 @@ func startFakeTaskWakeupServer(t *testing.T, onClientFrame func(protocol.Message
 	}))
 }
 
+func TestLegacyRuntimeWakeSocketDoesNotCarryControlHeartbeat(t *testing.T) {
+	heartbeat := make(chan struct{}, 1)
+	srv := startFakeTaskWakeupServer(t, func(frame protocol.Message) {
+		if frame.Type == protocol.EventDaemonHeartbeat {
+			select {
+			case heartbeat <- struct{}{}:
+			default:
+			}
+		}
+	}, nil)
+	defer srv.Close()
+
+	d := New(Config{
+		ServerBaseURL: srv.URL, WorkspacesRoot: t.TempDir(),
+		HeartbeatInterval: 10 * time.Millisecond,
+	}, testDiscardLogger())
+	d.client.SetToken("test-token")
+	d.mu.Lock()
+	d.runtimeIndex["rt-1"] = Runtime{ID: "rt-1", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	go func() {
+		_ = d.runTaskWakeupConnection(ctx, []string{"rt-1"}, make(chan taskWakeup, 1), make(chan struct{}))
+	}()
+	select {
+	case <-heartbeat:
+		t.Fatal("legacy runtime wake socket sent a control-plane heartbeat")
+	case <-ctx.Done():
+	}
+}
+
 func TestInboundWatchdogProbeAndTerminateViaConnection(t *testing.T) {
 	var mu sync.Mutex
 	var frames []protocol.Message
@@ -113,42 +145,32 @@ func TestInboundWatchdogProbeAndTerminateViaConnection(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	var heartbeats int
+	var probes int
 	for _, f := range frames {
-		if f.Type == protocol.EventDaemonHeartbeat {
-			heartbeats++
+		if f.Type == protocol.EventDaemonLivenessProbe {
+			probes++
 		}
 	}
-	// Immediate HB sender + at least one probe batch.
-	if heartbeats < 2 {
-		t.Fatalf("heartbeat frames = %d, want >= 2 (initial + probe)", heartbeats)
+	if probes < 1 {
+		t.Fatalf("liveness probe frames = %d, want >= 1", probes)
 	}
 }
 
 func TestInboundWatchdogProbeThenInboundDoesNotTerminate(t *testing.T) {
 	serverFrames := make(chan []byte, 4)
 	var mu sync.Mutex
-	var heartbeats int
+	var probes int
 	srv := startFakeTaskWakeupServer(t, func(msg protocol.Message) {
-		if msg.Type != protocol.EventDaemonHeartbeat {
+		if msg.Type != protocol.EventDaemonLivenessProbe {
 			return
 		}
 		mu.Lock()
-		heartbeats++
-		n := heartbeats
+		probes++
 		mu.Unlock()
-		// After the second heartbeat (probe), reply with ack so watchdog resets.
-		if n >= 2 {
-			ack, _ := json.Marshal(protocol.Message{
-				Type: protocol.EventDaemonHeartbeatAck,
-				Payload: marshalRaw(protocol.DaemonHeartbeatAckPayload{
-					RuntimeID: "rt-1",
-				}),
-			})
-			select {
-			case serverFrames <- ack:
-			default:
-			}
+		ack, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonLivenessAck})
+		select {
+		case serverFrames <- ack:
+		default:
 		}
 	}, serverFrames)
 	defer srv.Close()

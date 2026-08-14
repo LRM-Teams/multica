@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -165,6 +166,18 @@ func initializeRunTx(ctx context.Context, tx pgx.Tx, in StartInput, cfg RunConfi
 		ON CONFLICT (session_id, goal_version) DO NOTHING
 	`, in.WorkspaceID, in.SessionID, strings.TrimSpace(in.Goal), strings.TrimSpace(in.Language),
 		sourcePolicy, configJSON, in.CreatedBy); err != nil {
+		return RunEvent{}, err
+	}
+	director, err := PinResearchDirector(in.LeadAgentID)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	directorID := uuid.NewSHA1(uuid.MustParse(in.SessionID), []byte("research-director/1")).String()
+	if _, err = tx.Exec(ctx, `INSERT INTO research_director_identity
+		(id,workspace_id,session_id,identity_version,agent_id,assigned_by_user_id,reason)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,'fleet_lead_at_run_start')
+		ON CONFLICT (workspace_id,session_id,identity_version) DO NOTHING`, directorID, in.WorkspaceID, in.SessionID,
+		director.IdentityVersion, director.AgentID, in.CreatedBy); err != nil {
 		return RunEvent{}, err
 	}
 	var rootQuestionID string

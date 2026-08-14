@@ -1655,6 +1655,7 @@ const ChannelMessageQuoteSnapshotSchema = z.object({
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   createdAt: z.string().default(""),
+  selectedText: z.string().nullable().optional(),
 }).loose().transform((value) => stripLegacyQuoteAvatar(value));
 
 const ChannelMessageQuoteSchema = z.object({

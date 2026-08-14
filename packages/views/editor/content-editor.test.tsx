@@ -139,7 +139,7 @@ vi.mock("@tiptap/react", () => ({
   ),
 }));
 
-import { ContentEditor, type ContentEditorRef } from "./content-editor";
+import { ContentEditor } from "./content-editor";
 
 describe("ContentEditor", () => {
   beforeEach(() => {
@@ -277,25 +277,6 @@ describe("ContentEditor", () => {
     });
 
     expect(onUpdate).toHaveBeenCalledWith("draft before switching");
-  });
-
-  it("inserts a literal editable quote followed by a response paragraph", () => {
-    const ref = { current: null as ContentEditorRef | null };
-    render(<ContentEditor ref={ref} />);
-
-    act(() => ref.current?.insertQuoteText("> first\n> second"));
-
-    expect(mockInsertContent).toHaveBeenCalledWith([
-      {
-        type: "paragraph",
-        content: [
-          { type: "text", text: "> first" },
-          { type: "hardBreak" },
-          { type: "text", text: "> second" },
-        ],
-      },
-      { type: "paragraph" },
-    ]);
   });
 
   it("opens the empty-line AI prompt when Space is pressed in an empty paragraph", () => {

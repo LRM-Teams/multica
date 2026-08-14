@@ -2175,6 +2175,101 @@ func TestSendChannelMessageQuoteCapturesSnapshotAndHidesDeletedSource(t *testing
 	}
 }
 
+func TestSendChannelMessageStructuredQuotePersistsSelectedTextAfterSourceEdit(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "selected-quote-"+uuid.NewString(), testUserID)
+	source, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "before selected after", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("selected-source"), 0)
+	if err != nil {
+		t.Fatalf("insert source message: %v", err)
+	}
+
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"content": "respond to excerpt",
+		"quote": map[string]any{
+			"message_id":    source.ID,
+			"selected_text": "  selected  ",
+		},
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send structured quote: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.Quote == nil || created.Quote.Snapshot == nil || created.Quote.Snapshot.SelectedText == nil || *created.Quote.Snapshot.SelectedText != "selected" {
+		t.Fatalf("created selected quote = %+v", created.Quote)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE channel_message SET content = 'edited source', edited_at = now() WHERE id = $1`, source.ID); err != nil {
+		t.Fatalf("edit source: %v", err)
+	}
+	var raw []byte
+	if err := testPool.QueryRow(ctx, `SELECT quote_snapshot FROM channel_message WHERE id = $1`, created.ID).Scan(&raw); err != nil {
+		t.Fatalf("load persisted quote snapshot: %v", err)
+	}
+	var snapshot ChannelMessageQuoteSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatalf("decode persisted quote snapshot: %v", err)
+	}
+	if snapshot.Content != "before selected after" || snapshot.SelectedText == nil || *snapshot.SelectedText != "selected" {
+		t.Fatalf("persisted snapshot after source edit = %+v", snapshot)
+	}
+}
+
+func TestResolveChannelQuoteTargetRejectsInvalidSelectedText(t *testing.T) {
+	h := &Handler{}
+	messageID := uuid.NewString()
+	tests := []struct {
+		name  string
+		quote SendChannelMessageQuoteRequest
+	}{
+		{name: "without message id", quote: SendChannelMessageQuoteRequest{SelectedText: strPtr("excerpt")}},
+		{name: "blank", quote: SendChannelMessageQuoteRequest{MessageID: messageID, SelectedText: strPtr(" \n\t ")}},
+		{name: "oversized unicode", quote: SendChannelMessageQuoteRequest{MessageID: messageID, SelectedText: strPtr(strings.Repeat("界", channelQuoteSelectedTextMaxLen+1))}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			_, _, ok := h.resolveChannelQuoteTarget(rec, context.Background(), testWorkspaceID, pgtype.UUID{}, SendChannelMessageRequest{Quote: &tt.quote}, pgtype.UUID{})
+			if ok || rec.Code != http.StatusBadRequest {
+				t.Fatalf("ok=%v status=%d body=%s, want false/400", ok, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestSameQuoteSelectedTextIgnoresMutableSnapshotFields(t *testing.T) {
+	selected := "stable excerpt"
+	left, err := json.Marshal(ChannelMessageQuoteSnapshot{AuthorName: "Before", Content: "old source", SelectedText: &selected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := json.Marshal(ChannelMessageQuoteSnapshot{AuthorName: "After", Content: "edited source", SelectedText: &selected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameQuoteSelectedText(left, right) {
+		t.Fatal("mutable source snapshot fields must not cause an idempotency conflict")
+	}
+	different := "different excerpt"
+	right, err = json.Marshal(ChannelMessageQuoteSnapshot{AuthorName: "Before", Content: "old source", SelectedText: &different})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameQuoteSelectedText(left, right) {
+		t.Fatal("different selected text must cause an idempotency conflict")
+	}
+}
+
 func TestSendChannelMessageQuoteRejectsCrossChannelTarget(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -77,14 +77,9 @@ export const ContentEditor = forwardRef<
   const seeded = Boolean(props.defaultValue && String(props.defaultValue).trim());
   const [armed, setArmed] = useState(seeded);
   const loadedRef = useRef<ContentEditorRef | null>(null);
-  const pendingQuoteTextsRef = useRef<string[]>([]);
 
   const setLoadedRef = useCallback((editor: ContentEditorRef | null) => {
     loadedRef.current = editor;
-    if (!editor || pendingQuoteTextsRef.current.length === 0) return;
-    for (const text of pendingQuoteTextsRef.current.splice(0)) {
-      editor.insertQuoteText(text);
-    }
   }, []);
 
   useImperativeHandle(ref, () => ({
@@ -98,20 +93,11 @@ export const ContentEditor = forwardRef<
     uploadFile: (file) => loadedRef.current?.uploadFile(file),
     hasActiveUploads: () => loadedRef.current?.hasActiveUploads() ?? false,
     insertText: (text) => loadedRef.current?.insertText(text),
-    insertQuoteText: (text) => {
-      if (loadedRef.current) {
-        loadedRef.current.insertQuoteText(text);
-        return;
-      }
-      pendingQuoteTextsRef.current.push(text);
-      setArmed(true);
-    },
     insertBlankLineAtStart: () => loadedRef.current?.insertBlankLineAtStart(),
     openIssueReferences: () => loadedRef.current?.openIssueReferences(),
     getSelectedText: () => loadedRef.current?.getSelectedText() ?? "",
     insertIssueReference: (attrs) => loadedRef.current?.insertIssueReference(attrs),
     insertRunReference: (attrs) => loadedRef.current?.insertRunReference(attrs),
-    insertMarkdown: (md) => loadedRef.current?.insertMarkdown(md),
     openPageAI: () => loadedRef.current?.openPageAI() ?? false,
   }), [props.defaultValue]);
 

@@ -405,6 +405,7 @@ export type {
   ChannelMessage,
   UndeliveredMention,
   ChannelMessageQuote,
+  ChannelMessageQuoteInput,
   ChannelMessageQuoteSnapshot,
   ChannelMessagesCursor,
   ChannelMessagesPage,

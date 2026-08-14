@@ -446,12 +446,18 @@ export interface ChannelMessageQuoteSnapshot {
   content: string;
   parts?: MessagePart[];
   createdAt: string;
+  selectedText?: string | null;
 }
 
 export interface ChannelMessageQuote {
   messageId: string;
   snapshot?: ChannelMessageQuoteSnapshot | null;
   status: "active" | "deleted" | "inaccessible" | (string & {});
+}
+
+export interface ChannelMessageQuoteInput {
+  messageId: string;
+  selectedText?: string;
 }
 
 export interface ChannelMessageSearchResult {

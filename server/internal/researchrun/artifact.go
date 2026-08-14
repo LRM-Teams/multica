@@ -324,6 +324,43 @@ func MigrationRelationshipParserNames() []string {
 	}
 }
 
+// RunEventRelationshipSchemaNames lists event payload schemas admitted by the
+// closed Chapter D typed-reference parser.
+func RunEventRelationshipSchemaNames() []string {
+	return []string{
+		"budget_exhausted",
+		"control_task_created",
+		"execution_circuit_transition",
+		"goal_steered",
+		"inquiry_graph_created",
+		"inquiry_state_changed",
+		"inquiry_status_updated",
+		"node_command_continue",
+		"node_command_fork",
+		"node_command_reassign",
+		"node_command_retry",
+		"run_archived",
+		"run_awaiting_confirmation",
+		"run_cancelled",
+		"run_completed",
+		"run_failed",
+		"run_paused",
+		"run_resumed",
+		"run_started",
+		"selective_steering_applied",
+		"target_repair_decided",
+		"task_attempt_cancelling",
+		"task_attempt_failed",
+		"task_blocked",
+		"task_dispatched",
+		"task_dispatching",
+		"task_inquiry_targets_bound",
+		"task_result_accepted",
+		"task_started",
+		"task_waiting_for_execution_target",
+	}
+}
+
 // ScopedRelationshipFKNames lists migration 326 composite relationship FKs.
 func ScopedRelationshipFKNames() []string {
 	return []string{

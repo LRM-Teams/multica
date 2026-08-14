@@ -2109,6 +2109,148 @@ func TestResearchArtifactPassportDCompletion328RoundTrips(t *testing.T) {
 	}
 }
 
+func TestResearchReportRelationshipDiagnostics351RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_report_diagnostic_351_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifact328TestDDL+`
+		ALTER TABLE research_report ADD COLUMN structured JSONB NOT NULL DEFAULT '{}'::jsonb;
+	`); err != nil {
+		t.Fatalf("extend report schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	otherSessionID := "20000000-0000-4000-8000-000000000002"
+	reportID := "30000000-0000-4000-8000-000000000010"
+	claimID := "30000000-0000-4000-8000-000000000011"
+	localSourceID := "30000000-0000-4000-8000-000000000012"
+	foreignSourceID := "30000000-0000-4000-8000-000000000013"
+	brokenStructured := fmt.Sprintf(`{
+		"schema_version":1,
+		"outline":[{"id":"section-a","children":["section-b","missing-section"]},{"id":"section-b","children":["section-a"]}],
+		"sections":[{"id":"section-a","citation_ids":["missing-citation"]},{"id":"section-a","citation_ids":[]},{"id":"section-b","citation_ids":[]}],
+		"citations":[{"id":"citation-a","source_id":"missing-structured-source"}],
+		"sources":[{"source_id":"%s"},{"source_id":"not-a-uuid"}]
+	}`, foreignSourceID)
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO workspace (id) VALUES ($1::uuid);
+		INSERT INTO research_session (id, workspace_id) VALUES
+		  ($2::uuid, $1::uuid), ($3::uuid, $1::uuid);
+		INSERT INTO research_source (id, workspace_id, session_id) VALUES
+		  ($4::uuid, $1::uuid, $2::uuid), ($5::uuid, $1::uuid, $3::uuid);
+		INSERT INTO research_claim (id, workspace_id, session_id) VALUES ($6::uuid, $1::uuid, $2::uuid);
+		INSERT INTO research_report (id, workspace_id, session_id, structured) VALUES ($7::uuid, $1::uuid, $2::uuid, $8::jsonb);
+		INSERT INTO research_report_claim (report_id, claim_id, section_id) VALUES ($7::uuid, $6::uuid, 'missing-claim-section');
+	`, workspaceID, sessionID, otherSessionID, localSourceID, foreignSourceID, claimID, reportID, brokenStructured); err != nil {
+		t.Fatalf("seed report fixture: %v", err)
+	}
+
+	versions := []string{
+		"318_research_artifact_passport",
+		"319_research_artifact_passport_backfill",
+		"320_research_artifact_reciprocal_guards",
+		"321_research_artifact_policy_coupling_guards",
+		"322_research_artifact_policy_ledger_guards",
+		"323_research_artifact_integrity_guards",
+		"324_research_artifact_link_policy_guards",
+		"325_research_artifact_migration_diagnostics",
+		"327_research_artifact_canonicalization_registry",
+		"328_research_artifact_passport_d_completion",
+	}
+	for _, version := range versions {
+		upSQL, _ := readMigrationPair(t, version)
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply %s: %v", version, err)
+		}
+	}
+	up351, down351 := readMigrationPair(t, "351_research_report_relationship_diagnostics")
+	if _, err = conn.Exec(ctx, up351); err != nil {
+		t.Fatalf("apply 351: %v", err)
+	}
+
+	var diagnosticCount int
+	if err = conn.QueryRow(ctx, `
+		SELECT research_artifact_scan_research_report_migration_diagnostics($1::uuid, $2::uuid, $3::uuid)
+	`, workspaceID, sessionID, reportID).Scan(&diagnosticCount); err != nil {
+		t.Fatalf("scan broken report: %v", err)
+	}
+	if diagnosticCount < 6 {
+		t.Fatalf("broken report diagnostics=%d want at least 6", diagnosticCount)
+	}
+	for fieldPath, wantReason := range map[string]string{
+		"/structured/sections/0/id":                "duplicate_local_key",
+		"/structured/outline/0/id":                 "ambiguous_local_key",
+		"/structured/outline/0/children/1":         "dangling_local_key",
+		"/structured/outline":                      "cyclic_local_reference",
+		"/structured/citations/0/source_id":        "dangling_local_key",
+		"/structured/sources/1/source_id":          "malformed_uuid",
+		"/structured/sources/0/source_id":          "cross_scope_reference",
+		"/report_claim/" + claimID + "/section_id": "dangling_local_key",
+	} {
+		var reason string
+		if err = conn.QueryRow(ctx, `
+			SELECT reason_code FROM research_artifact_migration_diagnostic
+			WHERE owner_kind = 'report_revision' AND owner_id = $1::uuid AND field_path = $2
+		`, reportID, fieldPath).Scan(&reason); err != nil || reason != wantReason {
+			t.Fatalf("diagnostic %s reason=%q want=%q err=%v", fieldPath, reason, wantReason, err)
+		}
+	}
+
+	validStructured := fmt.Sprintf(`{
+		"schema_version":1,
+		"outline":[{"id":"section-a","children":[]}],
+		"sections":[{"id":"section-a","citation_ids":["citation-a"]}],
+		"citations":[{"id":"citation-a","source_id":"%s"}],
+		"sources":[{"source_id":"%s"}]
+	}`, localSourceID, localSourceID)
+	if _, err = conn.Exec(ctx, `
+		UPDATE research_report SET structured = $4::jsonb
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+		UPDATE research_report_claim SET section_id = 'section-a'
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND report_id = $3::uuid;
+	`, workspaceID, sessionID, reportID, validStructured); err != nil {
+		t.Fatalf("repair report: %v", err)
+	}
+	if err = conn.QueryRow(ctx, `
+		SELECT research_artifact_scan_research_report_migration_diagnostics($1::uuid, $2::uuid, $3::uuid)
+	`, workspaceID, sessionID, reportID).Scan(&diagnosticCount); err != nil {
+		t.Fatalf("rescan repaired report: %v", err)
+	}
+	if diagnosticCount != 0 {
+		t.Fatalf("repaired report diagnostics=%d want 0", diagnosticCount)
+	}
+
+	if _, err = conn.Exec(ctx, down351); err != nil {
+		t.Fatalf("apply 351 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up351); err != nil {
+		t.Fatalf("reapply 351 up: %v", err)
+	}
+}
+
 func TestResearchResultArtifactBackfill329RoundTrips(t *testing.T) {
 	pool := openTestPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

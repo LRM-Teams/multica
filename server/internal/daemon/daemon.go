@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,15 +73,11 @@ func (f taskRunnerFunc) run(ctx context.Context, task Task, provider string, slo
 type daemonProcessRole uint8
 
 const (
-	daemonProcessLegacy daemonProcessRole = iota
+	daemonProcessTestHarness daemonProcessRole = iota
 	daemonProcessBindingChild
 )
 
 var (
-	isBrewInstall        = cli.IsBrewInstall
-	getBrewPrefix        = cli.GetBrewPrefix
-	matchKnownBrewPrefix = cli.MatchKnownBrewPrefix
-
 	// detectAgentVersion / checkAgentMinVersion are indirections over the
 	// real agent helpers so tests can run the registration path without
 	// shelling out to a real CLI. Mirrors the pattern used for the brew
@@ -117,8 +112,6 @@ type Daemon struct {
 	mixedRunActivityOutbox     *mixedRunActivityOutbox
 	mixedRunActivityReporter   func(protocol.MixedRunActivityTransitionPayload) bool
 	lifecycleDiagnostics       *lifecycleDiagnosticWriter
-	machineUpgradeLog          *machineUpgradeEventLog
-	machineUpgradeTakeover     *machineUpgradeTakeover
 	runnerInstanceID           string
 	runnerDiagnostics          runnerDiagnosticSink
 	runnerDiagnosticStore      *diagnosticlog.Store
@@ -163,59 +156,35 @@ type Daemon struct {
 	reregisterNextAttempt     map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
 	reregisterLastCompletedAt map[string]time.Time // workspace_id -> wall-clock at which the last SUCCESSFUL re-register call returned (failures intentionally not stamped — see recordRegisterCompletion)
 
-	cancelFunc        context.CancelFunc // set by Run(); called by triggerRestart
-	rootCtx           context.Context    // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
-	restartBinary     string             // non-empty after a successful update; path to the new binary
-	stagedUpgradePath string             // ephemeral download; Computer never executes this path
-	updating          atomic.Bool        // prevents concurrent update attempts
-	activeTasks       atomic.Int64       // number of tasks currently in handleTask; exposed via /health
-	// machineUpgradeTaskCancels contains only task contexts created by this
-	// daemon. A Machine Upgrade may ask those managed turns to stop; it must
-	// never infer ownership of, or signal, an arbitrary local process.
-	machineUpgradeTaskMu      sync.Mutex
-	machineUpgradeTaskCancels map[int64]context.CancelFunc
-	taskSlotCounter           atomic.Int64                  // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, tasks are not capacity-limited — see nextTaskSlot)
-	ready                     atomic.Bool                   // false until preflight completes; gates /health status (starting -> running)
-	serverConnected           atomic.Bool                   // last authenticated Computer-level server round-trip succeeded
-	updateObservation         *updateObservationCoordinator // daemon-resolved auto/server update truth shared by every transport
-	// machineUpgradeGeneration is a fresh process identity. The server records
-	// it when this daemon accepts a machine operation and accepts convergence
-	// attestations only from that same process generation.
-	machineUpgradeGeneration string
-	machineUpgradeTarget     string // exact target staged by the active Machine Upgrade
-	machineUpgradeID         string
-	machineUpgradeRuntimeID  string
-
-	// serverReleaseManifestBaseURL caches the most recent non-empty
-	// ReleaseManifestBaseURL seen on a heartbeat ack (task #815 step 2: the
-	// server-dispatched top layer over the daemon-side env var from #1526).
-	// atomic.Value (not a mutex+field) because reads by explicit Machine
-	// Upgrade execution and control-plane writes never need a compound read-then-write; a plain
-	// swap/load is sufficient. Holds only string, or is unset (zero Value)
-	// before the first heartbeat ack arrives. A later ack that omits the
-	// field intentionally does NOT clear a previously cached value — a
-	// transient server-side hiccup should not blank out a previously-good
-	// override (see cli.releaseManifestBaseURLWithOverride).
-	serverReleaseManifestBaseURL atomic.Value
+	rootCtx     context.Context // Binding child lifetime used by long-running recoveries that must survive per-runtime ctx cancellation
+	activeTasks atomic.Int64    // number of tasks currently in handleTask
+	// managedTaskCancels contains only task contexts created by this Binding
+	// child. Host-requested drains may stop those turns, but can never infer
+	// ownership of, or signal, an arbitrary local process.
+	managedTaskMu      sync.Mutex
+	managedTaskCancels map[int64]context.CancelFunc
+	taskSlotCounter    atomic.Int64 // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, tasks are not capacity-limited — see nextTaskSlot)
+	ready              atomic.Bool  // true after Binding child preflight completes
+	serverConnected    atomic.Bool  // last authenticated Computer-level server round-trip succeeded
 
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
-	// the lock so a slow per-runtime claim cannot stall a Machine Upgrade or
-	// any other poller.
+	// the lock so a slow per-runtime claim cannot stall a Host-requested
+	// Binding drain or any other poller.
 	//
-	// The pair is the Machine Upgrade handoff barrier against the requirement
+	// The pair is the Binding handoff barrier against the requirement
 	// that "升级过程中如果有 task 进来，会延后升级而不是中断 task":
 	// runRuntimePoller refuses to call ClaimTask while pauseClaims is set, and
 	// the explicit lifecycle refuses to flip pauseClaims while any poller is mid-claim
 	// or any task is in handleTask. Together that closes the fetch-then-claim
 	// race where a new task slipping in during the release-metadata fetch
-	// would be cancelled by triggerRestart's root-ctx cancel.
+	// would be cancelled while this child is being replaced.
 	claimMu        sync.Mutex
 	pauseClaims    bool // when true, runRuntimePoller skips ClaimTask
 	claimsInFlight int  // pollers that have decided to claim but haven't yet handed the task off to handleTask
 	// environmentSwitchPrepared records ownership of pauseClaims by the local
-	// config-switch control flow. It prevents a release request from clearing
-	// a barrier held by an unrelated Machine Upgrade.
+	// config-switch control flow. It prevents one Host request from clearing a
+	// barrier held by another.
 	environmentSwitchPrepared atomic.Bool
 
 	// agentWakeSlots is a daemon-side fail-safe for the server's authoritative
@@ -233,25 +202,11 @@ type Daemon struct {
 	// changing process-global executable resolution or filesystem state.
 	resolveExecutable   func() (string, error)
 	prepareCLITransport func(Config, string, string, string, string, string) (string, string, error)
-	// runUpdateFn executes the release-download upgrade. Set to d.runUpdate by
-	// New() and overridable in tests for explicit Machine Upgrade staging.
-	runUpdateFn func(targetVersion string) (string, error)
-	// verifyUpdatedBinaryFn checks the stable binary path that triggerRestart
-	// would re-exec and confirms it already reports targetVersion. Set to
-	// d.verifyUpdatedBinary by New() and overridable in tests.
-	verifyUpdatedBinaryFn func(targetVersion, updateOutput string) (string, error)
-	// activateStagedFn CAS-commits the explicit staged target and returns its
-	// re-exec path. Nil → commitStagedActivation. Tests may no-op with ("", nil).
-	activateStagedFn func(ctx context.Context, updateID, targetVersion string) (string, error)
-	// Machine Upgrade recovery seams mirror the durable stage and verification
-	// phases so restart-boundary tests can prove completed phases are not rerun.
-	machineUpgradeStageFn    func(targetVersion string) (string, error)
-	machineUpgradeVerifyFn   func(targetVersion, updateOutput string) (string, error)
-	machineUpgradeRollbackFn func(context.Context, *machineUpgradeJournal) (string, error)
-	// Machine Upgrade handoff seams keep the bounded drain deterministic in
-	// tests. Production defaults are installed by the helper methods.
-	machineUpgradeNow  func() time.Time
-	machineUpgradeWait func(context.Context, time.Duration) error
+	// Binding drain seams keep the bounded execution-plane handoff
+	// deterministic in tests. Production defaults are installed by the helper
+	// methods.
+	bindingDrainNow  func() time.Time
+	bindingDrainWait func(context.Context, time.Duration) error
 
 	sharedSkillScanMu    sync.Mutex
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
@@ -277,11 +232,10 @@ type Daemon struct {
 	canonicalResidentFactoryOverride canonicalRuntimeBackendFactory
 }
 
-// New creates the legacy single-process execution composition. The public
-// Computer Host never calls this constructor; supervised Binding children use
-// RunBindingChild and its explicit scoped role.
+// New creates an in-package execution test harness. Production composition
+// enters through RunBindingChild; the Computer never constructs this type.
 func New(cfg Config, logger *slog.Logger) *Daemon {
-	return newDaemonForRole(cfg, logger, daemonProcessLegacy)
+	return newDaemonForRole(cfg, logger, daemonProcessTestHarness)
 }
 
 func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *Daemon {
@@ -314,15 +268,6 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 		runnerInstanceID:          uuid.NewString(),
 	}
 	d.initializeBindingExecution(bindingStateRoot)
-	if role != daemonProcessBindingChild {
-		d.initializeLegacyMachineLifecycleModules()
-	}
-	// A standalone replacement may bind the exclusive control port and finish
-	// registration so the incumbent can inspect it, but it must not claim work
-	// until that incumbent commits the exact takeover proof.
-	if cfg.DetachedMachineUpgradeCandidate {
-		d.pauseClaims = true
-	}
 	return d
 }
 
@@ -353,20 +298,6 @@ func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
 	d.reminderCache.onFireDelivery = d.localReminderInbox.AcceptDue
 	d.reminderCache.onFireReceipt = d.queueReminderFireReceipt
 	d.reminderCache.setPersistence(bindingStateRoot)
-}
-
-func (d *Daemon) initializeLegacyMachineLifecycleModules() {
-	d.updateObservation = newUpdateObservationCoordinator(d.cfg, d.logger)
-	if d.cfg.WorkspacesRoot != "" {
-		d.lifecycleDiagnostics = newLifecycleDiagnosticWriter(filepath.Join(d.cfg.WorkspacesRoot, ".multica", "lifecycle-diagnostics"), time.Now)
-	}
-	d.machineUpgradeLog = newMachineUpgradeEventLog(time.Now)
-	d.machineUpgradeTakeover = newMachineUpgradeTakeover()
-	d.runUpdateFn = d.runUpdate
-	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
-	d.machineUpgradeStageFn = d.runStageUpdate
-	d.machineUpgradeVerifyFn = d.verifyStagedBinary
-	d.machineUpgradeRollbackFn = d.restoreMachineUpgradeSource
 }
 
 // setAgentVersion records the detected CLI version for an agent provider so
@@ -729,198 +660,6 @@ func (w *runtimeSetWatcher) notify() {
 	}
 }
 
-// Run starts the daemon: resolves auth, registers runtimes, then polls for tasks.
-func (d *Daemon) Run(ctx context.Context) error {
-	// New Computer residents hold one machine-wide advisory lease for their
-	// complete lifetime. The control port remains a second observable gate,
-	// while the lease closes concurrent-start/PID races before network setup.
-	var residentLease *computer.FileLease
-	if strings.TrimSpace(d.cfg.BindingsRoot) != "" {
-		leaseCtx, leaseCancel := context.WithTimeout(ctx, 2*time.Second)
-		lease, err := computer.AcquireResidentLease(leaseCtx, d.cfg.BindingsRoot)
-		leaseCancel()
-		if err != nil {
-			return fmt.Errorf("another Computer resident owns this machine: %w", err)
-		}
-		residentLease = lease
-		defer residentLease.Close()
-	}
-
-	// Diagnostics are operational evidence only. Initialize them only after
-	// this process owns the resident lease: the rolling sink intentionally has
-	// one process writing each path. A missing or degraded sink must never
-	// prevent the Computer resident, Workspace Runners, or Agent turns from
-	// starting.
-	d.initializeRunnerDiagnostics()
-	if d.runnerDiagnosticStore != nil {
-		defer d.runnerDiagnosticStore.Close()
-	}
-
-	// Wrap context so handleUpdate can cancel the daemon for restart.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	d.cancelFunc = cancel
-	d.rootCtx = ctx
-	if d.runnerDiagnosticStore != nil {
-		go d.runnerDiagnosticStore.RunCleanup(ctx)
-	}
-	if d.canonicalRuntimes != nil {
-		defer func() { _ = d.canonicalRuntimes.closeAll() }()
-	}
-
-	// Bind health port early to detect another running daemon.
-	healthLn, err := d.listenHealth()
-	if err != nil {
-		return err
-	}
-
-	agentNames := make([]string, 0, len(d.cfg.Agents))
-	for name := range d.cfg.Agents {
-		agentNames = append(agentNames, name)
-	}
-	logFields := []any{"version", d.cfg.CLIVersion, "agents", agentNames, "server", d.cfg.ServerBaseURL}
-	if d.cfg.Profile != "" {
-		logFields = append(logFields, "profile", d.cfg.Profile)
-	}
-	d.logger.Info("starting daemon", logFields...)
-	d.logger.Debug("daemon config resolved",
-		"daemon_id", d.cfg.DaemonID,
-		"device_name", d.cfg.DeviceName,
-		"workspaces_root", d.cfg.WorkspacesRoot,
-		"health_port", d.cfg.HealthPort,
-		"poll_interval", d.cfg.PollInterval,
-		"heartbeat_interval", d.cfg.HeartbeatInterval,
-		"agent_timeout", d.cfg.AgentTimeout,
-		"max_agent_processes", d.cfg.MaxAgentProcesses,
-		"idle_watchdog", d.cfg.AgentIdleWatchdog,
-		"machine_upgrade_mode", "explicit_only",
-		"launched_by", d.cfg.LaunchedBy,
-	)
-	if d.reminderCache != nil {
-		if err := d.reminderCache.stateError(); err != nil {
-			return fmt.Errorf("reminder cache is not recoverable: %w", err)
-		}
-	}
-
-	// Load auth token from CLI config.
-	if err := d.resolveAuth(); err != nil {
-		return err
-	}
-
-	// Bind and serve the health port before the (potentially slow) preflight,
-	// so `daemon start` and the desktop see a live "starting" daemon instead
-	// of connection-refused while preflightAuth runs. preflightAuth's initial
-	// workspace sync detects every configured agent's version by exec'ing it,
-	// which on a cold cache with many agents takes ~20s. Liveness (port up) and
-	// readiness (status:"running") are reported separately: /health stays
-	// "starting" until d.ready is set after preflight, so a slow or *failing*
-	// preflight is never misreported as a started daemon. resolveAuth has
-	// already run, so a missing token still fails fast before we begin serving.
-	go d.serveHealth(ctx, healthLn, time.Now())
-	if err := d.startDetachedMachineUpgrade(ctx); err != nil {
-		return err
-	}
-
-	// Renew the PAT before the first API call, then do the initial
-	// workspace sync. Both steps live in preflightAuth so the ordering
-	// invariant (renew first) is enforced at one site instead of
-	// scattered into Run, and tests can exercise the failure paths
-	// without the full Run setup.
-	if err := d.preflightAuth(ctx); err != nil {
-		return err
-	}
-	defer d.deregisterRuntimes()
-	if restarted, err := d.recoverInterruptedMachineUpgrade(ctx); err != nil {
-		return fmt.Errorf("recover interrupted Machine Upgrade: %w", err)
-	} else if restarted {
-		return nil
-	}
-	// A supervised target records local readiness after normal authenticated
-	// registration/preflight. A v2 detached candidate is already live after
-	// local prepare; Attest notifies the server that the local upgrade completed.
-	if !d.cfg.DetachedMachineUpgradeCandidate {
-		if err := d.markMachineUpgradeCandidateReady(); err != nil {
-			d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)
-		}
-	}
-	if d.cfg.DetachedMachineUpgradeCandidate {
-		d.releaseClaimBarrier()
-	}
-	if err := d.reconcileMachineUpgradeTerminalJournal(ctx); err != nil {
-		d.logger.Debug("machine upgrade terminal marker not yet clearable", "error", err)
-	}
-
-	// Start workspace sync loop to discover newly created workspaces.
-	go d.workspaceSyncLoop(ctx)
-
-	go d.diagnosticsCleanupLoop(ctx)
-	go d.tokenRenewalLoop(ctx)
-	go d.releaseDetectionLoop(ctx)
-
-	// Preflight succeeded and the background loops are up: the daemon has
-	// registered its runtimes and can now claim and run tasks. Flip /health
-	// from "starting" to "running" — this is the signal `daemon start`'s
-	// readiness wait blocks on, so success is reported only after startup
-	// actually completed, not merely because the health port came up.
-	d.ready.Store(true)
-	d.logger.Debug("daemon execution loops launched; health now reporting ready")
-	<-ctx.Done()
-	d.logger.Debug("Computer Host main loop returning", "error", ctx.Err())
-	return ctx.Err()
-}
-
-// RestartBinary returns the path to the new binary if the daemon needs to restart
-// after a successful update, or empty string if no restart is needed.
-func (d *Daemon) RestartBinary() string {
-	return d.restartBinary
-}
-
-// MachineUpgradeTarget is the exact candidate version the foreground launcher
-// must observe before treating a detached successor as locally taken over.
-func (d *Daemon) MachineUpgradeTarget() string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.machineUpgradeTarget
-}
-
-// ReportMachineUpgradeTakeoverFailure leaves a durable typed failure instead
-// of allowing a standalone candidate startup error to look like convergence.
-// It is called by the foreground launcher after the daemon has stopped, while
-// its authenticated runtime credentials are still available.
-func (d *Daemon) ReportMachineUpgradeTakeoverFailure(cause error) {
-	if cause == nil || d.client == nil {
-		return
-	}
-	d.mu.Lock()
-	upgradeID, runtimeID := d.machineUpgradeID, d.machineUpgradeRuntimeID
-	d.mu.Unlock()
-	if upgradeID == "" || runtimeID == "" {
-		return
-	}
-	d.failMachineUpgrade(context.Background(), runtimeID, upgradeID, "candidate_takeover_failed", cause)
-}
-
-// ReportMachineUpgradeRollbackFailure leaves the rollback marker intact while
-// projecting a typed terminal failure to the server. Operator recovery still
-// has the exact local identity and retained source available for diagnosis.
-func (d *Daemon) ReportMachineUpgradeRollbackFailure(cause error) {
-	if cause == nil || d.client == nil {
-		return
-	}
-	journal, err := d.currentMachineUpgradeJournal()
-	if err != nil || journal == nil || journal.Phase != "rollback_pending" {
-		return
-	}
-	runtimeID := ""
-	if len(journal.RuntimeIDs) > 0 {
-		runtimeID = strings.TrimSpace(journal.RuntimeIDs[0])
-	}
-	if runtimeID == "" {
-		return
-	}
-	d.failMachineUpgrade(context.Background(), runtimeID, journal.ID, "rollback_restore_failed", cause)
-}
-
 // deregisterRuntimes notifies the server that all runtimes are going offline.
 func (d *Daemon) deregisterRuntimes() {
 	runtimeIDs := d.allRuntimeIDs()
@@ -992,6 +731,9 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityReminderLocalInbox,
 		protocol.DaemonCapabilityReminderTransientInput,
 		protocol.DaemonCapabilityWorkspaceRunnerAgentReset,
+		// Binding children advertise the wire capability so the server can
+		// deliver the machine action. They only forward it to Computer Host;
+		// acceptance and execution do not live in this package.
 		protocol.DaemonCapabilityMachineUpgrade,
 		protocol.DaemonCapabilityAgentSessionReset,
 	}
@@ -1069,24 +811,16 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 
 	includeCredentialTransport := d.client.WorkspaceDaemonTokenAvailable(workspaceID, time.Now())
 	req := map[string]any{
-		"workspace_id":                        workspaceID,
-		"daemon_id":                           d.cfg.DaemonID,
-		"legacy_daemon_ids":                   d.cfg.LegacyDaemonIDs,
-		"device_name":                         d.cfg.DeviceName,
-		"os":                                  runtime.GOOS,
-		"cli_version":                         d.cfg.CLIVersion,
-		"launched_by":                         d.cfg.LaunchedBy,
-		"capabilities":                        daemonRegistrationCapabilities(includeCredentialTransport),
-		"runtimes":                            runtimes,
-		"pinned_version":                      d.cfg.PinnedVersion,
-		"machine_upgrade_generation":          d.machineUpgradeGenerationID(),
-		"machine_upgrade_rollback_generation": d.machineUpgradeRollbackGenerationID(),
-		"computer_generation":                 d.cfg.ComputerGeneration,
-	}
-	if d.updateObservation != nil {
-		if snapshot := d.updateObservation.PublishedSnapshot(); snapshot != nil {
-			req["auto_update"] = snapshot
-		}
+		"workspace_id":        workspaceID,
+		"daemon_id":           d.cfg.DaemonID,
+		"legacy_daemon_ids":   d.cfg.LegacyDaemonIDs,
+		"device_name":         d.cfg.DeviceName,
+		"os":                  runtime.GOOS,
+		"cli_version":         d.cfg.CLIVersion,
+		"launched_by":         d.cfg.LaunchedBy,
+		"capabilities":        daemonRegistrationCapabilities(includeCredentialTransport),
+		"runtimes":            runtimes,
+		"computer_generation": d.cfg.ComputerGeneration,
 	}
 	// MULTICA_SANDBOX_INSTANCE_ID is set by mintSandboxRuntimeEnv for daemon-
 	// enabled env-dispatch sandboxes. Forwarding it lets the server record
@@ -1418,16 +1152,6 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 	if len(d.cfg.Agents) > 0 && len(d.allRuntimeIDs()) == 0 && registered == 0 {
 		return fmt.Errorf("failed to register runtimes for configured Workspace connections")
 	}
-	managedWorkspaceIDs := make([]string, 0, len(apiIDs))
-	d.mu.Lock()
-	for workspaceID := range d.workspaces {
-		managedWorkspaceIDs = append(managedWorkspaceIDs, workspaceID)
-	}
-	d.mu.Unlock()
-	sort.Strings(managedWorkspaceIDs)
-	if err := d.attestComputerMachineUpgrade(ctx, managedWorkspaceIDs); err != nil {
-		return fmt.Errorf("Computer upgrade successor attestation: %w", err)
-	}
 	if registered > 0 || removed > 0 {
 		d.logger.Debug("workspace sync done", "registered", registered, "removed", removed, "tracked", len(apiIDs))
 	}
@@ -1468,9 +1192,6 @@ func (d *Daemon) configuredWorkspaceBindings() (map[string]computer.WorkspaceBin
 func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {
 	if resp == nil {
 		return
-	}
-	if d.role != daemonProcessBindingChild {
-		d.handleLegacyMachineHeartbeatActions(ctx, runtimeID, resp)
 	}
 	if resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil {
 		d.logger.Debug("heartbeat: pending Workspace actions",
@@ -1522,51 +1243,6 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 			go d.handleMemoryCuration(ctx, *rt, *resp.PendingMemoryCuration)
 		}
 	}
-}
-
-// handleLegacyMachineHeartbeatActions is intentionally unreachable from a
-// supervised Binding child. The production Computer resident owns these
-// actions in internal/computer and children forward them across Host control.
-func (d *Daemon) handleLegacyMachineHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {
-	if err := d.reconcileMachineUpgradeTerminalJournal(ctx); err != nil {
-		d.logger.Debug("machine upgrade terminal marker not yet clearable", "runtime_id", runtimeID, "error", err)
-	}
-	if resp.ReleaseManifestBaseURL != "" {
-		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
-	}
-	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 {
-		d.logger.Debug("heartbeat: pending actions",
-			"runtime_id", runtimeID,
-			"update", resp.PendingUpdate != nil,
-			"machine_upgrade", resp.PendingMachineUpgrade != nil,
-			"model_list", resp.PendingModelList != nil,
-			"local_skills", resp.PendingLocalSkills != nil,
-			"local_skill_import", resp.PendingLocalSkillImport != nil,
-			"memory_curation", resp.PendingMemoryCuration != nil,
-			"restart", resp.PendingRestart != nil,
-			"agent_lifecycle_operations", len(resp.PendingAgentLifecycleOperations),
-		)
-	}
-	if resp.PendingUpdate != nil {
-		go d.handleUpdate(ctx, runtimeID, resp.PendingUpdate)
-	}
-	if resp.PendingMachineUpgrade != nil {
-		go d.handleMachineUpgrade(ctx, runtimeID, resp.PendingMachineUpgrade)
-	}
-	if resp.PendingRestart != nil {
-		d.logger.Info("remote restart requested", "runtime_id", runtimeID, "restart_id", resp.PendingRestart.ID)
-		d.triggerRestart()
-	}
-}
-
-// releaseManifestBaseURLOverride returns the most recent non-empty
-// server-dispatched release-manifest base URL seen on a heartbeat ack, or ""
-// if none has arrived yet. Passed to cli.releaseManifestBaseURLWithOverride
-// by the release-detection loop so a server-side domain change takes effect within
-// one heartbeat interval, no env var or redeploy required.
-func (d *Daemon) releaseManifestBaseURLOverride() string {
-	v, _ := d.serverReleaseManifestBaseURL.Load().(string)
-	return v
 }
 
 // handleModelList resolves the provider's supported models (via static
@@ -1780,437 +1456,6 @@ func (d *Daemon) reportRuntimeResultWithRetry(ctx context.Context, kind, runtime
 		"kind", kind, "runtime_id", runtimeID, "request_id", requestID, "error", lastErr)
 }
 
-// handleUpdate performs the CLI update when triggered by the server via heartbeat.
-func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *PendingUpdate) {
-	// Desktop-managed daemons share their CLI binary with the Electron app,
-	// which is responsible for shipping and replacing it. Letting the daemon
-	// self-update would just get overwritten on the next Desktop launch and
-	// could brick the embedded binary mid-update. Refuse cleanly.
-	if d.cfg.LaunchedBy == "desktop" {
-		d.logger.Info("refusing CLI self-update: daemon is managed by Desktop", "runtime_id", runtimeID, "update_id", update.ID)
-		if d.beginUpdateObservation("server", "disabled", update.TargetVersion) {
-			d.finishUpdateObservation("disabled", "update_failed", update.TargetVersion, "desktop_managed", "The CLI is managed by Multica Desktop.")
-		}
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "failed",
-			"error":  "CLI is managed by Multica Desktop — update the Desktop app to upgrade the CLI",
-		})
-		return
-	}
-
-	// Prevent concurrent update attempts.
-	if !d.updating.CompareAndSwap(false, true) {
-		d.logger.Warn("update already in progress, refusing server request", "runtime_id", runtimeID, "update_id", update.ID)
-		// PopPending has already transitioned this request to running on the
-		// server. Terminate that canonical request without touching the
-		// current attempt owner's observation; otherwise a release-detection
-		// metadata fetch can strand the request until its running timeout.
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "failed",
-			"error":  "update_already_in_progress",
-		})
-		return
-	}
-	restartTriggered := false
-	defer func() {
-		if !restartTriggered {
-			d.updating.Store(false)
-		}
-	}()
-
-	d.logger.Info("CLI update requested", "runtime_id", runtimeID, "update_id", update.ID, "target_version", update.TargetVersion)
-	if !d.beginUpdateObservation("server", "updating", update.TargetVersion) {
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "failed",
-			"error":  "failed_to_persist_update_observation",
-		})
-		return
-	}
-
-	// Report running status.
-	d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-		"status": "running",
-	})
-
-	output, err := d.runUpdateFn(update.TargetVersion)
-	if err != nil {
-		d.logger.Error("CLI update failed", "error", err, "output", output)
-		d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_failed", update.TargetVersion, "download_update_failed", "The release download update failed.")
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "failed",
-			"error":  err.Error(),
-		})
-		return
-	}
-
-	verifiedVersion, err := d.verifyUpdatedBinaryVersion(update.TargetVersion, output)
-	if err != nil {
-		d.logger.Error("CLI update verification failed", "error", err, "output", output)
-		d.finishUpdateObservation(d.idleUpdateObservationPhase(), "verification_failed", update.TargetVersion, "updated_binary_verification_failed", "The updated CLI version could not be verified.")
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "failed",
-			"error":  err.Error(),
-		})
-		return
-	}
-
-	d.logger.Info("CLI update staged successfully", "output", output, "verified_version", verifiedVersion)
-	// The binary is verified, but restart is not yet pending: the server may
-	// reject ready_to_apply or an older server may find the daemon busy. Keep
-	// the terminal attempt outcome durable without claiming a restart until
-	// the request acknowledgement and/or claim barrier actually permit one.
-	if !d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_succeeded", update.TargetVersion, "", "") {
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "failed",
-			"error":  "failed_to_persist_update_succeeded_observation",
-		})
-		return
-	}
-	stagedOutput := fmt.Sprintf("Staged %s (verified stable binary %s)", update.TargetVersion, verifiedVersion)
-	if update.SupportsReadyToApply {
-		if err := d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "ready_to_apply",
-			"output": stagedOutput,
-		}); err != nil {
-			d.logger.Error("CLI update staged but ready-to-apply state was not durably acknowledged; refusing restart", "runtime_id", runtimeID, "update_id", update.ID, "error", err)
-			return
-		}
-		if !d.finishUpdateObservation("restart_pending", "update_succeeded", update.TargetVersion, "", "") {
-			d.logger.Error("CLI update is ready to apply but restart-pending observation was not durable; refusing restart", "runtime_id", runtimeID, "update_id", update.ID)
-			return
-		}
-		restartCtx := d.rootCtx
-		if restartCtx == nil {
-			restartCtx = context.Background()
-		}
-		if d.abortStagedRestartIfCanceled(restartCtx, runtimeID, update.ID, false) {
-			return
-		}
-		// #105 (Frank c): server/page InitiateUpdate (SupportsReadyToApply) force-applies
-		// immediately — no waitForSafeRestart idle window. Busy runtimes still activate
-		// + restart; setClaimBarrier blocks new claims while the process is going down.
-		// #110: never restart without activateStagedAndRestart (no bare triggerRestart).
-		d.setClaimBarrier()
-		if d.abortStagedRestartIfCanceled(restartCtx, runtimeID, update.ID, true) {
-			return
-		}
-		d.logger.Info("CLI update ready; force activating staged release and restarting", "runtime_id", runtimeID, "update_id", update.ID, "active_tasks", d.activeTasks.Load(), "claims_in_flight", d.claimsInFlight)
-		restartTriggered = d.activateStagedAndRestart(restartCtx, runtimeID, update.ID, update.TargetVersion, stagedOutput)
-		return
-	}
-
-	if !d.trySetClaimBarrier() {
-		d.logger.Warn("CLI update staged but server does not support deferred apply; refusing to restart a busy daemon", "runtime_id", runtimeID, "update_id", update.ID)
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "failed",
-			"error":  "update_ready_to_apply_but_server_does_not_support_deferred_restart",
-		})
-		return
-	}
-	if !d.finishUpdateObservation("restart_pending", "update_succeeded", update.TargetVersion, "", "") {
-		d.releaseClaimBarrier()
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "failed",
-			"error":  "failed_to_persist_restart_pending_observation",
-		})
-		return
-	}
-	// Older servers do not complete a still-running update when the daemon
-	// re-registers on the target version. Preserve the old idle-only wire
-	// behavior for that mixed-version window.
-	d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-		"status": "completed",
-		"output": stagedOutput,
-	})
-	// #110: old-server idle path must activate staged Active before restart too.
-	restartTriggered = d.activateStagedAndRestart(ctx, runtimeID, update.ID, update.TargetVersion, stagedOutput)
-}
-
-// runUpdate stages targetVersion into the immutable VersionStore. It does not
-// self-replace the process executable (#815 B-cutover). Activation/CAS and
-// restart from the staged path are owned by handleUpdate / activate path.
-func (d *Daemon) runUpdate(targetVersion string) (string, error) {
-	return d.runStageUpdate(targetVersion)
-}
-
-// activateStagedAndRestart is the sole post-stage restart entry for handleUpdate.
-// It CAS-activates the staged release, sets d.restartBinary, then triggerRestart.
-// SupportsReadyToApply (#105 force-apply) and the legacy idle-only server path
-// must both call this — never triggerRestart alone after a staged update (#110).
-// Returns true if restart was scheduled; false if activation failed (path A
-// abandon, no restart).
-func (d *Daemon) activateStagedAndRestart(ctx context.Context, runtimeID, updateID, targetVersion, output string) bool {
-	// Thin activate: CAS staged tag to Active, then re-exec staged path.
-	// Full candidate health/register is a follow-up; path A already safe.
-	activate := d.activateStagedFn
-	if activate == nil {
-		activate = d.commitStagedActivation
-	}
-	if path, err := activate(ctx, updateID, targetVersion); err != nil {
-		d.logger.Error("CLI update activate CAS failed; path A abandon", "error", err, "runtime_id", runtimeID, "update_id", updateID)
-		d.abandonStagedUpdatePathA(ctx, runtimeID, updateID, output)
-		return false
-	} else if path != "" {
-		d.restartBinary = path
-	}
-	d.logger.Info("CLI update ready; daemon drained, restarting from staged Active", "runtime_id", runtimeID, "update_id", updateID, "output", output, "binary", d.restartBinary)
-	d.triggerRestart()
-	return true
-}
-
-func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, targetVersion, output string) bool {
-	interval := d.cfg.PollInterval
-	if interval <= 0 || interval > 15*time.Second {
-		interval = 5 * time.Second
-	}
-	return d.waitForSafeRestartWithWindow(
-		ctx,
-		runtimeID,
-		updateID,
-		targetVersion,
-		output,
-		stagedUpdateOpportunisticIdleWindow,
-		interval,
-	)
-}
-
-const stagedUpdateOpportunisticIdleWindow = 10 * time.Minute
-
-// stagedUpdateHardDrainExtra is T_hard − T_idle (design D6). After the
-// opportunistic idle window the barrier is forced; if still not drained by
-// T_hard the attempt is abandoned with typed drain_timeout (path A).
-const stagedUpdateHardDrainExtra = 5 * time.Minute
-
-// stagedUpdateHardDrainTotal is T_hard from T0 (stage ready / ready_to_apply).
-const stagedUpdateHardDrainTotal = stagedUpdateOpportunisticIdleWindow + stagedUpdateHardDrainExtra
-
-func (d *Daemon) abortStagedRestartIfCanceled(
-	ctx context.Context,
-	runtimeID, updateID string,
-	barrierHeld bool,
-) bool {
-	if ctx.Err() == nil {
-		return false
-	}
-	if barrierHeld {
-		d.releaseClaimBarrier()
-	}
-	d.finishUpdateObservationWithoutRestart()
-	d.logger.Warn("CLI update ready but restart wait ended before the daemon drained", "runtime_id", runtimeID, "update_id", updateID, "error", ctx.Err())
-	return true
-}
-
-// abandonStagedUpdatePathA releases the barrier, reports failed+drain_timeout,
-// and leaves the committed Active binary untouched (CUT-T1/T2). Used at T_hard.
-func (d *Daemon) abandonStagedUpdatePathA(ctx context.Context, runtimeID, updateID, output string) {
-	d.releaseClaimBarrier()
-	d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_failed", "", "drain_timeout", "Activation abandoned: drain did not complete within T_hard.")
-	d.logger.Warn("CLI update path A abandon at T_hard (drain_timeout); committed Active unchanged",
-		"runtime_id", runtimeID, "update_id", updateID, "output", compactUpdateOutput(output))
-	if d.client == nil {
-		return
-	}
-	_ = d.reportUpdateResult(ctx, runtimeID, updateID, map[string]any{
-		"status": "failed",
-		"error":  handlerDrainTimeoutError(),
-	})
-}
-
-// handlerDrainTimeoutError returns the stable machine string for path A.
-// Defined as a function so daemon does not import handler package.
-func handlerDrainTimeoutError() string {
-	return "drain_timeout"
-}
-
-func (d *Daemon) finishUpdateObservationWithoutRestart() {
-	if d.updateObservation == nil {
-		return
-	}
-	current := d.updateObservation.Snapshot()
-	d.finishUpdateObservation(d.idleUpdateObservationPhase(), "update_succeeded", current.TargetVersion, "", "")
-}
-
-func (d *Daemon) waitForSafeRestartWithWindow(
-	ctx context.Context,
-	runtimeID, updateID, targetVersion, output string,
-	opportunisticWindow, interval time.Duration,
-) bool {
-	return d.waitForSafeRestartWithWindows(
-		ctx,
-		runtimeID,
-		updateID,
-		targetVersion,
-		output,
-		opportunisticWindow,
-		stagedUpdateHardDrainExtra,
-		interval,
-	)
-}
-
-// waitForSafeRestartWithWindows is the testable form with explicit T_idle and
-// T_hard−T_idle windows. At T_hard without drain → path A abandon (no restart).
-func (d *Daemon) waitForSafeRestartWithWindows(
-	ctx context.Context,
-	runtimeID, updateID, targetVersion, output string,
-	opportunisticWindow, hardExtra, interval time.Duration,
-) bool {
-	if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, false) {
-		return false
-	}
-	// opportunisticWindow may be 0 (tests: fire idle deadline immediately).
-	// Only negative means "use production default".
-	if opportunisticWindow < 0 {
-		opportunisticWindow = stagedUpdateOpportunisticIdleWindow
-	}
-	if hardExtra <= 0 {
-		hardExtra = stagedUpdateHardDrainExtra
-	}
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	idleDeadline := time.NewTimer(opportunisticWindow)
-	defer idleDeadline.Stop()
-	hardDeadline := time.NewTimer(opportunisticWindow + hardExtra)
-	defer hardDeadline.Stop()
-	draining := false
-
-	tryRestart := func(barrierHeld bool) bool {
-		if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, barrierHeld) {
-			return false
-		}
-		return d.activateStagedAndRestart(ctx, runtimeID, updateID, targetVersion, output)
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, draining)
-			return false
-		case <-hardDeadline.C:
-			// D6 path A: T_hard reached without successful restart.
-			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, draining) {
-				return false
-			}
-			d.logger.Warn("CLI update T_hard reached without drain complete", "runtime_id", runtimeID, "update_id", updateID)
-			d.abandonStagedUpdatePathA(ctx, runtimeID, updateID, output)
-			return false
-		case <-idleDeadline.C:
-			d.setClaimBarrier()
-			draining = true
-			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
-				return false
-			}
-			d.logger.Info("CLI update stop-claim deadline reached; draining already-claimed tasks before restart", "runtime_id", runtimeID, "update_id", updateID)
-			if !d.claimBarrierDrained() {
-				continue
-			}
-			return tryRestart(true)
-		case <-ticker.C:
-			if draining {
-				if !d.claimBarrierDrained() {
-					continue
-				}
-				return tryRestart(true)
-			}
-			if !d.trySetClaimBarrier() {
-				continue
-			}
-			return tryRestart(true)
-		}
-	}
-}
-
-const (
-	updatedBinaryVersionCheckTimeout = 10 * time.Second
-	updateFailureOutputLimit         = 1200
-)
-
-func (d *Daemon) verifyUpdatedBinaryVersion(targetVersion, updateOutput string) (string, error) {
-	if d.verifyUpdatedBinaryFn != nil {
-		return d.verifyUpdatedBinaryFn(targetVersion, updateOutput)
-	}
-	return d.verifyUpdatedBinary(targetVersion, updateOutput)
-}
-
-func (d *Daemon) verifyUpdatedBinary(targetVersion, updateOutput string) (string, error) {
-	// #815: after StageRelease, truth is the immutable staged binary — not the
-	// still-running process executable (which must remain committed Active).
-	return d.verifyStagedBinary(targetVersion, updateOutput)
-}
-
-func compactUpdateOutput(output string) string {
-	compact := strings.Join(strings.Fields(strings.TrimSpace(output)), " ")
-	if len(compact) <= updateFailureOutputLimit {
-		return compact
-	}
-	return compact[:updateFailureOutputLimit] + "...(truncated)"
-}
-
-// updateReportBackoffs defines the retry schedule for delivering CLI update
-// status back to the server. This mirrors localSkillReportBackoffs because
-// both features have the same user-visible failure mode: the daemon completed
-// work locally, but a transient report failure leaves the UI waiting until the
-// server-side request times out.
-//
-// Overridable for tests to avoid real sleeps.
-var updateReportBackoffs = []time.Duration{0, 500 * time.Millisecond, 2 * time.Second, 4 * time.Second}
-
-func (d *Daemon) reportUpdateResult(ctx context.Context, runtimeID, updateID string, payload map[string]any) error {
-	return d.reportUpdateResultWithRetry(ctx, runtimeID, updateID, func(ctx context.Context) error {
-		return d.client.ReportUpdateResult(ctx, runtimeID, updateID, payload)
-	})
-}
-
-func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, updateID string, fn func(context.Context) error) error {
-	var lastErr error
-	for attempt, wait := range updateReportBackoffs {
-		if wait > 0 {
-			select {
-			case <-ctx.Done():
-				d.logger.Error("CLI update report cancelled",
-					"runtime_id", runtimeID, "update_id", updateID,
-					"attempt", attempt, "error", ctx.Err())
-				return ctx.Err()
-			case <-time.After(wait):
-			}
-		}
-
-		err := fn(ctx)
-		if err == nil {
-			if attempt > 0 {
-				d.logger.Info("CLI update report succeeded after retry",
-					"runtime_id", runtimeID, "update_id", updateID,
-					"attempt", attempt+1)
-			}
-			return nil
-		}
-		lastErr = err
-
-		var reqErr *requestError
-		if errors.As(err, &reqErr) && reqErr.StatusCode >= 400 && reqErr.StatusCode < 500 {
-			d.logger.Error("CLI update report rejected — not retrying",
-				"runtime_id", runtimeID, "update_id", updateID,
-				"status", reqErr.StatusCode, "error", err)
-			return err
-		}
-
-		d.logger.Warn("CLI update report failed — will retry",
-			"runtime_id", runtimeID, "update_id", updateID,
-			"attempt", attempt+1, "error", err)
-	}
-	d.logger.Error("CLI update report exhausted retries",
-		"runtime_id", runtimeID, "update_id", updateID, "error", lastErr)
-	return lastErr
-}
-
-// tryEnterClaim records the intent to call ClaimTask. Returns true if the
-// caller may proceed, false if the Machine Upgrade handoff barrier is in effect. Every
-// successful call MUST be paired with an exitClaim() on every exit path —
-// either right after a failed/empty claim, or via the handleTask goroutine's
-// defer once the task is handed off.
 func (d *Daemon) tryEnterClaim() bool {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
@@ -2285,74 +1530,15 @@ func (d *Daemon) claimBarrierDrained() bool {
 	return d.pauseClaims && d.claimsInFlight == 0 && d.activeTasks.Load() == 0
 }
 
-// releaseClaimBarrier clears the Machine Upgrade claim barrier so pollers may
-// resume claiming. Called on failure paths only — a successful upgrade leaves
-// the barrier set because triggerRestart is about to take the process down
-// and clearing it would open a window for new claims during shutdown.
+// releaseClaimBarrier clears a Host-held Binding barrier so pollers may resume
+// claiming. A successful prepare leaves the barrier set until Host explicitly
+// releases it or terminates the child.
 func (d *Daemon) releaseClaimBarrier() {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	d.pauseClaims = false
 }
 
-// triggerRestart initiates a graceful daemon restart after a successful CLI update.
-// If restartBinary was already set (e.g. staged VersionStore Active path), that
-// path is preferred. Otherwise falls back to brew symlink / current executable.
-// The caller (cmd_daemon.go) checks RestartBinary() and launches the new process.
-func (d *Daemon) triggerRestart() {
-	newBin := strings.TrimSpace(d.restartBinary)
-	if newBin == "" {
-		var err error
-		newBin, err = d.restartBinaryPath()
-		if err != nil {
-			d.logger.Error("could not resolve executable path for restart", "error", err)
-			return
-		}
-	}
-
-	d.logger.Info("scheduling daemon restart", "new_binary", newBin)
-	d.restartBinary = newBin
-
-	// Cancel the main context to trigger graceful shutdown.
-	if d.cancelFunc != nil {
-		d.cancelFunc()
-	}
-}
-
-func (d *Daemon) restartBinaryPath() (string, error) {
-	newBin, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	// Homebrew owns its prefix. On Linux, os.Executable() is the Cellar
-	// path that brew cleanup may delete, so restart through the stable
-	// <prefix>/bin/multica symlink instead of the PATH install file.
-	if isBrewInstall() {
-		if brewPrefix := getBrewPrefix(); brewPrefix != "" {
-			return filepath.Join(brewPrefix, "bin", "multica"), nil
-		}
-		if prefix := matchKnownBrewPrefix(newBin); prefix != "" {
-			return filepath.Join(prefix, "bin", "multica"), nil
-		}
-		d.logger.Warn("brew install detected but prefix could not be resolved; restart may fail",
-			"executable", newBin)
-		return newBin, nil
-	}
-	if path, err := computer.LaunchBinary(); err == nil && path != "" {
-		return path, nil
-	}
-	if resolved, err := filepath.EvalSymlinks(newBin); err == nil {
-		return resolved, nil
-	}
-	return newBin, nil
-}
-
-// pollLoop supervises one runtimePoller goroutine per registered runtime,
-// fans wake-up signals out to all of them, and waits for in-flight tasks to
-// drain on shutdown. Per-runtime workers replace the previous round-robin
-// loop so that a slow ClaimTask call (HTTP 30s timeout) for one runtime no
-// longer delays claims on every other runtime — that was the cross-workspace
-// stall mode reported in MUL-1744.
 func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan taskWakeup) error {
 	var taskWG sync.WaitGroup   // tracks in-flight handleTask goroutines
 	var pollerWG sync.WaitGroup // tracks runRuntimePoller goroutines
@@ -2536,9 +1722,9 @@ func (d *Daemon) runRuntimePoller(
 			defer d.exitClaim()
 			defer d.activeTasks.Add(-1)
 			taskCtx, cancel := context.WithCancel(parentCtx)
-			d.registerMachineUpgradeTask(slot, cancel)
+			d.registerManagedTask(slot, cancel)
 			defer func() {
-				d.unregisterMachineUpgradeTask(slot)
+				d.unregisterManagedTask(slot)
 				cancel()
 			}()
 			d.handleTask(taskCtx, t, slot)

@@ -256,8 +256,6 @@ func TestBindingChildForwardsMachineUpgradeToHost(t *testing.T) {
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	child.bindingHostControl = newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
-	childLife, cancelChild := context.WithCancel(context.Background())
-	child.cancelFunc = cancelChild
 	child.handleWorkspaceRunnerControlAck(context.Background(), &HeartbeatResponse{
 		RuntimeID:             "runtime-a",
 		PendingMachineUpgrade: &PendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v9.9.9"},
@@ -271,36 +269,6 @@ func TestBindingChildForwardsMachineUpgradeToHost(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Binding child did not forward Machine Upgrade to Host")
-	}
-	select {
-	case <-childLife.Done():
-		t.Fatal("Binding child executed the machine-wide restart locally")
-	default:
-	}
-}
-
-func TestBindingChildExecutionHandlerDoesNotOwnMachineActions(t *testing.T) {
-	child := newDaemonForRole(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
-	childLife, cancelChild := context.WithCancel(context.Background())
-	defer cancelChild()
-	child.cancelFunc = cancelChild
-	child.handleHeartbeatActions(context.Background(), "runtime-a", &HeartbeatResponse{
-		RuntimeID:              "runtime-a",
-		PendingRestart:         &PendingRestart{ID: "restart-a"},
-		PendingMachineUpgrade:  &PendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v9.9.9"},
-		ReleaseManifestBaseURL: "https://releases.invalid",
-	})
-
-	select {
-	case <-childLife.Done():
-		t.Fatal("Binding child executed a machine-wide restart")
-	case <-time.After(50 * time.Millisecond):
-	}
-	if got := child.releaseManifestBaseURLOverride(); got != "" {
-		t.Fatalf("Binding child retained machine release manifest %q", got)
-	}
-	if child.machineUpgradeID != "" || child.machineUpgradeLog != nil || child.machineUpgradeTakeover != nil {
-		t.Fatal("Binding child initialized or accepted legacy Machine Upgrade ownership")
 	}
 }
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
-	"github.com/multica-ai/multica/server/internal/daemon"
 )
 
 var daemonCmd = &cobra.Command{
@@ -75,10 +73,6 @@ func init() {
 	f.Duration("auto-update-interval", 0, "Release detection interval (default 5m; detection never installs automatically)")
 	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
 	_ = f.MarkHidden("computer-generation")
-	f.Bool("machine-upgrade-detached-candidate", false, "Internal detached Machine Upgrade candidate marker")
-	_ = f.MarkHidden("machine-upgrade-detached-candidate")
-	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
-	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
 	_ = f.MarkHidden("machine-attestation-source-pid")
 
@@ -227,25 +221,6 @@ func runActiveComputerBinary(target string) error {
 	child.Env = os.Environ()
 	if err := child.Run(); err != nil {
 		return fmt.Errorf("run Active Computer binary %s: %w", target, err)
-	}
-	return nil
-}
-
-func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
-	if d == nil {
-		return errors.New("daemon is required for detached rollback")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	path, err := d.PrepareMachineUpgradeRollbackRestart(ctx)
-	if err != nil {
-		return fmt.Errorf("restore previous Active: %w", err)
-	}
-	if err := bestEffortSyncInstalledServiceUnit(profile, path); err != nil {
-		return fmt.Errorf("rewrite OS service to restored Active: %w", err)
-	}
-	if err := spawnDetachedComputerBinary(path, profile, d.MachineUpgradeTarget(), nil); err != nil {
-		return fmt.Errorf("start restored incumbent: %w", err)
 	}
 	return nil
 }

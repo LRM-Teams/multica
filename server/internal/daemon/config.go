@@ -52,8 +52,6 @@ const (
 	DefaultRuntimeName              = "Local Agent"
 	DefaultWorkspaceSyncInterval    = 30 * time.Second
 	DefaultHealthPort               = 19514
-	DefaultReleaseDetectionInterval = 5 * time.Minute // detection-only poll (Frank approved 08-07)
-	DefaultReleaseDetectionDelay    = 2 * time.Minute // initial delay before first detection check
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
 	DefaultMemoryCurationRunTimeout = 10 * time.Minute
 	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
@@ -78,25 +76,14 @@ type Config struct {
 	LegacyDaemonIDs    []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
 	DeviceName         string
 	RuntimeName        string
-	CLIVersion         string // multica CLI version (e.g. "0.1.13")
-	LaunchedBy         string // "desktop" when spawned by the Electron app, empty for standalone
-	Profile            string // profile name (empty = default)
-	WorkspaceID        string // the one workspace this daemon registers for
-	BindingsRoot       string // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
-	ComputerGeneration int64  // monotonic machine-wide resident generation; server fences older generations
-	// DetachedMachineUpgradeCandidate gates the standalone takeover: the
-	// candidate proves local identity first, waits for the incumbent's local
-	// PID+version proof, and only then starts server preflight and registration.
-	DetachedMachineUpgradeCandidate bool
-	// MachineUpgradeTakeoverProtocol is set by a v2-aware launcher. An empty
-	// value means the candidate was spawned by an older launcher and must keep
-	// the legacy loopback handshake shape until that local proof commits.
-	MachineUpgradeTakeoverProtocol MachineUpgradeTakeoverProtocol
-	// MachineAttestationSourcePID is the incumbent PID this successor replaced.
-	// Raft's machine-attestation carries sourceServicePid the same way.
-	MachineAttestationSourcePID int
-	Agents                      map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
-	WorkspacesRoot              string                // base path containing workspace directories (default: ~/.multica/workspaces)
+	CLIVersion         string                // multica CLI version (e.g. "0.1.13")
+	LaunchedBy         string                // "desktop" when spawned by the Electron app, empty for standalone
+	Profile            string                // profile name (empty = default)
+	WorkspaceID        string                // the one workspace this daemon registers for
+	BindingsRoot       string                // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
+	ComputerGeneration int64                 // monotonic machine-wide resident generation; server fences older generations
+	Agents             map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
+	WorkspacesRoot     string                // base path containing workspace directories (default: ~/.multica/workspaces)
 	// BindingStateRoot isolates durable workspace-execution coordinator state
 	// for one Binding child. Empty keeps the historical single-process paths.
 	BindingStateRoot string
@@ -106,11 +93,6 @@ type Config struct {
 	// never from an environment variable or the unauthenticated health surface.
 	LocalControlToken             string
 	AgentWorkspaceQuotaBytes      int64         // per-agent cap on <workspace-id>/agents/<agent-id> total size, checked at turn-start; 0 = unlimited (default)
-	ReleaseDetectionConfigSource  string        // set to auto_detect when detection is active (was deprecated_noop)
-	ReleaseDetectionInterval      time.Duration // detection poll interval (default DefaultReleaseDetectionInterval)
-	ReleaseDetectionInitialDelay  time.Duration // delay before the first detection check (default DefaultReleaseDetectionDelay)
-	PinnedVersion                 string        // when non-empty, the daemon stays on this version and rejects explicit upgrades (env: MULTICA_PINNED_VERSION)
-	UpdateObservationPath         string        // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
 	SharedSkillsDir               string        // optional global override; when empty each provider uses its own shared root
 	SharedSkillsSyncInterval      time.Duration // how often to scan and sync SharedSkillsDir
 	MemoryCurationL3ReviewEnabled bool          // run the local Pi L3 reviewer during daemon-side curation
@@ -134,10 +116,6 @@ type Config struct {
 	CodexArgs                      []string
 }
 
-type MachineUpgradeTakeoverProtocol string
-
-const MachineUpgradeTakeoverProtocolV2 MachineUpgradeTakeoverProtocol = "v2"
-
 // Overrides allows CLI flags to override environment variables and defaults.
 // Zero values are ignored and the env/default value is used instead.
 type Overrides struct {
@@ -154,10 +132,6 @@ type Overrides struct {
 	RuntimeName                    string
 	Profile                        string // profile name (empty = default)
 	HealthPort                     int    // health check port (0 = use default)
-	// Legacy update flags remain accepted during the compatibility window. The
-	// enable/disable flag is a no-op; the interval only adjusts release detection.
-	DisableAutoUpdate        bool
-	ReleaseDetectionInterval time.Duration // 0 = use env/default; populated by the legacy interval flag
 }
 
 // LoadConfig builds the daemon configuration from environment variables
@@ -421,36 +395,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		agentWorkspaceQuotaBytes = parsed
 	}
 
-	// #2379 plus the later detect-only contract: automatic installation remains
-	// retired, while every daemon reports release availability every five
-	// minutes. Legacy enable/disable switches cannot re-enable mutation; an
-	// explicit interval override only adjusts the detection cadence.
-	_ = overrides.DisableAutoUpdate
-	releaseDetectionConfigSource := "auto_detect"
-	releaseDetectionInterval := DefaultReleaseDetectionInterval
-	if overrides.ReleaseDetectionInterval > 0 {
-		releaseDetectionInterval = overrides.ReleaseDetectionInterval
-	}
-
-	// Pinned version: when set, the daemon stays on this version and rejects
-	// explicit Machine Upgrade requests. The value must be a valid release tag
-	// (e.g. "0.3.92").
-	// An invalid or non-release value is a configuration error — we fail
-	// loud rather than silently ignoring the pin and letting the daemon
-	// upgrade past the intended version.
-	pinnedVersion := ""
-	if v := strings.TrimSpace(os.Getenv("MULTICA_PINNED_VERSION")); v != "" {
-		if !cli.IsReleaseVersion(v) {
-			return Config{}, fmt.Errorf("MULTICA_PINNED_VERSION: %q is not a valid release version", v)
-		}
-		pinnedVersion = v
-	}
-	machineStateRoot, err := cli.MachineStateRoot()
-	if err != nil {
-		return Config{}, fmt.Errorf("resolve daemon update observation path: %w", err)
-	}
-	updateObservationPath := filepath.Join(machineStateRoot, "daemon-update-status.json")
-
 	// Empty means "resolve per provider" in shared_skills.go (pi → ~/.pi/share/skills).
 	sharedSkillsDir := strings.TrimSpace(os.Getenv("MULTICA_SHARED_SKILLS_DIR"))
 	sharedSkillsInterval, err := durationFromEnv("MULTICA_SHARED_SKILLS_SYNC_INTERVAL", DefaultSharedSkillsSyncInterval)
@@ -500,10 +444,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		Agents:                         agents,
 		WorkspacesRoot:                 workspacesRoot,
 		AgentWorkspaceQuotaBytes:       agentWorkspaceQuotaBytes,
-		ReleaseDetectionConfigSource:   releaseDetectionConfigSource,
-		ReleaseDetectionInterval:       releaseDetectionInterval,
-		PinnedVersion:                  pinnedVersion,
-		UpdateObservationPath:          updateObservationPath,
 		SharedSkillsDir:                sharedSkillsDir,
 		SharedSkillsSyncInterval:       sharedSkillsInterval,
 		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,

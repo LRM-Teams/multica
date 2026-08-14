@@ -413,13 +413,8 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		controlHeartbeatInterval:    d.cfg.HeartbeatInterval,
 		controlHeartbeatPayload:     d.controlPlaneHeartbeatPayload,
 		controlHeartbeatAck:         d.handleWorkspaceRunnerControlAck,
-		controlHeartbeatChanges: func() (<-chan struct{}, func()) {
-			if d.updateObservation == nil {
-				return nil, func() {}
-			}
-			return d.updateObservation.Subscribe()
-		},
-		now:          time.Now,
-		onTransition: onTransition,
+		controlHeartbeatChanges:     func() (<-chan struct{}, func()) { return nil, func() {} },
+		now:                         time.Now,
+		onTransition:                onTransition,
 	})
 }

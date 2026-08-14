@@ -136,14 +136,14 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 			logger.Info("restarting Computer with updated binary via supervisor handoff", "path", restartBin)
 			os.Exit(daemonHandoffExitCode)
 		}
-		if err := spawnDetachedComputerBinary(restartBin, profile, host.MachineUpgradeTarget(), nil); err != nil {
+		if err := spawnDetachedComputerBinary(restartBin, profile, host.MachineUpgradeTarget()); err != nil {
 			if rollbackErr := cli.RollbackExecutable(restartBin); rollbackErr != nil {
 				return fmt.Errorf("start detached Computer successor: %w; restore previous Computer: %v", err, rollbackErr)
 			}
 			if journalErr := host.MarkMachineUpgradeRollbackPending(); journalErr != nil {
 				return fmt.Errorf("start detached Computer successor: %w; previous binary restored but rollback journal failed: %v", err, journalErr)
 			}
-			if restoreErr := spawnDetachedComputerBinary(restartBin, profile, "", nil); restoreErr != nil {
+			if restoreErr := spawnDetachedComputerBinary(restartBin, profile, ""); restoreErr != nil {
 				return fmt.Errorf("start detached Computer successor: %w; restored previous binary but restart failed: %v", err, restoreErr)
 			}
 			return fmt.Errorf("start detached Computer successor: %w; previous Computer restored", err)

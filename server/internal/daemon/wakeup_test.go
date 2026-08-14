@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,9 +158,6 @@ func TestLegacyRuntimeWakeSocketDoesNotExecuteControlAcknowledgements(t *testing
 	}
 	defer conn.Close()
 	d := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.restartBinary = "/tmp/must-not-restart"
-	var restarted atomic.Bool
-	d.cancelFunc = func() { restarted.Store(true) }
 	wakeups := make(chan taskWakeup, 1)
 	readDone := make(chan error, 1)
 	go func() {
@@ -174,9 +170,6 @@ func TestLegacyRuntimeWakeSocketDoesNotExecuteControlAcknowledgements(t *testing
 		}
 	case <-time.After(time.Second):
 		t.Fatal("task wake socket stopped after ignored control acknowledgement")
-	}
-	if restarted.Load() {
-		t.Fatal("legacy task wake socket executed a pending Restart")
 	}
 	_ = conn.Close()
 	select {

@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"strings"
 	"testing"
 
@@ -96,6 +97,19 @@ func TestComputerResidentConstructsComputerHostWithoutDaemonContainer(t *testing
 	}
 	if !foundComputerHost {
 		t.Fatal("Computer resident does not construct computer.Host")
+	}
+}
+
+func TestComputerMachineLifecycleDoesNotDependOnDaemon(t *testing.T) {
+	for _, filename := range []string{"cmd_computer_resident.go", "machine_upgrade_detached.go", "cmd_daemon.go"} {
+		body, err := os.ReadFile(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		if strings.Contains(text, "internal/daemon") || strings.Contains(text, "daemon.") {
+			t.Errorf("%s mixes the Computer machine lifecycle with internal/daemon", filename)
+		}
 	}
 }
 

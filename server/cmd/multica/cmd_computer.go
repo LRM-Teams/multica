@@ -264,10 +264,6 @@ func addComputerResidentFlags(cmd *cobra.Command) {
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
 	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
 	_ = f.MarkHidden("computer-generation")
-	f.Bool("machine-upgrade-detached-candidate", false, "Internal detached Machine Upgrade candidate marker")
-	_ = f.MarkHidden("machine-upgrade-detached-candidate")
-	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
-	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
 	_ = f.MarkHidden("machine-attestation-source-pid")
 }

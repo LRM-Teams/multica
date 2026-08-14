@@ -50,7 +50,11 @@ The public resident path lives in `cmd/multica/cmd_computer_resident.go` and is
 `runComputerResident → computer.NewHost → Host.RunProcess`; it does not construct
 or call `daemon.Daemon`. An executable
 architecture test enforces both directions: the Computer resident has no
-`daemon.*` dependency and production daemon files cannot own `computer.Host`.
+`daemon.*` dependency, while production daemon files cannot expose a resident
+`Run`, health/machine-attestation owner, restart/update executor, Machine
+Upgrade journal, takeover, stage, or successor lifecycle. The only
+Machine-Upgrade-related daemon behavior is child-local prepare/release and
+Runtime re-registration requested by the Computer.
 
 The CLI is composition only. A Computer Host must not construct provider
 runtimes, Inbox/Activity owners, Agent lifecycle executor, Attachment registry,

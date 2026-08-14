@@ -361,17 +361,12 @@ func (d *Daemon) runWSWriter(conn *websocket.Conn, writes <-chan []byte, done ch
 }
 
 func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
-	var observation *protocol.DaemonUpdateObservation
-	if d != nil && d.updateObservation != nil {
-		observation = d.updateObservation.PublishedSnapshot()
-	}
 	return protocol.DaemonHeartbeatRequestPayload{
 		RuntimeID:                 runtimeID,
 		ComputerGeneration:        d.cfg.ComputerGeneration,
 		SupportsBatchImport:       true,
 		SupportsMemoryCuration:    true,
 		ActiveMemoryCurationRunID: d.activeMemoryCurationRun(runtimeID),
-		UpdateObservation:         observation,
 	}
 }
 

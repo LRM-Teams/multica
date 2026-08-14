@@ -71,8 +71,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	config.Daemon.BindingStateRoot = filepath.Join(bootstrap.BindingsRoot, "binding-children", bootstrap.Environment, workspaceID)
 	config.Daemon.WorkspaceID = workspaceID
-	config.Daemon.UpdateObservationPath = ""
-
 	d := newDaemonForRole(config.Daemon, config.Logger, daemonProcessBindingChild)
 	d.rootCtx = ctx
 	hostControl := newBindingHostControlClient(bootstrap.HostControlURL, config.Daemon.LocalControlToken, bindingChildControlIdentity{
@@ -298,7 +296,7 @@ func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstr
 				return
 			}
 			if prepare {
-				if err := d.beginMachineUpgradeHandoff(r.Context()); err != nil {
+				if err := d.beginBindingDrain(r.Context()); err != nil {
 					http.Error(w, err.Error(), http.StatusConflict)
 					return
 				}

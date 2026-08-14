@@ -58,6 +58,14 @@ type client struct {
 	seenList []string
 }
 
+func (c *client) supportsRunnerCapability(capability string) bool {
+	if c == nil || capability == "" {
+		return false
+	}
+	_, supported := c.runnerCapabilities[capability]
+	return supported
+}
+
 const eventDedupCapacity = 128
 
 // markSeen records eventID as already delivered to this client. Empty event IDs
@@ -545,8 +553,8 @@ func (h *Hub) RequestSeedAgentContext(ctx context.Context, req protocol.SeedAgen
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
 // Wiring is done after handler construction because the handler depends on
 // DB queries that aren't available when the hub is built. A nil handler
-// disables WS heartbeat processing — daemons fall back to HTTP heartbeat
-// transparently because their fallback timer fires whenever no ack arrives.
+// disables heartbeat processing; capable Workspace Runners reconnect until
+// they reach a Server that supports their control plane.
 func (h *Hub) SetHeartbeatHandler(fn HeartbeatHandler) {
 	if h == nil {
 		return
@@ -1375,6 +1383,17 @@ func (c *client) handleFrame(raw []byte) {
 		}
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
+	case protocol.EventDaemonLivenessProbe:
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventDaemonLivenessAck})
+		if err != nil {
+			return
+		}
+		select {
+		case c.send <- frame:
+		default:
+			c.hub.unregister(c)
+			_ = c.conn.Close()
+		}
 	case protocol.EventAgentWorkspaceFileTree,
 		protocol.EventAgentWorkspaceFileContent,
 		protocol.EventDaemonWriteFileResponse,
@@ -1551,8 +1570,6 @@ func (c *client) sendReminderFrame(eventType string, payload any) error {
 func (c *client) handleHeartbeatFrame(raw json.RawMessage) {
 	handler := c.hub.heartbeatHandler()
 	if handler == nil {
-		// Server doesn't have a heartbeat handler wired — daemon will time
-		// out waiting for an ack and fall back to HTTP heartbeat.
 		return
 	}
 
@@ -1565,13 +1582,20 @@ func (c *client) handleHeartbeatFrame(raw json.RawMessage) {
 		slog.Debug("daemon websocket heartbeat missing runtime_id", "daemon_id", c.identity.DaemonID)
 		return
 	}
-	if _, ok := c.runtimes[payload.RuntimeID]; !ok {
-		// The connection authenticated for a fixed runtime set; reject any
-		// heartbeat for a runtime the client did not register for.
+	_, legacyRuntimeAuthorized := c.runtimes[payload.RuntimeID]
+	runnerControlAuthorized := c.hub.isCurrentWorkspaceRunner(c) &&
+		c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerControlPlane)
+	if !legacyRuntimeAuthorized && !runnerControlAuthorized {
+		// Legacy connections authenticate a fixed Runtime set. A current ready
+		// Workspace Runner instead uses dynamic DB authorization in the handler,
+		// because Runtime membership is mutable and not part of Runner identity.
 		slog.Warn("daemon websocket heartbeat for unauthorized runtime",
 			"daemon_id", c.identity.DaemonID,
 			"runtime_id", payload.RuntimeID)
 		return
+	}
+	if runnerControlAuthorized {
+		c.runnerLastInbound.Store(time.Now().UnixNano())
 	}
 
 	// Intentionally do NOT wrap this ctx with WithTimeout. The handler

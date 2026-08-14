@@ -1,6 +1,9 @@
 package researchrun
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestArtifactPolicyNormalAccessDominates(t *testing.T) {
 	policy := ArtifactPolicy{}
@@ -14,68 +17,56 @@ func TestArtifactPolicyNormalAccessDominates(t *testing.T) {
 
 func TestArtifactPolicyLegacyAdmissionMatrix(t *testing.T) {
 	policy := ArtifactPolicy{}
-	tests := []struct {
-		name       string
-		kind       ArtifactEntityKind
-		lifecycle  ArtifactLifecycleStatus
-		provenance ArtifactProvenanceCompleteness
-		wantOK     bool
-		wantReason ArtifactDenyReason
-	}{
-		{
-			name: "registered partial task", kind: ArtifactKindTask,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenancePartial,
-			wantOK: true,
-		},
-		{
-			name: "registered unknown-producer claim", kind: ArtifactKindClaim,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceUnknown,
-			wantOK: true,
-		},
-		{
-			name: "accepted partial source", kind: ArtifactKindSourceSnapshot,
-			lifecycle: ArtifactLifecycleAccepted, provenance: ArtifactProvenancePartial,
-			wantOK: true,
-		},
-		{
-			name: "succeeded task lineage registered", kind: ArtifactKindTask,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceComplete,
-			wantOK: true,
-		},
-		{
-			name: "succeeded attempt lineage registered", kind: ArtifactKindAttempt,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceComplete,
-			wantOK: true,
-		},
-		{
-			name: "context manifest always denied", kind: ArtifactKindContextManifest,
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenanceComplete,
-			wantOK: true, // kind is valid; manifest omission happens at plan layer
-		},
-		{
-			name: "superseded lifecycle denied", kind: ArtifactKindClaim,
-			lifecycle: ArtifactLifecycleSuperseded, provenance: ArtifactProvenancePartial,
-			wantOK: false, wantReason: ArtifactDenyLifecycle,
-		},
-		{
-			name: "withdrawn lifecycle denied", kind: ArtifactKindObservation,
-			lifecycle: ArtifactLifecycleWithdrawn, provenance: ArtifactProvenancePartial,
-			wantOK: false, wantReason: ArtifactDenyLifecycle,
-		},
-		{
-			name: "unknown kind denied", kind: ArtifactEntityKind("not-a-kind"),
-			lifecycle: ArtifactLifecycleRegistered, provenance: ArtifactProvenancePartial,
-			wantOK: false, wantReason: ArtifactDenyUnknownKind,
-		},
+	kinds := append(RegisteredArtifactEntityKinds(), ArtifactEntityKind("future-artifact-kind"))
+	lifecycles := []ArtifactLifecycleStatus{
+		ArtifactLifecycleRegistered,
+		ArtifactLifecycleAccepted,
+		ArtifactLifecycleRejected,
+		ArtifactLifecycleStale,
+		ArtifactLifecycleSuperseded,
+		ArtifactLifecycleWithdrawn,
+		ArtifactLifecycleStatus("future-lifecycle"),
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ok, reason := policy.LegacyAdmissionAllowed(tc.kind, tc.lifecycle, tc.provenance)
-			if ok != tc.wantOK || reason != tc.wantReason {
-				t.Fatalf("ok=%v reason=%q want ok=%v reason=%q", ok, reason, tc.wantOK, tc.wantReason)
+	provenances := []ArtifactProvenanceCompleteness{
+		ArtifactProvenanceComplete,
+		ArtifactProvenancePartial,
+		ArtifactProvenanceUnknown,
+		ArtifactProvenanceCompleteness("future-provenance"),
+	}
+
+	for _, kind := range kinds {
+		for _, lifecycle := range lifecycles {
+			for _, provenance := range provenances {
+				name := fmt.Sprintf("%s/%s/%s", kind, lifecycle, provenance)
+				t.Run(name, func(t *testing.T) {
+					wantOK, wantReason := expectedLegacyAdmission(kind, lifecycle, provenance)
+					ok, reason := policy.LegacyAdmissionAllowed(kind, lifecycle, provenance)
+					if ok != wantOK || reason != wantReason {
+						t.Fatalf("ok=%v reason=%q want ok=%v reason=%q", ok, reason, wantOK, wantReason)
+					}
+				})
 			}
-		})
+		}
 	}
+}
+
+func expectedLegacyAdmission(
+	kind ArtifactEntityKind,
+	lifecycle ArtifactLifecycleStatus,
+	provenance ArtifactProvenanceCompleteness,
+) (bool, ArtifactDenyReason) {
+	if _, ok := registeredArtifactEntityKinds[kind]; !ok {
+		return false, ArtifactDenyUnknownKind
+	}
+	if lifecycle != ArtifactLifecycleRegistered && lifecycle != ArtifactLifecycleAccepted {
+		return false, ArtifactDenyLifecycle
+	}
+	if provenance != ArtifactProvenanceComplete &&
+		provenance != ArtifactProvenancePartial &&
+		provenance != ArtifactProvenanceUnknown {
+		return false, ArtifactDenyMissingPassport
+	}
+	return true, ""
 }
 
 func TestArtifactPolicyAccessMatrix(t *testing.T) {

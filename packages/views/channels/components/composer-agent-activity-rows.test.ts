@@ -33,6 +33,11 @@ describe("selectComposerAgentActivityRows", () => {
       label: "Thinking...",
       dotClass: "bg-brand",
     });
+    expect(rows[1]).toMatchObject({
+      name: "Runner",
+      label: "Running command...",
+      dotClass: "bg-running",
+    });
     expect(rows.some((row) => /Online|Idle/.test(row.label))).toBe(false);
   });
 

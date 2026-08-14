@@ -9,6 +9,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { useT } from "../../i18n";
 import { resolveAgentLiveStatus } from "../resolve-agent-live-status";
+import { isRunningCommandActivityLabel } from "../runner-activity-labels";
 
 const activityToneDotClass: Record<string, string> = {
   neutral: "bg-muted-foreground/40",
@@ -147,9 +148,11 @@ function AgentActivityStatusView({
   }
   const isWorkingTone =
     summary.tone === "warning" || summary.tone === "info" || summary.tone === "active";
-  const dotClass = isWorkingTone
-    ? "bg-warning"
-    : activityToneDotClass[summary.tone] ?? "bg-muted-foreground";
+  const dotClass = isRunningCommandActivityLabel(summary.label)
+    ? "bg-running"
+    : isWorkingTone
+      ? "bg-warning"
+      : activityToneDotClass[summary.tone] ?? "bg-muted-foreground";
   const pulses = isWorkingTone;
   return (
     <span

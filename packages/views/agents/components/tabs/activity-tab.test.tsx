@@ -77,6 +77,7 @@ describe("ActivityTab", () => {
       expect.stringContaining("Idle"),
     ]);
     expect(screen.getAllByText("Running command")).toHaveLength(1);
+    expect(screen.getAllByTestId("runner-activity-row")[0]?.querySelector(".bg-running")).not.toBeNull();
     // Default-full: body visible without expand (2026-08-11).
     expect(screen.getByText("sanitized body")).toBeInTheDocument();
     expect(screen.getByTestId("activity-command-block")).toBeInTheDocument();

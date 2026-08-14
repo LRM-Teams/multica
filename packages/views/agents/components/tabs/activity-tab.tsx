@@ -10,6 +10,7 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
+import { isRunningCommandActivityLabel } from "../../runner-activity-labels";
 import {
   foldActivityCommandPreview,
   isLongActivityCommand,
@@ -139,7 +140,9 @@ function TimelineRow({
         <span
           className={cn(
             "relative z-[1] mt-1.5 size-1.5 shrink-0 rounded-full",
-            TONE_DOT[row.tone] ?? TONE_DOT.neutral,
+            isRunningCommandActivityLabel(row.title)
+              ? "bg-running"
+              : TONE_DOT[row.tone] ?? TONE_DOT.neutral,
           )}
           aria-hidden
         />

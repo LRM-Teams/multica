@@ -50,6 +50,7 @@ describe("AgentActivityStatus", () => {
       "Running command...",
     );
     expect(container.querySelector(".animate-ping")).not.toBeNull();
+    expect(container.querySelector(".bg-running")).not.toBeNull();
   });
 
   it("shows Offline instead of stale work as soon as presence disconnects", () => {

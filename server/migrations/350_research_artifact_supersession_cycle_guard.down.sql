@@ -1,0 +1,4 @@
+DROP TRIGGER IF EXISTS research_artifact_supersession_append_only_guard ON research_artifact_supersession;
+DROP FUNCTION IF EXISTS research_artifact_supersession_append_only_guard_fn();
+DROP TRIGGER IF EXISTS research_artifact_supersession_cycle_guard ON research_artifact_supersession;
+DROP FUNCTION IF EXISTS research_artifact_supersession_cycle_guard_fn();

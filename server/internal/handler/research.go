@@ -49,7 +49,42 @@ type ResearchFleetPreviewMember struct {
 // ResearchSessionListItem extends the session row with a workspace fleet preview.
 type ResearchSessionListItem struct {
 	ResearchSessionResponse
-	FleetPreview []ResearchFleetPreviewMember `json:"fleet_preview"`
+	FleetPreview      []ResearchFleetPreviewMember `json:"fleet_preview"`
+	ListProgress      *ResearchSessionListProgress `json:"list_progress,omitempty"`
+	ActiveAssignments []ResearchActiveAssignment   `json:"active_assignments"`
+	LatestOutcomes    []ResearchLatestOutcome      `json:"latest_outcomes"`
+}
+
+type ResearchSessionListProgress struct {
+	TaskTotal          int64   `json:"task_total"`
+	TaskCompleted      int64   `json:"task_completed"`
+	TaskRunning        int64   `json:"task_running"`
+	TaskBlocked        int64   `json:"task_blocked"`
+	EvidenceCount      int64   `json:"evidence_count"`
+	TodayEvidenceCount int64   `json:"today_evidence_count"`
+	NodeCount          int64   `json:"node_count"`
+	OpenQuestionCount  int64   `json:"open_question_count"`
+	AwaitingUserAction bool    `json:"awaiting_user_action"`
+	AttentionKind      *string `json:"attention_kind,omitempty"`
+	Recoverable        bool    `json:"recoverable"`
+	LastProgressAt     *string `json:"last_progress_at,omitempty"`
+}
+
+type ResearchActiveAssignment struct {
+	AgentID   string `json:"agent_id"`
+	Role      string `json:"role"`
+	TaskID    string `json:"task_id"`
+	TaskTitle string `json:"task_title"`
+	State     string `json:"state"`
+}
+
+type ResearchLatestOutcome struct {
+	ID                string  `json:"id"`
+	Kind              string  `json:"kind"`
+	Title             string  `json:"title"`
+	Summary           *string `json:"summary,omitempty"`
+	VerificationState string  `json:"verification_state"`
+	CreatedAt         string  `json:"created_at"`
 }
 
 type ResearchSessionSnapshot struct {
@@ -194,6 +229,55 @@ func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
 	return resp
 }
 
+// taskBoundResearchSessionResponse retains the V1-V5 compatibility family but
+// projects only fields frozen in the manifested Run representation. Live
+// routing, activity, handoff, timestamps, and unattended counters are absent.
+func taskBoundResearchSessionResponse(run researchrun.Run) ResearchSessionResponse {
+	return ResearchSessionResponse{
+		ID:           run.SessionID,
+		WorkspaceID:  run.WorkspaceID,
+		FleetID:      run.FleetID,
+		CreatedBy:    run.CreatedBy,
+		Title:        run.Title,
+		Goal:         run.Goal,
+		Status:       string(run.Status),
+		CurrentStage: run.CurrentStage,
+		DepthTier:    run.DepthTier,
+	}
+}
+
+// taskBoundResearchFleetResponse rebuilds the compatibility shape exclusively
+// from the hashed principal header. Member-row IDs, mutable Agent profiles,
+// runtime configuration, and Fleet timestamps are deliberately unavailable.
+func taskBoundResearchFleetResponse(run researchrun.Run, members []researchrun.FleetMember) ResearchFleetResponse {
+	response := ResearchFleetResponse{
+		ID:          run.FleetID,
+		WorkspaceID: run.WorkspaceID,
+		Members:     make([]ResearchFleetMemberResp, 0, len(members)),
+	}
+	seenRoles := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		if member.Status == "archived" {
+			continue
+		}
+		if _, duplicate := seenRoles[member.Role]; duplicate {
+			continue
+		}
+		seenRoles[member.Role] = struct{}{}
+		response.Members = append(response.Members, ResearchFleetMemberResp{
+			AgentID: member.AgentID,
+			Role:    member.Role,
+			Status:  member.Status,
+			IsLead:  member.IsLead,
+		})
+		if member.IsLead && response.LeadAgentID == nil {
+			agentID := member.AgentID
+			response.LeadAgentID = &agentID
+		}
+	}
+	return response
+}
+
 func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
@@ -221,11 +305,78 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list research sessions")
 		return
 	}
+	progressRows, err := h.Queries.ListResearchSessionProgress(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load research session progress")
+		return
+	}
+	progressBySession := make(map[string]*ResearchSessionListProgress, len(progressRows))
+	for _, row := range progressRows {
+		sessionID := uuidToString(row.SessionID)
+		progress := &ResearchSessionListProgress{
+			TaskTotal:          row.TaskTotal,
+			TaskCompleted:      row.TaskCompleted,
+			TaskRunning:        row.TaskRunning,
+			TaskBlocked:        row.TaskBlocked,
+			EvidenceCount:      row.EvidenceCount,
+			TodayEvidenceCount: row.TodayEvidenceCount,
+			NodeCount:          row.NodeCount,
+			OpenQuestionCount:  row.OpenQuestionCount,
+			AwaitingUserAction: row.AwaitingUserAction,
+			Recoverable:        row.Recoverable,
+		}
+		if row.AttentionKind != "" {
+			progress.AttentionKind = &row.AttentionKind
+		}
+		if row.LastProgressAt.Valid {
+			lastProgressAt := timestampToString(row.LastProgressAt)
+			progress.LastProgressAt = &lastProgressAt
+		}
+		progressBySession[sessionID] = progress
+	}
+	assignmentRows, err := h.Queries.ListResearchActiveAssignments(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load research assignments")
+		return
+	}
+	assignmentsBySession := make(map[string][]ResearchActiveAssignment)
+	for _, row := range assignmentRows {
+		sessionID := uuidToString(row.SessionID)
+		assignmentsBySession[sessionID] = append(assignmentsBySession[sessionID], ResearchActiveAssignment{
+			AgentID: uuidToString(row.AgentID), Role: row.Role, TaskID: uuidToString(row.TaskID), TaskTitle: row.TaskTitle, State: row.State,
+		})
+	}
+	outcomeRows, err := h.Queries.ListResearchLatestOutcomes(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load research outcomes")
+		return
+	}
+	outcomesBySession := make(map[string][]ResearchLatestOutcome)
+	for _, row := range outcomeRows {
+		sessionID := uuidToString(row.SessionID)
+		outcome := ResearchLatestOutcome{ID: uuidToString(row.ID), Kind: row.Kind, Title: row.Title, VerificationState: row.VerificationState, CreatedAt: timestampToString(row.CreatedAt)}
+		if row.Summary != "" {
+			outcome.Summary = &row.Summary
+		}
+		outcomesBySession[sessionID] = append(outcomesBySession[sessionID], outcome)
+	}
 	out := make([]ResearchSessionListItem, 0, len(rows))
 	for _, row := range rows {
+		sessionID := uuidToString(row.ID)
+		assignments := assignmentsBySession[sessionID]
+		if assignments == nil {
+			assignments = []ResearchActiveAssignment{}
+		}
+		outcomes := outcomesBySession[sessionID]
+		if outcomes == nil {
+			outcomes = []ResearchLatestOutcome{}
+		}
 		out = append(out, ResearchSessionListItem{
 			ResearchSessionResponse: researchSessionToResponse(row),
 			FleetPreview:            preview,
+			ListProgress:            progressBySession[sessionID],
+			ActiveAssignments:       assignments,
+			LatestOutcomes:          outcomes,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
@@ -405,40 +556,49 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "attempt_id is only available on the Agent research route")
 		return
 	}
-	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{
-		ID:          sessionID,
-		WorkspaceID: wsUUID,
-	})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "research session not found")
-		return
-	}
-	fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "research fleet missing")
-		return
-	}
-	members, _ := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
-		FleetID:     fleet.ID,
-		WorkspaceID: wsUUID,
-	})
-	nodes, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	edges, _ := h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	sources, _ := h.Queries.ListResearchSources(r.Context(), db.ListResearchSourcesParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	evals, _ := h.Queries.ListResearchStageEvals(r.Context(), db.ListResearchStageEvalsParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	messages, _ := h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: sessionID, WorkspaceID: wsUUID})
-	productRounds, _ := h.Queries.ListResearchProductRoundCards(r.Context(), db.ListResearchProductRoundCardsParams{SessionID: sessionID, WorkspaceID: wsUUID})
-
+	var sessionResponse ResearchSessionResponse
+	var fleetResponse ResearchFleetResponse
+	var nodes []db.ResearchGraphNode
+	var edges []db.ResearchGraphEdge
+	var sources []db.ResearchSource
+	var evals []db.ResearchStageEval
+	var messages []db.ResearchMessage
+	var productRounds []db.ResearchProductRoundCard
 	var report *ResearchReportResp
-	if rep, err := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); err == nil {
-		rr := researchReportToResp(rep)
-		report = &rr
+	if !agentAttemptScoped {
+		session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "research session not found")
+			return
+		}
+		fleet, err := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "research fleet missing")
+			return
+		}
+		members, _ := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{FleetID: fleet.ID, WorkspaceID: wsUUID})
+		sessionResponse = researchSessionToResponse(session)
+		fleetResponse = h.researchFleetToResponse(r.Context(), fleet, members)
+		nodes, _ = h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		edges, _ = h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		sources, _ = h.Queries.ListResearchSources(r.Context(), db.ListResearchSourcesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		evals, _ = h.Queries.ListResearchStageEvals(r.Context(), db.ListResearchStageEvalsParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		messages, _ = h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		productRounds, _ = h.Queries.ListResearchProductRoundCards(r.Context(), db.ListResearchProductRoundCardsParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		if rep, reportErr := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); reportErr == nil {
+			rr := researchReportToResp(rep)
+			report = &rr
+		}
 	}
 	var loadedRun *researchrun.RunSnapshot
-	durableRun, ownershipErr := h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
-	if ownershipErr != nil {
-		writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
-		return
+	durableRun := agentAttemptScoped
+	if !agentAttemptScoped {
+		var ownershipErr error
+		durableRun, ownershipErr = h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
+		if ownershipErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
+			return
+		}
 	}
 	if durableRun {
 		if h.ResearchRun == nil {
@@ -465,6 +625,10 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		loadedRun = &snapshot
+		if agentAttemptScoped {
+			sessionResponse = taskBoundResearchSessionResponse(snapshot.Run)
+			fleetResponse = taskBoundResearchFleetResponse(snapshot.Run, snapshot.PrincipalHeader)
+		}
 	}
 
 	graphNodes := mapGraphNodes(nodes, edges)
@@ -492,8 +656,8 @@ func (h *Handler) getResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
-		Session:           researchSessionToResponse(session),
-		Fleet:             h.researchFleetToResponse(r.Context(), fleet, members),
+		Session:           sessionResponse,
+		Fleet:             fleetResponse,
 		Nodes:             graphNodes,
 		Edges:             graphEdges,
 		Sources:           mappedSources,

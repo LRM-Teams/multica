@@ -26,19 +26,19 @@ export function ResearchHomeHero({
       data-testid="research-home-hero"
       aria-label={t(($) => $.home.composer_label)}
     >
-      <div className="relative flex flex-col gap-3 md:gap-3.5">
-        <div className="flex items-start gap-2.5">
+      <div className="relative flex flex-col gap-2">
+        <div className="flex items-center gap-2.5">
           <span
-            className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-brand/12 text-brand"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand/12 text-brand"
             aria-hidden
           >
-            <Compass className="size-[19px]" strokeWidth={2} />
+            <Compass className="size-4" strokeWidth={2} />
           </span>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-xl font-medium tracking-tight text-foreground md:text-2xl">
+          <div className="flex min-w-0 flex-1 items-baseline gap-3">
+            <h1 className="shrink-0 text-base font-medium tracking-tight text-foreground">
               {t(($) => $.home.hero_title)}
             </h1>
-            <p className="mt-0.5 text-sm leading-snug text-muted-foreground md:line-clamp-1 md:leading-relaxed">
+            <p className="hidden truncate text-xs text-muted-foreground md:block">
               {t(($) => $.home.hero_desc)}
             </p>
           </div>

@@ -20,17 +20,12 @@ const edgeTypes = [...RESEARCH_V6_EDGE_TYPES];
 const transitionKinds = [...RESEARCH_V6_TRANSITION_KINDS];
 
 describe("Research V6 registry — AC #1: every documented kind has a type and parse", () => {
-  it("documents exactly 30 node kinds (§7.1)", () => {
-    expect(nodeKinds).toHaveLength(30);
-    expect(new Set(nodeKinds).size).toBe(30);
+  it("documents 30 entity kinds plus the explicit goal origin", () => {
+    expect(nodeKinds).toHaveLength(31);
+    expect(new Set(nodeKinds).size).toBe(31);
   });
 
-  it("documents the exact §7.1 edge type set (23); the issue text says 24 — MISMATCH documented", () => {
-    // §7.1 of the plan enumerates the edge types below. Counting them from the
-    // authoritative document gives 23 (4+4+5+4+3+3), not 24. The issue brief
-    // repeated "24" — see the final report; the doc set is authoritative and
-    // matches the sibling graph-model adapter. We assert the actual documented
-    // set so a regression in coverage is caught loudly.
+  it("documents the exact §7.1 edge type set plus restart lineage", () => {
     expect(edgeTypes).toEqual([
       // structure
       "decomposes", "tests", "depends_on", "triggered",
@@ -43,7 +38,7 @@ describe("Research V6 registry — AC #1: every documented kind has a type and p
       // reporting / review
       "reported_in", "reviewed_by", "revised_by",
       // staffing / lifecycle
-      "staffed_by", "created_for", "retired_after",
+      "staffed_by", "created_for", "retired_after", "restart_of",
     ]);
   });
 

@@ -118,6 +118,58 @@ describe("Research list/bootstrap response boundaries", () => {
     });
   });
 
+  it("normalizes nullable projections and preserves unknown attention states", async () => {
+    const client = new ApiClient("https://api.example.test");
+    stubResponse({
+      sessions: [
+        {
+          ...session("s1"),
+          list_progress: {
+            attention_kind: "future_attention_kind",
+          },
+          active_assignments: null,
+          latest_outcomes: null,
+        },
+      ],
+    });
+
+    await expect(client.listResearchSessions("ws1")).resolves.toMatchObject({
+      sessions: [
+        {
+          id: "s1",
+          list_progress: { attention_kind: "future_attention_kind" },
+          active_assignments: undefined,
+          latest_outcomes: undefined,
+        },
+      ],
+    });
+  });
+
+  it("ignores malformed optional projections without dropping the session list", async () => {
+    const client = new ApiClient("https://api.example.test");
+    stubResponse({
+      sessions: [
+        {
+          ...session("s1"),
+          list_progress: { task_total: "12" },
+          active_assignments: {},
+          latest_outcomes: "invalid",
+        },
+      ],
+    });
+
+    await expect(client.listResearchSessions("ws1")).resolves.toMatchObject({
+      sessions: [
+        {
+          id: "s1",
+          list_progress: undefined,
+          active_assignments: undefined,
+          latest_outcomes: undefined,
+        },
+      ],
+    });
+  });
+
   it("accepts a self-consistent fleet and rejects synthetic empty fallback", async () => {
     const client = new ApiClient("https://api.example.test");
     stubResponse({

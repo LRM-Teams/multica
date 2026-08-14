@@ -556,7 +556,7 @@ export function ResearchListPage() {
                 />
                 {/* LRM-1138 / LRM-1140 A2: colored inject tag beside short intent. */}
                 <div
-                  className="flex items-start gap-2 px-3 py-3 md:px-3.5"
+                  className="flex items-start gap-2 px-3 py-2 md:px-3.5"
                   data-testid="research-composer-intent"
                 >
                   {selectedTemplate ? (
@@ -567,6 +567,7 @@ export function ResearchListPage() {
                   ) : null}
                   <Textarea
                     ref={goalInputRef}
+                    aria-label={t(($) => $.goal_placeholder)}
                     value={goal}
                     onChange={(e) =>
                       setComposer((prev) => ({
@@ -588,7 +589,7 @@ export function ResearchListPage() {
                       fieldErrors?.goal ? "research-create-goal-error" : undefined
                     }
                     data-testid="research-create-goal"
-                    className="min-h-[64px] flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0 focus-visible:border-transparent md:min-h-[88px]"
+                    className="min-h-10 flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0 focus-visible:border-transparent"
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                         e.preventDefault();
@@ -650,7 +651,7 @@ export function ResearchListPage() {
                     {t(($) => $.create_params.errors.empty_goal)}
                   </p>
                 ) : null}
-                <div className="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-center md:justify-between md:gap-3 md:px-3.5">
+                <div className="flex flex-col gap-2 border-t px-3 py-2 md:flex-row md:items-center md:justify-between md:gap-3 md:px-3.5">
                   <div className="min-w-0 space-y-0.5">
                     <ResearchCreateEstimateSummary params={createParams} />
                     <p className="hidden text-xs text-muted-foreground md:block">
@@ -668,7 +669,7 @@ export function ResearchListPage() {
                         setComposer((prev) => ({ ...prev, paramsOpen: true }));
                       }}
                       className={cn(
-                        "h-10 w-full shrink-0 rounded-full px-3.5 text-sm font-medium md:h-9 md:w-auto",
+                        "h-10 w-full shrink-0 rounded-full px-3.5 text-sm font-medium md:h-8 md:w-auto",
                         HERO_CTA_SECONDARY_CLASS,
                         createBusy && "opacity-50 cursor-not-allowed",
                       )}
@@ -684,7 +685,7 @@ export function ResearchListPage() {
                       aria-disabled={createBusy || undefined}
                       data-testid="research-create-submit"
                       className={cn(
-                        "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground md:h-9 md:w-auto",
+                        "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground md:h-8 md:w-auto",
                         HERO_CTA_PRIMARY_CLASS,
                         createBusy && "opacity-50 cursor-not-allowed",
                       )}

@@ -328,8 +328,10 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 		if row.AttentionKind != "" {
 			progress.AttentionKind = &row.AttentionKind
 		}
-		lastProgressAt := timestampToString(row.LastProgressAt)
-		progress.LastProgressAt = &lastProgressAt
+		if row.LastProgressAt.Valid {
+			lastProgressAt := timestampToString(row.LastProgressAt)
+			progress.LastProgressAt = &lastProgressAt
+		}
 		progressBySession[sessionID] = progress
 	}
 	assignmentRows, err := h.Queries.ListResearchActiveAssignments(r.Context(), wsUUID)
@@ -361,12 +363,20 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 	out := make([]ResearchSessionListItem, 0, len(rows))
 	for _, row := range rows {
 		sessionID := uuidToString(row.ID)
+		assignments := assignmentsBySession[sessionID]
+		if assignments == nil {
+			assignments = []ResearchActiveAssignment{}
+		}
+		outcomes := outcomesBySession[sessionID]
+		if outcomes == nil {
+			outcomes = []ResearchLatestOutcome{}
+		}
 		out = append(out, ResearchSessionListItem{
 			ResearchSessionResponse: researchSessionToResponse(row),
 			FleetPreview:            preview,
 			ListProgress:            progressBySession[sessionID],
-			ActiveAssignments:       assignmentsBySession[sessionID],
-			LatestOutcomes:          outcomesBySession[sessionID],
+			ActiveAssignments:       assignments,
+			LatestOutcomes:          outcomes,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})

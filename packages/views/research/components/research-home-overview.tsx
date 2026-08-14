@@ -17,13 +17,17 @@ function stageIndex(stage: string): number {
 }
 
 function rank(session: ResearchSession): number {
-  const kind = session.list_progress?.attention_kind;
+  const kind = knownAttentionKind(session.list_progress?.attention_kind);
   if (kind === "user_confirmation") return 0;
   if (kind === "blocked_tasks") return 1;
   if (kind === "recoverable_failure") return 2;
   if (session.status === "running") return 3;
   if (session.status === "paused") return 4;
   return 5;
+}
+
+function knownAttentionKind(value: string | null | undefined) {
+  return value === "user_confirmation" || value === "blocked_tasks" || value === "recoverable_failure" || value === "stalled" ? value : null;
 }
 
 function isActive(session: ResearchSession): boolean {
@@ -46,18 +50,20 @@ export function ResearchHomeOverview({
     [sessions],
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = active.find((session) => session.id === selectedId) ?? active[0] ?? null;
+  const latestCompleted = sessions.find((session) => session.status === "completed") ?? null;
+  const selected = active.find((session) => session.id === selectedId) ?? active[0] ?? latestCompleted;
 
   if (!selected) return null;
 
+  const projectionAvailable = sessions.some((session) => session.list_progress !== undefined);
   const workingAgents = new Set(active.flatMap((session) => (session.active_assignments ?? []).map((assignment) => assignment.agent_id))).size;
-  const needsAttention = active.filter((session) => Boolean(session.list_progress?.attention_kind)).length;
+  const needsAttention = active.filter((session) => Boolean(knownAttentionKind(session.list_progress?.attention_kind))).length;
   const todayEvidence = sessions.reduce((sum, session) => sum + (session.list_progress?.today_evidence_count ?? 0), 0);
   const summary = [
     [t(($) => $.home_overview.active), active.length, "text-brand"],
-    [t(($) => $.home_overview.attention), needsAttention, needsAttention > 0 ? "text-warning" : "text-foreground"],
-    [t(($) => $.home_overview.agents), workingAgents, "text-foreground"],
-    [t(($) => $.home_overview.today_evidence), todayEvidence, "text-success"],
+    [t(($) => $.home_overview.attention), projectionAvailable ? needsAttention : "—", needsAttention > 0 ? "text-warning" : "text-foreground"],
+    [t(($) => $.home_overview.agents), projectionAvailable ? workingAgents : "—", "text-foreground"],
+    [t(($) => $.home_overview.today_evidence), projectionAvailable ? todayEvidence : "—", "text-success"],
   ] as const;
 
   return (
@@ -98,7 +104,8 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
   const current = stageIndex(session.current_stage);
   const outcomes = session.latest_outcomes ?? [];
   const assignments = session.active_assignments ?? [];
-  const attention = progress?.attention_kind;
+  const attention = knownAttentionKind(progress?.attention_kind);
+  const completed = session.status === "completed";
 
   return (
     <article className={cn("relative overflow-hidden rounded-xl border bg-card/88 p-4 md:p-5", attention ? "border-warning/40" : "border-brand/25")} data-testid="research-focus-session">
@@ -108,7 +115,7 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span className={cn("size-2 rounded-full", attention ? "bg-warning" : "bg-brand motion-safe:animate-pulse")} aria-hidden />
-              <span>{attention ? t(($) => $.home_overview.needs_attention) : t(($) => $.home_overview.focus_heading)}</span>
+              <span>{completed ? t(($) => $.home_overview.recent_completed) : attention ? t(($) => $.home_overview.needs_attention) : t(($) => $.home_overview.focus_heading)}</span>
               <span aria-hidden>·</span>
               <Time kind="list" value={progress?.last_progress_at ?? session.updated_at} />
             </div>
@@ -116,12 +123,12 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
             <p className="mt-1 text-xs text-muted-foreground">{t(($) => $.stage[session.current_stage as keyof typeof $.stage] ?? session.current_stage)}</p>
           </div>
           <AppLink href={href} onClick={onNavigate} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-3.5 text-sm font-medium text-brand-foreground outline-none transition-colors hover:bg-brand/80 focus-visible:ring-2 focus-visible:ring-ring">
-            {attention === "user_confirmation" ? t(($) => $.home_overview.handle_confirmation) : t(($) => $.home_overview.enter)}
+            {completed ? t(($) => $.home_overview.read_report) : attention === "user_confirmation" ? t(($) => $.home_overview.handle_confirmation) : t(($) => $.home_overview.enter)}
             <ArrowRight className="size-3.5" aria-hidden />
           </AppLink>
         </div>
 
-        {attention ? <div className="mt-3 flex items-center gap-2 rounded-lg bg-warning/9 px-3 py-2 text-xs text-warning"><AlertTriangle className="size-3.5 shrink-0" aria-hidden />{t(($) => attention === "user_confirmation" ? $.home_overview.confirmation_reason : attention === "recoverable_failure" ? $.home_overview.recoverable_reason : $.home_overview.blocked_reason, { count: progress?.task_blocked ?? 0 })}</div> : null}
+        {attention ? <div className="mt-3 flex items-center gap-2 rounded-lg bg-warning/9 px-3 py-2 text-xs text-warning"><AlertTriangle className="size-3.5 shrink-0" aria-hidden />{t(($) => attention === "user_confirmation" ? $.home_overview.confirmation_reason : attention === "recoverable_failure" ? $.home_overview.recoverable_reason : attention === "stalled" ? $.home_overview.stalled_reason : $.home_overview.blocked_reason, { count: progress?.task_blocked ?? 0 })}</div> : null}
 
         <div className="mt-5 grid grid-cols-4 gap-0" aria-label={t(($) => $.home_overview.stage_progress)}>
           {STAGES.map((stage, index) => (
@@ -137,26 +144,25 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
 
         <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 border-y border-border/65 py-3 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1.5"><GitBranch className="size-3.5" aria-hidden />{progress ? t(($) => $.home_overview.tasks, { done: progress.task_completed, total: progress.task_total }) : t(($) => $.home_overview.progress_unavailable)}</span>
-          <span className="inline-flex items-center gap-1.5"><FileCheck2 className="size-3.5" aria-hidden />{t(($) => $.home_overview.evidence_count, { count: progress?.evidence_count ?? 0 })}</span>
-          <span className="inline-flex items-center gap-1.5"><Users className="size-3.5" aria-hidden />{t(($) => $.home_overview.open_questions, { count: progress?.open_question_count ?? 0 })}</span>
+          {progress ? <><span className="inline-flex items-center gap-1.5"><FileCheck2 className="size-3.5" aria-hidden />{t(($) => $.home_overview.evidence_count, { count: progress.evidence_count })}</span><span className="inline-flex items-center gap-1.5"><Users className="size-3.5" aria-hidden />{t(($) => $.home_overview.open_questions, { count: progress.open_question_count })}</span></> : null}
         </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <section>
             <h3 className="text-xs font-medium text-foreground">{t(($) => $.home_overview.assignments)}</h3>
-            <div className="mt-2 space-y-2">
-              {assignments.length > 0 ? assignments.map((assignment) => (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {assignments.length > 0 ? assignments.slice(0, 4).map((assignment) => (
                 <div key={assignment.task_id} className="flex items-center gap-2">
                   <ActorAvatar actorType="agent" actorId={assignment.agent_id} size={24} profileLink={false} />
                   <div className="min-w-0"><p className="truncate text-xs font-medium text-foreground">{assignment.task_title}</p><p className="text-xs text-muted-foreground">{assignment.role || assignment.state}</p></div>
                 </div>
-              )) : <p className="text-xs leading-relaxed text-muted-foreground">{t(($) => $.home_overview.assignments_idle)}</p>}
+              )) : session.active_assignments === undefined ? <p className="text-xs leading-relaxed text-muted-foreground">{t(($) => $.home_overview.projection_unavailable)}</p> : (session.fleet_preview ?? []).slice(0, 4).map((member) => <div key={member.agent_id} className="flex items-center gap-2"><ActorAvatar actorType="agent" actorId={member.agent_id} size={24} profileLink={false} /><div className="min-w-0"><p className="truncate text-xs font-medium text-foreground">{member.display_name || member.name || member.role || t(($) => $.home_overview.agent)}</p><p className="text-xs text-muted-foreground">{member.is_lead ? t(($) => $.home_overview.lead_idle) : member.role || t(($) => $.home_overview.waiting_dispatch)}</p></div></div>)}
             </div>
           </section>
           <section>
             <h3 className="text-xs font-medium text-foreground">{t(($) => $.home_overview.latest_outcomes)}</h3>
             <div className="mt-2 space-y-2">
-              {outcomes.length > 0 ? outcomes.map((outcome) => <div key={outcome.id} className="flex gap-2"><span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", outcome.kind === "claim" ? "bg-success" : "bg-brand")} aria-hidden /><div className="min-w-0"><p className="line-clamp-1 text-xs font-medium text-foreground">{outcome.title}</p>{outcome.summary ? <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{outcome.summary}</p> : null}</div></div>) : <p className="text-xs leading-relaxed text-muted-foreground">{t(($) => $.home_overview.outcomes_empty)}</p>}
+              {outcomes.length > 0 ? outcomes.slice(0, 2).map((outcome) => <div key={outcome.id} className="flex gap-2"><span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", outcome.kind === "claim" ? "bg-success" : "bg-brand")} aria-hidden /><div className="min-w-0"><p className="line-clamp-1 text-xs font-medium text-foreground">{outcome.title}</p>{outcome.summary ? <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{outcome.summary}</p> : null}</div></div>) : <p className="text-xs leading-relaxed text-muted-foreground">{session.latest_outcomes === undefined ? t(($) => $.home_overview.projection_unavailable) : t(($) => $.home_overview.outcomes_empty)}</p>}
             </div>
           </section>
         </div>
@@ -168,9 +174,11 @@ function FocusSession({ session, href, onNavigate }: { session: ResearchSession;
 function QueueRow({ session, selected, onSelect }: { session: ResearchSession; selected: boolean; onSelect: () => void }) {
   const { t } = useT("research");
   const progress = session.list_progress;
+  const assignment = session.active_assignments?.[0];
+  const attention = knownAttentionKind(progress?.attention_kind);
   return <button type="button" onClick={onSelect} aria-pressed={selected} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring", selected && "bg-muted text-foreground hover:bg-muted")}>
-    <span className={cn("size-2 shrink-0 rounded-full", progress?.attention_kind ? "bg-warning" : session.status === "running" ? "bg-brand" : "bg-muted-foreground")} aria-hidden />
+    <span className={cn("size-2 shrink-0 rounded-full", attention ? "bg-warning" : session.status === "running" ? "bg-brand" : "bg-muted-foreground")} aria-hidden />
     <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{session.title || session.goal}</span><span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground"><span>{t(($) => $.stage_short[session.current_stage as keyof typeof $.stage_short] ?? session.current_stage)}</span>{progress ? <><span aria-hidden>·</span><span className="tabular-nums">{progress.task_completed}/{progress.task_total} task</span><span aria-hidden>·</span><span>{progress.evidence_count} {t(($) => $.home_overview.evidence_short)}</span></> : null}</span></span>
-    <span className="shrink-0 text-xs tabular-nums text-muted-foreground"><Time kind="list" value={progress?.last_progress_at ?? session.updated_at} /></span>
+    <span className="flex shrink-0 items-center gap-2">{assignment ? <ActorAvatar actorType="agent" actorId={assignment.agent_id} size={20} profileLink={false} /> : null}<span className="flex max-w-28 flex-col items-end text-xs"><span className={cn("max-w-full truncate", attention ? "text-warning" : "text-muted-foreground")}>{attention ? t(($) => attention === "user_confirmation" ? $.home_overview.confirm_short : attention === "recoverable_failure" ? $.home_overview.recoverable_short : attention === "stalled" ? $.home_overview.stalled_short : $.home_overview.blocked_short) : assignment?.task_title || t(($) => $.home_overview.waiting_dispatch)}</span><Time kind="list" value={progress?.last_progress_at ?? session.updated_at} className="tabular-nums text-muted-foreground" /></span></span>
   </button>;
 }

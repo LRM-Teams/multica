@@ -65,7 +65,7 @@ WITH task_progress AS (
   GROUP BY t.session_id
 ), evidence_progress AS (
   SELECT session_id, count(*) AS evidence_count,
-    count(*) FILTER (WHERE created_at >= date_trunc('day', now())) AS today_evidence_count
+    count(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS today_evidence_count
   FROM research_observation
   WHERE workspace_id = $1 AND verification_status <> 'rejected'
   GROUP BY session_id
@@ -99,6 +99,7 @@ SELECT
     WHEN s.status = 'awaiting_user_confirm' THEN 'user_confirmation'
     WHEN COALESCE(tp.task_blocked, 0) > 0 THEN 'blocked_tasks'
     WHEN s.status = 'failed' AND length(s.last_error) > 0 THEN 'recoverable_failure'
+    WHEN s.status = 'running' AND COALESCE(tp.task_running, 0) = 0 AND s.last_progress_at < now() - interval '15 minutes' THEN 'stalled'
     ELSE NULL
   END)::text, '')::text AS attention_kind,
   COALESCE((s.status = 'failed' AND length(s.last_error) > 0) OR COALESCE(tp.task_blocked, 0) > 0, false)::boolean AS recoverable,
@@ -137,23 +138,23 @@ ORDER BY session_id, position;
 
 -- name: ListResearchLatestOutcomes :many
 WITH outcomes AS (
-  SELECT c.session_id, c.id, 'claim'::text AS kind, c.claim_text AS title,
+  SELECT c.session_id, c.id, 0 AS outcome_priority, 'claim'::text AS kind, c.claim_text AS title,
     NULLIF(c.resolution, '')::text AS summary, c.status AS verification_state, c.created_at
   FROM research_claim c
   JOIN research_session s ON s.id = c.session_id
   WHERE c.workspace_id = $1 AND c.goal_version = s.goal_version AND c.plan_version = s.plan_version AND c.status = 'supported'
   UNION ALL
-  SELECT o.session_id, o.id, 'observation'::text, COALESCE(NULLIF(o.interpretation, ''), NULLIF(o.quote, ''), 'Verified observation'),
+  SELECT o.session_id, o.id, 1, 'observation'::text, COALESCE(NULLIF(o.interpretation, ''), NULLIF(o.quote, ''), 'Verified observation'),
     NULLIF(o.quote, '')::text, o.verification_status, o.created_at
   FROM research_observation o
   WHERE o.workspace_id = $1 AND o.verification_status = 'verified'
   UNION ALL
-  SELECT t.session_id, t.id, 'task'::text, t.objective, NULLIF(t.terminal_reason, '')::text, t.status, t.completed_at
+  SELECT t.session_id, t.id, 2, 'task'::text, t.objective, NULLIF(t.terminal_reason, '')::text, t.status, t.completed_at
   FROM research_task t
   JOIN research_session s ON s.id = t.session_id
   WHERE t.workspace_id = $1 AND t.goal_version = s.goal_version AND t.plan_version = s.plan_version AND t.status = 'succeeded' AND t.completed_at IS NOT NULL
 ), ranked AS (
-  SELECT outcomes.*, row_number() OVER (PARTITION BY session_id ORDER BY created_at DESC, id) AS position
+  SELECT outcomes.*, row_number() OVER (PARTITION BY session_id ORDER BY outcome_priority, created_at DESC, id) AS position
   FROM outcomes
 )
 SELECT session_id, id, kind, title, COALESCE(summary, '')::text AS summary, verification_state, created_at

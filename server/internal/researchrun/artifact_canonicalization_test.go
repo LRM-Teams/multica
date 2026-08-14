@@ -85,6 +85,7 @@ func TestArtifactCanonicalTestVectors(t *testing.T) {
 		ArtifactKindInquiryEdge:             "sha256:3b0fbaa81b31561ad281cc04b1fdf90c0f7e19a2c8963ce8cf1790d1dfb548ef",
 		ArtifactKindInsight:                 "sha256:adf8c419d7305ea850d9d4e5ae9b46791eef3c07ce2707b9b37ed44dbf3c42af",
 		ArtifactKindIntegrationContribution: "sha256:73f6481e9aef5280ac62fdf40b6e21195b7e6836fb2d0557c11dd6a1400973bc",
+		ArtifactKindIntegrationRound:        "sha256:0805bf3aecab7b510cd7480a4cf1e178fd7c0d3dc9efcf500bd7ca1d8f6ad2e0",
 		ArtifactKindLegacySource:            "sha256:7410eb392af128f3c95814bf60ca99aa1d9926680fa64ed8640a3a9b79671adb",
 		ArtifactKindMethodDecision:          "sha256:12f728b8316e54dd36ad6c2aa4a710ad2f5816bbae5c30286596ee0e557d8b9e",
 		ArtifactKindObservation:             "sha256:e49c9298680ff6c6e24b8aaa5dacfba9e875d65ca17357b5af4923a71ba6b5e8",

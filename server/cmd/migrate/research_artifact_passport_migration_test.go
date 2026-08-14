@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -2130,6 +2131,147 @@ func TestResearchDispatchManifestBinding330RoundTrips(t *testing.T) {
 	if _, err = conn.Exec(ctx, up330); err != nil {
 		t.Fatalf("reapply 330 up: %v", err)
 	}
+}
+
+func TestResearchArtifactLateManifestPolicyMigrationsRoundTrip(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_late_policy_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+
+	prerequisites := []string{
+		"318_research_artifact_passport",
+		"319_research_artifact_passport_backfill",
+		"320_research_artifact_reciprocal_guards",
+		"321_research_artifact_policy_coupling_guards",
+		"322_research_artifact_policy_ledger_guards",
+		"323_research_artifact_integrity_guards",
+		"324_research_artifact_link_policy_guards",
+		"325_research_artifact_migration_diagnostics",
+		"326_research_artifact_scoped_relationship_fks",
+		"327_research_artifact_canonicalization_registry",
+		"328_research_artifact_passport_d_completion",
+	}
+	for _, name := range prerequisites {
+		upSQL, _ := readMigrationPair(t, name)
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply prerequisite %s: %v", name, err)
+		}
+	}
+
+	up346, down346 := readMigrationPair(t, "346_research_manifest_policy_grants")
+	up347, down347 := readMigrationPair(t, "347_research_manifest_gate_snapshot")
+	up349, down349 := readMigrationPair(t, "349_research_evaluation_manifest_grant_guard")
+	apply := func(label string) {
+		t.Helper()
+		for _, migration := range []struct {
+			name string
+			sql  string
+		}{{"346", up346}, {"347", up347}, {"349", up349}} {
+			if _, applyErr := conn.Exec(ctx, migration.sql); applyErr != nil {
+				t.Fatalf("%s apply %s: %v", label, migration.name, applyErr)
+			}
+		}
+	}
+	assertUp := func(label string) {
+		t.Helper()
+		var constraints, columns, triggers int
+		var functionDefinition string
+		if queryErr := conn.QueryRow(ctx, `
+			SELECT count(*)::int FROM pg_constraint
+			WHERE conrelid='research_artifact_context_manifest'::regclass
+			  AND conname IN (
+			    'research_artifact_context_manifest_normal_grant_pair_check',
+			    'research_artifact_context_manifest_evaluation_grant_pair_check',
+			    'research_artifact_context_manifest_normal_grant_fkey',
+			    'research_artifact_context_manifest_evaluation_grant_fkey'
+			  )
+		`).Scan(&constraints); queryErr != nil {
+			t.Fatalf("%s query constraints: %v", label, queryErr)
+		}
+		if queryErr := conn.QueryRow(ctx, `
+			SELECT count(*)::int FROM information_schema.columns
+			WHERE table_schema=current_schema() AND table_name='research_artifact_context_manifest'
+			  AND column_name IN ('gate_snapshot_bytes','gate_snapshot_hash')
+		`).Scan(&columns); queryErr != nil {
+			t.Fatalf("%s query columns: %v", label, queryErr)
+		}
+		if queryErr := conn.QueryRow(ctx, `
+			SELECT count(*)::int FROM pg_trigger
+			WHERE tgrelid='research_artifact_context_manifest'::regclass
+			  AND tgname='research_artifact_context_manifest_grant_guard' AND NOT tgisinternal
+		`).Scan(&triggers); queryErr != nil {
+			t.Fatalf("%s query trigger: %v", label, queryErr)
+		}
+		if queryErr := conn.QueryRow(ctx, `
+			SELECT pg_get_functiondef('research_artifact_context_manifest_grant_guard_fn()'::regprocedure)
+		`).Scan(&functionDefinition); queryErr != nil {
+			t.Fatalf("%s query function: %v", label, queryErr)
+		}
+		for _, required := range []string{
+			"NEW.purpose = 'evaluation'",
+			"NEW.purpose NOT IN ('task_execution','evaluation')",
+			"NEW.evaluation_grant_id IS NULL",
+		} {
+			if !strings.Contains(functionDefinition, required) {
+				t.Fatalf("%s strict grant function missing %q", label, required)
+			}
+		}
+		if constraints != 4 || columns != 2 || triggers != 1 {
+			t.Fatalf("%s constraints=%d columns=%d triggers=%d want 4/2/1", label, constraints, columns, triggers)
+		}
+	}
+
+	apply("first")
+	assertUp("first")
+	for _, migration := range []struct {
+		name string
+		sql  string
+	}{{"349", down349}, {"347", down347}, {"346", down346}} {
+		if _, err = conn.Exec(ctx, migration.sql); err != nil {
+			t.Fatalf("apply %s down: %v", migration.name, err)
+		}
+	}
+	var constraints, columns, triggers, functions int
+	if err = conn.QueryRow(ctx, `
+		SELECT
+		 (SELECT count(*)::int FROM pg_constraint WHERE conrelid='research_artifact_context_manifest'::regclass
+		   AND conname LIKE 'research_artifact_context_manifest_%grant%'),
+		 (SELECT count(*)::int FROM information_schema.columns WHERE table_schema=current_schema()
+		   AND table_name='research_artifact_context_manifest' AND column_name IN ('gate_snapshot_bytes','gate_snapshot_hash')),
+		 (SELECT count(*)::int FROM pg_trigger WHERE tgrelid='research_artifact_context_manifest'::regclass
+		   AND tgname='research_artifact_context_manifest_grant_guard' AND NOT tgisinternal),
+		 (SELECT count(*)::int FROM pg_proc JOIN pg_namespace ON pg_namespace.oid=pg_proc.pronamespace
+		   WHERE pg_namespace.nspname=current_schema() AND proname='research_artifact_context_manifest_grant_guard_fn')
+	`).Scan(&constraints, &columns, &triggers, &functions); err != nil {
+		t.Fatalf("query down state: %v", err)
+	}
+	if constraints != 0 || columns != 0 || triggers != 0 || functions != 0 {
+		t.Fatalf("down state constraints=%d columns=%d triggers=%d functions=%d want zero", constraints, columns, triggers, functions)
+	}
+	apply("reapply")
+	assertUp("reapply")
 }
 
 func TestResearchArtifactManifestOmissionReasons333RoundTrips(t *testing.T) {

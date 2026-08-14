@@ -63,3 +63,30 @@ func TestHashDispatchRequestHistoricalPayloadHashIsUnchangedWithoutTarget(t *tes
 		t.Fatalf("historical hash changed: got %s want %s", got, historical)
 	}
 }
+
+func TestHashDispatchRequestBindsManifestIdentity(t *testing.T) {
+	base := DispatchRequest{
+		Run: Run{SessionID: "session-1"}, Task: Task{ID: "task-1"}, AttemptID: "attempt-1",
+		AgentID: "agent-1", Prompt: "frozen prompt", Key: "dispatch-1",
+		ManifestID: "manifest-1", ManifestHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	left, err := HashDispatchRequest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.ManifestHash = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	right, err := HashDispatchRequest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left == right {
+		t.Fatal("manifest change did not change dispatch request hash")
+	}
+}
+
+func TestHashDispatchRequestRejectsPartialManifestIdentity(t *testing.T) {
+	request := DispatchRequest{Run: Run{SessionID: "session-1"}, Task: Task{ID: "task-1"}, AttemptID: "attempt-1", AgentID: "agent-1", Prompt: "prompt", Key: "key", ManifestID: "manifest-1"}
+	if _, err := HashDispatchRequest(request); err == nil {
+		t.Fatal("partial manifest identity was accepted")
+	}
+}

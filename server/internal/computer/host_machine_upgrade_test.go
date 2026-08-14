@@ -95,6 +95,10 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/progress":
 			w.WriteHeader(http.StatusNoContent)
 		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
+			if got := r.Header.Get("X-Computer-Generation"); got != "32" {
+				http.Error(w, "Computer generation header = "+got+", want 32", http.StatusConflict)
+				return
+			}
 			var body struct {
 				GenerationID string   `json:"generation_id"`
 				RuntimeIDs   []string `json:"runtime_ids"`

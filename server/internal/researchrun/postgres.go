@@ -1087,8 +1087,12 @@ func persistRunEventInputReferencesTx(ctx context.Context, tx pgx.Tx, event RunE
 			continue
 		}
 		var artifactID string
-		if err := json.Unmarshal(raw, &artifactID); err != nil || strings.TrimSpace(artifactID) == "" {
+		if err := json.Unmarshal(raw, &artifactID); err != nil {
 			return fmt.Errorf("%w: run event %s has invalid %s reference", ErrInvalidContract, event.Type, reference.field)
+		}
+		artifactID = strings.TrimSpace(artifactID)
+		if artifactID == "" {
+			continue
 		}
 		if err := persistTypedArtifactInputReferenceTx(
 			ctx, tx, event.WorkspaceID, event.SessionID,

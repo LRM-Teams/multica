@@ -37,25 +37,27 @@ func TestLegacySourceSnapshotPayloadGuard(t *testing.T) {
 	}
 	snapshotID := uuid.NewString()
 	otherSnapshotID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, snapshotID, ArtifactKindSourceSnapshot, `
 		INSERT INTO research_source_snapshot(
 		  id,workspace_id,session_id,canonical_url,title,publisher,source_class,
 		  evidence_traits,independence_key,retrieved_at,content_hash,snapshot_text,
 		  metadata,verification_status
-		) VALUES
-		  ($1::uuid,$3::uuid,$4::uuid,'https://example.test/source-a','A','example','primary',
-		   '{}'::text[],'a',now(),'sha256:a','a','{}'::jsonb,'verified'),
-		  ($2::uuid,$3::uuid,$4::uuid,'https://example.test/source-b','B','example','primary',
-		   '{}'::text[],'b',now(),'sha256:b','b','{}'::jsonb,'verified')
-	`, snapshotID, otherSnapshotID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_source(workspace_id,session_id,title,source_snapshot_id,payload)
-		VALUES($1::uuid,$2::uuid,'matching',$3::uuid,jsonb_build_object('snapshot_id',$3::text))
-	`, fixture.workspaceID, run.SessionID, snapshotID); err != nil {
-		t.Fatalf("matching Source reference rejected: %v", err)
-	}
+		) VALUES ($1::uuid,$2::uuid,$3::uuid,'https://example.test/source-a','A','example','primary',
+		  '{}'::text[],'a',now(),'sha256:a','a','{}'::jsonb,'verified')
+	`, snapshotID, fixture.workspaceID, run.SessionID)
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, otherSnapshotID, ArtifactKindSourceSnapshot, `
+		INSERT INTO research_source_snapshot(
+		  id,workspace_id,session_id,canonical_url,title,publisher,source_class,
+		  evidence_traits,independence_key,retrieved_at,content_hash,snapshot_text,
+		  metadata,verification_status
+		) VALUES ($1::uuid,$2::uuid,$3::uuid,'https://example.test/source-b','B','example','primary',
+		  '{}'::text[],'b',now(),'sha256:b','b','{}'::jsonb,'verified')
+	`, otherSnapshotID, fixture.workspaceID, run.SessionID)
+	matchingID := uuid.NewString()
+	seedDiagnosticArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, matchingID, ArtifactKindLegacySource, `
+		INSERT INTO research_source(id,workspace_id,session_id,title,source_snapshot_id,payload)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'matching',$4::uuid,jsonb_build_object('snapshot_id',$4::text))
+	`, matchingID, fixture.workspaceID, run.SessionID, snapshotID)
 
 	for _, tc := range []struct {
 		name         string
@@ -67,10 +69,11 @@ func TestLegacySourceSnapshotPayloadGuard(t *testing.T) {
 		{name: "json only", payload: `{"snapshot_id":"` + snapshotID + `"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, insertErr := pool.Exec(ctx, `
-				INSERT INTO research_source(workspace_id,session_id,title,source_snapshot_id,payload)
-				VALUES($1::uuid,$2::uuid,$3,NULLIF($4,'')::uuid,$5::jsonb)
-			`, fixture.workspaceID, run.SessionID, tc.name, tc.relationalID, tc.payload)
+			sourceID := uuid.NewString()
+			insertErr := execDiagnosticArtifact(ctx, pool, fixture.workspaceID, run.SessionID, sourceID, ArtifactKindLegacySource, `
+				INSERT INTO research_source(id,workspace_id,session_id,title,source_snapshot_id,payload)
+				VALUES($1::uuid,$2::uuid,$3::uuid,$4,NULLIF($5,'')::uuid,$6::jsonb)
+			`, sourceID, fixture.workspaceID, run.SessionID, tc.name, tc.relationalID, tc.payload)
 			var pgErr *pgconn.PgError
 			if !errors.As(insertErr, &pgErr) || pgErr.ConstraintName != "research_legacy_source_snapshot_payload_guard" {
 				t.Fatalf("insert err=%v constraint=%q", insertErr, pgErrConstraintName(pgErr))

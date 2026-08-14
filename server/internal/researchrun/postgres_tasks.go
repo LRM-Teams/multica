@@ -407,20 +407,26 @@ func attemptArtifactContent(attempt Attempt) map[string]any {
 func loadDispatchIntentReplayPrepare(
 	ctx context.Context,
 	tx pgx.Tx,
-	store *PostgresStore,
+	_ *PostgresStore,
 	in CreateDispatchIntentInput,
 	target ExecutionTarget,
 	workspaceID string,
 	artifactPassportEnabled bool,
 ) (Attempt, []byte, bool, error) {
 	var sessionID, taskID, agentID, dispatchKey string
+	var encodedRequest []byte
+	var storedRequestHash string
 	err := tx.QueryRow(ctx, `
 		SELECT outbox.session_id::text, outbox.task_id::text,
-		       attempt.assigned_agent_id::text, outbox.dispatch_key
+		       attempt.assigned_agent_id::text, outbox.dispatch_key,
+		       outbox.request_payload, outbox.request_hash
 		FROM research_dispatch_outbox outbox
 		JOIN research_task_attempt attempt ON attempt.id = outbox.attempt_id
 		WHERE outbox.attempt_id = $1::uuid
-	`, in.AttemptID).Scan(&sessionID, &taskID, &agentID, &dispatchKey)
+	`, in.AttemptID).Scan(
+		&sessionID, &taskID, &agentID, &dispatchKey,
+		&encodedRequest, &storedRequestHash,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Attempt{}, nil, false, nil
 	}
@@ -435,23 +441,28 @@ func loadDispatchIntentReplayPrepare(
 	if err != nil {
 		return Attempt{}, nil, false, err
 	}
-	manifestID, err := loadAttemptManifestIDTx(ctx, tx, workspaceID, in.SessionID, in.AttemptID)
+	var storedRequest DispatchRequest
+	if err = json.Unmarshal(encodedRequest, &storedRequest); err != nil {
+		return Attempt{}, nil, false, fmt.Errorf("%w: decode committed dispatch request: %v", ErrResultConflict, err)
+	}
+	requestHash, err := HashDispatchRequest(storedRequest)
 	if err != nil {
 		return Attempt{}, nil, false, err
 	}
-	_, encodedRequest, requestHash, err := resolveDispatchRequestTx(
-		ctx, tx, store, in, attempt, workspaceID, artifactPassportEnabled, manifestID,
-	)
-	if err != nil {
-		return Attempt{}, nil, false, err
-	}
-	var storedRequestHash string
-	if err = tx.QueryRow(ctx, `
-		SELECT request_hash FROM research_dispatch_outbox WHERE attempt_id = $1::uuid
-	`, in.AttemptID).Scan(&storedRequestHash); err != nil {
-		return Attempt{}, nil, false, err
-	}
-	if storedRequestHash != requestHash {
+	if storedRequestHash != requestHash || storedRequest.RequestHash != storedRequestHash ||
+		storedRequest.Run.WorkspaceID != workspaceID || storedRequest.Run.SessionID != sessionID ||
+		storedRequest.Run.GoalVersion != in.Request.Run.GoalVersion ||
+		storedRequest.Run.PlanVersion != in.Request.Run.PlanVersion ||
+		storedRequest.Run.OrchestratorVersion != in.Request.Run.OrchestratorVersion ||
+		storedRequest.Task.ID != taskID || storedRequest.Task.Kind != in.Request.Task.Kind ||
+		storedRequest.Task.GoalVersion != in.Request.Task.GoalVersion ||
+		storedRequest.Task.PlanVersion != in.Request.Task.PlanVersion ||
+		storedRequest.Task.TimeoutSeconds != in.Request.Task.TimeoutSeconds ||
+		!semanticJSONEqual(storedRequest.Task.AcceptanceCriteria, in.Request.Task.AcceptanceCriteria) ||
+		storedRequest.AttemptID != in.AttemptID || storedRequest.AgentID != in.AgentID ||
+		storedRequest.Key != in.Request.Key || storedRequest.Target != in.Request.Target ||
+		attempt.ExecutionTarget != target ||
+		(artifactPassportEnabled && (storedRequest.ManifestID == "" || storedRequest.ManifestHash == "")) {
 		return Attempt{}, nil, false, fmt.Errorf("%w: dispatch intent replay does not match committed request", ErrResultConflict)
 	}
 	return attempt, encodedRequest, true, nil
@@ -776,10 +787,14 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	clientKey := fmt.Sprintf("control:%s:%d:%d:%d", in.Kind, goalVersion, planVersion, kindSequence)
 	expected := expectedResultForTaskVersion(orchestratorVersion, in.Kind)
 	findingCodes := sortedFindingCodes(in.Findings)
+	targetFindings := in.Findings
+	if targetFindings == nil {
+		targetFindings = []GateFinding{}
+	}
 	acceptanceCriteria, _ := json.Marshal(map[string]any{
 		"schema_version": resultSchemaVersionForOrchestrator(orchestratorVersion),
 		"remediation": map[string]any{
-			"finding_codes": findingCodes, "target_findings": in.Findings,
+			"finding_codes": findingCodes, "target_findings": targetFindings,
 			"question_id": in.QuestionID, "question_key": questionKey,
 		},
 	})

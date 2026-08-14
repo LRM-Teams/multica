@@ -117,14 +117,6 @@ func TestMessageMatchReferenceBackfillDiagnosesRepairsAndPreservesOrdinals(t *te
 	if count != 0 {
 		t.Fatalf("repair left %d diagnostics", count)
 	}
-	if _, err = pool.Exec(ctx, `
-		UPDATE research_artifact_input_reference SET purpose='match_decision'
-		WHERE purpose='match_decision_migration' AND consumer_version_id IN (
-		  SELECT id FROM research_artifact_version WHERE artifact_id=$1::uuid
-		)
-	`, messageID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err = pool.Exec(ctx, `SELECT research_artifact_materialize_message_match_references($1::uuid,$2::uuid,$3::uuid)`, fixture.workspaceID, fixture.sessionID, messageID); err != nil {
 		t.Fatal(err)
 	}
@@ -135,8 +127,8 @@ func TestMessageMatchReferenceBackfillDiagnosesRepairsAndPreservesOrdinals(t *te
 	`, messageID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("rescan replaced %d production references", count)
+	if count != 4 {
+		t.Fatalf("append-only rescan retained %d migration references, want 4", count)
 	}
 }
 

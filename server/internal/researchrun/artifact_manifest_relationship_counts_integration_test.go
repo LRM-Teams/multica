@@ -28,13 +28,23 @@ func TestDispatchManifestFreezesRealVersionAndReferenceCounts(t *testing.T) {
 	if _, err = fixture.store.AcceptResult(ctx, fixture.input); err != nil {
 		t.Fatalf("AcceptResult plan: %v", err)
 	}
-	discover, err := listDiscoverTasks(ctx, fixture.store, fixture.run.SessionID)
-	if err != nil || len(discover) == 0 {
-		t.Fatalf("listDiscoverTasks: %v len=%d", err, len(discover))
+	tasks, err := fixture.store.ListTasks(ctx, fixture.run.SessionID)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	var executable *Task
+	for i := range tasks {
+		if tasks[i].Status == TaskStatusReady {
+			executable = &tasks[i]
+			break
+		}
+	}
+	if executable == nil {
+		t.Fatalf("accepted plan produced no ready task: %+v", tasks)
 	}
 	attempt, _, err := fixture.store.CreateDispatchIntent(ctx, testDispatchIntentInput(
 		t, ctx, fixture.store, fixture.run.SessionID, fixture.fixture.workspaceID,
-		discover[0].ID, fixture.fixture.agentID,
+		executable.ID, fixture.fixture.agentID,
 	))
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent discover: %v", err)

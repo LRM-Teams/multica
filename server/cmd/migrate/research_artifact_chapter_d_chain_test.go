@@ -112,7 +112,7 @@ func TestResearchArtifactChapterDMigrationChain(t *testing.T) {
 		  '{"schema_version":1,"client_request_id":"request-1","summary":"ok"}'::jsonb,
 		  '2026-01-01T00:00:05Z'
 		);
-	`, workspaceID, sessionID, contractID, questionID, taskID, attemptID); err != nil {
+	`, pgx.QueryExecModeSimpleProtocol, workspaceID, sessionID, contractID, questionID, taskID, attemptID); err != nil {
 		t.Fatalf("seed legacy fixture: %v", err)
 	}
 

@@ -317,6 +317,27 @@ export const ChannelGoalSchema = z.object({
     waiting: z.number().default(0),
     stale: z.number().default(0),
   }).optional(),
+  coordination: z.object({
+    project_id: z.string().optional(),
+    git_repository_bound: z.boolean().default(false),
+    agent_member_count: z.number().default(0),
+    channel_issue_total: z.number().default(0),
+    channel_project_issue_total: z.number().default(0),
+    project_issue_total: z.number().default(0),
+    open_project_issue_total: z.number().default(0),
+    in_review_project_issue_total: z.number().default(0),
+    subgoal_total: z.number().default(0),
+    open_subgoal_total: z.number().default(0),
+    execution_admission: z.enum([
+      "direct",
+      "project_required",
+      "git_required",
+      "issues_required",
+      "ready",
+      "acceptance_required",
+      "unavailable",
+    ]),
+  }).optional(),
 }).loose();
 
 export const ChannelGoalEnvelopeSchema = z.object({

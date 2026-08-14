@@ -16,27 +16,42 @@ import (
 )
 
 type ChannelGoalResponse struct {
-	ID                string                       `json:"id"`
-	WorkspaceID       string                       `json:"workspace_id"`
-	ChannelID         string                       `json:"channel_id"`
-	Title             string                       `json:"title"`
-	Objective         string                       `json:"objective"`
-	SuccessCriteria   []string                     `json:"success_criteria"`
-	Status            string                       `json:"status"`
-	Version           int64                        `json:"version"`
-	ProgressSummary   string                       `json:"progress_summary"`
-	CurrentStep       string                       `json:"current_step"`
-	Blocker           string                       `json:"blocker"`
-	EvidenceRefs      []string                     `json:"evidence_refs"`
-	CompletedCriteria []string                     `json:"completed_criteria"`
-	CreatedByType     string                       `json:"created_by_type"`
-	CreatedByID       string                       `json:"created_by_id"`
-	UpdatedByType     string                       `json:"updated_by_type"`
-	UpdatedByID       string                       `json:"updated_by_id"`
-	CreatedAt         time.Time                    `json:"created_at"`
-	UpdatedAt         time.Time                    `json:"updated_at"`
-	CompletedAt       *time.Time                   `json:"completed_at,omitempty"`
-	WorkGraph         *channelGoalWorkGraphSummary `json:"work_graph,omitempty"`
+	ID                string                          `json:"id"`
+	WorkspaceID       string                          `json:"workspace_id"`
+	ChannelID         string                          `json:"channel_id"`
+	Title             string                          `json:"title"`
+	Objective         string                          `json:"objective"`
+	SuccessCriteria   []string                        `json:"success_criteria"`
+	Status            string                          `json:"status"`
+	Version           int64                           `json:"version"`
+	ProgressSummary   string                          `json:"progress_summary"`
+	CurrentStep       string                          `json:"current_step"`
+	Blocker           string                          `json:"blocker"`
+	EvidenceRefs      []string                        `json:"evidence_refs"`
+	CompletedCriteria []string                        `json:"completed_criteria"`
+	CreatedByType     string                          `json:"created_by_type"`
+	CreatedByID       string                          `json:"created_by_id"`
+	UpdatedByType     string                          `json:"updated_by_type"`
+	UpdatedByID       string                          `json:"updated_by_id"`
+	CreatedAt         time.Time                       `json:"created_at"`
+	UpdatedAt         time.Time                       `json:"updated_at"`
+	CompletedAt       *time.Time                      `json:"completed_at,omitempty"`
+	WorkGraph         *channelGoalWorkGraphSummary    `json:"work_graph,omitempty"`
+	Coordination      *channelGoalCoordinationSummary `json:"coordination,omitempty"`
+}
+
+type channelGoalCoordinationSummary struct {
+	ProjectID                 string `json:"project_id,omitempty"`
+	GitRepositoryBound        bool   `json:"git_repository_bound"`
+	AgentMemberCount          int    `json:"agent_member_count"`
+	ChannelIssueTotal         int    `json:"channel_issue_total"`
+	ChannelProjectIssueTotal  int    `json:"channel_project_issue_total"`
+	ProjectIssueTotal         int    `json:"project_issue_total"`
+	OpenProjectIssueTotal     int    `json:"open_project_issue_total"`
+	InReviewProjectIssueTotal int    `json:"in_review_project_issue_total"`
+	SubgoalTotal              int    `json:"subgoal_total"`
+	OpenSubgoalTotal          int    `json:"open_subgoal_total"`
+	ExecutionAdmission        string `json:"execution_admission"`
 }
 
 type channelGoalWorkGraphSummary struct {
@@ -81,6 +96,8 @@ type checkpointChannelGoalRequest struct {
 	EvidenceRefs      []string `json:"evidence_refs"`
 	CompletedCriteria []string `json:"completed_criteria"`
 }
+
+const initialChannelGoalStep = "Choose DIRECT or durable coordination. For multi-agent code delivery, create or bind a Git-backed Project and decompose the Goal into reviewed Issues before implementation."
 
 func (h *Handler) publishChannelGoalUpdated(workspaceID, channelID, actorType, actorID string, goal ChannelGoalResponse) {
 	h.publish(protocol.EventChannelUpdated, workspaceID, actorType, actorID, map[string]any{
@@ -194,6 +211,18 @@ func channelGoalContextForClaim(goal ChannelGoalResponse) *protocol.ChannelGoalC
 	if goal.WorkGraph != nil {
 		out.WorkGraph = &protocol.ChannelWorkGraphContext{ID: goal.WorkGraph.ID, Version: goal.WorkGraph.Version, Status: goal.WorkGraph.Status, Completed: goal.WorkGraph.Completed, Running: goal.WorkGraph.Running, Waiting: goal.WorkGraph.Waiting, Stale: goal.WorkGraph.Stale}
 	}
+	if goal.Coordination != nil {
+		c := goal.Coordination
+		out.Coordination = &protocol.ChannelGoalCoordinationContext{
+			ProjectID: c.ProjectID, GitRepositoryBound: c.GitRepositoryBound,
+			AgentMemberCount: c.AgentMemberCount, ChannelIssueTotal: c.ChannelIssueTotal,
+			ChannelProjectIssueTotal: c.ChannelProjectIssueTotal,
+			ProjectIssueTotal:        c.ProjectIssueTotal, OpenProjectIssueTotal: c.OpenProjectIssueTotal,
+			InReviewProjectIssueTotal: c.InReviewProjectIssueTotal,
+			SubgoalTotal:              c.SubgoalTotal, OpenSubgoalTotal: c.OpenSubgoalTotal,
+			ExecutionAdmission: c.ExecutionAdmission,
+		}
+	}
 	return out
 }
 
@@ -222,8 +251,18 @@ func (h *Handler) GetChannelGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load channel goal")
 		return
 	}
-	h.hydrateChannelGoalWorkGraph(r.Context(), &goal)
+	h.hydrateChannelGoalControlPlane(r.Context(), &goal)
 	writeJSON(w, http.StatusOK, channelGoalEnvelope{Goal: &goal})
+}
+
+func (h *Handler) hydrateChannelGoalControlPlane(ctx context.Context, goal *ChannelGoalResponse) {
+	h.hydrateChannelGoalWorkGraph(ctx, goal)
+	if err := h.hydrateChannelGoalCoordination(ctx, goal); err != nil && goal != nil {
+		// Claim-time execution must fail closed when the durable coordination
+		// facts cannot be read. Do not let a transient DB error look like a
+		// single-agent DIRECT grant.
+		goal.Coordination = &channelGoalCoordinationSummary{ExecutionAdmission: "unavailable"}
+	}
 }
 
 func (h *Handler) hydrateChannelGoalWorkGraph(ctx context.Context, goal *ChannelGoalResponse) {
@@ -235,6 +274,92 @@ func (h *Handler) hydrateChannelGoalWorkGraph(ctx context.Context, goal *Channel
 	if err == nil {
 		goal.WorkGraph = &s
 	}
+}
+
+// hydrateChannelGoalCoordination makes the code-delivery control plane a
+// server-owned fact. A multi-agent Goal is planning state until its channel is
+// bound to a Project with a Git repository and at least one channel-linked
+// Issue in that Project.
+func (h *Handler) hydrateChannelGoalCoordination(ctx context.Context, goal *ChannelGoalResponse) error {
+	if goal == nil {
+		return nil
+	}
+	var projectID pgtype.UUID
+	var s channelGoalCoordinationSummary
+	err := h.DB.QueryRow(ctx, `
+		SELECT c.project_id,
+		       (c.project_id IS NOT NULL AND EXISTS (
+		         SELECT 1 FROM project_resource pr
+		         WHERE pr.project_id = c.project_id AND pr.workspace_id = c.workspace_id
+		           AND pr.resource_type = 'github_repo'
+		       )),
+		       (SELECT count(*)::int FROM channel_member cm
+		         WHERE cm.workspace_id = c.workspace_id AND cm.channel_id = c.id
+		           AND cm.member_type = 'agent'),
+		       (SELECT count(*)::int FROM issue_source_message src
+		         JOIN issue i ON i.id = src.issue_id AND i.workspace_id = src.workspace_id
+		         WHERE src.workspace_id = c.workspace_id AND src.channel_id = c.id),
+		       (SELECT count(*)::int FROM issue_source_message src
+		         JOIN issue i ON i.id = src.issue_id AND i.workspace_id = src.workspace_id
+		         WHERE src.workspace_id = c.workspace_id AND src.channel_id = c.id
+		           AND c.project_id IS NOT NULL AND i.project_id = c.project_id),
+		       (SELECT count(*)::int FROM issue i
+		         WHERE i.workspace_id = c.workspace_id
+		           AND c.project_id IS NOT NULL AND i.project_id = c.project_id),
+		       (SELECT count(*)::int FROM issue i
+		         WHERE i.workspace_id = c.workspace_id
+		           AND c.project_id IS NOT NULL AND i.project_id = c.project_id
+		           AND i.status NOT IN ('done', 'cancelled')),
+		       (SELECT count(*)::int FROM issue i
+		         WHERE i.workspace_id = c.workspace_id
+		           AND c.project_id IS NOT NULL AND i.project_id = c.project_id
+		           AND i.status = 'in_review'),
+		       (SELECT count(*)::int FROM channel_goal_subgoal sg
+		         WHERE sg.workspace_id = c.workspace_id AND sg.channel_id = c.id
+		           AND sg.goal_id = $3::uuid),
+		       (SELECT count(*)::int FROM channel_goal_subgoal sg
+		         WHERE sg.workspace_id = c.workspace_id AND sg.channel_id = c.id
+		           AND sg.goal_id = $3::uuid
+		           AND sg.status IN ('captured', 'in_progress', 'waiting'))
+		FROM channel c
+		WHERE c.workspace_id = $1::uuid AND c.id = $2::uuid`,
+		goal.WorkspaceID, goal.ChannelID, goal.ID,
+	).Scan(&projectID, &s.GitRepositoryBound, &s.AgentMemberCount,
+		&s.ChannelIssueTotal, &s.ChannelProjectIssueTotal, &s.ProjectIssueTotal, &s.OpenProjectIssueTotal,
+		&s.InReviewProjectIssueTotal, &s.SubgoalTotal, &s.OpenSubgoalTotal)
+	if err != nil {
+		return err
+	}
+	if projectID.Valid {
+		s.ProjectID = uuidToString(projectID)
+	}
+	s.ExecutionAdmission = channelGoalExecutionAdmission(s)
+	goal.Coordination = &s
+	return nil
+}
+
+func channelGoalExecutionAdmission(s channelGoalCoordinationSummary) string {
+	if s.AgentMemberCount <= 1 {
+		return "direct"
+	}
+	if s.ProjectID == "" {
+		return "project_required"
+	}
+	if !s.GitRepositoryBound {
+		return "git_required"
+	}
+	if s.ChannelProjectIssueTotal == 0 || s.ProjectIssueTotal == 0 {
+		return "issues_required"
+	}
+	if s.OpenProjectIssueTotal == 0 {
+		return "acceptance_required"
+	}
+	return "ready"
+}
+
+func goalCoordinationBlocksCompletion(s *channelGoalCoordinationSummary) bool {
+	return s != nil && s.AgentMemberCount > 1 &&
+		(s.ProjectID == "" || !s.GitRepositoryBound || s.ChannelProjectIssueTotal == 0 || s.ProjectIssueTotal == 0 || s.OpenProjectIssueTotal > 0)
 }
 
 func (h *Handler) CreateChannelGoal(w http.ResponseWriter, r *http.Request) {
@@ -266,11 +391,11 @@ func (h *Handler) CreateChannelGoal(w http.ResponseWriter, r *http.Request) {
 	criteriaJSON, _ := json.Marshal(criteria)
 	goal, err := scanChannelGoal(h.DB.QueryRow(r.Context(), `
 		INSERT INTO channel_goal (
-			workspace_id, channel_id, title, objective, success_criteria,
+			workspace_id, channel_id, title, objective, success_criteria, current_step,
 			created_by_type, created_by_id, updated_by_type, updated_by_id
-		) VALUES ($1, $2, $3, $4, $5, 'user', $6, 'user', $6)
+		) VALUES ($1, $2, $3, $4, $5, $6, 'user', $7, 'user', $7)
 		RETURNING `+channelGoalColumns,
-		parseUUID(workspaceID), channelID, req.Title, req.Objective, criteriaJSON, parseUUID(userID)))
+		parseUUID(workspaceID), channelID, req.Title, req.Objective, criteriaJSON, initialChannelGoalStep, parseUUID(userID)))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -280,6 +405,7 @@ func (h *Handler) CreateChannelGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create channel goal")
 		return
 	}
+	h.hydrateChannelGoalControlPlane(r.Context(), &goal)
 	h.publishChannelGoalUpdated(workspaceID, uuidToString(channelID), "member", userID, goal)
 	writeJSON(w, http.StatusCreated, channelGoalEnvelope{Goal: &goal})
 }
@@ -444,6 +570,16 @@ func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "complete and validate the work graph before completing the main goal")
 		return
 	}
+	if current.Status == "completed" {
+		if err := h.hydrateChannelGoalCoordination(r.Context(), &current); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify multi-agent goal delivery control plane")
+			return
+		}
+		if goalCoordinationBlocksCompletion(current.Coordination) {
+			writeError(w, http.StatusConflict, "multi-agent goal requires a Git-backed project and all channel-linked project issues to pass review before completion")
+			return
+		}
+	}
 	criteriaJSON, _ := json.Marshal(current.SuccessCriteria)
 	evidenceJSON, _ := json.Marshal(current.EvidenceRefs)
 	completedJSON, _ := json.Marshal(current.CompletedCriteria)
@@ -472,7 +608,7 @@ func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
 	if h.WorkGraph != nil {
 		_ = h.WorkGraph.SyncGoalLifecycle(r.Context(), workspaceID, goal.ID, goal.Status)
 	}
-	h.hydrateChannelGoalWorkGraph(r.Context(), &goal)
+	h.hydrateChannelGoalControlPlane(r.Context(), &goal)
 	writeJSON(w, http.StatusOK, channelGoalEnvelope{Goal: &goal})
 }
 
@@ -534,7 +670,7 @@ func (h *Handler) GetAgentChannelGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load channel goal")
 		return
 	}
-	h.hydrateChannelGoalWorkGraph(r.Context(), &goal)
+	h.hydrateChannelGoalControlPlane(r.Context(), &goal)
 	writeJSON(w, http.StatusOK, channelGoalEnvelope{Goal: &goal})
 }
 
@@ -566,11 +702,11 @@ func (h *Handler) CreateAgentChannelGoal(w http.ResponseWriter, r *http.Request)
 	criteriaJSON, _ := json.Marshal(criteria)
 	goal, err := scanChannelGoal(h.DB.QueryRow(r.Context(), `
 		INSERT INTO channel_goal (
-			workspace_id, channel_id, title, objective, success_criteria,
+			workspace_id, channel_id, title, objective, success_criteria, current_step,
 			created_by_type, created_by_id, updated_by_type, updated_by_id
-		) VALUES ($1, $2, $3, $4, $5, 'agent', $6, 'agent', $6)
+		) VALUES ($1, $2, $3, $4, $5, $6, 'agent', $7, 'agent', $7)
 		RETURNING `+channelGoalColumns,
-		workspaceID, channelID, req.Title, req.Objective, criteriaJSON, agentID))
+		workspaceID, channelID, req.Title, req.Objective, criteriaJSON, initialChannelGoalStep, agentID))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -580,6 +716,7 @@ func (h *Handler) CreateAgentChannelGoal(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to create channel goal")
 		return
 	}
+	h.hydrateChannelGoalControlPlane(r.Context(), &goal)
 	h.publishChannelGoalUpdated(uuidToString(workspaceID), uuidToString(channelID), "agent", uuidToString(agentID), goal)
 	writeJSON(w, http.StatusCreated, channelGoalEnvelope{Goal: &goal})
 }
@@ -671,6 +808,16 @@ func (h *Handler) UpdateAgentChannelGoal(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusConflict, "complete and validate the work graph before completing the main goal")
 		return
 	}
+	if current.Status == "completed" {
+		if err := h.hydrateChannelGoalCoordination(r.Context(), &current); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify multi-agent goal delivery control plane")
+			return
+		}
+		if goalCoordinationBlocksCompletion(current.Coordination) {
+			writeError(w, http.StatusConflict, "multi-agent goal requires a Git-backed project and all channel-linked project issues to pass review before completion")
+			return
+		}
+	}
 	criteriaJSON, _ := json.Marshal(current.SuccessCriteria)
 	completedJSON, _ := json.Marshal(current.CompletedCriteria)
 	goal, err := scanChannelGoal(h.DB.QueryRow(r.Context(), `
@@ -691,6 +838,7 @@ func (h *Handler) UpdateAgentChannelGoal(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to update channel goal")
 		return
 	}
+	h.hydrateChannelGoalControlPlane(r.Context(), &goal)
 	h.publishChannelGoalUpdated(uuidToString(workspaceID), uuidToString(channelID), "agent", uuidToString(agentID), goal)
 	if h.WorkGraph != nil {
 		_ = h.WorkGraph.SyncGoalLifecycle(r.Context(), uuidToString(workspaceID), goal.ID, goal.Status)
@@ -768,6 +916,7 @@ func (h *Handler) CheckpointAgentChannelGoal(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to checkpoint channel goal")
 		return
 	}
+	h.hydrateChannelGoalControlPlane(r.Context(), &goal)
 	h.publishChannelGoalUpdated(uuidToString(workspaceID), uuidToString(channelID), "agent", uuidToString(agentID), goal)
 	writeJSON(w, http.StatusOK, channelGoalEnvelope{Goal: &goal})
 }

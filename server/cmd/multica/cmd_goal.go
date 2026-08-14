@@ -37,6 +37,12 @@ var goalCheckpointCmd = &cobra.Command{
 	RunE:  runGoalCheckpoint,
 }
 
+var goalBootstrapCmd = &cobra.Command{
+	Use:   "bootstrap",
+	Short: "Create/bind the Goal Project and canonical Git repository (channel managers only)",
+	RunE:  runGoalBootstrap,
+}
+
 var goalUpdateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Revise or change the lifecycle of a goal (channel managers only)",
@@ -67,7 +73,7 @@ var goalProcessPutCmd = &cobra.Command{
 }
 
 func init() {
-	goalCmd.AddCommand(goalGetCmd, goalCreateCmd, goalCheckpointCmd, goalUpdateCmd, goalProcessCmd)
+	goalCmd.AddCommand(goalGetCmd, goalCreateCmd, goalBootstrapCmd, goalCheckpointCmd, goalUpdateCmd, goalProcessCmd)
 	goalProcessCmd.AddCommand(goalProcessListCmd, goalProcessGetCmd, goalProcessPutCmd)
 	for _, cmd := range []*cobra.Command{goalGetCmd, goalCreateCmd, goalCheckpointCmd, goalUpdateCmd, goalProcessListCmd, goalProcessGetCmd, goalProcessPutCmd} {
 		cmd.Flags().String("channel", "", "Channel id or #name")
@@ -79,6 +85,14 @@ func init() {
 	goalCreateCmd.Flags().StringSlice("criterion", nil, "Success criterion (repeatable)")
 	_ = goalCreateCmd.MarkFlagRequired("title")
 	_ = goalCreateCmd.MarkFlagRequired("objective")
+	goalBootstrapCmd.Flags().String("channel", "", "Channel id or #name")
+	goalBootstrapCmd.Flags().String("project-title", "", "Project title")
+	goalBootstrapCmd.Flags().String("repository-url", "", "Canonical GitHub repository URL")
+	goalBootstrapCmd.Flags().String("default-branch", "main", "Default branch hint")
+	goalBootstrapCmd.Flags().String("output", "json", "Output format (json)")
+	_ = goalBootstrapCmd.MarkFlagRequired("channel")
+	_ = goalBootstrapCmd.MarkFlagRequired("project-title")
+	_ = goalBootstrapCmd.MarkFlagRequired("repository-url")
 	goalCheckpointCmd.Flags().Int64("expected-version", 0, "Current goal version")
 	goalCheckpointCmd.Flags().String("progress", "", "Concrete progress made")
 	goalCheckpointCmd.Flags().String("current-step", "", "Next or current step")
@@ -98,6 +112,30 @@ func init() {
 	goalProcessPutCmd.Flags().Int64("expected-version", 0, "0 creates; otherwise current process version")
 	goalProcessPutCmd.Flags().String("content", "", "Markdown body")
 	goalProcessPutCmd.Flags().String("content-file", "", "Read Markdown body from file (- for stdin)")
+}
+
+func runGoalBootstrap(cmd *cobra.Command, _ []string) error {
+	if !isAgentAPIToken(cmd) {
+		return fmt.Errorf("goal bootstrap requires an active agent task token")
+	}
+	client, ctx, cancel, channelID, err := goalRequestContext(cmd)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	projectTitle, _ := cmd.Flags().GetString("project-title")
+	repositoryURL, _ := cmd.Flags().GetString("repository-url")
+	defaultBranch, _ := cmd.Flags().GetString("default-branch")
+	var out map[string]any
+	if err := client.PostJSON(ctx,
+		"/api/agent/channels/"+url.PathEscape(channelID)+"/goal/bootstrap",
+		map[string]any{
+			"project_title": projectTitle, "repository_url": repositoryURL,
+			"default_branch_hint": defaultBranch,
+		}, &out); err != nil {
+		return fmt.Errorf("bootstrap channel goal delivery: %w", err)
+	}
+	return printGoalResponse(out)
 }
 
 func goalRequestContext(cmd *cobra.Command) (*cli.APIClient, context.Context, context.CancelFunc, string, error) {

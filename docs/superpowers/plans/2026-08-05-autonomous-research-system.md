@@ -373,6 +373,14 @@ Projection 的后端读模型必须给每个节点提供：节点用途、绑定
 - detail payload 与 canonical entity reference；
 - created/updated/terminal event sequence。
 
+D5/V6 的视觉语义也属于 Projection 契约：节点输出 `level`、可空
+`cluster_id`/`parent_id`、`round`、可空真实指标和 lineage；Snapshot
+输出成果簇，Delta 输出簇 upsert/tombstone。Goal 是独立 M 级研究起点，
+唯一最高层且有 canonical derivation 的 accepted Insight 才投影为 XXL
+`master_synthesis`。Run 生命周期与节点生命周期分离，运行时失败只影响
+当前 Task/Attempt，不得污染 Goal 或历史成果。`importance` 保持 `[0,1]`，
+前端不得用旧量纲阈值推断视觉层级。
+
 V6 必须注册的 `node_kind` 至少包括：`task | attempt | result_artifact | search_plan | query_execution | source_candidate | screening_decision | source_snapshot | observation | claim | question | hypothesis | branch | insight | insight_derivation | integration_round | integration_contribution | dispute | dispute_position | deliberation | deliberation_turn | decision | team_formation | team_membership | divergence_pass | capability_observation | report_revision | evaluation_defect | monitoring_cycle | episode`。未知未来类型必须能以 generic node 降级显示，不能让旧客户端崩溃。
 
 稳定边类型至少包括：
@@ -963,6 +971,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
     - [x] C1c-2：为 Run reconcile claim 增加续租和 fencing token，使进程暂停超过 claim TTL 后的旧 owner 不能继续提交状态，并覆盖双 worker、长调用和进程暂停竞态。
 - [x] 实现完整失败分类、provider/Adapter circuit state、有界重试和目标幂等修复。
   - [x] C2a：冻结 Attempt 执行目标，复用 Agent Inbox `taskfailure.Reason` 建立结构化 Research FailureClass/Disposition，未知失败不得伪装成瞬时网络错误。
+    - [x] C2a-1：修复真实 `queued_expired` 事故中 Inbox delivery 终态与 Research Task attempt budget 被混为一谈的问题。未被 worker claim 的过期 delivery 仍以 `runtime_lost` 结算原 Attempt，但无论该 Inbox 行的通用 retryable flag 为何，Task 在自身预算内回到 `ready` 并重新解析目标；`runtime_offline` 等其他明确 non-retryable 事实仍收紧 disposition。单元回归锁定分类边界，PostgreSQL 回归锁定 attempt 1/3 后 Task=`ready`、Run=`running`。
   - [x] C2b：实现 workspace-bound Agent/Runtime/provider/Adapter 持久 circuit、失败窗口、带 generation 的 half-open probe lease、配置指纹恢复和 Transition 审计。
   - [x] C2c：让 dispatch 与 runtime reconcile 在选择、失败、成功路径驱动 circuit；有健康同能力 Agent 时换目标，无健康目标时等待最早 probe，不复制正在执行或取消中的 Task。
     - [x] C2c-1：批量读取候选实际存在的 Agent/Runtime/provider/Adapter circuit 与 provider lock；路由先选无 probe 的健康目标，再选到期 probe；全部阻塞时保持原 Task `ready`、记录幂等等待 Event，并把 Task/Run 唤醒时间设为最早 circuit 恢复时间。存量或本地 Adapter 没有 Runtime/provider 身份时只评估实际存在的层级，不伪造身份，也不拒绝正常 Result。
@@ -978,7 +987,9 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [ ] 实现统一工件护照、输入引用、schema/hash、版本和 data access level。
 - [ ] 所有 Task Context 只从护照选择可见工件；Prompt 不能读取无权数据。
 - [ ] evaluation-private 与被评对象隔离。
+  - [x] D-legacy-1：`legacy-v1-v5-compat-v1` 准入矩阵穷举全部已注册/未知 Artifact kind、全部合法/终止/未知 lifecycle 和全部完整/部分/未知/非法 provenance。只有 registered/accepted 且 provenance 枚举合法的已注册 kind 可进入后续 clearance/compartment 筛选；未知 kind、终止 lifecycle 和未来 provenance 分别 fail closed，§15.7 收口。
   - [x] D-eval-1：Quality Gate/Citation Audit dispatch 使用 `evaluation` purpose，同时冻结同一 grader Agent 的 normal 与 evaluation-private 持久 grant；Stage Evaluation 私有 representation 只在 active evaluation grant、assigned Attempt 路径解码并进入 grader Prompt，普通任务继续 omission/fail-closed。完整 principal/revocation 矩阵仍由 §15.10/§15.23 退出测试收口。
+  - [x] D-context-1：D-enabled outbox 的 frozen Manifest ID/Hash 进入不可变 `DispatchRequest` 指纹，并由真实 Agent Inbox Adapter 写入 `research_manifest_id` / `research_manifest_hash` context。Manifest 任一字段变化都会改变 request hash，缺一项 fail closed；outbox claim 每次还要求 payload 身份与独立 manifest 列完全一致，列被篡改时事务回滚且不派发。历史无 Manifest 请求继续省略两字段且固定 V1 hash 不变。PostgreSQL outbox 测试锁定 payload/列/重算 hash 三者一致并注入列篡改，Handler 测试锁定 Inbox JSON 数字、数组和 Manifest 身份不因序列化丢型。该项关闭“数据库有 Manifest、真实 Agent delivery 无 Manifest 身份”的链路缺口；D §15 其余 partial matrix 仍未完成。
   - [x] D-eval-2：Prompt 入口在进入任一 V1–V5 builder 前结构性剥离 `EvaluationPrivate`，只在 Quality Gate/Citation Audit 普通 Prompt 完成后追加授权 grader context；真实 subject/grader dispatch 对照证明 subject 序列化不含私有 ID、passport hash、metadata 或 content，grader 获得 manifest 冻结版本且不会吸收 dispatch 后新增的私有工件。§15.10 已收口；完整 principal/revocation 矩阵仍由 §15.23 收口。
   - [x] D-projection-1：Run Snapshot 通过内部 `artifactProjectionModule` 输出以 Passport ID 为实体 ID 的 bounded 投影；排序与 projection hash 稳定，未知 kind/access/lifecycle/provenance 降级且不暴露 content hash、representation、grant 或 omission。Human Snapshot 读取当前同 scope 投影，Attempt Snapshot 只投影冻结 Manifest 允许的 Passport（含 Manifest 自身），后续 live 工件不会进入旧 Attempt 投影。客户端 malformed 投影只降级为空投影，不丢弃整个 Run。§15.25 已收口；V6 全图以 Passport 权威替换兼容 `projectRunV2Graph` 仍属于 N。
 
@@ -990,11 +1001,23 @@ Manifest 不再仅依赖进程内硬编码 clearance。D 章尚未完成，最�
 `artifact_chapter_d15_exit_inventory_test.go` 的 26 项退出清单为准，不能以 migration
 数量或 fixture 正例替代完整验收。
 
+D-ddl-1 证据：PostgreSQL catalog 验收逐表检查所有 D-owned Passport/Version/Result/
+Manifest/Entry/Omission/Input/Supersession/Lifecycle/Policy 表的非空 workspace/session scope
+与 composite FK，并检查 target+new-revision 唯一索引、完整生产关系 FK，以及 passport/class/
+verification/grant/supersession/lifecycle/integrity/append-only/delete 守卫的稳定实际名称。
+§15.2 已收口；Go 常量清单不再被单独视为数据库存在性证据。
+
 D-access-2 证据：human Session snapshot 拒绝 `attempt_id`，在读取 Session、Fleet、
 legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-private context
 只能经 Agent 专用路由的 principal、active Fleet membership 和 assigned Attempt 校验读取。
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
+
+D-access-3 证据：真实 PostgreSQL HTTP 矩阵同时保留同 scope human live projection 与
+assigned active Agent Attempt projection 两个正向对照，并证明 unbound Fleet Agent、active
+但未分配 Agent、cross-workspace principal 与伪造 `X-Agent-ID` 均在 Run Snapshot 加载前
+fail closed；拒绝响应不泄漏 Session、Attempt、Agent 或 Passport ID。evaluation subject、
+grader、projector 与撤权后的完整 surface/revocation 组合仍由 §15.23 后续切片收口。
 
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
@@ -1005,29 +1028,44 @@ surface 矩阵仍未完成。
 - [ ] 增加 Hypothesis、Branch、Insight、Inquiry Edge schema、状态机和迁移。
   - [x] E2a：migration 348 建立四类 canonical Inquiry 表、tenant/session scoped FK、状态约束、frontier 索引，并把四类实体加入 Artifact Passport fail-closed kind registry；V6 默认值保持关闭。写入命令、完整多态端点守卫、环检测和状态转换仍待 E2b。
   - [x] E2b-guard：migration 350 与 `inquiryModule` 冻结 Hypothesis/Branch/Insight 合法状态迁移，要求 Branch 终止理由，逐类验证多态端点，并禁止 `decomposes | depends_on | refines` 形成有向环；`dispute` 在 H 章实体落库前保持不可写。生产批量写命令、Artifact Passport 原子注册与 Run Event 仍待 E2b-write。
+  - [x] E2b-write：`CreateInquiryGraph` 以 Serializable 单事务验证 Run state version 与真实 assigned Attempt/Agent，批量创建 Hypothesis/Branch/Insight/Inquiry Edge，按父分支拓扑落库，为每个实体注册 `research-run-v6` production hash、完整 provenance 与 Manifest 传播的 access level，并追加可恢复、可冲突检测的幂等 Run Event；四类实体进入 canonical-state crash/replay 哈希。V6 decoder/Adapter 接线仍由 E3 负责，默认版本保持 V5。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。
+  - [x] E3a：新增与 V1–V5 完全隔离的 `DecodeAndValidateResearchV6PlanResult`，严格拒绝未知字段、缺失 required、显式 null 与 trailing JSON；校验 client-key/typed reference、Question/Branch 父图、Inquiry 依赖图、Task DAG、每个 Task 的 Inquiry target、Branch 总预算和语义内容哈希。它不把 `research-run-v6` 加入生产 orchestrator allowlist；E3b 在 E2b-write 合并后负责 accepted Plan Result 的 ID 解析与原子持久化接线。
+  - [x] E3b-target：migration 355 建立 append-only、workspace/session scoped 的 Task–Inquiry Target canonical ledger；生产绑定命令要求真实 assigned Attempt/Agent、current state version、同一 Goal/Plan version 和已解析的同 Run Inquiry UUID，并以语义幂等 Event 记录 provenance。选择性 steering 状态读取只消费显式 Branch target，绝不从 Task objective 猜测归属。accepted V6 Plan 的 client-key→UUID 原子 adapter 仍待 E3b-write，PostgreSQL steering mutation 与 typed HTTP 输入仍待 E5b。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
+  - [x] E4a：`TransitionInquiry` 以 Run state-version 与 entity before-status 双 CAS、真实 assigned Attempt/Agent 和冻结 Manifest 当前版本授权为边界，批量迁移 Hypothesis/Branch/Insight；每项变更保存结构化 before/after/reason，生成 `research-run-v6` production Artifact Version、`revises` Input Reference、current-version policy mutation/eligibility revision，并与幂等 `inquiry_state_changed` Run Event 同事务提交。Question 状态更新与 V6 accepted Task Result 自动调用仍待 E4b。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
+  - [x] E5a：建立按 current state version fencing 的 selective steering 影响规划器；显式 affected branch 根扩展为后代闭包，只选择相交的 pending/ready/running Task，区分取消与允许完成，并保持终态 Branch/Task 为不可变历史。accepted Evidence 不属于可变计划输出。PostgreSQL 原子应用、typed HTTP 输入和 Event/Decision 仍待 E5b。
+  - [x] E5-prereq-target：选择性 steering 的 Task→Branch 输入已改为 migration 355 canonical 绑定，并提供事务内 state loader；未绑定 Branch 的 Task 仅能参与显式 full replan，局部 steering 不得通过文本或图布局推断其归属。
 
 退出条件：新证据能加强、削弱或推翻假设，创建/终止分支，并让后续任务引用这些持久对象。
 
 ### F. Search 与 Corpus 谱系
 
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
+- [x] F3b-policy：冻结 `research-screening-v1` 筛选合同。每个决定必须携带版本化纳排标准、`accepted | excluded | duplicate` 的合法命中矩阵、审查主体与时间、结构化事实和稳定 SHA-256 指纹；重复项必须指向另一候选并以 canonical URL 或 content hash 证明同一性。持久化接线仍随 F1/F3 后续切片完成，不能仅凭本项宣称来源谱系已闭环。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
+  - [x] F2a：冻结 `RetrievalAdapter` Search/Fetch seam 与统一请求/响应、游标、全文、成本、失败和安全事实 contract；Research Run 对 canonical URL/identity、内容 hash、大小/MIME、redirect、DNS 地址、credential forwarding、scan disposition 和 retry policy fail closed。具体 provider Adapter、Corpus 持久化及 SSRF transport 测试仍属于 F2b/F2c，不能以本项替代。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
+  - [x] F3a：`ComputeCorpusDedupDecisions` 对 canonical URL 与 content hash 建立确定性闭包，输出稳定 duplicate cluster、canonical candidate、effective independence family、disposition、rule 和 reason。跨 URL 同内容按 mirror 合并且不能冒充独立支持；同 URL 不同 hash fail closed 为 review；同 family 的不同内容保留但继续共享 family。持久 Screening Decision 接线和跨历史批次查询仍属于 F3b。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
+  - [x] F4a-ingestion：`source_ingestion.go` 冻结五类摄入意图（screened retrieval、Agent direct evidence、user attachment、workspace artifact、API dataset）及确定性审计指纹。检索摄入必须绑定完整 Search Plan → Query Execution → Source Candidate → accepted Screening Decision 谱系；所有非检索类型禁止伪造任何 Search/Screening 标识，URL 凭据、非法哈希和未来采集时间 fail closed。该切片只完成接纳前合同；持久化 ingestion kind、数据库约束和 Result materialization 接线仍待后续切片，不能据此宣称 Source Snapshot 写入链已经闭合。
 
 退出条件：报告中的每个来源可反向追到查询和筛选；重复镜像不能冒充独立支持；失败查询可被定向改写。
 
 ### G. 持续 Integration Round
 
 - [ ] 实现 E 中已冻结的 V6 Integration Result schema 和严格校验，不在 G 中改写协议。
+  - [x] G-contract-1：新增独立 `DecodeAndValidateV6IntegrationResult`，严格消费冻结 V6 `task_result`，拒绝未知/缺失/null/trailing 字段、非 Integration-owned payload、越界集合、无 Contribution、非法引用/枚举/分数、重复同类 key 和不完整嵌套对象；支持 Contribution、Inquiry status update、Insight、Dispute 与 follow-up Task proposal，但不启用 V6 默认生产 Run。后续持久化切片仍须校验 scope 内 UUID、前置版本、原 Agent 作者身份与 accepted Artifact。
 - [ ] 实现触发策略、固定输入版本、幂等执行和状态变化应用。
+  - [x] G2a-trigger：`integration_trigger.go` 冻结 `research-integration-trigger-v1` 的确定性触发决定；仅消费当前 Event 水位之后的 accepted Result Artifact 精确版本，至少两个原 Agent 参与，并按阻断冲突、待交付、结果数和信息增益触发。活动轮次、无新结果、阈值不足和轮次/成本预算均返回明确不触发原因；相同水位、Policy 和输入版本生成相同 Round Key。持久 Integration Round 的原子预留、执行和状态应用仍待 G2b，不能仅凭本项宣称持续整合已运行。
 - [ ] 实现每 Result 的 Assimilation Check、peer_synthesis、原 Agent Integration Contribution 和离线/退出参与者处理。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。
+  - [x] G4a-merge-decision：`integration_merge.go` 冻结 Claim、Question、Hypothesis 三类同类实体的服务端候选判定。精确语义指纹或达到版本化 semantic/lexical/entity 阈值才可提议合并；kind、访问权、终态、scope、method、time 任一不相容都返回稳定、有序拒绝理由。输入顺序不改变实体对身份或审计指纹，Agent prose 不能替代 server-computed signals。该切片只完成决策合同；候选持久化、相似度计算 Adapter、合并应用事务与 Event 尚待后续接线。
 - [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。
+  - [x] G-derivation-1：新增服务端 `insightDerivationModule`，只接纳 2–128 个 accepted/fresh Claim/Insight Version，要求至少两个不同 Task 或 Branch origin，按 `1 + max(input Insight level)` 计算层级，并以排序后的 input version/content hash、scope hash 和 relation 生成稳定幂等指纹。没有服务端观察到的语义价值或只有单一 origin 时返回 `no_semantic_gain`；重复/自环/循环 derivation edge fail closed，Claim/Insight 失效按 DAG 递归产生确定性 stale Insight 集合。持久命令、状态写入与重新整合 Work Item 仍待后续切片。
 - [ ] 后续任务 Context 读取跨 Agent 的最新 Integration Snapshot。
+  - [x] G6a-context：`integration_context.go` 冻结 `research-integration-context-v1` 选择边界；只在当前 workspace/session、Goal/Plan 和 Manifest Event/State 水位内选择最新跨 Agent Snapshot 精确 Artifact Version，并把 Passport、content/input/canonical-state hash 与贡献 Agent 集合纳入审计指纹。最新 Snapshot stale、superseded、无权或 evaluation-private 时整体 omission，禁止回退到较旧结论；同一最新位置出现多个身份则 fail closed。持久表查询、representation 冻结与 `TaskContextForAttempt` 接线仍待 G6b。
 
 退出条件：两个以上 Agent 的结果会产生可引用的多层 Insight、更新 Frontier 并生成组合后的新工作；输入失效会使祖先 Insight 过期；Integrator prose 不能绕过服务端状态转换。
 
@@ -1038,12 +1076,14 @@ surface 矩阵仍未完成。
 - [ ] 实现盲复核、Methodologist、区分任务和 Adjudicator 输入隔离。
 - [ ] 实现 Research Deliberation Turn、进展水位、轮次/成本限制、deadlock 和 Research Director 自动升级。
 - [ ] Gate 阻止未处理的阻断级争议，报告展示条件化和不可消解争议。
+  - [x] H5a-delivery-obligation：`dispute_delivery_gate.go` 对一个不可变 Report Revision 聚合验收完整 Dispute 集。blocking `open | investigating`、待确认 human gate、缺少当前修订披露或披露与 canonical condition/residual uncertainty/impact 不一致都会产生稳定 finding 并阻断；输入顺序不改变审计指纹。该切片只完成 Gate 决策合同；Dispute/Report 持久读取、现有 deliveryGateModule 接线和 finding 补救路由仍待后续切片。
 
 退出条件：固定冲突语料中能建立、讨论、deadlock 升级、调查、分类、裁决并在报告中追溯；不同范围的表面冲突不会被错误二选一，Research Director 不能无证据覆盖立场。
 
 ### I. Exploration Portfolio
 
 - [ ] 实现候选任务生成器和分项评分策略版本。
+  - [x] I1a-candidate-generation：`exploration_candidate_generation.go` 把 required Question、Evidence Gap、blocking Dispute、Hypothesis change、stale Insight、同质来源和 Method Gap 七类 canonical need signal 映射为有界 `discover | verify | counter_search | synthesize` 候选，携带固定 capability、purpose、分项评分、成本、硬约束和稳定 identity。Evidence Gap 可同时生成核验/反证，来源同质化生成 Divergence probe；输入与硬约束顺序不改变结果指纹，相同 target/purpose/method/source/perspective 不重复开工。该切片只完成生成合同；canonical signal 查询、Candidate Set 持久化、#3143 组合选择 Adapter、Decision/Event 和 Task 创建事务仍待后续接线。
 - [ ] 实现多候选组合选择、重复惩罚、来源/方法多样性和预算预留。
 - [ ] 实现动态分支扩展、终止、饱和探测和停止判断。
 - [ ] 实现 Divergence Pass 隔离上下文、触发器、exploration reserve、异质视角候选和交付门禁。
@@ -1056,6 +1096,7 @@ surface 矩阵仍未完成。
 - [ ] 实现 Capability Observation，记录 Agent/model/provider/tool/Adapter 的分组结果。
 - [ ] 路由同时考虑能力要求、权限、独立性、可用性、成本和足够样本的历史表现。
 - [ ] 实现 capability gap 和现有招聘/配置功能的 Adapter；不可满足时显式阻塞。
+  - [x] J3a-gap-action：`capability_gap_action.go` 把已证明的 routing gap 确定性映射为 `activate_existing | configure_existing | propose_team_formation | blocked`。策略先拒绝已有 active eligible Agent 的 stale gap，再选择无需配置的可激活 Agent、最少授权配置变更的现有 Agent，最后才提出组队；合同、Agent 上限、预算、工具或来源权限不足均返回明确阻塞理由。动作 identity 与审计指纹对 Agent/权限输入顺序稳定。该切片只完成 Adapter 决策；#3146 route output、现有 Agent mutation、#3147 Formation authorization、Decision/Event 和状态回读仍待后续接线。
 - [ ] 实现 Run 固定 Director 身份、Agent principal 授权检查、用户改派 Decision 和错误身份拒绝测试。
 - [ ] 实现 Contract 组队授权、Team Formation Decision、Research Team Membership、创建幂等和 Agent 退出处理。
 - [ ] 对 Agent Reach 等外部项目做离线 Adapter 对照评测，通过后才接生产流量。
@@ -1065,6 +1106,7 @@ surface 矩阵仍未完成。
 ### K. 报告整合、修订谱系与交付 Gate
 
 - [ ] Reporter 只消费最新 Integration Snapshot 和允许的 verified 工件。
+  - [x] K1a：`ValidateReporterInput` 对单个 Reporter Attempt 联合冻结当前 workspace/session、goal/plan、canonical state、Integration 水位和完整输入集合；只接纳 latest + completed Integration Snapshot 及其精确 `input_set_hash` 所引用的 accepted、verified、task-readable、非 evaluation-private 工件版本，并生成顺序稳定的 manifest fingerprint。当前仅完成准入合同；canonical 查询、dispatch manifest 持久化/绑定和 Report Revision 物化仍待后续 K 切片。
 - [ ] 报告保存完整版本、输入工件、Claim anchor、争议和修订理由。
 - [ ] 扩充 Evaluation Defect：方法遵循、范围偏移、证据充分度、冲突处理、校准、决策可用性和新鲜度。
 - [ ] Quality/Citation 评审覆盖全部 Claim/section，修订逐项关闭缺陷。
@@ -1075,6 +1117,7 @@ surface 矩阵仍未完成。
 
 - [ ] 实现 Research Monitor、Monitoring Cycle、`monitoring` 状态和调度资格。
 - [ ] 复用版本化 Search Plan，保存每次 Query Execution 和内容差异。
+  - [x] L2a：`ValidateMonitoringDiff` 冻结单次 Monitoring Cycle 的 workspace/session、Monitor、Cycle 和 Search Plan 版本，要求完整执行 Search Plan 中每个 canonical query key + hash，并以 Query Execution 绑定的前后工件版本/内容哈希验证 added/removed/modified/unchanged 差异；物质性分数由这些服务端解析事实计算，不接受 Agent 自报 aggregate delta。当前仅完成准入与计算合同；Monitor/Cycle/Query Execution/diff 持久化及 L1 cycle 决策接线仍待后续 L 切片。
 - [ ] 物质性变化触发增量 Inquiry/Integration/Report Revision；无变化写 Decision 后等待下一次。
 - [ ] 用户 pause/cancel/steering、凭据失效、来源永久不可达和预算耗尽都有明确状态转换。
 
@@ -1084,6 +1127,7 @@ surface 矩阵仍未完成。
 
 - [ ] 生成不含跨租户私有内容的 Research Episode。
 - [ ] 实现评测任务、环境、grader、重复运行和对照报告。
+  - [x] M2a：`researcheval.SealedSubjectInput` 冻结 Executor 可见的 Task、受控 Environment 与 seed，结构上不存在 Oracle 字段；strict decoder 拒绝 `oracle`/未知字段、尾随 JSON、schema 漂移和 hash 篡改。Document/tool/tag/trait/fault 顺序与重复先规范化再做 SHA-256，文档数量、单文档和总内容均有界，Fault 只能引用同 Environment 的 Document。该合同是后续 Passport version 的原始字节边界；尚未完成数据库 Passport 注册、Attempt Manifest 注入和真实 Run Executor。
 - [ ] 实现 Strategy Candidate、Promotion Decision、新 Run 固定版本和回退。
 - [ ] 建立线上质量/成本越界监测；禁止运行中自改 Prompt 或策略。
 
@@ -1091,12 +1135,14 @@ surface 矩阵仍未完成。
 
 ### N. 全量迁移、投影与生产验收
 
+- [x] N-gate-1：建立 V6 生产激活审计 seam，要求 Inquiry、Corpus、Integration、Dispute、Portfolio、Team Formation、Report/Evaluation、production decoder、canonical persistence、恢复、完整 Projection、隐藏 Oracle 系统评测、影子流量对照和已演练的 V5 previous version 全部提交带 ID/版本的证据；一次返回稳定排序的完整缺口。该审计只报告是否允许激活，不修改 V5 默认值或 supported decoder，实际 V6 激活仍待全部退出证据完成后的独立变更。
 - [ ] 每个 schema 改动都有 up/down migration、新库迁移和 down/up 回放。
 - [ ] 为历史 V1–V5 Run 建立只读投影和可恢复路径；不伪造历史 Inquiry/Search/Dispute 数据。
 - [ ] 更新 Run Snapshot，使前端能展示 Question、Hypothesis、Branch、Integration、Dispute、Search 和修订详情。
 - [ ] 实现稳定 Graph Projection Node/Edge schema、Snapshot/Delta、完整节点详情和重建 hash 测试。
   - [x] N-projection-integrity-1：V5/run-v2 compatibility graph 进入 V6 Snapshot 前执行严格拓扑校验；空/重复 source node、多个 source node 折叠为同一 canonical V6 ID、空/重复 edge、dangling endpoint 和空 edge type 全部 fail closed，不再静默丢 edge 或发布带重复 ID 的可哈希 Snapshot。成功映射按 canonical ID 稳定排序，Edge endpoint 必须引用映射后的 V6 Node ID。完整 30-kind Projection、详情与 Delta 重建一致性仍是后续 N 工作。
 - [ ] 实现固定 Snapshot 分页、Projection Slice、详情按需读取、WebSocket event sequence 续传和缺口 resync。
+  - [x] N-WS-1：生产 `researchRunProjector` 在成功投影每条 committed Run Event 后，同时保留 V5 `research_session:graph_updated` 并发布独立 `research_projection_v6:delta`。V6 envelope 固定为 `{run_id, delta}`，frame 使用该 Event 的连续 sequence，Node/Edge 通过与 HTTP Snapshot 相同的 mapper 生成稳定身份，集合字段始终为显式数组；已注册的 canonical Event 只映射允许的语义 transition。此项只关闭实时发布接线，不代表 event-derived 小 Delta、历史保留期、分页/Slice/详情和 gap resync 已全部完成。
 - [ ] 实现前端 Delta 幂等消费、乱序暂存、融合/扩散/冲突/失效 transition 映射、视口裁剪和显示分组；显示分组不得写回 canonical Graph。
 - [ ] 使用至少一万节点 fixture 验证分页、Slice、重连、重复/乱序 Delta、缺口重建和浏览器不全量载入。
 - [ ] 运行全文所列系统评测、故障注入、安全测试、完整 Go 验证和生产影子流量对照。
@@ -1160,9 +1206,11 @@ surface 矩阵仍未完成。
 - [x] A1 实现 V1–V5 canonical state hash、workspace-bound Event 读取和连续 replay；单测与真实 PostgreSQL `server/internal/researchrun` 回归通过。
 - [x] A2a 实现 V1–V5 orchestrator contract golden manifest；五个版本的完整 Prompt、可接受 Plan 和新 schema 拒绝均有固定回归。
 - [x] A2b 实现当前状态机行为 golden manifest；证据接纳、报告物化、结构化评审缺陷传递、有界重试、取消确认和结果幂等恢复均由真实 PostgreSQL 场景固定。测试发现任务自身永久失败被错误写为 `blocked`，已改为 `failed`；只有依赖终态导致的任务使用 `blocked/dependency_terminal`。历史 V1–V5 的协议边界由 A2a 分版本固定。
-- [x] A3 把六类已发生生产故障映射到脱敏可执行回归；新增画布 Projection 内部身份唯一断言和真实 PostgreSQL 重复证据饱和测试，其余四类复用并标注现有生产路径回归。测试输入不含线上 workspace、Run、Agent、来源或用户内容。
+- [x] A3 把七类已发生生产故障映射到脱敏可执行回归；新增画布 Projection 内部身份唯一断言、真实 PostgreSQL 重复证据饱和测试，以及 `queued_expired` 首次 Attempt 不得提前失败 Task/Run 的分类 + PostgreSQL 回归；其余四类复用并标注现有生产路径回归。测试输入不含线上 workspace、Run、Agent、来源或用户内容。
 - [x] A4 实现 `internal/researcheval` 评测契约、八模式固定受控语料、三个确定性 grader、重复 seed Runner、版本化聚合 Report 和同语料对照。当前装置是离线评测基础，不宣称已把生产 Research Run 自动执行器、LLM judge、Episode 或 Strategy Promotion 接入；这些仍属于 M。
 - [x] A5 实现七个自主行为固定场景和 `AutonomyGrader`：Oracle 同时约束动作执行者、必需/禁用行为、30 种 Projection Node、typed edge、14 项节点详情、递归 stale、异质 probe、原作者 Contribution、一万节点分页及 gap resync。`go test ./internal/researcheval -count=1` 与 `go vet ./internal/researcheval` 通过；生产 Adapter 尚未接入，不能把 fixture 正例当作生产验收结果。
+- [x] M1b 实现版本隔离的生产观测窗口判定 `EvaluateProductionWindow`：对同一 Strategy Version 的唯一终态 Run 观测计算质量均值、质量通过率、P95 成本和预算超限率；样本不足时只报告读数、不下越界结论；达到最小样本后按稳定 code 同时报告全部越界。混合 Strategy、重复 Run、空身份/时间、NaN/Inf、越界质量值和非法成本/预算均 fail closed。单测覆盖质量与成本四类同时越界、样本不足、阈值等值、混合版本、重复 Run 和非有限数值。该切片只建立确定性判定装置，生产遥测采集、持久窗口、告警和 Promotion/rollback 联动尚未接入，因此 M 章仍未完成。
+- [x] M1d 建立持久 Strategy 升级账本：migration 354 保存 append-only Strategy Version、不可变离线 Evaluation、批准/拒绝 Decision 和 workspace 单一 current/previous pointer；现有及新 workspace 均获得 `research-v5-default` 基线。`PersistStrategyPromotion` 规范化并 hash 候选配置与评测证据，以 request key 幂等，在 Serializable 事务内锁定当前版本，先写版本/评测/Decision，再原子推进 pointer generation；错绑基线、相同版本、非有限指标、证据/请求 key 冲突全部 fail closed。独立的一对一 `research_run_strategy_assignment` 由数据库 Trigger 在 Run 插入事务中固定当前版本且 append-only，不改变存量 `research_session`/sqlc 行协议，因此升级不影响已启动 Run。该切片尚未把 M1c 的生产越界 Decision 自动接到 rollback/freeze，也未提供管理 API。
 - [x] B1 把 committed Event 的 outbox 消费、顺序投影、成功确认、失败退避和 500 条批次上限迁入 `projectionModule`；Module 的持久化输入仅包含三项 Projection 操作，Projection output 仍使用现有 `Projector` Adapter。新增成功、失败、批次上限和禁用输出测试；该项没有改变 canonical Event schema 或生产投影 payload。
 - [x] B2 把 Result 提交的运行/任务读取、Attempt 与 Inbox 绑定预检、V1–V5 解码、计划能力检查和 `AcceptResultInput` 构造迁入 `resultAcceptanceModule`；PostgreSQL `AcceptResult` 仍负责事务内的 Agent 身份、状态、幂等 replay 和物化验证。新增合法接纳、Attempt/Inbox 错配、能力缺失和未知版本测试；Engine 只处理成功后 Reconcile 及“已接纳但推进失败”的错误语义。
 - [x] B3 把 orchestrator version 分派、V1–V5 Prompt builder 和 `compactJSON` 迁入 `taskPromptModule`；`engine.go` 不再包含 Prompt 文本。`TestOrchestratorContractsMatchGoldenFixtures` 明确执行五个版本并保持完整 Prompt SHA-256 不变，未知版本仍拒绝；该项不修改任何历史 Prompt 字节。

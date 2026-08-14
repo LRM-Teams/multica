@@ -13,12 +13,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// NotePageIssueRefResponse is a structured note→target link (S1-R1 / S1-R3 / S2-R1).
+// NotePageIssueRefResponse is a structured note→target link (S1-R1 / S1-R3 / S2-R1 / N2-A1).
 //
 // Contract for agents/clients:
 //   - Always: type, id, accessible
-//   - type is "issue" | "agent" | "run"
-//   - When accessible=true: label (+ detail fields); run also includes agent_id
+//   - type is "issue" | "agent" | "run" | "channel"
+//   - When accessible=true: label (+ detail fields); run also includes agent_id;
+//     channel puts kind in identifier ("worker" | "coordination")
 //   - When accessible=false: no label/title/identifier — only type+id
 type NotePageIssueRefResponse struct {
 	Type        string  `json:"type"`
@@ -73,9 +74,12 @@ func inaccessibleIssueRef(issueID string) NotePageIssueRefResponse {
 	}
 }
 
-// loadNotePageRefs returns issue + agent + run associations for a note page
-// (S1-R1 / S2-R1). Order: issues, then agents, then runs (each by created_at).
-func (h *Handler) loadNotePageRefs(ctx context.Context, pageID, pageWorkspaceID pgtype.UUID) ([]NotePageIssueRefResponse, error) {
+// loadNotePageRefs returns issue + agent + run + channel associations for a note page
+// (S1-R1 / S2-R1 / N2-A1). Order: issues, agents, runs, channels (each by created_at).
+func (h *Handler) loadNotePageRefs(
+	ctx context.Context,
+	pageID, pageWorkspaceID, userID pgtype.UUID,
+) ([]NotePageIssueRefResponse, error) {
 	issues, err := h.loadNotePageIssueRefs(ctx, pageID, pageWorkspaceID)
 	if err != nil {
 		return nil, err
@@ -88,10 +92,15 @@ func (h *Handler) loadNotePageRefs(ctx context.Context, pageID, pageWorkspaceID 
 	if err != nil {
 		return nil, err
 	}
-	out := make([]NotePageIssueRefResponse, 0, len(issues)+len(agents)+len(runs))
+	channels, err := h.loadNotePageChannelRefs(ctx, pageID, pageWorkspaceID, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]NotePageIssueRefResponse, 0, len(issues)+len(agents)+len(runs)+len(channels))
 	out = append(out, issues...)
 	out = append(out, agents...)
 	out = append(out, runs...)
+	out = append(out, channels...)
 	return out, nil
 }
 

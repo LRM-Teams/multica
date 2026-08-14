@@ -26,7 +26,7 @@ func TestTaskContextForAttemptRejectsRevokedGrantWithoutDeletingFrozenHistory(t 
 	fixture := seedResearchRunFixture(t, ctx, pool)
 	defer cleanupResearchRunFixture(pool, fixture)
 	store := NewPostgresStore(pool)
-	attempt, _, _, run, _ := setupRunningPlanAttempt(t, ctx, store, fixture)
+	attempt, inboxID, raw, run, task := setupRunningPlanAttempt(t, ctx, store, fixture)
 	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); err != nil {
 		t.Fatalf("authorized frozen read before revocation: %v", err)
 	}
@@ -50,6 +50,71 @@ func TestTaskContextForAttemptRejectsRevokedGrantWithoutDeletingFrozenHistory(t 
 	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("revoked frozen read err=%v want ErrInvalidTransition", err)
 	}
+	result, resultHash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, run.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AcceptResult(ctx, AcceptResultInput{
+		SessionID: run.SessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
+		InboxTaskID: inboxID, Raw: raw, Result: result, Hash: resultHash,
+	}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("revoked result acceptance err=%v want ErrInvalidTransition", err)
+	}
+
+	var manifestID, grantID string
+	if err = pool.QueryRow(ctx, `
+		SELECT id::text, normal_grant_id::text
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&manifestID, &grantID); err != nil {
+		t.Fatalf("load revoked frozen identities: %v", err)
+	}
+	deletions := []struct {
+		name string
+		sql  string
+		args []any
+	}{
+		{
+			name: "manifest",
+			sql: `DELETE FROM research_artifact_context_manifest
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid`,
+			args: []any{fixture.workspaceID, run.SessionID, manifestID},
+		},
+		{
+			name: "entry",
+			sql: `DELETE FROM research_artifact_context_entry
+				WHERE id = (SELECT id FROM research_artifact_context_entry
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND manifest_id = $3::uuid LIMIT 1)`,
+			args: []any{fixture.workspaceID, run.SessionID, manifestID},
+		},
+		{
+			name: "input reference",
+			sql: `DELETE FROM research_artifact_input_reference
+				WHERE id = (SELECT id FROM research_artifact_input_reference
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND manifest_id = $3::uuid LIMIT 1)`,
+			args: []any{fixture.workspaceID, run.SessionID, manifestID},
+		},
+		{
+			name: "grant",
+			sql: `DELETE FROM research_artifact_policy_grant
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid`,
+			args: []any{fixture.workspaceID, run.SessionID, grantID},
+		},
+		{
+			name: "revocation ledger",
+			sql: `DELETE FROM research_artifact_policy_mutation
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+				  AND policy_grant_id = $3::uuid AND mutation_kind = 'grant_revoke'`,
+			args: []any{fixture.workspaceID, run.SessionID, grantID},
+		},
+	}
+	for _, deletion := range deletions {
+		t.Run("cannot delete "+deletion.name, func(t *testing.T) {
+			if _, deleteErr := pool.Exec(ctx, deletion.sql, deletion.args...); deleteErr == nil {
+				t.Fatalf("direct %s deletion unexpectedly succeeded", deletion.name)
+			}
+		})
+	}
 
 	var entryCountAfter int
 	var representationBytesAfter int64
@@ -64,6 +129,23 @@ func TestTaskContextForAttemptRejectsRevokedGrantWithoutDeletingFrozenHistory(t 
 	}
 	if entryCountAfter != entryCountBefore || representationBytesAfter != representationBytesBefore {
 		t.Fatalf("revocation changed frozen audit history entries %d→%d bytes %d→%d", entryCountBefore, entryCountAfter, representationBytesBefore, representationBytesAfter)
+	}
+	var manifestCount, grantCount, revocationCount int
+	if err = pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_context_manifest WHERE id = $1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_policy_grant WHERE id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_policy_mutation
+		   WHERE policy_grant_id = $2::uuid AND mutation_kind = 'grant_revoke')
+	`, manifestID, grantID).Scan(&manifestCount, &grantCount, &revocationCount); err != nil {
+		t.Fatalf("count preserved revocation history: %v", err)
+	}
+	if manifestCount != 1 || grantCount != 1 || revocationCount != 1 {
+		t.Fatalf("preserved history manifest=%d grant=%d revocation=%d want 1/1/1",
+			manifestCount, grantCount, revocationCount)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID); err != nil {
+		t.Fatalf("whole-workspace audit cascade must remain allowed: %v", err)
 	}
 }
 

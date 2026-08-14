@@ -1255,15 +1255,19 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, h.agentRuntimeResponsesForList(r.Context(), runtimes))
+}
+
+func (h *Handler) agentRuntimeResponsesForList(ctx context.Context, runtimes []db.AgentRuntime) []AgentRuntimeResponse {
 	resp := make([]AgentRuntimeResponse, len(runtimes))
-	updates := h.runtimeUpdatesForList(r.Context(), runtimes)
-	machineUpgrades := h.machineUpgradesForList(r.Context(), runtimes)
-	autoUpdates := h.daemonUpdateStatusesForList(r.Context(), runtimes)
-	daemonHeartbeats := h.daemonHeartbeatsForList(r.Context(), runtimes)
+	updates := h.runtimeUpdatesForList(ctx, runtimes)
+	machineUpgrades := h.machineUpgradesForList(ctx, runtimes)
+	autoUpdates := h.daemonUpdateStatusesForList(ctx, runtimes)
+	daemonHeartbeats := h.daemonHeartbeatsForList(ctx, runtimes)
 	now := time.Now()
 	for i, rt := range runtimes {
 		update := updates[uuidToString(rt.ID)]
-		release := h.runtimeReleaseForResponse(r.Context(), rt, update)
+		release := h.runtimeReleaseForResponse(ctx, rt, update)
 		resp[i] = runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, autoUpdates[runtimeDaemonKey(rt)])
 		resp[i].MachineUpgrade = machineUpgrades[runtimeDaemonKey(rt)]
 		hb := daemonHeartbeats[runtimeDaemonKey(rt)]
@@ -1273,8 +1277,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	attachDaemonTargetVersions(resp)
-
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // DeleteAgentRuntime deletes a runtime after permission and dependency checks.

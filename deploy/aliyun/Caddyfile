@@ -1,4 +1,7 @@
 (multica_api) {
+	# Canonical DaemonCore socket is /api/daemon/connect.
+	# TODO(computer-liveness): Remove /api/daemon/ws after v0.4.24-alpha.55
+	# is no longer a supported direct self-upgrade source.
 	@multica_ws path /ws /ws/* /api/daemon/connect /api/daemon/ws /api/sandbox/node/ws
 	reverse_proxy @multica_ws backend:8080 {
 		flush_interval -1
@@ -25,6 +28,8 @@
 # paths remain proxied during the client migration so already-running older
 # daemons do not disconnect; all newly built clients use the API host.
 {$MULTICA_ROOT_HOST:leagent.me} {
+	# TODO(computer-liveness): Remove /api/daemon/ws after v0.4.24-alpha.55
+	# is no longer a supported direct self-upgrade source.
 	@legacy_ws path /ws /ws/* /api/daemon/connect /api/daemon/ws /api/sandbox/node/ws
 	handle @legacy_ws {
 		reverse_proxy backend:8080 {
@@ -49,6 +54,8 @@
 	@browser_navigation header Accept *text/html*
 	redir @browser_navigation https://{$MULTICA_APP_HOST:www.leagent.me}{uri} 308
 
+	# TODO(computer-liveness): Remove /api/daemon/ws after v0.4.24-alpha.55
+	# is no longer a supported direct self-upgrade source.
 	@compat_ws path /ws /ws/* /api/daemon/connect /api/daemon/ws /api/sandbox/node/ws
 	reverse_proxy @compat_ws backend:8080 {
 		flush_interval -1

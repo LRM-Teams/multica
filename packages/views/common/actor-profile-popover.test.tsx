@@ -5,7 +5,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { MemberProfile } from "@multica/core/types";
+import type { MemberProfile, RunnerActivityResponse } from "@multica/core/types";
 import type { AgentLiveStatusView } from "../agents/resolve-agent-live-status";
 import enAgents from "../locales/en/agents.json";
 import enSettings from "../locales/en/settings.json";
@@ -19,8 +19,9 @@ const mockLiveStatus = vi.hoisted(
 
 const mockActivity = vi.hoisted(() => ({
   current: {
-    data: null as { label: string; tone: string; visibility: string } | null | undefined,
+    data: null as RunnerActivityResponse | null | undefined,
     isLoading: false,
+    isError: false,
   },
 }));
 const mockHonorApi = vi.hoisted(() => ({
@@ -34,10 +35,7 @@ vi.mock("@multica/core/api", () => ({
 
 vi.mock("@multica/core/agents", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/agents")>()),
-  useRunnerActivitySummary: () => mockActivity.current,
-  useRunnerActivity: () => {
-    throw new Error("profile popover must not mount the per-Agent Timeline query");
-  },
+  useRunnerActivity: () => mockActivity.current,
 }));
 
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
@@ -56,6 +54,10 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
+}));
+
+vi.mock("./use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
 }));
 
 vi.mock("../agents/use-agent-live-status", () => ({
@@ -133,9 +135,8 @@ function makeProfile(): MemberProfile {
     description: "Builds and reviews changes.",
     role: "agent",
     status: "working",
-    // No longer consumed by the popover (converged onto the live ActivityEvent
-    // stream, #383); kept only to satisfy the MemberProfile type until the BE
-    // retires the server projection.
+    // Kept only to satisfy the MemberProfile type; the popover consumes the
+    // same Runner Activity timeline as the full Activity tab.
     recent_activity: [],
     profile_access: "full",
   };
@@ -156,7 +157,7 @@ function live(
 beforeEach(() => {
   cleanup();
   mockLiveStatus.current = live("Idle");
-  mockActivity.current = { data: null, isLoading: false };
+  mockActivity.current = { data: null, isLoading: false, isError: false };
   mockHonorApi.getAgentHonor.mockReset();
   mockHonorApi.getUserHonor.mockReset();
   mockHonorApi.getAgentHonor.mockImplementation(
@@ -168,24 +169,91 @@ beforeEach(() => {
 });
 
 describe("ActorProfileContentLoaded", () => {
-  it("renders the current Runner-projected Activity summary for agents", () => {
+  it("reuses Activity timeline chrome for the latest five headings without details", () => {
     mockActivity.current = {
-      data: { label: "Thinking...", tone: "info", visibility: "visible" },
+      data: {
+        summary: { label: "Running command...", tone: "running", visibility: "visible" },
+        timeline: [
+          {
+            id: "newest-command",
+            occurred_at: "2026-08-14T06:00:00Z",
+            title: "Running command",
+            subtext: "pnpm test -- --secret",
+            tone: "running",
+            body_kind: "command",
+            body: "pnpm test -- --secret",
+          },
+          {
+            id: "sending",
+            occurred_at: "2026-08-14T05:59:00Z",
+            title: "Sending message",
+            subtext: "#private-target",
+            tone: "warning",
+            body_kind: "none",
+          },
+          {
+            id: "working",
+            occurred_at: "2026-08-14T05:58:00Z",
+            title: "Working",
+            subtext: "Message received",
+            tone: "warning",
+            body_kind: "none",
+          },
+          {
+            id: "idle",
+            occurred_at: "2026-08-14T05:57:00Z",
+            title: "Idle",
+            subtext: "Idle",
+            tone: "success",
+            body_kind: "none",
+          },
+          {
+            id: "starting",
+            occurred_at: "2026-08-14T05:56:00Z",
+            title: "Starting",
+            tone: "warning",
+            body_kind: "none",
+          },
+          {
+            id: "older",
+            occurred_at: "2026-08-14T05:55:00Z",
+            title: "Older omitted activity",
+            tone: "neutral",
+            body_kind: "none",
+          },
+        ],
+      },
       isLoading: false,
+      isError: false,
     };
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
-    expect(screen.getByText("Thinking...")).toBeInTheDocument();
+    const timeline = screen.getByTestId("profile-activity-timeline");
+    expect(timeline).toHaveAttribute("data-activity-details", "hidden");
+    expect(screen.getByTestId("profile-activity-timeline-spine")).toBeInTheDocument();
+    const rows = screen.getAllByTestId("profile-activity-row");
+    expect(rows).toHaveLength(5);
+    ["Starting", "Idle", "Working", "Sending message", "Running command"].forEach(
+      (title, index) => expect(rows[index]).toHaveTextContent(title),
+    );
+    expect(rows[4]?.querySelector(".bg-running")).not.toBeNull();
+    expect(screen.queryByText("Older omitted activity")).toBeNull();
+    expect(screen.queryByText("pnpm test -- --secret")).toBeNull();
+    expect(screen.queryByText("#private-target")).toBeNull();
+    expect(screen.queryByText("Message received")).toBeNull();
+    expect(screen.queryByTestId("activity-command-block")).toBeNull();
+    expect(screen.queryByTestId("runner-activity-subtext")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
   });
 
-  it("shows a loading hint before the first Activity summary paint", () => {
-    mockActivity.current = { data: undefined, isLoading: true };
+  it("shows compact timeline skeletons before the first Activity paint", () => {
+    mockActivity.current = { data: undefined, isLoading: true, isError: false };
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
-    expect(screen.getByText("Loading")).toBeInTheDocument();
-    expect(screen.queryByText("No activity yet.")).toBeNull();
+    expect(screen.getByTestId("profile-activity-loading")).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText("No recent activity")).toBeNull();
   });
 
   it("does not render a name-row Online/Offline label (avatar badge only, LRM-248)", () => {
@@ -222,8 +290,18 @@ describe("ActorProfileContentLoaded", () => {
     const profile = makeProfile();
     profile.profile_access = "identity_only";
     mockActivity.current = {
-      data: { label: "Thinking...", tone: "info", visibility: "visible" },
+      data: {
+        summary: { label: "Thinking...", tone: "info", visibility: "visible" },
+        timeline: [{
+          id: "thinking",
+          occurred_at: "2026-08-14T06:00:00Z",
+          title: "Thinking...",
+          tone: "info",
+          body_kind: "none",
+        }],
+      },
       isLoading: false,
+      isError: false,
     };
 
     render(<ActorProfileContentLoaded profile={profile} />);

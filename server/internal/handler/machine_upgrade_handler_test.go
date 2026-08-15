@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -363,53 +362,43 @@ func TestMachineUpgrade_AcceptSnapshotsEveryConnectedWorkspaceRuntime(t *testing
 	}
 }
 
-func TestMachineUpgrade_ComputerAttestationRequiresExactAcceptedRuntimeSet(t *testing.T) {
+func TestMachineUpgrade_CurrentVersionSocketCompletesAcceptedUpgrade(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
 	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
 	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
 	}
-	accepted, err := testHandler.MachineUpgradeStore.Accept(
+	if _, err := testHandler.MachineUpgradeStore.Accept(
 		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9", "v9.9.9",
-	)
-	if err != nil {
+	); err != nil {
 		t.Fatalf("accept machine upgrade: %v", err)
 	}
 
-	if _, err := testHandler.MachineUpgradeStore.AttestComputer(
-		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9",
-		[]string{firstRuntimeID}, accepted.AcceptedWorkspaceIDs,
-	); !errors.Is(err, errMachineUpgradeAttestationRejected) {
-		t.Fatalf("incomplete Computer runtime proof error = %v, want attestation rejection", err)
+	wrong, err := testHandler.MachineUpgradeStore.CompleteOnCurrentVersion(context.Background(), daemonID, "v9.9.8")
+	if err != nil || wrong != nil {
+		t.Fatalf("wrong-version socket completion = %+v err=%v", wrong, err)
 	}
 	stored, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
 	if err != nil || stored.Phase == MachineUpgradeCompleted {
-		t.Fatalf("incomplete Computer proof completed operation: %+v err=%v", stored, err)
+		t.Fatalf("wrong-version socket completed operation: %+v err=%v", stored, err)
 	}
 
-	completed, err := testHandler.MachineUpgradeStore.AttestComputer(
-		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9",
-		[]string{firstRuntimeID, secondRuntimeID}, accepted.AcceptedWorkspaceIDs,
-	)
-	if err != nil || completed.Phase != MachineUpgradeCompleted ||
-		!sameMachineRuntimeSet(completed.AttestedRuntimeIDs, []string{firstRuntimeID, secondRuntimeID}) {
-		t.Fatalf("exact Computer proof = %+v err=%v", completed, err)
+	completed, err := testHandler.MachineUpgradeStore.CompleteOnCurrentVersion(context.Background(), daemonID, "v9.9.9")
+	if err != nil || completed == nil || completed.Phase != MachineUpgradeCompleted {
+		t.Fatalf("current-version socket proof = %+v err=%v", completed, err)
 	}
-	replayed, err := testHandler.MachineUpgradeStore.AttestComputer(
-		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9",
-		[]string{secondRuntimeID, firstRuntimeID}, accepted.AcceptedWorkspaceIDs,
-	)
-	if err != nil || replayed.ID != completed.ID || replayed.Phase != MachineUpgradeCompleted {
-		t.Fatalf("completed Computer proof replay = %+v err=%v", replayed, err)
+	replayed, err := testHandler.MachineUpgradeStore.CompleteOnCurrentVersion(context.Background(), daemonID, "v9.9.9")
+	if err != nil || replayed == nil || replayed.ID != completed.ID || replayed.Phase != MachineUpgradeCompleted {
+		t.Fatalf("completed socket proof replay = %+v err=%v", replayed, err)
 	}
 }
 
-func TestMachineUpgrade_ComputerAttestationAllowsRetiredProviderGap(t *testing.T) {
+func TestMachineUpgrade_CurrentVersionSocketCompletesRetiredProviderUpgrade(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -430,13 +419,9 @@ func TestMachineUpgrade_ComputerAttestationAllowsRetiredProviderGap(t *testing.T
 		t.Fatalf("accepted Runtimes = %v", accepted.AcceptedRuntimeIDs)
 	}
 
-	completed, err := testHandler.MachineUpgradeStore.AttestComputer(
-		context.Background(), daemonID, created.ID, "generation-retired", "v9.9.9",
-		[]string{claudeID}, accepted.AcceptedWorkspaceIDs,
-	)
-	if err != nil || completed.Phase != MachineUpgradeCompleted ||
-		!sameMachineRuntimeSet(completed.AttestedRuntimeIDs, []string{claudeID}) {
-		t.Fatalf("retired-provider Computer proof = %+v err=%v", completed, err)
+	completed, err := testHandler.MachineUpgradeStore.CompleteOnCurrentVersion(context.Background(), daemonID, "v9.9.9")
+	if err != nil || completed == nil || completed.Phase != MachineUpgradeCompleted {
+		t.Fatalf("retired-provider socket proof = %+v err=%v", completed, err)
 	}
 }
 
@@ -1168,6 +1153,72 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 	}
 	if got.Operation() == "" || got.TargetVersion != "v9.9.9" {
 		t.Fatalf("computer:upgrade payload = %+v", got)
+	}
+}
+
+func TestMachineUpgrade_CurrentBindingSocketCompletesAcceptedUpgrade(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/", map[string]string{
+		"generation_id":   "generation-socket",
+		"cli_version":     "v9.9.8",
+		"resolved_target": "v9.9.9",
+	})
+	acceptReq = withRouteParams(acceptReq, "runtimeId", firstRuntimeID, "upgradeId", created.ID)
+	acceptW := httptest.NewRecorder()
+	testHandler.AcceptMachineUpgrade(acceptW, acceptReq)
+	if acceptW.Code != http.StatusOK {
+		t.Fatalf("accept = %d: %s", acceptW.Code, acceptW.Body.String())
+	}
+	accepted, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || accepted == nil || accepted.Phase.terminal() {
+		t.Fatalf("accepted operation = %+v err=%v", accepted, err)
+	}
+
+	hub := daemonws.NewHub()
+	local := *testHandler
+	local.DaemonHub = hub
+	local.RunnerPresenceSource = hub
+	ready, err := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-socket",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendReady := func(identity daemonws.ClientIdentity) {
+		t.Helper()
+		if err := local.HandleWorkspaceRunnerFrame(context.Background(), identity, "instance-socket", protocol.EventWorkspaceRunnerReady, ready); err != nil {
+			t.Fatalf("ready %s/%s: %v", identity.DaemonID, identity.ClientVersion, err)
+		}
+	}
+
+	sendReady(daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, ClientVersion: "v9.9.8"})
+	stored, err := local.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || stored == nil || stored.Phase != accepted.Phase {
+		t.Fatalf("wrong-version socket completed upgrade = %+v err=%v", stored, err)
+	}
+
+	sendReady(daemonws.ClientIdentity{DaemonID: "other-" + daemonID, WorkspaceID: testWorkspaceID, ClientVersion: "v9.9.9"})
+	stored, err = local.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || stored == nil || stored.Phase != accepted.Phase {
+		t.Fatalf("foreign Computer socket completed upgrade = %+v err=%v", stored, err)
+	}
+
+	current := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, ClientVersion: "v9.9.9"}
+	sendReady(current)
+	completed, err := local.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || completed == nil || completed.Phase != MachineUpgradeCompleted || completed.Result == nil || *completed.Result != "completed" {
+		t.Fatalf("current Binding socket did not complete upgrade = %+v err=%v", completed, err)
+	}
+	sendReady(current)
+	replayed, err := local.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || replayed == nil || replayed.Phase != MachineUpgradeCompleted {
+		t.Fatalf("completed ready replay changed operation = %+v err=%v", replayed, err)
 	}
 }
 

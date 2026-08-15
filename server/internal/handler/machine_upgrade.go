@@ -76,7 +76,10 @@ type MachineUpgradeStore interface {
 	ClaimQueued(ctx context.Context, daemonID string) (*MachineUpgrade, error)
 	Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string) (*MachineUpgrade, error)
 	Attest(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
-	AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error)
+	// CompleteOnCurrentVersion finishes the Computer's unique non-terminal
+	// operation when a live Binding socket reports the resolved target.
+	// The client does not send an operation ID or generation.
+	CompleteOnCurrentVersion(ctx context.Context, daemonID, cliVersion string) (*MachineUpgrade, error)
 	BeginRollback(ctx context.Context, daemonID, id, generation, errorCode, errorMessage string) (*MachineUpgrade, error)
 	AttestRollback(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	Progress(ctx context.Context, daemonID, id string, phase MachineUpgradePhase, errorCode, errorMessage string) (*MachineUpgrade, error)
@@ -417,46 +420,40 @@ func (s *PostgresMachineUpgradeStore) Attest(ctx context.Context, daemonID, id, 
 		strings.TrimSpace(daemonID), strings.TrimSpace(id), strings.TrimSpace(runtimeID), strings.TrimSpace(generation)))
 }
 
-// AttestComputer is the Computer-level successor proof. Unlike runtime
-// attestation it includes every explicit Workspace connection, including
-// zero-Agent Workspaces, and therefore owns completion for generation-aware
-// Computer upgrades. The live Runtime set must cover every accepted Runtime
-// whose provider is still shipped; accepted IDs for retired providers may be
-// absent. Extra live Runtimes (new providers) are allowed.
-func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error) {
-	op, err := s.Get(ctx, daemonID, id)
+// CompleteOnCurrentVersion completes the Computer's unique non-terminal
+// Machine Upgrade when the current Binding socket reports the resolved
+// target. Operation ID and generation stay off this path: connect plus
+// version is the successor proof.
+func (s *PostgresMachineUpgradeStore) CompleteOnCurrentVersion(ctx context.Context, daemonID, cliVersion string) (*MachineUpgrade, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("machine upgrade store is not configured")
+	}
+	daemonID = strings.TrimSpace(daemonID)
+	cliVersion = strings.TrimSpace(cliVersion)
+	if daemonID == "" || cliVersion == "" {
+		return nil, nil
+	}
+	op, err := s.LatestForDaemon(ctx, daemonID)
 	if err != nil || op == nil {
 		return op, err
 	}
-	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
-	workspaceIDs = normalizedMachineRuntimeIDs(workspaceIDs)
-	if op.Phase == MachineUpgradeCompleted && op.AcceptedGeneration != nil && *op.AcceptedGeneration == strings.TrimSpace(generation) &&
-		sameMachineRuntimeSet(op.AttestedRuntimeIDs, runtimeIDs) &&
-		sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) && sameMachineRuntimeSet(op.AttestedWorkspaceIDs, workspaceIDs) &&
-		op.ResolvedTarget != nil && versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
+	if op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(cliVersion)) {
+		return nil, nil
+	}
+	if op.Phase == MachineUpgradeCompleted {
 		return op, nil
 	}
-	if (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) ||
-		op.AcceptedGeneration == nil || *op.AcceptedGeneration != strings.TrimSpace(generation) ||
-		!sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) ||
-		op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
-		return nil, errMachineUpgradeAttestationRejected
-	}
-	providers, err := s.providersForRuntimeIDs(ctx, op.AcceptedRuntimeIDs)
-	if err != nil {
-		return nil, err
-	}
-	if missing := agent.MissingRequiredRuntimeIDs(op.AcceptedRuntimeIDs, runtimeIDs, func(id string) string { return providers[id] }, true); len(missing) > 0 {
-		return nil, errMachineUpgradeAttestationRejected
+	if op.Phase.terminal() {
+		return nil, nil
 	}
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
-		SET attested_runtime_ids = $3::uuid[], attested_workspace_ids = $4::uuid[], phase='completed', result='completed',
-			completed_at=now(), updated_at=now()
-		WHERE daemon_id=$1 AND id=$2 AND phase IN ('handoff','converging')
-		  AND accepted_generation=$5
-		RETURNING `+machineUpgradeColumns,
-		strings.TrimSpace(daemonID), strings.TrimSpace(id), runtimeIDs, workspaceIDs, strings.TrimSpace(generation)))
+		SET phase = 'completed', result = 'completed',
+			completed_at = COALESCE(completed_at, now()), updated_at = now()
+		WHERE daemon_id = $1 AND id = $2
+		  AND phase NOT IN ('completed', 'failed', 'rolled_back', 'timeout', 'cancelled')
+		  AND resolved_target IS NOT NULL
+		RETURNING `+machineUpgradeColumns, daemonID, op.ID))
 }
 
 // BeginRollback is monotonic: only an operation that reached handoff may move

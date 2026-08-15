@@ -108,18 +108,15 @@ func TestHostProcessProjectsPreviousPackageTakeoverUntilLauncherExits(t *testing
 
 func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	const token = "owner-secret"
-	reregistered := make(chan struct{}, 2)
 	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != token {
 			http.Error(w, "unexpected child control request", http.StatusBadRequest)
 			return
 		}
-		reregistered <- struct{}{}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer childControl.Close()
 
-	attested := make(chan struct{}, 2)
 	acceptStarted := make(chan struct{}, 1)
 	acceptGate := make(chan struct{})
 	var acceptCount atomic.Int32
@@ -137,8 +134,8 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
 			})
 		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
-			attested <- struct{}{}
-			w.WriteHeader(http.StatusNoContent)
+			t.Error("same-version upgrade attested over HTTP")
+			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
 		default:
 			http.NotFound(w, r)
 		}
@@ -198,16 +195,6 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	close(acceptGate)
 	if got := acceptCount.Load(); got != 1 {
 		t.Fatalf("Machine Upgrade accept count = %d, want one machine-scoped owner", got)
-	}
-	select {
-	case <-reregistered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Computer Host did not ask the Binding child to re-register")
-	}
-	select {
-	case <-attested:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Computer Host did not attest the already-current Machine Upgrade")
 	}
 	cancel()
 	if err := <-done; err != nil {

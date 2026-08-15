@@ -153,8 +153,8 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if len(response.Runtimes) > 0 {
 		runtimeID = response.Runtimes[0].ID
 	}
-	_, stopUpgrade := context.WithCancel(ctx)
-	defer stopUpgrade()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	executor := computer.NewBindingMachineUpgradeExecutor(computer.BindingMachineUpgradeConfig{
 		Identity: computer.HostProcessIdentity{
 			ComputerID: bootstrap.ComputerID, ComputerGeneration: bootstrap.ComputerGeneration,
@@ -170,7 +170,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		DaemonToken:  response.DaemonToken,
 		Drain:        d.beginBindingDrain,
 		ReleaseDrain: d.releaseClaimBarrier,
-		Exit:         stopUpgrade,
+		Exit:         cancel,
 	})
 	d.bindingMachineUpgrade = executor.Execute
 	d.notifyRuntimeSetChanged()
@@ -186,8 +186,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err != nil {
 		return err
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	var (
 		readyOnce sync.Once
 		readyErr  error

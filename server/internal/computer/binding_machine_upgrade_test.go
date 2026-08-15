@@ -1,0 +1,89 @@
+package computer
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
+)
+
+func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
+	const controlToken = "owner-secret"
+	acceptedGeneration := "generation-a"
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
+			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
+				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
+				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
+			})
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/progress":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cloud.Close()
+
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != bindingChildPrepareUpgradePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
+			http.Error(w, "unexpected Host prepare", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(bindingMachineUpgradePrepared{
+			RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"},
+		})
+	}))
+	defer host.Close()
+
+	exited := make(chan struct{}, 1)
+	var swapped atomic.Bool
+	root := t.TempDir()
+	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
+		Identity: HostProcessIdentity{
+			ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
+			Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: cloud.URL,
+		},
+		ResidentRoot: root,
+		ControlURL:   host.URL,
+		ControlToken: controlToken,
+		Child:        BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
+		RuntimeID:    "runtime-a",
+		DaemonToken:  "runtime-token",
+		Exit: func() {
+			select {
+			case exited <- struct{}{}:
+			default:
+			}
+		},
+		StageRelease: func(string, time.Duration, string) (string, error) { return "/tmp/staged", nil },
+		VerifyBinary: func(context.Context, string, string) error { return nil },
+		InstallPath:  func() (string, error) { return "/tmp/active", nil },
+		SwapExecutable: func(string, string) error {
+			swapped.Store(true)
+			return nil
+		},
+	})
+	if err := executor.Execute(context.Background(), protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v2.0.0",
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !swapped.Load() {
+		t.Fatal("Binding child did not swap the Computer binary")
+	}
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("Binding child Machine Upgrade did not exit after swap")
+	}
+	journal, err := readMachineUpgradeJournal(root)
+	if err != nil || journal == nil || journal.Target != "v2.0.0" {
+		t.Fatalf("activated marker = %+v err=%v", journal, err)
+	}
+}

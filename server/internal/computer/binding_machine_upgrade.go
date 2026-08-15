@@ -159,10 +159,7 @@ func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending 
 		_ = executor.reportFailure(ctx, pending.ID, "activation_failed", err)
 		return err
 	}
-	journal := hostMachineUpgradeJournal{
-		ID: pending.ID, Generation: strings.TrimSpace(*receipt.AcceptedGeneration),
-		Source: executor.config.Identity.Version, Target: target, Phase: "activated",
-	}
+	journal := hostMachineUpgradeJournal{Target: target}
 	if err := writeMachineUpgradeJournal(executor.config.ResidentRoot, journal); err != nil {
 		_ = cli.RollbackExecutable(installPath)
 		_ = executor.reportFailure(ctx, pending.ID, "journal_persist_failed", err)
@@ -298,5 +295,3 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
-
-

@@ -558,6 +558,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
+		// TODO(computer-upgrade-attest): Remove after installed Computers no
+		// longer POST /computer/machine-upgrades/{id}/attest. Completion is
+		// the current Binding socket reporting the resolved target.
 		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
 		r.Post("/computer/machine-upgrades/{upgradeId}/takeover", h.CommitComputerMachineUpgradeTakeover)
 		r.Get("/connect", h.DaemonWebSocket)

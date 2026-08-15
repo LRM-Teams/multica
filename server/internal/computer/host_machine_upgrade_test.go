@@ -20,8 +20,7 @@ import (
 func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{residentRoot: t.TempDir()})
 	want := hostMachineUpgradeJournal{
-		ID: "upgrade-a", Generation: "generation-a", Source: "v1.0.0", Target: "v1.1.0",
-		RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"}, Phase: "activated",
+		ID: "upgrade-a", Generation: "generation-a", Source: "v1.0.0", Target: "v1.1.0", Phase: "activated",
 	}
 	if err := upgrade.writeJournal(want); err != nil {
 		t.Fatal(err)
@@ -413,7 +412,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		t.Fatal("activated Machine Upgrade did not stop incumbent Computer")
 	}
 	journal, err := upgrade.readJournal()
-	if err != nil || journal == nil || journal.Phase != "activated" || !sameHostStringSet(journal.RuntimeIDs, runtimeIDs) || !sameHostStringSet(journal.WorkspaceIDs, workspaceIDs) {
+	if err != nil || journal == nil || journal.Phase != "activated" || journal.ID != "upgrade-a" || journal.Target != "v2.0.0" {
 		t.Fatalf("activated Machine Upgrade journal = %+v, error=%v", journal, err)
 	}
 	incumbent.Stop()
@@ -453,10 +452,10 @@ func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	previousJournalPath := filepath.Join(previousJournalDir, "upgrade-a.json")
-	previousJournal := hostMachineUpgradeJournal{
-		ID: "upgrade-a", Generation: "generation-a", Source: "v1.0.0", Target: "v2.0.0",
-		RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"}, Phase: "handoff",
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	previousJournal := map[string]any{
+		"id": "upgrade-a", "generation": "generation-a", "source_version": "v1.0.0", "target_version": "v2.0.0",
+		"runtime_ids": []string{"runtime-a"}, "workspace_ids": []string{"workspace-a"}, "phase": "handoff",
+		"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	data, err := json.Marshal(previousJournal)
 	if err != nil {

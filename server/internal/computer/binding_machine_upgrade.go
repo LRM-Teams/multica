@@ -128,25 +128,11 @@ func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending 
 		_ = executor.reportFailure(ctx, pending.ID, "acceptance_set_mismatch", err)
 		return err
 	}
-	journal := hostMachineUpgradeJournal{
-		ID: pending.ID, Generation: strings.TrimSpace(*receipt.AcceptedGeneration),
-		Source: executor.config.Identity.Version, Target: target,
-		RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...),
-		Phase: "accepted",
-	}
 	if versionsMatch(executor.config.Identity.Version, target) {
-		if err := writeMachineUpgradeJournal(executor.config.ResidentRoot, journal); err != nil {
-			_ = executor.reportFailure(ctx, pending.ID, "journal_persist_failed", err)
-			return err
-		}
 		if executor.config.Exit != nil {
 			executor.config.Exit()
 		}
 		return nil
-	}
-	if err := writeMachineUpgradeJournal(executor.config.ResidentRoot, journal); err != nil {
-		_ = executor.reportFailure(ctx, pending.ID, "journal_persist_failed", err)
-		return err
 	}
 	if err := executor.reportProgress(ctx, pending.ID, "staging", "", ""); err != nil {
 		return err
@@ -154,18 +140,11 @@ func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending 
 	staged, err := executor.config.StageRelease(target, cli.DefaultUpdateDownloadTimeout, firstNonEmpty(executor.config.ManifestURL, prepared.ManifestURL))
 	if err != nil {
 		_ = executor.reportFailure(ctx, pending.ID, "stage_failed", err)
-		_ = removeMachineUpgradeJournal(executor.config.ResidentRoot)
-		return err
-	}
-	journal.Phase = "staged"
-	if err := writeMachineUpgradeJournal(executor.config.ResidentRoot, journal); err != nil {
-		_ = executor.reportFailure(ctx, pending.ID, "journal_persist_failed", err)
 		return err
 	}
 	_ = executor.reportProgress(ctx, pending.ID, "verifying", "", "")
 	if err := executor.config.VerifyBinary(ctx, staged, target); err != nil {
 		_ = executor.reportFailure(ctx, pending.ID, "verification_failed", err)
-		_ = removeMachineUpgradeJournal(executor.config.ResidentRoot)
 		return err
 	}
 	if err := executor.reportProgress(ctx, pending.ID, "handoff", "", ""); err != nil {
@@ -180,7 +159,10 @@ func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending 
 		_ = executor.reportFailure(ctx, pending.ID, "activation_failed", err)
 		return err
 	}
-	journal.Phase = "activated"
+	journal := hostMachineUpgradeJournal{
+		ID: pending.ID, Generation: strings.TrimSpace(*receipt.AcceptedGeneration),
+		Source: executor.config.Identity.Version, Target: target, Phase: "activated",
+	}
 	if err := writeMachineUpgradeJournal(executor.config.ResidentRoot, journal); err != nil {
 		_ = cli.RollbackExecutable(installPath)
 		_ = executor.reportFailure(ctx, pending.ID, "journal_persist_failed", err)

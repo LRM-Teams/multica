@@ -1464,6 +1464,22 @@ export const EMPTY_MEMORY_CURATOR_PROFILE = {
   updated_at: "",
 };
 
+export const GraphMemoryProfileSchema = z.object({
+  workspace_id: z.string().default(""),
+  memory_type: z.enum(["legacy", "graph"]).catch("legacy"),
+  explore_agents: z.number().int().default(4),
+  explore_max_rounds: z.number().int().default(3),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_GRAPH_MEMORY_PROFILE = {
+  workspace_id: "",
+  memory_type: "legacy" as const,
+  explore_agents: 4,
+  explore_max_rounds: 3,
+  updated_at: "",
+};
+
 export const StartMemoryCurationRunResponseSchema = z.object({
   id: z.string(),
   status: z.string().default("queued"),

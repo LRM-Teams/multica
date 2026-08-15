@@ -99,8 +99,7 @@ func TestWorkspaceRunnerInactiveLaunchAcceptsOnlyStoppedActivityAndFencesReplace
 	}
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_activity_launch
-		SET runtime_id = $4, launch_id = $3, status = 'active', last_client_sequence = 0,
-		    last_producer_fact_id = ''
+		SET runtime_id = $4, launch_id = $3, status = 'active'
 		WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID, newLaunchID, newRuntimeID); err != nil {
 		t.Fatal(err)
 	}

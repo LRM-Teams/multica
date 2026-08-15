@@ -332,6 +332,7 @@ func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemo
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit Runner ready fence: %w", err)
 		}
+		h.activityCursor().forgetOtherInstances(identity.WorkspaceID, identity.DaemonID, daemonInstanceID)
 
 		if h.Bus != nil {
 			for _, agentID := range activityAgentIDs {
@@ -382,16 +383,6 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 				daemon_instance_id = EXCLUDED.daemon_instance_id,
 				launch_id = EXCLUDED.launch_id,
 				status = EXCLUDED.status,
-				last_client_sequence = CASE
-					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
-					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
-					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
-					THEN agent_activity_launch.last_client_sequence ELSE 0 END,
-				last_producer_fact_id = CASE
-					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
-					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
-					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
-					THEN agent_activity_launch.last_producer_fact_id ELSE '' END,
 				updated_at = now()
 			WHERE agent_activity_launch.status = 'inactive'
 			   OR agent_activity_launch.daemon_instance_id <> EXCLUDED.daemon_instance_id
@@ -460,16 +451,6 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 					THEN 'active' ELSE 'accepted' END,
 				queue_state = EXCLUDED.queue_state, queue_depth = EXCLUDED.queue_depth,
 				queue_age_ms = EXCLUDED.queue_age_ms, accepted_at = COALESCE(agent_activity_launch.accepted_at, now()),
-				last_client_sequence = CASE
-					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
-					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
-					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
-					THEN agent_activity_launch.last_client_sequence ELSE 0 END,
-				last_producer_fact_id = CASE
-					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
-					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
-					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
-					THEN agent_activity_launch.last_producer_fact_id ELSE '' END,
 				updated_at = now()
 			WHERE agent_activity_launch.status = 'inactive'
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
@@ -541,26 +522,31 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		return err
 	}
 	terminalStopped := snapshot.ActivityKind == protocol.ActivityKindOffline && snapshot.DetailKind == "stopped" && snapshot.ProbeID == ""
+	if !h.activityCursor().accept(runnerActivityCursorKey{
+		workspaceID: identity.WorkspaceID, agentID: snapshot.AgentID,
+		daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, launchID: snapshot.LaunchID,
+	}, snapshot.ClientSequence, snapshot.ProducerFactID) {
+		return errors.New("stale or unauthorized Runner Activity")
+	}
 	var runtimeID pgtype.UUID
 	err = h.DB.QueryRow(ctx, `
 		UPDATE agent_activity_launch
-		SET last_client_sequence = $6, last_producer_fact_id = $7, updated_at = now()
+		SET updated_at = now()
 		WHERE workspace_id = $1 AND agent_id = $2
 		  AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5
-		  AND (status = 'active' OR (status = 'inactive' AND $9))
-		  AND (last_client_sequence < $6 OR (last_client_sequence = $6 AND last_producer_fact_id = $7))
+		  AND (status = 'active' OR (status = 'inactive' AND $7))
 		  AND (
-			$9 OR
-			($8 = '' AND NOT EXISTS (
+			$7 OR
+			($6 = '' AND NOT EXISTS (
 				SELECT 1 FROM agent_activity_probe p WHERE p.workspace_id = $1 AND p.agent_id = $2
 			)) OR
-			($8 <> '' AND EXISTS (
+			($6 <> '' AND EXISTS (
 				SELECT 1 FROM agent_activity_probe p WHERE p.workspace_id = $1 AND p.agent_id = $2
-					AND p.daemon_id = $3 AND p.daemon_instance_id = $4 AND p.launch_id = $5 AND p.probe_id = $8
+					AND p.daemon_id = $3 AND p.daemon_instance_id = $4 AND p.launch_id = $5 AND p.probe_id = $6
 			))
 		  )
 		RETURNING runtime_id`,
-		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID, snapshot.ProbeID, terminalStopped).Scan(&runtimeID)
+		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ProbeID, terminalStopped).Scan(&runtimeID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errors.New("stale or unauthorized Runner Activity")
 	}
@@ -830,6 +816,7 @@ func (h *Handler) HandleWorkspaceRunnerDisconnect(ctx context.Context, identity 
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit Runner disconnect fence: %w", err)
 		}
+		h.activityCursor().forgetInstance(identity.WorkspaceID, identity.DaemonID, daemonInstanceID)
 
 		for _, agentID := range presenceAgentIDs {
 			h.publishAgentPresence(identity.WorkspaceID, util.UUIDToString(agentID), AgentPresenceOffline)

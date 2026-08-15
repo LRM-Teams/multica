@@ -119,6 +119,10 @@ type Handler struct {
 	DaemonHub                  *daemonws.Hub
 	RunnerPresenceSource       RunnerPresenceSource
 	RunnerPresenceMu           *sync.Mutex
+	// runnerActivityCursor is the in-process sticky note for this connect:
+	// how far this Computer instance has already reported Activity. It is
+	// not durable residency and dies with the process or a new instance.
+	runnerActivityCursor *runnerActivityCursorStore
 	ReminderNotifier           daemonws.ReminderNotifier
 	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
 	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
@@ -291,6 +295,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		DaemonHub:             daemonHub,
 		RunnerPresenceSource:  daemonHub,
 		RunnerPresenceMu:      &sync.Mutex{},
+		runnerActivityCursor:  newRunnerActivityCursorStore(),
 		Bus:                   bus,
 		TaskService:           taskSvc,
 		AgentFleetRankService: agentFleetRankService,

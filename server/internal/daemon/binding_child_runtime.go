@@ -149,6 +149,30 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err := hostControl.reportRuntimeSet(ctx, response.Runtimes, response.DaemonToken, response.DaemonTokenExpiresAt); err != nil {
 		return fmt.Errorf("report Binding child Runtime set: %w", err)
 	}
+	runtimeID := ""
+	if len(response.Runtimes) > 0 {
+		runtimeID = response.Runtimes[0].ID
+	}
+	_, stopUpgrade := context.WithCancel(ctx)
+	defer stopUpgrade()
+	executor := computer.NewBindingMachineUpgradeExecutor(computer.BindingMachineUpgradeConfig{
+		Identity: computer.HostProcessIdentity{
+			ComputerID: bootstrap.ComputerID, ComputerGeneration: bootstrap.ComputerGeneration,
+			Environment: bootstrap.Environment, Version: config.Daemon.CLIVersion, ServerURL: bootstrap.ServerBaseURL,
+		},
+		ResidentRoot: bootstrap.BindingsRoot,
+		ControlURL:   bootstrap.HostControlURL,
+		ControlToken: config.Daemon.LocalControlToken,
+		Child: bindingChildControlIdentity{
+			WorkspaceID: workspaceID, RunnerGeneration: bootstrap.RunnerGeneration, PID: os.Getpid(),
+		},
+		RuntimeID:    runtimeID,
+		DaemonToken:  response.DaemonToken,
+		Drain:        d.beginBindingDrain,
+		ReleaseDrain: d.releaseClaimBarrier,
+		Exit:         stopUpgrade,
+	})
+	d.bindingMachineUpgrade = executor.Execute
 	d.notifyRuntimeSetChanged()
 	if len(runtimeIDs) > 0 {
 		defer d.deregisterRuntimes()

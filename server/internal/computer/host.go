@@ -136,12 +136,24 @@ func NewHost(config HostConfig) (*Host, error) {
 		}
 		return nil
 	}
+	callbacks.PrepareUpgrade = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) (any, error) {
+		if host.upgrade != nil {
+			return host.upgrade.prepareChildUpgrade(ctx, identity, raw)
+		}
+		if external.PrepareUpgrade != nil {
+			return external.PrepareUpgrade(ctx, identity, raw)
+		}
+		return nil, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
 	callbacks.Released = func(identity BindingChildIdentity) {
 		host.runtimeMu.Lock()
 		if current, ok := host.runtimeSets[identity.WorkspaceID]; ok && current.Identity == identity {
 			delete(host.runtimeSets, identity.WorkspaceID)
 		}
 		host.runtimeMu.Unlock()
+		if host.upgrade != nil {
+			host.upgrade.observeInitiatorExit(identity)
+		}
 		if external.Released != nil {
 			external.Released(identity)
 		}
@@ -260,6 +272,13 @@ func (host *Host) PrepareMachineUpgrade(ctx context.Context) error {
 		return errors.New("Computer Host is unavailable")
 	}
 	return host.supervisor.PrepareMachineUpgrade(ctx, host.control.token)
+}
+
+func (host *Host) PrepareSiblingMachineUpgrade(ctx context.Context, initiatorWorkspaceID string) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
+	}
+	return host.supervisor.PrepareSiblingMachineUpgrade(ctx, host.control.token, initiatorWorkspaceID)
 }
 
 func (host *Host) ReleaseMachineUpgrade(ctx context.Context) error {

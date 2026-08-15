@@ -319,9 +319,23 @@ func (supervisor *BindingSupervisor) Snapshot(workspaceID string) (RunnerRecord,
 // implementation. If any child rejects preparation, already-prepared siblings
 // are released so a failed machine operation cannot strand them paused.
 func (supervisor *BindingSupervisor) PrepareMachineUpgrade(ctx context.Context, controlToken string) error {
+	return supervisor.PrepareSiblingMachineUpgrade(ctx, controlToken, "")
+}
+
+func (supervisor *BindingSupervisor) PrepareSiblingMachineUpgrade(ctx context.Context, controlToken, initiatorWorkspaceID string) error {
 	targets, err := supervisor.machineControlTargets(nil)
 	if err != nil {
 		return err
+	}
+	if initiator := strings.TrimSpace(initiatorWorkspaceID); initiator != "" {
+		filtered := targets[:0]
+		for _, current := range targets {
+			if current.identity.WorkspaceID == initiator {
+				continue
+			}
+			filtered = append(filtered, current)
+		}
+		targets = filtered
 	}
 	prepared := make([]bindingMachineControlTarget, 0, len(targets))
 	for _, current := range targets {

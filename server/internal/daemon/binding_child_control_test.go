@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -233,20 +234,13 @@ func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
 	}
 }
 
-func TestBindingChildForwardsConnectSocketUpgradeToHost(t *testing.T) {
-	const controlToken = "host-control-token"
-	forwarded := make(chan HeartbeatResponse, 1)
-	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{
-		MachineActions: func(_ context.Context, identity computer.BindingChildIdentity, raw json.RawMessage) error {
-			if identity.WorkspaceID != "workspace-a" {
-				t.Errorf("Host machine action workspace = %q", identity.WorkspaceID)
-			}
-			var ack HeartbeatResponse
-			if err := json.Unmarshal(raw, &ack); err != nil {
-				return err
-			}
-			forwarded <- ack
-			return nil
+func TestBindingChildExecutesConnectSocketUpgradeLocally(t *testing.T) {
+	executed := make(chan protocol.ComputerUpgradePayload, 1)
+	hostHits := make(chan struct{}, 1)
+	host := newBindingControlTestHost(t, "host-control-token", 0, computer.HostControlCallbacks{
+		MachineActions: func(context.Context, computer.BindingChildIdentity, json.RawMessage) error {
+			hostHits <- struct{}{}
+			return errors.New("Host must not execute a connect-socket Machine Upgrade")
 		},
 	})
 	installLiveBindingChild(t, host, "workspace-a", 101)
@@ -256,7 +250,11 @@ func TestBindingChildForwardsConnectSocketUpgradeToHost(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	child.bindingHostControl = newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	child.bindingHostControl = newBindingHostControlClient(server.URL, "host-control-token", bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	child.bindingMachineUpgrade = func(_ context.Context, command protocol.ComputerUpgradePayload) error {
+		executed <- command
+		return nil
+	}
 	if err := child.handleComputerControlCommand(context.Background(), protocol.EventComputerUpgrade, protocol.ComputerUpgradePayload{
 		RequestID: "upgrade-a", TargetVersion: "v9.9.9",
 	}); err != nil {
@@ -264,12 +262,17 @@ func TestBindingChildForwardsConnectSocketUpgradeToHost(t *testing.T) {
 	}
 
 	select {
-	case ack := <-forwarded:
-		if ack.PendingMachineUpgrade == nil || ack.PendingMachineUpgrade.ID != "upgrade-a" || ack.PendingMachineUpgrade.TargetVersion != "v9.9.9" {
-			t.Fatalf("Host machine action = %+v", ack)
+	case command := <-executed:
+		if command.Operation() != "upgrade-a" || command.TargetVersion != "v9.9.9" {
+			t.Fatalf("child executor command = %+v", command)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("DaemonCore connect-socket upgrade was not forwarded to Host")
+		t.Fatal("DaemonCore connect-socket upgrade was not executed in the Binding child")
+	}
+	select {
+	case <-hostHits:
+		t.Fatal("connect-socket Machine Upgrade was forwarded to Host")
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

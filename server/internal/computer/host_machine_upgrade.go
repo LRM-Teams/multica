@@ -47,12 +47,13 @@ type hostMachineUpgrade struct {
 	installPath    func() (string, error)
 	swapExecutable func(string, string) error
 
-	mu              sync.Mutex
-	activeID        string
-	generationID    string
-	restartBinary   string
-	targetVersion   string
-	manifestBaseURL string
+	mu                   sync.Mutex
+	activeID             string
+	initiatorWorkspaceID string
+	generationID         string
+	restartBinary        string
+	targetVersion        string
+	manifestBaseURL      string
 }
 
 type hostMachineUpgradeReceipt struct {
@@ -176,6 +177,68 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	return nil
 }
 
+func (upgrade *hostMachineUpgrade) prepareChildUpgrade(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) (bindingMachineUpgradePrepared, error) {
+	if upgrade == nil || upgrade.host == nil {
+		return bindingMachineUpgradePrepared{}, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
+	var pending protocol.DaemonHeartbeatPendingMachineUpgrade
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &pending); err != nil {
+			return bindingMachineUpgradePrepared{}, err
+		}
+	}
+	if strings.TrimSpace(pending.ID) == "" {
+		return bindingMachineUpgradePrepared{}, errors.New("Computer upgrade request identity is required")
+	}
+	upgrade.mu.Lock()
+	if upgrade.activeID != "" && upgrade.activeID != pending.ID {
+		upgrade.mu.Unlock()
+		return bindingMachineUpgradePrepared{}, ErrComputerControlBusy
+	}
+	upgrade.activeID = pending.ID
+	upgrade.initiatorWorkspaceID = identity.WorkspaceID
+	manifestURL := upgrade.manifestBaseURL
+	upgrade.mu.Unlock()
+	if err := upgrade.host.PrepareSiblingMachineUpgrade(ctx, identity.WorkspaceID); err != nil {
+		upgrade.mu.Lock()
+		if upgrade.activeID == pending.ID {
+			upgrade.activeID = ""
+			upgrade.initiatorWorkspaceID = ""
+		}
+		upgrade.mu.Unlock()
+		return bindingMachineUpgradePrepared{}, err
+	}
+	runtimeIDs, workspaceIDs := upgrade.currentRuntimeAndWorkspaceIDs()
+	return bindingMachineUpgradePrepared{RuntimeIDs: runtimeIDs, WorkspaceIDs: workspaceIDs, ManifestURL: manifestURL}, nil
+}
+
+func (upgrade *hostMachineUpgrade) observeInitiatorExit(identity BindingChildIdentity) {
+	if upgrade == nil {
+		return
+	}
+	upgrade.mu.Lock()
+	initiator := upgrade.initiatorWorkspaceID
+	upgrade.mu.Unlock()
+	if initiator == "" || initiator != identity.WorkspaceID {
+		return
+	}
+	journal, err := upgrade.readJournal()
+	if err != nil || journal == nil || journal.Phase != "activated" {
+		return
+	}
+	path, err := upgrade.installPath()
+	if err != nil {
+		return
+	}
+	upgrade.mu.Lock()
+	upgrade.restartBinary = path
+	upgrade.targetVersion = journal.Target
+	upgrade.mu.Unlock()
+	if upgrade.config.cancel != nil {
+		upgrade.config.cancel()
+	}
+}
+
 func (upgrade *hostMachineUpgrade) execute(ctx context.Context, runtime hostBindingRuntime, token string, pending protocol.DaemonHeartbeatPendingMachineUpgrade) {
 	upgrade.mu.Lock()
 	// One machine-wide upgrade at a time. Same operationId is a replay; a
@@ -201,6 +264,7 @@ func (upgrade *hostMachineUpgrade) execute(ctx context.Context, runtime hostBind
 			upgrade.mu.Lock()
 			if upgrade.activeID == pending.ID {
 				upgrade.activeID = ""
+				upgrade.initiatorWorkspaceID = ""
 			}
 			upgrade.mu.Unlock()
 			if journalPersisted {
@@ -240,6 +304,7 @@ func (upgrade *hostMachineUpgrade) execute(ctx context.Context, runtime hostBind
 		upgrade.mu.Lock()
 		if upgrade.activeID == pending.ID {
 			upgrade.activeID = ""
+			upgrade.initiatorWorkspaceID = ""
 		}
 		upgrade.mu.Unlock()
 		return
@@ -448,15 +513,31 @@ func (upgrade *hostMachineUpgrade) attestJournal(ctx context.Context, journal ho
 }
 
 func (upgrade *hostMachineUpgrade) journalPath() string {
-	root := strings.TrimSpace(upgrade.config.residentRoot)
+	return machineUpgradeJournalPath(upgrade.config.residentRoot)
+}
+
+func (upgrade *hostMachineUpgrade) writeJournal(journal hostMachineUpgradeJournal) error {
+	return writeMachineUpgradeJournal(upgrade.config.residentRoot, journal)
+}
+
+func (upgrade *hostMachineUpgrade) readJournal() (*hostMachineUpgradeJournal, error) {
+	return readMachineUpgradeJournal(upgrade.config.residentRoot)
+}
+
+func (upgrade *hostMachineUpgrade) removeJournal() error {
+	return removeMachineUpgradeJournal(upgrade.config.residentRoot)
+}
+
+func machineUpgradeJournalPath(root string) string {
+	root = strings.TrimSpace(root)
 	if root == "" {
 		return ""
 	}
 	return filepath.Join(root, "machine-upgrade-host.json")
 }
 
-func (upgrade *hostMachineUpgrade) writeJournal(journal hostMachineUpgradeJournal) error {
-	path := upgrade.journalPath()
+func writeMachineUpgradeJournal(root string, journal hostMachineUpgradeJournal) error {
+	path := machineUpgradeJournalPath(root)
 	if path == "" {
 		return errors.New("Computer Machine Upgrade journal root is unavailable")
 	}
@@ -492,8 +573,8 @@ func (upgrade *hostMachineUpgrade) writeJournal(journal hostMachineUpgradeJourna
 	return os.Rename(temporaryPath, path)
 }
 
-func (upgrade *hostMachineUpgrade) readJournal() (*hostMachineUpgradeJournal, error) {
-	path := upgrade.journalPath()
+func readMachineUpgradeJournal(root string) (*hostMachineUpgradeJournal, error) {
+	path := machineUpgradeJournalPath(root)
 	if path == "" {
 		return nil, nil
 	}
@@ -514,8 +595,8 @@ func (upgrade *hostMachineUpgrade) readJournal() (*hostMachineUpgradeJournal, er
 	return &journal, nil
 }
 
-func (upgrade *hostMachineUpgrade) removeJournal() error {
-	path := upgrade.journalPath()
+func removeMachineUpgradeJournal(root string) error {
+	path := machineUpgradeJournalPath(root)
 	if path == "" {
 		return nil
 	}

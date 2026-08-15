@@ -16,9 +16,8 @@ executable.
 
 The Web API uses `resetAgent(agentId, mode)` and sends only `{ "mode":
 "restart" | "session" | "full" }`. Runtime IDs, filesystem paths, and force
-flags are server-owned. The operation response is an `AgentRestartOperation`;
-the database table is also hard-cut to `agent_restart_operation`. There is no
-legacy lifecycle table or parallel storage contract.
+flags are server-owned. The HTTP response is an accepted receipt for the live
+socket orchestration. There is no durable restart ledger.
 
 Raft Computer 1.0.16 accepts three discrete commands: `agent:stop`,
 `agent:reset-workspace`, and `agent:start`. It has no composite
@@ -50,8 +49,9 @@ Start persists one replacement `launchId` and stable `startDispatchId` before
 dispatch on the current Runner socket. The live connection owns the rest of
 the sequence. Runner Ready does not resume a half-finished restart, and
 desired/observed reconcile skips any agent with a running restart operation.
-Relay publication is not completion: an undelivered or interrupted operation
-stays running until timeout or a later human retry.
+Relay publication is not completion: an interrupted restart stays in process
+memory until the current socket finishes it or a later human retry starts a
+new one.
 
 The removed parallel paths must not return: no composite Agent Restart payload
 on daemon heartbeat, no `agent:lifecycle` wire command, no restart delivery

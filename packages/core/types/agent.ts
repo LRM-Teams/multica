@@ -1029,7 +1029,6 @@ export interface ProviderCapabilities {
 
 export interface AgentRestartPreflight {
   actions: Record<AgentRestartMode, AgentRestartModeState>;
-  active_operation?: AgentRestartOperation | null;
   /**
    * Provider capability set for this agent's runtime. Gate the profile restart
    * button on `provider_capabilities.force_restart` — do not hardcode a

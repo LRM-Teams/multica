@@ -1811,16 +1811,13 @@ export class ApiClient {
     );
   }
 
-  // Client sends only Raft's `mode` (never a path/force/runtime_id). The UUID
-  // Idempotency-Key makes a resend return the same operation.
+  // Client sends only Raft's `mode` (never a path/force/runtime_id).
   async resetAgent(
     id: string,
     mode: AgentRestartMode,
-    idempotencyKey: string,
   ): Promise<AgentRestartOperation> {
     const raw = await this.fetch<unknown>(`/api/members/agents/${id}/reset`, {
       method: "POST",
-      headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ mode }),
     });
     return parseWithFallback(
@@ -1828,21 +1825,6 @@ export class ApiClient {
       AgentRestartOperationSchema,
       EMPTY_AGENT_RESTART_OPERATION,
       { endpoint: "POST /api/members/agents/{id}/reset" },
-    );
-  }
-
-  async getAgentRestartOperation(
-    id: string,
-    operationId: string,
-  ): Promise<AgentRestartOperation> {
-    const raw = await this.fetch<unknown>(
-      `/api/members/agents/${id}/reset/${operationId}`,
-    );
-    return parseWithFallback(
-      raw,
-      AgentRestartOperationSchema,
-      EMPTY_AGENT_RESTART_OPERATION,
-      { endpoint: "GET /api/members/agents/{id}/reset/{operationId}" },
     );
   }
 

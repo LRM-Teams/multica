@@ -480,13 +480,19 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 		t.Fatal(err)
 	}
 	operationID := uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_restart_operation (
-			id, workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
-			action_kind, status, execution_mode, step, started_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'restart', 'running', 'immediate', 'stopping', now())`,
-		operationID, testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
-		t.Fatal(err)
+	h := *testHandler
+	h.agentRestarts = newAgentRestartStore()
+	if _, ok := h.restarts().begin(activeAgentRestartState{
+		operationID:  operationID,
+		workspaceID:  testWorkspaceID,
+		agentID:      agentID,
+		runtimeID:    runtimeID,
+		computerID:   daemonID,
+		storageKind:  agentRestartStorageRestart,
+		step:         agentRestartStepStopping,
+		stopLaunchID: launchID,
+	}); !ok {
+		t.Fatal("seed in-flight restart")
 	}
 	hub := daemonws.NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -513,7 +519,6 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 		}
 		time.Sleep(time.Millisecond)
 	}
-	h := *testHandler
 	h.runnerObservations = newRunnerObservationStore()
 	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.DaemonHub = hub

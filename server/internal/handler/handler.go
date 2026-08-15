@@ -125,7 +125,9 @@ type Handler struct {
 	runnerActivityCursor *runnerActivityCursorStore
 	// runnerObservations is the live Computer process: status, launch, and
 	// session for the current socket. It is not durable.
-	runnerObservations         *runnerObservationStore
+	runnerObservations *runnerObservationStore
+	// agentRestarts is one in-flight Agent Restart on this process.
+	agentRestarts              *agentRestartStore
 	ReminderNotifier           daemonws.ReminderNotifier
 	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
 	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
@@ -300,6 +302,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		RunnerPresenceMu:      &sync.Mutex{},
 		runnerActivityCursor:  newRunnerActivityCursorStore(),
 		runnerObservations:    newRunnerObservationStore(),
+		agentRestarts:         newAgentRestartStore(),
 		Bus:                   bus,
 		TaskService:           taskSvc,
 		AgentFleetRankService: agentFleetRankService,

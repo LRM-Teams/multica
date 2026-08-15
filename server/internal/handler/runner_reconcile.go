@@ -104,7 +104,7 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	if !live {
 		return errors.New("current Workspace Runner unavailable during launch reconcile")
 	}
-	skip := h.restartAgentsOnActiveOperation(ctx, identity.WorkspaceID)
+	skip := h.restartAgentsOnActiveOperation()
 	observed := make([]runnerObservedLaunch, 0)
 	for _, obs := range h.observations().listInstance(identity.WorkspaceID, identity.DaemonID, daemonInstanceID) {
 		if skip[obs.agentID] {
@@ -127,27 +127,10 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemonws.ClientIdentity) ([]runnerDesiredLaunch, error) {
 	rows, err := h.DB.Query(ctx, `
 		SELECT desired.agent_id::text, desired.runtime_id::text,
-		       desired.launch_id::text, desired.start_dispatch_id::text,
-		       CASE
-		         WHEN launch_operation.action_kind <> 'restart' THEN ''
-		         ELSE COALESCE(launch_operation.start_session_id, '')
-		       END
+		       desired.launch_id::text, desired.start_dispatch_id::text, ''
 		FROM agent_runner_launch_projection desired
 		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
-		LEFT JOIN agent_restart_operation active_operation
-		  ON active_operation.agent_id = desired.agent_id AND active_operation.status = 'running'
-		LEFT JOIN agent_restart_operation launch_operation
-		  ON launch_operation.id = desired.start_dispatch_id
 		WHERE desired.workspace_id::text = $1 AND runtime.daemon_id = $2
-		  AND active_operation.id IS NULL
-		  AND NOT EXISTS (
-			SELECT 1 FROM agent_restart_operation failed_reset
-			WHERE failed_reset.agent_id = desired.agent_id
-			  AND failed_reset.status = 'failed'
-			  AND failed_reset.action_kind <> 'restart'
-			  AND failed_reset.id <> desired.start_dispatch_id
-			  AND failed_reset.finished_at >= desired.updated_at
-		  )
 		ORDER BY desired.agent_id`, identity.WorkspaceID, identity.DaemonID)
 	if err != nil {
 		return nil, fmt.Errorf("load desired Runner launches: %w", err)
@@ -169,23 +152,9 @@ func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemon
 	return desired, nil
 }
 
-func (h *Handler) restartAgentsOnActiveOperation(ctx context.Context, workspaceID string) map[string]bool {
+func (h *Handler) restartAgentsOnActiveOperation() map[string]bool {
 	skip := map[string]bool{}
-	if h == nil || h.DB == nil {
-		return skip
-	}
-	rows, err := h.DB.Query(ctx, `
-		SELECT agent_id::text FROM agent_restart_operation
-		WHERE workspace_id::text = $1 AND status = 'running'`, workspaceID)
-	if err != nil {
-		return skip
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var agentID string
-		if err := rows.Scan(&agentID); err != nil {
-			return skip
-		}
+	for _, agentID := range h.restarts().agentIDs() {
 		skip[agentID] = true
 	}
 	return skip

@@ -111,7 +111,6 @@ export const AgentRestartPreflightSchema = z.object({
     session: AgentRestartModeStateSchema,
     full: AgentRestartModeStateSchema,
   }),
-  active_operation: AgentRestartOperationSchema.nullish(),
   provider_capabilities: z.object({
     force_restart: z.boolean().catch(false),
     custom_model_id: z.boolean().catch(false),

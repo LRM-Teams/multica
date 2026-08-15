@@ -209,7 +209,7 @@ flowchart LR
     PROOF --> FRESH2["agent:start\nconfig = {}"]
 ```
 
-Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action_kind`、`execution_mode` 或 scheduling mode。`AgentRestartOperation` 是 durable business record，数据库表已 hard-cut 为 `agent_restart_operation`，不保留旧 lifecycle storage contract。
+Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action_kind`、`execution_mode`、幂等键或 scheduling mode。一场 restart 只活在当前 server 进程内存里，不保留 durable restart ledger。
 
 两项有意 stronger-than-Raft 的 correctness proof：Stop 只接受 exact `launch_id` 的 inactive fact；Full Reset 必须等同 operation 的 terminal reset receipt 才能 start。当前 socket 拥有整场编排；Runner Ready 和 reconcile 都不再重投半截 restart。Agent Restart 不产生专属 toast。
 

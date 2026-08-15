@@ -400,7 +400,7 @@ func main() {
 	}
 
 	// Start background sweeper to mark stale runtimes as offline.
-	go runRuntimeSweeper(sweepCtx, queries, liveness, taskSvc, bus, pool)
+	go runRuntimeSweeper(sweepCtx, queries, liveness, taskSvc, bus)
 	go runRunnerActivityReaper(sweepCtx, h)
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)

@@ -32,13 +32,6 @@ func (s *PostgresUpdateStore) Create(ctx context.Context, runtimeID, targetVersi
 	return s.create(ctx, randomID(), runtimeID, targetVersion)
 }
 
-// CreateWithID creates an old PendingUpdate carrier under the canonical
-// Machine Upgrade ID. The two tables remain independently durable, but their
-// shared ID gives ReportUpdateResult an unambiguous, authenticated bridge.
-func (s *PostgresUpdateStore) CreateWithID(ctx context.Context, id, runtimeID, targetVersion string) (*UpdateRequest, error) {
-	return s.create(ctx, id, runtimeID, targetVersion)
-}
-
 func (s *PostgresUpdateStore) create(ctx context.Context, id, runtimeID, targetVersion string) (*UpdateRequest, error) {
 	if err := s.requireDB(); err != nil {
 		return nil, err

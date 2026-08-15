@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -121,8 +122,15 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				}
 				continue
 			}
-			if err := runner.handleComputerControl(connection.ctx, message.Type, command); err != nil && runner.logger != nil {
-				runner.logger.Warn("forward Computer control to Host failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
+			if err := runner.handleComputerControl(connection.ctx, message.Type, command); err != nil {
+				if runner.logger != nil {
+					runner.logger.Warn("forward Computer control to Host failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
+				}
+				if message.Type == protocol.EventComputerUpgrade && errors.Is(err, computer.ErrComputerControlBusy) {
+					_ = writeFrame(protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{
+						RequestID: command.RequestID, OK: false, Error: "control_busy",
+					})
+				}
 			}
 		case protocol.EventDaemonHeartbeatAck:
 			var ack HeartbeatResponse

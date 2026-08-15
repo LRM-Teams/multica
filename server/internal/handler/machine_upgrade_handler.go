@@ -362,9 +362,8 @@ func (h *Handler) createMachineUpgrade(
 }
 
 // dispatchComputerUpgradeToRunners is the Raft 1.0.16 connect-socket path:
-// command goes to the current DaemonCore socket. The child forwards it to
-// Computer Host; Host still owns the swap. Heartbeat claim remains for older
-// packages that do not understand computer:upgrade.
+// command goes to one current DaemonCore socket. Upgrade is machine-wide; the
+// child forwards it to Computer Host, and Host drains every Binding locally.
 func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computerID string, op *MachineUpgrade) {
 	if h == nil || h.DaemonHub == nil || op == nil || strings.TrimSpace(computerID) == "" {
 		return
@@ -384,7 +383,9 @@ func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computer
 		if err := rows.Scan(&workspaceID); err != nil {
 			return
 		}
-		_ = h.DaemonHub.NotifyWorkspaceRunner(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload)
+		if h.DaemonHub.NotifyWorkspaceRunner(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload) {
+			return
+		}
 	}
 }
 
@@ -458,9 +459,6 @@ func (h *Handler) attestMachineUpgradeRegistration(r *http.Request, rt db.AgentR
 	if err != nil || op == nil || (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) {
 		return
 	}
-	if op.AcceptedGeneration != nil && *op.AcceptedGeneration == legacyMachineUpgradeAcceptanceMarker {
-		return
-	}
 	runtimeIDs, err := h.machineUpgradeRuntimeIDs(r.Context(), rt)
 	if err != nil {
 		slog.Warn("machine upgrade registration runtime set failed", "error", err, "runtime_id", uuidToString(rt.ID))
@@ -472,41 +470,6 @@ func (h *Handler) attestMachineUpgradeRegistration(r *http.Request, rt db.AgentR
 			slog.Warn("machine upgrade registration attestation failed", "error", err, "runtime_id", uuidToString(rt.ID), "upgrade_id", op.ID)
 		}
 		return
-	}
-	if updated != nil {
-		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
-	}
-}
-
-// attestLegacyMachineUpgradeRegistration is the completion proof available to
-// v0.4.13: it has no machine generation marker, so the server requires its
-// prior running receipt plus the original full sibling set at the target.
-func (h *Handler) attestLegacyMachineUpgradeRegistration(r *http.Request, rt db.AgentRuntime, cliVersion string) {
-	if h == nil || h.MachineUpgradeStore == nil {
-		return
-	}
-	op, err := h.MachineUpgradeStore.LatestForDaemon(r.Context(), runtimeDaemonKey(rt))
-	if err != nil || op == nil || op.AcceptedGeneration == nil || *op.AcceptedGeneration != legacyMachineUpgradeAcceptanceMarker {
-		return
-	}
-	if op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging {
-		carrier, carrierErr := h.UpdateStore.Get(r.Context(), op.ID)
-		if carrierErr != nil || carrier == nil || carrier.Status != UpdateCompleted {
-			return
-		}
-		h.advanceLegacyMachineUpgradeToHandoff(r.Context(), rt, op, carrier.TargetVersion)
-		op, err = h.MachineUpgradeStore.Get(r.Context(), runtimeDaemonKey(rt), op.ID)
-		if err != nil || op == nil || (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) {
-			return
-		}
-	}
-	runtimeIDs, err := h.machineUpgradeRuntimeIDs(r.Context(), rt)
-	if err != nil {
-		return
-	}
-	updated, err := h.MachineUpgradeStore.AttestLegacy(r.Context(), runtimeDaemonKey(rt), op.ID, uuidToString(rt.ID), cliVersion, runtimeIDs)
-	if err != nil && !errors.Is(err, errMachineUpgradeAttestationRejected) {
-		slog.Warn("legacy machine upgrade registration attestation failed", "error", err, "runtime_id", uuidToString(rt.ID), "upgrade_id", op.ID)
 	}
 	if updated != nil {
 		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))

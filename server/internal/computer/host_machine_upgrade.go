@@ -33,6 +33,10 @@ type hostMachineUpgradeConfig struct {
 	previousPackageUpgradeBootstrap bool
 }
 
+// ErrComputerControlBusy is the Raft 1.0.16 Host busy signal. DaemonCore maps
+// it onto computer:upgrade:done { error: "control_busy" }.
+var ErrComputerControlBusy = errors.New("Computer Machine Upgrade is already running")
+
 type hostMachineUpgrade struct {
 	host   *Host
 	config hostMachineUpgradeConfig
@@ -155,6 +159,15 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	upgrade.mu.Unlock()
 	if ack.PendingMachineUpgrade != nil {
 		pending := *ack.PendingMachineUpgrade
+		upgrade.mu.Lock()
+		activeID := upgrade.activeID
+		upgrade.mu.Unlock()
+		if activeID != "" {
+			if activeID == pending.ID {
+				return nil
+			}
+			return ErrComputerControlBusy
+		}
 		go upgrade.execute(context.Background(), runtime, token, pending)
 	}
 	if ack.PendingRestart != nil {
@@ -165,9 +178,8 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 
 func (upgrade *hostMachineUpgrade) execute(ctx context.Context, runtime hostBindingRuntime, token string, pending protocol.DaemonHeartbeatPendingMachineUpgrade) {
 	upgrade.mu.Lock()
-	// Every Binding child can observe the same machine-scoped operation on its
-	// heartbeat. Exactly one goroutine may accept and execute it, including when
-	// the repeated notification carries the same operation ID.
+	// One machine-wide upgrade at a time. Same operationId is a replay; a
+	// different ID while this slot is taken is rejected at handleChildAction.
 	if upgrade.activeID != "" {
 		upgrade.mu.Unlock()
 		return

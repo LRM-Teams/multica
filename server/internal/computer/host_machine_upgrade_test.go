@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -161,6 +162,84 @@ func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testi
 	}
 	if got := humanIntentCalls.Load(); got != 0 {
 		t.Fatalf("Host created %d human lifecycle intents, want zero", got)
+	}
+}
+
+func TestHostMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
+	identity := BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 3, PID: 8051}
+	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
+		"workspace-a": {
+			Identity: identity,
+			Runtimes: []hostBindingRuntime{
+				{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
+			},
+			DaemonToken: "runtime-token",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	}}
+	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	upgrade.activeID = "upgrade-a"
+
+	raw, err := json.Marshal(protocol.DaemonHeartbeatAckPayload{
+		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v9.9.9"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := upgrade.handleChildAction(context.Background(), identity, raw); err != nil {
+		t.Fatalf("same operation replay = %v", err)
+	}
+	if upgrade.activeID != "upgrade-a" {
+		t.Fatalf("activeID = %q, want upgrade-a", upgrade.activeID)
+	}
+}
+
+func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
+	identity := BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 3, PID: 8051}
+	host := &Host{runtimeSets: map[string]hostBindingRuntimeSet{
+		"workspace-a": {
+			Identity: identity,
+			Runtimes: []hostBindingRuntime{
+				{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
+			},
+			DaemonToken: "runtime-token",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	}}
+	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	upgrade.activeID = "upgrade-a"
+
+	raw, err := json.Marshal(protocol.DaemonHeartbeatAckPayload{
+		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-b", TargetVersion: "v10.0.0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = upgrade.handleChildAction(context.Background(), identity, raw)
+	if !errors.Is(err, ErrComputerControlBusy) {
+		t.Fatalf("different operation while active = %v, want ErrComputerControlBusy", err)
+	}
+}
+
+func TestHostControlForwardsComputerControlBusy(t *testing.T) {
+	identity := BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 3, PID: 8051}
+	control := NewHostControl("owner-secret", NewProcessCapacity(1), HostControlCallbacks{
+		Current: func(got BindingChildIdentity) bool { return got == identity },
+		MachineActions: func(context.Context, BindingChildIdentity, json.RawMessage) error {
+			return ErrComputerControlBusy
+		},
+	})
+	mux := http.NewServeMux()
+	control.RegisterRoutes(mux)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	client := NewHostControlClient(server.URL, "owner-secret", identity)
+	err := client.ForwardMachineActions(context.Background(), protocol.DaemonHeartbeatAckPayload{
+		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-b", TargetVersion: "v10.0.0"},
+	})
+	if !errors.Is(err, ErrComputerControlBusy) {
+		t.Fatalf("ForwardMachineActions = %v, want ErrComputerControlBusy", err)
 	}
 }
 

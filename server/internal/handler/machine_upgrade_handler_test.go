@@ -126,6 +126,46 @@ func initiateMachineUpgrade(t *testing.T, userID, daemonID, target string) (*htt
 	return w, op
 }
 
+func TestSweepTimedOutQueuedMachineUpgradesReleasesSlot(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+	})
+
+	createdW, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	if createdW.Code != http.StatusOK || created.Phase != MachineUpgradeQueued {
+		t.Fatalf("create queued upgrade = %d %+v", createdW.Code, created)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE machine_upgrade SET created_at = now() - interval '3 minutes' WHERE id = $1
+	`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	swept, err := SweepTimedOutQueuedMachineUpgrades(context.Background(), testPool)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 1 {
+		t.Fatalf("swept = %d, want 1", swept)
+	}
+	got, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || got == nil || got.Phase != MachineUpgradeTimeout || got.ErrorCode == nil || *got.ErrorCode != "queued_timeout" {
+		t.Fatalf("timed-out upgrade = %+v err=%v", got, err)
+	}
+
+	retryW, retry := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	if retryW.Code != http.StatusOK || retry.Phase != MachineUpgradeQueued || retry.ID == created.ID {
+		t.Fatalf("retry after queued timeout = %d %+v", retryW.Code, retry)
+	}
+}
+
 func TestMachineUpgrade_CanonicalRouteSharesOneDaemonOperation(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

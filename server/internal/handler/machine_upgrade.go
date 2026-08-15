@@ -86,6 +86,34 @@ type MachineUpgradeStore interface {
 	Cancel(ctx context.Context, daemonID, id string) (*MachineUpgrade, error)
 }
 
+// machineUpgradeQueuedTimeout is how long a Computer upgrade may sit in
+// queued without the current socket taking it. After this the slot is
+// released so the user can click Upgrade again. This is not a delivery
+// scheduler and does not invent a new upgrade path.
+const machineUpgradeQueuedTimeout = 2 * time.Minute
+
+// SweepTimedOutQueuedMachineUpgrades releases Computer upgrade slots that
+// never left queued. Starting/staging/handoff stay owned by the live
+// socket plus the local marker.
+func SweepTimedOutQueuedMachineUpgrades(ctx context.Context, exec dbExecutor) (int64, error) {
+	if exec == nil {
+		return 0, errors.New("database is unavailable")
+	}
+	commandTag, err := exec.Exec(ctx, `
+		UPDATE machine_upgrade
+		SET phase = 'timeout', result = 'timeout',
+		    error_code = 'queued_timeout',
+		    error_message = 'Computer upgrade was not taken by the current socket before timeout',
+		    completed_at = now(), updated_at = now()
+		WHERE phase = 'queued'
+		  AND created_at < now() - ($1 * interval '1 second')
+	`, int64(machineUpgradeQueuedTimeout/time.Second))
+	if err != nil {
+		return 0, err
+	}
+	return commandTag.RowsAffected(), nil
+}
+
 var (
 	errMachineUpgradeAlreadyAccepted     = errors.New("machine upgrade has already been accepted for execution")
 	errMachineUpgradeNotFound            = errors.New("machine upgrade not found")

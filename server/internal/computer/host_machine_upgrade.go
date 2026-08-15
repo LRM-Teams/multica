@@ -163,23 +163,23 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	return nil
 }
 
-func (upgrade *hostMachineUpgrade) prepareChildUpgrade(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) (bindingMachineUpgradePrepared, error) {
+func (upgrade *hostMachineUpgrade) prepareChildUpgrade(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) (BindingMachineUpgradePrepared, error) {
 	if upgrade == nil || upgrade.host == nil {
-		return bindingMachineUpgradePrepared{}, errors.New("Computer Machine Upgrade coordinator is unavailable")
+		return BindingMachineUpgradePrepared{}, errors.New("Computer Machine Upgrade coordinator is unavailable")
 	}
 	var pending protocol.DaemonHeartbeatPendingMachineUpgrade
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &pending); err != nil {
-			return bindingMachineUpgradePrepared{}, err
+			return BindingMachineUpgradePrepared{}, err
 		}
 	}
 	if strings.TrimSpace(pending.ID) == "" {
-		return bindingMachineUpgradePrepared{}, errors.New("Computer upgrade request identity is required")
+		return BindingMachineUpgradePrepared{}, errors.New("Computer upgrade request identity is required")
 	}
 	upgrade.mu.Lock()
 	if upgrade.activeID != "" && upgrade.activeID != pending.ID {
 		upgrade.mu.Unlock()
-		return bindingMachineUpgradePrepared{}, ErrComputerControlBusy
+		return BindingMachineUpgradePrepared{}, ErrComputerControlBusy
 	}
 	upgrade.activeID = pending.ID
 	upgrade.initiatorWorkspaceID = identity.WorkspaceID
@@ -192,10 +192,10 @@ func (upgrade *hostMachineUpgrade) prepareChildUpgrade(ctx context.Context, iden
 			upgrade.initiatorWorkspaceID = ""
 		}
 		upgrade.mu.Unlock()
-		return bindingMachineUpgradePrepared{}, err
+		return BindingMachineUpgradePrepared{}, err
 	}
 	runtimeIDs, workspaceIDs := upgrade.currentRuntimeAndWorkspaceIDs()
-	return bindingMachineUpgradePrepared{RuntimeIDs: runtimeIDs, WorkspaceIDs: workspaceIDs, ManifestURL: manifestURL}, nil
+	return BindingMachineUpgradePrepared{RuntimeIDs: runtimeIDs, WorkspaceIDs: workspaceIDs, ManifestURL: manifestURL}, nil
 }
 
 func (upgrade *hostMachineUpgrade) observeInitiatorExit(identity BindingChildIdentity) {

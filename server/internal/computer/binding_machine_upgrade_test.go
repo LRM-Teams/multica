@@ -35,7 +35,7 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 			http.Error(w, "unexpected Host prepare", http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(bindingMachineUpgradePrepared{
+		_ = json.NewEncoder(w).Encode(BindingMachineUpgradePrepared{
 			RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"},
 		})
 	}))

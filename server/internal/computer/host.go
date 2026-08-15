@@ -162,6 +162,7 @@ func NewHost(config HostConfig) (*Host, error) {
 	callbacks.Current = supervisor.Current
 	host.supervisor = supervisor
 	host.control = NewHostControl(config.ControlToken, NewProcessCapacity(config.MaxAgentProcesses), callbacks)
+	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	return host, nil
 }
 
@@ -315,4 +316,15 @@ func (host *Host) DeliverComputerUpgrade(ctx context.Context, command protocol.C
 		return errors.New("Computer Host is unavailable")
 	}
 	return host.supervisor.DeliverComputerUpgrade(ctx, host.control.token, command)
+}
+
+func (host *Host) PrepareChildUpgrade(ctx context.Context, identity BindingChildIdentity, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (BindingMachineUpgradePrepared, error) {
+	if host == nil || host.upgrade == nil {
+		return BindingMachineUpgradePrepared{}, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
+	raw, err := json.Marshal(pending)
+	if err != nil {
+		return BindingMachineUpgradePrepared{}, err
+	}
+	return host.upgrade.prepareChildUpgrade(ctx, identity, raw)
 }

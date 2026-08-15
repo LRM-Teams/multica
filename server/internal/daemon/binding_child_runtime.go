@@ -48,6 +48,7 @@ type BindingChildRunConfig struct {
 	PublishReady   func(computer.BindingChildReady) error
 	RefreshEvery   time.Duration
 	HostLeaseEvery time.Duration
+	PrepareUpgrade func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error)
 }
 
 // RunBindingChild owns one Workspace Runner and all of its workspace-scoped
@@ -172,6 +173,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		Drain:        d.beginBindingDrain,
 		ReleaseDrain: d.releaseClaimBarrier,
 		Exit:         cancel,
+		Prepare:      config.PrepareUpgrade,
 	})
 	d.bindingMachineUpgrade = executor.Execute
 	d.notifyRuntimeSetChanged()

@@ -98,6 +98,51 @@ func TestStartBindingRunnerRequiresWorkspace(t *testing.T) {
 	}
 }
 
+func TestBindingRunnerLauncherSpawnsInProcessChild(t *testing.T) {
+	started := make(chan BindingChildBootstrap, 1)
+	launcher := BindingRunnerLauncher{
+		ComputerID: "computer-a", ComputerGeneration: 3, Environment: "test",
+		ServerBaseURL: "https://test.example.com", HostControlURL: "http://127.0.0.1:19514",
+		BindingsRoot: t.TempDir(), WorkspacesRoot: t.TempDir(),
+		Run: func(_ context.Context, bootstrap BindingChildBootstrap, publishReady func(BindingChildReady) error) error {
+			started <- bootstrap
+			return publishReady(BindingChildReady{
+				ProtocolVersion: BindingChildProtocolVersion,
+				WorkspaceID:     bootstrap.WorkspaceID, RunnerGeneration: bootstrap.RunnerGeneration,
+				PID: os.Getpid(), ControlURL: "http://127.0.0.1:9",
+			})
+		},
+	}
+	child, err := launcher.Spawn("workspace-a", 7)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer child.Stop()
+	if _, isProcess := child.(*BindingRunner); isProcess {
+		t.Fatal("Computer Binding was spawned as an OS child")
+	}
+	if child.PID() != os.Getpid() {
+		t.Fatalf("in-process Binding pid = %d, want host pid %d", child.PID(), os.Getpid())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ready, err := child.(ReadyBindingChild).AwaitReady(ctx)
+	if err != nil {
+		t.Fatalf("AwaitReady: %v", err)
+	}
+	if ready.WorkspaceID != "workspace-a" || ready.RunnerGeneration != 7 || ready.PID != os.Getpid() {
+		t.Fatalf("ready = %+v", ready)
+	}
+	select {
+	case bootstrap := <-started:
+		if bootstrap.WorkspaceID != "workspace-a" || bootstrap.RunnerGeneration != 7 || bootstrap.ComputerID != "computer-a" {
+			t.Fatalf("in-process bootstrap = %+v", bootstrap)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-process Binding did not start")
+	}
+}
+
 func TestPreviousPackageBindingBootstrapEndsWithLauncherProcess(t *testing.T) {
 	launcher := BindingRunnerLauncher{
 		PreviousPackageUpgradeBootstrap: true,

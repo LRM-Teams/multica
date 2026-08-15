@@ -286,7 +286,7 @@ func TestBindingChildExecutesConnectSocketUpgradeLocally(t *testing.T) {
 	}
 }
 
-func TestBindingChildForwardsMachineUpgradeToHost(t *testing.T) {
+func TestBindingChildForwardsRestartToHost(t *testing.T) {
 	const controlToken = "host-control-token"
 	forwarded := make(chan HeartbeatResponse, 1)
 	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{
@@ -307,22 +307,27 @@ func TestBindingChildForwardsMachineUpgradeToHost(t *testing.T) {
 	host.host.RegisterRoutes(mux)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
+	control := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	if err := control.reportRuntimeSet(context.Background(), []Runtime{
+		{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
+	}, "child-daemon-token", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("report runtime set: %v", err)
+	}
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	child.bindingHostControl = newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	child.bindingHostControl = control
 	child.handleWorkspaceRunnerControlAck(context.Background(), &HeartbeatResponse{
-		RuntimeID:             "runtime-a",
-		PendingMachineUpgrade: &PendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v9.9.9"},
-		PendingRestart:        &PendingRestart{ID: "restart-a"},
+		RuntimeID:      "runtime-a",
+		PendingRestart: &PendingRestart{ID: "restart-a"},
 	})
 
 	select {
 	case ack := <-forwarded:
-		if ack.PendingMachineUpgrade == nil || ack.PendingMachineUpgrade.ID != "upgrade-a" || ack.PendingRestart == nil {
+		if ack.PendingRestart == nil || ack.PendingRestart.ID != "restart-a" || ack.PendingMachineUpgrade != nil {
 			t.Fatalf("Host machine action = %+v", ack)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Binding child did not forward Machine Upgrade to Host")
+		t.Fatal("Binding child did not forward restart to Host")
 	}
 }
 

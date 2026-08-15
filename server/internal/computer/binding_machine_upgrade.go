@@ -31,6 +31,7 @@ type BindingMachineUpgradeConfig struct {
 	Drain          func(context.Context) error
 	ReleaseDrain   func()
 	Exit           func()
+	Prepare        func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (BindingMachineUpgradePrepared, error)
 	StageRelease   func(string, time.Duration, string) (string, error)
 	VerifyBinary   func(context.Context, string, string) error
 	InstallPath    func() (string, error)
@@ -171,32 +172,35 @@ func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending 
 	return nil
 }
 
-type bindingMachineUpgradePrepared struct {
+type BindingMachineUpgradePrepared struct {
 	RuntimeIDs   []string `json:"runtime_ids"`
 	WorkspaceIDs []string `json:"workspace_ids"`
 	ManifestURL  string   `json:"manifest_url,omitempty"`
 }
 
-func (executor *BindingMachineUpgradeExecutor) prepareHost(ctx context.Context, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (bindingMachineUpgradePrepared, error) {
+func (executor *BindingMachineUpgradeExecutor) prepareHost(ctx context.Context, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (BindingMachineUpgradePrepared, error) {
+	if executor.config.Prepare != nil {
+		return executor.config.Prepare(ctx, pending)
+	}
 	if strings.TrimSpace(executor.config.ControlURL) == "" || strings.TrimSpace(executor.config.ControlToken) == "" {
-		return bindingMachineUpgradePrepared{}, errors.New("Binding child Host control is unavailable")
+		return BindingMachineUpgradePrepared{}, errors.New("Binding child Host control is unavailable")
 	}
 	body, err := json.Marshal(struct {
 		Identity BindingChildIdentity                          `json:"identity"`
 		Payload  protocol.DaemonHeartbeatPendingMachineUpgrade `json:"payload"`
 	}{Identity: executor.config.Child, Payload: pending})
 	if err != nil {
-		return bindingMachineUpgradePrepared{}, err
+		return BindingMachineUpgradePrepared{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(executor.config.ControlURL, "/")+bindingChildPrepareUpgradePath, strings.NewReader(string(body)))
 	if err != nil {
-		return bindingMachineUpgradePrepared{}, err
+		return BindingMachineUpgradePrepared{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Multica-Control-Token", executor.config.ControlToken)
 	response, err := executor.client.Do(request)
 	if err != nil {
-		return bindingMachineUpgradePrepared{}, err
+		return BindingMachineUpgradePrepared{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusConflict {
@@ -205,17 +209,17 @@ func (executor *BindingMachineUpgradeExecutor) prepareHost(ctx context.Context, 
 		}
 		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&failure)
 		if failure.Code == bindingChildControlBusyCode {
-			return bindingMachineUpgradePrepared{}, ErrComputerControlBusy
+			return BindingMachineUpgradePrepared{}, ErrComputerControlBusy
 		}
-		return bindingMachineUpgradePrepared{}, fmt.Errorf("Computer Host prepare returned %s", response.Status)
+		return BindingMachineUpgradePrepared{}, fmt.Errorf("Computer Host prepare returned %s", response.Status)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return bindingMachineUpgradePrepared{}, fmt.Errorf("Computer Host prepare returned %s: %s", response.Status, strings.TrimSpace(string(message)))
+		return BindingMachineUpgradePrepared{}, fmt.Errorf("Computer Host prepare returned %s: %s", response.Status, strings.TrimSpace(string(message)))
 	}
-	var prepared bindingMachineUpgradePrepared
+	var prepared BindingMachineUpgradePrepared
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&prepared); err != nil {
-		return bindingMachineUpgradePrepared{}, err
+		return BindingMachineUpgradePrepared{}, err
 	}
 	return prepared, nil
 }

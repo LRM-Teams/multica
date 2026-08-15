@@ -234,7 +234,7 @@ func consolidateOneGraph(ctx context.Context, dir string, ds *graphDirState, bm 
 		if err != nil {
 			return nil, err
 		}
-		consolidator := memorygraph.NewConsolidator(store, backend, cfg, "pi", nil)
+		consolidator := memorygraph.NewConsolidator(store, backend, cfg, "pi", nil, memorygraph.NewTraceRecorder(dir))
 		if cfg.TTVTrajectories > 1 {
 			// R2: wire the production full-backtest runner so a candidate
 			// whose retrieval coverage rises runs a real explore backtest

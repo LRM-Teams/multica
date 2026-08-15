@@ -121,12 +121,7 @@ type fakeExploreBackend struct {
 }
 
 func exploreCompletedSession(output string) *agent.Session {
-	msgs := make(chan agent.Message)
-	close(msgs)
-	results := make(chan agent.Result, 1)
-	results <- agent.Result{Status: "completed", Output: output}
-	close(results)
-	return &agent.Session{Messages: msgs, Result: results}
+	return completedSessionWithMessages(output)
 }
 
 func (f *fakeExploreBackend) recordErr(format string, args ...any) {
@@ -269,7 +264,7 @@ func TestExploreAdoptsRunAndCrossChecksRounds(t *testing.T) {
 		expandsPerCall: func(int) int { return 2 },
 		reportRounds:   func(int) int { return 1 }, // under-report: server counted 2 expands
 	}
-	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi")
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
 
 	res, err := ex.Explore(context.Background(), "dispatch router retries")
 	if err != nil {
@@ -310,7 +305,7 @@ func TestExploreGarbageOutputMarkedFailed(t *testing.T) {
 	store := newExploreStore(t)
 	retr := newExploreRetriever(t, store)
 	backend := &fakeExploreBackend{t: t, garbage: true}
-	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi")
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
 
 	res, err := ex.Explore(context.Background(), "dispatch router retries")
 	if err != nil {
@@ -343,7 +338,7 @@ func TestExploreBudgetBlownRunNotAdopted(t *testing.T) {
 	cfg := testExploreConfig()
 	cfg.Agents = 2
 	cfg.MaxRounds = 1
-	ex := NewExplorer(store, retr, backend, cfg, "pi")
+	ex := NewExplorer(store, retr, backend, cfg, "pi", nil)
 
 	res, err := ex.Explore(context.Background(), "dispatch router retries")
 	if err != nil {
@@ -389,7 +384,7 @@ func TestExploreParallelAgentsAdoptFewestRounds(t *testing.T) {
 	}
 	cfg := testExploreConfig()
 	cfg.Agents = 3
-	ex := NewExplorer(store, retr, backend, cfg, "pi")
+	ex := NewExplorer(store, retr, backend, cfg, "pi", nil)
 
 	res, err := ex.Explore(context.Background(), "dispatch router retries")
 	if err != nil {
@@ -790,7 +785,7 @@ func TestExplorePinsVersionForWholeCall(t *testing.T) {
 	retr := newExploreRetriever(t, store)
 	backend := &switchingExploreBackend{t: t, store: store}
 
-	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi")
+	ex := NewExplorer(store, retr, backend, testExploreConfig(), "pi", nil)
 	res, err := ex.Explore(context.Background(), "dispatch router retries")
 	if err != nil {
 		t.Fatalf("Explore: %v", err)

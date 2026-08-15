@@ -71,7 +71,8 @@ type Explorer struct {
 	retr     *HybridRetriever
 	backend  AgentBackend
 	cfg      ExploreConfig
-	provider string // agent CLI provider name (e.g. "pi"); integration-time wiring
+	provider string         // agent CLI provider name (e.g. "pi"); integration-time wiring
+	traces   *TraceRecorder // nil → trajectories are drained but not persisted
 
 	// pinnedVersion, when > 0, forces Explore to run against that graph
 	// version instead of resolving the current pointer (the production
@@ -81,14 +82,16 @@ type Explorer struct {
 
 // NewExplorer returns an Explorer over the given store/retriever. cfg zero
 // values fall back to DefaultExploreConfig. provider is informational until
-// the provider-extension wiring lands at integration time.
-func NewExplorer(store *Store, retr *HybridRetriever, backend AgentBackend, cfg ExploreConfig, provider string) *Explorer {
+// the provider-extension wiring lands at integration time. traces may be
+// nil, in which case trajectories are not persisted.
+func NewExplorer(store *Store, retr *HybridRetriever, backend AgentBackend, cfg ExploreConfig, provider string, traces *TraceRecorder) *Explorer {
 	return &Explorer{
 		store:    store,
 		retr:     retr,
 		backend:  backend,
 		cfg:      cfg.normalized(),
 		provider: provider,
+		traces:   traces,
 	}
 }
 
@@ -164,21 +167,24 @@ func (e *Explorer) Explore(ctx context.Context, query string) (*RecallResult, er
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	// (b) Run trajectories in parallel; each records its index as Seed.
+	// (b) Run trajectories in parallel; each records its index as Seed. The
+	// trace id (query id) is fixed up front so every run's trajectory file
+	// is named after it.
+	traceID := uuid.NewString()
 	runs := make([]ExploreRun, e.cfg.Agents)
 	var wg sync.WaitGroup
 	for i := range runs {
 		wg.Add(1)
 		go func(seed int) {
 			defer wg.Done()
-			runs[seed] = e.runTrajectory(ctx, srv, baseURL, token, query, seed, seeds)
+			runs[seed] = e.runTrajectory(ctx, srv, baseURL, token, traceID, version, query, seed, seeds)
 		}(i)
 	}
 	wg.Wait()
 
 	// (e) Adoption: fewest rounds among successful found runs (tie: lowest
 	// seed, which is the iteration order here).
-	result := &RecallResult{TraceID: uuid.NewString(), Version: version, AgentRuns: runs}
+	result := &RecallResult{TraceID: traceID, Version: version, AgentRuns: runs}
 	adopted := -1
 	for i := range runs {
 		r := &runs[i]
@@ -217,11 +223,29 @@ func (e *Explorer) Explore(ctx context.Context, query string) (*RecallResult, er
 // server-side expand count (max of reported and counted), and a
 // budget-blown trajectory (server-side, design Q15/A6) is forced to
 // Found=false.
-func (e *Explorer) runTrajectory(ctx context.Context, srv *ExploreToolServer, baseURL, token, query string, seed int, seeds []exploreSeed) ExploreRun {
-	run := ExploreRun{RunID: uuid.NewString(), Seed: seed}
+func (e *Explorer) runTrajectory(ctx context.Context, srv *ExploreToolServer, baseURL, token, traceID string, version int, query string, seed int, seeds []exploreSeed) (run ExploreRun) {
+	run = ExploreRun{RunID: uuid.NewString(), Seed: seed}
 	trajectoryID := run.RunID
 
 	prompt := e.buildPrompt(baseURL, token, trajectoryID, query, seed, seeds)
+	startedAt := time.Now().UTC()
+
+	// Persist the trajectory best-effort once the outcome is final (the
+	// deferred write observes the named return value, including the
+	// budget-blown Found=false override). A nil drain writes header+footer
+	// only; a nil recorder skips the write entirely.
+	var drain *TraceDrain
+	defer func() {
+		e.traces.WriteExploreTrace(ExploreTraceMeta{
+			TraceID:      traceID,
+			RunID:        run.RunID,
+			GraphVersion: version,
+			Seed:         seed,
+			Model:        e.cfg.Model,
+			StartedAt:    startedAt,
+			PromptChars:  len(prompt),
+		}, drain, run)
+	}()
 
 	execCtx := ctx
 	cancel := context.CancelFunc(func() {})
@@ -240,6 +264,11 @@ func (e *Explorer) runTrajectory(ctx context.Context, srv *ExploreToolServer, ba
 		run.Error = fmt.Sprintf("execute: %v", err)
 		return run
 	}
+	// Start draining the message stream immediately, BEFORE waiting on
+	// Result: Session.Messages is a 256-cap buffered channel and a long
+	// trajectory stalls when nobody reads it. The channel closes before
+	// Result resolves, so the drain is complete by trace-write time.
+	drain = e.traces.Drain(session.Messages)
 	result, ok := <-session.Result
 	if !ok {
 		run.Error = "agent session ended without a result"

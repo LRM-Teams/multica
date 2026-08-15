@@ -107,7 +107,7 @@ func TestGraphMemoryE2ESmoke(t *testing.T) {
 		OpBudget:        12,
 		RoundBudget:     4,
 		Timeout:         5 * time.Minute,
-	}, "pi", nil)
+	}, "pi", nil, mg.NewTraceRecorder(store.Root))
 	cres, err := consolidator.Consolidate(ctx)
 	if err != nil {
 		t.Fatalf("stage 2: consolidate: %v", err)
@@ -165,7 +165,7 @@ func TestGraphMemoryE2ESmoke(t *testing.T) {
 		MaxRounds:         3,
 		MaxExpandPerRound: 4,
 		Timeout:           5 * time.Minute,
-	}, "pi")
+	}, "pi", mg.NewTraceRecorder(store.Root))
 	query := "What caused the \"concurrent map writes\" panic in the " + e2eKeyword + " scheduler, and how was it fixed?"
 	recall, err := explorer.Explore(ctx, query)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestGraphMemoryE2ESmoke(t *testing.T) {
 	sink := &fakeRewardSink{rewards: make(map[string]float64)}
 	params := mg.DefaultRewardParams()
 	composer := mg.NewRewardComposer(sink, params, time.Minute)
-	if err := composer.Submit(ctx, recall.TraceID, recall); err != nil {
+	if err := composer.Submit(ctx, recall.TraceID, recall, nil); err != nil {
 		t.Fatalf("stage 4: reward submit: %v", err)
 	}
 	if err := composer.OnJudgeResult(ctx, recall.TraceID, jres); err != nil {

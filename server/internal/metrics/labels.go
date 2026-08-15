@@ -134,7 +134,6 @@ var (
 		"cursor":        "cursor",
 		"gemini":        "gemini",
 		"grok":          "grok",
-		"hermes":        "hermes",
 		"kiro":          "kiro",
 		"kimi":          "kimi",
 		"multica_agent": "multica_agent",

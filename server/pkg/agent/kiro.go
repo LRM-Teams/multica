@@ -15,7 +15,7 @@ import (
 // kiroBlockedArgs are flags hardcoded by the daemon that must not be
 // overridden by user-configured custom_args. `acp` is the protocol subcommand,
 // and --trust-all-tools covers Kiro's CLI-level tool gate while
-// hermesClient handles ACP session/request_permission auto-approval. In Kiro
+// acpClient handles ACP session/request_permission auto-approval. In Kiro
 // CLI 2.1.1, `-a` is short for --trust-all-tools, not --agent; --agent remains
 // allowed so users can select a custom Kiro agent.
 var kiroBlockedArgs = map[string]blockedArgMode{
@@ -29,7 +29,7 @@ var kiroBlockedArgs = map[string]blockedArgMode{
 // via the standard ACP JSON-RPC 2.0 transport over stdin/stdout.
 //
 // Kiro CLI advertises loadSession, returns models from session/new, and supports
-// session/set_model, so the existing Hermes/Kimi ACP client can drive it with
+// session/set_model, so the shared ACP client can drive it with
 // only provider-specific launch and tool-name normalization.
 type kiroBackend struct {
 	cfg Config
@@ -77,7 +77,7 @@ func (b *kiroBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	}
 	// StderrPipe + an explicit copier give us a join point
 	// (`stderrDone`) that fires before the failure-promotion
-	// decision; see the matching comment in hermes.go for why the
+	// decision; see the matching comment in acp_client.go for why the
 	// io.MultiWriter form races with stopReason=end_turn under load.
 	providerErr := newACPProviderErrorSniffer("kiro")
 	stderr, err := cmd.StderrPipe()
@@ -107,9 +107,9 @@ func (b *kiroBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	var output strings.Builder
 	var streamingCurrentTurn atomic.Bool
 
-	promptDone := make(chan hermesPromptResult, 1)
+	promptDone := make(chan acpPromptResult, 1)
 
-	c := &hermesClient{
+	c := &acpClient{
 		cfg:          b.cfg,
 		stdin:        stdin,
 		pending:      make(map[int]*pendingRPC),
@@ -131,7 +131,7 @@ func (b *kiroBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			}
 			trySend(msgCh, msg)
 		},
-		onPromptDone: func(result hermesPromptResult) {
+		onPromptDone: func(result acpPromptResult) {
 			if !streamingCurrentTurn.Load() {
 				return
 			}
@@ -187,7 +187,7 @@ func (b *kiroBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		}
 
 		// Drop MCP entries whose remote transport the runtime didn't
-		// advertise. See the matching comment in hermes.go for why
+		// advertise. See the matching comment in acp_client.go for why
 		// unconditionally sending http/sse to a stdio-only ACP runtime
 		// tanks the whole session/new.
 		mcpServers = filterACPMcpServersByCapability(mcpServers, extractACPMcpCapabilities(initResult), "kiro", b.cfg.Logger)
@@ -209,14 +209,14 @@ func (b *kiroBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 				return
 			}
-			// Apply the same defensive resolution kimi/hermes use: if
+			// Apply the same defensive resolution other ACP adapters use: if
 			// kiro echoes a sessionId in the session/load response, prefer
 			// it (the canonical id the backend is committed to). When the
 			// response is empty or doesn't include sessionId — kiro's
 			// current observed shape — the helper falls back to the
 			// requested id, preserving today's behavior. Fixing this here
 			// too means a future kiro that DOES return a different id on
-			// silent state reset is handled the same way as hermes/kimi.
+			// silent state reset is handled the same way as other ACP adapters.
 			var changed bool
 			sessionID, changed = resolveResumedSessionID(opts.ResumeSessionID, result)
 			if changed {
@@ -308,7 +308,7 @@ func (b *kiroBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				finalStatus = "failed"
 				finalError = fmt.Sprintf("kiro session/prompt failed: %v", err)
 				if opts.ResumeSessionID != "" && isACPSessionNotFound(err) {
-					// See the hermes backend: the runtime echoes the
+					// See the shared ACP client: the runtime echoes the
 					// requested id back from session/resume even when
 					// the session is gone, so the stale id only fails
 					// here, at prompt time. Empty SessionID lets the
@@ -344,7 +344,7 @@ func (b *kiroBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 
 		<-readerDone
 		// Ensure the stderr copier has drained before consulting the
-		// provider-error sniffer; see hermes.go for the failure mode.
+		// provider-error sniffer; see acp_client.go for the failure mode.
 		<-stderrDone
 
 		outputMu.Lock()

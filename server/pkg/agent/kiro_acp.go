@@ -39,7 +39,7 @@ type kiroACPBackend struct {
 type kiroACPProcess struct {
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
-	client     *hermesClient
+	client     *acpClient
 	readerDone chan struct{}
 	stderrDone chan struct{}
 	sessionID  string
@@ -213,7 +213,7 @@ func (b *kiroACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*
 	}
 
 	p := &kiroACPProcess{cmd: cmd, stdin: stdin, readerDone: make(chan struct{}), stderrDone: make(chan struct{})}
-	p.client = &hermesClient{
+	p.client = &acpClient{
 		cfg:          b.cfg,
 		stdin:        stdin,
 		pending:      make(map[int]*pendingRPC),

@@ -47,7 +47,7 @@ type grokACPBackend struct {
 type grokACPProcess struct {
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
-	client     *hermesClient
+	client     *acpClient
 	readerDone chan struct{}
 	stderrDone chan struct{}
 	sessionID  string
@@ -261,7 +261,7 @@ func (b *grokACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*
 		return nil, fmt.Errorf("start grok ACP: %w", err)
 	}
 	p := &grokACPProcess{cmd: cmd, stdin: stdin, readerDone: make(chan struct{}), stderrDone: make(chan struct{})}
-	p.client = &hermesClient{
+	p.client = &acpClient{
 		cfg: b.cfg, stdin: stdin, pending: make(map[int]*pendingRPC), pendingTools: make(map[string]*pendingToolCall),
 		onMessage: func(msg Message) {
 			p.stateMu.Lock()

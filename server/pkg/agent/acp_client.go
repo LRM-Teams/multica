@@ -15,14 +15,14 @@ import (
 	"sync"
 )
 
-// ── hermesClient: ACP JSON-RPC 2.0 transport ──
+// ── acpClient: ACP JSON-RPC 2.0 transport ──
 
-type hermesPromptResult struct {
+type acpPromptResult struct {
 	stopReason string
 	usage      TokenUsage
 }
 
-type hermesClient struct {
+type acpClient struct {
 	cfg          Config
 	stdin        interface{ Write([]byte) (int, error) }
 	writeMu      sync.Mutex // serialises stdin.Write calls across goroutines
@@ -31,7 +31,7 @@ type hermesClient struct {
 	pending      map[int]*pendingRPC
 	sessionID    string
 	onMessage    func(Message)
-	onPromptDone func(hermesPromptResult)
+	onPromptDone func(acpPromptResult)
 	// acceptNotification can drop ACP session updates before dispatching to
 	// handlers that mutate client state such as usage or pending tool calls.
 	acceptNotification func(updateType string) bool
@@ -58,8 +58,8 @@ type hermesClient struct {
 // pendingToolCall buffers state for a tool call while its arguments
 // are streaming in. One entry per ACP toolCallId.
 type pendingToolCall struct {
-	toolName string         // already mapped via hermesToolNameFromTitle
-	input    map[string]any // from rawInput when the agent sends it up front (hermes)
+	toolName string         // already mapped via acpToolNameFromTitle
+	input    map[string]any // from rawInput when the agent sends it up front
 	argsText string         // accumulated `content[].text` args (kimi, cumulative)
 	emitted  bool           // whether we've already sent MessageToolUse
 }
@@ -82,14 +82,14 @@ func (e *acpToolCallFailure) Error() string {
 // goroutine) and handleAgentRequest() (reader goroutine) don't
 // interleave frames. The pipe itself is atomic for small writes, but
 // we also want deterministic ordering under contention.
-func (c *hermesClient) writeLine(data []byte) error {
+func (c *acpClient) writeLine(data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	_, err := c.stdin.Write(data)
 	return err
 }
 
-func (c *hermesClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+func (c *acpClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id, result, err := c.beginRequest(method, params)
 	if err != nil {
 		return nil, err
@@ -97,7 +97,7 @@ func (c *hermesClient) request(ctx context.Context, method string, params any) (
 	return c.awaitRequest(ctx, id, result)
 }
 
-func (c *hermesClient) awaitRequest(ctx context.Context, id int, result <-chan rpcResult) (json.RawMessage, error) {
+func (c *acpClient) awaitRequest(ctx context.Context, id int, result <-chan rpcResult) (json.RawMessage, error) {
 	select {
 	case res := <-result:
 		return res.result, res.err
@@ -112,7 +112,7 @@ func (c *hermesClient) awaitRequest(ctx context.Context, id int, result <-chan r
 // beginRequest writes one JSON-RPC request and returns its eventual response
 // channel. Resident adapters use the successful native write as the bounded
 // handoff receipt when the provider protocol only answers at end-of-turn.
-func (c *hermesClient) beginRequest(method string, params any) (int, <-chan rpcResult, error) {
+func (c *acpClient) beginRequest(method string, params any) (int, <-chan rpcResult, error) {
 	c.mu.Lock()
 	id := c.nextID
 	c.nextID++
@@ -143,7 +143,7 @@ func (c *hermesClient) beginRequest(method string, params any) (int, <-chan rpcR
 	return id, pr.ch, nil
 }
 
-func (c *hermesClient) closeAllPending(err error) {
+func (c *acpClient) closeAllPending(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for id, pr := range c.pending {
@@ -152,7 +152,7 @@ func (c *hermesClient) closeAllPending(err error) {
 	}
 }
 
-func (c *hermesClient) handleLine(line string) {
+func (c *acpClient) handleLine(line string) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
 		return
@@ -160,7 +160,7 @@ func (c *hermesClient) handleLine(line string) {
 
 	// Agent → client request: has id + method (no result / error yet).
 	// Kimi uses this for session/request_permission; if we don't answer,
-	// the agent blocks for 300s and the task hangs. Hermes doesn't send
+	// the agent blocks for 300s and the task hangs. Some ACP servers don't send
 	// these when launched with HERMES_YOLO_MODE=1, but we still handle
 	// the case generically for any future ACP backend we bolt on.
 	if _, hasID := raw["id"]; hasID {
@@ -178,7 +178,7 @@ func (c *hermesClient) handleLine(line string) {
 		}
 	}
 
-	// Notification (no id, has method) — session updates from Hermes.
+	// Notification (no id, has method) — session updates from the ACP server.
 	if _, hasMethod := raw["method"]; hasMethod {
 		c.handleNotification(raw)
 	}
@@ -190,7 +190,7 @@ func (c *hermesClient) handleLine(line string) {
 // actually prompt a user, so we auto-approve every action. ACP
 // providers choose their own option IDs, so the reply must echo an
 // allow option from the request rather than inventing an ID.
-func (c *hermesClient) handleAgentRequest(raw map[string]json.RawMessage) {
+func (c *acpClient) handleAgentRequest(raw map[string]json.RawMessage) {
 	var method string
 	_ = json.Unmarshal(raw["method"], &method)
 
@@ -300,7 +300,7 @@ func (e *acpRPCError) Error() string {
 
 // isACPSessionNotFound reports whether err is the agent rejecting a
 // session id it no longer knows. Runtimes signal this with codes and
-// wording that vary — Hermes says "Session not found" under -32603
+// wording that vary — some servers say "Session not found" under -32603
 // (Internal error), Kiro puts "No session found with id ..." in
 // `data` under -32603, kimi-cli raises invalid_params (-32602)
 // with {"session_id": "Session not found"} in `data` for every
@@ -324,7 +324,7 @@ func isACPSessionNotFound(err error) bool {
 		strings.Contains(text, "no such file or directory")
 }
 
-func (c *hermesClient) handleResponse(raw map[string]json.RawMessage) {
+func (c *acpClient) handleResponse(raw map[string]json.RawMessage) {
 	var id int
 	if err := json.Unmarshal(raw["id"], &id); err != nil {
 		// Try float (JSON numbers are floats by default).
@@ -378,7 +378,7 @@ func (c *hermesClient) handleResponse(raw map[string]json.RawMessage) {
 	}
 }
 
-func (c *hermesClient) extractPromptResult(data json.RawMessage) {
+func (c *acpClient) extractPromptResult(data json.RawMessage) {
 	var resp struct {
 		StopReason string `json:"stopReason"`
 		Usage      *struct {
@@ -393,7 +393,7 @@ func (c *hermesClient) extractPromptResult(data json.RawMessage) {
 		return
 	}
 
-	pr := hermesPromptResult{
+	pr := acpPromptResult{
 		stopReason: resp.StopReason,
 	}
 	if resp.Usage != nil {
@@ -409,7 +409,7 @@ func (c *hermesClient) extractPromptResult(data json.RawMessage) {
 	}
 }
 
-func (c *hermesClient) handleNotification(raw map[string]json.RawMessage) {
+func (c *acpClient) handleNotification(raw map[string]json.RawMessage) {
 	var method string
 	_ = json.Unmarshal(raw["method"], &method)
 
@@ -494,7 +494,7 @@ func normalizeACPUpdateType(t string) string {
 	}
 }
 
-func (c *hermesClient) handleAgentMessage(data json.RawMessage) {
+func (c *acpClient) handleAgentMessage(data json.RawMessage) {
 	var msg struct {
 		Content struct {
 			Type string `json:"type"`
@@ -509,7 +509,7 @@ func (c *hermesClient) handleAgentMessage(data json.RawMessage) {
 	}
 }
 
-func (c *hermesClient) handleAgentThought(data json.RawMessage) {
+func (c *acpClient) handleAgentThought(data json.RawMessage) {
 	var msg struct {
 		Content struct {
 			Type string `json:"type"`
@@ -524,7 +524,7 @@ func (c *hermesClient) handleAgentThought(data json.RawMessage) {
 	}
 }
 
-func (c *hermesClient) handleToolCallStart(data json.RawMessage) {
+func (c *acpClient) handleToolCallStart(data json.RawMessage) {
 	var msg struct {
 		ToolCallID string            `json:"toolCallId"`
 		Name       string            `json:"name"`
@@ -539,7 +539,7 @@ func (c *hermesClient) handleToolCallStart(data json.RawMessage) {
 		return
 	}
 
-	toolName := hermesToolNameFromTitle(msg.Title, msg.Kind)
+	toolName := acpToolNameFromTitle(msg.Title, msg.Kind)
 	if toolName == "" {
 		toolName = msg.Name
 	}
@@ -551,7 +551,7 @@ func (c *hermesClient) handleToolCallStart(data json.RawMessage) {
 		rawInput = msg.Parameters
 	}
 
-	// Hermes pre-populates rawInput on the initial tool_call — emit
+	// Some ACP servers pre-populate rawInput on the initial tool_call — emit
 	// MessageToolUse immediately so the UI can show the tool invocation
 	// live. Record the emission so handleToolCallUpdate doesn't re-emit
 	// on completion.
@@ -583,7 +583,7 @@ func (c *hermesClient) handleToolCallStart(data json.RawMessage) {
 	})
 }
 
-func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
+func (c *acpClient) handleToolCallUpdate(data json.RawMessage) {
 	var msg struct {
 		ToolCallID string            `json:"toolCallId"`
 		Status     string            `json:"status"`
@@ -618,7 +618,7 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 	if msg.Status != "completed" && msg.Status != "failed" {
 		pending := c.getPendingTool(msg.ToolCallID)
 		if pending == nil {
-			toolName := hermesToolNameFromTitle(title, msg.Kind)
+			toolName := acpToolNameFromTitle(title, msg.Kind)
 			pending = &pendingToolCall{
 				toolName: toolName,
 				input:    rawInput,
@@ -658,9 +658,9 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 
 	// Resolve tool name + Input for tool_result. #103: Activity backfill
 	// (#1853) needs non-empty Input on MessageToolResult. Cursor ACP uses
-	// hermesClient — previously completed frames dropped Input entirely
+	// acpClient — previously completed frames dropped Input entirely
 	// (stream-json #1931 never ran on this path).
-	toolName := hermesToolNameFromTitle(title, msg.Kind)
+	toolName := acpToolNameFromTitle(title, msg.Kind)
 	if pending != nil && pending.toolName != "" {
 		toolName = pending.toolName
 	}
@@ -686,7 +686,7 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 			"tool", toolName,
 			"call_id", msg.ToolCallID,
 			"write_input_enrich", enrichTag,
-			"decode_enrich", "acp_hermes",
+			"decode_enrich", "acp_client",
 			"input_empty", len(input) == 0,
 			"input_has_path", pathFromMap(input) != "",
 			"input_key_count", len(input),
@@ -715,13 +715,13 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 	}
 }
 
-func (c *hermesClient) resetToolCallFailure() {
+func (c *acpClient) resetToolCallFailure() {
 	c.toolFailureMu.Lock()
 	c.toolFailure = nil
 	c.toolFailureMu.Unlock()
 }
 
-func (c *hermesClient) recordToolCallFailure(failure *acpToolCallFailure) {
+func (c *acpClient) recordToolCallFailure(failure *acpToolCallFailure) {
 	if failure == nil {
 		return
 	}
@@ -732,7 +732,7 @@ func (c *hermesClient) recordToolCallFailure(failure *acpToolCallFailure) {
 	}
 }
 
-func (c *hermesClient) takeToolCallFailure() *acpToolCallFailure {
+func (c *acpClient) takeToolCallFailure() *acpToolCallFailure {
 	c.toolFailureMu.Lock()
 	defer c.toolFailureMu.Unlock()
 	failure := c.toolFailure
@@ -741,9 +741,9 @@ func (c *hermesClient) takeToolCallFailure() *acpToolCallFailure {
 }
 
 // trackTool stores pending-tool state for a given callID. Lazy-inits
-// the map so zero-value hermesClient values (common in tests) don't
+// the map so zero-value acpClient values (common in tests) don't
 // panic on the first tool call.
-func (c *hermesClient) trackTool(callID string, p *pendingToolCall) {
+func (c *acpClient) trackTool(callID string, p *pendingToolCall) {
 	c.toolMu.Lock()
 	defer c.toolMu.Unlock()
 	if c.pendingTools == nil {
@@ -753,8 +753,8 @@ func (c *hermesClient) trackTool(callID string, p *pendingToolCall) {
 }
 
 // getPendingTool returns the pending entry (may be nil) without
-// removing it. Safe to call on a zero-value hermesClient.
-func (c *hermesClient) getPendingTool(callID string) *pendingToolCall {
+// removing it. Safe to call on a zero-value acpClient.
+func (c *acpClient) getPendingTool(callID string) *pendingToolCall {
 	c.toolMu.Lock()
 	defer c.toolMu.Unlock()
 	if c.pendingTools == nil {
@@ -766,7 +766,7 @@ func (c *hermesClient) getPendingTool(callID string) *pendingToolCall {
 // takePendingTool removes and returns the pending entry, or nil if
 // none was tracked (e.g. the tool completed before we saw its start,
 // or we missed the start frame).
-func (c *hermesClient) takePendingTool(callID string) *pendingToolCall {
+func (c *acpClient) takePendingTool(callID string) *pendingToolCall {
 	c.toolMu.Lock()
 	defer c.toolMu.Unlock()
 	if c.pendingTools == nil {
@@ -779,11 +779,11 @@ func (c *hermesClient) takePendingTool(callID string) *pendingToolCall {
 
 // emitDeferredToolUse emits a buffered MessageToolUse right before the
 // matching MessageToolResult. Handles three cases:
-//   - hermes tool: already emitted on tool_call → skip
+//   - tool already emitted on tool_call → skip
 //   - kimi tool with streamed args → parse accumulated JSON as Input
 //   - unknown tool (completed arrived without a start frame) →
 //     synthesize minimal info from the update's own fields
-func (c *hermesClient) emitDeferredToolUse(
+func (c *acpClient) emitDeferredToolUse(
 	p *pendingToolCall,
 	callID, updateTitle, updateKind string,
 	updateRawInput map[string]any,
@@ -807,7 +807,7 @@ func (c *hermesClient) emitDeferredToolUse(
 	default:
 		// No record of the start frame — fall back to the update's own
 		// title/kind/rawInput so the UI at least sees the tool name.
-		toolName = hermesToolNameFromTitle(updateTitle, updateKind)
+		toolName = acpToolNameFromTitle(updateTitle, updateKind)
 		input = updateRawInput
 	}
 
@@ -929,7 +929,7 @@ func extractACPToolCallText(blocks []json.RawMessage) string {
 	return b.String()
 }
 
-func (c *hermesClient) handleUsageUpdate(data json.RawMessage) {
+func (c *acpClient) handleUsageUpdate(data json.RawMessage) {
 	var msg struct {
 		Used  int64 `json:"used"`
 		Size  int64 `json:"size"`
@@ -971,7 +971,7 @@ func (c *hermesClient) handleUsageUpdate(data json.RawMessage) {
 	c.usageMu.Unlock()
 }
 
-func (c *hermesClient) currentRuntimeStats() *RuntimeTokenStats {
+func (c *acpClient) currentRuntimeStats() *RuntimeTokenStats {
 	c.runtimeStatsMu.Lock()
 	defer c.runtimeStatsMu.Unlock()
 	if c.runtimeStats == nil {
@@ -984,7 +984,7 @@ func (c *hermesClient) currentRuntimeStats() *RuntimeTokenStats {
 // ── Helpers ──
 
 // extractACPSessionID pulls `sessionId` out of a session/new or
-// session/resume response. Shared by all ACP backends (hermes, kimi, kiro,
+// session/resume response. Shared by all ACP backends (kimi, kiro,
 // and anything else that follows the standard ACP schema).
 func extractACPSessionID(result json.RawMessage) string {
 	var r struct {
@@ -997,7 +997,7 @@ func extractACPSessionID(result json.RawMessage) string {
 }
 
 // extractACPCurrentModelID pulls the model selected by the ACP runtime out of
-// a session/new or session/resume response. Hermes returns this when it uses
+// a session/new or session/resume response. Some ACP servers return this when they use
 // its own default model, so token usage can still be attributed to a real model
 // even when Multica did not pass an explicit agent.model override.
 func extractACPCurrentModelID(result json.RawMessage) string {
@@ -1026,7 +1026,7 @@ func extractACPCurrentModelID(result json.RawMessage) string {
 }
 
 // resolveResumedSessionID picks which session id we should treat as live
-// after a `session/resume` round-trip. Hermes (and other ACP servers)
+// after a `session/resume` round-trip. ACP servers
 // return the canonical sessionId in the response — when the local
 // state.db has been wiped, the server silently creates a brand-new
 // session and returns its new id rather than failing. If we keep using
@@ -1043,14 +1043,14 @@ func resolveResumedSessionID(requested string, response json.RawMessage) (string
 	return got, got != requested
 }
 
-// buildHermesSessionParams constructs the params map for the ACP `session/new`
-// request. The `model` field is only included when non-empty so Hermes falls
+// buildACPSessionParams constructs the params map for the ACP `session/new`
+// request. The `model` field is only included when non-empty so the ACP server falls
 // back to its default only when no explicit model was configured.
 //
 // mcpServers should be the ACP-shaped array produced by buildACPMcpServers
 // from the agent's mcp_config; a nil slice is normalised to an empty array
 // so the wire request always carries the field (ACP requires it).
-func buildHermesSessionParams(cwd, model string, mcpServers []any) map[string]any {
+func buildACPSessionParams(cwd, model string, mcpServers []any) map[string]any {
 	if mcpServers == nil {
 		mcpServers = []any{}
 	}
@@ -1242,7 +1242,7 @@ func extractACPMcpCapabilities(result json.RawMessage) acpMcpTransportCapabiliti
 // (no `type` field) always pass through.
 //
 // Sending an http/sse entry to a runtime that doesn't support it is a
-// protocol violation per the ACP spec, and Hermes / Kimi observed in
+// protocol violation per the ACP spec, and Kimi observed in
 // practice reject the whole session/new request with a JSON-RPC error.
 // Dropping the offending entries with a warning lets the rest of the
 // session start and surfaces the problem in the daemon log instead of
@@ -1287,10 +1287,10 @@ func filterACPMcpServersByCapability(
 	return filtered
 }
 
-// hermesToolNameFromTitle extracts a tool name from the ACP tool call title.
-// Hermes ACP titles look like "terminal: ls -la", "read: /path/to/file", etc.
+// acpToolNameFromTitle extracts a tool name from the ACP tool call title.
+// ACP titles look like "terminal: ls -la", "read: /path/to/file", etc.
 // Some titles have no colon (e.g. "execute code").
-func hermesToolNameFromTitle(title string, kind string) string {
+func acpToolNameFromTitle(title string, kind string) string {
 	// Check exact-match titles first (no colon).
 	switch title {
 	case "execute code":
@@ -1344,7 +1344,7 @@ func hermesToolNameFromTitle(title string, kind string) string {
 		// emits bare titles like "Shell" or "Read file" without any
 		// `kind`, so returning an empty string here drops the tool
 		// name entirely before kimiToolNameFromTitle can map it.
-		// Hermes titles always carry a colon, so hermes never reaches
+		// Titles with a colon never reach
 		// this branch with a non-empty title.
 		if title != "" {
 			return title
@@ -1355,7 +1355,7 @@ func hermesToolNameFromTitle(title string, kind string) string {
 
 // ── Provider-error sniffing ──
 //
-// ACP agents (hermes, kimi, …) all have the same failure mode:
+// ACP agents (kimi, kiro, …) all have the same failure mode:
 // session/prompt reports stopReason=end_turn even when the underlying
 // HTTP call to the configured LLM endpoint returned an error — the
 // actionable detail only appears on stderr (e.g.
@@ -1365,7 +1365,7 @@ func hermesToolNameFromTitle(title string, kind string) string {
 // The sniffer scans for those patterns so the daemon can surface a
 // real failure instead of a generic "empty output".
 //
-// Parameterised by provider name so both hermes and kimi can share
+// Parameterised by provider name so ACP adapters can share
 // the transport: the regexes match format-level signals (HTTP status,
 // error-kind tags, "API call failed" banner) that both runtimes emit.
 //
@@ -1406,7 +1406,7 @@ var acpErrorDetailRe = regexp.MustCompile(`(?:Error:|detail:|Details:)\s*(.+)`)
 var acpTerminalErrorRe = regexp.MustCompile(`(?:❌|\[ERROR\]|after \d+ retr|Non-retryable|BadRequestError|AuthenticationError)`)
 
 // acpAgentOutputTerminalRe matches the synthetic agent-text turn that
-// hermes-style ACP adapters inject when they exhaust retries against
+// ACP adapters inject when they exhaust retries against
 // the upstream LLM ("API call failed after 3 retries: HTTP 429..."),
 // surfaced via session/update agent_message_chunk and ending up in the
 // final output buffer. Per-attempt warnings (which only go to stderr
@@ -1416,7 +1416,7 @@ var acpAgentOutputTerminalRe = regexp.MustCompile(`API call failed after \d+ ret
 const acpMaxErrorLines = 8
 
 // newACPProviderErrorSniffer returns a sniffer that tags its messages
-// with the given provider name (e.g. "hermes", "kimi") so failure
+// with the given provider name (e.g. "kiro", "kimi") so failure
 // strings make it obvious which runtime produced the error.
 func newACPProviderErrorSniffer(provider string) *acpProviderErrorSniffer {
 	return &acpProviderErrorSniffer{provider: provider, seen: map[string]bool{}}
@@ -1524,7 +1524,7 @@ func (s *acpProviderErrorSniffer) messageLocked() string {
 // updated (status, error) pair; callers should overwrite their
 // locals with the result.
 //
-// This is the shared post-processing step for hermes/kimi/kiro.
+// This is the shared post-processing step for ACP adapters.
 // Without it, runs that exhaust retries against the upstream LLM
 // (HTTP 429, expired token, …) silently report as "completed"
 // because session/prompt still ends with stopReason=end_turn — see

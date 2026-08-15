@@ -79,7 +79,7 @@ func TestComputerUpgradeSubprocessLiveOwnerCreatesHumanIntentBeforeLocalExecutio
 			"id":               fmt.Sprintf("upgrade-%d", attempt),
 			"request_id":       request.RequestID,
 			"requested_target": request.TargetVersion,
-			"phase":            "queued",
+			"phase":            "starting",
 		})
 	}))
 	defer intentServer.Close()
@@ -101,7 +101,7 @@ func TestComputerUpgradeSubprocessLiveOwnerCreatesHumanIntentBeforeLocalExecutio
 			return
 		}
 		requestSeen <- request
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": request.OperationID, "phase": "queued"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": request.OperationID, "phase": "starting"})
 	})
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
@@ -305,7 +305,7 @@ func TestComputerUpgradeSubprocessDistinctConcurrentMutationGetsStableConflict(t
 			if requestCount.Add(1) == 1 {
 				close(firstEntered)
 				<-secondRejected
-				_ = json.NewEncoder(w).Encode(map[string]any{"id": request.OperationID, "phase": "queued"})
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": request.OperationID, "phase": "starting"})
 				return
 			}
 			http.Error(w, "upgrade_already_in_progress", http.StatusConflict)
@@ -414,7 +414,7 @@ func newComputerUpgradeHumanIntentServer(t *testing.T) *httptest.Server {
 			"id":               fmt.Sprintf("upgrade-%d", operations.Add(1)),
 			"request_id":       request.RequestID,
 			"requested_target": request.TargetVersion,
-			"phase":            "queued",
+			"phase":            "starting",
 		})
 	}))
 }

@@ -13,12 +13,12 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
-// MachineUpgradePhase is intentionally broader than ticket #2377's queued
-// lifecycle. Later tickets advance the same durable record; they do not create
-// a second runtime-owned request model.
+// MachineUpgradePhase is the durable Computer-upgrade receipt. Create inserts
+// starting on a live socket. queued is leftover compatibility, not a queue.
 type MachineUpgradePhase string
 
 const (
+	// TODO(computer-upgrade-queued): remove after leftover queued rows are gone.
 	MachineUpgradeQueued          MachineUpgradePhase = "queued"
 	MachineUpgradeStarting        MachineUpgradePhase = "starting"
 	MachineUpgradeStaging         MachineUpgradePhase = "staging"
@@ -73,7 +73,6 @@ type MachineUpgradeStore interface {
 	Get(ctx context.Context, daemonID, id string) (*MachineUpgrade, error)
 	LatestForDaemon(ctx context.Context, daemonID string) (*MachineUpgrade, error)
 	LatestForDaemons(ctx context.Context, daemonIDs []string) (map[string]*MachineUpgrade, error)
-	ClaimQueued(ctx context.Context, daemonID string) (*MachineUpgrade, error)
 	Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string) (*MachineUpgrade, error)
 	Attest(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	// CompleteOnCurrentVersion finishes the Computer's unique non-terminal
@@ -157,7 +156,7 @@ func (s *PostgresMachineUpgradeStore) Create(ctx context.Context, daemonID, requ
 
 	op, err := scanMachineUpgrade(s.db.QueryRow(ctx, `
 		INSERT INTO machine_upgrade (id, daemon_id, requested_by, request_id, requested_target, phase)
-		VALUES ($1, $2, $3::uuid, $4, $5, 'queued')
+		VALUES ($1, $2, $3::uuid, $4, $5, 'starting')
 		RETURNING `+machineUpgradeColumns,
 		randomID(), daemonID, requestedBy, requestID, target))
 	if err == nil {
@@ -227,26 +226,6 @@ func (s *PostgresMachineUpgradeStore) LatestForDaemons(ctx context.Context, daem
 	return result, nil
 }
 
-// ClaimQueued is the sibling-heartbeat arbitration point. SKIP LOCKED makes
-// concurrent provider runtime heartbeats safe: exactly one changes queued to
-// starting and receives the action, while the others observe no claim.
-func (s *PostgresMachineUpgradeStore) ClaimQueued(ctx context.Context, daemonID string) (*MachineUpgrade, error) {
-	if s == nil || s.db == nil {
-		return nil, errors.New("machine upgrade store is not configured")
-	}
-	return scanMachineUpgrade(s.db.QueryRow(ctx, `
-		UPDATE machine_upgrade AS operation
-		SET phase = 'starting', updated_at = now()
-		WHERE operation.id = (
-			SELECT candidate.id FROM machine_upgrade AS candidate
-			WHERE candidate.daemon_id = $1 AND candidate.phase = 'queued'
-			ORDER BY candidate.created_at ASC, candidate.id ASC
-			FOR UPDATE SKIP LOCKED
-			LIMIT 1
-		)
-		RETURNING `+machineUpgradeColumns, strings.TrimSpace(daemonID)))
-}
-
 // Accept captures one Computer generation plus one machine-wide Workspace and
 // Runtime snapshot before any later registration can mark convergence. Both
 // sets come from the same statement snapshot: Workspace scope must never be
@@ -289,6 +268,8 @@ func (s *PostgresMachineUpgradeStore) Accept(ctx context.Context, daemonID, id, 
 	if versionsMatch(stringPointer(runningVersion), stringPointer(resolvedTarget)) {
 		phase = MachineUpgradeConverging
 	}
+	// TODO(computer-upgrade-queued): drop 'queued' after leftover queued
+	// rows are gone. Create now inserts starting; queued is not a queue.
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
 		SET phase = $3, resolved_target = $4, source_version = $5, accepted_generation = $6,
@@ -536,10 +517,13 @@ func (s *PostgresMachineUpgradeStore) Cancel(ctx context.Context, daemonID, id s
 	if s == nil || s.db == nil {
 		return nil, errors.New("machine upgrade store is not configured")
 	}
+	// TODO(computer-upgrade-queued): drop 'queued' after leftover queued
+	// rows are gone. Create now inserts starting; cancel is only for an
+	// undelivered leftover, not a waiting queue.
 	op, err := scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
 		SET phase = 'cancelled', result = 'cancelled', completed_at = now(), updated_at = now()
-		WHERE daemon_id = $1 AND id = $2 AND phase = 'queued'
+		WHERE daemon_id = $1 AND id = $2 AND phase IN ('queued', 'starting')
 		RETURNING `+machineUpgradeColumns, strings.TrimSpace(daemonID), strings.TrimSpace(id)))
 	if err == nil && op != nil {
 		return op, nil
@@ -554,7 +538,7 @@ func (s *PostgresMachineUpgradeStore) Cancel(ctx context.Context, daemonID, id s
 	if op == nil {
 		return nil, errMachineUpgradeNotFound
 	}
-	if op.Phase != MachineUpgradeQueued {
+	if op.Phase != MachineUpgradeQueued && op.Phase != MachineUpgradeStarting {
 		return nil, errMachineUpgradeAlreadyAccepted
 	}
 	return nil, errMachineUpgradeNotFound

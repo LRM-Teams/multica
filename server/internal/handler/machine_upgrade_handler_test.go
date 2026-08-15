@@ -107,11 +107,11 @@ func getMachineUpgradeRuntime(t *testing.T, runtimeID string) db.AgentRuntime {
 	return rt
 }
 
-func seedQueuedMachineUpgrade(t *testing.T, daemonID, target string) MachineUpgrade {
+func seedStartingMachineUpgrade(t *testing.T, daemonID, target string) MachineUpgrade {
 	t.Helper()
 	op, _, err := testHandler.MachineUpgradeStore.Create(context.Background(), daemonID, testUserID, uuid.NewString(), target)
-	if err != nil || op == nil || op.Phase != MachineUpgradeQueued {
-		t.Fatalf("seed queued upgrade: %+v err=%v", op, err)
+	if err != nil || op == nil || op.Phase != MachineUpgradeStarting {
+		t.Fatalf("seed starting upgrade: %+v err=%v", op, err)
 	}
 	return *op
 }
@@ -264,7 +264,7 @@ func TestMachineUpgrade_CapableHeartbeatDoesNotClaimConnectSocketUpgrade(t *test
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
 
@@ -282,7 +282,7 @@ func TestMachineUpgrade_CapableHeartbeatDoesNotClaimConnectSocketUpgrade(t *test
 	if secondAck.PendingMachineUpgrade != nil {
 		t.Fatalf("sibling heartbeat claimed connect-socket upgrade %+v", secondAck.PendingMachineUpgrade)
 	}
-	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID); err != nil || op == nil || op.Phase != MachineUpgradeQueued {
+	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID); err != nil || op == nil || op.Phase != MachineUpgradeStarting {
 		t.Fatalf("seeded upgrade after heartbeat = %+v err=%v", op, err)
 	}
 }
@@ -292,7 +292,7 @@ func TestMachineUpgrade_AcceptFromQueuedCompletesWithoutHeartbeatClaim(t *testin
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
 
@@ -367,7 +367,7 @@ func TestMachineUpgrade_AcceptSnapshotsEveryConnectedWorkspaceRuntime(t *testing
 		}
 	})
 
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
@@ -403,7 +403,7 @@ func TestMachineUpgrade_CurrentVersionSocketCompletesAcceptedUpgrade(t *testing.
 	}
 	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
 	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
@@ -439,7 +439,7 @@ func TestMachineUpgrade_CurrentVersionSocketCompletesRetiredProviderUpgrade(t *t
 	}
 	claudeID, retiredID, daemonID := createMachineUpgradeRuntimesWithProviders(t, testUserID, "claude", "antigravity")
 	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, claudeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
@@ -472,7 +472,7 @@ func TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration(t *testing.T
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
 	})
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.10")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.10")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
@@ -519,7 +519,7 @@ func TestMachineUpgrade_LegacyHeartbeatDoesNotBootstrapPendingUpdate(t *testing.
 		t.Skip("database not available")
 	}
 	firstRuntimeID, _, daemonID := createLegacyMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v0.4.14")
+	created := seedStartingMachineUpgrade(t, daemonID, "v0.4.14")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 
 	ack, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil)
@@ -530,7 +530,7 @@ func TestMachineUpgrade_LegacyHeartbeatDoesNotBootstrapPendingUpdate(t *testing.
 		t.Fatalf("pre-0.4.14 heartbeat still received an upgrade carrier %+v", ack)
 	}
 	op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if err != nil || op == nil || op.Phase != MachineUpgradeQueued || op.AcceptedGeneration != nil {
+	if err != nil || op == nil || op.Phase != MachineUpgradeStarting || op.AcceptedGeneration != nil {
 		t.Fatalf("pre-0.4.14 heartbeat claimed machine upgrade = %+v err=%v", op, err)
 	}
 }
@@ -540,7 +540,7 @@ func TestMachineUpgradeLatestResolvesOnlyAtCapableDelivery(t *testing.T) {
 		t.Skip("database not available")
 	}
 	runtimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "latest")
+	created := seedStartingMachineUpgrade(t, daemonID, "latest")
 	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/machine-upgrades/"+created.ID+"/accept", map[string]string{
 		"generation_id":   "generation-latest",
 		"cli_version":     "v9.9.9",
@@ -563,7 +563,7 @@ func TestMachineUpgrade_CapabilityAndManagedSetPreventUnsafeCompletion(t *testin
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET metadata = '{}'::jsonb WHERE id = $1`, firstRuntimeID); err != nil {
 		t.Fatal(err)
@@ -611,7 +611,7 @@ func TestMachineUpgrade_NewTargetProgressesDurablyBeforeHandoff(t *testing.T) {
 		t.Skip("database not available")
 	}
 	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v10.0.0")
+	created := seedStartingMachineUpgrade(t, daemonID, "v10.0.0")
 	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/", map[string]string{"generation_id": "generation-stage", "cli_version": "v9.9.9"})
 	acceptReq = withRouteParams(acceptReq, "runtimeId", firstRuntimeID, "upgradeId", created.ID)
 	acceptW := httptest.NewRecorder()
@@ -657,7 +657,7 @@ func TestMachineUpgrade_HandoffCompletesOnlyWithSuccessorSiblingSet(t *testing.T
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v10.0.0")
+	created := seedStartingMachineUpgrade(t, daemonID, "v10.0.0")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
@@ -698,7 +698,7 @@ func TestMachineUpgradeRollbackRequiresRestoredFullSiblingSet(t *testing.T) {
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v10.0.0")
+	created := seedStartingMachineUpgrade(t, daemonID, "v10.0.0")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
@@ -760,7 +760,7 @@ func TestMachineUpgradeRollbackAllowsRetiredProviderGap(t *testing.T) {
 		t.Skip("database not available")
 	}
 	claudeID, retiredID, daemonID := createMachineUpgradeRuntimesWithProviders(t, testUserID, "claude", "antigravity")
-	created := seedQueuedMachineUpgrade(t, daemonID, "v10.0.0")
+	created := seedStartingMachineUpgrade(t, daemonID, "v10.0.0")
 	claudeRuntime := getMachineUpgradeRuntime(t, claudeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), claudeRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
@@ -799,7 +799,7 @@ func TestMachineUpgradeFailedRollbackRetainsGenerationAndIsIdempotent(t *testing
 		t.Skip("database not available")
 	}
 	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v10.0.0")
+	created := seedStartingMachineUpgrade(t, daemonID, "v10.0.0")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
@@ -836,7 +836,7 @@ func TestMachineUpgrade_ProjectsCanonicalOperationToEverySiblingRuntime(t *testi
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 
 	req := newRequestAsUser(testUserID, http.MethodGet, "/api/runtimes", nil)
 	w := httptest.NewRecorder()
@@ -859,7 +859,7 @@ func TestMachineUpgrade_ProjectsCanonicalOperationToEverySiblingRuntime(t *testi
 		if found == nil || found.MachineUpgrade == nil {
 			t.Fatalf("runtime %s missing machine projection: %+v", id, found)
 		}
-		if found.MachineUpgrade.ID != created.ID || found.MachineUpgrade.RequestedTarget != "v9.9.9" || found.MachineUpgrade.Phase != MachineUpgradeQueued {
+		if found.MachineUpgrade.ID != created.ID || found.MachineUpgrade.RequestedTarget != "v9.9.9" || found.MachineUpgrade.Phase != MachineUpgradeStarting {
 			t.Fatalf("runtime %s projection = %+v", id, found.MachineUpgrade)
 		}
 	}
@@ -870,7 +870,7 @@ func TestMachineUpgrade_CanonicalAuthorizationAndCancellationBoundary(t *testing
 		t.Skip("database not available")
 	}
 	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 
 	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
@@ -911,8 +911,8 @@ func TestMachineUpgrade_CanonicalAuthorizationAndCancellationBoundary(t *testing
 	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
 		t.Fatal(err)
 	}
-	accepted := seedQueuedMachineUpgrade(t, daemonID, "v10.0.0")
-	if _, err := testPool.Exec(context.Background(), `UPDATE machine_upgrade SET phase = 'starting', result = NULL WHERE id = $1`, accepted.ID); err != nil {
+	accepted := seedStartingMachineUpgrade(t, daemonID, "v10.0.0")
+	if _, err := testPool.Exec(context.Background(), `UPDATE machine_upgrade SET phase = 'staging', result = NULL WHERE id = $1`, accepted.ID); err != nil {
 		t.Fatal(err)
 	}
 	cancelReq = newRequestAsUser(testUserID, http.MethodDelete, "/api/daemons/"+daemonID+"/upgrades/"+accepted.ID, nil)
@@ -1026,7 +1026,7 @@ func TestMachineUpgrade_RuntimeCompatibilityAdaptersShareAndCancelCanonicalOpera
 	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
 		t.Fatal(err)
 	}
-	queued := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	queued := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 	cancelReq := newRequestAsUser(testUserID, http.MethodDelete, "/api/runtimes/"+secondRuntimeID+"/update-intent", nil)
 	cancelReq = withURLParam(cancelReq, "runtimeId", secondRuntimeID)
 	cancelW := httptest.NewRecorder()
@@ -1172,7 +1172,7 @@ func TestMachineUpgrade_CurrentBindingSocketCompletesAcceptedUpgrade(t *testing.
 	}
 	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
 	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
-	created := seedQueuedMachineUpgrade(t, daemonID, "v9.9.9")
+	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/", map[string]string{
 		"generation_id":   "generation-socket",
 		"cli_version":     "v9.9.8",

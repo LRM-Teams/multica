@@ -307,8 +307,7 @@ func (h *Handler) createMachineUpgrade(
 	}
 	if created {
 		// Authority is the current Binding socket. Without one there is
-		// nothing to wait for — fail now so the one-per-machine slot
-		// does not sit in queued.
+		// nothing to wait for — fail now instead of parking a queue.
 		if !h.dispatchComputerUpgradeToRunners(r.Context(), runtimeDaemonKey(rt), op) {
 			failed, failErr := h.MachineUpgradeStore.Progress(
 				r.Context(), daemonID, op.ID, MachineUpgradeFailed,

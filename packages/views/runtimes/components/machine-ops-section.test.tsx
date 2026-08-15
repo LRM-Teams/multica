@@ -333,7 +333,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     expect(screen.queryByTestId("machine-daemon-upgrade-btn")).not.toBeInTheDocument();
   });
 
-  it("projects a sibling's queued machine upgrade as active", () => {
+  it("projects a sibling's starting machine upgrade as active", () => {
     const runtime = makeRuntime({
       runtime_health: "ok",
       target_version: null,
@@ -342,7 +342,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
         daemon_id: "daemon-1",
         request_id: "request-1",
         requested_target: "0.4.0",
-        phase: "queued",
+        phase: "starting",
         created_at: "2026-08-06T00:00:00Z",
         updated_at: "2026-08-06T00:00:00Z",
       },
@@ -359,7 +359,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     );
     expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
     expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
-    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Waiting for the Computer to accept the update…");
+    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Downloading and installing…");
   });
 
   it("keeps rollback recovery active until every sibling has attested", () => {

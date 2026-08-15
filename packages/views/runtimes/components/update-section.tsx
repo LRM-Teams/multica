@@ -168,7 +168,9 @@ export function UpdateSection({
           const result = await api.getMachineUpgrade(daemonId, update.id);
           const nextStatus: RuntimeUpdateStatus = (() => {
             switch (result.phase) {
-              case "queued": return "queued";
+              case "queued":
+              case "starting":
+                return "running";
               case "completed": return "completed";
               case "timeout": return "timeout";
               case "failed": case "rolled_back": case "cancelled": return "failed";

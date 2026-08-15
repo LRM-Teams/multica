@@ -72,7 +72,7 @@ function phaseToUpdateStatus(
   switch (phase) {
     case "queued":
     case "starting":
-      return "queued";
+      return "running";
     case "staging":
     case "verifying":
     case "handoff":

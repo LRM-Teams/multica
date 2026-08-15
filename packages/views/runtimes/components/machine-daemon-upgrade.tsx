@@ -117,7 +117,9 @@ export function MachineDaemonUpgrade({
           const result = await api.getMachineUpgrade(daemonID, update.id);
           const nextStatus: RuntimeUpdateStatus = (() => {
             switch (result.phase) {
-              case "queued": return "queued";
+              case "queued":
+              case "starting":
+                return "running";
               case "completed": return "completed";
               case "timeout": return "timeout";
               case "failed": case "rolled_back": case "cancelled": return "failed";
@@ -164,7 +166,7 @@ export function MachineDaemonUpgrade({
     switch (machineUpgrade?.phase) {
       case "queued":
       case "starting":
-        return "queued";
+        return "running";
       case "staging":
       case "verifying":
       case "handoff":
@@ -184,7 +186,7 @@ export function MachineDaemonUpgrade({
     }
   })();
   // A runtime page is a projection: no sibling needs to have initiated the
-  // request locally to render the daemon's canonical queued/active operation.
+  // request locally to render the daemon's canonical active operation.
   const effectiveStatus = status ?? projectedMachineStatus;
   const derivedStatus = deriveUpdateStatus({
     pollStatus: effectiveStatus,
@@ -211,8 +213,6 @@ export function MachineDaemonUpgrade({
     (updating ||
       derivedStatus === "pending" ||
       derivedStatus === "running" ||
-      // poll may report "queued" before pending (older type packages omit it)
-      effectiveStatus === "queued" ||
       isApplying);
   // Health may flip off `update_available` after a failed attempt — still failed.
   const isFailed =
@@ -254,11 +254,7 @@ export function MachineDaemonUpgrade({
     ) {
       return t(($) => $.machine.ops.upgrade_progress_applying);
     }
-    if (
-      derivedStatus === "pending" ||
-      effectiveStatus === "queued" ||
-      effectiveStatus === "pending"
-    ) {
+    if (derivedStatus === "pending" || effectiveStatus === "pending") {
       return t(($) => $.machine.ops.upgrade_progress_pending);
     }
     if (derivedStatus === "running") {

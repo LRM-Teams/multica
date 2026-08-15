@@ -47,11 +47,11 @@ Multica retains two stronger correctness proofs around those Raft primitives:
   operation.
 
 Start persists one replacement `launchId` and stable `startDispatchId` before
-dispatch. Reconnect replays stop or reset with the same operation ID, while a
-starting operation reuses the persisted launch and dispatch IDs through normal
-desired/observed Runner reconciliation. Relay publication is not completion:
-an undelivered operation stays visible and resumable until Runner Ready or
-timeout.
+dispatch on the current Runner socket. The live connection owns the rest of
+the sequence. Runner Ready does not resume a half-finished restart, and
+desired/observed reconcile skips any agent with a running restart operation.
+Relay publication is not completion: an undelivered or interrupted operation
+stays running until timeout or a later human retry.
 
 The removed parallel paths must not return: no composite Agent Restart payload
 on daemon heartbeat, no `agent:lifecycle` wire command, no restart delivery

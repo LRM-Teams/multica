@@ -51,7 +51,7 @@ func TestGraphMemoryJudgeRunRewardSweep(t *testing.T) {
 	svc := &GraphMemoryJudgeService{rewards: rewards}
 
 	ctx := context.Background()
-	require.NoError(t, rewards.Submit(ctx, "trace-stale", &memorygraph.RecallResult{TraceID: "trace-stale", Rounds: 1}))
+	require.NoError(t, rewards.Submit(ctx, "trace-stale", &memorygraph.RecallResult{TraceID: "trace-stale", Rounds: 1}, nil))
 
 	sweepCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})

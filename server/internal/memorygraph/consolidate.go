@@ -170,6 +170,7 @@ type Consolidator struct {
 	cfg      ConsolidateConfig
 	provider string // agent CLI provider name (e.g. "pi"); integration-time wiring
 	oplog    *OpLogger
+	traces   *TraceRecorder // nil → trajectories are drained but not persisted
 
 	runner FullBacktestRunner // nil → full backtests count as misses
 	// emb enables the vector channel of the per-candidate backtest retrieval
@@ -181,8 +182,9 @@ type Consolidator struct {
 // NewConsolidator returns a Consolidator over the given store. cfg zero
 // values fall back to DefaultConsolidateConfig. oplog may be nil, in which
 // case a fresh OpLogger over store is used. provider is informational until
-// provider wiring lands at integration time.
-func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, provider string, oplog *OpLogger) *Consolidator {
+// provider wiring lands at integration time. traces may be nil, in which
+// case trajectories are not persisted.
+func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, provider string, oplog *OpLogger, traces *TraceRecorder) *Consolidator {
 	if oplog == nil {
 		oplog = NewOpLogger(store)
 	}
@@ -192,6 +194,7 @@ func NewConsolidator(store *Store, backend AgentBackend, cfg ConsolidateConfig, 
 		cfg:      cfg.normalized(),
 		provider: provider,
 		oplog:    oplog,
+		traces:   traces,
 	}
 }
 
@@ -246,15 +249,40 @@ func (c *Consolidator) Consolidate(ctx context.Context) (*ConsolidateResult, err
 // applied, failures are skipped and recorded, and there is no snapshot
 // rollback — the op log is the audit trail.
 func (c *Consolidator) consolidateInPlace(ctx context.Context, current int, g *Graph, staging []stagingSummary, stats graphStats) (*ConsolidateResult, error) {
-	out, err := c.runAgent(ctx, c.buildPrompt(staging, stats, ""))
+	prompt := c.buildPrompt(staging, stats, "")
+	startedAt := time.Now().UTC()
+
+	// Persist the trajectory best-effort; the deferred write observes the
+	// final applied/rejected/error state.
+	var (
+		drain    *TraceDrain
+		applied  int
+		rejected []RejectReason
+		runErr   error
+	)
+	defer func() {
+		c.traces.WriteConsolidateTrace(ConsolidateTraceMeta{
+			GraphVersion: current,
+			Actor:        CreatorConsolidator,
+			Model:        c.cfg.Model,
+			StartedAt:    startedAt,
+			PromptChars:  len(prompt),
+		}, drain, applied, len(rejected), runErr)
+	}()
+
+	out, d, err := c.runAgent(ctx, prompt)
+	drain = d
 	if err != nil {
+		runErr = err
 		return nil, err
 	}
-	applied, rejected, err := c.applyOperations(g, current, CreatorConsolidator, out.Operations)
+	applied, rejected, err = c.applyOperations(g, current, CreatorConsolidator, out.Operations)
 	if err != nil {
+		runErr = err
 		return nil, err
 	}
 	if err := persistGraph(c.store, current, g); err != nil {
+		runErr = err
 		return nil, err
 	}
 	return &ConsolidateResult{
@@ -428,10 +456,27 @@ func (c *Consolidator) recordRegressions(winnerVersion int, winner CandidateStat
 
 // runTrajectory executes one consolidation trajectory against candidate
 // version v: one backend call, strict-JSON parse, safe apply, persist.
-func (c *Consolidator) runTrajectory(ctx context.Context, v, idx, total int, staging []stagingSummary, stats graphStats) trajectoryOutcome {
+func (c *Consolidator) runTrajectory(ctx context.Context, v, idx, total int, staging []stagingSummary, stats graphStats) (outcome trajectoryOutcome) {
 	actor := fmt.Sprintf("ttt-%d", idx)
 	sampling := fmt.Sprintf("You are consolidation trajectory %d of %d: use temperature seed %d for any sampling decisions.", idx, total, idx)
-	out, err := c.runAgent(ctx, c.buildPrompt(staging, stats, sampling))
+	prompt := c.buildPrompt(staging, stats, sampling)
+	startedAt := time.Now().UTC()
+
+	// Persist the trajectory best-effort; the deferred write observes the
+	// named return value, so the footer carries the final outcome.
+	var drain *TraceDrain
+	defer func() {
+		c.traces.WriteConsolidateTrace(ConsolidateTraceMeta{
+			GraphVersion: v,
+			Actor:        actor,
+			Model:        c.cfg.Model,
+			StartedAt:    startedAt,
+			PromptChars:  len(prompt),
+		}, drain, outcome.applied, len(outcome.rejected), outcome.err)
+	}()
+
+	out, d, err := c.runAgent(ctx, prompt)
+	drain = d
 	if err != nil {
 		return trajectoryOutcome{err: err}
 	}
@@ -450,8 +495,11 @@ func (c *Consolidator) runTrajectory(ctx context.Context, v, idx, total int, sta
 }
 
 // runAgent performs the single backend call of a consolidation trajectory
-// and parses the strict-JSON operations output.
-func (c *Consolidator) runAgent(ctx context.Context, prompt string) (*consolidateOutput, error) {
+// and parses the strict-JSON operations output. It also returns the drain
+// of the session's message stream (started immediately after Execute, before
+// Result is awaited) for trajectory persistence; the drain is nil when the
+// session never started.
+func (c *Consolidator) runAgent(ctx context.Context, prompt string) (*consolidateOutput, *TraceDrain, error) {
 	execCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
 
@@ -463,24 +511,27 @@ func (c *Consolidator) runAgent(ctx context.Context, prompt string) (*consolidat
 		EphemeralSession: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("consolidate: execute: %w", err)
+		return nil, nil, fmt.Errorf("consolidate: execute: %w", err)
 	}
+	// Drain the 256-cap message channel from the start so a long trajectory
+	// never stalls on a full buffer.
+	drain := c.traces.Drain(session.Messages)
 	result, ok := <-session.Result
 	if !ok {
-		return nil, fmt.Errorf("consolidate: agent session ended without a result")
+		return nil, drain, fmt.Errorf("consolidate: agent session ended without a result")
 	}
 	if result.Status != "completed" {
 		reason := strings.TrimSpace(result.Error)
 		if reason == "" {
 			reason = "consolidation agent did not complete: " + result.Status
 		}
-		return nil, fmt.Errorf("consolidate: %s", reason)
+		return nil, drain, fmt.Errorf("consolidate: %s", reason)
 	}
 	var out consolidateOutput
 	if !extractJSONObject(result.Output, &out) {
-		return nil, fmt.Errorf("consolidate: final response is not a valid operations JSON object")
+		return nil, drain, fmt.Errorf("consolidate: final response is not a valid operations JSON object")
 	}
-	return &out, nil
+	return &out, drain, nil
 }
 
 // applyOperations validates and applies the agent's operations to g one by

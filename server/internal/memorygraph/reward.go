@@ -15,6 +15,17 @@ type RewardSink interface {
 	SetReward(ctx context.Context, key string, reward float64) error
 }
 
+// RewardTraceSink is the optional trajectory-persistence hook of the reward
+// composer: after a reward is composed (judge write-back or timeout sweep),
+// the reward record is appended to every persisted explore trajectory file
+// of the trace, so exported trajectories carry their training signal. The
+// production implementation is *TraceRecorder over the trace's graph dir;
+// tests fake it. Appends are best-effort: failures are logged, never
+// returned.
+type RewardTraceSink interface {
+	AppendRewardTrace(rec RewardTraceRecord) error
+}
+
 // RewardParams holds the tunable constants of the explore-trajectory reward
 // formula (design §2 补充):
 //
@@ -42,6 +53,7 @@ const DefaultRewardTimeout = 15 * time.Minute
 // pendingTrace is a buffered explore trajectory awaiting its judge result.
 type pendingTrace struct {
 	recall      *RecallResult
+	traceSink   RewardTraceSink // nil → no trajectory reward record
 	submittedAt time.Time
 }
 
@@ -76,7 +88,9 @@ func NewRewardComposer(sink RewardSink, params RewardParams, timeout time.Durati
 
 // Submit buffers the trajectory of one recall under traceID. There is one
 // entry per trace; a duplicate trace id replaces the previous entry.
-func (c *RewardComposer) Submit(ctx context.Context, traceID string, recall *RecallResult) error {
+// traceSink is optional (nil): when set, the composed reward is later
+// appended to the trace's persisted trajectory files.
+func (c *RewardComposer) Submit(ctx context.Context, traceID string, recall *RecallResult, traceSink RewardTraceSink) error {
 	if traceID == "" {
 		return fmt.Errorf("reward: empty trace id")
 	}
@@ -85,7 +99,7 @@ func (c *RewardComposer) Submit(ctx context.Context, traceID string, recall *Rec
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.pending[traceID] = &pendingTrace{recall: recall, submittedAt: c.now()}
+	c.pending[traceID] = &pendingTrace{recall: recall, traceSink: traceSink, submittedAt: c.now()}
 	return nil
 }
 
@@ -107,6 +121,13 @@ func (c *RewardComposer) OnJudgeResult(ctx context.Context, traceID string, res 
 		return nil
 	}
 	reward := c.composeReward(pt.recall, res.Score)
+	c.recordRewardTrace(pt, RewardTraceRecord{
+		TraceID:    traceID,
+		JudgeScore: res.Score,
+		Reward:     reward,
+		Rounds:     pt.recall.Rounds,
+		Miss:       reward == c.params.MissPenalty,
+	})
 	if err := c.sink.SetReward(ctx, traceID, reward); err != nil {
 		return fmt.Errorf("reward: push reward for trace %s: %w", traceID, err)
 	}
@@ -117,24 +138,46 @@ func (c *RewardComposer) OnJudgeResult(ctx context.Context, traceID string, res 
 // composer timeout and removes it. It returns the number of swept entries.
 func (c *RewardComposer) SweepTimeouts(ctx context.Context) (int, error) {
 	c.mu.Lock()
-	var stale []string
+	type staleTrace struct {
+		id string
+		pt *pendingTrace
+	}
+	var stale []staleTrace
 	cutoff := c.now().Add(-c.timeout)
 	for id, pt := range c.pending {
 		if pt.submittedAt.Before(cutoff) {
-			stale = append(stale, id)
+			stale = append(stale, staleTrace{id: id, pt: pt})
 			delete(c.pending, id)
 		}
 	}
 	c.mu.Unlock()
 
 	swept := 0
-	for _, id := range stale {
-		if err := c.sink.SetReward(ctx, id, c.params.MissPenalty); err != nil {
-			return swept, fmt.Errorf("reward: sweep trace %s: %w", id, err)
+	for _, s := range stale {
+		c.recordRewardTrace(s.pt, RewardTraceRecord{
+			TraceID: s.id,
+			Reward:  c.params.MissPenalty,
+			Rounds:  s.pt.recall.Rounds,
+			Miss:    true,
+		})
+		if err := c.sink.SetReward(ctx, s.id, c.params.MissPenalty); err != nil {
+			return swept, fmt.Errorf("reward: sweep trace %s: %w", s.id, err)
 		}
 		swept++
 	}
 	return swept, nil
+}
+
+// recordRewardTrace appends a composed reward to the trace's persisted
+// trajectory files via the optional per-trace sink. Best-effort: failures
+// are logged and never fail reward delivery.
+func (c *RewardComposer) recordRewardTrace(pt *pendingTrace, rec RewardTraceRecord) {
+	if pt.traceSink == nil {
+		return
+	}
+	if err := pt.traceSink.AppendRewardTrace(rec); err != nil {
+		slog.Warn("reward: trajectory reward append failed", "trace_id", rec.TraceID, "error", err)
+	}
 }
 
 // PendingCount returns the number of traces awaiting a judge result.

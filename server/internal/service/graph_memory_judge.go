@@ -143,7 +143,7 @@ func (s *GraphMemoryJudgeService) JudgeRecall(ctx context.Context, req GraphMemo
 		if cfg, ok := extractArealProxyConfig(task.Context); ok && cfg.APIKey != "" {
 			s.sink.RegisterTrace(req.TraceID, cfg.APIKey)
 		}
-		if err := s.rewards.Submit(ctx, req.TraceID, recall); err != nil {
+		if err := s.rewards.Submit(ctx, req.TraceID, recall, memorygraph.NewTraceRecorder(dir)); err != nil {
 			slog.Warn("graph memory judge: reward submit failed", "trace_id", req.TraceID, "error", err)
 		}
 	}

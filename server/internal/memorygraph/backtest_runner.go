@@ -48,7 +48,9 @@ func (r *ExploreBacktestRunner) RunExplore(ctx context.Context, version int, que
 	if err := retr.RebuildForVersion(ctx, version); err != nil {
 		return 0, false, fmt.Errorf("backtest runner: rebuild retriever for v%d: %w", version, err)
 	}
-	explorer := NewExplorer(r.store, retr, r.backend, r.expCfg, r.provider)
+	// Backtest trajectories are evaluation-only: they have no query-log entry
+	// and no reward join, so they are not persisted (nil recorder).
+	explorer := NewExplorer(r.store, retr, r.backend, r.expCfg, r.provider, nil)
 	explorer.PinVersion(version)
 	recall, err := explorer.Explore(ctx, query)
 	if err != nil {

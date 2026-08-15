@@ -151,7 +151,7 @@ func newGraphMemoryProvider(cfg Config, kicker graphMemoryJudgeKicker, logger *s
 	return &graphMemoryProvider{
 		store:    store,
 		retr:     retr,
-		explorer: memorygraph.NewExplorer(store, retr, backend, explorerCfg, "pi"),
+		explorer: memorygraph.NewExplorer(store, retr, backend, explorerCfg, "pi", memorygraph.NewTraceRecorder(cfg.GraphMemoryDir)),
 		recorder: memorygraph.NewQueryRecorder(store, graphMemoryQueryLogWindow),
 		kicker:   kicker,
 		logger:   logger,

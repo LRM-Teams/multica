@@ -48,7 +48,7 @@ func TestConsolidateTTTWithRealBacktestRunner(t *testing.T) {
 
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
-	c := NewConsolidator(store, consBackend, cfg, "test", nil)
+	c := NewConsolidator(store, consBackend, cfg, "test", nil, nil)
 	c.SetRunner(NewExploreBacktestRunner(store, nil, explBackend, DefaultRetrievalConfig(), testExploreConfig(), "test"))
 
 	res, err := c.Consolidate(context.Background())
@@ -123,7 +123,7 @@ func TestConsolidateTTTRecordsRegressionsOnSwitch(t *testing.T) {
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 2
 	cfg.RecallTolerance = 0.5
-	c := NewConsolidator(store, backend, cfg, "test", nil)
+	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -165,7 +165,7 @@ func TestRecordRegressionsDeduplicates(t *testing.T) {
 	store := newTestStore(t)
 	seedGraphNode(t, store, 1, "n1", "alpha beta")
 
-	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), "test", nil)
+	c := NewConsolidator(store, nil, DefaultConsolidateConfig(), "test", nil, nil)
 
 	queries := []*BacktestQuery{
 		{Query: "omega cache", RelevantNodes: []string{"n-gone"}, BaselineRounds: 2, BaselineFound: true},

@@ -47,12 +47,14 @@ func consolidateOpsJSON(ops ...ConsolidateOp) string {
 }
 
 // fakeConsolidateBackend plays the consolidation agent: respond maps the
-// prompt and 1-based call index to the final response output.
+// prompt and 1-based call index to the final response output. msgs, when
+// set, are emitted on the session's message channel before the result.
 type fakeConsolidateBackend struct {
 	mu      sync.Mutex
 	calls   int
 	prompts []string
 	respond func(prompt string, callIdx int) string
+	msgs    []agent.Message
 }
 
 func (f *fakeConsolidateBackend) Execute(_ context.Context, prompt string, _ agent.ExecOptions) (*agent.Session, error) {
@@ -61,7 +63,7 @@ func (f *fakeConsolidateBackend) Execute(_ context.Context, prompt string, _ age
 	idx := f.calls
 	f.prompts = append(f.prompts, prompt)
 	f.mu.Unlock()
-	return exploreCompletedSession(f.respond(prompt, idx)), nil
+	return completedSessionWithMessages(f.respond(prompt, idx), f.msgs...), nil
 }
 
 func (f *fakeConsolidateBackend) allPrompts() string {
@@ -124,7 +126,7 @@ func TestConsolidateNonTTTAppliesValidOps(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil)
+	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -215,7 +217,7 @@ func TestConsolidateNonTTTCycleRejectedBatchContinues(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 1
-	c := NewConsolidator(store, backend, cfg, "test", nil)
+	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
 
 	res, err := c.Consolidate(context.Background())
 	if err != nil {
@@ -317,7 +319,7 @@ func TestConsolidateTTTSelectsMinCostWinner(t *testing.T) {
 	}}
 	cfg := DefaultConsolidateConfig()
 	cfg.TTVTrajectories = 3
-	c := NewConsolidator(store, backend, cfg, "test", nil)
+	c := NewConsolidator(store, backend, cfg, "test", nil, nil)
 	c.SetRunner(runner)
 
 	res, err := c.Consolidate(context.Background())

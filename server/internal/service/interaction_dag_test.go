@@ -580,7 +580,7 @@ func TestInteractionDAG_CloseSegmentForEvent_RecordsSegment(t *testing.T) {
 
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
 
-	segID, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "proxy-key", "delegation",
+	segID, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "proxy-key", "delegation",
 		map[string]any{"sandbox_ids": []string{"sbx-1"}, "issue_snapshot_id": "snap-1", "env_state": map[string]any{"k": "v"}})
 	require.NoError(t, err)
 
@@ -628,7 +628,7 @@ func TestInteractionDAG_CloseSegmentForEvent_LeafSegmentClosingEventEmpty(t *tes
 	store.addTestTaskMessage("run-2", 2)
 	store.addTestTaskMessage("run-2", 3)
 
-	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-2", "pk", "",
+	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-2", "pk", "",
 		map[string]any{"sandbox_ids": []string{"sbx-1"}})
 	require.NoError(t, err)
 
@@ -655,7 +655,7 @@ func TestInteractionDAG_CloseSegmentForEvent_TurnRanges(t *testing.T) {
 	// First segment: task messages 1-2.
 	store.addTestTaskMessage("run-1", 1)
 	store.addTestTaskMessage("run-1", 2)
-	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.NoError(t, err)
 	require.Len(t, store.segmentSnapshots, 1)
 	assert.Equal(t, int32(1), store.segmentSnapshots[0].StartSeq)
@@ -666,7 +666,7 @@ func TestInteractionDAG_CloseSegmentForEvent_TurnRanges(t *testing.T) {
 	store.addTestTaskMessage("run-1", 3)
 	store.addTestTaskMessage("run-1", 4)
 	store.addTestTaskMessage("run-1", 5)
-	_, err = svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "completion", nil)
+	_, _, err = svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "completion", nil)
 	require.NoError(t, err)
 	require.Len(t, store.segmentSnapshots, 2)
 	// Check second segment.
@@ -752,7 +752,7 @@ func TestInteractionDAG_CloseSegmentForEvent_MissingSessionLookupErrors(t *testi
 	client := &fakeArealSegmentClient{closeSegmentID: 1, exportPayload: json.RawMessage(`{"input_ids":{"type":"dataclass","class_path":"areal.infra.rpc.rtensor.RTensor","data":{"shard":{"type":"dataclass","class_path":"areal.infra.rpc.rtensor.TensorShardInfo","data":{"shard_id":"s","node_addr":"10.0.0.1:8000"}},"data":{"shape":[1,4]}}}}`)}
 	svc := NewInteractionDAGService(store, client, true)
 
-	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "unknown-sess", "pk", "delegation", nil)
+	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "unknown-sess", "pk", "delegation", nil)
 	require.Error(t, err)
 	assert.Empty(t, client.closeCalls, "must not close a segment when the session lookup fails")
 	assert.Empty(t, client.exportCalls, "must not export when the session lookup fails")
@@ -768,7 +768,7 @@ func TestInteractionDAG_CloseSegmentForEvent_CloseSegmentErrorPropagates(t *test
 	svc := NewInteractionDAGService(store, client, true)
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
 
-	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
 	assert.Empty(t, client.exportCalls, "must not export after a close failure")
 	assert.Empty(t, store.segmentSnapshots, "must not record a segment after a close failure")
@@ -785,7 +785,7 @@ func TestInteractionDAG_CloseSegmentForEvent_ExportErrorPropagates(t *testing.T)
 	svc := NewInteractionDAGService(store, client, true)
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
 
-	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
 	assert.Empty(t, store.segmentSnapshots, "must not record a segment after an export failure")
 }
@@ -802,7 +802,7 @@ func TestInteractionDAG_CloseSegmentForEvent_BadTensorRefErrors(t *testing.T) {
 	svc := NewInteractionDAGService(store, client, true)
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
 
-	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
 	assert.Empty(t, store.segmentSnapshots, "must not record a segment when tensor_ref is undecodable")
 }
@@ -821,7 +821,7 @@ func TestInteractionDAG_CloseSegmentForEvent_StoreInsertErrorPropagates(t *testi
 	svc := NewInteractionDAGService(store, client, true)
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
 
-	_, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	_, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.Error(t, err)
 	assert.Empty(t, store.segmentSnapshots, "must not persist on insert error")
 }
@@ -882,7 +882,7 @@ func TestInteractionDAGService_DisabledIsNoOp(t *testing.T) {
 	svc := NewInteractionDAGService(store, client, false)
 
 	assert.NoError(t, svc.RecordSessionAgentRun(context.Background(), "p", "s", "r", "i"))
-	_, err := svc.CloseSegmentForEvent(context.Background(), "p", "s", "pk", "delegation", nil)
+	_, _, err := svc.CloseSegmentForEvent(context.Background(), "p", "s", "pk", "delegation", nil)
 	assert.NoError(t, err)
 	assert.NoError(t, svc.AddEdge(context.Background(), "p", "a", "b", EdgeTypeDelegation))
 
@@ -909,17 +909,17 @@ func TestInteractionDAG_CloseSegmentForEvent_FanOutDeterministic(t *testing.T) {
 	require.NoError(t, svc.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", "run-1", "issue-1"))
 
 	// First close: the source segment.
-	rootID, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "completion", nil)
+	rootID, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "completion", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "sess-1-100", rootID)
 
 	// Two further closes (children). closeSegmentID is fixed at 100, so bump
 	// it per call to get distinct trajectory ids.
 	client.closeSegmentID = 101
-	child1, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	child1, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.NoError(t, err)
 	client.closeSegmentID = 102
-	child2, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
+	child2, _, err := svc.CloseSegmentForEvent(context.Background(), "proj-1", "sess-1", "pk", "delegation", nil)
 	require.NoError(t, err)
 
 	ids := map[string]bool{rootID: true, child1: true, child2: true}

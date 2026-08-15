@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/memorygraph"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -68,11 +69,20 @@ func (s *TaskService) closeTrainedSegmentForDelegation(ctx context.Context, pare
 	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, parentRunID); err == nil && existing != "" {
 		return
 	}
-	segID, err := s.Training.DAG.CloseSegmentForEvent(ctx, projectID, cfg.SessionID, cfg.APIKey, closingEvent, envSnapshot)
+	segID, traj, err := s.Training.DAG.CloseSegmentForEvent(ctx, projectID, cfg.SessionID, cfg.APIKey, closingEvent, envSnapshot)
 	if err != nil {
 		slog.Warn("interaction_dag: delegation segment close failed", "task_id", parentRunID, "err", err)
 		return
 	}
+	// Graph-memory ingest (async, best-effort): the seam forwards the real
+	// AReaL trajectory export so the staging summary is built from actual
+	// segment content (review R1).
+	s.fireSegmentIngest(ctx, memorygraph.SegmentExport{
+		SegmentID:    segID,
+		AgentRunID:   parentRunID,
+		Trajectory:   traj,
+		ClosingEvent: closingEvent,
+	})
 	// If the parent was itself a delegated-to child, link its segment to the
 	// grandparent's (the parent's parent) segment.
 	if parent.ParentTaskID.Valid {
@@ -135,11 +145,20 @@ func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task d
 	if task.ParentTaskID.Valid {
 		closingEvent = closingEventCompletion
 	}
-	segID, err := s.Training.DAG.CloseSegmentForEvent(ctx, projectID, cfg.SessionID, cfg.APIKey, closingEvent, envSnapshot)
+	segID, traj, err := s.Training.DAG.CloseSegmentForEvent(ctx, projectID, cfg.SessionID, cfg.APIKey, closingEvent, envSnapshot)
 	if err != nil {
 		slog.Warn("interaction_dag: terminal segment close failed", "task_id", runID, "err", err)
 		return
 	}
+	// Graph-memory ingest (async, best-effort): the seam forwards the real
+	// AReaL trajectory export so the staging summary is built from actual
+	// segment content (review R1).
+	s.fireSegmentIngest(ctx, memorygraph.SegmentExport{
+		SegmentID:    segID,
+		AgentRunID:   runID,
+		Trajectory:   traj,
+		ClosingEvent: closingEvent,
+	})
 	// Delegation edge parent->child, recorded at the child's close.
 	if task.ParentTaskID.Valid {
 		if parentSeg, err := s.Training.DAG.SegmentIDForAgentRun(ctx, util.UUIDToString(task.ParentTaskID)); err == nil && parentSeg != "" {
@@ -186,11 +205,20 @@ func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task 
 	if task.IssueID.Valid {
 		issueID = util.UUIDToString(task.IssueID)
 	}
-	segID, err := s.Training.DAG.RecordLocalSegmentForEvent(ctx, projectID, runID, issueID, closingEvent, envSnapshot)
+	segID, traj, err := s.Training.DAG.RecordLocalSegmentForEvent(ctx, projectID, runID, issueID, closingEvent, envSnapshot)
 	if err != nil {
 		slog.Warn("interaction_dag: local segment record failed", "task_id", runID, "err", err)
 		return
 	}
+	// Graph-memory ingest (async, best-effort): the seam forwards the
+	// allowlisted task_message snapshot so the staging summary is built from
+	// actual segment content (review R1).
+	s.fireSegmentIngest(ctx, memorygraph.SegmentExport{
+		SegmentID:    segID,
+		AgentRunID:   runID,
+		Trajectory:   traj,
+		ClosingEvent: closingEvent,
+	})
 	// Delegation edge parent->child, recorded at the child's close.
 	if task.ParentTaskID.Valid {
 		if parentSeg, err := s.Training.DAG.SegmentIDForAgentRun(ctx, util.UUIDToString(task.ParentTaskID)); err == nil && parentSeg != "" {

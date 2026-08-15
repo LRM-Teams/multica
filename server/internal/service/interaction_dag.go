@@ -179,6 +179,14 @@ func (s *InteractionDAGService) SegmentIDForAgentRun(ctx context.Context, agentR
 // traj JSON; (d) decode tensor_ref; (e) insert interaction_dag_segment +
 // interaction_dag_env_snapshot.
 //
+// Flow: (a) look up agent_run_id+issue_id by sessionID from
+// interaction_dag_session_run; (b) arealrl.CloseSegment(proxyKey) ->
+// trajectoryID; (c) arealrl.ExportTrajectory(sessionID, trajectoryID) -> raw
+// traj JSON; (d) decode tensor_ref; (e) insert interaction_dag_segment +
+// interaction_dag_env_snapshot. The raw trajectory export is returned
+// alongside the segment id so the graph-memory ingest seam receives the real
+// trajectory (review R1) instead of summarizing an empty one.
+//
 // adminKey is NOT a parameter: the arealrl.Client holds the admin key
 // internally and ExportTrajectory uses it; proxyKey is the only per-call
 // credential (session-key for CloseSegment). This drops the plan's redundant
@@ -187,39 +195,39 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 	ctx context.Context,
 	projectID, sessionID, proxyKey, closingEvent string,
 	envSnapshot map[string]any,
-) (string, error) {
+) (string, json.RawMessage, error) {
 	if !s.enabled {
-		return "", nil
+		return "", nil, nil
 	}
 	if s.store == nil || s.client == nil {
-		return "", errors.New("interaction_dag: service not fully configured (store or client nil)")
+		return "", nil, errors.New("interaction_dag: service not fully configured (store or client nil)")
 	}
 	if projectID == "" || sessionID == "" || proxyKey == "" {
-		return "", errors.New("interaction_dag: CloseSegmentForEvent requires project_id, session_id, proxy_key")
+		return "", nil, errors.New("interaction_dag: CloseSegmentForEvent requires project_id, session_id, proxy_key")
 	}
 
 	// (a) resolve agent_run_id + issue_id from the session mapping.
 	run, err := s.store.GetInteractionDAGSessionRun(ctx, sessionID)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: lookup session_run for %s: %w", sessionID, err)
+		return "", nil, fmt.Errorf("interaction_dag: lookup session_run for %s: %w", sessionID, err)
 	}
 
 	// (b) close the segment -> trajectory_id.
 	trajectoryID, err := s.client.CloseSegment(ctx, proxyKey)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: close_segment for session %s: %w", sessionID, err)
+		return "", nil, fmt.Errorf("interaction_dag: close_segment for session %s: %w", sessionID, err)
 	}
 
 	// (c) export the just-closed trajectory -> raw traj JSON.
 	raw, err := s.client.ExportTrajectory(ctx, sessionID, trajectoryID)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: export_trajectory %s/%d: %w", sessionID, trajectoryID, err)
+		return "", nil, fmt.Errorf("interaction_dag: export_trajectory %s/%d: %w", sessionID, trajectoryID, err)
 	}
 
 	// (d) decode tensor_ref from the export payload.
 	tensorRef, err := decodeTensorRef(raw)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: decode tensor_ref for session %s: %w", sessionID, err)
+		return "", nil, fmt.Errorf("interaction_dag: decode tensor_ref for session %s: %w", sessionID, err)
 	}
 
 	// (e) record the segment + env snapshot atomically: a single data-modifying
@@ -232,12 +240,12 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 	// Calculate the turn range for this segment.
 	lastEndSeq, err := s.store.GetLastEndSeqForAgentRun(ctx, run.AgentRunID)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: get last end_seq for %s: %w", run.AgentRunID, err)
+		return "", nil, fmt.Errorf("interaction_dag: get last end_seq for %s: %w", run.AgentRunID, err)
 	}
 	startSeq := lastEndSeq + 1
 	endSeq, err := s.store.GetMaxTaskMessageSeq(ctx, run.AgentRunID)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: get max task_message seq for %s: %w", run.AgentRunID, err)
+		return "", nil, fmt.Errorf("interaction_dag: get max task_message seq for %s: %w", run.AgentRunID, err)
 	}
 
 	if err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
@@ -257,10 +265,10 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 		IssueSnapshotID:  issueSnapshotID,
 		EnvState:         envState,
 	}); err != nil {
-		return "", fmt.Errorf("interaction_dag: insert segment+env_snapshot %s: %w", segmentID, err)
+		return "", nil, fmt.Errorf("interaction_dag: insert segment+env_snapshot %s: %w", segmentID, err)
 	}
 
-	return segmentID, nil
+	return segmentID, raw, nil
 }
 
 // AddEdge records a typed DAG edge between two segments. edgeType must be one
@@ -293,21 +301,23 @@ func (s *InteractionDAGService) AddEdge(ctx context.Context, projectID, srcSegme
 // Session identity is deterministic: multica:<agentRunID>. The segment ID equals
 // the session ID (one-segment-per-task, idempotent on repeated close). The
 // recorded segment carries trajectory_source=task_messages, trainable=false, and
-// null AReaL fields. Recording is best-effort: a failure returns an error but does
+// null AReaL fields. The allowlisted trajectory snapshot is returned alongside
+// the segment id so the graph-memory ingest seam receives it (review R1).
+// Recording is best-effort: a failure returns an error but does
 // not affect the task's terminal result.
 func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 	ctx context.Context,
 	projectID, agentRunID, issueID, closingEvent string,
 	envSnapshot map[string]any,
-) (string, error) {
+) (string, json.RawMessage, error) {
 	if !s.enabled {
-		return "", nil
+		return "", nil, nil
 	}
 	if s.store == nil || s.msgs == nil {
-		return "", errors.New("interaction_dag: RecordLocalSegmentForEvent requires store and message store")
+		return "", nil, errors.New("interaction_dag: RecordLocalSegmentForEvent requires store and message store")
 	}
 	if projectID == "" || agentRunID == "" {
-		return "", errors.New("interaction_dag: RecordLocalSegmentForEvent requires project_id, agent_run_id")
+		return "", nil, errors.New("interaction_dag: RecordLocalSegmentForEvent requires project_id, agent_run_id")
 	}
 
 	sessionID := fmt.Sprintf("multica:%s", agentRunID)
@@ -319,18 +329,18 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 		AgentRunID: agentRunID,
 		IssueID:    pgText(issueID),
 	}); err != nil {
-		return "", fmt.Errorf("interaction_dag: upsert local session run %s: %w", sessionID, err)
+		return "", nil, fmt.Errorf("interaction_dag: upsert local session run %s: %w", sessionID, err)
 	}
 
 	// Compute the sequence range for this segment.
 	lastEndSeq, err := s.store.GetLastEndSeqForAgentRun(ctx, agentRunID)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: get last end_seq for %s: %w", agentRunID, err)
+		return "", nil, fmt.Errorf("interaction_dag: get last end_seq for %s: %w", agentRunID, err)
 	}
 	startSeq := lastEndSeq + 1
 	endSeq, err := s.store.GetMaxTaskMessageSeq(ctx, agentRunID)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: get max task_message seq for %s: %w", agentRunID, err)
+		return "", nil, fmt.Errorf("interaction_dag: get max task_message seq for %s: %w", agentRunID, err)
 	}
 
 	// Read persisted task messages in the range and serialize the allowlisted
@@ -338,7 +348,7 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 	// sandbox runtime configuration never enter this snapshot.
 	msgs, err := s.msgs.MessagesForTaskInRange(ctx, agentRunID, startSeq, endSeq)
 	if err != nil {
-		return "", fmt.Errorf("interaction_dag: read messages for %s [%d,%d]: %w", agentRunID, startSeq, endSeq, err)
+		return "", nil, fmt.Errorf("interaction_dag: read messages for %s [%d,%d]: %w", agentRunID, startSeq, endSeq, err)
 	}
 	trajectory := serializeLocalTrajectory(msgs)
 
@@ -362,10 +372,10 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 		IssueSnapshotID:  issueSnapshotID,
 		EnvState:         envState,
 	}); err != nil {
-		return "", fmt.Errorf("interaction_dag: insert local segment+env_snapshot %s: %w", segmentID, err)
+		return "", nil, fmt.Errorf("interaction_dag: insert local segment+env_snapshot %s: %w", segmentID, err)
 	}
 
-	return segmentID, nil
+	return segmentID, json.RawMessage(trajectory), nil
 }
 
 // localTrajectoryEntry is the allowlisted shape for each task_message entry in a

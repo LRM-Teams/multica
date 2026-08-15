@@ -884,6 +884,14 @@ type GithubPullRequestCheckSuite struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GraphMemoryProfile struct {
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	ReviewerType     string             `json:"reviewer_type"`
+	ExploreAgents    int32              `json:"explore_agents"`
+	ExploreMaxRounds int32              `json:"explore_max_rounds"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type InboxItem struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`

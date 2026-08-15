@@ -586,6 +586,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
+		r.Post("/graph-memory/judge", h.ReportGraphMemoryJudge)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/progress", h.ReportTaskProgress)
@@ -690,6 +691,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
 					r.Get("/memory-curation/profile", h.GetMemoryCuratorProfile)
 					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)
+					r.Get("/graph-memory/profile", h.GetGraphMemoryProfile)
+					r.Put("/graph-memory/profile", h.UpdateGraphMemoryProfile)
 					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
 					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)

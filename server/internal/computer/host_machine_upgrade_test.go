@@ -72,36 +72,43 @@ func TestHostMachineUpgradeAcceptanceRequiresCompleteComputerSet(t *testing.T) {
 	}
 }
 
-func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testing.T) {
+func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	const controlToken = "owner-secret"
 	var humanIntentCalls atomic.Int32
-	accepted := make(chan string, 2)
-	acceptedGeneration := "generation-a"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	delivered := make(chan string, 2)
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/daemons/computer-a/upgrades":
 			humanIntentCalls.Add(1)
 			http.Error(w, "Host must not create human lifecycle intents", http.StatusForbidden)
 		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept",
 			"/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-b/accept":
-			operationID := strings.Split(r.URL.Path, "/")[6]
-			accepted <- operationID
-			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
-				ID: operationID, Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
-				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
-			})
-		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest",
-			"/api/daemon/computer/machine-upgrades/upgrade-b/attest":
-			t.Error("same-version upgrade attested over HTTP")
-			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
+			t.Error("Host accepted Machine Upgrade itself")
+			http.Error(w, "Host must not execute Machine Upgrade", http.StatusConflict)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
-	defer server.Close()
+	defer cloud.Close()
 
 	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
+		if r.Header.Get("X-Multica-Control-Token") != controlToken {
+			http.Error(w, "bad token", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == BindingComputerUpgradePath {
+			var request struct {
+				Command protocol.ComputerUpgradePayload `json:"command"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			delivered <- request.Command.Operation()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path != BindingReregisterRuntimePath {
 			http.Error(w, "unexpected child control request", http.StatusBadRequest)
 			return
 		}
@@ -132,7 +139,7 @@ func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testi
 	}
 	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{identity: HostProcessIdentity{
 		ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
-		Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+		Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: cloud.URL,
 	}})
 	host.upgrade = upgrade
 
@@ -151,12 +158,12 @@ func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testi
 			t.Fatalf("local delivery %s status = %d body=%s", operationID, response.Code, response.Body.String())
 		}
 		select {
-		case got := <-accepted:
+		case got := <-delivered:
 			if got != operationID {
-				t.Fatalf("accepted operation = %q, want %q", got, operationID)
+				t.Fatalf("delivered operation = %q, want %q", got, operationID)
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("local delivery did not execute %s", operationID)
+			t.Fatalf("local delivery did not hand off %s", operationID)
 		}
 		deadline := time.Now().Add(time.Second)
 		for {
@@ -199,7 +206,7 @@ func TestHostMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := upgrade.handleChildAction(context.Background(), identity, raw); err != nil {
-		t.Fatalf("same operation replay = %v", err)
+		t.Fatalf("forwarded heartbeat upgrade = %v", err)
 	}
 	if upgrade.activeID != "upgrade-a" {
 		t.Fatalf("activeID = %q, want upgrade-a", upgrade.activeID)
@@ -227,9 +234,8 @@ func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = upgrade.handleChildAction(context.Background(), identity, raw)
-	if !errors.Is(err, ErrComputerControlBusy) {
-		t.Fatalf("different operation while active = %v, want ErrComputerControlBusy", err)
+	if err := upgrade.handleChildAction(context.Background(), identity, raw); err != nil {
+		t.Fatalf("forwarded heartbeat upgrade = %v, want ignore", err)
 	}
 }
 
@@ -359,6 +365,10 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 
 	root := t.TempDir()
 	incumbent := newReadyHost(8101)
+	hostMux := http.NewServeMux()
+	incumbent.RegisterRoutes(hostMux)
+	hostControl := httptest.NewServer(hostMux)
+	defer hostControl.Close()
 	upgradeCancelled := make(chan struct{}, 1)
 	upgrade := newHostMachineUpgrade(incumbent, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
@@ -370,33 +380,50 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	})
 	incumbent.upgrade = upgrade
 	var staged, verified, swapped atomic.Bool
-	upgrade.stageRelease = func(target string, _ time.Duration, _ string) (string, error) {
-		if target != "v2.0.0" {
-			t.Fatalf("stage target = %q", target)
-		}
-		staged.Store(true)
-		return "/tmp/staged-computer", nil
-	}
-	upgrade.verifyBinary = func(_ context.Context, path, target string) error {
-		if path != "/tmp/staged-computer" || target != "v2.0.0" {
-			t.Fatalf("verify path/target = %q/%q", path, target)
-		}
-		verified.Store(true)
-		return nil
-	}
-	upgrade.installPath = func() (string, error) { return "/tmp/active-computer", nil }
-	upgrade.swapExecutable = func(current, candidate string) error {
-		if current != "/tmp/active-computer" || candidate != "/tmp/staged-computer" {
-			t.Fatalf("swap current/candidate = %q/%q", current, candidate)
-		}
-		swapped.Store(true)
-		return nil
-	}
-	upgrade.execute(context.Background(), incumbent.runtimeSets[workspaceIDs[0]].Runtimes[0], "runtime-token-workspace-a", protocol.DaemonHeartbeatPendingMachineUpgrade{
-		ID: "upgrade-a", TargetVersion: "v2.0.0",
+	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
+		Identity: HostProcessIdentity{
+			ComputerID: "computer-a", ComputerGeneration: 31, Environment: "test",
+			Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+		},
+		ResidentRoot: root,
+		ControlURL:   hostControl.URL,
+		ControlToken: controlToken,
+		Child:        incumbent.runtimeSets[workspaceIDs[0]].Identity,
+		RuntimeID:    runtimeIDs[0],
+		DaemonToken:  "runtime-token-workspace-a",
+		Exit: func() {
+			upgrade.observeInitiatorExit(incumbent.runtimeSets[workspaceIDs[0]].Identity)
+		},
+		StageRelease: func(target string, _ time.Duration, _ string) (string, error) {
+			if target != "v2.0.0" {
+				t.Fatalf("stage target = %q", target)
+			}
+			staged.Store(true)
+			return "/tmp/staged-computer", nil
+		},
+		VerifyBinary: func(_ context.Context, path, target string) error {
+			if path != "/tmp/staged-computer" || target != "v2.0.0" {
+				t.Fatalf("verify path/target = %q/%q", path, target)
+			}
+			verified.Store(true)
+			return nil
+		},
+		InstallPath: func() (string, error) { return "/tmp/active-computer", nil },
+		SwapExecutable: func(current, candidate string) error {
+			if current != "/tmp/active-computer" || candidate != "/tmp/staged-computer" {
+				t.Fatalf("swap current/candidate = %q/%q", current, candidate)
+			}
+			swapped.Store(true)
+			return nil
+		},
 	})
-	if got := prepares.Load(); got != int32(len(workspaceIDs)) {
-		t.Fatalf("Machine Upgrade prepare calls = %d, want %d", got, len(workspaceIDs))
+	if err := executor.Execute(context.Background(), protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v2.0.0",
+	}); err != nil {
+		t.Fatalf("Binding executor: %v", err)
+	}
+	if got := prepares.Load(); got != 1 {
+		t.Fatalf("Machine Upgrade sibling prepare calls = %d, want 1", got)
 	}
 	if !staged.Load() || !verified.Load() || !swapped.Load() {
 		t.Fatalf("Machine Upgrade phases stage=%t verify=%t swap=%t", staged.Load(), verified.Load(), swapped.Load())

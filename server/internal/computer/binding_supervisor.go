@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type BindingRunnerLauncher struct {
@@ -388,6 +390,14 @@ func (supervisor *BindingSupervisor) ReleaseEnvironmentSwitch(ctx context.Contex
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func (supervisor *BindingSupervisor) DeliverComputerUpgrade(ctx context.Context, controlToken string, command protocol.ComputerUpgradePayload) error {
+	targets := supervisor.availableMachineControlTargets()
+	if len(targets) == 0 {
+		return errors.New("Computer has no ready Binding for Machine Upgrade")
+	}
+	return RequestBindingComputerUpgrade(ctx, targets[0].controlURL, controlToken, targets[0].identity, command)
 }
 
 func (supervisor *BindingSupervisor) ReregisterBindings(ctx context.Context, controlToken string, workspaceIDs []string) error {

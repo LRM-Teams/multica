@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // HostConfig is the Computer's process-supervision boundary. Binding execution
@@ -307,4 +308,11 @@ func (host *Host) ReregisterBindings(ctx context.Context, workspaceIDs []string)
 		return errors.New("Computer Host is unavailable")
 	}
 	return host.supervisor.ReregisterBindings(ctx, host.control.token, workspaceIDs)
+}
+
+func (host *Host) DeliverComputerUpgrade(ctx context.Context, command protocol.ComputerUpgradePayload) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
+	}
+	return host.supervisor.DeliverComputerUpgrade(ctx, host.control.token, command)
 }

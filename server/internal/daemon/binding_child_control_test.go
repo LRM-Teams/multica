@@ -234,6 +234,16 @@ func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
 	}
 }
 
+func TestStandaloneDaemonIgnoresConnectSocketUpgrade(t *testing.T) {
+	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err := child.handleComputerControlCommand(context.Background(), protocol.EventComputerUpgrade, protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v9.9.9",
+	})
+	if err != nil {
+		t.Fatalf("standalone DaemonCore upgrade error = %v, want ignore", err)
+	}
+}
+
 func TestBindingChildExecutesConnectSocketUpgradeLocally(t *testing.T) {
 	executed := make(chan protocol.ComputerUpgradePayload, 1)
 	hostHits := make(chan struct{}, 1)

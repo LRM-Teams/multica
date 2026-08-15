@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/computer"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func (d *Daemon) listenBindingCredentialProxy() (net.Listener, error) {
@@ -411,6 +412,35 @@ func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstr
 	}
 	mux.HandleFunc(computer.BindingPrepareMachineUpgradePath, handle(true))
 	mux.HandleFunc(computer.BindingReleaseMachineUpgradePath, handle(false))
+	mux.HandleFunc(computer.BindingComputerUpgradePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !d.localControlAuthorized(r) {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		var request struct {
+			Identity computer.BindingChildIdentity   `json:"identity"`
+			Command  protocol.ComputerUpgradePayload `json:"command"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if err := d.handleComputerControlCommand(r.Context(), protocol.EventComputerUpgrade, request.Command); err != nil {
+			if errors.Is(err, computer.ErrComputerControlBusy) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc(computer.BindingPrepareEnvironmentSwitchPath, func(w http.ResponseWriter, r *http.Request) {
 		if !decodeIdentity(w, r) {
 			return

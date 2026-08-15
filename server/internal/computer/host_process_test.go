@@ -117,25 +117,13 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}))
 	defer childControl.Close()
 
-	acceptStarted := make(chan struct{}, 1)
-	acceptGate := make(chan struct{})
 	var acceptCount atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
 			acceptCount.Add(1)
-			select {
-			case acceptStarted <- struct{}{}:
-			default:
-			}
-			<-acceptGate
-			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
-				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: stringPointer("generation-a"),
-				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
-			})
-		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
-			t.Error("same-version upgrade attested over HTTP")
-			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
+			t.Error("Host accepted a forwarded heartbeat Machine Upgrade")
+			http.Error(w, "Host must not execute Machine Upgrade", http.StatusConflict)
 		default:
 			http.NotFound(w, r)
 		}
@@ -180,21 +168,9 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("forward Machine Upgrade: %v", err)
 	}
-	select {
-	case <-acceptStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Computer Host did not accept Machine Upgrade")
-	}
-	if err := hostClient.ForwardMachineActions(context.Background(), protocol.DaemonHeartbeatAckPayload{
-		RuntimeID:             "runtime-a",
-		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v1.0.0"},
-	}); err != nil {
-		t.Fatalf("forward duplicate Machine Upgrade: %v", err)
-	}
 	time.Sleep(50 * time.Millisecond)
-	close(acceptGate)
-	if got := acceptCount.Load(); got != 1 {
-		t.Fatalf("Machine Upgrade accept count = %d, want one machine-scoped owner", got)
+	if got := acceptCount.Load(); got != 0 {
+		t.Fatalf("Host executed forwarded heartbeat upgrade %d times, want 0", got)
 	}
 	cancel()
 	if err := <-done; err != nil {

@@ -108,7 +108,12 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 	switch action {
 	case protocol.EventComputerUpgrade:
 		if d.bindingMachineUpgrade == nil {
-			return errors.New("Binding child Machine Upgrade executor is unavailable")
+			// Raft 1.0.16: a DaemonCore not constructed by Computer
+			// ignores computer:upgrade instead of inventing a Host path.
+			if d.logger != nil {
+				d.logger.Info("ignoring computer:upgrade — not launched by a Computer service")
+			}
+			return nil
 		}
 		return d.bindingMachineUpgrade(ctx, command)
 	case protocol.EventComputerRestart:

@@ -114,14 +114,11 @@ func (upgrade *hostMachineUpgrade) localRequestHandler() http.HandlerFunc {
 		if targetVersion == "" {
 			targetVersion = "latest"
 		}
-		runtime, token, ok := upgrade.firstCurrentRuntime()
-		if !ok {
-			http.Error(w, "Computer has no ready Binding Runtime for Machine Upgrade", http.StatusConflict)
+		request.TargetVersion = targetVersion
+		if err := upgrade.host.DeliverComputerUpgrade(r.Context(), request); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		go upgrade.execute(context.Background(), runtime, token, protocol.DaemonHeartbeatPendingMachineUpgrade{
-			ID: operationID, TargetVersion: targetVersion,
-		})
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "phase": "queued"})
 	}
@@ -144,8 +141,7 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	if err := json.Unmarshal(raw, &ack); err != nil {
 		return err
 	}
-	runtime, token, ok := upgrade.currentRuntime(identity, ack.RuntimeID)
-	if !ok {
+	if _, _, ok := upgrade.currentRuntime(identity, ack.RuntimeID); !ok {
 		return errors.New("machine action Runtime belongs to another Binding child")
 	}
 	if ack.RuntimeGone || ack.PendingModelList != nil || ack.PendingLocalSkills != nil || ack.PendingLocalSkillImport != nil || len(ack.PendingLocalSkillImports) > 0 || ack.PendingMemoryCuration != nil {
@@ -157,17 +153,9 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	}
 	upgrade.mu.Unlock()
 	if ack.PendingMachineUpgrade != nil {
-		pending := *ack.PendingMachineUpgrade
-		upgrade.mu.Lock()
-		activeID := upgrade.activeID
-		upgrade.mu.Unlock()
-		if activeID != "" {
-			if activeID == pending.ID {
-				return nil
-			}
-			return ErrComputerControlBusy
-		}
-		go upgrade.execute(context.Background(), runtime, token, pending)
+		// Connect-socket upgrades execute in the Binding that received
+		// computer:upgrade. Host only prepares siblings / restarts.
+		return nil
 	}
 	if ack.PendingRestart != nil {
 		go upgrade.scheduleCurrentBinaryRestart()
@@ -232,117 +220,6 @@ func (upgrade *hostMachineUpgrade) observeInitiatorExit(identity BindingChildIde
 	upgrade.restartBinary = path
 	upgrade.targetVersion = journal.Target
 	upgrade.mu.Unlock()
-	if upgrade.config.cancel != nil {
-		upgrade.config.cancel()
-	}
-}
-
-func (upgrade *hostMachineUpgrade) execute(ctx context.Context, runtime hostBindingRuntime, token string, pending protocol.DaemonHeartbeatPendingMachineUpgrade) {
-	upgrade.mu.Lock()
-	// One machine-wide upgrade at a time. Same operationId is a replay; a
-	// different ID while this slot is taken is rejected at handleChildAction.
-	if upgrade.activeID != "" {
-		upgrade.mu.Unlock()
-		return
-	}
-	upgrade.activeID = pending.ID
-	manifestBaseURL := upgrade.manifestBaseURL
-	upgrade.mu.Unlock()
-
-	succeeded := false
-	prepared := false
-	journalPersisted := false
-	defer func() {
-		if !succeeded {
-			if prepared {
-				releaseCtx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
-				_ = upgrade.host.ReleaseMachineUpgrade(releaseCtx)
-				cancel()
-			}
-			upgrade.mu.Lock()
-			if upgrade.activeID == pending.ID {
-				upgrade.activeID = ""
-				upgrade.initiatorWorkspaceID = ""
-			}
-			upgrade.mu.Unlock()
-			if journalPersisted {
-				_ = upgrade.removeJournal()
-			}
-		}
-	}()
-
-	target, err := upgrade.resolveTarget(pending.TargetVersion, manifestBaseURL)
-	if err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "target_resolution_failed", err)
-		return
-	}
-	var receipt hostMachineUpgradeReceipt
-	err = upgrade.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s/accept", url.PathEscape(runtime.ID), url.PathEscape(pending.ID)), token, map[string]any{
-		"generation_id": upgrade.generationID, "cli_version": upgrade.config.identity.Version, "resolved_target": target,
-	}, &receipt, nil)
-	if err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "acceptance_failed", err)
-		return
-	}
-	runtimeIDs, workspaceIDs := upgrade.currentRuntimeAndWorkspaceIDs()
-	if err := validateHostMachineUpgradeReceipt(receipt, pending.ID, runtimeIDs, workspaceIDs); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "acceptance_set_mismatch", err)
-		return
-	}
-	if versionsMatch(upgrade.config.identity.Version, target) {
-		// Same-version upgrades complete when the current Binding socket
-		// reports this version. The Host only needs to release the slot.
-		succeeded = true
-		upgrade.mu.Lock()
-		if upgrade.activeID == pending.ID {
-			upgrade.activeID = ""
-			upgrade.initiatorWorkspaceID = ""
-		}
-		upgrade.mu.Unlock()
-		return
-	}
-	if err := upgrade.host.PrepareMachineUpgrade(ctx); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "handoff_failed", err)
-		return
-	}
-	prepared = true
-	if err := upgrade.reportProgress(ctx, runtime.ID, token, pending.ID, "staging", "", ""); err != nil {
-		return
-	}
-	staged, err := upgrade.stageRelease(target, cli.DefaultUpdateDownloadTimeout, manifestBaseURL)
-	if err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "stage_failed", err)
-		return
-	}
-	_ = upgrade.reportProgress(ctx, runtime.ID, token, pending.ID, "verifying", "", "")
-	if err := upgrade.verifyBinary(ctx, staged, target); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "verification_failed", err)
-		return
-	}
-	if err := upgrade.reportProgress(ctx, runtime.ID, token, pending.ID, "handoff", "", ""); err != nil {
-		return
-	}
-	installPath, err := upgrade.installPath()
-	if err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "activation_failed", err)
-		return
-	}
-	if err := upgrade.swapExecutable(installPath, staged); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "activation_failed", err)
-		return
-	}
-	journal := hostMachineUpgradeJournal{Target: target}
-	if err := upgrade.writeJournal(journal); err != nil {
-		_ = cli.RollbackExecutable(installPath)
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "journal_persist_failed", err)
-		return
-	}
-	journalPersisted = true
-	upgrade.mu.Lock()
-	upgrade.restartBinary = installPath
-	upgrade.targetVersion = target
-	upgrade.mu.Unlock()
-	succeeded = true
 	if upgrade.config.cancel != nil {
 		upgrade.config.cancel()
 	}

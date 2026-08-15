@@ -110,22 +110,7 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handle
 			gcRuntimes(ctx, queries, bus)
 			gcExpiredAgentCredentials(ctx, queries)
 			sweepTimedOutAgentRestartOperations(ctx, agentRestartDB)
-			sweepTimedOutQueuedMachineUpgrades(ctx, agentRestartDB)
 		}
-	}
-}
-
-func sweepTimedOutQueuedMachineUpgrades(ctx context.Context, exec *pgxpool.Pool) {
-	if exec == nil {
-		return
-	}
-	swept, err := handler.SweepTimedOutQueuedMachineUpgrades(ctx, exec)
-	if err != nil {
-		slog.Warn("sweep timed-out queued Computer upgrades failed", "error", err)
-		return
-	}
-	if swept > 0 {
-		slog.Info("swept timed-out queued Computer upgrades", "count", swept)
 	}
 }
 

@@ -306,8 +306,25 @@ func (h *Handler) createMachineUpgrade(
 		return nil, false, err
 	}
 	if created {
+		// Authority is the current Binding socket. Without one there is
+		// nothing to wait for — fail now so the one-per-machine slot
+		// does not sit in queued.
+		if !h.dispatchComputerUpgradeToRunners(r.Context(), runtimeDaemonKey(rt), op) {
+			failed, failErr := h.MachineUpgradeStore.Progress(
+				r.Context(), daemonID, op.ID, MachineUpgradeFailed,
+				"no_current_socket",
+				"Computer upgrade needs the current Binding socket",
+			)
+			if failErr != nil {
+				return nil, false, failErr
+			}
+			if failed != nil {
+				op = failed
+			}
+			h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
+			return op, false, nil
+		}
 		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
-		h.dispatchComputerUpgradeToRunners(r.Context(), runtimeDaemonKey(rt), op)
 	}
 	return op, created, nil
 }
@@ -315,9 +332,9 @@ func (h *Handler) createMachineUpgrade(
 // dispatchComputerUpgradeToRunners is the Raft 1.0.16 connect-socket path:
 // command goes to one current DaemonCore socket. Upgrade is machine-wide; the
 // child forwards it to Computer Host, and Host drains every Binding locally.
-func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computerID string, op *MachineUpgrade) {
+func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computerID string, op *MachineUpgrade) bool {
 	if h == nil || h.DaemonHub == nil || op == nil || strings.TrimSpace(computerID) == "" {
-		return
+		return false
 	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT workspace_id
@@ -325,19 +342,20 @@ func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computer
 		WHERE daemon_id = $1 AND active = TRUE AND revoked_at IS NULL
 		ORDER BY workspace_id`, computerID)
 	if err != nil {
-		return
+		return false
 	}
 	defer rows.Close()
 	payload := protocol.ComputerUpgradePayload{RequestID: op.ID, OperationID: op.ID, TargetVersion: op.RequestedTarget}
 	for rows.Next() {
 		var workspaceID pgtype.UUID
 		if err := rows.Scan(&workspaceID); err != nil {
-			return
+			return false
 		}
 		if h.DaemonHub.NotifyWorkspaceRunner(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload) {
-			return
+			return true
 		}
 	}
+	return false
 }
 
 type machineUpgradeInputError struct {

@@ -438,6 +438,14 @@ func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, ste
 	}, nil)
 }
 
+// KickGraphMemoryJudge reports one graph-memory recall to the server,
+// kicking the server-side async judge + delayed-reward flow (design §5.3).
+// Fire-and-forget from the caller's perspective: errors are logged by the
+// caller and never affect task execution.
+func (c *Client) KickGraphMemoryJudge(ctx context.Context, payload protocol.GraphMemoryJudgeKickPayload) error {
+	return c.postJSON(ctx, "/api/daemon/graph-memory/judge", payload, nil)
+}
+
 // TaskMessageData represents a single agent execution message for batch reporting.
 type TaskMessageData struct {
 	Seq     int            `json:"seq"`

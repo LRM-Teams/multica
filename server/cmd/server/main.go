@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/arealrl"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
@@ -377,12 +378,27 @@ func main() {
 	taskSvc.Wakeup = daemonWakeup
 	taskSvc.Analytics = analyticsClient
 	taskSvc.Metrics = businessMetrics
-	if tc := service.LoadTrainingConfig(); tc.BridgeStubURL != "" {
+	tc := service.LoadTrainingConfig()
+	if tc.BridgeStubURL != "" {
 		taskSvc.WithTraining(service.NewTrainingSessionDeps(tc, queries))
 		slog.Info("training bridge configured", "stub_url", tc.BridgeStubURL)
 	} else {
 		slog.Info("training bridge not configured (AREAL_BRIDGE_STUB_URL unset) — training hooks disabled")
 	}
+
+	// Graph memory reviewer activation (design §5.1/§5.3, review P0-1/P0-2):
+	// the ingest hook routes closed interaction-dag segments into the
+	// per-workspace memory_graph staging area, and the judge service runs
+	// the async judge + delayed-reward flow for daemon-reported recalls.
+	// Both are nil-safe per workspace (no memory_graph dir -> skip).
+	taskSvc.SetSegmentIngestHook(service.NewGraphMemoryIngestHook(queries, "", businessMetrics))
+	var graphRewardClient *arealrl.Client
+	if tc.BridgeStubURL != "" {
+		graphRewardClient = arealrl.New(tc.BridgeStubURL, tc.AdminAPIKey)
+	}
+	graphJudge := service.NewGraphMemoryJudgeService(queries, "", businessMetrics, graphRewardClient, 0)
+	h.GraphMemoryJudge = graphJudge
+	go graphJudge.RunRewardSweep(sweepCtx, time.Minute)
 	// LRM-1049: Autopilot scheduler/listeners/failure-monitor are retired.
 	// Reminder owns agent self-wake; API paths return 410.
 
@@ -437,6 +453,17 @@ func main() {
 	for _, job := range scheduler.MemoryCurationJobs(pool) {
 		if err := schedulerMgr.Register(job); err != nil {
 			slog.Warn("scheduler: failed to register memory curation job", "job", job.Name, "error", err)
+		} else {
+			schedulerRegistered = true
+		}
+	}
+	// Graph memory consolidation (design §5.4) is opt-in while the reviewer
+	// rolls out: MULTICA_GRAPH_CONSOLIDATION_ENABLED gates registration, and
+	// the handler additionally requires a graph reviewer per workspace
+	// (graph_memory_profile, falling back to MULTICA_REVIEWER_TYPE; A4).
+	if enabled := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_GRAPH_CONSOLIDATION_ENABLED"))); enabled == "true" || enabled == "1" || enabled == "on" {
+		if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
+			slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)
 		} else {
 			schedulerRegistered = true
 		}

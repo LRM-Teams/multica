@@ -112,19 +112,23 @@ type cloudRuntimeProxy interface {
 }
 
 type Handler struct {
-	Queries                     *db.Queries
-	DB                          dbExecutor
-	TxStarter                   txStarter
-	Hub                         *realtime.Hub
-	DaemonHub                   *daemonws.Hub
-	RunnerPresenceSource        RunnerPresenceSource
-	RunnerPresenceMu            *sync.Mutex
-	ReminderNotifier            daemonws.ReminderNotifier
-	ReminderOwnerInputNotifier  daemonws.ReminderOwnerInputNotifier
-	AgentDeliveryNotifier       daemonws.AgentDeliveryNotifier
-	SandboxHub                  *sandboxws.Hub
-	Bus                         *events.Bus
-	TaskService                 *service.TaskService
+	Queries                    *db.Queries
+	DB                         dbExecutor
+	TxStarter                  txStarter
+	Hub                        *realtime.Hub
+	DaemonHub                  *daemonws.Hub
+	RunnerPresenceSource       RunnerPresenceSource
+	RunnerPresenceMu           *sync.Mutex
+	ReminderNotifier           daemonws.ReminderNotifier
+	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
+	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
+	SandboxHub                 *sandboxws.Hub
+	Bus                        *events.Bus
+	TaskService                *service.TaskService
+	// GraphMemoryJudge runs the server-side async judge + delayed-reward
+	// flow for graph-memory recalls reported by daemons (design §5.3).
+	// Nil-safe: the endpoint accepts and drops reports when unwired.
+	GraphMemoryJudge            *service.GraphMemoryJudgeService
 	AgentFleetRankService       *service.AgentFleetRankService
 	AgentHonorService           *service.AgentHonorService
 	IssueService                *service.IssueService

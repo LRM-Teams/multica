@@ -1086,3 +1086,99 @@ func TestLoadConfig_PinnedVersion_EmptyIsNoop(t *testing.T) {
 		t.Fatalf("PinnedVersion = %q, want empty", cfg.PinnedVersion)
 	}
 }
+
+// Graph memory reviewer (design §1/§6): the switch defaults to legacy and the
+// graph knobs take their conservative defaults when no env is set.
+func TestLoadConfig_GraphMemoryDefaults(t *testing.T) {
+	stageFakeAgent(t)
+	root := t.TempDir()
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: root,
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.ReviewerType != ReviewerTypeLegacy {
+		t.Fatalf("ReviewerType = %q, want %q", cfg.ReviewerType, ReviewerTypeLegacy)
+	}
+	if want := filepath.Join(root, "memory_graph"); cfg.GraphMemoryDir != want {
+		t.Fatalf("GraphMemoryDir = %q, want %q", cfg.GraphMemoryDir, want)
+	}
+	if cfg.GraphExploreAgents != DefaultGraphExploreAgents {
+		t.Fatalf("GraphExploreAgents = %d, want %d", cfg.GraphExploreAgents, DefaultGraphExploreAgents)
+	}
+	if cfg.GraphExploreMaxRounds != DefaultGraphExploreMaxRounds {
+		t.Fatalf("GraphExploreMaxRounds = %d, want %d", cfg.GraphExploreMaxRounds, DefaultGraphExploreMaxRounds)
+	}
+	if cfg.GraphRewardTimeoutSeconds != DefaultGraphRewardTimeoutSeconds {
+		t.Fatalf("GraphRewardTimeoutSeconds = %d, want %d", cfg.GraphRewardTimeoutSeconds, DefaultGraphRewardTimeoutSeconds)
+	}
+	if cfg.GraphEmbedBaseURL != "" || cfg.GraphEmbedAPIKey != "" || cfg.GraphEmbedModel != "" {
+		t.Fatalf("GraphEmbed* = %q/%q/%q, want empty", cfg.GraphEmbedBaseURL, cfg.GraphEmbedAPIKey, cfg.GraphEmbedModel)
+	}
+}
+
+// An unknown reviewer type must fail loud: silently falling back to either
+// pipeline would mask an operator typo.
+func TestLoadConfig_InvalidReviewerType(t *testing.T) {
+	stageFakeAgent(t)
+	t.Setenv("MULTICA_REVIEWER_TYPE", "bogus")
+	_, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid MULTICA_REVIEWER_TYPE, got nil")
+	}
+	if !strings.Contains(err.Error(), "MULTICA_REVIEWER_TYPE") {
+		t.Fatalf("expected error to mention MULTICA_REVIEWER_TYPE, got: %v", err)
+	}
+}
+
+func TestLoadConfig_GraphReviewerFromEnv(t *testing.T) {
+	stageFakeAgent(t)
+	graphDir := filepath.Join(t.TempDir(), "graph")
+	t.Setenv("MULTICA_REVIEWER_TYPE", "graph")
+	t.Setenv("MULTICA_GRAPH_MEMORY_DIR", graphDir)
+	t.Setenv("MULTICA_GRAPH_EXPLORE_AGENTS", "4")
+	t.Setenv("MULTICA_GRAPH_EXPLORE_MAX_ROUNDS", "5")
+	t.Setenv("MULTICA_GRAPH_REWARD_TIMEOUT_SECONDS", "900")
+	t.Setenv("MULTICA_GRAPH_EMBED_BASE_URL", "https://embed.example.com")
+	t.Setenv("MULTICA_GRAPH_EMBED_MODEL", "text-embedding-3-small")
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.ReviewerType != ReviewerTypeGraph {
+		t.Fatalf("ReviewerType = %q, want %q", cfg.ReviewerType, ReviewerTypeGraph)
+	}
+	if cfg.GraphMemoryDir != graphDir {
+		t.Fatalf("GraphMemoryDir = %q, want %q", cfg.GraphMemoryDir, graphDir)
+	}
+	if cfg.GraphExploreAgents != 4 || cfg.GraphExploreMaxRounds != 5 || cfg.GraphRewardTimeoutSeconds != 900 {
+		t.Fatalf("graph explore/reward knobs = %d/%d/%d, want 4/5/900",
+			cfg.GraphExploreAgents, cfg.GraphExploreMaxRounds, cfg.GraphRewardTimeoutSeconds)
+	}
+	if cfg.GraphEmbedBaseURL != "https://embed.example.com" || cfg.GraphEmbedModel != "text-embedding-3-small" {
+		t.Fatalf("GraphEmbed* = %q/%q", cfg.GraphEmbedBaseURL, cfg.GraphEmbedModel)
+	}
+}
+
+func TestLoadConfig_InvalidGraphExploreAgents(t *testing.T) {
+	stageFakeAgent(t)
+	t.Setenv("MULTICA_GRAPH_EXPLORE_AGENTS", "0")
+	_, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("expected error for non-positive MULTICA_GRAPH_EXPLORE_AGENTS, got nil")
+	}
+	if !strings.Contains(err.Error(), "MULTICA_GRAPH_EXPLORE_AGENTS") {
+		t.Fatalf("expected error to mention MULTICA_GRAPH_EXPLORE_AGENTS, got: %v", err)
+	}
+}

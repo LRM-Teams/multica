@@ -56,6 +56,16 @@ const (
 	DefaultReleaseDetectionDelay    = 2 * time.Minute // initial delay before first detection check
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
 	DefaultMemoryCurationRunTimeout = 10 * time.Minute
+
+	// Graph memory reviewer (design: docs/superpowers/specs/2026-08-14-graph-memory-reviewer-design.zh-CN.md).
+	ReviewerTypeLegacy = "legacy"
+	ReviewerTypeGraph  = "graph"
+	// DefaultReviewerType keeps the legacy memory pipeline active unless the
+	// operator opts into the graph reviewer via MULTICA_REVIEWER_TYPE=graph.
+	DefaultReviewerType              = ReviewerTypeLegacy
+	DefaultGraphExploreAgents        = 1
+	DefaultGraphExploreMaxRounds     = 3
+	DefaultGraphRewardTimeoutSeconds = 600
 	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
 	// the curator agent (self-review / team curation / L3). 30s was too short
 	// for Cursor/Codex team curation over multiple agents and evidence.
@@ -110,6 +120,29 @@ type Config struct {
 	MemoryCurationL3ReviewEnabled bool          // run the local Pi L3 reviewer during daemon-side curation
 	MemoryCurationL3ReviewTimeout time.Duration // per-agent L3 reviewer timeout
 	MemoryCurationRunTimeout      time.Duration // wall-clock timeout for one daemon-claimed curation run
+	// ReviewerType selects the memory reviewer pipeline: "legacy" (default)
+	// or "graph" (design §1 reviewer.type switch). Any other value is a
+	// configuration error and fails LoadConfig.
+	ReviewerType string
+	// GraphMemoryDir is the root of the memorygraph.Store layout (design
+	// §4.1). Empty in env resolves to <WorkspacesRoot>/memory_graph.
+	GraphMemoryDir string
+	// GraphEmbed* configure the OpenAI-compatible embedding endpoint used by
+	// the hybrid retriever's vector channel (design §5.2). Empty BaseURL/Model
+	// silently disables embeddings and retrieval runs BM25-only.
+	GraphEmbedBaseURL string
+	GraphEmbedAPIKey  string
+	GraphEmbedModel   string
+	// GraphExploreAgents is the TTT K parallel explore trajectories (1 =
+	// non-TTT single trajectory, design Q17).
+	GraphExploreAgents int
+	// GraphExploreMaxRounds is the exploration-round budget per trajectory
+	// (design Q15).
+	GraphExploreMaxRounds int
+	// GraphRewardTimeoutSeconds is the delayed-reward sweep timeout (design
+	// Q28): pending explore traces whose judge result never arrives are
+	// resolved with the miss penalty after this long.
+	GraphRewardTimeoutSeconds int
 	// MaxAgentProcesses bounds distinct agents with a live resident provider
 	// process on this Computer (#35). 0 = unlimited and is the production
 	// default. MULTICA_MAX_AGENT_PROCESSES enables an explicit operator safety
@@ -537,6 +570,35 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		return Config{}, err
 	}
 
+	// Graph memory reviewer (design §1/§6). reviewer.type fails loud on any
+	// value outside legacy|graph: a typo must not silently pin the daemon to
+	// the wrong memory pipeline.
+	reviewerType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_REVIEWER_TYPE")))
+	if reviewerType == "" {
+		reviewerType = DefaultReviewerType
+	}
+	switch reviewerType {
+	case ReviewerTypeLegacy, ReviewerTypeGraph:
+	default:
+		return Config{}, fmt.Errorf("MULTICA_REVIEWER_TYPE: invalid reviewer type %q (want %q or %q)", reviewerType, ReviewerTypeLegacy, ReviewerTypeGraph)
+	}
+	graphMemoryDir := strings.TrimSpace(os.Getenv("MULTICA_GRAPH_MEMORY_DIR"))
+	if graphMemoryDir == "" {
+		graphMemoryDir = filepath.Join(workspacesRoot, "memory_graph")
+	}
+	graphExploreAgents, err := positiveIntFromEnv("MULTICA_GRAPH_EXPLORE_AGENTS", DefaultGraphExploreAgents)
+	if err != nil {
+		return Config{}, err
+	}
+	graphExploreMaxRounds, err := positiveIntFromEnv("MULTICA_GRAPH_EXPLORE_MAX_ROUNDS", DefaultGraphExploreMaxRounds)
+	if err != nil {
+		return Config{}, err
+	}
+	graphRewardTimeoutSeconds, err := positiveIntFromEnv("MULTICA_GRAPH_REWARD_TIMEOUT_SECONDS", DefaultGraphRewardTimeoutSeconds)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerBaseURL:                  serverBaseURL,
 		ReleaseChannel:                 releaseChannel,
@@ -558,6 +620,14 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
 		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
 		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
+		ReviewerType:                   reviewerType,
+		GraphMemoryDir:                 graphMemoryDir,
+		GraphEmbedBaseURL:              strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_BASE_URL")),
+		GraphEmbedAPIKey:               strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_API_KEY")),
+		GraphEmbedModel:                strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_MODEL")),
+		GraphExploreAgents:             graphExploreAgents,
+		GraphExploreMaxRounds:          graphExploreMaxRounds,
+		GraphRewardTimeoutSeconds:      graphRewardTimeoutSeconds,
 		MaxAgentProcesses:              maxAgentProcesses,
 		HealthPort:                     healthPort,
 		PollInterval:                   pollInterval,
@@ -571,6 +641,21 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		CodexArgs:                      codexArgs,
 		CodebuddyArgs:                  codebuddyArgs,
 	}, nil
+}
+
+// positiveIntFromEnv parses a positive-integer env var, returning def when
+// the var is unset. Non-numeric or non-positive values are configuration
+// errors (fail loud, same contract as the curation loaders above).
+func positiveIntFromEnv(name string, def int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def, nil
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s: invalid positive integer %q", name, v)
+	}
+	return parsed, nil
 }
 
 // officialCloudHost remains a small URL-normalization helper for compatibility

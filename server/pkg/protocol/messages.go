@@ -844,6 +844,37 @@ type TaskMessagePayload struct {
 	CreatedAt  string         `json:"created_at,omitempty"`
 }
 
+// GraphMemoryJudgeKickPayload is sent from daemon to server after a
+// graph-memory recall was handed to the downstream agent, kicking the
+// asynchronous judge + delayed-reward flow (design §5.3, Q18/Q28). The
+// daemon has no DB access for the judge's downstream history and no RL
+// bridge configuration, so judging and reward composition run server-side
+// (service.GraphMemoryJudgeService); the daemon only reports the recall.
+type GraphMemoryJudgeKickPayload struct {
+	TraceID string   `json:"trace_id"`
+	TaskID  string   `json:"task_id"` // agent_run_id of the downstream task
+	Query   string   `json:"query"`
+	Summary string   `json:"summary,omitempty"`
+	NodeIDs []string `json:"node_ids,omitempty"`
+	Rounds  int      `json:"rounds"`
+	Version int      `json:"version"`
+	// AgentRuns carries the per-trajectory round/error accounting of K-way
+	// explore (Q17) so the server-side reward composer can apply the
+	// round-cost term per run.
+	AgentRuns []GraphMemoryExploreRunPayload `json:"agent_runs,omitempty"`
+}
+
+// GraphMemoryExploreRunPayload is the wire shape of one explore trajectory
+// inside GraphMemoryJudgeKickPayload (mirrors memorygraph.ExploreRun minus
+// the fields the judge/reward flow does not need).
+type GraphMemoryExploreRunPayload struct {
+	RunID  string `json:"run_id"`
+	Seed   int    `json:"seed"`
+	Found  bool   `json:"found"`
+	Rounds int    `json:"rounds"`
+	Error  string `json:"error,omitempty"`
+}
+
 // DaemonRegisterPayload is sent from daemon to server on connection.
 type DaemonRegisterPayload struct {
 	DaemonID string        `json:"daemon_id"`
@@ -1220,14 +1251,14 @@ type AgentMemoryHydrateEntry struct {
 // record of one settled resident Pi turn. The daemon, rather than the
 // workspace runner, is the trust boundary which creates this payload.
 type TurnCaptureUpload struct {
-	AgentID         string                      `json:"agent_id"`
-	RuntimeID       string                      `json:"runtime_id"`
-	CaptureBatchID  string                      `json:"capture_batch_id"`
-	Turn            TurnCaptureTurn             `json:"turn"`
-	ProviderCalls   []TurnCaptureProviderCall   `json:"provider_calls"`
-	VisibleActions  []TurnCaptureVisibleAction  `json:"visible_actions,omitempty"`
-	Consumptions    []TurnCaptureConsumption    `json:"consumptions,omitempty"`
-	PayloadHash     string                      `json:"payload_hash"`
+	AgentID        string                     `json:"agent_id"`
+	RuntimeID      string                     `json:"runtime_id"`
+	CaptureBatchID string                     `json:"capture_batch_id"`
+	Turn           TurnCaptureTurn            `json:"turn"`
+	ProviderCalls  []TurnCaptureProviderCall  `json:"provider_calls"`
+	VisibleActions []TurnCaptureVisibleAction `json:"visible_actions,omitempty"`
+	Consumptions   []TurnCaptureConsumption   `json:"consumptions,omitempty"`
+	PayloadHash    string                     `json:"payload_hash"`
 }
 
 // TurnCaptureVisibleAction is a trusted, daemon-observed successful channel

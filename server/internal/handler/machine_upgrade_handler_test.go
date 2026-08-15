@@ -9,9 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -222,7 +225,7 @@ func TestMachineUpgrade_CanonicalRouteReplaysRequestIDAndSupportsLookup(t *testi
 	}
 }
 
-func TestMachineUpgrade_CapableHeartbeatAcceptsAndRequiresEverySiblingAttestation(t *testing.T) {
+func TestMachineUpgrade_CapableHeartbeatDoesNotClaimConnectSocketUpgrade(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -232,16 +235,32 @@ func TestMachineUpgrade_CapableHeartbeatAcceptsAndRequiresEverySiblingAttestatio
 	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
 
 	firstAck, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil)
-	if err != nil || firstAck.PendingMachineUpgrade == nil || firstAck.PendingMachineUpgrade.ID != created.ID {
-		t.Fatalf("first capable heartbeat claim = %+v err=%v", firstAck, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstAck.PendingMachineUpgrade != nil {
+		t.Fatalf("capable heartbeat claimed connect-socket upgrade %+v", firstAck.PendingMachineUpgrade)
 	}
 	secondAck, _, err := testHandler.processHeartbeat(context.Background(), secondRuntime, false, false, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if secondAck.PendingMachineUpgrade != nil {
-		t.Fatalf("sibling heartbeat also claimed %+v", secondAck.PendingMachineUpgrade)
+		t.Fatalf("sibling heartbeat claimed connect-socket upgrade %+v", secondAck.PendingMachineUpgrade)
 	}
+	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID); err != nil || op == nil || op.Phase != MachineUpgradeQueued {
+		t.Fatalf("connect-socket operation left queued = %+v err=%v", op, err)
+	}
+}
+
+func TestMachineUpgrade_AcceptFromQueuedCompletesWithoutHeartbeatClaim(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
+	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
 
 	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+firstRuntimeID+"/machine-upgrades/"+created.ID+"/accept", map[string]string{
 		"generation_id": "generation-a",
@@ -648,11 +667,6 @@ func TestMachineUpgradeLatestResolvesOnlyAtCapableDelivery(t *testing.T) {
 	if err := json.Unmarshal(createW.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	runtime := getMachineUpgradeRuntime(t, runtimeID)
-	ack, _, err := testHandler.processHeartbeat(context.Background(), runtime, false, false, "", nil)
-	if err != nil || ack.PendingMachineUpgrade == nil {
-		t.Fatalf("latest heartbeat ack = %+v, %v", ack, err)
-	}
 	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/machine-upgrades/"+created.ID+"/accept", map[string]string{
 		"generation_id":   "generation-latest",
 		"cli_version":     "v9.9.9",
@@ -690,8 +704,8 @@ func TestMachineUpgrade_CapabilityAndManagedSetPreventUnsafeCompletion(t *testin
 	}
 	firstRuntime = getMachineUpgradeRuntime(t, firstRuntimeID)
 	ack, _, err = testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil)
-	if err != nil || ack.PendingMachineUpgrade == nil {
-		t.Fatalf("capable runtime did not receive machine action: %+v err=%v", ack, err)
+	if err != nil || ack.PendingMachineUpgrade != nil {
+		t.Fatalf("capable connect-socket runtime claimed heartbeat upgrade: %+v err=%v", ack, err)
 	}
 
 	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/", map[string]string{"generation_id": "generation-b", "cli_version": "v9.9.9"})
@@ -724,11 +738,6 @@ func TestMachineUpgrade_NewTargetProgressesDurablyBeforeHandoff(t *testing.T) {
 	}
 	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
 	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
-	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
-	ack, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil)
-	if err != nil || ack.PendingMachineUpgrade == nil {
-		t.Fatalf("claim = %+v err=%v", ack, err)
-	}
 	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/", map[string]string{"generation_id": "generation-stage", "cli_version": "v9.9.9"})
 	acceptReq = withRouteParams(acceptReq, "runtimeId", firstRuntimeID, "upgradeId", created.ID)
 	acceptW := httptest.NewRecorder()
@@ -1173,5 +1182,183 @@ func TestMachineUpgrade_RuntimeCompatibilityAdaptersShareAndCancelCanonicalOpera
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("compatibility %s by non-owner = %d: %s", method, w.Code, w.Body.String())
 		}
+	}
+}
+
+func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+	})
+	siblingWorkspaceID := createBindingTestWorkspace(t, testUserID, "owner")
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
+	bindMachineUpgradeWorkspace(t, daemonID, siblingWorkspaceID, testUserID)
+
+	hub := daemonws.NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		workspaceID := r.URL.Query().Get("workspace")
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: workspaceID})
+	}))
+	t.Cleanup(server.Close)
+
+	dialReady := func(workspaceID string) *websocket.Conn {
+		t.Helper()
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"?workspace="+workspaceID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		ready, err := json.Marshal(protocol.Message{
+			Type: protocol.EventWorkspaceRunnerReady,
+			Payload: mustMarshalJSON(protocol.WorkspaceRunnerReadyPayload{
+				WorkspaceID: workspaceID, DaemonInstanceID: "instance-" + workspaceID,
+				ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+			}),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(time.Second)
+		for hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 {
+			if time.Now().After(deadline) {
+				t.Fatalf("Binding %s did not become ready", workspaceID)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return conn
+	}
+	firstConn := dialReady(testWorkspaceID)
+	secondConn := dialReady(siblingWorkspaceID)
+
+	local := *testHandler
+	local.DaemonHub = hub
+	req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{
+		"target_version": "v9.9.9",
+		"request_id":     uuid.NewString(),
+	})
+	req = withURLParam(req, "daemonId", daemonID)
+	w := httptest.NewRecorder()
+	local.CreateMachineUpgrade(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create machine upgrade = %d: %s", w.Code, w.Body.String())
+	}
+
+	readUpgrade := func(conn *websocket.Conn) (protocol.ComputerUpgradePayload, bool) {
+		t.Helper()
+		if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return protocol.ComputerUpgradePayload{}, false
+		}
+		var message protocol.Message
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatal(err)
+		}
+		if message.Type != protocol.EventComputerUpgrade {
+			t.Fatalf("unexpected Binding frame %q", message.Type)
+		}
+		var payload protocol.ComputerUpgradePayload
+		if err := json.Unmarshal(message.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload, true
+	}
+	first, firstOK := readUpgrade(firstConn)
+	second, secondOK := readUpgrade(secondConn)
+	if firstOK == secondOK {
+		t.Fatalf("live Binding delivery first=%v second=%v, want exactly one current socket", firstOK, secondOK)
+	}
+	got := first
+	if secondOK {
+		got = second
+	}
+	if got.Operation() == "" || got.TargetVersion != "v9.9.9" {
+		t.Fatalf("computer:upgrade payload = %+v", got)
+	}
+}
+
+func TestMachineUpgrade_DispatchesComputerUpgradeToNextLiveBinding(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+	})
+	siblingWorkspaceID := createBindingTestWorkspace(t, testUserID, "owner")
+	firstWorkspaceID, secondWorkspaceID := testWorkspaceID, siblingWorkspaceID
+	if firstWorkspaceID > secondWorkspaceID {
+		firstWorkspaceID, secondWorkspaceID = secondWorkspaceID, firstWorkspaceID
+	}
+	bindMachineUpgradeWorkspace(t, daemonID, firstWorkspaceID, testUserID)
+	bindMachineUpgradeWorkspace(t, daemonID, secondWorkspaceID, testUserID)
+
+	hub := daemonws.NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: r.URL.Query().Get("workspace")})
+	}))
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"?workspace="+secondWorkspaceID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	ready, err := json.Marshal(protocol.Message{
+		Type: protocol.EventWorkspaceRunnerReady,
+		Payload: mustMarshalJSON(protocol.WorkspaceRunnerReadyPayload{
+			WorkspaceID: secondWorkspaceID, DaemonInstanceID: "instance-" + secondWorkspaceID,
+			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for hub.WorkspaceRunnerConnectionCount(daemonID, secondWorkspaceID) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("live Binding did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	local := *testHandler
+	local.DaemonHub = hub
+	req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{
+		"target_version": "v9.9.9",
+		"request_id":     uuid.NewString(),
+	})
+	req = withURLParam(req, "daemonId", daemonID)
+	w := httptest.NewRecorder()
+	local.CreateMachineUpgrade(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create machine upgrade = %d: %s", w.Code, w.Body.String())
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("live Binding did not receive computer:upgrade: %v", err)
+	}
+	var message protocol.Message
+	if err := json.Unmarshal(raw, &message); err != nil || message.Type != protocol.EventComputerUpgrade {
+		t.Fatalf("live Binding frame = %+v err=%v", message, err)
 	}
 }

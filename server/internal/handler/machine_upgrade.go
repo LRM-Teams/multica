@@ -389,7 +389,7 @@ func (s *PostgresMachineUpgradeStore) Accept(ctx context.Context, daemonID, id, 
 	if resolvedTarget == "" {
 		return nil, errMachineUpgradeAcceptanceConflict
 	}
-	if op.Phase != MachineUpgradeStarting && op.Phase != MachineUpgradeStaging && op.Phase != MachineUpgradeVerifying && op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging {
+	if op.Phase != MachineUpgradeQueued && op.Phase != MachineUpgradeStarting && op.Phase != MachineUpgradeStaging && op.Phase != MachineUpgradeVerifying && op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging {
 		return nil, errMachineUpgradeAcceptanceConflict
 	}
 	if op.RequestedTarget != "latest" && !versionsMatch(stringPointer(op.RequestedTarget), stringPointer(resolvedTarget)) {
@@ -414,7 +414,7 @@ func (s *PostgresMachineUpgradeStore) Accept(ctx context.Context, daemonID, id, 
 				WHERE daemon_id = $1 AND active = TRUE AND revoked_at IS NULL
 				ORDER BY workspace_id
 			), accepted_at = now(), updated_at = now()
-		WHERE daemon_id = $1 AND id = $2 AND phase = 'starting' AND accepted_generation IS NULL
+		WHERE daemon_id = $1 AND id = $2 AND phase IN ('queued', 'starting') AND accepted_generation IS NULL
 		  AND EXISTS (`+machineUpgradeComputerRuntimeSelect+`)
 		RETURNING `+machineUpgradeColumns,
 		strings.TrimSpace(daemonID), strings.TrimSpace(id), string(phase), strings.TrimSpace(resolvedTarget), strings.TrimSpace(runningVersion), strings.TrimSpace(generation)))

@@ -1248,22 +1248,12 @@ func (h *Handler) processHeartbeat(
 		}
 		ack.PendingMemoryCuration = pendingCuration
 	}
-	if agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMachineUpgrade) && h.MachineUpgradeStore != nil {
-		pending, err := h.MachineUpgradeStore.ClaimQueued(ctx, runtimeDaemonKey(rt))
-		if err != nil {
-			return nil, m, err
-		}
-		if pending != nil {
-			target := pending.RequestedTarget
-			ack.PendingMachineUpgrade = &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: pending.ID, TargetVersion: target}
-			h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{"runtime": h.runtimeToResponse(ctx, rt)})
-		}
-	} else if h.MachineUpgradeStore != nil && runtimeCurrentVersion(runtimeMetadata(rt)) != nil {
-		// Installed 0.4.13 daemons do not understand PendingMachineUpgrade,
-		// but they do understand PendingUpdate and report its lifecycle. Claim
-		// the canonical operation once, then use that old wire action strictly
-		// as the bootstrap carrier. A queued operation is not shown as started
-		// until the old daemon sends its running receipt.
+	// Capable Computers receive computer:upgrade on one current Binding
+	// socket. Heartbeat ClaimQueued stays only for packages that still speak
+	// PendingUpdate.
+	// TODO(heartbeat-upgrade-claim): Remove after 0.4.13 is no longer a
+	// supported direct self-upgrade source.
+	if !agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMachineUpgrade) && h.MachineUpgradeStore != nil && runtimeCurrentVersion(runtimeMetadata(rt)) != nil {
 		if err := h.claimLegacyMachineUpgrade(ctx, rt); err != nil {
 			slog.Warn("legacy machine upgrade claim failed", "runtime_id", runtimeID, "error", err)
 		}

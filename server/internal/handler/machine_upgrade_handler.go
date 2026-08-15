@@ -362,9 +362,11 @@ func (h *Handler) createMachineUpgrade(
 }
 
 // dispatchComputerUpgradeToRunners is the Raft 1.0.16 connect-socket path:
-// command goes to the current DaemonCore socket. The child forwards it to
-// Computer Host; Host still owns the swap. Heartbeat claim remains for older
-// packages that do not understand computer:upgrade.
+// command goes to one current DaemonCore socket. Upgrade is machine-wide; the
+// child forwards it to Computer Host, and Host drains every Binding locally.
+// TODO(heartbeat-upgrade-claim): Heartbeat ClaimQueued remains for older
+// packages that do not understand computer:upgrade. Remove after those
+// packages are no longer supported direct self-upgrade sources.
 func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computerID string, op *MachineUpgrade) {
 	if h == nil || h.DaemonHub == nil || op == nil || strings.TrimSpace(computerID) == "" {
 		return
@@ -384,7 +386,9 @@ func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computer
 		if err := rows.Scan(&workspaceID); err != nil {
 			return
 		}
-		_ = h.DaemonHub.NotifyWorkspaceRunner(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload)
+		if h.DaemonHub.NotifyWorkspaceRunner(computerID, uuidToString(workspaceID), protocol.EventComputerUpgrade, payload) {
+			return
+		}
 	}
 }
 

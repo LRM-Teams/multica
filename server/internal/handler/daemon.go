@@ -1251,7 +1251,7 @@ func (h *Handler) processHeartbeat(
 	// Capable Computers receive computer:upgrade on one current Binding
 	// socket. Heartbeat ClaimQueued stays only for packages that still speak
 	// PendingUpdate.
-	// TODO(heartbeat-upgrade-claim): Remove after 0.4.13 is no longer a
+	// TODO(heartbeat-upgrade-claim): Remove after v0.4.13 is no longer a
 	// supported direct self-upgrade source.
 	if !agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMachineUpgrade) && h.MachineUpgradeStore != nil && runtimeCurrentVersion(runtimeMetadata(rt)) != nil {
 		if err := h.claimLegacyMachineUpgrade(ctx, rt); err != nil {

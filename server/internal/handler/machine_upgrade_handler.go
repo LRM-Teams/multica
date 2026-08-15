@@ -364,9 +364,9 @@ func (h *Handler) createMachineUpgrade(
 // dispatchComputerUpgradeToRunners is the Raft 1.0.16 connect-socket path:
 // command goes to one current DaemonCore socket. Upgrade is machine-wide; the
 // child forwards it to Computer Host, and Host drains every Binding locally.
-// TODO(heartbeat-upgrade-claim): Heartbeat ClaimQueued remains for older
-// packages that do not understand computer:upgrade. Remove after those
-// packages are no longer supported direct self-upgrade sources.
+// TODO(heartbeat-upgrade-claim): Remove after v0.4.13 is no longer a
+// supported direct self-upgrade source. That release still claims through
+// heartbeat PendingUpdate and does not understand computer:upgrade.
 func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computerID string, op *MachineUpgrade) {
 	if h == nil || h.DaemonHub == nil || op == nil || strings.TrimSpace(computerID) == "" {
 		return

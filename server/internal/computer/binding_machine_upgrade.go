@@ -253,7 +253,6 @@ func (executor *BindingMachineUpgradeExecutor) postJSON(ctx context.Context, pat
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(executor.config.DaemonToken))
-	request.Header.Set("X-Computer-Generation", fmt.Sprintf("%d", executor.config.Identity.ComputerGeneration))
 	result, err := executor.client.Do(request)
 	if err != nil {
 		return err

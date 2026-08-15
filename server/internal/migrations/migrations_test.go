@@ -784,6 +784,39 @@ func TestMigration316RepairsMissingComputerWorkspaceBindingTables(t *testing.T) 
 	}
 }
 
+func TestMigration390DropsCloudComputerGenerationFence(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "390_drop_computer_generation_fence.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"DROP TABLE IF EXISTS computer_generation",
+		"DROP COLUMN IF EXISTS computer_generation",
+		"accepted_workspace_ids",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Errorf("migration 390 up missing %q", required)
+		}
+	}
+	if strings.Contains(string(up), "DROP COLUMN IF EXISTS accepted_workspace_ids") {
+		t.Fatal("migration 390 must not drop machine_upgrade workspace attestation columns")
+	}
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "390_drop_computer_generation_fence.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"CREATE TABLE IF NOT EXISTS computer_generation", "ADD COLUMN IF NOT EXISTS computer_generation"} {
+		if !strings.Contains(string(down), required) {
+			t.Errorf("migration 390 down missing %q", required)
+		}
+	}
+}
+
 func TestMigration314ComputerGenerationFenceAndWorkspaceAttestation(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

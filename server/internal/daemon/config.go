@@ -91,7 +91,7 @@ type Config struct {
 	Profile            string                // profile name (empty = default)
 	WorkspaceID        string                // the one workspace this daemon registers for
 	BindingsRoot       string                // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
-	ComputerGeneration int64                 // monotonic machine-wide resident generation; server fences older generations
+	ComputerGeneration int64                 // local Host/child slot generation; cloud liveness is the connect socket
 	Agents             map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
 	WorkspacesRoot     string                // base path containing workspace directories (default: ~/.multica/workspaces)
 	// BindingStateRoot isolates durable workspace-execution coordinator state

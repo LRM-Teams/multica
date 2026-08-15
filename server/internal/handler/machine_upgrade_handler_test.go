@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -456,22 +455,12 @@ func TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO computer_generation (daemon_id, generation) VALUES ($1, 66)
-		ON CONFLICT (daemon_id) DO UPDATE SET generation=66`, daemonID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_generation WHERE daemon_id=$1`, daemonID)
-	})
-
 	request := func(predecessor, candidate int64, workspaceIDs []string) *httptest.ResponseRecorder {
 		req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/computer/machine-upgrades/"+created.ID+"/takeover", map[string]any{
 			"daemon_id": daemonID, "generation_id": "generation-a", "cli_version": "v9.9.10",
 			"predecessor_computer_generation": predecessor, "candidate_computer_generation": candidate,
 			"workspace_ids": workspaceIDs,
 		})
-		req.Header.Set("X-Computer-Generation", strconv.FormatInt(candidate, 10))
 		req = withURLParam(req, "upgradeId", created.ID)
 		w := httptest.NewRecorder()
 		testHandler.CommitComputerMachineUpgradeTakeover(w, req)
@@ -481,16 +470,8 @@ func TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration(t *testing.T
 	if w := request(0, 0, nil); w.Code != http.StatusOK {
 		t.Fatalf("incomplete identity receipt status=%d body=%s", w.Code, w.Body.String())
 	}
-	var generation int64
-	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 66 {
-		t.Fatalf("takeover receipt changed generation=%d err=%v", generation, err)
-	}
-
 	if w := request(66, 67, accepted.AcceptedWorkspaceIDs); w.Code != http.StatusOK {
 		t.Fatalf("takeover receipt status=%d body=%s accepted=%+v", w.Code, w.Body.String(), accepted)
-	}
-	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 66 {
-		t.Fatalf("takeover receipt CAS'd generation=%d err=%v", generation, err)
 	}
 	if w := request(66, 67, accepted.AcceptedWorkspaceIDs); w.Code != http.StatusOK {
 		t.Fatalf("takeover receipt replay status=%d body=%s", w.Code, w.Body.String())

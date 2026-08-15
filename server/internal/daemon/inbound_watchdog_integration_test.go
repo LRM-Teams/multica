@@ -88,7 +88,6 @@ func TestLegacyRuntimeWakeSocketDoesNotCarryControlHeartbeat(t *testing.T) {
 		ServerBaseURL: srv.URL, WorkspacesRoot: t.TempDir(),
 		HeartbeatInterval: 10 * time.Millisecond,
 	}, testDiscardLogger())
-	d.client.SetToken("test-token")
 	d.mu.Lock()
 	d.runtimeIndex["rt-1"] = Runtime{ID: "rt-1", WorkspaceID: "ws-1"}
 	d.mu.Unlock()
@@ -258,7 +257,7 @@ func TestInboundWatchdogRuntimeSetChangeCleansUp(t *testing.T) {
 	}
 }
 
-func TestTaskWakeupConnectionSendsComputerGeneration(t *testing.T) {
+func TestTaskWakeupConnectionOmitsComputerGeneration(t *testing.T) {
 	headerCh := make(chan string, 1)
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -272,11 +271,10 @@ func TestTaskWakeupConnectionSendsComputerGeneration(t *testing.T) {
 	defer srv.Close()
 
 	d := New(Config{
-		ServerBaseURL:      srv.URL,
-		HeartbeatInterval:  time.Hour,
-		InboundWatchdog:    time.Hour,
-		WorkspacesRoot:     t.TempDir(),
-		ComputerGeneration: 33,
+		ServerBaseURL:     srv.URL,
+		HeartbeatInterval: time.Hour,
+		InboundWatchdog:   time.Hour,
+		WorkspacesRoot:    t.TempDir(),
 	}, testDiscardLogger())
 	d.runtimeIndex["rt-1"] = Runtime{ID: "rt-1", WorkspaceID: "ws-1"}
 	runtimeSetCh, unsub := d.runtimeSet.Subscribe()
@@ -288,8 +286,8 @@ func TestTaskWakeupConnectionSendsComputerGeneration(t *testing.T) {
 
 	select {
 	case got := <-headerCh:
-		if got != "33" {
-			t.Fatalf("X-Computer-Generation = %q, want 33", got)
+		if got != "" {
+			t.Fatalf("X-Computer-Generation = %q, want omitted", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("task wakeup handshake was not received")

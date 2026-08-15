@@ -93,9 +93,6 @@ func (h *Handler) requireDaemonRuntimeAccess(w http.ResponseWriter, r *http.Requ
 	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(rt.WorkspaceID)) {
 		return db.AgentRuntime{}, false
 	}
-	if rt.DaemonID.Valid && !h.requireCurrentComputerGeneration(w, r, rt.DaemonID.String) {
-		return db.AgentRuntime{}, false
-	}
 	return rt, true
 }
 
@@ -172,9 +169,8 @@ func (h *Handler) verifyDaemonWorkspaceAccess(r *http.Request, workspaceID strin
 // ---------------------------------------------------------------------------
 
 type DaemonRegisterRequest struct {
-	WorkspaceID        string `json:"workspace_id"`
-	DaemonID           string `json:"daemon_id"`
-	ComputerGeneration int64  `json:"computer_generation,omitempty"`
+	WorkspaceID string `json:"workspace_id"`
+	DaemonID    string `json:"daemon_id"`
 	// LegacyDaemonIDs lists prior hostname-derived daemon_ids this machine
 	// may have registered under before switching to a persistent UUID. The
 	// handler merges any matching runtime rows into the new row so agents
@@ -290,22 +286,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		ownerID = member.UserID
 	}
-	if req.ComputerGeneration > 0 {
-		if err := h.authorizeComputerConnectionRequest(r.Context(), r, req.DaemonID, req.WorkspaceID); err != nil {
-			if errors.Is(err, errComputerConnectionUnauthorized) {
-				writeError(w, http.StatusForbidden, err.Error())
-			} else {
-				writeError(w, http.StatusInternalServerError, "failed to authorize Computer connection")
-			}
-			return
-		}
-		if err := h.claimComputerGeneration(r.Context(), req.DaemonID, req.ComputerGeneration); err != nil {
-			writeCodedError(w, http.StatusConflict, "stale_computer_generation", err.Error())
-			return
-		}
-	} else if !h.requireCurrentComputerGeneration(w, r, req.DaemonID) {
-		return
-	}
+	// Live ownership is the current connect socket. Register no longer
+	// claims or fences a cloud Computer generation.
 
 	// Registration and permanent removal share one workspace+daemon advisory
 	// lock. Holding it across the tombstone check, runtime upserts, and token
@@ -902,10 +884,6 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		outcome = "workspace_denied"
 		return
 	}
-	if rt.DaemonID.Valid && !h.requireCurrentComputerGeneration(w, r, rt.DaemonID.String) {
-		outcome = "stale_computer_generation"
-		return
-	}
 	authMs = time.Since(start).Milliseconds()
 
 	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport, req.SupportsMemoryCuration, req.ActiveMemoryCurationRunID, req.UpdateObservation)
@@ -996,9 +974,6 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 		if (dynamicRunner && identity.DaemonID != rt.DaemonID.String) ||
 			(!dynamicRunner && identity.DaemonID != "" && identity.DaemonID != rt.DaemonID.String) {
 			return nil, fmt.Errorf("runtime not assigned to connection Computer")
-		}
-		if err := h.checkCurrentComputerGeneration(ctx, rt.DaemonID.String, payload.ComputerGeneration, payload.ComputerGeneration > 0); err != nil {
-			return nil, err
 		}
 	}
 	ack, _, err := h.processHeartbeat(ctx, rt, payload.SupportsBatchImport, payload.SupportsMemoryCuration, payload.ActiveMemoryCurationRunID, payload.UpdateObservation)

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestRegisterRuntimesForWorkspace_DoesNotCallStarting pins the Computer
@@ -50,7 +51,7 @@ func TestRegisterRuntimesForWorkspace_DoesNotCallStarting(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
+	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
 
 	d := &Daemon{
 		cfg: Config{
@@ -104,7 +105,7 @@ func TestRegisterRuntimesForWorkspace_ZeroRegisterableAgentsKeepsComputerConnect
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
+	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
 	d := &Daemon{
 		cfg: Config{
 			DaemonID: "daemon-1",

@@ -252,7 +252,7 @@ func TestMembershipLossRevokesZeroRuntimeConnectionAndPreservesSibling(t *testin
 	}
 }
 
-func TestComputerHeartbeat_FencesGenerationAfterConnectionAuthorization(t *testing.T) {
+func TestComputerHeartbeat_AuthorizesConnectionWithoutGenerationFence(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -262,27 +262,23 @@ func TestComputerHeartbeat_FencesGenerationAfterConnectionAuthorization(t *testi
 		t.Fatalf("establish connection: got %d: %s", w.Code, w.Body.String())
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_generation WHERE daemon_id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_heartbeat WHERE daemon_id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, computerID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE daemon_id=$1`, computerID)
 	})
 
-	heartbeat := func(userID string, generation int64) *httptest.ResponseRecorder {
+	heartbeat := func(userID string) *httptest.ResponseRecorder {
 		req := newRequestAs(userID, http.MethodPost, "/api/daemon/computer/heartbeat", map[string]any{
-			"daemon_id": computerID, "workspace_id": testWorkspaceID, "generation": generation,
+			"daemon_id": computerID, "workspace_id": testWorkspaceID,
 		})
 		w := httptest.NewRecorder()
 		testHandler.ComputerHeartbeat(w, req)
 		return w
 	}
 
-	if w := heartbeat(testUserID, 2); w.Code != http.StatusOK {
-		t.Fatalf("claim generation 2: got %d: %s", w.Code, w.Body.String())
-	}
-	if w := heartbeat(testUserID, 1); w.Code != http.StatusConflict {
-		t.Fatalf("stale generation: got %d, want 409: %s", w.Code, w.Body.String())
+	if w := heartbeat(testUserID); w.Code != http.StatusOK {
+		t.Fatalf("owner heartbeat: got %d: %s", w.Code, w.Body.String())
 	}
 
 	foreignEmail := "computer-generation-" + uuid.NewString() + "@multica.ai"
@@ -300,15 +296,7 @@ func TestComputerHeartbeat_FencesGenerationAfterConnectionAuthorization(t *testi
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id=$1`, foreignUserID)
 	})
-	if w := heartbeat(foreignUserID, 3); w.Code != http.StatusForbidden {
-		t.Fatalf("unconnected member generation claim: got %d, want 403: %s", w.Code, w.Body.String())
-	}
-
-	var generation int64
-	if err := testPool.QueryRow(ctx, `SELECT generation FROM computer_generation WHERE daemon_id=$1`, computerID).Scan(&generation); err != nil {
-		t.Fatal(err)
-	}
-	if generation != 2 {
-		t.Fatalf("generation after rejected claim = %d, want 2", generation)
+	if w := heartbeat(foreignUserID); w.Code != http.StatusForbidden {
+		t.Fatalf("unconnected member heartbeat: got %d, want 403: %s", w.Code, w.Body.String())
 	}
 }

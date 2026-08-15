@@ -117,7 +117,6 @@ func TestDaemonRegister_RevokedWorkspaceBindingDoesNotFallbackToSession(t *testi
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-old", time.Now().Add(time.Hour))
 	c.SetRuntimeDaemonToken("old-rt", "mdt-old", time.Now().Add(time.Hour))
 
@@ -1555,7 +1554,7 @@ func TestWatchTaskCancellation_TaskDeleted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	cancelled := d.watchTaskCancellation(ctx, "task-deleted", 10*time.Millisecond, slog.Default())
+	cancelled := d.watchTaskCancellation(ctx, "task-deleted", "rt-1", 10*time.Millisecond, slog.Default())
 
 	select {
 	case <-cancelled:
@@ -1585,7 +1584,7 @@ func TestWatchTaskCancellation_StatusCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	cancelled := d.watchTaskCancellation(ctx, "task-cancelled", 10*time.Millisecond, slog.Default())
+	cancelled := d.watchTaskCancellation(ctx, "task-cancelled", "rt-1", 10*time.Millisecond, slog.Default())
 
 	select {
 	case <-cancelled:
@@ -1611,7 +1610,7 @@ func TestWatchTaskCancellation_RunningTaskNotInterrupted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	cancelled := d.watchTaskCancellation(ctx, "task-running", 10*time.Millisecond, slog.Default())
+	cancelled := d.watchTaskCancellation(ctx, "task-running", "rt-1", 10*time.Millisecond, slog.Default())
 
 	select {
 	case <-cancelled:
@@ -2239,10 +2238,14 @@ func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
+	d.client.SetRuntimeDaemonToken("rt-pin", "mdt-runtime", time.Now().Add(time.Hour))
 
 	backend := statusStreamBackend{sessionID: "sess-pin-1", statusCount: 1}
 	opts := agent.ExecOptions{Cwd: "/work/task-pin"}
-	result, _, err := d.executeAndDrain(context.Background(), backend, "prompt", opts, slog.Default(), "task-pin")
+	result, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", opts, slog.Default(), canonicalInboxTaskForTest(Task{
+		ID:        "task-pin",
+		RuntimeID: "rt-pin",
+	}))
 	if err != nil {
 		t.Fatalf("executeAndDrain error: %v", err)
 	}

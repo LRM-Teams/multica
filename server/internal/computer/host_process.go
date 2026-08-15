@@ -119,11 +119,14 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 			go store.RunCleanup(processCtx)
 		}
 	}
-	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{
-		identity: config.Identity, releaseManifestURL: config.ReleaseManifestURL,
-		residentRoot: config.ResidentRoot, cancel: cancel,
-		previousPackageUpgradeBootstrap: config.PreviousPackageUpgradeBootstrap,
-	})
+	if host.upgrade == nil {
+		host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	}
+	host.upgrade.config.identity = config.Identity
+	host.upgrade.config.releaseManifestURL = config.ReleaseManifestURL
+	host.upgrade.config.residentRoot = config.ResidentRoot
+	host.upgrade.config.cancel = cancel
+	host.upgrade.config.previousPackageUpgradeBootstrap = config.PreviousPackageUpgradeBootstrap
 
 	loadDesired := func() []string {
 		ids, loadErr := config.DesiredWorkspaceIDs()

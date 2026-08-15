@@ -47,12 +47,13 @@ type hostMachineUpgrade struct {
 	installPath    func() (string, error)
 	swapExecutable func(string, string) error
 
-	mu              sync.Mutex
-	activeID        string
-	generationID    string
-	restartBinary   string
-	targetVersion   string
-	manifestBaseURL string
+	mu                   sync.Mutex
+	activeID             string
+	initiatorWorkspaceID string
+	generationID         string
+	restartBinary        string
+	targetVersion        string
+	manifestBaseURL      string
 }
 
 type hostMachineUpgradeReceipt struct {
@@ -65,15 +66,13 @@ type hostMachineUpgradeReceipt struct {
 	AcceptedWorkspaceIDs []string `json:"accepted_workspace_ids,omitempty"`
 }
 
+// hostMachineUpgradeJournal is the on-disk successor marker. Write it only
+// after the binary swap succeeds. The new Host only needs the target so it
+// can confirm it is the upgraded binary and delete the marker. Cloud
+// completion is the new Binding socket reporting this version.
 type hostMachineUpgradeJournal struct {
-	ID           string   `json:"id"`
-	Generation   string   `json:"generation"`
-	Source       string   `json:"source_version"`
-	Target       string   `json:"target_version"`
-	RuntimeIDs   []string `json:"runtime_ids"`
-	WorkspaceIDs []string `json:"workspace_ids"`
-	Phase        string   `json:"phase"`
-	UpdatedAt    string   `json:"updated_at"`
+	Target    string `json:"target_version"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 func newHostMachineUpgrade(host *Host, config hostMachineUpgradeConfig) *hostMachineUpgrade {
@@ -115,14 +114,11 @@ func (upgrade *hostMachineUpgrade) localRequestHandler() http.HandlerFunc {
 		if targetVersion == "" {
 			targetVersion = "latest"
 		}
-		runtime, token, ok := upgrade.firstCurrentRuntime()
-		if !ok {
-			http.Error(w, "Computer has no ready Binding Runtime for Machine Upgrade", http.StatusConflict)
+		request.TargetVersion = targetVersion
+		if err := upgrade.host.DeliverComputerUpgrade(r.Context(), request); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		go upgrade.execute(context.Background(), runtime, token, protocol.DaemonHeartbeatPendingMachineUpgrade{
-			ID: operationID, TargetVersion: targetVersion,
-		})
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "phase": "queued"})
 	}
@@ -145,8 +141,7 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	if err := json.Unmarshal(raw, &ack); err != nil {
 		return err
 	}
-	runtime, token, ok := upgrade.currentRuntime(identity, ack.RuntimeID)
-	if !ok {
+	if _, _, ok := upgrade.currentRuntime(identity, ack.RuntimeID); !ok {
 		return errors.New("machine action Runtime belongs to another Binding child")
 	}
 	if ack.RuntimeGone || ack.PendingModelList != nil || ack.PendingLocalSkills != nil || ack.PendingLocalSkillImport != nil || len(ack.PendingLocalSkillImports) > 0 || ack.PendingMemoryCuration != nil {
@@ -158,17 +153,9 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	}
 	upgrade.mu.Unlock()
 	if ack.PendingMachineUpgrade != nil {
-		pending := *ack.PendingMachineUpgrade
-		upgrade.mu.Lock()
-		activeID := upgrade.activeID
-		upgrade.mu.Unlock()
-		if activeID != "" {
-			if activeID == pending.ID {
-				return nil
-			}
-			return ErrComputerControlBusy
-		}
-		go upgrade.execute(context.Background(), runtime, token, pending)
+		// Connect-socket upgrades execute in the Binding that received
+		// computer:upgrade. Host only prepares siblings / restarts.
+		return nil
 	}
 	if ack.PendingRestart != nil {
 		go upgrade.scheduleCurrentBinaryRestart()
@@ -176,130 +163,63 @@ func (upgrade *hostMachineUpgrade) handleChildAction(ctx context.Context, identi
 	return nil
 }
 
-func (upgrade *hostMachineUpgrade) execute(ctx context.Context, runtime hostBindingRuntime, token string, pending protocol.DaemonHeartbeatPendingMachineUpgrade) {
+func (upgrade *hostMachineUpgrade) prepareChildUpgrade(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) (BindingMachineUpgradePrepared, error) {
+	if upgrade == nil || upgrade.host == nil {
+		return BindingMachineUpgradePrepared{}, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
+	var pending protocol.DaemonHeartbeatPendingMachineUpgrade
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &pending); err != nil {
+			return BindingMachineUpgradePrepared{}, err
+		}
+	}
+	if strings.TrimSpace(pending.ID) == "" {
+		return BindingMachineUpgradePrepared{}, errors.New("Computer upgrade request identity is required")
+	}
 	upgrade.mu.Lock()
-	// One machine-wide upgrade at a time. Same operationId is a replay; a
-	// different ID while this slot is taken is rejected at handleChildAction.
-	if upgrade.activeID != "" {
+	if upgrade.activeID != "" && upgrade.activeID != pending.ID {
 		upgrade.mu.Unlock()
-		return
+		return BindingMachineUpgradePrepared{}, ErrComputerControlBusy
 	}
 	upgrade.activeID = pending.ID
-	manifestBaseURL := upgrade.manifestBaseURL
+	upgrade.initiatorWorkspaceID = identity.WorkspaceID
+	manifestURL := upgrade.manifestBaseURL
 	upgrade.mu.Unlock()
-
-	succeeded := false
-	prepared := false
-	journalPersisted := false
-	defer func() {
-		if !succeeded {
-			if prepared {
-				releaseCtx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
-				_ = upgrade.host.ReleaseMachineUpgrade(releaseCtx)
-				cancel()
-			}
-			upgrade.mu.Lock()
-			if upgrade.activeID == pending.ID {
-				upgrade.activeID = ""
-			}
-			upgrade.mu.Unlock()
-			if journalPersisted {
-				_ = upgrade.removeJournal()
-			}
-		}
-	}()
-
-	target, err := upgrade.resolveTarget(pending.TargetVersion, manifestBaseURL)
-	if err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "target_resolution_failed", err)
-		return
-	}
-	var receipt hostMachineUpgradeReceipt
-	err = upgrade.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s/accept", url.PathEscape(runtime.ID), url.PathEscape(pending.ID)), token, map[string]any{
-		"generation_id": upgrade.generationID, "cli_version": upgrade.config.identity.Version, "resolved_target": target,
-	}, &receipt, nil)
-	if err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "acceptance_failed", err)
-		return
-	}
-	runtimeIDs, workspaceIDs := upgrade.currentRuntimeAndWorkspaceIDs()
-	if err := validateHostMachineUpgradeReceipt(receipt, pending.ID, runtimeIDs, workspaceIDs); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "acceptance_set_mismatch", err)
-		return
-	}
-	if versionsMatch(upgrade.config.identity.Version, target) {
-		if err := upgrade.host.ReregisterBindings(ctx, receipt.AcceptedWorkspaceIDs); err != nil {
-			upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "already_current_registration_failed", err)
-			return
-		}
-		if err := upgrade.attest(ctx, receipt); err != nil {
-			upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "already_current_attestation_failed", err)
-			return
-		}
-		succeeded = true
+	if err := upgrade.host.PrepareSiblingMachineUpgrade(ctx, identity.WorkspaceID); err != nil {
 		upgrade.mu.Lock()
 		if upgrade.activeID == pending.ID {
 			upgrade.activeID = ""
+			upgrade.initiatorWorkspaceID = ""
 		}
 		upgrade.mu.Unlock()
-		return
+		return BindingMachineUpgradePrepared{}, err
 	}
-	journal := hostMachineUpgradeJournal{
-		ID: pending.ID, Generation: strings.TrimSpace(*receipt.AcceptedGeneration), Source: upgrade.config.identity.Version, Target: target,
-		RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...),
-		Phase: "accepted",
-	}
-	if err := upgrade.writeJournal(journal); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "journal_persist_failed", err)
-		return
-	}
-	journalPersisted = true
-	if err := upgrade.host.PrepareMachineUpgrade(ctx); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "handoff_failed", err)
-		return
-	}
-	prepared = true
-	if err := upgrade.reportProgress(ctx, runtime.ID, token, pending.ID, "staging", "", ""); err != nil {
-		return
-	}
-	staged, err := upgrade.stageRelease(target, cli.DefaultUpdateDownloadTimeout, manifestBaseURL)
-	if err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "stage_failed", err)
-		return
-	}
-	journal.Phase = "staged"
-	if err := upgrade.writeJournal(journal); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "journal_persist_failed", err)
-		return
-	}
-	_ = upgrade.reportProgress(ctx, runtime.ID, token, pending.ID, "verifying", "", "")
-	if err := upgrade.verifyBinary(ctx, staged, target); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "verification_failed", err)
-		return
-	}
-	if err := upgrade.reportProgress(ctx, runtime.ID, token, pending.ID, "handoff", "", ""); err != nil {
-		return
-	}
-	installPath, err := upgrade.installPath()
-	if err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "activation_failed", err)
-		return
-	}
-	if err := upgrade.swapExecutable(installPath, staged); err != nil {
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "activation_failed", err)
-		return
-	}
-	journal.Phase = "activated"
-	if err := upgrade.writeJournal(journal); err != nil {
-		_ = cli.RollbackExecutable(installPath)
-		upgrade.reportFailure(ctx, runtime.ID, token, pending.ID, "journal_persist_failed", err)
+	runtimeIDs, workspaceIDs := upgrade.currentRuntimeAndWorkspaceIDs()
+	return BindingMachineUpgradePrepared{RuntimeIDs: runtimeIDs, WorkspaceIDs: workspaceIDs, ManifestURL: manifestURL}, nil
+}
+
+func (upgrade *hostMachineUpgrade) observeInitiatorExit(identity BindingChildIdentity) {
+	if upgrade == nil {
 		return
 	}
 	upgrade.mu.Lock()
-	upgrade.restartBinary = installPath
-	upgrade.targetVersion = target
+	initiator := upgrade.initiatorWorkspaceID
 	upgrade.mu.Unlock()
-	succeeded = true
+	if initiator == "" || initiator != identity.WorkspaceID {
+		return
+	}
+	journal, err := upgrade.readJournal()
+	if err != nil || journal == nil || strings.TrimSpace(journal.Target) == "" {
+		return
+	}
+	path, err := upgrade.installPath()
+	if err != nil {
+		return
+	}
+	upgrade.mu.Lock()
+	upgrade.restartBinary = path
+	upgrade.targetVersion = journal.Target
+	upgrade.mu.Unlock()
 	if upgrade.config.cancel != nil {
 		upgrade.config.cancel()
 	}
@@ -354,35 +274,16 @@ func (upgrade *hostMachineUpgrade) recoverSuccessor(ctx context.Context) error {
 	if journal == nil {
 		return nil
 	}
-	if journal.Phase != "activated" {
-		if versionsMatch(upgrade.config.identity.Version, journal.Source) {
-			if runtime, token, ok := upgrade.firstCurrentRuntime(); ok {
-				if err := upgrade.reportProgress(ctx, runtime.ID, token, journal.ID, "failed", "interrupted_before_activation", "Computer restarted before Machine Upgrade activation"); err != nil {
-					return fmt.Errorf("report interrupted Computer Machine Upgrade: %w", err)
-				}
-			} else {
-				return errors.New("restored Computer has no current Runtime for rollback report")
-			}
-			return upgrade.removeJournal()
-		}
-		return fmt.Errorf("Machine Upgrade journal phase %q does not match running Computer %s", journal.Phase, upgrade.config.identity.Version)
-	}
 	if !versionsMatch(upgrade.config.identity.Version, journal.Target) {
 		return fmt.Errorf("activated Machine Upgrade target %s does not match running Computer %s", journal.Target, upgrade.config.identity.Version)
 	}
-	upgrade.generationID = journal.Generation
-	if err := upgrade.host.ReregisterBindings(ctx, journal.WorkspaceIDs); err != nil {
-		return fmt.Errorf("re-register successor Binding set: %w", err)
-	}
-	if err := upgrade.attestJournal(ctx, *journal); err != nil {
-		return err
-	}
+	// The successor only reports its current version. Cloud completion is
+	// the new Binding socket, not a follow-up HTTP attest.
 	if previousPackageJournalPath != "" {
 		if err := os.Remove(previousPackageJournalPath); err != nil && !os.IsNotExist(err) && upgrade.host != nil && upgrade.host.logger != nil {
-			upgrade.host.logger.Warn("could not remove previous-package Machine Upgrade handoff journal after attestation",
+			upgrade.host.logger.Warn("could not remove previous-package Machine Upgrade marker after successor start",
 				"path", previousPackageJournalPath, "error", err)
 		}
-		return nil
 	}
 	return upgrade.removeJournal()
 }
@@ -417,18 +318,20 @@ func (upgrade *hostMachineUpgrade) readPreviousPackageJournal() (*hostMachineUpg
 		if readErr != nil {
 			continue
 		}
-		var candidate hostMachineUpgradeJournal
-		if json.Unmarshal(data, &candidate) != nil || candidate.Phase != "handoff" ||
+		var candidate struct {
+			hostMachineUpgradeJournal
+			RuntimeIDs   []string `json:"runtime_ids"`
+			WorkspaceIDs []string `json:"workspace_ids"`
+		}
+		if json.Unmarshal(data, &candidate) != nil ||
 			!versionsMatch(upgrade.config.identity.Version, candidate.Target) {
 			continue
 		}
-		if strings.TrimSpace(candidate.ID) == "" || strings.TrimSpace(candidate.Generation) == "" ||
-			len(candidate.RuntimeIDs) == 0 || len(candidate.WorkspaceIDs) == 0 {
-			return nil, "", fmt.Errorf("previous-package Machine Upgrade handoff journal %s is incomplete", path)
+		if strings.TrimSpace(candidate.Target) == "" {
+			return nil, "", fmt.Errorf("previous-package Machine Upgrade marker %s is incomplete", path)
 		}
 		if newest == nil || candidate.UpdatedAt > newest.UpdatedAt {
-			copy := candidate
-			copy.Phase = "activated"
+			copy := candidate.hostMachineUpgradeJournal
 			newest = &copy
 			newestPath = path
 		}
@@ -436,27 +339,32 @@ func (upgrade *hostMachineUpgrade) readPreviousPackageJournal() (*hostMachineUpg
 	return newest, newestPath, nil
 }
 
-func (upgrade *hostMachineUpgrade) attestJournal(ctx context.Context, journal hostMachineUpgradeJournal) error {
-	runtime, token, ok := upgrade.firstCurrentRuntime()
-	if !ok {
-		return errors.New("Computer successor has no current Runtime for upgrade attestation")
-	}
-	return upgrade.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/attest", url.PathEscape(journal.ID)), token, map[string]any{
-		"daemon_id": upgrade.config.identity.ComputerID, "generation_id": journal.Generation,
-		"cli_version": upgrade.config.identity.Version, "runtime_ids": journal.RuntimeIDs, "workspace_ids": journal.WorkspaceIDs,
-	}, nil, map[string]string{"X-Workspace-ID": runtime.WorkspaceID})
+func (upgrade *hostMachineUpgrade) journalPath() string {
+	return machineUpgradeJournalPath(upgrade.config.residentRoot)
 }
 
-func (upgrade *hostMachineUpgrade) journalPath() string {
-	root := strings.TrimSpace(upgrade.config.residentRoot)
+func (upgrade *hostMachineUpgrade) writeJournal(journal hostMachineUpgradeJournal) error {
+	return writeMachineUpgradeJournal(upgrade.config.residentRoot, journal)
+}
+
+func (upgrade *hostMachineUpgrade) readJournal() (*hostMachineUpgradeJournal, error) {
+	return readMachineUpgradeJournal(upgrade.config.residentRoot)
+}
+
+func (upgrade *hostMachineUpgrade) removeJournal() error {
+	return removeMachineUpgradeJournal(upgrade.config.residentRoot)
+}
+
+func machineUpgradeJournalPath(root string) string {
+	root = strings.TrimSpace(root)
 	if root == "" {
 		return ""
 	}
 	return filepath.Join(root, "machine-upgrade-host.json")
 }
 
-func (upgrade *hostMachineUpgrade) writeJournal(journal hostMachineUpgradeJournal) error {
-	path := upgrade.journalPath()
+func writeMachineUpgradeJournal(root string, journal hostMachineUpgradeJournal) error {
+	path := machineUpgradeJournalPath(root)
 	if path == "" {
 		return errors.New("Computer Machine Upgrade journal root is unavailable")
 	}
@@ -492,8 +400,8 @@ func (upgrade *hostMachineUpgrade) writeJournal(journal hostMachineUpgradeJourna
 	return os.Rename(temporaryPath, path)
 }
 
-func (upgrade *hostMachineUpgrade) readJournal() (*hostMachineUpgradeJournal, error) {
-	path := upgrade.journalPath()
+func readMachineUpgradeJournal(root string) (*hostMachineUpgradeJournal, error) {
+	path := machineUpgradeJournalPath(root)
 	if path == "" {
 		return nil, nil
 	}
@@ -508,14 +416,14 @@ func (upgrade *hostMachineUpgrade) readJournal() (*hostMachineUpgradeJournal, er
 	if err := json.Unmarshal(data, &journal); err != nil {
 		return nil, fmt.Errorf("parse Computer Machine Upgrade journal: %w", err)
 	}
-	if strings.TrimSpace(journal.ID) == "" || strings.TrimSpace(journal.Generation) == "" || strings.TrimSpace(journal.Target) == "" {
+	if strings.TrimSpace(journal.Target) == "" {
 		return nil, errors.New("Computer Machine Upgrade journal is incomplete")
 	}
 	return &journal, nil
 }
 
-func (upgrade *hostMachineUpgrade) removeJournal() error {
-	path := upgrade.journalPath()
+func removeMachineUpgradeJournal(root string) error {
+	path := machineUpgradeJournalPath(root)
 	if path == "" {
 		return nil
 	}
@@ -546,25 +454,6 @@ func (upgrade *hostMachineUpgrade) resolveTarget(requested, manifestBaseURL stri
 		return "", errors.New("resolved release is empty")
 	}
 	return cli.NormalizeReleaseTag(release.TagName), nil
-}
-
-func (upgrade *hostMachineUpgrade) attest(ctx context.Context, receipt hostMachineUpgradeReceipt) error {
-	generation := upgrade.generationID
-	if receipt.AcceptedGeneration != nil && strings.TrimSpace(*receipt.AcceptedGeneration) != "" {
-		generation = strings.TrimSpace(*receipt.AcceptedGeneration)
-	}
-	runtimeIDs, workspaceIDs := upgrade.currentRuntimeAndWorkspaceIDs()
-	if len(receipt.AcceptedWorkspaceIDs) > 0 {
-		workspaceIDs = append([]string(nil), receipt.AcceptedWorkspaceIDs...)
-	}
-	runtime, token, ok := upgrade.firstCurrentRuntime()
-	if !ok {
-		return errors.New("Computer has no current Runtime for upgrade attestation")
-	}
-	return upgrade.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/attest", url.PathEscape(receipt.ID)), token, map[string]any{
-		"daemon_id": upgrade.config.identity.ComputerID, "generation_id": generation,
-		"cli_version": upgrade.config.identity.Version, "runtime_ids": runtimeIDs, "workspace_ids": workspaceIDs,
-	}, nil, map[string]string{"X-Workspace-ID": runtime.WorkspaceID})
 }
 
 func (upgrade *hostMachineUpgrade) reportProgress(ctx context.Context, runtimeID, token, upgradeID, phase, code, message string) error {
@@ -745,19 +634,4 @@ func (host *Host) MachineUpgradeTarget() string {
 	host.upgrade.mu.Lock()
 	defer host.upgrade.mu.Unlock()
 	return host.upgrade.targetVersion
-}
-
-// MarkMachineUpgradeRollbackPending lets the foreground launcher record that
-// successor startup failed after activation and the retained previous binary
-// was restored. The restored Host reports the failure and clears the journal.
-func (host *Host) MarkMachineUpgradeRollbackPending() error {
-	if host == nil || host.upgrade == nil {
-		return errors.New("Computer Machine Upgrade coordinator is unavailable")
-	}
-	journal, err := host.upgrade.readJournal()
-	if err != nil || journal == nil {
-		return err
-	}
-	journal.Phase = "rollback_pending"
-	return host.upgrade.writeJournal(*journal)
 }

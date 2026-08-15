@@ -12,8 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -34,14 +34,6 @@ type machineUpgradeProgressRequest struct {
 	Generation   string              `json:"generation_id,omitempty"`
 	ErrorCode    string              `json:"error_code,omitempty"`
 	ErrorMessage string              `json:"error_message,omitempty"`
-}
-
-type attestComputerMachineUpgradeRequest struct {
-	DaemonID     string   `json:"daemon_id"`
-	GenerationID string   `json:"generation_id"`
-	CLIVersion   string   `json:"cli_version"`
-	RuntimeIDs   []string `json:"runtime_ids"`
-	WorkspaceIDs []string `json:"workspace_ids"`
 }
 
 type commitComputerMachineUpgradeTakeoverRequest struct {
@@ -96,53 +88,12 @@ func (h *Handler) CommitComputerMachineUpgradeTakeover(w http.ResponseWriter, r 
 	writeJSON(w, http.StatusOK, op)
 }
 
-// AttestComputerMachineUpgrade is the successor's complete machine proof.
-// Runtime registrations still provide compatibility evidence, but only this
-// exact Workspace set can complete a generation-aware Computer upgrade.
+// AttestComputerMachineUpgrade is a retired successor HTTP proof.
+// TODO(computer-upgrade-attest): Remove after installed Computers no longer
+// POST /computer/machine-upgrades/{id}/attest. Completion is the current
+// Binding socket reporting the resolved target.
 func (h *Handler) AttestComputerMachineUpgrade(w http.ResponseWriter, r *http.Request) {
-	if h.MachineUpgradeStore == nil {
-		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
-		return
-	}
-	var req attestComputerMachineUpgradeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	req.DaemonID = strings.TrimSpace(req.DaemonID)
-	if req.DaemonID == "" || strings.TrimSpace(req.GenerationID) == "" || strings.TrimSpace(req.CLIVersion) == "" {
-		writeError(w, http.StatusBadRequest, "daemon_id, generation_id, and cli_version are required")
-		return
-	}
-	if tokenDaemon := middleware.DaemonIDFromContext(r.Context()); tokenDaemon != "" && !strings.EqualFold(tokenDaemon, req.DaemonID) {
-		writeError(w, http.StatusForbidden, "Computer credential scope mismatch")
-		return
-	}
-	if err := h.authorizeComputerOwnerRequest(r.Context(), r, req.DaemonID); err != nil {
-		if errors.Is(err, errComputerConnectionUnauthorized) {
-			writeError(w, http.StatusForbidden, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, "failed to authorize Computer owner")
-		}
-		return
-	}
-	if !h.requireCurrentComputerGeneration(w, r, req.DaemonID) {
-		return
-	}
-	for field, ids := range map[string][]string{"runtime_ids": req.RuntimeIDs, "workspace_ids": req.WorkspaceIDs} {
-		for _, id := range ids {
-			if _, err := util.ParseUUID(id); err != nil {
-				writeError(w, http.StatusBadRequest, field+" must contain immutable UUIDs")
-				return
-			}
-		}
-	}
-	op, err := h.MachineUpgradeStore.AttestComputer(r.Context(), req.DaemonID, chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion, req.RuntimeIDs, req.WorkspaceIDs)
-	if err != nil {
-		h.writeMachineUpgradeDaemonError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, op)
+	writeCodedError(w, http.StatusGone, "machine_upgrade_attest_retired", "Computer Machine Upgrade completes on the current Binding socket")
 }
 
 // AcceptMachineUpgrade is daemon-authenticated. The daemon may accept an
@@ -445,6 +396,31 @@ func (h *Handler) machineUpgradeRuntimeIDs(ctx context.Context, rt db.AgentRunti
 		ids = append(ids, uuidToString(id))
 	}
 	return normalizedMachineRuntimeIDs(ids), rows.Err()
+}
+
+// completeMachineUpgradeOnCurrentSocket finishes the Computer's unique
+// non-terminal Machine Upgrade when this authenticated Binding socket
+// reports the resolved target. The successor does not send an operation
+// ID or generation.
+func (h *Handler) completeMachineUpgradeOnCurrentSocket(ctx context.Context, identity daemonws.ClientIdentity) {
+	if h == nil || h.MachineUpgradeStore == nil {
+		return
+	}
+	computerID := strings.TrimSpace(identity.DaemonID)
+	version := strings.TrimSpace(identity.ClientVersion)
+	if computerID == "" || version == "" {
+		return
+	}
+	updated, err := h.MachineUpgradeStore.CompleteOnCurrentVersion(ctx, computerID, version)
+	if err != nil {
+		slog.Warn("machine upgrade socket completion failed", "error", err, "computer_id", computerID)
+		return
+	}
+	if updated == nil || updated.Phase != MachineUpgradeCompleted {
+		return
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/", nil)
+	h.publishComputerUpgradeProjection(req, computerID)
 }
 
 // attestMachineUpgradeRegistration runs after a register transaction has

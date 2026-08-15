@@ -27,18 +27,18 @@ func runningUnderSupervision() bool {
 	return os.Getenv(superviseEnvVar) == "1"
 }
 
-var daemonSuperviseCmd = &cobra.Command{
+var computerSuperviseCmd = &cobra.Command{
 	Use:   "supervise",
-	Short: "Run the daemon under an external process supervisor",
-	Long: "Runs the daemon as a supervised worker process: an OS process manager " +
+	Short: "Run the Computer under an external process supervisor",
+	Long: "Runs the Computer as a supervised worker process: an OS process manager " +
 		"(launchd/systemd/Scheduled Task) keeps this `supervise` process alive, " +
-		"and it in turn keeps the daemon alive across crashes. Intended to be " +
+		"and it in turn keeps the Computer alive across crashes. Intended to be " +
 		"registered as a background service rather than run interactively.",
-	RunE: runDaemonSupervise,
+	RunE: runComputerSupervise,
 }
 
 func init() {
-	f := daemonSuperviseCmd.Flags()
+	f := computerSuperviseCmd.Flags()
 	f.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
 	f.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
 	f.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
@@ -71,7 +71,7 @@ func resolveSupervisedWorkerPath(fallbackPath string, workerArgs []string) (stri
 	return fallbackPath, workerArgs, nil
 }
 
-func runDaemonSupervise(cmd *cobra.Command, _ []string) error {
+func runComputerSupervise(cmd *cobra.Command, _ []string) error {
 	profile := resolveProfile(cmd)
 
 	exePath, err := os.Executable()
@@ -104,13 +104,13 @@ func runDaemonSupervise(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("create supervisor: %w", err)
 	}
 
-	logger := logger_pkg.NewLogger("daemon-supervisor")
+	logger := logger_pkg.NewLogger("computer-supervisor")
 	if err := bestEffortSyncInstalledServiceUnit(profile, exePath); err != nil {
-		logger.Warn("could not rewrite OS service unit on supervise start; re-run `multica daemon install-service` if a later OS restart fails",
+		logger.Warn("could not rewrite OS service unit on supervise start; re-run computer service install if a later OS restart fails",
 			"path", exePath, "error", err)
 	}
 
-	logger.Info("starting supervised daemon", "worker_path", exePath, "profile", profile)
+	logger.Info("starting supervised Computer", "worker_path", exePath, "profile", profile)
 
 	ctx, stop := notifyShutdownContext(context.Background())
 	defer stop()

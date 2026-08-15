@@ -117,6 +117,7 @@ type Daemon struct {
 	runnerDiagnosticStore      *diagnosticlog.Store
 	bindingHostControl         *bindingHostControlClient
 	bindingDiagnostics         *bindingChildDiagnosticForwarder
+	bindingMachineUpgrade      func(context.Context, protocol.ComputerUpgradePayload) error
 	bindingChildMachineActions func(context.Context, string, *HeartbeatResponse)
 
 	mu           sync.Mutex

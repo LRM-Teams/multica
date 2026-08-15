@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // HostConfig is the Computer's process-supervision boundary. Binding execution
@@ -136,12 +137,24 @@ func NewHost(config HostConfig) (*Host, error) {
 		}
 		return nil
 	}
+	callbacks.PrepareUpgrade = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) (any, error) {
+		if host.upgrade != nil {
+			return host.upgrade.prepareChildUpgrade(ctx, identity, raw)
+		}
+		if external.PrepareUpgrade != nil {
+			return external.PrepareUpgrade(ctx, identity, raw)
+		}
+		return nil, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
 	callbacks.Released = func(identity BindingChildIdentity) {
 		host.runtimeMu.Lock()
 		if current, ok := host.runtimeSets[identity.WorkspaceID]; ok && current.Identity == identity {
 			delete(host.runtimeSets, identity.WorkspaceID)
 		}
 		host.runtimeMu.Unlock()
+		if host.upgrade != nil {
+			host.upgrade.observeInitiatorExit(identity)
+		}
 		if external.Released != nil {
 			external.Released(identity)
 		}
@@ -149,6 +162,7 @@ func NewHost(config HostConfig) (*Host, error) {
 	callbacks.Current = supervisor.Current
 	host.supervisor = supervisor
 	host.control = NewHostControl(config.ControlToken, NewProcessCapacity(config.MaxAgentProcesses), callbacks)
+	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
 	return host, nil
 }
 
@@ -262,6 +276,13 @@ func (host *Host) PrepareMachineUpgrade(ctx context.Context) error {
 	return host.supervisor.PrepareMachineUpgrade(ctx, host.control.token)
 }
 
+func (host *Host) PrepareSiblingMachineUpgrade(ctx context.Context, initiatorWorkspaceID string) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
+	}
+	return host.supervisor.PrepareSiblingMachineUpgrade(ctx, host.control.token, initiatorWorkspaceID)
+}
+
 func (host *Host) ReleaseMachineUpgrade(ctx context.Context) error {
 	if host == nil || host.supervisor == nil || host.control == nil {
 		return errors.New("Computer Host is unavailable")
@@ -288,4 +309,22 @@ func (host *Host) ReregisterBindings(ctx context.Context, workspaceIDs []string)
 		return errors.New("Computer Host is unavailable")
 	}
 	return host.supervisor.ReregisterBindings(ctx, host.control.token, workspaceIDs)
+}
+
+func (host *Host) DeliverComputerUpgrade(ctx context.Context, command protocol.ComputerUpgradePayload) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
+	}
+	return host.supervisor.DeliverComputerUpgrade(ctx, host.control.token, command)
+}
+
+func (host *Host) PrepareChildUpgrade(ctx context.Context, identity BindingChildIdentity, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (BindingMachineUpgradePrepared, error) {
+	if host == nil || host.upgrade == nil {
+		return BindingMachineUpgradePrepared{}, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
+	raw, err := json.Marshal(pending)
+	if err != nil {
+		return BindingMachineUpgradePrepared{}, err
+	}
+	return host.upgrade.prepareChildUpgrade(ctx, identity, raw)
 }

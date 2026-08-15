@@ -19,10 +19,7 @@ import (
 
 func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{residentRoot: t.TempDir()})
-	want := hostMachineUpgradeJournal{
-		ID: "upgrade-a", Generation: "generation-a", Source: "v1.0.0", Target: "v1.1.0",
-		RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"}, Phase: "activated",
-	}
+	want := hostMachineUpgradeJournal{Target: "v1.1.0"}
 	if err := upgrade.writeJournal(want); err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +30,25 @@ func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("Machine Upgrade journal permissions = %o, want 600", got)
 	}
+	raw, err := os.ReadFile(upgrade.journalPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(raw, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := persisted["id"]; ok {
+		t.Fatalf("activated marker still persisted id: %s", raw)
+	}
+	if _, ok := persisted["generation"]; ok {
+		t.Fatalf("activated marker still persisted generation: %s", raw)
+	}
 	got, err := upgrade.readJournal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.ID != want.ID || got.Generation != want.Generation || got.Target != want.Target || got.Phase != want.Phase {
+	if got == nil || got.Target != want.Target {
 		t.Fatalf("Machine Upgrade journal = %+v, want %+v", got, want)
 	}
 }
@@ -61,35 +72,43 @@ func TestHostMachineUpgradeAcceptanceRequiresCompleteComputerSet(t *testing.T) {
 	}
 }
 
-func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testing.T) {
+func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	const controlToken = "owner-secret"
 	var humanIntentCalls atomic.Int32
-	attested := make(chan string, 2)
-	acceptedGeneration := "generation-a"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	delivered := make(chan string, 2)
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/daemons/computer-a/upgrades":
 			humanIntentCalls.Add(1)
 			http.Error(w, "Host must not create human lifecycle intents", http.StatusForbidden)
 		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept",
 			"/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-b/accept":
-			operationID := strings.Split(r.URL.Path, "/")[6]
-			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
-				ID: operationID, Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
-				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
-			})
-		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest",
-			"/api/daemon/computer/machine-upgrades/upgrade-b/attest":
-			attested <- strings.Split(r.URL.Path, "/")[5]
-			w.WriteHeader(http.StatusNoContent)
+			t.Error("Host accepted Machine Upgrade itself")
+			http.Error(w, "Host must not execute Machine Upgrade", http.StatusConflict)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
-	defer server.Close()
+	defer cloud.Close()
 
 	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
+		if r.Header.Get("X-Multica-Control-Token") != controlToken {
+			http.Error(w, "bad token", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == BindingComputerUpgradePath {
+			var request struct {
+				Command protocol.ComputerUpgradePayload `json:"command"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			delivered <- request.Command.Operation()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path != BindingReregisterRuntimePath {
 			http.Error(w, "unexpected child control request", http.StatusBadRequest)
 			return
 		}
@@ -120,7 +139,7 @@ func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testi
 	}
 	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{identity: HostProcessIdentity{
 		ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
-		Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+		Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: cloud.URL,
 	}})
 	host.upgrade = upgrade
 
@@ -139,12 +158,12 @@ func TestHostMachineUpgradeLocalDeliveryExecutesExistingServerOperation(t *testi
 			t.Fatalf("local delivery %s status = %d body=%s", operationID, response.Code, response.Body.String())
 		}
 		select {
-		case got := <-attested:
+		case got := <-delivered:
 			if got != operationID {
-				t.Fatalf("attested operation = %q, want %q", got, operationID)
+				t.Fatalf("delivered operation = %q, want %q", got, operationID)
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("local delivery did not execute and attest %s", operationID)
+			t.Fatalf("local delivery did not hand off %s", operationID)
 		}
 		deadline := time.Now().Add(time.Second)
 		for {
@@ -187,7 +206,7 @@ func TestHostMachineUpgradeSameOperationIsIgnoredWhileActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := upgrade.handleChildAction(context.Background(), identity, raw); err != nil {
-		t.Fatalf("same operation replay = %v", err)
+		t.Fatalf("forwarded heartbeat upgrade = %v", err)
 	}
 	if upgrade.activeID != "upgrade-a" {
 		t.Fatalf("activeID = %q, want upgrade-a", upgrade.activeID)
@@ -215,9 +234,8 @@ func TestHostMachineUpgradeDifferentOperationReturnsBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = upgrade.handleChildAction(context.Background(), identity, raw)
-	if !errors.Is(err, ErrComputerControlBusy) {
-		t.Fatalf("different operation while active = %v, want ErrComputerControlBusy", err)
+	if err := upgrade.handleChildAction(context.Background(), identity, raw); err != nil {
+		t.Fatalf("forwarded heartbeat upgrade = %v, want ignore", err)
 	}
 }
 
@@ -290,7 +308,6 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	}))
 	defer childControl.Close()
 
-	attested := make(chan struct{}, 1)
 	acceptedGeneration := "generation-a"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -302,25 +319,8 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/progress":
 			w.WriteHeader(http.StatusNoContent)
 		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
-			if got := r.Header.Get("X-Computer-Generation"); got != "32" {
-				http.Error(w, "Computer generation header = "+got+", want 32", http.StatusConflict)
-				return
-			}
-			var body struct {
-				GenerationID string   `json:"generation_id"`
-				RuntimeIDs   []string `json:"runtime_ids"`
-				WorkspaceIDs []string `json:"workspace_ids"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if body.GenerationID != acceptedGeneration || !sameHostStringSet(body.RuntimeIDs, runtimeIDs) || !sameHostStringSet(body.WorkspaceIDs, workspaceIDs) {
-				http.Error(w, "incomplete successor attestation", http.StatusConflict)
-				return
-			}
-			attested <- struct{}{}
-			w.WriteHeader(http.StatusNoContent)
+			t.Error("successor attested over HTTP")
+			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
 		default:
 			http.NotFound(w, r)
 		}
@@ -365,6 +365,10 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 
 	root := t.TempDir()
 	incumbent := newReadyHost(8101)
+	hostMux := http.NewServeMux()
+	incumbent.RegisterRoutes(hostMux)
+	hostControl := httptest.NewServer(hostMux)
+	defer hostControl.Close()
 	upgradeCancelled := make(chan struct{}, 1)
 	upgrade := newHostMachineUpgrade(incumbent, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
@@ -376,33 +380,50 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	})
 	incumbent.upgrade = upgrade
 	var staged, verified, swapped atomic.Bool
-	upgrade.stageRelease = func(target string, _ time.Duration, _ string) (string, error) {
-		if target != "v2.0.0" {
-			t.Fatalf("stage target = %q", target)
-		}
-		staged.Store(true)
-		return "/tmp/staged-computer", nil
-	}
-	upgrade.verifyBinary = func(_ context.Context, path, target string) error {
-		if path != "/tmp/staged-computer" || target != "v2.0.0" {
-			t.Fatalf("verify path/target = %q/%q", path, target)
-		}
-		verified.Store(true)
-		return nil
-	}
-	upgrade.installPath = func() (string, error) { return "/tmp/active-computer", nil }
-	upgrade.swapExecutable = func(current, candidate string) error {
-		if current != "/tmp/active-computer" || candidate != "/tmp/staged-computer" {
-			t.Fatalf("swap current/candidate = %q/%q", current, candidate)
-		}
-		swapped.Store(true)
-		return nil
-	}
-	upgrade.execute(context.Background(), incumbent.runtimeSets[workspaceIDs[0]].Runtimes[0], "runtime-token-workspace-a", protocol.DaemonHeartbeatPendingMachineUpgrade{
-		ID: "upgrade-a", TargetVersion: "v2.0.0",
+	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
+		Identity: HostProcessIdentity{
+			ComputerID: "computer-a", ComputerGeneration: 31, Environment: "test",
+			Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+		},
+		ResidentRoot: root,
+		ControlURL:   hostControl.URL,
+		ControlToken: controlToken,
+		Child:        incumbent.runtimeSets[workspaceIDs[0]].Identity,
+		RuntimeID:    runtimeIDs[0],
+		DaemonToken:  "runtime-token-workspace-a",
+		Exit: func() {
+			upgrade.observeInitiatorExit(incumbent.runtimeSets[workspaceIDs[0]].Identity)
+		},
+		StageRelease: func(target string, _ time.Duration, _ string) (string, error) {
+			if target != "v2.0.0" {
+				t.Fatalf("stage target = %q", target)
+			}
+			staged.Store(true)
+			return "/tmp/staged-computer", nil
+		},
+		VerifyBinary: func(_ context.Context, path, target string) error {
+			if path != "/tmp/staged-computer" || target != "v2.0.0" {
+				t.Fatalf("verify path/target = %q/%q", path, target)
+			}
+			verified.Store(true)
+			return nil
+		},
+		InstallPath: func() (string, error) { return "/tmp/active-computer", nil },
+		SwapExecutable: func(current, candidate string) error {
+			if current != "/tmp/active-computer" || candidate != "/tmp/staged-computer" {
+				t.Fatalf("swap current/candidate = %q/%q", current, candidate)
+			}
+			swapped.Store(true)
+			return nil
+		},
 	})
-	if got := prepares.Load(); got != int32(len(workspaceIDs)) {
-		t.Fatalf("Machine Upgrade prepare calls = %d, want %d", got, len(workspaceIDs))
+	if err := executor.Execute(context.Background(), protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v2.0.0",
+	}); err != nil {
+		t.Fatalf("Binding executor: %v", err)
+	}
+	if got := prepares.Load(); got != 1 {
+		t.Fatalf("Machine Upgrade sibling prepare calls = %d, want 1", got)
 	}
 	if !staged.Load() || !verified.Load() || !swapped.Load() {
 		t.Fatalf("Machine Upgrade phases stage=%t verify=%t swap=%t", staged.Load(), verified.Load(), swapped.Load())
@@ -413,7 +434,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		t.Fatal("activated Machine Upgrade did not stop incumbent Computer")
 	}
 	journal, err := upgrade.readJournal()
-	if err != nil || journal == nil || journal.Phase != "activated" || !sameHostStringSet(journal.RuntimeIDs, runtimeIDs) || !sameHostStringSet(journal.WorkspaceIDs, workspaceIDs) {
+	if err != nil || journal == nil || journal.Target != "v2.0.0" {
 		t.Fatalf("activated Machine Upgrade journal = %+v, error=%v", journal, err)
 	}
 	incumbent.Stop()
@@ -431,13 +452,8 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		t.Fatalf("recover successor: %v", err)
 	}
 	defer successor.Stop()
-	if got := reregistrations.Load(); got != int32(len(workspaceIDs)) {
-		t.Fatalf("successor re-registration calls = %d, want %d", got, len(workspaceIDs))
-	}
-	select {
-	case <-attested:
-	case <-time.After(time.Second):
-		t.Fatal("successor did not attest complete Computer set")
+	if got := reregistrations.Load(); got != 0 {
+		t.Fatalf("successor re-registration calls = %d, want 0", got)
 	}
 	if journal, err := successorUpgrade.readJournal(); err != nil || journal != nil {
 		t.Fatalf("successor left Machine Upgrade journal = %+v, error=%v", journal, err)
@@ -453,10 +469,10 @@ func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	previousJournalPath := filepath.Join(previousJournalDir, "upgrade-a.json")
-	previousJournal := hostMachineUpgradeJournal{
-		ID: "upgrade-a", Generation: "generation-a", Source: "v1.0.0", Target: "v2.0.0",
-		RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"}, Phase: "handoff",
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	previousJournal := map[string]any{
+		"id": "upgrade-a", "generation": "generation-a", "source_version": "v1.0.0", "target_version": "v2.0.0",
+		"runtime_ids": []string{"runtime-a"}, "workspace_ids": []string{"workspace-a"}, "phase": "handoff",
+		"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	data, err := json.Marshal(previousJournal)
 	if err != nil {
@@ -476,14 +492,13 @@ func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer childControl.Close()
-	attested := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-a/attest" {
-			http.NotFound(w, r)
+		if r.URL.Path == "/api/daemon/computer/machine-upgrades/upgrade-a/attest" {
+			t.Error("previous-package successor attested over HTTP")
+			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
 			return
 		}
-		attested <- struct{}{}
-		w.WriteHeader(http.StatusNoContent)
+		http.NotFound(w, r)
 	}))
 	defer server.Close()
 
@@ -523,15 +538,10 @@ func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
 	if err := upgrade.recoverSuccessor(context.Background()); err != nil {
 		t.Fatalf("recover previous-package successor: %v", err)
 	}
-	if got := reregistered.Load(); got != 1 {
-		t.Fatalf("successor re-registration calls = %d, want 1", got)
-	}
-	select {
-	case <-attested:
-	case <-time.After(time.Second):
-		t.Fatal("previous-package handoff was not attested")
+	if got := reregistered.Load(); got != 0 {
+		t.Fatalf("successor re-registration calls = %d, want 0", got)
 	}
 	if _, err := os.Stat(previousJournalPath); !os.IsNotExist(err) {
-		t.Fatalf("previous-package handoff journal remains after attestation: %v", err)
+		t.Fatalf("previous-package handoff journal remains after successor start: %v", err)
 	}
 }

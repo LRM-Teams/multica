@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/computer"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func (d *Daemon) listenBindingCredentialProxy() (net.Listener, error) {
@@ -47,6 +48,7 @@ type BindingChildRunConfig struct {
 	PublishReady   func(computer.BindingChildReady) error
 	RefreshEvery   time.Duration
 	HostLeaseEvery time.Duration
+	PrepareUpgrade func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error)
 }
 
 // RunBindingChild owns one Workspace Runner and all of its workspace-scoped
@@ -149,6 +151,31 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err := hostControl.reportRuntimeSet(ctx, response.Runtimes, response.DaemonToken, response.DaemonTokenExpiresAt); err != nil {
 		return fmt.Errorf("report Binding child Runtime set: %w", err)
 	}
+	runtimeID := ""
+	if len(response.Runtimes) > 0 {
+		runtimeID = response.Runtimes[0].ID
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	executor := computer.NewBindingMachineUpgradeExecutor(computer.BindingMachineUpgradeConfig{
+		Identity: computer.HostProcessIdentity{
+			ComputerID: bootstrap.ComputerID, ComputerGeneration: bootstrap.ComputerGeneration,
+			Environment: bootstrap.Environment, Version: config.Daemon.CLIVersion, ServerURL: bootstrap.ServerBaseURL,
+		},
+		ResidentRoot: bootstrap.BindingsRoot,
+		ControlURL:   bootstrap.HostControlURL,
+		ControlToken: config.Daemon.LocalControlToken,
+		Child: bindingChildControlIdentity{
+			WorkspaceID: workspaceID, RunnerGeneration: bootstrap.RunnerGeneration, PID: os.Getpid(),
+		},
+		RuntimeID:    runtimeID,
+		DaemonToken:  response.DaemonToken,
+		Drain:        d.beginBindingDrain,
+		ReleaseDrain: d.releaseClaimBarrier,
+		Exit:         cancel,
+		Prepare:      config.PrepareUpgrade,
+	})
+	d.bindingMachineUpgrade = executor.Execute
 	d.notifyRuntimeSetChanged()
 	if len(runtimeIDs) > 0 {
 		defer d.deregisterRuntimes()
@@ -162,8 +189,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err != nil {
 		return err
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	var (
 		readyOnce sync.Once
 		readyErr  error
@@ -389,6 +414,35 @@ func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstr
 	}
 	mux.HandleFunc(computer.BindingPrepareMachineUpgradePath, handle(true))
 	mux.HandleFunc(computer.BindingReleaseMachineUpgradePath, handle(false))
+	mux.HandleFunc(computer.BindingComputerUpgradePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !d.localControlAuthorized(r) {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		var request struct {
+			Identity computer.BindingChildIdentity   `json:"identity"`
+			Command  protocol.ComputerUpgradePayload `json:"command"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if err := d.handleComputerControlCommand(r.Context(), protocol.EventComputerUpgrade, request.Command); err != nil {
+			if errors.Is(err, computer.ErrComputerControlBusy) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc(computer.BindingPrepareEnvironmentSwitchPath, func(w http.ResponseWriter, r *http.Request) {
 		if !decodeIdentity(w, r) {
 			return

@@ -78,17 +78,21 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	defer stop()
 
 	logger := logger_pkg.NewLogger("computer")
+	var host *computer.Host
 	launcher := computer.BindingRunnerLauncher{
 		ComputerID: computerID, ComputerGeneration: computerGeneration,
 		Environment: string(serviceTarget.Environment), Profile: profile, ServerBaseURL: serviceTarget.Origin,
 		HostControlURL: fmt.Sprintf("http://127.0.0.1:%d", computer.HealthPort(profile)),
 		BindingsRoot:   bindingsRoot, WorkspacesRoot: workspacesRoot,
+		Run: func(ctx context.Context, bootstrap computer.BindingChildBootstrap, publishReady func(computer.BindingChildReady) error) error {
+			return runInProcessBindingChild(ctx, bootstrap, publishReady, host)
+		},
 		// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
 		PreviousPackageUpgradeBootstrap: previousPackageUpgradeBootstrap,
 		PreviousPackageUpgradeSourcePID: machineAttestationSourcePID,
 	}
-	host, err := computer.NewHost(computer.HostConfig{
+	host, err = computer.NewHost(computer.HostConfig{
 		Spawn: launcher.Spawn, Logger: logger, ControlToken: controlToken,
 		MaxAgentProcesses: maxAgentProcesses,
 	})
@@ -147,9 +151,6 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		if err := spawnDetachedComputerBinary(restartBin, profile, host.MachineUpgradeTarget()); err != nil {
 			if rollbackErr := cli.RollbackExecutable(restartBin); rollbackErr != nil {
 				return fmt.Errorf("start detached Computer successor: %w; restore previous Computer: %v", err, rollbackErr)
-			}
-			if journalErr := host.MarkMachineUpgradeRollbackPending(); journalErr != nil {
-				return fmt.Errorf("start detached Computer successor: %w; previous binary restored but rollback journal failed: %v", err, journalErr)
 			}
 			if restoreErr := spawnDetachedComputerBinary(restartBin, profile, ""); restoreErr != nil {
 				return fmt.Errorf("start detached Computer successor: %w; restored previous binary but restart failed: %v", err, restoreErr)

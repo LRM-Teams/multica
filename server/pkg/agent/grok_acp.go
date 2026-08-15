@@ -47,7 +47,7 @@ type grokACPBackend struct {
 type grokACPProcess struct {
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
-	client     *hermesClient
+	client     *acpClient
 	readerDone chan struct{}
 	stderrDone chan struct{}
 	sessionID  string
@@ -261,7 +261,7 @@ func (b *grokACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*
 		return nil, fmt.Errorf("start grok ACP: %w", err)
 	}
 	p := &grokACPProcess{cmd: cmd, stdin: stdin, readerDone: make(chan struct{}), stderrDone: make(chan struct{})}
-	p.client = &hermesClient{
+	p.client = &acpClient{
 		cfg: b.cfg, stdin: stdin, pending: make(map[int]*pendingRPC), pendingTools: make(map[string]*pendingToolCall),
 		onMessage: func(msg Message) {
 			p.stateMu.Lock()
@@ -313,11 +313,26 @@ func (b *grokACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*
 	var created json.RawMessage
 	if opts.ResumeSessionID != "" {
 		created, err = p.client.request(ctx, "session/load", map[string]any{"cwd": cwd, "sessionId": opts.ResumeSessionID, "mcpServers": mcp})
-		if err != nil {
+		if err != nil && isACPSessionNotFound(err) {
+			if b.cfg.Logger != nil {
+				b.cfg.Logger.Warn("resumed grok ACP session not found; starting a fresh session",
+					"session_id", opts.ResumeSessionID,
+					"cwd", cwd,
+					"error", err,
+				)
+			}
+			created, err = p.client.request(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": mcp})
+			if err != nil {
+				b.disposeProcess(p)
+				return nil, fmt.Errorf("grok ACP session/new after stale session/load: %w", err)
+			}
+			p.sessionID = extractACPSessionID(created)
+		} else if err != nil {
 			b.disposeProcess(p)
 			return nil, fmt.Errorf("grok ACP session/load: %w", err)
+		} else {
+			p.sessionID, _ = resolveResumedSessionID(opts.ResumeSessionID, created)
 		}
-		p.sessionID, _ = resolveResumedSessionID(opts.ResumeSessionID, created)
 	} else {
 		created, err = p.client.request(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": mcp})
 		if err != nil {

@@ -2270,7 +2270,7 @@ func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	}
 }
 
-func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
+func TestExecuteAndDrain_DoesNotRecordIssueRunSessionIntoResidentCache(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, slog.Default())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2281,8 +2281,11 @@ func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
 
 	agentID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	runtimeID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	backend := statusStreamBackend{sessionID: "live-provider-sess", statusCount: 1}
-	_, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", agent.ExecOptions{Cwd: "/work"}, slog.Default(), Task{
+	if err := d.agentRuntimeSessions.Put(agentID, runtimeID, "resident-session"); err != nil {
+		t.Fatal(err)
+	}
+	backend := statusStreamBackend{sessionID: "issue-run-session", statusCount: 1}
+	_, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", agent.ExecOptions{Cwd: "/work/issue-run"}, slog.Default(), Task{
 		ID:        "task-live-session",
 		AgentID:   agentID,
 		RuntimeID: runtimeID,
@@ -2291,19 +2294,13 @@ func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
 		t.Fatalf("executeAndDrainForTask: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	var got string
-	for time.Now().Before(deadline) {
-		got, err = d.agentRuntimeSessions.Get(agentID, runtimeID)
-		if err != nil {
-			t.Fatalf("read session store: %v", err)
-		}
-		if got == "live-provider-sess" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	got, err := d.agentRuntimeSessions.Get(agentID, runtimeID)
+	if err != nil {
+		t.Fatalf("read session store: %v", err)
 	}
-	t.Fatalf("session store = %q, want live-provider-sess (production never recorded the live provider session)", got)
+	if got != "resident-session" {
+		t.Fatalf("resident cache = %q, want resident-session (issue-run must not overwrite start.config.sessionId)", got)
+	}
 }
 
 // TestExecuteAndDrain_PinsTaskSessionOnlyOnce covers the

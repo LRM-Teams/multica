@@ -114,7 +114,7 @@ func TestCodexPendingNoticeUsesFencedTurnSteer(t *testing.T) {
 
 func TestGrokPendingNoticeUsesNativeInterject(t *testing.T) {
 	writer := newNoticeCaptureWriter()
-	client := &hermesClient{stdin: writer, pending: make(map[int]*pendingRPC)}
+	client := &acpClient{stdin: writer, pending: make(map[int]*pendingRPC)}
 	process := &grokACPProcess{client: client, sessionID: "session-9"}
 	backend := newGrokACPBackend(Config{})
 	backend.process.Store(process)
@@ -138,7 +138,7 @@ func TestGrokPendingNoticeUsesNativeInterject(t *testing.T) {
 
 func TestCursorPendingNoticeUsesNativeACPFollowUp(t *testing.T) {
 	writer := newNoticeCaptureWriter()
-	client := &hermesClient{stdin: writer, pending: make(map[int]*pendingRPC)}
+	client := &acpClient{stdin: writer, pending: make(map[int]*pendingRPC)}
 	process := &cursorACPProcess{client: client, sessionID: "session-cursor", noticeOpen: true}
 	backend := newCursorACPBackend(Config{})
 	backend.process.Store(process)
@@ -167,7 +167,7 @@ func TestCursorPendingNoticeUsesNativeACPFollowUp(t *testing.T) {
 
 func TestCursorPendingNoticeRejectsBeforePrimaryAdmission(t *testing.T) {
 	writer := newNoticeCaptureWriter()
-	client := &hermesClient{stdin: writer, pending: make(map[int]*pendingRPC)}
+	client := &acpClient{stdin: writer, pending: make(map[int]*pendingRPC)}
 	process := &cursorACPProcess{client: client, sessionID: "session-cursor"}
 	backend := newCursorACPBackend(Config{})
 	backend.process.Store(process)
@@ -185,7 +185,7 @@ func TestCursorPendingNoticeRejectsBeforePrimaryAdmission(t *testing.T) {
 
 func TestCursorResidentTurnWaitsForNativeFollowUp(t *testing.T) {
 	writer := &requestCaptureWriter{lines: make(chan []byte, 2)}
-	client := &hermesClient{stdin: writer, pending: make(map[int]*pendingRPC)}
+	client := &acpClient{stdin: writer, pending: make(map[int]*pendingRPC)}
 	process := &cursorACPProcess{client: client, sessionID: "session-cursor"}
 	backend := newCursorACPBackend(Config{})
 	backend.process.Store(process)

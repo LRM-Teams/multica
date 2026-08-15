@@ -3310,7 +3310,10 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					// Not Multica agent_session / agent_session_id (inbox
 					// wake/drain UUID) — different "session", task #109.
 					if msg.SessionID != "" && sessionPinned.CompareAndSwap(false, true) {
-						d.recordProviderSession(task.AgentID, task.RuntimeID, msg.SessionID)
+						// Pin is task-scoped (session + cwd). Do not write the
+						// DaemonCore resume cache: that cache is the resident
+						// RuntimeSession, same as Raft's start.config.sessionId.
+						// An issue-run cwd would poison the next agent-home restart.
 						pinCtx, pinCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						if err := d.client.PinTaskSession(pinCtx, taskID, msg.SessionID, opts.Cwd, task.RuntimeID); err != nil {
 							taskLog.Warn("pin task session failed (task still runs; resume pointer lost for this cycle)", "error", err)

@@ -94,6 +94,64 @@ func TestGrokACPBackendReusesOneChildForCompatibleTurns(t *testing.T) {
 	}
 }
 
+func fakeGrokACPStaleLoadThenNewScript() string {
+	return `#!/bin/sh
+printf x >> "$GROK_TEST_STARTS"
+if [ -n "$GROK_TEST_ARGS" ]; then
+  printf '%s\n' "$@" > "$GROK_TEST_ARGS"
+fi
+: > "$GROK_TEST_RPC"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{}}}}\n' "$id" ;;
+    *'"session/load"'*)
+      printf '%s\n' "$line" >> "$GROK_TEST_RPC"
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"Path not found.","data":{"code":"FS_NOT_FOUND","detail":"No such file or directory (os error 2)"}}}\n' "$id"
+      ;;
+    *'"session/new"'*)
+      printf '%s\n' "$line" >> "$GROK_TEST_RPC"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fresh-grok-session"}}\n' "$id"
+      ;;
+    *'"session/prompt"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+  esac
+done
+`
+}
+
+func TestGrokACPBackendFallsBackToNewWhenSessionLoadPathMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "grok")
+	writeTestExecutable(t, path, []byte(fakeGrokACPStaleLoadThenNewScript()))
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rpcPath := filepath.Join(dir, "rpc")
+	b := newGrokACPBackend(Config{ExecutablePath: path, Env: map[string]string{
+		"GROK_HOME": dir, "GROK_TEST_STARTS": filepath.Join(dir, "starts"), "GROK_TEST_RPC": rpcPath,
+	}})
+	t.Cleanup(b.Close)
+
+	s, err := b.Execute(context.Background(), "hello", ExecOptions{Cwd: dir, ResumeSessionID: "stale-issue-run"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := <-s.Result
+	if got.Status != "completed" || got.SessionID != "fresh-grok-session" {
+		t.Fatalf("result = %+v, want completed fresh-grok-session", got)
+	}
+	rpc, err := os.ReadFile(rpcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rpc), `"session/load"`) || !strings.Contains(string(rpc), `"session/new"`) {
+		t.Fatalf("rpc log = %s, want session/load then session/new", rpc)
+	}
+	if b.process.Load() == nil {
+		t.Fatal("stale session/load disposed the process instead of keeping the fresh session")
+	}
+}
+
 func TestGrokACPBackendRejectsConcurrentTurn(t *testing.T) {
 	b := newGrokACPBackend(Config{})
 	b.running.Store(true)

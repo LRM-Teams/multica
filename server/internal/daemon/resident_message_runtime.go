@@ -167,6 +167,9 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("resident Message runtime identity: %w", err)
 	}
 
+	// Resume only the id last applied by agent:start for this DaemonCore.
+	// Do not invent a disk-backed pointer; a new process starts empty until
+	// the next start payload, same as Raft idleRestartSnapshots.
 	resumeSessionID := ""
 	if d.agentRuntimeSessions != nil {
 		if stored, err := d.agentRuntimeSessions.Get(agentID, runtimeID); err == nil {

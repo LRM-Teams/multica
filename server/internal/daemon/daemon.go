@@ -2330,7 +2330,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	executionMemories := serverMemories
 	if !restrictedExecution {
 		executionMemories, _ = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
-		// Graph reviewer (design §1 reviewer.type=graph): a successful graph
+		// Graph reviewer (design §1 memory_type=graph): a successful graph
 		// recall replaces the legacy scoped-memory snapshot; errors and
 		// misses keep the legacy result.
 		if graphMemories := d.graphExecutionMemories(ctx, memoryTask, taskLog); graphMemories != nil {

@@ -12,7 +12,7 @@ import (
 )
 
 const getGraphMemoryProfile = `-- name: GetGraphMemoryProfile :one
-SELECT workspace_id, reviewer_type, explore_agents, explore_max_rounds, updated_at
+SELECT workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at
 FROM graph_memory_profile
 WHERE workspace_id = $1
 `
@@ -22,7 +22,7 @@ func (q *Queries) GetGraphMemoryProfile(ctx context.Context, workspaceID pgtype.
 	var i GraphMemoryProfile
 	err := row.Scan(
 		&i.WorkspaceID,
-		&i.ReviewerType,
+		&i.MemoryType,
 		&i.ExploreAgents,
 		&i.ExploreMaxRounds,
 		&i.UpdatedAt,
@@ -31,19 +31,19 @@ func (q *Queries) GetGraphMemoryProfile(ctx context.Context, workspaceID pgtype.
 }
 
 const upsertGraphMemoryProfile = `-- name: UpsertGraphMemoryProfile :one
-INSERT INTO graph_memory_profile (workspace_id, reviewer_type, explore_agents, explore_max_rounds)
+INSERT INTO graph_memory_profile (workspace_id, memory_type, explore_agents, explore_max_rounds)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (workspace_id) DO UPDATE SET
-  reviewer_type = EXCLUDED.reviewer_type,
+  memory_type = EXCLUDED.memory_type,
   explore_agents = EXCLUDED.explore_agents,
   explore_max_rounds = EXCLUDED.explore_max_rounds,
   updated_at = now()
-RETURNING workspace_id, reviewer_type, explore_agents, explore_max_rounds, updated_at
+RETURNING workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at
 `
 
 type UpsertGraphMemoryProfileParams struct {
 	WorkspaceID      pgtype.UUID `json:"workspace_id"`
-	ReviewerType     string      `json:"reviewer_type"`
+	MemoryType       string      `json:"memory_type"`
 	ExploreAgents    int32       `json:"explore_agents"`
 	ExploreMaxRounds int32       `json:"explore_max_rounds"`
 }
@@ -51,14 +51,14 @@ type UpsertGraphMemoryProfileParams struct {
 func (q *Queries) UpsertGraphMemoryProfile(ctx context.Context, arg UpsertGraphMemoryProfileParams) (GraphMemoryProfile, error) {
 	row := q.db.QueryRow(ctx, upsertGraphMemoryProfile,
 		arg.WorkspaceID,
-		arg.ReviewerType,
+		arg.MemoryType,
 		arg.ExploreAgents,
 		arg.ExploreMaxRounds,
 	)
 	var i GraphMemoryProfile
 	err := row.Scan(
 		&i.WorkspaceID,
-		&i.ReviewerType,
+		&i.MemoryType,
 		&i.ExploreAgents,
 		&i.ExploreMaxRounds,
 		&i.UpdatedAt,

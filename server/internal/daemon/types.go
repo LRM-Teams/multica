@@ -47,16 +47,16 @@ type Task struct {
 	// regardless of task kind so the daemon can inject `## Workspace Context`
 	// into the brief. Empty when the owner hasn't set one.
 	WorkspaceContext string `json:"workspace_context,omitempty"`
-	// ReviewerType is the per-workspace graph memory reviewer override sent
+	// MemoryType is the per-workspace graph memory reviewer override sent
 	// by the server from graph_memory_profile (design §1/A4). It overrides
-	// the daemon's MULTICA_REVIEWER_TYPE env default for this task only;
+	// the daemon's MULTICA_MEMORY_TYPE env default for this task only;
 	// empty means the env default applies.
-	ReviewerType string     `json:"reviewer_type,omitempty"`
-	ThreadName   string     `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Agent        *AgentData `json:"agent,omitempty"`
-	ProjectID    string     `json:"project_id,omitempty"`   // issue's project, when present
-	ChannelID    string     `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
-	ChannelKind  string     `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; drives personal-memory entry gate
+	MemoryType  string     `json:"memory_type,omitempty"`
+	ThreadName  string     `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Agent       *AgentData `json:"agent,omitempty"`
+	ProjectID   string     `json:"project_id,omitempty"`   // issue's project, when present
+	ChannelID   string     `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
+	ChannelKind string     `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; drives personal-memory entry gate
 	// ScopedSecrets are channel/project (and optionally agent) secrets injected
 	// after filtering by the current task channel/project (LRM-953). Agent
 	// custom_env remains separate and is treated as agent-scoped.

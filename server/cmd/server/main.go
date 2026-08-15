@@ -464,7 +464,7 @@ func main() {
 	// Graph memory consolidation (design §5.4) is opt-in while the reviewer
 	// rolls out: MULTICA_GRAPH_CONSOLIDATION_ENABLED gates registration, and
 	// the handler additionally requires a graph reviewer per workspace
-	// (graph_memory_profile, falling back to MULTICA_REVIEWER_TYPE; A4).
+	// (graph_memory_profile, falling back to MULTICA_MEMORY_TYPE; A4).
 	if enabled := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_GRAPH_CONSOLIDATION_ENABLED"))); enabled == "true" || enabled == "1" || enabled == "on" {
 		if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
 			slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)

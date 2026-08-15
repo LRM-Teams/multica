@@ -58,7 +58,7 @@ type graphMemoryJudgeKicker interface {
 // graphMemoryProvider wires the memorygraph subsystem into the daemon's
 // execution-memory injection path (design §5.2): hybrid retrieval plus the
 // explore agent replace the legacy scoped-file injection when
-// reviewer.type=graph.
+// memory_type=graph.
 type graphMemoryProvider struct {
 	store    *memorygraph.Store
 	retr     *memorygraph.HybridRetriever
@@ -297,21 +297,21 @@ func (d *Daemon) graphMemory() *graphMemoryProvider {
 	return d.graphMemoryProv
 }
 
-// effectiveReviewerType resolves the reviewer type for one task (design
+// effectiveMemoryType resolves the reviewer type for one task (design
 // §1/A4): a valid task-scoped override from the server payload wins over
-// the process-level env default (cfg.ReviewerType, already validated by
+// the process-level env default (cfg.MemoryType, already validated by
 // LoadConfig); anything unrecognized falls back to the env default.
-func effectiveReviewerType(configured, taskScoped string) string {
+func effectiveMemoryType(configured, taskScoped string) string {
 	switch strings.ToLower(strings.TrimSpace(taskScoped)) {
-	case ReviewerTypeLegacy:
-		return ReviewerTypeLegacy
-	case ReviewerTypeGraph:
-		return ReviewerTypeGraph
+	case MemoryTypeLegacy:
+		return MemoryTypeLegacy
+	case MemoryTypeGraph:
+		return MemoryTypeGraph
 	}
-	if configured == ReviewerTypeGraph {
-		return ReviewerTypeGraph
+	if configured == MemoryTypeGraph {
+		return MemoryTypeGraph
 	}
-	return ReviewerTypeLegacy
+	return MemoryTypeLegacy
 }
 
 // graphExecutionMemories returns graph-recalled execution memory when the
@@ -319,7 +319,7 @@ func effectiveReviewerType(configured, taskScoped string) string {
 // caller then keeps the legacy prepareExecutionMemory result. Graph errors
 // never break task execution: they are logged and fall back to legacy.
 func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
-	if effectiveReviewerType(d.cfg.ReviewerType, task.ReviewerType) != ReviewerTypeGraph {
+	if effectiveMemoryType(d.cfg.MemoryType, task.MemoryType) != MemoryTypeGraph {
 		return nil
 	}
 	provider := d.graphMemory()

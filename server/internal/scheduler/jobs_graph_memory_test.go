@@ -13,13 +13,13 @@ import (
 )
 
 func TestGraphMemoryConsolidationSkipsWhenReviewerNotGraph(t *testing.T) {
-	t.Setenv("MULTICA_REVIEWER_TYPE", "")
+	t.Setenv("MULTICA_MEMORY_TYPE", "")
 	res, err := GraphMemoryJobs(nil, nil).Handler(context.Background(), HandlerInput{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
-	if res.Result["skipped"] != true || res.Result["reason"] != "reviewer_not_graph" {
-		t.Fatalf("result = %v, want skipped/reviewer_not_graph", res.Result)
+	if res.Result["skipped"] != true || res.Result["reason"] != "memory_type_not_graph" {
+		t.Fatalf("result = %v, want skipped/memory_type_not_graph", res.Result)
 	}
 }
 
@@ -29,7 +29,7 @@ func TestGraphMemoryConsolidationSkipsWhenReviewerNotGraph(t *testing.T) {
 // still walk every found dir.
 func TestGraphMemoryConsolidationBelowThreshold(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("MULTICA_REVIEWER_TYPE", "graph")
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
 	t.Setenv("MULTICA_WORKSPACES_ROOT", root)
 
 	dir := root + "/ws-1/memory_graph"
@@ -306,15 +306,15 @@ func TestGraphConsolidationStateMigratesLegacyFormat(t *testing.T) {
 	}
 }
 
-// Per-workspace reviewer.type resolution (design §1/A4): the profile row
+// Per-workspace memory_type resolution (design §1/A4): the profile row
 // wins over the env default; the env default wins over the legacy fallback;
 // a lookup failure fails open to the env default.
-func TestResolveGraphMemoryReviewerType(t *testing.T) {
+func TestResolveGraphMemoryMemoryType(t *testing.T) {
 	ctx := context.Background()
 	wsDir := "/root/3f6b1c2e-7a8d-4e5f-9a0b-1c2d3e4f5a6b/memory_graph"
 	rootDir := "/root/memory_graph"
 
-	profile := func(rt string, err error) graphReviewerTypeLookup {
+	profile := func(rt string, err error) graphMemoryTypeLookup {
 		return func(context.Context, string) (string, error) { return rt, err }
 	}
 
@@ -322,7 +322,7 @@ func TestResolveGraphMemoryReviewerType(t *testing.T) {
 		name   string
 		dir    string
 		env    string
-		lookup graphReviewerTypeLookup
+		lookup graphMemoryTypeLookup
 		want   string
 	}{
 		{"profile graph beats env legacy", wsDir, "legacy", profile("graph", nil), "graph"},
@@ -336,8 +336,8 @@ func TestResolveGraphMemoryReviewerType(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolveGraphMemoryReviewerType(ctx, tc.dir, tc.env, tc.lookup); got != tc.want {
-				t.Fatalf("resolveGraphMemoryReviewerType = %q, want %q", got, tc.want)
+			if got := resolveGraphMemoryType(ctx, tc.dir, tc.env, tc.lookup); got != tc.want {
+				t.Fatalf("resolveGraphMemoryType = %q, want %q", got, tc.want)
 			}
 		})
 	}

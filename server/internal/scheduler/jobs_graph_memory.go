@@ -80,11 +80,11 @@ func (s *graphConsolidationState) dir(path string) *graphDirState {
 
 // GraphMemoryJobs returns the graph memory consolidation job (design §5.4).
 //
-// reviewer.type resolution (design §1/A4) is per workspace: the
+// memory_type resolution (design §1/A4) is per workspace: the
 // graph_memory_profile row for the workspace a memory_graph directory
 // belongs to wins; directories without a profile row (or the root-level
 // default layout, which maps to no workspace) fall back to the server
-// process env MULTICA_REVIEWER_TYPE, then "legacy". pool may be nil (tests,
+// process env MULTICA_MEMORY_TYPE, then "legacy". pool may be nil (tests,
 // DB-less deployments), in which case only the env fallback is available.
 // bm may be nil; every BusinessMetrics method tolerates a nil receiver.
 func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) JobSpec {
@@ -106,14 +106,14 @@ func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) JobSpec
 	}
 }
 
-// graphReviewerTypeLookup resolves the per-workspace reviewer type from
+// graphMemoryTypeLookup resolves the per-workspace reviewer type from
 // graph_memory_profile; it must return an error (e.g. pgx.ErrNoRows) when
 // no profile row exists.
-type graphReviewerTypeLookup func(ctx context.Context, workspaceID string) (string, error)
+type graphMemoryTypeLookup func(ctx context.Context, workspaceID string) (string, error)
 
 // graphMemoryProfileLookup builds the lookup over the sqlc queries; nil
 // pool yields a nil lookup (env-only resolution).
-func graphMemoryProfileLookup(pool *pgxpool.Pool) graphReviewerTypeLookup {
+func graphMemoryProfileLookup(pool *pgxpool.Pool) graphMemoryTypeLookup {
 	if pool == nil {
 		return nil
 	}
@@ -123,17 +123,17 @@ func graphMemoryProfileLookup(pool *pgxpool.Pool) graphReviewerTypeLookup {
 		if err != nil {
 			return "", err
 		}
-		return profile.ReviewerType, nil
+		return profile.MemoryType, nil
 	}
 }
 
-// resolveGraphMemoryReviewerType resolves reviewer.type for one
+// resolveGraphMemoryType resolves memory_type for one
 // memory_graph directory (design §1/A4): the per-workspace profile row wins
 // when the directory maps to a workspace (<root>/<workspace>/memory_graph);
-// otherwise the MULTICA_REVIEWER_TYPE env default applies, then "legacy".
+// otherwise the MULTICA_MEMORY_TYPE env default applies, then "legacy".
 // Lookup errors (including a missing row) fail open to the env default so a
 // transient DB hiccup never flips a workspace's memory pipeline.
-func resolveGraphMemoryReviewerType(ctx context.Context, dir, envType string, lookup graphReviewerTypeLookup) string {
+func resolveGraphMemoryType(ctx context.Context, dir, envType string, lookup graphMemoryTypeLookup) string {
 	if lookup != nil {
 		if wsID, ok := graphDirWorkspaceID(dir); ok {
 			if rt, err := lookup(ctx, wsID); err == nil && (rt == "legacy" || rt == "graph") {
@@ -160,12 +160,12 @@ func graphDirWorkspaceID(dir string) (string, bool) {
 
 func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
-		envType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_REVIEWER_TYPE")))
+		envType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
 		lookup := graphMemoryProfileLookup(pool)
 		if lookup == nil && envType != "graph" {
 			// Without a DB there is no per-workspace override to resolve; the
 			// env default gates the whole sweep.
-			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "reviewer_not_graph"}}, nil
+			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "memory_type_not_graph"}}, nil
 		}
 		root, err := graphMemoryWorkspacesRoot()
 		if err != nil {
@@ -182,10 +182,10 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 
 		consolidated := 0
 		for _, dir := range dirs {
-			// Per-workspace reviewer.type (A4): only graph-enabled dirs
+			// Per-workspace memory_type (A4): only graph-enabled dirs
 			// consolidate; the rest are logged and skipped.
-			if rt := resolveGraphMemoryReviewerType(ctx, dir, envType, lookup); rt != "graph" {
-				slog.Info("graph memory consolidation skipped: reviewer not graph", "dir", dir, "reviewer_type", rt)
+			if rt := resolveGraphMemoryType(ctx, dir, envType, lookup); rt != "graph" {
+				slog.Info("graph memory consolidation skipped: reviewer not graph", "dir", dir, "memory_type", rt)
 				continue
 			}
 			// Per-workspace errors are logged and the loop continues: one

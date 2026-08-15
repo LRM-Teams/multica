@@ -16,10 +16,13 @@ import (
 	"github.com/multica-ai/multica/server/internal/computer"
 )
 
+// TODO(standalone-daemon): Remove this unused command group after callers
+// stop constructing daemonCmd in tests. The public CLI no longer registers
+// `multica daemon`; Computer is the only resident.
 var daemonCmd = &cobra.Command{
 	Use:    "daemon",
 	Short:  "Control the local agent runtime daemon",
-	Hidden: true, // compatibility alias for the machine-wide Computer (#2487)
+	Hidden: true,
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		// The hidden compatibility spelling must still target the one Computer;
 		// accepting a profile/custom server here would recreate the retired

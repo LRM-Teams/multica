@@ -52,7 +52,7 @@ func (noopGraphMemoryMetrics) ObserveGraphExploreRounds(int)     {}
 // no MessageStore access for the downstream history (Q18), no BusinessMetrics
 // handle, and no RL bridge configuration. *Client satisfies this interface.
 type graphMemoryJudgeKicker interface {
-	KickGraphMemoryJudge(ctx context.Context, payload protocol.GraphMemoryJudgeKickPayload) error
+	KickGraphMemoryJudge(ctx context.Context, runtimeID string, payload protocol.GraphMemoryJudgeKickPayload) error
 }
 
 // graphMemoryProvider wires the memorygraph subsystem into the daemon's
@@ -206,7 +206,7 @@ func (p *graphMemoryProvider) ensureRetriever(ctx context.Context) error {
 // content keeps the exact "## Graph Memory Recall" shape, so
 // renderPromotedMemorySnapshot needs no changes. A recall miss (Found=false)
 // is data, not an error: it returns a nil slice (no injection).
-func (p *graphMemoryProvider) prepareGraphExecutionMemory(ctx context.Context, taskID, query string) ([]execenv.MemoryContextForEnv, error) {
+func (p *graphMemoryProvider) prepareGraphExecutionMemory(ctx context.Context, taskID, runtimeID, query string) ([]execenv.MemoryContextForEnv, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
@@ -237,7 +237,7 @@ func (p *graphMemoryProvider) prepareGraphExecutionMemory(ctx context.Context, t
 	if !recall.Found {
 		return nil, nil
 	}
-	p.notifyAsyncJudge(taskID, query, recall)
+	p.notifyAsyncJudge(taskID, runtimeID, query, recall)
 	return []execenv.MemoryContextForEnv{{
 		Name:    "Graph memory recall",
 		Content: "## Graph Memory Recall\n" + strings.TrimSpace(recall.Summary) + "\n\n cited nodes: " + strings.Join(recall.NodeIDs, ", "),
@@ -251,7 +251,7 @@ func (p *graphMemoryProvider) prepareGraphExecutionMemory(ctx context.Context, t
 // push needs the RL bridge configuration, neither of which exists
 // daemon-side (review P0-2). Fire-and-forget: the recall path never blocks
 // on judging and failures are only logged.
-func (p *graphMemoryProvider) notifyAsyncJudge(taskID, query string, recall *memorygraph.RecallResult) {
+func (p *graphMemoryProvider) notifyAsyncJudge(taskID, runtimeID, query string, recall *memorygraph.RecallResult) {
 	if p.kicker == nil || taskID == "" {
 		return
 	}
@@ -276,7 +276,7 @@ func (p *graphMemoryProvider) notifyAsyncJudge(taskID, query string, recall *mem
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := p.kicker.KickGraphMemoryJudge(ctx, payload); err != nil {
+		if err := p.kicker.KickGraphMemoryJudge(ctx, runtimeID, payload); err != nil {
 			p.logger.Warn("graph memory: judge kick failed", "trace_id", recall.TraceID, "error", err)
 		}
 	}()
@@ -330,7 +330,7 @@ func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slo
 	if query == "" {
 		return nil
 	}
-	memories, err := provider.prepareGraphExecutionMemory(ctx, task.ID, query)
+	memories, err := provider.prepareGraphExecutionMemory(ctx, task.ID, task.RuntimeID, query)
 	if err != nil {
 		log.Warn("graph memory recall failed; falling back to legacy memory", "task_id", task.ID, "error", err)
 		return nil

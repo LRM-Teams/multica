@@ -46,9 +46,9 @@ type commitComputerMachineUpgradeTakeoverRequest struct {
 }
 
 // CommitComputerMachineUpgradeTakeover is a compatibility receipt for older
-// Computers that still POST after local PID+version proof. It does not CAS
-// computer_generation. Raft Computer completes replacement locally; heartbeat
-// and register claim the new generation when the successor comes online.
+// Computers that still POST after local PID+version proof. Cloud liveness is
+// the current connect socket, not a computer_generation CAS. Raft Computer
+// completes replacement locally.
 func (h *Handler) CommitComputerMachineUpgradeTakeover(w http.ResponseWriter, r *http.Request) {
 	if h.MachineUpgradeStore == nil {
 		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
@@ -370,8 +370,6 @@ func (h *Handler) writeMachineUpgradeDaemonError(w http.ResponseWriter, err erro
 		writeError(w, http.StatusNotFound, "machine upgrade not found")
 	case errors.Is(err, errMachineUpgradeAcceptanceConflict), errors.Is(err, errMachineUpgradeAttestationRejected):
 		writeCodedError(w, http.StatusConflict, "machine_upgrade_attestation_rejected", err.Error())
-	case errors.Is(err, errStaleComputerGeneration):
-		writeCodedError(w, http.StatusConflict, "stale_computer_generation", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "machine upgrade operation failed: "+err.Error())
 	}

@@ -485,7 +485,6 @@ func (upgrade *hostMachineUpgrade) postJSON(ctx context.Context, path, token str
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
-	request.Header.Set("X-Computer-Generation", fmt.Sprintf("%d", upgrade.config.identity.ComputerGeneration))
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}

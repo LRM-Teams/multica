@@ -35,6 +35,16 @@ func TestDaemonProductionOwnsNoComputerLifecycle(t *testing.T) {
 		"listenHealth(",
 		"healthHandler(",
 		"machineAttestationHandler(",
+		"SetHumanToken(",
+		"HumanToken(",
+		"ClearHumanToken(",
+		"humanToken",
+		"func (c *Client) RenewToken(",
+		"func (c *Client) ListWorkspaces(",
+		"func (d *Daemon) resolveAuth(",
+		"func (d *Daemon) preflightAuth(",
+		"func (d *Daemon) tokenRenewalLoop(",
+		"func (d *Daemon) tryRenewToken(",
 	}
 
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {

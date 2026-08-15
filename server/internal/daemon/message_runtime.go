@@ -144,7 +144,7 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			d.reportAgentMemoryWrites(reportCtx, memoryTask)
 			if sessionID, ok := standaloneChatSessionIDFromMessages(preparedMessages); ok {
 				if reply := standaloneAssistantTextFromCapture(capture); reply != "" {
-					if err := d.client.ReportStandaloneChatReply(reportCtx, sessionID, reply); err != nil && d.logger != nil {
+					if err := d.client.ReportStandaloneChatReply(reportCtx, sessionID, reply, runtimeID); err != nil && d.logger != nil {
 						d.logger.Warn("standalone chat reply writeback failed", "session_id", sessionID, "error", err)
 					}
 				}

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -141,17 +140,18 @@ type Client struct {
 	baseURL string
 	client  *http.Client
 
-	tokenMu         sync.RWMutex
-	token           string
+	tokenMu sync.RWMutex
+	// workspaceTokens and runtimeTokens hold Computer Binding credentials
+	// (mdt_). Human PATs (mul_) stay in setup/CLI. Agent credentials (mat_)
+	// are passed explicitly by the agent process, not stored here.
 	workspaceTokens map[string]daemonAuthToken
 	runtimeTokens   map[string]daemonAuthToken
 
 	// Identity headers sent on every request as X-Client-*. Populated by
 	// SetIdentity(); empty values are simply omitted.
-	platform           string
-	version            string
-	os                 string
-	computerGeneration int64
+	platform string
+	version  string
+	os       string
 }
 
 // NewClient creates a new daemon API client.
@@ -187,12 +187,9 @@ func (c *Client) SetVersion(v string) {
 	c.version = v
 }
 
-func (c *Client) SetComputerGeneration(generation int64) {
-	c.computerGeneration = generation
-}
-
-// addIdentityHeaders attaches the Computer identity and fencing generation to
-// an HTTP request or WebSocket handshake header set.
+// addIdentityHeaders attaches Computer identity headers to an HTTP request
+// or WebSocket handshake. Live ownership is the current connect socket, not
+// a Computer generation header.
 func (c *Client) addIdentityHeaders(headers http.Header) {
 	if c.platform != "" {
 		headers.Set("X-Client-Platform", c.platform)
@@ -203,27 +200,10 @@ func (c *Client) addIdentityHeaders(headers http.Header) {
 	if c.os != "" {
 		headers.Set("X-Client-OS", c.os)
 	}
-	if c.computerGeneration > 0 {
-		headers.Set("X-Computer-Generation", strconv.FormatInt(c.computerGeneration, 10))
-	}
 }
 
 func (c *Client) setIdentityHeaders(req *http.Request) {
 	c.addIdentityHeaders(req.Header)
-}
-
-// SetToken sets the auth token for authenticated requests.
-func (c *Client) SetToken(token string) {
-	c.tokenMu.Lock()
-	defer c.tokenMu.Unlock()
-	c.token = token
-}
-
-// Token returns the current auth token.
-func (c *Client) Token() string {
-	c.tokenMu.RLock()
-	defer c.tokenMu.RUnlock()
-	return c.token
 }
 
 type daemonAuthToken struct {
@@ -310,28 +290,32 @@ func (c *Client) WorkspaceDaemonToken(workspaceID string, now time.Time) string 
 	return tok.token
 }
 
-func (c *Client) tokenSnapshot() string {
-	c.tokenMu.RLock()
-	defer c.tokenMu.RUnlock()
-	return c.token
-}
-
+// tokenForWorkspace returns the live Computer Binding token (mdt_) for one
+// Workspace. It never falls back to a human PAT.
 func (c *Client) tokenForWorkspace(workspaceID string) string {
 	c.tokenMu.RLock()
 	defer c.tokenMu.RUnlock()
 	if tok, ok := c.workspaceTokens[workspaceID]; ok && tok.available(time.Now()) {
 		return tok.token
 	}
-	return c.token
+	return ""
 }
 
+// tokenForRuntime returns the live Computer Binding token (mdt_) for one
+// Runtime. It never falls back to a human PAT. Agent credentials (mat_) are
+// passed explicitly by the agent process, not through this helper.
 func (c *Client) tokenForRuntime(runtimeID string) string {
 	c.tokenMu.RLock()
 	defer c.tokenMu.RUnlock()
 	if tok, ok := c.runtimeTokens[runtimeID]; ok && tok.available(time.Now()) {
 		return tok.token
 	}
-	return c.token
+	return ""
+}
+
+// registerToken is the Computer Binding token. Human PATs stay in setup/CLI.
+func (c *Client) registerToken(workspaceID string) string {
+	return c.tokenForWorkspace(workspaceID)
 }
 
 type AgentInboxEvent struct {
@@ -421,29 +405,29 @@ func (c *Client) GetResidentAgentRuntimeConfig(ctx context.Context, runtimeID, a
 	return &resp, nil
 }
 
-func (c *Client) ReportStandaloneChatReply(ctx context.Context, sessionID, content string) error {
+func (c *Client) ReportStandaloneChatReply(ctx context.Context, sessionID, content, runtimeID string) error {
 	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(content) == "" {
 		return nil
 	}
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/chat/sessions/%s/assistant-replies", sessionID), map[string]any{
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/chat/sessions/%s/assistant-replies", sessionID), map[string]any{
 		"content": content,
-	}, nil)
+	}, nil, c.tokenForRuntime(runtimeID))
 }
 
-func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, step, total int) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/progress", taskID), map[string]any{
+func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, step, total int, runtimeID string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/tasks/%s/progress", taskID), map[string]any{
 		"summary": summary,
 		"step":    step,
 		"total":   total,
-	}, nil)
+	}, nil, c.tokenForRuntime(runtimeID))
 }
 
 // KickGraphMemoryJudge reports one graph-memory recall to the server,
 // kicking the server-side async judge + delayed-reward flow (design §5.3).
 // Fire-and-forget from the caller's perspective: errors are logged by the
 // caller and never affect task execution.
-func (c *Client) KickGraphMemoryJudge(ctx context.Context, payload protocol.GraphMemoryJudgeKickPayload) error {
-	return c.postJSON(ctx, "/api/daemon/graph-memory/judge", payload, nil)
+func (c *Client) KickGraphMemoryJudge(ctx context.Context, runtimeID string, payload protocol.GraphMemoryJudgeKickPayload) error {
+	return c.postJSONWithToken(ctx, "/api/daemon/graph-memory/judge", payload, nil, c.tokenForRuntime(runtimeID))
 }
 
 // TaskMessageData represents a single agent execution message for batch reporting.
@@ -458,10 +442,10 @@ type TaskMessageData struct {
 	Output  string         `json:"output,omitempty"`
 }
 
-func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages []TaskMessageData) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/messages", taskID), map[string]any{
+func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages []TaskMessageData, runtimeID string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/tasks/%s/messages", taskID), map[string]any{
 		"messages": messages,
-	}, nil)
+	}, nil, c.tokenForRuntime(runtimeID))
 }
 
 func (c *Client) ReportAgentInboxMessages(ctx context.Context, lease AgentInboxLease, messages []TaskMessageData) error {
@@ -596,7 +580,7 @@ func (c *Client) AckAgentInboxEvent(ctx context.Context, lease AgentInboxLease) 
 // agent_inbox_event.session_id) and work_dir on the task row mid-flight so a
 // daemon crash doesn't lose --resume. Not the Multica agent_session /
 // agent_session_id inbox wake/drain UUID (task #109).
-func (c *Client) PinTaskSession(ctx context.Context, taskID, sessionID, workDir string) error {
+func (c *Client) PinTaskSession(ctx context.Context, taskID, sessionID, workDir, runtimeID string) error {
 	if sessionID == "" && workDir == "" {
 		return nil
 	}
@@ -607,7 +591,7 @@ func (c *Client) PinTaskSession(ctx context.Context, taskID, sessionID, workDir 
 	if workDir != "" {
 		body["work_dir"] = workDir
 	}
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/session", taskID), body, nil)
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/tasks/%s/session", taskID), body, nil, c.tokenForRuntime(runtimeID))
 }
 
 // RecoverOrphans tells the server to fail any dispatched/running tasks the
@@ -620,11 +604,11 @@ func (c *Client) RecoverOrphans(ctx context.Context, runtimeID string) error {
 // GetTaskStatus returns the current status of a task. Used by the daemon to
 // detect terminal/interruption signals (cancelled, failed, completed, or a
 // 404 task-not-found) while a task is executing.
-func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (string, error) {
+func (c *Client) GetTaskStatus(ctx context.Context, taskID, runtimeID string) (string, error) {
 	var resp struct {
 		Status string `json:"status"`
 	}
-	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/status", taskID), &resp); err != nil {
+	if err := c.getJSONWithToken(ctx, fmt.Sprintf("/api/daemon/tasks/%s/status", taskID), &resp, c.tokenForRuntime(runtimeID)); err != nil {
 		return "", err
 	}
 	return resp.Status, nil
@@ -646,9 +630,9 @@ type (
 // TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 // longer a supported direct self-upgrade source. Current DaemonCore liveness
 // is the Workspace Runner socket, not this HTTP heartbeat.
-func (c *Client) ComputerHeartbeat(ctx context.Context, workspaceID, daemonID string, generation int64) error {
+func (c *Client) ComputerHeartbeat(ctx context.Context, workspaceID, daemonID string) error {
 	return c.postJSONWithToken(ctx, "/api/daemon/computer/heartbeat", map[string]any{
-		"workspace_id": workspaceID, "daemon_id": daemonID, "generation": generation,
+		"workspace_id": workspaceID, "daemon_id": daemonID,
 	}, nil, c.tokenForWorkspace(workspaceID))
 }
 
@@ -701,46 +685,10 @@ func (c *Client) SyncEvolutionSubmissions(ctx context.Context, runtimeID string,
 	return &result, nil
 }
 
-// WorkspaceInfo holds minimal workspace metadata returned by the API.
-type WorkspaceInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// RenewTokenResponse mirrors handler.RenewPATResponse — kept loose (string +
-// bool) because the daemon never parses the timestamp itself; it just logs it
-// for operator visibility.
-type RenewTokenResponse struct {
-	ExpiresAt string `json:"expires_at"`
-	Renewed   bool   `json:"renewed"`
-}
-
-// RenewToken asks the server to extend the daemon's current PAT in place when
-// it's within the server-side renewal window. The server is authoritative on
-// the threshold — the daemon doesn't know the token's expires_at locally —
-// so this is safe to call on any cadence; the only thing extra calls cost is
-// one round trip and one cheap SELECT.
-func (c *Client) RenewToken(ctx context.Context) (*RenewTokenResponse, error) {
-	var resp RenewTokenResponse
-	if err := c.postJSON(ctx, "/api/tokens/current/renew", map[string]any{}, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// ListWorkspaces fetches all workspaces the authenticated user belongs to.
-func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error) {
-	var workspaces []WorkspaceInfo
-	if err := c.getJSON(ctx, "/api/workspaces", &workspaces); err != nil {
-		return nil, err
-	}
-	return workspaces, nil
-}
-
-func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
-	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
+func (c *Client) Deregister(ctx context.Context, workspaceID string, runtimeIDs []string) error {
+	return c.postJSONWithToken(ctx, "/api/daemon/deregister", map[string]any{
 		"runtime_ids": runtimeIDs,
-	}, nil)
+	}, nil, c.tokenForWorkspace(workspaceID))
 }
 
 // RegisterResponse holds the server's response to a daemon registration.
@@ -752,13 +700,9 @@ type RegisterResponse struct {
 	ServerCapabilities   []string        `json:"server_capabilities,omitempty"`
 }
 
-func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {
-	return c.RegisterForWorkspace(ctx, "", req)
-}
-
 func (c *Client) RegisterForWorkspace(ctx context.Context, workspaceID string, req map[string]any) (*RegisterResponse, error) {
 	var resp RegisterResponse
-	if err := c.postJSONWithToken(ctx, "/api/daemon/register", req, &resp, c.tokenForWorkspace(workspaceID)); err != nil {
+	if err := c.postJSONWithToken(ctx, "/api/daemon/register", req, &resp, c.registerToken(workspaceID)); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -835,10 +779,6 @@ func isTransientError(err error) bool {
 // The server-side CompleteTask / FailTask treat "already terminal" as an
 // idempotent success (see service/task.go), so a duplicate replay from a
 // retry is safe even if the server's prior response was lost in transit.
-func (c *Client) postJSONWithRetry(ctx context.Context, path string, reqBody any, respBody any, schedule []time.Duration) error {
-	return c.postJSONWithRetryToken(ctx, path, reqBody, respBody, schedule, c.tokenSnapshot())
-}
-
 // UploadTurnCapture posts one trusted, complete resident-Pi turn capture with
 // the cached durable agent credential. It intentionally does not use the
 // runner WebSocket: the daemon owns the Pi extension and redaction boundary.
@@ -901,10 +841,6 @@ func (c *Client) postJSONWithRetryToken(ctx context.Context, path string, reqBod
 	}
 }
 
-func (c *Client) postJSON(ctx context.Context, path string, reqBody any, respBody any) error {
-	return c.postJSONWithToken(ctx, path, reqBody, respBody, c.tokenSnapshot())
-}
-
 func (c *Client) postJSONWithToken(ctx context.Context, path string, reqBody any, respBody any, token string) error {
 	return c.postJSONWithTokenAndHeaders(ctx, path, reqBody, respBody, token, nil)
 }
@@ -949,10 +885,6 @@ func (c *Client) postJSONWithTokenAndHeaders(ctx context.Context, path string, r
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(respBody)
-}
-
-func (c *Client) getJSON(ctx context.Context, path string, respBody any) error {
-	return c.getJSONWithToken(ctx, path, respBody, c.tokenSnapshot())
 }
 
 func (c *Client) getJSONWithToken(ctx context.Context, path string, respBody any, token string) error {

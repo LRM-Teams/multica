@@ -99,13 +99,16 @@ describe("Research V6 10k performance gate (LRM-1485) · visible-DOM budget (PR 
     const desktop = VIEWPORT_BUDGETS.find((b) => b.key === "desktop")!;
     expect(desktop.softLimit).toBe(120);
     expect(desktop.hardLimit).toBe(180);
+    expect(desktop.edgeHardLimit).toBe(420);
     expect(desktop.domBudget).toBe(220);
     const mid = VIEWPORT_BUDGETS.find((b) => b.key === "mid")!;
     expect(mid.softLimit).toBe(72);
     expect(mid.hardLimit).toBe(96);
+    expect(mid.edgeHardLimit).toBe(220);
     const narrow = VIEWPORT_BUDGETS.find((b) => b.key === "narrow")!;
     expect(narrow.softLimit).toBe(32);
     expect(narrow.hardLimit).toBe(48);
+    expect(narrow.edgeHardLimit).toBe(96);
   });
 
   it("first screen mounts ≤ soft limit and DOM never exceeds the budget at any breakpoint", () => {

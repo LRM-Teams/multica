@@ -156,33 +156,6 @@ func TestClient_MemoryCenterCallsUseRuntimeDaemonToken(t *testing.T) {
 	}
 }
 
-func TestClient_ResetAgentRuntimeSessionUsesRuntimeTokenAndOperationID(t *testing.T) {
-	var body map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Path; got != "/api/daemon/runtimes/runtime-1/agents/agent-1/session/reset" {
-			t.Fatalf("path = %q", got)
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer runtime-token" {
-			t.Fatalf("Authorization = %q", got)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode body: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"reset"}`))
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL)
-	c.SetRuntimeDaemonToken("runtime-1", "runtime-token", time.Now().Add(time.Hour))
-	if err := c.ResetAgentRuntimeSession(context.Background(), "operation-1", "agent-1", "runtime-1"); err != nil {
-		t.Fatalf("ResetAgentRuntimeSession: %v", err)
-	}
-	if body["operation_id"] != "operation-1" {
-		t.Fatalf("operation_id = %#v", body["operation_id"])
-	}
-}
-
 func TestClient_RuntimeScopedCallsSkipExpiredRuntimeDaemonToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/api/daemon/runtimes/rt-1/agents/agent-1/credential" {

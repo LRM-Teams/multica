@@ -60,8 +60,6 @@ export interface StarGraphNodeProps {
   };
   /** Override the computed accessible name (D5 keyboard/SR contract). */
   accessibleName?: string;
-  /** Opaque graph id used by the canvas focus manager. */
-  nodeId?: string;
   /** Canvas uses roving tabindex so a large graph contributes one tab stop. */
   tabIndex?: number;
   /** Explicitly busy (spinner/pulse). */
@@ -69,7 +67,6 @@ export interface StarGraphNodeProps {
   /** Grid position on the canvas (left/top in % or px). Optional. */
   style?: React.CSSProperties;
   onOpen?: () => void;
-  tabIndex?: number;
   className?: string;
 }
 
@@ -89,11 +86,9 @@ export function StarGraphNode({
   metricText,
   busy,
   accessibleName,
-  nodeId,
   tabIndex,
   style,
   onOpen,
-  tabIndex,
   className,
 }: StarGraphNodeProps) {
   const token = starGraphTierToken(tier);
@@ -126,8 +121,6 @@ export function StarGraphNode({
       data-node-id={nodeId}
       tabIndex={tabIndex}
       aria-label={readable}
-      data-node-id={nodeId}
-      tabIndex={tabIndex}
       onClick={onOpen}
       data-tier={tier}
       data-state={state}

@@ -81,7 +81,7 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		return researchrun.DispatchResult{}, fmt.Errorf("ensure research agent model: %w", err)
 	}
 	if request.Target != (researchrun.ExecutionTarget{}) {
-		currentTarget, targetErr := researchExecutionTarget(ctx, h, agent, runtime)
+		currentTarget, targetErr := researchExecutionTarget(agent, runtime)
 		if targetErr != nil {
 			return researchrun.DispatchResult{}, targetErr
 		}
@@ -146,21 +146,16 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	if err != nil {
 		return researchrun.DispatchResult{}, err
 	}
+	inboxContext, err := encodeResearchDispatchInboxContext(request, requestHash)
+	if err != nil {
+		return researchrun.DispatchResult{}, err
+	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE agent_inbox_event
-		SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object(
-		  'type', 'research_run_task',
-		  'research_dispatch_key', $2::text,
-		  'research_dispatch_request_hash', $3::text,
-		  'research_session_id', $4::text,
-		  'research_task_id', $5::text,
-		  'research_attempt_id', $6::text,
-		  'research_task_timeout_seconds', $7::integer,
-		  'research_task_acceptance_criteria', $8::jsonb
-		), updated_at = now()
+		SET context = COALESCE(context, '{}'::jsonb) || $2::jsonb,
+		    updated_at = now()
 		WHERE id = $1
-	`, task.ID, request.Key, requestHash, request.Run.SessionID, request.Task.ID, request.AttemptID,
-		request.Task.TimeoutSeconds, request.Task.AcceptanceCriteria); err != nil {
+	`, task.ID, inboxContext); err != nil {
 		return researchrun.DispatchResult{}, fmt.Errorf("bind research task dispatch: %w", err)
 	}
 	if err = qtx.LinkChatMessageToTask(ctx, db.LinkChatMessageToTaskParams{ID: message.ID, TaskID: task.ID}); err != nil {
@@ -174,6 +169,31 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	}
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
 	return researchrun.DispatchResult{InboxTaskID: uuidToString(task.ID)}, nil
+}
+
+func encodeResearchDispatchInboxContext(request researchrun.DispatchRequest, requestHash string) ([]byte, error) {
+	contextPayload := map[string]any{
+		"type":                              "research_run_task",
+		"research_dispatch_key":             request.Key,
+		"research_dispatch_request_hash":    requestHash,
+		"research_session_id":               request.Run.SessionID,
+		"research_task_id":                  request.Task.ID,
+		"research_attempt_id":               request.AttemptID,
+		"research_task_timeout_seconds":     request.Task.TimeoutSeconds,
+		"research_task_acceptance_criteria": request.Task.AcceptanceCriteria,
+	}
+	if request.ManifestID != "" || request.ManifestHash != "" {
+		if request.ManifestID == "" || request.ManifestHash == "" {
+			return nil, fmt.Errorf("research dispatch manifest identity is incomplete")
+		}
+		contextPayload["research_manifest_id"] = request.ManifestID
+		contextPayload["research_manifest_hash"] = request.ManifestHash
+	}
+	encoded, err := json.Marshal(contextPayload)
+	if err != nil {
+		return nil, fmt.Errorf("encode research dispatch inbox context: %w", err)
+	}
+	return encoded, nil
 }
 
 func classifyResearchDispatchError(err error) error {
@@ -207,16 +227,7 @@ func classifyResearchDispatchError(err error) error {
 	return err
 }
 
-func researchExecutionTarget(ctx context.Context, h *Handler, agent db.Agent, runtime db.AgentRuntime) (researchrun.ExecutionTarget, error) {
-	providerFingerprint := ""
-	err := h.DB.QueryRow(ctx, `
-		SELECT COALESCE(provider_config_fingerprint, '')
-		FROM agent_runtime_state
-		WHERE agent_id = $1 AND runtime_id = $2
-	`, agent.ID, runtime.ID).Scan(&providerFingerprint)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return researchrun.ExecutionTarget{}, fmt.Errorf("load research target configuration: %w", err)
-	}
+func researchExecutionTarget(agent db.Agent, runtime db.AgentRuntime) (researchrun.ExecutionTarget, error) {
 	target := researchrun.ExecutionTarget{
 		Adapter:   "agent_inbox",
 		AgentID:   uuidToString(agent.ID),
@@ -226,8 +237,8 @@ func researchExecutionTarget(ctx context.Context, h *Handler, agent db.Agent, ru
 	}
 	return researchrun.FingerprintExecutionTarget(target, researchrun.ExecutionTargetConfigIdentity{
 		RuntimeMode: agent.RuntimeMode, RuntimePinnedVersion: runtime.PinnedVersion.String,
-		ProviderStateFingerprint: providerFingerprint, RuntimeConfig: string(agent.RuntimeConfig),
-		CustomEnv: string(agent.CustomEnv), CustomArgs: string(agent.CustomArgs),
+		RuntimeConfig: string(agent.RuntimeConfig),
+		CustomEnv:     string(agent.CustomEnv), CustomArgs: string(agent.CustomArgs),
 		MCPConfig: string(agent.McpConfig), ThinkingLevel: agent.ThinkingLevel.String,
 	}), nil
 }
@@ -356,10 +367,22 @@ type researchRunProjector struct {
 	handler *Handler
 }
 
+type researchProjectionSnapshotReader interface {
+	SnapshotForProjection(context.Context, string, string) (researchrun.RunSnapshot, error)
+}
+
 func (p *researchRunProjector) Project(ctx context.Context, event researchrun.RunEvent) error {
 	h := p.handler
 	if h == nil {
 		return errors.New("research projector is unavailable")
+	}
+	projectionReader, ok := h.ResearchRun.(researchProjectionSnapshotReader)
+	if !ok {
+		return errors.New("research projection snapshot reader is unavailable")
+	}
+	snap, err := projectionReader.SnapshotForProjection(ctx, event.SessionID, event.WorkspaceID)
+	if err != nil {
+		return fmt.Errorf("load authorized research projection snapshot: %w", err)
 	}
 	workspaceID := parseUUID(event.WorkspaceID)
 	sessionID := parseUUID(event.SessionID)
@@ -372,54 +395,13 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 		_ = json.Unmarshal(event.Payload, &payload)
 	}
 
-	// LRM-1401: canvas truth is the run-v2 ledger projection. Keep writing
-	// event→node rows only as recoverable audit fallback; live WS carries the
-	// deterministic semantic graph so the UI stops treating dispatch events as
-	// the research map.
-	if h.ResearchRun != nil {
-		if snap, snapErr := h.ResearchRun.Snapshot(ctx, event.SessionID, event.WorkspaceID); snapErr == nil {
-			nodes, edges := projectRunV2Graph(snap)
-			if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Sequence, nodes, edges); err != nil {
-				return err
-			}
-		} else {
-			// Snapshot unavailable: retain legacy single-event node insert.
-			if nodeType, title, summary, status := projectResearchEvent(event, session, payload); nodeType != "" {
-				actorAgentID := projectedResearchActorAgentID(event, payload)
-				nodePayload := map[string]any{
-					"run_event_id": event.ID,
-					"event_type":   event.Type,
-					"sequence":     event.Sequence,
-					"details":      payload,
-				}
-				encoded, _ := json.Marshal(nodePayload)
-				node, insertErr := h.insertProjectedResearchNode(ctx, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
-				if insertErr != nil {
-					return insertErr
-				}
-				if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
-					return err
-				}
-				h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
-			}
-		}
-	} else if nodeType, title, summary, status := projectResearchEvent(event, session, payload); nodeType != "" {
-		actorAgentID := projectedResearchActorAgentID(event, payload)
-		nodePayload := map[string]any{
-			"run_event_id": event.ID,
-			"event_type":   event.Type,
-			"sequence":     event.Sequence,
-			"details":      payload,
-		}
-		encoded, _ := json.Marshal(nodePayload)
-		node, insertErr := h.insertProjectedResearchNode(ctx, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
-		if insertErr != nil {
-			return insertErr
-		}
-		if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
-			return err
-		}
-		h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
+	// Canvas truth is the least-privilege run snapshot. Projection must stop when
+	// that authorized view is unavailable; synthesizing event-shaped fallback
+	// nodes would create graph state that the canonical snapshot cannot prove.
+	nodes, edges := projectRunV2Graph(snap)
+	typedGraph := projectRunV2TypedGraph(snap, 0, 0, false)
+	if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Type, event.Sequence, nodes, edges, typedGraph); err != nil {
+		return err
 	}
 
 	if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
@@ -448,7 +430,8 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 
 // publishProjectedRunGraph upserts the full run-v2 projected graph over WS.
 // Stable node/edge IDs let the client replace prior semantic nodes in place.
-func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, actorType, actorID, sessionID string, eventSequence int64, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) error {
+func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, actorType, actorID, sessionID, eventType string,
+	eventSequence int64, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp, typedGraph ResearchGraphTypedResp) error {
 	if h == nil {
 		return nil
 	}
@@ -480,7 +463,96 @@ func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, acto
 		}
 		h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, actorType, actorID, payload)
 	}
+	// V6 is run-scoped and sequence-framed. Publish the same deterministic graph
+	// that the projector committed, using the exact identity mapper used by the
+	// snapshot route. Full upserts are intentionally valid and idempotent here;
+	// the bounded HTTP delta route may return a smaller event-derived set.
+	if err := assertResearchProjectionLease(ctx, h.DB, sessionID); err != nil {
+		return err
+	}
+	envelope, err := buildResearchV6ProjectedGraphEnvelope(sessionID, eventType, eventSequence, nodes, edges, typedGraph)
+	if err != nil {
+		return err
+	}
+	h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID, envelope)
 	return nil
+}
+
+type researchV6RealtimeResyncEnvelope struct {
+	RunID           string `json:"run_id"`
+	ResyncRequired  bool   `json:"resync_required"`
+	ThroughSequence int64  `json:"through_sequence"`
+}
+
+func buildResearchV6ProjectedGraphEnvelope(runID, eventType string, eventSequence int64, nodes []ResearchGraphNodeResp,
+	edges []ResearchGraphEdgeResp, typedGraph ResearchGraphTypedResp) (any, error) {
+	if researchV6RealtimeRequiresResync(eventType) {
+		return researchV6RealtimeResyncEnvelope{RunID: runID, ResyncRequired: true, ThroughSequence: eventSequence}, nil
+	}
+	v6Nodes, v6Edges, clusters, err := mapResearchV6TypedGraph(runID, nodes, edges, typedGraph)
+	if err != nil {
+		return nil, err
+	}
+	from := eventSequence - 1
+	if from < 0 {
+		from = 0
+	}
+	delta := researchV6Delta{
+		FromSequenceExclusive: from,
+		ThroughSequence:       eventSequence,
+		NodeUpserts:           v6Nodes,
+		EdgeUpserts:           v6Edges,
+		NodeTombstones:        []string{},
+		EdgeTombstones:        []string{},
+		ClusterUpserts:        clusters,
+		ClusterTombstones:     []string{},
+		AffectedRootNodeIDs:   researchV6RootIDs(v6Nodes),
+		TransitionKind:        researchV6TransitionKindForEvent(eventType),
+	}
+	return researchV6DeltaEnvelope{RunID: runID, Delta: delta}, nil
+}
+
+func researchV6RealtimeRequiresResync(eventType string) bool {
+	switch eventType {
+	case "task_dispatching", "task_dispatched", "task_started", "task_attempt_cancelling", "task_attempt_failed",
+		"task_blocked", "run_started", "run_awaiting_confirmation", "run_completed", "run_resumed", "run_paused",
+		"run_cancelled", "run_archived", "budget_exhausted", "execution_circuit_transition",
+		"target_repair_decided", "task_waiting_for_execution_target":
+		return false
+	default:
+		// Structural and unknown events may remove or regroup nodes. Without the
+		// client's prior cluster baseline the server cannot invent tombstones;
+		// an explicit resync frame is the only lossless response.
+		return true
+	}
+}
+
+func researchV6TransitionKindForEvent(eventType string) *string {
+	var transition string
+	switch eventType {
+	case "task_dispatching", "task_dispatched":
+		transition = "task_dispatched"
+	case "task_result_accepted":
+		transition = "result_accepted"
+	case "integration_completed", "insight_created":
+		transition = "integration_formed"
+	case "insight_staled":
+		transition = "insight_staled"
+	case "dispute_opened":
+		transition = "dispute_opened"
+	case "deliberation_turn_recorded":
+		transition = "deliberation_progressed"
+	case "lead_escalated":
+		transition = "lead_escalated"
+	case "team_formation_committed", "team_membership_changed":
+		transition = "team_membership_changed"
+	case "report_revised":
+		transition = "report_revised"
+	}
+	if transition == "" {
+		return nil
+	}
+	return &transition
 }
 
 func assertResearchProjectionLease(ctx context.Context, executor dbExecutor, sessionID string) error {

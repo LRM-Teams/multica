@@ -205,7 +205,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if rdb != nil {
 		h.ModelListStore = handler.NewRedisModelListStore(rdb)
 		h.RestartStore = handler.NewRedisRestartStore(rdb)
-		h.AgentLifecycleDispatchStore = handler.NewRedisAgentLifecycleDispatchStore(rdb, h.DB)
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
@@ -423,10 +422,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderSnapshot,
 		h.HandleDaemonReminderFireAttempt,
 	)
-	daemonHub.SetReminderProjectionHandlers(
-		h.HandleDaemonReminderProjection,
-		h.HandleDaemonReminderProjectionAck,
-	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
 	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
 	// The current fenced Workspace Runner owns Attachment, launch, Message, and
@@ -559,18 +554,24 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 		r.Post("/register", h.DaemonRegister)
 		r.Post("/deregister", h.DaemonDeregister)
-		r.Post("/starting", h.DaemonMarkStarting)
 		r.Post("/heartbeat", h.DaemonHeartbeat)
+		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+		// longer a supported direct self-upgrade source.
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
+		// TODO(computer-upgrade-attest): Remove after installed Computers no
+		// longer POST /computer/machine-upgrades/{id}/attest. Completion is
+		// the current Binding socket reporting the resolved target.
 		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
 		r.Post("/computer/machine-upgrades/{upgradeId}/takeover", h.CommitComputerMachineUpgradeTakeover)
+		r.Get("/connect", h.DaemonWebSocket)
+		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+		// longer a supported direct self-upgrade source.
 		r.Get("/ws", h.DaemonWebSocket)
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
 		r.Get("/runtimes/{runtimeId}/agents/{agentId}/runtime-config", h.DaemonGetAgentRuntimeConfig)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed", h.ReportAgentProviderCrashed)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
-		r.Post("/runtimes/{runtimeId}/agents/{agentId}/session/reset", h.ResetAgentRuntimeSession)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
 		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/accept", h.AcceptMachineUpgrade)
@@ -582,7 +583,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
 		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
 		r.Post("/runtimes/{runtimeId}/memory-curation/{runId}/result", h.ReportMemoryCurationRunResult)
-		r.Post("/runtimes/{runtimeId}/agent-lifecycle/{operationId}/result", h.ReportAgentLifecycleOperationResult)
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
@@ -885,6 +885,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Notes
 			r.Route("/api/notes", func(r chi.Router) {
+				r.Post("/retrospectives", h.CreateNoteRetrospective)
 				r.Route("/pages", func(r chi.Router) {
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)
@@ -909,6 +910,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Get("/run-refs", h.ListNotePageRunRefs)
 						r.Post("/run-refs", h.CreateNotePageRunRef)
 						r.Delete("/run-refs/{runId}", h.DeleteNotePageRunRef)
+						r.Get("/channel-refs", h.ListNotePageChannelRefs)
+						r.Post("/channel-refs", h.CreateNotePageChannelRef)
+						r.Delete("/channel-refs/{channelId}", h.DeleteNotePageChannelRef)
 						r.Post("/issues", h.CreateNotePageIssue)
 						r.Get("/writebacks", h.ListNotePageWritebacks)
 						r.Post("/writebacks", h.CreateNotePageWriteback)
@@ -1049,6 +1053,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Research Fleet
 			r.Route("/api/research", func(r chi.Router) {
+				r.Route("/v6/runs/{runId}/projection", func(r chi.Router) {
+					r.Get("/snapshot", h.GetResearchV6ProjectionSnapshot)
+					r.Get("/nodes/{nodeId}", h.GetResearchV6ProjectionNodeDetail)
+					r.Get("/slice", h.GetResearchV6ProjectionSlice)
+					r.Get("/deltas", h.GetResearchV6ProjectionDeltas)
+					r.Post("/resume", h.PostResearchV6ProjectionResume)
+				})
 				r.Get("/fleet", h.GetResearchFleet)
 				r.Post("/fleet/ensure", h.EnsureResearchFleet)
 				r.Post("/fleet/members", h.HireResearchFleetMember)
@@ -1143,9 +1154,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/restore", h.RestoreAgent)
 					r.Post("/cancel-tasks", h.CancelAgentTasks)
 					r.Get("/health", h.GetAgentHealth)
-					r.Get("/lifecycle", h.GetAgentLifecycle)
-					r.Post("/lifecycle", h.CreateAgentLifecycleOperation)
-					r.Get("/lifecycle/{operationId}", h.GetAgentLifecycleOperation)
+					r.Get("/reset", h.GetAgentRestart)
+					r.Post("/reset", h.ResetAgent)
+					r.Get("/reset/{operationId}", h.GetAgentRestartOperation)
 					// Workspace Runner Activity is the only public Agent Activity
 					// contract. It is a server-owned presentation read model; there is
 					// no compatibility translation from the removed event timeline.
@@ -1384,6 +1395,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/channels/{channelId}/goal", h.CreateAgentChannelGoal)
 				r.Patch("/channels/{channelId}/goal", h.UpdateAgentChannelGoal)
 				r.Post("/channels/{channelId}/goal/checkpoint", h.CheckpointAgentChannelGoal)
+				r.Post("/channels/{channelId}/goal/bootstrap", h.BootstrapAgentChannelGoalControlPlane)
 				r.Get("/channels/{channelId}/goal/subgoals", h.ListAgentChannelGoalSubgoals)
 				r.Post("/channels/{channelId}/goal/subgoals", h.CreateAgentChannelGoalSubgoal)
 				r.Post("/work-graphs", h.CreateAgentWorkGraph)
@@ -1447,6 +1459,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/projects", h.ListAgentProjects)
 				r.Get("/projects/{id}/resources", h.ListAgentProjectResources)
 				r.Get("/workspace", h.GetAgentWorkspace)
+				r.Get("/workspace-info", h.GetAgentWorkspaceInfo)
 				r.Get("/workspaces/{id}", h.GetAgentWorkspaceByID)
 				r.Get("/agents", h.ListAgentDirectoryAgents)
 				// Squad retired (Frank 2026-07-28): no /api/agent/squads*.
@@ -1538,6 +1551,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/goal", h.GetChannelGoal)
 					r.Post("/goal", h.CreateChannelGoal)
 					r.Patch("/goal", h.UpdateChannelGoal)
+					r.Post("/goal/bootstrap", h.BootstrapChannelGoalControlPlane)
 					r.Get("/goal/subgoals", h.ListChannelGoalSubgoals)
 					r.Post("/goal/subgoals", h.CreateChannelGoalSubgoal)
 					r.Post("/goal/subgoals/batch", h.BatchCreateChannelGoalSubgoals)
@@ -1551,6 +1565,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/members", h.ListChannelMembers)
 					r.Get("/member-management-capabilities", h.GetChannelMemberManagementCapabilities)
 					r.Get("/invite-candidates", h.ListChannelInviteCandidates)
+					r.Get("/mention-candidates", h.ListChannelMentionCandidates)
 					r.Post("/members", h.AddChannelMember)
 					r.Post("/members/batch", h.AddChannelMembers)
 					r.Delete("/members/{memberType}/{memberId}", h.RemoveChannelMember)

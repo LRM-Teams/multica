@@ -47,7 +47,6 @@ import { useWorkspaceSlug } from "@multica/core/paths";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Attachment, NoteAIEditResult, NoteAIJobStatus } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
-import { Slice } from "@tiptap/pm/model";
 import {
   parseMarkdownChunked,
   MARKDOWN_CHUNK_THRESHOLD,
@@ -144,6 +143,7 @@ interface ContentEditorProps {
    * headers. Does not filter the pool (that is `mentionAllowedActorIds`).
    */
   mentionChannelMemberIds?: ReadonlySet<string> | null;
+  fetchMentionCandidates?: import("./extensions/mention-suggestion").MentionCandidatesFetch | null;
   /** Enable the `/` command picker. Defaults false. */
   enableSlashCommands?: boolean;
   /**
@@ -206,14 +206,6 @@ interface ContentEditorRef {
   insertIssueReference: (attrs: { id: string; label: string }) => void;
   insertRunReference: (attrs: { id: string; label: string; agentId?: string | null }) => void;
   /**
-   * LRM-695 — append Markdown at the end of the document, parsing it through
-   * the same `@tiptap/markdown` pipeline as paste so block syntax (e.g. a `>`
-   * blockquote) becomes a real node instead of literal text. The caret lands at
-   * the end; nothing is sent. Falls back to plain-text insertion when the
-   * Markdown parser is unavailable (readonly/legacy mounts).
-   */
-  insertMarkdown: (md: string) => void;
-  /**
    * Open the in-note Editor AI prompt (S3-A4). Uses the current empty paragraph
    * when possible; otherwise appends one at the end. Returns false when page AI
    * is not wired.
@@ -253,6 +245,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       mentionAllowedActorIds,
       scopedMentionAgents,
       mentionChannelMemberIds,
+      fetchMentionCandidates,
       enableSlashCommands = false,
       slashCommandMode = "skill",
       attachments,
@@ -280,6 +273,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     const mentionChannelMemberIdsRef = useRef<ReadonlySet<string> | null>(
       mentionChannelMemberIds ?? null,
     );
+    const fetchMentionCandidatesRef = useRef(fetchMentionCandidates ?? null);
     const lastEmittedRef = useRef<string | null>(null);
 
     // In-session record of attachments freshly uploaded through this editor.
@@ -355,6 +349,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     mentionAllowedActorIdsRef.current = mentionAllowedActorIds ?? null;
     scopedMentionAgentsRef.current = scopedMentionAgents ?? null;
     mentionChannelMemberIdsRef.current = mentionChannelMemberIds ?? null;
+    fetchMentionCandidatesRef.current = fetchMentionCandidates ?? null;
 
     const queryClient = useQueryClient();
     const [emptyLineAiState, setEmptyLineAiState] = useState<EmptyLineAiState | null>(null);
@@ -415,6 +410,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           getMentionAllowedActorIds: () => mentionAllowedActorIdsRef.current,
           getMentionScopedAgents: () => scopedMentionAgentsRef.current,
           getMentionChannelMemberIds: () => mentionChannelMemberIdsRef.current,
+          getMentionCandidates: () => fetchMentionCandidatesRef.current,
           enableChannelReferences,
           enableIssueReferences,
           enableSlashCommands,
@@ -665,28 +661,6 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           return;
         }
         editor.chain().focus().insertContentAt({ from, to }, content).run();
-      },
-      insertMarkdown: (md: string) => {
-        if (!editor) return;
-        // No Markdown parser (readonly/legacy) → insert as plain text at end.
-        if (!editor.markdown) {
-          editor.chain().focus("end").insertContent(md).run();
-          return;
-        }
-        const json = editor.markdown.parse(md);
-        const node = editor.schema.nodeFromJSON(json);
-        // maxOpen lets ProseMirror stitch the block content in at the caret;
-        // mirrors the proven markdown-paste path (extensions/markdown-paste.ts).
-        const slice = Slice.maxOpen(node.content);
-        editor
-          .chain()
-          .focus("end")
-          .command(({ tr }) => {
-            tr.replaceSelection(slice);
-            return true;
-          })
-          .focus("end")
-          .run();
       },
       openPageAI: () => {
         if (!editor || !onEditPageWithAIRef.current) return false;

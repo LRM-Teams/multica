@@ -45,6 +45,8 @@ import {
   EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
   SendChatMessageResponseSchema,
   EMPTY_SEND_CHAT_MESSAGE_RESPONSE,
+  ChannelMentionCandidatesResponseSchema,
+  EMPTY_CHANNEL_MENTION_CANDIDATES,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
 
@@ -218,8 +220,19 @@ describe("Agent file schemas", () => {
       status: "ok",
       nodes: [{ path: "memory/MEMORY.md", is_dir: false, size: 42 }],
       truncated: false,
+      root_path: "/home/u/.multica/workspaces/ws/agents/agent-1",
     });
     expect(parsed.nodes[0]?.path).toBe("memory/MEMORY.md");
+    expect(parsed.root_path).toBe("/home/u/.multica/workspaces/ws/agents/agent-1");
+  });
+
+  it("defaults a missing root_path so older daemons still parse", () => {
+    const parsed = AgentFilesResponseSchema.parse({
+      agent_id: "agent-1",
+      status: "ok",
+      nodes: [],
+    });
+    expect(parsed.root_path).toBe("");
   });
 
   it("falls back when file tree response is malformed", () => {
@@ -598,6 +611,7 @@ describe("Channel message pagination schemas", () => {
               authorAvatarUrl: "/legacy/quote.png",
               content: "parent",
               createdAt: "2026-07-03T00:00:00Z",
+              selectedText: "chosen excerpt",
             },
           },
         },
@@ -609,6 +623,9 @@ describe("Channel message pagination schemas", () => {
     expect(message.reply_to).not.toHaveProperty("author_avatar_url");
     expect((message.quote as { snapshot: Record<string, unknown> }).snapshot).not.toHaveProperty(
       "authorAvatarUrl",
+    );
+    expect((message.quote as { snapshot: Record<string, unknown> }).snapshot.selectedText).toBe(
+      "chosen excerpt",
     );
   });
 
@@ -672,6 +689,38 @@ describe("Channel message pagination schemas", () => {
   it("rejects malformed message lists so callers can fall back", () => {
     expect(ChannelMessagesPageSchema.safeParse({ messages: null }).success).toBe(false);
     expect(ChannelThreadMessagesPageSchema.safeParse({ messages: null }).success).toBe(false);
+  });
+
+  it("rejects malformed selected quote text", () => {
+    const result = ChannelMessagesPageSchema.safeParse({
+      messages: [{
+        id: "msg-1",
+        channel_id: "channel-1",
+        workspace_id: "ws-1",
+        type: "user",
+        author_id: "user-1",
+        author_name: "Ada",
+        content: "reply",
+        source: "multica",
+        external_message_id: null,
+        created_at: "2026-07-03T00:00:00Z",
+        quote_message_id: "msg-0",
+        quote: {
+          messageId: "msg-0",
+          status: "active",
+          snapshot: {
+            type: "user",
+            authorId: "user-2",
+            authorName: "Bob",
+            content: "source",
+            createdAt: "2026-07-03T00:00:00Z",
+            selectedText: 42,
+          },
+        },
+      }],
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 
@@ -905,5 +954,36 @@ describe("ConversationHandleLookupSchema", () => {
       { endpoint: "GET /api/conversations/lookup" },
     );
     expect(wrongType).toEqual(EMPTY_CONVERSATION_HANDLE_LOOKUP);
+  });
+});
+
+describe("ChannelMentionCandidatesResponseSchema", () => {
+  it("parses a canonical mention-candidates page", () => {
+    const parsed = ChannelMentionCandidatesResponseSchema.parse({
+      in_channel: [{ type: "agent", id: "a1", handle: "li-wei", label: "里维" }],
+      not_in_channel: [{ type: "member", id: "u2", handle: "bob", label: "Bob" }],
+      has_more: true,
+      next_offset: 20,
+    });
+    expect(parsed.in_channel[0]?.label).toBe("里维");
+    expect(parsed.has_more).toBe(true);
+    expect(parsed.next_offset).toBe(20);
+  });
+
+  it("falls back when the body is malformed", () => {
+    expect(
+      parseWithFallback(null, ChannelMentionCandidatesResponseSchema, EMPTY_CHANNEL_MENTION_CANDIDATES, {
+        endpoint: "GET /api/channels/{id}/mention-candidates",
+      }),
+    ).toEqual(EMPTY_CHANNEL_MENTION_CANDIDATES);
+    const missing = parseWithFallback(
+      { in_channel: null, not_in_channel: "x" },
+      ChannelMentionCandidatesResponseSchema,
+      EMPTY_CHANNEL_MENTION_CANDIDATES,
+      { endpoint: "GET /api/channels/{id}/mention-candidates" },
+    );
+    expect(missing.in_channel).toEqual([]);
+    expect(missing.not_in_channel).toEqual([]);
+    expect(missing.has_more).toBe(false);
   });
 });

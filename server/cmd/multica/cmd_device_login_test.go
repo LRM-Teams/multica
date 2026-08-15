@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -201,25 +204,112 @@ func writeDeviceTokenError(w http.ResponseWriter, code string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": code})
 }
 
+func writeDeviceTokenSuccess(w http.ResponseWriter, accessToken string) {
+	json.NewEncoder(w).Encode(deviceTokenResponse{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		ExpiresIn:   90 * 24 * 3600,
+	})
+}
+
+func assertRFCDeviceTokenForm(t *testing.T, r *http.Request) {
+	t.Helper()
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+		t.Errorf("Content-Type = %q, want application/x-www-form-urlencoded", ct)
+	}
+	if err := r.ParseForm(); err != nil {
+		t.Fatalf("ParseForm: %v", err)
+	}
+	if got := r.PostForm.Get("grant_type"); got != "urn:ietf:params:oauth:grant-type:device_code" {
+		t.Errorf("grant_type = %q, want RFC 8628 URN", got)
+	}
+	if got := r.PostForm.Get("client_id"); got != "multica-cli" {
+		t.Errorf("client_id = %q, want multica-cli", got)
+	}
+	if got := r.PostForm.Get("device_code"); got != "dc_test" {
+		t.Errorf("device_code = %q, want dc_test", got)
+	}
+}
+
+func TestStartDeviceAuthorization_SendsFormClientID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/device/code" {
+			http.NotFound(w, r)
+			return
+		}
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+			t.Errorf("Content-Type = %q, want application/x-www-form-urlencoded", ct)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		if got := r.PostForm.Get("client_id"); got != "multica-cli" {
+			t.Errorf("client_id = %q, want multica-cli", got)
+		}
+		if _, err := io.ReadAll(r.Body); err != nil {
+			t.Fatalf("drain body: %v", err)
+		}
+		json.NewEncoder(w).Encode(deviceCodeResponse{
+			DeviceCode:              "dc_start",
+			UserCode:                "WDJB-MJHT",
+			VerificationURI:         "https://example.com/device",
+			VerificationURIComplete: "https://example.com/device?user_code=WDJB-MJHT",
+			ExpiresIn:               600,
+			Interval:                5,
+		})
+	}))
+	defer srv.Close()
+
+	client := cli.NewAPIClient(srv.URL, "", "")
+	code, err := startDeviceAuthorization(context.Background(), client)
+	if err != nil {
+		t.Fatalf("startDeviceAuthorization: %v", err)
+	}
+	if code.DeviceCode != "dc_start" || code.UserCode != "WDJB-MJHT" {
+		t.Fatalf("start response = %+v", code)
+	}
+}
+
+func TestPollDeviceToken_SendsRFC8628FormAndReadsAccessToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/device/token" {
+			http.NotFound(w, r)
+			return
+		}
+		assertRFCDeviceTokenForm(t, r)
+		writeDeviceTokenSuccess(w, "mul_from_rfc")
+	}))
+	defer srv.Close()
+
+	client := cli.NewAPIClient(srv.URL, "", "")
+	code := deviceCodeResponse{DeviceCode: "dc_test", Interval: 1, ExpiresIn: 30}
+
+	token, err := pollDeviceToken(newAutoWatchTestCmd(), client, code)
+	if err != nil {
+		t.Fatalf("pollDeviceToken: %v", err)
+	}
+	if token != "mul_from_rfc" {
+		t.Fatalf("token=%q, want mul_from_rfc", token)
+	}
+}
+
 func TestPollDeviceToken_BacksOffOnSlowDownThenSucceeds(t *testing.T) {
 	srv := fakeDeviceAuthServer(t, []func(w http.ResponseWriter){
 		func(w http.ResponseWriter) { writeDeviceTokenError(w, "authorization_pending") },
 		func(w http.ResponseWriter) { writeDeviceTokenError(w, "slow_down") },
-		func(w http.ResponseWriter) {
-			json.NewEncoder(w).Encode(issueDeviceTokenResponse{Token: "mul_test", ExpiresInDays: 90})
-		},
+		func(w http.ResponseWriter) { writeDeviceTokenSuccess(w, "mul_test") },
 	})
 	defer srv.Close()
 
 	client := cli.NewAPIClient(srv.URL, "", "")
 	code := deviceCodeResponse{DeviceCode: "dc_test", Interval: 1, ExpiresIn: 30}
 
-	token, expiresInDays, err := pollDeviceToken(newAutoWatchTestCmd(), client, code)
+	token, err := pollDeviceToken(newAutoWatchTestCmd(), client, code)
 	if err != nil {
 		t.Fatalf("pollDeviceToken: %v", err)
 	}
-	if token != "mul_test" || expiresInDays != 90 {
-		t.Fatalf("token=%q expiresInDays=%d, want mul_test/90", token, expiresInDays)
+	if token != "mul_test" {
+		t.Fatalf("token=%q, want mul_test", token)
 	}
 }
 
@@ -232,7 +322,7 @@ func TestPollDeviceToken_AccessDeniedStopsImmediately(t *testing.T) {
 	client := cli.NewAPIClient(srv.URL, "", "")
 	code := deviceCodeResponse{DeviceCode: "dc_test", Interval: 1, ExpiresIn: 30}
 
-	if _, _, err := pollDeviceToken(newAutoWatchTestCmd(), client, code); err == nil {
+	if _, err := pollDeviceToken(newAutoWatchTestCmd(), client, code); err == nil {
 		t.Fatal("expected error for access_denied, got nil")
 	}
 }
@@ -246,7 +336,7 @@ func TestPollDeviceToken_ExpiredTokenStopsImmediately(t *testing.T) {
 	client := cli.NewAPIClient(srv.URL, "", "")
 	code := deviceCodeResponse{DeviceCode: "dc_test", Interval: 1, ExpiresIn: 30}
 
-	if _, _, err := pollDeviceToken(newAutoWatchTestCmd(), client, code); err == nil {
+	if _, err := pollDeviceToken(newAutoWatchTestCmd(), client, code); err == nil {
 		t.Fatal("expected error for expired_token, got nil")
 	}
 }
@@ -267,7 +357,7 @@ func TestPollDeviceToken_StopsAtDeadlineIfNeverApproved(t *testing.T) {
 	code := deviceCodeResponse{DeviceCode: "dc_test", Interval: 1, ExpiresIn: 1}
 
 	start := time.Now()
-	_, _, err := pollDeviceToken(newAutoWatchTestCmd(), client, code)
+	_, err := pollDeviceToken(newAutoWatchTestCmd(), client, code)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}

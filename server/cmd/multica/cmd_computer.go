@@ -3,14 +3,19 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
+	"github.com/multica-ai/multica/server/internal/daemon"
+	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
 )
 
 var computerCmd = &cobra.Command{
@@ -44,40 +49,56 @@ func rejectRetiredComputerProfileFlag(cmd *cobra.Command) error {
 	return nil
 }
 
+var computerServiceCmd = &cobra.Command{
+	Use:    computer.ResidentServiceArg,
+	Hidden: true,
+	Short:  "Run the Computer resident process",
+	Args:   cobra.NoArgs,
+	RunE:   runComputerResident,
+}
+
+var computerRunnerCmd = &cobra.Command{
+	Use:    computer.ResidentRunnerArg,
+	Hidden: true,
+	Short:  "Run one Workspace Binding child",
+	Args:   cobra.NoArgs,
+	RunE:   runComputerBindingRunner,
+}
+
 var computerStartCmd = &cobra.Command{
 	Use:   "start [/<workspace>]",
 	Short: "Start the resident Computer",
 	Long:  "Start the machine-wide resident Computer that polls for tasks and executes them using local agent CLIs (Claude, Codex).\nRuns detached in the background by default. Use --foreground to run in the current terminal.",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonStart,
+	RunE:  runComputerStart,
 }
 
 var computerStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the resident Computer",
 	Args:  cobra.NoArgs,
-	RunE:  runDaemonStop,
+	RunE:  runComputerStop,
 }
 
 var computerStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show resident Computer status",
 	Args:  cobra.NoArgs,
-	RunE:  runDaemonStatus,
+	RunE:  runComputerStatus,
 }
 
 var computerRestartCmd = &cobra.Command{
 	Use:   "restart [/<workspace>]",
 	Short: "Restart the resident Computer (stop + start)",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonRestart,
+	RunE:  runComputerRestart,
 }
 
 var computerLogsCmd = &cobra.Command{
 	Use:   "logs [/<workspace>]",
 	Short: "Show resident Computer service logs",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonLogs,
+	RunE:  runComputerLogs,
 }
 
 var computerDoctorCmd = &cobra.Command{
@@ -171,6 +192,14 @@ func init() {
 	computerDoctorCmd.Flags().Bool("fix", false, "Apply only provably safe stale-state cleanup")
 	computerDoctorCmd.Flags().String("output", "table", "Output format: table or json")
 
+	addComputerResidentFlags(computerServiceCmd)
+	computerRunnerCmd.Flags().String("workspace-id", "", "Workspace Binding identity")
+	_ = computerRunnerCmd.MarkFlagRequired("workspace-id")
+
+	computerCmd.AddCommand(computerServiceCmd)
+	computerCmd.AddCommand(computerRunnerCmd)
+	computerSuperviseCmd.Hidden = true
+	computerCmd.AddCommand(computerSuperviseCmd)
 	computerCmd.AddCommand(computerStartCmd)
 	computerCmd.AddCommand(computerStopCmd)
 	computerCmd.AddCommand(computerStatusCmd)
@@ -181,6 +210,91 @@ func init() {
 	computerIdentityCmd.AddCommand(computerIdentityAdoptCmd)
 	computerIdentityCmd.AddCommand(computerIdentityFreshCmd)
 	computerCmd.AddCommand(computerIdentityCmd)
+}
+
+func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
+	workspaceID, _ := cmd.Flags().GetString("workspace-id")
+	if strings.TrimSpace(workspaceID) == "" {
+		return fmt.Errorf("workspace-id is required")
+	}
+	bootstrap, err := computer.ReadBindingChildBootstrap(os.Stdin)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(workspaceID) != bootstrap.WorkspaceID {
+		return fmt.Errorf("workspace-id %q does not match Binding child bootstrap %q", workspaceID, bootstrap.WorkspaceID)
+	}
+	ctx, stop := notifyShutdownContext(context.Background())
+	defer stop()
+	return runInProcessBindingChild(ctx, bootstrap, func(ready computer.BindingChildReady) error {
+		return computer.WriteBindingChildReady(os.Stdout, ready)
+	}, nil)
+}
+
+func runInProcessBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstrap, publishReady func(computer.BindingChildReady) error, host *computer.Host) error {
+	cfg, err := daemon.LoadConfig(daemon.Overrides{
+		ServerURL:      bootstrap.ServerBaseURL,
+		WorkspacesRoot: bootstrap.WorkspacesRoot,
+		DaemonID:       bootstrap.ComputerID,
+		Profile:        bootstrap.Profile,
+	})
+	if err != nil {
+		return err
+	}
+	cfg.CLIVersion = version
+	cfg.Environment = bootstrap.Environment
+	cfg.ServerBaseURL = bootstrap.ServerBaseURL
+	cfg.DaemonID = bootstrap.ComputerID
+	cfg.ComputerGeneration = bootstrap.ComputerGeneration
+	cfg.BindingsRoot = bootstrap.BindingsRoot
+	cfg.WorkspacesRoot = bootstrap.WorkspacesRoot
+	controlToken, err := computer.ReadControlToken(bootstrap.Profile)
+	if err != nil {
+		return fmt.Errorf("read Computer Host control token: %w", err)
+	}
+	cfg.LocalControlToken = controlToken
+	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID, "runner_generation", bootstrap.RunnerGeneration)
+	var prepareUpgrade func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error)
+	if host != nil {
+		identity := computer.BindingChildIdentity{
+			WorkspaceID: bootstrap.WorkspaceID, RunnerGeneration: bootstrap.RunnerGeneration, PID: os.Getpid(),
+		}
+		prepareUpgrade = func(ctx context.Context, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error) {
+			return host.PrepareChildUpgrade(ctx, identity, pending)
+		}
+	}
+	return daemon.RunBindingChild(ctx, daemon.BindingChildRunConfig{
+		Daemon:         cfg,
+		Bootstrap:      bootstrap,
+		Logger:         logger,
+		PublishReady:   publishReady,
+		PrepareUpgrade: prepareUpgrade,
+	})
+}
+
+func addComputerResidentFlags(cmd *cobra.Command) {
+	f := cmd.Flags()
+	f.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
+	f.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
+	f.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
+	f.Duration("poll-interval", 0, "Task poll interval (env: MULTICA_DAEMON_POLL_INTERVAL)")
+	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
+	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
+	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
+	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
+	_ = f.MarkHidden("computer-generation")
+	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
+	_ = f.MarkHidden("machine-attestation-source-pid")
+	// v0.4.24-alpha.55 passes these two inputs when it launches an upgraded
+	// Computer. The marker gates the bounded previous-package adapter; neither
+	// value re-enters the current takeover proof or lifecycle state. The
+	// successor must accept this argv so that alpha.55 can self-upgrade.
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	f.Bool("machine-upgrade-detached-candidate", false, "Previous-package Machine Upgrade bootstrap marker")
+	_ = f.MarkHidden("machine-upgrade-detached-candidate")
+	f.String("machine-upgrade-takeover-protocol", "", "Previous-package Machine Upgrade takeover protocol")
+	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 }
 
 func requireComputerStoppedForIdentityChange() error {
@@ -293,7 +407,8 @@ func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), cli.DefaultUpdateDownloadTimeout+30*time.Second)
 	defer cancel()
 	upgrade, err := (&computer.Lifecycle{ControlPort: computerUpgradeControlPort("")}).Upgrade(ctx, computer.UpgradeOptions{
-		TargetVersion: targetVersion,
+		TargetVersion:    targetVersion,
+		CreateLiveIntent: createComputerUpgradeHumanIntent,
 	})
 	if err != nil {
 		return err
@@ -323,4 +438,30 @@ func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 		upgrade.BinaryPath,
 	)
 	return nil
+}
+
+func createComputerUpgradeHumanIntent(ctx context.Context, computerID, requestID, targetVersion string) (map[string]any, error) {
+	cfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return nil, fmt.Errorf("load human session: %w", err)
+	}
+	target, err := cli.ResolveServiceTarget(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.Token) == "" {
+		return nil, fmt.Errorf("human session is missing; run `multica login`")
+	}
+	if strings.TrimSpace(cfg.WorkspaceID) == "" {
+		return nil, fmt.Errorf("human session has no Workspace context; run `multica setup /<workspace>`")
+	}
+	client := cli.NewAPIClient(target.Origin, cfg.WorkspaceID, cfg.Token)
+	var operation map[string]any
+	path := fmt.Sprintf("/api/daemons/%s/upgrades", url.PathEscape(strings.TrimSpace(computerID)))
+	if err := client.PostJSON(ctx, path, map[string]string{
+		"request_id": requestID, "target_version": targetVersion,
+	}, &operation); err != nil {
+		return nil, err
+	}
+	return operation, nil
 }

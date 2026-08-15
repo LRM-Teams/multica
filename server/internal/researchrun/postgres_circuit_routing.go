@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 func (s *PostgresStore) EvaluateExecutionTargets(ctx context.Context, workspaceID string, members []FleetMember) (map[string]ExecutionTargetHealth, error) {
@@ -62,8 +63,7 @@ func (s *PostgresStore) EvaluateExecutionTargets(ctx context.Context, workspaceI
 	health := make(map[string]ExecutionTargetHealth, len(members))
 	for _, member := range members {
 		item := ExecutionTargetHealth{AgentID: member.AgentID, Dispatchable: true}
-		if strings.TrimSpace(member.ProviderBlockDetail) != "" &&
-			(member.ProviderBlockedUntil == nil || member.ProviderBlockedUntil.After(databaseNow)) {
+		if providerLockBlocksExecutionTarget(member.ProviderBlockDetail, member.ProviderBlockedUntil, databaseNow) {
 			item.Dispatchable = false
 			item.BlockedReason = "provider_blocked"
 			if member.ProviderBlockedUntil != nil {
@@ -101,6 +101,13 @@ func (s *PostgresStore) EvaluateExecutionTargets(ctx context.Context, workspaceI
 		health[member.AgentID] = item
 	}
 	return health, nil
+}
+
+func providerLockBlocksExecutionTarget(detail string, until *time.Time, now time.Time) bool {
+	if until == nil {
+		return taskfailure.ProviderLockActive(detail, time.Time{}, false, now)
+	}
+	return taskfailure.ProviderLockActive(detail, *until, true, now)
 }
 
 func circuitLookupKey(target CircuitTarget) string {

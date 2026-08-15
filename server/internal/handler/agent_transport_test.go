@@ -799,6 +799,74 @@ func TestAgentTransportSendMessageRejectsAgentControlledPartsAndAttachmentOnly(t
 	}
 }
 
+func TestAgentTransportSendMessageAttachesNoteWritePart(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	noteID := createNotePageForAITest(t, "Target note "+uuid.NewString())
+	content := "proposed note body " + uuid.NewString()
+
+	create := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           content,
+		"note_write":        true,
+		"client_message_id": "note-write-create-" + uuid.NewString(),
+	})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("note_write create: status=%d body=%s", create.Code, create.Body.String())
+	}
+	var createBody AgentTransportSendResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &createBody); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if !agentTransportHasNoteWritePart(createBody.Message.Parts, "") {
+		t.Fatalf("create parts=%+v, want note_write without ref_id", createBody.Message.Parts)
+	}
+
+	targeted := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           content + "-targeted",
+		"note_write":        true,
+		"note_page_id":      noteID,
+		"client_message_id": "note-write-page-" + uuid.NewString(),
+	})
+	if targeted.Code != http.StatusCreated {
+		t.Fatalf("note_write targeted: status=%d body=%s", targeted.Code, targeted.Body.String())
+	}
+	var targetedBody AgentTransportSendResponse
+	if err := json.Unmarshal(targeted.Body.Bytes(), &targetedBody); err != nil {
+		t.Fatalf("decode targeted: %v", err)
+	}
+	if !agentTransportHasNoteWritePart(targetedBody.Message.Parts, noteID) {
+		t.Fatalf("targeted parts=%+v, want note_write ref_id=%s", targetedBody.Message.Parts, noteID)
+	}
+
+	missingPage := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           content + "-missing",
+		"note_write":        true,
+		"note_page_id":      uuid.NewString(),
+		"client_message_id": "note-write-missing-" + uuid.NewString(),
+	})
+	if missingPage.Code != http.StatusBadRequest {
+		t.Fatalf("missing note page: status=%d body=%s", missingPage.Code, missingPage.Body.String())
+	}
+
+	pageWithoutFlag := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           content + "-flag",
+		"note_page_id":      noteID,
+		"client_message_id": "note-write-flag-" + uuid.NewString(),
+	})
+	if pageWithoutFlag.Code != http.StatusBadRequest {
+		t.Fatalf("note_page_id without note_write: status=%d body=%s", pageWithoutFlag.Code, pageWithoutFlag.Body.String())
+	}
+}
+
 func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2241,7 +2309,7 @@ func TestAgentTransportReadAnchorsUseCanonicalTargetWindows(t *testing.T) {
 	}
 }
 
-func assertAgentTransportReadMessageIDs(t *testing.T, messages []ChannelMessageResponse, want ...string) {
+func assertAgentTransportReadMessageIDs(t *testing.T, messages []AgentTransportReadMessageResponse, want ...string) {
 	t.Helper()
 	if len(messages) != len(want) {
 		t.Fatalf("message count = %d, want %d: %+v", len(messages), len(want), messages)
@@ -2292,6 +2360,57 @@ func TestAgentTransportReadThreadIncludesSystemReplies(t *testing.T) {
 	}
 	if readBody.ContextTarget != "thread:"+root.ID {
 		t.Fatalf("thread context target = %q, want thread:%s", readBody.ContextTarget, root.ID)
+	}
+}
+
+func TestAgentTransportReadThreadMessagesCarryCanonicalContextTarget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "thread root for coverage target", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed thread root: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "thread reply for coverage target", "multica", nil, parseUUID(root.ID), parseUUID(root.ID), nil, 0); err != nil {
+		t.Fatalf("seed thread reply: %v", err)
+	}
+	var channelName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
+		t.Fatalf("load channel name: %v", err)
+	}
+
+	readRec := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": "#" + channelName + ":" + root.ID,
+		"limit":  5,
+	})
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("transport thread read: status=%d body=%s", readRec.Code, readRec.Body.String())
+	}
+	var response struct {
+		ContextTarget string `json:"context_target"`
+		Messages      []struct {
+			ID     string `json:"id"`
+			Target string `json:"target"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(readRec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode transport thread read: %v", err)
+	}
+	if len(response.Messages) == 0 {
+		t.Fatal("transport thread read returned no Messages")
+	}
+	wantTarget := "thread:" + root.ID
+	if response.ContextTarget != wantTarget {
+		t.Fatalf("context target = %q, want %q", response.ContextTarget, wantTarget)
+	}
+	for _, message := range response.Messages {
+		if message.Target != wantTarget {
+			t.Fatalf("message %s target = %q, want %q", message.ID, message.Target, wantTarget)
+		}
 	}
 }
 
@@ -2402,6 +2521,19 @@ func TestAgentTransportAutoRetryStripsArealProxyFromChildContext(t *testing.T) {
 	if _, ok := ctxMap["squad_id"]; !ok {
 		t.Errorf("retry child lost squad_id; want it preserved, context=%s", string(reloaded.Context))
 	}
+}
+
+func agentTransportHasNoteWritePart(parts []protocol.MessagePart, pageID string) bool {
+	want := strings.TrimSpace(pageID)
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeNoteWrite {
+			continue
+		}
+		if strings.TrimSpace(part.RefID) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func agentTransportSendForTest(t *testing.T, taskID, agentID string, body map[string]any) *httptest.ResponseRecorder {
@@ -2571,7 +2703,7 @@ func seedCompletedAgentAttachmentUploadSessionForTest(t *testing.T, agentID, cha
 	}
 }
 
-func transportMessagesContain(messages []ChannelMessageResponse, id, content string) bool {
+func transportMessagesContain(messages []AgentTransportReadMessageResponse, id, content string) bool {
 	for _, msg := range messages {
 		if msg.ID == id && msg.Content == content {
 			return true
@@ -2580,7 +2712,7 @@ func transportMessagesContain(messages []ChannelMessageResponse, id, content str
 	return false
 }
 
-func transportMessagesContainType(messages []ChannelMessageResponse, id, content, typ string) bool {
+func transportMessagesContainType(messages []AgentTransportReadMessageResponse, id, content, typ string) bool {
 	for _, msg := range messages {
 		if msg.ID == id && msg.Content == content && msg.Type == typ {
 			return true

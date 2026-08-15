@@ -79,10 +79,40 @@ describe("useSemanticTransition — settleNow", () => {
     expect(result.current.queueSize).toBe(0);
     expect(result.current.directiveFor("branch-1")).toBeNull();
   });
+
+  it("settles live animation immediately when the page resumes", () => {
+    let hidden = false;
+    const hiddenSpy = vi
+      .spyOn(document, "hidden", "get")
+      .mockImplementation(() => hidden);
+    try {
+      const { result } = renderHook(() => useSemanticTransition());
+      act(() => {
+        result.current.enqueue({
+          transition_kind: "branch_spawned",
+          related_ids: ["hidden-branch"],
+          anchor_id: null,
+        });
+      });
+      expect(result.current.queueSize).toBeGreaterThan(0);
+
+      act(() => {
+        hidden = true;
+        document.dispatchEvent(new Event("visibilitychange"));
+        hidden = false;
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+
+      expect(result.current.queueSize).toBe(0);
+      expect(result.current.directiveFor("hidden-branch")).toBeNull();
+    } finally {
+      hiddenSpy.mockRestore();
+    }
+  });
 });
 
 describe("useSemanticTransition — profiles", () => {
-  it("collapses displacement to the uniform fade under reduced motion (Rule ④)", () => {
+  it("settles immediately under reduced motion (Rule ④)", () => {
     // Emulate the device-side reduced-motion signal so prefers-reduced-motion
     // resolves true even though jsdom's default matchMedia reports false.
     const nativeMatchMedia = window.matchMedia;
@@ -107,10 +137,8 @@ describe("useSemanticTransition — profiles", () => {
         });
       });
       expect(result.current.profile.reducedMotion).toBe(true);
-      const d = result.current.directiveFor("director-1");
-      expect(d!.style.animationName).toBe("research-motion-fade-in");
-      // Persistent escalate emphasis marker survives reduced-motion collapse.
-      expect(d!.markerClass).toContain("research-motion-marker-escalate-emphasis");
+      expect(result.current.queueSize).toBe(0);
+      expect(result.current.directiveFor("director-1")).toBeNull();
     } finally {
       window.matchMedia = nativeMatchMedia;
     }

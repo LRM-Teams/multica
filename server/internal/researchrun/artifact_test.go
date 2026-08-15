@@ -1,7 +1,11 @@
 package researchrun
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +17,53 @@ func TestMigrationArtifactContentHashMatchesSQL(t *testing.T) {
 	want := "sha256:89a0eb387df6af5e0f77bcfe0452a48fd924d7377d69ff9b0e26d9afda5d47cf"
 	if got != want {
 		t.Fatalf("hash=%q want=%q", got, want)
+	}
+}
+
+func TestDecisionRelationshipSchemaRegistryCoversProductionWriters(t *testing.T) {
+	registered := make(map[string]bool)
+	for _, kind := range DecisionRelationshipSchemaNames() {
+		if registered[kind] {
+			t.Fatalf("duplicate Decision schema %q", kind)
+		}
+		registered[kind] = true
+	}
+	pattern := regexp.MustCompile(`(?s)INSERT INTO research_decision\s*\([^;]{0,500}?\)\s*VALUES\s*\([^;]{0,300}?'([a-z_]+)'`)
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		source, readErr := os.ReadFile(file)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, match := range pattern.FindAllSubmatch(source, -1) {
+			kind := string(match[1])
+			if kind == "agent" || kind == "system" || kind == "user" {
+				continue
+			}
+			if !registered[kind] {
+				t.Errorf("%s writes unregistered Decision schema %q", file, kind)
+			}
+		}
+	}
+	for _, dynamic := range []string{"quality_gate", "citation_audit"} {
+		if !registered[dynamic] {
+			t.Errorf("dynamic Decision schema %q is not registered", dynamic)
+		}
+	}
+	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "368_research_decision_relationship_schema.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for kind := range registered {
+		if !strings.Contains(string(migration), "'"+kind+"'") {
+			t.Errorf("migration 368 SQL registry missing Decision schema %q", kind)
+		}
 	}
 }
 
@@ -39,6 +90,22 @@ func TestRegisteredArtifactEntityKindsMatchSpecInventory(t *testing.T) {
 		ArtifactKindRunEvent,
 		ArtifactKindGraphNode,
 		ArtifactKindGraphEdge,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindIntegrationContribution,
+		ArtifactKindIntegrationRound,
+		ArtifactKindDispute,
+		ArtifactKindDisputePosition,
+		ArtifactKindDeliberation,
+		ArtifactKindDeliberationTurn,
+		ArtifactKindResearchDirectorIdentity,
+		ArtifactKindAdjudicationDecision,
+		ArtifactKindInquiryEdge,
+		ArtifactKindSearchPlan,
+		ArtifactKindQueryExecution,
+		ArtifactKindSourceCandidate,
+		ArtifactKindScreeningDecision,
 	}
 	got := RegisteredArtifactEntityKinds()
 	slices.SortFunc(got, func(a, b ArtifactEntityKind) int {
@@ -65,7 +132,7 @@ func TestRegisteredArtifactEntityKindsMatchSpecInventory(t *testing.T) {
 }
 
 func TestParseArtifactEntityKindRejectsUnknown(t *testing.T) {
-	if _, err := ParseArtifactEntityKind("hypothesis"); err == nil {
+	if _, err := ParseArtifactEntityKind("future_unknown_kind"); err == nil {
 		t.Fatal("expected unknown kind error")
 	}
 }
@@ -99,6 +166,14 @@ func TestReciprocalArtifactPassportGuardTriggerNames(t *testing.T) {
 		"research_run_event_artifact_passport_guard",
 		"research_graph_node_artifact_passport_guard",
 		"research_graph_edge_artifact_passport_guard",
+		"research_hypothesis_artifact_passport_guard",
+		"research_branch_artifact_passport_guard",
+		"research_insight_artifact_passport_guard",
+		"research_inquiry_edge_artifact_passport_guard",
+		"research_search_plan_artifact_passport_guard",
+		"research_query_execution_artifact_passport_guard",
+		"research_source_candidate_artifact_passport_guard",
+		"research_screening_decision_artifact_passport_guard",
 	}
 	got := ReciprocalArtifactPassportGuardTriggerNames()
 	slices.Sort(want)
@@ -153,6 +228,8 @@ func TestIntegrityGuardTriggerNames(t *testing.T) {
 
 func TestLinkPolicyGuardTriggerNames(t *testing.T) {
 	want := []string{
+		"research_artifact_supersession_cycle_guard",
+		"research_artifact_supersession_append_only_guard",
 		"research_artifact_supersession_to_policy_guard",
 		"research_artifact_policy_mutation_to_supersession_guard",
 		"research_artifact_lifecycle_event_to_policy_guard",
@@ -166,11 +243,30 @@ func TestLinkPolicyGuardTriggerNames(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyGuardTriggerNames(t *testing.T) {
+	want := []string{
+		"research_artifact_version_immutable_guard",
+		"research_artifact_policy_mutation_append_only_guard",
+		"research_artifact_lifecycle_event_append_only_guard",
+	}
+	got := AppendOnlyGuardTriggerNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("append-only guard triggers=%v want=%v", got, want)
+	}
+}
+
 func TestMigrationDiagnosticReasonCodes(t *testing.T) {
 	want := []string{
+		"ambiguous_local_key",
 		"cross_scope_reference",
+		"cyclic_local_reference",
+		"dangling_local_key",
+		"duplicate_local_key",
 		"invalid_match_decision",
 		"malformed_uuid",
+		"mismatched_reference",
 		"unknown_schema",
 		"unresolved_reference",
 	}
@@ -184,9 +280,16 @@ func TestMigrationDiagnosticReasonCodes(t *testing.T) {
 
 func TestMigrationRelationshipParserNames(t *testing.T) {
 	want := []string{
+		"research_claim_method_evidence_standard",
 		"research_message_match_decision",
+		"research_message_sender_principal",
 		"research_decision_inputs",
+		"research_decision_evaluation_local_references",
+		"research_graph_node_payload",
+		"research_legacy_source_payload",
+		"research_report_structured",
 		"research_run_event_payload",
+		"research_task_remediation_acceptance_criteria",
 	}
 	got := MigrationRelationshipParserNames()
 	slices.Sort(want)
@@ -198,6 +301,8 @@ func TestMigrationRelationshipParserNames(t *testing.T) {
 
 func TestScopedRelationshipFKNames(t *testing.T) {
 	want := []string{
+		"research_message_run_event_scoped_fkey",
+		"research_message_target_agent_scoped_fkey",
 		"research_task_attempt_task_scoped_fkey",
 		"research_task_question_scoped_fkey",
 		"research_task_parent_task_scoped_fkey",

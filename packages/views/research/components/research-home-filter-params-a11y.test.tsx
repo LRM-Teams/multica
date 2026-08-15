@@ -97,7 +97,7 @@ describe("research home/filter/params a11y static contract (LRM-1207)", () => {
     expect(src).toMatch(/data-testid=["']research-home-hero["']/);
     expect(src).toMatch(/aria-label=\{t\(\(\$\) => \$\.home\.composer_label\)\}/);
     expect(src).toMatch(/aria-hidden[\s\S]{0,120}<Compass\b/);
-    expect(src).toMatch(/<h1\b/);
+    expect(src).toMatch(/<h2\b/);
   });
 
   it("source: filter search labelled; Search icon hidden; radiogroup + aria-checked radios", () => {
@@ -128,7 +128,7 @@ describe("research home/filter/params a11y static contract (LRM-1207)", () => {
     ).toBe(hero);
     expect(hero.querySelector("[aria-hidden]")).toBeTruthy();
     expect(
-      screen.getByRole("heading", { level: 1, name: "Research home" }),
+      screen.getByRole("heading", { level: 2, name: "Research home" }),
     ).toBeTruthy();
   });
 

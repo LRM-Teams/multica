@@ -511,7 +511,7 @@ func (g *fakeDuplexGateway) Has(callID string) bool {
 	return g != nil && g.hasCallID != "" && g.hasCallID == callID
 }
 func (g *fakeDuplexGateway) MarkPending(string, string, string) {}
-func (g *fakeDuplexGateway) Close(string)              {}
+func (g *fakeDuplexGateway) Close(string)                       {}
 func (g *fakeDuplexGateway) Start(
 	context.Context,
 	string,

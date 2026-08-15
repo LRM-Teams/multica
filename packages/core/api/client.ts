@@ -18,6 +18,7 @@ import type {
   ComputerConnection,
   AgentFileContentResponse,
   AgentFilesResponse,
+  ListAgentFilesParams,
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
@@ -116,9 +117,9 @@ import type {
   DashboardRunTimeDaily,
   MachineUpgrade,
   RuntimeRestart,
-  AgentLifecycleActionKind,
-  AgentLifecyclePreflight,
-  AgentLifecycleOperation,
+  AgentRestartMode,
+  AgentRestartPreflight,
+  AgentRestartOperation,
   RuntimeModelListRequest,
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
@@ -139,8 +140,10 @@ import type {
   ChannelNotifyLevel,
   ChannelMember,
   ChannelInviteCandidatesResponse,
+  ChannelMentionCandidatesResponse,
   ChannelMemberManagementCapabilities,
   ChannelMessage,
+  ChannelMessageQuoteInput,
   ChannelMessagesPage,
   MarkChannelReadResult,
   ChannelReaction,
@@ -152,6 +155,7 @@ import type {
   ChannelProjectFileContent,
   ChannelGoalEnvelope,
   CreateChannelGoalRequest,
+  BootstrapChannelGoalControlPlaneRequest,
   UpdateChannelGoalRequest,
   ChannelGoalProcessEnvelope,
   ChannelGoalProcessListEnvelope,
@@ -239,11 +243,14 @@ import type {
   CreateNotePageIssueRefRequest,
   CreateNotePageAgentRefRequest,
   CreateNotePageRunRefRequest,
+  CreateNotePageChannelRefRequest,
   CreateNotePageIssueRequest,
   CreateNotePageIssueResponse,
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteWritebackRequest,
+  CreateNoteRetrospectiveRequest,
+  CreateNoteRetrospectiveResponse,
   IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
@@ -300,6 +307,8 @@ import {
   EMPTY_AGENT_FILE_CONTENT_RESPONSE,
   EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_AGENT_HEALTH_RESPONSE,
+  EMPTY_AGENT_RESTART_OPERATION,
+  EMPTY_AGENT_RESTART_PREFLIGHT,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
@@ -321,6 +330,8 @@ import {
   AgentFileContentResponseSchema,
   AgentFilesResponseSchema,
   AgentHealthResponseSchema,
+  AgentRestartOperationSchema,
+  AgentRestartPreflightSchema,
   RunnerActivityResponseSchema,
   EMPTY_RUNNER_ACTIVITY_RESPONSE,
   RunnerActivitySummariesResponseSchema,
@@ -339,6 +350,8 @@ import {
   ChannelGoalSubgoalEnvelopeSchema,
   EMPTY_CHANNEL_GOAL_SUBGOAL_LIST,
   ChannelMessageSearchResponseSchema,
+  ChannelMentionCandidatesResponseSchema,
+  EMPTY_CHANNEL_MENTION_CANDIDATES,
   WorkspaceSearchResponseSchema,
   EMPTY_CHANNEL_MESSAGES_PAGE,
   EMPTY_CHANNEL_THREAD_MESSAGES_PAGE,
@@ -464,6 +477,8 @@ import {
   NoteWritebackListResponseSchema,
   EMPTY_NOTE_WRITEBACK,
   EMPTY_NOTE_WRITEBACK_LIST,
+  CreateNoteRetrospectiveResponseSchema,
+  EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1200,6 +1215,29 @@ export class ApiClient {
     });
   }
 
+  async listNotePageChannelRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/channel-refs`);
+    return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/channel-refs",
+    });
+  }
+
+  async createNotePageChannelRef(pageId: string, data: CreateNotePageChannelRefRequest): Promise<NotePageIssueRef> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/channel-refs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageIssueRefSchema, EMPTY_NOTE_PAGE_ISSUE_REF, {
+      endpoint: "POST /api/notes/pages/{id}/channel-refs",
+    });
+  }
+
+  async deleteNotePageChannelRef(pageId: string, channelId: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/channel-refs/${encodeURIComponent(channelId)}`, {
+      method: "DELETE",
+    });
+  }
+
   async createNotePageIssue(pageId: string, data: CreateNotePageIssueRequest = {}): Promise<CreateNotePageIssueResponse> {
     const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issues`, {
       method: "POST",
@@ -1235,6 +1273,16 @@ export class ApiClient {
       },
       { endpoint: "POST /api/notes/pages/{id}/issues" },
     );
+  }
+
+  async createNoteRetrospective(data: CreateNoteRetrospectiveRequest): Promise<CreateNoteRetrospectiveResponse> {
+    const raw = await this.fetch<unknown>("/api/notes/retrospectives", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreateNoteRetrospectiveResponseSchema, EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE, {
+      endpoint: "POST /api/notes/retrospectives",
+    });
   }
 
   async listNotePageWritebacks(pageId: string, status?: string): Promise<NoteWritebackListResponse> {
@@ -1711,9 +1759,10 @@ export class ApiClient {
     });
   }
 
-  async listAgentFiles(id: string, params?: { include_hidden?: boolean }): Promise<AgentFilesResponse> {
+  async listAgentFiles(id: string, params?: ListAgentFilesParams): Promise<AgentFilesResponse> {
     const search = new URLSearchParams();
     if (params?.include_hidden) search.set("include_hidden", "true");
+    if (params?.path) search.set("path", params.path);
     const suffix = search.toString() ? `?${search}` : "";
     const raw = await this.fetch<unknown>(`/api/members/agents/${id}/files${suffix}`);
     return parseWithFallback(raw, AgentFilesResponseSchema, EMPTY_AGENT_FILES_RESPONSE, {
@@ -1749,33 +1798,52 @@ export class ApiClient {
     return this.fetch(`/api/members/agents/${id}/restore`, { method: "POST" });
   }
 
-  // Agent lifecycle actions (#632/#633). Preflight is the server-authoritative
-  // source for per-action enable/disable + immediate-vs-scheduled — the FE never
+  // Raft-aligned Agent reset modes. Preflight is the server-authoritative
+  // source for per-mode enable/disable — the FE never
   // derives active/idle from `agent.status`.
-  async getAgentLifecyclePreflight(id: string): Promise<AgentLifecyclePreflight> {
-    return this.fetch(`/api/members/agents/${id}/lifecycle`);
+  async getAgentRestartPreflight(id: string): Promise<AgentRestartPreflight> {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/reset`);
+    return parseWithFallback(
+      raw,
+      AgentRestartPreflightSchema,
+      EMPTY_AGENT_RESTART_PREFLIGHT,
+      { endpoint: "GET /api/members/agents/{id}/reset" },
+    );
   }
 
-  // Client sends only `action_kind` (never a path/force/runtime_id). The UUID
-  // Idempotency-Key makes a resend return the same operation; a full_reset that
-  // is not executable-now is rejected here (never scheduled).
-  async startAgentLifecycleAction(
+  // Client sends only Raft's `mode` (never a path/force/runtime_id). The UUID
+  // Idempotency-Key makes a resend return the same operation.
+  async resetAgent(
     id: string,
-    actionKind: AgentLifecycleActionKind,
+    mode: AgentRestartMode,
     idempotencyKey: string,
-  ): Promise<AgentLifecycleOperation> {
-    return this.fetch(`/api/members/agents/${id}/lifecycle`, {
+  ): Promise<AgentRestartOperation> {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/reset`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ action_kind: actionKind }),
+      body: JSON.stringify({ mode }),
     });
+    return parseWithFallback(
+      raw,
+      AgentRestartOperationSchema,
+      EMPTY_AGENT_RESTART_OPERATION,
+      { endpoint: "POST /api/members/agents/{id}/reset" },
+    );
   }
 
-  async getAgentLifecycleOperation(
+  async getAgentRestartOperation(
     id: string,
     operationId: string,
-  ): Promise<AgentLifecycleOperation> {
-    return this.fetch(`/api/members/agents/${id}/lifecycle/${operationId}`);
+  ): Promise<AgentRestartOperation> {
+    const raw = await this.fetch<unknown>(
+      `/api/members/agents/${id}/reset/${operationId}`,
+    );
+    return parseWithFallback(
+      raw,
+      AgentRestartOperationSchema,
+      EMPTY_AGENT_RESTART_OPERATION,
+      { endpoint: "GET /api/members/agents/{id}/reset/{operationId}" },
+    );
   }
 
   // Bulk-cancel every active task (queued/dispatched/running) for the agent.
@@ -3666,6 +3734,25 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/invite-candidates${suffix}`);
   }
 
+  async listChannelMentionCandidates(
+    channelId: string,
+    params?: { q?: string; limit?: number; offset?: number; signal?: AbortSignal },
+  ): Promise<ChannelMentionCandidatesResponse> {
+    const search = new URLSearchParams();
+    const q = params?.q?.trim();
+    if (q) search.set("q", q);
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    if (params?.offset !== undefined) search.set("offset", String(params.offset));
+    const suffix = search.size > 0 ? `?${search.toString()}` : "";
+    const raw = await this.fetch<unknown>(
+      `/api/channels/${channelId}/mention-candidates${suffix}`,
+      abortInit({ signal: params?.signal }),
+    );
+    return parseWithFallback(raw, ChannelMentionCandidatesResponseSchema, EMPTY_CHANNEL_MENTION_CANDIDATES, {
+      endpoint: "GET /api/channels/{id}/mention-candidates",
+    });
+  }
+
   // Group-local Tasks projection. The channel is a discussion context, not an
   // Issue owner: this only returns issues anchored to a source message there.
   async listChannelSourceIssues(
@@ -4065,7 +4152,7 @@ export class ApiClient {
       parts?: MessagePart[];
       replyToMessageId?: string | null;
       clientMessageId?: string | null;
-      quoteMessageId?: string | null;
+      quote?: ChannelMessageQuoteInput | null;
     },
   ): Promise<ChannelMessage> {
     // Channel attachments bind from structured `parts` (type: "attachment").
@@ -4073,15 +4160,18 @@ export class ApiClient {
     const body: {
       content: string;
       reply_to_message_id?: string;
-      quote_message_id?: string;
+      quote?: { message_id: string; selected_text?: string };
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content: input.content };
     if (input.replyToMessageId) {
       body.reply_to_message_id = input.replyToMessageId;
     }
-    if (input.quoteMessageId) {
-      body.quote_message_id = input.quoteMessageId;
+    if (input.quote) {
+      body.quote = { message_id: input.quote.messageId };
+      if (input.quote.selectedText) {
+        body.quote.selected_text = input.quote.selectedText;
+      }
     }
     if (input.parts && input.parts.length > 0) {
       body.parts = input.parts;
@@ -4147,22 +4237,25 @@ export class ApiClient {
       parts?: MessagePart[];
       replyToMessageId?: string | null;
       clientMessageId?: string | null;
-      quoteMessageId?: string | null;
+      quote?: ChannelMessageQuoteInput | null;
     },
   ): Promise<ChannelMessage> {
     // Same as sendChannelMessage: attachment truth is `parts`, not attachment_ids.
     const body: {
       content: string;
       reply_to_message_id?: string;
-      quote_message_id?: string;
+      quote?: { message_id: string; selected_text?: string };
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content: input.content };
     if (input.replyToMessageId) {
       body.reply_to_message_id = input.replyToMessageId;
     }
-    if (input.quoteMessageId) {
-      body.quote_message_id = input.quoteMessageId;
+    if (input.quote) {
+      body.quote = { message_id: input.quote.messageId };
+      if (input.quote.selectedText) {
+        body.quote.selected_text = input.quote.selectedText;
+      }
     }
     if (input.parts && input.parts.length > 0) {
       body.parts = input.parts;
@@ -4224,6 +4317,19 @@ export class ApiClient {
     });
     return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
       endpoint: "POST /api/channels/:id/goal",
+    });
+  }
+
+  async bootstrapChannelGoalControlPlane(
+    channelId: string,
+    input: BootstrapChannelGoalControlPlaneRequest,
+  ): Promise<ChannelGoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal/bootstrap`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
+      endpoint: "POST /api/channels/:id/goal/bootstrap",
     });
   }
 
@@ -4802,13 +4908,12 @@ export class ApiClient {
   ): Promise<import("../research/queries").ResearchPresenceResponse> {
     const { ResearchPresenceResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/presence`);
-    const result = ResearchPresenceResponseSchema.safeParse(raw);
-    if (!result.success) {
-      throw new Error(
-        "GET /api/research/sessions/:id/presence response failed schema validation",
-      );
-    }
-    const parsed = result.data;
+    const parsed = parseWithFallback(
+      raw,
+      ResearchPresenceResponseSchema,
+      { session_id: id, presence: {} },
+      { endpoint: "GET /api/research/sessions/:id/presence" },
+    );
     if (parsed.session_id !== "" && parsed.session_id !== id) {
       throw new Error(
         "GET /api/research/sessions/:id/presence response failed session validation",
@@ -5085,23 +5190,23 @@ export class ApiClient {
     runId: string,
     fromSequenceExclusive: number,
   ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6Delta } = await import("../research-v6/schemas");
+    const { parseResearchV6DeltaStrict } = await import("../research-v6/schemas");
     const raw = await this.fetch(
       `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
     );
     if (raw == null) return null;
-    return parseResearchV6Delta(raw);
+    return parseResearchV6DeltaStrict(raw);
   }
 
   async resumeResearchV6Projection(
     runId: string,
     lastConfirmedSequence: number,
   ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
+    const { parseResearchV6ResumeVerdictStrict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
       method: "POST",
       body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
     });
-    return parseResearchV6ResumeVerdict(raw);
+    return parseResearchV6ResumeVerdictStrict(raw);
   }
 }

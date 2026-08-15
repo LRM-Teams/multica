@@ -1,6 +1,6 @@
 // Package agent provides a unified interface for executing prompts via
-// coding agents (Claude Code, CodeBuddy, Codex, Copilot, OpenCode, OpenClaw,
-// Hermes, Gemini, Pi, Cursor, Kimi, Kiro, Antigravity, Grok). It mirrors the happy-cli
+// coding agents (Claude Code, Codex, OpenCode, Pi, Cursor, Kiro, Grok).
+// Every shipped provider is canonical-resident. It mirrors the happy-cli
 // AgentBackend pattern, translated to idiomatic Go.
 package agent
 
@@ -56,6 +56,24 @@ type ResidentRuntimeLivenessChecker interface {
 	RuntimeAlive() (alive bool, known bool)
 }
 
+// ResidentRuntimeStarter starts the long-lived provider child without a turn.
+// Raft only treats an Agent as running after this spawn; constructing the
+// adapter is not residency.
+type ResidentRuntimeStarter interface {
+	EnsureResidentProcess(ctx context.Context) error
+}
+
+var (
+	_ ResidentRuntimeStarter = (*codexAppServerBackend)(nil)
+	_ ResidentRuntimeStarter = (*piRPCBackend)(nil)
+	_ ResidentRuntimeStarter = (*cursorACPBackend)(nil)
+	_ ResidentRuntimeStarter = (*grokACPBackend)(nil)
+	_ ResidentRuntimeStarter = (*kiroACPBackend)(nil)
+	_ ResidentRuntimeStarter = (*claudeACPBackend)(nil)
+	_ ResidentRuntimeStarter = (*claudeStreamJSONBackend)(nil)
+	_ ResidentRuntimeStarter = (*opencodeServeBackend)(nil)
+)
+
 // ResidentRuntimeForceKillable is an optional contract for backends that keep
 // a long-lived provider child process alive across turns (task #62). ForceKill
 // terminates the underlying process immediately, even while a turn is
@@ -97,11 +115,10 @@ type ResidentMessageInput interface {
 	AcceptMessageBatch(context.Context, []ResidentMessage) (ResidentMessageAcceptance, error)
 }
 
-// ResidentMessagePreparation is an optional pre-input gate for resident
-// backends that must finish provider maintenance, such as context compaction,
-// before native Message acceptance may begin. The daemon calls this with the
-// parent handoff context before adding its bounded native-acceptance timeout.
-// emit reports normalized runtime lifecycle events while the gate is active.
+// ResidentMessagePreparation is an optional pre-input hook on the parent
+// handoff context, before the daemon adds its bounded native-acceptance
+// timeout. It must not run context compaction: compaction belongs after a
+// completed turn, never on the Message delivery path.
 type ResidentMessagePreparation interface {
 	PrepareMessageInput(context.Context, func(Message)) error
 }
@@ -372,13 +389,14 @@ type TokenUsage struct {
 
 // Result is the final outcome after an agent session completes.
 type Result struct {
-	Status       string // "completed", "failed", "aborted", "timeout", "cancelled"
-	Output       string // accumulated text output
-	Error        string // error message if failed
-	DurationMs   int64
-	SessionID    string
-	Usage        map[string]TokenUsage // keyed by model name
-	RuntimeStats *RuntimeTokenStats    // provider-native current-session telemetry when available
+	Status          string // "completed", "failed", "aborted", "timeout", "cancelled"
+	Output          string // accumulated text output
+	Error           string // error message if failed
+	DurationMs      int64
+	SessionID       string
+	Usage           map[string]TokenUsage // keyed by model name
+	RuntimeStats    *RuntimeTokenStats    // provider-native current-session telemetry when available
+	HadSemanticWork bool                  // thinking, tools, or visible text — not compaction-only
 }
 
 // RuntimeTokenStats is provider-native token/cost/context telemetry for the
@@ -401,7 +419,7 @@ type RuntimeTokenStats struct {
 
 // Config configures a Backend instance.
 type Config struct {
-	ExecutablePath string            // path to CLI binary (claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro-cli, agy, grok)
+	ExecutablePath string            // path to CLI binary (claude, codex, opencode, pi, cursor, kiro-cli, grok)
 	Env            map[string]string // extra environment variables
 	Logger         *slog.Logger
 	// ResidentOptions are the stable agent-scoped defaults used when a native
@@ -417,20 +435,13 @@ type Config struct {
 // test instead of silently shipping a provider that fails closed on every
 // capability. Do not reintroduce a parallel literal of these type strings.
 var agentConstructors = map[string]func(Config) Backend{
-	"claude":      func(cfg Config) Backend { return &claudeBackend{cfg: cfg} },
-	"codebuddy":   func(cfg Config) Backend { return &codebuddyBackend{cfg: cfg} },
-	"codex":       func(cfg Config) Backend { return &codexBackend{cfg: cfg} },
-	"copilot":     func(cfg Config) Backend { return &copilotBackend{cfg: cfg} },
-	"opencode":    func(cfg Config) Backend { return &opencodeBackend{cfg: cfg} },
-	"openclaw":    func(cfg Config) Backend { return &openclawBackend{cfg: cfg} },
-	"hermes":      func(cfg Config) Backend { return &hermesBackend{cfg: cfg} },
-	"gemini":      func(cfg Config) Backend { return &geminiBackend{cfg: cfg} },
-	"pi":          func(cfg Config) Backend { return &piBackend{cfg: cfg} },
-	"cursor":      func(cfg Config) Backend { return &cursorBackend{cfg: cfg} },
-	"kimi":        func(cfg Config) Backend { return &kimiBackend{cfg: cfg} },
-	"kiro":        func(cfg Config) Backend { return &kiroBackend{cfg: cfg} },
-	"antigravity": func(cfg Config) Backend { return &antigravityBackend{cfg: cfg} },
-	"grok":        func(cfg Config) Backend { return &grokBackend{cfg: cfg} },
+	"claude":   func(cfg Config) Backend { return &claudeBackend{cfg: cfg} },
+	"codex":    func(cfg Config) Backend { return &codexBackend{cfg: cfg} },
+	"opencode": func(cfg Config) Backend { return &opencodeBackend{cfg: cfg} },
+	"pi":       func(cfg Config) Backend { return &piBackend{cfg: cfg} },
+	"cursor":   func(cfg Config) Backend { return &cursorBackend{cfg: cfg} },
+	"kiro":     func(cfg Config) Backend { return &kiroBackend{cfg: cfg} },
+	"grok":     func(cfg Config) Backend { return &grokBackend{cfg: cfg} },
 }
 
 // KnownAgentTypes returns every agent type New() accepts (agentConstructors'
@@ -452,7 +463,7 @@ func New(agentType string, cfg Config) (Backend, error) {
 
 	ctor, ok := agentConstructors[agentType]
 	if !ok {
-		return nil, fmt.Errorf("unknown agent type: %q (supported: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok)", agentType)
+		return nil, fmt.Errorf("unknown agent type: %q (supported: claude, codex, opencode, pi, cursor, kiro, grok)", agentType)
 	}
 	return ctor(cfg), nil
 }
@@ -469,20 +480,13 @@ func DetectVersion(ctx context.Context, executablePath string) (string, error) {
 // environment variables are deliberately omitted so the string is a hint
 // about *what* users are extending, not a dump of the full command line.
 var launchHeaders = map[string]string{
-	"antigravity": "agy -p (print mode)",
-	"claude":      "claude (stream-json)",
-	"codebuddy":   "codebuddy (stream-json)",
-	"codex":       "codex app-server",
-	"copilot":     "copilot (json)",
-	"cursor":      "cursor-agent (stream-json)",
-	"gemini":      "gemini (stream-json)",
-	"grok":        "grok (streaming-json)",
-	"hermes":      "hermes acp",
-	"kimi":        "kimi acp",
-	"kiro":        "kiro-cli acp",
-	"openclaw":    "openclaw agent (json)",
-	"opencode":    "opencode run (json)",
-	"pi":          "pi (json mode)",
+	"claude":   "claude (stream-json)",
+	"codex":    "codex app-server",
+	"cursor":   "cursor-agent (stream-json)",
+	"grok":     "grok (streaming-json)",
+	"kiro":     "kiro-cli acp",
+	"opencode": "opencode run (json)",
+	"pi":       "pi (json mode)",
 }
 
 // LaunchHeader returns the user-visible launch skeleton for agentType, or an

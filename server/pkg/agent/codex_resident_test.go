@@ -108,7 +108,7 @@ func TestCodexResidentAcceptsCanonicalMessageAtNativeTurnBoundary(t *testing.T) 
 	}
 }
 
-func TestCodexResidentPreparesMessageInputWithNativeCompactionLifecycle(t *testing.T) {
+func TestCodexResidentCompactsAfterCompletedTurnNotBeforeAccept(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fixture is POSIX-only")
 	}
@@ -143,20 +143,17 @@ func TestCodexResidentPreparesMessageInputWithNativeCompactionLifecycle(t *testi
 	if err != nil {
 		t.Fatalf("initialize Codex resident: %v", err)
 	}
-	for range session.Messages {
+	var lifecycle []Message
+	for msg := range session.Messages {
+		if msg.Type == MessageCompactionStarted || msg.Type == MessageCompactionFinished {
+			lifecycle = append(lifecycle, msg)
+		}
 	}
 	if result := <-session.Result; result.Status != "completed" {
 		t.Fatalf("initialize result = %+v", result)
 	}
-
-	var lifecycle []Message
-	if err := backend.PrepareMessageInput(context.Background(), func(message Message) {
-		lifecycle = append(lifecycle, message)
-	}); err != nil {
-		t.Fatalf("PrepareMessageInput: %v", err)
-	}
 	if len(lifecycle) != 2 || lifecycle[0].Type != MessageCompactionStarted || lifecycle[1].Type != MessageCompactionFinished {
-		t.Fatalf("preparation lifecycle = %+v, want started then finished", lifecycle)
+		t.Fatalf("post-turn lifecycle = %+v, want started then finished", lifecycle)
 	}
 	raw, err := os.ReadFile(requestPath)
 	if err != nil {
@@ -164,6 +161,15 @@ func TestCodexResidentPreparesMessageInputWithNativeCompactionLifecycle(t *testi
 	}
 	if !strings.Contains(string(raw), `"method":"thread/compact/start"`) || !strings.Contains(string(raw), `"threadId":"thr-compact"`) {
 		t.Fatalf("native compact request = %s", raw)
+	}
+	var prep []Message
+	if err := backend.PrepareMessageInput(context.Background(), func(message Message) {
+		prep = append(prep, message)
+	}); err != nil {
+		t.Fatalf("PrepareMessageInput: %v", err)
+	}
+	if len(prep) != 0 {
+		t.Fatalf("PrepareMessageInput must not compact, got %+v", prep)
 	}
 }
 

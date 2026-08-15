@@ -64,3 +64,32 @@ func TestClaudeACPUsageUpdateTracksContextOccupancy(t *testing.T) {
 		t.Fatal("60% occupied Claude session should compact")
 	}
 }
+
+func TestShouldProactivelyCompactSkipsIneffectiveRepeat(t *testing.T) {
+	percentHigh := 70.0
+	percentStillHigh := 68.0
+	percentLow := 40.0
+	stats := &RuntimeTokenStats{ContextPercent: &percentHigh}
+	var st compactionAttemptState
+
+	if !shouldProactivelyCompactAt(stats, &st) {
+		t.Fatal("first crossing of 60% should compact")
+	}
+	st.recordAttempt(true, stats)
+	if !shouldProactivelyCompactAt(stats, &st) {
+		t.Fatal("failed compact may be retried while occupancy stays high")
+	}
+
+	st.recordAttempt(false, &RuntimeTokenStats{ContextPercent: &percentStillHigh})
+	if shouldProactivelyCompactAt(stats, &st) {
+		t.Fatal("ineffective compact must not run again until occupancy falls")
+	}
+	low := &RuntimeTokenStats{ContextPercent: &percentLow}
+	if shouldProactivelyCompactAt(low, &st) {
+		t.Fatal("below 60% must not compact")
+	}
+	st.recordAttempt(false, low)
+	if !shouldProactivelyCompactAt(stats, &st) {
+		t.Fatal("after occupancy falls under the resume line, 60% may compact again")
+	}
+}

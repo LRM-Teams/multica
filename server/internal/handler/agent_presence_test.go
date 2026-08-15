@@ -25,18 +25,52 @@ func (f fakeRunnerPresenceSource) IsCurrentWorkspaceRunner(daemonID, workspaceID
 	return f.current[daemonID+"/"+workspaceID+"/"+daemonInstanceID]
 }
 
-func TestProjectRunnerLaunchPresenceKeepsAcceptedCurrentRunnerOnline(t *testing.T) {
+func TestProjectRunnerLaunchPresenceIsOnlineOnlyWhenActive(t *testing.T) {
 	h := Handler{RunnerPresenceSource: fakeRunnerPresenceSource{current: map[string]bool{
 		"computer-1/workspace-1/instance-1": true,
 	}}}
-
-	got := h.projectRunnerLaunchPresence("workspace-1", &runnerLaunchPresence{
-		daemonID:         "computer-1",
-		daemonInstanceID: "instance-1",
-		status:           "accepted",
-	})
-	if got != AgentPresenceOnline {
-		t.Fatalf("accepted current Runner Presence = %q, want online", got)
+	cases := []struct {
+		name   string
+		launch *runnerLaunchPresence
+		want   string
+	}{
+		{name: "nil launch", want: AgentPresenceOffline},
+		{
+			name: "accepted current Runner",
+			launch: &runnerLaunchPresence{
+				daemonID: "computer-1", daemonInstanceID: "instance-1", status: "accepted",
+			},
+			want: AgentPresenceOffline,
+		},
+		{
+			name: "inactive current Runner",
+			launch: &runnerLaunchPresence{
+				daemonID: "computer-1", daemonInstanceID: "instance-1", status: protocol.AgentStatusInactive,
+			},
+			want: AgentPresenceOffline,
+		},
+		{
+			name: "active current Runner",
+			launch: &runnerLaunchPresence{
+				daemonID: "computer-1", daemonInstanceID: "instance-1", status: protocol.AgentStatusActive,
+			},
+			want: AgentPresenceOnline,
+		},
+		{
+			name: "active stale Runner",
+			launch: &runnerLaunchPresence{
+				daemonID: "computer-1", daemonInstanceID: "other-instance", status: protocol.AgentStatusActive,
+			},
+			want: AgentPresenceOffline,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got := h.projectRunnerLaunchPresence("workspace-1", test.launch)
+			if got != test.want {
+				t.Fatalf("Presence = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -105,8 +139,8 @@ func TestGetAgentPresenceReturnsFullWorkspaceRosterFromRunnerManagementTruth(t *
 	if byAgent[activeID] != AgentPresenceOnline {
 		t.Fatalf("active current launch = %q, want online", byAgent[activeID])
 	}
-	if byAgent[acceptedID] != AgentPresenceOnline {
-		t.Fatalf("accepted current launch = %q, want online", byAgent[acceptedID])
+	if byAgent[acceptedID] != AgentPresenceOffline {
+		t.Fatalf("accepted current launch = %q, want offline", byAgent[acceptedID])
 	}
 	if byAgent[inactiveID] != AgentPresenceOffline || byAgent[missingID] != AgentPresenceOffline {
 		t.Fatalf("inactive=%q missing=%q, want offline/offline", byAgent[inactiveID], byAgent[missingID])
@@ -243,8 +277,8 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
 		t.Fatalf("persist Runner start acknowledgement: %v", err)
 	}
-	if len(presencePayloads) != 1 || presencePayloads[0].AgentID != agentID || presencePayloads[0].Presence != AgentPresenceOnline {
-		t.Fatalf("start acknowledgement Presence payloads = %+v, want one online transition", presencePayloads)
+	if len(presencePayloads) != 0 {
+		t.Fatalf("start acknowledgement Presence payloads = %+v, want none (ACK is not Online)", presencePayloads)
 	}
 	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID, ProviderSessionID: "provider-session-1", TurnID: "turn-1", RuntimeGeneration: 3}
 	raw, err = json.Marshal(session)
@@ -268,6 +302,16 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if status != "accepted" || queueState != protocol.AgentStartQueueQueued || queueDepth != 2 || queueAge != 15 || providerSession != "provider-session-1" || providerTurn != "turn-1" || generation != 3 {
 		t.Fatalf("persisted Runner launch=%q/%q/%d/%d/%q/%q/%d", status, queueState, queueDepth, queueAge, providerSession, providerTurn, generation)
 	}
+	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, active); err != nil {
+		t.Fatalf("persist Runner active status: %v", err)
+	}
+	if len(presencePayloads) != 1 || presencePayloads[0].AgentID != agentID || presencePayloads[0].Presence != AgentPresenceOnline {
+		t.Fatalf("active Presence payloads = %+v, want one online transition", presencePayloads)
+	}
 	stale := session
 	stale.LaunchID, stale.ProviderSessionID = "launch-stale", "provider-session-stale"
 	raw, _ = json.Marshal(stale)
@@ -279,6 +323,82 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, raw); err == nil {
 		t.Fatal("stale Runner launch status was accepted")
 	}
+}
+
+func TestRunnerStartAcknowledgementPresenceStaysOfflineUntilActive(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "runner-ack-presence-"+uuid.NewString()[:8], nil)
+	h := *testHandler
+	bus := events.New()
+	var presencePayloads []AgentPresenceRealtimePayload
+	bus.Subscribe(protocol.EventAgentPresence, func(event events.Event) {
+		presencePayloads = append(presencePayloads, event.Payload.(AgentPresenceRealtimePayload))
+	})
+	h.Bus = bus
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"daemon-1/" + testWorkspaceID + "/instance-1": true,
+	}}
+	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
+	var launchID, startDispatchID string
+	if err := testPool.QueryRow(ctx, `SELECT launch_id::text, start_dispatch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, parseUUID(agentID)).Scan(&launchID, &startDispatchID); err != nil {
+		t.Fatalf("load desired launch: %v", err)
+	}
+	start := protocol.AgentStartAckPayload{
+		AgentID: agentID, LaunchID: launchID, StartDispatchID: startDispatchID,
+		QueueState: protocol.AgentStartQueueStarting, QueueDepth: 1, QueueAgeMS: 5,
+	}
+	raw, err := json.Marshal(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
+		t.Fatalf("persist Runner start acknowledgement: %v", err)
+	}
+	if len(presencePayloads) != 0 {
+		t.Fatalf("ACK Presence payloads = %+v, want none", presencePayloads)
+	}
+	if got := agentPresenceFromHTTP(t, h, agentID); got != AgentPresenceOffline {
+		t.Fatalf("Presence after ACK = %q, want offline", got)
+	}
+
+	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, active); err != nil {
+		t.Fatalf("persist Runner active status: %v", err)
+	}
+	if len(presencePayloads) != 1 || presencePayloads[0].AgentID != agentID || presencePayloads[0].Presence != AgentPresenceOnline {
+		t.Fatalf("active Presence payloads = %+v, want one online", presencePayloads)
+	}
+	if got := agentPresenceFromHTTP(t, h, agentID); got != AgentPresenceOnline {
+		t.Fatalf("Presence after active = %q, want online", got)
+	}
+}
+
+func agentPresenceFromHTTP(t *testing.T, h Handler, agentID string) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := newRequestAs(testUserID, http.MethodGet, "/api/agents/presence", nil)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	h.GetAgentPresence(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GetAgentPresence status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response AgentPresenceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range response.Items {
+		if item.AgentID == agentID {
+			return item.Presence
+		}
+	}
+	t.Fatalf("GetAgentPresence omitted Agent %s", agentID)
+	return ""
 }
 
 func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
@@ -308,7 +428,7 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 	}
 	defer conn.Close()
 	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
 	})
 	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
@@ -351,29 +471,40 @@ func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 	}
 }
 
-func TestPendingRunnerStopDispatchUsesCurrentLaunchID(t *testing.T) {
+func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	agentID, runtimeID := createHandlerTestAgent(t, "runner-stop-"+uuid.NewString()[:8], nil), handlerTestRuntimeID(t)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (
-			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
-		) VALUES ($1, $2, $3, 'daemon-1', 'instance-1', 'launch-current', 'active')`, testWorkspaceID, agentID, runtimeID); err != nil {
+	daemonID := "daemon-runner-lifecycle-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "runner lifecycle")
+	agentID := createHandlerTestAgentOnRuntime(t, "runner-lifecycle-"+uuid.NewString()[:8], runtimeID)
+	var launchID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT launch_id::text
+		FROM agent_runner_launch_projection
+		WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
+	`, testWorkspaceID, agentID, runtimeID).Scan(&launchID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_lifecycle_operation (
-			workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
+		INSERT INTO agent_activity_launch (
+			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
+		) VALUES ($1, $2, $3, $4, 'instance-1', $5, 'active')`, testWorkspaceID, agentID, runtimeID, daemonID, launchID); err != nil {
+		t.Fatal(err)
+	}
+	operationID := uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_restart_operation (
+			id, workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
 			action_kind, status, execution_mode, step, started_at
-		) VALUES ($1, $2, $3, $4, $5, 'restart', 'running', 'immediate', 'restart_runtime', now())`,
-		testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
+		) VALUES ($1, $2, $3, $4, $5, $6, 'restart', 'running', 'immediate', 'stopping', now())`,
+		operationID, testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
 	hub := daemonws.NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
 	}))
 	defer server.Close()
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
@@ -382,14 +513,15 @@ func TestPendingRunnerStopDispatchUsesCurrentLaunchID(t *testing.T) {
 	}
 	defer conn.Close()
 	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
 	})
 	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for hub.WorkspaceRunnerConnectionCount("daemon-1", testWorkspaceID) != 1 {
+	for hub.WorkspaceRunnerConnectionCount(daemonID, testWorkspaceID) != 1 ||
+		!hub.WorkspaceRunnerSupportsCapability(daemonID, testWorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess) {
 		if time.Now().After(deadline) {
 			t.Fatal("Runner did not become ready")
 		}
@@ -397,22 +529,15 @@ func TestPendingRunnerStopDispatchUsesCurrentLaunchID(t *testing.T) {
 	}
 	h := *testHandler
 	h.DaemonHub = hub
-	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if err := h.dispatchPendingRunnerStops(ctx, identity); err != nil {
-		t.Fatalf("dispatch pending Runner stop: %v", err)
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
+		t.Fatalf("reconcile while lifecycle stop is active: %v", err)
 	}
-	conn.SetReadDeadline(time.Now().Add(time.Second))
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var frame protocol.Message
-	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStop {
-		t.Fatalf("Runner stop frame=%+v err=%v", frame, err)
-	}
-	var stop protocol.WorkspaceRunnerAgentStopPayload
-	if err := json.Unmarshal(frame.Payload, &stop); err != nil || stop.AgentID != agentID || stop.LaunchID != "launch-current" {
-		t.Fatalf("Runner stop payload=%+v err=%v", stop, err)
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, raw, err := conn.ReadMessage(); err == nil {
+		var frame protocol.Message
+		_ = json.Unmarshal(raw, &frame)
+		t.Fatalf("lifecycle operation dispatched a parallel Runner frame: %+v", frame)
 	}
 }
 

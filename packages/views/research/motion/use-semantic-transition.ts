@@ -8,7 +8,7 @@
  *  - enqueue contract projection deltas into the transition queue reducer;
  *  - drive a RAF clock that advances/settles the queue (throttled to ~30fps
  *    under low-performance, see MOTION_LOW_PERF_FRAME_MS);
- *  - honour `prefers-reduced-motion` (uniform fade, instant layout) and a
+ *  - honour `prefers-reduced-motion` (immediate settlement) and a
  *    low-performance profile (no glow, halved budget) — Rule ④/⑤;
  *  - track `document.visibilitychange` so hidden-period events do not replay
  *    and restore collapses the backlog (Rule ⑥);

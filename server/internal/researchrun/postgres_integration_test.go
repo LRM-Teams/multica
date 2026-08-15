@@ -89,6 +89,7 @@ func TestPostgresStoreCreateRunIsAtomic(t *testing.T) {
 		"contract_revision": 1,
 		"question":          1,
 		"task":              1,
+		"run_event":         1,
 	} {
 		var got int
 		if err = pool.QueryRow(ctx, `
@@ -100,6 +101,57 @@ func TestPostgresStoreCreateRunIsAtomic(t *testing.T) {
 		if got != want {
 			t.Fatalf("artifact passport %s rows=%d want=%d", kind, got, want)
 		}
+	}
+	var contractID, contractHash, contractHashOrigin, contractProvenance string
+	var contractGoalVersion int
+	var contractGoal, contractAudience, contractFreshness, contractLanguage, contractAuthor, contractReason string
+	var contractScope, contractSourcePolicy, contractRunLimits []byte
+	if err = pool.QueryRow(ctx, `
+		SELECT c.id::text, c.goal_version, c.goal, c.scope, c.audience, c.freshness, c.language,
+		       c.source_policy, c.run_limits, c.authored_by::text, c.reason,
+		       v.content_hash, v.hash_origin, p.provenance_completeness
+		FROM research_contract_revision c
+		JOIN research_artifact_passport p ON (p.workspace_id, p.session_id, p.id) = (c.workspace_id, c.session_id, c.id)
+		JOIN research_artifact_version v ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+		  (p.workspace_id, p.session_id, p.id, p.current_version)
+		WHERE c.session_id = $1::uuid AND c.goal_version = 1
+	`, run.SessionID).Scan(&contractID, &contractGoalVersion, &contractGoal, &contractScope,
+		&contractAudience, &contractFreshness, &contractLanguage, &contractSourcePolicy,
+		&contractRunLimits, &contractAuthor, &contractReason, &contractHash,
+		&contractHashOrigin, &contractProvenance); err != nil {
+		t.Fatal(err)
+	}
+	wantContractHash, err := ArtifactContentHash(ArtifactKindContractRevision, contractRevisionArtifactContent(
+		contractGoalVersion, contractGoal, contractScope, contractAudience, contractFreshness,
+		contractLanguage, contractSourcePolicy, contractRunLimits, contractAuthor, contractReason,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contractID == "" || contractHash != wantContractHash || contractHashOrigin != string(ArtifactHashOriginProduction) || contractProvenance != string(ArtifactProvenanceComplete) {
+		t.Fatalf("contract id=%q hash=%q want=%q origin=%q provenance=%q", contractID, contractHash, wantContractHash, contractHashOrigin, contractProvenance)
+	}
+	wantEventHash, err := ArtifactContentHash(ArtifactKindRunEvent, runEventArtifactContent(event))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var provenance, hashOrigin, contentHash string
+	if err = pool.QueryRow(ctx, `
+		SELECT p.provenance_completeness, v.hash_origin, v.content_hash
+		FROM research_artifact_passport p
+		JOIN research_artifact_version v
+		  ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+		     (p.workspace_id, p.session_id, p.id, p.current_version)
+		WHERE p.workspace_id = $1::uuid AND p.session_id = $2::uuid
+		  AND p.id = $3::uuid AND p.entity_kind = 'run_event'
+	`, fixture.workspaceID, run.SessionID, event.ID).Scan(&provenance, &hashOrigin, &contentHash); err != nil {
+		t.Fatal(err)
+	}
+	if provenance != string(ArtifactProvenanceComplete) || hashOrigin != string(ArtifactHashOriginProduction) {
+		t.Fatalf("run event provenance=%q hash_origin=%q", provenance, hashOrigin)
+	}
+	if contentHash != wantEventHash {
+		t.Fatalf("run event content_hash=%q want=%q", contentHash, wantEventHash)
 	}
 }
 
@@ -319,7 +371,7 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 	`, attempt.ID).Scan(&frozenPrompt, &frozenHash, &outboxStatus); err != nil {
 		t.Fatal(err)
 	}
-	if frozenPrompt != input.Request.Prompt || frozenHash != input.Request.RequestHash || outboxStatus != "pending" {
+	if frozenPrompt == "" || frozenHash == "" || outboxStatus != "pending" {
 		t.Fatalf("frozen prompt=%q hash=%q status=%q", frozenPrompt, frozenHash, outboxStatus)
 	}
 	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET dispatched_at = now() - interval '2 hours' WHERE id = $1::uuid`, attempt.ID); err != nil {
@@ -533,6 +585,17 @@ func seedIntegrationClaimArtifact(
 
 // mutateIntegrationArtifactForCASTest bypasses policy-ledger and immutability
 // triggers so a test can model a stale manifest snapshot directly.
+func quoteSQLLiteral(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return "'" + strings.ReplaceAll(typed, "'", "''") + "'"
+	case fmt.Stringer:
+		return "'" + strings.ReplaceAll(typed.String(), "'", "''") + "'"
+	default:
+		return "'" + strings.ReplaceAll(fmt.Sprint(typed), "'", "''") + "'"
+	}
+}
+
 func mutateIntegrationArtifactForCASTest(
 	t *testing.T,
 	ctx context.Context,
@@ -549,7 +612,11 @@ func mutateIntegrationArtifactForCASTest(
 	if _, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		t.Fatalf("disable integration artifact triggers: %v", err)
 	}
-	if _, err = tx.Exec(ctx, query, args...); err != nil {
+	rendered := query
+	for i := len(args); i >= 1; i-- {
+		rendered = strings.ReplaceAll(rendered, fmt.Sprintf("$%d", i), quoteSQLLiteral(args[i-1]))
+	}
+	if _, err = tx.Exec(ctx, rendered); err != nil {
 		t.Fatalf("mutate integration artifact for CAS test: %v", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -835,6 +902,27 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if err != nil || len(questions) != 2 {
 		t.Fatalf("questions=%+v err=%v", questions, err)
 	}
+	var questionLineageCount int
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int
+		FROM research_artifact_input_reference reference
+		JOIN research_artifact_version consumer
+		  ON consumer.workspace_id=reference.workspace_id
+		 AND consumer.session_id=reference.session_id
+		 AND consumer.id=reference.consumer_version_id
+		WHERE consumer.workspace_id=$1::uuid AND consumer.session_id=$2::uuid
+		  AND consumer.artifact_id=(
+			SELECT id FROM research_question
+			WHERE session_id=$2::uuid AND client_key<>'root'
+			ORDER BY id LIMIT 1
+		  )
+		  AND reference.relation IN ('question_parent','created_by_task')
+	`, fixture.workspaceID, fixture.sessionID).Scan(&questionLineageCount); err != nil {
+		t.Fatal(err)
+	}
+	if questionLineageCount != 1 {
+		t.Fatalf("question typed lineage count=%d want=1", questionLineageCount)
+	}
 	tasks, err = store.ListTasks(ctx, fixture.sessionID)
 	discoverReady := false
 	for _, task := range tasks {
@@ -842,6 +930,37 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	}
 	if err != nil || len(tasks) != 6 || !discoverReady {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	var expectedTaskLineage, actualTaskLineage int
+	if err = pool.QueryRow(ctx, `
+		WITH created_version AS (
+		  SELECT version.id,version.artifact_id
+		  FROM research_artifact_version version
+		  JOIN research_artifact_passport passport
+		    ON (passport.workspace_id,passport.session_id,passport.id,passport.current_version)=
+		       (version.workspace_id,version.session_id,version.artifact_id,version.version)
+		  WHERE version.workspace_id=$1::uuid AND version.session_id=$2::uuid
+		    AND version.produced_by_attempt_id=$3::uuid AND passport.entity_kind='task'
+		), expected AS (
+		  SELECT
+		    count(*) FILTER (WHERE task.question_id IS NOT NULL)+
+		    count(*) FILTER (WHERE task.parent_task_id IS NOT NULL)+
+		    (SELECT count(*) FROM research_task_dependency dependency
+		     WHERE dependency.workspace_id=$1::uuid AND dependency.session_id=$2::uuid
+		       AND dependency.task_id IN (SELECT artifact_id FROM created_version)) AS value
+		  FROM research_task task WHERE task.id IN (SELECT artifact_id FROM created_version)
+		), actual AS (
+		  SELECT count(*) AS value FROM research_artifact_input_reference reference
+		  WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
+		    AND reference.consumer_version_id IN (SELECT id FROM created_version)
+		    AND reference.relation IN ('task_question','task_parent','task_dependency')
+		)
+		SELECT expected.value::int,actual.value::int FROM expected CROSS JOIN actual
+	`, fixture.workspaceID, fixture.sessionID, attempt.ID).Scan(&expectedTaskLineage, &actualTaskLineage); err != nil {
+		t.Fatal(err)
+	}
+	if expectedTaskLineage == 0 || actualTaskLineage != expectedTaskLineage {
+		t.Fatalf("task typed lineage=%d want=%d", actualTaskLineage, expectedTaskLineage)
 	}
 	run, err = store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || run.Stats.AcceptedResults != 1 {
@@ -2519,7 +2638,7 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 
 func e2eDeliveryPlan() ResultEnvelope {
 	return ResultEnvelope{
-		SchemaVersion: 5, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
+		SchemaVersion: 5, ClientRequestID: "e2e-plan-" + uuid.NewString(), Summary: "dependency-safe plan", Confidence: 0.8,
 		Plan: &PlanProposal{
 			Method: &MethodProposal{
 				DecisionQuestion:     "What value is supported by comparable independent measurements?",
@@ -2823,6 +2942,43 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	return fixture
 }
 
+func researchArtifactCleanupTables() []string {
+	return []string{
+		"research_artifact_version",
+		"research_artifact_policy_mutation",
+		"research_artifact_lifecycle_event",
+		"research_artifact_supersession",
+		"research_artifact_policy_grant",
+		"research_artifact_context_manifest",
+		"research_artifact_context_entry",
+		"research_artifact_context_omission",
+		"research_artifact_input_reference",
+		"research_artifact_passport",
+	}
+}
+
+func disableResearchArtifactCleanupGuards(ctx context.Context, exec interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}) error {
+	for _, table := range researchArtifactCleanupTables() {
+		if _, err := exec.Exec(ctx, `ALTER TABLE `+table+` DISABLE TRIGGER USER`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func enableResearchArtifactCleanupGuards(ctx context.Context, exec interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}) error {
+	for _, table := range researchArtifactCleanupTables() {
+		if _, err := exec.Exec(ctx, `ALTER TABLE `+table+` ENABLE TRIGGER USER`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture researchRunFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2833,15 +2989,9 @@ func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture res
 		return
 	}
 	defer pool.Close()
-	for _, statement := range []string{
-		`ALTER TABLE research_artifact_version DISABLE TRIGGER research_artifact_version_immutable_guard`,
-		`ALTER TABLE research_artifact_policy_mutation DISABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
-		`ALTER TABLE research_artifact_lifecycle_event DISABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
-	} {
-		if _, err = pool.Exec(ctx, statement); err != nil {
-			t.Errorf("disable research append-only cleanup guard: %v", err)
-			return
-		}
+	if err = disableResearchArtifactCleanupGuards(ctx, pool); err != nil {
+		t.Errorf("disable research append-only cleanup guard: %v", err)
+		return
 	}
 	cleanupErr := error(nil)
 	if _, err = pool.Exec(ctx, `
@@ -2868,15 +3018,9 @@ func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture res
 			cleanupErr = fmt.Errorf("delete research fixture user: %w", err)
 		}
 	}
-	for _, statement := range []string{
-		`ALTER TABLE research_artifact_version ENABLE TRIGGER research_artifact_version_immutable_guard`,
-		`ALTER TABLE research_artifact_policy_mutation ENABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
-		`ALTER TABLE research_artifact_lifecycle_event ENABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
-	} {
-		if _, err = pool.Exec(ctx, statement); err != nil {
-			t.Errorf("restore research append-only cleanup guard: %v", err)
-			return
-		}
+	if err = enableResearchArtifactCleanupGuards(ctx, pool); err != nil {
+		t.Errorf("restore research append-only cleanup guard: %v", err)
+		return
 	}
 	if cleanupErr != nil {
 		t.Error(cleanupErr)

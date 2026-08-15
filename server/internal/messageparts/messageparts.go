@@ -276,6 +276,8 @@ func FallbackContent(parts []protocol.MessagePart) string {
 				title = "Untitled"
 			}
 			values = append(values, "笔记「"+title+"」")
+		case protocol.MessagePartTypeNoteWrite:
+			// Confirmation marker only; visible markdown stays in content/text.
 		case protocol.MessagePartTypeAttachment:
 			// Attachment-only messages may have empty content. Do not invent
 			// markdown URLs or synthetic labels from attachment metadata.
@@ -463,6 +465,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		return normalizeChoiceReplyPart(part)
 	case protocol.MessagePartTypeNoteBrief:
 		return normalizeNoteBriefPart(part)
+	case protocol.MessagePartTypeNoteWrite:
+		return normalizeNoteWritePart(part)
 	case protocol.MessagePartTypeVoice:
 		if part.DurationMS < 0 || part.DurationMS > 60_000 {
 			return protocol.MessagePart{}, fmt.Errorf("duration_ms must be between 0 and 60000")
@@ -643,6 +647,30 @@ func normalizeNoteBriefPart(part protocol.MessagePart) (protocol.MessagePart, er
 	return part, nil
 }
 
+func normalizeNoteWritePart(part protocol.MessagePart) (protocol.MessagePart, error) {
+	part.RefID = strings.TrimSpace(part.RefID)
+	part.Label = strings.TrimSpace(part.Label)
+	part.Text = ""
+	part.RefType = ""
+	part.RefSubType = ""
+	part.Event = ""
+	part.EventParams = nil
+	part.Params = nil
+	part.ContentStartUTF16 = nil
+	part.ContentEndUTF16 = nil
+	part.PackID = ""
+	part.StickerID = ""
+	part.Alt = ""
+	part.AttachmentID = ""
+	part.Filename = ""
+	part.ContentType = ""
+	part.SizeBytes = 0
+	part.DurationMS = 0
+	part.TranscriptionStatus = ""
+	part.SynthesisStatus = ""
+	return part, nil
+}
+
 func clearNonChoiceFields(part *protocol.MessagePart) {
 	part.Text = ""
 	part.RefType = ""
@@ -688,6 +716,18 @@ func scrubForeignPartFields(part protocol.MessagePart) protocol.MessagePart {
 		part.SelectCount = 0
 		part.OptionID = ""
 		// Keep Text (body), Label (title), RefID (page id).
+	case protocol.MessagePartTypeNoteWrite:
+		part.ChoiceID = ""
+		part.Prompt = ""
+		part.Layout = ""
+		part.Options = nil
+		part.AllowDismiss = nil
+		part.ExpiresAt = ""
+		part.SelectedOptionID = ""
+		part.SelectCount = 0
+		part.OptionID = ""
+		part.Text = ""
+		// Keep optional RefID (page id) and Label (suggested title).
 	default:
 		part.ChoiceID = ""
 		part.Prompt = ""

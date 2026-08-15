@@ -30,6 +30,10 @@ const (
 // outcome is consumed here: none enters MessageCoordinator, Pending Notice,
 // recovery, Activity, or another durable/user-visible projection.
 func (d *Daemon) handleReminderOwnerInput(ctx context.Context, payload protocol.ReminderOwnerInputPayload) reminderOwnerInputOutcome {
+	return d.acceptReminderOwnerInput(ctx, payload, protocol.DaemonCapabilityReminderTransientInput)
+}
+
+func (d *Daemon) acceptReminderOwnerInput(ctx context.Context, payload protocol.ReminderOwnerInputPayload, requiredServerCapability string) reminderOwnerInputOutcome {
 	if reason := validateReminderOwnerInputPayload(payload); reason != "" {
 		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, reason)
 		return reminderOwnerInputRejected
@@ -42,13 +46,17 @@ func (d *Daemon) handleReminderOwnerInput(ctx context.Context, payload protocol.
 	runtime, runtimeKnown := d.runtimeIndex[payload.RuntimeID]
 	workspace := d.workspaces[payload.WorkspaceID]
 	d.mu.Unlock()
-	if !runtimeKnown || runtime.WorkspaceID != payload.WorkspaceID || !workspaceHasServerCapability(workspace, protocol.DaemonCapabilityReminderTransientInput) {
+	if !runtimeKnown || runtime.WorkspaceID != payload.WorkspaceID || (requiredServerCapability != "" && !workspaceHasServerCapability(workspace, requiredServerCapability)) {
 		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, "runtime_or_capability_mismatch")
 		return reminderOwnerInputRejected
 	}
-	attachment, ok := d.currentAttachmentForRuntimeAgent(payload.RuntimeID, payload.AgentID)
-	if !ok || attachment.WorkspaceID != payload.WorkspaceID || int64(attachment.AttachmentGeneration) != payload.PlacementGeneration {
-		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, "owner_placement_mismatch")
+	runner := d.currentWorkspaceRunner(payload.WorkspaceID)
+	if runner == nil {
+		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, "agent_start_missing")
+		return reminderOwnerInputRejected
+	}
+	if !runner.hasAcceptedStart(payload.AgentID, payload.RuntimeID) {
+		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, "agent_start_mismatch")
 		return reminderOwnerInputRejected
 	}
 	if !d.canonicalRuntimes.hasResidentBackend(payload.AgentID, payload.RuntimeID) {
@@ -114,7 +122,7 @@ func validateReminderOwnerInputPayload(payload protocol.ReminderOwnerInputPayloa
 			return "invalid_identity"
 		}
 	}
-	if payload.PlacementGeneration < 1 || payload.Version < 1 || strings.TrimSpace(payload.Title) == "" || utf8.RuneCountInString(payload.Title) > 500 {
+	if payload.Version < 1 || strings.TrimSpace(payload.Title) == "" || utf8.RuneCountInString(payload.Title) > 500 {
 		return "invalid_version_or_title"
 	}
 	if len(payload.Anchor.Excerpt) > reminderOwnerInputMaxExcerptBytes || len(payload.Anchor.Target) > reminderOwnerInputMaxTargetBytes || len(payload.Anchor.ReplyTarget) > reminderOwnerInputMaxTargetBytes || len(payload.Occurrence.Cadence) > 256 || len(payload.Occurrence.Timezone) > 128 {

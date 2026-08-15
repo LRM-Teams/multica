@@ -195,18 +195,17 @@ runtime roll, then verify migrations `304` and
 `305` adds the foreign-key indexes required to keep Agent deletion bounded as
 Workspace Runner Activity and Message-handoff rows accumulate.
 
-Apply the server migrations before rolling daemons. The Attachment schema is
-introduced in order by `320_agent_attachment_projection`,
-`321_agent_attachment_projection_trigger`, `322_agent_attachment_replay_ack`,
-and `323_agent_activity_launch_accepted`; do not run a daemon that advertises
-the Attachment capability until those rows are recorded. Migration `304` is
-irreversible. Rolling back `320`-`323` removes server Attachment/launch
-projections and receipts, so rollback requires reverting the coordinated server
-and daemon release together; it does not delete machine-local AgentRoot,
-Message Draft, or Context Boundary files.
+Apply the server migrations before rolling Computers. Migration
+`386_remove_attachment_and_reminder_projection_protocol` removes the obsolete
+Attachment and Reminder projection/replay tables introduced by `320`-`322`;
+current binaries must not advertise or wait for an Attachment capability.
+Migration `304` and migration `386` are irreversible. Rollback therefore
+requires restoring the database from backup and reverting the coordinated
+Server and Computer release together; it does not delete machine-local
+AgentRoot, Message Draft, or Context Boundary files.
 
-The minimum coordinated server/daemon release line is `0.4.24`. The connected
-daemon must additionally advertise `workspace_runner_attachment_v1`; this
-capability check fences earlier `0.4.24-alpha.*` builds. Older CLI versions are
+The minimum coordinated Server/Computer release line is `0.4.24`. The connected
+Computer must advertise the current Workspace Runner control-plane capability.
+Older CLI versions are
 rejected with `426 workspace_runner_protocol_unsupported`, and a Runner missing
 the hard-cut capability is closed before it can own the Workspace slot.

@@ -46,6 +46,20 @@
   transition: filter 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
   outline: none;
   -webkit-tap-highlight-color: transparent;
+  --sg-node-fill: radial-gradient(
+    circle at 42% 34%,
+    rgb(27 75 85 / 78%),
+    rgb(10 31 42 / 94%) 64%,
+    #091722 100%
+  );
+  --sg-node-halo: 0 0 0 transparent;
+  background-color: #091722;
+  background-image: var(--sg-node-fill);
+  border: 1px solid color-mix(in oklab, var(--sg-accent-result) 60%, #183044);
+  box-shadow:
+    inset 0 0 24px rgb(72 211 228 / 7%),
+    0 8px 25px rgb(0 0 0 / 24%),
+    var(--sg-node-halo);
 }
 .sg-node.sg-tier-s {
   border-radius: 50%;
@@ -53,6 +67,70 @@
 .sg-node:hover {
   filter: brightness(1.12);
   z-index: 6;
+}
+.sg-node.sg-tier-xxl,
+.sg-node.sg-tier-xl,
+.sg-node.sg-tier-l {
+  border-color: color-mix(in oklab, var(--sg-accent-stable) 66%, #183044);
+  --sg-node-fill: radial-gradient(
+    circle at 42% 35%,
+    rgb(28 86 61 / 82%),
+    rgb(12 51 37 / 96%) 66%,
+    #09251c 100%
+  );
+  background-color: #09251c;
+}
+.sg-node.sg-tier-m {
+  --sg-node-fill: radial-gradient(
+    circle at 40% 34%,
+    rgb(22 55 67 / 92%),
+    #0a1b28 72%
+  );
+}
+.sg-node.sg-tier-s {
+  --sg-node-fill: radial-gradient(
+    circle at 40% 30%,
+    rgb(20 57 70 / 96%),
+    #0a1925 74%
+  );
+}
+.sg-node.sg-tier-xxl .sg-core { padding: 23%; }
+.sg-node.sg-tier-xl .sg-core { padding: 21%; }
+.sg-node.sg-tier-l .sg-core { padding: 19%; }
+.sg-node.sg-tier-m .sg-core { padding: 17%; }
+.sg-node.sg-tier-s .sg-core { padding: 11%; }
+.sg-node.sg-tier-xxl .sg-title { font-size: 1.15rem; line-height: 1.18; }
+.sg-node.sg-tier-xl .sg-title { font-size: 1rem; line-height: 1.22; }
+.sg-node.sg-tier-l .sg-title { font-size: .78rem; }
+.sg-node.sg-tier-m .sg-title { font-size: .66rem; }
+.sg-node.sg-tier-s .sg-title { font-size: .66rem; }
+.sg-node [data-testid="star-graph-header"] {
+  color: #85edb4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-shadow: 0 0 12px rgb(88 214 154 / 32%);
+}
+.sg-node .sg-sub { font-size: .58rem; line-height: 1.35; }
+.sg-node .sg-metrics { color: #82cda4; font-size: .55rem; }
+.sg-node[data-state="run"] {
+  border-color: var(--sg-state-run);
+}
+.sg-node[data-state="conflict"],
+.sg-node[data-state="failed"] {
+  border-color: var(--sg-state-conflict);
+  --sg-node-fill: radial-gradient(circle at 40% 32%, #45252c, #171923 74%);
+}
+.sg-node[data-state="pending-review"] {
+  border-color: var(--sg-state-review);
+}
+.sg-node[data-state="run"]::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border: 1px dashed color-mix(in oklab, var(--sg-state-run) 72%, transparent);
+  border-radius: 50%;
+  opacity: 0.72;
+  pointer-events: none;
+  animation: sg-run-ring 1.8s ease-out infinite;
 }
 .sg-node:focus-visible {
   outline: 2px solid var(--ring);
@@ -72,79 +150,105 @@
   box-shadow: 0 0 18px var(--ring);
   pointer-events: none;
 }
-.sg-node[data-state="abandoned"],
+.sg-node[data-state="abandoned"] {
+  opacity: 0.62;
+}
 .sg-node[data-state="failed"] {
-  opacity: 0.55;
+  opacity: 1;
 }
 
 /* Concentric decorative rings via background layering (tier ringCount).
    We draw rings with repeating-radial-gradient so a single class inlines the
    ring count token without extra DOM nodes. */
 .sg-node.sg-ring-1 {
-  background-image: repeating-radial-gradient(
+  background-image: radial-gradient(
     circle,
     transparent 0 78%,
-    var(--sg-ring-inset) 78% 81%
-  );
+    var(--sg-ring-inset) 78.5% 79.2%,
+    transparent 79.8%
+  ), var(--sg-node-fill);
 }
 .sg-node.sg-ring-2 {
   background-image:
-    repeating-radial-gradient(
+    radial-gradient(
       circle,
-      transparent 0 78%,
-      var(--sg-ring-inset) 78% 81%
+      transparent 0 76%,
+      var(--sg-ring-inset) 76.4% 77.1%,
+      transparent 77.7%
     ),
-    repeating-radial-gradient(
+    radial-gradient(
       circle,
-      transparent 0 88%,
-      color-mix(in oklab, var(--sg-ring-inset) 55%, transparent) 88% 91%
-    );
+      transparent 0 87%,
+      color-mix(in oklab, var(--sg-ring-inset) 55%, transparent) 87.4% 88.1%,
+      transparent 88.7%
+    ),
+    var(--sg-node-fill);
 }
 .sg-node.sg-ring-3 {
   background-image:
-    repeating-radial-gradient(
+    radial-gradient(
       circle,
-      transparent 0 76%,
-      var(--sg-ring-inset) 76% 79%
+      transparent 0 70%,
+      var(--sg-ring-inset) 70.4% 71.1%,
+      transparent 71.7%
     ),
-    repeating-radial-gradient(
+    radial-gradient(
       circle,
-      transparent 0 86%,
-      color-mix(in oklab, var(--sg-ring-inset) 55%, transparent) 86% 89%
+      transparent 0 81%,
+      color-mix(in oklab, var(--sg-ring-inset) 55%, transparent) 81.4% 82.1%,
+      transparent 82.7%
     ),
-    repeating-radial-gradient(
+    radial-gradient(
       circle,
-      transparent 0 93%,
-      color-mix(in oklab, var(--sg-ring-inset) 40%, transparent) 93% 95%
-    );
+      transparent 0 91%,
+      color-mix(in oklab, var(--sg-ring-inset) 40%, transparent) 91.4% 92.1%,
+      transparent 92.7%
+    ),
+    var(--sg-node-fill);
 }
 
 /* Soft outer glow via layered box-shadows (glow token). */
 .sg-node.sg-glow-1 {
-  box-shadow: 0 0 18px color-mix(in oklab, var(--sg-accent-synthesis) 12%, transparent);
+  --sg-node-halo: 0 0 18px color-mix(in oklab, var(--sg-accent-synthesis) 12%, transparent);
 }
 .sg-node.sg-glow-2 {
-  box-shadow:
+  --sg-node-halo:
     0 0 0 10px color-mix(in oklab, var(--sg-accent-synthesis) 5%, transparent),
     0 0 45px color-mix(in oklab, var(--sg-accent-synthesis) 20%, transparent);
 }
 .sg-node.sg-glow-3 {
-  box-shadow:
+  --sg-node-halo:
     0 0 0 10px color-mix(in oklab, var(--sg-accent-synthesis) 7%, transparent),
     0 0 0 22px color-mix(in oklab, var(--sg-accent-synthesis) 5%, transparent),
     0 0 0 38px color-mix(in oklab, var(--sg-accent-synthesis) 3%, transparent),
     0 0 90px color-mix(in oklab, var(--sg-accent-synthesis) 26%, transparent);
 }
+.sg-node.sg-tier-xxl::before,
+.sg-node.sg-tier-xl::before,
+.sg-node.sg-tier-l::before {
+  content: "";
+  position: absolute;
+  inset: -9px;
+  border: 1px solid color-mix(in oklab, var(--sg-accent-stable) 46%, transparent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.sg-node.sg-tier-xxl::before { inset: -14px; box-shadow: 0 0 60px rgb(88 214 154 / 18%); }
 
 .sg-node .sg-core {
   position: relative;
   width: 100%;
   height: 100%;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
   padding: 10%;
   overflow: hidden;
 }
+.sg-node.sg-tier-m .sg-core,
+.sg-node.sg-tier-s .sg-core { gap: 0.15rem; }
 
 /* Text truncation inside the circular core (never spills the circle). */
 .sg-node .sg-title {
@@ -177,6 +281,13 @@
 }
 
 .sg-node .sg-metrics {
+  font-variant-numeric: tabular-nums;
+}
+
+.sg-node [data-testid="star-graph-agent-badge"] {
+  border-color: color-mix(in oklab, var(--sg-accent-agent) 65%, transparent);
+  background: color-mix(in oklab, var(--sg-accent-agent) 14%, transparent);
+  color: #bdeff4;
   font-variant-numeric: tabular-nums;
 }
 
@@ -220,13 +331,18 @@
 @keyframes sg-spin {
   to { transform: rotate(360deg); }
 }
+@keyframes sg-run-ring {
+  0% { opacity: 0.78; transform: scale(0.96); }
+  72%, 100% { opacity: 0; transform: scale(1.1); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .sg-node {
     transition: none;
   }
   .sg-glyph[data-glyph="pulse"],
-  .sg-glyph[data-glyph="restart"] {
+  .sg-glyph[data-glyph="restart"],
+  .sg-node[data-state="run"]::after {
     animation: none;
   }
 }
@@ -239,9 +355,10 @@
   padding: 0.4rem 0.55rem;
   border: 1px solid var(--border);
   border-radius: 0.65rem;
-  background: var(--sg-panel);
+  background: rgb(11 22 34 / 88%);
   color: var(--muted-foreground);
   backdrop-filter: blur(12px);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 22%);
 }
 .sg-map-key .sg-menu-btn {
   color: var(--muted-foreground);
@@ -288,7 +405,7 @@
   height: 1px;
   background: repeating-linear-gradient(
     90deg,
-    var(--sg-state-conflict) 0 5px,
+    var(--sg-state-review) 0 5px,
     transparent 5px 9px
   );
 }
@@ -296,7 +413,7 @@
   height: 1px;
   background: repeating-linear-gradient(
     90deg,
-    var(--sg-accent-result) 0 2px,
+    var(--research-stage-explore) 0 2px,
     transparent 2px 6px
   );
 }

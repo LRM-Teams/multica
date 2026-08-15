@@ -1,0 +1,59 @@
+{
+  "contract_kind": "atomic_result_submission",
+  "schema_version": 6,
+  "client_request_id": "00000000-0000-4000-8000-000000000301",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "work_item_id": "00000000-0000-4000-8000-000000000202",
+  "task_id": "00000000-0000-4000-8000-000000000203",
+  "attempt_id": "00000000-0000-4000-8000-000000000204",
+  "agent_id": "00000000-0000-4000-8000-000000000205",
+  "manifest_id": "00000000-0000-4000-8000-000000000201",
+  "manifest_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "goal_version": 2,
+  "branch_refs": [
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "state_version": 4
+    }
+  ],
+  "content_layers": {
+    "catalog_summary": "生产配置下在 2k 并发附近出现稳定 P99 延迟拐点。",
+    "brief_summary": "三次独立运行均在 1.8k–2.2k 并发区间出现 P99 延迟上升；瓶颈与连接池饱和相关。",
+    "objective": "在生产配置下复现高并发延迟拐点。",
+    "conclusion": "目标技术在默认连接池配置下不适合超过约 2k 并发的写入负载。",
+    "content": "测试矩阵、环境、原始指标和复现命令已记录；连接池扩大后拐点后移，但资源成本明显增加。",
+    "scope": { "deployment": "single-region", "workload": "write-heavy" },
+    "uncertainties": ["多区域部署尚未测试。"],
+    "conflicts": [],
+    "open_questions": ["扩大连接池后的成本是否满足目标预算？"]
+  },
+  "evidence_refs": [
+    {
+      "kind": "observation",
+      "id": "00000000-0000-4000-8000-000000000302",
+      "version_id": "00000000-0000-4000-8000-000000000303",
+      "content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  ],
+  "state_proposal": {
+    "conclusion_state": "accepted",
+    "integration_state": "candidate"
+  },
+  "related_candidates": [
+    {
+      "kind": "result_s",
+      "id": "00000000-0000-4000-8000-000000000006",
+      "version_id": "00000000-0000-4000-8000-000000000007",
+      "tier": "S",
+      "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "task_specific_schema": "research.production_benchmark.v1",
+  "task_specific_payload": {
+    "benchmark_matrix": [
+      { "concurrency": 2000, "p99_ms": 184 }
+    ]
+  },
+  "content_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+}

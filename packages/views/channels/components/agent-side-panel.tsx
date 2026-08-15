@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AGENT_DESCRIPTION_MAX_LENGTH, agentDetailKeys } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
-import { deriveRuntimeHealthPresentation, runtimeListOptions, type RuntimeHealthPresentation } from "@multica/core/runtimes";
+import { runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -33,7 +33,6 @@ import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
-import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { RolesDialog } from "../../settings/components/roles-dialog";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { ActorStyledName } from "../../common/actor-styled-name";
@@ -202,9 +201,9 @@ export function AgentSidePanel({
             displayName={displayName}
             agentHonorLevel={agent.honor_level}
             honorSurface="profile"
-            className="text-base font-bold leading-tight text-foreground"
+            className="text-[17px] font-bold leading-tight text-foreground"
           />
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          <p className="mt-0.5 truncate text-[13px] text-muted-foreground">
             {handleLabel || `@${agent.name}`}
             {agent.archived_at ? (
               <span className="ml-2">{t(($) => $.row.archived)}</span>
@@ -236,7 +235,7 @@ export function AgentSidePanel({
                   type="button"
                   onClick={() => selectTab(tabId)}
                   className={cn(
-                    "flex items-center gap-1.5 whitespace-nowrap border-b-2 py-2.5 text-xs font-medium transition-colors",
+                    "flex touch-manipulation items-center gap-1.5 whitespace-nowrap border-b-2 py-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                     variant === "page"
                       ? "min-h-11 min-w-0 flex-1 justify-center px-2"
                       : "shrink-0 px-3",
@@ -245,7 +244,7 @@ export function AgentSidePanel({
                       : "border-transparent text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  <Icon className="size-3.5" />
+                  <Icon className="size-3.5" aria-hidden="true" />
                   {t(($) => $.tabs[tabId])}
                 </button>
               );
@@ -338,7 +337,6 @@ function AgentProfileTabContent({
   const handleUpdate = useUpdateAgent(wsId);
   const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
   const qc = useQueryClient();
-  const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
   // Runtime config used to be editable by any workspace member when the agent
   // carried the `group_manager` marker ("shared team infrastructure"). That
@@ -354,12 +352,6 @@ function AgentProfileTabContent({
   // (older backend, no runtime bound) means false, not "assume supported".
   const forceRestartSupported =
     selectedRuntime?.provider_capabilities?.force_restart ?? false;
-  // Derived, staleness-aware health instead of the raw `status` column
-  // (#10 — "runtime online status" had two divergent sources across the
-  // app).
-  const runtimeUpdateHealth =
-    agent.runtime_mode !== "cloud" && selectedRuntime ? deriveRuntimeHealthPresentation(selectedRuntime) : "ok";
-
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
   const displayName = resolveActorDisplayName(agent, agent.id);
   const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
@@ -507,34 +499,30 @@ function AgentProfileTabContent({
           aria-label={t(($) => $.side_panel.runtime_section)}
           data-testid="agent-profile-runtime-config"
         >
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            {t(($) => $.side_panel.runtime_section)}
-          </h3>
-          {/* LRM-1351 (Frank pencil lock): summary body is not a click target;
-              only the trailing pencil opens the Dialog. */}
-          <div className="flex items-start gap-1">
-            <div className="min-w-0 flex-1">
-              <RuntimeConfigSummary
-                agent={agent}
-                runtimes={runtimes}
-                members={members}
-                currentUserId={currentUserId}
-                runtimeUpdateHealth={runtimeUpdateHealth}
-                runtimeHealthLabel={runtimeHealthLabel}
-              />
-            </div>
+          <div className="mb-2 flex items-center gap-1">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {t(($) => $.side_panel.runtime_section)}
+            </h3>
             {canEditRuntime ? (
               <button
                 type="button"
-                className="mt-0.5 inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="-my-1.5 inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => setRuntimeDialogOpen(true)}
                 aria-label={t(($) => $.execution_config.edit_trigger_aria)}
                 data-testid="agent-runtime-config-edit"
               >
-                <Pencil className="h-3.5 w-3.5" aria-hidden />
+                <Pencil className="size-3.5" aria-hidden />
               </button>
             ) : null}
           </div>
+          {/* LRM-1351 (Frank pencil lock): summary body is not a click target;
+              only the section-heading edit control opens the Dialog. */}
+          <RuntimeConfigSummary
+            agent={agent}
+            runtimes={runtimes}
+            members={members}
+            currentUserId={currentUserId}
+          />
           <RuntimeConfigDialog
             agent={agent}
             open={runtimeDialogOpen}
@@ -565,15 +553,11 @@ function RuntimeConfigSummary({
   runtimes,
   members,
   currentUserId,
-  runtimeUpdateHealth,
-  runtimeHealthLabel,
 }: {
   agent: Agent;
   runtimes: import("@multica/core/types").AgentRuntime[];
   members: readonly MemberWithUser[];
   currentUserId: string | null;
-  runtimeUpdateHealth: ReturnType<typeof deriveRuntimeHealthPresentation> | "ok";
-  runtimeHealthLabel: (health: RuntimeHealthPresentation) => string;
 }) {
   const { t } = useT("agents");
   return (
@@ -599,12 +583,6 @@ function RuntimeConfigSummary({
             canEdit={false}
             onChange={() => {}}
           />
-          {runtimeUpdateHealth !== "ok" &&
-            runtimeUpdateHealth !== "update_available" && (
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {runtimeHealthLabel(runtimeUpdateHealth)}
-              </span>
-            )}
           <ModelPicker
             runtimeId={agent.runtime_id}
             value={agent.model ?? ""}

@@ -7,6 +7,7 @@ export {
   voiceCallDuplexWsUrlFromPath,
 } from "./client";
 export type { ApiClientOptions, DevicePending, DeviceConfirmResponse } from "./client";
+export type { ListAgentFilesParams } from "../types";
 export { parseWithFallback, setSchemaLogger } from "./schema";
 export type { ParseOptions } from "./schema";
 export { DuplicateIssueErrorBodySchema } from "./schemas";

@@ -3,6 +3,7 @@ import { createRef, type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { issueKeys, PAGINATED_STATUSES } from "@multica/core/issues/queries";
+import { buildGroupMentionAllowedActorIds } from "../../channels/mention-scope";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { IssueStatus, ListIssuesCache } from "@multica/core/types";
 import type { QueryClient } from "@tanstack/react-query";
@@ -716,6 +717,41 @@ describe("createMentionSuggestion", () => {
     expect(items.find((i) => i.id === "a-out")?.group).toBe("not_in_channel");
   });
 
+  it("does not offer the viewing human in a group-channel @ picker", () => {
+    const qc = fakeQc({
+      members: [
+        { user_id: "u1", name: "alice", display_name: "Alice", role: "member" },
+        { user_id: "u2", name: "bob", display_name: "Bob", role: "member" },
+      ],
+      agents: [
+        {
+          id: "a1",
+          name: "aegis",
+          display_name: "Aegis",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+    });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    const config = createMentionSuggestion(qc, {
+      getAllowedActorIds: () =>
+        buildGroupMentionAllowedActorIds({
+          workspaceUserIds: ["u1", "u2"],
+          workspaceAgentIds: ["a1"],
+          channelMemberIds: ["u1", "u2", "a1"],
+          viewerUserId: "u1",
+        }),
+    });
+    const items = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+
+    expect(items.some((i) => i.type === "member" && i.id === "u1")).toBe(false);
+    expect(items.some((i) => i.type === "member" && i.id === "u2")).toBe(true);
+    expect(items.some((i) => i.type === "agent" && i.id === "a1")).toBe(true);
+  });
+
   it("#2115: selecting a regrouped in-channel row inserts that actor, not displayItems[index]", () => {
     // Candidate order puts NOT-in-channel first; groupItems renders InChannel first.
     // Pre-fix selectItem used displayItems[index], so clicking visual row 0 inserted
@@ -765,5 +801,91 @@ describe("createMentionSuggestion", () => {
     expect(command).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a-in", group: "in_channel" }),
     );
+  });
+
+  it("keeps in-channel actors and pages outsiders from mention-candidates", async () => {
+    const fetchMentionCandidates = vi.fn(async (_query: string, offset: number) => {
+      if (offset > 0) {
+        return {
+          in_channel: [
+            { id: "li-wei", label: "里维", type: "agent" as const, handle: "li-wei", group: "in_channel" as const },
+          ],
+          not_in_channel: [
+            { id: "a-out-20", label: "Agent 20", type: "agent" as const, handle: "agent-20", group: "not_in_channel" as const },
+          ],
+          has_more: false,
+          next_offset: null,
+        };
+      }
+      return {
+        in_channel: [
+          { id: "li-wei", label: "里维", type: "agent" as const, handle: "li-wei", group: "in_channel" as const },
+          { id: "a-tai", label: "阿泰", type: "agent" as const, handle: "a-tai", group: "in_channel" as const },
+        ],
+        not_in_channel: [
+          { id: "a-out-0", label: "Agent 00", type: "agent" as const, handle: "agent-0", group: "not_in_channel" as const },
+        ],
+        has_more: true,
+        next_offset: 20,
+      };
+    });
+
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[
+            { id: "li-wei", label: "里维", type: "agent", handle: "li-wei", group: "in_channel" },
+          ]}
+          query=""
+          command={() => {}}
+          fetchMentionCandidates={fetchMentionCandidates}
+        />
+      </I18nWrapper>,
+    );
+
+    expect(await screen.findByText("里维")).toBeInTheDocument();
+    expect(screen.getByText("阿泰")).toBeInTheDocument();
+    expect(screen.getByText("Agent 00")).toBeInTheDocument();
+    expect(screen.queryByText("Agent 20")).toBeNull();
+    expect(fetchMentionCandidates).toHaveBeenCalledWith("", 0, expect.any(AbortSignal));
+  });
+
+  it("does not dump workspace outsiders into the sync pool when mention-candidates is active", () => {
+    const qc = fakeQc({
+      members: [
+        { user_id: "u-in", name: "in-channel", role: "member" },
+        { user_id: "u-out", name: "not-in-channel", role: "member" },
+      ],
+      agents: [
+        {
+          id: "a-in",
+          name: "li-wei",
+          display_name: "里维",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+        {
+          id: "a-out",
+          name: "agentpro",
+          display_name: "AgentPro",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+    });
+    const config = createMentionSuggestion(qc, {
+      getAllowedActorIds: () => new Set(["u-in", "u-out", "a-in", "a-out"]),
+      getChannelMemberIds: () => new Set(["u-in", "a-in"]),
+      getMentionCandidates: () => async () => ({
+        in_channel: [],
+        not_in_channel: [],
+        has_more: false,
+        next_offset: null,
+      }),
+    });
+    const items = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+    expect(items.map((item) => item.id).sort()).toEqual(["a-in", "u-in"]);
   });
 });

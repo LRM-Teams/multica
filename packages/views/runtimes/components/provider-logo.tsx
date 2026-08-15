@@ -29,50 +29,7 @@ function OpenCodeLogo({ className }: { className: string }) {
   );
 }
 
-// OpenClaw — lobster mascot, vector version based on official branding
-function OpenClawLogo({ className }: { className: string }) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" className={className}>
-      {/* Body */}
-      <path
-        d="M8 2C5.5 2 3.5 4 3.5 6.5S5 10.5 6.5 11v1.5H8V11c.3.1.7.1 1 0v1.5h1.5V11c1.5-.5 3-2.5 3-4.5S10.5 2 8 2Z"
-        fill="#E8453A"
-      />
-      {/* Left claw */}
-      <path
-        d="M3.5 5.5C2 5 1 6 1.5 7s2 .5 2.2-.7"
-        fill="#FF6B5A"
-      />
-      {/* Right claw */}
-      <path
-        d="M12.5 5.5c1.5-.5 2.5.5 2 1.5s-2 .5-2.2-.7"
-        fill="#FF6B5A"
-      />
-      {/* Antennae */}
-      <path d="M6.5 3Q5 1.2 4.3 1.5" stroke="#FF6B5A" strokeWidth="0.8" strokeLinecap="round" />
-      <path d="M9.5 3Q11 1.2 11.7 1.5" stroke="#FF6B5A" strokeWidth="0.8" strokeLinecap="round" />
-      {/* Eyes */}
-      <circle cx="6.2" cy="5.2" r="0.9" fill="#050810" />
-      <circle cx="9.8" cy="5.2" r="0.9" fill="#050810" />
-      <circle cx="6.4" cy="5" r="0.3" fill="#00E5CC" />
-      <circle cx="10" cy="5" r="0.3" fill="#00E5CC" />
-    </svg>
-  );
-}
 
-// Hermes (NousResearch) — official anime mascot, 48×48 webp embedded as data URI
-const HERMES_ICON =
-  "data:image/webp;base64,UklGRuYDAABXRUJQVlA4INoDAADQEwCdASowADAAPm0uk0ckIiGhKrqpWIANiWkAEyQea/fD8IewvGL5V7Nb3H8u/MA8G9rT+4flL+UfIe42/23GB8zPqF/o3E0UAP5h/h/+F6ZX+x5evnX/r+4T/K/67/u/zg7znogfrusMANZLkn1gvlY/vNsKubtj/9xLSzxTsLr7K9GLdFNs5rwtISRcPXvH4z57n2fg0XR3aQ2D+pPpycwyl7TwAAD+/2DbjivnePzfyHCsdOgJXKlUR/OgAkofD7K4AdmsPKyP5Ml4/4HBYmIm5/efn/H+X3IZtngyaUOvwbFuRS/1yODFYO3vf3qeXGgPdfgIROXd/EPT7K2jysfvY9N71+w6g2gBPs+P6lxYkPf6S9QfpvH/7Pp7i8xRh0nVDBTEQyczSz7V9hoqo4nDJuii+SfibZRR/d5zB+9jkcb1DNN7YnC5Y7+WfGrE3eseXt3hSm+NS5++m1MHbjsrd9z/Q4HPRP/C85Po41XObalGyIUcFUL2j2n3uI/Yh6U8r6trCUJFB4kT3fsv6+8ylX/d96y2hq869FCXLjq4YqEO8vs5BtT52sf7KyDxPAWkH/b06YbfVXf4/7y5THL6Sr/4mOrrY9P2LW81f05HHFN8n0jcyqKOH7AluMm0AHPgFyz8RVrfBdmnPiC2FLMQfNDte5yGFzGC3fMlDed/tS/PO3Q/hjsNLvAXUUjqHyCo3JeN69jyNgWjjf8iUqoBsXT+lJyp2r8p60ad1jxhNyTblyJwda8aWEw1hFDeGjpMGguDF66RL4c+ZO+PhculC6WxvCsZ7IPAsdD7/ywx3w3AowJ66hAAK7k+m6X2QV06OVOCwyIGERex/AUyuBbLUK93X58+M+Si7YfYjVYGpoJ7JvSgD8ExaA21z9OY+si+1wreacDanKnFDmhwBQC3t6MLeXCOGp3VURDKl10K7tdKHQcb4hr48ba+1x/MrMRwHfq3IQrDIXPYCg4b0OLnVN9JyXttKGM63B5imIdKuU0r6hhSslT10lGLjnIJuwO5WKR0RHs+BX5vs6H63y3K7IuuZ1eRN+Aczvbs4QuDs6ZRuzjJ/1DJ5R/3ZrFPrtxvMwT06vAXIgcbhLGNLhOQUYRPdUN5MgyCtL5NH71ArTPLRRkIjhGwoCYXKKqlqIKKT9NX3vwp/nlh4SX71dlYg/mPXbJ9bMeVugyjqFahjFTJ/rT3HtBCWG8h+OvvbOFDFKurCG9BOhO9B719OS7zsP0KPqoymnv7hVvoJyZp0iziCbBvaJpmF9Cvfs8/vWqWr7TUo616WfMW+X9nkgpuqtnfAAAAAA==";
-
-function HermesLogo({ className }: { className: string }) {
-  return (
-    <img
-      src={HERMES_ICON}
-      alt="Hermes"
-      className={`${className} rounded-sm`}
-    />
-  );
-}
 
 // Pi (pi.dev) — official pixel-art "pi" wordmark, sourced from pi.dev/logo.svg
 function PiLogo({ className }: { className: string }) {
@@ -89,14 +46,6 @@ function PiLogo({ className }: { className: string }) {
   );
 }
 
-// GitHub Copilot — GitHub mark (Invertocat)
-function CopilotLogo({ className }: { className: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
-      <path d="M12 1C5.9225 1 1 5.9225 1 12C1 16.8675 4.14875 20.9787 8.52125 22.4362C9.07125 22.5325 9.2775 22.2025 9.2775 21.9137C9.2775 21.6525 9.26375 20.7862 9.26375 19.865C6.5 20.3737 5.785 19.1912 5.565 18.5725C5.44125 18.2562 4.905 17.28 4.4375 17.0187C4.0525 16.8125 3.5025 16.3037 4.42375 16.29C5.29 16.2762 5.90875 17.0875 6.115 17.4175C7.105 19.0812 8.68625 18.6137 9.31875 18.325C9.415 17.61 9.70375 17.1287 10.02 16.8537C7.5725 16.5787 5.015 15.63 5.015 11.4225C5.015 10.2262 5.44125 9.23625 6.1425 8.46625C6.0325 8.19125 5.6475 7.06375 6.2525 5.55125C6.2525 5.55125 7.17375 5.2625 9.2775 6.67875C10.1575 6.43125 11.0925 6.3075 12.0275 6.3075C12.9625 6.3075 13.8975 6.43125 14.7775 6.67875C16.8813 5.24875 17.8025 5.55125 17.8025 5.55125C18.4075 7.06375 18.0225 8.19125 17.9125 8.46625C18.6138 9.23625 19.04 10.2125 19.04 11.4225C19.04 15.6437 16.4688 16.5787 14.0213 16.8537C14.42 17.1975 14.7638 17.8575 14.7638 18.8887C14.7638 20.36 14.75 21.5425 14.75 21.9137C14.75 22.2025 14.9563 22.5462 15.5063 22.4362C19.8513 20.9787 23 16.8537 23 12C23 5.9225 18.0775 1 12 1Z" />
-    </svg>
-  );
-}
 
 // Cursor — official brand logo from Cursor brand assets
 function CursorLogo({ className }: { className: string }) {
@@ -112,46 +61,8 @@ function CursorLogo({ className }: { className: string }) {
   );
 }
 
-// Kimi (Moonshot AI) — wordmark "K" mark in Moonshot brand purple, simple
-// rounded-square logotype suitable for small icon sizes.
-function KimiLogo({ className }: { className: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className}>
-      <rect width="24" height="24" rx="5" fill="#1F1147" />
-      <path
-        d="M7.2 6h2.4v5.1l4.3-5.1h2.9l-4.4 5.1L17 18h-2.9l-3.2-5.2-1.3 1.5V18H7.2V6z"
-        fill="#FFFFFF"
-      />
-    </svg>
-  );
-}
 
-// Gemini (Google) — official "Google Gemini" mark from Simple Icons
-// (simpleicons.org/icons/googlegemini.svg, CC0 1.0). Rendered in the
-// Simple Icons brand color (#8E75B2), matching the pattern used by the
-// other provider marks in this file.
-function GeminiLogo({ className }: { className: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="#8E75B2" className={className}>
-      <path d="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81" />
-    </svg>
-  );
-}
 
-// Antigravity (Google) — official mark, shipped as a PNG asset next to
-// this file. Different bundlers type the PNG import differently — Next.js
-// gives a StaticImageData object (.src), electron-vite + plain vite give
-// a string. Normalise via unknown so neither side's narrower type wins
-// and breaks the other's typecheck.
-import antigravityLogo from "./antigravity-logo.png";
-const antigravityLogoSrc: string = (() => {
-  const asset = antigravityLogo as unknown;
-  return typeof asset === "string" ? asset : (asset as { src: string }).src;
-})();
-
-function AntigravityLogo({ className }: { className: string }) {
-  return <img src={antigravityLogoSrc} alt="Antigravity" className={className} />;
-}
 
 // Kiro CLI — official icon sourced from kiro.dev/icon.svg.
 function KiroLogo({ className }: { className: string }) {
@@ -234,30 +145,16 @@ export function ProviderLogo({
   switch (provider) {
     case "claude":
       return <ClaudeLogo className={className} />;
-    case "codebuddy":
-      return <ClaudeLogo className={className} />;
     case "codex":
       return <CodexLogo className={className} />;
     case "opencode":
       return <OpenCodeLogo className={className} />;
-    case "openclaw":
-      return <OpenClawLogo className={className} />;
-    case "hermes":
-      return <HermesLogo className={className} />;
     case "pi":
       return <PiLogo className={className} />;
-    case "copilot":
-      return <CopilotLogo className={className} />;
     case "cursor":
       return <CursorLogo className={className} />;
-    case "kimi":
-      return <KimiLogo className={className} />;
     case "kiro":
       return <KiroLogo className={className} />;
-    case "gemini":
-      return <GeminiLogo className={className} />;
-    case "antigravity":
-      return <AntigravityLogo className={className} />;
     case "grok":
       return <GrokLogo className={className} />;
     default:

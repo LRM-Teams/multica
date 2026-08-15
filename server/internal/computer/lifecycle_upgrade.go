@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type UpgradeRoute string
@@ -31,6 +33,10 @@ type UpgradeOptions struct {
 	TargetVersion   string
 	RequestID       string
 	DownloadTimeout time.Duration
+	// CreateLiveIntent records the human-authorized server operation before a
+	// running Computer is asked to execute it. The server operation ID is the
+	// shared identity used by both the Daemon WS and loopback delivery paths.
+	CreateLiveIntent func(context.Context, string, string, string) (map[string]any, error)
 }
 
 // UpgradeResult distinguishes a live canonical operation from an offline
@@ -63,7 +69,7 @@ func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (Upgrad
 	}
 
 	if health := l.upgradeHealth(ctx); Alive(health) {
-		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget)
+		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget, options.CreateLiveIntent)
 	}
 	if err := rejectLivePIDWithoutControl(l.view().pidPath); err != nil {
 		return UpgradeResult{}, err
@@ -110,7 +116,7 @@ func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (Upgrad
 		if !Alive(health) {
 			return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: Computer ownership changed while routing the upgrade; retry")
 		}
-		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget)
+		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget, options.CreateLiveIntent)
 	}
 	return result, nil
 }
@@ -159,19 +165,50 @@ func (l *Lifecycle) requestLiveUpgrade(
 	ctx context.Context,
 	health map[string]any,
 	requestID, targetVersion string,
+	createIntent func(context.Context, string, string, string) (map[string]any, error),
 ) (UpgradeResult, error) {
 	daemonID, _ := health["daemon_id"].(string)
 	daemonID = strings.TrimSpace(daemonID)
 	if daemonID == "" {
 		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live Computer did not prove its machine identity")
 	}
+	if createIntent == nil {
+		return UpgradeResult{}, errors.New("live Computer upgrade requires a human-authorized server lifecycle intent")
+	}
+	operation, err := createIntent(ctx, daemonID, requestID, targetVersion)
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("create Computer upgrade lifecycle intent: %w", err)
+	}
+	operationID, _ := operation["id"].(string)
+	operationID = strings.TrimSpace(operationID)
+	if operationID == "" {
+		return UpgradeResult{}, errors.New("Computer upgrade lifecycle intent is missing operation id")
+	}
+	if operationComputerID, _ := operation["daemon_id"].(string); strings.TrimSpace(operationComputerID) != "" && !strings.EqualFold(strings.TrimSpace(operationComputerID), daemonID) {
+		return UpgradeResult{}, errors.New("Computer upgrade lifecycle intent belongs to another Computer")
+	}
+	operationRequestID, _ := operation["request_id"].(string)
+	if strings.TrimSpace(operationRequestID) != requestID {
+		return UpgradeResult{}, fmt.Errorf("Computer upgrade lifecycle intent has request id %q, want %q", operationRequestID, requestID)
+	}
+	operationTarget, _ := operation["requested_target"].(string)
+	if strings.TrimSpace(operationTarget) != targetVersion {
+		return UpgradeResult{}, fmt.Errorf("Computer upgrade lifecycle intent has target %q, want %q", operationTarget, targetVersion)
+	}
+	phase, _ := operation["phase"].(string)
+	if strings.TrimSpace(phase) == "" {
+		return UpgradeResult{}, errors.New("Computer upgrade lifecycle intent is missing operation phase")
+	}
+	resolvedTarget, _ := operation["resolved_target"].(string)
+	if strings.TrimSpace(resolvedTarget) == "" {
+		resolvedTarget = operationTarget
+	}
 	controlToken, err := ReadControlToken("")
 	if err != nil {
 		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: read owner control credential: %w", err)
 	}
-	body, err := json.Marshal(map[string]string{
-		"request_id":     requestID,
-		"target_version": targetVersion,
+	body, err := json.Marshal(protocol.ComputerUpgradePayload{
+		RequestID: requestID, OperationID: operationID, TargetVersion: targetVersion,
 	})
 	if err != nil {
 		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: encode owner request: %w", err)
@@ -201,24 +238,16 @@ func (l *Lifecycle) requestLiveUpgrade(
 			strings.TrimSpace(string(message)),
 		)
 	}
-	var operation map[string]any
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&operation); err != nil {
+	var acceptance map[string]any
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&acceptance); err != nil {
 		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: decode live owner response: %w", err)
 	}
-	operationID, _ := operation["id"].(string)
-	if strings.TrimSpace(operationID) == "" {
+	acceptedOperationID, _ := acceptance["id"].(string)
+	if strings.TrimSpace(acceptedOperationID) == "" {
 		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live owner response is missing operation id")
 	}
-	phase, _ := operation["phase"].(string)
-	if strings.TrimSpace(phase) == "" {
-		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live owner response is missing operation phase")
-	}
-	resolvedTarget, _ := operation["resolved_target"].(string)
-	if strings.TrimSpace(resolvedTarget) == "" {
-		resolvedTarget, _ = operation["requested_target"].(string)
-	}
-	if strings.TrimSpace(resolvedTarget) == "" {
-		resolvedTarget = targetVersion
+	if strings.TrimSpace(acceptedOperationID) != operationID {
+		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live owner accepted operation %q, want %q", acceptedOperationID, operationID)
 	}
 	return UpgradeResult{
 		Route:           UpgradeRouteLive,

@@ -9,8 +9,8 @@ import { useLocale } from "../i18n";
 import {
   ClaudeCodeLogo,
   CodexLogo,
-  GeminiCliLogo,
-  OpenClawLogo,
+  CursorLogo,
+  GrokLogo,
   OpenCodeLogo,
   heroButtonClassName,
 } from "./shared";
@@ -78,12 +78,12 @@ export function LandingHero() {
                 <span className="text-[15px] font-medium">Codex</span>
               </div>
               <div className="flex items-center gap-2.5 text-white/80">
-                <GeminiCliLogo className="size-5" />
-                <span className="text-[15px] font-medium">Gemini CLI</span>
+                <CursorLogo className="size-5" />
+                <span className="text-[15px] font-medium">Cursor</span>
               </div>
               <div className="flex items-center gap-2.5 text-white/80">
-                <OpenClawLogo className="size-5" />
-                <span className="text-[15px] font-medium">OpenClaw</span>
+                <GrokLogo className="size-5" />
+                <span className="text-[15px] font-medium">Grok</span>
               </div>
               <div className="flex items-center gap-2.5 text-white/80">
                 <OpenCodeLogo className="size-5" />

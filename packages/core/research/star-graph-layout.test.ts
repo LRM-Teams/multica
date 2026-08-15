@@ -78,6 +78,64 @@ describe("LRM-1514 star-graph layout — D5 baseline from algorithm", () => {
       expect(n.y).toBeCloseTo(m.y, 6);
     }
   });
+
+  it("spreads a sparse pair across the horizontal field", () => {
+    const layout = layoutStarGraph([
+      { id: "goal", tier: "xxl", clusterId: "main" },
+      { id: "left", tier: "xl", clusterId: "result" },
+      { id: "right", tier: "xl", clusterId: "result" },
+    ]);
+    const left = layout.nodes.find((node) => node.id === "left")!;
+    const right = layout.nodes.find((node) => node.id === "right")!;
+
+    expect(Math.sign(left.x)).not.toBe(Math.sign(right.x));
+    expect(Math.abs(left.x - right.x)).toBeGreaterThan(
+      Math.abs(left.y - right.y),
+    );
+  });
+
+  it("separates a canonical goal origin from the XXL synthesis destination", () => {
+    const layout = layoutStarGraph([
+      { id: "origin", tier: "m", nodeKind: "goal" },
+      { id: "synthesis", tier: "xxl", nodeKind: "finding", clusterId: "result" },
+      { id: "result", tier: "xl", nodeKind: "finding", clusterId: "result" },
+    ]);
+    const origin = layout.nodes.find((node) => node.id === "origin")!;
+    const synthesis = layout.nodes.find((node) => node.id === "synthesis")!;
+
+    expect(layout.rootId).toBe("origin");
+    expect(origin).toMatchObject({ x: 0, y: 0 });
+    expect(synthesis.x).toBeGreaterThan(origin.x);
+  });
+
+  it("includes Agent satellites in cluster territory and renders canonical new directions", () => {
+    const layout = layoutStarGraph(
+      [
+        { id: "goal", tier: "xxl", nodeKind: "goal" },
+        { id: "result", tier: "xl", clusterId: "result" },
+        { id: "agent", tier: "s", parentId: "result" },
+        { id: "frontier", tier: "m" },
+      ],
+      [{ id: "new", fromNodeId: "goal", toNodeId: "frontier", kind: "newdir" }],
+    );
+
+    expect(layout.clusters[0]?.memberIds).toEqual(["agent", "result"]);
+    expect(layout.frontiers?.[0]?.memberIds).toEqual(["frontier"]);
+  });
+
+  it("gives an unclustered goal-led graph enough world-space to remain legible", () => {
+    const layout = layoutStarGraph([
+      { id: "goal", tier: "m", nodeKind: "goal" },
+      { id: "finding-a", tier: "m", nodeKind: "finding" },
+      { id: "finding-b", tier: "m", nodeKind: "finding" },
+      { id: "finding-c", tier: "m", nodeKind: "finding" },
+      { id: "agent", tier: "s", nodeKind: "agent_activity", parentId: "finding-a" },
+    ]);
+    const minX = Math.min(...layout.nodes.map((node) => node.x - node.radius));
+    const maxX = Math.max(...layout.nodes.map((node) => node.x + node.radius));
+
+    expect(maxX - minX).toBeGreaterThanOrEqual(700);
+  });
 });
 
 describe("LRM-1514 quantitative hard gates", () => {
@@ -119,6 +177,9 @@ describe("LRM-1514 quantitative hard gates", () => {
     for (const cluster of layout.clusters) {
       for (const memberId of cluster.memberIds) {
         const node = layout.nodes.find((n) => n.id === memberId)!;
+        // S-tier Agent satellites follow their parent orbit and cluster
+        // containment contracts, not the stable-result sector heuristic.
+        if (node.tier === "s") continue;
         const dCluster = dist(node.x, node.y, cluster.x, cluster.y);
         const dRoot = dist(node.x, node.y, 0, 0);
         expect(dCluster).toBeLessThan(dRoot);

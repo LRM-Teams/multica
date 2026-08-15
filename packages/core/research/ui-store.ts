@@ -8,6 +8,9 @@ import { defaultStorage } from "../platform/storage";
 import { DEFAULT_RESEARCH_D5_LENS, type ResearchD5Lens } from "./d5-lens";
 
 export type ResearchD5RailMode = "chat" | "detail";
+export type ResearchD5Overlay =
+  | { sessionId: string; kind: "agent"; agentId: string }
+  | { sessionId: string; kind: "report" };
 
 type ResearchUiState = {
   chatDrawerOpen: boolean;
@@ -21,6 +24,9 @@ type ResearchUiState = {
   /** Active D5 display lens (URL + store; display-only). */
   d5Lens: ResearchD5Lens;
   setD5Lens: (lens: ResearchD5Lens) => void;
+  /** Session-scoped transient inspector surface; deliberately not persisted. */
+  d5Overlay: ResearchD5Overlay | null;
+  setD5Overlay: (overlay: ResearchD5Overlay | null) => void;
 };
 
 export const useResearchUiStore = create<ResearchUiState>()(
@@ -35,6 +41,8 @@ export const useResearchUiStore = create<ResearchUiState>()(
       setD5RailMode: (mode) => set({ d5RailMode: mode }),
       d5Lens: DEFAULT_RESEARCH_D5_LENS,
       setD5Lens: (lens) => set({ d5Lens: lens }),
+      d5Overlay: null,
+      setD5Overlay: (overlay) => set({ d5Overlay: overlay }),
     }),
     {
       name: "multica_research_ui_v4",

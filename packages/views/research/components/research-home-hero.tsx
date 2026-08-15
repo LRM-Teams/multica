@@ -13,9 +13,11 @@ import { useT } from "../../i18n/use-t";
  */
 export function ResearchHomeHero({
   children,
+  preview,
   className,
 }: {
   children?: ReactNode;
+  preview?: ReactNode;
   className?: string;
 }) {
   const { t } = useT("research");
@@ -26,24 +28,27 @@ export function ResearchHomeHero({
       data-testid="research-home-hero"
       aria-label={t(($) => $.home.composer_label)}
     >
-      <div className="relative flex flex-col gap-3 md:gap-3.5">
-        <div className="flex items-start gap-2.5">
+      <div className="research-home-launch grid lg:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.85fr)]">
+        <div className="relative flex min-w-0 flex-col gap-3 overflow-hidden p-4 md:p-5 lg:p-6">
+        <div className="flex items-center gap-2.5">
           <span
-            className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-brand/12 text-brand"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand/12 text-brand"
             aria-hidden
           >
-            <Compass className="size-[19px]" strokeWidth={2} />
+            <Compass className="size-4" strokeWidth={2} />
           </span>
           <div className="min-w-0 flex-1">
-            <h1 className="text-xl font-medium tracking-tight text-foreground md:text-2xl">
+            <h2 className="line-clamp-2 text-sm font-medium tracking-tight text-foreground sm:text-base md:text-xl">
               {t(($) => $.home.hero_title)}
-            </h1>
-            <p className="mt-0.5 text-sm leading-snug text-muted-foreground md:line-clamp-1 md:leading-relaxed">
+            </h2>
+            <p className="mt-1 hidden line-clamp-1 text-xs text-muted-foreground md:block">
               {t(($) => $.home.hero_desc)}
             </p>
           </div>
         </div>
         {children}
+        </div>
+        {preview}
       </div>
     </section>
   );

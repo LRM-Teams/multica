@@ -38,12 +38,44 @@ func TestWithdrawnPassportExcludedFromDispatchManifestPlan(t *testing.T) {
 	claimID := uuid.NewString()
 	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "withdrawn-claim", "withdrawn claim")
 
-	if _, err = pool.Exec(ctx, `
-		UPDATE research_artifact_passport
-		SET lifecycle_status = 'withdrawn'
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
-		t.Fatalf("withdraw passport: %v", err)
+	operationID := uuid.NewString()
+	outcome, err := (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: operationID, WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: claimID, Kind: artifactLifecycleWithdraw, Reason: "integration withdrawal",
+	})
+	if err != nil {
+		t.Fatalf("withdraw through lifecycle module: %v", err)
+	}
+	replayed, err := (artifactLifecycleModule{store: store}).Change(ctx, artifactLifecycleChange{
+		OperationID: operationID, WorkspaceID: fixture.workspaceID, SessionID: run.SessionID,
+		ArtifactID: claimID, Kind: artifactLifecycleWithdraw, Reason: "integration withdrawal",
+	})
+	if err != nil || !replayed.Replayed || replayed != (artifactLifecycleOutcome{
+		ArtifactID: outcome.ArtifactID, Lifecycle: outcome.Lifecycle,
+		EligibilityRevision: outcome.EligibilityRevision, PolicyWatermark: outcome.PolicyWatermark, Replayed: true,
+	}) {
+		t.Fatalf("withdraw replay=%+v err=%v initial=%+v", replayed, err, outcome)
+	}
+	oldRevision, newRevision, withdrawalWatermark := outcome.EligibilityRevision-1, outcome.EligibilityRevision, outcome.PolicyWatermark
+	var lifecycleEvents, policyMutations int
+	if err = pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_lifecycle_event
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid
+		     AND old_status='registered' AND new_status='withdrawn'
+		     AND old_eligibility_revision=$4 AND new_eligibility_revision=$5
+		     AND policy_watermark=$6),
+		  (SELECT count(*)::int FROM research_artifact_policy_mutation
+		   WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid
+		     AND mutation_kind='lifecycle'
+		     AND old_eligibility_revision=$4 AND new_eligibility_revision=$5
+		     AND old_lifecycle_status='registered' AND new_lifecycle_status='withdrawn'
+		     AND watermark=$6)
+	`, fixture.workspaceID, run.SessionID, claimID, oldRevision, newRevision, withdrawalWatermark).Scan(&lifecycleEvents, &policyMutations); err != nil {
+		t.Fatalf("load withdrawal ledger: %v", err)
+	}
+	if lifecycleEvents != 1 || policyMutations != 1 {
+		t.Fatalf("withdrawal ledger events=%d mutations=%d want 1/1", lifecycleEvents, policyMutations)
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -78,6 +110,76 @@ func TestWithdrawnPassportExcludedFromDispatchManifestPlan(t *testing.T) {
 	if !foundOmission {
 		t.Fatal("expected withdrawn claim in manifest omissions with lifecycle reason")
 	}
+}
+
+func withdrawIntegrationArtifact(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, artifactID string,
+) (oldRevision, newRevision, watermark int64) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var lockedSessionID string
+	if err = tx.QueryRow(ctx, `
+		SELECT id::text FROM research_session
+		WHERE workspace_id=$1::uuid AND id=$2::uuid
+		FOR UPDATE
+	`, workspaceID, sessionID).Scan(&lockedSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.QueryRow(ctx, `
+		SELECT research_artifact_policy_watermark_for_tx($1::uuid, $2::uuid)
+	`, workspaceID, sessionID).Scan(&watermark); err != nil {
+		t.Fatal(err)
+	}
+	var oldStatus string
+	if err = tx.QueryRow(ctx, `
+		SELECT lifecycle_status, eligibility_revision
+		FROM research_artifact_passport
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		FOR UPDATE
+	`, workspaceID, sessionID, artifactID).Scan(&oldStatus, &oldRevision); err != nil {
+		t.Fatal(err)
+	}
+	if oldStatus != string(ArtifactLifecycleRegistered) {
+		t.Fatalf("artifact lifecycle=%q want registered", oldStatus)
+	}
+	newRevision = oldRevision + 1
+	if _, err = tx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET lifecycle_status='withdrawn', eligibility_revision=$4
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		  AND lifecycle_status='registered' AND eligibility_revision=$5
+	`, workspaceID, sessionID, artifactID, newRevision, oldRevision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision,
+		  old_lifecycle_status, new_lifecycle_status
+		) VALUES ($1::uuid,$2::uuid,$3,'lifecycle',$4::uuid,$5,$6,'registered','withdrawn')
+	`, workspaceID, sessionID, watermark, artifactID, oldRevision, newRevision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_artifact_lifecycle_event (
+		  workspace_id, session_id, artifact_id, old_status, new_status,
+		  old_eligibility_revision, new_eligibility_revision, policy_watermark,
+		  actor_type, reason
+		) VALUES ($1::uuid,$2::uuid,$3::uuid,'registered','withdrawn',$4,$5,$6,'system','integration withdrawal')
+	`, workspaceID, sessionID, artifactID, oldRevision, newRevision, watermark); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return oldRevision, newRevision, watermark
 }
 
 func TestCreateDispatchIntentRejectsStaleStateVersionWithoutArtifacts(t *testing.T) {

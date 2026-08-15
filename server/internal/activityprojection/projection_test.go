@@ -45,12 +45,36 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 	}
 }
 
+func TestActivityKindFromDetailKindOwnsDaemonFactReduction(t *testing.T) {
+	cases := []struct {
+		detail string
+		want   string
+	}{
+		{detail: "idle", want: protocol.ActivityKindOnline},
+		{detail: "ready", want: protocol.ActivityKindOnline},
+		{detail: "thinking_started", want: protocol.ActivityKindThinking},
+		{detail: "model_response_started", want: protocol.ActivityKindWorking},
+		{detail: "running_command", want: protocol.ActivityKindWorking},
+		{detail: "runtime_error", want: protocol.ActivityKindError},
+		{detail: "runtime_crashed", want: protocol.ActivityKindError},
+		{detail: "runtime_unavailable", want: protocol.ActivityKindOffline},
+		{detail: "machine_disconnected", want: protocol.ActivityKindOffline},
+		{detail: "stopped", want: protocol.ActivityKindOffline},
+	}
+	for _, tc := range cases {
+		if got := ActivityKindFromDetailKind(tc.detail); got != tc.want {
+			t.Fatalf("ActivityKindFromDetailKind(%q) = %q, want %q", tc.detail, got, tc.want)
+		}
+	}
+}
+
 func TestProjectSummaryUsesLifecycleToneVocabulary(t *testing.T) {
 	cases := []struct {
 		kind, detail, want string
 	}{
 		{protocol.ActivityKindOnline, "idle", "success"},
 		{protocol.ActivityKindWorking, "message_received", "warning"},
+		{protocol.ActivityKindWorking, "running_command", "running"},
 		{protocol.ActivityKindError, "runtime_error", "error"},
 		{protocol.ActivityKindOffline, "machine_disconnected", "neutral"},
 	}
@@ -76,7 +100,7 @@ func TestTimelineRowFromSnapshotHasNoProviderBody(t *testing.T) {
 		ActivityKind: protocol.ActivityKindWorking,
 		DetailKind:   "running_command",
 	})
-	if row.Title != "Running command..." || row.BodyKind != "none" || row.Body != "" || row.Subtext != "" {
+	if row.Title != "Running command..." || row.Tone != "running" || row.BodyKind != "none" || row.Body != "" || row.Subtext != "" {
 		t.Fatalf("snapshot row = %+v, want bounded presentation without provider detail", row)
 	}
 }
@@ -95,15 +119,15 @@ func TestProjectTimelineEntryUsesGenericFallbackAndBoundsText(t *testing.T) {
 
 func TestProjectTimelineEntryUsesEventLocalLifecycleInsteadOfLatestSnapshot(t *testing.T) {
 	latest := Summary{Label: "Online", Tone: "success", Visibility: "visible"}
-	message := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Message received","activity_kind":"working","detail_kind":"message_received"}`)}, latest)
+	message := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Message received","detail_kind":"message_received"}`)}, latest)
 	if message.Title != "Working" || message.Subtext != "Message received" || message.Tone != "warning" || message.BodyKind != "none" {
 		t.Fatalf("message row = %+v", message)
 	}
-	errorRow := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Runtime error","activity_kind":"error","detail_kind":"runtime_error"}`)}, latest)
+	errorRow := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Runtime error","detail_kind":"runtime_error"}`)}, latest)
 	if errorRow.Title != "Error" || errorRow.Subtext != "Runtime error" || errorRow.Tone != "error" {
 		t.Fatalf("error row = %+v", errorRow)
 	}
-	idle := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Idle","activity_kind":"online","detail_kind":"idle"}`)}, Summary{Label: "Error", Tone: "error"})
+	idle := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Idle","detail_kind":"idle"}`)}, Summary{Label: "Error", Tone: "error"})
 	if idle.Title != "Idle" || idle.Subtext != "Idle" || idle.Tone != "success" {
 		t.Fatalf("idle row = %+v", idle)
 	}
@@ -111,13 +135,13 @@ func TestProjectTimelineEntryUsesEventLocalLifecycleInsteadOfLatestSnapshot(t *t
 
 func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
 	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"pnpm test","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
-	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "warning" || row.BodyKind != "none" {
+	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "running" || row.BodyKind != "command" {
 		t.Fatalf("command row = %+v, want title Running command with the command as subtext", row)
 	}
 	// The generic label narrative (no command in the tool input) must not
 	// echo the title as its own subtext.
 	plain := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Running command","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
-	if plain.Title != "Running command" || plain.Subtext != "" {
+	if plain.Title != "Running command" || plain.Subtext != "" || plain.Tone != "running" || plain.BodyKind != "command" {
 		t.Fatalf("generic command row = %+v, want no subtext", plain)
 	}
 }

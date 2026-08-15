@@ -1,22 +1,61 @@
 "use client";
 
+import { useId } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
 import type { StarRelationView } from "../lib/star-canvas-view-model";
-import { quadraticEdgePath, relationEdgeClass } from "./star-graph-canvas-utils";
+import {
+  isEdgeLabelClear,
+  quadraticEdgePath,
+  relationEdgeClass,
+} from "./star-graph-canvas-utils";
+
+const EMPTY_LABEL_OBSTACLES: readonly {
+  id: string;
+  x: number;
+  y: number;
+  radius: number;
+}[] = [];
 
 export function StarGraphEdges({
   relations,
   width,
   height,
   lensHints,
+  relationLabels,
+  labelObstacles = EMPTY_LABEL_OBSTACLES,
 }: {
   relations: readonly StarRelationView[];
   width: number;
   height: number;
   lensHints?: D5LensDisplayHints;
+  relationLabels?: Partial<Record<StarRelationView["kind"], string>>;
+  labelObstacles?: readonly { id: string; x: number; y: number; radius: number }[];
 }) {
+  const idPrefix = useId().replaceAll(":", "");
   if (relations.length === 0 || width <= 0 || height <= 0) return null;
+
+  // Labels are navigation aids, not canonical facts. Show at most one
+  // representative label per visible visual family, plus a small number of
+  // explicitly emphasized relations. Unknown/neutral and fusion relations
+  // stay unlabeled until the product has truthful localized names for them.
+  const labelIndexes = new Set<number>();
+  const representedFamilies = new Set<StarRelationView["kind"]>();
+  for (let index = 0; index < relations.length; index += 1) {
+    const relation = relations[index]!;
+    const labelKind = truthfulLabelKind(relation);
+    if (labelKind && !representedFamilies.has(labelKind)) {
+      labelIndexes.add(index);
+      representedFamilies.add(labelKind);
+    }
+  }
+  let emphasizedLabelCount = 0;
+  for (let index = 0; index < relations.length && emphasizedLabelCount < 4; index += 1) {
+    if (lensHints?.emphasizedRelationIds.has(relations[index]!.id)) {
+      labelIndexes.add(index);
+      emphasizedLabelCount += 1;
+    }
+  }
 
   return (
     <svg
@@ -32,20 +71,48 @@ export function StarGraphEdges({
           <stop offset="1" stopColor="var(--research-lane-2)" />
         </linearGradient>
       </defs>
-      {relations.map((relation) => (
-        <path
-          key={relation.id}
-          data-testid={`star-graph-edge-${relation.id}`}
-          data-kind={relation.kind}
-          data-edge-type={relation.edgeType}
-          className={cn(
-            relationEdgeClass(relation.kind, relation.edgeType),
-            lensHints?.dimmedRelationIds.has(relation.id) && "sg-lens-dim",
-            lensHints?.emphasizedRelationIds.has(relation.id) && "sg-lens-emphasis",
-          )}
-          d={quadraticEdgePath(relation.from, relation.to)}
-        />
-      ))}
+      {relations.map((relation, index) => {
+        const pathId = `${idPrefix}-edge-${index}`;
+        const path = quadraticEdgePath(relation.from, relation.to);
+        const labelKind = truthfulLabelKind(relation);
+        return (
+          <g key={relation.id}>
+            <path
+              id={pathId}
+              data-testid={`star-graph-edge-${relation.id}`}
+              data-kind={relation.kind}
+              data-edge-type={relation.edgeType}
+              className={cn(
+                relationEdgeClass(relation.kind, relation.edgeType),
+                lensHints?.dimmedRelationIds.has(relation.id) && "sg-lens-dim",
+                lensHints?.emphasizedRelationIds.has(relation.id) && "sg-lens-emphasis",
+              )}
+              d={path}
+            />
+            {labelKind &&
+              labelIndexes.has(index) &&
+              relationLabels?.[labelKind] &&
+              isEdgeLabelClear(relation, labelObstacles) ? (
+              <text className="sg-edge-label">
+                <textPath href={`#${pathId}`} startOffset="50%" textAnchor="middle">
+                  {relationLabels[labelKind]}
+                </textPath>
+              </text>
+            ) : null}
+          </g>
+        );
+      })}
     </svg>
   );
+}
+
+function truthfulLabelKind(
+  relation: StarRelationView,
+): StarRelationView["kind"] | null {
+  const visualClass = relationEdgeClass(relation.kind, relation.edgeType);
+  if (visualClass === "sg-edge-decompose") return "decompose";
+  if (visualClass === "sg-edge-support") return "support";
+  if (visualClass === "sg-edge-challenge") return "challenge";
+  if (visualClass === "sg-edge-newdir") return "newdir";
+  return null;
 }

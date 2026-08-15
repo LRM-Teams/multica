@@ -40,7 +40,9 @@ func newMessageSendCmd() *cobra.Command {
 			"draft. Do not automatically retry it. After reviewing the newer context, choose one " +
 			"path: revise with a normal send, `multica message send --send-draft` for the saved " +
 			"draft unchanged, or send nothing. Use `--send-draft --anyway` only after repeated " +
-			"holds when that draft is still correct.",
+			"holds when that draft is still correct. To propose a workspace note for human confirm, " +
+			"add `--note-write` and pipe only the cleaned note markdown; omit `--note-page-id` unless " +
+			"the human specified a page.",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
@@ -48,6 +50,8 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().Bool("send-draft", false, "Send the current local Draft for this target")
 	cmd.Flags().Bool("anyway", false, "Send a saved Draft despite the freshness check")
 	cmd.Flags().String("kind", "", "Structured output kind (content|confirmation|status|handoff|delegation|review|deliverable)")
+	cmd.Flags().Bool("note-write", false, "Propose a product-note write for human confirm (create note, or insert/child when --note-page-id is set)")
+	cmd.Flags().String("note-page-id", "", "Existing note page id to target; requires --note-write")
 	return cmd
 }
 
@@ -263,7 +267,7 @@ func runAgentMessageSendWithWriter(cmd *cobra.Command, output io.Writer) error {
 		return fmt.Errorf("--anyway is only valid with --send-draft")
 	}
 	if sendDraft {
-		for _, name := range []string{"attachment-id", "kind"} {
+		for _, name := range []string{"attachment-id", "kind", "note-write", "note-page-id"} {
 			if cmd.Flags().Changed(name) {
 				return fmt.Errorf("--send-draft does not accept --%s; it reuses the saved payload", name)
 			}
@@ -306,6 +310,17 @@ func runAgentMessageSendWithWriter(cmd *cobra.Command, output io.Writer) error {
 			return fmt.Errorf("invalid --kind %q; use content|confirmation|status|handoff|delegation|review|deliverable", kind)
 		}
 		body["kind"] = normalized
+	}
+	noteWrite, _ := cmd.Flags().GetBool("note-write")
+	notePageID := strings.TrimSpace(flagString(cmd, "note-page-id"))
+	if notePageID != "" && !noteWrite {
+		return fmt.Errorf("--note-page-id requires --note-write")
+	}
+	if noteWrite {
+		body["note_write"] = true
+		if notePageID != "" {
+			body["note_page_id"] = notePageID
+		}
 	}
 	// Raft-aligned: chat send identity is minted by the Credential Proxy
 	// (independent uuid / draft reuse). CLI does not stamp turn batch keys.

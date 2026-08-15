@@ -199,6 +199,10 @@
 - **契约**：workspace 导航 = `bg-sidebar`；会话列表 = `bg-background`。LRM-551 lock A（两列同走 sidebar chrome）已否——同色会把导航和会话列表糊成一块。
 - **物**：`conversation-sidebar-styles.ts` 的 `CONVERSATION_LIST_PANE_BG` / 行选中 `bg-muted` / hover `bg-accent`；`channels-page-list-bg.test.ts` + `conversation-sidebar-styles.test.ts`。规范源：`docs/design-product-surfaces.md`。
 
+### 2.10 群聊 @ 候选不含发送者本人 — `可执行`（⑤）
+- **契约**：群聊 composer 的 @ picker 不列出当前登录用户。@自己不是有效的 notify/wake 目标，排在列表里是噪声。Issue 评论、agent 候选、以及 DM 的 peer-only allowlist 不走这条。
+- **物**：`buildGroupMentionAllowedActorIds({ viewerUserId })` 从本地 allowlist 删除 viewer；`ListChannelMentionCandidates` 从 in-channel 页删除 viewer（服务端列表会盖过本地 sync）；`channels-page` fetch 映射再滤一层；`mention-scope.test.ts` + `mention-suggestion.test.tsx` + `channel_mention_candidates_test.go` 锁住。
+
 ## 3. 属性显示（跨面）
 
 ### 3.1 本家属性语法 — `可执行`（task #518）
@@ -241,7 +245,7 @@
 - **Computer 生命周期所有权**：升级、重启和其他整机 mutation 只由 Computer owner 发起；Workspace owner/admin 只管理自己的 Workspace，不因页面中可见一台 Computer 就取得别人电脑的控制权。Workspace 页面只是发起入口和状态投影；一次 Computer 升级对该环境下全部 active Workspace connections 生效，所有连接必须看到同一 operation、版本和结果，禁止按发起 Workspace 分叉升级 lineage。
 - **Computer 升级只有一个 CLI 入口**：`multica computer upgrade` 先探测本机 resident；live owner 可控时只通过 owner-only loopback control 提交 canonical Machine Upgrade，不自行 stage。只有确认没有 resident owner 时才允许在 machine mutation lock 下离线下载、校验并提交 Active，且结果只表示供下次 Computer start 使用；resident ownership 存在但 control 不可达时必须返回 `upgrade_service_unreachable`，不能离线绕过。顶层 `multica update` 不存在；`--target-version` 是唯一显式包选择，普通升级继续由 production/test 环境固定包源。
 - **Computer 就是 PATH 那一份**：`$HOME/.local/bin/multica` 既是 CLI 也是 Computer。`computer upgrade` 把它换成新文件并留下 `.prev`；start / supervise 跑的也是这份，没有 VersionStore 子进程。
-- **Computer restart 与升级恢复共享单 owner 栅栏**：`computer restart` 只有在旧 resident 的 control port 已证明释放后才能分配并启动 successor；仅成功发送 shutdown 不构成 stop proof。Machine Upgrade 的 `accepted/staged` journal 只可在服务端确认同一 operation、generation、target 及 Runtime/Workspace 集合已 `failed` 后 CAS 清理；上报未 ACK 或身份不匹配必须保留。`handoff/candidate_ready/rollback_pending` 仍要求各自的 successor 或 rollback proof。完整合同与回归见 `docs/machine-upgrade-rollout.md`。
+- **Computer restart 与升级恢复共享单 owner 栅栏**：`computer restart` 只有在旧 resident 的 control port 已证明释放后才能分配并启动 successor；仅成功发送 shutdown 不构成 stop proof。Machine Upgrade 的 `accepted/staged` journal 只可在服务端确认同一 operation、generation、target 及 Runtime/Workspace 集合已 `failed` 后 CAS 清理；上报未 ACK 或身份不匹配必须保留。当前 PATH 版本已不是该 journal 的 source/target 时，不得用旧 journal 拦住启动。完整合同与回归见 `docs/machine-upgrade-rollout.md`。
 - **Computer CLI 单测不得触碰机器级 resident**：`HOME=t.TempDir()` 只能隔离文件，不能隔离固定 control port `19514`。任何会 start/stop/restart Computer 的命令测试必须替换 lifecycle seam，验证意图和结果而不访问真实端口或进程；真实进程测试必须使用显式隔离 control port，并独立证明不会命中默认 resident。
 - **包源随环境固定**：production 只用 `metainfo.json.environments.production` 的稳定版本；test 只用 `metainfo.json.environments.test` 的预发布版本。没有独立 `release_channel` 让用户制造“test 连稳定包”或“production 连预发布包”的组合。带版本 archive/checksum/manifest 不可变；不发布根目录 channel JSON，也不做隐式 fallback。
 - **页面引导**：Computer 页面用 `/api/config.environment` 决定命令类型，用 `daemon_server_url` 和 `daemon_app_url` 分别填 test API/Web origin。production 显示 `multica setup /<workspace>`；test 显示 `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>`。两个值当前可以相同，但协议不强制同源。页面不能读取本机 `~/.multica`，所以首次连接必须把目标写进命令；完成后本机配置保存 active environment。连接卡只保留平台选择、安装命令、setup 命令和等待状态；一行说明 setup 会激活目标环境、连接 Workspace 并启动 Computer。若 setup 将切换已有 active environment，CLI 必须在任何写入或登录前询问，除非自动化显式传 `--yes`。
@@ -346,13 +350,14 @@
 - 升级先把校验过的字节写到 ephemeral scratch，再 `SwapExecutable`：当前文件 rename 成 `.prev`，新文件落到同一 PATH。失败必须把 `.prev` 换回去。回滚只认 `.prev`，不再走 Previous generation CAS。
 - verify / recovery 只能 exec 那个 scratch 文件的 `--version`。`runStageUpdate` 的 status 字符串不是路径；journal `staged_path` 也必须是普通文件，缺失就 restage，不能拿 status 当可执行文件。
 - live resident 是唯一 mutation owner；无 resident 才允许离线 swap。Homebrew prefix 不自替换。
+- live CLI 先用保存的 human session 创建 canonical server operation，再把同一 operation ID 交给 Host loopback；server 的 `computer:upgrade` WS 派发与 loopback 可并发到达，Host 按 operation ID 去重。Workspace execution credential 只接受、推进和 attest 已有 operation，不能反调 human route 创建 operation。
 - **物**：`server/internal/cli/exec_swap.go`、`stage_release.go`、`lifecycle_upgrade.go`；`TestSwapExecutable*`、`TestCommitStagedActivationSwapsInstallPathAndKeepsPrev`、`TestVerifyStagedBinaryUsesScratchPathFromRunStageUpdateStatus`、`TestRecoverStagedJournal*`、offline `computer upgrade` subprocess 证明 PATH + `.prev`。
 
 ### 4.12 Daemon 更新观测必须是单调、持久、可降级的事实 — `可执行`（① PostgreSQL daemon scope + ② typed envelope + ③ daemon 单一 coordinator + ⑤重启/CAS 回归；owner: @Barry）
-- daemon 内只有一个 update-observation coordinator；自动轮询和 server 下发更新都必须通过它写入。每次语义变化先把完整 snapshot 原子持久化到本机，再发布给 HTTP/WS heartbeat；持久化失败时拒绝开始更新、重启或对外宣称新状态。进程重启后创建新 `session_id`，`revision` 从 1 开始；未终结的 `checking|updating` 归一为 `interrupted`，已成功的 `restart_pending` 结果必须重放。
+- daemon 内只有一个 update-observation coordinator；自动轮询和 server 下发更新都必须通过它写入。每次语义变化先把完整 snapshot 原子持久化到本机，再唤醒 current Workspace Runner control heartbeat；持久化失败时拒绝开始更新、重启或对外宣称新状态。进程重启后创建新 `session_id`，`revision` 从 1 开始；未终结的 `checking|updating` 归一为 `interrupted`，已成功的 `restart_pending` 结果必须重放。
 - server 以 `(workspace_id, daemon_id)` 保存 daemon-scope 最新事实。register 采用新 session，同 session 只接受更高 revision；完全相同的重复 revision 是零写入幂等，旧 session/较低 revision 忽略，同 revision 不同 payload fail closed 并保留 daemon liveness。旧 daemon 在 register 时没有 envelope 必须清空旧投影，不能继续显示历史“健康”状态。
 - 配置来源、运行资格、当前 phase、最近 outcome 是四个独立 typed 轴，禁止用一个字符串混写。`observed_at` 只在 daemon 语义变化时更新，server 另记 `received_at`；错误只允许有限枚举 code 与长度受限、去空白的安全摘要，不得上传原始命令输出、环境变量或凭据。runtime API 对新 daemon 返回 typed `auto_update`，对旧/未知/非法未来枚举返回 `null`，不能因此丢掉 runtime 行。
-- **物**：migration 231 `daemon_update_status`、register/heartbeat session-revision CAS、`daemon-update-status.json` atomic snapshot、HTTP+WS change wake、runtime typed projection、old-daemon clear、duplicate-zero-write / stale-session / conflicting-revision / interrupted-replay / malformed-future-enum regressions。此阶段只增加观测，不改变 host default、claim barrier、supervisor 激活或 UI。
+- **物**：migration 231 `daemon_update_status`、register/heartbeat session-revision CAS、`daemon-update-status.json` atomic snapshot、Runner control change wake、runtime typed projection、old-daemon clear、duplicate-zero-write / stale-session / conflicting-revision / interrupted-replay / malformed-future-enum regressions。此阶段只增加观测，不改变 host default、claim barrier、supervisor 激活或 UI。
 
 ### 4.13 Daemon 每个 profile 只能有一个 supervisor 拥有 worker generation — `可执行`（② typed state + ③单一 supervisor + ⑤真实进程回归；owner: @Barry）
 - supervisor 必须在整个生命周期持有每个 profile 唯一的 OS advisory lock，并且是唯一调用 worker `Start`、`Wait`、终止和重启的进程。锁冲突必须在 worker 启动前 fail closed；不能依赖 stale PID 文件判断唯一性，也不能把 child `Process.Release` 后失去退出事实。
@@ -366,12 +371,14 @@
 - 代理 URL 可能携带凭据：持久配置仍走原子 `0600` config；CLI show/set receipt 只能显示 presence，禁止回显原值。没有真实 caller 的“image pull”等能力不得虚报覆盖；新增 subprocess caller 只有继承 canonical daemon env 才自动纳入。
 - **物**：`applyProxyConfig` 的 env-over-config、大小写归一、NO_PROXY 去重+loopback 回归；`taskWakeupDialer` 必须使用 `http.ProxyFromEnvironment`。双向 mutation gate 固定为：配置 `HTTP_PROXY` 时 proxy decision 必须非空（删 Proxy hook 即红）；目标命中 `NO_PROXY` 时 decision 必须为空（强制走 proxy 即红）。
 
-### 4.15 Agent 重启控制面直接替换为 Raft 风格组合 — `仅文档`（新协议尚未落地）
-- 舍弃现有 `agent_lifecycle_operation` 编排，不做适配、双写或兼容层。服务端按 Raft 的边界组合 stop / session reset / workspace reset / start，机器继续用 status / session / Activity 事件表达运行时事实，不另建 phase-event ledger。
-- 复用 Raft 架构不等于继承其丢失窗口：每条命令必须有稳定 ID，破坏性命令必须幂等，Computer 必须持久保留终态并重试到 server ACK；start ACK 只代表受理，ready 只能由后续 status/session 证明。Full Reset 必须先取得 runtime 已停止且 provider lease 已释放的可靠证据，之后才能删除并重建完整 Agent Workspace。
-- Activity 沿用 Raft 的 `Stopped` / `Starting` / `Working` 叙事；stop 事件附带 restart mode 与是否强制中断 active turn，不再发明 request/phase/completion 三套 Activity。三种模式和完整理由见 `docs/adr/0009-three-agent-restart-modes.md`。
+### 4.15 Agent Restart 对齐 Raft 1.0.16 三模式与离散命令 — `可执行`（②服务端持久 restart operation + ⑤三模式/断线恢复回归；owner: @Codex）
+- Product/API 只暴露 `resetAgent(agentId, mode)`，mode 固定为 `restart | session | full`；没有 public `action_kind`、`execution_mode` 或 `after_current_run`。`AgentRestartOperation` 持久化 `stopping → resetting_workspace? → starting → terminal`；数据库表同样已 hard-cut 为 `agent_restart_operation`。
+- Raft 1.0.16 Computer wire 只有 `agent:stop`、`agent:reset-workspace`、`agent:start`，没有 composite `agent:lifecycle`。Restart 的 start 使用 `config.sessionId=<canonical provider session>`；Session/Full 的 start 使用 `config:{}`。Raft 将 truthy sessionId 视为 resume、absent/empty 视为 fresh，Multica 不再自造 nil/empty/omitted 三态。
+- Stop 先把旧 `launchId` 持久化为 `stop_launch_id`，只有该 launch 的 inactive status 才推进；Runner 必须先撤销 APM admission、fence 迟到 startup，并等待 startup owner、provider lease 与 resident process 全部 quiescent 后才能发布 inactive。Start 先持久化新 `launchId/startDispatchId`。Full 必须在上述 stop 证据后 reset AgentRoot，并且 Server 收到同 operation 的 terminal reset result 后才允许 start。
+- Runner Ready 按持久 step 恢复：stop/reset 重放同一个 operation ID，starting 通过 desired/observed reconcile 重用同一个 launch/start dispatch fence。relay publish 不等于 accepted/completed；未送达 operation 保持 running，直到 Ready 恢复或 timeout。Activity 只消费正常 `Stopped → Starting → Idle/Working` 事实；Agent Restart 不新增 toast stream。
+- **物**：离散 `WorkspaceRunnerAgentStopPayload` / `WorkspaceRunnerAgentResetWorkspacePayload+Result` / `WorkspaceRunnerAgentStartPayload.Config.SessionID`、`agentRestartOrchestrator`、三模式成功链、stale launch fence、reset completion proof、reconnect redrive 与 production resident prestart 回归；旧 composite payload、heartbeat pending queue、delivery lease 和本地 `.multica/lifecycle-commands` ledger 不得恢复。
 
-### 4.16 调研进度只认服务端账本，Agent prose 不得推进状态 — `可执行`（① canonical ledger + ② strict envelope + ③单一调度器 + ⑤迁移/幂等回归；owner: @Codex ✅ 已签）
+### 4.16 V1–V5 调研进度只认服务端账本，Agent prose 不得推进状态 — `可执行`（① canonical ledger + ② strict envelope + ③单一调度器 + ⑤迁移/幂等回归；owner: @Codex ✅ 已签）
 - Research Run Module 拥有目标/计划版本、问题前沿、任务及尝试、来源快照、Observation、Claim/Evidence、Decision、事件序列和交付门槛。Agent 只实现有界 Research Task Interface；聊天、画布节点和旧版报告接口都是 projection 或兼容入口，不能成为 canonical progress。普通群聊仍按消息驱动，不能宣称具备 Research Run 的恢复、证据和交付语义。
 - 分派以 `(session, task, attempt)` 生成唯一 dispatch key；结果必须由对应 inbox task 的 task-scoped credential 提交 strict JSON envelope。重复的 request ID + 相同 payload 幂等回放；相同 ID + 不同 payload、错 Agent、错 inbox task、跨 workspace、未知字段、循环依赖、snapshot 中不存在的 quote 全部 fail closed。
 - 调度器只有一个 Store Interface：PostgreSQL lease 决定多副本单 owner，状态机决定并发、能力路由、超时、重试、stale result、replan 和恢复。Agent 不得用 `graph-append/source-upsert/report-patch/stage-eval/product-round judgment` 绕过它；initialized run 在 handler guard 直接 409。
@@ -385,10 +392,13 @@
 - **物**：migration `274_research_run_backend` + `276_research_report_quality`；`server/internal/researchrun`；`research_run_adapter.go` / `research_run_http.go` / `research_run_guard.go`；scheduler `research_run_reconcile`；CLI `multica research task-result`；builtin skill `multica-research-fleet`；前端 typed Run snapshot 和 steer API。
 - **已见红**：全新 PostgreSQL 逐迁移到 274 通过；274 down/up 直接回放通过；真实 Store 集成回归首次执行在 `run_stats` 参数推断处失败，显式 SQL casts 修复后锁住 initialize→attempt→result materialize→dependency activation→idempotent replay。v2 回归先因不支持 `research-run-v2`、质量失败错误进入 replan、placeholder report 被接受而失败；实现后覆盖 required-answer 报告遗漏、作者自审、报告结构、精确引用支持、独立审核范围、质量失败新修订任务和 v1 prompt/contract 固定。后续回归继续覆盖证据去重计数、证据只读视图、依赖失败传播、重试退避、terminal projection recovery；strict envelope、exact quote、DAG cycle、capability routing 和 durable-only prompt 另有单测。v4 PostgreSQL 回归先让 deep run 的单一控制记录被旧全局来源配额错误阻塞，再锁定 Claim 标准通过；无关反证任务的假通过改为 Claim 定向检查；迁移后 v1–v3 来源写入曾因 nil traits 触发 `NOT NULL`，统一规范为空数组后旧版回归恢复。控制环回归先证明旧路由会把边际收益、未回答问题和 Claim 缺口都送进 replan；现锁定 finding precedence、question 绑定、plan version 不变、routing Decision、目标幂等和跨 session/stale target 拒绝。信息增益回归锁定重复 batch 为零、canonical verification upgrade、Claim 降置信度与裁决更新、动态 follow-up 交付依赖、无验证路径 required Question 拒绝、replan 阻塞旧交付、零变化探测不使报告过期及真实图变化强制报告修订。
 
-### 4.18 主动调研必须通过可寻址状态持续整合与解决争议 — `仅文档`（目标已定，Implementation 尚未落地）
+### 4.18 旧版主动调研目标 — `已废弃历史记录`（不得实施）
+
+本节以下条目记录从未生产启用的旧 V6 设计，已由 ADR-0017 和 §4.19 废弃。保留它们只为说明旧迁移、测试和代码的来源；任何与新规格冲突的固定 Fleet、固定角色、递归 stale、独立评审或交付规则都不是目标行为。
 - 目标协议见 `docs/superpowers/plans/2026-08-05-autonomous-research-system.md`。新能力必须把 Hypothesis、Branch、Insight、Search/Corpus 谱系、Integration Round、Dispute、Research Monitor、Capability Observation、Episode 和 Strategy Version 变成服务端可验证事实；增加 Agent 角色或 Prompt 文字不能算完成。
 - 每批可信结果都必须能够触发固定输入版本的整合、争议检测、候选工作生成和有分项理由的组合选择。Integrator 只能提议，Evidence、Inquiry、Dispute、Task 和 Gate 状态仍由 Research Run 验证后更新。
 - 每个 accepted Task Result 都必须写 Assimilation Check Decision。存在相关同类结果时，原产出 Agent 必须提交有工件引用的 Integration Contribution；存在冲突时转入 Research Deliberation；没有相关结果时记录等待水位，后续结果到达后重检。Agent 不可用必须保留缺席原因，不能伪造 Contribution。
+- Insight Derivation 只接受至少两个 accepted/fresh 且来自不同 Task 或不同 Branch 的 Claim/Insight Artifact Version；层级和 input/scope/relation 幂等指纹由服务端计算。没有服务端可观察语义价值时记录 `no_semantic_gain`，任一输入失效必须沿无环 derivation edge 递归 stale 所有下游 Insight。
 - Research Run 创建时必须把当前 Research Fleet lead 固定为 `research_director_agent_id`；现有产品中该 Agent 是罗纳尔多。只有该身份能提交 Team Formation 或 lead adjudication。运行中 Fleet lead 变化不能暗改 Director；只能由用户显式改派并写版本化 Decision。
 - Research Director 自主创建 Agent 必须经过 Contract 授权、Team Formation Decision、预算/权限/重复检查和 Research Team Membership；失败和退出必须保留事实。没有这些对象的“hire Agent”消息不能改变 Fleet。
 - 冲突 Agent 的讨论必须写 Research Deliberation Turn 并由 canonical Position/Evidence/scope delta 衡量进展；deadlock 自动升级给 Research Director。Director 只能按证据解决、拆分范围、创建区分任务或保留未解决状态，不能用身份覆盖 Evidence Standard。
@@ -396,27 +406,53 @@
 - Research Projection 必须为每个 canonical 研究实体提供稳定 typed Node/Edge、完整详情和可重建 Delta，包括组队、Membership、Task/Attempt/Result、Search/Source、Observation/Claim、Question/Hypothesis/Branch、Integration Contribution/Insight Derivation、Dispute/Deliberation、Divergence、Decision、Evaluation 和 Report；前端布局不能回写 canonical 关系。
 - Committed Research Event 的投影消费由 `projectionModule` 拥有：只按顺序读取未投影 Event，Projection output 成功后才能确认；失败按 Event 的 durable attempt count 写下一次时间；单次调用最多处理 500 条，避免 Reconcile 长时间占用 lease。Engine 只能请求投影，不得复制 outbox 确认和退避规则。
 - Research Result 的接纳前规则由 `resultAcceptanceModule` 拥有：先验证 Attempt 属于目标 Task 且 Inbox 绑定一致，再按 Run 固定的 orchestrator version 解码，并验证新任务所需 capability 当前可用，最后调用 PostgreSQL 原子接纳。PostgreSQL 事务仍必须重新验证 Agent/Inbox、Attempt/Run 状态和 replay hash；预检不能替代事务内授权。Engine 只在已接纳后触发 Reconcile。
+- Research Artifact 的 withdrawal 与 supersession 只能经过 `artifactLifecycleModule.Change`；调用方提交稳定 Operation ID、目标、理由及可选 successor/Decision，不得直接拼 Passport、policy mutation、lifecycle event 或 supersession SQL。PostgreSQL Adapter 负责 Run→Passport UUID 锁序、eligibility CAS、policy watermark 和 reciprocal ledger 原子写；同一 Operation 必须可在未知 commit 后幂等重放，历史 Version 和审计行不得删除。
+- Inquiry Graph 的生命周期与结构合法性由 `inquiryModule` 独占：Hypothesis/Branch/Insight 只能沿冻结状态机迁移，terminated Branch 必须有理由，多态 Edge 两端必须是同一 workspace/session 的真实实体，`decomposes | depends_on | refines` 必须保持 DAG。Go 预检不能替代 migration 350 的数据库 Trigger；H 章 Dispute 表建立前，`dispute` 只保留为协议词汇且任何 Edge 写入 fail closed。
+- Execution Task 对 Inquiry 的责任边界只能来自 append-only 的 canonical Task–Inquiry Target ledger：目标必须是同一 Run 内已解析实体，绑定 Task 与产出 Attempt 必须属于同一 Goal/Plan version，并记录真实 Agent/Attempt provenance。Selective steering 只消费明确的 Branch target；不得从 objective、Prompt、前端坐标或名称相似度猜测 Task 归属，未绑定 Task 在局部 steering 中保持不变。
+- Agent Attempt 的冻结工件读取在 normal 或 evaluation grant 撤销后必须返回稳定的 access-denied 领域错误；HTTP Agent surface 映射为不含 Run、Attempt、Agent 或 Passport 身份的 403，不能以 500 暴露内部授权状态，也不能因历史 Manifest 仍存在而继续读取。撤权不得删除冻结历史，旧 `ErrInvalidTransition` 判定在迁移期继续成立。
+- Question、Hypothesis、Branch 和 Insight 的证据驱动状态变化必须经过 `UpdateInquiryStatus`：命令携带 expected state version、before/after、实质理由与可解析的 same-Run Evidence refs，服务端在同一事务保存 append-only Transition/Event/Agent/Attempt provenance 并 CAS 更新目标。状态字段本身不是充分审计证据，Agent prose 或前端投影不得直接推进生命周期。
+- V6 selective steering 必须携带 current state version 和 canonical Branch UUID；服务端负责扩展 Branch 后代并从 Task–Inquiry Target ledger 计算最小影响集。事务只能 obsolete 该集合内的非终态 Branch/Task，并对其中 active Attempt 发出 durable cancellation；未命中 Task、accepted Evidence 和历史终态工件保持不变。`full_replan` 必须显式声明，不能由空 affected 集合猜测。
+- Inquiry Graph 的生产创建只能经 `CreateInquiryGraph` 批命令：调用方必须提供当前 Run state version、真实 assigned Attempt/Agent 与幂等键；领域行、`research-run-v6` production Artifact Passport/Version 和 `inquiry_graph_created` Run Event 必须同事务提交。任何绕过该边界的裸 INSERT 都不构成可接受的生产实现。
 - 无限画布必须从同一 `snapshot_id + through_event_sequence` 的分页 Snapshot 开始，随后按连续 event sequence 幂等应用 Delta。重复 Delta 不得产生重复节点；序号缺口或保留期过期必须重新取 Snapshot。大图通过有界 Slice、邻接计数和按需详情读取，不能要求浏览器一次载入全部 Run。语义融合只能来自后端 Insight Derivation；前端视觉聚类不能写回研究结论。
+- 每条成功投影的 committed Research Event 必须同时保留 V5 graph event，并发布独立的 `research_projection_v6:delta`；V6 payload 只能是 run-scoped `{run_id, delta}`，sequence frame 必须来自该 committed Event，Node/Edge 身份必须复用 Snapshot mapper。实时路径不得自己发明另一套 ID、丢弃 edge、用前端时钟推进 sequence，或把旧 V5 payload 冒充 V6 Delta。
 - A1 已由 `server/internal/researchrun/canonical_state.go` 建立可执行基线：`CanonicalState` 对同一 Run 的 V1–V5 规范表做确定性哈希，排除 lease、调度时间、行维护时间和投影重试字段；`ListRunEvents` 与 `ReplayRunEvents` 按 workspace、连续 sequence 和重复一致性重放 committed Event。当前 Event 只保证投影重放，不包含从零恢复全部规范表所需的完整数据，不能宣称系统已经采用 event sourcing。
 - A2a 已由 `orchestrator_golden_test.go` 和 `testdata/golden/orchestrator_contracts.json` 冻结 V1–V5 的完整 Task Prompt 哈希、可接受 Plan Result 哈希和新 schema 拒绝行为。修改旧版本协议必须让 golden 失败；真实语义变化只能新增 orchestrator version，不能更新旧 hash 来掩盖不兼容。
 - V1–V5 Research Task Prompt 的版本选择和渲染由 `taskPromptModule` 独占；Engine 与 dispatch 只提交 Run、Task、Attempt、Snapshot 和 Fleet 输入，不能拼接或修改 Prompt。历史 builder 保持不可变，新语义只能新增 orchestrator version，并继续由完整 Prompt hash 验证。
+- 旧 V6 合同从未被生产 decoder 接受，也没有生产 Run；ADR-0017 因此允许按 [`2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md) 原位替换这一个未发布版本。替换必须同时更新 `docs/contracts/research-run-v6.schema.json`、跨对象合同、Prompt/Result golden、builtin skill 与 source map，禁止把新字段混入 V1–V5 envelope。替换期间默认版本和 supported-version 列表保持 V5/unsupported；新 V6 首次冻结后再发生不兼容 hash 变化才代表 V7。
+- V6 生产激活必须通过 `researchrun.AssessV6Activation` 的完整证据审计：每项退出证据必须有稳定 ID 和 revision，缺一项即保持禁止；回滚目标必须是已演练的 `research-run-v5` previous version。审计通过只产生允许激活的 Decision，不能隐式修改默认版本或 supported decoder。
 - Research Task 的运行态同步、Ready Task 排序、能力路由、Attempt 创建、Inbox 分派、身份挂接和取消确认由 `executionModule` 独占。已挂接 Attempt 以 Inbox Task ID 为运行身份；未挂接 Attempt 以稳定 dispatch key 查找原执行，禁止因响应丢失直接复制 Task。取消只有在 Runtime 接受取消或未挂接派发超过 stale 后才能在 Store 确认；派发成功但身份挂接失败时必须撤销刚创建的 Runtime Task。Engine 只能调用该 Module，不能直接组合 Dispatcher 与 Attempt 状态变更。
 - Research Run 的确定性 dispatch 故障、预算耗尽和补救终态由 `failureModule` 处理。未知或明确可重试的 dispatch 错误不得修改 Run；能力永久缺失和不可重试 Adapter 错误才失败。Run 失败必须先提交 `MarkFailed`，再取消活动 Attempt，最后投影 committed Event；取消失败时保留待确认状态并停止本次投影。预算耗尽必须先写幂等 Decision，再评估交付 Gate，禁止先看 Gate 后补写预算事实。Engine 不得直接组合 `MarkFailed`、取消和投影。
+- Agent Inbox 的 `queued_expired` 只证明原 delivery 在 worker claim 前已终止、不可重投，不证明 Research Task 不可重试。Research policy 必须保留 Task 自己的 attempt budget，结算旧 Attempt 后重新解析健康目标；只有 Task budget 真正耗尽才允许失败 Task/Run。其他 Inbox `retryable=false` 仍按 C2a 收紧 Research disposition，不能被泛化覆盖。
 - Research Run 的交付判断和 finding 到补救任务的确定性路由由 `deliveryGateModule` 独占。Gate 通过后只能进入等待用户确认；确认请求必须重新评估最新 canonical graph，不能复用旧 Gate。Gate 未通过时一次只创建最小、可寻址且带完整 observed findings 的控制任务；绑定目标并发变化返回可重算结果，不能失败 Run。Module 不派发任务，任务激活和执行继续由 `executionModule` 负责。Engine 不得解释 finding code、拼补救 objective 或直接执行 Gate 状态转换。
 - `researchrun` 禁止重新引入覆盖全部用例的 Store Interface。Engine 的生产实现明确组合具体 `PostgresStore`、Dispatcher 和 Projector；每个内部 Module 只声明自己的窄输入接口，测试替身也按该接口实现。多个窄接口不能再嵌入一个全能组合接口以绕过此约束。PostgreSQL 事务和 SQL 留在 `researchrun` 包内，Handler 只能通过外部 Research Run 用例接口调用，不能获取子实体写接口。
 - Research Run 的每个 canonical 写事务必须经过 `beginResearchTx`/`commitResearchTx` 私有 runner，并注册稳定的 `researchTxOperation` 标签。除 `CanonicalState` 与 `ListRunEvents` 的只读 repeatable-read 事务外，生产代码禁止直接 `BeginTx`/`Commit`；`transaction_guard_test.go` 的 AST 扫描与 registry 完整性测试是结构性门禁。每个 registry 标签还必须在 PostgreSQL recovery matrix 中证明 `before_commit` 回滚 + 相同重试，以及 `after_commit` 的 `ErrCommitOutcomeUnknown` + 幂等/reconcile 恢复；`transaction_recovery_coverage_test.go` 保证 registry 与 matrix 一一对应。
+- Source Snapshot 的摄入类型必须显式且互斥。`screened_retrieval` 必须绑定完整 Search Plan、Query Execution、Source Candidate 与 accepted Screening Decision（含决定指纹）；`agent_direct_evidence`、`user_attachment`、`workspace_artifact` 和 `api_dataset` 必须保存各自真实 origin，并禁止携带任何伪造 Search/Screening 标识。接纳前合同由 `ValidateSourceIngestionIntent` 执行；持久化字段、数据库约束和 Result materialization 尚未接线前，本条仍只证明准入边界，不能宣称生产 Source 写入已强制执行。
 - Handler 和 scheduler 只依赖固定 `researchrun.ResearchRun` 用例接口：运行创建/读取、Fleet 读取、生命周期命令、Steer、NodeCommand、task-scoped SubmitResult 和批量 reconcile。`NewEngine` 返回该接口；内部 `Start`、单 Run `ReconcileSession`、Module、PostgresStore 和来源/Observation/Claim/Task 写方法不得加入外部接口。接口方法集合由反射回归固定，新增用例必须先说明调用者、授权和不可由现有命令表达的原因。
 - A2b 已由 `behavior_golden_test.go` 和 `testdata/golden/research_behaviors.json` 冻结证据接纳、报告物化、评审缺陷传递、有界重试、取消确认和结果幂等恢复的用户可观察语义。跨运行随机 UUID、数据库时间和 scheduler 字段不属于行为 golden；同一 Run 的崩溃前后完整状态比较继续使用 A1 canonical hash。golden 变化必须说明协议或状态机原因，不能直接重录期望值。
 - Research Task 自身的 Attempt 永久失败或耗尽预算后必须进入 `failed` 并记录 failure class；`blocked` 只表示任务尚未执行但因依赖终态等外部前置条件无法继续。两者都属于终态，但投影、详情和失败分析不得混用。
 - 已发生的 Research 生产故障必须保留脱敏、可执行回归和明确 oracle。当前集合覆盖画布重复节点、合法 task result 被 403、永久 dispatch 失败扩散、报告绕过验证、评审缺陷丢失和重复证据低收益；测试与症状的权威映射记录在自主调研实现计划 A3。只写事故描述或只断言 HTTP/任务数量之一均不能替代端到端状态断言。
 - 同一 Run Snapshot 的 canvas Projection 内不得产生重复 node/edge ID，并且重复投影必须保持稳定身份和内容。信息收益只按 canonical graph 的变化计算；相同证据可被幂等接纳为不同 Task 的完成事实，但不得重复增长 Source/Observation/Claim/Evidence，连续零收益必须推进有界饱和计数。
+- D-enabled Research Agent 派发必须把持久 Manifest ID/Hash 同时绑定进不可变 DispatchRequest hash、outbox payload/列和真实 Agent Inbox context；只在数据库保留 Manifest 而不给执行侧身份不算端到端上下文证明。两字段必须成对出现，任一变化使幂等请求冲突；outbox 每次 claim 都必须复核 payload 与独立列相等，不能只相信创建时写对。历史无 Manifest 派发保持原哈希与省略字段。执行装置：`researchrun.HashDispatchRequest`、`rebindDispatchPromptForManifestTx`、`PostgresStore.ClaimDispatchIntents`、`handler.encodeResearchDispatchInboxContext` 及对应 outbox/Handler 回归。
 - Research 系统评测必须把 Subject 可见的 Task/Environment 与隐藏 Oracle 分离；Executor、Agent Prompt 和生产策略不能读取 Oracle。固定 Corpus 要版本化并覆盖所有研究模式和已声明干扰，多个 seed 的执行错误必须作为失败样本进入分母，不能被 Runner 跳过。事实/冲突、Claim 可追溯性和来源筛选使用独立 grader；删除 grader、缺少 grader 或跨 Corpus version 比较不能得到“无退化”结论。当前可执行装置位于 `server/internal/researcheval`；生产 Run Adapter、LLM judge、Episode 与 Strategy Promotion 未接入前不得宣称生产策略已经通过系统评测。
+- Research 来源筛选决定必须通过版本化服务端合同，而不是保存一段自由文本后直接接受。`accepted` 必须命中纳入标准且不命中排除标准；`excluded` 必须命中排除标准；`duplicate` 必须指向另一候选，并用规范 URL 或 SHA-256 content hash 证明同一性。每个决定必须保存可定位事实、审查主体、审查时间、理由和稳定指纹；缺项、未知标准、重复事实或不规范身份事实一律在持久化前失败。当前可执行装置为 `server/internal/researchrun/screening_policy.go`；其接入 Search 谱系持久事务前不得宣称 F 章完成。
 - Research 自主行为评测必须验证可观察事实，不能只匹配最终文案：动作至少保留 actor/kind/target/outcome，图至少保留稳定 Node/Edge 和 V6 注册类型，节点详情必须实际提供用途、小目标、进入条件、方法、输入、动作、执行者、结果、证据、决定、失败、恢复及上下游字段，投影必须提供重建 hash、节点身份、分页规模和缺口恢复读数。固定正例 Executor 只验证 grader 和 Corpus 本身；只有真实生产 Adapter 通过同一隐藏 Oracle 才能声明对应能力完成，不得为生产另写放宽版 grader。
+- 生产评测进入 Research Run 的唯一可见输入必须先冻结为 `SealedSubjectInput`：只包含 Task、受控 Environment 和 seed，结构上不得出现 Oracle；未知字段、尾随 JSON、schema/hash 漂移一律 fail closed。等价集合先确定性规范化，Document 和 Fault 引用有界且自包含。后续 Passport/Manifest 必须绑定这些原始字节与 subject hash，不能把 Corpus Case 整体、grader 期望或临时拼接 Prompt 交给 Agent。
 - 每个交付必须有当前 Contract/Plan 的 Divergence Pass。该 Pass 使用隔离上下文和有界 exploration reserve 提出异质视角 probe；推测只能创建 Question/Hypothesis/Branch/Task，不能直接成为 Claim。
 - 生产 Strategy 不得在线自改。Episode 只能产生候选；候选经过固定评测集、历史回放、安全不变量、非退化检查和 Promotion Decision 后，才对新 Run 生效。已有 Run 固定旧版本，且保留 previous version 回退。
+- Strategy 升级的版本、候选配置 hash、离线评测快照、批准/拒绝 Decision 和 workspace 当前指针必须是持久事实。版本、评测与 Decision append-only；同一个 request key 只能对应同一组输入。Promotion 在 Serializable 事务中锁定当前指针，只有当前版本仍与评测基线一致且 Decision 已落库时才推进 generation。每个 Research Run 在创建事务中固定当时的 Strategy version，后续升级或回退不得改写既有 Run。
+- Research 生产质量/成本监测必须按单一 Strategy Version 的终态 Run 窗口判定，禁止把混合版本或重复 Run 聚合成证据。达到显式最小样本量前只能报告观测、不能宣告安全或越界；达到样本量后必须同时评估质量均值、质量通过率、P95 成本和预算超限率。NaN/Inf、缺失身份/时间和非法预算必须 fail closed。当前确定性判定装置为 `researcheval.EvaluateProductionWindow`；生产遥测采集、持久窗口、告警与 Promotion/rollback 联动仍未接入。
 - 执行失败的修复决定必须是按目标幂等的持久记录，不能每次重算都开一条新补救路径。`research_target_repair` 以 `UNIQUE (workspace_id, repair_key)` 把"这个 Task 在这个状态版本上对这个确切失败已决定的修复动作"变成唯一行；`repair_key` 含 session、task、goal/plan version、`failure_fingerprint` 和 repair kind，`failure_fingerprint` 含 failure class、source reason 和冻结的 target config fingerprint。相同 canonical failure 只推进 `occurrence_count` 与最近观测；状态版本、目标配置或失败类别改变才允许新记录。允许动作矩阵是不可变数据库判定 `research_repair_action_allowed` 并以 CHECK 约束执行，Go 侧矩阵只做写前拒绝；`research_negative`、`method_invalid` 和 `internal_invariant` 在矩阵中没有条目，因此不可能为研究结果或不变量破坏记录自动修复。修复决定 append-only（Trigger 拒绝原地改写动作、失败身份和状态版本，`occurrence_count` 单调），写入点是唯一失败结算函数 `failAttemptTx`，投影 Event 幂等键即 repair key。
   - **物**：migration `299_research_target_repair`；`server/internal/researchrun/repair.go`、`postgres_repair.go`；`TestFailureDispositionOnlyChoosesAllowedRepairActions`、`TestEveryDurableInboxFailureReasonResolvesToAllowedRepair`、`TestClassesWithoutLicensedRepairRecordNothing`、`TestRepairKeyIsStableAndMovesWithCanonicalIdentity`、`TestTargetRepairIsIdempotentPerCanonicalFailure`、`TestTargetRepairSplitsOnTargetConfigurationChange`、`TestRepairActionMatrixIsEnforcedByDatabaseAndMatchesExecutor`、`TestConcurrentWorkersConvergeOnOneTargetRepair`、`TestMigration299DownUpRestoresTargetRepairSchema`。
 - 本条在 schema、状态机、迁移、回放、故障注入和系统评测均见红并通过前保持 `仅文档`；实施 PR 必须逐项把约束升级为类型、唯一约束、事务或测试，并在本条记录具体装置。
+
+### 4.19 罗纳尔多分层调研 V6 — `仅文档`（设计已定，Implementation 尚未落地）
+
+- 完整产品语义见 [`docs/superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md)；机器载荷和跨对象约束见 [`docs/research-run-v6-contract.md`](research-run-v6-contract.md)；表、事务和恢复见 [`docs/research-run-v6-storage-contract.md`](research-run-v6-storage-contract.md)；HTTP、Realtime 和 Report origin 见 [`docs/research-run-v6-http-contract.md`](research-run-v6-http-contract.md)；文件级顺序和退出条件见 [`docs/superpowers/plans/2026-08-14-ronaldo-research-director-implementation-plan.zh-CN.md`](superpowers/plans/2026-08-14-ronaldo-research-director-implementation-plan.zh-CN.md)。实现不得从已废弃 §4.18 选择冲突行为拼成第三套协议。
+- 新 Run 由用户选择唯一 Director，初始团队只有罗纳尔多；其他 Agent 全部由 Director 动态创建和管理。Research、Match、Discussion、Integration、Director 与 Report 共用一个持久 Work Item 调度面，Agent 会话不保存 canonical progress。
+- Result/Insight 按 S/M/L/XL/XXL 压缩；promotion 需要至少两个 fresh 同级输入，assimilation 不提升等级。每个输入版本最多一个 canonical successor；已吸收节点不自动恢复，跨 Branch 只能复用 successor。每个 Branch 最多一个当前 XXL，同一 XXL 可以服务多个 Branch。
+- Director 上下文每轮从持久 Research Brief 与 Control Brief 重建；终止节点只给聚合总结。Director 不可用时进入 `awaiting_director` 并通知用户，不自动换人。每个 Run active team membership 上限 50，Research token 总量不设产品上限。
+- Report 是挂在 Goal 上的不可变 HTML 交付物，不是 graph node。JavaScript 只允许在独立 origin、`sandbox="allow-scripts"`、无同源/存储/外部网络/主应用桥接的 iframe 中运行；只有 Director 可以发布。
+- 本节在 migration、strict V6 schema、事务恢复、V1–V5 golden、Director context bound、single-successor race、大图 Projection、Web/Desktop UI、HTML sandbox 负向测试和 `AssessV6Activation` 全部通过前保持 `仅文档`，默认版本必须继续是 V5。
 
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
@@ -493,7 +529,7 @@
 - `WorkspacesRoot` 默认且唯一为 `~/.multica/workspaces`；每个 Agent 的根目录、工作目录和 subprocess cwd 都是 `<WorkspacesRoot>/<workspace_id>/agents/<agent_id>/`。路径拼装只通过 `server/internal/agentworkspace`，禁止 caller 自己拼 `agents`、task ID 或 provider/profile 后缀。
 - 运行时只暴露 `MULTICA_AGENT_ROOT`。`memory/`、`skills/`、`devices/`、provider 私有配置和 Agent 自己创建的代码/worktree 都位于 AgentRoot 下，以相对路径定位；不得为这些子目录增加平行 context 字段或 `MULTICA_*_DIR` 环境变量。
 - 同一 Agent 跨 task、daemon 重启和 provider 切换复用同一目录。硬切不扫描、不迁移、不删除旧 per-task/repo 目录；旧文件留在原处，新运行只认 canonical AgentRoot。
-- Multica 不 clone/pull/reset/branch/worktree，也不提供 `multica repo` 命令。Agent 自己把 checkout 放进 AgentRoot；干活时先选 workspace 内的项目目录或 worktree，再跑 git。项目资源仍是用户管理的 metadata：不改变进程 cwd，不写入 daemon claim/register payload，也不把 repository URL 注入 runtime brief（brief 在 resident 复用时不会因资源变更重写）。当前任务绑定了 project 时，Agent 用 `multica workspace info --projects` 读现活的 project 与 resource 绑定。
+- Multica 不 clone/pull/reset/branch/worktree，也不提供 `multica repo` 命令。Agent 自己把 checkout 放进 AgentRoot；干活时先选 workspace 内的项目目录或 worktree，再跑 git。项目资源仍是用户管理的 metadata：不改变进程 cwd，不写入 daemon claim/register payload，也不把 repository URL 注入 runtime brief（brief 在 resident 复用时不会因资源变更重写）。当前任务绑定了 project 时，Agent 用 `multica workspace info --projects` 读现活的 project 与 resource 绑定。普通 `workspace_role=member` Agent 可读 `workspace info`：Workspace/Agent/Computer/失败摘要只走 `GET /api/agent/workspace-info`，Projects + resources 只走 `GET /api/agent/projects?include_resources=true`；不得借 `OwnerUserID` 命中人类 API 或解锁其余 private Computer，Computer 可见集仅为 public + 当前 Agent 绑定项。
 - AgentRoot 不参与 task GC，也没有后台 retention/GC；仅用户明确选择 full reset，或在 Computer 存储页确认删除时，才可删除精确 canonical root。full reset 是硬切语义：先强制中断 runtime，然后直接删除并重建，不等待 quiescence。
 - **物**：`server/internal/agentworkspace/path.go`；`agent_runtime_turn.go`；`execenv/agent_workspace.go`；`TestCanonicalAgentWorkspace*`、`TestMulticaAgentRootStableAcrossHarnessSwitch`、`TestMulticaAgentEnvUsesProviderNeutralRoot`、`TestAgentWorkspaceHoldsCodeCheckouts`。
 
@@ -514,7 +550,7 @@
 ### 4.19.1 Agent Attachment 是机器责任，不是进程状态 — `可执行`（② concrete machine owner + ③单一 apply core + ⑤ generation/restart 回归）
 - machine-wide durable Attachment owner 是本机 Agent placement generation、detach tombstone、Runtime lifecycle cursor 与 Runtime-set reconciliation 的唯一实现；它是 concrete internal dependency，不再保留只有单一 adapter 的宽假接口。调用方只消费 `attached|moved|detached|unchanged`，不得读 map 或自行比较 generation。Attachment 不代表 provider process 已启动；detach 不删除 Agent Root、Inbox 或 Message Draft。
 - 所有正式操作固定 authenticated Workspace scope，event payload 不携带 `WorkspaceID`。Runtime reconciliation 必须提供该 Workspace 明确允许的 Runtime IDs，只能 detach，禁止猜测或静默 move。Attachment generation 与 per-Runtime lifecycle sequence 是两套身份；状态/tombstone 与 cursor 在一次 `Apply` 中原子持久化，失败共同回滚。
-- `.daemon/reminder_agents.json` 的现有字段和路径继续作为 Attachment registry 的持久兼容格式；`reminderAgentManager` facade 与旧 start/stop/replay-end production wire 已删除。generation-zero 的 credential/task observation 仅作 provisional bootstrap，正式 `Resolve/List` 不返回它。完整决策见 [`ADR-0013`](adr/0013-use-agent-attachment-for-durable-machine-responsibility.md)。
+- Agent 本机 admission 只认 current Workspace Runner 接受的 `agent:start`；`agent:stop` 删除该 launch。不存在独立 Attachment registry、attach/detach wire、generation、replay cursor 或本地兼容 ledger。Message coordinator 可从同一 Runner 的 APM start snapshot 修复，不能读取第二套 ownership state。
 - Reminder 只消费 registry 的 Workspace-scoped Attachment、Runtime residency 与 recovery cursor value snapshots，再维护自己的 timer/fence/projection state；Reminder cache cleanup 不能反向 detach Agent。缺少 Runtime→Workspace ownership proof 时不得退回 unscoped Agent lookup。
 - restart-time Message Delivery 只能从固定 Runner scope 调用 `Resolve(workspaceID, agentID)` 重建 Inbox coordinator；Runtime 与 AgentRoot 必须来自该 Attachment 且 Runtime 仍属于同一 Workspace。detached 或 wrong-Workspace Agent 在 ACK 前拒绝，已有 coordinator 也必须通过 Runner→Runtime Workspace proof。
 - **物**：`agent_attachment.go` 的 Workspace-scoped contract、`agent_attachment_registry.go` 的单一 concrete generation/tombstone/cursor/reconcile owner、`agent_attachment_daemon.go` 的 scoped Reminder projection、`message_runtime.go` 的 Workspace-scoped restart resolution，以及 registry/Reminder/Delivery restart 回归与旧 facade/假接口不存在门禁。
@@ -528,10 +564,41 @@
 - `InboxRegistry` 固定一个 Workspace scope；仅在该 scope 内 shared Attachment owner `Resolve` 成功且 Runtime ownership 匹配时创建 coordinator。Delivery、recovery page、coverage 与 reconnect recovery 都经过 current Runner 方法；reconnect 保留 registry，Runner close 只关闭自己的 Inboxes。旧 machine-local 仅 Agent lookup 必须唯一，否则 fail closed，不能隐式选另一个 Workspace。
 - **物**：`workspace_runner_state.go` 的 narrow constructor/connection ownership 与 current-connection fence；`workspace_runner_message.go`、`workspace_runner_activity.go`、`workspace_runner_attachment.go` 的行为归属；`workspace_runner_delivery.go` 只返回 current Runner、不暴露 coordinator；`workspace_runner_state_test.go` 的 whole-Daemon dependency 与 field reach-through source guard，以及 identity/reconnect/isolation/recovery 回归。
 
-### 4.19.3 Reminder 控制面走专线，触发输入复用 Runner admission — `可执行`（①旧事件不存在 + ②discriminated payload + ⑤协议/transport/admission tests）
-- 对齐 Raft 的边界是两层：定时控制面保留 `reminder.upsert` / `reminder.cancel` / `reminder.snapshot` / `reminder.fire_attempt`；fire commit 后给 resident Agent 的一次性输入复用 Workspace Runner `agent:deliver`，以 `kind:"reminder", transient:true` 区分。不存在 `reminder.owner_input` 第二条唤醒专线。
-- transient Reminder 与 canonical Message 共用当前 Runner 连接和 resident-turn admission，但不获得 Message identity、cursor、replay、ACK、MessageCoordinator 或 Activity。Agent idle 时注入一次；busy/compacting、transport lost 或 native injection failure 都是最终丢弃，不能排队或在 reconnect/idle boundary 重放。
-- **物**：`AgentTransientDeliverPayload` 的协议形状与 golden；Workspace Runner 的 `agent:deliver` union dispatch；Reminder relay scope 回归；idle/busy/invalid placement/capability 回归；`EventReminderOwnerInput` 常量不存在。
+### 4.19.3 Reminder 本地 Inbox 是唯一新版唤醒路径 — `可执行`（②local projection + ③single admission + ⑤offline/replay tests）
+- **口径（2026-08-13，按 Raft 1.0.16 修正）**：定时控制面保留 `reminder.upsert` / `reminder.cancel` / `reminder.snapshot` / `reminder.fire_attempt`，但 `fire_attempt` 只是一份 Server receipt，不是 Agent wake。owner Computer 在 due/catch-up 时先持久化 due receipt，再由 `LocalReminderInbox.AcceptDue` 直接进入 resident-turn admission；Server commit 不得再向声明 `reminder_local_inbox_v1` 的 daemon 推第二份 transient input。
+- `ReminderTimerJob.local_input` 是 owner-authorized、bounded 的本地执行投影；不获得 canonical Message identity、cursor、MessageCoordinator 或 Message Activity。busy/compacting/native acceptance failure 保留同一 due receipt，每 1 秒只重试本地 wake；同一 `owner + reminder + version` 在 reconnect/snapshot/catch-up 中不得二次注入。一旦 `wake_enqueued=true`，周期重试立即停止；未 ACK 的 Server receipt 只在当前 fire dispatch 首发及 Computer connection-ready 时重放。`ReminderFireResultPayload.ack` 必须回显原始 `owner + reminder + attempted version`，Computer 只删除该 occurrence 的 receipt；不能从可能已推进到下一周期的 canonical projection 推断 ACK，也不能顺带确认同一 Reminder 的其他 occurrence。
+- `reminder_transient_owner_input_v1` 只用于 rolling-upgrade 兼容：缺 `local_input` 的旧 timer projection 仍以成功排入 `fire_attempt` 作为旧 wake handoff；服务端按 runtime capability 二选一，绝不能对同一新版 daemon 同时走 Local Inbox 和 Runner transient 两条路。
+- **物**：`LocalReminderInbox.AcceptDue`；`ReminderTimerJob.local_input`；`reminderDueReceipt` 的 local-wake/server-ack 双收敛；`TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot` 的原始 occurrence ACK；`TestReminderFireResultAcknowledgesOnlyItsAttemptedOccurrence` 的精确删除与相邻 receipt 对照；无 Server transport 仍接受本地 due 的回归；receipt/reconnect 不重复注入回归；local capability 下 notifier 调用为零的集成回归。
+
+### 4.19.4 Computer host 按 Raft 监督 Binding OS child — `可执行`（③ host reconcile + ⑤ crash/degrade/generation tests）
+- **口径（2026-08-14）**：对齐 Raft Computer `serviceReconcileLoop` / `runnerStateMachine`，但保持 Multica 的 Workspace Binding cardinality：`internal/computer.Host` 每 5s 对账 desired Binding；crash 后 2s backoff；60s 内 3 次 crash 进入 degraded、不再自动拉起。摘掉 Binding 是 graceful stop，不是 unlinked/degraded。
+- **真实 process boundary**：`computer __runner` child 必须实际持有 `WorkspaceRunner + AgentProcessManager + Inbox/MessageCoordinator + Activity + provider runtimes`。Host 不构造这些 execution owners；删除 child 会删除完整 Binding behavior，不能只损失一个 sentinel。
+- **generation fence**：`computer_generation` 是整机 resident tenure；每个 Binding slot 的 `runner_generation` 在 spawn 时独立递增。Bootstrap、Ready、Host control、Runtime report、diagnostic、capacity grant 和 exit observation 全部校验 exact Workspace + generation + PID；旧 generation 必须 no-op / fail closed。
+- **package boundary**：`internal/computer` 拥有 resident/health/control、desired set、supervision、crash/backoff、machine capacity、diagnostic aggregation 与 Machine Upgrade journal/stage/activation/successor attestation；`internal/daemon` 只拥有 child execution。Public resident 直接 `computer.NewHost → Host.RunProcess`，禁止构造或依赖 `daemon.Daemon`；反向也禁止 daemon 生产代码持有 `computer.Host`。CLI 只 wiring，不新增 `computerhost` 包。
+- **Machine Upgrade**：Host prepare 所有 current children；每个 child drain/terminate 自己的 execution。任一 prepare 失败必须 release 已暂停 siblings；already-current / rollback re-register 也由 generation-fenced child 执行，Host 禁止 provider probing。
+- **物**：`computer.Host` / `Host.RunProcess` / `hostMachineUpgrade` / `BindingSupervisor` / `HostControl` / `ProcessCapacity` / `BindingRunner`；真实 bootstrap/Ready/control process protocol；per-Binding child state root；双向 architecture guard；generation/crash/sibling/capacity/Machine Upgrade/process tests。完整判断见 [`ADR-0015`](adr/0015-computer-host-supervises-binding-runner.md)。
+
+### 4.19.5 Machine Upgrade 本机证明即完成，不做云端 generation CAS — `可执行`（①CAS 不存在 + ⑤ local-proof / receipt tests）
+- **口径（2026-08-13）**：对齐 Raft Computer：successor 本机 PID+version+control 证明即完成 handoff。云端 `CommitTakeover` generation CAS 删除。`/takeover` 只给旧 Computer 当 receipt，不得改 `computer_generation`。generation 由 successor 上线后的 heartbeat/register claim；Attest 只通知升级完成。
+- **物**：`machine_upgrade_takeover.go` 本机 proof 不再调用 cloud CAS；`PostgresMachineUpgradeStore.CommitTakeover` 不存在；`TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof`；`TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration`。判断见 [`ADR-0016`](adr/0016-local-upgrade-proof-no-cloud-cas.md)。
+
+### 4.19.7 过期 Machine Upgrade journal 不得拦住新 PATH Computer — `可执行`（⑤ recovery 回归）
+- 对齐 Raft：正在跑的 PATH 二进制就是 Computer。journal 的 source/target 都对不上当前版本时，那是上一次升级留下的诊断记录，启动必须继续，禁止 fail closed，也禁止回滚到旧 source。
+- 当前版本仍是该 journal 的 source 或 target 时，按原相恢复：source 上续 accepted/staged，target 上续 successor，`rollback_pending` 只在这一对版本上才换回 `.prev`。
+- **物**：`machineUpgradeJournalSupersededByRunningPath`；`recoverInterruptedMachineUpgrade`；`TestInterruptedMachineUpgradeRecoveryDoesNotBlockNewerPATHWithStaleRollbackPending`；`TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplicitActivation`。
+
+### 4.19.8 Computer 控制动作只走 current Workspace Runner — `可执行`（② capability + ③单一 carrier + ⑤正反向回归）
+- 声明 `workspace_runner_control_plane_v1` 的 current Runner 是该 Computer-Workspace Binding 内 Runtime heartbeat 与 Server pending action 的唯一 carrier。Runner 每次按当前 Workspace Runtime set 发送，Server 每次重新验证 Workspace、Computer 与 generation；ack 只在同一 Runner socket、同一 Workspace Runtime scope 内消费。
+- 当前 daemon 不启动 HTTP heartbeat loop，也不在 legacy runtime-multiplexed socket 上发送 heartbeat 或消费 heartbeat ack。旧 socket 只保留 task wake、Reminder、文件 RPC 与独立 `daemon:liveness_probe/ack`；liveness 不得调用 pending-action handler。Server 保留 legacy WS/HTTP adapter 仅用于 rolling-upgrade 中的旧 daemon。
+- 控制 heartbeat 在 current Runner Ready 后立即启动，不等待额外 lifecycle replay。Server 对每个 heartbeat 逐个校验 Computer/Workspace ownership，不得要求当前 Runtime set 等于该 Computer 的全部历史 DB Runtime 行。Reminder reconnect 另按 current Runtime set 请求完整 snapshot，在线 mutation 直接发送 version-fenced upsert/cancel。reconnect replacement 先 fence 旧 socket，再由新 current Runner 恢复。多 Workspace 共用一台 Computer 时每个 Binding 独立发送和鉴权，禁止跨 Workspace 或跨 Computer 执行动作。
+- Agent Restart 不进入 control heartbeat pending action；它只由 4.15 的持久 orchestrator 经 current Workspace Runner 投递离散 `agent:stop/reset-workspace/start`。heartbeat 不得恢复 lifecycle envelope 或本机复合 executor，否则会与离散状态机形成两条控制路径。
+- **物**：`DaemonCapabilityWorkspaceRunnerControlPlane`；`WorkspaceRunner.runControlPlaneHeartbeats`；`HandleDaemonWSHeartbeat` 的 Workspace/Computer/generation fence；`TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat`、`TestWorkspaceRunnerControlHeartbeatUsesExactWorkspaceRuntimeSet`、`TestLegacyRuntimeWakeSocketDoesNotExecuteControlAcknowledgements`、`TestLivenessProbeAcknowledgesWithoutInvokingHeartbeatActions`、`TestWorkspaceRunnerHeartbeatRejectsRuntimeAssignedToAnotherComputer`；现场验收矩阵见 [`docs/daemon-control-plane-validation.md`](daemon-control-plane-validation.md)。
+
+### 4.19.6 Machine Upgrade 后继校对允许退役 provider — `可执行`（⑤ attest 回归）
+- Workspace 连接集合仍必须与 accept 快照完全一致。
+- Runtime 校对要求后继覆盖**当前仍在产品目录里**的 accepted runtime。目录里已经没有的 provider（例如删掉的 Antigravity）缺号算退役，不能把 Computer 卡在启动失败。
+- 后继多出来的 runtime（新 provider）允许。禁止手改 `accepted_runtime_ids` 来过关。
+- **物**：`agent.MissingRequiredRuntimeIDs`；`attestComputerMachineUpgrade`；`PostgresMachineUpgradeStore.AttestComputer`；`TestMissingRequiredRuntimeIDsRetiresUnknownCatalog`；`TestAttestComputerMachineUpgradeAllowsRetiredProviderGap`；`TestMachineUpgrade_ComputerAttestationAllowsRetiredProviderGap`。
 
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。
@@ -553,13 +620,20 @@
 - **订阅策略（S3-W1）**：「有关联即订阅」——`note_page_issue_ref` 行即隐式订阅；无独立订阅表。
 - **事件白名单（S3-W2）**：仅 issue 状态新进入 `done` / `cancelled` 时出提案；进行中/阻塞/标题编辑/普通评论为零提案。
 - **与 Agent Daily 并行（S3-W3）**：产品笔记/待审写回与 agent 私有 `memory/daily/` 两套存储并行、可互链、禁止合并；交叉声明见合同文档 §「Product note writeback ≠ Agent Daily」与 `docs/agent-memory-model.md` §10。
-- **物**：`docs/notes-editor-worker-contract.md`；`docs/agent-memory-model.md` §10；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` / `note_writeback_events.go` + 误用、dispatch/ACL、prompt breakout、白名单测。
+- **聊天提案写笔记（Messages）**：人点按钮才用点击者 ACL 写入。出按钮的条件：Agent 发了 `--note-write`，**或**人上一条在要求插入/写入笔记（含「给我按钮」）且这条回复像待写入正文（不是一句「好的」）。禁止把本地 `notes/*.md` 当成产品笔记。省略 `--note-page-id` → 「新建笔记」；有 UUID / `/notes/<uuid>` / sticky `note_brief` → 「插入笔记下方 / 新建子笔记」。
+- **物**：`docs/notes-editor-worker-contract.md`；`docs/agent-memory-model.md` §10；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` / `note_writeback_events.go` / `appendAgentNoteWritePart` + 误用、dispatch/ACL、prompt breakout、白名单、`--note-write` 测。
 
 ### 4.23 Context compaction 是可见 Activity，不是 Message acceptance 或进程生命周期 — `可执行`（②统一 lifecycle event + ③单一 gate/投影 + ⑤状态机回归；owner: @Codex）
 - Provider 原生事件先归一成 `MessageCompactionStarted` / `MessageCompactionFinished`；resident runtime 的主动压缩必须在独立 `ResidentMessagePreparation` gate 完成，不能共享 20 秒 native Message acceptance timeout，也不能把压缩超时解释成进程重启。
 - Activity 必须按 Raft 阶段投影：开始写一次 `Working/compacting_context`，显式或推断完成写一次 `Working/compaction_finished`，5 分钟未见完成只写一次 `Working/compaction_stale`；之后每分钟 heartbeat 只更新 Snapshot、不追加 Timeline。只有 provider turn 完成才投影 `Online/idle`。
 - `thinking`、`text`、`tool_use` 与无错误 turn end 可推断遗漏的 finish；runtime error/失败 preparation 中断 active compaction 并向被阻塞的 Message turn 传播。compaction active 时 busy Notice 继续留在 Pending/retry，不得跨上下文重写边界注入。
 - **物**：`ResidentMessagePreparation`、`agentActivityCompactionState`、`TestRuntimePoolPreparesResidentInputOutsideNativeAcceptanceTimeout`、`TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput`、`TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary`。
+
+### 4.19 活进程只复用，换进程必须显式 stop — `可执行`（⑤ pool/capability 回归）
+- Raft 两条：槽里有活进程 → 复用，不换 launch、不报新的 active；要换进程 → 显式 restart/reset，或等进程死后再 start。禁止 acquire 时比对 model/MCP/AGENTS 哈希并隐式 stop+start。
+- 产品只注册有 resident adapter 的 runtime。one-shot 寿命不再进入同一槽，因此槽上没有 mode 字段。Grok Build 的 provider id / CLI 是 `grok`。
+- 换 model 要立刻生效，走与 Restart 按钮同一条显式 restart。人没点 restart 时，旧进程可以带着旧 bake-in 再跑一轮——接受，与 Raft rebind 同代价。
+- **物**：`canonicalAgentRuntimePool.acquire`；`TestCanonicalAgentRuntimePoolReusesLiveProcessEvenIfFactoryWouldFail`；`TestAllKnownProvidersAreCanonicalResident`。权威判断见 `docs/adr/0011-resident-process-reuse-no-hash-restart.md`。
 
 ---
 
@@ -568,5 +642,12 @@
 - 创建请求必须携带由调用者稳定生成的 `client_request_id`；同 Agent、同 key、同请求返回原群，不同请求复用 key 必须冲突。重试不得留下重复频道、无 owner 频道、半套成员或孤儿 onboarding。
 - 游戏仅是验收面，存储、API、CLI 与内置技能只表达通用 coordination；不得出现狼人、法官、卧底等产品模型。
 - **物**：migration 255 的 provenance/temporary/idempotency 约束；`POST /api/agent/channels`；`multica channel create`；`multica-multi-agent-coordination` 技能及 source map；通用设计见 `docs/superpowers/specs/2026-07-31-general-multi-agent-coordination-design.md`。
+
+### 4.19 Device-code CLI login speaks RFC 8628 at the HTTP boundary — `可执行`（⑤合同测试）
+- Official public `client_id` is `multica-cli`. Missing `client_id` is `invalid_request`; unknown is `invalid_client`. There is no OAuth client registry.
+- `POST /api/device/code` and `POST /api/device/token` accept only `application/x-www-form-urlencoded`. Token polls must send `grant_type=urn:ietf:params:oauth:grant-type:device_code`. There is no JSON `{client_hint}` start or `{token, expires_in_days}` success body.
+- Token success is RFC 6749 `{access_token, token_type=Bearer, expires_in}` seconds. `access_token` is the existing user PAT (`mul_…`), still single-claim.
+- `/device` must accept a typed `user_code`. Arriving via `verification_uri_complete` must display the code and require a match confirmation before approve/deny.
+- **物**：`server/internal/handler/device_auth.go` + `device_auth_test.go`；`server/cmd/multica/cmd_auth.go` + `cmd_device_login_test.go`；`packages/views/device/device-confirm-page.tsx` + test.
 
 维护人：Parker（产品）。规矩变更走 PR；`可执行` 升降档需 owner 签字。

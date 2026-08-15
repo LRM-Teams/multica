@@ -1557,7 +1557,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	if strings.TrimSpace(resp.ChannelID) != "" {
 		channelID := parseUUID(resp.ChannelID)
 		if goal, err := h.currentChannelGoal(ctx, event.WorkspaceID, channelID); err == nil {
-			h.hydrateChannelGoalWorkGraph(ctx, &goal)
+			h.hydrateChannelGoalControlPlane(ctx, &goal)
 			resp.ChannelGoal = channelGoalContextForClaim(goal)
 			// LRM-1004: attach bounded subgoals for this claiming agent only.
 			if resp.ChannelGoal != nil {
@@ -1574,15 +1574,6 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		)
 		return nil
 	}
-	// D6-1a: put canonical runtime-state generation on every wake claim so the
-	// daemon can later fence agentRuntimeTurnCoordinator.Begin. Soft-fail keeps
-	// legacy resume (PriorSessionID from chat_session/issue) working if Ensure
-	// cannot create/return a row (wrong binding, migration lag, etc.).
-	// Do NOT surface FreshSessionNoticeReason here: migration-218 cutover rows
-	// still pair with legacy PriorSession resume, and current daemons inject a
-	// "brand new / history archived" brief whenever the notice is non-empty.
-	// That false execution hint is reserved for D6-2 after archive/read-switch.
-	h.attachCanonicalRuntimeState(ctx, event.AgentID, resp.RuntimeID, &resp)
 	return &resp
 }
 
@@ -1656,36 +1647,6 @@ func filterManagerChannelsTo(channels []ManagerChannelData, channelID string) []
 		}
 	}
 	return out
-}
-
-// attachCanonicalRuntimeState ensures the agent×runtime row exists and copies
-// generation onto the claim response. It intentionally omits
-// FreshSessionNoticeReason until D6-2 completes archive + resume cutover, and
-// never mutates PriorSessionID/PriorWorkDir.
-func (h *Handler) attachCanonicalRuntimeState(ctx context.Context, agentID pgtype.UUID, runtimeID string, resp *AgentTaskResponse) {
-	if h == nil || resp == nil || !agentID.Valid || strings.TrimSpace(runtimeID) == "" {
-		return
-	}
-	runtimeUUID := parseUUID(runtimeID)
-	if !runtimeUUID.Valid {
-		return
-	}
-	state, err := h.Queries.EnsureAgentRuntimeState(ctx, db.EnsureAgentRuntimeStateParams{
-		AgentID:   agentID,
-		RuntimeID: runtimeUUID,
-	})
-	if err != nil {
-		slog.Warn("agent inbox claim: ensure agent_runtime_state failed",
-			"agent_id", uuidToString(agentID),
-			"runtime_id", runtimeID,
-			"error", err,
-		)
-		return
-	}
-	if state.Generation > 0 {
-		resp.RuntimeStateGeneration = state.Generation
-	}
-	// Intentionally do not copy state.FreshSessionNoticeReason.
 }
 
 func agentInboxSyntheticTask(event db.AgentInboxEvent, runtimeID pgtype.UUID) db.AgentInboxEvent {

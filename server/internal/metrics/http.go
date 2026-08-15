@@ -101,7 +101,7 @@ func isSLOEligibleRequest(r *http.Request, route string, responseHeaders http.He
 	if !strings.HasPrefix(route, "/api/") {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") || strings.HasSuffix(route, "/ws") {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") || strings.HasSuffix(route, "/ws") || strings.HasSuffix(route, "/connect") {
 		return false
 	}
 	if strings.HasPrefix(route, "/api/daemon/") || strings.HasPrefix(route, "/api/sandbox/") || strings.HasPrefix(route, "/api/agent/") {

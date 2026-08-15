@@ -1,0 +1,61 @@
+{
+  "contract_kind": "director_action_proposal",
+  "schema_version": 6,
+  "client_request_id": "00000000-0000-4000-8000-000000000101",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "work_item_id": "00000000-0000-4000-8000-000000000102",
+  "attempt_id": "00000000-0000-4000-8000-000000000103",
+  "manifest_id": "00000000-0000-4000-8000-000000000104",
+  "manifest_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "director_assignment_id": "00000000-0000-4000-8000-000000000004",
+  "director_generation": 1,
+  "brief_id": "00000000-0000-4000-8000-000000000001",
+  "brief_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "reviewed_page_count": 1,
+  "expected_state_version": 12,
+  "through_event_sequence": 45,
+  "actions": [
+    {
+      "action_id": "create-performance-agent",
+      "kind": "create_agent",
+      "reason": "当前空闲 Agent 不具备生产压测能力，需要补充一个专项执行者。",
+      "idempotency_key": "team.performance-agent.goal-v2",
+      "target_refs": [
+        {
+          "kind": "branch",
+          "id": "00000000-0000-4000-8000-000000000005"
+        }
+      ],
+      "expected_state_version": 12,
+      "payload_schema": "research.agent.create.v1",
+      "payload": {
+        "name": "Performance Investigator",
+        "mission_prompt": "测量目标技术在生产型高并发负载下的延迟和资源边界。",
+        "model": "director-selected",
+        "tools": ["shell", "browser"]
+      },
+      "depends_on_action_ids": []
+    },
+    {
+      "action_id": "create-performance-task",
+      "kind": "create_task",
+      "reason": "现有结果暴露了延迟拐点，但缺少生产配置下的复现。",
+      "idempotency_key": "task.performance-reproduction.goal-v2",
+      "target_refs": [
+        {
+          "kind": "branch",
+          "id": "00000000-0000-4000-8000-000000000005"
+        }
+      ],
+      "expected_state_version": 12,
+      "payload_schema": "research.task.create.v1",
+      "payload": {
+        "task_type": "production_benchmark",
+        "objective": "在生产配置下复现高并发延迟拐点。",
+        "expected_result_schema": "research.atomic_result.v1"
+      },
+      "depends_on_action_ids": ["create-performance-agent"]
+    }
+  ]
+}

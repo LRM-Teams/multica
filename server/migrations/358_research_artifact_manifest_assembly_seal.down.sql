@@ -1,0 +1,17 @@
+DROP TRIGGER IF EXISTS research_artifact_input_reference_update_guard
+  ON research_artifact_input_reference;
+DROP TRIGGER IF EXISTS research_artifact_context_omission_update_guard
+  ON research_artifact_context_omission;
+DROP TRIGGER IF EXISTS research_artifact_context_entry_update_guard
+  ON research_artifact_context_entry;
+DROP FUNCTION IF EXISTS research_artifact_manifest_lineage_update_guard_fn();
+
+DROP TRIGGER IF EXISTS research_artifact_context_omission_insert_guard
+  ON research_artifact_context_omission;
+DROP TRIGGER IF EXISTS research_artifact_context_entry_insert_guard
+  ON research_artifact_context_entry;
+DROP FUNCTION IF EXISTS research_artifact_manifest_selection_insert_guard_fn();
+
+DROP TRIGGER IF EXISTS research_artifact_manifest_assembly_marker
+  ON research_artifact_context_manifest;
+DROP FUNCTION IF EXISTS research_artifact_manifest_assembly_marker_fn();

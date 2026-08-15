@@ -1,0 +1,62 @@
+{
+  "contract_kind": "report_package_submission",
+  "schema_version": 6,
+  "client_request_id": "00000000-0000-4000-8000-000000000501",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "work_item_id": "00000000-0000-4000-8000-000000000502",
+  "task_id": "00000000-0000-4000-8000-000000000503",
+  "attempt_id": "00000000-0000-4000-8000-000000000504",
+  "agent_id": "00000000-0000-4000-8000-000000000505",
+  "manifest_id": "00000000-0000-4000-8000-000000000509",
+  "manifest_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "goal_version": 2,
+  "input_snapshot_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "input_nodes": [
+    {
+      "kind": "insight",
+      "id": "00000000-0000-4000-8000-000000000506",
+      "version_id": "00000000-0000-4000-8000-000000000507",
+      "tier": "XXL",
+      "content_hash": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    }
+  ],
+  "title": "生产采用评估报告",
+  "summary": "报告综合性能、成本和运维分支，给出有条件采用建议。",
+  "document_resource_id": "00000000-0000-4000-8000-000000000508",
+  "resources": [
+    {
+      "resource_id": "00000000-0000-4000-8000-000000000508",
+      "path": "index.html",
+      "media_type": "text/html;charset=utf-8",
+      "byte_size": 24576,
+      "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "role": "document"
+    }
+  ],
+  "outline": [
+    {
+      "id": "conclusion",
+      "title": "结论",
+      "level": 1
+    }
+  ],
+  "citations": [
+    {
+      "id": "citation-1",
+      "label": "性能复现结果",
+      "evidence_refs": [
+        {
+          "kind": "observation",
+          "id": "00000000-0000-4000-8000-000000000302",
+          "version_id": "00000000-0000-4000-8000-000000000303",
+          "content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        }
+      ]
+    }
+  ],
+  "plain_text": "结论：目标技术适合中等并发负载；高并发写入场景需要连接池调优和成本验证。",
+  "script_hashes": [],
+  "style_hashes": [],
+  "package_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

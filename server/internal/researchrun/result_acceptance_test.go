@@ -6,7 +6,68 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
+
+func TestResultAcceptanceModuleRoutesV6PlanToAtomicAdapter(t *testing.T) {
+	store, submission := validResultAcceptanceFixture(t)
+	store.run.OrchestratorVersion = OrchestratorVersionV6
+	store.run.SessionID, store.run.WorkspaceID = uuid.NewString(), uuid.NewString()
+	store.task.SessionID, store.task.WorkspaceID = store.run.SessionID, store.run.WorkspaceID
+	store.task.ExpectedResult = "research_plan_v6"
+	store.members = []FleetMember{{AgentID: uuid.NewString(), Role: "researcher", Status: "active"}}
+	submission.SessionID, submission.WorkspaceID = store.run.SessionID, store.run.WorkspaceID
+	submission.Raw = encodeResearchV6PlanFixture(t, validResearchV6PlanFixture())
+
+	if _, err := (resultAcceptanceModule{store: store}).Accept(context.Background(), submission); err != nil {
+		t.Fatal(err)
+	}
+	if store.accepted == nil || store.accepted.V6Plan == nil || store.accepted.Result.SchemaVersion != 6 || len(store.accepted.Result.Plan.Tasks) != 1 {
+		t.Fatalf("V6 plan did not reach atomic adapter: %+v", store.accepted)
+	}
+}
+
+func TestResultAcceptanceModuleRoutesV6EvidenceToAtomicAdapter(t *testing.T) {
+	store, submission := validResultAcceptanceFixture(t)
+	store.run.OrchestratorVersion = OrchestratorVersionV6
+	store.task.Kind, store.task.ExpectedResult = TaskKindDiscover, "research_evidence_v6"
+	submission.Raw = encodeV6EvidenceFixture(t, validV6EvidenceResultFixture())
+
+	if _, err := (resultAcceptanceModule{store: store}).Accept(context.Background(), submission); err != nil {
+		t.Fatal(err)
+	}
+	if store.accepted == nil || store.accepted.V6Evidence == nil || store.accepted.Result.SchemaVersion != 6 || len(store.accepted.V6Evidence.QueryExecutions) != 1 {
+		t.Fatalf("V6 evidence did not reach atomic adapter: %+v", store.accepted)
+	}
+}
+
+func TestResultAcceptanceModuleRoutesV6IntegrationToAtomicAdapter(t *testing.T) {
+	store, submission := validResultAcceptanceFixture(t)
+	store.run.OrchestratorVersion = OrchestratorVersionV6
+	store.task.Kind, store.task.ExpectedResult = TaskKindIntegrate, "research_integration_v6"
+	submission.Raw = validV6IntegrationResultJSON(t)
+
+	if _, err := (resultAcceptanceModule{store: store}).Accept(context.Background(), submission); err != nil {
+		t.Fatal(err)
+	}
+	if store.accepted == nil || store.accepted.V6Integration == nil || store.accepted.Result.SchemaVersion != 6 || len(store.accepted.V6Integration.IntegrationContributions) != 1 {
+		t.Fatalf("V6 integration did not reach atomic adapter: %+v", store.accepted)
+	}
+}
+
+func TestResultAcceptanceModuleRoutesV6DeliberationToAtomicAdapter(t *testing.T) {
+	store, submission := validResultAcceptanceFixture(t)
+	store.run.OrchestratorVersion = OrchestratorVersionV6
+	store.task.Kind, store.task.ExpectedResult = TaskKindDeliberate, "research_deliberation_v6"
+	submission.Raw = validV6DeliberationResultJSON(t)
+	if _, err := (resultAcceptanceModule{store: store}).Accept(context.Background(), submission); err != nil {
+		t.Fatal(err)
+	}
+	if store.accepted == nil || store.accepted.V6Deliberation == nil || len(store.accepted.V6Deliberation.Turns) != 2 {
+		t.Fatalf("V6 deliberation did not reach atomic adapter: %+v", store.accepted)
+	}
+}
 
 func TestResultAcceptanceModuleValidatesAndPassesCanonicalInput(t *testing.T) {
 	store, submission := validResultAcceptanceFixture(t)
@@ -100,6 +161,7 @@ func validResultAcceptanceFixture(t *testing.T) (*resultAcceptanceTestStore, res
 		attempts: []Attempt{{ID: "attempt-1", TaskID: "task-1", InboxTaskID: "inbox-1"}},
 		members:  []FleetMember{{AgentID: "scout-agent", Role: "scout", Status: "active"}},
 		outcome:  AcceptResultOutcome{TaskID: "task-1", TaskKind: TaskKindPlan},
+		contract: ResearchContract{SourcePolicy: json.RawMessage(`{}`)},
 	}
 	return store, resultSubmission{
 		SessionID: "session-1", WorkspaceID: "workspace-1", TaskID: "task-1",
@@ -108,13 +170,14 @@ func validResultAcceptanceFixture(t *testing.T) (*resultAcceptanceTestStore, res
 }
 
 type resultAcceptanceTestStore struct {
-	run              Run
-	task             Task
-	attempts         []Attempt
-	members          []FleetMember
-	outcome          AcceptResultOutcome
-	accepted         *AcceptResultInput
-	passportEnabled  bool
+	run                 Run
+	task                Task
+	attempts            []Attempt
+	members             []FleetMember
+	outcome             AcceptResultOutcome
+	contract            ResearchContract
+	accepted            *AcceptResultInput
+	passportEnabled     bool
 	hasDispatchManifest bool
 }
 
@@ -132,6 +195,10 @@ func (store *resultAcceptanceTestStore) ListAttempts(context.Context, string) ([
 
 func (store *resultAcceptanceTestStore) ListFleetMembers(context.Context, string, string) ([]FleetMember, error) {
 	return append([]FleetMember(nil), store.members...), nil
+}
+
+func (store *resultAcceptanceTestStore) GetCurrentContract(context.Context, string, string) (ResearchContract, error) {
+	return store.contract, nil
 }
 
 func (store *resultAcceptanceTestStore) AcceptResult(_ context.Context, input AcceptResultInput) (AcceptResultOutcome, error) {

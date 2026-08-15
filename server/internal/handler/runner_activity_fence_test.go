@@ -11,7 +11,7 @@ func TestRunnerActivityFingerprintBindsWholeProducerFact(t *testing.T) {
 	base := protocol.AgentActivityPayload{Snapshot: protocol.AgentActivitySnapshot{
 		AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-1",
 		ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: time.Unix(1, 0),
-		ActivityKind: protocol.ActivityKindWorking,
+		ActivityKind: protocol.ActivityKindWorking, DetailKind: "model_response_started",
 	}}
 	first, err := runnerActivityFingerprint(base)
 	if err != nil {

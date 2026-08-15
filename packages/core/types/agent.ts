@@ -471,7 +471,7 @@ export interface Agent {
    * `agent.mcp_config` (see providerSupportsMcpConfig). Each backend
  * materialises it in the runtime-native place: Claude/Pi flags, Cursor
  * `.cursor/mcp.json`, Codex config.toml, ACP session params, OpenCode env
- * config, OpenClaw wrapper config, etc. `null` (or the field omitted on
+ * config, etc. `null` (or the field omitted on
  * legacy backends) means no managed config; the daemon falls back to the
  * CLI's own default. MUL-2764.
    *
@@ -917,6 +917,13 @@ export interface AgentFileNode {
   size?: number;
 }
 
+/** Query params for GET /api/agents/:id/files — one directory at a time. */
+export interface ListAgentFilesParams {
+  include_hidden?: boolean;
+  /** Relative directory under the agent root. Omit or empty for the root. */
+  path?: string;
+}
+
 export type AgentFilesStatus = "ok" | "offline" | "missing" | "error";
 
 export interface AgentFilesResponse {
@@ -924,6 +931,8 @@ export interface AgentFilesResponse {
   status: AgentFilesStatus;
   nodes: AgentFileNode[];
   truncated: boolean;
+  /** Daemon-absolute agent root. Absent when the runtime is offline. */
+  root_path?: string;
 }
 
 export interface AgentFileContentResponse {
@@ -971,43 +980,32 @@ export interface ListAgentSkillSuggestionsResponse {
   suggestions: AgentSkillSuggestion[];
 }
 
-// Agent lifecycle actions (#632/#633). Single server entry, three kinds; the
-// client only ever sends `action_kind` (the server resolves the workspace root
-// from the agent/workspace binding — never a path).
-export type AgentLifecycleActionKind =
-  | "restart"
-  | "reset_session_restart"
-  | "full_reset_restart";
+// Raft-aligned Agent reset contract. The server resolves runtime and workspace
+// bindings; clients send only one of the three product modes.
+export type AgentRestartMode = "restart" | "session" | "full";
 
-export type AgentLifecycleExecutionMode = "immediate" | "after_current_run";
-
-export type AgentLifecycleOperationStatus =
-  | "scheduled"
+export type AgentRestartOperationStatus =
   | "running"
   | "succeeded"
   | "failed";
 
 /**
- * Per-action executability from the preflight — server-authoritative. The FE
+ * Per-mode executability from the preflight — server-authoritative. The FE
  * must not derive active/idle from `agent.status`; `supported`/`disabled_reason`
  * is the final judge (covers permission, no runtime, offline/old daemon, and the
  * dormant `unsupported_runtime_capability` gate before #677 D6 activates).
- * `full_reset_restart` is idle-only: while a run is active it reports
- * `{ supported: false, disabled_reason: "agent_active" }` and is never scheduled.
  */
-export interface AgentLifecycleActionState {
+export interface AgentRestartModeState {
   supported: boolean;
   disabled_reason?: string | null;
-  execution_mode: AgentLifecycleExecutionMode;
 }
 
-export interface AgentLifecycleOperation {
+export interface AgentRestartOperation {
   id: string;
   agent_id: string;
   runtime_id: string | null;
-  action_kind: AgentLifecycleActionKind;
-  status: AgentLifecycleOperationStatus;
-  execution_mode: AgentLifecycleExecutionMode;
+  mode: AgentRestartMode;
+  status: AgentRestartOperationStatus;
   step?: string | null;
   reason_code?: string | null;
   created_at: string;
@@ -1017,7 +1015,7 @@ export interface AgentLifecycleOperation {
 
 /**
  * FE-facing projection of server/pkg/agent ProviderCapabilities. Exposed as a
- * set on runtime + lifecycle preflight — do not add one-off top-level bools
+ * set on runtime + restart preflight — do not add one-off top-level bools
  * per capability. Older servers omit the object; treat missing keys as false.
  */
 export interface ProviderCapabilities {
@@ -1029,9 +1027,9 @@ export interface ProviderCapabilities {
   needs_inline_system_prompt: boolean;
 }
 
-export interface AgentLifecyclePreflight {
-  actions: Record<AgentLifecycleActionKind, AgentLifecycleActionState>;
-  active_operation?: AgentLifecycleOperation | null;
+export interface AgentRestartPreflight {
+  actions: Record<AgentRestartMode, AgentRestartModeState>;
+  active_operation?: AgentRestartOperation | null;
   /**
    * Provider capability set for this agent's runtime. Gate the profile restart
    * button on `provider_capabilities.force_restart` — do not hardcode a

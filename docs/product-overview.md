@@ -327,13 +327,13 @@ Agent 是 Multica 的灵魂。几乎所有功能都围绕"如何让一个 agent 
 | `multica config use <production\|test>` | 安全切环境；production 固定 stable，test 固定 preview |
 | `multica login` | 浏览器打开 OAuth 登录，保存 90 天 PAT 到 `~/.multica/config.json` |
 | `multica login --token <pat>` | 无头登录（SSH/CI） |
-| `multica computer start` | 启动全机唯一、脱离终端的 resident |
-| `multica computer stop` | 停止全机唯一 resident |
+| `multica computer start` | 启动全机唯一、脱离终端的 Computer Host resident，并恢复 active Binding children |
+| `multica computer stop` | 停止全机唯一 Computer Host resident 及其监督的 Binding children |
 | `multica computer status` | 只读显示 Identity、环境、固定包源、resident 和 Workspace connections |
 | `multica computer logs -f` | 实时跟随机器级服务日志 |
 | `multica computer doctor` | 诊断进程、环境、包源和连接，不创建或删除连接 |
 
-一个 OS 用户只有一个 `~/.multica/computer` 和一个 resident；它可保存多个
+一个 OS 用户只有一个 `~/.multica/computer` 和一个 Computer Host resident；Host 可监督多个
 Workspace connection。production 与 test 的连接可以同时留在本地，但一个
 resident generation 一次只连接一个环境。profile 只作为受限迁移证据，不再
 选择第二个 daemon。

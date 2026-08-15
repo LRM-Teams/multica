@@ -9,14 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PostgresStore struct {
-	pool        *pgxpool.Pool
-	txFaultHook researchTxFaultHook
+	pool                          *pgxpool.Pool
+	txFaultHook                   researchTxFaultHook
+	dispatchManifestBeforeCASHook func(context.Context, *dispatchManifestPlan) error
+	dispatchManifestPlannedHook   func(context.Context, dispatchManifestPlan) error
 }
 
 var (
@@ -163,6 +166,18 @@ func initializeRunTx(ctx context.Context, tx pgx.Tx, in StartInput, cfg RunConfi
 		ON CONFLICT (session_id, goal_version) DO NOTHING
 	`, in.WorkspaceID, in.SessionID, strings.TrimSpace(in.Goal), strings.TrimSpace(in.Language),
 		sourcePolicy, configJSON, in.CreatedBy); err != nil {
+		return RunEvent{}, err
+	}
+	director, err := PinResearchDirector(in.LeadAgentID)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	directorID := uuid.NewSHA1(uuid.MustParse(in.SessionID), []byte("research-director/1")).String()
+	if _, err = tx.Exec(ctx, `INSERT INTO research_director_identity
+		(id,workspace_id,session_id,identity_version,agent_id,assigned_by_user_id,reason)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,'fleet_lead_at_run_start')
+		ON CONFLICT (workspace_id,session_id,identity_version) DO NOTHING`, directorID, in.WorkspaceID, in.SessionID,
+		director.IdentityVersion, director.AgentID, in.CreatedBy); err != nil {
 		return RunEvent{}, err
 	}
 	var rootQuestionID string
@@ -568,7 +583,6 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 		       COALESCE(agent.runtime_id::text, ''), COALESCE(runtime.provider, ''),
 		       COALESCE(agent.model, ''), agent.runtime_mode,
 		       COALESCE(runtime.pinned_version, ''),
-		       COALESCE(runtime_state.provider_config_fingerprint, ''),
 		       COALESCE(agent.runtime_config::text, ''), COALESCE(agent.custom_env::text, ''),
 		       COALESCE(agent.custom_args::text, ''), COALESCE(agent.mcp_config::text, ''),
 		       COALESCE(agent.thinking_level, ''),
@@ -577,8 +591,6 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 		JOIN research_session s ON s.fleet_id = m.fleet_id
 		JOIN agent ON agent.id = m.agent_id AND agent.workspace_id = m.workspace_id
 		LEFT JOIN agent_runtime runtime ON runtime.id = agent.runtime_id AND runtime.workspace_id = m.workspace_id
-		LEFT JOIN agent_runtime_state runtime_state
-		  ON runtime_state.agent_id = agent.id AND runtime_state.runtime_id = agent.runtime_id
 		WHERE s.id = $1::uuid AND s.workspace_id = $2::uuid AND m.workspace_id = s.workspace_id
 		ORDER BY m.is_lead DESC, m.created_at, m.id
 	`, sessionID, workspaceID)
@@ -589,22 +601,22 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 	out := []FleetMember{}
 	for rows.Next() {
 		var item FleetMember
-		var runtimeMode, pinnedVersion, providerFingerprint string
+		var runtimeMode, pinnedVersion string
 		var runtimeConfig, customEnv, customArgs, mcpConfig, thinkingLevel string
 		var blockedUntil pgtype.Timestamptz
 		item.ExecutionTarget.Adapter = "agent_inbox"
 		if err := rows.Scan(&item.AgentID, &item.Role, &item.Status, &item.IsLead,
 			&item.ExecutionTarget.RuntimeID, &item.ExecutionTarget.Provider,
 			&item.ExecutionTarget.Model, &runtimeMode, &pinnedVersion,
-			&providerFingerprint, &runtimeConfig, &customEnv, &customArgs, &mcpConfig,
+			&runtimeConfig, &customEnv, &customArgs, &mcpConfig,
 			&thinkingLevel, &item.ProviderBlockDetail, &blockedUntil); err != nil {
 			return nil, err
 		}
 		item.ExecutionTarget.AgentID = item.AgentID
 		item.ExecutionTarget = FingerprintExecutionTarget(item.ExecutionTarget, ExecutionTargetConfigIdentity{
 			RuntimeMode: runtimeMode, RuntimePinnedVersion: pinnedVersion,
-			ProviderStateFingerprint: providerFingerprint, RuntimeConfig: runtimeConfig,
-			CustomEnv: customEnv, CustomArgs: customArgs, MCPConfig: mcpConfig,
+			RuntimeConfig: runtimeConfig,
+			CustomEnv:     customEnv, CustomArgs: customArgs, MCPConfig: mcpConfig,
 			ThinkingLevel: thinkingLevel,
 		})
 		if blockedUntil.Valid {
@@ -695,21 +707,60 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		}
 		return RunSnapshot{}, err
 	}
-	snapshot, err := s.TaskContext(ctx, taskID, workspaceID)
-	if err != nil {
-		return RunSnapshot{}, err
-	}
 	if !passportEnabled {
-		return snapshot, nil
+		return s.TaskContext(ctx, taskID, workspaceID)
 	}
 	allowed, ok, err := loadManifestAuthorizedArtifactIDsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return RunSnapshot{}, err
 	}
 	if !ok {
-		return snapshot, nil
+		return RunSnapshot{}, fmt.Errorf("%w: attempt has no frozen artifact manifest", ErrInvalidTransition)
 	}
-	filtered := filterRunSnapshotByManifest(snapshot, allowed)
+	_ = allowed
+	frozenRun, err := loadFrozenRunRepresentationPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered := RunSnapshot{Run: frozenRun}
+	frozenDurable, err := loadFrozenDurableContextPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.Contract = frozenDurable.Contract
+	filtered.Method = frozenDurable.Method
+	filtered.Questions = frozenDurable.Questions
+	filtered.Tasks = frozenDurable.Tasks
+	filtered.Attempts = frozenDurable.Attempts
+	filtered.PrincipalHeader, err = loadManifestPrincipalHeaderPool(ctx, s, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	privateEvaluations, err := loadFrozenEvaluationPrivatePool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.EvaluationPrivate = privateEvaluations
+	frozenLegacy, err := loadFrozenLegacyContextPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.LegacyContext = &frozenLegacy
+	frozenSources, frozenObservations, frozenClaims, err := loadFrozenEvidenceRepresentationsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.Sources = frozenSources
+	filtered.Observations = frozenObservations
+	filtered.Claims = frozenClaims
+	frozenAttempts, err := loadFrozenAttemptRepresentationsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	filtered.Attempts, err = applyFrozenAttempts(filtered.Attempts, frozenAttempts, attemptID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
 	manifestID, manifestHash, policyWatermark, _, summaryErr := loadAttemptManifestSummaryPool(
 		ctx, s.pool, workspaceID, sessionID, attemptID,
 	)
@@ -723,6 +774,11 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		PolicyWatermark:  policyWatermark,
 		ManifestFiltered: true,
 	}
+	projection, projectionErr := (artifactProjectionModule{store: s}).LoadManifest(ctx, workspaceID, sessionID, manifestID)
+	if projectionErr != nil {
+		return RunSnapshot{}, projectionErr
+	}
+	filtered.ArtifactProjection = &projection
 	if gateSnapshot, found, gateErr := loadManifestGateSnapshotPool(ctx, s.pool, workspaceID, sessionID, attemptID); gateErr != nil {
 		return RunSnapshot{}, gateErr
 	} else if found {
@@ -815,7 +871,7 @@ func (s *PostgresStore) RenewRunLease(ctx context.Context, lease RunLease, durat
 	return renewed, nil
 }
 
-func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time) error {
+func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time, lastError string) error {
 	tx, err := s.beginResearchTx(ctx, txOpReconcileLeaseRelease, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -824,12 +880,12 @@ func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next tim
 	command, err := tx.Exec(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_token = NULL, reconcile_lease_expires_at = NULL,
-		    next_reconcile_at = $4, updated_at = now()
+		    next_reconcile_at = $4, last_error = $5, updated_at = now()
 		WHERE id = $1::uuid
 		  AND reconcile_lease_token = $2::uuid
 		  AND reconcile_lease_generation = $3
 		  AND reconcile_lease_expires_at > now()
-	`, lease.SessionID, lease.Token, lease.Generation, next)
+	`, lease.SessionID, lease.Token, lease.Generation, next, truncateBytes(lastError, 4096))
 	if err != nil {
 		return err
 	}
@@ -968,6 +1024,9 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 		if existing.Type != eventType || existing.ActorType != actorType || existing.ActorID != actorID || !semanticJSONEqual(existing.Payload, encoded) {
 			return RunEvent{}, fmt.Errorf("%w: event idempotency key %q was reused for different content", ErrResultConflict, key)
 		}
+		if err = persistRunEventInputReferencesTx(ctx, tx, existing); err != nil {
+			return RunEvent{}, err
+		}
 		return existing, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -997,10 +1056,74 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindRunEvent, workspaceID, sessionID, event.ID, event.CreatedAt, nil, nil); err != nil {
+	contentHash, err := ArtifactContentHash(ArtifactKindRunEvent, runEventArtifactContent(event))
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: event.ID,
+		Kind: ArtifactKindRunEvent, SourceCreatedAt: &event.CreatedAt,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
+	}); err != nil {
+		return RunEvent{}, err
+	}
+	if err = persistRunEventInputReferencesTx(ctx, tx, event); err != nil {
 		return RunEvent{}, err
 	}
 	return event, nil
+}
+
+func persistRunEventInputReferencesTx(ctx context.Context, tx pgx.Tx, event RunEvent) error {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("%w: decode run event payload lineage: %v", ErrInvalidContract, err)
+	}
+	type eventReference struct {
+		field    string
+		kind     ArtifactEntityKind
+		relation string
+	}
+	for _, reference := range []eventReference{
+		{field: "task_id", kind: ArtifactKindTask, relation: "event_task"},
+		{field: "attempt_id", kind: ArtifactKindAttempt, relation: "event_attempt"},
+		{field: "question_id", kind: ArtifactKindQuestion, relation: "event_question"},
+		{field: "report_id", kind: ArtifactKindReportRevision, relation: "event_report"},
+	} {
+		raw, ok := payload[reference.field]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+		var artifactID string
+		if err := json.Unmarshal(raw, &artifactID); err != nil {
+			return fmt.Errorf("%w: run event %s has invalid %s reference", ErrInvalidContract, event.Type, reference.field)
+		}
+		artifactID = strings.TrimSpace(artifactID)
+		if artifactID == "" {
+			continue
+		}
+		if err := persistTypedArtifactInputReferenceTx(
+			ctx, tx, event.WorkspaceID, event.SessionID,
+			event.ID, ArtifactKindRunEvent, artifactID, reference.kind,
+			reference.relation, "run_event_materialization", 0,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runEventArtifactContent(event RunEvent) map[string]any {
+	return map[string]any{
+		"sequence":        event.Sequence,
+		"event_type":      event.Type,
+		"idempotency_key": event.IdempotencyKey,
+		"actor_type":      event.ActorType,
+		"actor_id":        event.ActorID,
+		"payload":         json.RawMessage(event.Payload),
+	}
 }
 
 func semanticJSONEqual(left, right []byte) bool {

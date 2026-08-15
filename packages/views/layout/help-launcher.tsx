@@ -12,6 +12,7 @@ import {
   PRODUCT_CHANGELOG_URL,
   PRODUCT_DOCS_ORIGIN,
 } from "@multica/core/constants/product-origin";
+import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 
 const DOCS_URL = PRODUCT_DOCS_ORIGIN;
@@ -24,7 +25,10 @@ export function HelpLauncher() {
       <DropdownMenuTrigger
         aria-label={t(($) => $.help.trigger)}
         title={t(($) => $.help.trigger)}
-        className="inline-flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground data-popup-open:bg-accent data-popup-open:text-foreground"
+        className={cn(
+          "inline-flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors cursor-pointer hover:bg-accent hover:text-foreground data-popup-open:bg-accent data-popup-open:text-foreground",
+          "group-data-[collapsible=icon]:size-8",
+        )}
       >
         <CircleHelp className="size-4" />
       </DropdownMenuTrigger>

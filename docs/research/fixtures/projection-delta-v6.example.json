@@ -1,0 +1,38 @@
+{
+  "contract_kind": "projection_delta",
+  "schema_version": 6,
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "snapshot_id": "00000000-0000-4000-8000-000000000601",
+  "event_sequence": 48,
+  "previous_projection_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "projection_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "upsert_nodes": [
+    {
+      "id": "work_s:00000000-0000-4000-8000-000000000701",
+      "kind": "work_s",
+      "tier": "S",
+      "canonical_ref": {
+        "kind": "work_item",
+        "id": "00000000-0000-4000-8000-000000000701",
+        "revision": 1
+      },
+      "branch_ids": ["00000000-0000-4000-8000-000000000005"],
+      "state": {
+        "execution": "running",
+        "conclusion": "proposed",
+        "integration": "unmatched"
+      },
+      "catalog_summary": "正在复现低配实例下的性能边界。",
+      "absorbed": false,
+      "terminal": false,
+      "expandable": false,
+      "hidden_child_count": 0,
+      "updated_at": "2026-08-14T08:02:00Z"
+    }
+  ],
+  "remove_node_ids": [],
+  "upsert_edges": [],
+  "remove_edge_ids": [],
+  "invalidate_slice_keys": ["default:page:1"]
+}

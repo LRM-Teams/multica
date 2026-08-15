@@ -84,6 +84,7 @@ export interface StarCanvasViewModel {
   entities: StarEntityView[];
   relations: StarRelationView[];
   clusters: StarGraphLayoutResult["clusters"];
+  frontiers: StarGraphLayoutResult["frontiers"];
   rootId: string | null;
   version: string;
   stats: StarGraphLayoutResult["stats"];
@@ -123,6 +124,7 @@ function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
   return {
     id: n.id,
     tier: tier as StarGraphLayoutTier,
+    nodeKind: n.node_type,
     clusterId: n.cluster_id && n.cluster_id !== "" ? n.cluster_id : null,
     parentId: n.parent_id || n.derived_from || null,
   };
@@ -137,6 +139,12 @@ function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
 export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation["kind"] {
   switch (edgeType) {
     case "leads_to":
+    case "decomposes":
+    case "depends_on":
+    case "tests":
+    case "triggered":
+    case "produced":
+    case "consumed":
     case "refines":
     case "escalated_to":
     case "decompose":
@@ -146,7 +154,15 @@ export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation
     case "supports":
     case "resolved_by":
     case "merged_from":
+    case "integrates":
+    case "reported_in":
+    case "reviewed_by":
+    case "revised_by":
+    case "staffed_by":
+    case "created_for":
+    case "retired_after":
       return "support";
+    case "discussed_by":
     case "challenged_by":
     case "contradicts":
     case "invalidates":
@@ -157,7 +173,6 @@ export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation
       return "challenge";
     case "restart_of":
       return "newdir";
-    case "discussed_by":
     default:
       // Neutral relation drives layout determinism without overloading the
       // challenge/support semantics; the real edgeType still styles the line.
@@ -273,6 +288,7 @@ export function buildStarCanvasViewModel(
     entities,
     relations: relationsView,
     clusters: result.clusters,
+    frontiers: result.frontiers ?? [],
     rootId: result.rootId,
     version: result.version,
     stats,
@@ -293,6 +309,7 @@ export function rebaseStarCanvasIntoViewModel(
     | "entities"
     | "relations"
     | "clusters"
+    | "frontiers"
     | "rootId"
     | "version"
     | "stats"
@@ -325,6 +342,7 @@ export function rebaseStarCanvasIntoViewModel(
       to: r.to,
     })),
     clusters: model.clusters,
+    frontiers: model.frontiers,
     rootId: model.rootId,
     version: model.version,
     stats: { reused: 0, moved: 0, total: model.entities.length },
@@ -355,6 +373,7 @@ export function rebaseStarCanvasIntoViewModel(
     entities,
     relations: relationsView,
     clusters: translated.clusters,
+    frontiers: translated.frontiers ?? [],
     rootId: translated.rootId,
     version: translated.version,
     stats: { ...model.stats, ...translated.stats },
@@ -372,7 +391,7 @@ export function rebaseStarCanvasIntoViewModel(
 export function extractLayoutResultFromViewModel(
   model: Pick<
     StarCanvasViewModel,
-    "entities" | "relations" | "clusters" | "rootId" | "version" | "stats"
+    "entities" | "relations" | "clusters" | "frontiers" | "rootId" | "version" | "stats"
   >,
 ): StarGraphLayoutResult {
   return {
@@ -397,6 +416,7 @@ export function extractLayoutResultFromViewModel(
       to: r.to,
     })),
     clusters: model.clusters,
+    frontiers: model.frontiers,
     rootId: model.rootId,
     version: model.version,
     stats: model.stats,

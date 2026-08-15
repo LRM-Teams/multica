@@ -130,6 +130,41 @@ export interface ResearchSession {
   depth_tier?: ResearchDepthTier;
   product_round?: number;
   product_round_budget?: number;
+  list_progress?: ResearchSessionListProgress;
+  active_assignments?: ResearchActiveAssignment[];
+  latest_outcomes?: ResearchLatestOutcome[];
+}
+
+export interface ResearchSessionListProgress {
+  task_total: number;
+  task_completed: number;
+  task_running: number;
+  task_blocked: number;
+  evidence_count: number;
+  today_evidence_count: number;
+  node_count: number;
+  open_question_count: number;
+  awaiting_user_action: boolean;
+  attention_kind?: string | null;
+  recoverable: boolean;
+  last_progress_at?: string | null;
+}
+
+export interface ResearchActiveAssignment {
+  agent_id: string;
+  role: string;
+  task_id: string;
+  task_title: string;
+  state: string;
+}
+
+export interface ResearchLatestOutcome {
+  id: string;
+  kind: string;
+  title: string;
+  summary?: string | null;
+  verification_state: string;
+  created_at: string;
 }
 export interface ResearchGraphNode {
   id: string;
@@ -635,6 +670,35 @@ export interface ResearchRunSnapshot {
   gate: { passed: boolean; findings: ResearchRunGateFinding[] };
   /** Bounded passport summary when snapshot is manifest-filtered for an attempt. */
   attempt_context?: ResearchAttemptArtifactContext;
+  /** Bounded passport metadata; content hashes and representations are never exposed. */
+  artifact_projection?: ResearchArtifactProjection;
+}
+
+export interface ResearchArtifactProjection {
+  projection_hash: string;
+  items: ResearchArtifactProjectionItem[];
+}
+
+export interface ResearchArtifactProjectionItem {
+  id: string;
+  run_id: string;
+  entity_kind: string;
+  entity_id: string;
+  current_version: number | null;
+  eligibility_revision: number;
+  lifecycle_status: string;
+  provenance_completeness: string;
+  schema_name: string;
+  schema_version: string;
+  access_level: string;
+  goal_version: number | null;
+  plan_version: number | null;
+  produced_by_task_id?: string;
+  produced_by_attempt_id?: string;
+  produced_by_agent_id?: string;
+  version_count: number;
+  input_reference_count: number;
+  output_reference_count: number;
 }
 
 /** Bounded passport metadata for D-enabled task-bound session reads. */
@@ -647,9 +711,16 @@ export interface ResearchAttemptArtifactContext {
 }
 
 export interface SteerResearchRunRequest {
-  goal: string;
+  /** Required for legacy full Goal replacement; omitted for V6 branch steering. */
+  goal?: string;
   reason?: string;
   allow_running_finish?: boolean;
+  /** Optimistic fence required by V6 selective/full-plan steering. */
+  expected_state_version?: number;
+  /** Canonical Branch UUID roots. Descendants are resolved by the server. */
+  affected_branch_ids?: string[];
+  /** Replan every current Branch without replacing the durable Goal. */
+  full_replan?: boolean;
   scope?: Record<string, unknown>;
   audience?: string;
   freshness?: string;

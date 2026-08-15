@@ -40,22 +40,23 @@ not create runtime-owned update state. Startup keeps incomplete local upgrade
 journals fail-closed; only a proven later Active generation may supersede a
 retained `candidate_ready` marker, and the marker remains available for diagnosis.
 For standalone upgrades, the target first proves its exact local binary,
-PID, Computer generation, and accepted Workspace binding set. The server
-then atomically changes the Computer generation from predecessor to candidate;
-only after that CAS may the target heartbeat, register runtimes, connect its
-WebSocket, or claim work. Runtime registration is post-takeover recovery and
-convergence evidence; Runtime cardinality is not Computer takeover identity. A
-candidate rejected before the CAS cannot fence the incumbent and requires no
-remote rollback.
+PID, Computer generation, and accepted Workspace binding set. That local
+proof completes the handoff. The successor then heartbeats, registers
+runtimes, connects its WebSocket, and notifies the server that the upgrade
+completed. Heartbeat and register claim the new Computer generation. There
+is no predecessor-to-candidate cloud CAS. Runtime registration is recovery
+and convergence evidence; Runtime cardinality is not Computer takeover
+identity. A candidate rejected before the local proof cannot fence the
+incumbent and requires no remote rollback.
 
 Standalone takeover also carries a candidate-generation-bound local protocol
 marker from launcher to candidate. A v2 launcher waits for the explicit
 `takeover_ready` state. When a
 new candidate is spawned by a pre-v2 launcher, it projects the historical
 `running`/`handoff` loopback shape from the durable receipt so that launcher can
-authorize the same generation CAS. This compatibility projection does not
-start preflight, register runtimes, connect WebSocket, or claim work; those
-remain blocked until the CAS commits.
+authorize the same local proof. A v2 candidate continues into preflight,
+registration, and WebSocket after that local prepare. A pre-v2 candidate
+still waits for the incumbent loopback commit before those steps.
 
 ## CLI
 
@@ -67,11 +68,16 @@ multica computer upgrade --target-version <version>
 ```
 
 `computer upgrade` is the only local upgrade command. It first checks the
-machine-wide resident. A live resident receives the request through its
-owner-authenticated loopback control surface and owns download, verification,
-handoff, rollback, and convergence. If no resident owns the machine, the command
-may swap the on-PATH Computer (`$HOME/.local/bin/multica`) under the machine lock;
-that offline result is not proof of a running successor. Held resident ownership
+machine-wide resident. With a live resident, the CLI uses the saved human
+session to create the canonical server Machine Upgrade operation, then delivers
+that same operation ID through the owner-authenticated loopback surface. The
+server may concurrently deliver it over the DaemonCore WebSocket; Computer Host
+deduplicates both paths by operation ID and remains the sole owner of download,
+verification, handoff, rollback, and convergence. Host never uses a Workspace
+execution credential to create a human operation. If no resident owns the
+machine, the command may swap the on-PATH Computer (`$HOME/.local/bin/multica`)
+under the machine lock; that offline result is not proof of a running successor.
+Held resident ownership
 with unavailable control returns `upgrade_service_unreachable` and never falls
 back to offline activation. Omit `--target-version` to use the package selected
 by the active production or test environment. There is no top-level

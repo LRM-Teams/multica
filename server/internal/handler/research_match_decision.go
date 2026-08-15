@@ -2,11 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -29,11 +31,11 @@ type ResearchMatchDecisionItem struct {
 // ResearchMatchDecision is the utterance-scoped envelope (LRM-1317/1330).
 // Stored at research_message.meta.match_decision; also projected top-level.
 type ResearchMatchDecision struct {
-	UtteranceID          string                       `json:"utterance_id"`
-	Confidence           *float64                     `json:"confidence,omitempty"`
-	PrimaryAnchorNodeID  *string                      `json:"primary_anchor_node_id,omitempty"`
-	MatchedNodeIDs       []string                     `json:"matched_node_ids"`
-	Decisions            []ResearchMatchDecisionItem  `json:"decisions"`
+	UtteranceID         string                      `json:"utterance_id"`
+	Confidence          *float64                    `json:"confidence,omitempty"`
+	PrimaryAnchorNodeID *string                     `json:"primary_anchor_node_id,omitempty"`
+	MatchedNodeIDs      []string                    `json:"matched_node_ids"`
+	Decisions           []ResearchMatchDecisionItem `json:"decisions"`
 }
 
 func isMatchDecisionAction(action string) bool {
@@ -82,10 +84,10 @@ func normalizeMatchDecision(raw json.RawMessage, messageID string) (*ResearchMat
 	}
 
 	out := &ResearchMatchDecision{
-		UtteranceID:         strings.TrimSpace(in.UtteranceID),
-		Confidence:          in.Confidence,
-		MatchedNodeIDs:      make([]string, 0, len(in.MatchedNodeIDs)),
-		Decisions:           make([]ResearchMatchDecisionItem, 0, len(in.Decisions)),
+		UtteranceID:    strings.TrimSpace(in.UtteranceID),
+		Confidence:     in.Confidence,
+		MatchedNodeIDs: make([]string, 0, len(in.MatchedNodeIDs)),
+		Decisions:      make([]ResearchMatchDecisionItem, 0, len(in.Decisions)),
 	}
 	if out.UtteranceID == "" {
 		out.UtteranceID = messageID
@@ -120,6 +122,7 @@ func normalizeMatchDecision(raw json.RawMessage, messageID string) (*ResearchMat
 	}
 
 	primaryAttach := 0
+	seenDecision := map[string]struct{}{}
 	for _, d := range in.Decisions {
 		item := ResearchMatchDecisionItem{
 			NodeID: strings.TrimSpace(d.NodeID),
@@ -129,6 +132,10 @@ func normalizeMatchDecision(raw json.RawMessage, messageID string) (*ResearchMat
 		if item.NodeID == "" || !isMatchDecisionAction(item.Action) {
 			return nil, fmt.Errorf("invalid decision item")
 		}
+		if _, duplicate := seenDecision[item.NodeID]; duplicate {
+			return nil, fmt.Errorf("duplicate decision node_id")
+		}
+		seenDecision[item.NodeID] = struct{}{}
 		if item.Action == matchActionDeprecate && item.Reason == "" {
 			return nil, fmt.Errorf("deprecate requires reason")
 		}
@@ -208,13 +215,14 @@ func (h *Handler) PutResearchMessageMatchDecision(w http.ResponseWriter, r *http
 		writeError(w, http.StatusInternalServerError, "failed to encode match_decision")
 		return
 	}
-	updated, err := h.Queries.SetResearchMessageMatchDecision(r.Context(), db.SetResearchMessageMatchDecisionParams{
-		ID:            messageID,
-		SessionID:     sessionID,
-		WorkspaceID:   wsUUID,
-		MatchDecision: payload,
-	})
+	updated, err := h.setResearchMessageMatchDecisionWithPassport(
+		r.Context(), wsUUID, sessionID, messageID, payload,
+	)
 	if err != nil {
+		if errors.Is(err, researchrun.ErrInvalidContract) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to persist match_decision")
 		return
 	}

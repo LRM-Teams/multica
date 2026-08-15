@@ -18,6 +18,29 @@ export interface ChannelGoalWorkGraphSummary {
   stale: number;
 }
 
+export type ChannelGoalExecutionAdmission =
+  | "direct"
+  | "project_required"
+  | "git_required"
+  | "issues_required"
+  | "ready"
+  | "acceptance_required"
+  | "unavailable";
+
+export interface ChannelGoalCoordinationSummary {
+  project_id?: string;
+  git_repository_bound: boolean;
+  agent_member_count: number;
+  channel_issue_total: number;
+  channel_project_issue_total: number;
+  project_issue_total: number;
+  open_project_issue_total: number;
+  in_review_project_issue_total: number;
+  subgoal_total: number;
+  open_subgoal_total: number;
+  execution_admission: ChannelGoalExecutionAdmission;
+}
+
 export interface WorkGraphNode {
   id: string; issue_id: string; role: string; context_policy: string;
   execution_status: string; validity_status: string; review_status: string;
@@ -54,6 +77,7 @@ export interface ChannelGoal {
   updated_at: string;
   completed_at?: string;
   work_graph?: ChannelGoalWorkGraphSummary;
+  coordination?: ChannelGoalCoordinationSummary;
 }
 
 export interface ChannelGoalEnvelope {
@@ -64,6 +88,12 @@ export interface CreateChannelGoalRequest {
   title: string;
   objective: string;
   success_criteria: string[];
+}
+
+export interface BootstrapChannelGoalControlPlaneRequest {
+  project_title: string;
+  repository_url: string;
+  default_branch_hint?: string;
 }
 
 export interface UpdateChannelGoalRequest {
@@ -202,6 +232,22 @@ export interface ChannelInviteCandidate {
 
 export interface ChannelInviteCandidatesResponse {
   candidates: ChannelInviteCandidate[];
+}
+
+/** GET /api/channels/:id/mention-candidates row. */
+export interface ChannelMentionCandidate {
+  type: "member" | "agent";
+  id: string;
+  handle: string;
+  label: string;
+  avatar_url?: string | null;
+}
+
+export interface ChannelMentionCandidatesResponse {
+  in_channel: ChannelMentionCandidate[];
+  not_in_channel: ChannelMentionCandidate[];
+  has_more: boolean;
+  next_offset?: number | null;
 }
 
 export type ChannelMemberRole = "owner" | "manager" | "member";
@@ -400,12 +446,18 @@ export interface ChannelMessageQuoteSnapshot {
   content: string;
   parts?: MessagePart[];
   createdAt: string;
+  selectedText?: string | null;
 }
 
 export interface ChannelMessageQuote {
   messageId: string;
   snapshot?: ChannelMessageQuoteSnapshot | null;
   status: "active" | "deleted" | "inaccessible" | (string & {});
+}
+
+export interface ChannelMessageQuoteInput {
+  messageId: string;
+  selectedText?: string;
 }
 
 export interface ChannelMessageSearchResult {

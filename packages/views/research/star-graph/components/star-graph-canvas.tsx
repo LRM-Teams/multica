@@ -11,8 +11,8 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { useResearchCanvasStore } from "@multica/core/research";
-import type { TypedGraphNode } from "@multica/core/research";
-import { indexTypedGraphNodes } from "@multica/core/research";
+import type { ResearchCanvasFilter, TypedGraphNode } from "@multica/core/research";
+import { emptyCanvasFilter, indexTypedGraphNodes } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
 import { StarGraphMapKey } from "@multica/ui/components/star-graph";
 import { cn } from "@multica/ui/lib/utils";
@@ -30,10 +30,11 @@ import type { MotionDirective } from "../../motion/directives";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import {
   computeClusterHiddenCounts,
+  edgeBudgetForViewport,
   filterEntitiesForCanvasDisplay,
   filterRelationsToVisibleEntities,
   selectVisibleEntityIds,
-  STAR_GRAPH_DOM_BUDGET,
+  STAR_GRAPH_SEMANTIC_NODE_BUDGET,
 } from "../lib/star-graph-visible-budget";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import {
@@ -65,6 +66,7 @@ export interface StarGraphCanvasProps {
   filterHiddenNote?: string;
   showMapKey?: boolean;
   clusterLabels?: ReadonlyMap<string, string>;
+  frontierLabel?: string;
   lensHints?: D5LensDisplayHints;
   motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
   onHelp?: () => void;
@@ -85,10 +87,12 @@ export interface StarGraphCanvasProps {
   onLoadMore?: () => void;
   loadMorePending?: boolean;
   typedNodes?: readonly TypedGraphNode[];
+  canvasFilter?: ResearchCanvasFilter;
   className?: string;
 }
 
 const DEFAULT_CAMERA: StarGraphCamera = { x: 0, y: 0, zoom: 1 };
+const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
 
 export function StarGraphCanvas({
   model,
@@ -101,6 +105,7 @@ export function StarGraphCanvas({
   filterHiddenNote,
   showMapKey = true,
   clusterLabels,
+  frontierLabel,
   lensHints,
   motionDirectives,
   onHelp,
@@ -109,12 +114,13 @@ export function StarGraphCanvas({
   nodeAccessibleNames,
   relatedNodeIds,
   initialFitEntityIdList,
-  entityBudget = STAR_GRAPH_DOM_BUDGET,
+  entityBudget = STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   hiddenCountLabel,
   loadMoreLabel,
   onLoadMore,
   loadMorePending = false,
   typedNodes,
+  canvasFilter = EMPTY_CANVAS_FILTER,
   className,
 }: StarGraphCanvasProps) {
   const { t } = useT("research");
@@ -127,7 +133,6 @@ export function StarGraphCanvas({
   );
   const setStoredViewport = useResearchCanvasStore((s) => s.setViewport);
   const setSessionViewport = useResearchCanvasStore((s) => s.setSessionViewport);
-  const canvasFilter = useResearchCanvasStore((s) => s.filter);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [camera, setCameraState] = useState<StarGraphCamera>(
     () => storedViewport ?? DEFAULT_CAMERA,
@@ -192,6 +197,12 @@ export function StarGraphCanvas({
           label: t(($) => $.d5.star_graph.map_key.relations.newdir.label),
           description: t(
             ($) => $.d5.star_graph.map_key.relations.newdir.description,
+          ),
+        },
+        neutral: {
+          label: t(($) => $.d5.star_graph.map_key.relations.neutral.label),
+          description: t(
+            ($) => $.d5.star_graph.map_key.relations.neutral.description,
           ),
         },
       },
@@ -278,8 +289,20 @@ export function StarGraphCanvas({
   );
 
   const visibleRelations = useMemo(
-    () => filterRelationsToVisibleEntities(model.relations, visibleEntityIds),
-    [model.relations, visibleEntityIds],
+    () =>
+      filterRelationsToVisibleEntities(model.relations, visibleEntityIds, {
+        budget: edgeBudgetForViewport(viewport.width),
+        focusNodeId: selectedNodeId ?? model.rootId,
+        relatedNodeIds,
+      }),
+    [
+      model.relations,
+      model.rootId,
+      relatedNodeIds,
+      selectedNodeId,
+      viewport.width,
+      visibleEntityIds,
+    ],
   );
   const focusedLensHints = useMemo(
     () =>
@@ -628,15 +651,24 @@ export function StarGraphCanvas({
       >
         <StarGraphClusterLayer
           clusters={model.clusters}
+          frontiers={model.frontiers}
+          frontierLabel={frontierLabel}
           clusterLabels={clusterLabels}
           hiddenCounts={clusterHiddenCounts}
           hiddenCountLabel={hiddenCountLabel}
         />
         <StarGraphEdges
           relations={visibleRelations}
+          labelObstacles={visibleEntities}
           width={worldSize.width}
           height={worldSize.height}
           lensHints={focusedLensHints}
+          relationLabels={{
+            decompose: mapKeyLabels.relations.decompose.label,
+            support: mapKeyLabels.relations.support.label,
+            challenge: mapKeyLabels.relations.challenge.label,
+            newdir: mapKeyLabels.relations.newdir.label,
+          }}
         />
         <StarGraphEntityLayer
           entities={visibleEntities}

@@ -12,29 +12,22 @@ var errInboxRegistryClosed = errors.New("Inbox registry is closed")
 
 type inboxCoordinatorFactory func(InboxKey, string) (*MessageCoordinator, error)
 
-type inboxAttachmentResolver interface {
-	Resolve(string, string) (AgentAttachment, bool)
-}
-
 type inboxRegistryEntry struct {
 	runtimeID   string
 	coordinator *MessageCoordinator
 }
 
 type inboxRegistryDependencies struct {
-	attachments inboxAttachmentResolver
 	ownsRuntime func(string) bool
 	open        inboxCoordinatorFactory
 	logger      *slog.Logger
 }
 
 // InboxRegistry owns every in-memory Message coordinator for one immutable
-// Workspace Runner scope. Production lifecycle creation is owned by an
-// APM-accepted server start; Attachment resolution remains available to
-// explicit legacy repair and test seams.
+// Workspace Runner scope. Lifecycle creation is owned by an APM-accepted
+// server start.
 type InboxRegistry struct {
 	workspaceID string
-	attachments inboxAttachmentResolver
 	ownsRuntime func(string) bool
 	open        inboxCoordinatorFactory
 	logger      *slog.Logger
@@ -49,12 +42,11 @@ func newInboxRegistry(workspaceID string, dependencies inboxRegistryDependencies
 	if workspaceID == "" {
 		return nil, errors.New("Inbox registry Workspace identity is required")
 	}
-	if dependencies.attachments == nil || dependencies.ownsRuntime == nil || dependencies.open == nil {
-		return nil, errors.New("Inbox registry Attachment authority, Runtime ownership, and coordinator factory are required")
+	if dependencies.ownsRuntime == nil || dependencies.open == nil {
+		return nil, errors.New("Inbox registry Runtime ownership and coordinator factory are required")
 	}
 	return &InboxRegistry{
 		workspaceID: workspaceID,
-		attachments: dependencies.attachments,
 		ownsRuntime: dependencies.ownsRuntime,
 		open:        dependencies.open,
 		logger:      dependencies.logger,
@@ -62,56 +54,8 @@ func newInboxRegistry(workspaceID string, dependencies inboxRegistryDependencies
 	}, nil
 }
 
-// Ensure opens or replaces one Inbox only after resolving its current durable
-// Attachment inside this registry's fixed Workspace scope.
-func (registry *InboxRegistry) Ensure(agentID string) (bool, error) {
-	agentID = strings.TrimSpace(agentID)
-	if registry == nil || agentID == "" {
-		return false, errors.New("Inbox registry and Agent identity are required")
-	}
-	attachment, ok := registry.attachments.Resolve(registry.workspaceID, agentID)
-	if !ok {
-		return false, fmt.Errorf("no durable Agent Attachment for %q in Workspace %q", agentID, registry.workspaceID)
-	}
-	if !registry.ownsRuntime(attachment.RuntimeID) {
-		return false, fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, registry.workspaceID)
-	}
-	registry.mu.Lock()
-	if registry.closed {
-		registry.mu.Unlock()
-		return false, errInboxRegistryClosed
-	}
-	previous, exists := registry.inboxes[agentID]
-	if exists && previous.runtimeID == attachment.RuntimeID && previous.coordinator != nil {
-		registry.mu.Unlock()
-		return false, nil
-	}
-	coordinator, err := registry.open(InboxKey{WorkspaceID: registry.workspaceID, AgentID: agentID}, attachment.RuntimeID)
-	if err != nil {
-		registry.mu.Unlock()
-		return false, err
-	}
-	// Attachment may move while local files are opened. Re-resolve before the
-	// coordinator becomes visible so a stale Runtime never wins that race.
-	current, currentOK := registry.attachments.Resolve(registry.workspaceID, agentID)
-	if !currentOK || current.RuntimeID != attachment.RuntimeID || !registry.ownsRuntime(current.RuntimeID) {
-		registry.mu.Unlock()
-		coordinator.Close()
-		return false, fmt.Errorf("Agent Attachment changed while opening Inbox %q in Workspace %q", agentID, registry.workspaceID)
-	}
-	registry.inboxes[agentID] = inboxRegistryEntry{runtimeID: attachment.RuntimeID, coordinator: coordinator}
-	registry.mu.Unlock()
-	if exists && previous.coordinator != nil {
-		previous.coordinator.Close()
-	}
-	registry.log("workspace Runner Inbox opened", agentID, attachment.RuntimeID, map[bool]string{true: "replaced", false: "created"}[exists])
-	return true, nil
-}
-
-// AcceptStart is the AgentProcessManager start seam. The server-owned
-// start command is current placement authority; replacing a stale local Inbox
-// here keeps setup, reconnect, and runtime move in lifecycle rather than in
-// Message delivery.
+// AcceptStart opens or replaces one Inbox for an accepted managed start inside
+// this registry's fixed Workspace scope.
 func (registry *InboxRegistry) AcceptStart(agentID, runtimeID string) (bool, error) {
 	agentID = strings.TrimSpace(agentID)
 	runtimeID = strings.TrimSpace(runtimeID)

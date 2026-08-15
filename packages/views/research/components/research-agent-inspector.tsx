@@ -122,9 +122,16 @@ function ResearchAgentInspectorBody({
           min: (count) => t(($) => $.panel.execution.elapsed_min, { count }),
           hour: (count) => t(($) => $.panel.execution.elapsed_hour, { count }),
         });
+  const headerStatus =
+    row.action ||
+    row.actionDetail ||
+    t(($) => $.panel.execution.status[row.status]);
 
   return (
-    <>
+    <div
+      data-testid="research-agent-inspector-content"
+      className="min-w-0 [overflow-wrap:anywhere]"
+    >
       <header className="agent-head">
         <button
           ref={closeButtonRef}
@@ -139,7 +146,7 @@ function ResearchAgentInspectorBody({
           <div className="agent-big-avatar">{row.initials || row.name.slice(0, 2).toUpperCase()}</div>
           <div>
             <b id={titleId}>{row.name}</b>
-            <span>{row.action || row.actionDetail || row.status}</span>
+            <span>{headerStatus}</span>
           </div>
         </div>
       </header>
@@ -173,7 +180,9 @@ function ResearchAgentInspectorBody({
             {row.startedAt != null ? (
               <ExecutionFact label={t(($) => $.panel.execution.started)} value={clock(row.startedAt)} />
             ) : null}
-            <ExecutionFact label={t(($) => $.panel.execution.updated)} value={clock(row.updatedAt)} />
+            {row.updatedAt != null ? (
+              <ExecutionFact label={t(($) => $.panel.execution.updated)} value={clock(row.updatedAt)} />
+            ) : null}
             {elapsed ? (
               <ExecutionFact label={t(($) => $.panel.execution.duration)} value={elapsed} />
             ) : null}
@@ -202,7 +211,7 @@ function ResearchAgentInspectorBody({
           </Button>
         ) : null}
       </footer>
-    </>
+    </div>
   );
 }
 

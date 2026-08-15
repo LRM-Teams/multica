@@ -98,14 +98,13 @@ func init() {
 }
 
 // buildSuperviseServiceArgs builds the argv the OS service manager should
-// launch: the supervise subcommand plus a forwarded --profile, mirroring how
-// buildDaemonStartArgs forwards flags for the background-start path. The
+// launch: the supervise subcommand plus a forwarded --profile. The
 // service always launches the plain `daemon supervise` invocation — any
 // other daemon flags (poll interval, agent timeout, etc.) are picked up from
 // environment/config the same way a manually-run supervise process already
 // reads them, so the installed service doesn't need to duplicate every flag.
 func buildSuperviseServiceArgs(profile string) []string {
-	args := []string{"daemon", "supervise"}
+	args := []string{"computer", "supervise"}
 	if profile != "" {
 		args = append(args, "--profile", profile)
 	}

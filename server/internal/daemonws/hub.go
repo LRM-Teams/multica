@@ -27,6 +27,9 @@ const (
 	agentDeliveryRetryInterval = time.Second
 	runnerInboundWatchdog      = 70 * time.Second
 	runnerPingInterval         = 20 * time.Second
+	legacyRunnerAttachmentCap  = "workspace_runner_attachment_v1"
+	legacyAttachmentReplayReq  = "agent:attachment.replay_request"
+	legacyAttachmentReplayEnd  = "agent:attachment.replay_end"
 )
 
 // ClientIdentity captures the already-authenticated daemon connection scope.
@@ -56,6 +59,21 @@ type client struct {
 	dedupMu  sync.Mutex
 	seenIDs  map[string]struct{}
 	seenList []string
+}
+
+func (c *client) supportsRunnerCapability(capability string) bool {
+	if c == nil || capability == "" {
+		return false
+	}
+	_, supported := c.runnerCapabilities[capability]
+	return supported
+}
+
+func (c *client) isLegacyUpgradeRunner() bool {
+	return c != nil &&
+		c.supportsRunnerCapability(legacyRunnerAttachmentCap) &&
+		c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerControlPlane) &&
+		!c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerAgentProcess)
 }
 
 const eventDedupCapacity = 128
@@ -92,8 +110,6 @@ type HeartbeatHandler func(ctx context.Context, identity ClientIdentity, payload
 
 type ReminderSnapshotHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error)
 type ReminderFireAttemptHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error)
-type ReminderProjectionHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error)
-type ReminderProjectionAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionAckPayload) error
 type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentDeliverAckPayload) error
 type AgentMessageHandoffHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentMessageHandoffPayload) error
 
@@ -104,9 +120,8 @@ type WorkspaceRunnerHandler func(ctx context.Context, identity ClientIdentity, d
 type WorkspaceRunnerDisconnectHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID string) error
 
 type ReminderOwnerGoneError struct {
-	AgentID             string
-	RuntimeID           string
-	PlacementGeneration int64
+	AgentID   string
+	RuntimeID string
 }
 
 func (e *ReminderOwnerGoneError) Error() string { return "reminder owner no longer belongs to daemon" }
@@ -134,8 +149,6 @@ type Hub struct {
 	reminderMu                  sync.RWMutex
 	onReminderSnapshot          ReminderSnapshotHandler
 	onReminderFire              ReminderFireAttemptHandler
-	onReminderProjection        ReminderProjectionHandler
-	onReminderProjectionAck     ReminderProjectionAckHandler
 	deliveryMu                  sync.RWMutex
 	onAgentDeliveryAck          AgentDeliveryAckHandler
 	onAgentMessageHandoff       AgentMessageHandoffHandler
@@ -545,8 +558,8 @@ func (h *Hub) RequestSeedAgentContext(ctx context.Context, req protocol.SeedAgen
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
 // Wiring is done after handler construction because the handler depends on
 // DB queries that aren't available when the hub is built. A nil handler
-// disables WS heartbeat processing — daemons fall back to HTTP heartbeat
-// transparently because their fallback timer fires whenever no ack arrives.
+// disables heartbeat processing; capable Workspace Runners reconnect until
+// they reach a Server that supports their control plane.
 func (h *Hub) SetHeartbeatHandler(fn HeartbeatHandler) {
 	if h == nil {
 		return
@@ -570,13 +583,6 @@ func (h *Hub) SetReminderHandlers(snapshot ReminderSnapshotHandler, fire Reminde
 	h.onReminderSnapshot = snapshot
 	h.onReminderFire = fire
 	h.reminderMu.Unlock()
-}
-
-func (h *Hub) SetReminderProjectionHandlers(replay ReminderProjectionHandler, ack ReminderProjectionAckHandler) {
-	h.mu.Lock()
-	h.onReminderProjection = replay
-	h.onReminderProjectionAck = ack
-	h.mu.Unlock()
 }
 
 func (h *Hub) reminderHandlers() (ReminderSnapshotHandler, ReminderFireAttemptHandler) {
@@ -618,15 +624,6 @@ func (h *Hub) RequestRevokePiRun(ctx context.Context, req protocol.RevokePiRunRe
 	return nil
 }
 
-func (h *Hub) reminderProjectionHandlers() (ReminderProjectionHandler, ReminderProjectionAckHandler) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.onReminderProjection, h.onReminderProjectionAck
-}
-
-// SetMessageKindRecorder installs an optional callback fired exactly once per
-// inbound daemon WebSocket frame. Used by the metrics layer to count traffic
-// by handler kind without hard-coupling the hub to any specific collector.
 func (h *Hub) SetMessageKindRecorder(rec MessageKindRecorder) {
 	if h == nil {
 		return
@@ -689,16 +686,12 @@ func (h *Hub) NotifyTaskAvailable(runtimeID, taskID string) {
 	h.notifyTaskAvailable(runtimeID, taskID, "")
 }
 
-func (h *Hub) NotifyReminderProjection(runtimeID string, payload protocol.ReminderProjectionEvent) {
-	h.notifyReminder(runtimeID, protocol.EventReminderProjection, payload, fmt.Sprintf("reminder-projection:%s:%d", runtimeID, payload.Seq))
+func (h *Hub) NotifyReminderUpsert(runtimeID string, payload protocol.ReminderUpsertPayload) {
+	h.notifyReminder(runtimeID, protocol.EventReminderUpsert, payload, fmt.Sprintf("reminder-upsert:%s:%d", payload.Reminder.ReminderID, payload.Reminder.Version))
 }
 
-func (h *Hub) NotifyAgentAttachmentRemoved(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentDetachPayload) {
-	h.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentDetach, payload)
-}
-
-func (h *Hub) NotifyAgentAttachmentAdded(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentAttachPayload) {
-	h.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentAttach, payload)
+func (h *Hub) NotifyReminderCancel(runtimeID string, payload protocol.ReminderCancelPayload) {
+	h.notifyReminder(runtimeID, protocol.EventReminderCancel, payload, fmt.Sprintf("reminder-cancel:%s:%d", payload.ReminderID, payload.Version))
 }
 
 func (h *Hub) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType string, payload any) bool {
@@ -844,20 +837,27 @@ func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID
 			return
 		}
 		delivered = h.notifyWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame, eventID)
-	case protocol.EventAgentAttach:
-		var payload protocol.WorkspaceRunnerAgentAttachPayload
+	case protocol.EventDaemonAgentStart:
+		var payload protocol.WorkspaceRunnerAgentStartPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			M.WakeupDeliveredMiss.Add(1)
 			return
 		}
-		delivered = h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
-	case protocol.EventAgentDetach:
-		var payload protocol.WorkspaceRunnerAgentDetachPayload
+		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess, frame)
+	case protocol.EventDaemonAgentStop:
+		var payload protocol.WorkspaceRunnerAgentStopPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			M.WakeupDeliveredMiss.Add(1)
 			return
 		}
-		delivered = h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
+		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentProcess, frame)
+	case protocol.EventDaemonAgentResetWorkspace:
+		var payload protocol.WorkspaceRunnerAgentResetWorkspacePayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			M.WakeupDeliveredMiss.Add(1)
+			return
+		}
+		delivered = h.notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, protocol.DaemonCapabilityWorkspaceRunnerAgentReset, frame)
 	default:
 		M.WakeupDeliveredMiss.Add(1)
 		return
@@ -867,6 +867,21 @@ func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID
 	} else {
 		M.WakeupDeliveredMiss.Add(1)
 	}
+}
+
+func (h *Hub) NotifyAgentRestartCommand(workspaceID, computerID, eventType, commandID string, payload any) bool {
+	if h == nil || workspaceID == "" || computerID == "" || commandID == "" || !validAgentRestartCommand(eventType, payload) {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	capability := protocol.DaemonCapabilityWorkspaceRunnerAgentProcess
+	if eventType == protocol.EventDaemonAgentResetWorkspace {
+		capability = protocol.DaemonCapabilityWorkspaceRunnerAgentReset
+	}
+	return h.notifyCapableWorkspaceRunnerFrame(computerID, workspaceID, capability, frame)
 }
 
 func (h *Hub) notifyFrame(runtimeID string, data []byte, eventID string) (delivered bool, deduped bool) {
@@ -946,6 +961,18 @@ func (h *Hub) IsCurrentWorkspaceRunner(daemonID, workspaceID, daemonInstanceID s
 	defer h.mu.RUnlock()
 	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
 	return c != nil && c.runnerDaemonInstanceID == daemonInstanceID
+}
+
+// HasWorkspaceRunner reports whether this Computer currently holds a live
+// DaemonCore / Workspace Runner socket for the Workspace. Socket presence is
+// Computer liveness: connect is online, disconnect is offline.
+func (h *Hub) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}] != nil
 }
 
 // WorkspaceRunnerSupportsCapability reports only the active ready connection's
@@ -1060,6 +1087,30 @@ func (h *Hub) notifyWorkspaceRunnerFrame(daemonID, workspaceID string, frame []b
 	}
 }
 
+func (h *Hub) notifyCapableWorkspaceRunnerFrame(daemonID, workspaceID, capability string, frame []byte) bool {
+	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
+	h.mu.RLock()
+	c := h.byRunner[key]
+	if c == nil {
+		h.mu.RUnlock()
+		return false
+	}
+	if _, supported := c.runnerCapabilities[capability]; !supported {
+		h.mu.RUnlock()
+		return false
+	}
+	select {
+	case c.send <- frame:
+		h.mu.RUnlock()
+		return true
+	default:
+		h.mu.RUnlock()
+		h.unregister(c)
+		_ = c.conn.Close()
+		return false
+	}
+}
+
 // CloseWorkspaceRunner closes only the still-current Runner for the supplied
 // daemon instance. A stale-probe timeout must not disconnect a replacement
 // connection that became ready after the probe was issued.
@@ -1107,7 +1158,7 @@ func (h *Hub) register(c *client) {
 }
 
 func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerReadyPayload) bool {
-	if c == nil || ready.Validate() != nil || ready.WorkspaceID != c.identity.WorkspaceID {
+	if c == nil || !validWorkspaceRunnerReady(ready) || ready.WorkspaceID != c.identity.WorkspaceID {
 		return false
 	}
 	key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
@@ -1129,6 +1180,34 @@ func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerRead
 	}
 	c.startRunnerWatchdog()
 	return true
+}
+
+func validWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
+	return ready.Validate() == nil || validLegacyUpgradeWorkspaceRunnerReady(ready)
+}
+
+// validLegacyUpgradeWorkspaceRunnerReady is a server-only rolling-upgrade
+// adapter for the immediately preceding Computer release. That release can
+// carry machine upgrade actions over the Runner control plane but advertises
+// the retired Attachment capability instead of the current Agent process one.
+// Validate a copy with the current capability added, then retain the original
+// capability set on the connection so new Agent process commands stay fenced.
+func validLegacyUpgradeWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
+	var supportsLegacyAttachment, supportsControlPlane bool
+	for _, capability := range ready.ActiveCapabilities {
+		switch capability {
+		case legacyRunnerAttachmentCap:
+			supportsLegacyAttachment = true
+		case protocol.DaemonCapabilityWorkspaceRunnerControlPlane:
+			supportsControlPlane = true
+		}
+	}
+	if !supportsLegacyAttachment || !supportsControlPlane {
+		return false
+	}
+	compatible := ready
+	compatible.ActiveCapabilities = append(append([]string(nil), ready.ActiveCapabilities...), protocol.DaemonCapabilityWorkspaceRunnerAgentProcess)
+	return compatible.Validate() == nil
 }
 
 func (h *Hub) isCurrentWorkspaceRunner(c *client) bool {
@@ -1303,6 +1382,12 @@ func (c *client) handleFrame(raw []byte) {
 			return
 		}
 		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventAgentResetWorkspaceResult:
+		var payload protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
 	case protocol.EventAgentStatus:
 		var payload protocol.AgentStatusPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
@@ -1317,30 +1402,6 @@ func (c *client) handleFrame(raw []byte) {
 		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
 	case protocol.EventAgentActivity:
 		var payload protocol.AgentActivityPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentAttachmentReplayReq:
-		var payload protocol.WorkspaceRunnerAttachmentReplayRequest
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentAttached:
-		var payload protocol.WorkspaceRunnerAgentAttachedPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentDetached:
-		var payload protocol.WorkspaceRunnerAgentDetachedPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
-			return
-		}
-		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
-	case protocol.EventAgentAttachmentReplayAck:
-		var payload protocol.WorkspaceRunnerAttachmentReplayAck
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
 			return
 		}
@@ -1373,8 +1434,21 @@ func (c *client) handleFrame(raw []byte) {
 			c.hub.unregister(c)
 			_ = c.conn.Close()
 		}
+	case legacyAttachmentReplayReq:
+		c.handleLegacyUpgradeReplayRequest(msg.Payload)
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
+	case protocol.EventDaemonLivenessProbe:
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventDaemonLivenessAck})
+		if err != nil {
+			return
+		}
+		select {
+		case c.send <- frame:
+		default:
+			c.hub.unregister(c)
+			_ = c.conn.Close()
+		}
 	case protocol.EventAgentWorkspaceFileTree,
 		protocol.EventAgentWorkspaceFileContent,
 		protocol.EventDaemonWriteFileResponse,
@@ -1392,10 +1466,6 @@ func (c *client) handleFrame(raw []byte) {
 		c.handleReminderSnapshotRequest(msg.Payload)
 	case protocol.EventReminderFireAttempt:
 		c.handleReminderFireAttempt(msg.Payload)
-	case protocol.EventReminderProjectionReq:
-		c.handleReminderProjectionRequest(msg.Payload)
-	case protocol.EventReminderProjectionAck:
-		c.handleReminderProjectionAck(msg.Payload)
 	case protocol.EventAgentDeliverAck:
 		handler := c.hub.agentDeliveryAckHandler()
 		if handler == nil {
@@ -1428,13 +1498,48 @@ func (c *client) handleFrame(raw []byte) {
 	}
 }
 
+// handleLegacyUpgradeReplayRequest completes the immediately preceding
+// Computer release's retired startup handshake without replaying or mutating
+// Attachment state. Echoing its validated cursors lets that client start the
+// current control-plane heartbeat and receive its pending machine upgrade.
+func (c *client) handleLegacyUpgradeReplayRequest(raw json.RawMessage) {
+	if c == nil || !c.hub.isCurrentWorkspaceRunner(c) || !c.isLegacyUpgradeRunner() {
+		return
+	}
+	var request struct {
+		RuntimeCursors map[string]int64 `json:"runtimeCursors"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil || request.RuntimeCursors == nil {
+		return
+	}
+	for runtimeID, cursor := range request.RuntimeCursors {
+		if strings.TrimSpace(runtimeID) == "" || len(runtimeID) > 200 || cursor < 0 {
+			return
+		}
+	}
+	frame, err := json.Marshal(protocol.Message{
+		Type:    legacyAttachmentReplayEnd,
+		Payload: mustMarshalRaw(request),
+	})
+	if err != nil {
+		return
+	}
+	c.runnerLastInbound.Store(time.Now().UnixNano())
+	select {
+	case c.send <- frame:
+	default:
+		c.hub.unregister(c)
+		_ = c.conn.Close()
+	}
+}
+
 func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
 	handler, _ := c.hub.reminderHandlers()
 	if handler == nil {
 		return
 	}
 	var payload protocol.ReminderSnapshotRequestPayload
-	if err := json.Unmarshal(raw, &payload); err != nil || payload.AgentID == "" {
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.RuntimeID == "" {
 		slog.Debug("daemon websocket reminder snapshot invalid payload", "error", err, "daemon_id", c.identity.DaemonID)
 		return
 	}
@@ -1444,7 +1549,7 @@ func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
 		if errors.As(err, &ownerGone) {
 			return
 		}
-		slog.Warn("daemon websocket reminder snapshot failed", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID)
+		slog.Warn("daemon websocket reminder snapshot failed", "error", err, "daemon_id", c.identity.DaemonID, "runtime_id", payload.RuntimeID)
 		_ = c.conn.Close()
 		return
 	}
@@ -1493,46 +1598,6 @@ func (c *client) handleReminderFireAttempt(raw json.RawMessage) {
 	}
 }
 
-func (c *client) handleReminderProjectionRequest(raw json.RawMessage) {
-	handler, _ := c.hub.reminderProjectionHandlers()
-	if handler == nil {
-		return
-	}
-	var payload protocol.ReminderProjectionRequestPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		_ = c.conn.Close()
-		return
-	}
-	events, end, err := handler(context.Background(), c.identity, payload)
-	if err != nil {
-		slog.Warn("daemon websocket reminder projection replay failed", "error", err, "daemon_id", c.identity.DaemonID)
-		_ = c.conn.Close()
-		return
-	}
-	for _, event := range events {
-		if err := c.sendReminderFrame(protocol.EventReminderProjection, event); err != nil {
-			return
-		}
-	}
-	_ = c.sendReminderFrame(protocol.EventReminderProjectionEnd, end)
-}
-
-func (c *client) handleReminderProjectionAck(raw json.RawMessage) {
-	_, handler := c.hub.reminderProjectionHandlers()
-	if handler == nil {
-		return
-	}
-	var payload protocol.ReminderProjectionAckPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		_ = c.conn.Close()
-		return
-	}
-	if err := handler(context.Background(), c.identity, payload); err != nil {
-		slog.Warn("daemon websocket reminder projection ack failed", "error", err, "daemon_id", c.identity.DaemonID)
-		_ = c.conn.Close()
-	}
-}
-
 func (c *client) sendReminderFrame(eventType string, payload any) error {
 	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
 	if err != nil {
@@ -1551,8 +1616,6 @@ func (c *client) sendReminderFrame(eventType string, payload any) error {
 func (c *client) handleHeartbeatFrame(raw json.RawMessage) {
 	handler := c.hub.heartbeatHandler()
 	if handler == nil {
-		// Server doesn't have a heartbeat handler wired — daemon will time
-		// out waiting for an ack and fall back to HTTP heartbeat.
 		return
 	}
 
@@ -1565,13 +1628,20 @@ func (c *client) handleHeartbeatFrame(raw json.RawMessage) {
 		slog.Debug("daemon websocket heartbeat missing runtime_id", "daemon_id", c.identity.DaemonID)
 		return
 	}
-	if _, ok := c.runtimes[payload.RuntimeID]; !ok {
-		// The connection authenticated for a fixed runtime set; reject any
-		// heartbeat for a runtime the client did not register for.
+	_, legacyRuntimeAuthorized := c.runtimes[payload.RuntimeID]
+	runnerControlAuthorized := c.hub.isCurrentWorkspaceRunner(c) &&
+		c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerControlPlane)
+	if !legacyRuntimeAuthorized && !runnerControlAuthorized {
+		// Legacy connections authenticate a fixed Runtime set. A current ready
+		// Workspace Runner instead uses dynamic DB authorization in the handler,
+		// because Runtime membership is mutable and not part of Runner identity.
 		slog.Warn("daemon websocket heartbeat for unauthorized runtime",
 			"daemon_id", c.identity.DaemonID,
 			"runtime_id", payload.RuntimeID)
 		return
+	}
+	if runnerControlAuthorized {
+		c.runnerLastInbound.Store(time.Now().UnixNano())
 	}
 
 	// Intentionally do NOT wrap this ctx with WithTimeout. The handler

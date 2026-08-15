@@ -1,0 +1,4 @@
+-- Irreversible hard cut: the removed ledgers represented retired wire
+-- protocols. Reconstructing their cursors, receipts, ordering, or placement
+-- generations would invent acknowledgement state. Restore a database backup
+-- and the matching older application to roll back across this boundary.

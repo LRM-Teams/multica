@@ -167,7 +167,11 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 			retErr = errors.Join(retErr, heartbeatFailure)
 		default:
 		}
-		if releaseErr := e.store.ReleaseRun(context.WithoutCancel(ctx), lease, next); releaseErr != nil {
+		lastError := ""
+		if retErr != nil {
+			lastError = retErr.Error()
+		}
+		if releaseErr := e.store.ReleaseRun(context.WithoutCancel(ctx), lease, next, lastError); releaseErr != nil {
 			if !errors.Is(releaseErr, ErrRunLeaseLost) || !errors.Is(retErr, ErrRunLeaseLost) {
 				retErr = errors.Join(retErr, fmt.Errorf("release research run lease: %w", releaseErr))
 			}
@@ -212,6 +216,13 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	}
 	if dispatchNext, wait := nextReconcileAfterDispatch(e.clock.Now(), dispatchOutcome, hasExecutingCurrentWork(run, tasks)); wait {
 		next = dispatchNext
+		return e.projectPending(ctx, sessionID)
+	}
+	if hasUnfinishedCurrentWork(run, tasks) {
+		// Delivery Gate findings such as plan_incomplete and tasks_incomplete
+		// describe expected intermediate state while current-plan work remains.
+		// They must not create remediation work before that work has run.
+		next = e.clock.Now().Add(10 * time.Second)
 		return e.projectPending(ctx, sessionID)
 	}
 
@@ -270,6 +281,19 @@ func hasExecutingCurrentWork(run Run, tasks []Task) bool {
 			continue
 		}
 		if task.Status == TaskStatusDispatching || task.Status == TaskStatusRunning {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUnfinishedCurrentWork(run Run, tasks []Task) bool {
+	for _, task := range tasks {
+		if task.GoalVersion != run.GoalVersion || task.PlanVersion != run.PlanVersion {
+			continue
+		}
+		switch task.Status {
+		case TaskStatusPending, TaskStatusReady, TaskStatusDispatching, TaskStatusRunning:
 			return true
 		}
 	}
@@ -366,9 +390,84 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	return RunSnapshot{
+	snapshot := RunSnapshot{
 		Run: run, Contract: contract, Method: method, Questions: questions, Tasks: tasks, Attempts: attempts,
 		Sources: sources, Observations: observations, Claims: claims, Gate: gate,
+	}
+	passportEnabled, err := e.store.SessionArtifactPassportEnabled(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	if passportEnabled {
+		projection, projectionErr := (artifactProjectionModule{store: e.store}).Load(
+			ctx, workspaceID, sessionID, artifactProjectionScope{},
+		)
+		if projectionErr != nil {
+			return RunSnapshot{}, projectionErr
+		}
+		snapshot.ArtifactProjection = &projection
+	}
+	return snapshot, nil
+}
+
+// SnapshotForProjection is the internal least-privilege read model used by
+// graph projection. Projection needs durable graph identities and delivery
+// readiness, but it must not read source/observation representations,
+// evaluation-private context, frozen Attempt context, or Artifact contents.
+func (e *Engine) SnapshotForProjection(ctx context.Context, sessionID, workspaceID string) (RunSnapshot, error) {
+	if e == nil || e.store == nil {
+		return RunSnapshot{}, errors.New("research run engine is unavailable")
+	}
+	return loadProjectionSnapshot(ctx, e.store, sessionID, workspaceID)
+}
+
+type projectionSnapshotStore interface {
+	GetRun(context.Context, string, string) (Run, error)
+	GetCurrentContract(context.Context, string, string) (ResearchContract, error)
+	GetCurrentMethod(context.Context, string, string) (*ResearchMethod, error)
+	ListQuestions(context.Context, string) ([]Question, error)
+	ListTasks(context.Context, string) ([]Task, error)
+	ListAttempts(context.Context, string) ([]Attempt, error)
+	ListClaims(context.Context, string) ([]Claim, error)
+	EvaluateGate(context.Context, string) (GateResult, error)
+}
+
+func loadProjectionSnapshot(ctx context.Context, store projectionSnapshotStore, sessionID, workspaceID string) (RunSnapshot, error) {
+	run, err := store.GetRun(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	contract, err := store.GetCurrentContract(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	method, err := store.GetCurrentMethod(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	questions, err := store.ListQuestions(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	tasks, err := store.ListTasks(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	attempts, err := store.ListAttempts(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	claims, err := store.ListClaims(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	gate, err := store.EvaluateGate(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	return RunSnapshot{
+		Run: run, Contract: contract, Method: method, Questions: questions,
+		Tasks: tasks, Attempts: attempts, Claims: claims, Gate: gate,
 	}, nil
 }
 
@@ -391,6 +490,26 @@ func (e *Engine) ListFleetMembers(ctx context.Context, sessionID, workspaceID st
 }
 
 func (e *Engine) Steer(ctx context.Context, in SteerInput) (Run, error) {
+	if isSelectiveSteer(in) {
+		outcome, err := e.store.ApplySelectiveSteering(ctx, in)
+		if err != nil {
+			return Run{}, err
+		}
+		if len(outcome.Plan.CancelRunningTaskIDs) > 0 {
+			if _, err = e.cancelPendingAttempts(ctx, outcome.Run, "research_selective_steering"); err != nil {
+				return outcome.Run, err
+			}
+		}
+		objective := "Replan only the explicitly affected Inquiry Branches: " + strings.Join(outcome.Plan.ImpactedBranchIDs, ", ") +
+			". Preserve all other current-plan Tasks and every accepted Evidence artifact. Steering reason: " + strings.TrimSpace(in.Reason)
+		if _, _, err = e.store.CreateControlTask(ctx, ControlTaskInput{
+			SessionID: in.SessionID, Kind: TaskKindReplan, Objective: truncateBytes(objective, maxTaskObjectiveBytes),
+			Capability: "lead", Priority: 1, Rationale: "The user selectively redirected canonical Inquiry branches.",
+		}); err != nil {
+			return outcome.Run, err
+		}
+		return outcome.Run, reconcileHandoff(e.ReconcileSession(ctx, in.SessionID))
+	}
 	run, _, _, err := e.store.Steer(ctx, in)
 	if err != nil {
 		return Run{}, err

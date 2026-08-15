@@ -13,6 +13,7 @@ func TestGoalCommandsAreRegisteredWithRequiredSafetyFlags(t *testing.T) {
 	}{
 		{name: "get", flags: []string{"channel"}},
 		{name: "create", flags: []string{"channel", "title", "objective", "criterion"}},
+		{name: "bootstrap", flags: []string{"channel", "project-title", "repository-url", "default-branch"}},
 		{name: "checkpoint", flags: []string{"channel", "expected-version", "progress", "current-step", "blocker", "evidence", "completed-criterion"}},
 		{name: "update", flags: []string{"channel", "expected-version", "title", "objective", "criterion", "status"}},
 	} {

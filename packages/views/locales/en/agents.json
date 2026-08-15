@@ -140,11 +140,7 @@
     "agent_archived_toast": "Agent archived",
     "archive_failed_toast": "Failed to archive agent",
     "agent_restored_toast": "Agent restored",
-    "restore_failed_toast": "Failed to restore agent",
-    "agent_updated_restart_toast": "Saved. Restarting agent so the new runtime config applies…",
-    "restart_after_update_failed_toast": "Config saved, but restart failed — use Restart on the agent, or wait for the next run.",
-    "agent_updated_restart_scheduled_toast": "Saved. Agent will restart after the current task so the new config applies.",
-    "agent_updated_next_run_toast": "Saved. Changes take effect on the next run (restart unavailable right now)."
+    "restore_failed_toast": "Failed to restore agent"
   },
   "inspector": {
     "section_properties": "Properties",
@@ -236,7 +232,7 @@
     "select_required": "Select a model",
     "default_provider": "Default (provider)",
     "managed_by_runtime_title": "Model selection is managed by this runtime.",
-    "managed_by_runtime_hint": "Configure the model on the runtime host (e.g. Hermes reads it from its own config file).",
+    "managed_by_runtime_hint": "Configure the model on the runtime host (the CLI reads it from its own config file).",
     "discovery_failed": "discovery failed",
     "clear_full": "Clear selection (use provider default)",
     "scanning_on_computer": "Checking models on this Computer…",
@@ -359,7 +355,7 @@
       "save_failed_toast": "Failed to save custom arguments"
     },
     "mcp_config": {
-      "intro": "MCP server configuration forwarded to the runtime CLI (Claude via --mcp-config, Codex via $CODEX_HOME/config.toml, Hermes/Kimi/Kiro via ACP mcpServers, OpenCode via OPENCODE_CONFIG_CONTENT, OpenClaw via the per-task config wrapper). Stored verbatim and may contain secrets — only the agent owner and workspace admins can read it. Leave empty to fall back to the CLI's own default. For OpenClaw HTTP/SSE entries use OpenClaw's own field name (e.g. \"transport\": \"streamable-http\") instead of Claude's \"type\".",
+      "intro": "MCP server configuration forwarded to the runtime CLI (Claude via --mcp-config, Codex via $CODEX_HOME/config.toml, Cursor via .cursor/mcp.json, Kiro via ACP mcpServers, OpenCode via OPENCODE_CONFIG_CONTENT, Pi via --mcp-config). Stored verbatim and may contain secrets — only the agent owner and workspace admins can read it. Leave empty to fall back to the CLI's own default.",
       "placeholder": "{\n  \"mcpServers\": {\n    \"fetch\": {\n      \"command\": \"uvx\",\n      \"args\": [\"mcp-server-fetch\"]\n    }\n  }\n}",
       "editor_aria": "MCP config JSON editor",
       "clear_action": "Clear",
@@ -636,20 +632,17 @@
         "scope": "Restarts the process. Keeps the session, workspace (MEMORY.md, notes/), and everything else.",
         "title_short": "Restart"
       },
-      "reset_session_restart": {
+      "session": {
         "title": "Reset session & restart",
         "scope": "Clears the model session and context, then restarts. Workspace (MEMORY.md, notes/) and everything else are kept.",
         "title_short": "Reset session"
       },
-      "full_reset_restart": {
+      "full": {
         "title": "Full reset & restart",
         "scope": "Clears the session and permanently deletes the workspace files (MEMORY.md, notes/), then restarts. This is not Delete agent.",
         "title_short": "Full reset"
       }
     },
-    "after_current_run": "Not available while a task is running — wait until idle, or use Restart (force).",
-    "full_reset_confirm": "This can't be undone. Type this agent's handle {{handle}} to confirm.",
-    "full_reset_confirm_placeholder": "Enter {{handle}}",
     "disabled_reason": {
       "agent_active": "Wait until the current task finishes, then try again.",
       "unsupported_runtime_capability": "Requires Computer v0.3.95 or newer.",
@@ -659,21 +652,13 @@
       "unavailable": "This action isn't available right now.",
       "no_force_capability": "This code agent can't force-restart yet."
     },
-    "status": {
-      "scheduled": "Restart was queued but may not run automatically. Close and try again when the agent is idle.",
-      "running": "Restarting…",
-      "succeeded": "Done. The agent is back online.",
-      "failed": "Restart failed.",
-      "failed_reason": "Restart failed: {{reason}}"
-    },
     "cta": {
       "restart": "Restart",
-      "reset_session_restart": "Reset session & restart",
-      "full_reset_restart": "Full reset & restart"
+      "session": "Reset session & restart",
+      "full": "Full reset & restart"
     },
+    "request_failed": "Restart request failed. Check the agent status and try again.",
     "cancel": "Cancel",
-    "retry": "Retry",
-    "done": "Done",
     "description_short": "Restart {{name}}.",
     "recommended": "Default"
   },

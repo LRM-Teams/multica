@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@multica/ui/components/ui/button";
+import { FileSearch, Network, ShieldCheck, Users } from "lucide-react";
 import { useT } from "../../i18n/use-t";
 
 const EXAMPLE_KEYS = ["q1", "q2", "q3", "q4"] as const;
@@ -10,53 +11,17 @@ type ResearchEmptyStateProps = {
   onStart: () => void;
 };
 
-/** LRM-783 / LRM-784 — designed empty with mini-canvas (goal + dashed ghosts). */
-function EmptyMiniCanvas({
-  goalLabel,
-  probeLabel,
-  sourceLabel,
-}: {
-  goalLabel: string;
-  probeLabel: string;
-  sourceLabel: string;
-}) {
+function EmptyResearchPath() {
+  const { t } = useT("research");
+  const steps = [
+    [FileSearch, t(($) => $.home_empty.ask)],
+    [Users, t(($) => $.home_empty.assign)],
+    [ShieldCheck, t(($) => $.home_empty.verify)],
+    [Network, t(($) => $.home_empty.deliver)],
+  ] as const;
   return (
-    <div
-      aria-hidden
-      className="relative mb-4 h-28 w-[270px] rounded-xl sm:h-32 sm:w-[300px]"
-      style={{
-        backgroundImage:
-          "radial-gradient(circle, color-mix(in oklab, var(--foreground) 10%, transparent) 1px, transparent 1.5px)",
-        backgroundSize: "24px 24px",
-      }}
-    >
-      <svg
-        className="absolute inset-0 size-full"
-        viewBox="0 0 300 128"
-        fill="none"
-      >
-        <path
-          d="M150 50 C 122 68, 100 76, 78 88"
-          stroke="var(--border)"
-          strokeWidth="1.5"
-          strokeDasharray="4 4"
-        />
-        <path
-          d="M150 50 C 178 68, 200 76, 222 88"
-          stroke="var(--border)"
-          strokeWidth="1.5"
-          strokeDasharray="4 4"
-        />
-      </svg>
-      <div className="absolute left-1/2 top-5 -translate-x-1/2 rounded-[9px] bg-brand px-2.5 py-1.5 text-[11.5px] font-semibold text-brand-foreground ring-2 ring-brand/45">
-        {goalLabel}
-      </div>
-      <div className="absolute left-9 top-[72px] rounded-lg border border-dashed border-input bg-background px-2 py-1 text-[10.5px] text-muted-foreground">
-        {probeLabel}
-      </div>
-      <div className="absolute right-9 top-[72px] rounded-lg border border-dashed border-input bg-background px-2 py-1 text-[10.5px] text-muted-foreground">
-        {sourceLabel}
-      </div>
+    <div className="mb-3 grid w-full max-w-xl grid-cols-2 gap-2 sm:grid-cols-4" aria-label={t(($) => $.home_empty.path)}>
+      {steps.map(([Icon, label], index) => <div key={label} className="relative flex flex-col items-center gap-2 rounded-lg border border-border/75 bg-card/70 px-2 py-3 text-xs text-muted-foreground">{index > 0 ? <span className="absolute right-1/2 top-5 hidden h-px w-full bg-border md:block" aria-hidden /> : null}<span className="relative z-[1] flex size-8 items-center justify-center rounded-full border border-brand/40 bg-card text-brand"><Icon className="size-4" aria-hidden /></span><span className="relative z-[1] text-center">{label}</span></div>)}
     </div>
   );
 }
@@ -73,11 +38,7 @@ export function ResearchEmptyState({
       className="flex w-full max-w-2xl flex-col items-center gap-3 px-2 py-8 text-center sm:py-10"
       data-testid="research-empty-state"
     >
-      <EmptyMiniCanvas
-        goalLabel={t(($) => $.node.goal)}
-        probeLabel={t(($) => $.node.probe)}
-        sourceLabel={t(($) => $.logic.lane.source)}
-      />
+      <EmptyResearchPath />
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">{t(($) => $.empty_title)}</h2>
         <p className="mx-auto max-w-[22rem] text-[12.5px] leading-relaxed text-muted-foreground">

@@ -27,6 +27,10 @@ type runnerDiagnosticRegistry struct {
 	failed  map[string]struct{}
 }
 
+type runnerDiagnosticSink interface {
+	record(string, diagnosticlog.Event) error
+}
+
 func (d *Daemon) initializeRunnerDiagnostics() {
 	if d == nil || d.runnerDiagnostics != nil {
 		return
@@ -62,6 +66,7 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 		loggers:            make(map[string]*diagnosticlog.Logger),
 		failed:             make(map[string]struct{}),
 	}
+	d.runnerDiagnosticStore = store
 }
 
 func (d *Daemon) recordRunnerDiagnostic(workspaceID string, event diagnosticlog.Event) {

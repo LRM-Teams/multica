@@ -53,6 +53,7 @@ func TestAgentProxyCLITransportPinsAuthenticatedLaunchContext(t *testing.T) {
 		"MULTICA_WORKSPACE_ID",
 		AgentProxyURLEnv,
 		AgentProxyTokenFileEnv,
+		"unset " + AgentProxyCLIWrapperEnv,
 	} {
 		if !strings.Contains(wrapperText, expected) {
 			t.Fatalf("Agent Proxy CLI wrapper omitted %q: %s", expected, wrapperText)
@@ -90,7 +91,7 @@ func TestAgentProxyCLIWrapperPreservesExistingTaskCredentialTransport(t *testing
 	}
 	root := t.TempDir()
 	realBinary := filepath.Join(root, "real-multica")
-	if err := os.WriteFile(realBinary, []byte("#!/bin/sh\nprintf 'agent=%s\\nworkspace=%s\\nproxy=%s\\nproxy_token_file=%s\\ntask_token_file=%s\\n' \"$MULTICA_AGENT_ID\" \"$MULTICA_WORKSPACE_ID\" \"$MULTICA_AGENT_PROXY_URL\" \"$MULTICA_AGENT_PROXY_TOKEN_FILE\" \"$MULTICA_TOKEN_FILE\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(realBinary, []byte("#!/bin/sh\nprintf 'agent=%s\\nworkspace=%s\\nproxy=%s\\nproxy_token_file=%s\\ntask_token_file=%s\\nwrapper_forward=%s\\n' \"$MULTICA_AGENT_ID\" \"$MULTICA_WORKSPACE_ID\" \"$MULTICA_AGENT_PROXY_URL\" \"$MULTICA_AGENT_PROXY_TOKEN_FILE\" \"$MULTICA_TOKEN_FILE\" \"$MULTICA_AGENT_CLI_WRAPPER\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	d := New(Config{WorkspacesRoot: root, HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -105,7 +106,10 @@ func TestAgentProxyCLIWrapperPreservesExistingTaskCredentialTransport(t *testing
 	t.Cleanup(func() { _ = transport.Close() })
 
 	command := exec.Command(transport.wrapperPath)
-	command.Env = append(os.Environ(), "MULTICA_TOKEN_FILE=/task/credential.token")
+	command.Env = append(os.Environ(),
+		"MULTICA_TOKEN_FILE=/task/credential.token",
+		AgentProxyCLIWrapperEnv+"=/stale/wrapper",
+	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("execute Agent Proxy wrapper: %v: %s", err, output)
@@ -117,6 +121,7 @@ func TestAgentProxyCLIWrapperPreservesExistingTaskCredentialTransport(t *testing
 		"proxy=http://127.0.0.1:19514",
 		"proxy_token_file=" + transport.tokenFile,
 		"task_token_file=/task/credential.token",
+		"wrapper_forward=\n",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("Agent Proxy wrapper output omitted %q: %s", expected, text)

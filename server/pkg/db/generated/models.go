@@ -229,20 +229,6 @@ type AgentRuntime struct {
 	PinnedVersion  pgtype.Text        `json:"pinned_version"`
 }
 
-type AgentRuntimeState struct {
-	AgentID                   pgtype.UUID        `json:"agent_id"`
-	RuntimeID                 pgtype.UUID        `json:"runtime_id"`
-	ProviderSessionID         pgtype.Text        `json:"provider_session_id"`
-	WorkDir                   pgtype.Text        `json:"work_dir"`
-	ProviderConfigFingerprint pgtype.Text        `json:"provider_config_fingerprint"`
-	Generation                int64              `json:"generation"`
-	LastTurnID                pgtype.UUID        `json:"last_turn_id"`
-	FreshSessionNoticeReason  pgtype.Text        `json:"fresh_session_notice_reason"`
-	LegacyResumeArchivedAt    pgtype.Timestamptz `json:"legacy_resume_archived_at"`
-	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt                 pgtype.Timestamptz `json:"updated_at"`
-}
-
 type AgentSession struct {
 	ID               pgtype.UUID        `json:"id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`

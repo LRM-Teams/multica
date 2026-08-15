@@ -2,6 +2,7 @@ package researchrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -383,9 +384,6 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 				ProbeLeaseDuration:   probeLeaseDuration(currentTask, snapshot.Run.Config),
 				ExpectedStateVersion: snapshot.Run.StateVersion, Request: request,
 			})
-			if errors.Is(err, ErrInvalidTransition) {
-				break
-			}
 			if errors.Is(err, ErrCircuitUnavailable) {
 				health, err = module.store.EvaluateExecutionTargets(ctx, run.WorkspaceID, members)
 				if err != nil {
@@ -399,6 +397,9 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 				continue
 			}
 			if err != nil {
+				// A dispatch contract failure is not evidence that the current
+				// research plan has finished. Propagate it so reconcile retries or
+				// applies failure policy instead of falling through to Delivery Gate.
 				return outcome, err
 			}
 			activeByAgent[agentID]++
@@ -515,7 +516,7 @@ func selectedExecutionTarget(agentID string, members []FleetMember) ExecutionTar
 func hasActiveCapability(task Task, members []FleetMember) bool {
 	role := roleForTask(task)
 	for _, member := range members {
-		if member.Status == "active" && strings.EqualFold(strings.TrimSpace(member.Role), role) {
+		if member.Status == "active" && strings.EqualFold(strings.TrimSpace(member.Role), role) && !taskExcludesAgent(task, member.AgentID) {
 			return true
 		}
 	}
@@ -525,7 +526,7 @@ func hasActiveCapability(task Task, members []FleetMember) bool {
 func hasActiveDispatchCandidate(task Task, members []FleetMember) bool {
 	preferred := strings.TrimSpace(task.AssignedAgentID)
 	for _, member := range members {
-		if member.Status == "active" && member.AgentID == preferred {
+		if member.Status == "active" && member.AgentID == preferred && !taskExcludesAgent(task, member.AgentID) {
 			return true
 		}
 	}
@@ -536,7 +537,7 @@ func selectAgent(task Task, members []FleetMember, active map[string]int) string
 	role := roleForTask(task)
 	if pref := strings.TrimSpace(task.AssignedAgentID); pref != "" {
 		for _, member := range members {
-			if member.AgentID != pref || member.Status != "active" {
+			if member.AgentID != pref || member.Status != "active" || taskExcludesAgent(task, member.AgentID) {
 				continue
 			}
 			if active[pref] > 0 {
@@ -549,7 +550,7 @@ func selectAgent(task Task, members []FleetMember, active map[string]int) string
 	}
 	candidates := make([]FleetMember, 0, len(members))
 	for _, member := range members {
-		if member.Status != "active" || !strings.EqualFold(strings.TrimSpace(member.Role), role) {
+		if member.Status != "active" || !strings.EqualFold(strings.TrimSpace(member.Role), role) || taskExcludesAgent(task, member.AgentID) {
 			continue
 		}
 		candidates = append(candidates, member)
@@ -570,6 +571,27 @@ func selectAgent(task Task, members []FleetMember, active map[string]int) string
 		}
 	}
 	return ""
+}
+
+func taskExcludesAgent(task Task, agentID string) bool {
+	var criteria struct {
+		Mode    string `json:"mode"`
+		Routing struct {
+			ExcludedAgentIDs []string `json:"excluded_agent_ids"`
+		} `json:"routing"`
+	}
+	if json.Unmarshal(task.AcceptanceCriteria, &criteria) != nil {
+		return len(task.AcceptanceCriteria) > 0
+	}
+	if criteria.Mode == "dispute_review" && len(criteria.Routing.ExcludedAgentIDs) == 0 {
+		return true
+	}
+	for _, excluded := range criteria.Routing.ExcludedAgentIDs {
+		if excluded == agentID {
+			return true
+		}
+	}
+	return false
 }
 
 func roleForTask(task Task) string {

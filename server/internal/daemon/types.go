@@ -27,11 +27,10 @@ type Runtime struct {
 // of an Agent resident on one runtime. Message delivery is deliberately not
 // represented here: it is handled exclusively by MessageCoordinator.
 type ResidentAgentRuntimeConfig struct {
-	WorkspaceID            string     `json:"workspace_id"`
-	RuntimeID              string     `json:"runtime_id"`
-	WorkspaceContext       string     `json:"workspace_context,omitempty"`
-	RuntimeStateGeneration int64      `json:"runtime_state_generation"`
-	Agent                  *AgentData `json:"agent"`
+	WorkspaceID      string     `json:"workspace_id"`
+	RuntimeID        string     `json:"runtime_id"`
+	WorkspaceContext string     `json:"workspace_context,omitempty"`
+	Agent            *AgentData `json:"agent"`
 }
 
 // Task represents a claimed task from the server.
@@ -66,8 +65,6 @@ type Task struct {
 	ProjectTitle             string                             `json:"project_title,omitempty"`               // human-readable project title for context injection
 	PriorSessionID           string                             `json:"prior_session_id,omitempty"`            // Claude session ID from a previous task on this issue
 	PriorWorkDir             string                             `json:"prior_work_dir,omitempty"`              // work_dir from a previous task on this issue
-	RuntimeStateGeneration   int64                              `json:"runtime_state_generation,omitempty"`    // canonical runtime-state CAS generation; populated after D6 activates the cutover
-	FreshSessionNoticeReason string                             `json:"fresh_session_notice_reason,omitempty"` // transport signal for the one-time fresh provider-session brief
 	TriggerCommentID         string                             `json:"trigger_comment_id,omitempty"`          // comment that triggered this task
 	TriggerThreadID          string                             `json:"trigger_thread_id,omitempty"`           // root comment ID for the triggering thread; falls back to trigger_comment_id on old servers
 	TriggerCommentContent    string                             `json:"trigger_comment_content,omitempty"`     // content of the triggering comment

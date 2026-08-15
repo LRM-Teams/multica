@@ -7,6 +7,15 @@ allowed-tools: Bash(multica *), Bash(git *), Bash(gh *)
 
 # Working on Multica issues
 
+An active multi-agent channel Goal is not itself a code assignment. Repository
+mutation requires a claimed Issue that is linked to the Goal channel and belongs
+to the channel's bound Git-backed Project. Chat wakes without such an Issue may
+coordinate the control plane but must not create competing implementations.
+Implementation Issues stop at `in_review`. Canonical merge and deployment
+belong to a separate manager-owned integration Issue whose metadata includes
+`delivery_role=integration`; that lane integrates only independently reviewed,
+green-CI branches and verifies the deployed commit against the parent Goal.
+
 Product contracts the runtime brief does not fully encode: PR linking vs close
 intent, reading linked-PR state, metadata keys, status side effects, and
 sub-issue enqueue behavior.

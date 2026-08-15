@@ -19,6 +19,7 @@ export interface StarGraphBounds {
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
+const MAX_AUTO_FIT_ZOOM = 1;
 
 export function computeEntityBounds(entities: readonly StarEntityView[]): StarGraphBounds | null {
   if (entities.length === 0) return null;
@@ -61,7 +62,7 @@ export function fitCameraToBounds(
   const usableW = Math.max(viewport.width - padding * 2, 1);
   const usableH = Math.max(viewport.height - padding * 2, 1);
   const zoom = clamp(
-    Math.min(usableW / bounds.width, usableH / bounds.height, MAX_ZOOM),
+    Math.min(usableW / bounds.width, usableH / bounds.height, MAX_AUTO_FIT_ZOOM),
     MIN_ZOOM,
     MAX_ZOOM,
   );
@@ -109,7 +110,11 @@ export function centerCameraOnPoint(
 }
 
 export function relationEdgeClass(_kind: string, edgeType: string): string {
-  if (edgeType === "merged_from" || edgeType === "integration_formed") {
+  if (
+    edgeType === "merged_from" ||
+    edgeType === "integrates" ||
+    edgeType === "integration_formed"
+  ) {
     return "sg-edge-merge";
   }
   if (DECOMPOSITION_EDGE_TYPES.has(edgeType)) return "sg-edge-decompose";
@@ -125,6 +130,12 @@ export function relationEdgeClass(_kind: string, edgeType: string): string {
 
 const DECOMPOSITION_EDGE_TYPES = new Set([
   "leads_to",
+  "decomposes",
+  "depends_on",
+  "tests",
+  "triggered",
+  "produced",
+  "consumed",
   "refines",
   "escalated_to",
   "decompose",
@@ -147,13 +158,58 @@ export function quadraticEdgePath(
   from: { x: number; y: number },
   to: { x: number; y: number },
 ): string {
+  const control = quadraticEdgeControl(from, to);
+  return [
+    `M ${from.x.toFixed(1)} ${from.y.toFixed(1)}`,
+    `Q ${control.x.toFixed(1)} ${control.y.toFixed(1)}`,
+    `${to.x.toFixed(1)} ${to.y.toFixed(1)}`,
+  ].join(" ");
+}
+
+function quadraticEdgeControl(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): { x: number; y: number } {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const len = Math.hypot(dx, dy) || 1;
   const bend = Math.min(32, len * 0.09);
-  const mx = (from.x + to.x) / 2 - (dy / len) * bend;
-  const my = (from.y + to.y) / 2 + (dx / len) * bend;
-  return `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} Q ${mx.toFixed(1)} ${my.toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
+  return {
+    x: (from.x + to.x) / 2 - (dy / len) * bend,
+    y: (from.y + to.y) / 2 + (dx / len) * bend,
+  };
+}
+
+export function isEdgeLabelClear(
+  relation: {
+    fromNodeId: string;
+    toNodeId: string;
+    from: { x: number; y: number };
+    to: { x: number; y: number };
+  },
+  obstacles: readonly { id: string; x: number; y: number; radius: number }[],
+  clearance = 18,
+): boolean {
+  const control = quadraticEdgeControl(relation.from, relation.to);
+  const labelPoint = {
+    x: relation.from.x * 0.25 + control.x * 0.5 + relation.to.x * 0.25,
+    y: relation.from.y * 0.25 + control.y * 0.5 + relation.to.y * 0.25,
+  };
+  for (const obstacle of obstacles) {
+    if (
+      obstacle.id === relation.fromNodeId ||
+      obstacle.id === relation.toNodeId
+    ) {
+      continue;
+    }
+    if (
+      Math.hypot(labelPoint.x - obstacle.x, labelPoint.y - obstacle.y) <
+      obstacle.radius + clearance
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function clamp(value: number, min: number, max: number): number {

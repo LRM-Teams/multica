@@ -28,6 +28,7 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { useReactionActorName } from "../../common/use-reaction-actor-name";
 import { ActorStyledName } from "../../common/actor-styled-name";
 import type { ChannelMessage } from "@multica/core/types";
+import type { NoteWriteConfirmation } from "@multica/core/notes/worker-reply-actions";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
@@ -297,7 +298,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   /** Slack-style continuation: no avatar/name row; gutter shows HH:mm on hover. */
   compact = false,
   groupEnd = true,
-  noteWorkerPageId = null,
+  noteWriteConfirmation = null,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -342,10 +343,10 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
    */
   groupEnd?: boolean;
   /**
-   * Note Worker page id from a preceding `note_brief` part. When set on an
-   * agent reply, show insert-below / create-child note actions.
+   * Human-confirm actions for an agent note write: insert/child when a page is
+   * specified, or create a new note when it is not.
    */
-  noteWorkerPageId?: string | null;
+  noteWriteConfirmation?: NoteWriteConfirmation | null;
 // LRM-268 adds contentExpanded/contentOverflows; mobileOverlay already uses a
 // union instead of three booleans (#568). Full useReducer consolidation is a
 // separate refactor of this ~1100-line component — suppress to unblock CI.
@@ -1184,8 +1185,11 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 </button>
               </div>
             )}
-            {isAgent && noteWorkerPageId ? (
-              <NoteWorkerReplyActions message={message} pageId={noteWorkerPageId} />
+            {isAgent && noteWriteConfirmation ? (
+              <NoteWorkerReplyActions
+                message={message}
+                pageId={noteWriteConfirmation.mode === "existing" ? noteWriteConfirmation.pageId : null}
+              />
             ) : null}
           </div>
         )}

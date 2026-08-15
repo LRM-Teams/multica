@@ -17,8 +17,6 @@ const reminderCacheStateFile = "reminder_cache.json"
 
 const defaultReminderFireRetryDelay = time.Second
 
-var errReminderProjectionGap = errors.New("reminder projection sequence gap")
-
 // reminderDueIdentity is the Raft 1.0.16 due key: owner + reminder + version.
 type reminderDueIdentity struct {
 	OwnerAgentID string `json:"owner_agent_id"`
@@ -29,6 +27,7 @@ type reminderDueIdentity struct {
 // reminderDueReceipt is the persisted local due fact. It stays until both the
 // owner wake is enqueued and the server has acknowledged the same identity.
 type reminderDueReceipt struct {
+	RuntimeID     string                    `json:"runtime_id,omitempty"`
 	Job           protocol.ReminderTimerJob `json:"job"`
 	FiredAtClient string                    `json:"fired_at_client"`
 	Catchup       bool                      `json:"catchup"`
@@ -54,49 +53,43 @@ func (systemReminderClock) AfterFunc(delay time.Duration, fn func()) reminderTim
 }
 
 type reminderCacheEntry struct {
-	job   protocol.ReminderTimerJob
-	timer reminderTimer
+	runtimeID string
+	job       protocol.ReminderTimerJob
+	timer     reminderTimer
 }
 
 type reminderVersionFence struct {
 	OwnerAgentID string `json:"owner_agent_id"`
 	Version      int64  `json:"version"`
-	LastSeq      int64  `json:"last_seq"`
 	Terminal     bool   `json:"terminal"`
 }
 
 type reminderCacheState struct {
-	Fences           map[string]reminderVersionFence `json:"fences"`
-	RuntimeCursors   map[string]int64                `json:"runtime_cursors"`
-	RuntimeResets    map[string]bool                 `json:"runtime_resets,omitempty"`
-	RecoveryRequired bool                            `json:"recovery_required,omitempty"`
-	Receipts         map[string][]reminderDueReceipt `json:"receipts,omitempty"`
+	Fences   map[string]reminderVersionFence `json:"fences"`
+	Receipts map[string][]reminderDueReceipt `json:"receipts,omitempty"`
 }
 
-// reminderCache is the owner-daemon timer projection. Entries are ephemeral,
-// while the per-ID version fences and per-runtime projection cursors are
-// persisted together before an event is ACKed. That makes deleted timers
-// non-resurrectable without retaining unbounded terminal definitions server-side.
+// reminderCache is the Computer-local Raft-shaped timer cache. A reconnect
+// replaces one Runtime from a full snapshot; per-Reminder versions fence
+// duplicate and delayed live upserts/cancels.
 type reminderCache struct {
-	mu               sync.Mutex
-	entries          map[string]reminderCacheEntry
-	fences           map[string]reminderVersionFence
-	runtimeCursors   map[string]int64
-	runtimeResets    map[string]bool
-	recoveryRequired bool
-	attemptedFires   map[string]int64
-	receipts         map[string][]reminderDueReceipt
-	suspended        bool
-	clock            reminderClock
-	onFire           func(protocol.ReminderTimerJob)
-	onFireDelivery   func(protocol.ReminderTimerJob) bool
-	fireRetryDelay   time.Duration
-	fireRetryTimers  map[string]reminderTimer
-	dispatching      map[string]bool
-	logger           *slog.Logger
-	path             string
-	loadErr          error
-	writeState       func(string, []byte) error
+	mu              sync.Mutex
+	entries         map[string]reminderCacheEntry
+	fences          map[string]reminderVersionFence
+	attemptedFires  map[string]int64
+	receipts        map[string][]reminderDueReceipt
+	suspended       bool
+	clock           reminderClock
+	onFire          func(protocol.ReminderTimerJob)
+	onFireDelivery  func(protocol.ReminderTimerJob) bool
+	onFireReceipt   func(reminderDueReceipt) bool
+	fireRetryDelay  time.Duration
+	fireRetryTimers map[string]reminderTimer
+	dispatching     map[string]bool
+	logger          *slog.Logger
+	path            string
+	loadErr         error
+	writeState      func(string, []byte) error
 }
 
 func newReminderCache(clock reminderClock, logger *slog.Logger, onFire func(protocol.ReminderTimerJob)) *reminderCache {
@@ -109,8 +102,6 @@ func newReminderCache(clock reminderClock, logger *slog.Logger, onFire func(prot
 	return &reminderCache{
 		entries:         make(map[string]reminderCacheEntry),
 		fences:          make(map[string]reminderVersionFence),
-		runtimeCursors:  make(map[string]int64),
-		runtimeResets:   make(map[string]bool),
 		attemptedFires:  make(map[string]int64),
 		receipts:        make(map[string][]reminderDueReceipt),
 		fireRetryTimers: make(map[string]reminderTimer),
@@ -137,7 +128,7 @@ func (c *reminderCache) setPersistence(root string) {
 			if globErr != nil {
 				c.loadErr = fmt.Errorf("find quarantined reminder cache state: %w", globErr)
 			} else if len(quarantined) > 0 {
-				c.initializeRecoveryStateLocked(fmt.Errorf("primary reminder cache state missing after quarantine"))
+				c.initializeEmptyStateLocked(fmt.Errorf("primary reminder cache state missing after quarantine"))
 			}
 		} else {
 			c.recoverCorruptStateLocked(fmt.Errorf("load reminder cache state: %w", err))
@@ -154,17 +145,6 @@ func (c *reminderCache) setPersistence(root string) {
 			c.fences[id] = fence
 		}
 	}
-	for runtimeID, seq := range state.RuntimeCursors {
-		if runtimeID != "" && seq >= 0 {
-			c.runtimeCursors[runtimeID] = seq
-		}
-	}
-	for runtimeID, required := range state.RuntimeResets {
-		if runtimeID != "" && required {
-			c.runtimeResets[runtimeID] = true
-		}
-	}
-	c.recoveryRequired = state.RecoveryRequired
 	if state.Receipts != nil {
 		c.receipts = cloneReminderReceipts(state.Receipts)
 	}
@@ -176,23 +156,20 @@ func (c *reminderCache) recoverCorruptStateLocked(cause error) {
 		c.loadErr = fmt.Errorf("quarantine corrupt reminder cache state: %w", err)
 		return
 	}
-	c.initializeRecoveryStateLocked(cause)
+	c.initializeEmptyStateLocked(cause)
 }
 
-func (c *reminderCache) initializeRecoveryStateLocked(cause error) {
+func (c *reminderCache) initializeEmptyStateLocked(cause error) {
 	clear(c.fences)
-	clear(c.runtimeCursors)
-	clear(c.runtimeResets)
 	clear(c.attemptedFires)
 	clear(c.receipts)
-	c.recoveryRequired = true
 	c.loadErr = nil
 	if err := c.persistLocked(); err != nil {
-		c.loadErr = fmt.Errorf("persist reminder cache recovery marker: %w", err)
+		c.loadErr = fmt.Errorf("persist empty reminder cache state: %w", err)
 		return
 	}
 	if c.logger != nil {
-		c.logger.Warn("reminder cache canonical reset required", "path", c.path, "error", cause)
+		c.logger.Warn("reminder cache state reset; reconnect snapshot required", "path", c.path, "error", cause)
 	}
 }
 
@@ -209,10 +186,7 @@ func (c *reminderCache) persistLocked() error {
 	if c.path == "" {
 		return nil
 	}
-	state := reminderCacheState{
-		Fences: c.fences, RuntimeCursors: c.runtimeCursors, RuntimeResets: c.runtimeResets,
-		RecoveryRequired: c.recoveryRequired, Receipts: c.receipts,
-	}
+	state := reminderCacheState{Fences: c.fences, Receipts: c.receipts}
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -236,14 +210,6 @@ func cloneReminderFences(in map[string]reminderVersionFence) map[string]reminder
 	out := make(map[string]reminderVersionFence, len(in))
 	for id, fence := range in {
 		out[id] = fence
-	}
-	return out
-}
-
-func cloneReminderCursors(in map[string]int64) map[string]int64 {
-	out := make(map[string]int64, len(in))
-	for id, seq := range in {
-		out[id] = seq
 	}
 	return out
 }
@@ -294,102 +260,73 @@ func findReceiptIndex(receipts []reminderDueReceipt, identity reminderDueIdentit
 	return -1
 }
 
-func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) (bool, error) {
-	if c == nil || event.Seq < 1 || event.RuntimeID == "" || event.AgentID == "" || event.ReminderID == "" || event.Version < 1 {
+func (c *reminderCache) upsert(job protocol.ReminderTimerJob) bool {
+	ok, _ := c.upsertForRuntime("test", job)
+	return ok
+}
+
+func (c *reminderCache) upsertForRuntime(runtimeID string, job protocol.ReminderTimerJob) (bool, error) {
+	if c == nil || runtimeID == "" || job.OwnerAgentID == "" || job.ReminderID == "" || job.Version < 1 {
 		return false, nil
 	}
-	if !event.Terminal {
-		if event.Reminder.ReminderID == "" {
-			event.Reminder = protocol.ReminderTimerJob{ReminderID: event.ReminderID, OwnerAgentID: event.AgentID, Version: event.Version, FireAt: event.FireAt}
-		}
-		if event.Reminder.ReminderID != event.ReminderID || event.Reminder.OwnerAgentID != event.AgentID || event.Reminder.Version != event.Version {
-			return false, nil
-		}
-		if _, err := time.Parse(time.RFC3339, event.Reminder.FireAt); err != nil {
-			return false, nil
-		}
+	fireAt, err := time.Parse(time.RFC3339, job.FireAt)
+	if err != nil {
+		return false, nil
 	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if event.Seq <= c.runtimeCursors[event.RuntimeID] {
+	fence, exists := c.fences[job.ReminderID]
+	if exists && (job.Version < fence.Version || (job.Version == fence.Version && !fence.Terminal)) {
 		return false, nil
-	}
-	if event.PrevSeq != c.runtimeCursors[event.RuntimeID] {
-		return false, fmt.Errorf("%w: runtime %s has %d, event %d follows %d", errReminderProjectionGap, event.RuntimeID, c.runtimeCursors[event.RuntimeID], event.Seq, event.PrevSeq)
 	}
 	previousFences := cloneReminderFences(c.fences)
-	previousCursors := cloneReminderCursors(c.runtimeCursors)
-	previousAttempt, hadAttempted := c.attemptedFires[event.ReminderID]
-
-	fence, exists := c.fences[event.ReminderID]
-	apply := false
-	if event.Terminal {
-		apply = !exists || event.Version >= fence.Version
-	} else if !exists || event.Version > fence.Version {
-		apply = true
-	} else if event.EventType == "fire_result" && event.Version == fence.Version && hadAttempted && previousAttempt == event.Version {
-		apply = true
-	}
-	if apply {
-		c.fences[event.ReminderID] = reminderVersionFence{
-			OwnerAgentID: event.AgentID, Version: event.Version, LastSeq: event.Seq, Terminal: event.Terminal,
-		}
-		delete(c.attemptedFires, event.ReminderID)
-		if event.EventType == "fire_result" {
-			for _, receipt := range append([]reminderDueReceipt(nil), c.receipts[event.ReminderID]...) {
-				if receipt.Job.OwnerAgentID == event.AgentID {
-					c.ackFireReceiptLocked(receiptIdentity(receipt))
-				}
-			}
-		}
-	}
-	c.runtimeCursors[event.RuntimeID] = event.Seq
+	c.fences[job.ReminderID] = reminderVersionFence{OwnerAgentID: job.OwnerAgentID, Version: job.Version}
+	delete(c.attemptedFires, job.ReminderID)
 	if err := c.persistLocked(); err != nil {
 		c.fences = previousFences
-		c.runtimeCursors = previousCursors
-		if hadAttempted {
-			c.attemptedFires[event.ReminderID] = previousAttempt
-		} else {
-			delete(c.attemptedFires, event.ReminderID)
-		}
 		return false, err
 	}
-	if !apply {
-		return false, nil
-	}
-	if current, ok := c.entries[event.ReminderID]; ok && current.timer != nil {
+	if current, ok := c.entries[job.ReminderID]; ok && current.timer != nil {
 		current.timer.Stop()
 	}
-	delete(c.entries, event.ReminderID)
-	if !event.Terminal {
-		fireAt, _ := time.Parse(time.RFC3339, event.Reminder.FireAt)
-		c.entries[event.ReminderID] = reminderCacheEntry{job: event.Reminder}
-		if !c.suspended {
-			c.armLocked(event.Reminder, fireAt)
-		}
+	c.entries[job.ReminderID] = reminderCacheEntry{runtimeID: runtimeID, job: job}
+	if !c.suspended {
+		c.armLocked(job, fireAt)
 	}
 	return true, nil
 }
 
-// upsert/cancel remain small unit-test helpers. Production frames always use
-// applyProjection so sequence and durable ACK fencing cannot be bypassed.
-func (c *reminderCache) upsert(job protocol.ReminderTimerJob) bool {
-	seq := c.nextTestSeq()
-	event := protocol.ReminderProjectionEvent{Seq: seq, PrevSeq: seq - 1, RuntimeID: "test", AgentID: job.OwnerAgentID, EventType: "upsert", ReminderID: job.ReminderID, Version: job.Version, FireAt: job.FireAt, Reminder: job}
-	ok, _ := c.applyProjection(event)
+func (c *reminderCache) cancel(reminderID string, version int64) bool {
+	fence := c.highWatermark(reminderID)
+	ok, _ := c.cancelForRuntime("test", fence.OwnerAgentID, reminderID, version)
 	return ok
 }
 
-func (c *reminderCache) cancel(reminderID string, version int64) bool {
-	fence := c.highWatermark(reminderID)
-	seq := c.nextTestSeq()
-	event := protocol.ReminderProjectionEvent{Seq: seq, PrevSeq: seq - 1, RuntimeID: "test", AgentID: fence.OwnerAgentID, EventType: "cancel", ReminderID: reminderID, Version: version, Terminal: true}
-	if event.AgentID == "" {
-		event.AgentID = "test"
+func (c *reminderCache) cancelForRuntime(runtimeID, ownerAgentID, reminderID string, version int64) (bool, error) {
+	if c == nil || runtimeID == "" || reminderID == "" || version < 1 {
+		return false, nil
 	}
-	ok, _ := c.applyProjection(event)
-	return ok
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fence, exists := c.fences[reminderID]
+	if exists && (version < fence.Version || (ownerAgentID != "" && fence.OwnerAgentID != "" && ownerAgentID != fence.OwnerAgentID)) {
+		return false, nil
+	}
+	if ownerAgentID == "" {
+		ownerAgentID = fence.OwnerAgentID
+	}
+	previousFences := cloneReminderFences(c.fences)
+	c.fences[reminderID] = reminderVersionFence{OwnerAgentID: ownerAgentID, Version: version, Terminal: true}
+	delete(c.attemptedFires, reminderID)
+	if err := c.persistLocked(); err != nil {
+		c.fences = previousFences
+		return false, err
+	}
+	if current, ok := c.entries[reminderID]; ok && current.timer != nil {
+		current.timer.Stop()
+	}
+	delete(c.entries, reminderID)
+	return true, nil
 }
 
 func (c *reminderCache) cancelOwned(reminderID string, version int64, ownerAgentID string) bool {
@@ -404,6 +341,91 @@ func (c *reminderCache) cancelOwned(reminderID string, version int64, ownerAgent
 		return false
 	}
 	return c.cancel(reminderID, version)
+}
+
+func (c *reminderCache) replaceRuntime(runtimeID string, jobs []protocol.ReminderTimerJob) error {
+	if c == nil || runtimeID == "" {
+		return nil
+	}
+	incoming := make(map[string]protocol.ReminderTimerJob, len(jobs))
+	for _, job := range jobs {
+		if job.OwnerAgentID == "" || job.ReminderID == "" || job.Version < 1 {
+			return errors.New("invalid reminder snapshot job")
+		}
+		if _, err := time.Parse(time.RFC3339, job.FireAt); err != nil {
+			return err
+		}
+		incoming[job.ReminderID] = job
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	previousFences := cloneReminderFences(c.fences)
+	previousReceipts := cloneReminderReceipts(c.receipts)
+	for id, entry := range c.entries {
+		if entry.runtimeID != runtimeID {
+			continue
+		}
+		if _, present := incoming[id]; !present {
+			fence := c.fences[id]
+			fence.OwnerAgentID = entry.job.OwnerAgentID
+			fence.Version = entry.job.Version
+			fence.Terminal = true
+			c.fences[id] = fence
+		}
+	}
+	for _, job := range incoming {
+		c.fences[job.ReminderID] = reminderVersionFence{OwnerAgentID: job.OwnerAgentID, Version: job.Version}
+		identity := reminderDueIdentity{OwnerAgentID: job.OwnerAgentID, ReminderID: job.ReminderID, Version: job.Version}
+		if index := findReceiptIndex(c.receipts[job.ReminderID], identity); index >= 0 {
+			receipts := c.receipts[job.ReminderID]
+			receipts[index].RuntimeID = runtimeID
+			c.receipts[job.ReminderID] = receipts
+		}
+	}
+	if err := c.persistLocked(); err != nil {
+		c.fences = previousFences
+		c.receipts = previousReceipts
+		return err
+	}
+	for id, entry := range c.entries {
+		if entry.runtimeID != runtimeID {
+			continue
+		}
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+		delete(c.entries, id)
+	}
+	for _, job := range incoming {
+		identity := reminderDueIdentity{OwnerAgentID: job.OwnerAgentID, ReminderID: job.ReminderID, Version: job.Version}
+		if findReceiptIndex(c.receipts[job.ReminderID], identity) >= 0 {
+			continue
+		}
+		fireAt, _ := time.Parse(time.RFC3339, job.FireAt)
+		c.entries[job.ReminderID] = reminderCacheEntry{runtimeID: runtimeID, job: job}
+		if !c.suspended {
+			c.armLocked(job, fireAt)
+		}
+	}
+	return nil
+}
+
+func (c *reminderCache) runtimeFor(job protocol.ReminderTimerJob) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[job.ReminderID]
+	if ok && entry.job.OwnerAgentID == job.OwnerAgentID && entry.job.Version == job.Version && entry.runtimeID != "" {
+		return entry.runtimeID, true
+	}
+	identity := reminderDueIdentity{OwnerAgentID: job.OwnerAgentID, ReminderID: job.ReminderID, Version: job.Version}
+	if index := findReceiptIndex(c.receipts[job.ReminderID], identity); index >= 0 {
+		runtimeID := c.receipts[job.ReminderID][index].RuntimeID
+		return runtimeID, runtimeID != ""
+	}
+	return "", false
 }
 
 func (c *reminderCache) pendingFireReceipts() []reminderDueReceipt {
@@ -450,12 +472,6 @@ func (c *reminderCache) ackFireReceiptLocked(identity reminderDueIdentity) bool 
 	return true
 }
 
-func (c *reminderCache) nextTestSeq() int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.runtimeCursors["test"] + 1
-}
-
 func (c *reminderCache) highWatermark(reminderID string) reminderVersionFence {
 	if c == nil {
 		return reminderVersionFence{}
@@ -465,257 +481,34 @@ func (c *reminderCache) highWatermark(reminderID string) reminderVersionFence {
 	return c.fences[reminderID]
 }
 
-func (c *reminderCache) projectionCursors() map[string]int64 {
-	if c == nil {
-		return map[string]int64{}
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return cloneReminderCursors(c.runtimeCursors)
-}
-
-func (c *reminderCache) projectionReplayState(runtimeIDs []string) (map[string]int64, map[string]bool, error) {
-	if c == nil {
-		return map[string]int64{}, map[string]bool{}, nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	previousResets := make(map[string]bool, len(c.runtimeResets))
-	for runtimeID, required := range c.runtimeResets {
-		previousResets[runtimeID] = required
-	}
-	previousRecoveryRequired := c.recoveryRequired
-	if c.recoveryRequired && len(runtimeIDs) > 0 {
-		for _, runtimeID := range runtimeIDs {
-			if runtimeID != "" {
-				c.runtimeResets[runtimeID] = true
-			}
-		}
-		c.recoveryRequired = false
-		if err := c.persistLocked(); err != nil {
-			c.runtimeResets = previousResets
-			c.recoveryRequired = previousRecoveryRequired
-			return nil, nil, err
-		}
-	}
-	cursors := make(map[string]int64, len(runtimeIDs))
-	resets := make(map[string]bool)
-	for _, runtimeID := range runtimeIDs {
-		if runtimeID == "" {
-			continue
-		}
-		if c.runtimeResets[runtimeID] {
-			cursors[runtimeID] = 0
-			resets[runtimeID] = true
-			continue
-		}
-		cursors[runtimeID] = c.runtimeCursors[runtimeID]
-	}
-	return cursors, resets, nil
-}
-
-func (c *reminderCache) requiredRuntimeResets() map[string]bool {
-	if c == nil {
-		return map[string]bool{}
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	resets := make(map[string]bool, len(c.runtimeResets))
-	for runtimeID, required := range c.runtimeResets {
-		if required {
-			resets[runtimeID] = true
-		}
-	}
-	return resets
-}
-
-func (c *reminderCache) reconcileRuntimeSet(allowed map[string]bool, retiredOwnerIDs []string) (bool, error) {
+func (c *reminderCache) reconcileRuntimeSet(allowed map[string]bool) (bool, error) {
 	if c == nil {
 		return false, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	retiredOwners := make(map[string]bool, len(retiredOwnerIDs))
-	for _, agentID := range retiredOwnerIDs {
-		if agentID != "" {
-			retiredOwners[agentID] = true
-		}
-	}
-	previousFences := cloneReminderFences(c.fences)
-	previousCursors := cloneReminderCursors(c.runtimeCursors)
-	previousResets := make(map[string]bool, len(c.runtimeResets))
-	for runtimeID, required := range c.runtimeResets {
-		previousResets[runtimeID] = required
-	}
-	previousAttempted := cloneAttemptedFires(c.attemptedFires)
 	changed := false
-	for reminderID, fence := range c.fences {
-		if retiredOwners[fence.OwnerAgentID] {
-			delete(c.fences, reminderID)
-			delete(c.attemptedFires, reminderID)
-			changed = true
-		}
-	}
-	for runtimeID := range c.runtimeCursors {
-		if !allowed[runtimeID] {
-			delete(c.runtimeCursors, runtimeID)
-			changed = true
-		}
-	}
-	for runtimeID := range c.runtimeResets {
-		if !allowed[runtimeID] {
-			delete(c.runtimeResets, runtimeID)
-			changed = true
-		}
-	}
-	for _, entry := range c.entries {
-		if retiredOwners[entry.job.OwnerAgentID] {
-			changed = true
-			break
-		}
-	}
-	if !changed {
-		return false, nil
-	}
-	if err := c.persistLocked(); err != nil {
-		c.fences = previousFences
-		c.runtimeCursors = previousCursors
-		c.runtimeResets = previousResets
-		c.attemptedFires = previousAttempted
-		return false, err
-	}
-	for reminderID, entry := range c.entries {
-		if !retiredOwners[entry.job.OwnerAgentID] {
-			continue
-		}
-		if entry.timer != nil {
-			entry.timer.Stop()
-		}
-		delete(c.entries, reminderID)
-	}
-	return true, nil
-}
-
-func (c *reminderCache) advanceProjectionCursor(runtimeID string, prevSeq, seq int64) error {
-	if c == nil || runtimeID == "" || seq < 1 {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if seq <= c.runtimeCursors[runtimeID] {
-		return nil
-	}
-	if prevSeq != c.runtimeCursors[runtimeID] {
-		return fmt.Errorf("%w: runtime %s has %d, event %d follows %d", errReminderProjectionGap, runtimeID, c.runtimeCursors[runtimeID], seq, prevSeq)
-	}
-	previous := c.runtimeCursors[runtimeID]
-	c.runtimeCursors[runtimeID] = seq
-	if err := c.persistLocked(); err != nil {
-		c.runtimeCursors[runtimeID] = previous
-		return err
-	}
-	return nil
-}
-
-func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, jobs []protocol.ReminderTimerJob) (int, error) {
-	if c == nil || runtimeID == "" || agentID == "" || watermark < 0 {
-		return 0, nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if watermark < c.runtimeCursors[runtimeID] {
-		// Task #69: this whole snapshot used to be dropped with zero trace.
-		// A server watermark behind the daemon's own persisted cursor should
-		// be rare (it means the server regressed relative to what this
-		// daemon already ACKed) — worth a Warn every time it happens, not
-		// silence, since a genuinely stale watermark here means the daemon
-		// is about to miss every job in this snapshot.
-		if c.logger != nil {
-			c.logger.Warn("reminder snapshot rejected: server watermark behind local cursor",
-				"runtime_id", runtimeID, "agent_id", agentID, "watermark", watermark, "local_cursor", c.runtimeCursors[runtimeID])
-		}
-		return 0, nil
-	}
-	previousFences := cloneReminderFences(c.fences)
-	previousAttempted := cloneAttemptedFires(c.attemptedFires)
-	acceptedJobs := make(map[string]protocol.ReminderTimerJob)
-	for _, job := range jobs {
-		if job.OwnerAgentID != agentID || job.ReminderID == "" || job.Version < 1 {
-			continue
-		}
-		if _, err := time.Parse(time.RFC3339, job.FireAt); err != nil {
-			continue
-		}
-		fence, exists := c.fences[job.ReminderID]
-		if exists && (fence.LastSeq > watermark || job.Version < fence.Version || (fence.Terminal && job.Version <= fence.Version)) {
-			// Task #69: also silent before. Legitimate most of the time
-			// (a stale/superseded job the daemon already knows is done),
-			// but silence is exactly what let three separate drop points in
-			// this file go unnoticed for 20+ hours — logging one skip is
-			// cheap, re-discovering "which of four silent branches did it"
-			// from scratch is not.
-			if c.logger != nil {
-				c.logger.Debug("reminder snapshot skipped job behind local fence",
-					"reminder_id", job.ReminderID, "agent_id", agentID, "job_version", job.Version,
-					"fence_version", fence.Version, "fence_terminal", fence.Terminal, "fence_last_seq", fence.LastSeq, "watermark", watermark)
-			}
-			continue
-		}
-		if attemptedVersion, attempted := c.attemptedFires[job.ReminderID]; attempted && attemptedVersion == job.Version {
-			// One connection may attempt a due version only once. A reconnect
-			// clears this ephemeral fence so a server-uncommitted version remains
-			// recoverable from the next canonical snapshot.
-			if c.logger != nil {
-				c.logger.Info("reminder snapshot skipped job already attempted on current connection",
-					"reminder_id", job.ReminderID, "agent_id", agentID, "version", job.Version)
-			}
-			continue
-		}
-		if attemptedVersion, attempted := c.attemptedFires[job.ReminderID]; attempted && job.Version > attemptedVersion {
-			delete(c.attemptedFires, job.ReminderID)
-		}
-		acceptedJobs[job.ReminderID] = job
-		c.fences[job.ReminderID] = reminderVersionFence{OwnerAgentID: agentID, Version: job.Version, LastSeq: watermark}
-	}
 	for id, entry := range c.entries {
-		if entry.job.OwnerAgentID != agentID {
-			continue
-		}
-		if _, present := acceptedJobs[id]; present {
-			continue
-		}
-		fence := c.fences[id]
-		if fence.LastSeq <= watermark {
-			fence.OwnerAgentID = agentID
-			fence.Terminal = true
-			fence.LastSeq = watermark
-			c.fences[id] = fence
-		}
-	}
-	if err := c.persistLocked(); err != nil {
-		c.fences = previousFences
-		c.attemptedFires = previousAttempted
-		return 0, err
-	}
-	accepted := 0
-	for id, entry := range c.entries {
-		if entry.job.OwnerAgentID != agentID {
+		if allowed[entry.runtimeID] {
 			continue
 		}
 		if entry.timer != nil {
 			entry.timer.Stop()
 		}
 		delete(c.entries, id)
+		fence := c.fences[id]
+		fence.OwnerAgentID = entry.job.OwnerAgentID
+		fence.Version = entry.job.Version
+		fence.Terminal = true
+		c.fences[id] = fence
+		changed = true
 	}
-	for _, job := range acceptedJobs {
-		fireAt, _ := time.Parse(time.RFC3339, job.FireAt)
-		c.entries[job.ReminderID] = reminderCacheEntry{job: job}
-		if !c.suspended {
-			c.armLocked(job, fireAt)
+	if changed {
+		if err := c.persistLocked(); err != nil {
+			return false, err
 		}
-		accepted++
 	}
-	return accepted, nil
+	return changed, nil
 }
 
 func (c *reminderCache) clear() {
@@ -766,108 +559,13 @@ func (c *reminderCache) suspend() {
 	c.suspended = true
 }
 
-func (c *reminderCache) markRuntimeReset(runtimeID string) error {
-	if c == nil || runtimeID == "" {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.runtimeResets[runtimeID] {
-		return nil
-	}
-	previous := c.runtimeResets[runtimeID]
-	c.runtimeResets[runtimeID] = true
-	if err := c.persistLocked(); err != nil {
-		if previous {
-			c.runtimeResets[runtimeID] = true
-		} else {
-			delete(c.runtimeResets, runtimeID)
-		}
-		return err
-	}
-	return nil
-}
-
-func (c *reminderCache) resetRuntime(runtimeID string, reset protocol.ReminderRuntimeReset) error {
-	if c == nil || runtimeID == "" || reset.ProjectionWatermark < 0 {
-		return nil
-	}
-	ownerIDs := make(map[string]bool, len(reset.Owners))
-	jobs := make([]protocol.ReminderTimerJob, 0)
-	for _, owner := range reset.Owners {
-		if owner.AgentID == "" || owner.PlacementGeneration < 1 {
-			return errors.New("invalid reminder runtime reset owner")
-		}
-		ownerIDs[owner.AgentID] = true
-		if owner.Terminal && len(owner.Reminders) > 0 {
-			return errors.New("terminal reminder runtime reset owner has jobs")
-		}
-		for _, job := range owner.Reminders {
-			if job.OwnerAgentID != owner.AgentID || job.ReminderID == "" || job.Version < 1 {
-				return errors.New("invalid reminder runtime reset job")
-			}
-			if _, err := time.Parse(time.RFC3339, job.FireAt); err != nil {
-				return err
-			}
-			jobs = append(jobs, job)
-		}
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	previousFences := cloneReminderFences(c.fences)
-	previousCursors := cloneReminderCursors(c.runtimeCursors)
-	previousResets := make(map[string]bool, len(c.runtimeResets))
-	for id, required := range c.runtimeResets {
-		previousResets[id] = required
-	}
-	previousAttempted := cloneAttemptedFires(c.attemptedFires)
-	for id, fence := range c.fences {
-		if ownerIDs[fence.OwnerAgentID] {
-			delete(c.fences, id)
-			delete(c.attemptedFires, id)
-		}
-	}
-	for _, job := range jobs {
-		c.fences[job.ReminderID] = reminderVersionFence{
-			OwnerAgentID: job.OwnerAgentID, Version: job.Version, LastSeq: reset.ProjectionWatermark,
-		}
-	}
-	c.runtimeCursors[runtimeID] = reset.ProjectionWatermark
-	delete(c.runtimeResets, runtimeID)
-	if err := c.persistLocked(); err != nil {
-		c.fences = previousFences
-		c.runtimeCursors = previousCursors
-		c.runtimeResets = previousResets
-		c.attemptedFires = previousAttempted
-		return err
-	}
-	for id, entry := range c.entries {
-		if !ownerIDs[entry.job.OwnerAgentID] {
-			continue
-		}
-		if entry.timer != nil {
-			entry.timer.Stop()
-		}
-		delete(c.entries, id)
-	}
-	for _, job := range jobs {
-		fireAt, _ := time.Parse(time.RFC3339, job.FireAt)
-		c.entries[job.ReminderID] = reminderCacheEntry{job: job}
-		if !c.suspended {
-			c.armLocked(job, fireAt)
-		}
-	}
-	return nil
-}
-
 func (c *reminderCache) resume() {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if !c.suspended {
+		c.mu.Unlock()
 		return
 	}
 	c.suspended = false
@@ -876,6 +574,14 @@ func (c *reminderCache) resume() {
 		if err == nil {
 			c.armLocked(entry.job, fireAt)
 		}
+	}
+	receipts := make([]reminderDueReceipt, 0)
+	for _, pending := range c.receipts {
+		receipts = append(receipts, pending...)
+	}
+	c.mu.Unlock()
+	for _, receipt := range receipts {
+		c.dispatchFire(receipt)
 	}
 }
 
@@ -926,11 +632,7 @@ func (c *reminderCache) armLocked(job protocol.ReminderTimerJob, fireAt time.Tim
 	entry := c.entries[job.ReminderID]
 	entry.timer = timer
 	c.entries[job.ReminderID] = entry
-	// Task #69: whether a timer ever actually got armed for a given
-	// reminder was previously answerable nowhere — not in the persisted
-	// fence (which only records confirmed projection state, not local
-	// timer state) and not in any debug/introspection endpoint (none
-	// exists). This is the only place in the codebase that arms a timer.
+	// This is the only place in the codebase that arms a timer.
 	if c.logger != nil {
 		c.logger.Debug("reminder timer armed", "reminder_id", job.ReminderID, "agent_id", job.OwnerAgentID, "version", job.Version, "delay", delay)
 	}
@@ -952,6 +654,7 @@ func (c *reminderCache) attemptFireOnce(job protocol.ReminderTimerJob) {
 	c.attemptedFires[job.ReminderID] = job.Version
 	fireAt, _ := time.Parse(time.RFC3339, job.FireAt)
 	receipt := reminderDueReceipt{
+		RuntimeID:     current.runtimeID,
 		Job:           job,
 		FiredAtClient: c.clock.Now().UTC().Format(time.RFC3339Nano),
 		Catchup:       fireAt.Before(c.clock.Now()),
@@ -990,6 +693,18 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 	c.clearFireRetryLocked(identity)
 	c.mu.Unlock()
 
+	// A successfully accepted local Inbox item is never injected twice. The
+	// durable receipt may still be replayed until the server acknowledges it.
+	if receipt.WakeEnqueued {
+		if !receipt.ServerAcked && c.onFireReceipt != nil {
+			c.deliverFireReceipt(receipt)
+		}
+		c.mu.Lock()
+		delete(c.dispatching, key)
+		c.mu.Unlock()
+		return
+	}
+
 	wakeEnqueued := false
 	func() {
 		defer func() {
@@ -999,7 +714,9 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 		}()
 		wakeEnqueued = c.deliverFire(receipt.Job)
 	}()
-
+	if !receipt.ServerAcked && c.onFireReceipt != nil {
+		c.deliverFireReceipt(receipt)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.dispatching, key)
@@ -1025,6 +742,15 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 		c.receipts[receipt.Job.ReminderID] = pending
 	}
 	_ = c.persistLocked()
+}
+
+func (c *reminderCache) deliverFireReceipt(receipt reminderDueReceipt) (queued bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil && c.logger != nil {
+			c.logger.Error("reminder fire receipt panicked", "reminder_id", receipt.Job.ReminderID, "error", recovered)
+		}
+	}()
+	return c.onFireReceipt(receipt)
 }
 
 func (c *reminderCache) scheduleFireRetryLocked(receipt reminderDueReceipt) {
@@ -1068,4 +794,38 @@ func (c *reminderCache) clearFireRetryLocked(identity reminderDueIdentity) {
 		timer.Stop()
 		delete(c.fireRetryTimers, key)
 	}
+}
+
+func writeDaemonStateAtomically(path string, raw []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }

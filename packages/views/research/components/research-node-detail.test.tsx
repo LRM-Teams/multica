@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type {
   ResearchFleetMember,
   ResearchGraphNode,
@@ -15,6 +15,20 @@ vi.mock("../../i18n/use-t", () => ({
       fn({
         overlay: { detail_close: "Close detail" },
         panel: { weight: "Weight" },
+        actions: { cancel: "Cancel" },
+        ring: {
+          continue: "Continue research",
+          fork: "Fork",
+          retry: "Retry",
+          reassign: "Reassign",
+          reassign_confirm: "Confirm reassign?",
+        },
+        d5: {
+          detail: {
+            open_report: "Open report",
+            command_pending: "Applying…",
+          },
+        },
         node: {
           goal: "Goal",
           subquestion: "Sub",
@@ -69,6 +83,10 @@ vi.mock("../../i18n/use-t", () => ({
           updated_at: "Updated",
           duration: "Duration",
           input: "Input",
+          raw_input_expand: "Expand raw input",
+          raw_input_collapse: "Collapse raw input",
+          objective_expand: "Expand full objective",
+          objective_collapse: "Collapse full objective",
           gate_blocker: "Gate blocked",
           next_steps: "Next steps",
           next_step_actions: {
@@ -203,6 +221,72 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
       "data-placement",
       "sheet",
     );
+  });
+
+  it("wraps unbroken projection text inside narrow detail surfaces", () => {
+    render(
+      <ResearchNodeDetail
+        node={{
+          ...node,
+          title: `https://example.test/${"segment".repeat(80)}`,
+          summary: "散列".repeat(200),
+        }}
+        sources={sources}
+        open
+        placement="inline"
+      />,
+    );
+
+    expect(screen.getByTestId("research-node-detail-body")).toHaveClass(
+      "min-w-0",
+      "[overflow-wrap:anywhere]",
+    );
+  });
+
+  it("keeps a pending node command focusable and suppresses reactivation", () => {
+    const onNodeCommand = vi.fn();
+    render(
+      <ResearchNodeDetail
+        node={node}
+        sources={sources}
+        open
+        placement="inline"
+        onNodeCommand={onNodeCommand}
+        pendingNodeCommand="continue"
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Applying…" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+    button.focus();
+    fireEvent.click(button);
+    expect(button).toHaveFocus();
+    expect(onNodeCommand).not.toHaveBeenCalled();
+  });
+
+  it("confirms reassign through an accessible dialog", () => {
+    const onNodeCommand = vi.fn();
+    render(
+      <ResearchNodeDetail
+        node={{
+          ...node,
+          node_type: "task",
+          status: "running",
+          payload: { task_id: "task-1" },
+        }}
+        sources={sources}
+        open
+        placement="inline"
+        onNodeCommand={onNodeCommand}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Confirm reassign?");
+    expect(onNodeCommand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("research-node-reassign-confirm"));
+    expect(onNodeCommand).toHaveBeenCalledWith("reassign");
   });
 
   it("shows dead-end reason when node is blocked", () => {
@@ -517,7 +601,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(screen.getByText("Discover and select sources")).toBeInTheDocument();
     expect(screen.getByText("Required role:")).toBeInTheDocument();
     expect(screen.getByText("Reviewable evidence package")).toBeInTheDocument();
-    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
     expect(screen.getByText("Sources 2")).toBeInTheDocument();
     expect(screen.getByText("Observations 3")).toBeInTheDocument();
     expect(screen.getByText("Claims 1")).toBeInTheDocument();
@@ -634,8 +718,39 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
 
     const inputBlock = screen.getByTestId("node-detail-input");
     expect(inputBlock).toHaveTextContent("Input");
-    expect(inputBlock).toHaveTextContent("minimum_independent_sources");
+    expect(inputBlock).toHaveTextContent("minimum independent sources");
     expect(inputBlock).toHaveTextContent("2");
+    expect(inputBlock.querySelector("dl")).not.toBeNull();
+    expect(inputBlock.querySelector("pre")).toBeNull();
+  });
+
+  it("distills long task objectives and keeps the full text progressively available", () => {
+    const longObjective = "Investigate the market. ".repeat(30);
+    const objectiveNode: ResearchGraphNode = {
+      ...node,
+      payload: { details: { task_id: "task-long" } },
+    };
+    const run = {
+      tasks: [
+        {
+          id: "task-long",
+          client_key: "long",
+          kind: "discover",
+          objective: longObjective,
+          required_capability: "scout",
+          status: "in_flight",
+          attempt_count: 1,
+          goal_version: 1,
+          plan_version: 1,
+        },
+      ],
+      attempts: [], sources: [], observations: [], claims: [], questions: [],
+    } as unknown as ResearchRunSnapshot;
+
+    render(<ResearchNodeDetail node={objectiveNode} sources={[]} run={run} open />);
+
+    expect(screen.getByText("Expand full objective")).toBeInTheDocument();
+    expect(screen.getByText("Collapse full objective")).toBeInTheDocument();
   });
 
   it("LRM-1410 residual: stage_gate node surfaces real run gate findings with severity", () => {

@@ -29,6 +29,21 @@ func (h *Handler) publishResearchGraph(workspaceID string, actorType, actorID st
 		"node":       mapGraphNodeWithEdge(node, edge),
 		"edge":       edgeResp,
 	})
+	// V6 is a separate, run-scoped transport. Keep the legacy event intact while
+	// new clients receive an explicit envelope and can reject cross-run frames.
+	if h.ResearchRun != nil {
+		runID := uuidToString(sessionID)
+		if _, err := h.ResearchRun.Snapshot(context.Background(), runID, workspaceID); err == nil {
+			var sequence int64
+			if err = h.DB.QueryRow(context.Background(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err == nil {
+				// This compatibility callback has no committed Run Event payload and
+				// therefore no trustworthy prior graph baseline for tombstones. Tell
+				// V6 clients to reload instead of publishing a lossy synthetic delta.
+				h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID,
+					researchV6RealtimeResyncEnvelope{RunID: runID, ResyncRequired: true, ThroughSequence: sequence})
+			}
+		}
+	}
 }
 
 func (h *Handler) emitResearchProcessCard(
@@ -54,7 +69,7 @@ func (h *Handler) emitResearchProcessCard(
 	if body == "" {
 		body = ev.Title
 	}
-	msg, err := h.Queries.CreateResearchMessage(ctx, db.CreateResearchMessageParams{
+	msg, err := h.createResearchMessageWithPassport(ctx, db.CreateResearchMessageParams{
 		WorkspaceID:   wsUUID,
 		SessionID:     sessionID,
 		SenderType:    "system",

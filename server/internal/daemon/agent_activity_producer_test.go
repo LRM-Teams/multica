@@ -26,8 +26,8 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		processID   string
 	}{
 		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
-		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at}, kind: protocol.ActivityKindWorking, entryKind: "narrative", entryText: "Working", processID: "process-1"},
-		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking},
+		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at}, kind: protocol.ActivityKindWorking, detail: "model_response_started", entryKind: "narrative", entryText: "Working", processID: "process-1"},
+		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, detail: "thinking_started"},
 		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "ls -la"},
 		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
 		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compaction_finished", entryKind: "narrative", entryText: "Context compaction finished"},
@@ -70,6 +70,26 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 				t.Fatalf("entry body = %+v err=%v", body, err)
 			}
 		})
+	}
+}
+
+func TestAgentActivityProducerDropsUnknownToolNonFact(t *testing.T) {
+	at := time.Date(2026, time.August, 14, 1, 0, 0, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) {
+		sent = append(sent, payload)
+	})
+	installActivityProducerAgent(t, producer)
+	err := producer.Observe(AgentObservation{
+		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool,
+		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "cursor-agent", ToolCallID: "call-1"},
+		At:   at,
+	})
+	if err == nil || !strings.Contains(err.Error(), "non-fact activity detail kind") {
+		t.Fatalf("unknown tool Observe error = %v, want non-fact drop", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("unknown tool sent %d Activity facts, want none", len(sent))
 	}
 }
 
@@ -179,14 +199,14 @@ func TestAgentActivityProducerHeartbeatsAndProbeDoNotInventState(t *testing.T) {
 	}
 	now = now.Add(time.Second)
 	producer.Tick()
-	if len(sent) != 2 || sent[1].Snapshot.ClientSequence != 2 || len(sent[1].Entries) != 0 {
+	if len(sent) != 2 || sent[1].Snapshot.ClientSequence != 2 || len(sent[1].Entries) != 0 || sent[1].Detail != "Starting…" || !sent[1].IsHeartbeat {
 		t.Fatalf("heartbeat payload = %+v", sent)
 	}
 	probe, err := producer.Probe(protocol.AgentActivityProbePayload{AgentID: "agent-a", LaunchID: "launch-a", ProbeID: "probe-1"})
 	if err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
-	if probe.Snapshot.ProbeID != "probe-1" || probe.Snapshot.ActivityKind != protocol.ActivityKindWorking || probe.Snapshot.ClientSequence != 2 {
+	if probe.Snapshot.ProbeID != "probe-1" || probe.Snapshot.ActivityKind != protocol.ActivityKindWorking || probe.Snapshot.ClientSequence != 2 || probe.Detail != "Starting…" || probe.IsHeartbeat {
 		t.Fatalf("probe = %+v", probe.Snapshot)
 	}
 	state, ok := producer.states[agentActivityProducerKey{agentID: "agent-a", launchID: "launch-a"}]
@@ -277,7 +297,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 		runner.observeResidentMessageRuntime("agent-a", "runtime-1", message)
 	}
 	wantKinds := []string{protocol.ActivityKindThinking, protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindError}
-	wantDetails := []string{"", "running_command", "running_command", "runtime_error"}
+	wantDetails := []string{"thinking_started", "running_command", "running_command", "runtime_error"}
 	if len(activities) != len(wantKinds) {
 		t.Fatalf("Activity count = %d, want %d", len(activities), len(wantKinds))
 	}
@@ -290,7 +310,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if err := json.Unmarshal(activities[1].Entries[0].Body, &toolBody); err != nil {
 		t.Fatal(err)
 	}
-	if toolBody.Text != "ls -la" || toolBody.ActivityKind != protocol.ActivityKindWorking || toolBody.DetailKind != "running_command" {
+	if toolBody.Text != "ls -la" || toolBody.DetailKind != "running_command" {
 		t.Fatalf("tool-use Activity body = %+v", toolBody)
 	}
 	var diagnostic protocol.AgentActivitySystemBody
@@ -304,8 +324,73 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if err := json.Unmarshal(activities[len(activities)-1].Entries[0].Body, &errorBody); err != nil {
 		t.Fatal(err)
 	}
-	if errorBody.Text != "Agent execution failed" || errorBody.ActivityKind != protocol.ActivityKindError || errorBody.DetailKind != "runtime_error" {
+	if errorBody.Text != "Agent execution failed" || errorBody.DetailKind != "runtime_error" {
 		t.Fatalf("runtime error Activity = %+v, want producer-owned safe narrative", errorBody)
+	}
+}
+
+func TestResidentRuntimeEventPersistsProviderSessionWithoutManagedActivity(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	runner.observeResidentMessageRuntime("agent-1", "runtime-1", agent.Message{Type: agent.MessageText, SessionID: "provider-session-1"})
+
+	got, err := d.agentRuntimeSessions.Get("agent-1", "runtime-1")
+	if err != nil {
+		t.Fatalf("read recorded provider session: %v", err)
+	}
+	if got != "provider-session-1" {
+		t.Fatalf("recorded provider session = %q, want provider-session-1", got)
+	}
+}
+
+func TestResidentRuntimeEventProjectsChangedProviderSession(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	sessions := make(chan protocol.AgentSessionPayload, 2)
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, payload any) error {
+		if session, ok := payload.(protocol.AgentSessionPayload); ok && eventType == protocol.EventAgentSession {
+			sessions <- session
+		}
+		return nil
+	})
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.activity.SetManaged(
+		protocol.AgentStatusPayload{AgentID: "agent-1", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-1", LaunchID: ack.LaunchID},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	message := agent.Message{Type: agent.MessageText, SessionID: "provider-session-1"}
+	runner.observeResidentMessageRuntime("agent-1", "runtime-1", message)
+	runner.observeResidentMessageRuntime("agent-1", "runtime-1", message)
+	select {
+	case got := <-sessions:
+		if got.ProviderSessionID != message.SessionID || got.LaunchID != ack.LaunchID {
+			t.Fatalf("projected provider session = %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("changed provider session was not published")
+	}
+	select {
+	case duplicate := <-sessions:
+		t.Fatalf("unchanged provider session was republished: %+v", duplicate)
+	default:
+	}
+	frames := runner.activity.ReconnectFrames()
+	found := false
+	for _, frame := range frames {
+		if session, ok := frame.Payload.(protocol.AgentSessionPayload); ok && frame.EventType == protocol.EventAgentSession && session.AgentID == "agent-1" {
+			found = session.ProviderSessionID == message.SessionID
+		}
+	}
+	if !found {
+		t.Fatalf("reconnect frames did not retain provider session: %+v", frames)
 	}
 }
 
@@ -408,7 +493,6 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	}
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.canonicalRuntimes.slots["agent-a\x00runtime-1"] = &canonicalAgentRuntimeSlot{
-		mode:    canonicalRuntimeResident,
 		backend: failingResidentMessageRuntime{},
 	}
 

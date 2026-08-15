@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,111 +14,9 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
-	"github.com/multica-ai/multica/server/internal/daemon"
-	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
-	"github.com/multica-ai/multica/server/internal/util"
 )
 
-var daemonCmd = &cobra.Command{
-	Use:    "daemon",
-	Short:  "Control the local agent runtime daemon",
-	Hidden: true, // compatibility alias for the machine-wide Computer (#2487)
-	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-		// The hidden compatibility spelling must still target the one Computer;
-		// accepting a profile/custom server here would recreate the retired
-		// second-resident model behind an invisible flag.
-		return rejectRetiredComputerFlags(cmd)
-	},
-}
-
-var daemonStartCmd = &cobra.Command{
-	Use:   "start",
-	Short: "Start the local agent runtime daemon",
-	Long:  "Start the daemon process that polls for tasks and executes them using local agent CLIs (Claude, Codex).\nRuns in the background by default. Use --foreground to run in the current terminal.",
-	RunE:  runDaemonStart,
-}
-
-var daemonStopCmd = &cobra.Command{
-	Use:   "stop",
-	Short: "Stop the running daemon",
-	RunE:  runDaemonStop,
-}
-
-var daemonStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show daemon status",
-	RunE:  runDaemonStatus,
-}
-
-var daemonRestartCmd = &cobra.Command{
-	Use:   "restart",
-	Short: "Restart the running daemon (stop + start)",
-	RunE:  runDaemonRestart,
-}
-
-var daemonLogsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "Show daemon logs",
-	RunE:  runDaemonLogs,
-}
-
-func init() {
-	f := daemonStartCmd.Flags()
-	f.Bool("foreground", false, "Run in the foreground instead of background")
-	f.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
-	f.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
-	f.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
-	f.Duration("poll-interval", 0, "Task poll interval (env: MULTICA_DAEMON_POLL_INTERVAL)")
-	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
-	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
-	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	f.Bool("no-auto-update", false, "Deprecated no-op; automatic installation is disabled and release detection remains active")
-	f.Duration("auto-update-interval", 0, "Release detection interval (default 5m; detection never installs automatically)")
-	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
-	_ = f.MarkHidden("computer-generation")
-	f.Bool("machine-upgrade-detached-candidate", false, "Internal detached Machine Upgrade candidate marker")
-	_ = f.MarkHidden("machine-upgrade-detached-candidate")
-	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
-	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
-
-	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
-	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
-
-	daemonStatusCmd.Flags().String("output", "table", "Output format: table or json")
-
-	rf := daemonRestartCmd.Flags()
-	rf.Bool("foreground", false, "Run in the foreground instead of background")
-	rf.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
-	rf.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
-	rf.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
-	rf.Duration("poll-interval", 0, "Task poll interval (env: MULTICA_DAEMON_POLL_INTERVAL)")
-	rf.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
-	rf.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
-	rf.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	rf.Bool("no-auto-update", false, "Deprecated no-op; automatic installation is disabled and release detection remains active")
-	rf.Duration("auto-update-interval", 0, "Release detection interval (default 5m; detection never installs automatically)")
-
-	daemonCmd.AddCommand(daemonStartCmd)
-	daemonCmd.AddCommand(daemonStopCmd)
-	daemonCmd.AddCommand(daemonRestartCmd)
-	daemonCmd.AddCommand(daemonStatusCmd)
-	daemonCmd.AddCommand(daemonLogsCmd)
-}
-
-// daemonDeprecatedAliasNotices prints the deprecation guidance for the hidden
-// `multica daemon ...` lifecycle alias, which now delegates to the same
-// machine-wide Computer. Not printed when running as `multica computer ...`.
-func daemonDeprecatedAliasNotices() {
-	if computerMode {
-		return
-	}
-	fmt.Fprintln(os.Stderr, "Note: `multica daemon ...` is deprecated and will be removed in a future release. Use `multica computer ...` instead.")
-}
-
-// --- daemon start ---
-
-func runDaemonStart(cmd *cobra.Command, args []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerStart(cmd *cobra.Command, args []string) error {
 	binding, selected, err := resolveWorkspaceBinding(args)
 	if err != nil {
 		return err
@@ -134,7 +31,7 @@ func runDaemonStart(cmd *cobra.Command, args []string) error {
 	}
 	foreground, _ := cmd.Flags().GetBool("foreground")
 	if foreground {
-		return runDaemonForeground(cmd)
+		return runComputerResident(cmd, args)
 	}
 	if err := runDaemonBackground(cmd); err != nil {
 		return err
@@ -219,202 +116,6 @@ func flagDuration(cmd *cobra.Command, name string) time.Duration {
 	return value
 }
 
-// buildDaemonStartArgs constructs args for the background child process.
-func buildDaemonStartArgs(cmd *cobra.Command) []string {
-	args := []string{"daemon", "start", "--foreground"}
-
-	if v := flagString(cmd, "daemon-id"); v != "" {
-		args = append(args, "--daemon-id", v)
-	}
-	if v := flagString(cmd, "device-name"); v != "" {
-		args = append(args, "--device-name", v)
-	}
-	if v := flagString(cmd, "runtime-name"); v != "" {
-		args = append(args, "--runtime-name", v)
-	}
-	if d, _ := cmd.Flags().GetDuration("poll-interval"); d > 0 {
-		args = append(args, "--poll-interval", d.String())
-	}
-	if d, _ := cmd.Flags().GetDuration("heartbeat-interval"); d > 0 {
-		args = append(args, "--heartbeat-interval", d.String())
-	}
-	// Forward agent-timeout when explicitly set, including an explicit 0
-	// (= no cap), so it can override an environment MULTICA_AGENT_TIMEOUT.
-	if cmd.Flags().Changed("agent-timeout") {
-		d, _ := cmd.Flags().GetDuration("agent-timeout")
-		args = append(args, "--agent-timeout", d.String())
-	}
-	if d, _ := cmd.Flags().GetDuration("codex-semantic-inactivity-timeout"); d > 0 {
-		args = append(args, "--codex-semantic-inactivity-timeout", d.String())
-	}
-	if b, _ := cmd.Flags().GetBool("no-auto-update"); b {
-		args = append(args, "--no-auto-update")
-	}
-	if d, _ := cmd.Flags().GetDuration("auto-update-interval"); d > 0 {
-		args = append(args, "--auto-update-interval", d.String())
-	}
-
-	return args
-}
-
-func runDaemonForeground(cmd *cobra.Command) error {
-	util.EnsureHiddenConsole()
-
-	profile := ""
-
-	// The service environment is an explicit machine choice. Production is
-	// fixed to leagent.me; only test may carry a validated Tencent Cloud
-	// IP/domain origin.
-	machineConfig, err := cli.LoadCLIConfigForProfile("")
-	if err != nil {
-		return fmt.Errorf("read Computer environment: %w", err)
-	}
-	serviceTarget, err := cli.ResolveServiceTarget(machineConfig)
-	if err != nil {
-		return fmt.Errorf("resolve Computer environment: %w", err)
-	}
-	overrides := daemon.Overrides{
-		ServerURL:   serviceTarget.Origin,
-		DaemonID:    flagString(cmd, "daemon-id"),
-		DeviceName:  flagString(cmd, "device-name"),
-		RuntimeName: flagString(cmd, "runtime-name"),
-		Profile:     profile,
-		HealthPort:  computer.HealthPort(profile),
-	}
-	if overrides.DaemonID == "" {
-		identity, err := (&computer.Lifecycle{}).Identity()
-		if err != nil {
-			return fmt.Errorf("resolve machine-wide Computer identity: %w", err)
-		}
-		overrides.DaemonID = identity
-	}
-	if d, _ := cmd.Flags().GetDuration("poll-interval"); d > 0 {
-		overrides.PollInterval = d
-	}
-	if d, _ := cmd.Flags().GetDuration("heartbeat-interval"); d > 0 {
-		overrides.HeartbeatInterval = d
-	}
-	// Distinguish "flag not passed" from an explicit `--agent-timeout 0` so a
-	// user can turn off an env-configured cap from the CLI.
-	if cmd.Flags().Changed("agent-timeout") {
-		d, _ := cmd.Flags().GetDuration("agent-timeout")
-		overrides.AgentTimeout = &d
-	}
-	if d, _ := cmd.Flags().GetDuration("codex-semantic-inactivity-timeout"); d > 0 {
-		overrides.CodexSemanticInactivityTimeout = d
-	}
-	if b, _ := cmd.Flags().GetBool("no-auto-update"); b {
-		overrides.DisableAutoUpdate = true
-	}
-	if d, _ := cmd.Flags().GetDuration("auto-update-interval"); d > 0 {
-		overrides.ReleaseDetectionInterval = d
-	}
-
-	cfg, err := daemon.LoadConfig(overrides)
-	if err != nil {
-		return err
-	}
-	cfg.CLIVersion = version
-	cfg.Environment = string(serviceTarget.Environment)
-	channel, err := cli.ResolveReleaseChannel(machineConfig)
-	if err != nil {
-		return err
-	}
-	cfg.ReleaseChannel = string(channel)
-	cfg.BindingsRoot = computer.RootDir("")
-	cfg.ComputerGeneration, _ = cmd.Flags().GetInt64("computer-generation")
-	if cfg.ComputerGeneration == 0 {
-		cfg.ComputerGeneration, err = computer.NewGenerationStore(computer.RootDir("")).Next()
-		if err != nil {
-			return fmt.Errorf("allocate Computer generation: %w", err)
-		}
-	}
-	cfg.DetachedMachineUpgradeCandidate, _ = cmd.Flags().GetBool("machine-upgrade-detached-candidate")
-	takeoverProtocol, _ := cmd.Flags().GetString("machine-upgrade-takeover-protocol")
-	cfg.MachineUpgradeTakeoverProtocol = machineUpgradeTakeoverProtocolForGeneration(
-		takeoverProtocol, cfg.ComputerGeneration,
-	)
-	controlToken, err := computer.EnsureControlToken(profile)
-	if err != nil {
-		return err
-	}
-	cfg.LocalControlToken = controlToken
-	// Set by the Electron Desktop app when it spawns the CLI so the server
-	// can mark those runtimes as "managed" and hide CLI self-update UI.
-	cfg.LaunchedBy = os.Getenv("MULTICA_LAUNCHED_BY")
-
-	ctx, stop := notifyShutdownContext(context.Background())
-	defer stop()
-
-	logger := logger_pkg.NewLogger("daemon")
-	d := daemon.New(cfg, logger)
-
-	// Write PID file so "daemon stop" can find us. Best-effort: a resident
-	// whose state directory cannot be created simply runs without a PID file,
-	// exactly as before.
-	lc := &computer.Lifecycle{}
-	cleanupPID := func() {}
-	if computer.RootDir(profile) != "" {
-		cleanup, err := lc.PublishPID()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not write PID file: %v\n", err)
-		} else {
-			cleanupPID = cleanup
-		}
-	}
-	defer cleanupPID()
-
-	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		return err
-	}
-
-	// Check if the daemon needs to restart after a CLI update.
-	if restartBin := d.RestartBinary(); restartBin != "" {
-		// Point the OS service unit at the staged Active binary before we exit
-		// (and before any later systemd restart). Without this, install-service
-		// may still have ExecStart=/…/versions/vOLD/… after vOLD is deleted,
-		// and systemd returns 203/EXEC in a crash-loop (s144 2026-08-04).
-		if err := bestEffortSyncInstalledServiceUnit(profile, restartBin); err != nil {
-			logger.Warn("could not rewrite OS service unit to staged binary; re-run `multica daemon install-service` if the next OS restart fails",
-				"path", restartBin, "error", err)
-		}
-		if runningUnderSupervision() {
-			logger.Info("restarting daemon with updated binary via supervisor handoff", "path", restartBin)
-			// Runtimes were already deregistered by triggerRestart() before
-			// handoff. The supervisor-spawned successor re-registers on
-			// startup; do not duplicate cleanup here.
-			os.Exit(daemonHandoffExitCode)
-		}
-		// A standalone Machine Upgrade cannot end at stage-and-stop. Wait for
-		// the incumbent's control listener to disappear, then launch the exact
-		// committed binary as a detached foreground daemon. Its startup bind is
-		// the local exclusive-ownership gate; server-side completion still waits
-		// for the same journal generation plus every accepted runtime to attest.
-		takeoverExpectation, takeoverErr := d.MachineUpgradeTakeoverExpectation()
-		if takeoverErr == nil {
-			takeoverErr = spawnDetachedDaemonBinary(restartBin, profile, d.MachineUpgradeTarget(), &takeoverExpectation)
-		}
-		if takeoverErr != nil {
-			// The candidate has not returned a successful takeover CAS, so the
-			// incumbent still owns the server generation. Restore the retained
-			// source locally and terminally fail the operation; remote rollback is
-			// reserved for failures after ownership actually changed.
-			if rollbackStateErr := d.MarkMachineUpgradeRollbackPending(); rollbackStateErr != nil {
-				return fmt.Errorf("record detached takeover restore: %w", rollbackStateErr)
-			}
-			d.ReportMachineUpgradeTakeoverFailure(takeoverErr)
-			if recoveryErr := rollbackDetachedMachineUpgrade(profile, d); recoveryErr != nil {
-				d.ReportMachineUpgradeRollbackFailure(recoveryErr)
-				return fmt.Errorf("start detached machine-upgrade successor: %w; rollback recovery: %v", takeoverErr, recoveryErr)
-			}
-			return fmt.Errorf("start detached machine-upgrade successor: %w; previous Active generation restored", takeoverErr)
-		}
-		logger.Info("started detached machine-upgrade successor", "path", restartBin)
-	}
-
-	return nil
-}
-
 func runActiveComputerBinary(target string) error {
 	child := exec.Command(target, os.Args[1:]...)
 	child.Stdin = os.Stdin
@@ -427,29 +128,9 @@ func runActiveComputerBinary(target string) error {
 	return nil
 }
 
-func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
-	if d == nil {
-		return errors.New("daemon is required for detached rollback")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	path, err := d.PrepareMachineUpgradeRollbackRestart(ctx)
-	if err != nil {
-		return fmt.Errorf("restore previous Active: %w", err)
-	}
-	if err := bestEffortSyncInstalledServiceUnit(profile, path); err != nil {
-		return fmt.Errorf("rewrite OS service to restored Active: %w", err)
-	}
-	if err := spawnDetachedDaemonBinary(path, profile, d.MachineUpgradeTarget(), nil); err != nil {
-		return fmt.Errorf("start restored incumbent: %w", err)
-	}
-	return nil
-}
-
 // --- daemon restart ---
 
-func runDaemonRestart(cmd *cobra.Command, args []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerRestart(cmd *cobra.Command, args []string) error {
 	binding, selected, err := resolveWorkspaceBinding(args)
 	if err != nil {
 		return err // validate before stopping the one resident
@@ -473,8 +154,7 @@ func runDaemonRestart(cmd *cobra.Command, args []string) error {
 
 // --- daemon stop ---
 
-func runDaemonStop(cmd *cobra.Command, _ []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerStop(cmd *cobra.Command, _ []string) error {
 	lc := &computer.Lifecycle{}
 	label := "Computer"
 
@@ -498,8 +178,7 @@ func runDaemonStop(cmd *cobra.Command, _ []string) error {
 
 // --- daemon status ---
 
-func runDaemonStatus(cmd *cobra.Command, _ []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerStatus(cmd *cobra.Command, _ []string) error {
 	lc := &computer.Lifecycle{}
 
 	health := lc.Status()
@@ -595,8 +274,7 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 
 // --- daemon logs ---
 
-func runDaemonLogs(cmd *cobra.Command, args []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerLogs(cmd *cobra.Command, args []string) error {
 	lc := &computer.Lifecycle{}
 
 	follow, _ := cmd.Flags().GetBool("follow")

@@ -13,6 +13,8 @@ import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion
 import { useT } from "../../i18n/use-t";
 import { ChoiceCard, ChoiceReplyPart } from "./choice-card";
 import { AgentCreationProposalCard } from "../../common/agent-creation-proposal-card";
+import { AppLink } from "../../navigation";
+import { useWorkspacePaths } from "@multica/core/paths";
 
 const SAFE_STICKER_ID = /^[a-z0-9-]+$/;
 
@@ -67,6 +69,9 @@ export function MessagePartsRenderer({
         if (part.type === "note_brief") {
           return <NoteBriefPart key={key} part={part} />;
         }
+        if (part.type === "note_write") {
+          return null;
+        }
         if (part.type === "reference") {
           if (part.ref_type === "agent:create" && choiceContext?.messageId) {
             return (
@@ -86,8 +91,10 @@ export function MessagePartsRenderer({
 
 function NoteBriefPart({ part }: { part: Extract<MessagePart, { type: "note_brief" }> }) {
   const { t } = useT("channels");
+  const paths = useWorkspacePaths();
   const title = part.label?.trim() || t(($) => $.message.note_brief_untitled);
   const body = part.text?.trim() || t(($) => $.message.note_brief_empty);
+  const pageId = part.ref_id?.trim() || "";
 
   return (
     <Collapsible defaultOpen={false} className="mt-1 overflow-hidden rounded-md border bg-muted/20">
@@ -111,9 +118,19 @@ function NoteBriefPart({ part }: { part: Extract<MessagePart, { type: "note_brie
       <CollapsibleContent>
         <div
           data-testid="note-brief-body"
-          className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words border-t px-2.5 py-2 text-[13px] leading-5 text-muted-foreground"
+          className="max-h-56 space-y-2 overflow-y-auto whitespace-pre-wrap break-words border-t px-2.5 py-2 text-[13px] leading-5 text-muted-foreground"
         >
-          {body}
+          <div>{body}</div>
+          {pageId ? (
+            <AppLink
+              href={paths.noteDetail(pageId)}
+              data-testid="note-brief-open-note"
+              className="inline-flex text-[12px] font-medium text-primary underline-offset-2 hover:underline"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {t(($) => $.message.note_brief_open_note)}
+            </AppLink>
+          ) : null}
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -195,6 +212,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `choice-reply-${part.choice_id}-${part.option_id}`;
   } else if (part.type === "note_brief") {
     base = `note-brief-${part.ref_id}-${hashString(part.label ?? "")}`;
+  } else if (part.type === "note_write") {
+    base = `note-write-${part.ref_id ?? "create"}-${hashString(part.label ?? "")}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }

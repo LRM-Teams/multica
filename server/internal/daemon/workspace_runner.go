@@ -4,127 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net/url"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const workspaceRunnerWriteTimeout = 10 * time.Second
 
-// workspaceRunnerLoop owns one WebSocket per authenticated workspace. It is
-// intentionally separate from the removed runtime-multiplexed wake socket: a
-// Runner survives a workspace with zero runtimes and can never receive another
-// workspace's commands.
-func (d *Daemon) workspaceRunnerLoop(ctx context.Context) {
-	if d == nil || d.runtimeSet == nil {
-		return
-	}
-	changes, unsub := d.runtimeSet.Subscribe()
-	defer unsub()
-	d.reconcileWorkspaceRunners(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			d.stopWorkspaceRunners()
-			return
-		case <-changes:
-			d.reconcileWorkspaceRunners(ctx)
-		}
-	}
-}
-
-// reconcileWorkspaceRunners treats a Binding as the Runner's sole identity.
-// Runtime changes merely wake reconciliation; they never replace an existing
-// Runner, its connection, or its locally owned Inbox/lifecycle state.
-func (d *Daemon) reconcileWorkspaceRunners(parent context.Context) {
-	desired := make(map[string]struct{})
-	for _, workspaceID := range d.workspaceRunnerWorkspaceIDs() {
-		desired[workspaceID] = struct{}{}
-	}
-	type start struct {
-		runner *WorkspaceRunner
-		ctx    context.Context
-	}
-	var starts []start
-	var stops []context.CancelFunc
-	d.workspaceRunnerMu.Lock()
-	if d.workspaceRunners == nil {
-		d.workspaceRunners = make(map[string]*WorkspaceRunner)
-	}
-	if d.workspaceRunnerCancels == nil {
-		d.workspaceRunnerCancels = make(map[string]context.CancelFunc)
-	}
-	for workspaceID, cancel := range d.workspaceRunnerCancels {
-		if _, ok := desired[workspaceID]; !ok {
-			delete(d.workspaceRunnerCancels, workspaceID)
-			delete(d.workspaceRunners, workspaceID)
-			stops = append(stops, cancel)
-		}
-	}
-	for workspaceID := range desired {
-		if _, running := d.workspaceRunnerCancels[workspaceID]; running {
-			continue
-		}
-		runner := d.workspaceRunners[workspaceID]
-		if runner == nil {
-			var err error
-			runner, err = d.newWorkspaceRunner(workspaceID)
-			if err != nil {
-				if d.logger != nil {
-					d.logger.Warn("Workspace Runner construction failed", "workspace_id", workspaceID, "reason", "invalid_runner_configuration", "error", err)
-				}
-				continue
-			}
-			d.workspaceRunners[workspaceID] = runner
-		}
-		child, cancel := context.WithCancel(parent)
-		d.workspaceRunnerCancels[workspaceID] = cancel
-		starts = append(starts, start{runner: runner, ctx: child})
-	}
-	d.workspaceRunnerMu.Unlock()
-	for _, cancel := range stops {
-		cancel()
-	}
-	for _, next := range starts {
-		if d.workspaceRunnerRun != nil {
-			d.workspaceRunnerRun(next.runner, next.ctx)
-			continue
-		}
-		runner, child := next.runner, next.ctx
-		go runner.Run(child)
-	}
-}
-
-func (d *Daemon) stopWorkspaceRunners() {
-	d.workspaceRunnerMu.Lock()
-	cancels := make([]context.CancelFunc, 0, len(d.workspaceRunnerCancels))
-	for workspaceID, cancel := range d.workspaceRunnerCancels {
-		cancels = append(cancels, cancel)
-		delete(d.workspaceRunnerCancels, workspaceID)
-	}
-	d.workspaceRunnerMu.Unlock()
-	for _, cancel := range cancels {
-		cancel()
-	}
-}
-
-func (d *Daemon) workspaceRunnerWorkspaceIDs() []string {
-	d.mu.Lock()
-	ids := make([]string, 0, len(d.workspaces))
-	for workspaceID := range d.workspaces {
-		ids = append(ids, workspaceID)
-	}
-	d.mu.Unlock()
-	sort.Strings(ids)
-	return ids
-}
-
-func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnection, conn *websocket.Conn) error {
+func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, conn *websocket.Conn) error {
 	workspaceID := connection.workspaceID
 	writeFrame := func(eventType string, payload any) error {
 		return runner.sendOnConnection(connection, eventType, payload)
@@ -175,14 +64,29 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			return err
 		}
 	}
-	attachmentRuntimeSet := runner.attachmentRuntimeSet()
-	attachmentReplay, err := runner.attachmentReplayRequest(attachmentRuntimeSet)
-	if err != nil {
-		return err
+	var controlStarted bool
+	var stopControl context.CancelFunc
+	var controlDone chan struct{}
+	startControl := func() {
+		if controlStarted {
+			return
+		}
+		controlStarted = true
+		controlCtx, cancelControl := context.WithCancel(connection.ctx)
+		stopControl = cancelControl
+		controlDone = make(chan struct{})
+		go func() {
+			defer close(controlDone)
+			runner.runControlPlaneHeartbeats(controlCtx, connection)
+		}()
 	}
-	if err := writeFrame(protocol.EventAgentAttachmentReplayReq, attachmentReplay); err != nil {
-		return err
-	}
+	defer func() {
+		if controlStarted {
+			stopControl()
+			<-controlDone
+		}
+	}()
+	startControl()
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -201,12 +105,51 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
 				return err
 			}
+		case protocol.EventComputerUpgrade, protocol.EventComputerRestart:
+			var command protocol.ComputerUpgradePayload
+			if message.Type == protocol.EventComputerRestart {
+				var restart protocol.ComputerRestartPayload
+				if json.Unmarshal(message.Payload, &restart) != nil || restart.Validate() != nil {
+					continue
+				}
+				command = protocol.ComputerUpgradePayload{RequestID: restart.RequestID, OperationID: restart.OperationID}
+			} else if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
+				continue
+			}
+			if runner.handleComputerControl == nil {
+				if runner.logger != nil {
+					runner.logger.Info("ignoring Computer control; Host callback is unavailable", "workspace_id", workspaceID, "action", message.Type)
+				}
+				continue
+			}
+			if err := runner.handleComputerControl(connection.ctx, message.Type, command); err != nil {
+				if runner.logger != nil {
+					runner.logger.Warn("forward Computer control to Host failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
+				}
+				if message.Type == protocol.EventComputerUpgrade && errors.Is(err, computer.ErrComputerControlBusy) {
+					_ = writeFrame(protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{
+						RequestID: command.RequestID, OK: false, Error: "control_busy",
+					})
+				}
+			}
+		case protocol.EventDaemonHeartbeatAck:
+			var ack HeartbeatResponse
+			if json.Unmarshal(message.Payload, &ack) != nil || ack.RuntimeID == "" || !runner.ownsRuntime(ack.RuntimeID) {
+				continue
+			}
+			if runner.controlHeartbeatAck != nil {
+				lifetime := runner.life
+				if lifetime == nil {
+					lifetime = context.Background()
+				}
+				runner.controlHeartbeatAck(lifetime, &ack)
+			}
 		case protocol.EventDaemonAgentStart:
 			var start protocol.WorkspaceRunnerAgentStartPayload
 			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
 				continue
 			}
-			ack, err := runner.registerManagedAgentStart(start)
+			ack, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(workspaceID, start, failConnection)
 			if err != nil {
 				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {
@@ -215,37 +158,25 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				failConnection(err)
 				continue
 			}
-			if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {
-				return err
+			writeErr := writeFrame(protocol.EventAgentStartAck, ack)
+			if releaseStartupPublication != nil {
+				// Provider startup is already owned before the ACK write. Publication
+				// waits only to preserve ACK-before-status ordering; a failed write
+				// still releases the owner so reconnect/stop cannot strand Starting.
+				releaseStartupPublication()
 			}
-			connection.deliveries.Resume(start.AgentID, start.LaunchID)
+			if writeErr != nil {
+				return writeErr
+			}
 			go func() {
-				// Provider startup belongs to the Runner, not the socket that
-				// delivered agent:start. A Machine Upgrade successor can drop
-				// that control connection while Codex is still booting.
-				startCtx := runner.life
-				if startCtx == nil {
-					startCtx = context.Background()
+				published := startupPublished != nil && <-startupPublished
+				if published && replayed {
+					published = runner.replayManagedAgentStartPublication(start, failConnection)
 				}
-				status, session, err := runner.completeManagedAgentStart(startCtx, start, ack)
-				if err != nil {
-					if runner.logger != nil {
-						runner.logger.Warn("Workspace Runner provider start failed", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "start_dispatch_id", start.StartDispatchID, "reason", "provider_start_failed", "error", err)
-					}
-					if status.AgentID != "" {
-						if writeErr := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); writeErr != nil && runner.logger != nil {
-							runner.logger.Debug("workspace Runner start-failure status unpublished", "workspace_id", workspaceID, "agent_id", start.AgentID, "error", writeErr)
-						}
-					}
-					return
-				}
-				if err := runner.sendOnCurrentConnection(protocol.EventAgentStatus, status); err != nil {
-					failConnection(err)
-					return
-				}
-				if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, session); err != nil {
-					failConnection(err)
-					return
+				if published {
+					connection.deliveries.Resume(start.AgentID, start.LaunchID)
+				} else {
+					connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				}
 			}()
 		case protocol.EventDaemonAgentStop:
@@ -253,68 +184,22 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
 				continue
 			}
-			status, err := runner.stopManagedAgent(stop)
-			if err != nil {
+			if err := runner.stopManagedAgent(connection.ctx, stop, func() {
+				connection.deliveries.FenceStop(stop.AgentID, stop.LaunchID)
+			}, writeFrame); err != nil {
 				if runner.logger != nil {
 					runner.logger.Warn("Workspace Runner stop rejected", "workspace_id", workspaceID, "agent_id", stop.AgentID, "launch_id", stop.LaunchID, "reason", "stop_rejected", "error", err)
 				}
 				failConnection(err)
 				continue
 			}
-			if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
-				return err
-			}
-		case protocol.EventAgentAttach:
-			var attach protocol.WorkspaceRunnerAgentAttachPayload
-			if json.Unmarshal(message.Payload, &attach) != nil {
+		case protocol.EventDaemonAgentResetWorkspace:
+			var reset protocol.WorkspaceRunnerAgentResetWorkspacePayload
+			if json.Unmarshal(message.Payload, &reset) != nil || reset.Validate() != nil {
 				continue
 			}
-			receipt, err := runner.applyAttachmentAttach(attach)
-			if err != nil {
-				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner Attachment attach rejected", "workspace_id", workspaceID, "agent_id", attach.AgentID, "runtime_id", attach.RuntimeID, "reason", "attach_rejected", "error", err)
-				}
-				continue
-			}
-			if err := writeFrame(protocol.EventAgentAttached, receipt); err != nil {
-				return err
-			}
-			if runner.requestReminderSnapshot != nil {
-				runner.requestReminderSnapshot(attach.AgentID)
-			}
-		case protocol.EventAgentDetach:
-			var detach protocol.WorkspaceRunnerAgentDetachPayload
-			if json.Unmarshal(message.Payload, &detach) != nil {
-				continue
-			}
-			receipt, err := runner.applyAttachmentDetach(detach)
-			if err != nil {
-				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner Attachment detach rejected", "workspace_id", workspaceID, "agent_id", detach.AgentID, "runtime_id", detach.RuntimeID, "reason", "detach_rejected", "error", err)
-				}
-				continue
-			}
-			if err := writeFrame(protocol.EventAgentDetached, receipt); err != nil {
-				return err
-			}
-			if runner.removeDetachedReminderAgent != nil {
-				if err := runner.removeDetachedReminderAgent(detach.AgentID); err != nil {
-					return err
-				}
-			}
-		case protocol.EventAgentAttachmentReplayEnd:
-			var end protocol.WorkspaceRunnerAttachmentReplayEnd
-			if json.Unmarshal(message.Payload, &end) != nil {
-				continue
-			}
-			ack, err := runner.completeAttachmentReplay(attachmentRuntimeSet, end)
-			if err != nil {
-				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner Attachment replay rejected", "workspace_id", workspaceID, "reason", "invalid_replay_end", "error", err)
-				}
-				continue
-			}
-			if err := writeFrame(protocol.EventAgentAttachmentReplayAck, ack); err != nil {
+			result := runner.resetManagedAgentWorkspace(reset)
+			if err := writeFrame(protocol.EventAgentResetWorkspaceResult, result); err != nil {
 				return err
 			}
 		case protocol.EventMixedRunActivityAck:
@@ -364,35 +249,64 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 	}
 }
 
-func writeWorkspaceRunnerFrame(conn *websocket.Conn, eventType string, payload any) error {
-	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
-	if err != nil {
-		return err
+func (runner *WorkspaceRunner) ownsRuntime(runtimeID string) bool {
+	if runner == nil || runner.runtimeIDs == nil || runtimeID == "" {
+		return false
 	}
-	if err := conn.SetWriteDeadline(time.Now().Add(workspaceRunnerWriteTimeout)); err != nil {
-		return err
+	for _, current := range runner.runtimeIDs() {
+		if current == runtimeID {
+			return true
+		}
 	}
-	return conn.WriteMessage(websocket.TextMessage, frame)
+	return false
 }
 
-func workspaceRunnerURL(baseURL, workspaceID string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return "", fmt.Errorf("invalid daemon server URL: %w", err)
+func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, connection *DaemonConnection) {
+	if runner == nil || runner.controlHeartbeatPayload == nil {
+		return
 	}
-	switch u.Scheme {
-	case "http":
-		u.Scheme = "ws"
-	case "https":
-		u.Scheme = "wss"
-	case "ws", "wss":
-	default:
-		return "", fmt.Errorf("daemon server URL must use http, https, ws, or wss")
+	interval := runner.controlHeartbeatInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/ws"
-	q := u.Query()
-	q.Set("workspace_id", workspaceID)
-	u.RawQuery = q.Encode()
-	u.Fragment = ""
-	return u.String(), nil
+	var changes <-chan struct{}
+	unsubscribe := func() {}
+	if runner.controlHeartbeatChanges != nil {
+		changes, unsubscribe = runner.controlHeartbeatChanges()
+	}
+	defer unsubscribe()
+	send := func() bool {
+		if runner.runtimeIDs == nil {
+			return true
+		}
+		for _, runtimeID := range runner.runtimeIDs() {
+			if ctx.Err() != nil {
+				return false
+			}
+			if err := runner.sendOnConnection(connection, protocol.EventDaemonHeartbeat, runner.controlHeartbeatPayload(runtimeID)); err != nil {
+				connection.Close()
+				return false
+			}
+		}
+		return true
+	}
+	if !send() {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-changes:
+			if !send() {
+				return
+			}
+		case <-ticker.C:
+			if !send() {
+				return
+			}
+		}
+	}
 }

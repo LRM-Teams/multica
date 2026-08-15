@@ -3,6 +3,7 @@ package researchrun
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -18,6 +19,18 @@ func TestSelectAgentRequiresMatchingIdleCapability(t *testing.T) {
 	got := selectAgent(Task{Kind: TaskKindVerify, RequiredCapability: "validator"}, members, map[string]int{"busy-validator": 1})
 	if got != "idle-validator" {
 		t.Fatalf("selectAgent=%q", got)
+	}
+}
+
+func TestSelectAgentEnforcesTaskIndependenceExclusions(t *testing.T) {
+	task := Task{RequiredCapability: "validator", AcceptanceCriteria: []byte(`{"routing":{"excluded_agent_ids":["author"]}}`)}
+	members := []FleetMember{{AgentID: "author", Role: "validator", Status: "active"}, {AgentID: "independent", Role: "validator", Status: "active"}}
+	if got := selectAgent(task, members, map[string]int{}); got != "independent" {
+		t.Fatalf("selected=%q", got)
+	}
+	task.AssignedAgentID = "author"
+	if got := selectAgent(task, members, map[string]int{}); got != "independent" {
+		t.Fatalf("sticky exclusion bypass selected=%q", got)
 	}
 }
 
@@ -397,5 +410,21 @@ func TestTaskPromptRejectsUnsupportedOrchestratorVersion(t *testing.T) {
 	_, err := buildTaskPrompt(Run{OrchestratorVersion: "research-run-v999"}, Task{}, Attempt{}, RunSnapshot{}, nil)
 	if !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBuildTaskPromptV6FreezesIntegrationRoundContract(t *testing.T) {
+	roundID := "22222222-2222-4222-8222-222222222222"
+	criteria := json.RawMessage(`{"integration_round_id":"` + roundID + `","input_state_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","input_version_ids":["version-1","version-2"]}`)
+	prompt, err := buildTaskPrompt(Run{SessionID: "session-v6", OrchestratorVersion: OrchestratorVersionV6, Goal: "Find the supported answer"},
+		Task{ID: "task-v6", Kind: TaskKindIntegrate, ExpectedResult: "research_integration_v6", GoalVersion: 1, PlanVersion: 1, AcceptanceCriteria: criteria},
+		Attempt{ID: "attempt-v6", DispatchKey: "dispatch-v6"}, RunSnapshot{Contract: ResearchContract{Language: "en"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"Durable Research Run V6", roundID, "input_state_hash", "research_integration_v6", "task_result", "schema_version: 6"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("prompt misses %q:\n%s", required, prompt)
+		}
 	}
 }

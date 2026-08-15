@@ -1,12 +1,19 @@
 "use client";
 
-import { useMemo, useState, type ReactElement } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+} from "react";
 import type {
   TrajectoryLaneLayout,
   TrajectoryLayoutCommit,
 } from "@multica/core/research";
 import { sliceTrajectoryLaneLayout } from "@multica/core/research";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 import { GIT_BRANCH_COLORS } from "../lib/git-topology";
 import { TrajectoryCommitCard } from "./trajectory-commit-card";
 
@@ -37,8 +44,10 @@ export function TrajectoryGraph({
   onOpenDetail: (id: string) => void;
   className?: string;
 }) {
+  const { t } = useT("research");
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(400);
+  const graphRef = useRef<HTMLElement>(null);
 
   const totalHeight = layout.rowCount * TRAJECTORY_ROW_HEIGHT;
 
@@ -51,17 +60,64 @@ export function TrajectoryGraph({
       overscan: TRAJECTORY_OVERSCAN,
     });
   }, [layout, scrollTop, viewportHeight]);
+  const visibleFocusableId = win.commits.some((commit) => commit.id === selectedId)
+    ? selectedId
+    : win.commits[0]?.id ?? null;
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (
+      event.key !== "ArrowDown" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+    const card = (event.target as HTMLElement).closest<HTMLElement>(
+      "[data-commit-id]",
+    );
+    if (!card) return;
+    const currentIndex = layout.commits.findIndex(
+      (commit) => commit.id === card.dataset.commitId,
+    );
+    if (currentIndex < 0) return;
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? layout.commits.length - 1
+          : event.key === "ArrowDown"
+            ? Math.min(layout.commits.length - 1, currentIndex + 1)
+            : Math.max(0, currentIndex - 1);
+    const next = layout.commits[nextIndex];
+    if (!next || next.id === card.dataset.commitId) return;
+
+    event.preventDefault();
+    onSelect(next.id);
+    const nextTop = next.row * TRAJECTORY_ROW_HEIGHT;
+    const graph = graphRef.current;
+    if (graph) graph.scrollTop = nextTop;
+    setScrollTop(nextTop);
+    requestAnimationFrame(() => {
+      const target = Array.from(
+        graphRef.current?.querySelectorAll<HTMLElement>("[data-commit-id]") ?? [],
+      ).find((candidate) => candidate.dataset.commitId === next.id);
+      target?.focus({ preventScroll: true });
+    });
+  };
 
   return (
     <section
       ref={(el) => {
+        graphRef.current = el;
         if (el) setViewportHeight(el.clientHeight || 400);
       }}
       data-testid="trajectory-graph"
       data-window-rows={`${win.commits.length}/${layout.rowCount}`}
       className={cn("relative overflow-y-auto outline-none", className)}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-      aria-label="Exploration trajectory graph"
+      onKeyDown={handleKeyDown}
+      aria-label={t((s) => s.trajectory_explorer.graph_label)}
     >
       <div style={{ height: totalHeight, position: "relative" }}>
         <TrajectorySegmentLayer layout={win} />
@@ -81,6 +137,7 @@ export function TrajectoryGraph({
               layout={win}
               commit={commit}
               selected={selectedId === commit.id}
+              tabIndex={commit.id === visibleFocusableId ? 0 : -1}
               onSelect={onSelect}
               onOpenDetail={onOpenDetail}
             />

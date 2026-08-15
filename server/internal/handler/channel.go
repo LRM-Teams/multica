@@ -49,6 +49,7 @@ const channelListMemberAvatarLimit = 5
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
+const channelQuoteSelectedTextMaxLen = 4000
 const channelOutputContractInstruction = "Channel output contract: use the runtime brief as the source of truth for visible output. Never print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
 const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Reply only to the Message target for chat transport supplied below: it is the current message's source location. A top-level group message stays in the main channel, a thread message stays in that thread, and a DM stays in that DM. Never create or switch to a thread based on message content or tone. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful answer using the requested supported delivery modality (no acknowledgement sticker first). Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
@@ -291,12 +292,13 @@ type ChannelMessageQuote struct {
 }
 
 type ChannelMessageQuoteSnapshot struct {
-	Type       string                 `json:"type"`
-	AuthorID   *string                `json:"authorId,omitempty"`
-	AuthorName string                 `json:"authorName"`
-	Content    string                 `json:"content"`
-	Parts      []protocol.MessagePart `json:"parts,omitempty"`
-	CreatedAt  string                 `json:"createdAt"`
+	Type         string                 `json:"type"`
+	AuthorID     *string                `json:"authorId,omitempty"`
+	AuthorName   string                 `json:"authorName"`
+	Content      string                 `json:"content"`
+	Parts        []protocol.MessagePart `json:"parts,omitempty"`
+	CreatedAt    string                 `json:"createdAt"`
+	SelectedText *string                `json:"selectedText,omitempty"`
 }
 
 type ChannelReactionResponse struct {
@@ -366,14 +368,40 @@ type ChannelInviteCandidatesResponse struct {
 	Candidates []ChannelInviteCandidateResponse `json:"candidates"`
 }
 
+// ChannelMentionCandidate is one @ picker row. Type matches the composer
+// mention vocabulary (member | agent), not channel_member.member_type.
+type ChannelMentionCandidate struct {
+	Type      string  `json:"type"`
+	ID        string  `json:"id"`
+	Handle    string  `json:"handle"`
+	Label     string  `json:"label"`
+	AvatarURL *string `json:"avatar_url,omitempty"`
+}
+
+// ChannelMentionCandidatesResponse is GET /api/channels/:id/mention-candidates.
+// in_channel is always the full matching membership. not_in_channel is a page
+// of workspace users/agents who are not members yet.
+type ChannelMentionCandidatesResponse struct {
+	InChannel    []ChannelMentionCandidate `json:"in_channel"`
+	NotInChannel []ChannelMentionCandidate `json:"not_in_channel"`
+	HasMore      bool                      `json:"has_more"`
+	NextOffset   *int                      `json:"next_offset,omitempty"`
+}
+
 type SendChannelMessageRequest struct {
-	Content             string                 `json:"content"`
-	Parts               []protocol.MessagePart `json:"parts"`
-	AttachmentIDs       []string               `json:"attachment_ids"`
-	ReplyToMessageID    *string                `json:"reply_to_message_id"`
-	QuoteMessageID      *string                `json:"quote_message_id"`
-	QuoteMessageIDCamel *string                `json:"quoteMessageId"`
-	ClientMessageID     *string                `json:"client_message_id"`
+	Content             string                          `json:"content"`
+	Parts               []protocol.MessagePart          `json:"parts"`
+	AttachmentIDs       []string                        `json:"attachment_ids"`
+	ReplyToMessageID    *string                         `json:"reply_to_message_id"`
+	QuoteMessageID      *string                         `json:"quote_message_id"`
+	QuoteMessageIDCamel *string                         `json:"quoteMessageId"`
+	Quote               *SendChannelMessageQuoteRequest `json:"quote"`
+	ClientMessageID     *string                         `json:"client_message_id"`
+}
+
+type SendChannelMessageQuoteRequest struct {
+	MessageID    string  `json:"message_id"`
+	SelectedText *string `json:"selected_text"`
 }
 
 type UpdateChannelMessageRequest struct {
@@ -1335,6 +1363,189 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, http.StatusOK, ChannelInviteCandidatesResponse{Candidates: out})
+}
+
+const mentionCandidatePageDefault = 20
+const mentionCandidatePageMax = 100
+
+// ListChannelMentionCandidates returns the group @ picker roster.
+// Channel members are never paginated. Outsiders are a limit/offset page so
+// a large workspace cannot hide in-channel people behind ASCII sort order.
+func (h *Handler) ListChannelMentionCandidates(w http.ResponseWriter, r *http.Request) {
+	if rejectAgentOnHumanRoute(w, r, "ListChannelMentionCandidates") {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	qLower := strings.ToLower(q)
+	qLike := "%" + qLower + "%"
+	includeAll := qLower == ""
+	limit := boundedQueryInt(r, "limit", mentionCandidatePageDefault, mentionCandidatePageMax)
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	inChannel, err := h.listChannelMentionInChannel(r.Context(), parseUUID(workspaceID), channelID, includeAll, qLike)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel mention candidates")
+		return
+	}
+	inChannel = dropViewerMentionCandidate(inChannel, userID)
+	outsiders, hasMore, err := h.listChannelMentionOutsiders(r.Context(), parseUUID(workspaceID), channelID, includeAll, qLike, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel mention candidates")
+		return
+	}
+
+	resp := ChannelMentionCandidatesResponse{
+		InChannel:    inChannel,
+		NotInChannel: outsiders,
+		HasMore:      hasMore,
+	}
+	if hasMore {
+		next := offset + len(outsiders)
+		resp.NextOffset = &next
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listChannelMentionInChannel(ctx context.Context, workspaceID, channelID pgtype.UUID, includeAll bool, qLike string) ([]ChannelMentionCandidate, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT CASE WHEN cm.member_type = 'user' THEN 'member' ELSE 'agent' END,
+		       cm.member_id,
+		       COALESCE(u.name, a.name, ''),
+		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
+		       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END
+		FROM channel_member cm
+		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
+		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
+		WHERE cm.channel_id = $1
+		  AND cm.workspace_id = $2
+		  AND (
+			$3::boolean
+			OR lower(COALESCE(u.name, a.name, '')) LIKE $4
+			OR lower(COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '')) LIKE $4
+		  )
+		ORDER BY lower(COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '')),
+		         lower(COALESCE(u.name, a.name, '')),
+		         cm.member_id`,
+		channelID, workspaceID, includeAll, qLike)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanChannelMentionCandidates(rows)
+}
+
+func (h *Handler) listChannelMentionOutsiders(ctx context.Context, workspaceID, channelID pgtype.UUID, includeAll bool, qLike string, limit, offset int) ([]ChannelMentionCandidate, bool, error) {
+	rows, err := h.DB.Query(ctx, `
+		WITH visible_agents AS (
+			SELECT a.id, a.name, COALESCE(NULLIF(a.display_name, ''), a.name) AS display_name,
+			       a.avatar_url
+			FROM agent a
+			WHERE a.workspace_id = $1
+			  AND a.archived_at IS NULL
+			  AND NOT EXISTS (
+				SELECT 1 FROM channel_member cm
+				WHERE cm.channel_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
+			  )
+			  AND (
+				$3::boolean
+				OR lower(a.name) LIKE $4
+				OR lower(COALESCE(NULLIF(a.display_name, ''), a.name)) LIKE $4
+			  )
+		), candidates AS (
+			SELECT 'member'::text AS type, m.user_id AS id,
+			       COALESCE(u.name, '') AS handle,
+			       COALESCE(NULLIF(u.display_name, ''), u.name, u.email) AS label,
+			       u.avatar_url
+			FROM member m
+			JOIN "user" u ON u.id = m.user_id
+			WHERE m.workspace_id = $1
+			  AND NOT EXISTS (
+				SELECT 1 FROM channel_member cm
+				WHERE cm.channel_id = $2 AND cm.member_type = 'user' AND cm.member_id = m.user_id
+			  )
+			  AND (
+				$3::boolean
+				OR lower(u.name) LIKE $4
+				OR lower(COALESCE(NULLIF(u.display_name, ''), u.name, u.email)) LIKE $4
+				OR lower(u.email) LIKE $4
+			  )
+			UNION ALL
+			SELECT 'agent'::text AS type, va.id AS id,
+			       va.name AS handle, va.display_name AS label, va.avatar_url
+			FROM visible_agents va
+		)
+		SELECT type, id, handle, label, avatar_url
+		FROM candidates
+		ORDER BY lower(label), lower(handle), id
+		LIMIT $5 OFFSET $6`,
+		workspaceID, channelID, includeAll, qLike, limit+1, offset)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	all, err := scanChannelMentionCandidates(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(all) > limit
+	if hasMore {
+		all = all[:limit]
+	}
+	return all, hasMore, nil
+}
+
+func dropViewerMentionCandidate(rows []ChannelMentionCandidate, viewerUserID string) []ChannelMentionCandidate {
+	if viewerUserID == "" || len(rows) == 0 {
+		return rows
+	}
+	out := make([]ChannelMentionCandidate, 0, len(rows))
+	for _, row := range rows {
+		if row.Type == "member" && row.ID == viewerUserID {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func scanChannelMentionCandidates(rows pgx.Rows) ([]ChannelMentionCandidate, error) {
+	out := []ChannelMentionCandidate{}
+	for rows.Next() {
+		var c ChannelMentionCandidate
+		var id pgtype.UUID
+		var avatar pgtype.Text
+		if err := rows.Scan(&c.Type, &id, &c.Handle, &c.Label, &avatar); err != nil {
+			return nil, err
+		}
+		c.ID = uuidToString(id)
+		c.AvatarURL = textToPtr(avatar)
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
@@ -2766,7 +2977,8 @@ func (h *Handler) validateChannelReplyTarget(w http.ResponseWriter, ctx context.
 	return replyToID, true
 }
 
-func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID, rawSnake, rawCamel *string, threadRootID pgtype.UUID) (pgtype.UUID, []byte, bool) {
+func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID, request SendChannelMessageRequest, threadRootID pgtype.UUID) (pgtype.UUID, []byte, bool) {
+	rawSnake, rawCamel := request.QuoteMessageID, request.QuoteMessageIDCamel
 	raw := rawSnake
 	if rawCamel != nil {
 		if raw != nil && strings.TrimSpace(*raw) != strings.TrimSpace(*rawCamel) {
@@ -2775,8 +2987,33 @@ func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.C
 		}
 		raw = rawCamel
 	}
+	if request.Quote != nil {
+		structuredID := strings.TrimSpace(request.Quote.MessageID)
+		if raw != nil && strings.TrimSpace(*raw) != structuredID {
+			writeError(w, http.StatusBadRequest, "quote.message_id conflicts with legacy quote message ID")
+			return pgtype.UUID{}, nil, false
+		}
+		raw = &request.Quote.MessageID
+	}
 	if raw == nil || strings.TrimSpace(*raw) == "" {
+		if request.Quote != nil && request.Quote.SelectedText != nil {
+			writeError(w, http.StatusBadRequest, "quote.selected_text requires quote.message_id")
+			return pgtype.UUID{}, nil, false
+		}
 		return pgtype.UUID{}, nil, true
+	}
+	var selectedText *string
+	if request.Quote != nil && request.Quote.SelectedText != nil {
+		trimmed := strings.TrimSpace(*request.Quote.SelectedText)
+		if trimmed == "" {
+			writeError(w, http.StatusBadRequest, "quote.selected_text must not be blank")
+			return pgtype.UUID{}, nil, false
+		}
+		if len([]rune(trimmed)) > channelQuoteSelectedTextMaxLen {
+			writeError(w, http.StatusBadRequest, "quote.selected_text is too long")
+			return pgtype.UUID{}, nil, false
+		}
+		selectedText = &trimmed
 	}
 	quoteID, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(*raw), "quote_message_id")
 	if !ok {
@@ -2820,12 +3057,13 @@ func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.C
 		}
 	}
 	snapshot := ChannelMessageQuoteSnapshot{
-		Type:       authorType,
-		AuthorID:   uuidToPtr(authorID),
-		AuthorName: authorName,
-		Content:    content,
-		Parts:      decodedParts,
-		CreatedAt:  timestampToString(createdAt),
+		Type:         authorType,
+		AuthorID:     uuidToPtr(authorID),
+		AuthorName:   authorName,
+		Content:      content,
+		Parts:        decodedParts,
+		CreatedAt:    timestampToString(createdAt),
+		SelectedText: selectedText,
 	}
 	rawSnapshot, err := json.Marshal(snapshot)
 	if err != nil {
@@ -3725,7 +3963,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req.QuoteMessageID, req.QuoteMessageIDCamel, rootID)
+	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req, rootID)
 	if !ok {
 		return
 	}
@@ -4613,7 +4851,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req.QuoteMessageID, req.QuoteMessageIDCamel, pgtype.UUID{})
+	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req, pgtype.UUID{})
 	if !ok {
 		return
 	}
@@ -7193,12 +7431,31 @@ func (h *Handler) matchesChannelMessageIdempotencyPayload(ctx context.Context, e
 	if !sameNullableUUID(existing.ReplyToMessageID, in.ReplyToMessageID) || !sameNullableUUID(existing.QuoteMessageID, in.QuoteMessageID) || !sameNullableUUID(existing.ThreadRootMessageID, in.ThreadRootMessageID) {
 		return false, nil
 	}
+	if !sameQuoteSelectedText(existing.quoteSnapshotRaw, in.QuoteSnapshot) {
+		return false, nil
+	}
 	expectedAttachments := channelAttachmentIDSet(attachmentIDs)
 	existingAttachments, err := h.channelMessageAttachmentIDSet(ctx, in.WorkspaceID, parseUUID(existing.ID))
 	if err != nil {
 		return false, err
 	}
 	return sameStringSet(existingAttachments, expectedAttachments), nil
+}
+
+// sameQuoteSelectedText deliberately compares only immutable request data.
+// Source content and author fields in the snapshot may change independently.
+func sameQuoteSelectedText(a, b []byte) bool {
+	var left, right ChannelMessageQuoteSnapshot
+	if len(a) > 0 && json.Unmarshal(a, &left) != nil {
+		return false
+	}
+	if len(b) > 0 && json.Unmarshal(b, &right) != nil {
+		return false
+	}
+	if left.SelectedText == nil || right.SelectedText == nil {
+		return left.SelectedText == nil && right.SelectedText == nil
+	}
+	return *left.SelectedText == *right.SelectedText
 }
 
 func (h *Handler) channelMessageAttachmentIDSet(ctx context.Context, workspaceID, messageID pgtype.UUID) (map[string]struct{}, error) {

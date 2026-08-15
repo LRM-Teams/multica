@@ -27,7 +27,7 @@ func TestMapThoughtStrategiesProjectsCompleteItem(t *testing.T) {
 			}`),
 		},
 		{
-			ID: mustTestUUID("33333333-3333-3333-3333-333333333333"),
+			ID:        mustTestUUID("33333333-3333-3333-3333-333333333333"),
 			SessionID: sessionID, NodeType: "probe", Title: "空节点", Status: "active",
 			Payload: []byte(`{}`),
 		},
@@ -62,7 +62,7 @@ func TestMapThoughtStrategiesDraftingPartial(t *testing.T) {
 	sessionID := mustTestUUID("11111111-1111-1111-1111-111111111111")
 	rows := []db.ResearchGraphNode{
 		{
-			ID: mustTestUUID("44444444-4444-4444-4444-444444444444"),
+			ID:        mustTestUUID("44444444-4444-4444-4444-444444444444"),
 			SessionID: sessionID, NodeType: "subquestion", Title: "监管", Status: "active",
 			Payload: []byte(`{
 				"rationale": "改监管合规主线",
@@ -70,7 +70,7 @@ func TestMapThoughtStrategiesDraftingPartial(t *testing.T) {
 			}`),
 		},
 		{
-			ID: mustTestUUID("55555555-5555-5555-5555-555555555555"),
+			ID:        mustTestUUID("55555555-5555-5555-5555-555555555555"),
 			SessionID: sessionID, NodeType: "finding", Title: "半缺", Status: "active",
 			Payload: []byte(`{"expected_outcome": "只有结果没有思路"}`),
 		},
@@ -90,7 +90,7 @@ func TestMapThoughtStrategiesNestedAndRevisionFallback(t *testing.T) {
 	updated := pgtype.Timestamptz{Time: time.Date(2026, 8, 4, 5, 30, 0, 0, time.UTC), Valid: true}
 	rows := []db.ResearchGraphNode{
 		{
-			ID: mustTestUUID("66666666-6666-6666-6666-666666666666"),
+			ID:        mustTestUUID("66666666-6666-6666-6666-666666666666"),
 			SessionID: sessionID, NodeType: "goal", Title: "出海", Status: "active", UpdatedAt: updated,
 			Payload: []byte(`{
 				"thought_strategy": {
@@ -122,9 +122,9 @@ func TestMapThoughtStrategiesNestedAndRevisionFallback(t *testing.T) {
 func TestMapThoughtStrategiesNeverUsesTitleSummary(t *testing.T) {
 	rows := []db.ResearchGraphNode{
 		{
-			ID: mustTestUUID("77777777-7777-7777-7777-777777777777"),
+			ID:        mustTestUUID("77777777-7777-7777-7777-777777777777"),
 			SessionID: mustTestUUID("11111111-1111-1111-1111-111111111111"),
-			NodeType: "subquestion", Title: "看起来像思路", Summary: "看起来像目标",
+			NodeType:  "subquestion", Title: "看起来像思路", Summary: "看起来像目标",
 			Status: "active", Payload: []byte(`{}`),
 		},
 	}

@@ -8,12 +8,11 @@ import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
-import { ComposerQuotePreview } from "./message-quote";
+import type { ResolvedMessageSelection } from "../lib/selection-quote";
 import {
   ComposerSendErrorBar,
   type ComposerSendErrorState,
 } from "./composer-send-error-bar";
-import type { QuoteTarget } from "./message-quote-types";
 import { ThreadRootPreview } from "./thread-root-preview";
 import { Composer, type ComposerProps } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
@@ -47,11 +46,8 @@ export interface ThreadPanelProps {
   onRetry?: () => void;
   onReact?: (message: ChannelMessage, emoji: string) => void;
   onQuoteMessage?: (message: ChannelMessage) => void;
-  /**
-   * LRM-695 — append a selection-quote markdown block (`>` blockquote) to the
-   * thread composer. Owned by the surface (channels-page holds threadEditorRef).
-   */
-  onInsertSelectionQuote?: (markdown: string) => void;
+  /** Set a structured quote target from a selection in this thread. */
+  onQuoteSelection?: (selection: ResolvedMessageSelection) => void;
   /** Retry a failed optimistic send (reuses `client_message_id`). */
   onRetrySend?: (message: ChannelMessage) => void;
   /** Click an agent author's avatar/name → open the agent side panel (parity
@@ -62,8 +58,6 @@ export interface ThreadPanelProps {
   /** Click a human author's avatar/name → open the LRM-619 member Profile
    *  dock (same parity; without it member avatar clicks are dead). */
   onOpenMember?: (userId: string) => void;
-  quoteTarget?: QuoteTarget | null;
-  onClearQuote?: () => void;
   /** #772 inline send-failure bar for the thread composer (surface-owned). */
   sendError?: ComposerSendErrorState | null;
   onRestorePrevious?: () => void;
@@ -126,12 +120,10 @@ export function ThreadPanel({
   onRetry,
   onReact,
   onQuoteMessage,
-  onInsertSelectionQuote,
+  onQuoteSelection,
   onRetrySend,
   onOpenAgent,
   onOpenMember,
-  quoteTarget,
-  onClearQuote,
   sendError,
   onRestorePrevious,
   editor,
@@ -154,7 +146,7 @@ export function ThreadPanel({
   const threadMessageAreaRef = useRef<HTMLDivElement>(null);
   const threadSelectionMenu = useSelectionQuoteMenu({
     containerRef: threadMessageAreaRef,
-    onQuote: (md: string) => onInsertSelectionQuote?.(md),
+    onQuote: (selection) => onQuoteSelection?.(selection),
   });
 
   // `leading` / `actions` on ConversationHeader and `leadingActions` on
@@ -314,7 +306,7 @@ export function ThreadPanel({
             onVoiceSend={onVoiceSend}
             isMobile={isMobile}
             // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-            prefix={sendError || quoteTarget || composerPrefixExtra ? (
+            prefix={sendError || composerPrefixExtra ? (
               <>
                 {composerPrefixExtra}
                 <ComposerSendErrorBar
@@ -322,13 +314,6 @@ export function ThreadPanel({
                   onRetry={onSend}
                   onRestore={onRestorePrevious ?? (() => {})}
                 />
-                {quoteTarget ? (
-                  <ComposerQuotePreview
-                    quote={quoteTarget}
-                    onCancel={onClearQuote ?? (() => {})}
-                    cancelLabel={t(($) => $.quote.cancel)}
-                  />
-                ) : null}
               </>
             ) : undefined}
             tray={composerTray}

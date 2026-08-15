@@ -89,6 +89,7 @@ Multica 是一个开源、AI 原生的团队工作区(源码:${MULTICA_GITHUB_UR
 ## 保持同步
 
 如果你发现 \`multica --help\`、官方文档或 GitHub 仓库出现与本 instruction 相冲突或重要补充的变化(命令改名、新增核心概念、删除参数),先告诉用户、提议一份更新后的 instruction,然后再继续。不要静默地改自己的 instruction;等用户确认,再通过 CLI 应用变更。`;
+
 export const HELPER_INSTRUCTIONS = { en, zh } as const;
 export type HelperInstructionsLang = keyof typeof HELPER_INSTRUCTIONS;
 

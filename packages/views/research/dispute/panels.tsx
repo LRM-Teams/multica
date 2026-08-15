@@ -14,7 +14,7 @@ import type { ResearchGraphNode } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { cn } from "@multica/ui/lib/utils";
 import { ArrowUp, ArrowUpRight } from "lucide-react";
-import { ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useT } from "../../i18n/use-t";
 import { disputeNodeGlyph } from "./encode";
 import type { DecisionView, DisputeSubgraphModel, TurnView } from "./model";

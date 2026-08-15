@@ -122,29 +122,29 @@ type Handler struct {
 	ReminderNotifier           daemonws.ReminderNotifier
 	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
 	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
+	AgentRestartNotifier       daemonws.AgentRestartNotifier
 	SandboxHub                 *sandboxws.Hub
 	Bus                        *events.Bus
 	TaskService                *service.TaskService
 	// GraphMemoryJudge runs the server-side async judge + delayed-reward
 	// flow for graph-memory recalls reported by daemons (design §5.3).
 	// Nil-safe: the endpoint accepts and drops reports when unwired.
-	GraphMemoryJudge            *service.GraphMemoryJudgeService
-	AgentFleetRankService       *service.AgentFleetRankService
-	AgentHonorService           *service.AgentHonorService
-	IssueService                *service.IssueService
-	HonorService                *service.HonorService
-	EmailService                *service.EmailService
-	EnvCheckpointService        EnvCheckpointServiceAPI
-	UpdateStore                 UpdateStore
-	UpdateIntentStore           UpdateIntentStore
-	MachineUpgradeStore         MachineUpgradeStore
-	RestartStore                RestartStore
-	AgentLifecycleDispatchStore AgentLifecycleDispatchStore
-	RuntimeReleaseSource        RuntimeReleaseSource
-	ModelListStore              ModelListStore
-	LocalSkillListStore         LocalSkillListStore
-	LocalSkillImportStore       LocalSkillImportStore
-	LivenessStore               LivenessStore
+	GraphMemoryJudge      *service.GraphMemoryJudgeService
+	AgentFleetRankService *service.AgentFleetRankService
+	AgentHonorService     *service.AgentHonorService
+	IssueService          *service.IssueService
+	HonorService          *service.HonorService
+	EmailService          *service.EmailService
+	EnvCheckpointService  EnvCheckpointServiceAPI
+	UpdateStore           UpdateStore
+	UpdateIntentStore     UpdateIntentStore
+	MachineUpgradeStore   MachineUpgradeStore
+	RestartStore          RestartStore
+	RuntimeReleaseSource  RuntimeReleaseSource
+	ModelListStore        ModelListStore
+	LocalSkillListStore   LocalSkillListStore
+	LocalSkillImportStore LocalSkillImportStore
+	LivenessStore         LivenessStore
 	// MemberPresenceStore tracks human online/offline from realtime WS
 	// sessions (LRM-462). Distinct from LivenessStore (daemon heartbeats).
 	MemberPresenceStore MemberPresenceStore
@@ -288,37 +288,36 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	taskSvc.Analytics = analyticsClient
 	agentFleetRankService := service.NewAgentFleetRankService(queries)
 	h := &Handler{
-		Queries:                     queries,
-		DB:                          executor,
-		TxStarter:                   txStarter,
-		Hub:                         hub,
-		DaemonHub:                   daemonHub,
-		RunnerPresenceSource:        daemonHub,
-		RunnerPresenceMu:            &sync.Mutex{},
-		Bus:                         bus,
-		TaskService:                 taskSvc,
-		AgentFleetRankService:       agentFleetRankService,
-		AgentHonorService:           service.NewAgentHonorService(queries, agentFleetRankService),
-		IssueService:                service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
-		HonorService:                service.NewHonorService(queries),
-		EmailService:                emailService,
-		UpdateStore:                 NewPostgresUpdateStore(updateDB),
-		UpdateIntentStore:           NewPostgresUpdateIntentStore(updateDB),
-		MachineUpgradeStore:         NewPostgresMachineUpgradeStore(updateDB),
-		RestartStore:                NewInMemoryRestartStore(),
-		AgentLifecycleDispatchStore: NewInMemoryAgentLifecycleDispatchStore(executor),
-		RuntimeReleaseSource:        NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
-		ModelListStore:              NewInMemoryModelListStore(),
-		LocalSkillListStore:         NewInMemoryLocalSkillListStore(),
-		LocalSkillImportStore:       NewInMemoryLocalSkillImportStore(),
-		LivenessStore:               NewNoopLivenessStore(),
-		MemberPresenceStore:         NewMemoryMemberPresenceStore(),
-		HeartbeatScheduler:          NewPassthroughHeartbeatScheduler(queries),
-		Storage:                     store,
-		CFSigner:                    cfSigner,
-		Analytics:                   analyticsClient,
-		WebhookRateLimiter:          NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
-		WebhookIPRateLimiter:        NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
+		Queries:               queries,
+		DB:                    executor,
+		TxStarter:             txStarter,
+		Hub:                   hub,
+		DaemonHub:             daemonHub,
+		RunnerPresenceSource:  daemonHub,
+		RunnerPresenceMu:      &sync.Mutex{},
+		Bus:                   bus,
+		TaskService:           taskSvc,
+		AgentFleetRankService: agentFleetRankService,
+		AgentHonorService:     service.NewAgentHonorService(queries, agentFleetRankService),
+		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
+		HonorService:          service.NewHonorService(queries),
+		EmailService:          emailService,
+		UpdateStore:           NewPostgresUpdateStore(updateDB),
+		UpdateIntentStore:     NewPostgresUpdateIntentStore(updateDB),
+		MachineUpgradeStore:   NewPostgresMachineUpgradeStore(updateDB),
+		RestartStore:          NewInMemoryRestartStore(),
+		RuntimeReleaseSource:  NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
+		ModelListStore:        NewInMemoryModelListStore(),
+		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),
+		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),
+		LivenessStore:         NewNoopLivenessStore(),
+		MemberPresenceStore:   NewMemoryMemberPresenceStore(),
+		HeartbeatScheduler:    NewPassthroughHeartbeatScheduler(queries),
+		Storage:               store,
+		CFSigner:              cfSigner,
+		Analytics:             analyticsClient,
+		WebhookRateLimiter:    NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
+		WebhookIPRateLimiter:  NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
 		CloudRuntime: cloudruntime.NewClient(cloudruntime.Config{
 			BaseURL: cfg.CloudRuntimeFleetURL,
 			Timeout: cfg.CloudRuntimeFleetTimeout,

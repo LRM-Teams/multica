@@ -271,107 +271,6 @@ func TestResolveWorkspacesRootDefaultsToMulticaHome(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_ReleaseDetectionDefaultsOn(t *testing.T) {
-	stageFakeAgent(t)
-	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "http://localhost:8080",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
-		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
-	}
-}
-
-// Legacy enable/disable environment values remain parseable but cannot disable
-// release detection or re-enable automatic installation.
-func TestLoadConfig_AutoUpdateLegacyEnvKeepsSelfHostDetectOnly(t *testing.T) {
-	stageFakeAgent(t)
-	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "false")
-	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "http://localhost:8080",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
-		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
-	}
-}
-
-// Hosted cloud uses the same detect-only contract. The WSS form also exercises
-// NormalizeServerBaseURL before detection configuration is resolved.
-func TestLoadConfig_ReleaseDetectionUsesSameCloudContract(t *testing.T) {
-	stageFakeAgent(t)
-	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "wss://leagent.me/ws",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
-		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
-	}
-}
-
-func TestLoadConfig_AutoUpdateTrueEnvCannotEnableInstallation(t *testing.T) {
-	stageFakeAgent(t)
-	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "true")
-	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "http://localhost:8080",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
-		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
-	}
-}
-
-func TestLoadConfig_AutoUpdateFalseEnvCannotDisableDetection(t *testing.T) {
-	stageFakeAgent(t)
-	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "false")
-	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "https://leagent.me",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
-		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
-	}
-}
-
-// The legacy --no-auto-update flag remains accepted but cannot disable release
-// detection or change the explicit-only installation contract.
-func TestLoadConfig_AutoUpdateNoFlagIsCompatibilityNoOp(t *testing.T) {
-	stageFakeAgent(t)
-	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "true")
-	cfg, err := LoadConfig(Overrides{
-		ServerURL:         "https://leagent.me",
-		WorkspacesRoot:    t.TempDir(),
-		DisableAutoUpdate: true,
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
-		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
-	}
-}
-
-// TestResolveAgentsViaLoginShell_StripsAliasShadowing locks down the fix for
-// #2512: when the user's rc file declares an alias with the same name as the
-// agent CLI, the resolver must still return the real binary on PATH, not the
-// alias text. The previous revision of this code passed the rest of the test
-// suite but silently dropped this case (alias text is not absolute, so the
-// `case "$p" in /*)` filter rejected it).
 func TestResolveAgentsViaLoginShell_StripsAliasShadowing(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell not available on Windows")
@@ -633,23 +532,17 @@ func pinNonCodexAgentsToMissingPaths(t *testing.T) {
 	for _, name := range []string{
 		"MULTICA_CLAUDE_PATH",
 		"MULTICA_OPENCODE_PATH",
-		"MULTICA_OPENCLAW_PATH",
-		"MULTICA_HERMES_PATH",
-		"MULTICA_GEMINI_PATH",
 		"MULTICA_PI_PATH",
 		"MULTICA_CURSOR_PATH",
-		"MULTICA_COPILOT_PATH",
-		"MULTICA_KIMI_PATH",
 		"MULTICA_KIRO_PATH",
-		"MULTICA_CODEBUDDY_PATH",
-		"MULTICA_ANTIGRAVITY_PATH",
+		"MULTICA_GROK_PATH",
 	} {
 		t.Setenv(name, filepath.Join(missingDir, strings.ToLower(name)))
 	}
 }
 
 // =============================================================================
-// CLI config Backends.OpenClaw overrides (issue #3875)
+// CLI config load fail-soft (missing / malformed config.json)
 // =============================================================================
 
 // writeCLIConfigForProfile is a minimal helper for the override tests:
@@ -661,118 +554,6 @@ func writeCLIConfigForProfile(t *testing.T, profile string, cfg cli.CLIConfig) {
 	t.Setenv("HOME", tmp)
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
 		t.Fatalf("write cli config: %v", err)
-	}
-}
-
-// TestApplyOpenclawOverride_DoesNothingWhenNil verifies the early-return
-// path. A daemon started with no override should not Setenv anything; the
-// existing probe / spawn flow remains undisturbed.
-func TestApplyOpenclawOverride_DoesNothingWhenNil(t *testing.T) {
-	// Pre-set both env vars to known values; verify they survive untouched.
-	t.Setenv("MULTICA_OPENCLAW_PATH", "/before/openclaw")
-	t.Setenv("OPENCLAW_STATE_DIR", "/before/state")
-
-	applyOpenclawOverride(nil)
-
-	if got := os.Getenv("MULTICA_OPENCLAW_PATH"); got != "/before/openclaw" {
-		t.Errorf("MULTICA_OPENCLAW_PATH mutated: got %q, want /before/openclaw", got)
-	}
-	if got := os.Getenv("OPENCLAW_STATE_DIR"); got != "/before/state" {
-		t.Errorf("OPENCLAW_STATE_DIR mutated: got %q, want /before/state", got)
-	}
-}
-
-// TestApplyOpenclawOverride_SetsBothWhenEnvUnset verifies the happy path:
-// neither env var is set, the override has both fields, both env vars get
-// set to the override values.
-func TestApplyOpenclawOverride_SetsBothWhenEnvUnset(t *testing.T) {
-	t.Setenv("MULTICA_OPENCLAW_PATH", "")
-	t.Setenv("OPENCLAW_STATE_DIR", "")
-	os.Unsetenv("MULTICA_OPENCLAW_PATH")
-	os.Unsetenv("OPENCLAW_STATE_DIR")
-	t.Cleanup(func() {
-		os.Unsetenv("MULTICA_OPENCLAW_PATH")
-		os.Unsetenv("OPENCLAW_STATE_DIR")
-	})
-
-	applyOpenclawOverride(&cli.OpenClawOverride{
-		BinaryPath: "/from/config/openclaw",
-		StateDir:   "/from/config/state",
-	})
-
-	if got := os.Getenv("MULTICA_OPENCLAW_PATH"); got != "/from/config/openclaw" {
-		t.Errorf("MULTICA_OPENCLAW_PATH: got %q, want /from/config/openclaw", got)
-	}
-	if got := os.Getenv("OPENCLAW_STATE_DIR"); got != "/from/config/state" {
-		t.Errorf("OPENCLAW_STATE_DIR: got %q, want /from/config/state", got)
-	}
-}
-
-// TestApplyOpenclawOverride_EnvWinsOverConfig is the precedence test
-// agreed with @YOMXXX in #3875 review: an env var set upstream by the user
-// (shell export, launchctl, systemd unit) MUST take precedence over the
-// config-file value. This is the back-compat contract — anyone with
-// MULTICA_OPENCLAW_PATH already in their environment must not see the
-// daemon silently change its meaning when they later add a config file.
-func TestApplyOpenclawOverride_EnvWinsOverConfig(t *testing.T) {
-	// User has already exported these in their shell.
-	t.Setenv("MULTICA_OPENCLAW_PATH", "/from/env/openclaw")
-	t.Setenv("OPENCLAW_STATE_DIR", "/from/env/state")
-
-	applyOpenclawOverride(&cli.OpenClawOverride{
-		BinaryPath: "/from/config/openclaw",
-		StateDir:   "/from/config/state",
-	})
-
-	if got := os.Getenv("MULTICA_OPENCLAW_PATH"); got != "/from/env/openclaw" {
-		t.Errorf("MULTICA_OPENCLAW_PATH: env should win, got %q want /from/env/openclaw", got)
-	}
-	if got := os.Getenv("OPENCLAW_STATE_DIR"); got != "/from/env/state" {
-		t.Errorf("OPENCLAW_STATE_DIR: env should win, got %q want /from/env/state", got)
-	}
-}
-
-// TestApplyOpenclawOverride_PartialFields_OnlySetsConfigured verifies that
-// an override with only one field set leaves the other env var alone (does
-// not Setenv to ""). This matters: a user who only configures state_dir
-// must not have their MULTICA_OPENCLAW_PATH discovery path forcibly
-// short-circuited to an empty string.
-func TestApplyOpenclawOverride_PartialFields_OnlySetsConfigured(t *testing.T) {
-	os.Unsetenv("MULTICA_OPENCLAW_PATH")
-	os.Unsetenv("OPENCLAW_STATE_DIR")
-	t.Cleanup(func() {
-		os.Unsetenv("MULTICA_OPENCLAW_PATH")
-		os.Unsetenv("OPENCLAW_STATE_DIR")
-	})
-
-	applyOpenclawOverride(&cli.OpenClawOverride{
-		StateDir: "/from/config/state",
-		// BinaryPath intentionally empty — must NOT call Setenv("MULTICA_OPENCLAW_PATH", "")
-	})
-
-	if _, set := os.LookupEnv("MULTICA_OPENCLAW_PATH"); set {
-		t.Errorf("MULTICA_OPENCLAW_PATH should remain unset when BinaryPath is empty; got %q", os.Getenv("MULTICA_OPENCLAW_PATH"))
-	}
-	if got := os.Getenv("OPENCLAW_STATE_DIR"); got != "/from/config/state" {
-		t.Errorf("OPENCLAW_STATE_DIR: got %q, want /from/config/state", got)
-	}
-}
-
-// TestOpenclawOverrideFrom_NavigationCases verifies the nullable-pointer
-// chain into Backends.OpenClaw. Three cases that all must safely return
-// nil without panicking: nil Backends, nil OpenClaw inside Backends, and
-// the happy path (returns the inner override unchanged).
-func TestOpenclawOverrideFrom_NavigationCases(t *testing.T) {
-	if got := openclawOverrideFrom(cli.CLIConfig{}); got != nil {
-		t.Errorf("nil Backends should produce nil override, got %+v", got)
-	}
-	if got := openclawOverrideFrom(cli.CLIConfig{Backends: &cli.BackendOverrides{}}); got != nil {
-		t.Errorf("nil OpenClaw inside Backends should produce nil override, got %+v", got)
-	}
-	want := &cli.OpenClawOverride{StateDir: "/x"}
-	got := openclawOverrideFrom(cli.CLIConfig{Backends: &cli.BackendOverrides{OpenClaw: want}})
-	if got != want {
-		t.Errorf("happy path should return inner pointer; got %p want %p", got, want)
 	}
 }
 
@@ -876,99 +657,46 @@ func TestLoadConfig_AppliesProfileProxyConfig(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_AppliesBackendOverridesFromConfigFile is the integration
-// test that ties commit 1's schema to commit 2's wire-up: write a config
-// file with backends.openclaw.{binary_path,state_dir}, call LoadConfig
-// (with no env vars set), and verify the openclaw probe picked up the
-// configured BinaryPath and the OPENCLAW_STATE_DIR env var was injected.
-func TestLoadConfig_AppliesBackendOverridesFromConfigFile(t *testing.T) {
+func TestLoadConfig_MissingCLIConfigIsNonFatal(t *testing.T) {
 	stageFakeAgent(t)
-	// stageFakeAgent left "claude" on PATH; we also need a fake "openclaw"
-	// at a custom path that the config file points at (mimicking a non-default
-	// installation: another bundled / isolated / CI deployment, etc).
-	customDir := t.TempDir()
-	customOpenclaw := writeFakeExecutable(t, customDir, "non-default-openclaw")
-
-	// Make sure no env-var override is leaking in from the test runner.
-	os.Unsetenv("MULTICA_OPENCLAW_PATH")
-	os.Unsetenv("OPENCLAW_STATE_DIR")
-	t.Cleanup(func() {
-		os.Unsetenv("MULTICA_OPENCLAW_PATH")
-		os.Unsetenv("OPENCLAW_STATE_DIR")
-	})
-
-	// Drop a CLI config under the user's HOME (already pointed at TempDir
-	// by stageFakeAgent's t.Setenv chain — but reassert here for clarity).
-	homeForCLIConfig := t.TempDir()
-	t.Setenv("HOME", homeForCLIConfig)
-	cfg := cli.CLIConfig{
-		ServerURL: "http://localhost:8080",
-		Backends: &cli.BackendOverrides{
-			OpenClaw: &cli.OpenClawOverride{
-				BinaryPath: customOpenclaw,
-				StateDir:   "/var/lib/openclaw-isolated",
-			},
-		},
-	}
-	if err := cli.SaveCLIConfig(cfg); err != nil {
-		t.Fatalf("save cli config: %v", err)
-	}
-
-	loaded, err := LoadConfig(Overrides{
-		ServerURL:      "http://localhost:8080",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	openclaw, ok := loaded.Agents["openclaw"]
-	if !ok {
-		t.Fatalf("agents map missing 'openclaw' key; got keys=%v", agentKeys(loaded.Agents))
-	}
-	if openclaw.Path != customOpenclaw {
-		t.Errorf("openclaw.Path: got %q, want %q (the binary configured in CLI config)", openclaw.Path, customOpenclaw)
-	}
-	if got := os.Getenv("OPENCLAW_STATE_DIR"); got != "/var/lib/openclaw-isolated" {
-		t.Errorf("OPENCLAW_STATE_DIR: got %q, want injected from config", got)
-	}
-}
-
-// TestLoadConfig_BackendOverrides_BackwardCompat_NoConfigFile verifies that
-// the override mechanism is purely additive: a daemon started without any
-// CLI config file (or with an empty one) behaves identically to before
-// commit 1 — agents discovered from PATH, no env injection.
-func TestLoadConfig_BackendOverrides_BackwardCompat_NoConfigFile(t *testing.T) {
-	stageFakeAgent(t)
-
-	// Point HOME at an empty dir — no config.json present.
 	t.Setenv("HOME", t.TempDir())
-	os.Unsetenv("MULTICA_OPENCLAW_PATH")
-	os.Unsetenv("OPENCLAW_STATE_DIR")
-	t.Cleanup(func() {
-		os.Unsetenv("MULTICA_OPENCLAW_PATH")
-		os.Unsetenv("OPENCLAW_STATE_DIR")
-	})
 
-	_, err := LoadConfig(Overrides{
+	if _, err := LoadConfig(Overrides{
 		ServerURL:      "http://localhost:8080",
 		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("LoadConfig with no config file should not fail: %v", err)
 	}
+}
 
-	if _, set := os.LookupEnv("OPENCLAW_STATE_DIR"); set {
-		t.Errorf("OPENCLAW_STATE_DIR should remain unset when no config file is present; got %q", os.Getenv("OPENCLAW_STATE_DIR"))
+// TestLoadConfig_NoAgentCLIStillSucceeds is the Computer V1 setup contract:
+// a machine with no detected agent CLI must still load and connect. Zero
+// runtimes is a valid connected Computer, not a configuration error.
+func TestLoadConfig_NoAgentCLIStillSucceeds(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("SHELL", filepath.Join(t.TempDir(), "fish"))
+	t.Setenv("MULTICA_DAEMON_ID", "11111111-1111-1111-1111-111111111111")
+	pinNonCodexAgentsToMissingPaths(t)
+	t.Setenv("MULTICA_CODEX_PATH", filepath.Join(t.TempDir(), "missing-codex"))
+
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig with no agent CLI must succeed: %v", err)
+	}
+	if len(cfg.Agents) != 0 {
+		t.Fatalf("expected zero agents, got %#v", cfg.Agents)
 	}
 }
 
-// TestLoadConfig_BackendOverrides_MalformedConfigFileNonFatal verifies the
-// fail-soft contract documented inline in LoadConfig: a corrupt config.json
-// must not prevent daemon startup. This matters for diskcorruption /
-// partial-write recovery — the daemon should log and proceed using
-// env-var-only configuration.
-func TestLoadConfig_BackendOverrides_MalformedConfigFileNonFatal(t *testing.T) {
+// TestLoadConfig_MalformedCLIConfigIsNonFatal verifies the fail-soft contract
+// documented inline in LoadConfig: a corrupt config.json must not prevent
+// daemon startup. The daemon should log and proceed using env-var-only
+// configuration.
+func TestLoadConfig_MalformedCLIConfigIsNonFatal(t *testing.T) {
 	stageFakeAgent(t)
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
@@ -1035,56 +763,6 @@ func agentKeys(m map[string]AgentEntry) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// TestLoadConfig_PinnedVersion_Valid tests that a valid release version in
-// MULTICA_PINNED_VERSION is accepted and stored in the config.
-func TestLoadConfig_PinnedVersion_Valid(t *testing.T) {
-	stageFakeAgent(t)
-	t.Setenv("MULTICA_PINNED_VERSION", "0.3.92")
-	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "http://localhost:8080",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.PinnedVersion != "0.3.92" {
-		t.Fatalf("PinnedVersion = %q, want 0.3.92", cfg.PinnedVersion)
-	}
-}
-
-// TestLoadConfig_PinnedVersion_Invalid verifies that a non-release version
-// string is rejected with a clear error, not silently ignored.
-func TestLoadConfig_PinnedVersion_Invalid(t *testing.T) {
-	stageFakeAgent(t)
-	t.Setenv("MULTICA_PINNED_VERSION", "not-a-version")
-	_, err := LoadConfig(Overrides{
-		ServerURL:      "http://localhost:8080",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err == nil {
-		t.Fatal("expected error for invalid pinned version, got nil")
-	}
-	if !strings.Contains(err.Error(), "MULTICA_PINNED_VERSION") {
-		t.Fatalf("expected error to mention MULTICA_PINNED_VERSION, got: %v", err)
-	}
-}
-
-// TestLoadConfig_PinnedVersion_EmptyIsNoop verifies that without the env var,
-// PinnedVersion is empty (no pin, normal explicit-upgrade behavior).
-func TestLoadConfig_PinnedVersion_EmptyIsNoop(t *testing.T) {
-	stageFakeAgent(t)
-	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "http://localhost:8080",
-		WorkspacesRoot: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.PinnedVersion != "" {
-		t.Fatalf("PinnedVersion = %q, want empty", cfg.PinnedVersion)
-	}
 }
 
 // Graph memory reviewer (design §1/§6): the switch defaults to legacy and the

@@ -64,8 +64,13 @@ const EMPTY_HINTS: D5LensDisplayHints = {
   emphasizedRelationIds: new Set(),
 };
 
-function parseFilterRound(round: string | null | undefined): number | null {
-  if (round == null || round.trim() === "") return null;
+function parseFilterRound(round: string | number | null | undefined): number | null {
+  if (round == null) return null;
+  if (typeof round === "number") {
+    if (!Number.isFinite(round) || round <= 0) return null;
+    return Math.trunc(round);
+  }
+  if (round.trim() === "") return null;
   const parsed = Number(round);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.trunc(parsed);

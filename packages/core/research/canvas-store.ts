@@ -28,6 +28,8 @@ export interface CanvasViewport {
 }
 
 const MAX_SESSION_VIEWPORTS = 20;
+const MAX_SESSION_SELECTIONS = 20;
+const MAX_SESSION_FILTERS = 20;
 
 function retainRecentSessionViewports(
   current: Record<string, CanvasViewport>,
@@ -38,6 +40,31 @@ function retainRecentSessionViewports(
   return Object.fromEntries([
     ...previous.slice(-(MAX_SESSION_VIEWPORTS - 1)),
     [sessionId, viewport],
+  ]);
+}
+
+function retainRecentSessionSelections(
+  current: Record<string, string>,
+  sessionId: string,
+  nodeId: string | null,
+): Record<string, string> {
+  const previous = Object.entries(current).filter(([key]) => key !== sessionId);
+  if (nodeId == null) return Object.fromEntries(previous);
+  return Object.fromEntries([
+    ...previous.slice(-(MAX_SESSION_SELECTIONS - 1)),
+    [sessionId, nodeId],
+  ]);
+}
+
+function retainRecentSessionFilters(
+  current: Record<string, ResearchCanvasFilter>,
+  sessionId: string,
+  filter: ResearchCanvasFilter,
+): Record<string, ResearchCanvasFilter> {
+  const previous = Object.entries(current).filter(([key]) => key !== sessionId);
+  return Object.fromEntries([
+    ...previous.slice(-(MAX_SESSION_FILTERS - 1)),
+    [sessionId, filter],
   ]);
 }
 
@@ -77,15 +104,25 @@ type CanvasState = {
   viewportBySession: Record<string, CanvasViewport>;
   /** Currently selected node id (client selection, not canonical). */
   selectedNodeId: string | null;
+  /** Session-scoped selection restores refreshes without leaking across runs. */
+  selectedNodeBySession: Record<string, string>;
   /** Current display-only filter. */
   filter: ResearchCanvasFilter;
+  /** Session-scoped display filters restore without leaking across runs. */
+  filterBySession: Record<string, ResearchCanvasFilter>;
   setViewport: (viewport: CanvasViewport) => void;
   setSessionViewport: (sessionId: string, viewport: CanvasViewport) => void;
   clearViewport: () => void;
   selectNode: (nodeId: string | null) => void;
+  selectSessionNode: (sessionId: string, nodeId: string | null) => void;
   clearSelection: () => void;
   setFilter: (filter: Partial<ResearchCanvasFilter>) => void;
   clearFilter: () => void;
+  setSessionFilter: (
+    sessionId: string,
+    filter: Partial<ResearchCanvasFilter>,
+  ) => void;
+  clearSessionFilter: (sessionId: string) => void;
 };
 
 export const useResearchCanvasStore = create<CanvasState>()(
@@ -94,7 +131,9 @@ export const useResearchCanvasStore = create<CanvasState>()(
       viewport: null,
       viewportBySession: {},
       selectedNodeId: null,
+      selectedNodeBySession: {},
       filter: emptyCanvasFilter(),
+      filterBySession: {},
       setViewport: (viewport) => set({ viewport }),
       setSessionViewport: (sessionId, viewport) =>
         set((state) => ({
@@ -106,10 +145,37 @@ export const useResearchCanvasStore = create<CanvasState>()(
         })),
       clearViewport: () => set({ viewport: null }),
       selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
+      selectSessionNode: (sessionId, nodeId) =>
+        set((state) => ({
+          selectedNodeBySession: retainRecentSessionSelections(
+            state.selectedNodeBySession,
+            sessionId,
+            nodeId,
+          ),
+        })),
       clearSelection: () => set({ selectedNodeId: null }),
       setFilter: (filter) =>
         set((s) => ({ filter: { ...s.filter, ...filter } })),
       clearFilter: () => set({ filter: emptyCanvasFilter() }),
+      setSessionFilter: (sessionId, filter) =>
+        set((state) => ({
+          filterBySession: retainRecentSessionFilters(
+            state.filterBySession,
+            sessionId,
+            {
+              ...(state.filterBySession[sessionId] ?? emptyCanvasFilter()),
+              ...filter,
+            },
+          ),
+        })),
+      clearSessionFilter: (sessionId) =>
+        set((state) => ({
+          filterBySession: retainRecentSessionFilters(
+            state.filterBySession,
+            sessionId,
+            emptyCanvasFilter(),
+          ),
+        })),
     }),
     {
       name: "multica_research_canvas_v1",
@@ -120,7 +186,9 @@ export const useResearchCanvasStore = create<CanvasState>()(
         viewport: s.viewport,
         viewportBySession: s.viewportBySession,
         selectedNodeId: s.selectedNodeId,
+        selectedNodeBySession: s.selectedNodeBySession,
         filter: s.filter,
+        filterBySession: s.filterBySession,
       }),
     },
   ),

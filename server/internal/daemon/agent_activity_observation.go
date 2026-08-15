@@ -166,42 +166,42 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	case AgentObservationRuntimeReady:
 		data := observation.Data.(AgentRuntimeObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindOnline, "idle", data.ProcessInstanceID
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Online")
+		entry, err = activityNarrativeEntry(projection.detailKind, "Online")
 	case AgentObservationRuntimeStarting:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "starting"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Starting…")
+		entry, err = activityNarrativeEntry(projection.detailKind, "Starting…")
 	case AgentObservationRuntimeWorking:
 		data := observation.Data.(AgentRuntimeObservationData)
-		projection.activityKind, projection.processInstanceID = protocol.ActivityKindWorking, data.ProcessInstanceID
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Working")
+		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindWorking, "model_response_started", data.ProcessInstanceID
+		entry, err = activityNarrativeEntry(projection.detailKind, "Working")
 	case AgentObservationRuntimeThinking:
-		projection.activityKind = protocol.ActivityKindThinking
+		projection.activityKind, projection.detailKind = protocol.ActivityKindThinking, "thinking_started"
 	case AgentObservationRuntimeTool:
 		data := observation.Data.(AgentRuntimeStageObservationData)
 		projection.activityKind = protocol.ActivityKindWorking
 		var narrative string
 		projection.detailKind, narrative = toolActivityFact(data.ToolName, data.ToolInput)
 		if narrative != "" {
-			entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, narrative)
+			entry, err = activityNarrativeEntry(projection.detailKind, narrative)
 		}
 	case AgentObservationRuntimeCompacting:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compacting_context"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Compacting context")
+		entry, err = activityNarrativeEntry(projection.detailKind, "Compacting context")
 	case AgentObservationRuntimeCompacted:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_finished"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Context compaction finished")
+		entry, err = activityNarrativeEntry(projection.detailKind, "Context compaction finished")
 	case AgentObservationRuntimeCompactionStale:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_stale"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Context compaction still running; no finish event observed")
+		entry, err = activityNarrativeEntry(projection.detailKind, "Context compaction still running; no finish event observed")
 	case AgentObservationRuntimeIdle:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Idle")
+		entry, err = activityNarrativeEntry(projection.detailKind, "Idle")
 	case AgentObservationRuntimeDiagnostic:
 		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
 		entry, err = activitySystemEntry("Runtime warning", "Provider reported a warning")
 	case AgentObservationMessageBodyAccepted:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "message_received"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Message received")
+		entry, err = activityNarrativeEntry(projection.detailKind, "Message received")
 	case AgentObservationFreshnessHeld:
 		data := observation.Data.(AgentFreshnessHoldObservationData)
 		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
@@ -213,10 +213,17 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	case AgentObservationError:
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Agent execution failed")
+		entry, err = activityNarrativeEntry(projection.detailKind, "Agent execution failed")
 	case AgentObservationOffline:
+		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind = protocol.ActivityKindOffline
-		entry, err = activityNarrativeEntry(projection.activityKind, "", "Offline")
+		if data.ReasonCode == "stopped" {
+			projection.detailKind = "stopped"
+			entry, err = activityNarrativeEntry(projection.detailKind, "Stopped")
+		} else {
+			projection.detailKind = "runtime_unavailable"
+			entry, err = activityNarrativeEntry(projection.detailKind, "Offline")
+		}
 	default:
 		return agentActivityProjection{}, fmt.Errorf("unknown Agent Observation kind %q", observation.Kind)
 	}

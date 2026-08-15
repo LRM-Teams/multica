@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,123 @@ func TestHashManifestEntriesDeterministic(t *testing.T) {
 	second := hashManifestEntries([]artifactVersionCandidate{entries[1], entries[0]})
 	if first != second {
 		t.Fatalf("hash=%q want=%q", first, second)
+	}
+}
+
+func TestDisputeReviewManifestUsesClosedArtifactAllowlist(t *testing.T) {
+	plan := dispatchManifestPlan{Entries: []artifactVersionCandidate{
+		{ArtifactID: "run", Kind: ArtifactKindRunSession}, {ArtifactID: "task", Kind: ArtifactKindTask},
+		{ArtifactID: "position", Kind: ArtifactKindDisputePosition}, {ArtifactID: "other-claim", Kind: ArtifactKindClaim},
+	}}
+	task := Task{ID: "task", AcceptanceCriteria: json.RawMessage(`{"task_context":{"mode":"dispute_review","visible_artifact_ids":["position"]}}`)}
+	got := isolateDisputeReviewManifest(plan, task)
+	if len(got.Entries) != 3 || len(got.Omissions) != 1 || got.Omissions[0].ArtifactID != "other-claim" || got.Omissions[0].OmissionReason != "irrelevant" {
+		t.Fatalf("isolated plan=%+v", got)
+	}
+	if _, ok := got.IsolationAllowlist["position"]; !ok {
+		t.Fatal("visible position missing from allowlist")
+	}
+}
+
+func TestHashManifestOmissionsBindsFrozenDisposition(t *testing.T) {
+	base := []artifactVersionCandidate{
+		{VersionRowID: "version-1", OmissionReason: "lifecycle"},
+		{VersionRowID: "version-2", OmissionReason: "evaluation_compartment"},
+	}
+	want := hashManifestOmissions(base)
+	mutations := []struct {
+		name  string
+		value []artifactVersionCandidate
+	}{
+		{name: "removed", value: base[:1]},
+		{name: "reordered", value: []artifactVersionCandidate{base[1], base[0]}},
+		{name: "version", value: []artifactVersionCandidate{{VersionRowID: "changed", OmissionReason: "lifecycle"}, base[1]}},
+		{name: "reason", value: []artifactVersionCandidate{{VersionRowID: "version-1", OmissionReason: "policy_denied"}, base[1]}},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			if got := hashManifestOmissions(mutation.value); got == want {
+				t.Fatalf("omission hash did not bind %s", mutation.name)
+			}
+		})
+	}
+	if hashManifestOmissions(nil) != hashManifestOmissions([]artifactVersionCandidate{}) {
+		t.Fatal("empty omission set must have one canonical hash")
+	}
+}
+
+func TestDispatchManifestHashBindsAuthorizationScope(t *testing.T) {
+	base := dispatchManifestHashInput{
+		WorkspaceID:         "11111111-1111-1111-1111-111111111111",
+		SessionID:           "22222222-2222-2222-2222-222222222222",
+		AttemptID:           "33333333-3333-3333-3333-333333333333",
+		TaskID:              "44444444-4444-4444-4444-444444444444",
+		Purpose:             ArtifactPurposeTaskExecution,
+		PolicyVersion:       LegacyV1V5CompatPolicy,
+		PolicyWatermark:     7,
+		ThroughStateVersion: 11,
+		Entries: []artifactVersionCandidate{{
+			VersionRowID:         "55555555-5555-5555-5555-555555555555",
+			ArtifactID:           "66666666-6666-6666-6666-666666666666",
+			Kind:                 ArtifactKindClaim,
+			Version:              2,
+			EligibilityRevision:  3,
+			AccessLevel:          ArtifactAccessRaw,
+			Lifecycle:            ArtifactLifecycleRegistered,
+			Provenance:           ArtifactProvenanceComplete,
+			VersionCount:         2,
+			InputReferenceCount:  4,
+			OutputReferenceCount: 5,
+			RelationshipHash:     "sha256:relationships",
+			Representation:       "full",
+			RepresentationHash:   "sha256:representation",
+		}},
+	}
+	want := hashDispatchManifest(base)
+
+	tests := []struct {
+		name   string
+		mutate func(*dispatchManifestHashInput)
+	}{
+		{"workspace", func(in *dispatchManifestHashInput) { in.WorkspaceID = "different" }},
+		{"session", func(in *dispatchManifestHashInput) { in.SessionID = "different" }},
+		{"attempt", func(in *dispatchManifestHashInput) { in.AttemptID = "different" }},
+		{"task", func(in *dispatchManifestHashInput) { in.TaskID = "different" }},
+		{"purpose", func(in *dispatchManifestHashInput) { in.Purpose = ArtifactPurposeEvaluation }},
+		{"policy version", func(in *dispatchManifestHashInput) { in.PolicyVersion = "different" }},
+		{"policy watermark", func(in *dispatchManifestHashInput) { in.PolicyWatermark++ }},
+		{"state watermark", func(in *dispatchManifestHashInput) { in.ThroughStateVersion++ }},
+		{"version row", func(in *dispatchManifestHashInput) { in.Entries[0].VersionRowID = "different" }},
+		{"selected version", func(in *dispatchManifestHashInput) { in.Entries[0].Version++ }},
+		{"access", func(in *dispatchManifestHashInput) { in.Entries[0].AccessLevel = ArtifactAccessRedacted }},
+		{"lifecycle", func(in *dispatchManifestHashInput) { in.Entries[0].Lifecycle = ArtifactLifecycleAccepted }},
+		{"provenance", func(in *dispatchManifestHashInput) { in.Entries[0].Provenance = ArtifactProvenancePartial }},
+		{"version count", func(in *dispatchManifestHashInput) { in.Entries[0].VersionCount++ }},
+		{"input count", func(in *dispatchManifestHashInput) { in.Entries[0].InputReferenceCount++ }},
+		{"output count", func(in *dispatchManifestHashInput) { in.Entries[0].OutputReferenceCount++ }},
+		{"relationship identity", func(in *dispatchManifestHashInput) { in.Entries[0].RelationshipHash = "sha256:different" }},
+		{"representation", func(in *dispatchManifestHashInput) { in.Entries[0].RepresentationHash = "different" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := base
+			changed.Entries = append([]artifactVersionCandidate(nil), base.Entries...)
+			tc.mutate(&changed)
+			if got := hashDispatchManifest(changed); got == want {
+				t.Fatalf("hash did not bind %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestDispatchManifestHashCanonicalizesEntryOrder(t *testing.T) {
+	first := artifactVersionCandidate{VersionRowID: "v1", ArtifactID: "b", Kind: ArtifactKindClaim, Version: 1, EligibilityRevision: 1, Representation: "full", RepresentationHash: "h1"}
+	second := artifactVersionCandidate{VersionRowID: "v2", ArtifactID: "a", Kind: ArtifactKindObservation, Version: 1, EligibilityRevision: 1, Representation: "full", RepresentationHash: "h2"}
+	base := dispatchManifestHashInput{WorkspaceID: "w", SessionID: "s", AttemptID: "a", TaskID: "t", Purpose: ArtifactPurposeTaskExecution, PolicyVersion: "p", PolicyWatermark: 1, ThroughStateVersion: 2, Entries: []artifactVersionCandidate{first, second}}
+	reversed := base
+	reversed.Entries = []artifactVersionCandidate{second, first}
+	if hashDispatchManifest(base) != hashDispatchManifest(reversed) {
+		t.Fatal("manifest hash must use canonical entry order")
 	}
 }
 
@@ -114,6 +232,18 @@ func TestFilterRunSnapshotByManifest(t *testing.T) {
 	}
 	if filtered.Claims[0].ID != "claim-1" {
 		t.Fatalf("claim=%q", filtered.Claims[0].ID)
+	}
+}
+
+func TestFilterRunSnapshotByEmptyManifestFailsClosed(t *testing.T) {
+	snapshot := RunSnapshot{
+		Sources:      []SourceSnapshotView{{ID: "source"}},
+		Observations: []Observation{{ID: "observation"}},
+		Claims:       []Claim{{ID: "claim"}},
+	}
+	filtered := filterRunSnapshotByManifest(snapshot, map[string]struct{}{})
+	if len(filtered.Sources) != 0 || len(filtered.Observations) != 0 || len(filtered.Claims) != 0 {
+		t.Fatalf("empty manifest exposed evidence: %+v", filtered)
 	}
 }
 
@@ -203,16 +333,48 @@ func TestCreateDispatchIntentPersistsManifestBoundOutbox(t *testing.T) {
 	if manifestID == "" || manifestHash == "" || requestHash == "" {
 		t.Fatalf("outbox binding incomplete: manifest_id=%q manifest_hash=%q request_hash=%q", manifestID, manifestHash, requestHash)
 	}
-	var manifestAttemptID string
+	var versionContentHash, hashOrigin, provenance string
 	if err = pool.QueryRow(ctx, `
-		SELECT attempt_id::text
-		FROM research_artifact_context_manifest
-		WHERE id = $1::uuid
-	`, manifestID).Scan(&manifestAttemptID); err != nil {
+		SELECT v.content_hash, v.hash_origin, p.provenance_completeness
+		FROM research_artifact_passport p
+		JOIN research_artifact_version v
+		  ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+		     (p.workspace_id, p.session_id, p.id, p.current_version)
+		WHERE p.workspace_id = $1::uuid AND p.session_id = $2::uuid
+		  AND p.id = $3::uuid AND p.entity_kind = 'context_manifest'
+	`, fixture.workspaceID, run.SessionID, manifestID).Scan(
+		&versionContentHash, &hashOrigin, &provenance,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if versionContentHash != manifestHash {
+		t.Fatalf("manifest version content_hash=%q want persisted manifest_hash=%q", versionContentHash, manifestHash)
+	}
+	if hashOrigin != string(ArtifactHashOriginProduction) || provenance != string(ArtifactProvenanceComplete) {
+		t.Fatalf("manifest hash_origin=%q provenance=%q", hashOrigin, provenance)
+	}
+	var manifestAttemptID, grantID, grantPrincipalID, grantClearance string
+	var grantRevision int64
+	if err = pool.QueryRow(ctx, `
+		SELECT m.attempt_id::text, g.id::text, g.principal_id::text,
+		       g.normal_clearance, m.normal_grant_revision
+		FROM research_artifact_context_manifest m
+		JOIN research_artifact_policy_grant g
+		  ON g.workspace_id = m.workspace_id
+		 AND g.session_id = m.session_id
+		 AND g.id = m.normal_grant_id
+		WHERE m.id = $1::uuid
+	`, manifestID).Scan(
+		&manifestAttemptID, &grantID, &grantPrincipalID, &grantClearance, &grantRevision,
+	); err != nil {
 		t.Fatalf("load manifest row: %v", err)
 	}
 	if manifestAttemptID != attempt.ID {
 		t.Fatalf("manifest attempt=%q want=%q", manifestAttemptID, attempt.ID)
+	}
+	if grantID == "" || grantPrincipalID != fixture.agentID || grantClearance != "raw" || grantRevision != 1 {
+		t.Fatalf("manifest grant id=%q principal=%q clearance=%q revision=%d",
+			grantID, grantPrincipalID, grantClearance, grantRevision)
 	}
 }
 
@@ -253,12 +415,12 @@ func TestDispatchOutboxPromptMatchesManifestBoundRequestHash(t *testing.T) {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
 	var payload []byte
-	var storedHash string
+	var storedHash, storedManifestID, storedManifestHash string
 	if err = pool.QueryRow(ctx, `
-		SELECT request_payload, request_hash
+		SELECT request_payload, request_hash, manifest_id::text, manifest_hash
 		FROM research_dispatch_outbox
 		WHERE attempt_id = $1::uuid
-	`, attempt.ID).Scan(&payload, &storedHash); err != nil {
+	`, attempt.ID).Scan(&payload, &storedHash, &storedManifestID, &storedManifestHash); err != nil {
 		t.Fatalf("load outbox payload: %v", err)
 	}
 	var request DispatchRequest
@@ -277,6 +439,16 @@ func TestDispatchOutboxPromptMatchesManifestBoundRequestHash(t *testing.T) {
 	}
 	if request.Prompt == "test dispatch" {
 		t.Fatal("expected manifest rebound to replace placeholder test dispatch prompt")
+	}
+	if request.ManifestID == "" || request.ManifestID != storedManifestID || request.ManifestHash != storedManifestHash {
+		t.Fatalf("request manifest=%q/%q stored=%q/%q", request.ManifestID, request.ManifestHash, storedManifestID, storedManifestHash)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_dispatch_outbox SET manifest_hash=$2 WHERE attempt_id=$1::uuid`, attempt.ID,
+		"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"); err != nil {
+		t.Fatalf("tamper outbox manifest hash: %v", err)
+	}
+	if _, err = store.ClaimDispatchIntents(ctx, run.SessionID, uuid.NewString(), time.Minute, 1); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("claim tampered outbox err=%v", err)
 	}
 }
 
@@ -357,6 +529,74 @@ func TestTaskContextForAttemptExcludesPostDispatchArtifacts(t *testing.T) {
 	}
 	if frozen.AttemptContext == nil || !frozen.AttemptContext.ManifestFiltered {
 		t.Fatalf("attempt context=%+v", frozen.AttemptContext)
+	}
+}
+
+func TestTaskContextForAttemptRejectsTamperedFrozenRepresentation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Frozen read hash", Title: "Frozen read hash",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	claimID := uuid.NewString()
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "frozen-read-claim", "frozen read claim")
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	tamperedBytes := []byte(`{"id":"tampered"}`)
+	tamperedHash := contentHashFromPayload(tamperedBytes)
+	tag, err := pool.Exec(ctx, `
+		UPDATE research_artifact_context_entry entry
+		SET representation_bytes = $4,
+		    representation_hash = $5
+		FROM research_artifact_context_manifest manifest,
+		     research_artifact_version version,
+		     research_artifact_passport passport
+		WHERE (manifest.workspace_id, manifest.session_id, manifest.id) =
+		      (entry.workspace_id, entry.session_id, entry.manifest_id)
+		  AND (version.workspace_id, version.session_id, version.id) =
+		      (entry.workspace_id, entry.session_id, entry.artifact_version_id)
+		  AND (passport.workspace_id, passport.session_id, passport.id) =
+		      (version.workspace_id, version.session_id, version.artifact_id)
+		  AND manifest.workspace_id = $1::uuid
+		  AND manifest.session_id = $2::uuid
+		  AND manifest.attempt_id = $3::uuid
+		  AND passport.entity_kind = 'claim'
+	`, fixture.workspaceID, run.SessionID, attempt.ID, tamperedBytes, tamperedHash)
+	if err != nil {
+		if !strings.Contains(err.Error(), "immutable") && !strings.Contains(err.Error(), "append-only") && !strings.Contains(err.Error(), "sealed") {
+			t.Fatalf("tamper frozen representation: %v", err)
+		}
+		return
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("tampered rows=%d want 1", tag.RowsAffected())
+	}
+	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("TaskContextForAttempt err=%v want ErrInvalidTransition", err)
 	}
 }
 

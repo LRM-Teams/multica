@@ -27,12 +27,13 @@ function roundCard(sessionId: string) {
 }
 
 describe("ApiClient session-scoped Research reads", () => {
-  it("rejects malformed and cross-session presence responses", async () => {
+  it("degrades malformed presence and rejects cross-session responses", async () => {
     const client = new ApiClient("https://api.example.test");
     stubResponse({ session_id: "s1", presence: [] });
-    await expect(client.getResearchPresence("s1")).rejects.toThrow(
-      "response failed schema validation",
-    );
+    await expect(client.getResearchPresence("s1")).resolves.toEqual({
+      session_id: "s1",
+      presence: {},
+    });
 
     stubResponse({ session_id: "s2", presence: {} });
     await expect(client.getResearchPresence("s1")).rejects.toThrow(

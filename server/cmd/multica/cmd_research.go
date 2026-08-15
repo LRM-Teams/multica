@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -107,6 +108,7 @@ var researchArchiveCmd = &cobra.Command{
 }
 
 func init() {
+	researchSessionGetCmd.Flags().String("attempt-id", "", "Assigned Research Run attempt ID for frozen task context")
 	researchGraphAppendCmd.Flags().String("type", "probe", "node type")
 	researchGraphAppendCmd.Flags().String("title", "", "node title")
 	researchGraphAppendCmd.Flags().String("summary", "", "node summary")
@@ -182,7 +184,12 @@ func runResearchSessionGet(cmd *cobra.Command, args []string) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 	var out map[string]any
-	if err := client.GetJSON(ctx, researchAPIPath(cmd, "/api/research/sessions/"+args[0]), &out); err != nil {
+	path := "/api/research/sessions/" + args[0]
+	attemptID, _ := cmd.Flags().GetString("attempt-id")
+	if attemptID = strings.TrimSpace(attemptID); attemptID != "" {
+		path += "?attempt_id=" + url.QueryEscape(attemptID)
+	}
+	if err := client.GetJSON(ctx, researchAPIPath(cmd, path), &out); err != nil {
 		return fmt.Errorf("get research session: %w", err)
 	}
 	return cli.PrintJSON(os.Stdout, out)

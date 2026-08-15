@@ -22,13 +22,15 @@ func readPolicyWatermarkTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionI
 	return watermark, err
 }
 
-func casPassportEligibilityRevisionTx(
+func casPassportSelectionTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, artifactID string,
+	kind ArtifactEntityKind,
 	currentVersion int32,
 	eligibilityRevision int64,
 	lifecycle ArtifactLifecycleStatus,
+	provenance ArtifactProvenanceCompleteness,
 ) error {
 	// Passport has no updated_at column (318 schema). CAS is a pure predicate
 	// match: rewrite a column to itself so RowsAffected reports the lock result.
@@ -38,10 +40,12 @@ func casPassportEligibilityRevisionTx(
 		WHERE workspace_id = $1::uuid
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid
-		  AND current_version = $4
-		  AND eligibility_revision = $5
-		  AND lifecycle_status = $6
-	`, workspaceID, sessionID, artifactID, currentVersion, eligibilityRevision, lifecycle)
+		  AND entity_kind = $4
+		  AND current_version = $5
+		  AND eligibility_revision = $6
+		  AND lifecycle_status = $7
+		  AND provenance_completeness = $8
+	`, workspaceID, sessionID, artifactID, kind, currentVersion, eligibilityRevision, lifecycle, provenance)
 	if err != nil {
 		return err
 	}
@@ -51,12 +55,18 @@ func casPassportEligibilityRevisionTx(
 	return nil
 }
 
-func casArtifactVersionRepresentationTx(
+func casArtifactVersionSelectionTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, versionRowID string,
-	contentHash, representationHash string,
+	contentHash string,
+	accessLevel ArtifactAccessLevel,
+	representationBytes []byte,
+	representationHash string,
 ) error {
+	if contentHashFromPayload(representationBytes) != representationHash {
+		return fmt.Errorf("%w: artifact representation bytes/hash CAS failed", ErrInvalidTransition)
+	}
 	var matched bool
 	err := tx.QueryRow(ctx, `
 		SELECT true
@@ -65,14 +75,49 @@ func casArtifactVersionRepresentationTx(
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid
 		  AND content_hash = $4
-	`, workspaceID, sessionID, versionRowID, contentHash).Scan(&matched)
+		  AND access_level = $5
+	`, workspaceID, sessionID, versionRowID, contentHash, accessLevel).Scan(&matched)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: artifact version representation CAS failed", ErrInvalidTransition)
 	}
 	if err != nil {
 		return err
 	}
-	_ = representationHash
+	return nil
+}
+
+func casArtifactRelationshipSelectionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	entry artifactVersionCandidate,
+) error {
+	var versionCount, inputReferenceCount, outputReferenceCount int
+	err := tx.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_version versions
+		   WHERE versions.workspace_id=$1::uuid
+		     AND versions.session_id=$2::uuid
+		     AND versions.artifact_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference refs
+		   WHERE refs.workspace_id=$1::uuid
+		     AND refs.session_id=$2::uuid
+		     AND refs.consumer_version_id=$4::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference refs
+		   WHERE refs.workspace_id=$1::uuid
+		     AND refs.session_id=$2::uuid
+		     AND refs.input_version_id=$4::uuid)
+	`, workspaceID, sessionID, entry.ArtifactID, entry.VersionRowID).Scan(
+		&versionCount, &inputReferenceCount, &outputReferenceCount,
+	)
+	if err != nil {
+		return err
+	}
+	if versionCount != entry.VersionCount ||
+		inputReferenceCount != entry.InputReferenceCount ||
+		outputReferenceCount != entry.OutputReferenceCount {
+		return fmt.Errorf("%w: artifact relationship projection CAS failed", ErrInvalidTransition)
+	}
 	return nil
 }
 
@@ -177,6 +222,35 @@ func persistResultArtifactInputReferencesTx(
 	return err
 }
 
+func manifestInputVersionSetHashTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, manifestID string,
+) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT artifact_version_id::text
+		FROM research_artifact_context_entry
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND manifest_id=$3::uuid
+		ORDER BY artifact_version_id::text
+	`, workspaceID, sessionID, manifestID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	return contentHashFromPayload([]byte(strings.Join(ids, "\n"))), nil
+}
+
 type manifestArtifactSet struct {
 	ArtifactIDs map[string]struct{}
 	Hash        string
@@ -276,6 +350,12 @@ func loadManifestAuthorizedArtifactIDsPool(
 		}
 		return nil, false, err
 	}
+	if err = verifyAttemptManifestReadGrantPool(ctx, pool, workspaceID, sessionID, attemptID); err != nil {
+		return nil, false, err
+	}
+	if err = verifyAttemptManifestHashPool(ctx, pool, workspaceID, sessionID, attemptID); err != nil {
+		return nil, false, err
+	}
 	rows, err := pool.Query(ctx, `
 		SELECT v.artifact_id::text
 		FROM research_artifact_context_entry e
@@ -305,6 +385,59 @@ func loadManifestAuthorizedArtifactIDsPool(
 	return ids, true, nil
 }
 
+func verifyAttemptManifestReadGrantPool(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var authorized bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM research_artifact_context_manifest m
+		  JOIN research_task_attempt a
+		    ON (a.workspace_id, a.session_id, a.id, a.task_id) =
+		       (m.workspace_id, m.session_id, m.attempt_id, m.task_id)
+		  JOIN research_artifact_policy_grant normal
+		    ON (normal.workspace_id, normal.session_id, normal.id, normal.revision) =
+		       (m.workspace_id, m.session_id, m.normal_grant_id, m.normal_grant_revision)
+		  LEFT JOIN research_artifact_policy_grant evaluation
+		    ON (evaluation.workspace_id, evaluation.session_id, evaluation.id, evaluation.revision) =
+		       (m.workspace_id, m.session_id, m.evaluation_grant_id, m.evaluation_grant_revision)
+		  WHERE m.workspace_id = $1::uuid
+		    AND m.session_id = $2::uuid
+		    AND m.attempt_id = $3::uuid
+		    AND normal.principal_kind = 'agent'
+		    AND normal.principal_id = a.assigned_agent_id
+		    AND normal.purpose = m.purpose
+		    AND normal.policy_version = m.policy_version
+		    AND normal.status = 'active'
+		    AND normal.evaluation_private = false
+		    AND normal.normal_clearance IS NOT NULL
+		    AND research_artifact_access_level_allowed(normal.normal_clearance)
+		    AND (
+		      (m.purpose = 'task_execution' AND m.evaluation_grant_id IS NULL)
+		      OR
+		      (m.purpose = 'evaluation'
+		       AND evaluation.id IS NOT NULL
+		       AND evaluation.principal_kind = 'agent'
+		       AND evaluation.principal_id = a.assigned_agent_id
+		       AND evaluation.purpose = m.purpose
+		       AND evaluation.policy_version = m.policy_version
+		       AND evaluation.status = 'active'
+		       AND evaluation.evaluation_private = true)
+		    )
+		)
+	`, workspaceID, sessionID, attemptID).Scan(&authorized)
+	if err != nil {
+		return fmt.Errorf("verify attempt manifest read grant: %w", err)
+	}
+	if !authorized {
+		return fmt.Errorf("%w: %w: attempt manifest grant no longer authorizes task context", ErrArtifactAccessDenied, ErrInvalidTransition)
+	}
+	return nil
+}
+
 func loadAttemptManifestSummaryPool(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -325,14 +458,47 @@ func loadAttemptManifestSummaryPool(
 }
 
 func filterRunSnapshotByManifest(snapshot RunSnapshot, allowed map[string]struct{}) RunSnapshot {
-	if len(allowed) == 0 {
-		return snapshot
-	}
 	filtered := snapshot
+	if _, ok := allowed[snapshot.Run.SessionID]; !ok {
+		filtered.Run = Run{}
+	}
+	filtered.Questions = filterQuestionsByManifest(snapshot.Questions, allowed)
+	filtered.Tasks = filterTasksByManifest(snapshot.Tasks, allowed)
+	filtered.Attempts = filterAttemptsByManifest(snapshot.Attempts, allowed)
 	filtered.Sources = filterSourcesByManifest(snapshot.Sources, allowed)
 	filtered.Observations = filterObservationsByManifest(snapshot.Observations, allowed)
 	filtered.Claims = filterClaimsByManifest(snapshot.Claims, allowed)
 	return filtered
+}
+
+func filterQuestionsByManifest(questions []Question, allowed map[string]struct{}) []Question {
+	out := make([]Question, 0, len(questions))
+	for _, question := range questions {
+		if _, ok := allowed[question.ID]; ok {
+			out = append(out, question)
+		}
+	}
+	return out
+}
+
+func filterTasksByManifest(tasks []Task, allowed map[string]struct{}) []Task {
+	out := make([]Task, 0, len(tasks))
+	for _, task := range tasks {
+		if _, ok := allowed[task.ID]; ok {
+			out = append(out, task)
+		}
+	}
+	return out
+}
+
+func filterAttemptsByManifest(attempts []Attempt, allowed map[string]struct{}) []Attempt {
+	out := make([]Attempt, 0, len(attempts))
+	for _, attempt := range attempts {
+		if _, ok := allowed[attempt.ID]; ok {
+			out = append(out, attempt)
+		}
+	}
+	return out
 }
 
 func filterSourcesByManifest(sources []SourceSnapshotView, allowed map[string]struct{}) []SourceSnapshotView {
@@ -359,7 +525,14 @@ func filterClaimsByManifest(claims []Claim, allowed map[string]struct{}) []Claim
 	out := make([]Claim, 0, len(claims))
 	for _, c := range claims {
 		if _, ok := allowed[c.ID]; ok {
-			out = append(out, c)
+			filtered := c
+			filtered.Evidence = make([]ClaimEvidence, 0, len(c.Evidence))
+			for _, evidence := range c.Evidence {
+				if _, evidenceAllowed := allowed[evidence.ArtifactID]; evidenceAllowed {
+					filtered.Evidence = append(filtered.Evidence, evidence)
+				}
+			}
+			out = append(out, filtered)
 		}
 	}
 	return out
@@ -384,24 +557,39 @@ func verifyShadowEquivalenceTx(
 	tx pgx.Tx,
 	workspaceID, sessionID string,
 	stateVersion int64,
+	purpose ArtifactPurpose,
 ) error {
 	module := NewArtifactContextModule()
-	plan, err := module.PlanDispatchManifest(ctx, tx, workspaceID, sessionID, stateVersion)
+	plan, err := module.PlanDispatchManifestForPurpose(ctx, tx, workspaceID, sessionID, stateVersion, purpose)
 	if err != nil {
 		return err
 	}
-	liveIDs, err := loadLegacyManifestVisibleArtifactIDsTx(ctx, tx, workspaceID, sessionID)
+	return verifyShadowPlanEquivalenceTx(ctx, tx, workspaceID, sessionID, plan, "")
+}
+
+func verifyShadowPlanEquivalenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	plan dispatchManifestPlan,
+	excludedContextManifestID string,
+) error {
+	domainProjection, err := loadLegacyShadowDomainProjectionTx(
+		ctx, tx, workspaceID, sessionID, plan.Purpose, plan.PolicyVersion, excludedContextManifestID,
+	)
 	if err != nil {
 		return err
 	}
-	manifestIDs := make(map[string]struct{}, len(plan.Entries))
-	for _, entry := range plan.Entries {
-		manifestIDs[entry.ArtifactID] = struct{}{}
+	if plan.IsolationAllowlist != nil {
+		for index := range domainProjection {
+			_, explicit := plan.IsolationAllowlist[domainProjection[index].ArtifactID]
+			foundation := domainProjection[index].Kind == ArtifactKindRunSession || domainProjection[index].Kind == ArtifactKindContractRevision || domainProjection[index].Kind == ArtifactKindMethodDecision
+			if domainProjection[index].Disposition == shadowDispositionEntry && !explicit && !foundation {
+				domainProjection[index].Disposition = "irrelevant"
+			}
+		}
 	}
-	return compareShadowManifestError(liveIDs, manifestArtifactSet{
-		ArtifactIDs: manifestIDs,
-		Hash:        plan.ManifestHash,
-	})
+	return compareShadowDomainProjection(domainProjection, projectManifestForShadow(plan), plan.ManifestHash)
 }
 
 func loadLegacyManifestVisibleArtifactIDsTx(
@@ -421,9 +609,7 @@ func loadLegacyManifestVisibleArtifactIDsTx(
 		if module.policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
 			continue
 		}
-		admitted, _ := module.policy.LegacyAdmissionAllowed(
-			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
-		)
+		admitted, _ := module.policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts())
 		if !admitted {
 			continue
 		}
@@ -464,7 +650,144 @@ func verifyAcceptanceManifestPolicyTx(
 	if err != nil {
 		return 0, 0, err
 	}
+	if err = verifyAcceptanceManifestGrantsTx(ctx, tx, workspaceID, sessionID, attemptID); err != nil {
+		return 0, 0, err
+	}
 	return manifestWatermark, reserved, nil
+}
+
+type acceptanceManifestGrantBinding struct {
+	purpose                 string
+	policyVersion           string
+	normalGrantID           string
+	normalGrantRevision     int64
+	evaluationGrantID       string
+	evaluationGrantRevision int64
+	assignedAgentID         string
+	fleetID                 string
+}
+
+func acceptanceManifestGrantShapeAllowed(purpose, normalGrantID, evaluationGrantID string) bool {
+	switch ArtifactPurpose(strings.TrimSpace(purpose)) {
+	case ArtifactPurposeTaskExecution:
+		return normalGrantID != "" && evaluationGrantID == ""
+	case ArtifactPurposeEvaluation:
+		return normalGrantID != "" && evaluationGrantID != ""
+	default:
+		return false
+	}
+}
+
+func verifyAcceptanceManifestGrantsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var binding acceptanceManifestGrantBinding
+	err := tx.QueryRow(ctx, `
+		SELECT m.purpose, m.policy_version,
+		       COALESCE(m.normal_grant_id::text, ''), COALESCE(m.normal_grant_revision, 0),
+		       COALESCE(m.evaluation_grant_id::text, ''), COALESCE(m.evaluation_grant_revision, 0),
+		       COALESCE(a.assigned_agent_id::text, ''), s.fleet_id::text
+		FROM research_artifact_context_manifest m
+		JOIN research_task_attempt a
+		  ON a.workspace_id = m.workspace_id
+		 AND a.session_id = m.session_id
+		 AND a.id = m.attempt_id
+		 AND a.task_id = m.task_id
+		JOIN research_session s
+		  ON s.workspace_id = m.workspace_id
+		 AND s.id = m.session_id
+		WHERE m.workspace_id = $1::uuid
+		  AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(
+		&binding.purpose, &binding.policyVersion,
+		&binding.normalGrantID, &binding.normalGrantRevision,
+		&binding.evaluationGrantID, &binding.evaluationGrantRevision,
+		&binding.assignedAgentID, &binding.fleetID,
+	)
+	if err != nil {
+		return fmt.Errorf("load acceptance manifest grant binding: %w", err)
+	}
+	if binding.assignedAgentID == "" || !acceptanceManifestGrantShapeAllowed(
+		binding.purpose, binding.normalGrantID, binding.evaluationGrantID,
+	) {
+		return fmt.Errorf("%w: acceptance manifest grant binding is invalid", ErrInvalidTransition)
+	}
+	if err = verifyAcceptanceGrantTx(ctx, tx, workspaceID, sessionID,
+		binding.normalGrantID, binding.normalGrantRevision, binding.assignedAgentID,
+		binding.purpose, binding.policyVersion, false,
+	); err != nil {
+		return err
+	}
+	if binding.evaluationGrantID != "" {
+		if err = verifyAcceptanceGrantTx(ctx, tx, workspaceID, sessionID,
+			binding.evaluationGrantID, binding.evaluationGrantRevision, binding.assignedAgentID,
+			binding.purpose, binding.policyVersion, true,
+		); err != nil {
+			return err
+		}
+	}
+
+	var memberID string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text
+		FROM research_fleet_member
+		WHERE workspace_id = $1::uuid
+		  AND fleet_id = $2::uuid
+		  AND agent_id = $3::uuid
+		  AND status = 'active'
+		FOR UPDATE
+	`, workspaceID, binding.fleetID, binding.assignedAgentID).Scan(&memberID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: assigned agent is not an active fleet member", ErrInvalidTransition)
+	}
+	if err != nil {
+		return fmt.Errorf("lock acceptance fleet membership: %w", err)
+	}
+	return nil
+}
+
+func verifyAcceptanceGrantTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, grantID string,
+	expectedRevision int64,
+	expectedPrincipalID, expectedPurpose, expectedPolicyVersion string,
+	expectedEvaluationPrivate bool,
+) error {
+	var principalKind, principalID, purpose, policyVersion, status string
+	var revision int64
+	var evaluationPrivate, clearanceAllowed bool
+	err := tx.QueryRow(ctx, `
+		SELECT principal_kind, principal_id::text, purpose, policy_version,
+		       revision, status, evaluation_private,
+		       normal_clearance IS NOT NULL
+		         AND research_artifact_access_level_allowed(normal_clearance)
+		FROM research_artifact_policy_grant
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		FOR UPDATE
+	`, workspaceID, sessionID, grantID).Scan(
+		&principalKind, &principalID, &purpose, &policyVersion,
+		&revision, &status, &evaluationPrivate, &clearanceAllowed,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: acceptance policy grant is missing", ErrInvalidTransition)
+	}
+	if err != nil {
+		return fmt.Errorf("lock acceptance policy grant: %w", err)
+	}
+	if principalKind != "agent" || principalID != expectedPrincipalID ||
+		purpose != expectedPurpose || policyVersion != expectedPolicyVersion ||
+		revision != expectedRevision || status != "active" ||
+		evaluationPrivate != expectedEvaluationPrivate ||
+		(!expectedEvaluationPrivate && !clearanceAllowed) {
+		return fmt.Errorf("%w: acceptance policy grant no longer authorizes the assigned agent", ErrInvalidTransition)
+	}
+	return nil
 }
 
 func verifyAcceptanceManifestEntryEligibilityTx(
@@ -494,8 +817,8 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 		    AND m.attempt_id = $3::uuid
 		    AND (
 		      e.eligibility_revision <> p.eligibility_revision
+		      OR v.version <> p.current_version
 		      OR p.lifecycle_status NOT IN ('registered', 'accepted')
-		      OR v.content_hash <> convert_from(e.representation_bytes, 'UTF8')
 		    )
 		)
 	`, workspaceID, sessionID, attemptID).Scan(&stale)
@@ -505,23 +828,82 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 	if stale {
 		return fmt.Errorf("%w: acceptance manifest entry stale", ErrInvalidTransition)
 	}
+	rows, err := tx.Query(ctx, `
+		SELECT e.representation_bytes, e.representation_hash
+		FROM research_artifact_context_entry e
+		JOIN research_artifact_context_manifest m
+		  ON (m.workspace_id, m.session_id, m.id) = (e.workspace_id, e.session_id, e.manifest_id)
+		WHERE m.workspace_id = $1::uuid AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var representation []byte
+		var storedHash string
+		if err = rows.Scan(&representation, &storedHash); err != nil {
+			return err
+		}
+		if contentHashFromPayload(representation) != storedHash {
+			return fmt.Errorf("%w: acceptance manifest representation hash mismatch", ErrInvalidTransition)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
 	return nil
 }
 
-func loadManifestEntryCandidatesForAttemptTx(
+type artifactManifestQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func loadManifestEntryCandidatesForAttempt(
 	ctx context.Context,
-	tx pgx.Tx,
+	querier artifactManifestQuerier,
 	workspaceID, sessionID, attemptID string,
-) ([]artifactVersionCandidate, string, error) {
-	rows, err := tx.Query(ctx, `
+) ([]artifactVersionCandidate, dispatchManifestHashInput, string, error) {
+	var hashInput dispatchManifestHashInput
+	var purposeRaw string
+	var storedHash string
+	err := querier.QueryRow(ctx, `
+		SELECT workspace_id::text, session_id::text, attempt_id::text, task_id::text,
+		       purpose, policy_version, policy_watermark, through_state_version,
+		       manifest_hash
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(
+		&hashInput.WorkspaceID, &hashInput.SessionID, &hashInput.AttemptID, &hashInput.TaskID,
+		&purposeRaw, &hashInput.PolicyVersion, &hashInput.PolicyWatermark,
+		&hashInput.ThroughStateVersion, &storedHash,
+	)
+	if err != nil {
+		return nil, dispatchManifestHashInput{}, "", err
+	}
+	hashInput.Purpose = ArtifactPurpose(purposeRaw)
+
+	rows, err := querier.Query(ctx, `
 		SELECT
+		  v.id::text,
 		  v.artifact_id::text,
+		  p.entity_kind,
 		  v.version,
 		  e.eligibility_revision,
+		  v.access_level,
 		  v.content_hash,
 		  e.representation,
 		  e.representation_hash,
-		  m.manifest_hash
+		  e.selection_lifecycle_status,
+		  e.selection_provenance_completeness,
+		  e.selection_version_count,
+		  e.selection_input_reference_count,
+		  e.selection_output_reference_count,
+		  e.selection_relationship_hash
 		FROM research_artifact_context_entry e
 		JOIN research_artifact_context_manifest m
 		  ON m.workspace_id = e.workspace_id
@@ -531,32 +913,75 @@ func loadManifestEntryCandidatesForAttemptTx(
 		  ON v.workspace_id = e.workspace_id
 		 AND v.session_id = e.session_id
 		 AND v.id = e.artifact_version_id
+		JOIN research_artifact_passport p
+		  ON p.workspace_id = v.workspace_id
+		 AND p.session_id = v.session_id
+		 AND p.id = v.artifact_id
 		WHERE m.workspace_id = $1::uuid
 		  AND m.session_id = $2::uuid
 		  AND m.attempt_id = $3::uuid
 		ORDER BY e.ordinal
 	`, workspaceID, sessionID, attemptID)
 	if err != nil {
-		return nil, "", err
+		return nil, dispatchManifestHashInput{}, "", err
 	}
 	defer rows.Close()
 
 	var entries []artifactVersionCandidate
-	var storedHash string
 	for rows.Next() {
 		var entry artifactVersionCandidate
+		var kindRaw, accessRaw string
+		var lifecycleRaw, provenanceRaw *string
+		var versionCount, inputCount, outputCount *int
+		var relationshipHash *string
 		if err = rows.Scan(
-			&entry.ArtifactID, &entry.Version, &entry.EligibilityRevision,
-			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash, &storedHash,
+			&entry.VersionRowID, &entry.ArtifactID, &kindRaw, &entry.Version, &entry.EligibilityRevision,
+			&accessRaw, &entry.ContentHash, &entry.Representation, &entry.RepresentationHash,
+			&lifecycleRaw, &provenanceRaw, &versionCount, &inputCount, &outputCount, &relationshipHash,
 		); err != nil {
-			return nil, "", err
+			return nil, dispatchManifestHashInput{}, "", err
+		}
+		entry.Kind, err = ParseArtifactEntityKind(kindRaw)
+		if err != nil {
+			return nil, dispatchManifestHashInput{}, "", err
+		}
+		if lifecycleRaw == nil || provenanceRaw == nil || versionCount == nil || inputCount == nil || outputCount == nil {
+			return nil, dispatchManifestHashInput{}, "", fmt.Errorf("%w: manifest entry lacks frozen projection metadata", ErrInvalidTransition)
+		}
+		entry.AccessLevel = ArtifactAccessLevel(accessRaw)
+		entry.Lifecycle = ArtifactLifecycleStatus(*lifecycleRaw)
+		entry.Provenance = ArtifactProvenanceCompleteness(*provenanceRaw)
+		entry.VersionCount = *versionCount
+		entry.InputReferenceCount = *inputCount
+		entry.OutputReferenceCount = *outputCount
+		if relationshipHash != nil {
+			entry.RelationshipHash = *relationshipHash
 		}
 		entries = append(entries, entry)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, "", err
+		return nil, dispatchManifestHashInput{}, "", err
 	}
-	return entries, storedHash, nil
+	hashInput.Entries = entries
+	return entries, hashInput, storedHash, nil
+}
+
+func verifyAttemptManifestHashPool(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID string,
+) error {
+	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttempt(ctx, pool, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(storedHash) == "" {
+		return fmt.Errorf("%w: attempt manifest hash missing", ErrInvalidTransition)
+	}
+	if hashDispatchManifest(hashInput) != storedHash {
+		return fmt.Errorf("%w: attempt manifest hash mismatch", ErrInvalidTransition)
+	}
+	return nil
 }
 
 func verifyAcceptanceManifestHashTx(
@@ -564,15 +989,63 @@ func verifyAcceptanceManifestHashTx(
 	tx pgx.Tx,
 	workspaceID, sessionID, attemptID string,
 ) error {
-	entries, storedHash, err := loadManifestEntryCandidatesForAttemptTx(ctx, tx, workspaceID, sessionID, attemptID)
+	_, hashInput, storedHash, err := loadManifestEntryCandidatesForAttempt(ctx, tx, workspaceID, sessionID, attemptID)
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(storedHash) == "" {
 		return fmt.Errorf("%w: acceptance manifest hash missing", ErrInvalidTransition)
 	}
-	if hashManifestEntries(entries) != storedHash {
+	if hashDispatchManifest(hashInput) != storedHash {
 		return fmt.Errorf("%w: acceptance manifest hash mismatch", ErrInvalidTransition)
+	}
+	if err = verifyAcceptanceManifestOmissionHashTx(ctx, tx, workspaceID, sessionID, attemptID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyAcceptanceManifestOmissionHashTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var storedHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT omission_hash
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&storedHash); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT o.candidate_version_id::text, o.reason
+		FROM research_artifact_context_omission o
+		JOIN research_artifact_context_manifest m
+		  ON (m.workspace_id, m.session_id, m.id) =
+		     (o.workspace_id, o.session_id, o.manifest_id)
+		WHERE m.workspace_id = $1::uuid
+		  AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+		ORDER BY o.ordinal
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var omissions []artifactVersionCandidate
+	for rows.Next() {
+		var omission artifactVersionCandidate
+		if err = rows.Scan(&omission.VersionRowID, &omission.OmissionReason); err != nil {
+			return err
+		}
+		omissions = append(omissions, omission)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if storedHash == "" || hashManifestOmissions(omissions) != storedHash {
+		return fmt.Errorf("%w: acceptance Manifest omission hash mismatch", ErrInvalidTransition)
 	}
 	return nil
 }
@@ -628,7 +1101,10 @@ func sortAcceptanceManifestLockTargets(targets []acceptanceManifestLockTarget) {
 		if targets[i].Kind != targets[j].Kind {
 			return targets[i].Kind < targets[j].Kind
 		}
-		return targets[i].ArtifactID < targets[j].ArtifactID
+		if targets[i].ArtifactID != targets[j].ArtifactID {
+			return targets[i].ArtifactID < targets[j].ArtifactID
+		}
+		return targets[i].VersionRowID < targets[j].VersionRowID
 	})
 }
 

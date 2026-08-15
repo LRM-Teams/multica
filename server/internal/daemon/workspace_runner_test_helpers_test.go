@@ -2,53 +2,10 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"reflect"
 	"testing"
-
-	"github.com/gorilla/websocket"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func completeTestWorkspaceRunnerAttachmentReplay(conn *websocket.Conn) error {
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
-		return err
-	}
-	var frame protocol.Message
-	var request protocol.WorkspaceRunnerAttachmentReplayRequest
-	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventAgentAttachmentReplayReq {
-		return fmt.Errorf("invalid Attachment replay request frame: %s", raw)
-	}
-	if err := json.Unmarshal(frame.Payload, &request); err != nil || request.Validate() != nil {
-		return fmt.Errorf("invalid Attachment replay request payload: %s", frame.Payload)
-	}
-	end, err := json.Marshal(protocol.Message{
-		Type:    protocol.EventAgentAttachmentReplayEnd,
-		Payload: marshalRaw(protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: request.RuntimeCursors}),
-	})
-	if err != nil {
-		return err
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, end); err != nil {
-		return err
-	}
-	_, raw, err = conn.ReadMessage()
-	if err != nil {
-		return err
-	}
-	var ack protocol.WorkspaceRunnerAttachmentReplayAck
-	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventAgentAttachmentReplayAck {
-		return fmt.Errorf("invalid Attachment replay acknowledgement frame: %s", raw)
-	}
-	if err := json.Unmarshal(frame.Payload, &ack); err != nil || ack.Validate() != nil || !reflect.DeepEqual(ack.RuntimeCursors, request.RuntimeCursors) {
-		return fmt.Errorf("invalid Attachment replay acknowledgement payload: %s", frame.Payload)
-	}
-	return nil
-}
-
-func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send func(string, any) error) (*WorkspaceRunner, *workspaceRunnerConnection) {
+func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send func(string, any) error) (*WorkspaceRunner, *DaemonConnection) {
 	t.Helper()
 	if send == nil {
 		send = func(string, any) error { return nil }
@@ -58,14 +15,7 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	connection := &workspaceRunnerConnection{
-		workspaceID: workspaceID,
-		ctx:         ctx,
-		cancel:      cancel,
-		write:       send,
-		close:       func() {},
-	}
+	connection := newDaemonConnection(workspaceID, context.Background(), send, func() {})
 	runner.replaceConnection(connection)
 	d.attachWorkspaceRunner(runner)
 	t.Cleanup(func() {
@@ -162,6 +112,9 @@ func prepareHeadlessWorkspaceRunnerTestDaemon(d *Daemon, workspacesRoot string) 
 	if d.canonicalRuntimes == nil {
 		d.canonicalRuntimes = newCanonicalAgentRuntimePool()
 	}
+	if d.processAdmission == nil {
+		d.processAdmission = d.canonicalRuntimes.managedProcessAdmission()
+	}
 	if d.client == nil {
 		d.client = NewClient("")
 	}
@@ -170,9 +123,6 @@ func prepareHeadlessWorkspaceRunnerTestDaemon(d *Daemon, workspacesRoot string) 
 	}
 	if d.workspaces == nil {
 		d.workspaces = make(map[string]*workspaceState)
-	}
-	if d.agentAttachments == nil {
-		d.agentAttachments = newLocalAgentAttachmentRegistry(workspacesRoot, d.logger)
 	}
 	if d.workspaceRunners == nil {
 		d.workspaceRunners = make(map[string]*WorkspaceRunner)

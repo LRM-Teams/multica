@@ -3,12 +3,23 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/auth"
+)
+
+// Spec pins for RFC 8628 + the official public CLI client. Tests use these
+// literals — not the handler's constants — so a silent rename of the
+// accepted client_id or grant cannot keep the suite green.
+const (
+	rfcDeviceClientID  = "multica-cli"
+	rfcDeviceGrantType = "urn:ietf:params:oauth:grant-type:device_code"
+	rfcPATLifetimeSec  = 90 * 24 * 3600
 )
 
 func newDeviceAuthTestUser(t *testing.T, email string) string {
@@ -29,10 +40,18 @@ func newDeviceAuthTestUser(t *testing.T, email string) string {
 	return userID
 }
 
-// requestDeviceCode drives RequestDeviceCode and returns the parsed body.
-func requestDeviceCode(t *testing.T, clientHint string) deviceCodeResponse {
+func newDeviceFormRequest(path string, form url.Values) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
+}
+
+func requestDeviceCode(t *testing.T) deviceCodeResponse {
 	t.Helper()
-	req := newRequest("POST", "/api/device/code", requestDeviceCodeRequest{ClientHint: clientHint})
+	req := newDeviceFormRequest("/api/device/code", url.Values{
+		"client_id": {rfcDeviceClientID},
+		"scope":     {""},
+	})
 	w := httptest.NewRecorder()
 	testHandler.RequestDeviceCode(w, req)
 	if w.Code != 200 {
@@ -49,20 +68,27 @@ func requestDeviceCode(t *testing.T, clientHint string) deviceCodeResponse {
 }
 
 func pollDeviceToken(deviceCode string) *httptest.ResponseRecorder {
-	req := newRequest("POST", "/api/device/token", issueDeviceTokenRequest{DeviceCode: deviceCode})
+	req := newDeviceFormRequest("/api/device/token", url.Values{
+		"grant_type":  {rfcDeviceGrantType},
+		"device_code": {deviceCode},
+		"client_id":   {rfcDeviceClientID},
+	})
 	w := httptest.NewRecorder()
 	testHandler.IssueDeviceToken(w, req)
 	return w
 }
 
-func TestRequestDeviceCode_ReturnsRFC8628Shape(t *testing.T) {
+func TestRequestDeviceCode_FormStartReturnsRFC8628Shape(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	resp := requestDeviceCode(t, "test-host")
+	resp := requestDeviceCode(t)
 
 	if resp.DeviceCode == "" || resp.UserCode == "" {
 		t.Fatalf("device_code/user_code must be non-empty: %+v", resp)
+	}
+	if resp.VerificationURI == "" {
+		t.Fatalf("verification_uri must be present: %+v", resp)
 	}
 	if !strings.Contains(resp.VerificationURIComplete, resp.UserCode) {
 		t.Fatalf("verification_uri_complete = %q, want it to contain user_code %q", resp.VerificationURIComplete, resp.UserCode)
@@ -87,12 +113,41 @@ func TestDeviceAuthAppURLDefaultsToLeAgent(t *testing.T) {
 	}
 }
 
+func TestRequestDeviceCode_RejectsMissingAndUnknownClientID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	missing := newDeviceFormRequest("/api/device/code", url.Values{})
+	missingW := httptest.NewRecorder()
+	testHandler.RequestDeviceCode(missingW, missing)
+	assertDeviceTokenError(t, missingW, "invalid_request")
+
+	unknown := newDeviceFormRequest("/api/device/code", url.Values{"client_id": {"not-a-client"}})
+	unknownW := httptest.NewRecorder()
+	testHandler.RequestDeviceCode(unknownW, unknown)
+	assertDeviceTokenError(t, unknownW, "invalid_client")
+}
+
+func TestRequestDeviceCode_RejectsJSONBody(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	req := newRequest("POST", "/api/device/code", map[string]string{
+		"client_id":   rfcDeviceClientID,
+		"client_hint": "should-not-work",
+	})
+	w := httptest.NewRecorder()
+	testHandler.RequestDeviceCode(w, req)
+	assertDeviceTokenError(t, w, "invalid_request")
+}
+
 func TestDeviceAuth_PendingIsVisibleToAnyLoggedInUser(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	approver := newDeviceAuthTestUser(t, "device-approver@multica.ai")
-	code := requestDeviceCode(t, "my-laptop")
+	code := requestDeviceCode(t)
 
 	req := newRequestAs(approver, "GET", "/api/device/pending?user_code="+code.UserCode, nil)
 	w := httptest.NewRecorder()
@@ -104,8 +159,25 @@ func TestDeviceAuth_PendingIsVisibleToAnyLoggedInUser(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.ClientHint != "my-laptop" {
-		t.Fatalf("client_hint = %q, want %q", resp.ClientHint, "my-laptop")
+	if resp.ClientHint != "Multica CLI" {
+		t.Fatalf("client_hint = %q, want %q", resp.ClientHint, "Multica CLI")
+	}
+}
+
+func TestDeviceAuth_PendingNormalizesTypedUserCode(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	approver := newDeviceAuthTestUser(t, "device-normalize@multica.ai")
+	code := requestDeviceCode(t)
+
+	// RFC 6.1: strip punctuation, ignore case.
+	typed := strings.ToLower(strings.ReplaceAll(code.UserCode, "-", ""))
+	req := newRequestAs(approver, "GET", "/api/device/pending?user_code="+typed, nil)
+	w := httptest.NewRecorder()
+	testHandler.GetPendingDeviceAuthorization(w, req)
+	if w.Code != 200 {
+		t.Fatalf("normalized lookup status = %d, body = %s", w.Code, w.Body.String())
 	}
 }
 
@@ -122,7 +194,7 @@ func TestDeviceAuth_PendingDoesNotDistinguishUnknownFromExpired(t *testing.T) {
 	unknownW := httptest.NewRecorder()
 	testHandler.GetPendingDeviceAuthorization(unknownW, unknownReq)
 
-	code := requestDeviceCode(t, "expiring-host")
+	code := requestDeviceCode(t)
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE device_authorization SET expires_at = now() - interval '1 minute' WHERE user_code = $1`, code.UserCode); err != nil {
 		t.Fatalf("force-expire: %v", err)
@@ -139,15 +211,16 @@ func TestDeviceAuth_PendingDoesNotDistinguishUnknownFromExpired(t *testing.T) {
 	}
 }
 
-// TestDeviceAuth_FullApproveFlowMintsUsablePAT is the end-to-end happy
-// path: request code -> approve -> poll -> the returned token actually
-// authenticates as the approving user.
-func TestDeviceAuth_FullApproveFlowMintsUsablePAT(t *testing.T) {
+// TestDeviceAuth_FullApproveFlowMintsUsableAccessToken is the end-to-end
+// happy path: form start → approve → form poll → the returned access_token
+// is the minted PAT and authenticates as the approving user via the same
+// lookup the HTTP auth middleware uses.
+func TestDeviceAuth_FullApproveFlowMintsUsableAccessToken(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	approver := newDeviceAuthTestUser(t, "device-full-flow@multica.ai")
-	code := requestDeviceCode(t, "cli-host")
+	code := requestDeviceCode(t)
 
 	confirmReq := newRequestAs(approver, "POST", "/api/device/confirm", confirmDeviceAuthorizationRequest{UserCode: code.UserCode, Approve: true})
 	confirmW := httptest.NewRecorder()
@@ -164,16 +237,19 @@ func TestDeviceAuth_FullApproveFlowMintsUsablePAT(t *testing.T) {
 	if err := json.Unmarshal(pollW.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token response: %v", err)
 	}
-	if !strings.HasPrefix(tokenResp.Token, "mul_") {
-		t.Fatalf("token = %q, want mul_ prefix", tokenResp.Token)
+	if tokenResp.AccessToken == "" || tokenResp.TokenType != "Bearer" {
+		t.Fatalf("token response = %+v, want access_token + token_type=Bearer", tokenResp)
+	}
+	if tokenResp.ExpiresIn != rfcPATLifetimeSec {
+		t.Fatalf("expires_in = %d, want %d", tokenResp.ExpiresIn, rfcPATLifetimeSec)
+	}
+	if !strings.HasPrefix(tokenResp.AccessToken, "mul_") {
+		t.Fatalf("access_token = %q, want mul_ prefix", tokenResp.AccessToken)
 	}
 
-	// The minted token must actually authenticate as the approving user —
-	// round-trip it through GetPersonalAccessTokenByHash the same way
-	// personal_access_token_test.go verifies freshly minted PATs.
-	pat, err := testHandler.Queries.GetPersonalAccessTokenByHash(context.Background(), auth.HashToken(tokenResp.Token))
+	pat, err := testHandler.Queries.GetPersonalAccessTokenByHash(context.Background(), auth.HashToken(tokenResp.AccessToken))
 	if err != nil {
-		t.Fatalf("minted token does not resolve: %v", err)
+		t.Fatalf("minted access_token does not resolve: %v", err)
 	}
 	if uuidToString(pat.UserID) != approver {
 		t.Fatalf("minted PAT belongs to user %s, want approver %s", uuidToString(pat.UserID), approver)
@@ -184,7 +260,7 @@ func TestDeviceAuth_PollWhilePendingReturnsAuthorizationPending(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	code := requestDeviceCode(t, "still-waiting")
+	code := requestDeviceCode(t)
 
 	w := pollDeviceToken(code.DeviceCode)
 	assertDeviceTokenError(t, w, "authorization_pending")
@@ -195,7 +271,7 @@ func TestDeviceAuth_PollAfterDenyReturnsAccessDenied(t *testing.T) {
 		t.Skip("database not available")
 	}
 	approver := newDeviceAuthTestUser(t, "device-denier@multica.ai")
-	code := requestDeviceCode(t, "denied-host")
+	code := requestDeviceCode(t)
 
 	denyReq := newRequestAs(approver, "POST", "/api/device/confirm", confirmDeviceAuthorizationRequest{UserCode: code.UserCode, Approve: false})
 	denyW := httptest.NewRecorder()
@@ -212,7 +288,7 @@ func TestDeviceAuth_PollAfterExpiryReturnsExpiredToken(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	code := requestDeviceCode(t, "expiring-poll")
+	code := requestDeviceCode(t)
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE device_authorization SET expires_at = now() - interval '1 minute' WHERE user_code = $1`, code.UserCode); err != nil {
 		t.Fatalf("force-expire: %v", err)
@@ -222,6 +298,44 @@ func TestDeviceAuth_PollAfterExpiryReturnsExpiredToken(t *testing.T) {
 	assertDeviceTokenError(t, w, "expired_token")
 }
 
+func TestDeviceAuth_PollRejectsWrongGrantAndClient(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	code := requestDeviceCode(t)
+
+	wrongGrant := newDeviceFormRequest("/api/device/token", url.Values{
+		"grant_type":  {"authorization_code"},
+		"device_code": {code.DeviceCode},
+		"client_id":   {rfcDeviceClientID},
+	})
+	wrongGrantW := httptest.NewRecorder()
+	testHandler.IssueDeviceToken(wrongGrantW, wrongGrant)
+	assertDeviceTokenError(t, wrongGrantW, "unsupported_grant_type")
+
+	missingClient := newDeviceFormRequest("/api/device/token", url.Values{
+		"grant_type":  {rfcDeviceGrantType},
+		"device_code": {code.DeviceCode},
+	})
+	missingClientW := httptest.NewRecorder()
+	testHandler.IssueDeviceToken(missingClientW, missingClient)
+	assertDeviceTokenError(t, missingClientW, "invalid_request")
+
+	unknownClient := newDeviceFormRequest("/api/device/token", url.Values{
+		"grant_type":  {rfcDeviceGrantType},
+		"device_code": {code.DeviceCode},
+		"client_id":   {"someone-else"},
+	})
+	unknownClientW := httptest.NewRecorder()
+	testHandler.IssueDeviceToken(unknownClientW, unknownClient)
+	assertDeviceTokenError(t, unknownClientW, "invalid_client")
+
+	jsonReq := newRequest("POST", "/api/device/token", map[string]string{"device_code": code.DeviceCode})
+	jsonW := httptest.NewRecorder()
+	testHandler.IssueDeviceToken(jsonW, jsonReq)
+	assertDeviceTokenError(t, jsonW, "invalid_request")
+}
+
 // TestDeviceAuth_PollTwiceWithinIntervalReturnsSlowDown is the RFC 8628
 // §3.5 backoff signal: a second poll arriving faster than the server's
 // advertised interval must not be treated as a normal pending poll.
@@ -229,7 +343,7 @@ func TestDeviceAuth_PollTwiceWithinIntervalReturnsSlowDown(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	code := requestDeviceCode(t, "fast-poller")
+	code := requestDeviceCode(t)
 
 	first := pollDeviceToken(code.DeviceCode)
 	assertDeviceTokenError(t, first, "authorization_pending")
@@ -247,7 +361,7 @@ func TestDeviceAuth_ReplayedPollAfterClaimReturnsExpiredToken(t *testing.T) {
 		t.Skip("database not available")
 	}
 	approver := newDeviceAuthTestUser(t, "device-replay@multica.ai")
-	code := requestDeviceCode(t, "replay-host")
+	code := requestDeviceCode(t)
 
 	confirmReq := newRequestAs(approver, "POST", "/api/device/confirm", confirmDeviceAuthorizationRequest{UserCode: code.UserCode, Approve: true})
 	testHandler.ConfirmDeviceAuthorization(httptest.NewRecorder(), confirmReq)
@@ -273,7 +387,7 @@ func TestDeviceAuth_DoubleConfirmIsIdempotentNotDoubleMint(t *testing.T) {
 		t.Skip("database not available")
 	}
 	approver := newDeviceAuthTestUser(t, "device-double-confirm@multica.ai")
-	code := requestDeviceCode(t, "double-confirm-host")
+	code := requestDeviceCode(t)
 
 	for range 2 {
 		req := newRequestAs(approver, "POST", "/api/device/confirm", confirmDeviceAuthorizationRequest{UserCode: code.UserCode, Approve: true})
@@ -286,7 +400,7 @@ func TestDeviceAuth_DoubleConfirmIsIdempotentNotDoubleMint(t *testing.T) {
 
 	var patCount int
 	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM personal_access_token WHERE name = $1`, "CLI (double-confirm-host)").Scan(&patCount); err != nil {
+		`SELECT count(*) FROM personal_access_token WHERE user_id = $1`, approver).Scan(&patCount); err != nil {
 		t.Fatalf("count PATs: %v", err)
 	}
 	if patCount != 0 {

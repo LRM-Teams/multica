@@ -128,11 +128,24 @@ type StartOptions struct {
 	CodexSemanticInactivityTimeout time.Duration
 }
 
+const (
+	// ResidentCommand is the public cobra command that owns the Computer.
+	ResidentCommand = "computer"
+	// ResidentServiceArg is the hidden argv that marks a spawned resident.
+	// Callers never type this; Lifecycle and the supervisor assemble it.
+	ResidentServiceArg = "__service"
+)
+
+// ResidentServicePrefix is the Computer-owned process contract. Workspace
+// Runner inbound (agent:deliver / agent:start) is not assembled here.
+func ResidentServicePrefix() []string {
+	return []string{ResidentCommand, ResidentServiceArg}
+}
+
 // ResidentArgs is the one internal process contract for the detached
-// Computer. `daemon start --foreground` remains only an implementation
-// compatibility boundary for this release; callers never assemble it.
+// Computer. Callers never assemble the prefix; they pass StartOptions only.
 func ResidentArgs(options StartOptions) []string {
-	args := []string{"daemon", "start", "--foreground"}
+	args := ResidentServicePrefix()
 	appendString := func(name, value string) {
 		if strings.TrimSpace(value) != "" {
 			args = append(args, name, value)

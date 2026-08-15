@@ -85,7 +85,7 @@ function ImportanceStars({ level }: { level: number }): ReactNode {
     <span
       className="flex items-center gap-0.5"
       data-testid="node-importance"
-      title={`重要性 ${level}/3`}
+      title={t(($) => $.node_card.importance_sr, { level })}
     >
       <span className="sr-only">{t(($) => $.node_card.importance_sr, { level })}</span>
       {[1, 2, 3].map((i) => (
@@ -143,9 +143,15 @@ function ProgressCountsRow({
     (risk !== null && risk !== undefined);
   if (!hasAny) return null;
   const chips: Array<{ label: string; value: number }> = [];
-  if (resolved !== null && resolved !== undefined) chips.push({ label: "已解决", value: resolved });
-  if (progress !== null && progress !== undefined) chips.push({ label: "新进展", value: progress });
-  if (risk !== null && risk !== undefined) chips.push({ label: "风险", value: risk });
+  if (resolved !== null && resolved !== undefined) {
+    chips.push({ label: t(($) => $.node_card.resolved), value: resolved });
+  }
+  if (progress !== null && progress !== undefined) {
+    chips.push({ label: t(($) => $.node_card.progress), value: progress });
+  }
+  if (risk !== null && risk !== undefined) {
+    chips.push({ label: t(($) => $.node_card.risk), value: risk });
+  }
   if (chips.every((c) => c.value === 0)) {
     return (
       <div data-testid="node-progress-none" className="text-[10px] text-muted-foreground">
@@ -190,8 +196,10 @@ export function NodeCardShell({
   legend,
   className,
 }: NodeCardShellProps) {
+  const { t } = useT("research");
   const familyVisual = familyVisualFor(family);
   const stateVisual = stateVisualFor(state);
+  const stateLabel = t(($) => $.node_card.states[state]);
   const FamilyIcon = familyVisual.icon;
   const compact = zoom <= 0.4;
   const expanded = zoom >= 1.6;
@@ -220,7 +228,7 @@ export function NodeCardShell({
         <span
           data-testid="node-terminal-check"
           className="absolute right-1.5 top-2 flex h-4 w-4 items-center justify-center rounded-full bg-success text-[9px] font-bold text-white"
-          aria-label="已完成"
+          aria-label={t(($) => $.node_card.states.terminal)}
         >
           {"✓"}
         </span>
@@ -253,7 +261,7 @@ export function NodeCardShell({
         <h3
           data-testid="node-title"
           className={cn(
-            "line-clamp-2 text-sm font-medium leading-snug",
+            "line-clamp-2 [overflow-wrap:anywhere] text-sm font-medium leading-snug",
             stateVisual.titleClass,
           )}
         >
@@ -262,7 +270,10 @@ export function NodeCardShell({
 
         {/* Summary — hidden at 40%. */}
         {summary && !compact && (
-          <p data-testid="node-summary" className="line-clamp-2 text-xs text-muted-foreground">
+          <p
+            data-testid="node-summary"
+            className="line-clamp-2 [overflow-wrap:anywhere] text-xs text-muted-foreground"
+          >
             {summary}
           </p>
         )}
@@ -271,10 +282,10 @@ export function NodeCardShell({
             never merged into prose; hidden at 40% per zoom density). */}
         {!compact && (
           <div className="space-y-0.5 pt-0.5">
-            {owner && <CardFaceRow icon="👤" label="负责人" value={owner} testid="node-owner" />}
-            {objective && <CardFaceRow icon="◎" label="目标" value={objective} testid="node-objective" />}
+            {owner && <CardFaceRow icon="👤" label={t(($) => $.node_card.owner)} value={owner} testid="node-owner" />}
+            {objective && <CardFaceRow icon="◎" label={t(($) => $.node_card.objective)} value={objective} testid="node-objective" />}
             {currentAction && (
-              <CardFaceRow icon="↻" label="当前" value={currentAction} testid="node-current-action" />
+              <CardFaceRow icon="↻" label={t(($) => $.node_card.current_action)} value={currentAction} testid="node-current-action" />
             )}
             <ProgressCountsRow
               resolved={resolvedCount}
@@ -295,7 +306,7 @@ export function NodeCardShell({
               stateVisual.badgeToneClass,
             )}
           >
-            {stateVisual.label}
+            {stateLabel}
           </span>
         </div>
 
@@ -325,7 +336,7 @@ export function NodeCardShell({
         {/* Legend tail at 160% — extra detail. */}
         {expanded && !compact && legend && (
           <div data-testid="node-expanded-meta" className="pt-0.5 text-[10px] text-muted-foreground">
-            {expandedSummary(importance)}
+            {t(($) => $.node_card.importance_sr, { level: importance || "-" })}
           </div>
         )}
       </div>
@@ -351,10 +362,6 @@ export function NodeCardShell({
   }
 
   return <article {...commonProps}>{cardInner}</article>;
-}
-
-function expandedSummary(importance: number): string {
-  return `重要性 ${importance || "-"}/3`;
 }
 
 function StatusGlyph({

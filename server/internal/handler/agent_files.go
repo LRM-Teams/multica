@@ -30,6 +30,7 @@ type AgentFilesResponse struct {
 	Status    string                     `json:"status"`
 	Nodes     []protocol.WorkdirFileNode `json:"nodes"`
 	Truncated bool                       `json:"truncated"`
+	RootPath  string                     `json:"root_path,omitempty"`
 }
 
 type AgentFileContentResponse struct {
@@ -95,7 +96,7 @@ func (h *Handler) ListAgentFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agentID := uuidToString(agent.ID)
-	reply := func(status string, nodes []protocol.WorkdirFileNode, truncated bool) {
+	reply := func(status string, nodes []protocol.WorkdirFileNode, truncated bool, rootPath string) {
 		if nodes == nil {
 			nodes = []protocol.WorkdirFileNode{}
 		}
@@ -104,12 +105,17 @@ func (h *Handler) ListAgentFiles(w http.ResponseWriter, r *http.Request) {
 			Status:    status,
 			Nodes:     nodes,
 			Truncated: truncated,
+			RootPath:  rootPath,
 		})
 	}
 	runtimeID, ok := agentFileRuntimeID(agent)
 	if !ok || h.DaemonHub == nil {
-		reply("offline", nil, false)
+		reply("offline", nil, false, "")
 		return
+	}
+	dirPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if dirPath == "." {
+		dirPath = ""
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), agentFileRPCTimeout)
 	defer cancel()
@@ -117,25 +123,27 @@ func (h *Handler) ListAgentFiles(w http.ResponseWriter, r *http.Request) {
 		RequestID:    uuid.NewString(),
 		RuntimeID:    runtimeID,
 		RelPath:      agentRootRelPath(agent),
+		DirPath:      dirPath,
+		OneLevel:     true,
 		HideDotfiles: !includeHiddenAgentFiles(r),
 	})
 	if err != nil {
 		if errors.Is(err, daemonws.ErrRuntimeOffline) {
-			reply("offline", nil, false)
+			reply("offline", nil, false, "")
 			return
 		}
-		reply("error", nil, false)
+		reply("error", nil, false, "")
 		return
 	}
 	if resp.Missing {
-		reply("missing", nil, false)
+		reply("missing", nil, false, resp.RootPath)
 		return
 	}
 	if resp.Error != "" {
-		reply("error", nil, false)
+		reply("error", nil, false, resp.RootPath)
 		return
 	}
-	reply("ok", resp.Nodes, resp.Truncated)
+	reply("ok", resp.Nodes, resp.Truncated, resp.RootPath)
 }
 
 func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +154,10 @@ func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
 	filePath := strings.TrimSpace(r.URL.Query().Get("path"))
 	if filePath == "" {
 		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if reason := agentworkspace.PreviewDeniedReason(filePath); reason != "" {
+		writeError(w, http.StatusBadRequest, reason)
 		return
 	}
 	runtimeID, ok := agentFileRuntimeID(agent)

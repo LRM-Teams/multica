@@ -2,11 +2,14 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // createTestAgentRuntimeWithDaemonID inserts a minimal agent_runtime row
@@ -39,6 +42,28 @@ func createTestAgentRuntimeWithDaemonID(t *testing.T, daemonID string) db.AgentR
 		t.Fatalf("reload test agent_runtime: %v", err)
 	}
 	return rt
+}
+
+func TestComputerConnectedByRunner_SocketIsAuthoritativeWhenHubAvailable(t *testing.T) {
+	h := &Handler{DaemonHub: daemonws.NewHub()}
+	now := time.Now()
+	hb := &db.DaemonHeartbeat{LastSeenAt: pgtimestamptz(now.Add(-10 * time.Second))}
+	if h.computerConnectedByRunner("daemon-1", "workspace-1", hb, now) {
+		t.Fatal("fresh heartbeat must not mark a Computer online without a current Runner socket")
+	}
+}
+
+func TestComputerConnectedByRunner_FallsBackToHeartbeatWhenHubUnavailable(t *testing.T) {
+	h := &Handler{}
+	now := time.Now()
+	fresh := &db.DaemonHeartbeat{LastSeenAt: pgtimestamptz(now.Add(-10 * time.Second))}
+	if !h.computerConnectedByRunner("daemon-1", "workspace-1", fresh, now) {
+		t.Fatal("legacy composition without Hub must use heartbeat freshness")
+	}
+	stale := &db.DaemonHeartbeat{LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute))}
+	if h.computerConnectedByRunner("daemon-1", "workspace-1", stale, now) {
+		t.Fatal("legacy composition without Hub must treat a stale heartbeat as offline")
+	}
 }
 
 func TestComputerConnected_NilHeartbeatIsDisconnected(t *testing.T) {
@@ -161,5 +186,21 @@ func TestRecordHeartbeat_WritesDaemonHeartbeatOnFirstCall(t *testing.T) {
 	}
 	if time.Since(hb.LastSeenAt.Time) > 10*time.Second {
 		t.Fatalf("daemon_heartbeat.last_seen_at = %v, expected it to be freshly written", hb.LastSeenAt.Time)
+	}
+}
+
+func TestWorkspaceRunnerHeartbeatRejectsRuntimeAssignedToAnotherComputer(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	rt := createTestAgentRuntimeWithDaemonID(t, "computer-owner-"+randomID())
+	for _, daemonID := range []string{"", "computer-other-" + randomID()} {
+		_, err := testHandler.HandleDaemonWSHeartbeat(context.Background(), daemonws.ClientIdentity{
+			DaemonID:    daemonID,
+			WorkspaceID: testWorkspaceID,
+		}, protocol.DaemonHeartbeatRequestPayload{RuntimeID: uuidToString(rt.ID)})
+		if err == nil || !strings.Contains(err.Error(), "runtime not assigned to connection Computer") {
+			t.Fatalf("Workspace Runner daemon_id %q error = %v", daemonID, err)
+		}
 	}
 }

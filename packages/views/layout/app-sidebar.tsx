@@ -603,7 +603,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         <SidebarContent ref={sidebarScrollRef} style={sidebarFadeStyle}>
           {/* Global search entry (LRM-454 Lock A) — opens the GlobalSearchDialog.
               ⌘K also opens it (LRM-606 reclaim); SearchCommand is retired. */}
-          <div className="px-2 pt-2">
+          <div className="px-2 pt-2 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:pt-1">
             <SidebarMenuButton
               onClick={() => useGlobalSearchStore.getState().setOpen(true)}
               tooltip={t(($) => $.nav.search) ?? undefined}
@@ -640,7 +640,11 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                         onMouseEnter={prefetchActivity}
                         onFocus={prefetchActivity}
                       >
-                        {item.key === "inbox" ? <InboxNavIcon icon={item.icon} /> : <item.icon />}
+                        {item.key === "inbox" ? (
+                          <InboxNavIcon icon={item.icon} unread={unreadCount > 0} />
+                        ) : (
+                          <item.icon />
+                        )}
                         <span>{t(($) => $.nav[item.labelKey])}</span>
                         {item.key === "inbox" && unreadCount > 0 && (
                           <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-solid px-1 text-[10px] font-semibold text-brand-solid-foreground">
@@ -656,7 +660,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
           </SidebarGroup>
 
           {visiblePinned.length > 0 && (
-            <Collapsible defaultOpen>
+            <Collapsible defaultOpen className="group-data-[collapsible=icon]:hidden">
               <SidebarGroup className="group/pinned">
                 <SidebarGroupLabel
                   render={<CollapsibleTrigger />}
@@ -746,7 +750,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         </SidebarContent>
 
         <SidebarFooter className="p-2">
-          <div className="flex justify-end">
+          <div className="flex justify-end group-data-[collapsible=icon]:justify-center">
             <HelpLauncher />
           </div>
         </SidebarFooter>

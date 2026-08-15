@@ -11,12 +11,27 @@ describe("buildGroupMentionAllowedActorIds", () => {
       workspaceUserIds: ["u1", "u2"],
       workspaceAgentIds: ["a1"],
       channelMemberIds: ["a2", "u1"],
+      viewerUserId: null,
     });
     expect(set.has("u1")).toBe(true);
     expect(set.has("u2")).toBe(true);
     expect(set.has("a1")).toBe(true);
     expect(set.has("a2")).toBe(true);
     expect(set.size).toBe(4);
+  });
+
+  it("drops the viewing human from the group @ picker", () => {
+    const set = buildGroupMentionAllowedActorIds({
+      workspaceUserIds: ["u1", "u2"],
+      workspaceAgentIds: ["a1"],
+      channelMemberIds: ["a2", "u1"],
+      viewerUserId: "u1",
+    });
+    expect(set.has("u1")).toBe(false);
+    expect(set.has("u2")).toBe(true);
+    expect(set.has("a1")).toBe(true);
+    expect(set.has("a2")).toBe(true);
+    expect(set.size).toBe(3);
   });
 });
 

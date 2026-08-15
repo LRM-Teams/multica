@@ -315,7 +315,15 @@ func (h *Handler) PatchResearchReport(w http.ResponseWriter, r *http.Request) {
 			revision = latest.Revision + 1
 		}
 	}
-	rep, err := h.Queries.CreateResearchReport(r.Context(), db.CreateResearchReportParams{
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin report revision")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	qtx := h.Queries.WithTx(tx)
+
+	rep, err := qtx.CreateResearchReport(r.Context(), db.CreateResearchReportParams{
 		WorkspaceID: wsUUID,
 		SessionID:   sessionID,
 		Revision:    revision,
@@ -324,6 +332,28 @@ func (h *Handler) PatchResearchReport(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to patch report")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE research_report
+		SET author_agent_id = $1
+		WHERE workspace_id = $2 AND session_id = $3 AND id = $4
+	`, member.AgentID, wsUUID, sessionID, rep.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to bind report author")
+		return
+	}
+	if err := researchrun.RegisterProductionReportRevisionTx(
+		r.Context(),
+		tx,
+		workspaceID,
+		uuidToString(sessionID),
+		uuidToString(rep.ID),
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to register report revision artifact")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit report revision")
 		return
 	}
 	resp := researchReportToResp(rep)
@@ -476,7 +506,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := h.Queries.CreateResearchMessage(r.Context(), db.CreateResearchMessageParams{
+	msg, err := h.createResearchMessageWithPassport(r.Context(), db.CreateResearchMessageParams{
 		WorkspaceID:   wsUUID,
 		SessionID:     session.ID,
 		SenderType:    senderType,

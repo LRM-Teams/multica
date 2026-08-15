@@ -223,7 +223,7 @@ func TestExecutionCircuitConfigurationResetAndRunLeaseFence(t *testing.T) {
 	}); !errors.Is(err, ErrRunLeaseLost) {
 		t.Fatalf("stale reconciler circuit mutation err=%v", err)
 	}
-	if err = store.ReleaseRun(ctx, secondLease, time.Now().UTC()); err != nil {
+	if err = store.ReleaseRun(ctx, secondLease, time.Now().UTC(), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -344,6 +344,16 @@ func TestExecutionTargetHealthBlocksOpenCircuitAndExposesDueProbe(t *testing.T) 
 	due := health[fixture.agentID]
 	if !due.Dispatchable || len(due.ProbeTargets) != 1 || due.ProbeTargets[0].Scope != CircuitProvider || len(due.Blocking) != 0 {
 		t.Fatalf("due health=%+v", due)
+	}
+	members[0].ProviderBlockDetail = "{}"
+	members[0].ProviderBlockedUntil = nil
+	health, err = store.EvaluateExecutionTargets(ctx, fixture.workspaceID, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	placeholder := health[fixture.agentID]
+	if !placeholder.Dispatchable || placeholder.BlockedReason != "" {
+		t.Fatalf("blank JSON provider detail must not block routing: health=%+v", placeholder)
 	}
 	members[0].ProviderBlockDetail = "provider credentials require attention"
 	members[0].ProviderBlockedUntil = nil

@@ -913,10 +913,12 @@ RETURNING *;
 -- name: RefreshAgentStatusFromTasks :one
 -- Provider-quota lock (tasks #64/#77) wins over workload: a blocked agent
 -- must not flip back to idle/working just because the draining task ended.
--- Lock = detail non-empty AND (until unknown OR until > now()).
+-- Lock = a real detail (not "{}" / other JSON leftovers) AND (until unknown
+-- OR until > now()).
 UPDATE agent AS a
 SET status = CASE
-    WHEN a.provider_block_detail <> ''
+    WHEN btrim(COALESCE(a.provider_block_detail, '')) <> ''
+         AND lower(btrim(a.provider_block_detail)) NOT IN ('{}', '[]', 'null', 'undefined', '""')
          AND (a.provider_blocked_until IS NULL OR a.provider_blocked_until > now())
       THEN 'blocked'
     WHEN EXISTS (
@@ -1010,5 +1012,6 @@ WHERE id = $1;
 SELECT id, provider_blocked_until, provider_block_detail
 FROM agent
 WHERE id = ANY($1::uuid[])
-  AND provider_block_detail <> ''
+  AND btrim(COALESCE(provider_block_detail, '')) <> ''
+  AND lower(btrim(provider_block_detail)) NOT IN ('{}', '[]', 'null', 'undefined', '""')
   AND (provider_blocked_until IS NULL OR provider_blocked_until > now());

@@ -29,6 +29,9 @@ func TestAgentProcessManagerIdempotentStartQueueAndRecovery(t *testing.T) {
 	if first.LaunchID != "launch-a" || first.StartDispatchID != "dispatch-a" {
 		t.Fatalf("start identities = %+v, want separate launch and dispatch ids", first)
 	}
+	if _, err := manager.startWithDisposition(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-other"}); err == nil {
+		t.Fatal("same launch accepted a second start-dispatch owner")
+	}
 	if _, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-other", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}); err == nil {
 		t.Fatal("conflicting reuse of accepted start dispatch was allowed")
 	}
@@ -89,6 +92,125 @@ func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing
 	}
 	if err := manager.Stop(agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID}); err == nil {
 		t.Fatal("stale old-launch stop was accepted")
+	}
+}
+
+func TestAgentProcessManagerRestartDuringStartingRebindsWithoutStop(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if first.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("queue = %q, want starting", first.QueueState)
+	}
+	second, err := manager.Restart(
+		agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID},
+		agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-b", StartDispatchID: "dispatch-b"},
+	)
+	if err != nil {
+		t.Fatalf("Restart during starting: %v", err)
+	}
+	if second.QueueState != protocol.AgentStartQueueRebound {
+		t.Fatalf("restart-during-starting queue = %q, want rebound", second.QueueState)
+	}
+	snapshot, ok := manager.Snapshot("agent-a")
+	if !ok || snapshot.LaunchID != "launch-b" || snapshot.ProcessInstanceID != "" {
+		t.Fatalf("rebound snapshot = %+v, exists=%v; want launch-b still starting with no process", snapshot, ok)
+	}
+	if snapshot.QueueState != protocol.AgentStartQueueStarting && snapshot.QueueState != protocol.AgentStartQueueRebound {
+		t.Fatalf("rebound live queue = %q, want starting or rebound", snapshot.QueueState)
+	}
+}
+
+func TestAgentProcessManagerStopEpochRejectsAcceptedStartReplayUntilSettled(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	request := agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}
+	if _, err := manager.Start(request); err != nil {
+		t.Fatal(err)
+	}
+	callback := agentProcessCallback{AgentID: request.AgentID, LaunchID: request.LaunchID}
+	if _, _, found, err := manager.beginManagedStop(callback); err != nil || !found {
+		t.Fatalf("begin managed stop found=%v err=%v", found, err)
+	}
+	if _, err := manager.Start(request); err == nil {
+		t.Fatal("accepted start replay crossed the active stop epoch")
+	}
+	manager.completeManagedStart(callback)
+	manager.completeManagedStop(callback)
+}
+
+func TestAgentProcessManagerStopWaitsForIdleRestoreStartupOwner(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	if err := manager.RestoreIdle("agent-a", "runtime-1", "launch-a", "dispatch-a"); err != nil {
+		t.Fatal(err)
+	}
+	callback := agentProcessCallback{AgentID: "agent-a", LaunchID: "launch-a"}
+	_, startupDone, found, err := manager.beginManagedStop(callback)
+	if err != nil || !found {
+		t.Fatalf("begin idle-restore stop found=%v err=%v", found, err)
+	}
+	select {
+	case <-startupDone:
+		t.Fatal("idle restore closed its startup fence before the owner settled")
+	default:
+	}
+	manager.completeManagedStart(callback)
+	select {
+	case <-startupDone:
+	case <-time.After(time.Second):
+		t.Fatal("idle restore startup fence did not close after owner settlement")
+	}
+}
+
+func TestAgentProcessManagerFailedStartupSettlesBeforeLaunchDisappears(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	request := agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}
+	if _, err := manager.Start(request); err != nil {
+		t.Fatal(err)
+	}
+	callback := agentProcessCallback{AgentID: request.AgentID, LaunchID: request.LaunchID}
+	startupDone, found := manager.managedStartupDone(callback)
+	if !found {
+		t.Fatal("accepted start has no startup owner")
+	}
+	manager.completeFailedManagedStart(callback)
+	select {
+	case <-startupDone:
+	case <-time.After(time.Second):
+		t.Fatal("failed startup owner did not settle")
+	}
+	if snapshot, ok := manager.Snapshot(request.AgentID); ok {
+		t.Fatalf("failed launch remained visible after startup settlement: %+v", snapshot)
+	}
+}
+
+func TestAgentProcessManagerStopWaitsForEveryReboundStartupOwner(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	first := agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "dispatch-a"}
+	if _, err := manager.startWithDisposition(first); err != nil {
+		t.Fatal(err)
+	}
+	second := agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-b", StartDispatchID: "dispatch-b"}
+	result, err := manager.startWithDisposition(second)
+	if err != nil || result.Replayed {
+		t.Fatalf("rebound start replayed=%v err=%v", result.Replayed, err)
+	}
+	_, startupDone, found, err := manager.beginManagedStop(agentProcessCallback{AgentID: "agent-a", LaunchID: "launch-b"})
+	if err != nil || !found {
+		t.Fatalf("begin rebound stop found=%v err=%v", found, err)
+	}
+	manager.completeManagedStart(agentProcessCallback{AgentID: "agent-a", LaunchID: "launch-a"})
+	select {
+	case <-startupDone:
+		t.Fatal("rebound stop settled after only the old startup owner finished")
+	default:
+	}
+	manager.completeManagedStart(agentProcessCallback{AgentID: "agent-a", LaunchID: "launch-b"})
+	select {
+	case <-startupDone:
+	case <-time.After(time.Second):
+		t.Fatal("rebound stop did not settle after every startup owner finished")
 	}
 }
 

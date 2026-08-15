@@ -647,7 +647,7 @@ func TestPiRPCBackendCompact(t *testing.T) {
 	}
 }
 
-func TestPiRPCBackendPreparesMessageInputWithVisibleCompactionLifecycle(t *testing.T) {
+func TestPiRPCBackendCompactsAfterCompletedTurnNotBeforeAccept(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pi")
 	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
@@ -661,18 +661,26 @@ func TestPiRPCBackendPreparesMessageInputWithVisibleCompactionLifecycle(t *testi
 	if err != nil {
 		t.Fatalf("initialize Pi RPC: %v", err)
 	}
+	var lifecycle []Message
+	for msg := range session.Messages {
+		if msg.Type == MessageCompactionStarted || msg.Type == MessageCompactionFinished {
+			lifecycle = append(lifecycle, msg)
+		}
+	}
 	if result := <-session.Result; result.Status != "completed" {
 		t.Fatalf("initialize result = %+v", result)
 	}
-
-	var lifecycle []Message
+	if len(lifecycle) != 2 || lifecycle[0].Type != MessageCompactionStarted || lifecycle[1].Type != MessageCompactionFinished || lifecycle[1].Content != "compacted summary" {
+		t.Fatalf("post-turn lifecycle = %+v, want started then finished with summary", lifecycle)
+	}
+	var prep []Message
 	if err := b.PrepareMessageInput(context.Background(), func(message Message) {
-		lifecycle = append(lifecycle, message)
+		prep = append(prep, message)
 	}); err != nil {
 		t.Fatalf("PrepareMessageInput: %v", err)
 	}
-	if len(lifecycle) != 2 || lifecycle[0].Type != MessageCompactionStarted || lifecycle[1].Type != MessageCompactionFinished || lifecycle[1].Content != "compacted summary" {
-		t.Fatalf("preparation lifecycle = %+v, want started then finished with summary", lifecycle)
+	if len(prep) != 0 {
+		t.Fatalf("PrepareMessageInput must not compact, got %+v", prep)
 	}
 }
 
@@ -707,7 +715,9 @@ func TestPiRPCBackendRuntimeStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	<-session.Result
+	if result := <-session.Result; result.Status != "completed" {
+		t.Fatalf("Execute result = %+v", result)
+	}
 
 	stats, err := b.RuntimeStats(context.Background())
 	if err != nil {
@@ -715,6 +725,33 @@ func TestPiRPCBackendRuntimeStats(t *testing.T) {
 	}
 	if stats == nil || stats.ContextPercent == nil || *stats.ContextPercent != 44.8 {
 		t.Fatalf("RuntimeStats = %+v", stats)
+	}
+}
+
+func TestWaitPiRPCResponsePrefersBufferedAckOverTerminalEvent(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		turn := &piRPCTurn{
+			response: make(chan piRPCResponse, 1),
+			done:     make(chan piRPCCompletion, 1),
+		}
+		turn.response <- piRPCResponse{ID: "multica-turn", Success: true}
+		turn.done <- piRPCCompletion{messages: []json.RawMessage{json.RawMessage(`{"role":"assistant"}`)}}
+
+		response, completion, ok := waitPiRPCResponse(context.Background(), turn, "multica-turn")
+		if !ok || completion != nil || response.ID != "multica-turn" {
+			t.Fatalf("iteration %d: response=%+v completion=%+v ok=%v, want buffered ACK", i, response, completion, ok)
+		}
+		// executeTurn waits on turn.done after the prompt ACK. Preferring the
+		// ACK must not drop the already-received agent_end, or that wait hangs
+		// until the test's 2s timeout.
+		select {
+		case got := <-turn.done:
+			if len(got.messages) != 1 {
+				t.Fatalf("iteration %d: restored completion = %+v", i, got)
+			}
+		default:
+			t.Fatalf("iteration %d: preferring ACK discarded the already-received agent_end", i)
+		}
 	}
 }
 

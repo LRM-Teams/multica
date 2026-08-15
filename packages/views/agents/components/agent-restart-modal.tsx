@@ -3,11 +3,11 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
-  agentLifecycleActionState,
-  resolveLifecycleDisabledReasonKey,
-  useAgentLifecycle,
+  agentRestartModeState,
+  resolveRestartDisabledReasonKey,
+  useAgentRestart,
 } from "@multica/core/agents";
-import type { AgentLifecycleActionKind } from "@multica/core/types";
+import type { AgentRestartMode } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -19,14 +19,14 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 
-const TIERS: AgentLifecycleActionKind[] = [
+const TIERS: AgentRestartMode[] = [
   "restart",
-  "reset_session_restart",
-  "full_reset_restart",
+  "session",
+  "full",
 ];
 
 /**
- * Agent lifecycle restart modal (#633 / #26 / #27 / #28 / #34).
+ * Raft-aligned Agent restart modal.
  * Three selectable blocks with short title + one-line scope (Frank: each
  * restart kind must be clear). Full reset: no type-to-confirm — select Full
  * and click CTA.
@@ -51,34 +51,34 @@ export function AgentRestartModal({
 }) {
   void _agentHandle;
   const { t } = useT("agents");
-  const lifecycle = useAgentLifecycle(agentId, open);
-  const [selected, setSelected] = useState<AgentLifecycleActionKind>("restart");
+  const restart = useAgentRestart(agentId, open);
+  const [selected, setSelected] = useState<AgentRestartMode>("restart");
 
-  const selectedState = agentLifecycleActionState(lifecycle.preflight, selected);
-  const isSubmitting = lifecycle.start.isPending;
-  const isFullReset = selected === "full_reset_restart";
+  const selectedState = agentRestartModeState(restart.preflight, selected);
+  const isSubmitting = restart.resetAgent.isPending;
+  const isFullReset = selected === "full";
   const canSubmit = selectedState.supported && !isSubmitting;
 
   const reasonLabel = (reason: string | null | undefined): string =>
-    t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(reason)]);
+    t(($) => $.restart_modal.disabled_reason[resolveRestartDisabledReasonKey(reason)]);
 
   const close = () => {
-    lifecycle.reset();
+    restart.clear();
     setSelected("restart");
     onOpenChange(false);
   };
 
   /** R1/R3/R5: start accepted → dismiss modal; agent surfaces show Starting. */
   const dismissAfterStart = () => {
-    lifecycle.refreshAfterTerminal();
-    lifecycle.reset();
+    restart.refreshAfterRequest();
+    restart.clear();
     setSelected("restart");
     onOpenChange(false);
   };
 
   const submit = () => {
     if (!canSubmit) return;
-    lifecycle.start.mutate(selected, {
+    restart.resetAgent.mutate(selected, {
       onSuccess: () => {
         dismissAfterStart();
       },
@@ -100,8 +100,8 @@ export function AgentRestartModal({
           data-testid="restart-tier-blocks"
         >
           {TIERS.map((kind) => {
-            const state = agentLifecycleActionState(lifecycle.preflight, kind);
-            const destructive = kind === "full_reset_restart";
+            const state = agentRestartModeState(restart.preflight, kind);
+            const destructive = kind === "full";
             const isSelected = selected === kind;
             const primary = kind === "restart";
             return (
@@ -145,6 +145,12 @@ export function AgentRestartModal({
             );
           })}
         </div>
+
+        {restart.resetAgent.isError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {t(($) => $.restart_modal.request_failed)}
+          </p>
+        ) : null}
 
         <DialogFooter>
           <Button variant="ghost" onClick={close} disabled={isSubmitting}>

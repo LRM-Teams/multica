@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import enResearch from "../../locales/en/research.json";
+import { RESEARCH_LIST_FILTER_STORAGE_KEY } from "../lib/research-list-persist";
 
 const sessionsQueryRef = vi.hoisted(() => ({
   current: {
@@ -107,6 +108,27 @@ vi.mock("./research-session-row", () => ({
   ),
 }));
 
+vi.mock("./research-home-overview", () => ({
+  ResearchHomeOverview: () => <div data-testid="research-home-overview" />,
+}));
+
+vi.mock("./research-home-constellation-preview", () => ({
+  ResearchHomeConstellationPreview: () => (
+    <div
+      data-testid="research-home-constellation"
+      aria-label="Current research workspace constellation overview"
+    />
+  ),
+}));
+
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: () => <span data-testid="actor-avatar" />,
+}));
+
+vi.mock("../../i18n/time", () => ({
+  Time: () => <span data-testid="time" />,
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (fn: (dict: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
@@ -153,6 +175,7 @@ function setQuery(partial: Partial<typeof sessionsQueryRef.current>) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
   mutationRef.current = { mutate: vi.fn(), isPending: false, isError: false, error: null, reset: vi.fn() };
   fleetQueryRef.current = {
@@ -163,6 +186,24 @@ beforeEach(() => {
     error: null,
     refetch: vi.fn(),
   };
+});
+
+describe("ResearchListPage one-time return restoration", () => {
+  it("consumes a zero-scroll detail return so a later sidebar entry starts at top", () => {
+    sessionStorage.setItem(
+      RESEARCH_LIST_FILTER_STORAGE_KEY,
+      JSON.stringify({ q: "", status: null, scroll: 0, sessionId: "session-1" }),
+    );
+    setQuery({ data: { sessions: [] } });
+
+    const first = render(<ResearchListPage />);
+    expect(sessionStorage.getItem(RESEARCH_LIST_FILTER_STORAGE_KEY)).toBeNull();
+    first.unmount();
+
+    const second = render(<ResearchListPage />);
+    expect(screen.getByTestId("research-list-page").scrollTop).toBe(0);
+    second.unmount();
+  });
 });
 
 describe("ResearchListPage list states (LRM-789)", () => {
@@ -180,7 +221,9 @@ describe("ResearchListPage list states (LRM-789)", () => {
     const row = container.querySelector('[data-testid="research-session-row-skeleton"]');
     expect(row?.className).toContain("min-h-[58px]");
     expect(row?.className).not.toContain("border");
-    expect(screen.queryByText(enResearch.groups.in_progress)).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: new RegExp(enResearch.groups.in_progress) }),
+    ).toBeNull();
     expect(screen.queryByText(enResearch.empty_title)).toBeNull();
   });
 
@@ -363,7 +406,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(screen.getByText(enResearch.list.recent_heading)).toBeTruthy();
   });
 
-  it("LRM-1106: workbench max-w-[1240px]; no max-w-3xl on hero or list", () => {
+  it("research command center uses the wide workbench without a nested narrow shell", () => {
     setQuery({
       data: {
         sessions: [session({ id: "s-run", status: "running", title: "Alpha" })],
@@ -371,7 +414,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     });
     const { container } = render(<ResearchListPage />);
     const workbench = container.querySelector('[data-testid="research-list-workbench"]');
-    expect(workbench?.className).toContain("max-w-[1240px]");
+    expect(workbench?.className).toContain("max-w-screen-2xl");
     expect(screen.getByTestId("research-home-hero").className).not.toContain("max-w-3xl");
     const list = container.querySelector(
       '[data-testid="research-session-list-content"]',
@@ -381,7 +424,7 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(list?.querySelector('[role="radiogroup"]')).toBeTruthy();
   });
 
-  it("LRM-1144 Δ1–Δ3: workbench atmosphere, sunk desc, desktop textarea 88px", () => {
+  it("keeps the atmosphere at shell level and the compact composer above the fold", () => {
     setQuery({
       data: {
         sessions: [session({ id: "s-run", status: "running", title: "Alpha" })],
@@ -396,11 +439,10 @@ describe("ResearchListPage list states (LRM-789)", () => {
 
     const desc = screen.getByText(enResearch.home.hero_desc);
     expect(desc.className).not.toContain("max-w-[36rem]");
-    expect(desc.className).toContain("md:line-clamp-1");
+    expect(desc.className).toContain("line-clamp-1");
 
     const goal = screen.getByTestId("research-create-goal");
-    expect(goal.className).toContain("min-h-[64px]");
-    expect(goal.className).toContain("md:min-h-[88px]");
+    expect(goal.className).toContain("min-h-10");
 
     setQuery({ data: undefined, isLoading: true });
     rerender(<ResearchListPage />);
@@ -486,7 +528,17 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     expect(desc).toBeInTheDocument();
     expect(desc.className).not.toContain("sr-only");
     expect(screen.getByTestId("research-home-composer")).toBeInTheDocument();
+    expect(screen.getByTestId("research-home-constellation")).toHaveAccessibleName(
+      enResearch.home_overview.constellation_label,
+    );
     expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
+  });
+
+  it("keeps the approved local dark constellation world independent of app theme", () => {
+    render(<ResearchListPage />);
+    const page = screen.getByTestId("research-list-page");
+    expect(page.className).toContain("research-home-theme");
+    expect(page.className).toContain("dark");
   });
 
   it("wires hero CTA micro-interaction tokens (LRM-837)", () => {

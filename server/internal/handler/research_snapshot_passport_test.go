@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -13,11 +14,22 @@ import (
 )
 
 type recordingResearchRunEngine struct {
-	snapshotCalled           bool
-	snapshotForAttemptCalled bool
-	snapshotSessionID        string
-	snapshotWorkspaceID      string
-	snapshotAttemptID        string
+	snapshotCalled              bool
+	snapshotForProjectionCalled bool
+	snapshotForAttemptCalled    bool
+	snapshotSessionID           string
+	snapshotWorkspaceID         string
+	snapshotAttemptID           string
+	snapshot                    researchrun.RunSnapshot
+	snapshotForAttemptErr       error
+	snapshotForProjectionErr    error
+}
+
+func (f *recordingResearchRunEngine) SnapshotForProjection(_ context.Context, sessionID, workspaceID string) (researchrun.RunSnapshot, error) {
+	f.snapshotForProjectionCalled = true
+	f.snapshotSessionID = sessionID
+	f.snapshotWorkspaceID = workspaceID
+	return f.snapshot, f.snapshotForProjectionErr
 }
 
 func (f *recordingResearchRunEngine) Create(context.Context, researchrun.StartInput) (researchrun.Run, error) {
@@ -28,7 +40,7 @@ func (f *recordingResearchRunEngine) Snapshot(_ context.Context, sessionID, work
 	f.snapshotCalled = true
 	f.snapshotSessionID = sessionID
 	f.snapshotWorkspaceID = workspaceID
-	return researchrun.RunSnapshot{}, nil
+	return f.snapshot, nil
 }
 
 func (f *recordingResearchRunEngine) SnapshotForAttempt(_ context.Context, sessionID, workspaceID, attemptID string) (researchrun.RunSnapshot, error) {
@@ -36,7 +48,7 @@ func (f *recordingResearchRunEngine) SnapshotForAttempt(_ context.Context, sessi
 	f.snapshotSessionID = sessionID
 	f.snapshotWorkspaceID = workspaceID
 	f.snapshotAttemptID = attemptID
-	return researchrun.RunSnapshot{}, nil
+	return f.snapshot, f.snapshotForAttemptErr
 }
 
 func (f *recordingResearchRunEngine) ListFleetMembers(context.Context, string, string) ([]researchrun.FleetMember, error) {
@@ -158,7 +170,55 @@ func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotWithoutAttemptID(
 	}
 }
 
-func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotForAttemptWhenAttemptIDPresent(t *testing.T) {
+func TestResearchFleetMembershipUsesAgentPrincipalInsteadOfSpoofedHeader(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	activeAgentID := ensureMergableFleetMember(t)
+	unboundAgentID := createHandlerTestAgent(t, "unbound-research-"+uuid.NewString()[:8], nil)
+
+	request := newRequest(http.MethodGet, "/api/agent/research/session", nil)
+	request = withAgentPrincipal(request, unboundAgentID, testWorkspaceID, testUserID)
+	request.Header.Set("X-Agent-ID", activeAgentID)
+	recorder := httptest.NewRecorder()
+	if _, ok := testHandler.requireActiveFleetMember(recorder, request, parseUUID(testWorkspaceID)); ok {
+		t.Fatal("unbound AgentPrincipal borrowed active Fleet membership from X-Agent-ID")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s want 403", recorder.Code, recorder.Body.String())
+	}
+	for _, deniedID := range []string{unboundAgentID, activeAgentID} {
+		if strings.Contains(recorder.Body.String(), deniedID) {
+			t.Fatalf("Fleet denial leaked Agent ID %q in body=%q", deniedID, recorder.Body.String())
+		}
+	}
+	leadRecorder := httptest.NewRecorder()
+	if _, ok := testHandler.requireResearchLeadActor(leadRecorder, request, parseUUID(testWorkspaceID)); ok {
+		t.Fatal("unbound AgentPrincipal borrowed research Lead identity from X-Agent-ID")
+	}
+	if leadRecorder.Code != http.StatusForbidden {
+		t.Fatalf("lead status=%d body=%s want 403", leadRecorder.Code, leadRecorder.Body.String())
+	}
+
+	positive := newRequest(http.MethodGet, "/api/agent/research/session", nil)
+	positive = withAgentPrincipal(positive, activeAgentID, testWorkspaceID, testUserID)
+	positive.Header.Set("X-Agent-ID", unboundAgentID)
+	positiveRecorder := httptest.NewRecorder()
+	member, ok := testHandler.requireActiveFleetMember(positiveRecorder, positive, parseUUID(testWorkspaceID))
+	if !ok {
+		t.Fatalf("active AgentPrincipal rejected through spoofed header: status=%d body=%s", positiveRecorder.Code, positiveRecorder.Body.String())
+	}
+	if uuidToString(member.AgentID) != activeAgentID {
+		t.Fatalf("authorized member=%s want principal=%s", uuidToString(member.AgentID), activeAgentID)
+	}
+	positiveLeadRecorder := httptest.NewRecorder()
+	lead, ok := testHandler.requireResearchLeadActor(positiveLeadRecorder, positive, parseUUID(testWorkspaceID))
+	if !ok || uuidToString(lead.AgentID) != activeAgentID {
+		t.Fatalf("active Lead principal rejected: ok=%v member=%s status=%d body=%s", ok, uuidToString(lead.AgentID), positiveLeadRecorder.Code, positiveLeadRecorder.Body.String())
+	}
+}
+
+func TestSnapshotPassportHumanSnapshotRejectsAttemptScopedRead(t *testing.T) {
 	sessionID := seedInitializedResearchSessionForSnapshotTest(t)
 	attemptID := uuid.NewString()
 
@@ -171,22 +231,16 @@ func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotForAttemptWhenAtt
 	recorder := httptest.NewRecorder()
 	testHandler.GetResearchSessionSnapshot(recorder, req)
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s want 400", recorder.Code, recorder.Body.String())
 	}
-	if !engine.snapshotForAttemptCalled {
-		t.Fatal("expected SnapshotForAttempt to be called when attempt_id is present")
+	if strings.Contains(recorder.Body.String(), attemptID) {
+		t.Fatalf("rejected human read leaked attempt id in body=%q", recorder.Body.String())
+	}
+	if engine.snapshotForAttemptCalled {
+		t.Fatal("human route must not call SnapshotForAttempt")
 	}
 	if engine.snapshotCalled {
-		t.Fatal("Snapshot must not be called when attempt_id is present")
-	}
-	if engine.snapshotSessionID != uuidToString(sessionID) {
-		t.Fatalf("snapshot session id=%q, want %q", engine.snapshotSessionID, uuidToString(sessionID))
-	}
-	if engine.snapshotWorkspaceID != testWorkspaceID {
-		t.Fatalf("snapshot workspace id=%q, want %q", engine.snapshotWorkspaceID, testWorkspaceID)
-	}
-	if engine.snapshotAttemptID != attemptID {
-		t.Fatalf("snapshot attempt id=%q, want %q", engine.snapshotAttemptID, attemptID)
+		t.Fatal("rejected human attempt-scoped read must not load a live snapshot")
 	}
 }

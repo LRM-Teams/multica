@@ -894,6 +894,99 @@ func TestBuildPromptInjectsActiveChannelGoalEveryWake(t *testing.T) {
 	}
 }
 
+func TestBuildPromptBlocksUnassignedMultiAgentGoalImplementation(t *testing.T) {
+	base := Task{
+		ChannelID: "channel-1", ChatSessionID: "chat-1", ChatMessage: "continue",
+		ChannelGoal: &protocol.ChannelGoalContext{
+			ID: "goal-1", Title: "Ship", Objective: "Ship safely", Version: 1,
+			SuccessCriteria: []string{"Reviewed release"},
+			Coordination: &protocol.ChannelGoalCoordinationContext{
+				AgentMemberCount: 2, ExecutionAdmission: "project_required",
+			},
+		},
+	}
+	t.Run("manager bootstraps control plane but cannot code", func(t *testing.T) {
+		task := base
+		task.Agent = &AgentData{ManagerChannels: []execenv.ManagerChannelContextForEnv{{ID: "channel-1", Name: "delivery"}}}
+		out := BuildPrompt(task, "claude", "")
+		for _, want := range []string{
+			"EXECUTION GATE: this multi-agent Goal is not a code assignment",
+			"multica goal bootstrap --channel <id>",
+			"Never assign the same deliverable to two agents",
+			"channel has no bound Project",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("manager gate missing %q:\n%s", want, out)
+			}
+		}
+	})
+	t.Run("ordinary member is proposal only", func(t *testing.T) {
+		task := base
+		task.Agent = &AgentData{}
+		out := BuildPrompt(task, "claude", "")
+		if !strings.Contains(out, "no server-owned code deliverable") || !strings.Contains(out, "do not start an independent implementation") {
+			t.Fatalf("executor proposal-only gate missing:\n%s", out)
+		}
+	})
+	t.Run("unavailable control plane fails closed", func(t *testing.T) {
+		task := base
+		task.ChannelGoal = &protocol.ChannelGoalContext{
+			ID: "goal-1", Title: "Ship", Objective: "Ship safely", Version: 1,
+			SuccessCriteria: []string{"Reviewed release"},
+			Coordination:    &protocol.ChannelGoalCoordinationContext{ExecutionAdmission: "unavailable"},
+		}
+		out := BuildPrompt(task, "claude", "")
+		if !strings.Contains(out, "EXECUTION GATE") || !strings.Contains(out, "server could not verify Project/Git/Issue ownership") {
+			t.Fatalf("unavailable control plane did not fail closed:\n%s", out)
+		}
+	})
+}
+
+func TestBuildPromptAllowsOnlyManagerIntegrationIssueToRelease(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID: "release-issue", ProjectID: "project-1", ChannelID: "channel-1",
+		Agent:              &AgentData{ManagerChannels: []execenv.ManagerChannelContextForEnv{{ID: "channel-1", Name: "delivery"}}},
+		AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{Metadata: map[string]any{"delivery_role": "integration"}},
+		ChannelGoal: &protocol.ChannelGoalContext{
+			ID: "goal-1", Title: "Ship", Objective: "Ship safely", Version: 2,
+			SuccessCriteria: []string{"Reviewed release"},
+			Coordination: &protocol.ChannelGoalCoordinationContext{
+				ProjectID: "project-1", GitRepositoryBound: true, AgentMemberCount: 3,
+				ProjectIssueTotal: 4, OpenProjectIssueTotal: 2, ExecutionAdmission: "ready",
+			},
+		},
+	}, "claude", "")
+	for _, want := range []string{
+		"canonical integration/release Issue", "independently reviewed Issue branches",
+		"require green CI", "verify the deployed artifact against every Goal criterion",
+		"--repeat every:15m", "Cancel the Reminder when the Goal becomes terminal",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("integration prompt missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestBuildPromptAdmitsOnlyAlignedClaimedGoalIssue(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID: "issue-1", ProjectID: "project-1", ChannelID: "channel-1",
+		Agent: &AgentData{},
+		ChannelGoal: &protocol.ChannelGoalContext{
+			ID: "goal-1", Title: "Ship", Objective: "Ship safely", Version: 2,
+			SuccessCriteria: []string{"Reviewed release"},
+			Coordination: &protocol.ChannelGoalCoordinationContext{
+				ProjectID: "project-1", GitRepositoryBound: true, AgentMemberCount: 3,
+				ProjectIssueTotal: 4, OpenProjectIssueTotal: 2, ExecutionAdmission: "ready",
+			},
+		},
+	}, "claude", "")
+	for _, want := range []string{"Execution admitted only for this claimed implementation Issue", "canonical non-main branch", "stop at in_review"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("aligned issue prompt missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestBuildPromptWithoutChannelGoalKeepsOrdinaryChatUnchanged(t *testing.T) {
 	out := BuildPrompt(Task{ChatSessionID: "chat-1", ChatMessage: "hello"}, "claude", "")
 	if strings.Contains(out, "Current channel goal") {

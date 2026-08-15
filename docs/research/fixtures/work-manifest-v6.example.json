@@ -1,0 +1,53 @@
+{
+  "contract_kind": "work_manifest",
+  "schema_version": 6,
+  "manifest_id": "00000000-0000-4000-8000-000000000201",
+  "manifest_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "work_item_id": "00000000-0000-4000-8000-000000000202",
+  "task_id": "00000000-0000-4000-8000-000000000203",
+  "attempt_id": "00000000-0000-4000-8000-000000000204",
+  "assigned_agent_id": "00000000-0000-4000-8000-000000000205",
+  "goal": {
+    "goal_version": 2,
+    "goal": "判断目标技术是否适合生产环境，并给出有证据的采用建议。",
+    "scope": { "market": "CN", "time_horizon": "2026" },
+    "audience": "技术负责人",
+    "freshness": "优先使用最近十二个月材料",
+    "language": "zh-CN",
+    "source_policy": { "prefer_primary": true }
+  },
+  "branch_refs": [
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "state_version": 4
+    }
+  ],
+  "runtime_protocol_version": "research-runtime-v6.1",
+  "mission_prompt": "复现生产型高并发负载下的延迟拐点；保存数据、配置和不确定性。",
+  "expected_result_schema": "research.atomic_result.v1",
+  "task_specific_schema": {
+    "type": "object",
+    "required": ["benchmark_matrix"]
+  },
+  "artifacts": [
+    {
+      "artifact_version_id": "00000000-0000-4000-8000-000000000007",
+      "kind": "result_artifact",
+      "representation": "brief",
+      "representation_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "use_kind": "related_frontier",
+      "reason": "用于复现已有延迟拐点。"
+    }
+  ],
+  "catalog_access": {
+    "same_tier": "S",
+    "higher_candidate_branch_ids": ["00000000-0000-4000-8000-000000000005"],
+    "include_higher_candidates": true,
+    "through_event_sequence": 47,
+    "page_size": 100
+  },
+  "through_state_version": 13,
+  "through_event_sequence": 47
+}

@@ -52,14 +52,14 @@ describe("ActivityTab", () => {
   it("renders the server-projected rows in the previous chronological timeline UI", () => {
     runnerActivity.mockReturnValue({
       data: {
-        summary: { label: "Running command...", tone: "active", visibility: "visible" },
+        summary: { label: "Running command...", tone: "running", visibility: "visible" },
         timeline: [
           { id: "row-2", occurred_at: "2026-08-06T12:01:00Z", title: "Idle", tone: "success", body_kind: "none" },
           {
             id: "row-1",
             occurred_at: "2026-08-06T12:00:00Z",
             title: "Running command",
-            tone: "warning",
+            tone: "running",
             body_kind: "command",
             body: "sanitized body",
           },
@@ -77,6 +77,7 @@ describe("ActivityTab", () => {
       expect.stringContaining("Idle"),
     ]);
     expect(screen.getAllByText("Running command")).toHaveLength(1);
+    expect(screen.getAllByTestId("runner-activity-row")[0]?.querySelector(".bg-running")).not.toBeNull();
     // Default-full: body visible without expand (2026-08-11).
     expect(screen.getByText("sanitized body")).toBeInTheDocument();
     expect(screen.getByTestId("activity-command-block")).toBeInTheDocument();
@@ -89,12 +90,12 @@ describe("ActivityTab", () => {
       '/bin/bash -lc "pwd && rg --files -g \'!*.git\' -g \'!node_modules\' | head -80 && git status --short"';
     runnerActivity.mockReturnValue({
       data: {
-        summary: { label: "Running command...", tone: "warning", visibility: "visible" },
+        summary: { label: "Running command...", tone: "running", visibility: "visible" },
         timeline: [{
           id: "row-cmd",
           occurred_at: "2026-08-06T12:00:00Z",
           title: "Running command",
-          tone: "warning",
+          tone: "running",
           body_kind: "command",
           body: command,
         }],
@@ -111,21 +112,19 @@ describe("ActivityTab", () => {
     await waitFor(() => expect(copyText).toHaveBeenCalledWith(command));
   });
 
-  it("promotes Running command subtext into the mono command block (current API shape)", () => {
-    // Production projection still puts the command in subtext with body empty.
-    // UI-first fix: render that subtext as the command block + Copy, not muted text.
+  it("promotes a server-marked command subtext without inspecting its title", () => {
     const command =
       '/bin/bash -lc \'pwd && rg --files -g "!*.git" | head -80 && git status --short\'…';
     runnerActivity.mockReturnValue({
       data: {
-        summary: { label: "Running command...", tone: "warning", visibility: "visible" },
+        summary: { label: "Command activity", tone: "running", visibility: "visible" },
         timeline: [{
           id: "row-current",
           occurred_at: "2026-08-06T12:00:00Z",
-          title: "Running command",
+          title: "Command activity",
           subtext: command,
-          tone: "warning",
-          body_kind: "none",
+          tone: "running",
+          body_kind: "command",
         }],
       },
       isLoading: false,

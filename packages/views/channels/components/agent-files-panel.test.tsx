@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { AgentFilesPanel } from "./agent-files-panel";
+
+vi.mock("@multica/ui/lib/clipboard", () => ({
+  copyText: vi.fn(),
+}));
 
 vi.mock("@multica/core/api", () => ({
   api: {
@@ -91,14 +96,29 @@ function renderPanel(
   );
 }
 
+const AGENT_ROOT_PATH =
+  "/Users/frank/.multica/workspaces/ws-1/agents/agent-1";
+
+function mockOneLevelFiles(
+  dirs: Record<string, Array<{ path: string; is_dir: boolean; size?: number }>>,
+) {
+  vi.mocked(api.listAgentFiles).mockImplementation(
+    async (_id, params?: { include_hidden?: boolean; path?: string }) => ({
+      agent_id: "agent-1",
+      status: "ok",
+      nodes: dirs[params?.path ?? ""] ?? [],
+      truncated: false,
+      root_path: AGENT_ROOT_PATH,
+    }),
+  );
+}
+
 describe("AgentFilesPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.listAgentFiles).mockResolvedValue({
-      agent_id: "agent-1",
-      status: "ok",
-      nodes: [{ path: "memory/MEMORY.md", is_dir: false, size: 12 }],
-      truncated: false,
+    mockOneLevelFiles({
+      "": [{ path: "memory", is_dir: true }],
+      memory: [{ path: "memory/MEMORY.md", is_dir: false, size: 12 }],
     });
     vi.mocked(api.getAgentFileContent).mockResolvedValue({
       content: "{\"ok\":true}",
@@ -120,10 +140,43 @@ describe("AgentFilesPanel", () => {
     const memory = await screen.findByRole("button", { name: "memory" });
     expect(memory).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("MEMORY.md")).not.toBeInTheDocument();
+    expect(api.listAgentFiles).toHaveBeenCalledTimes(1);
+    expect(api.listAgentFiles).toHaveBeenCalledWith("agent-1", { include_hidden: false });
     fireEvent.click(memory);
     expect(await screen.findByText("MEMORY.md")).toBeInTheDocument();
+    expect(api.listAgentFiles).toHaveBeenCalledWith("agent-1", { include_hidden: false, path: "memory" });
     expect(screen.getByRole("button", { name: /show hidden files/i })).toBeInTheDocument();
-    expect(api.listAgentFiles).toHaveBeenCalledWith("agent-1", { include_hidden: false });
+  });
+
+  it("does not paint a whole-tree truncation banner on the Files tab", async () => {
+    renderPanel(makeAgent());
+    await screen.findByRole("button", { name: "memory" });
+    expect(screen.queryByText("File list truncated.")).not.toBeInTheDocument();
+  });
+
+  it("shows the daemon agent root and copies it", async () => {
+    vi.mocked(copyText).mockResolvedValue(true);
+    renderPanel(makeAgent());
+    expect(await screen.findByText(AGENT_ROOT_PATH)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy path" }));
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(AGENT_ROOT_PATH);
+    });
+  });
+
+  it("refresh re-lists the current directories without a full-tree fetch", async () => {
+    renderPanel(makeAgent());
+    fireEvent.click(await screen.findByRole("button", { name: "memory" }));
+    await screen.findByText("MEMORY.md");
+    const before = vi.mocked(api.listAgentFiles).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(vi.mocked(api.listAgentFiles).mock.calls.length).toBeGreaterThan(before);
+    });
+    const afterExpand = vi.mocked(api.listAgentFiles).mock.calls.slice(before);
+    expect(afterExpand.some((call) => call[1]?.path === undefined || call[1]?.path === "")).toBe(true);
+    expect(afterExpand.some((call) => call[1]?.path === "memory")).toBe(true);
+    expect(afterExpand.every((call) => call[1]?.path !== "memory/MEMORY.md")).toBe(true);
   });
 
   // LRM-1305 — decorative lucide inside named buttons must not dual-announce.
@@ -135,6 +188,12 @@ describe("AgentFilesPanel", () => {
     expect(hiddenToggle.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
+  it("shows only public information for a non-owner", async () => {
+    renderPanel(makeAgent("user-owner"), "user-other");
+    expect(screen.getByText("Atlas")).toBeInTheDocument();
+    expect(screen.getByText(/only the creator can view/i)).toBeInTheDocument();
+    await waitFor(() => expect(api.listAgentFiles).not.toHaveBeenCalled());
+  });
 
   it("allows dev read-only access for a non-owner", async () => {
     renderPanel(makeAgent("user-owner"), "user-other", {
@@ -151,14 +210,33 @@ describe("AgentFilesPanel", () => {
     expect(api.updateAgentFileContent).not.toHaveBeenCalled();
   });
 
+  it("opens a file editor and saves text content", async () => {
+    mockOneLevelFiles({
+      "": [{ path: "config", is_dir: true }],
+      config: [{ path: "config/settings.json", is_dir: false, size: 12 }],
+    });
+
+    renderPanel(makeAgent());
+    fireEvent.click(await screen.findByRole("button", { name: "config" }));
+    fireEvent.click(await screen.findByText("settings.json"));
+
+    const editor = await screen.findByLabelText("File content");
+    expect(editor).toHaveValue("{\n  \"ok\": true\n}");
+    fireEvent.change(editor, { target: { value: "{\n  \"ok\": false\n}" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(api.updateAgentFileContent).toHaveBeenCalledWith("agent-1", {
+      path: "config/settings.json",
+      content: "{\n  \"ok\": false\n}",
+      expected_content_hash: "hash-1",
+    }));
+  });
 
   it("keeps long file names within the Files tab width", async () => {
     const longFileName = "this-is-a-very-long-file-name-that-must-not-widen-the-agent-profile-panel.md";
-    vi.mocked(api.listAgentFiles).mockResolvedValue({
-      agent_id: "agent-1",
-      status: "ok",
-      nodes: [{ path: `memory/${longFileName}`, is_dir: false, size: 12 }],
-      truncated: false,
+    mockOneLevelFiles({
+      "": [{ path: "memory", is_dir: true }],
+      memory: [{ path: `memory/${longFileName}`, is_dir: false, size: 12 }],
     });
 
     const { container } = renderPanel(makeAgent());
@@ -186,4 +264,32 @@ describe("AgentFilesPanel", () => {
     expect(screen.getAllByRole("button", { name: /close/i })).toHaveLength(1);
   });
 
+  it("closes the file preview via header Close editor, Escape, and backdrop", async () => {
+    renderPanel(makeAgent());
+    fireEvent.click(await screen.findByRole("button", { name: "memory" }));
+    fireEvent.click(await screen.findByText("MEMORY.md"));
+
+    const closeEditor = await screen.findByRole("button", { name: "Close editor" });
+    fireEvent.click(closeEditor);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByText("MEMORY.md"));
+    expect(await screen.findByRole("button", { name: "Close editor" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByText("MEMORY.md"));
+    expect(await screen.findByRole("button", { name: "Close editor" })).toBeInTheDocument();
+    const backdrop = document.querySelector('[data-slot="dialog-overlay"]');
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop!);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
+    });
+  });
 });

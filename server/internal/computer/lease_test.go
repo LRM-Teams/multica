@@ -31,3 +31,23 @@ func TestResidentLeaseIsExclusiveAndIgnoresStaleUnlockedFile(t *testing.T) {
 	}
 	_ = third.Close()
 }
+
+func TestBindingChildLeaseIsExclusivePerWorkspaceAndIndependentAcrossSiblings(t *testing.T) {
+	root := t.TempDir()
+	first, err := AcquireBindingChildLease(context.Background(), root, "test", "workspace-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := AcquireBindingChildLease(ctx, root, "test", "workspace-a"); err == nil {
+		t.Fatal("second process acquired the same Binding execution lease")
+	}
+	sibling, err := AcquireBindingChildLease(context.Background(), root, "test", "workspace-b")
+	if err != nil {
+		t.Fatalf("sibling Binding lease: %v", err)
+	}
+	_ = sibling.Close()
+}

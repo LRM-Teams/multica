@@ -25,6 +25,11 @@ func TestReduceRunnerLaunchesConvergesRaftDesiredAndRunningState(t *testing.T) {
 		{name: "first setup starts missing agent", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new"}}}},
 		{name: "matching reconnect is no-op", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", status: protocol.AgentStatusActive}}},
 		{name: "accepted start is not residency", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", status: "accepted"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new"}}}},
+		{name: "runtime move stops mismatched accepted start before replacement", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", launchID: "launch-old", status: "accepted"}}, want: []runnerReconcileAction{
+			{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}},
+		}},
+		{name: "restart reconnect preserves Raft session config", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new", sessionID: "provider-session"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: "provider-session"}}}}},
+		{name: "reset reconnect preserves fresh Raft config", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, want: []runnerReconcileAction{{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "dispatch-new", Config: protocol.WorkspaceRunnerAgentStartConfig{}}}}},
 		{name: "runtime move stops old before a later reconcile starts new", desired: []runnerDesiredLaunch{{agentID: "agent-a", runtimeID: "runtime-new", launchID: "launch-new", startDispatchID: "dispatch-new"}}, observed: []runnerObservedLaunch{{agentID: "agent-a", runtimeID: "runtime-old", launchID: "launch-old", status: protocol.AgentStatusActive}}, want: []runnerReconcileAction{
 			{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: "agent-a", LaunchID: "launch-old"}},
 		}},
@@ -115,7 +120,7 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	}
 	defer conn.Close()
 	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
-		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-same", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-same", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
 	})
 	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {

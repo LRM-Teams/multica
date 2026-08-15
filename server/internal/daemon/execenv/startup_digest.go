@@ -9,7 +9,7 @@ import (
 )
 
 // StartupStaticContext returns the positive allowlist of durable agent×runtime
-// facts used for create-time AGENTS materialization and fingerprint digest.
+// facts used for create-time AGENTS materialization.
 //
 // Constructed empty then filled — never "copy whole TaskContextForEnv and zero
 // some fields" (Barry #1274 CODE blocker: leak of FreshSession / user memory /
@@ -82,7 +82,7 @@ func (p StartupMaterializationPlan) Digest() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// StartupStaticDigest is the fingerprint alias for ManagedStartupInputDigest.
+// StartupStaticDigest is the alias for ManagedStartupInputDigest.
 func StartupStaticDigest(provider string, ctx TaskContextForEnv) string {
 	return ManagedStartupInputDigest(provider, ctx)
 }

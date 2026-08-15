@@ -11,7 +11,7 @@ import (
 
 func TestListModelsStaticProviders(t *testing.T) {
 	ctx := context.Background()
-	for _, provider := range []string{"gemini", "cursor"} {
+	for _, provider := range []string{"cursor"} {
 		got, err := ListModels(ctx, provider, "")
 		if err != nil {
 			t.Fatalf("ListModels(%q) error: %v", provider, err)
@@ -30,30 +30,12 @@ func TestListModelsStaticProviders(t *testing.T) {
 	}
 }
 
-func TestListModelsCopilotFallsBackToStatic(t *testing.T) {
-	// Copilot uses dynamic ACP discovery, but with no `copilot`
-	// binary on PATH (the discovery LookPath fails) it must fall
-	// back to copilotStaticModels() so the UI dropdown stays
-	// populated. This is the "binary missing on the daemon host"
-	// path we care about for self-hosted runtimes.
+func TestListModelsRemovedProvidersAreUnknown(t *testing.T) {
 	ctx := context.Background()
-	modelCacheMu.Lock()
-	delete(modelCache, "copilot")
-	modelCacheMu.Unlock()
-
-	got, err := ListModels(ctx, "copilot", "/nonexistent/copilot-cli")
-	if err != nil {
-		t.Fatalf("ListModels(copilot) error: %v", err)
-	}
-	if len(got) == 0 {
-		t.Fatal("expected static fallback models, got empty list")
-	}
-	ids := map[string]bool{}
-	for _, m := range got {
-		ids[m.ID] = true
-	}
-	if !ids["gpt-5.4"] || !ids["claude-sonnet-4.6"] {
-		t.Errorf("static fallback missing expected models: %+v", got)
+	for _, provider := range []string{"gemini", "copilot", "hermes", "openclaw", "kimi", "codebuddy", "antigravity"} {
+		if _, err := ListModels(ctx, provider, ""); err == nil {
+			t.Errorf("ListModels(%q) must fail closed after the runtime was removed", provider)
+		}
 	}
 }
 
@@ -98,37 +80,6 @@ func TestClaudeStaticModelsExposeOnlyCurrentCleanLineup(t *testing.T) {
 	}
 }
 
-func TestGeminiStaticModelsExposesAliasesAndGemini3(t *testing.T) {
-	// Gemini CLI has no `models list` subcommand, so we expose the
-	// CLI's own aliases (auto / pro / flash / flash-lite) plus
-	// explicit version pins including Gemini 3. Regression guard
-	// for multica-ai/multica#1503 — Gemini 3 must be selectable.
-	models := geminiStaticModels()
-	ids := map[string]Model{}
-	for _, m := range models {
-		ids[m.ID] = m
-	}
-	for _, want := range []string{
-		"auto", "auto-gemini-2.5",
-		"pro", "flash", "flash-lite",
-		"gemini-3-pro-preview", "gemini-3-flash-preview",
-		"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-	} {
-		if _, ok := ids[want]; !ok {
-			t.Errorf("missing expected Gemini model %q in: %+v", want, models)
-		}
-	}
-	auto, ok := ids["auto"]
-	if !ok || !auto.Default {
-		t.Errorf("expected `auto` to be the default Gemini entry, got %+v", auto)
-	}
-	for _, m := range models {
-		if m.Provider != "google" {
-			t.Errorf("all Gemini entries must carry Provider=google, got %+v", m)
-		}
-	}
-}
-
 func TestCodexStaticModelsExposesGPT55(t *testing.T) {
 	// Codex CLI has no `models list` subcommand so the catalog is
 	// hand-maintained. Regression guard for multica-ai/multica#2009 —
@@ -167,101 +118,6 @@ func TestCodexStaticModelsExposesGPT55(t *testing.T) {
 	}
 }
 
-func TestInferCopilotProvider(t *testing.T) {
-	cases := map[string]string{
-		"gpt-5.5":           "openai",
-		"gpt-5.4-mini":      "openai",
-		"gpt-5.3-codex":     "openai",
-		"gpt-4.1":           "openai",
-		"o1":                "openai",
-		"o3":                "openai",
-		"o3-mini":           "openai",
-		"o4-mini":           "openai",
-		"o5":                "openai", // future-proof: any o<digit>+
-		"o6-mini-high":      "openai",
-		"claude-opus-4.7":   "anthropic",
-		"claude-sonnet-4.6": "anthropic",
-		"claude-haiku-4.5":  "anthropic",
-		"gemini-3-pro":      "google",
-		"grok-code-fast-1":  "xai",
-		"auto":              "",
-		"raptor-mini":       "",
-		// negative cases: must not be misidentified as OpenAI
-		// reasoning series even though they start with `o`.
-		"opus-fake": "",
-		"omni":      "",
-		"o":         "",
-	}
-	for id, want := range cases {
-		if got := inferCopilotProvider(id); got != want {
-			t.Errorf("inferCopilotProvider(%q) = %q, want %q", id, got, want)
-		}
-	}
-}
-
-func TestCopilotStaticModelsExposesFullCatalog(t *testing.T) {
-	// GitHub Copilot CLI has no `models list` subcommand, so the
-	// catalog is hand-maintained from the official supported-models
-	// docs. Regression guard for multica-ai/multica#1948 — the
-	// dropdown previously shipped only 2 models and used dashed IDs
-	// (`claude-sonnet-4-6`) which the CLI rejects. IDs must use the
-	// dotted form (`claude-sonnet-4.6`) that `copilot --model <id>`
-	// actually accepts, and cover both OpenAI and Anthropic families.
-	models := copilotStaticModels()
-	ids := map[string]Model{}
-	for _, m := range models {
-		ids[m.ID] = m
-	}
-	for _, want := range []string{
-		"gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
-		"gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2",
-		"gpt-5-mini", "gpt-4.1",
-		"claude-opus-4.7", "claude-sonnet-4.6",
-		"claude-sonnet-4.5", "claude-haiku-4.5",
-	} {
-		if _, ok := ids[want]; !ok {
-			t.Errorf("missing expected Copilot model %q in: %+v", want, models)
-		}
-	}
-	// Dashed legacy IDs must not reappear — `copilot --model
-	// claude-sonnet-4-6` errors with "Model ... is not available".
-	for _, banned := range []string{"claude-sonnet-4-6", "claude-sonnet-4-5"} {
-		if _, ok := ids[banned]; ok {
-			t.Errorf("Copilot catalog must not use dashed model id %q; use dotted form", banned)
-		}
-	}
-	for _, m := range models {
-		switch m.Provider {
-		case "openai", "anthropic":
-		default:
-			t.Errorf("Copilot entry %q has unexpected Provider %q", m.ID, m.Provider)
-		}
-		if m.Default {
-			t.Errorf("Copilot entries should not set Default; account routing decides. got %+v", m)
-		}
-	}
-}
-
-func TestListModelsHermesWithoutBinary(t *testing.T) {
-	// With no `hermes` binary on PATH the discovery fast-paths to
-	// an empty list (the UI then falls back to creatable manual
-	// entry). This test only verifies the fast-path; an actual
-	// ACP session is exercised in integration.
-	ctx := context.Background()
-	// Prime the cache miss so we hit the live discovery function.
-	modelCacheMu.Lock()
-	delete(modelCache, "hermes")
-	modelCacheMu.Unlock()
-
-	got, err := ListModels(ctx, "hermes", "/nonexistent/hermes")
-	if err != nil {
-		t.Fatalf("ListModels(hermes) error: %v", err)
-	}
-	if got == nil {
-		t.Error("expected non-nil slice even when binary is missing")
-	}
-}
-
 func TestListModelsKiroWithoutBinary(t *testing.T) {
 	ctx := context.Background()
 	modelCacheMu.Lock()
@@ -290,11 +146,9 @@ func TestStaticCatalogsHaveAtMostOneDefault(t *testing.T) {
 	// default so the UI badge is unambiguous. More than one
 	// usually means a copy/paste slip when adding new models.
 	catalogs := map[string][]Model{
-		"claude":  claudeStaticModels(),
-		"codex":   codexStaticModels(),
-		"gemini":  geminiStaticModels(),
-		"cursor":  cursorStaticModels(),
-		"copilot": copilotStaticModels(),
+		"claude": claudeStaticModels(),
+		"codex":  codexStaticModels(),
+		"cursor": cursorStaticModels(),
 	}
 	for provider, models := range catalogs {
 		count := 0
@@ -654,111 +508,6 @@ func TestDiscoverOpenCodeModelsFallsBackOnVerboseNoise(t *testing.T) {
 	}
 }
 
-func TestParseOpenclawAgents(t *testing.T) {
-	input := `deepseek-v4   deepseek-v4
-claude-sonnet claude-sonnet-4-6
-deepseek-v4   deepseek-v4
-`
-	models := parseOpenclawAgents(input)
-	// duplicate deduped; label includes model name.
-	if len(models) != 2 {
-		t.Fatalf("expected 2 agents, got %d: %+v", len(models), models)
-	}
-	if models[0].ID != "deepseek-v4" {
-		t.Errorf("unexpected first agent: %+v", models[0])
-	}
-	if models[0].Label != "deepseek-v4 (deepseek-v4)" {
-		t.Errorf("unexpected label: %+v", models[0])
-	}
-	if models[0].Provider != "openclaw" {
-		t.Errorf("expected provider openclaw, got %q", models[0].Provider)
-	}
-}
-
-func TestParseOpenclawAgentsRejectsDecoratedTUI(t *testing.T) {
-	// Reproduces the shape of real `openclaw agents list` output
-	// that leaked header tokens like "Identity:" / "Workspace:"
-	// and single-character box-drawing icons into the dropdown.
-	input := `╭───────────────────────────────╮
-│                               │
-│  ◇  Agents:                   │
-│  │                            │
-│  │    Identity:               │
-│  │    Workspace:              │
-│  │    Agent                   │
-│  │                            │
-╰───────────────────────────────╯
-deepseek-v4   deepseek-v4
-claude-sonnet claude-sonnet-4-6
-`
-	models := parseOpenclawAgents(input)
-	if len(models) != 2 {
-		t.Fatalf("expected 2 agents (decoration skipped), got %d: %+v", len(models), models)
-	}
-	for _, m := range models {
-		if strings.HasSuffix(m.ID, ":") {
-			t.Errorf("section header leaked into result: %+v", m)
-		}
-	}
-	if models[0].ID != "deepseek-v4" || models[1].ID != "claude-sonnet" {
-		t.Errorf("unexpected agents: %+v", models)
-	}
-}
-
-func TestParseOpenclawAgentsJSONArray(t *testing.T) {
-	input := []byte(`[
-    {"name": "deepseek-v4", "model": "deepseek-v4"},
-    {"name": "claude-sonnet", "model": "claude-sonnet-4-6"}
-]`)
-	models, ok := parseOpenclawAgentsJSON(input)
-	if !ok {
-		t.Fatal("expected parseOpenclawAgentsJSON to accept an array")
-	}
-	if len(models) != 2 {
-		t.Fatalf("got %d, want 2: %+v", len(models), models)
-	}
-	if models[0].ID != "deepseek-v4" || models[0].Label != "deepseek-v4 (deepseek-v4)" {
-		t.Errorf("unexpected first entry: %+v", models[0])
-	}
-}
-
-func TestParseOpenclawAgentsJSONWrapped(t *testing.T) {
-	input := []byte(`{"agents": [{"name": "foo", "model": "bar"}]}`)
-	models, ok := parseOpenclawAgentsJSON(input)
-	if !ok {
-		t.Fatal("expected parseOpenclawAgentsJSON to accept wrapped object")
-	}
-	if len(models) != 1 || models[0].ID != "foo" {
-		t.Errorf("unexpected: %+v", models)
-	}
-}
-
-func TestOpenclawEntriesToModelsUsesIDOverName(t *testing.T) {
-	// When both id and name are present, Model.ID should use the id field
-	// because openclaw resolves --agent by id. Names with spaces (e.g.
-	// "Sub2API OPS") would be mangled by openclaw's normalizeAgentId.
-	input := []byte(`[{"id": "sub2api", "name": "Sub2API OPS", "model": "gpt-4o"}]`)
-	models, ok := parseOpenclawAgentsJSON(input)
-	if !ok {
-		t.Fatal("expected parseOpenclawAgentsJSON to accept array")
-	}
-	if len(models) != 1 {
-		t.Fatalf("got %d models, want 1", len(models))
-	}
-	if models[0].ID != "sub2api" {
-		t.Errorf("Model.ID = %q, want %q (should use id, not name)", models[0].ID, "sub2api")
-	}
-	if models[0].Label != "Sub2API OPS (gpt-4o)" {
-		t.Errorf("Model.Label = %q, want %q (should use name for display)", models[0].Label, "Sub2API OPS (gpt-4o)")
-	}
-}
-
-func TestParseOpenclawAgentsJSONRejectsGarbage(t *testing.T) {
-	if _, ok := parseOpenclawAgentsJSON([]byte("not json")); ok {
-		t.Error("expected ok=false for non-JSON")
-	}
-}
-
 func TestParseCursorModels(t *testing.T) {
 	input := `Available models
 
@@ -879,77 +628,22 @@ func TestParseHermesSessionNewModelsGarbage(t *testing.T) {
 	}
 }
 
-func TestHermesModelSelectionSupported(t *testing.T) {
-	// Regression guard: hermes now supports model selection via
-	// the ACP session/set_model RPC, so the UI dropdown should
-	// not be disabled for it.
-	if !ModelSelectionSupported("hermes") {
-		t.Error("hermes should be model-selection-supported now that set_session_model is wired")
-	}
-}
-
-// TestAntigravityModelSelectionSupported pins that the antigravity provider
-// now reports model selection as supported: agy 1.0.6 added a `--model` flag
-// (MUL-3125) and buildAntigravityArgs wires opts.Model through, so the UI
-// must render the live picker rather than a disabled "Managed by runtime"
-// label.
-func TestAntigravityModelSelectionSupported(t *testing.T) {
-	if !ModelSelectionSupported("antigravity") {
-		t.Error("antigravity should be model-selection-supported now that agy 1.0.6 has --model")
+func TestKiroModelSelectionSupported(t *testing.T) {
+	if !ModelSelectionSupported("kiro") {
+		t.Error("kiro should be model-selection-supported")
 	}
 }
 
 func TestCustomModelIDSupported(t *testing.T) {
-	// Raft: free-form Custom model ID only for these providers.
-	for _, provider := range []string{"claude", "codex", "cursor", "copilot", "pi"} {
+	for _, provider := range []string{"claude", "codex", "cursor", "pi"} {
 		if !CustomModelIDSupported(provider) {
 			t.Errorf("%q should support custom model IDs", provider)
 		}
 	}
-	for _, provider := range []string{"opencode", "hermes", "gemini", "grok", "antigravity", "openclaw"} {
+	for _, provider := range []string{"opencode", "grok", "kiro"} {
 		if CustomModelIDSupported(provider) {
 			t.Errorf("%q must not support custom model IDs", provider)
 		}
-	}
-}
-
-// TestParseAntigravityModels covers the `agy models` line-per-name format:
-// each non-blank line becomes a Model whose ID and Label are the verbatim
-// display string `--model` expects, duplicates collapse, and blanks drop.
-func TestParseAntigravityModels(t *testing.T) {
-	t.Parallel()
-
-	out := strings.Join([]string{
-		"Gemini 3.5 Flash (Medium)",
-		"Claude Opus 4.6 (Thinking)",
-		"", // blank line — skipped
-		"GPT-OSS 120B (Medium)",
-		"Claude Opus 4.6 (Thinking)", // duplicate — collapsed
-	}, "\n")
-
-	got := parseAntigravityModels(out)
-	want := []Model{
-		{ID: "Gemini 3.5 Flash (Medium)", Label: "Gemini 3.5 Flash (Medium)", Provider: "antigravity"},
-		{ID: "Claude Opus 4.6 (Thinking)", Label: "Claude Opus 4.6 (Thinking)", Provider: "antigravity"},
-		{ID: "GPT-OSS 120B (Medium)", Label: "GPT-OSS 120B (Medium)", Provider: "antigravity"},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("parseAntigravityModels len = %d, want %d (%+v)", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("model[%d] = %+v, want %+v", i, got[i], want[i])
-		}
-	}
-}
-
-// TestParseAntigravityModelsEmpty pins that empty / whitespace-only output
-// yields no models (so cachedDiscovery treats it as a transient miss and
-// retries rather than caching a blank catalog).
-func TestParseAntigravityModelsEmpty(t *testing.T) {
-	t.Parallel()
-	if got := parseAntigravityModels("   \n\t\n"); len(got) != 0 {
-		t.Errorf("expected no models for blank output, got %+v", got)
 	}
 }
 

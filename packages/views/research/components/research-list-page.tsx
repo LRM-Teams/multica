@@ -58,7 +58,11 @@ import { ResearchCreateEstimateSummary } from "./research-create-estimate";
 import { ResearchCreateParamsPanel } from "./research-create-params-panel";
 import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchHomeHero } from "./research-home-hero";
+import { ResearchHomeOverview } from "./research-home-overview";
+import { ResearchHomeConstellationPreview } from "./research-home-constellation-preview";
+import { ResearchHomeHeader } from "./research-home-header";
 import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
+import "./research-home-visual.css";
 import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
@@ -112,6 +116,7 @@ export function ResearchListPage() {
   );
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [createRetrying, setCreateRetrying] = useState(false);
+  const [selectedResearchId, setSelectedResearchId] = useState<string | null>(null);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
@@ -162,7 +167,9 @@ export function ResearchListPage() {
     if (restoreApplied.current) return;
     restoreApplied.current = true;
     const saved = readResearchListPersist();
-    if (!saved || saved.scroll <= 0) return;
+    if (!saved?.sessionId) return;
+    clearResearchListPersist();
+    if (saved.scroll <= 0) return;
     queueMicrotask(() => {
       if (scrollRef.current != null) {
         scrollRef.current.scrollTop = saved.scroll;
@@ -524,13 +531,13 @@ export function ResearchListPage() {
     <ResearchConnectivityShell>
       <div
         ref={scrollRef}
-        className="flex h-full flex-col overflow-y-auto"
+        className="dark research-home-theme flex h-full flex-col overflow-y-auto"
         data-testid="research-list-page"
       >
         <div
           className={cn(
             RESEARCH_LIST_WORKBENCH_CLASS,
-            "relative flex w-full flex-col gap-5 py-4 md:gap-6 md:py-6",
+            "relative flex w-full flex-col gap-4 py-4",
           )}
           data-testid="research-list-workbench"
         >
@@ -538,9 +545,10 @@ export function ResearchListPage() {
           {!bootstrapLoading && !bootstrapIsError ? (
             <ResearchShellAtmosphere className="-top-2" heightClassName="h-[200px]" />
           ) : null}
+          <ResearchHomeHeader sessions={sessions} />
           {/* LRM-783 / LRM-784 / LRM-1106: brand-hero + full-width composer (12 cols). */}
           <div ref={composerCardRef} className="relative z-[1]">
-            <ResearchHomeHero>
+            <ResearchHomeHero preview={<ResearchHomeConstellationPreview sessions={sessions} selectedId={selectedResearchId} />}>
               <div
                 className={cn(
                   "w-full overflow-hidden rounded-2xl border bg-card",
@@ -555,7 +563,7 @@ export function ResearchListPage() {
                 />
                 {/* LRM-1138 / LRM-1140 A2: colored inject tag beside short intent. */}
                 <div
-                  className="flex items-start gap-2 px-3 py-3 md:px-3.5"
+                  className="flex items-start gap-2 px-3 py-2 md:px-3.5"
                   data-testid="research-composer-intent"
                 >
                   {selectedTemplate ? (
@@ -566,6 +574,7 @@ export function ResearchListPage() {
                   ) : null}
                   <Textarea
                     ref={goalInputRef}
+                    aria-label={t(($) => $.goal_placeholder)}
                     value={goal}
                     onChange={(e) =>
                       setComposer((prev) => ({
@@ -587,7 +596,7 @@ export function ResearchListPage() {
                       fieldErrors?.goal ? "research-create-goal-error" : undefined
                     }
                     data-testid="research-create-goal"
-                    className="min-h-[64px] flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0 focus-visible:border-transparent md:min-h-[88px]"
+                    className="min-h-10 flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0 focus-visible:border-transparent"
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                         e.preventDefault();
@@ -649,7 +658,7 @@ export function ResearchListPage() {
                     {t(($) => $.create_params.errors.empty_goal)}
                   </p>
                 ) : null}
-                <div className="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-center md:justify-between md:gap-3 md:px-3.5">
+                <div className="flex flex-col gap-2 border-t px-3 py-2 md:flex-row md:items-center md:justify-between md:gap-3 md:px-3.5">
                   <div className="min-w-0 space-y-0.5">
                     <ResearchCreateEstimateSummary params={createParams} />
                     <p className="hidden text-xs text-muted-foreground md:block">
@@ -667,7 +676,7 @@ export function ResearchListPage() {
                         setComposer((prev) => ({ ...prev, paramsOpen: true }));
                       }}
                       className={cn(
-                        "h-10 w-full shrink-0 rounded-full px-3.5 text-sm font-medium md:h-9 md:w-auto",
+                        "h-10 w-full shrink-0 rounded-full px-3.5 text-sm font-medium md:h-8 md:w-auto",
                         HERO_CTA_SECONDARY_CLASS,
                         createBusy && "opacity-50 cursor-not-allowed",
                       )}
@@ -683,7 +692,7 @@ export function ResearchListPage() {
                       aria-disabled={createBusy || undefined}
                       data-testid="research-create-submit"
                       className={cn(
-                        "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground md:h-9 md:w-auto",
+                        "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground md:h-8 md:w-auto",
                         HERO_CTA_PRIMARY_CLASS,
                         createBusy && "opacity-50 cursor-not-allowed",
                       )}
@@ -754,6 +763,16 @@ export function ResearchListPage() {
               ) : null}
             </ResearchHomeHero>
           </div>
+
+          {!bootstrapLoading && !bootstrapIsError && sessions.length > 0 ? (
+            <ResearchHomeOverview
+              sessions={sessions}
+              selectedId={selectedResearchId}
+              onSelect={setSelectedResearchId}
+              hrefFor={(id) => paths.researchDetail(id)}
+              onNavigate={persistBeforeNavigate}
+            />
+          ) : null}
 
           {bootstrapLoading ? (
             <ResearchSessionListSkeleton rows={4} label={t(($) => $.list.loading)} />

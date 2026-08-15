@@ -1,28 +1,22 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
-func TestNewReturnsHermesBackend(t *testing.T) {
+func TestNewDoesNotRegisterHermesRuntime(t *testing.T) {
 	t.Parallel()
-	b, err := New("hermes", Config{ExecutablePath: "/nonexistent/hermes"})
-	if err != nil {
-		t.Fatalf("New(hermes) error: %v", err)
-	}
-	if _, ok := b.(*hermesBackend); !ok {
-		t.Fatalf("expected *hermesBackend, got %T", b)
+	if _, err := New("hermes", Config{ExecutablePath: "/nonexistent/hermes"}); err == nil {
+		t.Fatal("hermes is ACP transport for kiro, not a registered runtime")
 	}
 }
+
 
 // ── extractACPSessionID ──
 
@@ -1384,53 +1378,6 @@ done
 `
 }
 
-func TestHermesBackendAttributesUsageToACPDefaultModel(t *testing.T) {
-	t.Parallel()
-
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	writeTestExecutable(t, fakePath, []byte(fakeHermesACPUsageWithDefaultModelScript()))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
-		Timeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
-
-	select {
-	case result, ok := <-session.Result:
-		if !ok {
-			t.Fatal("result channel closed without a value")
-		}
-		if result.Status != "completed" {
-			t.Fatalf("expected completed result, got %q: %s", result.Status, result.Error)
-		}
-		if _, ok := result.Usage["unknown"]; ok {
-			t.Fatalf("usage should not be attributed to unknown: %+v", result.Usage)
-		}
-		usage, ok := result.Usage["nous:moonshotai/kimi-k2.6"]
-		if !ok {
-			t.Fatalf("expected usage under Hermes current model, got %+v", result.Usage)
-		}
-		if usage.InputTokens != 17 || usage.OutputTokens != 5 || usage.CacheReadTokens != 3 {
-			t.Fatalf("usage = %+v, want input=17 output=5 cache_read=3", usage)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for result")
-	}
-}
 
 // fakeHermesACPRateLimitScript impersonates hermes for the GitHub
 // multica#1952 scenario: the upstream LLM returns HTTP 429 (rate
@@ -1528,49 +1475,6 @@ func TestHermesProviderErrorSnifferTerminalNonRetryable(t *testing.T) {
 // hermes' synthetic "API call failed..." agent turn means the output
 // buffer is non-empty. Before the fix the sniffer-promotion was
 // gated on `finalOutput == ""`, so the run silently completed.
-func TestHermesBackendPromotesProviderErrorWithNonEmptyOutput(t *testing.T) {
-	t.Parallel()
-
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	writeTestExecutable(t, fakePath, []byte(fakeHermesACPRateLimitScript()))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
-		Timeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
-
-	select {
-	case result, ok := <-session.Result:
-		if !ok {
-			t.Fatal("result channel closed without a value")
-		}
-		if result.Status != "failed" {
-			t.Fatalf("expected status=failed (sniffer should promote on 429 even with non-empty output), got %q (error=%q output=%q)", result.Status, result.Error, result.Output)
-		}
-		if !strings.Contains(result.Error, "429") && !strings.Contains(result.Error, "usage limit") {
-			t.Errorf("expected error to surface the 429 / usage-limit message, got %q", result.Error)
-		}
-		if result.SessionID != "ses_429" {
-			t.Errorf("expected session id to be preserved on failure, got %q", result.SessionID)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for result")
-	}
-}
 
 // TestIsACPSessionNotFound pins the discrimination the resumed-session
 // recovery relies on: only a JSON-RPC -32603 whose text names a missing
@@ -1674,50 +1578,6 @@ done
 // `SessionID == ""` — with the stale id still in the Result, the retry
 // never fires and every future dispatch on the same (agent, issue)
 // loops on the dead session.
-func TestHermesBackendClearsSessionIDWhenResumedSessionNotFound(t *testing.T) {
-	t.Parallel()
-
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	writeTestExecutable(t, fakePath, []byte(fakeHermesACPStaleResumeScript()))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
-		Timeout:         5 * time.Second,
-		ResumeSessionID: "ses_stale",
-	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
-
-	select {
-	case result, ok := <-session.Result:
-		if !ok {
-			t.Fatal("result channel closed without a value")
-		}
-		if result.Status != "failed" {
-			t.Fatalf("expected status=failed, got %q (error=%q)", result.Status, result.Error)
-		}
-		if !strings.Contains(result.Error, "Session not found") {
-			t.Errorf("expected error to surface the session-not-found message, got %q", result.Error)
-		}
-		if result.SessionID != "" {
-			t.Errorf("expected empty session id so the daemon's fresh-session retry fires, got %q", result.SessionID)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for result")
-	}
-}
 
 // fakeHermesACPStaleResumeSetModelScript is the model-override variant
 // of fakeHermesACPStaleResumeScript: session/resume echoes the requested
@@ -1751,51 +1611,6 @@ done
 // resumed session surfaces there instead. The Result must carry an
 // empty SessionID here too, or the daemon's fresh-session retry never
 // fires for any agent configured with a model.
-func TestHermesBackendClearsSessionIDWhenSetModelSessionNotFound(t *testing.T) {
-	t.Parallel()
-
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	writeTestExecutable(t, fakePath, []byte(fakeHermesACPStaleResumeSetModelScript()))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
-		Timeout:         5 * time.Second,
-		ResumeSessionID: "ses_stale",
-		Model:           "some-model",
-	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
-
-	select {
-	case result, ok := <-session.Result:
-		if !ok {
-			t.Fatal("result channel closed without a value")
-		}
-		if result.Status != "failed" {
-			t.Fatalf("expected status=failed, got %q (error=%q)", result.Status, result.Error)
-		}
-		if !strings.Contains(result.Error, `could not switch to model "some-model"`) {
-			t.Errorf("expected error to name the requested model, got %q", result.Error)
-		}
-		if result.SessionID != "" {
-			t.Errorf("expected empty session id so the daemon's fresh-session retry fires, got %q", result.SessionID)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for result")
-	}
-}
 
 // fakeHermesACPTransientRetryScript emits a single retryable per-
 // attempt warning to stderr and then completes with a normal agent
@@ -1835,46 +1650,6 @@ done
 // Authentication errors) and is followed by a successful agent
 // turn must stay status=completed. The previous "any sniffer line
 // → fail" rule would have wrongly marked this run as failed.
-func TestHermesBackendDoesNotPromoteOnTransientRetry(t *testing.T) {
-	t.Parallel()
-
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	writeTestExecutable(t, fakePath, []byte(fakeHermesACPTransientRetryScript()))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
-		Timeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
-
-	select {
-	case result, ok := <-session.Result:
-		if !ok {
-			t.Fatal("result channel closed without a value")
-		}
-		if result.Status != "completed" {
-			t.Fatalf("transient retry that ultimately succeeded must stay status=completed, got %q (error=%q output=%q)", result.Status, result.Error, result.Output)
-		}
-		if !strings.Contains(result.Output, "Here is the answer") {
-			t.Errorf("expected the successful agent turn to be in output, got %q", result.Output)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for result")
-	}
-}
 
 // ── extractACPMcpCapabilities ──
 
@@ -2007,31 +1782,6 @@ func TestFilterACPMcpServersByCapabilityEmptyInputReturnsEmpty(t *testing.T) {
 // Silently launching with no MCP servers would look indistinguishable
 // from "the saved config was applied" and is exactly the surprise the
 // MCP Tab is meant to remove.
-func TestHermesExecuteFailsClosedOnMalformedMcpConfig(t *testing.T) {
-	t.Parallel()
-
-	// Any existing executable is fine — Execute returns before the spawn.
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	writeTestExecutable(t, fakePath, []byte("#!/bin/sh\nexit 0\n"))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err = backend.Execute(ctx, "prompt", ExecOptions{
-		Timeout:   2 * time.Second,
-		McpConfig: json.RawMessage(`not json`),
-	})
-	if err == nil {
-		t.Fatal("expected Execute to fail closed on malformed mcp_config, got nil error")
-	}
-	if !strings.Contains(err.Error(), "mcp_config") {
-		t.Fatalf("expected error to mention mcp_config, got %q", err)
-	}
-}
 
 // fakeACPRecordingScript impersonates an ACP agent that records every
 // JSON-RPC frame it receives to a file (one per line) before responding.
@@ -2096,152 +1846,12 @@ func findRecordedFrame(t *testing.T, recordPath, method string) map[string]any {
 // session/resume carries the managed MCP set. Without this, a resumed
 // Hermes task lost access to MCP tools that a fresh task on the same
 // agent would have — which is the inconsistency Elon's review flagged.
-func TestHermesResumeIncludesMcpServers(t *testing.T) {
-	t.Parallel()
-
-	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_resume", `{}`)))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
-		Timeout:         5 * time.Second,
-		ResumeSessionID: "ses_resume",
-		McpConfig:       json.RawMessage(`{"mcpServers":{"fetch":{"command":"uvx"}}}`),
-	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
-	select {
-	case <-session.Result:
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for result")
-	}
-
-	frame := findRecordedFrame(t, recordPath, "session/resume")
-	params, ok := frame["params"].(map[string]any)
-	if !ok {
-		t.Fatalf("session/resume params: got %T, want map", frame["params"])
-	}
-	servers, ok := params["mcpServers"].([]any)
-	if !ok {
-		t.Fatalf("session/resume.mcpServers: got %T, want []any", params["mcpServers"])
-	}
-	if len(servers) != 1 {
-		t.Fatalf("session/resume.mcpServers: got %d entries, want 1", len(servers))
-	}
-	entry := servers[0].(map[string]any)
-	if entry["name"] != "fetch" || entry["command"] != "uvx" {
-		t.Errorf("session/resume.mcpServers[0]: got %v, want {name:fetch,command:uvx,...}", entry)
-	}
-}
 
 // TestHermesDropsRemoteMcpWhenCapabilityNotAdvertised pins the contract
 // that when the runtime's initialize response advertises no http/sse
 // support, those entries are filtered out of session/new — sending them
 // anyway is a protocol violation that reliably tanks the request.
-func TestHermesDropsRemoteMcpWhenCapabilityNotAdvertised(t *testing.T) {
-	t.Parallel()
-
-	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	// agentCapabilities = {} → neither http nor sse advertised.
-	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_new", `{}`)))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
-		Timeout: 5 * time.Second,
-		McpConfig: json.RawMessage(`{"mcpServers":{
-			"local":{"command":"uvx"},
-			"remote-http":{"type":"http","url":"https://x/mcp"},
-			"remote-sse":{"type":"sse","url":"https://x/sse"}
-		}}`),
-	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
-	select {
-	case <-session.Result:
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for result")
-	}
-
-	frame := findRecordedFrame(t, recordPath, "session/new")
-	params := frame["params"].(map[string]any)
-	servers, ok := params["mcpServers"].([]any)
-	if !ok {
-		t.Fatalf("session/new.mcpServers: got %T, want []any", params["mcpServers"])
-	}
-	if len(servers) != 1 {
-		t.Fatalf("session/new.mcpServers: got %d entries, want 1 (only stdio should remain)", len(servers))
-	}
-	if servers[0].(map[string]any)["name"] != "local" {
-		t.Errorf("kept the wrong entry: %v", servers[0])
-	}
-}
 
 // TestHermesKeepsRemoteMcpWhenCapabilityAdvertised confirms the gate
 // doesn't over-filter: when the runtime advertises http+sse, all entries
 // must pass through to session/new.
-func TestHermesKeepsRemoteMcpWhenCapabilityAdvertised(t *testing.T) {
-	t.Parallel()
-
-	recordPath := filepath.Join(t.TempDir(), "frames.jsonl")
-	fakePath := filepath.Join(t.TempDir(), "hermes")
-	writeTestExecutable(t, fakePath, []byte(fakeACPRecordingScript(recordPath, "ses_new", `{"mcpCapabilities":{"http":true,"sse":true}}`)))
-
-	backend, err := New("hermes", Config{ExecutablePath: fakePath, Logger: slog.Default()})
-	if err != nil {
-		t.Fatalf("new hermes backend: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{
-		Timeout: 5 * time.Second,
-		McpConfig: json.RawMessage(`{"mcpServers":{
-			"local":{"command":"uvx"},
-			"remote-http":{"type":"http","url":"https://x/mcp"},
-			"remote-sse":{"type":"sse","url":"https://x/sse"}
-		}}`),
-	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	go func() {
-		for range session.Messages {
-		}
-	}()
-	select {
-	case <-session.Result:
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout waiting for result")
-	}
-
-	frame := findRecordedFrame(t, recordPath, "session/new")
-	params := frame["params"].(map[string]any)
-	servers := params["mcpServers"].([]any)
-	if len(servers) != 3 {
-		t.Fatalf("session/new.mcpServers: got %d entries, want 3", len(servers))
-	}
-}

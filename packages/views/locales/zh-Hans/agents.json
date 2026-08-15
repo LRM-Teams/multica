@@ -135,11 +135,7 @@
     "agent_archived_toast": "已归档智能体",
     "archive_failed_toast": "归档智能体失败",
     "agent_restored_toast": "已恢复智能体",
-    "restore_failed_toast": "恢复智能体失败",
-    "agent_updated_restart_toast": "已保存，正在重启 agent 以应用新运行配置…",
-    "restart_after_update_failed_toast": "配置已保存，但重启失败——请手动点重启，或等下次运行生效。",
-    "agent_updated_restart_scheduled_toast": "已保存。当前任务结束后将重启 agent 以应用新配置。",
-    "agent_updated_next_run_toast": "已保存。当前无法重启，改动将在下次运行生效。"
+    "restore_failed_toast": "恢复智能体失败"
   },
   "inspector": {
     "section_properties": "属性",
@@ -231,7 +227,7 @@
     "select_required": "请选择模型",
     "default_provider": "默认（提供方）",
     "managed_by_runtime_title": "模型选择由该运行时管理。",
-    "managed_by_runtime_hint": "请在运行时主机上配置模型（例如 Hermes 会从自身配置文件读取）。",
+    "managed_by_runtime_hint": "请在运行时主机上配置模型（CLI 会从自身配置文件读取）。",
     "discovery_failed": "发现失败",
     "clear_full": "清除选择（使用提供方默认）",
     "scanning_on_computer": "正在此电脑上扫描模型…",
@@ -352,7 +348,7 @@
       "save_failed_toast": "保存自定义参数失败"
     },
     "mcp_config": {
-      "intro": "转发给运行时 CLI 的 MCP 服务器配置（Claude 通过 --mcp-config，Codex 通过 $CODEX_HOME/config.toml，Hermes/Kimi/Kiro 通过 ACP mcpServers，OpenCode 通过 OPENCODE_CONFIG_CONTENT，OpenClaw 通过每个任务的配置 wrapper）。原样保存，可能包含密钥 —— 只有智能体所有者和工作区管理员可以读取。留空则回退到 CLI 自身的默认设置。OpenClaw 的 HTTP/SSE 条目需要使用 OpenClaw 自己的字段名（例如 \"transport\": \"streamable-http\"），而不是 Claude 的 \"type\"。",
+      "intro": "转发给运行时 CLI 的 MCP 服务器配置（Claude 通过 --mcp-config，Codex 通过 $CODEX_HOME/config.toml，Cursor 通过 .cursor/mcp.json，Kiro 通过 ACP mcpServers，OpenCode 通过 OPENCODE_CONFIG_CONTENT，Pi 通过 --mcp-config）。原样保存，可能包含密钥 —— 只有智能体所有者和工作区管理员可以读取。留空则回退到 CLI 自身的默认设置。",
       "placeholder": "{\n  \"mcpServers\": {\n    \"fetch\": {\n      \"command\": \"uvx\",\n      \"args\": [\"mcp-server-fetch\"]\n    }\n  }\n}",
       "editor_aria": "MCP 配置 JSON 编辑器",
       "clear_action": "清空",
@@ -626,20 +622,17 @@
         "scope": "重启进程。保留会话、工作区（MEMORY.md、notes/）及其余一切。",
         "title_short": "重启"
       },
-      "reset_session_restart": {
+      "session": {
         "title": "重置会话并重启",
         "scope": "清除模型会话与上下文，然后重启。工作区（MEMORY.md、notes/）及其余一切保留。",
         "title_short": "重置会话"
       },
-      "full_reset_restart": {
+      "full": {
         "title": "完全重置并重启",
         "scope": "清除会话并永久删除工作区文件（MEMORY.md、notes/），然后重启。这不是删除智能体。",
         "title_short": "完全重置"
       }
     },
-    "after_current_run": "任务进行中不可用——请等空闲，或用「重启」（强制）。",
-    "full_reset_confirm": "此操作不可撤销。输入该智能体的标识 {{handle}} 以确认。",
-    "full_reset_confirm_placeholder": "输入 {{handle}}",
     "disabled_reason": {
       "agent_active": "等当前任务完成后再试。",
       "unsupported_runtime_capability": "需要 Computer v0.3.95 或更新版本。",
@@ -649,21 +642,13 @@
       "unavailable": "此操作当前不可用。",
       "no_force_capability": "该 Code Agent 暂不支持强制重启。"
     },
-    "status": {
-      "scheduled": "重启已排队，但可能不会自动执行。请关闭，等智能体空闲后再试。",
-      "running": "重启中…",
-      "succeeded": "完成。智能体已恢复在线。",
-      "failed": "重启失败。",
-      "failed_reason": "重启失败：{{reason}}"
-    },
     "cta": {
       "restart": "重启",
-      "reset_session_restart": "重置会话并重启",
-      "full_reset_restart": "完全重置并重启"
+      "session": "重置会话并重启",
+      "full": "完全重置并重启"
     },
+    "request_failed": "重启请求失败。请检查智能体状态后重试。",
     "cancel": "取消",
-    "retry": "重试",
-    "done": "完成",
     "description_short": "重启 {{name}}。",
     "recommended": "推荐"
   },

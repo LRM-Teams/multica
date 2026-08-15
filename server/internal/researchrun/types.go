@@ -11,6 +11,7 @@ const (
 	OrchestratorVersionV3 = "research-run-v3"
 	OrchestratorVersionV4 = "research-run-v4"
 	OrchestratorVersionV5 = "research-run-v5"
+	OrchestratorVersionV6 = "research-run-v6"
 	OrchestratorVersion   = OrchestratorVersionV5
 )
 
@@ -35,6 +36,9 @@ const (
 	TaskKindDeepRead      TaskKind = "deep_read"
 	TaskKindVerify        TaskKind = "verify"
 	TaskKindCounterSearch TaskKind = "counter_search"
+	TaskKindIntegrate     TaskKind = "integrate"
+	TaskKindDeliberate    TaskKind = "deliberate"
+	TaskKindDiverge       TaskKind = "diverge"
 	TaskKindReplan        TaskKind = "replan"
 	TaskKindSynthesize    TaskKind = "synthesize"
 	TaskKindQualityGate   TaskKind = "quality_gate"
@@ -329,6 +333,7 @@ type Observation struct {
 }
 
 type ClaimEvidence struct {
+	ArtifactID         string  `json:"-"`
 	ObservationID      string  `json:"observation_id"`
 	Relation           string  `json:"relation"`
 	Strength           float64 `json:"strength"`
@@ -382,29 +387,34 @@ type StartInput struct {
 }
 
 type SteerInput struct {
-	SessionID          string
-	WorkspaceID        string
-	UserID             string
-	Goal               string
-	Reason             string
-	AllowRunningFinish bool
-	Scope              json.RawMessage
-	Audience           *string
-	Freshness          *string
-	Language           *string
-	SourcePolicy       json.RawMessage
-	RunLimits          json.RawMessage
+	SessionID            string
+	WorkspaceID          string
+	UserID               string
+	Goal                 string
+	Reason               string
+	AllowRunningFinish   bool
+	ExpectedStateVersion int64
+	AffectedBranchIDs    []string
+	FullReplan           bool
+	Scope                json.RawMessage
+	Audience             *string
+	Freshness            *string
+	Language             *string
+	SourcePolicy         json.RawMessage
+	RunLimits            json.RawMessage
 }
 
 type DispatchRequest struct {
-	Run         Run             `json:"run"`
-	Task        Task            `json:"task"`
-	AttemptID   string          `json:"attempt_id"`
-	AgentID     string          `json:"agent_id"`
-	Target      ExecutionTarget `json:"target,omitempty"`
-	Prompt      string          `json:"prompt"`
-	Key         string          `json:"key"`
-	RequestHash string          `json:"request_hash"`
+	Run          Run             `json:"run"`
+	Task         Task            `json:"task"`
+	AttemptID    string          `json:"attempt_id"`
+	AgentID      string          `json:"agent_id"`
+	Target       ExecutionTarget `json:"target,omitempty"`
+	ManifestID   string          `json:"manifest_id,omitempty"`
+	ManifestHash string          `json:"manifest_hash,omitempty"`
+	Prompt       string          `json:"prompt"`
+	Key          string          `json:"key"`
+	RequestHash  string          `json:"request_hash"`
 }
 
 type ExecutionTarget struct {
@@ -488,17 +498,133 @@ type GateResult struct {
 }
 
 type RunSnapshot struct {
-	Run          Run                  `json:"run"`
-	Contract     ResearchContract     `json:"contract"`
-	Method       *ResearchMethod      `json:"method,omitempty"`
-	Questions    []Question           `json:"questions"`
-	Tasks        []Task               `json:"tasks"`
-	Attempts     []Attempt            `json:"attempts"`
-	Sources      []SourceSnapshotView `json:"sources"`
-	Observations []Observation        `json:"observations"`
-	Claims       []Claim              `json:"claims"`
-	Gate         GateResult           `json:"gate"`
-	AttemptContext *AttemptArtifactContext `json:"attempt_context,omitempty"`
+	Run                Run                        `json:"run"`
+	Contract           ResearchContract           `json:"contract"`
+	Method             *ResearchMethod            `json:"method,omitempty"`
+	Questions          []Question                 `json:"questions"`
+	Tasks              []Task                     `json:"tasks"`
+	Attempts           []Attempt                  `json:"attempts"`
+	Sources            []SourceSnapshotView       `json:"sources"`
+	Observations       []Observation              `json:"observations"`
+	Claims             []Claim                    `json:"claims"`
+	EvaluationPrivate  []EvaluationPrivateContext `json:"evaluation_private,omitempty"`
+	LegacyContext      *FrozenLegacyContext       `json:"-"`
+	Gate               GateResult                 `json:"gate"`
+	AttemptContext     *AttemptArtifactContext    `json:"attempt_context,omitempty"`
+	ArtifactProjection *ArtifactProjection        `json:"artifact_projection,omitempty"`
+	// PrincipalHeader is the bounded Fleet roster frozen into the Attempt's
+	// Context Manifest. It is handler-only compatibility metadata, not another
+	// Research artifact family.
+	PrincipalHeader []FleetMember `json:"-"`
+}
+
+// FrozenLegacyContext retains V1-V5 compatibility families selected into one
+// Attempt manifest. Values are dispatch-time representations, never live rows.
+type FrozenLegacyContext struct {
+	Sources           []FrozenLegacySource        `json:"sources"`
+	Messages          []FrozenResearchMessage     `json:"messages"`
+	ProductRounds     []FrozenProductRound        `json:"product_rounds"`
+	ThoughtStrategies []FrozenThoughtStrategyNode `json:"thought_strategy_nodes"`
+	Report            *FrozenResearchReport       `json:"report,omitempty"`
+}
+
+type FrozenLegacySource struct {
+	ID                string          `json:"id"`
+	SessionID         string          `json:"session_id"`
+	URL               string          `json:"url"`
+	Title             string          `json:"title"`
+	SourceClass       string          `json:"source_class"`
+	CredibilityWeight float64         `json:"credibility_weight"`
+	Stance            string          `json:"stance"`
+	Relevance         float64         `json:"relevance"`
+	Summary           string          `json:"summary"`
+	Excerpt           string          `json:"excerpt"`
+	Payload           json.RawMessage `json:"payload"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+}
+
+type FrozenResearchMessage struct {
+	ID            string          `json:"id"`
+	SessionID     string          `json:"session_id"`
+	SenderType    string          `json:"sender_type"`
+	SenderID      string          `json:"sender_id,omitempty"`
+	TargetAgentID string          `json:"target_agent_id,omitempty"`
+	Body          string          `json:"body"`
+	CardKind      string          `json:"card_kind"`
+	Meta          json.RawMessage `json:"meta"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+type FrozenProductRound struct {
+	ID                string          `json:"id"`
+	SessionID         string          `json:"session_id"`
+	RoundNumber       int32           `json:"round_number"`
+	Decision          string          `json:"decision"`
+	CoverageGaps      json.RawMessage `json:"coverage_gaps"`
+	ConfidenceNote    string          `json:"confidence_note"`
+	BudgetUsed        int32           `json:"budget_used"`
+	BudgetRemaining   int32           `json:"budget_remaining"`
+	GoalPatchProposal string          `json:"goal_patch_proposal,omitempty"`
+	NextRoundFocus    string          `json:"next_round_focus,omitempty"`
+	DecidedByAgentID  string          `json:"decided_by_agent_id,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+}
+
+type FrozenThoughtStrategyNode struct {
+	ID        string          `json:"id"`
+	SessionID string          `json:"session_id"`
+	Payload   json.RawMessage `json:"payload"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type FrozenResearchReport struct {
+	ID         string          `json:"id"`
+	SessionID  string          `json:"session_id"`
+	Revision   int32           `json:"revision"`
+	ContentMD  string          `json:"content_md"`
+	Structured json.RawMessage `json:"structured"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
+// ArtifactProjection is the bounded, hash-stable passport read model. It never
+// exposes content hashes, representations, locators, grants, or omission data.
+type ArtifactProjection struct {
+	ProjectionHash string                   `json:"projection_hash"`
+	Items          []ArtifactProjectionItem `json:"items"`
+}
+
+type ArtifactProjectionItem struct {
+	ID                     string `json:"id"`
+	RunID                  string `json:"run_id"`
+	EntityKind             string `json:"entity_kind"`
+	EntityID               string `json:"entity_id"`
+	CurrentVersion         *int   `json:"current_version"`
+	EligibilityRevision    int64  `json:"eligibility_revision"`
+	LifecycleStatus        string `json:"lifecycle_status"`
+	ProvenanceCompleteness string `json:"provenance_completeness"`
+	SchemaName             string `json:"schema_name"`
+	SchemaVersion          string `json:"schema_version"`
+	AccessLevel            string `json:"access_level"`
+	GoalVersion            *int   `json:"goal_version"`
+	PlanVersion            *int   `json:"plan_version"`
+	ProducedByTaskID       string `json:"produced_by_task_id,omitempty"`
+	ProducedByAttemptID    string `json:"produced_by_attempt_id,omitempty"`
+	ProducedByAgentID      string `json:"produced_by_agent_id,omitempty"`
+	VersionCount           int    `json:"version_count"`
+	InputReferenceCount    int    `json:"input_reference_count"`
+	OutputReferenceCount   int    `json:"output_reference_count"`
+}
+
+type EvaluationPrivateContext struct {
+	ID          string          `json:"id"`
+	Stage       string          `json:"stage"`
+	Passed      bool            `json:"passed"`
+	Score       float64         `json:"score"`
+	Findings    json.RawMessage `json:"findings"`
+	Remediation string          `json:"remediation"`
+	CreatedAt   time.Time       `json:"created_at"`
 }
 
 // AttemptArtifactContext is a bounded passport summary for task-bound reads.

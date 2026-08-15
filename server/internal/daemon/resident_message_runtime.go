@@ -37,19 +37,20 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return errors.New("resident Message runtime is not configured")
 	}
 	if d.canonicalRuntimes.hasResidentBackend(agentID, runtimeID) {
-		if runIdentity == nil {
-			return nil
-		}
-		if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err == nil {
-			return nil
-		} else if !errors.Is(err, agent.ErrPiRPCRunIdentityRequiresFreshSession) {
-			return fmt.Errorf("bind resident Pi run identity: %w", err)
-		}
-		// A run-scoped Pi session cannot inherit an unbound or differently
-		// bound resident. Replace it only through the pool's idle invalidation
-		// boundary; an active prior turn remains busy and is never torn down.
-		if err := d.canonicalRuntimes.invalidateSession(agentID, runtimeID); err != nil {
-			return fmt.Errorf("rotate resident Pi run identity: %w", err)
+		if runIdentity != nil {
+			if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err == nil {
+				return d.ensureResidentProviderProcess(ctx, agentID, runtimeID)
+			} else if !errors.Is(err, agent.ErrPiRPCRunIdentityRequiresFreshSession) {
+				return fmt.Errorf("bind resident Pi run identity: %w", err)
+			}
+			// A run-scoped Pi session cannot inherit an unbound or differently
+			// bound resident. Replace it only through the pool's idle invalidation
+			// boundary; an active prior turn remains busy and is never torn down.
+			if err := d.canonicalRuntimes.invalidateSession(agentID, runtimeID); err != nil {
+				return fmt.Errorf("rotate resident Pi run identity: %w", err)
+			}
+		} else {
+			return d.ensureResidentProviderProcess(ctx, agentID, runtimeID)
 		}
 	}
 	if d.client == nil {
@@ -69,7 +70,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if err != nil {
 		return fmt.Errorf("load resident Agent configuration: %w", err)
 	}
-	if config.Agent == nil || config.Agent.ID != agentID || config.RuntimeID != runtimeID || config.WorkspaceID != runtime.WorkspaceID || config.RuntimeStateGeneration <= 0 {
+	if config.Agent == nil || config.Agent.ID != agentID || config.RuntimeID != runtimeID || config.WorkspaceID != runtime.WorkspaceID {
 		return errors.New("invalid resident Agent configuration")
 	}
 	if !isCanonicalResidentProvider(runtime.Provider) {
@@ -94,15 +95,10 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		AgentSkills:       convertSkillsForEnv(config.Agent.Skills),
 		WorkspaceContext:  config.WorkspaceContext,
 	}
-	openclawBin := ""
-	if runtime.Provider == "openclaw" {
-		openclawBin = entry.Path
-	}
 	env := execenv.Reuse(execenv.ReuseParams{
 		AgentRoot:    workspace.AgentRoot,
 		Provider:     runtime.Provider,
 		CodexVersion: d.agentVersion("codex"),
-		OpenclawBin:  openclawBin,
 		McpConfig:    config.Agent.McpConfig,
 		Task:         taskCtx,
 	}, d.logger)
@@ -150,12 +146,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
 	}
-	if env.OpenclawConfigPath != "" {
-		agentEnv["OPENCLAW_CONFIG_PATH"] = env.OpenclawConfigPath
-	}
-	if roots, ok := composeOpenclawIncludeRoots(env.OpenclawIncludeRoot, os.Getenv("OPENCLAW_INCLUDE_ROOTS")); ok {
-		agentEnv["OPENCLAW_INCLUDE_ROOTS"] = roots
-	}
 
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:             config.Agent.ID,
@@ -178,25 +168,25 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	}
 
 	resumeSessionID := ""
-	if d.agentLifecycleExecutor != nil && d.agentLifecycleExecutor.sessions != nil {
-		if stored, err := d.agentLifecycleExecutor.sessions.Get(agentID, runtimeID); err == nil {
+	if d.agentRuntimeSessions != nil {
+		if stored, err := d.agentRuntimeSessions.Get(agentID, runtimeID); err == nil {
 			resumeSessionID = stored
 		}
 	}
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
-		Mode:               canonicalRuntimeResident,
 		CanonicalSessionID: resumeSessionID,
 		BackendConfig: agent.Config{
 			ExecutablePath: entry.Path,
 			Env:            agentEnv,
 			Logger:         d.logger,
 			ResidentOptions: agent.ExecOptions{
-				Cwd:           env.AgentRoot,
-				Model:         model,
-				CustomArgs:    append([]string(nil), config.Agent.CustomArgs...),
-				McpConfig:     append([]byte(nil), config.Agent.McpConfig...),
-				ThinkingLevel: thinking,
+				Cwd:             env.AgentRoot,
+				Model:           model,
+				CustomArgs:      append([]string(nil), config.Agent.CustomArgs...),
+				McpConfig:       append([]byte(nil), config.Agent.McpConfig...),
+				ThinkingLevel:   thinking,
+				ResumeSessionID: resumeSessionID,
 			},
 		},
 		Factory: d.canonicalResidentMessageFactory(runtime.Provider),
@@ -214,6 +204,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			if err != nil {
 				return nil, err
 			}
+			environment[AgentProxyCLIWrapperEnv] = transport.wrapperPath
 			environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
 			return func() { _ = transport.Close() }, nil
 		},
@@ -225,8 +216,32 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	lease.release(true)
 	if runIdentity != nil {
 		if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err != nil {
+			_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 			return fmt.Errorf("bind resident Pi run identity: %w", err)
 		}
+	}
+	if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
+		_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
+		return fmt.Errorf("start resident provider process: %w", err)
+	}
+	return nil
+}
+
+// ensureResidentProviderProcess keeps Raft's failed-start cleanup invariant:
+// a provider that did not start cannot remain registered as resident. Idle
+// backends detach immediately. If an older turn is still draining, force the
+// provider process to exit and let that turn's owner detach the fenced backend.
+func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, runtimeID string) error {
+	if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
+		startErr := fmt.Errorf("start resident provider process: %w", err)
+		cleanupErr := d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
+		if errors.Is(cleanupErr, ErrCanonicalAgentRuntimeBusy) {
+			cleanupErr = d.canonicalRuntimes.forceInvalidateSession(agentID, runtimeID)
+		}
+		if cleanupErr != nil {
+			return errors.Join(startErr, fmt.Errorf("retire failed resident provider process: %w", cleanupErr))
+		}
+		return startErr
 	}
 	return nil
 }
@@ -241,7 +256,7 @@ func (d *Daemon) canonicalResidentMessageFactory(provider string) canonicalRunti
 	if d != nil && d.canonicalResidentFactoryOverride != nil {
 		return d.canonicalResidentFactoryOverride
 	}
-	return defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)
+	return defaultCanonicalRuntimeFactory(provider)
 }
 
 func newCanonicalGrokResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {

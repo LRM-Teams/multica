@@ -1,0 +1,2 @@
+-- Irreversible data cutover: pre-cutover active operations do not contain the
+-- launch/reset proofs required to reconstruct a safe running state.

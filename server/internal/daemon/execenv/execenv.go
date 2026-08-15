@@ -26,11 +26,6 @@ type TaskContextForEnv struct {
 	NewCommentsSince    string // RFC3339 anchor (last run's started_at) the count is measured from; empty on cold start
 	PriorSessionResumed bool   // true when the daemon will resume an existing provider session for this task
 	AssignmentSnapshot  *protocol.IssueAssignmentSnapshot
-	// FreshSessionNoticeReason is non-empty when the canonical provider
-	// session is intentionally new (for example, during cutover or after an
-	// explicit reset). The reason is a transport signal; the rendered brief
-	// uses one stable user-facing explanation for every reason.
-	FreshSessionNoticeReason string
 
 	AgentID           string // unique ID of the dispatched agent
 	AgentName         string
@@ -113,19 +108,6 @@ type Environment struct {
 	AgentRoot string
 	// CodexHome is the provider-private CODEX_HOME below AgentRoot.
 	CodexHome string
-	// OpenclawConfigPath is the path to the synthesized OpenClaw
-	// config (set only for openclaw provider). The daemon exports this as
-	// OPENCLAW_CONFIG_PATH on the openclaw subprocess so its native skill
-	// scanner pins workspaceDir to WorkDir.
-	OpenclawConfigPath string
-	// OpenclawIncludeRoot is the directory of the user's active OpenClaw
-	// config (set only for openclaw provider with an on-disk user config).
-	// The daemon must prepend it to OPENCLAW_INCLUDE_ROOTS so OpenClaw is
-	// allowed to follow the wrapper's `$include` link out of envRoot into
-	// the user's config — by default OpenClaw confines `$include` to the
-	// directory holding the wrapper file. Empty when no $include is
-	// emitted (fresh install).
-	OpenclawIncludeRoot string
 
 	logger *slog.Logger // for cleanup logging
 }
@@ -135,7 +117,6 @@ type ReuseParams struct {
 	AgentRoot    string
 	Provider     string
 	CodexVersion string // only used when Provider == "codex"
-	OpenclawBin  string // only used when Provider == "openclaw"; empty = PATH lookup
 	// McpConfig is the agent's saved `mcp_config` JSON. Reused on reuse so a
 	// freshly-saved managed set re-materialises into the wrapper before the
 	// task starts — without this a stale wrapper from a prior run would keep
@@ -217,25 +198,6 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 				logger.Warn("execenv: refresh codex skills failed", "error", err)
 			}
 		}
-	}
-
-	// Refresh the Agent-scoped OpenClaw config — the user may have
-	// added/removed agents or rotated providers since the prior task ran,
-	// and the workspace override always re-targets the current workDir.
-	// Fail closed: a user config that can no longer be parsed should block
-	// reuse rather than degrade to a minimal config that boots OpenClaw
-	// without the registered agents.
-	if params.Provider == "openclaw" {
-		result, err := prepareOpenclawConfig(agentRoot, agentRoot, OpenclawConfigPrep{
-			OpenclawBin: params.OpenclawBin,
-			McpConfig:   params.McpConfig,
-		})
-		if err != nil {
-			logger.Warn("execenv: refresh openclaw config failed", "error", err)
-			return nil
-		}
-		env.OpenclawConfigPath = result.ConfigPath
-		env.OpenclawIncludeRoot = result.IncludeRoot
 	}
 
 	logger.Info("execenv: reusing agent workspace", "agent_root", agentRoot)

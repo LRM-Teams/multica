@@ -70,6 +70,10 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
+		h.completeMachineUpgradeOnCurrentSocket(ctx, identity)
+		if err := h.resumeAgentRestartOperations(ctx, identity); err != nil {
+			return err
+		}
 		// Raft establishes APM ownership before it offers durable deliveries.
 		// The Computer can then accept messages into the Agent's starting Inbox
 		// and ACK them without requiring the Provider to be ready yet.
@@ -82,7 +86,7 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.redeliverUnacknowledgedStandaloneChat(ctx, identity); err != nil {
 			return err
 		}
-		return h.dispatchPendingRunnerStops(ctx, identity)
+		return nil
 	case protocol.EventAgentStatus:
 		var status protocol.AgentStatusPayload
 		if err := json.Unmarshal(raw, &status); err != nil {
@@ -90,6 +94,13 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		}
 		if err := h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status); err != nil {
 			return err
+		}
+		handled, err := h.advanceAgentRestartFromStatus(ctx, identity, status)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
 		}
 		if status.Status == protocol.AgentStatusInactive && h.DaemonHub != nil {
 			return h.reconcileWorkspaceRunnerLaunches(ctx, identity)
@@ -107,6 +118,12 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		// were rejected_no_process while the Agent was down — same ledger
 		// as Runner ready, not a fake ACK.
 		return h.redeliverUnacknowledgedStandaloneChat(ctx, identity)
+	case protocol.EventAgentResetWorkspaceResult:
+		var result protocol.WorkspaceRunnerAgentResetWorkspaceResultPayload
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return fmt.Errorf("decode Agent workspace reset result: %w", err)
+		}
+		return h.recordAgentWorkspaceResetResult(ctx, identity, result)
 	case protocol.EventAgentSession:
 		var session protocol.AgentSessionPayload
 		if err := json.Unmarshal(raw, &session); err != nil {
@@ -119,30 +136,6 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return fmt.Errorf("decode Runner Activity: %w", err)
 		}
 		return h.recordRunnerActivity(ctx, identity, daemonInstanceID, activity)
-	case protocol.EventAgentAttachmentReplayReq:
-		var request protocol.WorkspaceRunnerAttachmentReplayRequest
-		if err := json.Unmarshal(raw, &request); err != nil {
-			return fmt.Errorf("decode Attachment replay request: %w", err)
-		}
-		return h.replayAgentAttachmentCommands(ctx, identity, request)
-	case protocol.EventAgentAttached:
-		var receipt protocol.WorkspaceRunnerAgentAttachedPayload
-		if err := json.Unmarshal(raw, &receipt); err != nil {
-			return fmt.Errorf("decode Attachment attach receipt: %w", err)
-		}
-		return h.acknowledgeAgentAttachmentCommand(ctx, identity, eventType, receipt)
-	case protocol.EventAgentDetached:
-		var receipt protocol.WorkspaceRunnerAgentDetachedPayload
-		if err := json.Unmarshal(raw, &receipt); err != nil {
-			return fmt.Errorf("decode Attachment detach receipt: %w", err)
-		}
-		return h.acknowledgeAgentAttachmentCommand(ctx, identity, eventType, protocol.WorkspaceRunnerAgentAttachedPayload(receipt))
-	case protocol.EventAgentAttachmentReplayAck:
-		var acknowledgement protocol.WorkspaceRunnerAttachmentReplayAck
-		if err := json.Unmarshal(raw, &acknowledgement); err != nil {
-			return fmt.Errorf("decode Attachment replay acknowledgement: %w", err)
-		}
-		return h.acknowledgeAgentAttachmentReplay(ctx, identity, acknowledgement)
 	case protocol.EventMixedRunActivityTransition:
 		var transition protocol.MixedRunActivityTransitionPayload
 		if err := json.Unmarshal(raw, &transition); err != nil {
@@ -424,14 +417,32 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
 			) VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
-				runtime_id = EXCLUDED.runtime_id,
+				runtime_id = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					THEN agent_activity_launch.runtime_id
+					ELSE EXCLUDED.runtime_id
+				END,
 				daemon_id = EXCLUDED.daemon_id,
 				daemon_instance_id = EXCLUDED.daemon_instance_id,
 				launch_id = EXCLUDED.launch_id,
 				status = EXCLUDED.status,
-				last_client_sequence = 0,
-				last_producer_fact_id = '',
-				last_activity_fingerprint = '',
+				last_client_sequence = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					THEN agent_activity_launch.last_client_sequence ELSE 0 END,
+				last_producer_fact_id = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					THEN agent_activity_launch.last_producer_fact_id ELSE '' END,
+				last_activity_fingerprint = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					THEN agent_activity_launch.last_activity_fingerprint ELSE '' END,
 				updated_at = now()
 			WHERE agent_activity_launch.status = 'inactive'
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
@@ -483,13 +494,38 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 				start_dispatch_id, status, queue_state, queue_depth, queue_age_ms, accepted_at
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, 'accepted', $8, $9, $10, now())
 			ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
-				runtime_id = EXCLUDED.runtime_id, daemon_id = EXCLUDED.daemon_id,
+				runtime_id = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					THEN agent_activity_launch.runtime_id ELSE EXCLUDED.runtime_id END,
+				daemon_id = EXCLUDED.daemon_id,
 				daemon_instance_id = EXCLUDED.daemon_instance_id, launch_id = EXCLUDED.launch_id,
 				start_dispatch_id = EXCLUDED.start_dispatch_id,
-				status = 'accepted',
+				status = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					 AND agent_activity_launch.status = 'active'
+					THEN 'active' ELSE 'accepted' END,
 				queue_state = EXCLUDED.queue_state, queue_depth = EXCLUDED.queue_depth,
 				queue_age_ms = EXCLUDED.queue_age_ms, accepted_at = COALESCE(agent_activity_launch.accepted_at, now()),
-				last_client_sequence = 0, last_producer_fact_id = '', last_activity_fingerprint = '', updated_at = now()
+				last_client_sequence = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					THEN agent_activity_launch.last_client_sequence ELSE 0 END,
+				last_producer_fact_id = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					THEN agent_activity_launch.last_producer_fact_id ELSE '' END,
+				last_activity_fingerprint = CASE
+					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+					THEN agent_activity_launch.last_activity_fingerprint ELSE '' END,
+				updated_at = now()
 			WHERE agent_activity_launch.status = 'inactive'
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
 			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
@@ -547,10 +583,15 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		return err
 	}
 	snapshot := activity.Snapshot
+	// Raft's agent:activity wire carries execution facts, not presentation
+	// state. Reduce the fact on the server before fencing, persistence, and
+	// realtime projection so a daemon can never overwrite UI lifecycle state.
+	snapshot.ActivityKind = activityprojection.ActivityKindFromDetailKind(snapshot.DetailKind)
+	activity.Snapshot = snapshot
 	if snapshot.DaemonInstanceID != daemonInstanceID {
 		return errors.New("Activity daemon instance does not match current Runner")
 	}
-	workspaceID, agentID, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, snapshot.AgentID)
+	workspaceID, agentID, _, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, snapshot.AgentID)
 	if err != nil {
 		return err
 	}
@@ -558,14 +599,17 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	if err != nil {
 		return err
 	}
-	command, err := h.DB.Exec(ctx, `
+	terminalStopped := snapshot.ActivityKind == protocol.ActivityKindOffline && snapshot.DetailKind == "stopped" && snapshot.ProbeID == ""
+	var runtimeID pgtype.UUID
+	err = h.DB.QueryRow(ctx, `
 		UPDATE agent_activity_launch
 		SET last_client_sequence = $6, last_producer_fact_id = $7, last_activity_fingerprint = $8, updated_at = now()
 		WHERE workspace_id = $1 AND agent_id = $2
 		  AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5
-		  AND status = 'active'
+		  AND (status = 'active' OR (status = 'inactive' AND $10))
 		  AND (last_client_sequence < $6 OR (last_client_sequence = $6 AND last_producer_fact_id = $7 AND last_activity_fingerprint = $8))
 		  AND (
+			$10 OR
 			($9 = '' AND NOT EXISTS (
 				SELECT 1 FROM agent_activity_probe p WHERE p.workspace_id = $1 AND p.agent_id = $2
 			)) OR
@@ -573,15 +617,22 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 				SELECT 1 FROM agent_activity_probe p WHERE p.workspace_id = $1 AND p.agent_id = $2
 					AND p.daemon_id = $3 AND p.daemon_instance_id = $4 AND p.launch_id = $5 AND p.probe_id = $9
 			))
-		  )`,
-		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID, fingerprint, snapshot.ProbeID)
+		  )
+		RETURNING runtime_id`,
+		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID, fingerprint, snapshot.ProbeID, terminalStopped).Scan(&runtimeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("stale or unauthorized Runner Activity")
+	}
 	if err != nil {
 		return fmt.Errorf("advance Runner Activity fence: %w", err)
 	}
-	if command.RowsAffected() != 1 {
-		return errors.New("stale or unauthorized Runner Activity")
-	}
-	if snapshot.ProbeID != "" {
+	if terminalStopped {
+		if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe
+			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`,
+			workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID); err != nil {
+			return fmt.Errorf("clear terminal Runner Activity probe: %w", err)
+		}
+	} else if snapshot.ProbeID != "" {
 		if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe
 			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5 AND probe_id = $6`,
 			workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ProbeID); err != nil {

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { useImperativeHandle, type Ref } from "react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -143,13 +144,19 @@ vi.mock("../../navigation/context", () => ({
   }),
 }));
 
-// Expose `plainUrls` so a test can assert the channel composer opts into
-// plain-text URLs (#542) — the miss-surface root cause was this prop never
-// reaching the web channel composer.
 vi.mock("../../editor/lazy-content-editor", () => ({
-  ContentEditor: (props: { plainUrls?: boolean }) => (
-    <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />
-  ),
+  ContentEditor: function MockContentEditor(props: {
+    plainUrls?: boolean;
+    prefix?: React.ReactNode;
+    ref?: Ref<{ focus: () => void }>;
+  }) {
+    useImperativeHandle(props.ref, () => ({ focus: () => {} }));
+    return (
+      <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)}>
+        {props.prefix}
+      </div>
+    );
+  },
 }));
 
 vi.mock("../../common/project-picker-button", () => ({
@@ -169,12 +176,14 @@ const listProps = vi.hoisted(() => ({
   current: null as {
     onEditMessage?: (m: ChannelMessage, content: string) => void;
     onOpenThread?: (m: ChannelMessage) => void;
+    onQuoteMessage?: (m: ChannelMessage) => void;
   } | null,
 }));
 vi.mock("./channel-message-list", () => ({
   ChannelMessageList: (props: {
     onEditMessage?: (m: ChannelMessage, content: string) => void;
     onOpenThread?: (m: ChannelMessage) => void;
+    onQuoteMessage?: (m: ChannelMessage) => void;
   }) => {
     listProps.current = props;
     return <div data-testid="message-list" />;
@@ -232,6 +241,32 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     // The mocked ProjectPickerButton renders as a plain button labeled
     // "project" — it must not appear until the settings surface is opened.
     expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+  });
+
+  it("shows a structured message quote above the composer", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+
+    act(() => {
+      listProps.current?.onQuoteMessage?.({
+        id: "message-1",
+        channel_id: "chan-1",
+        workspace_id: "ws-1",
+        seq: 1,
+        type: "user",
+        author_id: "user-2",
+        author_name: "Bob",
+        content: "Quoted message",
+        source: "multica",
+        external_message_id: null,
+        client_message_id: null,
+        created_at: "2026-06-17T09:15:00Z",
+      });
+    });
+
+    expect(screen.getByTestId("composer-quote-preview")).toHaveTextContent(
+      "Bob: Quoted message",
+    );
   });
 
   it("reveals the project picker inside Channel details → Settings", async () => {

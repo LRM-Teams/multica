@@ -65,6 +65,12 @@ func TestChannelGoalLifecycleAndCompletionGate(t *testing.T) {
 	if goal == nil || goal.Version != 1 || len(goal.SuccessCriteria) != 2 {
 		t.Fatalf("created goal = %#v", goal)
 	}
+	if goal.CurrentStep != initialChannelGoalStep {
+		t.Fatalf("initial current_step = %q, want control-plane setup", goal.CurrentStep)
+	}
+	if goal.Coordination == nil || goal.Coordination.ExecutionAdmission == "" {
+		t.Fatalf("created goal missing coordination summary: %#v", goal.Coordination)
+	}
 
 	duplicate := httptest.NewRecorder()
 	testHandler.CreateChannelGoal(duplicate, goalRequest(t, testUserID, http.MethodPost, channel.ID, createBody))
@@ -136,6 +142,28 @@ func TestChannelGoalLifecycleAndCompletionGate(t *testing.T) {
 	}
 }
 
+func TestChannelGoalExecutionAdmission(t *testing.T) {
+	tests := []struct {
+		name string
+		in   channelGoalCoordinationSummary
+		want string
+	}{
+		{name: "single agent direct", in: channelGoalCoordinationSummary{AgentMemberCount: 1}, want: "direct"},
+		{name: "project required", in: channelGoalCoordinationSummary{AgentMemberCount: 2}, want: "project_required"},
+		{name: "git required", in: channelGoalCoordinationSummary{AgentMemberCount: 2, ProjectID: "project-1"}, want: "git_required"},
+		{name: "issues required", in: channelGoalCoordinationSummary{AgentMemberCount: 2, ProjectID: "project-1", GitRepositoryBound: true}, want: "issues_required"},
+		{name: "ready", in: channelGoalCoordinationSummary{AgentMemberCount: 2, ProjectID: "project-1", GitRepositoryBound: true, ChannelProjectIssueTotal: 1, ProjectIssueTotal: 2, OpenProjectIssueTotal: 1}, want: "ready"},
+		{name: "acceptance required", in: channelGoalCoordinationSummary{AgentMemberCount: 2, ProjectID: "project-1", GitRepositoryBound: true, ChannelProjectIssueTotal: 1, ProjectIssueTotal: 2}, want: "acceptance_required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := channelGoalExecutionAdmission(tt.in); got != tt.want {
+				t.Fatalf("admission = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestChannelGoalWriteRequiresChannelAuthority(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
@@ -154,6 +182,85 @@ func TestChannelGoalWriteRequiresChannelAuthority(t *testing.T) {
 	}))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("ordinary member create = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumanChannelManagerCanBootstrapGoalControlPlane(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	channel := createGoalTestChannel(t)
+	for index := 0; index < 2; index++ {
+		agentID := createHandlerTestAgent(t, "Legacy goal agent "+uuid.NewString()[:8], nil)
+		if _, err := testPool.Exec(context.Background(), `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+			VALUES ($1, $2, 'agent', $3, 'member')`,
+			parseUUID(channel.ID), parseUUID(testWorkspaceID), parseUUID(agentID)); err != nil {
+			t.Fatalf("add goal agent %d: %v", index, err)
+		}
+	}
+	created := httptest.NewRecorder()
+	testHandler.CreateChannelGoal(created, goalRequest(t, testUserID, http.MethodPost, channel.ID, map[string]any{
+		"title": "Recover legacy delivery", "objective": "Bind the canonical repository",
+		"success_criteria": []string{"Control plane ready"},
+	}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("CreateChannelGoal = %d: %s", created.Code, created.Body.String())
+	}
+
+	bootstrap := httptest.NewRecorder()
+	testHandler.BootstrapChannelGoalControlPlane(bootstrap, goalRequest(
+		t, testUserID, http.MethodPost, channel.ID,
+		map[string]any{
+			"project_title":       "Recovered delivery project",
+			"repository_url":      "https://github.com/multica-ai/legacy-" + uuid.NewString(),
+			"default_branch_hint": "dev",
+		},
+	))
+	if bootstrap.Code != http.StatusCreated {
+		t.Fatalf("human bootstrap = %d: %s", bootstrap.Code, bootstrap.Body.String())
+	}
+	goal := decodeGoalEnvelope(t, bootstrap).Goal
+	if goal == nil || goal.Coordination == nil || goal.Coordination.ProjectID == "" ||
+		!goal.Coordination.GitRepositoryBound || goal.Coordination.ExecutionAdmission != "issues_required" {
+		t.Fatalf("human bootstrap goal = %#v", goal)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, parseUUID(goal.Coordination.ProjectID))
+	})
+}
+
+func TestHumanChannelMemberCannotBootstrapGoalControlPlane(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test DB not configured")
+	}
+	channel := createGoalTestChannel(t)
+	created := httptest.NewRecorder()
+	testHandler.CreateChannelGoal(created, goalRequest(t, testUserID, http.MethodPost, channel.ID, map[string]any{
+		"title": "Protected delivery", "objective": "Keep repository authority scoped",
+		"success_criteria": []string{"Only managers can bind"},
+	}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("CreateChannelGoal = %d: %s", created.Code, created.Body.String())
+	}
+
+	memberID := seedWorkspaceUserForTransportTargetTest(t, "goal-bootstrap-member-"+uuid.NewString())
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1, $2, 'user', $3, 'member')`,
+		parseUUID(channel.ID), parseUUID(testWorkspaceID), parseUUID(memberID)); err != nil {
+		t.Fatalf("add ordinary member: %v", err)
+	}
+	bootstrap := httptest.NewRecorder()
+	testHandler.BootstrapChannelGoalControlPlane(bootstrap, goalRequest(
+		t, memberID, http.MethodPost, channel.ID,
+		map[string]any{
+			"project_title":  "Unauthorized project",
+			"repository_url": "https://github.com/multica-ai/unauthorized-" + uuid.NewString(),
+		},
+	))
+	if bootstrap.Code != http.StatusForbidden {
+		t.Fatalf("ordinary member bootstrap = %d: %s", bootstrap.Code, bootstrap.Body.String())
 	}
 }
 
@@ -254,6 +361,31 @@ func TestAgentGoalManagerCreateExecutorCheckpointAndIntentGuard(t *testing.T) {
 		t.Fatalf("agent-created goal = %#v", createdGoal)
 	}
 
+	bootstrap := httptest.NewRecorder()
+	testHandler.BootstrapAgentChannelGoalControlPlane(bootstrap, agentGoalRequest(
+		t, managerID, http.MethodPost, "/api/agent/channels/"+channel.ID+"/goal/bootstrap", channel.ID,
+		map[string]any{
+			"project_title": "Goal delivery project", "repository_url": "https://github.com/multica-ai/goal-delivery.git",
+			"default_branch_hint": "dev",
+		},
+	))
+	if bootstrap.Code != http.StatusCreated {
+		t.Fatalf("manager bootstrap = %d: %s", bootstrap.Code, bootstrap.Body.String())
+	}
+	var bootstrapped BootstrapAgentChannelGoalControlPlaneResponse
+	if err := json.Unmarshal(bootstrap.Body.Bytes(), &bootstrapped); err != nil {
+		t.Fatalf("decode bootstrap: %v", err)
+	}
+	if !bootstrapped.Created || bootstrapped.Project.ID == "" || bootstrapped.Resource.ResourceType != "github_repo" {
+		t.Fatalf("bootstrap response = %#v", bootstrapped)
+	}
+	if bootstrapped.Goal.Coordination == nil || bootstrapped.Goal.Coordination.ExecutionAdmission != "issues_required" {
+		t.Fatalf("bootstrap admission = %#v", bootstrapped.Goal.Coordination)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, parseUUID(bootstrapped.Project.ID))
+	})
+
 	checkpoint := httptest.NewRecorder()
 	testHandler.CheckpointAgentChannelGoal(checkpoint, agentGoalRequest(
 		t, executorID, http.MethodPost, "/api/agent/channels/"+channel.ID+"/goal/checkpoint", channel.ID,
@@ -287,8 +419,8 @@ func TestAgentGoalManagerCreateExecutorCheckpointAndIntentGuard(t *testing.T) {
 		t, managerID, http.MethodPatch, "/api/agent/channels/"+channel.ID+"/goal", channel.ID,
 		map[string]any{"expected_version": checkpointGoal.Version, "status": "completed"},
 	))
-	if revised.Code != http.StatusOK {
-		t.Fatalf("manager completion = %d: %s", revised.Code, revised.Body.String())
+	if revised.Code != http.StatusConflict {
+		t.Fatalf("manager completion without project Issues = %d: %s", revised.Code, revised.Body.String())
 	}
 }
 

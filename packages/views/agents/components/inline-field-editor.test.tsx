@@ -39,8 +39,11 @@ describe("InlineFieldEditor (LRM-471)", () => {
       />,
     );
 
+    const trigger = screen.getByTestId("name-trigger");
     expect(screen.getByTestId("decorated-name")).toHaveTextContent("Decorated Atlas");
-    fireEvent.click(screen.getByTestId("name-trigger"));
+    expect(trigger).toHaveClass("w-fit", "max-w-full");
+    expect(trigger.querySelector("svg")).toHaveClass("lucide-pencil");
+    fireEvent.click(trigger);
     expect(screen.getByLabelText("Display name")).toHaveValue("Atlas");
   });
 

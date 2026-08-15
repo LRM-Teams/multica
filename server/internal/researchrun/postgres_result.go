@@ -7,20 +7,31 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 type acceptedResultState struct {
-	workspaceID string
-	attemptID   string
-	task        Task
-	run         Run
-	stale       bool
-	targetPlan  int
-	verified    bool
+	workspaceID  string
+	attemptID    string
+	task         Task
+	run          Run
+	stale        bool
+	targetPlan   int
+	verified     bool
+	outputAccess ArtifactAccessLevel
+	checkpoint   func(context.Context, researchTxFaultPoint) error
+}
+
+func (state acceptedResultState) checkpointAfter(ctx context.Context, point researchTxFaultPoint) error {
+	if state.checkpoint == nil {
+		return nil
+	}
+	return state.checkpoint(ctx, point)
 }
 
 func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) (AcceptResultOutcome, error) {
@@ -44,6 +55,53 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		}
 		return AcceptResultOutcome{}, err
 	}
+	var lockedResult ResultEnvelope
+	var lockedHash string
+	if state.run.OrchestratorVersion == OrchestratorVersionV6 {
+		if state.task.Kind == TaskKindPlan {
+			lockedPlan, planHash, decodeErr := DecodeAndValidateResearchV6PlanResult(in.Raw)
+			if decodeErr != nil {
+				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
+			}
+			in.V6Plan, lockedHash, lockedResult = &lockedPlan, planHash, researchV6PlanEnvelope(lockedPlan)
+		} else if isEvidenceTask(state.task.Kind) && state.task.ExpectedResult == "research_evidence_v6" {
+			lockedEvidence, evidenceHash, decodeErr := DecodeAndValidateV6EvidenceResult(in.Raw)
+			if decodeErr != nil {
+				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
+			}
+			in.V6Evidence, lockedHash, lockedResult = &lockedEvidence, evidenceHash, researchV6EvidenceEnvelope(lockedEvidence)
+		} else if state.task.Kind == TaskKindIntegrate && state.task.ExpectedResult == "research_integration_v6" {
+			lockedIntegration, integrationHash, decodeErr := decodeAndHashV6IntegrationResult(in.Raw)
+			if decodeErr != nil {
+				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
+			}
+			in.V6Integration, lockedHash, lockedResult = &lockedIntegration, integrationHash, researchV6IntegrationEnvelope(lockedIntegration)
+		} else if state.task.Kind == TaskKindDeliberate && state.task.ExpectedResult == "research_deliberation_v6" {
+			lockedDeliberation, deliberationHash, decodeErr := DecodeAndValidateV6DeliberationResult(in.Raw)
+			if decodeErr != nil {
+				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
+			}
+			in.V6Deliberation, lockedHash, lockedResult = &lockedDeliberation, deliberationHash, researchV6DeliberationEnvelope(lockedDeliberation)
+		} else {
+			return AcceptResultOutcome{}, fmt.Errorf("%w: V6 task result adapter is not available for %s", ErrUnsupportedVersion, state.task.Kind)
+		}
+	} else {
+		lockedResult, lockedHash, err = DecodeAndValidateResultForVersion(state.run.OrchestratorVersion, in.Raw, state.task, state.run.Config)
+		if err != nil {
+			return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, err)
+		}
+	}
+	if normalizeArtifactContentHash(lockedHash) != in.Hash {
+		return AcceptResultOutcome{}, fmt.Errorf("%w: result hash changed under locked run/task contract", ErrResultConflict)
+	}
+	in.Result = lockedResult
+	state.outputAccess = ArtifactAccessRaw
+	state.checkpoint = func(ctx context.Context, point researchTxFaultPoint) error {
+		if s.txFaultHook == nil {
+			return nil
+		}
+		return s.txFaultHook(ctx, txOpResultAccept, point)
+	}
 
 	artifactPassportEnabled, err := sessionArtifactPassportEnabled(ctx, tx, in.SessionID, state.workspaceID)
 	if err != nil {
@@ -64,6 +122,17 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		if err = lockAcceptanceManifestAuthorizationTargetsTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID); err != nil {
 			return AcceptResultOutcome{}, err
 		}
+		state.outputAccess, err = deriveManifestOutputAccessTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID)
+		if err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
+	if in.V6Plan != nil {
+		prepared, prepareErr := prepareResearchV6PlanMaterialization(state.run.SessionID, state.attemptID, in.AgentID, state.run.StateVersion, *in.V6Plan)
+		if prepareErr != nil {
+			return AcceptResultOutcome{}, prepareErr
+		}
+		in.Result = prepared.Result
 	}
 
 	if !state.stale && state.task.Kind == TaskKindReplan {
@@ -72,7 +141,11 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 			return AcceptResultOutcome{}, err
 		}
 	}
-	measureGain := isEvidenceTask(state.task.Kind) && !state.stale
+	// V6 retrieval results contain screened candidates, not fetched Source
+	// Snapshots. Information gain is measured only after ingestion creates
+	// canonical evidence; counting candidates would trigger false low-gain
+	// replans and let links masquerade as evidence.
+	measureGain := isEvidenceTask(state.task.Kind) && !state.stale && in.V6Evidence == nil
 	var graphBefore researchGraphState
 	if measureGain {
 		graphBefore, err = s.loadResearchGraphState(ctx, tx, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
@@ -108,6 +181,26 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 			return AcceptResultOutcome{}, err
 		}
 		outcome.TasksCreated = created
+		if in.V6Plan != nil {
+			if err = materializeAcceptedV6PlanTx(ctx, tx, state, *in.V6Plan, in.AgentID, questionIDs); err != nil {
+				return AcceptResultOutcome{}, err
+			}
+		}
+	}
+	if in.V6Evidence != nil {
+		if err = materializeAcceptedV6EvidenceTx(ctx, tx, state, *in.V6Evidence, in.AgentID); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
+	if in.V6Integration != nil {
+		if err = materializeAcceptedV6IntegrationTx(ctx, tx, state, *in.V6Integration, in.AgentID); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
+	if in.V6Deliberation != nil {
+		if err = materializeAcceptedV6DeliberationTx(ctx, tx, state, *in.V6Deliberation, in.AgentID); err != nil {
+			return AcceptResultOutcome{}, err
+		}
 	}
 
 	sourceIDs, created, err := materializeSources(ctx, tx, state, in.Result)
@@ -152,7 +245,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		}
 	}
 
-	resultJSON, err := json.Marshal(in.Result)
+	resultJSON, err := acceptedResultJSON(in, state.run.OrchestratorVersion)
 	if err != nil {
 		return AcceptResultOutcome{}, err
 	}
@@ -169,16 +262,25 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	if command.RowsAffected() != 1 {
 		return AcceptResultOutcome{}, fmt.Errorf("%w: attempt changed while accepting result", ErrInvalidTransition)
 	}
+	if err = state.checkpointAfter(ctx, txResultAfterAttemptTerminal); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 	if err = settleAttemptCircuitSuccessTx(ctx, tx, in.AttemptID); err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	if err = state.checkpointAfter(ctx, txResultAfterCircuitSettlement); err != nil {
 		return AcceptResultOutcome{}, err
 	}
 	if artifactPassportEnabled {
 		resultID, persistErr := persistAcceptedResultArtifactTx(
-			ctx, tx, state.workspaceID, in.SessionID, in.AttemptID,
-			state.run.OrchestratorVersion, in.Result, resultJSON, in.Hash, acceptancePolicyWatermark,
+			ctx, tx, state.workspaceID, in.SessionID, state.task.ID, in.AttemptID,
+			state.run.OrchestratorVersion, in.Result, resultJSON, in.Hash, acceptancePolicyWatermark, state.outputAccess,
 		)
 		if persistErr != nil {
 			return AcceptResultOutcome{}, classifyResultConstraint(persistErr)
+		}
+		if err = state.checkpointAfter(ctx, txResultAfterResultArtifact); err != nil {
+			return AcceptResultOutcome{}, err
 		}
 		resultVersionRowID, versionErr := loadManifestVersionRowIDTx(ctx, tx, state.workspaceID, in.SessionID, resultID)
 		if versionErr != nil {
@@ -187,12 +289,18 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		if err = persistResultArtifactInputReferencesTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID, resultVersionRowID); err != nil {
 			return AcceptResultOutcome{}, classifyResultConstraint(err)
 		}
+		if err = state.checkpointAfter(ctx, txResultAfterArtifactLineage); err != nil {
+			return AcceptResultOutcome{}, err
+		}
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task
 		SET status = 'succeeded', completed_at = now(), terminal_reason = '', updated_at = now()
 		WHERE id = $1::uuid
 	`, state.task.ID); err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	if err = state.checkpointAfter(ctx, txResultAfterTaskTerminal); err != nil {
 		return AcceptResultOutcome{}, err
 	}
 	if !state.stale {
@@ -235,6 +343,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		outcome.SourcesCreated, outcome.ObservationsCreated, outcome.ClaimsCreated); err != nil {
 		return AcceptResultOutcome{}, err
 	}
+	if err = state.checkpointAfter(ctx, txResultAfterRunUpdate); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 	event, err := appendEvent(ctx, tx, state.workspaceID, in.SessionID, "task_result_accepted", "result:"+in.AttemptID, "agent", in.AgentID, map[string]any{
 		"attempt_id":           in.AttemptID,
 		"task_id":              state.task.ID,
@@ -257,6 +368,14 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	outcome.Event = event
+	if state.run.OrchestratorVersion == OrchestratorVersionV6 && !state.stale {
+		if err = reserveReadyV6IntegrationRoundsTx(ctx, tx, state, event.Sequence); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
+	if err = state.checkpointAfter(ctx, txResultAfterEvent); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 	if err = s.commitResearchTx(ctx, txOpResultAccept, tx); err != nil {
 		return AcceptResultOutcome{}, err
 	}
@@ -308,6 +427,18 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 	if err != nil {
 		return err
 	}
+	rationale := truncateBytes(method.MethodRationale, 8192)
+	existing, existingErr := loadResearchMethodVersion(ctx, tx, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
+	if existingErr == nil {
+		if existing.DecisionQuestion != method.DecisionQuestion ||
+			existing.MethodRationale != method.MethodRationale {
+			return fmt.Errorf("%w: accepted research method changed", ErrResultConflict)
+		}
+		return nil
+	}
+	if !errors.Is(existingErr, ErrInvalidResult) {
+		return existingErr
+	}
 	var decisionID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
@@ -317,11 +448,47 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 		          $4, $5, $6, $7, $8)
 		RETURNING id::text
 	`, state.workspaceID, state.run.SessionID, agentID, state.run.GoalVersion,
-		state.targetPlan, inputs, outcome, truncateBytes(method.MethodRationale, 8192)).Scan(&decisionID)
+		state.targetPlan, inputs, outcome, rationale).Scan(&decisionID)
 	if err != nil {
 		return err
 	}
-	return ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("research_method"), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)))
+	kind := artifactKindForDecision("research_method")
+	contentHash, err := ArtifactContentHash(kind, map[string]any{
+		"decision_kind": "research_method",
+		"actor_type":    "agent",
+		"actor_id":      agentID,
+		"goal_version":  state.run.GoalVersion,
+		"plan_version":  state.targetPlan,
+		"inputs":        json.RawMessage(inputs),
+		"outcome":       json.RawMessage(outcome),
+		"rationale":     rationale,
+	})
+	if err != nil {
+		return err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID:            state.workspaceID,
+		SessionID:              state.run.SessionID,
+		EntityID:               decisionID,
+		Kind:                   kind,
+		SourceCreatedAt:        timePtr(time.Now()),
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            int32Ptr(int32(state.run.GoalVersion)),
+		PlanVersion:            int32Ptr(int32(state.targetPlan)),
+		AccessLevel:            state.outputAccess,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
+		ProducedByAttemptID:    state.attemptID,
+	}); err != nil {
+		return err
+	}
+	if err = persistDecisionInputReferencesTx(
+		ctx, tx, state.workspaceID, state.run.SessionID,
+		decisionID, kind, inputs, outcome,
+	); err != nil {
+		return err
+	}
+	return state.checkpointAfter(ctx, txResultAfterMethod)
 }
 
 func isEvidenceTask(kind TaskKind) bool {
@@ -402,6 +569,9 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 	}
 	if attemptStatus == AttemptStatusSucceeded {
 		if existingRequestID == in.Result.ClientRequestID && existingHash == in.Hash {
+			if err = verifyAcceptedResultReplayLineageTx(ctx, tx, state, in); err != nil {
+				return acceptedResultState{}, nil, err
+			}
 			return state, &AcceptResultOutcome{Replayed: true, TaskID: state.task.ID, TaskKind: state.task.Kind, GoalVersion: state.task.GoalVersion, PlanVersion: state.task.PlanVersion}, nil
 		}
 		return acceptedResultState{}, nil, ErrResultConflict
@@ -413,6 +583,128 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 		return acceptedResultState{}, nil, fmt.Errorf("%w: run is %s", ErrInvalidTransition, runStatus)
 	}
 	return state, nil, nil
+}
+
+func verifyAcceptedResultReplayLineageTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	state acceptedResultState,
+	in AcceptResultInput,
+) error {
+	resultJSON, err := acceptedResultJSON(in, state.run.OrchestratorVersion)
+	if err != nil {
+		return err
+	}
+	var (
+		manifestID, storedManifestHash, currentManifestHash, storedInputSetHash string
+		resultHash, requestID, orchestratorVersion, schemaVersion               string
+		resultTaskID, resultAttemptID, manifestTaskID                           string
+		acceptanceWatermark, manifestWatermark, currentWatermark                int64
+		exactInputSet, resultMatches                                            bool
+	)
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(result.manifest_id::text,''), result.manifest_hash,
+		       manifest.manifest_hash, result.input_version_set_hash,
+		       result.content_hash, result.client_request_id, result.orchestrator_version,
+		       result.result_schema_version,
+		       COALESCE(version.produced_by_task_id::text,''),
+		       COALESCE(version.produced_by_attempt_id::text,''), manifest.task_id::text,
+		       COALESCE(result.acceptance_policy_watermark,-1), manifest.policy_watermark,
+		       policy.watermark,
+		       result.result=$5::jsonb,
+		       NOT EXISTS (
+		         (SELECT entry.artifact_version_id
+		          FROM research_artifact_context_entry entry
+		          WHERE entry.workspace_id=result.workspace_id
+		            AND entry.session_id=result.session_id
+		            AND entry.manifest_id=result.manifest_id)
+		         EXCEPT
+		         (SELECT reference.input_version_id
+		          FROM research_artifact_input_reference reference
+		          WHERE reference.workspace_id=result.workspace_id
+		            AND reference.session_id=result.session_id
+		            AND reference.consumer_version_id=version.id
+		            AND reference.relation='acceptance_input'
+		            AND reference.manifest_id=result.manifest_id)
+		       )
+		       AND NOT EXISTS (
+		         (SELECT reference.input_version_id
+		          FROM research_artifact_input_reference reference
+		          WHERE reference.workspace_id=result.workspace_id
+		            AND reference.session_id=result.session_id
+		            AND reference.consumer_version_id=version.id
+		            AND reference.relation='acceptance_input')
+		         EXCEPT
+		         (SELECT entry.artifact_version_id
+		          FROM research_artifact_context_entry entry
+		          WHERE entry.workspace_id=result.workspace_id
+		            AND entry.session_id=result.session_id
+		            AND entry.manifest_id=result.manifest_id)
+		       )
+		FROM research_result_artifact result
+		JOIN research_artifact_passport passport
+		  ON (passport.workspace_id,passport.session_id,passport.id)=
+		     (result.workspace_id,result.session_id,result.id)
+		JOIN research_artifact_version version
+		  ON (version.workspace_id,version.session_id,version.artifact_id,version.version)=
+		     (passport.workspace_id,passport.session_id,passport.id,passport.current_version)
+		JOIN research_artifact_context_manifest manifest
+		  ON (manifest.workspace_id,manifest.session_id,manifest.id,manifest.attempt_id)=
+		     (result.workspace_id,result.session_id,result.manifest_id,result.attempt_id)
+		JOIN research_artifact_policy_state policy
+		  ON (policy.workspace_id,policy.session_id)=(result.workspace_id,result.session_id)
+		WHERE result.workspace_id=$1::uuid AND result.session_id=$2::uuid
+		  AND result.attempt_id=$3::uuid AND result.id=passport.id
+		  AND result.attempt_id=$4::uuid
+	`, state.workspaceID, state.run.SessionID, in.AttemptID, state.attemptID, resultJSON).Scan(
+		&manifestID, &storedManifestHash, &currentManifestHash, &storedInputSetHash,
+		&resultHash, &requestID, &orchestratorVersion, &schemaVersion,
+		&resultTaskID, &resultAttemptID, &manifestTaskID,
+		&acceptanceWatermark, &manifestWatermark, &currentWatermark,
+		&resultMatches, &exactInputSet,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var passportEnabled bool
+		if loadErr := tx.QueryRow(ctx, `
+			SELECT artifact_passport_enabled FROM research_session
+			WHERE workspace_id=$1::uuid AND id=$2::uuid
+		`, state.workspaceID, state.run.SessionID).Scan(&passportEnabled); loadErr != nil {
+			return loadErr
+		}
+		if !passportEnabled {
+			return nil
+		}
+		return fmt.Errorf("%w: accepted Result lineage is missing", ErrResultConflict)
+	}
+	if err != nil {
+		return err
+	}
+	inputSetHash, err := manifestInputVersionSetHashTx(ctx, tx, state.workspaceID, state.run.SessionID, manifestID)
+	if err != nil {
+		return err
+	}
+	if manifestID == "" || storedManifestHash == "" || storedInputSetHash == "" ||
+		storedManifestHash != currentManifestHash || storedInputSetHash != inputSetHash ||
+		!exactInputSet || !resultMatches || resultHash != in.Hash || requestID != in.Result.ClientRequestID ||
+		orchestratorVersion != state.run.OrchestratorVersion || schemaVersion != fmt.Sprintf("%d", in.Result.SchemaVersion) ||
+		(resultTaskID != "" && resultTaskID != state.task.ID) || resultAttemptID != in.AttemptID || manifestTaskID != state.task.ID ||
+		acceptanceWatermark <= manifestWatermark || acceptanceWatermark > currentWatermark {
+		return fmt.Errorf("%w: accepted Result replay lineage changed", ErrResultConflict)
+	}
+	if err = verifyAcceptanceManifestHashTx(ctx, tx, state.workspaceID, state.run.SessionID, in.AttemptID); err != nil {
+		return fmt.Errorf("%w: accepted Result manifest changed: %v", ErrResultConflict, err)
+	}
+	return nil
+}
+
+func acceptedResultJSON(in AcceptResultInput, orchestratorVersion string) ([]byte, error) {
+	if orchestratorVersion == OrchestratorVersionV6 {
+		if !json.Valid(in.Raw) {
+			return nil, fmt.Errorf("%w: invalid stored V6 result JSON", ErrInvalidResult)
+		}
+		return append([]byte(nil), in.Raw...), nil
+	}
+	return json.Marshal(in.Result)
 }
 
 func prepareReplan(ctx context.Context, tx pgx.Tx, state acceptedResultState) error {
@@ -451,15 +743,24 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		return nil, 0, err
 	}
 	created := 0
+	createdIDs := make([]string, 0, len(questions))
 	for _, proposal := range questions {
 		var id string
+		requestedID := ""
+		if state.run.OrchestratorVersion == OrchestratorVersionV6 {
+			namespace, parseErr := uuid.Parse(state.run.SessionID)
+			if parseErr != nil {
+				return nil, 0, parseErr
+			}
+			requestedID = uuid.NewSHA1(namespace, []byte("research-run-v6/question/"+proposal.ClientKey)).String()
+		}
 		_, existed := ids[proposal.ClientKey]
 		err = tx.QueryRow(ctx, `
 			INSERT INTO research_question (
-				workspace_id, session_id, created_by_task_id, client_key, kind,
+				id, workspace_id, session_id, created_by_task_id, client_key, kind,
 				question, required, status, priority, impact, uncertainty, novelty,
 				goal_version, plan_version
-			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 'open',
+			) VALUES (COALESCE(NULLIF($14, '')::uuid, gen_random_uuid()), $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 'open',
 			          $8, $9, $10, $11, $12, $13)
 			ON CONFLICT (session_id, goal_version, plan_version, client_key)
 			DO UPDATE SET
@@ -476,7 +777,7 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		`, state.workspaceID, state.run.SessionID, state.task.ID, proposal.ClientKey,
 			proposal.Kind, strings.TrimSpace(proposal.Text), proposal.Required,
 			proposal.Priority, proposal.Impact, proposal.Uncertainty, proposal.Novelty,
-			state.run.GoalVersion, state.targetPlan).Scan(&id)
+			state.run.GoalVersion, state.targetPlan, requestedID).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, 0, fmt.Errorf("%w: question key %q was reused for different content", ErrResultConflict, proposal.ClientKey)
 		}
@@ -485,7 +786,8 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		}
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindQuestion, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+			createdIDs = append(createdIDs, id)
+			if err = state.checkpointAfter(ctx, txResultAfterQuestion); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -507,6 +809,40 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		return nil, 0, err
 	} else if cyclic {
 		return nil, 0, fmt.Errorf("%w: persisted question graph contains a cycle", ErrInvalidResult)
+	}
+	for _, questionID := range createdIDs {
+		if err = registerProductionQuestionPassportTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, questionID,
+			state.attemptID, state.outputAccess,
+		); err != nil {
+			return nil, 0, err
+		}
+	}
+	for _, questionID := range createdIDs {
+		var parentID, createdByTaskID string
+		if err = tx.QueryRow(ctx, `
+			SELECT COALESCE(parent_question_id::text, ''), created_by_task_id::text
+			FROM research_question
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, state.workspaceID, state.run.SessionID, questionID).Scan(&parentID, &createdByTaskID); err != nil {
+			return nil, 0, err
+		}
+		if parentID != "" {
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				questionID, ArtifactKindQuestion, parentID, ArtifactKindQuestion,
+				"question_parent", "question_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, state.workspaceID, state.run.SessionID,
+			questionID, ArtifactKindQuestion, createdByTaskID, ArtifactKindTask,
+			"created_by_task", "question_materialization", 0,
+		); err != nil {
+			return nil, 0, err
+		}
 	}
 	return ids, created, nil
 }
@@ -580,6 +916,7 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 		return 0, fmt.Errorf("%w: proposed tasks exceed remaining run budget", ErrInvalidResult)
 	}
 	created := 0
+	createdTaskIDs := make([]string, 0, missing)
 	for _, proposal := range proposals {
 		questionID := ""
 		if proposal.QuestionKey != "" {
@@ -617,22 +954,36 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			criteria, proposal.Priority, state.run.GoalVersion, state.targetPlan,
 			maxAttempts, timeout).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
-			var existingKind TaskKind
-			var existingObjective, existingCapability, existingResult string
+			var matches bool
 			err = tx.QueryRow(ctx, `
-				SELECT id::text, kind, objective, required_capability, expected_result
+				SELECT id::text,
+				       COALESCE(question_id::text, '') = $5
+				       AND COALESCE(parent_task_id::text, '') = $6
+				       AND kind = $7
+				       AND objective = $8
+				       AND required_capability = $9
+				       AND expected_result = $10
+				       AND acceptance_criteria = $11::jsonb
+				       AND priority = $12::double precision
+				       AND max_attempts = $13
+				       AND timeout_seconds = $14
 				FROM research_task
 				WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND client_key = $4
-			`, state.run.SessionID, state.run.GoalVersion, state.targetPlan, proposal.ClientKey).Scan(
-				&id, &existingKind, &existingObjective, &existingCapability, &existingResult,
-			)
-			if err == nil && (existingKind != proposal.Kind || existingObjective != strings.TrimSpace(proposal.Objective) || existingCapability != strings.TrimSpace(proposal.RequiredCapability) || existingResult != strings.TrimSpace(proposal.ExpectedResult)) {
+			`, state.run.SessionID, state.run.GoalVersion, state.targetPlan, proposal.ClientKey,
+				questionID, state.task.ID, proposal.Kind, strings.TrimSpace(proposal.Objective),
+				strings.TrimSpace(proposal.RequiredCapability), strings.TrimSpace(proposal.ExpectedResult),
+				criteria, proposal.Priority, maxAttempts, timeout).Scan(&id, &matches)
+			if err == nil && !matches {
 				return 0, fmt.Errorf("%w: task key %q was reused for different content", ErrResultConflict, proposal.ClientKey)
+			}
+			if err == nil {
+				taskIDs[proposal.ClientKey] = id
 			}
 		} else if err == nil {
 			created++
 			taskIDs[proposal.ClientKey] = id
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindTask, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+			createdTaskIDs = append(createdTaskIDs, id)
+			if err = state.checkpointAfter(ctx, txResultAfterTask); err != nil {
 				return 0, err
 			}
 		}
@@ -652,7 +1003,13 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			`, state.workspaceID, state.run.SessionID, taskIDs[proposal.ClientKey], dependencyID); err != nil {
 				return 0, err
 			}
+			if err = state.checkpointAfter(ctx, txResultAfterTaskDependency); err != nil {
+				return 0, err
+			}
 		}
+	}
+	if err = validateDeclaredTaskDependencies(ctx, tx, state.workspaceID, state.run.SessionID, proposals, taskIDs); err != nil {
+		return 0, err
 	}
 	if usesEvidenceFitnessContract(state.run.OrchestratorVersion) {
 		for _, proposal := range result.ProposedTasks {
@@ -660,6 +1017,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 				INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
 				VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid) ON CONFLICT DO NOTHING
 			`, state.workspaceID, state.run.SessionID, taskIDs[proposal.ClientKey], state.task.ID); err != nil {
+				return 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterTaskDependency); err != nil {
 				return 0, err
 			}
 		}
@@ -674,7 +1034,141 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 	} else if cyclic {
 		return 0, fmt.Errorf("%w: persisted task dependency graph contains a cycle", ErrInvalidResult)
 	}
+	for _, taskID := range createdTaskIDs {
+		if err = registerProductionTaskPassportTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, taskID,
+			state.attemptID, state.outputAccess,
+		); err != nil {
+			return 0, err
+		}
+	}
+	for _, taskID := range createdTaskIDs {
+		if err = persistMaterializedTaskRelationshipReferencesTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, taskID,
+		); err != nil {
+			return 0, err
+		}
+	}
 	return created, nil
+}
+
+func persistMaterializedTaskRelationshipReferencesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, taskID string,
+) error {
+	var questionID, parentTaskID string
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(question_id::text, ''), COALESCE(parent_task_id::text, '')
+		FROM research_task
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+	`, workspaceID, sessionID, taskID).Scan(&questionID, &parentTaskID); err != nil {
+		return err
+	}
+	if questionID != "" {
+		if err := persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			taskID, ArtifactKindTask, questionID, ArtifactKindQuestion,
+			"task_question", "task_materialization", 0,
+		); err != nil {
+			return err
+		}
+	}
+	if parentTaskID != "" {
+		if err := persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			taskID, ArtifactKindTask, parentTaskID, ArtifactKindTask,
+			"task_parent", "task_materialization", 0,
+		); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT depends_on_task_id::text
+		FROM research_task_dependency
+		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND task_id=$3::uuid
+		ORDER BY depends_on_task_id
+	`, workspaceID, sessionID, taskID)
+	if err != nil {
+		return err
+	}
+	dependencies := make([]string, 0)
+	for rows.Next() {
+		var dependencyID string
+		if err = rows.Scan(&dependencyID); err != nil {
+			rows.Close()
+			return err
+		}
+		dependencies = append(dependencies, dependencyID)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for ordinal, dependencyID := range dependencies {
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, workspaceID, sessionID,
+			taskID, ArtifactKindTask, dependencyID, ArtifactKindTask,
+			"task_dependency", "task_materialization", ordinal,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDeclaredTaskDependencies(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	proposals []TaskProposal,
+	taskIDs map[string]string,
+) error {
+	for _, proposal := range proposals {
+		expected := make([]string, 0, len(proposal.DependsOn))
+		for _, dependencyKey := range proposal.DependsOn {
+			dependencyID, ok := taskIDs[dependencyKey]
+			if !ok {
+				return fmt.Errorf("%w: task %q references unknown dependency %q", ErrInvalidResult, proposal.ClientKey, dependencyKey)
+			}
+			expected = append(expected, dependencyID)
+		}
+		sort.Strings(expected)
+
+		rows, err := tx.Query(ctx, `
+			SELECT depends_on_task_id::text
+			FROM research_task_dependency
+			WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND task_id = $3::uuid
+			ORDER BY depends_on_task_id
+		`, workspaceID, sessionID, taskIDs[proposal.ClientKey])
+		if err != nil {
+			return err
+		}
+		actual := make([]string, 0, len(expected))
+		for rows.Next() {
+			var dependencyID string
+			if err = rows.Scan(&dependencyID); err != nil {
+				rows.Close()
+				return err
+			}
+			actual = append(actual, dependencyID)
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if len(actual) != len(expected) {
+			return fmt.Errorf("%w: task key %q was reused with different dependencies", ErrResultConflict, proposal.ClientKey)
+		}
+		for i := range expected {
+			if actual[i] != expected[i] {
+				return fmt.Errorf("%w: task key %q was reused with different dependencies", ErrResultConflict, proposal.ClientKey)
+			}
+		}
+	}
+	return nil
 }
 
 func attachV4ProposedWorkToDelivery(ctx context.Context, tx pgx.Tx, state acceptedResultState, proposals []TaskProposal, taskIDs map[string]string) error {
@@ -789,6 +1283,7 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			verificationStatus = "verified"
 		}
 		var id string
+		var persistedRetrievedAt time.Time
 		var existed bool
 		if err = tx.QueryRow(ctx, `
 			SELECT EXISTS (
@@ -802,9 +1297,9 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			INSERT INTO research_source_snapshot (
 				workspace_id, session_id, produced_by_task_id, canonical_url,
 				title, publisher, source_class, evidence_traits, independence_key, retrieved_at,
-				snapshot_text, content_hash, metadata, verification_status
+				snapshot_text, content_hash, metadata, verification_status, ingestion_kind
 			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::text[], $9, $10,
-			          $11, $12, $13, $14)
+			          $11, $12, $13, $14, 'agent_direct_evidence')
 			ON CONFLICT (session_id, canonical_url, content_hash)
 			DO UPDATE SET
 			  title = CASE WHEN research_source_snapshot.title = '' THEN EXCLUDED.title ELSE research_source_snapshot.title END,
@@ -813,23 +1308,71 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			    ELSE research_source_snapshot.evidence_traits
 			  END,
 			  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_source_snapshot.verification_status END
-			RETURNING id::text
+			WHERE research_source_snapshot.publisher = EXCLUDED.publisher
+			  AND research_source_snapshot.source_class = EXCLUDED.source_class
+			  AND research_source_snapshot.independence_key = EXCLUDED.independence_key
+			  AND research_source_snapshot.snapshot_text = EXCLUDED.snapshot_text
+			RETURNING id::text, retrieved_at
 		`, state.workspaceID, state.run.SessionID, state.task.ID, canonical,
 			truncateBytes(source.Title, 4096), truncateBytes(source.Publisher, 1024),
 			truncateBytes(source.SourceClass, 160), evidenceTraits, truncateBytes(source.IndependenceKey, 160),
 			source.RetrievedAt, source.SnapshotText, contentHash,
-			normalizeJSON(source.Metadata, `{}`), verificationStatus).Scan(&id)
+			normalizeJSON(source.Metadata, `{}`), verificationStatus).Scan(&id, &persistedRetrievedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, 0, fmt.Errorf("%w: source key %q was reused for a different evidence identity", ErrResultConflict, source.ClientKey)
+		}
 		if err != nil {
 			return nil, 0, err
 		}
 		ids[source.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindSourceSnapshot, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil); err != nil {
+			metadata := normalizeJSON(source.Metadata, `{}`)
+			versionHash, hashErr := ArtifactContentHash(ArtifactKindSourceSnapshot, map[string]any{
+				"produced_by_task_id": state.task.ID,
+				"canonical_url":       canonical,
+				"title":               truncateBytes(source.Title, 4096),
+				"publisher":           truncateBytes(source.Publisher, 1024),
+				"source_class":        truncateBytes(source.SourceClass, 160),
+				"evidence_traits":     evidenceTraits,
+				"independence_key":    truncateBytes(source.IndependenceKey, 160),
+				"retrieved_at":        persistedRetrievedAt,
+				"snapshot_text":       source.SnapshotText,
+				"content_hash":        contentHash,
+				"metadata":            json.RawMessage(metadata),
+				"verification_status": verificationStatus,
+			})
+			if hashErr != nil {
+				return nil, 0, hashErr
+			}
+			if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+				WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: id,
+				Kind: ArtifactKindSourceSnapshot, SourceCreatedAt: timePtr(time.Now()),
+				ProvenanceCompleteness: ArtifactProvenanceComplete,
+				AccessLevel:            state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+				ContentHash: versionHash, ProducedByAttemptID: state.attemptID,
+			}); err != nil {
+				return nil, 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterSourceSnapshot); err != nil {
 				return nil, 0, err
 			}
 		}
 		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
+			return nil, 0, err
+		}
+		var sourceProducerTaskID string
+		if err = tx.QueryRow(ctx, `
+			SELECT produced_by_task_id::text FROM research_source_snapshot
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, state.workspaceID, state.run.SessionID, id).Scan(&sourceProducerTaskID); err != nil {
+			return nil, 0, err
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, state.workspaceID, state.run.SessionID,
+			id, ArtifactKindSourceSnapshot, sourceProducerTaskID, ArtifactKindTask,
+			"source_producer", "source_materialization", 0,
+		); err != nil {
 			return nil, 0, err
 		}
 		payload, _ := json.Marshal(map[string]any{
@@ -856,11 +1399,60 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			// Legacy source projection already exists for this snapshot.
 		} else if err != nil {
 			return nil, 0, err
-		} else if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindLegacySource, state.workspaceID, state.run.SessionID, legacySourceID, time.Now(), nil, nil); err != nil {
-			return nil, 0, err
+		} else {
+			versionHash, hashErr := ArtifactContentHash(ArtifactKindLegacySource, legacySourceArtifactContent(
+				canonical, truncateBytes(source.Title, 4096), truncateBytes(source.SourceClass, 160),
+				sourceProjectionWeight(state.run.OrchestratorVersion, source.SourceClass), "", 0.5,
+				truncateBytes(result.Summary, 4096), truncateBytes(source.SnapshotText, 2000), payload, id,
+			))
+			if hashErr != nil {
+				return nil, 0, hashErr
+			}
+			if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+				WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: legacySourceID,
+				Kind: ArtifactKindLegacySource, SourceCreatedAt: timePtr(time.Now()),
+				ProvenanceCompleteness: ArtifactProvenanceComplete,
+				AccessLevel:            state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+				ContentHash: versionHash, ProducedByAttemptID: state.attemptID,
+			}); err != nil {
+				return nil, 0, err
+			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				legacySourceID, ArtifactKindLegacySource, id, ArtifactKindSourceSnapshot,
+				"projects", "source_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterLegacySource); err != nil {
+				return nil, 0, err
+			}
 		}
 	}
 	return ids, created, nil
+}
+
+func legacySourceArtifactContent(
+	url, title, sourceClass string,
+	credibilityWeight float64,
+	stance string,
+	relevance float64,
+	summary, excerpt string,
+	payload []byte,
+	sourceSnapshotID string,
+) map[string]any {
+	return map[string]any{
+		"url":                url,
+		"title":              title,
+		"source_class":       sourceClass,
+		"credibility_weight": credibilityWeight,
+		"stance":             stance,
+		"relevance":          relevance,
+		"summary":            summary,
+		"excerpt":            excerpt,
+		"payload":            json.RawMessage(payload),
+		"source_snapshot_id": sourceSnapshotID,
+	}
 }
 
 func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResultState, result ResultEnvelope, sourceIDs map[string]string) (map[string]string, int, error) {
@@ -898,28 +1490,150 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10)
 			ON CONFLICT (session_id, source_snapshot_id, content_hash)
 			DO UPDATE SET
-			  interpretation = CASE WHEN research_observation.interpretation = '' THEN EXCLUDED.interpretation ELSE research_observation.interpretation END,
 			  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_observation.verification_status END
+			WHERE research_observation.quote = EXCLUDED.quote
+			  AND research_observation.datum = EXCLUDED.datum
+			  AND research_observation.locator = EXCLUDED.locator
+			  AND research_observation.interpretation = EXCLUDED.interpretation
 			RETURNING id::text
 		`, state.workspaceID, state.run.SessionID, sourceID, state.task.ID,
 			observation.Quote, normalizeJSON(observation.Datum, `{}`),
 			truncateBytes(observation.Locator, 1024), truncateBytes(observation.Interpretation, 8192),
 			contentHash, verificationStatus).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, 0, fmt.Errorf("%w: observation key %q resolved to a different canonical observation", ErrResultConflict, observation.ClientKey)
+		}
 		if err != nil {
 			return nil, 0, err
 		}
 		ids[observation.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindObservation, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil); err != nil {
+			datum := normalizeJSON(observation.Datum, `{}`)
+			versionHash, hashErr := ArtifactContentHash(ArtifactKindObservation, map[string]any{
+				"source_snapshot_id":  sourceID,
+				"produced_by_task_id": state.task.ID,
+				"quote":               observation.Quote,
+				"datum":               json.RawMessage(datum),
+				"locator":             truncateBytes(observation.Locator, 1024),
+				"interpretation":      truncateBytes(observation.Interpretation, 8192),
+				"content_hash":        contentHash,
+				"verification_status": verificationStatus,
+			})
+			if hashErr != nil {
+				return nil, 0, hashErr
+			}
+			if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+				WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: id,
+				Kind: ArtifactKindObservation, SourceCreatedAt: timePtr(time.Now()),
+				ProvenanceCompleteness: ArtifactProvenanceComplete,
+				AccessLevel:            state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+				ContentHash: versionHash, ProducedByAttemptID: state.attemptID,
+			}); err != nil {
+				return nil, 0, err
+			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				id, ArtifactKindObservation, sourceID, ArtifactKindSourceSnapshot,
+				"observes", "observation_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterObservation); err != nil {
 				return nil, 0, err
 			}
 		}
 		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
 			return nil, 0, err
 		}
+		var observationProducerTaskID string
+		if err = tx.QueryRow(ctx, `
+			SELECT produced_by_task_id::text FROM research_observation
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, state.workspaceID, state.run.SessionID, id).Scan(&observationProducerTaskID); err != nil {
+			return nil, 0, err
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, state.workspaceID, state.run.SessionID,
+			id, ArtifactKindObservation, observationProducerTaskID, ArtifactKindTask,
+			"observation_producer", "observation_materialization", 0,
+		); err != nil {
+			return nil, 0, err
+		}
 	}
 	return ids, created, nil
+}
+
+func persistTypedArtifactInputReferenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, consumerID string,
+	consumerKind ArtifactEntityKind,
+	inputID string,
+	inputKind ArtifactEntityKind,
+	relation, purpose string,
+	ordinal int,
+) error {
+	var consumerResolved, inputResolved int
+	var persistedOrdinal *int
+	err := tx.QueryRow(ctx, `
+		WITH consumer AS (
+			SELECT version.id
+			FROM research_artifact_passport passport
+			JOIN research_artifact_version version
+			  ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+			     (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+			WHERE passport.workspace_id = $1::uuid AND passport.session_id = $2::uuid
+			  AND passport.id = $3::uuid AND passport.entity_kind = $4
+		), input AS (
+			SELECT version.id
+			FROM research_artifact_passport passport
+			JOIN research_artifact_version version
+			  ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+			     (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+			WHERE passport.workspace_id = $1::uuid AND passport.session_id = $2::uuid
+			  AND passport.id = $5::uuid AND passport.entity_kind = $6
+		), inserted AS (
+			INSERT INTO research_artifact_input_reference (
+				workspace_id, session_id, consumer_version_id, input_version_id,
+				relation, explicitly_used, purpose, ordinal
+			)
+			SELECT $1::uuid, $2::uuid, consumer.id, input.id, $7, true, $8, $9
+			FROM consumer CROSS JOIN input
+			ON CONFLICT (workspace_id, session_id, consumer_version_id, input_version_id, relation)
+			DO NOTHING
+			RETURNING ordinal
+		)
+		SELECT
+		  (SELECT count(*)::int FROM consumer),
+		  (SELECT count(*)::int FROM input),
+		  COALESCE(
+		    (SELECT inserted.ordinal FROM inserted),
+		    (SELECT reference.ordinal
+		     FROM research_artifact_input_reference reference
+		     CROSS JOIN consumer CROSS JOIN input
+		     WHERE reference.workspace_id=$1::uuid AND reference.session_id=$2::uuid
+		       AND reference.consumer_version_id=consumer.id
+		       AND reference.input_version_id=input.id AND reference.relation=$7)
+		  )
+	`, workspaceID, sessionID, consumerID, string(consumerKind), inputID, string(inputKind), relation, purpose, ordinal).Scan(&consumerResolved, &inputResolved, &persistedOrdinal)
+	if err != nil {
+		return err
+	}
+	if consumerResolved != 1 || inputResolved != 1 || persistedOrdinal == nil {
+		return fmt.Errorf(
+			"%w: %s %s (resolved=%d) could not resolve %s %s (resolved=%d) for %s lineage",
+			ErrInvalidResult, consumerKind, consumerID, consumerResolved,
+			inputKind, inputID, inputResolved, relation,
+		)
+	}
+	if *persistedOrdinal != ordinal {
+		return fmt.Errorf(
+			"%w: %s %s has conflicting %s lineage ordinal %d (want %d)",
+			ErrInvalidResult, consumerKind, consumerID, relation, *persistedOrdinal, ordinal,
+		)
+	}
+	return nil
 }
 
 func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState, result ResultEnvelope, observationIDs map[string]string) (map[string]string, int, error) {
@@ -970,13 +1684,14 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			                    WHEN research_claim.resolution = '' THEN EXCLUDED.resolution ELSE research_claim.resolution END,
 			  updated_at = now()
 			WHERE research_claim.claim_text = EXCLUDED.claim_text
+			  AND research_claim.significance = EXCLUDED.significance
 			  AND (research_claim.evidence_standard_key = '' OR EXCLUDED.evidence_standard_key = '' OR research_claim.evidence_standard_key = EXCLUDED.evidence_standard_key)
 			RETURNING id::text
 		`, state.workspaceID, state.run.SessionID, state.task.ID, claim.ClientKey,
 			claim.EvidenceStandardKey, strings.TrimSpace(claim.Text), claim.Significance, claim.Confidence, status,
 			state.task.GoalVersion, state.targetPlan, truncateBytes(claim.Resolution, 8192), adjudicated).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, 0, fmt.Errorf("%w: claim key %q was reused for different text", ErrResultConflict, claim.ClientKey)
+			return nil, 0, fmt.Errorf("%w: claim key %q was reused for a different claim identity", ErrResultConflict, claim.ClientKey)
 		}
 		if err != nil {
 			return nil, 0, err
@@ -984,7 +1699,63 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		ids[claim.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindClaim, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+			claimContent := map[string]any{
+				"client_key":            claim.ClientKey,
+				"evidence_standard_key": claim.EvidenceStandardKey,
+				"claim_text":            strings.TrimSpace(claim.Text),
+				"significance":          claim.Significance,
+				"confidence":            claim.Confidence,
+				"status":                string(status),
+				"goal_version":          state.task.GoalVersion,
+				"plan_version":          state.targetPlan,
+				"resolution":            truncateBytes(claim.Resolution, 8192),
+				"produced_by_task_id":   state.task.ID,
+			}
+			if err = ensureProducedDomainArtifactPassportWithAccessTx(
+				ctx, tx, ArtifactKindClaim, state.workspaceID, state.run.SessionID, id,
+				state.attemptID, time.Now(), int32Ptr(int32(state.task.GoalVersion)),
+				int32Ptr(int32(state.targetPlan)), state.outputAccess, claimContent,
+			); err != nil {
+				return nil, 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterClaim); err != nil {
+				return nil, 0, err
+			}
+		}
+		var producedByTaskID string
+		if err = tx.QueryRow(ctx, `
+			SELECT produced_by_task_id::text FROM research_claim
+			WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+		`, state.workspaceID, state.run.SessionID, id).Scan(&producedByTaskID); err != nil {
+			return nil, 0, err
+		}
+		if err = persistTypedArtifactInputReferenceTx(
+			ctx, tx, state.workspaceID, state.run.SessionID,
+			id, ArtifactKindClaim, producedByTaskID, ArtifactKindTask,
+			"claim_producer", "claim_materialization", 0,
+		); err != nil {
+			return nil, 0, err
+		}
+		if usesEvidenceFitnessContract(state.run.OrchestratorVersion) && claim.EvidenceStandardKey != "" {
+			var methodID string
+			if err = tx.QueryRow(ctx, `
+				SELECT id::text FROM research_decision
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+				  AND decision_kind='research_method' AND goal_version=$3 AND plan_version=$4
+				  AND EXISTS (
+				    SELECT 1 FROM jsonb_array_elements(outcome->'evidence_standards') standard
+				    WHERE standard->>'client_key'=$5
+				  )
+				ORDER BY created_at DESC,id DESC LIMIT 1
+			`, state.workspaceID, state.run.SessionID, state.task.GoalVersion,
+				state.targetPlan, claim.EvidenceStandardKey).Scan(&methodID); err != nil {
+				return nil, 0, err
+			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				id, ArtifactKindClaim, methodID, ArtifactKindMethodDecision,
+				"claim_evidence_standard", "claim_materialization", 0,
+			); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -999,32 +1770,171 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				verificationStatus = "verified"
 				verifiedBy = state.task.ID
 			}
-			var evidenceID string
-			if err = tx.QueryRow(ctx, `
-				INSERT INTO research_claim_evidence (
-					workspace_id, session_id, claim_id, observation_id, relation,
-					strength, directness, method_fit, verification_status, verified_by_task_id, rationale
-				) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9,
-				          NULLIF($10, '')::uuid, $11)
-				ON CONFLICT (claim_id, observation_id, relation)
-				DO UPDATE SET
-				  strength = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.strength ELSE GREATEST(research_claim_evidence.strength, EXCLUDED.strength) END,
-				  directness = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.directness ELSE GREATEST(research_claim_evidence.directness, EXCLUDED.directness) END,
-				  method_fit = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.method_fit ELSE GREATEST(research_claim_evidence.method_fit, EXCLUDED.method_fit) END,
-				  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_claim_evidence.verification_status END,
-				  verified_by_task_id = COALESCE(EXCLUDED.verified_by_task_id, research_claim_evidence.verified_by_task_id),
-				  rationale = CASE WHEN EXCLUDED.rationale <> '' THEN EXCLUDED.rationale ELSE research_claim_evidence.rationale END,
-				  updated_at = now()
-				RETURNING id::text
-			`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation,
-				evidence.Strength, evidence.Directness, evidence.MethodFit, verificationStatus, verifiedBy,
-				truncateBytes(evidence.Rationale, 4096), usesEvidenceFitnessContract(state.run.OrchestratorVersion)).Scan(&evidenceID); err != nil {
+			rationale := truncateBytes(evidence.Rationale, 4096)
+			var (
+				evidenceID                                               string
+				currentStrength, currentDirectness, currentMethodFit     float64
+				currentVerification, currentVerifiedBy, currentRationale string
+			)
+			err = tx.QueryRow(ctx, `
+				SELECT id::text, strength, directness, method_fit, verification_status,
+				       COALESCE(verified_by_task_id::text,''), rationale
+				FROM research_claim_evidence
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+				  AND claim_id=$3::uuid AND observation_id=$4::uuid AND relation=$5
+				FOR UPDATE
+			`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation).Scan(
+				&evidenceID, &currentStrength, &currentDirectness, &currentMethodFit,
+				&currentVerification, &currentVerifiedBy, &currentRationale,
+			)
+			existedEvidence := err == nil
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return nil, 0, err
 			}
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID, evidenceID, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+			if !existedEvidence {
+				err = tx.QueryRow(ctx, `
+					INSERT INTO research_claim_evidence (
+						workspace_id, session_id, claim_id, observation_id, relation,
+						strength, directness, method_fit, verification_status, verified_by_task_id, rationale
+					) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9,
+					          NULLIF($10, '')::uuid, $11)
+					ON CONFLICT (claim_id, observation_id, relation) DO NOTHING
+					RETURNING id::text
+				`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation,
+					evidence.Strength, evidence.Directness, evidence.MethodFit, verificationStatus,
+					verifiedBy, rationale).Scan(&evidenceID)
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil, 0, fmt.Errorf("%w: evidence link was created concurrently", ErrResultConflict)
+				}
+				if err != nil {
+					return nil, 0, err
+				}
+			} else if state.attemptID != "" {
+				nextStrength := max(currentStrength, evidence.Strength)
+				nextDirectness := max(currentDirectness, evidence.Directness)
+				nextMethodFit := max(currentMethodFit, evidence.MethodFit)
+				if usesEvidenceFitnessContract(state.run.OrchestratorVersion) && verificationStatus == "verified" {
+					nextStrength, nextDirectness, nextMethodFit = evidence.Strength, evidence.Directness, evidence.MethodFit
+				}
+				nextVerification := currentVerification
+				if verificationStatus == "verified" {
+					nextVerification = verificationStatus
+				}
+				nextVerifiedBy := currentVerifiedBy
+				if verifiedBy != "" {
+					nextVerifiedBy = verifiedBy
+				}
+				nextRationale := currentRationale
+				if rationale != "" {
+					nextRationale = rationale
+				}
+				changed := nextStrength != currentStrength || nextDirectness != currentDirectness ||
+					nextMethodFit != currentMethodFit || nextVerification != currentVerification ||
+					nextVerifiedBy != currentVerifiedBy || nextRationale != currentRationale
+				if changed {
+					version, versionErr := lockMutableArtifactVersionForAttemptTx(
+						ctx, tx, state.workspaceID, state.run.SessionID, evidenceID,
+						state.attemptID, ArtifactKindEvidenceLink, state.outputAccess,
+					)
+					if versionErr != nil {
+						return nil, 0, versionErr
+					}
+					currentContent := map[string]any{
+						"claim_id": id, "observation_id": observationID, "relation": evidence.Relation,
+						"strength": currentStrength, "directness": currentDirectness, "method_fit": currentMethodFit,
+						"verification_status": currentVerification, "verified_by_task_id": currentVerifiedBy,
+						"rationale": currentRationale,
+					}
+					currentHash, hashErr := ArtifactContentHash(ArtifactKindEvidenceLink, currentContent)
+					if hashErr != nil {
+						return nil, 0, hashErr
+					}
+					if version.HashOrigin != ArtifactHashOriginProduction || version.ContentHash != currentHash {
+						return nil, 0, fmt.Errorf("%w: evidence link canonical state no longer matches its frozen version", ErrResultConflict)
+					}
+					if _, err = tx.Exec(ctx, `
+						UPDATE research_claim_evidence
+						SET strength=$4, directness=$5, method_fit=$6, verification_status=$7,
+						    verified_by_task_id=NULLIF($8,'')::uuid, rationale=$9, updated_at=now()
+						WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+					`, state.workspaceID, state.run.SessionID, evidenceID, nextStrength, nextDirectness,
+						nextMethodFit, nextVerification, nextVerifiedBy, nextRationale); err != nil {
+						return nil, 0, err
+					}
+					nextContent := map[string]any{
+						"claim_id": id, "observation_id": observationID, "relation": evidence.Relation,
+						"strength": nextStrength, "directness": nextDirectness, "method_fit": nextMethodFit,
+						"verification_status": nextVerification, "verified_by_task_id": nextVerifiedBy,
+						"rationale": nextRationale,
+					}
+					nextHash, nextHashErr := ArtifactContentHash(ArtifactKindEvidenceLink, nextContent)
+					if nextHashErr != nil {
+						return nil, 0, nextHashErr
+					}
+					if err = appendProducedArtifactVersionTx(
+						ctx, tx, state.workspaceID, state.run.SessionID, evidenceID,
+						state.task.ID, state.attemptID, state.task.GoalVersion, state.targetPlan,
+						version, nextHash,
+					); err != nil {
+						return nil, 0, err
+					}
+				}
+			}
+			evidenceContent := map[string]any{
+				"claim_id":            id,
+				"observation_id":      observationID,
+				"relation":            evidence.Relation,
+				"strength":            evidence.Strength,
+				"directness":          evidence.Directness,
+				"method_fit":          evidence.MethodFit,
+				"verification_status": verificationStatus,
+				"verified_by_task_id": verifiedBy,
+				"rationale":           rationale,
+			}
+			if !existedEvidence {
+				if err = ensureProducedDomainArtifactPassportWithAccessTx(
+					ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID,
+					evidenceID, state.attemptID, time.Now(), int32Ptr(int32(state.task.GoalVersion)),
+					int32Ptr(int32(state.targetPlan)), state.outputAccess, evidenceContent,
+				); err != nil {
+					return nil, 0, err
+				}
+			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				evidenceID, ArtifactKindEvidenceLink, id, ArtifactKindClaim,
+				"evidence_claim", "evidence_materialization", 0,
+			); err != nil {
 				return nil, 0, err
+			}
+			if err = persistTypedArtifactInputReferenceTx(
+				ctx, tx, state.workspaceID, state.run.SessionID,
+				evidenceID, ArtifactKindEvidenceLink, observationID, ArtifactKindObservation,
+				"evidence_observation", "evidence_materialization", 0,
+			); err != nil {
+				return nil, 0, err
+			}
+			var persistedVerifierTaskID string
+			if err = tx.QueryRow(ctx, `
+				SELECT COALESCE(verified_by_task_id::text,'')
+				FROM research_claim_evidence
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid
+			`, state.workspaceID, state.run.SessionID, evidenceID).Scan(&persistedVerifierTaskID); err != nil {
+				return nil, 0, err
+			}
+			if persistedVerifierTaskID != "" {
+				if err = persistTypedArtifactInputReferenceTx(
+					ctx, tx, state.workspaceID, state.run.SessionID,
+					evidenceID, ArtifactKindEvidenceLink, persistedVerifierTaskID, ArtifactKindTask,
+					"evidence_verifier", "evidence_materialization", 0,
+				); err != nil {
+					return nil, 0, err
+				}
 			}
 			if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, evidenceID); err != nil {
+				return nil, 0, err
+			}
+			if err = state.checkpointAfter(ctx, txResultAfterEvidenceLink); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -1063,7 +1973,30 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		if err != nil {
 			return "", err
 		}
+		if err = lockStructuredReportSourcesTx(ctx, tx, state.workspaceID, state.run.SessionID, structuredReport); err != nil {
+			return "", err
+		}
 	}
+	rows, err := tx.Query(ctx, `
+		SELECT id::text
+		FROM research_report
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		  AND produced_by_attempt_id = $3::uuid
+		ORDER BY revision, id
+		FOR UPDATE
+	`, state.workspaceID, state.run.SessionID, state.attemptID)
+	if err != nil {
+		return "", err
+	}
+	if rows.Next() {
+		rows.Close()
+		return "", fmt.Errorf("%w: attempt already owns a report revision", ErrResultConflict)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return "", err
+	}
+	rows.Close()
 	var revision int
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(revision), 0) + 1 FROM research_report WHERE session_id = $1::uuid`, state.run.SessionID).Scan(&revision); err != nil {
 		return "", err
@@ -1083,7 +2016,37 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		state.task.AssignedAgentID).Scan(&reportID); err != nil {
 		return "", err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindReportRevision, state.workspaceID, state.run.SessionID, reportID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+	reportHash, err := ArtifactContentHash(ArtifactKindReportRevision, map[string]any{
+		"revision":               revision,
+		"content_md":             report.ContentMD,
+		"structured":             json.RawMessage(structuredJSON),
+		"goal_version":           state.run.GoalVersion,
+		"plan_version":           state.targetPlan,
+		"produced_by_task_id":    state.task.ID,
+		"produced_by_attempt_id": state.attemptID,
+		"author_agent_id":        state.task.AssignedAgentID,
+	})
+	if err != nil {
+		return "", err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: reportID,
+		Kind: ArtifactKindReportRevision, SourceCreatedAt: timePtr(time.Now()),
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            int32Ptr(int32(state.run.GoalVersion)), PlanVersion: int32Ptr(int32(state.targetPlan)),
+		AccessLevel: state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: reportHash, ProducedByAttemptID: state.attemptID,
+	}); err != nil {
+		return "", err
+	}
+	if usesStructuredResultContract(state.run.OrchestratorVersion) {
+		if err = persistReportSourceInputReferencesTx(
+			ctx, tx, state.workspaceID, state.run.SessionID, reportID, structuredReport,
+		); err != nil {
+			return "", err
+		}
+	}
+	if err = state.checkpointAfter(ctx, txResultAfterReport); err != nil {
 		return "", err
 	}
 	sections := map[string]reportStructuredSection{}
@@ -1146,8 +2109,114 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			truncateBytes(link.SectionID, 160), truncateBytes(link.AnchorQuote, 8192)); err != nil {
 			return "", err
 		}
+		if err = state.checkpointAfter(ctx, txResultAfterReportClaim); err != nil {
+			return "", err
+		}
 	}
 	return reportID, nil
+}
+
+func persistReportSourceInputReferencesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, reportID string,
+	report reportStructuredV1,
+) error {
+	if len(report.Sources) == 0 {
+		return nil
+	}
+	sourceIDs := make([]string, 0, len(report.Sources))
+	for _, source := range report.Sources {
+		sourceIDs = append(sourceIDs, source.SourceID)
+	}
+	var inserted int
+	err := tx.QueryRow(ctx, `
+		WITH report_version AS (
+			SELECT version.id
+			FROM research_artifact_passport passport
+			JOIN research_artifact_version version
+			  ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+			     (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+			WHERE passport.workspace_id = $1::uuid
+			  AND passport.session_id = $2::uuid
+			  AND passport.id = $3::uuid
+			  AND passport.entity_kind = 'report_revision'
+		), requested_source AS (
+			SELECT source_id, (ordinal - 1)::integer AS ordinal
+			FROM unnest($4::text[]) WITH ORDINALITY requested(source_id, ordinal)
+		), source_version AS (
+			SELECT requested.source_id, requested.ordinal, version.id
+			FROM requested_source requested
+			JOIN research_artifact_passport passport
+			  ON passport.workspace_id = $1::uuid
+			 AND passport.session_id = $2::uuid
+			 AND passport.id = requested.source_id::uuid
+			 AND passport.entity_kind = 'legacy_source'
+			JOIN research_artifact_version version
+			  ON (version.workspace_id, version.session_id, version.artifact_id, version.version) =
+			     (passport.workspace_id, passport.session_id, passport.id, passport.current_version)
+		), inserted AS (
+			INSERT INTO research_artifact_input_reference (
+				workspace_id, session_id, consumer_version_id, input_version_id,
+				relation, explicitly_used, purpose, ordinal
+			)
+			SELECT $1::uuid, $2::uuid, report_version.id, source_version.id,
+			       'report_source', true, 'report_materialization', source_version.ordinal
+			FROM report_version CROSS JOIN source_version
+			RETURNING 1
+		)
+		SELECT count(*)::int FROM inserted
+	`, workspaceID, sessionID, reportID, sourceIDs).Scan(&inserted)
+	if err != nil {
+		return err
+	}
+	if inserted != len(sourceIDs) {
+		return fmt.Errorf(
+			"%w: report source lineage resolved %d of %d source artifact versions",
+			ErrInvalidResult, inserted, len(sourceIDs),
+		)
+	}
+	return nil
+}
+
+func lockStructuredReportSourcesTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, report reportStructuredV1) error {
+	sourceIDs := make([]string, 0, len(report.Sources))
+	for _, source := range report.Sources {
+		sourceIDs = append(sourceIDs, source.SourceID)
+	}
+	if len(sourceIDs) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT source.id::text
+		FROM research_source source
+		WHERE source.workspace_id = $1::uuid
+		  AND source.session_id = $2::uuid
+		  AND source.id::text = ANY($3::text[])
+		ORDER BY source.id
+		FOR KEY SHARE
+	`, workspaceID, sessionID, sourceIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := make(map[string]struct{}, len(sourceIDs))
+	for rows.Next() {
+		var sourceID string
+		if err = rows.Scan(&sourceID); err != nil {
+			return err
+		}
+		found[sourceID] = struct{}{}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, sourceID := range sourceIDs {
+		if _, ok := found[sourceID]; !ok {
+			return fmt.Errorf("%w: report structured source %q is unavailable in this research session", ErrInvalidResult, sourceID)
+		}
+	}
+	return nil
 }
 
 func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultState, evaluation EvaluationProposal) error {
@@ -1197,6 +2266,34 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	if err != nil {
 		return err
 	}
+	rationale := truncateBytes(strings.Join(evaluation.Findings, "\n"), 8192)
+	rows, err := tx.Query(ctx, `
+		SELECT decision.id::text
+		FROM research_decision decision
+		JOIN research_artifact_passport passport
+		  ON passport.workspace_id = decision.workspace_id AND passport.session_id = decision.session_id
+		 AND passport.id = decision.id
+		JOIN research_artifact_version version
+		  ON version.workspace_id = passport.workspace_id AND version.session_id = passport.session_id
+		 AND version.artifact_id = passport.id AND version.version = passport.current_version
+		WHERE decision.workspace_id = $1::uuid AND decision.session_id = $2::uuid
+		  AND decision.decision_kind IN ('quality_gate', 'citation_audit')
+		  AND version.produced_by_attempt_id = $3::uuid
+		ORDER BY decision.created_at, decision.id
+		FOR UPDATE OF decision
+	`, state.workspaceID, state.run.SessionID, state.attemptID)
+	if err != nil {
+		return err
+	}
+	if rows.Next() {
+		rows.Close()
+		return fmt.Errorf("%w: attempt already owns an evaluation decision", ErrResultConflict)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 	var decisionID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
@@ -1206,11 +2303,54 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 		RETURNING id::text
 	`, state.workspaceID, state.run.SessionID, state.task.Kind, state.task.AssignedAgentID,
 		state.run.GoalVersion, state.targetPlan, inputs, outcome,
-		truncateBytes(strings.Join(evaluation.Findings, "\n"), 8192)).Scan(&decisionID)
+		rationale).Scan(&decisionID)
 	if err != nil {
 		return err
 	}
-	return ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision(string(state.task.Kind)), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)))
+	kind := artifactKindForDecision(string(state.task.Kind))
+	contentHash, err := ArtifactContentHash(kind, evaluationDecisionArtifactContent(
+		state.task.Kind, state.task.AssignedAgentID, state.run.GoalVersion,
+		state.targetPlan, inputs, outcome, rationale,
+	))
+	if err != nil {
+		return err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: state.workspaceID, SessionID: state.run.SessionID, EntityID: decisionID,
+		Kind: kind, SourceCreatedAt: timePtr(time.Now()),
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion:            int32Ptr(int32(state.run.GoalVersion)), PlanVersion: int32Ptr(int32(state.targetPlan)),
+		AccessLevel: state.outputAccess, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contentHash, ProducedByAttemptID: state.attemptID,
+	}); err != nil {
+		return err
+	}
+	if err = persistDecisionInputReferencesTx(
+		ctx, tx, state.workspaceID, state.run.SessionID,
+		decisionID, kind, inputs, outcome,
+	); err != nil {
+		return err
+	}
+	return state.checkpointAfter(ctx, txResultAfterEvaluation)
+}
+
+func evaluationDecisionArtifactContent(
+	decisionKind TaskKind,
+	actorID string,
+	goalVersion, planVersion int,
+	inputs, outcome []byte,
+	rationale string,
+) map[string]any {
+	return map[string]any{
+		"decision_kind": string(decisionKind),
+		"actor_type":    "agent",
+		"actor_id":      actorID,
+		"goal_version":  goalVersion,
+		"plan_version":  planVersion,
+		"inputs":        json.RawMessage(inputs),
+		"outcome":       json.RawMessage(outcome),
+		"rationale":     rationale,
+	}
 }
 
 func loadReportClaimKeys(ctx context.Context, tx pgx.Tx, reportID string) ([]string, error) {
@@ -1251,7 +2391,7 @@ func updateQuestionProgress(ctx context.Context, tx pgx.Tx, state acceptedResult
 			}
 		}
 	}
-	_, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE research_question
 		SET coverage = LEAST(1, coverage + $2),
 		    status = CASE
@@ -1262,7 +2402,20 @@ func updateQuestionProgress(ctx context.Context, tx pgx.Tx, state acceptedResult
 		    updated_at = now()
 		WHERE id = $1::uuid
 	`, state.task.QuestionID, result.CoverageDelta, answerClaimID)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("%w: question %s is unavailable", ErrInvalidResult, state.task.QuestionID)
+	}
+	if answerClaimID == "" {
+		return nil
+	}
+	return persistTypedArtifactInputReferenceTx(
+		ctx, tx, state.workspaceID, state.run.SessionID,
+		state.task.QuestionID, ArtifactKindQuestion, answerClaimID, ArtifactKindClaim,
+		"answer_claim", "question_progress", 0,
+	)
 }
 
 func verificationTask(kind TaskKind) bool {

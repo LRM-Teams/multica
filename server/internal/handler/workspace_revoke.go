@@ -207,7 +207,6 @@ func (h *Handler) publishRevocation(ctx context.Context, result revocationResult
 			"agent": agentToResponse(agent),
 		})
 		if agent.RuntimeID.Valid {
-			h.projectReminderOwnerStop(ctx, uuidToString(agent.ID), uuidToString(agent.RuntimeID))
 		}
 	}
 

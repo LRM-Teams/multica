@@ -50,7 +50,7 @@
     "who_working": "{{name}}",
     "output_line": "Output · {{summary}}",
     "no_output": "Output · none yet",
-    "recent_heading": "Recent research",
+    "recent_heading": "All research",
     "recent_count": "{{count}}",
     "stage_energy_aria": "{{stage}} · {{status}}, {{done}}/4 stages complete"
   },
@@ -106,6 +106,8 @@
   },
   "session_page": {
     "load_failed": "Failed to load session",
+    "load_failed_hint": "The session response could not be used. Retry to load the latest research state.",
+    "technical_details": "Technical details",
     "retry": "Retry",
     "canvas_forming_title": "Canvas forming",
     "canvas_forming_hint": "The fleet is placing nodes — they will show up here.",
@@ -415,6 +417,10 @@
     "updated_at": "Updated",
     "duration": "Duration",
     "input": "Input",
+    "raw_input_expand": "Expand raw input",
+    "raw_input_collapse": "Collapse raw input",
+    "objective_expand": "Expand full objective",
+    "objective_collapse": "Collapse full objective",
     "gate_blocker": "Gate blocked",
     "next_steps": "Next steps",
     "next_step_actions": {
@@ -505,13 +511,64 @@
     "decision": "Decision"
   },
   "node_card": {
+    "task_meta": "Task",
+    "agent_legend": "Agent {{id}}",
+    "kinds": {
+      "goal": "Goal",
+      "task": "Task",
+      "attempt": "Attempt",
+      "result_artifact": "Result artifact",
+      "search_plan": "Search plan",
+      "query_execution": "Query execution",
+      "source_candidate": "Source candidate",
+      "screening_decision": "Screening decision",
+      "source_snapshot": "Source snapshot",
+      "observation": "Observation",
+      "claim": "Claim",
+      "question": "Question",
+      "hypothesis": "Hypothesis",
+      "branch": "Branch",
+      "insight": "Insight",
+      "insight_derivation": "Insight derivation",
+      "integration_round": "Integration round",
+      "integration_contribution": "Integration contribution",
+      "dispute": "Dispute",
+      "dispute_position": "Dispute position",
+      "deliberation": "Deliberation",
+      "deliberation_turn": "Deliberation turn",
+      "decision": "Decision",
+      "team_formation": "Team formation",
+      "team_membership": "Team membership",
+      "capability_observation": "Capability observation",
+      "divergence_pass": "Divergence pass",
+      "monitoring_cycle": "Monitoring cycle",
+      "report_revision": "Report revision",
+      "evaluation_defect": "Evaluation defect",
+      "episode": "Run summary"
+    },
     "generic_type": "Unknown type",
     "generic_unrecognized": "Unrecognized type",
     "generic_raw": "Raw: ",
     "generic_owner": "Owner: ",
     "importance_sr": "Importance {{level}}/3",
     "row_label_sr": "{{label}}: ",
-    "no_progress": "No new progress"
+    "no_progress": "No new progress",
+    "owner": "Owner",
+    "objective": "Objective",
+    "current_action": "Current action",
+    "resolved": "Resolved",
+    "progress": "New progress",
+    "risk": "Risk",
+    "states": {
+      "default": "Ready",
+      "selected": "Selected",
+      "loading": "Loading",
+      "running": "Running",
+      "failed": "Failed",
+      "stale": "Stale",
+      "unknown": "Unknown status",
+      "terminal": "Completed"
+    }
   },
   "logic": {
     "label": "Research logic",
@@ -561,8 +618,8 @@
   },
   "home": {
     "composer_label": "Create a research session",
-    "hero_title": "Research",
-    "hero_desc": "State the question clearly — the fleet gathers sources, marks detours, and maps the answer onto an exploration graph.",
+    "hero_title": "Turn one question into a research constellation.",
+    "hero_desc": "Ask a question worth understanding. The fleet branches, gathers evidence, validates conflicts, and delivers a research map.",
     "composer_hint": "⌘⏎ to start · stages S1–S4 stay visible",
     "creating": "Assembling fleet…",
     "create_failed": "Couldn't create the research session",
@@ -580,6 +637,76 @@
     "template_prompt_reset": "Restore default",
     "template_prompt_cancel": "Cancel",
     "template_prompt_apply": "Apply changes"
+  },
+  "home_header": {
+    "title": "Research Constellation",
+    "subtitle": "Research home · multi-session constellation",
+    "working": "Research fleet online · {{count}} Agents working",
+    "standby": "Research fleet standing by"
+  },
+  "home_preview": {
+    "title": "Launch preview",
+    "subtitle": "The fleet will follow this method after creation",
+    "lead": "Lead Agent",
+    "fleet": "Research fleet",
+    "auto_assign": "Auto assign",
+    "agent_count": "{{count}} Agents",
+    "depth": "Depth",
+    "depth_shallow": "Quick · up to 2 rounds",
+    "depth_standard": "Standard · up to 3 rounds",
+    "depth_deep": "Deep · up to 5 rounds",
+    "source_policy": "Source policy",
+    "primary_sources": "primary sources",
+    "stages": "Research stages",
+    "evidence_note": "Multi-source evidence and independent verification enabled"
+  },
+  "home_overview": {
+    "active": "In progress",
+    "agents": "Agents working",
+    "agent_short": "Agents",
+    "today_evidence": "Evidence · last 24h",
+    "attention": "Needs attention",
+    "focus_heading": "Focused research",
+    "needs_attention": "Needs attention",
+    "recent_completed": "Recently completed",
+    "queue_heading": "Active research queue",
+    "queue_subtitle": "Select a session to inspect its full progress",
+    "live": "Live sync",
+    "stage_progress": "S1 through S4 stage progress",
+    "tasks": "{{done}}/{{total}} tasks",
+    "evidence_count": "{{count}} evidence",
+    "evidence_short": "evidence",
+    "open_questions": "{{count}} open questions",
+    "open_questions_short": "Open questions",
+    "constellation_label": "Current research workspace constellation overview",
+    "constellation_empty": "Waiting for the first research goal",
+    "enter": "Enter research workspace",
+    "read_report": "Read research report",
+    "handle_confirmation": "Handle confirmation",
+    "confirmation_reason": "This research is waiting for your confirmation before the fleet can continue.",
+    "blocked_reason": "{{count}} tasks are blocked. Enter the workspace to review causes and next actions.",
+    "recoverable_reason": "This research hit a recoverable error. Existing work is preserved and ready to continue.",
+    "stalled_reason": "No new progress has been recorded for 15 minutes. Enter the workspace to inspect tasks and Agents.",
+    "assignments": "Agent assignments",
+    "assignments_idle": "The fleet is waiting for the next task dispatch.",
+    "projection_unavailable": "This live projection is not available from the current service.",
+    "agent": "Research Agent",
+    "lead_idle": "Lead · synthesis and coordination",
+    "waiting_dispatch": "Waiting for dispatch",
+    "latest_outcomes": "Latest verified outcomes",
+    "outcomes_empty": "The fleet is building the research frame. Verified outcomes will appear here.",
+    "confirm_short": "Awaiting confirmation",
+    "blocked_short": "Blocked",
+    "recoverable_short": "Recoverable",
+    "stalled_short": "Stalled",
+    "progress_unavailable": "Stage is available; detailed counts are unavailable"
+  },
+  "home_empty": {
+    "path": "Research workflow",
+    "ask": "Frame the question",
+    "assign": "Assign multiple Agents",
+    "verify": "Verify across sources",
+    "deliver": "Deliver the research map"
   },
   "ring": {
     "title": "Node actions",
@@ -674,6 +801,7 @@
     "citation_fetch_failed_hint": "This source could not be fetched. The citation stays as a placeholder until a good URL is available.",
     "citation_summary_empty": "No summary for this source yet.",
     "citation_anchor": "Locate citation {{label}}",
+    "citations_label": "Citations",
     "source_failed_badge": "Fetch failed",
     "source_failed_purpose": "Excluded from citation numbering",
     "source_fail_fetch": "Source fetch failed",
@@ -874,6 +1002,7 @@
     "reconnect_failed_hint": "Check the network, then retry. Your last loaded research is still on screen.",
     "server_error_title": "Server error",
     "server_error_hint": "The research service returned an error (5xx). You can retry without losing this session shell.",
+    "technical_details": "Technical details",
     "retry": "Retry",
     "retrying": "Retrying…",
     "waiting_network": "Waiting for network",
@@ -896,6 +1025,8 @@
   "trajectory_explorer": {
     "title": "Trajectory explorer",
     "loading": "Loading trajectory",
+    "graph_label": "Exploration trajectory graph",
+    "overview_label": "Trajectory overview",
     "empty": "No exploration trajectory yet",
     "empty_hint": "Start a new research or wait for results to appear.",
     "error": "Failed to load trajectory",
@@ -919,6 +1050,7 @@
     "status_run": "running",
     "status_fail": "failed",
     "status_wait": "waiting",
+    "status_abandoned": "abandoned",
     "status_mute": "muted"
   },
   "canvas_plugins": {
@@ -1005,12 +1137,24 @@
   "d5": {
     "brand_title": "Research Constellation · D5",
     "brand_subtitle": "XXL / XL / L / M results · S agent work nodes",
+    "projection": {
+      "classic": "Classic",
+      "classic_hint": "Classic projection view; live V6 projection is not available for this session"
+    },
+    "projection_contract": {
+      "title": "Backend projection conflicts with the research stage",
+      "body": "The session is still in {{stage}}, but the backend returned a failed final quality gate ({{codes}}). That gate is isolated from the canvas; real task and attempt failures remain visible.",
+      "details": "View backend-ready error details",
+      "copy": "Copy error details",
+      "copied": "Copied",
+      "copy_failed": "Copy failed because the browser denied clipboard access. Expand the error details and copy them manually."
+    },
     "lens_group": "Display lenses",
     "lens": {
       "relations": "Relations",
       "confidence": "Confidence",
       "agent": "Agent",
-      "lineage": "Lineage"
+      "lineage": "Round lineage"
     },
     "rail": {
       "mobile_title": "Research context",
@@ -1023,13 +1167,25 @@
     "goal_panel": {
       "title": "Goal versions",
       "version": "v{{version}}",
+      "round": "round {{round}}",
+      "round_with_budget": "round {{round}} / {{budget}}",
       "current": "Current",
       "impact": "{{labeledNodes}} of {{totalNodes}} nodes tagged with a goal version"
     },
     "detail": {
       "open_report": "Open full report",
-      "continue_deepening": "Continue deepening",
-      "continue_message": "Please continue deepening the research on: {{title}}"
+      "command_pending": "Applying…",
+      "command_failed": "Could not apply this node action. Refresh and try again.",
+      "permission_denied": "You do not have permission to continue this path.",
+      "session_terminal": "This research session is already finished.",
+      "node_stale": "This node changed. The canvas has been refreshed; try again.",
+      "state_version_conflict": "This path changed. Review the refreshed node before retrying.",
+      "action_not_allowed": "This node cannot be continued in its current state.",
+      "idempotency_conflict": "This request conflicts with an earlier action. Refresh and try again.",
+      "invalid_request": "This node cannot accept that request.",
+      "run_not_running": "Resume the research session before continuing this path.",
+      "not_retryable": "This node is not retryable in its current state.",
+      "no_eligible_member": "No eligible research agent is available for this path."
     },
     "summary": {
       "title": "Constellation · {{loaded}} loaded directions",
@@ -1123,6 +1279,10 @@
           "newdir": {
             "label": "New direction",
             "description": "A new exploration direction branches from existing work."
+          },
+          "neutral": {
+            "label": "Other relation",
+            "description": "An unclassified or newer relation. Keep the original type; do not treat it as support or challenge."
           }
         }
       }
@@ -1130,6 +1290,7 @@
     "canvas": {
       "loading": "Loading constellation…",
       "error": "Could not load the typed research graph.",
+      "interface_error_details": "Technical details",
       "stale_title": "Constellation may be out of date.",
       "stale_body": "The last loaded graph remains visible while refresh is unavailable.",
       "stale_announcement": "Constellation refresh failed. The last loaded graph remains visible.",

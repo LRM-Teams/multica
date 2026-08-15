@@ -12,13 +12,31 @@ import (
 )
 
 type dispatchRaceFixture struct {
-	pool    *pgxpool.Pool
-	store   *PostgresStore
-	fixture researchRunFixture
-	run     Run
-	task    Task
-	claimID string
-	input   CreateDispatchIntentInput
+	pool     *pgxpool.Pool
+	store    *PostgresStore
+	fixture  researchRunFixture
+	run      Run
+	task     Task
+	claimID  string
+	sourceID string
+	input    CreateDispatchIntentInput
+}
+
+func assertDispatchCommittedOnceWithFreshFacts(t *testing.T, ctx context.Context, fx dispatchRaceFixture, mutation string) {
+	t.Helper()
+	var attempts, manifests, outboxes, events int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_task_attempt WHERE id=$1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_manifest WHERE workspace_id=$2::uuid AND session_id=$3::uuid AND attempt_id=$1::uuid),
+		  (SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id=$1::uuid),
+		  (SELECT count(*)::int FROM research_run_event WHERE workspace_id=$2::uuid AND session_id=$3::uuid AND event_type='task_dispatching' AND payload->>'attempt_id'=$1::text)
+	`, fx.input.AttemptID, fx.fixture.workspaceID, fx.run.SessionID).Scan(&attempts, &manifests, &outboxes, &events); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || manifests != 1 || outboxes != 1 || events != 1 {
+		t.Fatalf("fresh dispatch after %s: attempt=%d manifest=%d outbox=%d events=%d want all 1", mutation, attempts, manifests, outboxes, events)
+	}
 }
 
 func setupDispatchRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) dispatchRaceFixture {
@@ -43,11 +61,38 @@ func setupDispatchRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.P
 		t, ctx, pool, fixture.workspaceID, run.SessionID,
 		claimID, "dispatch-race-claim", "claim for dispatch race",
 	)
+	sourceID := uuid.NewString()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_source_snapshot (
+		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
+		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
+		  verification_status
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'https://example.test/dispatch-race',
+		  'Dispatch race source', 'example.test', 'primary', '{}'::text[],
+		  'dispatch-race-source', now(), 'sha256:dispatch-race-source',
+		  'dispatch race source snapshot', '{}'::jsonb, 'verified'
+		)
+	`, sourceID, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatalf("insert dispatch race source: %v", err)
+	}
+	backfillIntegrationArtifactPassport(
+		t, ctx, tx, fixture.workspaceID, run.SessionID, sourceID,
+		string(ArtifactKindSourceSnapshot), nil, nil,
+	)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit dispatch race source: %v", err)
+	}
 
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, task.ID, fixture.agentID)
 	return dispatchRaceFixture{
 		pool: pool, store: store, fixture: fixture, run: run, task: task,
-		claimID: claimID, input: input,
+		claimID: claimID, sourceID: sourceID, input: input,
 	}
 }
 
@@ -72,26 +117,61 @@ func invokeDispatchWithBeforeCommitFault(t *testing.T, ctx context.Context, fx d
 
 func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRaceFixture) {
 	t.Helper()
-	var attemptCount, manifestCount, outboxCount int
+	var attempts, passports, manifests, entries, omissions, grants, outboxes, events int
 	if err := fx.pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_task_attempt WHERE id = $1::uuid
-	`, fx.input.AttemptID).Scan(&attemptCount); err != nil {
+		SELECT
+		  (SELECT count(*)::int FROM research_task_attempt WHERE id=$1::uuid),
+		  (SELECT count(*)::int FROM research_artifact_passport
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid
+		     AND (id=$1::uuid OR entity_kind='context_manifest')),
+		  (SELECT count(*)::int FROM research_artifact_context_manifest
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_entry
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_omission
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_artifact_policy_grant
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid),
+		  (SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id=$1::uuid),
+		  (SELECT count(*)::int FROM research_run_event
+		   WHERE workspace_id=$2::uuid AND session_id=$3::uuid
+		     AND event_type='task_dispatching' AND payload->>'attempt_id'=$1::text)
+	`, fx.input.AttemptID, fx.fixture.workspaceID, fx.run.SessionID).Scan(
+		&attempts, &passports, &manifests, &entries, &omissions, &grants, &outboxes, &events,
+	); err != nil {
 		t.Fatal(err)
 	}
+	if attempts != 0 || passports != 0 || manifests != 0 || entries != 0 || omissions != 0 || grants != 0 || outboxes != 0 || events != 0 {
+		t.Fatalf("rolled-back dispatch leaked attempt=%d passports=%d manifest=%d entries=%d omissions=%d grants=%d outbox=%d events=%d",
+			attempts, passports, manifests, entries, omissions, grants, outboxes, events)
+	}
+	var passportCount, manifestEntryCount, omissionCount, inputReferenceCount, grantCount, eventCount int
 	if err := fx.pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_artifact_context_manifest
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
-	`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&manifestCount); err != nil {
+		SELECT
+		  (SELECT count(*)::int FROM research_artifact_passport
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		     AND (id = $3::uuid OR entity_kind = 'context_manifest')),
+		  (SELECT count(*)::int FROM research_artifact_context_entry
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_context_omission
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_artifact_input_reference ref
+		   WHERE ref.workspace_id = $1::uuid AND ref.session_id = $2::uuid
+		     AND ref.relation = 'manifest_input'),
+		  (SELECT count(*)::int FROM research_artifact_policy_grant
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid),
+		  (SELECT count(*)::int FROM research_run_event
+		   WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		     AND idempotency_key = $4)
+	`, fx.fixture.workspaceID, fx.run.SessionID, fx.input.AttemptID, fx.input.Request.Key).Scan(
+		&passportCount, &manifestEntryCount, &omissionCount, &inputReferenceCount, &grantCount, &eventCount,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id = $1::uuid
-	`, fx.input.AttemptID).Scan(&outboxCount); err != nil {
-		t.Fatal(err)
-	}
-	if attemptCount != 0 || manifestCount != 0 || outboxCount != 0 {
-		t.Fatalf("rolled-back dispatch leaked attempt=%d manifest=%d outbox=%d",
-			attemptCount, manifestCount, outboxCount)
+	if passportCount != 0 || manifestEntryCount != 0 || omissionCount != 0 ||
+		inputReferenceCount != 0 || grantCount != 0 || eventCount != 0 {
+		t.Fatalf("rolled-back dispatch leaked passport=%d entry=%d omission=%d input=%d grant=%d event=%d",
+			passportCount, manifestEntryCount, omissionCount, inputReferenceCount, grantCount, eventCount)
 	}
 	var taskStatus string
 	if err := fx.pool.QueryRow(ctx, `
@@ -101,6 +181,100 @@ func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRace
 	}
 	if taskStatus != string(TaskStatusReady) && taskStatus != string(TaskStatusPending) {
 		t.Fatalf("task status=%q want ready or pending after rolled-back dispatch", taskStatus)
+	}
+}
+
+func TestDispatchCASMismatchRollsBackCompleteWriteSet(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	for _, tc := range []struct {
+		name string
+		hook func(context.Context, dispatchRaceFixture, *dispatchManifestPlan) error
+	}{
+		{
+			name: "eligibility revision",
+			hook: func(ctx context.Context, fx dispatchRaceFixture, _ *dispatchManifestPlan) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET eligibility_revision = eligibility_revision + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "representation bytes hash",
+			hook: func(_ context.Context, fx dispatchRaceFixture, plan *dispatchManifestPlan) error {
+				entry, ok := manifestEntryForArtifact(*plan, fx.claimID)
+				if !ok {
+					return errors.New("claim missing from dispatch manifest plan")
+				}
+				for i := range plan.Entries {
+					if plan.Entries[i].ArtifactID == entry.ArtifactID {
+						plan.Entries[i].RepresentationBytes = append([]byte(nil), entry.RepresentationBytes...)
+						plan.Entries[i].RepresentationBytes = append(plan.Entries[i].RepresentationBytes, '!')
+						return nil
+					}
+				}
+				return errors.New("claim disappeared from dispatch manifest plan")
+			},
+		},
+		{
+			name: "relationship identity hash",
+			hook: func(ctx context.Context, fx dispatchRaceFixture, _ *dispatchManifestPlan) error {
+				_, err := fx.pool.Exec(ctx, `
+					INSERT INTO research_artifact_input_reference(
+					  workspace_id,session_id,consumer_version_id,input_version_id,
+					  relation,explicitly_used,purpose,ordinal
+					)
+					SELECT consumer.workspace_id,consumer.session_id,consumer.id,input.id,
+					       'shadow_identity_race',true,'task_execution',0
+					FROM research_artifact_passport consumer_passport
+					JOIN research_artifact_version consumer
+					  ON consumer.workspace_id=consumer_passport.workspace_id
+					 AND consumer.session_id=consumer_passport.session_id
+					 AND consumer.artifact_id=consumer_passport.id
+					 AND consumer.version=consumer_passport.current_version
+					JOIN research_artifact_passport input_passport
+					  ON input_passport.workspace_id=consumer_passport.workspace_id
+					 AND input_passport.session_id=consumer_passport.session_id
+					 AND input_passport.id=$4::uuid
+					JOIN research_artifact_version input
+					  ON input.workspace_id=input_passport.workspace_id
+					 AND input.session_id=input_passport.session_id
+					 AND input.artifact_id=input_passport.id
+					 AND input.version=input_passport.current_version
+					WHERE consumer_passport.workspace_id=$1::uuid
+					  AND consumer_passport.session_id=$2::uuid
+					  AND consumer_passport.id=$3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.task.ID, fx.claimID)
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := setupDispatchRaceFixture(t, ctx, pool)
+			defer cleanupResearchRunFixture(pool, fx.fixture)
+			fx.store.dispatchManifestBeforeCASHook = func(ctx context.Context, plan *dispatchManifestPlan) error {
+				return tc.hook(ctx, fx, plan)
+			}
+			_, _, err := fx.store.CreateDispatchIntent(ctx, fx.input)
+			fx.store.dispatchManifestBeforeCASHook = nil
+			if !errors.Is(err, ErrInvalidTransition) {
+				t.Fatalf("CreateDispatchIntent err=%v want ErrInvalidTransition", err)
+			}
+			assertDispatchRolledBack(t, ctx, fx)
+		})
 	}
 }
 
@@ -158,6 +332,40 @@ func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 			},
 		},
 		{
+			name:        "missing_current_version",
+			wantInvalid: true,
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET current_version = current_version + 1
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "version_access_level",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_version
+					SET access_level = 'verified_only'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "provenance_becomes_unknown",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_artifact_passport
+					SET provenance_completeness = 'unknown'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
 			name: "withdrawn_lifecycle",
 			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
 				_, err := fx.pool.Exec(ctx, `
@@ -165,6 +373,51 @@ func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 					SET lifecycle_status = 'withdrawn'
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return err
+			},
+		},
+		{
+			name: "source_verification_rejected",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
+					UPDATE research_source_snapshot
+					SET verification_status = 'rejected'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.sourceID)
+				return nil
+			},
+		},
+		{
+			name: "artifact_superseded",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				successorID := uuid.NewString()
+				decisionID := uuid.NewString()
+				seedIntegrationClaimArtifact(
+					t, ctx, fx.pool, fx.fixture.workspaceID, fx.run.SessionID,
+					successorID, "dispatch-race-successor", "successor after rolled-back dispatch",
+				)
+				seedIntegrationSupersessionDecision(
+					t, ctx, fx.pool, fx.fixture.workspaceID, fx.run.SessionID,
+					fx.fixture.userID, decisionID,
+				)
+				var successorVersionID, supersededVersionID string
+				if err := fx.pool.QueryRow(ctx, `
+					SELECT id::text FROM research_artifact_version
+					WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1
+				`, fx.fixture.workspaceID, fx.run.SessionID, successorID).Scan(&successorVersionID); err != nil {
+					return err
+				}
+				if err := fx.pool.QueryRow(ctx, `
+					SELECT id::text FROM research_artifact_version
+					WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID).Scan(&supersededVersionID); err != nil {
+					return err
+				}
+				_, err := fx.store.SupersedeArtifact(ctx, SupersedeArtifactInput{
+					WorkspaceID: fx.fixture.workspaceID, SessionID: fx.run.SessionID,
+					SuccessorVersionID: successorVersionID, SupersededVersionID: supersededVersionID,
+					DecisionID: decisionID, Reason: "dispatch race supersession",
+				})
 				return err
 			},
 		},
@@ -190,6 +443,7 @@ func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateDispatchIntent after fresh candidate mutation: %v", err)
 			}
+			assertDispatchCommittedOnceWithFreshFacts(t, ctx, fx, tc.name)
 		})
 	}
 }

@@ -1,56 +1,91 @@
 package researchrun
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ArtifactEntityKind identifies one canonical Research artifact passport.
 type ArtifactEntityKind string
 
 const (
-	ArtifactKindRunSession          ArtifactEntityKind = "run_session"
-	ArtifactKindContractRevision    ArtifactEntityKind = "contract_revision"
-	ArtifactKindMethodDecision        ArtifactEntityKind = "method_decision"
-	ArtifactKindQuestion              ArtifactEntityKind = "question"
-	ArtifactKindTask                  ArtifactEntityKind = "task"
-	ArtifactKindAttempt               ArtifactEntityKind = "attempt"
-	ArtifactKindResultArtifact        ArtifactEntityKind = "result_artifact"
-	ArtifactKindLegacySource          ArtifactEntityKind = "legacy_source"
-	ArtifactKindSourceSnapshot        ArtifactEntityKind = "source_snapshot"
-	ArtifactKindObservation           ArtifactEntityKind = "observation"
-	ArtifactKindClaim                 ArtifactEntityKind = "claim"
-	ArtifactKindEvidenceLink          ArtifactEntityKind = "evidence_link"
-	ArtifactKindReportRevision        ArtifactEntityKind = "report_revision"
-	ArtifactKindEvaluationDecision    ArtifactEntityKind = "evaluation_decision"
-	ArtifactKindStageEvaluation       ArtifactEntityKind = "stage_evaluation"
-	ArtifactKindResearchMessage       ArtifactEntityKind = "research_message"
-	ArtifactKindProductRoundDecision  ArtifactEntityKind = "product_round_decision"
-	ArtifactKindContextManifest       ArtifactEntityKind = "context_manifest"
-	ArtifactKindRunEvent              ArtifactEntityKind = "run_event"
-	ArtifactKindGraphNode             ArtifactEntityKind = "graph_node"
-	ArtifactKindGraphEdge             ArtifactEntityKind = "graph_edge"
+	ArtifactKindRunSession               ArtifactEntityKind = "run_session"
+	ArtifactKindContractRevision         ArtifactEntityKind = "contract_revision"
+	ArtifactKindMethodDecision           ArtifactEntityKind = "method_decision"
+	ArtifactKindQuestion                 ArtifactEntityKind = "question"
+	ArtifactKindTask                     ArtifactEntityKind = "task"
+	ArtifactKindAttempt                  ArtifactEntityKind = "attempt"
+	ArtifactKindResultArtifact           ArtifactEntityKind = "result_artifact"
+	ArtifactKindLegacySource             ArtifactEntityKind = "legacy_source"
+	ArtifactKindSourceSnapshot           ArtifactEntityKind = "source_snapshot"
+	ArtifactKindObservation              ArtifactEntityKind = "observation"
+	ArtifactKindClaim                    ArtifactEntityKind = "claim"
+	ArtifactKindEvidenceLink             ArtifactEntityKind = "evidence_link"
+	ArtifactKindReportRevision           ArtifactEntityKind = "report_revision"
+	ArtifactKindEvaluationDecision       ArtifactEntityKind = "evaluation_decision"
+	ArtifactKindStageEvaluation          ArtifactEntityKind = "stage_evaluation"
+	ArtifactKindResearchMessage          ArtifactEntityKind = "research_message"
+	ArtifactKindProductRoundDecision     ArtifactEntityKind = "product_round_decision"
+	ArtifactKindContextManifest          ArtifactEntityKind = "context_manifest"
+	ArtifactKindRunEvent                 ArtifactEntityKind = "run_event"
+	ArtifactKindGraphNode                ArtifactEntityKind = "graph_node"
+	ArtifactKindGraphEdge                ArtifactEntityKind = "graph_edge"
+	ArtifactKindHypothesis               ArtifactEntityKind = "hypothesis"
+	ArtifactKindBranch                   ArtifactEntityKind = "branch"
+	ArtifactKindInsight                  ArtifactEntityKind = "insight"
+	ArtifactKindInquiryEdge              ArtifactEntityKind = "inquiry_edge"
+	ArtifactKindSearchPlan               ArtifactEntityKind = "search_plan"
+	ArtifactKindQueryExecution           ArtifactEntityKind = "query_execution"
+	ArtifactKindSourceCandidate          ArtifactEntityKind = "source_candidate"
+	ArtifactKindScreeningDecision        ArtifactEntityKind = "screening_decision"
+	ArtifactKindIntegrationContribution  ArtifactEntityKind = "integration_contribution"
+	ArtifactKindIntegrationRound         ArtifactEntityKind = "integration_round"
+	ArtifactKindDispute                  ArtifactEntityKind = "dispute"
+	ArtifactKindDisputePosition          ArtifactEntityKind = "dispute_position"
+	ArtifactKindDeliberation             ArtifactEntityKind = "deliberation"
+	ArtifactKindDeliberationTurn         ArtifactEntityKind = "deliberation_turn"
+	ArtifactKindResearchDirectorIdentity ArtifactEntityKind = "research_director_identity"
+	ArtifactKindAdjudicationDecision     ArtifactEntityKind = "adjudication_decision"
 )
 
 var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
-	ArtifactKindRunSession:         {},
-	ArtifactKindContractRevision:   {},
-	ArtifactKindMethodDecision:     {},
-	ArtifactKindQuestion:           {},
-	ArtifactKindTask:               {},
-	ArtifactKindAttempt:            {},
-	ArtifactKindResultArtifact:     {},
-	ArtifactKindLegacySource:       {},
-	ArtifactKindSourceSnapshot:     {},
-	ArtifactKindObservation:        {},
-	ArtifactKindClaim:              {},
-	ArtifactKindEvidenceLink:       {},
-	ArtifactKindReportRevision:     {},
-	ArtifactKindEvaluationDecision: {},
-	ArtifactKindStageEvaluation:    {},
-	ArtifactKindResearchMessage:    {},
-	ArtifactKindProductRoundDecision: {},
-	ArtifactKindContextManifest:    {},
-	ArtifactKindRunEvent:           {},
-	ArtifactKindGraphNode:          {},
-	ArtifactKindGraphEdge:          {},
+	ArtifactKindRunSession:               {},
+	ArtifactKindContractRevision:         {},
+	ArtifactKindMethodDecision:           {},
+	ArtifactKindQuestion:                 {},
+	ArtifactKindTask:                     {},
+	ArtifactKindAttempt:                  {},
+	ArtifactKindResultArtifact:           {},
+	ArtifactKindLegacySource:             {},
+	ArtifactKindSourceSnapshot:           {},
+	ArtifactKindObservation:              {},
+	ArtifactKindClaim:                    {},
+	ArtifactKindEvidenceLink:             {},
+	ArtifactKindReportRevision:           {},
+	ArtifactKindEvaluationDecision:       {},
+	ArtifactKindStageEvaluation:          {},
+	ArtifactKindResearchMessage:          {},
+	ArtifactKindProductRoundDecision:     {},
+	ArtifactKindContextManifest:          {},
+	ArtifactKindRunEvent:                 {},
+	ArtifactKindGraphNode:                {},
+	ArtifactKindGraphEdge:                {},
+	ArtifactKindHypothesis:               {},
+	ArtifactKindBranch:                   {},
+	ArtifactKindInsight:                  {},
+	ArtifactKindInquiryEdge:              {},
+	ArtifactKindSearchPlan:               {},
+	ArtifactKindQueryExecution:           {},
+	ArtifactKindSourceCandidate:          {},
+	ArtifactKindScreeningDecision:        {},
+	ArtifactKindIntegrationContribution:  {},
+	ArtifactKindIntegrationRound:         {},
+	ArtifactKindDispute:                  {},
+	ArtifactKindDisputePosition:          {},
+	ArtifactKindDeliberation:             {},
+	ArtifactKindDeliberationTurn:         {},
+	ArtifactKindResearchDirectorIdentity: {},
+	ArtifactKindAdjudicationDecision:     {},
 }
 
 // ArtifactLifecycleStatus is passport admissibility, not domain status.
@@ -87,9 +122,9 @@ const (
 type ArtifactHashOrigin string
 
 const (
-	ArtifactHashOriginProduction           ArtifactHashOrigin = "production"
-	ArtifactHashOriginMigrationRecomputed  ArtifactHashOrigin = "migration_recomputed"
-	ArtifactHashOriginLegacyStored         ArtifactHashOrigin = "legacy_stored"
+	ArtifactHashOriginProduction          ArtifactHashOrigin = "production"
+	ArtifactHashOriginMigrationRecomputed ArtifactHashOrigin = "migration_recomputed"
+	ArtifactHashOriginLegacyStored        ArtifactHashOrigin = "legacy_stored"
 )
 
 // ArtifactCanonicalizationVersion is the active canonical JSON profile.
@@ -97,6 +132,89 @@ const ArtifactCanonicalizationVersion = "research-artifact-c14n-v1"
 
 // LegacyV1V5CompatPolicy is the named ordinary-task admission exception for backfilled rows.
 const LegacyV1V5CompatPolicy = "legacy-v1-v5-compat-v1"
+const ResearchV6ContextPolicy = "research-v6-context-v1"
+
+type SupersedeArtifactInput struct {
+	WorkspaceID         string
+	SessionID           string
+	SuccessorVersionID  string
+	SupersededVersionID string
+	DecisionID          string
+	Reason              string
+}
+
+type ArtifactSupersession struct {
+	ID                     string
+	SuccessorVersionID     string
+	SupersededVersionID    string
+	SupersededArtifactID   string
+	OldEligibilityRevision int64
+	NewEligibilityRevision int64
+	PolicyWatermark        int64
+	DecisionID             string
+	Reason                 string
+}
+
+func (in SupersedeArtifactInput) validate() error {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.SessionID) == "" ||
+		strings.TrimSpace(in.SuccessorVersionID) == "" || strings.TrimSpace(in.SupersededVersionID) == "" ||
+		strings.TrimSpace(in.DecisionID) == "" {
+		return fmt.Errorf("%w: supersession scope, versions, and decision are required", ErrInvalidContract)
+	}
+	if strings.TrimSpace(in.Reason) == "" {
+		return fmt.Errorf("%w: supersession reason is required", ErrInvalidContract)
+	}
+	if in.SuccessorVersionID == in.SupersededVersionID {
+		return fmt.Errorf("%w: an artifact version cannot supersede itself", ErrInvalidContract)
+	}
+	return nil
+}
+
+// WithdrawArtifactInput identifies one passport whose future ordinary
+// admission is being revoked. DecisionID is optional because a lifecycle event
+// is the canonical reciprocal fact for withdrawal; callers may bind a scoped
+// Decision when the owning workflow has one.
+type WithdrawArtifactInput struct {
+	WorkspaceID string
+	SessionID   string
+	ArtifactID  string
+	DecisionID  string
+	ActorType   string
+	ActorID     string
+	Reason      string
+}
+
+// ArtifactWithdrawal is the durable receipt for one lifecycle transition.
+type ArtifactWithdrawal struct {
+	ArtifactID             string
+	EntityKind             ArtifactEntityKind
+	OldLifecycle           ArtifactLifecycleStatus
+	NewLifecycle           ArtifactLifecycleStatus
+	OldEligibilityRevision int64
+	NewEligibilityRevision int64
+	PolicyWatermark        int64
+	LifecycleEventID       string
+	DecisionID             string
+}
+
+func (in WithdrawArtifactInput) validate() error {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.SessionID) == "" || strings.TrimSpace(in.ArtifactID) == "" {
+		return fmt.Errorf("%w: withdrawal scope is required", ErrInvalidContract)
+	}
+	if strings.TrimSpace(in.Reason) == "" {
+		return fmt.Errorf("%w: withdrawal reason is required", ErrInvalidContract)
+	}
+	switch in.ActorType {
+	case "system":
+	case "user", "agent":
+		if strings.TrimSpace(in.ActorID) == "" {
+			return fmt.Errorf("%w: withdrawal actor id is required", ErrInvalidContract)
+		}
+	default:
+		return fmt.Errorf("%w: invalid withdrawal actor type %q", ErrInvalidContract, in.ActorType)
+	}
+	return nil
+}
 
 func ParseArtifactEntityKind(raw string) (ArtifactEntityKind, error) {
 	kind := ArtifactEntityKind(raw)
@@ -137,6 +255,14 @@ func ReciprocalArtifactPassportGuardTriggerNames() []string {
 		"research_run_event_artifact_passport_guard",
 		"research_graph_node_artifact_passport_guard",
 		"research_graph_edge_artifact_passport_guard",
+		"research_hypothesis_artifact_passport_guard",
+		"research_branch_artifact_passport_guard",
+		"research_insight_artifact_passport_guard",
+		"research_inquiry_edge_artifact_passport_guard",
+		"research_search_plan_artifact_passport_guard",
+		"research_query_execution_artifact_passport_guard",
+		"research_source_candidate_artifact_passport_guard",
+		"research_screening_decision_artifact_passport_guard",
 	}
 }
 
@@ -171,6 +297,8 @@ func IntegrityGuardTriggerNames() []string {
 // LinkPolicyGuardTriggerNames lists migration 324 supersession/lifecycle policy guards.
 func LinkPolicyGuardTriggerNames() []string {
 	return []string{
+		"research_artifact_supersession_cycle_guard",
+		"research_artifact_supersession_append_only_guard",
 		"research_artifact_supersession_to_policy_guard",
 		"research_artifact_policy_mutation_to_supersession_guard",
 		"research_artifact_lifecycle_event_to_policy_guard",
@@ -178,12 +306,26 @@ func LinkPolicyGuardTriggerNames() []string {
 	}
 }
 
+// AppendOnlyGuardTriggerNames lists the stable immutable ledger guards.
+func AppendOnlyGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_version_immutable_guard",
+		"research_artifact_policy_mutation_append_only_guard",
+		"research_artifact_lifecycle_event_append_only_guard",
+	}
+}
+
 // MigrationDiagnosticReasonCodes lists migration 325 diagnostic reason registry.
 func MigrationDiagnosticReasonCodes() []string {
 	return []string{
+		"ambiguous_local_key",
 		"cross_scope_reference",
+		"cyclic_local_reference",
+		"dangling_local_key",
+		"duplicate_local_key",
 		"invalid_match_decision",
 		"malformed_uuid",
+		"mismatched_reference",
 		"unknown_schema",
 		"unresolved_reference",
 	}
@@ -192,15 +334,38 @@ func MigrationDiagnosticReasonCodes() []string {
 // MigrationRelationshipParserNames lists migration 325 relationship parser registry.
 func MigrationRelationshipParserNames() []string {
 	return []string{
+		"research_claim_method_evidence_standard",
 		"research_message_match_decision",
+		"research_message_sender_principal",
 		"research_decision_inputs",
+		"research_decision_evaluation_local_references",
+		"research_graph_node_payload",
+		"research_legacy_source_payload",
+		"research_report_structured",
 		"research_run_event_payload",
+		"research_task_remediation_acceptance_criteria",
+	}
+}
+
+// DecisionRelationshipSchemaNames lists the closed set of persisted Decision
+// schemas that Chapter D may inspect for typed artifact relationships.
+func DecisionRelationshipSchemaNames() []string {
+	return []string{
+		"budget_exhausted",
+		"citation_audit",
+		"information_gain",
+		"quality_gate",
+		"remediation_routing",
+		"research_method",
+		"selective_steering",
 	}
 }
 
 // ScopedRelationshipFKNames lists migration 326 composite relationship FKs.
 func ScopedRelationshipFKNames() []string {
 	return []string{
+		"research_message_run_event_scoped_fkey",
+		"research_message_target_agent_scoped_fkey",
 		"research_task_attempt_task_scoped_fkey",
 		"research_task_question_scoped_fkey",
 		"research_task_parent_task_scoped_fkey",

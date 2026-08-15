@@ -25,10 +25,17 @@ func (runner *WorkspaceRunner) messageRuntimeID(agentID string) string {
 }
 
 func (runner *WorkspaceRunner) ensureMessageInbox(agentID, expectedRuntimeID string) (bool, error) {
-	if runner == nil || runner.inboxes == nil {
+	if runner == nil || runner.inboxes == nil || runner.processes == nil {
 		return false, errors.New("Workspace Runner Inbox registry is unavailable")
 	}
-	created, err := runner.inboxes.Ensure(agentID)
+	launch, ok := runner.processes.Snapshot(agentID)
+	if !ok || !launch.Managed || launch.RuntimeID == "" {
+		return false, fmt.Errorf("no accepted agent:start for Agent %q", agentID)
+	}
+	if expectedRuntimeID != "" && launch.RuntimeID != expectedRuntimeID {
+		return false, fmt.Errorf("Workspace Runner Inbox Runtime mismatch for Agent %q", agentID)
+	}
+	created, err := runner.inboxes.AcceptStart(agentID, launch.RuntimeID)
 	if err != nil {
 		return false, err
 	}
@@ -43,6 +50,31 @@ func (runner *WorkspaceRunner) ensureMessageInbox(agentID, expectedRuntimeID str
 func (runner *WorkspaceRunner) hasMessageInbox(agentID string) bool {
 	_, _, ok := runner.messageCoordinator(agentID)
 	return ok
+}
+
+func (runner *WorkspaceRunner) hasAcceptedStart(agentID, runtimeID string) bool {
+	if runner == nil || runner.processes == nil {
+		return false
+	}
+	launch, ok := runner.processes.Snapshot(agentID)
+	return ok && launch.Managed && launch.RuntimeID == runtimeID
+}
+
+func (runner *WorkspaceRunner) ensureMessageInboxForDelivery(agentID string) error {
+	if runner == nil || runner.inboxes == nil || runner.processes == nil {
+		return errors.New("Workspace Runner Message lifecycle is unavailable")
+	}
+	if runner.hasMessageInbox(agentID) {
+		return nil
+	}
+	launch, ok := runner.processes.Snapshot(agentID)
+	if !ok || !launch.Managed || launch.RuntimeID == "" {
+		return fmt.Errorf("no accepted agent:start for %q", agentID)
+	}
+	if _, err := runner.inboxes.AcceptStart(agentID, launch.RuntimeID); err != nil {
+		return fmt.Errorf("repair Agent Message coordinator: %w", err)
+	}
+	return nil
 }
 
 func (runner *WorkspaceRunner) messageContextBoundary(agentID, target string) (int64, bool, error) {
@@ -172,7 +204,11 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
 		))
 		if runner.logger != nil {
-			runner.logger.Warn("Workspace Runner Agent Message handoff incomplete before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+			if deferred {
+				runner.logger.Debug("Workspace Runner Agent Message handoff deferred before delivery acknowledgement", "reason", "runtime_busy", "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+			} else {
+				runner.logger.Warn("Workspace Runner Agent Message handoff incomplete before delivery acknowledgement", "error", err, "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+			}
 		}
 		if deferred {
 			return result, nil
@@ -276,7 +312,7 @@ func (runner *WorkspaceRunner) restartFromIdleSnapshot(agentID string, res agent
 	if runner.processes == nil || res.runtimeID == "" || res.launchID == "" {
 		return fmt.Errorf("idle snapshot for Agent %q is incomplete", agentID)
 	}
-	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID)
+	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID, firstNonEmpty(res.startDispatchID, res.launchID))
 }
 
 func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {
@@ -290,9 +326,32 @@ func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, ag
 		AgentID: agentID, RuntimeID: res.runtimeID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
 	}
 	ack := protocol.AgentStartAckPayload{AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID}
-	if _, _, err := runner.completeManagedAgentStart(ctx, start, ack); err != nil && runner.logger != nil && ctx.Err() == nil {
-		runner.logger.Warn("Workspace Runner idle snapshot start failed", "agent_id", agentID, "runtime_id", res.runtimeID, "launch_id", res.launchID, "error", err)
+	callback := agentProcessCallback{AgentID: agentID, LaunchID: res.launchID}
+	failed := false
+	defer func() {
+		if failed {
+			runner.processes.completeFailedManagedStart(callback)
+		} else {
+			runner.processes.completeManagedStart(callback)
+		}
+	}()
+	outcome, err := runner.completeManagedAgentStart(ctx, start, ack)
+	if err != nil {
+		failed = true
+		runner.publishManagedAgentStartFailure(start, outcome)
+		if runner.logger != nil && ctx.Err() == nil {
+			runner.logger.Warn("Workspace Runner idle snapshot start failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "provider_start_failed", "failed", err)...)
+		}
+		return
 	}
+	if err := runner.establishManagedAgentStart(start, outcome); err != nil {
+		if runner.logger != nil && ctx.Err() == nil {
+			runner.logger.Warn("Workspace Runner idle snapshot state failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "state_failed", "failed", err)...)
+		}
+		return
+	}
+	runner.publishManagedAgentStartActivity(agentID, res.runtimeID)
+	runner.flushManagedAgentStartMessages(ctx, start, ack)
 }
 
 func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
@@ -310,7 +369,7 @@ func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
 		AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive,
 	})
 	now := time.Now().UTC()
-	entry, err := activityNarrativeEntry(protocol.ActivityKindOffline, "runtime_unavailable", "Process unavailable; restart required")
+	entry, err := activityNarrativeEntry("runtime_unavailable", "Process unavailable; restart required")
 	if err != nil {
 		return
 	}
@@ -325,6 +384,7 @@ func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
 			ActivityKind:     protocol.ActivityKindOffline,
 			DetailKind:       "runtime_unavailable",
 		},
+		Detail:  "Process unavailable; restart required",
 		Entries: []protocol.AgentActivityEntry{entry},
 	})
 }
@@ -424,10 +484,10 @@ func (runner *WorkspaceRunner) sendAgentFrame(eventType string, payload any) boo
 }
 
 func (runner *WorkspaceRunner) hasRuntime(runtimeID string) bool {
-	if runner == nil || runner.runtimeSet == nil {
+	if runner == nil || runner.runtimeIDs == nil {
 		return false
 	}
-	for _, current := range runner.runtimeSet().RuntimeIDs {
+	for _, current := range runner.runtimeIDs() {
 		if current == strings.TrimSpace(runtimeID) {
 			return true
 		}

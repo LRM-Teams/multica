@@ -12,9 +12,8 @@ const EMPTY_TYPING_ACTORS: readonly ConversationTypingActor[] = [];
 /**
  * Bottom composer / reply strip shared by group channels and thread replies.
  * This strip is conversation-scoped, so it only renders transient human typing
- * events that belong to the open conversation. Workspace-wide Agent activity
- * belongs on Agent surfaces and must not be presented as a reply to the current
- * conversation.
+ * events that belong to the open conversation. Channel-member Agent Activity
+ * lives on ComposerAgentActivityStrip, not here.
  */
 export function ConversationActivityStrip({
   typingActors = EMPTY_TYPING_ACTORS,

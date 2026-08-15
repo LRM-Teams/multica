@@ -361,6 +361,30 @@ describe("ResearchV6LiveProjectionController", () => {
     expect(c.getClient().getState().snapshotId).toBe("snap-9");
   });
 
+  it("applies the contiguous Delta returned by a successful resume", async () => {
+    const live = makeLiveSource();
+    const base = makeSnapshot(3, ["a"]);
+    const t = makeTransport({
+      resumeVerdict: { ok: true, delta: makeDelta(3, 4, ["offline-result"]) },
+    });
+    const scheduler = makeScheduler();
+    const c = new ResearchV6LiveProjectionController("run-1", t.transport, live.source, {
+      autoConnect: true,
+      scheduleReconnect: scheduler.scheduleReconnect,
+      reconnectDelayMs: 0,
+    });
+    c.getClient().applySnapshot(base);
+    c.connect();
+
+    live.drop();
+    await scheduler.flush();
+
+    expect(t.resumeCalls).toEqual([{ runId: "run-1", seq: 3 }]);
+    expect(c.getClient().getState().lastConfirmedSequence).toBe(4);
+    expect(c.getClient().getState().nodes.has("offline-result")).toBe(true);
+    expect(c.getConnectionStatus()).toBe("connected");
+  });
+
   it("keeps connection state separate from data state; a drop does not clear data", async () => {
     const live = makeLiveSource();
     const base = makeSnapshot(3, ["a"]);

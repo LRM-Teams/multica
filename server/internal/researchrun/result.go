@@ -26,6 +26,7 @@ var (
 	ErrCapabilityUnavailable = errors.New("research run capability unavailable")
 	ErrBudgetExhausted       = errors.New("research run budget exhausted")
 	ErrControlTargetChanged  = errors.New("research control target changed")
+	ErrArtifactAccessDenied  = errors.New("research artifact access denied")
 	ErrInvalidContract       = errors.New("invalid research contract")
 	ErrUnsupportedVersion    = errors.New("unsupported research orchestrator version")
 )
@@ -618,6 +619,9 @@ func CanonicalURL(raw string) (string, error) {
 	}
 	if u.Hostname() == "" {
 		return "", errors.New("URL host is required")
+	}
+	if u.User != nil {
+		return "", errors.New("URL must not contain embedded credentials")
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	host := strings.ToLower(u.Hostname())

@@ -53,6 +53,19 @@ state, cluster, and lineage must come from projection facts. The frontend must
 never manufacture a summary, confidence, source count, conclusion count, or
 relationship to make the canvas resemble the prototype.
 
+The V6 node contract therefore carries `level`, nullable `cluster_id` and
+`parent_id`, `round`, and nullable `confidence`, `document_count`, and
+`conclusion_count`. Missing metrics are `null`, never a fabricated zero.
+`importance` and `confidence` remain canonical ratios in `[0,1]`; visual size
+comes exclusively from `level`, not from a client-side numeric threshold.
+
+The origin is always a distinct `{node_kind: "goal", level: "m"}` node. A
+master synthesis is emitted only for a uniquely highest, accepted Insight with
+canonical derivation inputs, as `{node_kind: "insight", node_subtype:
+"master_synthesis", level: "xxl"}`. Run failure does not repaint either node:
+Goal remains active unless the Run is cancelled/archived, while completed or
+accepted historical facts retain their own lifecycle states.
+
 States use shape/glyph/text as well as colour: default, selected, running,
 stable, pending review, conflict, failed/abandoned, and restarting. Historical
 dead ends, superseded results, and absorbed inputs remain inspectable.
@@ -75,6 +88,19 @@ must not be silently reinterpreted as supporting evidence.
 
 Cluster boundaries are display groupings backed by projection cluster facts.
 They are not canonical Insights and are never written back as research facts.
+The canonical `goal` is the visual origin at the leading edge of the field;
+an XXL master synthesis is a separate convergence destination. Goal-led graphs
+therefore progress left-to-right through result clusters instead of placing the
+largest node at the centre of a generic 360-degree radial map. S-tier Agent
+nodes remain inside the visual territory of their parent result. A New Frontier
+territory is rendered only when a canonical new-direction relation exists.
+
+V6 snapshots include `clusters`; deltas include `cluster_upserts` and
+`cluster_tombstones`. Each cluster has stable identity, label, one of
+`stable_result | exploration | new_frontier`, canonical member node IDs, and
+nullable aggregate metrics. Node lineage is carried by `derived_from`,
+`merged_from`, `superseded_by`, `restart_of`, and `invalidated_by`, with stable
+edge relations retained when the canonical graph supplies them.
 
 ## 5. Conversation-driven graph changes
 
@@ -137,7 +163,7 @@ research state. Refresh must reconstruct the same terminal graph.
   for reduced motion, background resume, and resync.
 - Each frontend change runs relevant Vitest, typecheck, and `pnpm react:doctor`.
 
-## 9. Implementation status at `dev@1617b8662`
+## 9. Implementation status at `dev@fc2671ed7`
 
 Status in this table means code already present on `dev`. Open pull requests are
 tracked separately in §11 and are not counted as integrated until merged.
@@ -145,29 +171,29 @@ tracked separately in §11 and are not counted as integrated until merged.
 | Area | Status | Next production work |
 | --- | --- | --- |
 | Shared Web/Desktop routes | Integrated | Keep parity gate |
-| Top command bar and goal history | Integrated | Visual polish against target |
+| Top command bar and goal history | Integrated | Validate deployed visual density against target |
 | Five-tier star graph, camera, clusters, relations | Integrated | Improve fact density and edge degradation |
-| Context rail, chat, node detail | Integrated | Add canonical change receipts |
-| Agent inspector and shared Agent panel | Integrated | Complete Attempt/lease fact coverage |
+| Context rail, chat, node detail | Integrated | Validate deployed responsive and deep-link flows |
+| Agent inspector and shared Agent panel | Integrated | Validate the deployed responsive matrix |
 | Local node report | Integrated | Project quality/citation review decisions; canonical contributor, Attempt, evidence, and lineage sections are integrated |
 | Typed graph pagination/filter/lens/DOM budget | Integrated | Add viewport slice gateway when backend exists |
-| V6 schema, API, adapter, ordered live client | Built, not wired to session page | Capability-gated production integration |
-| 30-kind cards, Insight, Dispute, trajectory | Built as isolated modules | Register in D5 detail/lens surfaces |
-| V6 server snapshot/delta/resume | Not present on current dev | Backend dependency; do not fake in frontend |
+| V6 schema, API, adapter | Integrated behind capability detection | Validate against a real server route when available |
+| V6 ordered live client | Implemented with dedicated envelope consumer | Integrate the backend transport PR, then wire the D5 shell against a deployed run |
+| 30-kind cards, Insight, Dispute, trajectory | Integrated in D5 detail/lens surfaces | Complete deployed visual evidence |
+| V6 server snapshot/delta/resume | Implemented in backend transport PR | Keep explicit V5/D5 fallback until that PR is integrated and deployed |
 
 ## 10. Delivery sequence
 
-1. Close visible D5 parity gaps using current typed projection facts: node
-   summaries, compact metrics, relation fallback, selected-neighbour emphasis,
-   rail composition, and target breakpoints.
-2. Add canonical conversation-change receipts and terminal-state transitions
-   for abandon, regoal, restart, frontier, and integration.
-3. Integrate Insight, Dispute, execution, and trajectory modules into existing
-   D5 lenses/details through stable props and callbacks.
-4. Wire the V6 adapter/live client behind capability detection once the server
-   routes are real, retaining the existing D5 shell and explicit fallback.
-5. Run the full visual/performance/accessibility matrix and remove obsolete
-   documents or mark them superseded.
+1. Integrate the dedicated `research_projection_v6:delta` event with envelope
+   `{run_id, delta}` and the matching snapshot/delta/resume routes. The legacy
+   `research_session:graph_updated` event remains unchanged for V5 clients.
+2. Validate the full visual/performance/accessibility matrix against one
+   deployed Web/Desktop revision and attach durable artifacts.
+3. Exercise the capability-gated V6 adapter/live client against real snapshot,
+   delta, and resume routes when the backend exposes them; retain explicit
+   V5/D5 fallback until then.
+4. Close visual parity gaps found by that deployed matrix without reconstructing
+   facts absent from the canonical projection.
 ## 11. Delivery ledger
 
 This ledger is the merge checklist for the production target. A linked open PR
@@ -176,25 +202,40 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 
 | Contract surface | Current evidence | Delivery state |
 | --- | --- | --- |
-| Target D5 shell and shared Web/Desktop composition | `dev@ec2082afc`, PR #2907 | Integrated |
-| Canonical conversation change receipts | PR #2908 | Awaiting merge |
-| Dispute and trajectory/Insight detail registration | PRs #2909–#2910 | Awaiting merge |
-| Capability-gated V6 adapter in the existing D5 shell | PR #2911 | Awaiting merge; server capability absent |
-| Canvas keyboard focus and Escape restoration | PR #2912 | Awaiting merge |
-| Agent Attempt/lease facts and inspector focus | PRs #2913, #2919 | Awaiting merge |
-| Unknown relation neutral degradation | PR #2914 | Awaiting merge |
-| Mobile context sheet | PR #2915 | Awaiting merge |
-| Semantic light/dark colour tokens | PR #2916 | Awaiting merge |
-| Reduced-motion settlement | PR #2917 | Awaiting merge |
-| V6 socket truth and ordered resync recovery | PRs #2918, #2920, #2922 | Awaiting merge; server capability absent |
-| Canvas load/stale projection recovery | PRs #2924, #2932 | Awaiting merge |
-| Lens keyboard access and selected neighbourhood focus | PRs #2925, #2933 | Awaiting merge |
-| Node report lineage, contributors, and attempt history | PRs #2926–#2927 | Awaiting merge |
-| Typed status/confidence fidelity | PR #2928 | Awaiting merge |
-| Canvas visual and accessibility localisation | PRs #2930–#2931 | Awaiting merge |
-| Session-isolated camera restoration | PR #2934 | Awaiting merge |
-| 25% overview and DOM/card budgets | PR #2923 plus existing budget modules | Awaiting merge |
-| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@1617b8662` | Backend blocked; explicit V5/D5 fallback required |
+| Target D5 shell and shared Web/Desktop composition | `dev@fc2671ed7`, PR #2907 | Integrated |
+| Canonical conversation change receipts | `2edba39a`, PR #2908 | Integrated |
+| Dispute and trajectory/Insight detail registration | `cee8dc2a`, `4cac759b`, PRs #2909–#2910 | Integrated |
+| Capability-gated V6 adapter in the existing D5 shell | `a0963726`, PR #2911 | Integrated; server capability absent |
+| Canvas keyboard focus and Escape restoration | `e9ef764c`, PR #2912 | Integrated |
+| Agent Attempt/lease facts and inspector focus | `a95806d1`, `e7e4097c`, `0fe34d207`, PRs #2913, #2919, #2978 | Integrated |
+| Unknown relation neutral degradation | `938401fc`, PR #2914 | Integrated |
+| Mobile context sheet | `87d6019f`, PR #2915 | Integrated |
+| Semantic light/dark colour tokens | `453117e3`, PR #2916 | Integrated |
+| Reduced-motion settlement | `97e7cb3b`, PR #2917 | Integrated |
+| V6 socket truth and ordered resync recovery engine | `b70cfc3b`, `19bb7100`, `8b5a942c`, PRs #2918, #2920, #2922 | Engine integrated; D5 production wiring awaits WS envelope decision |
+| Canvas load/stale projection recovery | `d10e76c5`, `ed0c9ce4`, PRs #2924, #2932; PRs #2963–#2973 | Integrated |
+| Lens keyboard access and selected neighbourhood focus | `748a82e3`, `7918beed`, PRs #2925, #2933 | Integrated |
+| Node report lineage, contributors, and attempt history | `471d7e29`, `ddf93eed`, PRs #2926–#2927 | Integrated |
+| Typed status/confidence fidelity | `a4ad3529`, PR #2928 | Integrated |
+| Canvas visual and accessibility localisation | `6b8d4853`, `efe31ec4`, `b3c28a38`, `4d272991`, `2e1dad935`, PRs #2930–#2931, #2974–#2976 | Integrated |
+| Session-isolated camera, selection, and inspector restoration | `fa389f8f`, `4d21b75ea`, `4707ce9d5`, PRs #2934, #2998–#2999 | Integrated |
+| 25% overview and DOM/card/node/edge budgets | `e8dd9b46`, `792ef4ac8`, `3dc864714`, PRs #2923, #2996–#2997 | Integrated; runtime evidence still required |
+| Attempt-bound Agent identity and session-isolated filters | `ebbe40594`, `a437e30a5`, PRs #3001–#3002 | Integrated |
+| Canonical V6 edge-family registration | `dd48ef731`, PR #3005 | Integrated |
+| Canonical node commands (`continue | fork | retry | reassign`) | `2302775c9`, `29af08fa0`, PRs #3006–#3007 | Integrated; replaces chat-text command fallback and aligns task-only recovery eligibility |
+| Capability fallback and localized recovery disclosure | `de0f2f194`, `1c3497112`, `d11b72e9f`, `9e5133c75`, PRs #3008, #3014–#3016 | Integrated; raw diagnostics remain collapsed and malformed V6 success remains an interface error |
+| D5 command-bar product round | `7ee3283ac`, PR #3009 | Integrated; reads only canonical session round/budget facts |
+| Node detail opening and deep-link restoration | `c62653dfc`, `2bb0db0ff`, PRs #3010–#3011 | Integrated; includes poll-safe one-time node-link restoration |
+| Recovery-action focus retention | `29af08fa0`, `aa636fdef`, `7d28aa5ea`, PRs #3007, #3012–#3013 | Integrated; pending actions remain focusable and suppress duplicate activation |
+| Remaining D5/V6 copy localisation | `046acd8e2`, `f2f2344bd`, PRs #3017–#3018 | Integrated; includes all registered V6 node kinds |
+| Context-rail responsive geometry | `0daa942e5`, `0ad395142`, PRs #3019–#3020 | Integrated; flex-child canvas excludes the sibling rail exactly once and duplicate open-rail toggle is hidden |
+| Custom control and responsive Lens accessibility | `08aa6f3d8`, PR #3021 | Integrated; semantic focus rings plus active Lens announcement/state |
+| Long unbroken node-card copy containment | `cb8fa3b50`, PR #3022 | Integrated; registered and generic node cards retain bounded two-line density |
+| Shared Research frontend typecheck baseline | `612034aea`, PR #3024 | Integrated; V6 Dispute panel uses a type-only `ReactNode` import |
+| Strict V6 Delta/resume HTTP success boundary | `21ba93fad`, PR #3030 | Integrated; explicit JSON `null` alone means no Delta, while malformed non-null success is an interface error |
+| V6 reconnect Delta recovery | `fc2671ed7`, PR #3031 | Integrated; a successful resume verdict is applied through the same identity/order/gap/resync pipeline instead of being discarded |
+| V6 WS Delta routing envelope | Dedicated `research_projection_v6:delta` with `{run_id, delta}` in backend transport PR | Await integration/deployed exercise; legacy V5 event remains intact |
+| Real V6 snapshot/delta/resume API | Backend transport PR adds the three paths consumed by `ApiClient` | Await integration/deployed exercise; explicit V5/D5 fallback remains until then |
 | Runtime visual/performance/accessibility matrix | No current deployed-session artifacts for this revision | Unverified; required before completion |
 
 ### Completion evidence rule

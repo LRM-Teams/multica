@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type {
   Agent,
+  AgentRestartOperation,
+  AgentRestartPreflight,
   AgentPresenceResponse,
   AgentFileContentResponse,
   AgentFilesResponse,
@@ -27,6 +29,7 @@ import type {
   GroupedIssuesResponse,
   ProjectGroupedIssuesResponse,
   ChannelMessageSearchResponse,
+  ChannelMentionCandidatesResponse,
   ChannelMessagesPage,
   ChannelThreadMessagesPage,
   AgentHealthResponse,
@@ -65,6 +68,7 @@ import type {
   NotePageIssueRefListResponse,
   NoteWriteback,
   NoteWritebackListResponse,
+  CreateNoteRetrospectiveResponse,
   IssueNoteRef,
   IssueNoteRefListResponse,
 } from "../types";
@@ -72,8 +76,62 @@ import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 import type { ConversationHandleLookup } from "../conversations/types";
 
+const AgentRestartModeStateSchema = z.object({
+  supported: z.boolean().catch(false),
+  disabled_reason: z.string().nullish(),
+}).loose();
+
+/** Defensive desktop boundary for Raft's three Agent reset modes. */
+export const AgentRestartOperationSchema = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  runtime_id: z.string().nullable().default(null),
+  mode: z.enum(["restart", "session", "full"]).catch("restart"),
+  status: z.enum(["running", "succeeded", "failed"]).catch("failed"),
+  step: z.string().nullish(),
+  reason_code: z.string().nullish(),
+  created_at: z.string(),
+  started_at: z.string().nullish(),
+  finished_at: z.string().nullish(),
+}).loose();
+
+export const EMPTY_AGENT_RESTART_OPERATION: AgentRestartOperation = {
+  id: "",
+  agent_id: "",
+  runtime_id: null,
+  mode: "restart",
+  status: "failed",
+  reason_code: "invalid_server_response",
+  created_at: "",
+};
+
+export const AgentRestartPreflightSchema = z.object({
+  actions: z.object({
+    restart: AgentRestartModeStateSchema,
+    session: AgentRestartModeStateSchema,
+    full: AgentRestartModeStateSchema,
+  }),
+  active_operation: AgentRestartOperationSchema.nullish(),
+  provider_capabilities: z.object({
+    force_restart: z.boolean().catch(false),
+    custom_model_id: z.boolean().catch(false),
+    model_selection: z.boolean().catch(false),
+    thinking_discovery: z.boolean().catch(false),
+    canonical_resident: z.boolean().catch(false),
+    needs_inline_system_prompt: z.boolean().catch(false),
+  }).loose().optional(),
+}).loose();
+
+export const EMPTY_AGENT_RESTART_PREFLIGHT: AgentRestartPreflight = {
+  actions: {
+    restart: { supported: false, disabled_reason: "unavailable" },
+    session: { supported: false, disabled_reason: "unavailable" },
+    full: { supported: false, disabled_reason: "unavailable" },
+  },
+};
+
 export const NotePageIssueRefSchema: z.ZodType<NotePageIssueRef> = z.object({
-  type: z.enum(["issue", "agent", "run"]).catch("issue"),
+  type: z.enum(["issue", "agent", "run", "channel"]).catch("issue"),
   id: z.string().default(""),
   label: z.string().nullable().optional(),
   accessible: z.boolean().default(false),
@@ -180,6 +238,36 @@ export const EMPTY_NOTE_PAGE: NotePage = {
 
 export const EMPTY_NOTE_PAGE_LIST: NotePageListResponse = { pages: [] };
 
+export const CreateNoteRetrospectiveResponseSchema: z.ZodType<CreateNoteRetrospectiveResponse> = z.object({
+  page: NotePageSchema,
+  window: z.object({
+    kind: z.string().default(""),
+    timezone: z.string().default(""),
+    start: z.string().default(""),
+    end: z.string().default(""),
+    label: z.string().default(""),
+  }).loose(),
+  sources_used: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_empty: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_skipped: z.array(z.string()).nullish().transform((v) => v ?? []),
+  fact_count: z.number().default(0),
+  composition: z.string().default(""),
+  layers_used: z.array(z.string()).nullish().transform((v) => v ?? []),
+  child_pages_used: z.array(z.string()).nullish().transform((v) => v ?? []),
+}).loose();
+
+export const EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE: CreateNoteRetrospectiveResponse = {
+  page: EMPTY_NOTE_PAGE,
+  window: { kind: "", timezone: "", start: "", end: "", label: "" },
+  sources_used: [],
+  sources_empty: [],
+  sources_skipped: [],
+  fact_count: 0,
+  composition: "",
+  layers_used: [],
+  child_pages_used: [],
+};
+
 export const NoteAIEditResultSchema = z.object({
   action: z.enum(["insert", "replace_selection", "replace_page", "patch"]),
   markdown: z.string().default(""),
@@ -284,6 +372,27 @@ export const ChannelGoalSchema = z.object({
     running: z.number().default(0),
     waiting: z.number().default(0),
     stale: z.number().default(0),
+  }).optional(),
+  coordination: z.object({
+    project_id: z.string().optional(),
+    git_repository_bound: z.boolean().default(false),
+    agent_member_count: z.number().default(0),
+    channel_issue_total: z.number().default(0),
+    channel_project_issue_total: z.number().default(0),
+    project_issue_total: z.number().default(0),
+    open_project_issue_total: z.number().default(0),
+    in_review_project_issue_total: z.number().default(0),
+    subgoal_total: z.number().default(0),
+    open_subgoal_total: z.number().default(0),
+    execution_admission: z.enum([
+      "direct",
+      "project_required",
+      "git_required",
+      "issues_required",
+      "ready",
+      "acceptance_required",
+      "unavailable",
+    ]),
   }).optional(),
 }).loose();
 
@@ -1546,6 +1655,7 @@ const ChannelMessageQuoteSnapshotSchema = z.object({
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   createdAt: z.string().default(""),
+  selectedText: z.string().nullable().optional(),
 }).loose().transform((value) => stripLegacyQuoteAvatar(value));
 
 const ChannelMessageQuoteSchema = z.object({
@@ -2145,6 +2255,7 @@ export const AgentFilesResponseSchema = z.object({
   status: z.string().default("error"),
   nodes: z.array(AgentFileNodeSchema),
   truncated: z.boolean().default(false),
+  root_path: z.string().optional().default(""),
 }).loose();
 
 export const EMPTY_AGENT_FILES_RESPONSE: AgentFilesResponse = {
@@ -2152,6 +2263,7 @@ export const EMPTY_AGENT_FILES_RESPONSE: AgentFilesResponse = {
   status: "error",
   nodes: [],
   truncated: false,
+  root_path: "",
 };
 
 export const AgentFileContentResponseSchema = z.object({
@@ -2937,5 +3049,26 @@ export const EMPTY_REMINDER_PAGE: RawReminderPage = {
   definitions: [],
   occurrences: [],
   limit: 0,
+  has_more: false,
+};
+
+export const ChannelMentionCandidateSchema = z.object({
+  type: z.enum(["member", "agent"]).catch("member"),
+  id: z.string().catch(""),
+  handle: z.string().catch(""),
+  label: z.string().catch(""),
+  avatar_url: z.string().nullish(),
+}).loose();
+
+export const ChannelMentionCandidatesResponseSchema = z.object({
+  in_channel: z.array(ChannelMentionCandidateSchema).catch([]),
+  not_in_channel: z.array(ChannelMentionCandidateSchema).catch([]),
+  has_more: z.boolean().catch(false),
+  next_offset: z.number().nullish(),
+}).loose();
+
+export const EMPTY_CHANNEL_MENTION_CANDIDATES: ChannelMentionCandidatesResponse = {
+  in_channel: [],
+  not_in_channel: [],
   has_more: false,
 };

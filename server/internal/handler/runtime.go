@@ -126,7 +126,7 @@ func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
 	daemonHeartbeat := h.daemonHeartbeatForRuntime(ctx, rt)
 	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
-	resp.ComputerConnected = computerConnected(daemonHeartbeat, time.Now())
+	resp.ComputerConnected = h.computerConnectedByRunner(runtimeDaemonKey(rt), uuidToString(rt.WorkspaceID), daemonHeartbeat, time.Now())
 	if daemonHeartbeat != nil {
 		resp.DaemonLastSeenAt = timestampToPtr(daemonHeartbeat.LastSeenAt)
 	}
@@ -1255,26 +1255,29 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, h.agentRuntimeResponsesForList(r.Context(), runtimes))
+}
+
+func (h *Handler) agentRuntimeResponsesForList(ctx context.Context, runtimes []db.AgentRuntime) []AgentRuntimeResponse {
 	resp := make([]AgentRuntimeResponse, len(runtimes))
-	updates := h.runtimeUpdatesForList(r.Context(), runtimes)
-	machineUpgrades := h.machineUpgradesForList(r.Context(), runtimes)
-	autoUpdates := h.daemonUpdateStatusesForList(r.Context(), runtimes)
-	daemonHeartbeats := h.daemonHeartbeatsForList(r.Context(), runtimes)
+	updates := h.runtimeUpdatesForList(ctx, runtimes)
+	machineUpgrades := h.machineUpgradesForList(ctx, runtimes)
+	autoUpdates := h.daemonUpdateStatusesForList(ctx, runtimes)
+	daemonHeartbeats := h.daemonHeartbeatsForList(ctx, runtimes)
 	now := time.Now()
 	for i, rt := range runtimes {
 		update := updates[uuidToString(rt.ID)]
-		release := h.runtimeReleaseForResponse(r.Context(), rt, update)
+		release := h.runtimeReleaseForResponse(ctx, rt, update)
 		resp[i] = runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, autoUpdates[runtimeDaemonKey(rt)])
 		resp[i].MachineUpgrade = machineUpgrades[runtimeDaemonKey(rt)]
 		hb := daemonHeartbeats[runtimeDaemonKey(rt)]
-		resp[i].ComputerConnected = computerConnected(hb, now)
+		resp[i].ComputerConnected = h.computerConnectedByRunner(runtimeDaemonKey(rt), uuidToString(rt.WorkspaceID), hb, now)
 		if hb != nil {
 			resp[i].DaemonLastSeenAt = timestampToPtr(hb.LastSeenAt)
 		}
 	}
 	attachDaemonTargetVersions(resp)
-
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // DeleteAgentRuntime deletes a runtime after permission and dependency checks.
@@ -1623,7 +1626,6 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 		h.publish(protocol.EventAgentArchived, wsID, "member", userID, map[string]any{
 			"agent": agentToResponse(a),
 		})
-		h.projectReminderOwnerStop(r.Context(), uuidToString(a.ID), uuidToString(rt.ID))
 	}
 	h.publish(protocol.EventDaemonRegister, wsID, "member", userID, map[string]any{
 		"action": "delete",

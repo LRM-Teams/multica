@@ -56,6 +56,8 @@ export function ResearchSessionGoalCard({
   onConfirmSubstantive,
   confirmSubstantivePending = false,
   goalVersion = null,
+  productRound = null,
+  productRoundBudget = null,
   goalHistory = [],
   goalImpact = null,
   className,
@@ -71,6 +73,8 @@ export function ResearchSessionGoalCard({
   onConfirmSubstantive?: (proposal: string) => void | Promise<void>;
   confirmSubstantivePending?: boolean;
   goalVersion?: number | null;
+  productRound?: number | null;
+  productRoundBudget?: number | null;
   goalHistory?: readonly GoalVersionEntry[];
   goalImpact?: { labeledNodes: number; totalNodes: number } | null;
   className?: string;
@@ -159,11 +163,25 @@ export function ResearchSessionGoalCard({
         "border-brand/30 bg-brand/10 hover:bg-brand/15",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
         model.state === "updated" && "shadow-[0_0_0_3px_color-mix(in_oklab,var(--brand)_22%,transparent)]",
+        panelPlacement === "below" && "d5-goal-card",
         className,
       )}
     >
-      <span className="shrink-0 text-[10px] font-extrabold tracking-wide text-brand">
+      <span className="d5-goal-meta shrink-0 text-[10px] font-extrabold tracking-wide text-brand">
         {t(($) => $.goal_card.label)}
+        {goalVersion != null
+          ? ` · ${t(($) => $.d5.goal_panel.version, { version: goalVersion })}`
+          : null}
+        {productRound != null && productRound > 0
+          ? ` · ${
+              productRoundBudget != null && productRoundBudget > 0
+                ? t(($) => $.d5.goal_panel.round_with_budget, {
+                    round: productRound,
+                    budget: productRoundBudget,
+                  })
+                : t(($) => $.d5.goal_panel.round, { round: productRound })
+            }`
+          : null}
       </span>
       {model.state === "loading" ? (
         <Loader2
@@ -171,14 +189,17 @@ export function ResearchSessionGoalCard({
           aria-hidden
         />
       ) : (
-        <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-foreground">
+        <span className="d5-goal-summary min-w-0 flex-1 truncate text-[11.5px] font-semibold text-foreground">
           {summaryLabel}
         </span>
       )}
       <span
         aria-hidden
         data-testid="research-session-goal-dot"
-        className={cn("size-1.5 shrink-0 rounded-full", statusDotClass(model.state))}
+        className={cn(
+          "d5-goal-state-dot size-1.5 shrink-0 rounded-full",
+          statusDotClass(model.state),
+        )}
       />
     </button>
   );
@@ -217,7 +238,8 @@ export function ResearchSessionGoalCard({
 
   // LRM-1010/1112: top bar keeps Goal as icon so the primary CTA never overflows;
   // `compact` forces desktop to the icon surface per the LRM-1112 frozen header.
-  const showIcon = compact || isMobile || collapsed;
+  const showIcon =
+    compact || isMobile || (collapsed && panelPlacement !== "below");
 
   const panelBody = (
     <>
@@ -334,7 +356,7 @@ export function ResearchSessionGoalCard({
       <div className="flex flex-row flex-wrap justify-between gap-2 border-t px-4 py-3">
             <div className="flex gap-1.5">
               {/* Collapse toggle is desktop-only — narrow always uses the icon trigger. */}
-              {!isMobile ? (
+              {!isMobile && panelPlacement !== "below" ? (
                 <Button
                   type="button"
                   size="sm"

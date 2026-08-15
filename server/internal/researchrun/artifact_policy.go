@@ -5,7 +5,7 @@ type ArtifactPurpose string
 
 const (
 	ArtifactPurposeTaskExecution ArtifactPurpose = "task_execution"
-	ArtifactPurposeEvaluation  ArtifactPurpose = "evaluation"
+	ArtifactPurposeEvaluation    ArtifactPurpose = "evaluation"
 )
 
 // ArtifactClearance is the normal access profile held by a principal.
@@ -22,12 +22,22 @@ type ArtifactDenyReason string
 
 const (
 	ArtifactDenyUnknownKind           ArtifactDenyReason = "unknown_kind"
-	ArtifactDenyUnknownAccess           ArtifactDenyReason = "unknown_access"
-	ArtifactDenyInsufficientClearance  ArtifactDenyReason = "insufficient_clearance"
-	ArtifactDenyEvaluationCompartment   ArtifactDenyReason = "evaluation_compartment"
-	ArtifactDenyLifecycle               ArtifactDenyReason = "lifecycle"
-	ArtifactDenyMissingPassport         ArtifactDenyReason = "missing_passport"
+	ArtifactDenyUnknownAccess         ArtifactDenyReason = "unknown_access"
+	ArtifactDenyUnknownPurpose        ArtifactDenyReason = "unknown_purpose"
+	ArtifactDenyInsufficientClearance ArtifactDenyReason = "insufficient_clearance"
+	ArtifactDenyEvaluationCompartment ArtifactDenyReason = "evaluation_compartment"
+	ArtifactDenyLifecycle             ArtifactDenyReason = "lifecycle"
+	ArtifactDenyMissingPassport       ArtifactDenyReason = "missing_passport"
+	ArtifactDenyLegacyIneligible      ArtifactDenyReason = "legacy_ineligible"
+	ArtifactDenyDomainFact            ArtifactDenyReason = "domain_fact"
 )
+
+type legacyAdmissionFacts struct {
+	Kind         ArtifactEntityKind
+	Lifecycle    ArtifactLifecycleStatus
+	Provenance   ArtifactProvenanceCompleteness
+	DomainStatus string
+}
 
 // ArtifactPolicy implements the section 6 access lattice and legacy admission gate.
 type ArtifactPolicy struct{}
@@ -65,6 +75,9 @@ func (ArtifactPolicy) CanReadNormal(
 	purpose ArtifactPurpose,
 	evaluationPrivate bool,
 ) (bool, ArtifactDenyReason) {
+	if purpose != ArtifactPurposeTaskExecution && purpose != ArtifactPurposeEvaluation {
+		return false, ArtifactDenyUnknownPurpose
+	}
 	if evaluationPrivate && purpose != ArtifactPurposeEvaluation {
 		return false, ArtifactDenyEvaluationCompartment
 	}
@@ -82,7 +95,7 @@ func (ArtifactPolicy) CanReadNormal(
 // and must never appear in ordinary task-execution manifests or subject context.
 func (ArtifactPolicy) EvaluationPrivateKind(kind ArtifactEntityKind) bool {
 	switch kind {
-	case ArtifactKindStageEvaluation:
+	case ArtifactKindStageEvaluation, ArtifactKindEvaluationDecision:
 		return true
 	default:
 		return false
@@ -98,6 +111,22 @@ func (ArtifactPolicy) LegacyAdmissionAllowed(
 	if _, err := ParseArtifactEntityKind(string(kind)); err != nil {
 		return false, ArtifactDenyUnknownKind
 	}
+	switch kind {
+	case ArtifactKindContextManifest,
+		ArtifactKindHypothesis,
+		ArtifactKindBranch,
+		ArtifactKindInsight,
+		ArtifactKindIntegrationContribution,
+		ArtifactKindIntegrationRound,
+		ArtifactKindDispute,
+		ArtifactKindDisputePosition,
+		ArtifactKindDeliberation,
+		ArtifactKindDeliberationTurn,
+		ArtifactKindResearchDirectorIdentity,
+		ArtifactKindAdjudicationDecision,
+		ArtifactKindInquiryEdge:
+		return false, ArtifactDenyLegacyIneligible
+	}
 	switch lifecycle {
 	case ArtifactLifecycleRegistered, ArtifactLifecycleAccepted:
 	default:
@@ -111,6 +140,73 @@ func (ArtifactPolicy) LegacyAdmissionAllowed(
 	return true, ""
 }
 
+func (policy ArtifactPolicy) LegacyAdmissionAllowedFacts(facts legacyAdmissionFacts) (bool, ArtifactDenyReason) {
+	if allowed, deny := policy.LegacyAdmissionAllowed(facts.Kind, facts.Lifecycle, facts.Provenance); !allowed {
+		return false, deny
+	}
+	return policy.admissionDomainFactsAllowed(facts)
+}
+
+func (policy ArtifactPolicy) V6AdmissionAllowedFacts(facts legacyAdmissionFacts) (bool, ArtifactDenyReason) {
+	if _, err := ParseArtifactEntityKind(string(facts.Kind)); err != nil {
+		return false, ArtifactDenyUnknownKind
+	}
+	if facts.Lifecycle != ArtifactLifecycleRegistered && facts.Lifecycle != ArtifactLifecycleAccepted {
+		return false, ArtifactDenyLifecycle
+	}
+	if facts.Provenance != ArtifactProvenanceComplete {
+		return false, ArtifactDenyMissingPassport
+	}
+	return policy.admissionDomainFactsAllowed(facts)
+}
+
+func (policy ArtifactPolicy) admissionDomainFactsAllowed(facts legacyAdmissionFacts) (bool, ArtifactDenyReason) {
+	status := facts.DomainStatus
+	switch facts.Kind {
+	case ArtifactKindTask:
+		switch TaskStatus(status) {
+		case TaskStatusPending, TaskStatusReady, TaskStatusDispatching, TaskStatusRunning,
+			TaskStatusSucceeded, TaskStatusFailed, TaskStatusBlocked, TaskStatusObsolete, TaskStatusCancelled:
+			return true, ""
+		default:
+			return false, ArtifactDenyDomainFact
+		}
+	case ArtifactKindAttempt:
+		switch AttemptStatus(status) {
+		case AttemptStatusDispatching, AttemptStatusRunning, AttemptStatusCancelling,
+			AttemptStatusSucceeded, AttemptStatusFailed, AttemptStatusCancelled, AttemptStatusLost:
+			return true, ""
+		default:
+			return false, ArtifactDenyDomainFact
+		}
+	case ArtifactKindClaim:
+		switch ClaimStatus(status) {
+		case ClaimStatusProposed, ClaimStatusSupported, ClaimStatusDisputed, ClaimStatusRefuted, ClaimStatusUnresolved:
+			return true, ""
+		default:
+			return false, ArtifactDenyDomainFact
+		}
+	case ArtifactKindSourceSnapshot, ArtifactKindObservation, ArtifactKindEvidenceLink:
+		switch status {
+		case "pending", "verified":
+			return true, ""
+		default:
+			return false, ArtifactDenyDomainFact
+		}
+	case ArtifactKindContextManifest:
+		return false, ArtifactDenyDomainFact
+	default:
+		return true, ""
+	}
+}
+
+func (policy ArtifactPolicy) AdmissionAllowedFacts(policyVersion string, facts legacyAdmissionFacts) (bool, ArtifactDenyReason) {
+	if policyVersion == ResearchV6ContextPolicy {
+		return policy.V6AdmissionAllowedFacts(facts)
+	}
+	return policy.LegacyAdmissionAllowedFacts(facts)
+}
+
 func (ArtifactPolicy) ManifestOmissionReason(deny ArtifactDenyReason) string {
 	switch deny {
 	case ArtifactDenyInsufficientClearance:
@@ -119,6 +215,8 @@ func (ArtifactPolicy) ManifestOmissionReason(deny ArtifactDenyReason) string {
 		return "evaluation_compartment"
 	case ArtifactDenyLifecycle:
 		return "lifecycle"
+	case ArtifactDenyLegacyIneligible:
+		return "policy_denied"
 	default:
 		return "policy_denied"
 	}
@@ -129,5 +227,12 @@ func defaultTaskExecutionClearance() ArtifactClearance {
 }
 
 func manifestPurposeForTask() ArtifactPurpose {
+	return ArtifactPurposeTaskExecution
+}
+
+func manifestPurposeForTaskKind(kind TaskKind) ArtifactPurpose {
+	if kind == TaskKindQualityGate || kind == TaskKindCitationAudit {
+		return ArtifactPurposeEvaluation
+	}
 	return ArtifactPurposeTaskExecution
 }

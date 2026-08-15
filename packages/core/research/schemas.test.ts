@@ -3,6 +3,7 @@ import {
   EMPTY_RESEARCH_SNAPSHOT,
   ListResearchSessionsResponseSchema,
   ResearchSessionSnapshotSchema,
+  ResearchArtifactProjectionSchema,
   ResearchPresenceResponseSchema,
   ResearchNodeCommandResponseSchema,
   EMPTY_RESEARCH_NODE_COMMAND,
@@ -77,6 +78,13 @@ describe("research schemas", () => {
       endpoint: "test",
     });
     expect(parsed.run?.attempt_context?.attempt_id).toBeUndefined();
+  });
+
+  it("degrades a malformed artifact projection to an empty bounded surface", () => {
+    expect(ResearchArtifactProjectionSchema.parse({ projection_hash: 42, items: "invalid" })).toEqual({
+      projection_hash: "",
+      items: [],
+    });
   });
 
   it("falls back on malformed list response", () => {
@@ -306,7 +314,7 @@ describe("research schemas", () => {
     const fallback = { session_id: "s1", presence: {} };
     expect(
       parseWithFallback(
-        { session_id: "s1", presence: null },
+        { session_id: "s1", presence: [] },
         ResearchPresenceResponseSchema,
         fallback,
         { endpoint: "test" },

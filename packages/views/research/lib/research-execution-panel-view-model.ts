@@ -1,8 +1,9 @@
-import type { ResearchPresenceMap } from "@multica/core/research";
+import type { ResearchPresenceMap, ResearchPresencePhase } from "@multica/core/research";
 import type { ResearchFleetMember, ResearchGraphNode } from "@multica/core/types";
 import type {
   ResearchExecutionActionKey,
   ResearchExecutionAgent,
+  ResearchExecutionStatus,
   ResearchExecutionTimeKey,
 } from "./research-execution-panel-fixture";
 
@@ -29,6 +30,20 @@ const STATUS_TIME_KEY: Record<ResearchExecutionAgent["status"], ResearchExecutio
   idle: "idle",
 };
 
+function executionStatus(phase: ResearchPresencePhase | undefined): ResearchExecutionStatus {
+  switch (phase) {
+    case "queued":
+    case "running":
+    case "done":
+    case "failed":
+    case "stale":
+    case "idle":
+      return phase;
+    default:
+      return "idle";
+  }
+}
+
 function initials(name: string): string {
   const compact = name.trim();
   if (!compact) return "AI";
@@ -50,7 +65,7 @@ export function buildResearchExecutionAgents(
     .filter((member) => member.status !== "archived")
     .map((member) => {
       const signal = presence[member.agent_id];
-      const status = signal?.phase ?? "idle";
+      const status = executionStatus(signal?.phase);
       const name = member.display_name || member.name || member.role || "Agent";
       const node = signal?.nodeId ? nodesById.get(signal.nodeId) : undefined;
       return {

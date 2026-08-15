@@ -3,6 +3,7 @@
 import { Filter } from "lucide-react";
 import type { ResearchCanvasFilter } from "@multica/core/research";
 import {
+  emptyCanvasFilter,
   isBlankFilter,
   useResearchCanvasStore,
 } from "@multica/core/research";
@@ -16,6 +17,12 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type { D5FilterOptions } from "../lib/research-d5-filter-options";
+
+// Zustand selectors are consumed through useSyncExternalStore. A freshly
+// allocated fallback makes an absent per-session filter look like a changed
+// snapshot on every read and React eventually aborts with update-depth error
+// #185. Keep the empty snapshot referentially stable until the store owns one.
+const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
 
 function FilterField({
   label,
@@ -57,19 +64,26 @@ function FilterField({
 }
 
 export function ResearchD5CanvasFilter({
+  sessionId,
   options,
   className,
 }: {
+  sessionId: string;
   options: D5FilterOptions;
   className?: string;
 }) {
   const { t } = useT("research");
-  const filter = useResearchCanvasStore((s) => s.filter);
-  const setFilter = useResearchCanvasStore((s) => s.setFilter);
-  const clearFilter = useResearchCanvasStore((s) => s.clearFilter);
+  const filter = useResearchCanvasStore(
+    (s) => s.filterBySession[sessionId] ?? EMPTY_CANVAS_FILTER,
+  );
+  const setSessionFilter = useResearchCanvasStore((s) => s.setSessionFilter);
+  const clearSessionFilter = useResearchCanvasStore(
+    (s) => s.clearSessionFilter,
+  );
   const active = !isBlankFilter(filter);
 
-  const patch = (partial: Partial<ResearchCanvasFilter>) => setFilter(partial);
+  const patch = (partial: Partial<ResearchCanvasFilter>) =>
+    setSessionFilter(sessionId, partial);
 
   return (
     <Popover>
@@ -143,7 +157,7 @@ export function ResearchD5CanvasFilter({
             variant="ghost"
             data-testid="research-d5-filter-clear"
             disabled={!active}
-            onClick={() => clearFilter()}
+            onClick={() => clearSessionFilter(sessionId)}
           >
             {t(($) => $.d5.filter.clear)}
           </Button>

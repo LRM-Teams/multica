@@ -55,15 +55,14 @@ const (
 	agentDisplayStatusOffline  = "offline"
 	agentDisplayStatusStopped  = "stopped"
 
-	// agentRuntimeStartingTTL bounds how long a fresh MarkAgentRuntimesStarting
-	// call keeps a runtime showing "starting" if the daemon never follows up
-	// with a completing register call (crash between the two, lost request,
-	// etc.) — register unconditionally clears starting_since on success, so
-	// this TTL only matters for the failure case. ~3x the ~20s cold-start
-	// version-probe loop it's meant to cover; expiring early just means a
-	// slow-starting machine stops showing "starting" a little sooner, not
-	// that it shows something wrong (falls through to the existing
-	// connectivity-based tiers, i.e. today's behavior).
+	// agentRuntimeStartingTTL bounds leftover starting_since stamps from
+	// retired /api/daemon/starting callers. New Computers do not write this
+	// column. Register still clears it on success; the TTL only covers older
+	// daemons that never followed up. After the window, display falls through
+	// to connectivity-based tiers.
+	//
+	// TODO(starting-since): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
 	agentRuntimeStartingTTL = 60 * time.Second
 )
 
@@ -140,11 +139,11 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	summary := agentHealthSummary(agent, rt, events, now)
-	if operation, err := getActiveAgentLifecycleOperation(r.Context(), h.DB, agent.ID); err != nil {
-		slog.Warn("agent health: load lifecycle overlay failed", "agent_id", agentID, "error", err)
+	if operation, err := getActiveAgentRestartOperation(r.Context(), h.DB, agent.ID); err != nil {
+		slog.Warn("agent health: load restart overlay failed", "agent_id", agentID, "error", err)
 	} else if operation != nil {
 		summary.State = "restarting"
-		summary.ReasonCode = "agent_lifecycle_" + string(operation.ActionKind)
+		summary.ReasonCode = "agent_restart_" + string(operation.Mode)
 		if operation.StartedAt != nil {
 			summary.StateSince = operation.StartedAt
 		} else {

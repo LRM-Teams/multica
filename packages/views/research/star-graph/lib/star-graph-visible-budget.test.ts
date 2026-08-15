@@ -3,8 +3,10 @@ import type { StarEntityView } from "./star-canvas-view-model";
 import {
   LOW_ZOOM_CLUSTER_COLLAPSE,
   STAR_GRAPH_DOM_BUDGET,
+  STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   OVERVIEW_LANDMARK_BUDGET,
   computeClusterHiddenCounts,
+  edgeBudgetForViewport,
   effectiveEntityBudget,
   filterEntitiesForCanvasDisplay,
   filterRelationsToVisibleEntities,
@@ -75,23 +77,30 @@ describe("selectVisibleEntityIds", () => {
 
   it("uses the D5 default budget constant", () => {
     expect(STAR_GRAPH_DOM_BUDGET).toBe(220);
+    expect(STAR_GRAPH_SEMANTIC_NODE_BUDGET).toBe(180);
   });
 
-  it("caps visible entities at the desktop DOM budget", () => {
+  it("caps visible entities at the desktop semantic-node budget", () => {
     const entities = [
       entity({ id: "goal", tier: "xxl" }),
       ...Array.from({ length: 250 }, (_, index) =>
         entity({ id: `node-${index}`, tier: index % 3 === 0 ? "l" : "s" }),
       ),
     ];
-    const visible = selectVisibleEntityIds(entities, { rootId: "goal" });
+    const visible = selectVisibleEntityIds(entities, {
+      rootId: "goal",
+      budget: STAR_GRAPH_DOM_BUDGET,
+    });
+    expect(visible.size).toBeLessThanOrEqual(
+      STAR_GRAPH_SEMANTIC_NODE_BUDGET,
+    );
     expect(visible.size).toBeLessThanOrEqual(STAR_GRAPH_DOM_BUDGET);
     expect(visible.has("goal")).toBe(true);
   });
 
   it("reduces budget at low zoom", () => {
-    expect(effectiveEntityBudget(220, 0.4)).toBeLessThan(220);
-    expect(effectiveEntityBudget(220, 1)).toBe(220);
+    expect(effectiveEntityBudget(180, 0.4)).toBeLessThan(180);
+    expect(effectiveEntityBudget(180, 1)).toBe(180);
   });
 
   it("caps production Landmark-style cards at 12 in 25% overview", () => {
@@ -204,5 +213,29 @@ describe("filterRelationsToVisibleEntities", () => {
     expect(filterRelationsToVisibleEntities(relations, visible)).toEqual([
       relations[0],
     ]);
+  });
+
+  it("uses the contract edge budget for each viewport", () => {
+    expect(edgeBudgetForViewport(1200)).toBe(420);
+    expect(edgeBudgetForViewport(1199)).toBe(220);
+    expect(edgeBudgetForViewport(768)).toBe(220);
+    expect(edgeBudgetForViewport(767)).toBe(96);
+  });
+
+  it("caps visible edges while retaining focus and related context first", () => {
+    const visible = new Set(["focus", "related-a", "related-b", "other"]);
+    const relations = [
+      { id: "ordinary", fromNodeId: "other", toNodeId: "related-a" },
+      { id: "related", fromNodeId: "related-a", toNodeId: "related-b" },
+      { id: "focused", fromNodeId: "focus", toNodeId: "other" },
+    ];
+
+    expect(
+      filterRelationsToVisibleEntities(relations, visible, {
+        budget: 2,
+        focusNodeId: "focus",
+        relatedNodeIds: new Set(["related-a", "related-b"]),
+      }).map((relation) => relation.id),
+    ).toEqual(["focused", "related"]);
   });
 });

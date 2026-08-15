@@ -1,0 +1,100 @@
+{
+  "contract_kind": "director_brief",
+  "schema_version": 6,
+  "brief_id": "00000000-0000-4000-8000-000000000001",
+  "brief_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "director_assignment_id": "00000000-0000-4000-8000-000000000004",
+  "director_generation": 1,
+  "state_version": 12,
+  "through_event_sequence": 45,
+  "page": {
+    "page_key": "overview:1",
+    "page_kind": "overview",
+    "page_ordinal": 0,
+    "page_count": 1,
+    "page_hash": "sha256:abababababababababababababababababababababababababababababababab",
+    "has_more": false
+  },
+  "goal": {
+    "goal_version": 2,
+    "goal": "判断目标技术是否适合生产环境，并给出有证据的采用建议。",
+    "scope": { "market": "CN", "time_horizon": "2026" },
+    "audience": "技术负责人",
+    "freshness": "优先使用最近十二个月材料",
+    "language": "zh-CN",
+    "source_policy": { "prefer_primary": true }
+  },
+  "research": {
+    "overview": "一个活动分支正在验证性能边界；当前没有未解决争议。",
+    "branch_count": 1,
+    "branches": [
+      {
+        "branch": {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "state_version": 4
+        },
+        "objective": "验证性能与扩展边界。",
+        "scope": { "workload": "high-concurrency" },
+        "status": "active",
+        "frontier_nodes": [
+          {
+            "node": {
+              "kind": "result_s",
+              "id": "00000000-0000-4000-8000-000000000006",
+              "version_id": "00000000-0000-4000-8000-000000000007",
+              "tier": "S",
+              "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            },
+            "catalog_summary": "基准测试显示高并发写入存在延迟拐点。",
+            "brief_summary": "测试覆盖三个负载区间；高并发区 P99 明显上升，仍需核实生产配置差异。",
+            "steward_agent_id": "00000000-0000-4000-8000-000000000008",
+            "branch_ids": ["00000000-0000-4000-8000-000000000005"],
+            "conclusion_state": "accepted",
+            "integration_state": "unmatched"
+          }
+        ],
+        "has_more": false
+      }
+    ],
+    "terminal_summaries": [
+      {
+        "branch_id": "00000000-0000-4000-8000-000000000005",
+        "reason_code": "no_semantic_gain",
+        "summary": "重复检索同一批基准数据，没有新增独立证据。",
+        "count": 2
+      }
+    ],
+    "unresolved_disputes": []
+  },
+  "control": {
+    "director_state": "available",
+    "active_team_count": 2,
+    "team_hard_cap": 50,
+    "creation_threshold": 20,
+    "team": [
+      {
+        "agent_id": "00000000-0000-4000-8000-000000000009",
+        "membership_id": "00000000-0000-4000-8000-000000000010",
+        "state": "working",
+        "mission_summary": "统筹全部调研方向并处理争议。",
+        "active_work_item_id": "00000000-0000-4000-8000-000000000011",
+        "steward_node_count": 0
+      },
+      {
+        "agent_id": "00000000-0000-4000-8000-000000000008",
+        "membership_id": "00000000-0000-4000-8000-000000000012",
+        "state": "idle",
+        "mission_summary": "测量生产型负载的性能边界。",
+        "steward_node_count": 1
+      }
+    ],
+    "work_items": [],
+    "discussions": [],
+    "reports": [],
+    "latest_steering": [],
+    "changes": []
+  },
+  "created_at": "2026-08-14T08:00:00Z"
+}

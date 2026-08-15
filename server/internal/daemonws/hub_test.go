@@ -418,6 +418,59 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	}
 }
 
+func TestWorkspaceRunnerReadyDispatchesStatusAfterCurrentSlotIsClaimed(t *testing.T) {
+	hub := NewHub()
+	var order []string
+	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, daemonInstanceID, eventType string, _ json.RawMessage) error {
+		if eventType == protocol.EventWorkspaceRunnerReady {
+			// Mimic the production ready handler: it does DB work before the
+			// Computer can replay agent:status on the same socket.
+			time.Sleep(30 * time.Millisecond)
+		}
+		order = append(order, eventType+":"+daemonInstanceID)
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	write := func(eventType string, payload any) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAgentProcess},
+	})
+	write(protocol.EventAgentStatus, protocol.AgentStatusPayload{
+		AgentID: "agent-1", LaunchID: "launch-1", Status: protocol.AgentStatusActive,
+	})
+	deadline := time.Now().Add(time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatalf("ready/status order = %v, want ready then active status", order)
+		}
+		if len(order) >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if order[0] != protocol.EventWorkspaceRunnerReady+":instance-1" || order[1] != protocol.EventAgentStatus+":instance-1" {
+		t.Fatalf("ready/status order = %v, want ready then active status on the claimed slot", order)
+	}
+}
+
 func TestCloseWorkspaceRunnerFencesReplacementDaemonInstance(t *testing.T) {
 	hub := NewHub()
 	var readyCount atomic.Int64

@@ -151,7 +151,6 @@ func (runner *WorkspaceRunner) replayManagedAgentStartPublication(start protocol
 			}
 		}
 	}
-	runner.publishManagedAgentStartActivity(start.AgentID, start.RuntimeID)
 	return true
 }
 

@@ -39,7 +39,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 	if runner.mixedRunActivityReplay != nil {
 		runner.mixedRunActivityReplay(writeFrame)
 	}
-	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
+	transportGeneration, _ := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && runner.logger != nil {
 			runner.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
 		}
@@ -59,11 +59,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			}
 		}
 	}()
-	for _, frame := range reconnectFrames {
-		if err := writeFrame(frame.EventType, frame.Payload); err != nil {
-			return err
-		}
-	}
 	var controlStarted bool
 	var stopControl context.CancelFunc
 	var controlDone chan struct{}

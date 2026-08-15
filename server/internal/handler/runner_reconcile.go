@@ -97,16 +97,24 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	if err != nil {
 		return err
 	}
+	// Observed residency is the current Computer process, not a durable row.
+	// A persisted active launch from a previous daemonInstanceID is leftover
+	// cache; treating it as running would skip agent:start after restart.
+	daemonInstanceID, live := h.DaemonHub.CurrentWorkspaceRunnerInstance(identity.DaemonID, identity.WorkspaceID)
+	if !live {
+		return errors.New("current Workspace Runner unavailable during launch reconcile")
+	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT agent_id::text, COALESCE(runtime_id::text, ''), launch_id, status
 		FROM agent_activity_launch
-		WHERE workspace_id::text = $1 AND daemon_id = $2 AND status IN ('accepted', 'active')
+		WHERE workspace_id::text = $1 AND daemon_id = $2 AND daemon_instance_id = $3
+		  AND status IN ('accepted', 'active')
 		  AND NOT EXISTS (
 			SELECT 1 FROM agent_restart_operation operation
 			WHERE operation.agent_id = agent_activity_launch.agent_id
 			  AND operation.status = 'running' AND operation.step <> 'starting'
 		  )
-		ORDER BY agent_id`, identity.WorkspaceID, identity.DaemonID)
+		ORDER BY agent_id`, identity.WorkspaceID, identity.DaemonID, daemonInstanceID)
 	if err != nil {
 		return fmt.Errorf("load observed Runner launches: %w", err)
 	}

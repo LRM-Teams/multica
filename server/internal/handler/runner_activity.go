@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -284,9 +283,10 @@ func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity
 	return nil
 }
 
-// recordWorkspaceRunnerReady fences launches owned by an older daemon process.
-// A Computer may already be connected while none of its prior Agent processes
-// have restarted; those Agents stay Offline until a new launch is reported.
+// recordWorkspaceRunnerReady forgets Activity owned by an older Computer
+// process. Launch status is not durable residency: a leftover active row must
+// not block the replacement process from reporting agent:status, so this
+// handler only retires snapshots/probes from a previous daemonInstanceID.
 func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, runningAgentIDs []string) error {
 	return h.runnerPresenceLocked(func() error {
 		workspaceID, err := util.ParseUUID(identity.WorkspaceID)
@@ -303,14 +303,11 @@ func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemo
 		defer tx.Rollback(ctx)
 
 		rows, err := tx.Query(ctx, `
-		UPDATE agent_activity_snapshot s
+		UPDATE agent_activity_snapshot
 		SET activity_kind = 'offline', detail_kind = 'computer_restarted',
 			observed_at = now(), received_at = now()
-		FROM agent_activity_launch l
-		WHERE l.workspace_id = s.workspace_id AND l.agent_id = s.agent_id
-		  AND l.workspace_id = $1 AND l.daemon_id = $2
-		  AND l.daemon_instance_id <> $3 AND l.status IN ('accepted', 'active')
-		RETURNING s.agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
+		WHERE workspace_id = $1 AND daemon_id = $2 AND daemon_instance_id <> $3
+		RETURNING agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
 		if err != nil {
 			return fmt.Errorf("fence prior Runner snapshots: %w", err)
 		}
@@ -328,54 +325,12 @@ func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemo
 			return fmt.Errorf("iterate fenced Runner Agents: %w", err)
 		}
 		rows.Close()
-		if len(runningAgentIDs) == 0 {
-			if _, err := tx.Exec(ctx, `
-				UPDATE agent_activity_launch
-				SET status = 'inactive', updated_at = now()
-				WHERE workspace_id = $1 AND daemon_id = $2
-				  AND daemon_instance_id = $3 AND status IN ('accepted', 'active')`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
-				return fmt.Errorf("fence absent Runner residencies: %w", err)
-			}
-		} else if _, err := tx.Exec(ctx, `
-			UPDATE agent_activity_launch
-			SET status = 'inactive', updated_at = now()
-			WHERE workspace_id = $1 AND daemon_id = $2
-			  AND daemon_instance_id = $3 AND status IN ('accepted', 'active')
-			  AND NOT (agent_id = ANY($4::uuid[]))`, workspaceID, identity.DaemonID, daemonInstanceID, runningAgentIDs); err != nil {
-			return fmt.Errorf("fence absent Runner residencies: %w", err)
-		}
-		rows, err = tx.Query(ctx, `
-		UPDATE agent_activity_launch
-		SET status = 'inactive', updated_at = now()
-		WHERE workspace_id = $1 AND daemon_id = $2
-		  AND daemon_instance_id <> $3 AND status IN ('accepted', 'active')
-		RETURNING agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
-		if err != nil {
-			return fmt.Errorf("fence prior Runner launches: %w", err)
-		}
-		var presenceAgentIDs []pgtype.UUID
-		for rows.Next() {
-			var agentID pgtype.UUID
-			if err := rows.Scan(&agentID); err != nil {
-				rows.Close()
-				return fmt.Errorf("scan fenced Runner launch: %w", err)
-			}
-			presenceAgentIDs = append(presenceAgentIDs, agentID)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf("iterate fenced Runner launches: %w", err)
-		}
-		rows.Close()
 		if _, err := tx.Exec(ctx, `DELETE FROM agent_activity_probe
 		WHERE workspace_id = $1 AND daemon_id = $2 AND daemon_instance_id <> $3`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
 			return fmt.Errorf("clear prior Runner probes: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit Runner ready fence: %w", err)
-		}
-		for _, agentID := range presenceAgentIDs {
-			h.publishAgentPresence(identity.WorkspaceID, util.UUIDToString(agentID), AgentPresenceOffline)
 		}
 
 		if h.Bus != nil {
@@ -437,13 +392,9 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
 					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
 					THEN agent_activity_launch.last_producer_fact_id ELSE '' END,
-				last_activity_fingerprint = CASE
-					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
-					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
-					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
-					THEN agent_activity_launch.last_activity_fingerprint ELSE '' END,
 				updated_at = now()
 			WHERE agent_activity_launch.status = 'inactive'
+			   OR agent_activity_launch.daemon_instance_id <> EXCLUDED.daemon_instance_id
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
 			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
 			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id)`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
@@ -519,11 +470,6 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
 					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
 					THEN agent_activity_launch.last_producer_fact_id ELSE '' END,
-				last_activity_fingerprint = CASE
-					WHEN agent_activity_launch.daemon_id = EXCLUDED.daemon_id
-					 AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
-					 AND agent_activity_launch.launch_id = EXCLUDED.launch_id
-					THEN agent_activity_launch.last_activity_fingerprint ELSE '' END,
 				updated_at = now()
 			WHERE agent_activity_launch.status = 'inactive'
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
@@ -594,31 +540,27 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	if err != nil {
 		return err
 	}
-	fingerprint, err := runnerActivityFingerprint(activity)
-	if err != nil {
-		return err
-	}
 	terminalStopped := snapshot.ActivityKind == protocol.ActivityKindOffline && snapshot.DetailKind == "stopped" && snapshot.ProbeID == ""
 	var runtimeID pgtype.UUID
 	err = h.DB.QueryRow(ctx, `
 		UPDATE agent_activity_launch
-		SET last_client_sequence = $6, last_producer_fact_id = $7, last_activity_fingerprint = $8, updated_at = now()
+		SET last_client_sequence = $6, last_producer_fact_id = $7, updated_at = now()
 		WHERE workspace_id = $1 AND agent_id = $2
 		  AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5
-		  AND (status = 'active' OR (status = 'inactive' AND $10))
-		  AND (last_client_sequence < $6 OR (last_client_sequence = $6 AND last_producer_fact_id = $7 AND last_activity_fingerprint = $8))
+		  AND (status = 'active' OR (status = 'inactive' AND $9))
+		  AND (last_client_sequence < $6 OR (last_client_sequence = $6 AND last_producer_fact_id = $7))
 		  AND (
-			$10 OR
-			($9 = '' AND NOT EXISTS (
+			$9 OR
+			($8 = '' AND NOT EXISTS (
 				SELECT 1 FROM agent_activity_probe p WHERE p.workspace_id = $1 AND p.agent_id = $2
 			)) OR
-			($9 <> '' AND EXISTS (
+			($8 <> '' AND EXISTS (
 				SELECT 1 FROM agent_activity_probe p WHERE p.workspace_id = $1 AND p.agent_id = $2
-					AND p.daemon_id = $3 AND p.daemon_instance_id = $4 AND p.launch_id = $5 AND p.probe_id = $9
+					AND p.daemon_id = $3 AND p.daemon_instance_id = $4 AND p.launch_id = $5 AND p.probe_id = $8
 			))
 		  )
 		RETURNING runtime_id`,
-		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID, fingerprint, snapshot.ProbeID, terminalStopped).Scan(&runtimeID)
+		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID, snapshot.ProbeID, terminalStopped).Scan(&runtimeID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errors.New("stale or unauthorized Runner Activity")
 	}
@@ -662,6 +604,19 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		snapshot.ActivityKind, snapshot.DetailKind, snapshot.ObservedAt)
 	if err != nil {
 		return fmt.Errorf("upsert Runner Activity snapshot: %w", err)
+	}
+	if activity.IsHeartbeat {
+		if h.Bus != nil {
+			projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
+			if err != nil {
+				return err
+			}
+			h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
+				AgentID:  snapshot.AgentID,
+				Activity: projected,
+			})
+		}
+		return nil
 	}
 	for _, entry := range activity.Entries {
 		_, err := h.DB.Exec(ctx, `
@@ -922,18 +877,12 @@ func (h *Handler) markRunnerActivityOfflineForComputerDisconnect(ctx context.Con
 	})
 }
 
-func runnerActivityFingerprint(activity protocol.AgentActivityPayload) (string, error) {
-	// ProbeID correlates a server liveness request; it is not producer fact
-	// content. A valid probe reply intentionally reuses the last observation's
-	// sequence and fact ID, so including ProbeID here would reject that reply as
-	// a conflicting same-sequence fact.
-	activity.Snapshot.ProbeID = ""
-	encoded, err := json.Marshal(activity)
-	if err != nil {
-		return "", fmt.Errorf("encode Runner Activity fact: %w", err)
+func (h *Handler) liveRunnerOwnsActivitySnapshot(daemonID, workspaceID string, snapshot protocol.AgentActivitySnapshot) bool {
+	if h == nil || daemonID == "" || snapshot.DaemonInstanceID == "" {
+		return false
 	}
-	digest := sha256.Sum256(encoded)
-	return fmt.Sprintf("%x", digest[:]), nil
+	source := h.currentRunnerPresenceSource()
+	return source != nil && source.IsCurrentWorkspaceRunner(daemonID, workspaceID, snapshot.DaemonInstanceID)
 }
 
 // GetRunnerActivity is the Workspace-authorized presentation API for typed
@@ -991,12 +940,13 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	response := RunnerActivityResponse{Timeline: []RunnerActivityTimelineResponseRow{}}
 	var snapshot protocol.AgentActivitySnapshot
 	var observedAt pgtype.Timestamptz
+	var daemonID string
 	err := h.DB.QueryRow(ctx, `
-		SELECT daemon_instance_id, launch_id, client_sequence, producer_fact_id,
+		SELECT daemon_id, daemon_instance_id, launch_id, client_sequence, producer_fact_id,
 			observed_at, activity_kind, detail_kind, probe_id, process_instance_id
 		FROM agent_activity_snapshot
 		WHERE workspace_id = $1 AND agent_id = $2`, workspaceID, agentID).Scan(
-		&snapshot.DaemonInstanceID, &snapshot.LaunchID, &snapshot.ClientSequence, &snapshot.ProducerFactID,
+		&daemonID, &snapshot.DaemonInstanceID, &snapshot.LaunchID, &snapshot.ClientSequence, &snapshot.ProducerFactID,
 		&observedAt, &snapshot.ActivityKind, &snapshot.DetailKind, &snapshot.ProbeID, &snapshot.ProcessInstanceID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1008,7 +958,9 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	snapshot.AgentID = util.UUIDToString(agentID)
 	snapshot.ObservedAt = observedAt.Time
 	summary := activityprojection.ProjectSummary(snapshot)
-	response.Summary = &summary
+	if h.liveRunnerOwnsActivitySnapshot(daemonID, util.UUIDToString(workspaceID), snapshot) {
+		response.Summary = &summary
+	}
 
 	rows, err := h.DB.Query(ctx, `
 		SELECT id, entry_kind, entry_body, observed_at

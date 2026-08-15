@@ -69,10 +69,9 @@ func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID st
 	}, "Resident runtime ready")
 }
 
-// publishManagedAgentStartActivity runs only after the active status has been
-// written on a Workspace Runner connection. The server fences Activity on an
-// active launch, so publishing these snapshots from completeManagedAgentStart
-// would put them on the wire before the status that authorizes them.
+// publishManagedAgentStartActivity runs only after a new provider spawn has
+// written active status. Replayed starts must not call this: Raft's
+// rebindRunningStart republishes status/session and leaves lastActivity alone.
 func (runner *WorkspaceRunner) publishManagedAgentStartActivity(agentID, runtimeID string) {
 	runner.observeRuntimeStarting(agentID, runtimeID, "Managed start")
 	runner.observeResidentRuntimeReady(agentID, runtimeID)
@@ -203,6 +202,11 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	switch message.Type {
 	case agent.MessageThinking:
 		kind = AgentObservationRuntimeThinking
+	case agent.MessageText:
+		// Raft maps provider text to working / model_response_started. That
+		// is the live "the model is producing" fact; dropping it leaves the
+		// compact surface stuck on Thinking or a previous tool.
+		kind = AgentObservationRuntimeWorking
 	case agent.MessageCompactionStarted:
 		kind = AgentObservationRuntimeCompacting
 	case agent.MessageCompactionFinished:

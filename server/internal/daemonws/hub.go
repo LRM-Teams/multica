@@ -992,6 +992,22 @@ func (h *Hub) WorkspaceRunnerSupportsCapability(daemonID, workspaceID, capabilit
 	return supported
 }
 
+// CurrentWorkspaceRunnerInstance is the live Computer process on this
+// daemon/workspace socket. Observed Agent residency is only meaningful for
+// this instance; a persisted active row from a dead process is not residency.
+func (h *Hub) CurrentWorkspaceRunnerInstance(daemonID, workspaceID string) (string, bool) {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
+		return "", false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
+	if c == nil || c.runnerDaemonInstanceID == "" {
+		return "", false
+	}
+	return c.runnerDaemonInstanceID, true
+}
+
 // WorkspaceRunnerIdentity returns a copy of the current ready connection's
 // authenticated scope. Mutation handlers use it to run the same reconcile as
 // ready/reconnect immediately after an Agent placement changes.

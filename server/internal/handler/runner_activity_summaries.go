@@ -33,7 +33,7 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT s.agent_id, s.activity_kind, s.detail_kind, latest_error.error_text
+		SELECT s.agent_id, s.daemon_id, s.daemon_instance_id, s.activity_kind, s.detail_kind, latest_error.error_text
 		FROM agent_activity_snapshot s
 		LEFT JOIN LATERAL (
 			SELECT recent.entry_body ->> 'text' AS error_text
@@ -62,11 +62,15 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 	response := RunnerActivitySummariesResponse{Items: []RunnerActivitySummaryResponseItem{}}
 	for rows.Next() {
 		var agentID pgtype.UUID
+		var daemonID string
 		var snapshot protocol.AgentActivitySnapshot
 		var errorText pgtype.Text
-		if err := rows.Scan(&agentID, &snapshot.ActivityKind, &snapshot.DetailKind, &errorText); err != nil {
+		if err := rows.Scan(&agentID, &daemonID, &snapshot.DaemonInstanceID, &snapshot.ActivityKind, &snapshot.DetailKind, &errorText); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load runner activity summaries")
 			return
+		}
+		if !h.liveRunnerOwnsActivitySnapshot(daemonID, util.UUIDToString(workspaceID), snapshot) {
+			continue
 		}
 		summary := activityprojection.ProjectSummary(snapshot)
 		if errorText.Valid {

@@ -304,6 +304,15 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	if runner.onReady != nil {
 		runner.onReady()
 	}
+	// Replay after ready so the Hub has claimed this socket as the current
+	// Runner. agent:status active sent before that claim is dropped as stale.
+	if runner.activity != nil {
+		for _, frame := range runner.activity.ReconnectFrames() {
+			if err := connection.Write(frame.EventType, frame.Payload); err != nil {
+				return err
+			}
+		}
+	}
 	return runner.serveConnection(connection, conn)
 }
 

@@ -26,7 +26,7 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		processID   string
 	}{
 		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
-		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at}, kind: protocol.ActivityKindWorking, detail: "model_response_started", entryKind: "narrative", entryText: "Working", processID: "process-1"},
+		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "model_response_started", entryKind: "narrative", entryText: "Working"},
 		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, detail: "thinking_started"},
 		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "ls -la"},
 		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
@@ -93,7 +93,17 @@ func TestAgentActivityProducerDropsUnknownToolNonFact(t *testing.T) {
 	}
 }
 
-func TestAgentActivityProducerObserveUsesDeterministicFactIdentity(t *testing.T) {
+func TestRaftActivityProducerFactIDMatchesDaemonInstanceSeq(t *testing.T) {
+	got := raftActivityProducerFactID("agent-a", "launch-a", "daemon-1", 3)
+	if got != "daemon_activity:agent-a:launch-a:daemon-1:3" {
+		t.Fatalf("fact id = %q", got)
+	}
+	if got := raftActivityProducerFactID("agent-a", "", "", 1); got != "daemon_activity:agent-a:legacy:1" {
+		t.Fatalf("legacy fact id = %q", got)
+	}
+}
+
+func TestAgentActivityProducerObserveUsesRaftSeqFactIdentity(t *testing.T) {
 	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
 	observation := AgentObservation{
 		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking,
@@ -108,8 +118,10 @@ func TestAgentActivityProducerObserveUsesDeterministicFactIdentity(t *testing.T)
 	if err := producer.Observe(observation); err != nil {
 		t.Fatal(err)
 	}
-	if len(sent) != 2 || sent[0].Snapshot.ProducerFactID == "" || sent[0].Snapshot.ProducerFactID != sent[1].Snapshot.ProducerFactID || sent[0].Snapshot.ClientSequence != 1 || sent[1].Snapshot.ClientSequence != 2 {
-		t.Fatalf("observed payloads = %+v", sent)
+	wantFirst := "daemon_activity:agent-a:launch-a:daemon-1:1"
+	wantSecond := "daemon_activity:agent-a:launch-a:daemon-1:2"
+	if len(sent) != 2 || sent[0].Snapshot.ClientSequence != 1 || sent[1].Snapshot.ClientSequence != 2 || sent[0].Snapshot.ProducerFactID != wantFirst || sent[1].Snapshot.ProducerFactID != wantSecond {
+		t.Fatalf("observed payloads = %+v, want Raft seq-derived facts %q then %q", sent, wantFirst, wantSecond)
 	}
 }
 
@@ -120,7 +132,7 @@ func TestAgentActivityProducerObserveRejectsMissingOrStaleLaunch(t *testing.T) {
 	installActivityProducerAgent(t, producer)
 	observation := AgentObservation{
 		AgentID: "agent-a", LaunchID: "launch-stale", Kind: AgentObservationRuntimeWorking,
-		Data: AgentRuntimeObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", RuntimeGeneration: 1}, At: at,
+		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}, At: at,
 	}
 	if err := producer.Observe(observation); err == nil {
 		t.Fatal("Observe accepted a stale launch")
@@ -143,7 +155,7 @@ func TestAgentActivityProducerObserveKeepsSessionAndProcessIdentitiesDistinct(t 
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, nil)
 	installActivityProducerAgent(t, producer)
 	observation := AgentObservation{
-		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, At: at,
+		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, At: at,
 		Data: AgentRuntimeObservationData{
 			RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ProviderSessionID: "session-1", TurnID: "turn-1", RuntimeGeneration: 4,
 		},
@@ -154,6 +166,73 @@ func TestAgentActivityProducerObserveKeepsSessionAndProcessIdentitiesDistinct(t 
 	state := producer.states[agentActivityProducerKey{agentID: "agent-a", launchID: "launch-a"}]
 	if state.snapshot.ProcessInstanceID != "process-1" || state.session.ProviderSessionID != "session-1" || state.session.TurnID != "turn-1" || state.session.RuntimeGeneration != 4 {
 		t.Fatalf("managed identities = snapshot:%+v session:%+v", state.snapshot, state.session)
+	}
+}
+
+func TestReplayManagedAgentStartDoesNotRepaintLiveActivity(t *testing.T) {
+	now := time.Date(2026, time.August, 15, 12, 0, 0, 0, time.UTC)
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	start := protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}
+	if _, err := runner.processes.Start(agentProcessStartRequest{
+		AgentID: start.AgentID, RuntimeID: start.RuntimeID, LaunchID: start.LaunchID, StartDispatchID: start.StartDispatchID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	markTestLaunchRunning(t, runner, start.AgentID)
+	if err := runner.activity.SetManaged(
+		protocol.AgentStatusPayload{AgentID: start.AgentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: start.AgentID, LaunchID: start.LaunchID},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.activity.Observe(AgentObservation{
+		AgentID: start.AgentID, LaunchID: start.LaunchID, Kind: AgentObservationRuntimeThinking,
+		Data: AgentRuntimeStageObservationData{RuntimeID: start.RuntimeID}, At: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.replayManagedAgentStartPublication(start, nil) {
+		t.Fatal("replayed a running launch as unpublished")
+	}
+	if len(activities) != 1 || activities[0].Snapshot.DetailKind != "thinking_started" {
+		t.Fatalf("replayed start Activity = %+v, want the live thinking Snapshot left alone", activities)
+	}
+}
+
+func TestResidentTextProjectsWorkingLikeRaft(t *testing.T) {
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	if _, err := runner.processes.Start(agentProcessStartRequest{
+		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	markTestLaunchRunning(t, runner, "agent-1")
+	if err := runner.activity.SetManaged(
+		protocol.AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-1", LaunchID: "launch-1"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	runner.observeResidentMessageRuntime("agent-1", "runtime-1", agent.Message{Type: agent.MessageText, Content: "working on it"})
+	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.DetailKind != "model_response_started" {
+		t.Fatalf("text Activity = %+v, want Raft model_response_started", activities)
 	}
 }
 
@@ -187,7 +266,6 @@ func TestAgentActivityProducerHeartbeatsAndProbeDoNotInventState(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
-	producer.newID = sequentialActivityFactIDs()
 	installActivityProducerAgent(t, producer)
 	if err := producer.Observe(AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeStarting, Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}, At: now}); err != nil {
 		t.Fatal(err)
@@ -199,7 +277,7 @@ func TestAgentActivityProducerHeartbeatsAndProbeDoNotInventState(t *testing.T) {
 	}
 	now = now.Add(time.Second)
 	producer.Tick()
-	if len(sent) != 2 || sent[1].Snapshot.ClientSequence != 2 || len(sent[1].Entries) != 0 || sent[1].Detail != "Starting…" || !sent[1].IsHeartbeat {
+	if len(sent) != 2 || sent[1].Snapshot.ClientSequence != 2 || sent[1].Snapshot.ProducerFactID != "daemon_activity:agent-a:launch-a:daemon-1:2" || len(sent[1].Entries) != 0 || sent[1].Detail != "Starting…" || !sent[1].IsHeartbeat {
 		t.Fatalf("heartbeat payload = %+v", sent)
 	}
 	probe, err := producer.Probe(protocol.AgentActivityProbePayload{AgentID: "agent-a", LaunchID: "launch-a", ProbeID: "probe-1"})
@@ -534,12 +612,4 @@ func installActivityProducerAgent(t *testing.T, producer *agentActivityProducer)
 	}
 }
 
-func sequentialActivityFactIDs() func() string {
-	ids := []string{"heartbeat-1", "heartbeat-2", "heartbeat-3"}
-	index := 0
-	return func() string {
-		id := ids[index]
-		index++
-		return id
-	}
-}
+

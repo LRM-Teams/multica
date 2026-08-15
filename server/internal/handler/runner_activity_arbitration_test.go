@@ -100,7 +100,7 @@ func TestWorkspaceRunnerInactiveLaunchAcceptsOnlyStoppedActivityAndFencesReplace
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_activity_launch
 		SET runtime_id = $4, launch_id = $3, status = 'active', last_client_sequence = 0,
-		    last_producer_fact_id = '', last_activity_fingerprint = ''
+		    last_producer_fact_id = ''
 		WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID, newLaunchID, newRuntimeID); err != nil {
 		t.Fatal(err)
 	}
@@ -198,15 +198,72 @@ func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T
 	if err := testHandler.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", nil); err != nil {
 		t.Fatal(err)
 	}
-	var kind, detail, status string
+	var kind, detail, status, instanceID string
 	if err := testPool.QueryRow(ctx, `SELECT activity_kind, detail_kind FROM agent_activity_snapshot WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&kind, &detail); err != nil {
 		t.Fatal(err)
 	}
+	if err := testPool.QueryRow(ctx, `SELECT status, daemon_instance_id FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status, &instanceID); err != nil {
+		t.Fatal(err)
+	}
+	if kind != protocol.ActivityKindOffline || detail != "computer_restarted" {
+		t.Fatalf("ready Activity = kind:%q detail:%q", kind, detail)
+	}
+	if status != protocol.AgentStatusActive || instanceID != "old-instance" {
+		t.Fatalf("ready must not persist residency; leftover launch = status:%q instance:%q", status, instanceID)
+	}
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"daemon-1/" + testWorkspaceID + "/new-instance": true,
+	}}
+	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", protocol.EventAgentStatus, active); err != nil {
+		t.Fatalf("replacement agent:status: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT status, daemon_instance_id FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status, &instanceID); err != nil {
+		t.Fatal(err)
+	}
+	if status != protocol.AgentStatusActive || instanceID != "new-instance" {
+		t.Fatalf("replacement launch = status:%q instance:%q", status, instanceID)
+	}
+}
+
+func TestWorkspaceRunnerReadyKeepsSameInstanceRunningLaunchActive(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "ready-same-"+uuid.NewString()[:8], nil)
+	launchID := "launch-" + uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
+		VALUES ($1, $2, $3, 'daemon-1', 'instance-1', $4, 'active')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
+		t.Fatal(err)
+	}
+	// Same-process reconnect reports ready before it can replay agent:status.
+	// An empty runningAgents list must not deactivate that still-live launch.
+	if err := testHandler.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	var status string
 	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if kind != protocol.ActivityKindOffline || detail != "computer_restarted" || status != protocol.AgentStatusInactive {
-		t.Fatalf("ready fence = kind:%q detail:%q status:%q", kind, detail, status)
+	if status != protocol.AgentStatusActive {
+		t.Fatalf("same-instance ready status=%q, want active so reconnect can replay agent:status", status)
+	}
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"daemon-1/" + testWorkspaceID + "/instance-1": true,
+	}}
+	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", protocol.EventAgentStatus, active); err != nil {
+		t.Fatalf("replayed agent:status after same-instance ready: %v", err)
 	}
 }
 

@@ -1,8 +1,6 @@
 package daemon
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -46,10 +44,6 @@ func (p *agentActivityProducer) observeLocked(observation AgentObservation) erro
 	if err != nil {
 		return err
 	}
-	factID, err := agentObservationFactID(observation, key.launchID)
-	if err != nil {
-		return err
-	}
 
 	snapshot := state.snapshot
 	snapshot.AgentID = key.agentID
@@ -61,7 +55,7 @@ func (p *agentActivityProducer) observeLocked(observation AgentObservation) erro
 		snapshot.ProcessInstanceID = projection.processInstanceID
 	}
 	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = factID
+	snapshot.ProducerFactID = ""
 	snapshot.ObservedAt = observation.At.UTC()
 	snapshot.ProbeID = ""
 	if err := p.publishLocked(snapshot, projection.entries); err != nil {
@@ -171,8 +165,10 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "starting"
 		entry, err = activityNarrativeEntry(projection.detailKind, "Starting…")
 	case AgentObservationRuntimeWorking:
-		data := observation.Data.(AgentRuntimeObservationData)
-		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindWorking, "model_response_started", data.ProcessInstanceID
+		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "model_response_started"
+		if data, ok := observation.Data.(AgentRuntimeObservationData); ok {
+			projection.processInstanceID = data.ProcessInstanceID
+		}
 		entry, err = activityNarrativeEntry(projection.detailKind, "Working")
 	case AgentObservationRuntimeThinking:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindThinking, "thinking_started"
@@ -234,19 +230,6 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.entries = []protocol.AgentActivityEntry{entry}
 	}
 	return projection, nil
-}
-
-func agentObservationFactID(observation AgentObservation, launchID string) (string, error) {
-	fact := struct {
-		Observation AgentObservation `json:"observation"`
-		LaunchID    string           `json:"resolved_launch_id"`
-	}{Observation: observation, LaunchID: launchID}
-	raw, err := json.Marshal(fact)
-	if err != nil {
-		return "", fmt.Errorf("encode Agent Observation fingerprint: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return fmt.Sprintf("observation-%x", sum[:]), nil
 }
 
 // messageSendHoldTitle and messageSendHoldSubtext are Activity presentation,

@@ -49,14 +49,14 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&def); err != nil {
 		t.Fatal(err)
 	}
-	if def.WorkspaceID != workspaceID || def.ReviewerType != "legacy" || def.ExploreAgents != 4 || def.ExploreMaxRounds != 3 {
+	if def.WorkspaceID != workspaceID || def.MemoryType != "legacy" || def.ExploreAgents != 4 || def.ExploreMaxRounds != 3 {
 		t.Fatalf("default profile = %+v, want legacy/4/3", def)
 	}
 
 	// PUT persists the reviewer settings.
 	w = httptest.NewRecorder()
 	putReq := withURLParam(newRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/graph-memory/profile", map[string]any{
-		"reviewer_type": "graph", "explore_agents": 2, "explore_max_rounds": 5,
+		"memory_type": "graph", "explore_agents": 2, "explore_max_rounds": 5,
 	}), "id", workspaceID)
 	putReq.Header.Set("X-Workspace-ID", workspaceID)
 	testHandler.UpdateGraphMemoryProfile(w, putReq)
@@ -67,7 +67,7 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.ReviewerType != "graph" || saved.ExploreAgents != 2 || saved.ExploreMaxRounds != 5 || saved.UpdatedAt == "" {
+	if saved.MemoryType != "graph" || saved.ExploreAgents != 2 || saved.ExploreMaxRounds != 5 || saved.UpdatedAt == "" {
 		t.Fatalf("saved profile = %+v, want graph/2/5 with updated_at", saved)
 	}
 
@@ -90,7 +90,7 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 	// Validation: an unknown reviewer type is rejected.
 	w = httptest.NewRecorder()
 	badReq := withURLParam(newRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/graph-memory/profile", map[string]any{
-		"reviewer_type": "bogus", "explore_agents": 2, "explore_max_rounds": 5,
+		"memory_type": "bogus", "explore_agents": 2, "explore_max_rounds": 5,
 	}), "id", workspaceID)
 	badReq.Header.Set("X-Workspace-ID", workspaceID)
 	testHandler.UpdateGraphMemoryProfile(w, badReq)

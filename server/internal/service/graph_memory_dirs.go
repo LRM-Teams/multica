@@ -52,17 +52,17 @@ func graphMemoryDirForWorkspace(root, workspaceID string) (dir string, ok bool) 
 	return "", false
 }
 
-// resolveGraphReviewerType resolves reviewer.type for one workspace (design
+// resolveGraphMemoryType resolves memory_type for one workspace (design
 // §1/A4): a valid graph_memory_profile row wins over the process env default
-// (MULTICA_REVIEWER_TYPE); anything unrecognized falls back to the env
+// (MULTICA_MEMORY_TYPE); anything unrecognized falls back to the env
 // default, then "legacy". Lookup errors (including a missing row) fail open
 // to the env default so a transient DB hiccup never flips a workspace's
 // memory pipeline.
-func resolveGraphReviewerType(ctx context.Context, queries *db.Queries, workspaceID pgtype.UUID, envType string) string {
+func resolveGraphMemoryType(ctx context.Context, queries *db.Queries, workspaceID pgtype.UUID, envType string) string {
 	if queries != nil && workspaceID.Valid {
 		if profile, err := queries.GetGraphMemoryProfile(ctx, workspaceID); err == nil {
-			if profile.ReviewerType == "graph" || profile.ReviewerType == "legacy" {
-				return profile.ReviewerType
+			if profile.MemoryType == "graph" || profile.MemoryType == "legacy" {
+				return profile.MemoryType
 			}
 		}
 	}
@@ -72,7 +72,7 @@ func resolveGraphReviewerType(ctx context.Context, queries *db.Queries, workspac
 	return "legacy"
 }
 
-// graphMemoryEnvReviewerType reads the process-level reviewer.type default.
-func graphMemoryEnvReviewerType() string {
-	return strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_REVIEWER_TYPE")))
+// graphMemoryEnvMemoryType reads the process-level memory_type default.
+func graphMemoryEnvMemoryType() string {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
 }

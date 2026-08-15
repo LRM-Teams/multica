@@ -38,6 +38,7 @@ import {
   evolutionKeys,
   evolutionMetricsOptions,
   evolutionReviewSubmissionListOptions,
+  graphMemoryProfileOptions,
   memoryCurationRunOptions,
   memoryCuratorProfileOptions,
   workspaceMemoryCurationStatusOptions,
@@ -52,6 +53,7 @@ import type {
   EvolutionDailyMetric,
   EvolutionTaskEfficiency,
   EvolutionUnitMetric,
+  GraphMemoryType,
   MemoryCurationRunDetail,
   MemoryCurationStageStatus,
   MemoryCuratorMode,
@@ -109,6 +111,11 @@ const COPY = {
   learningQueue: "Learning queue",
   learningQueueHint: "Review-first memory and skill candidates waiting for a human decision.",
   memoryOps: "Memory curation",
+  memoryType: "Memory type",
+  memoryTypeHint: "Pick the memory pipeline for this workspace. Graph memory builds a hierarchical memory DAG and is experimental.",
+  memoryTypeLegacy: "Legacy (MEMORY.md)",
+  memoryTypeGraph: "Graph memory (experimental)",
+  memoryTypeSaved: "Memory type updated",
   memoryOpsHint: "Active agents self-review first; team curation then promotes clean shared knowledge. The top three stats are the workspace funnel: local proposals → DB pending → team knowledge.",
   funnelHint: "Funnel: left = latest self-review candidates; middle = DB pending candidates ({skills} skills); right = team_knowledge registry rows (not copied to every agent).",
   curatorOps: "Curator operations",
@@ -737,6 +744,7 @@ export function EvolutionCenterPage() {
 
             <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]">
               <div className="grid gap-4">
+                <MemoryTypeCard wsId={wsId} />
                 <CuratorProfileCard
                   key={`${profileData?.id ?? "new"}-${profileData?.config_version ?? 0}`}
                   wsId={wsId}
@@ -996,6 +1004,54 @@ function draftFromProfile(profile: MemoryCuratorProfile | undefined): CuratorPro
     catchUpEnabled: profile?.catch_up_enabled ?? true,
     confidenceThreshold: profile?.confidence_threshold ?? 0.8,
   };
+}
+
+function MemoryTypeCard({ wsId }: { wsId: string }) {
+  const copy = useEvolutionCopy();
+  const queryClient = useQueryClient();
+  const { data: profile } = useQuery(graphMemoryProfileOptions(wsId));
+  const memoryType: GraphMemoryType = profile?.memory_type ?? "legacy";
+
+  // The PUT endpoint validates the full profile, so the explore knobs are
+  // re-sent unchanged from the current profile (or the server defaults).
+  const update = useMutation({
+    mutationFn: (next: GraphMemoryType) => api.updateGraphMemoryProfile(wsId, {
+      memory_type: next,
+      explore_agents: profile?.explore_agents ?? 4,
+      explore_max_rounds: profile?.explore_max_rounds ?? 3,
+    }),
+    onSuccess: async () => {
+      toast.success(copy("memoryTypeSaved"));
+      await queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
+    },
+    onError: (error) => showErrorToast(error instanceof Error ? error.message : copy("memoryType")),
+  });
+
+  return (
+    <Card className="bg-background/90 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><GitBranch className="h-4 w-4 text-brand" />{copy("memoryType")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("memoryTypeHint")}</p>
+      </CardHeader>
+      <CardContent>
+        <Select
+          value={memoryType}
+          onValueChange={(value) => {
+            if (value && value !== memoryType) update.mutate(value as GraphMemoryType);
+          }}
+          disabled={update.isPending}
+        >
+          <SelectTrigger className="w-full" aria-label={copy("memoryType")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="legacy">{copy("memoryTypeLegacy")}</SelectItem>
+            <SelectItem value="graph">{copy("memoryTypeGraph")}</SelectItem>
+          </SelectContent>
+        </Select>
+      </CardContent>
+    </Card>
+  );
 }
 
 function CuratorProfileCard({

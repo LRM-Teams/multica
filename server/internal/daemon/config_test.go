@@ -777,8 +777,8 @@ func TestLoadConfig_GraphMemoryDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.ReviewerType != ReviewerTypeLegacy {
-		t.Fatalf("ReviewerType = %q, want %q", cfg.ReviewerType, ReviewerTypeLegacy)
+	if cfg.MemoryType != MemoryTypeLegacy {
+		t.Fatalf("MemoryType = %q, want %q", cfg.MemoryType, MemoryTypeLegacy)
 	}
 	if want := filepath.Join(root, "memory_graph"); cfg.GraphMemoryDir != want {
 		t.Fatalf("GraphMemoryDir = %q, want %q", cfg.GraphMemoryDir, want)
@@ -799,25 +799,25 @@ func TestLoadConfig_GraphMemoryDefaults(t *testing.T) {
 
 // An unknown reviewer type must fail loud: silently falling back to either
 // pipeline would mask an operator typo.
-func TestLoadConfig_InvalidReviewerType(t *testing.T) {
+func TestLoadConfig_InvalidMemoryType(t *testing.T) {
 	stageFakeAgent(t)
-	t.Setenv("MULTICA_REVIEWER_TYPE", "bogus")
+	t.Setenv("MULTICA_MEMORY_TYPE", "bogus")
 	_, err := LoadConfig(Overrides{
 		ServerURL:      "http://localhost:8080",
 		WorkspacesRoot: t.TempDir(),
 	})
 	if err == nil {
-		t.Fatal("expected error for invalid MULTICA_REVIEWER_TYPE, got nil")
+		t.Fatal("expected error for invalid MULTICA_MEMORY_TYPE, got nil")
 	}
-	if !strings.Contains(err.Error(), "MULTICA_REVIEWER_TYPE") {
-		t.Fatalf("expected error to mention MULTICA_REVIEWER_TYPE, got: %v", err)
+	if !strings.Contains(err.Error(), "MULTICA_MEMORY_TYPE") {
+		t.Fatalf("expected error to mention MULTICA_MEMORY_TYPE, got: %v", err)
 	}
 }
 
 func TestLoadConfig_GraphReviewerFromEnv(t *testing.T) {
 	stageFakeAgent(t)
 	graphDir := filepath.Join(t.TempDir(), "graph")
-	t.Setenv("MULTICA_REVIEWER_TYPE", "graph")
+	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
 	t.Setenv("MULTICA_GRAPH_MEMORY_DIR", graphDir)
 	t.Setenv("MULTICA_GRAPH_EXPLORE_AGENTS", "4")
 	t.Setenv("MULTICA_GRAPH_EXPLORE_MAX_ROUNDS", "5")
@@ -831,8 +831,8 @@ func TestLoadConfig_GraphReviewerFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.ReviewerType != ReviewerTypeGraph {
-		t.Fatalf("ReviewerType = %q, want %q", cfg.ReviewerType, ReviewerTypeGraph)
+	if cfg.MemoryType != MemoryTypeGraph {
+		t.Fatalf("MemoryType = %q, want %q", cfg.MemoryType, MemoryTypeGraph)
 	}
 	if cfg.GraphMemoryDir != graphDir {
 		t.Fatalf("GraphMemoryDir = %q, want %q", cfg.GraphMemoryDir, graphDir)

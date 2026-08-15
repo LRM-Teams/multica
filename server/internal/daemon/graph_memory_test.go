@@ -12,29 +12,29 @@ import (
 )
 
 // Per-task reviewer-type precedence (design §1/A4): the server-sent
-// per-workspace profile value overrides the daemon's MULTICA_REVIEWER_TYPE
+// per-workspace profile value overrides the daemon's MULTICA_MEMORY_TYPE
 // env default; empty or unrecognized task values fall back to the env
 // default, then legacy.
-func TestEffectiveReviewerTypePrecedence(t *testing.T) {
+func TestEffectiveMemoryTypePrecedence(t *testing.T) {
 	cases := []struct {
 		name       string
 		configured string
 		taskScoped string
 		want       string
 	}{
-		{"task graph overrides env legacy", ReviewerTypeLegacy, ReviewerTypeGraph, ReviewerTypeGraph},
-		{"task legacy overrides env graph", ReviewerTypeGraph, ReviewerTypeLegacy, ReviewerTypeLegacy},
-		{"empty task falls back to env graph", ReviewerTypeGraph, "", ReviewerTypeGraph},
-		{"empty task falls back to env legacy", ReviewerTypeLegacy, "", ReviewerTypeLegacy},
-		{"unrecognized task value falls back to env", ReviewerTypeGraph, "bogus", ReviewerTypeGraph},
-		{"task value is case/space tolerant", ReviewerTypeLegacy, " Graph ", ReviewerTypeGraph},
-		{"unrecognized env and no task value defaults legacy", "bogus", "", ReviewerTypeLegacy},
-		{"unrecognized both defaults legacy", "bogus", "bogus", ReviewerTypeLegacy},
+		{"task graph overrides env legacy", MemoryTypeLegacy, MemoryTypeGraph, MemoryTypeGraph},
+		{"task legacy overrides env graph", MemoryTypeGraph, MemoryTypeLegacy, MemoryTypeLegacy},
+		{"empty task falls back to env graph", MemoryTypeGraph, "", MemoryTypeGraph},
+		{"empty task falls back to env legacy", MemoryTypeLegacy, "", MemoryTypeLegacy},
+		{"unrecognized task value falls back to env", MemoryTypeGraph, "bogus", MemoryTypeGraph},
+		{"task value is case/space tolerant", MemoryTypeLegacy, " Graph ", MemoryTypeGraph},
+		{"unrecognized env and no task value defaults legacy", "bogus", "", MemoryTypeLegacy},
+		{"unrecognized both defaults legacy", "bogus", "bogus", MemoryTypeLegacy},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := effectiveReviewerType(tc.configured, tc.taskScoped); got != tc.want {
-				t.Fatalf("effectiveReviewerType(%q, %q) = %q, want %q", tc.configured, tc.taskScoped, got, tc.want)
+			if got := effectiveMemoryType(tc.configured, tc.taskScoped); got != tc.want {
+				t.Fatalf("effectiveMemoryType(%q, %q) = %q, want %q", tc.configured, tc.taskScoped, got, tc.want)
 			}
 		})
 	}
@@ -45,12 +45,12 @@ func TestEffectiveReviewerTypePrecedence(t *testing.T) {
 // not process-global: the lazy provider must stay uninitialized.
 func TestGraphExecutionMemoriesTaskOverrideBeatsEnv(t *testing.T) {
 	d := &Daemon{
-		cfg:    Config{ReviewerType: ReviewerTypeGraph},
+		cfg:    Config{MemoryType: MemoryTypeGraph},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	out := d.graphExecutionMemories(context.Background(), Task{
-		ReviewerType: ReviewerTypeLegacy,
-		ChatMessage:  "hello",
+		MemoryType:  MemoryTypeLegacy,
+		ChatMessage: "hello",
 	}, d.logger)
 	if out != nil {
 		t.Fatalf("graphExecutionMemories = %v, want nil under task-scoped legacy override", out)
@@ -66,7 +66,7 @@ func TestGraphExecutionMemoriesTaskOverrideBeatsEnv(t *testing.T) {
 // task-scoped resolution path).
 func TestGraphExecutionMemoriesEnvDefaultApplies(t *testing.T) {
 	d := &Daemon{
-		cfg:    Config{ReviewerType: ReviewerTypeLegacy},
+		cfg:    Config{MemoryType: MemoryTypeLegacy},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	if out := d.graphExecutionMemories(context.Background(), Task{ChatMessage: "hello"}, d.logger); out != nil {

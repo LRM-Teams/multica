@@ -1535,8 +1535,8 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	}
 	// Per-workspace graph memory reviewer override (design §1/A4): the
 	// daemon treats this as a task-scoped override of its env default.
-	if reviewerType := h.graphMemoryReviewerTypeForWorkspace(ctx, event.WorkspaceID); reviewerType != "" {
-		resp.ReviewerType = reviewerType
+	if memoryType := h.graphMemoryTypeForWorkspace(ctx, event.WorkspaceID); memoryType != "" {
+		resp.MemoryType = memoryType
 	}
 	if resp.Agent != nil {
 		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, event.WorkspaceID, service.MemoryExecutionScope{

@@ -1,7 +1,7 @@
 # Graph Memory Reviewer 设计文档
 
 - 日期：2026-08-14
-- 状态：已实现（feature/graph-memory-reviewer）；2026-08-14 设计评审调整 A1/A2/A3/A4/A6 已批准并落地（Q27 评判粒度、Q13 回测判定、Q10 触发兜底/退避、Q1/Q23 per-workspace reviewer.type、Q15 预算服务端强制）
+- 状态：已实现（feature/graph-memory-reviewer）；2026-08-14 设计评审调整 A1/A2/A3/A4/A6 已批准并落地（Q27 评判粒度、Q13 回测判定、Q10 触发兜底/退避、Q1/Q23 per-workspace memory_type、Q15 预算服务端强制）
 - 决策记录来源：AReaL 工作区 `../coversation.md`（第一轮 + 第二轮问答，临时原始记录）；本文件是长期权威设计记录
 - 影响面：`multica/server`（新增 graph memory 子系统，替代 memorycuration pipeline）、`areal` Python 训练侧（reward 回传）
 
@@ -12,8 +12,10 @@
 本设计新增 **graph reviewer**：层次化 DAG memory，支持配置开关与 legacy 切换：
 
 ```
-reviewer.type = legacy | graph     # 整条 pipeline 切换，legacy 仅作回退备份
+memory_type = legacy | graph     # 整条 pipeline 切换，legacy 仅作回退备份
 ```
+
+> 更名说明：该开关原名为 `reviewer.type`（列名 `reviewer_type`，env `MULTICA_REVIEWER_TYPE`），2026-08 统一更名为 `memory_type`（列名 `memory_type`，env `MULTICA_MEMORY_TYPE`）。下文中历史问答若出现旧名，均指同一配置。
 
 目标：
 
@@ -27,7 +29,7 @@ reviewer.type = legacy | graph     # 整条 pipeline 切换，legacy 仅作回�
 
 | # | 决策点 | 结论 |
 |---|--------|------|
-| Q1 | 切换边界 | 统一接口，`reviewer.type = legacy \| graph`，存储隔离；reviewer.type 为 per-workspace 设置（`graph_memory_profile` 表），覆盖 daemon/server 进程 env `MULTICA_REVIEWER_TYPE` 默认（A4） |
+| Q1 | 切换边界 | 统一接口，`memory_type = legacy \| graph`（原 `reviewer.type`），存储隔离；memory_type 为 per-workspace 设置（`graph_memory_profile` 表），覆盖 daemon/server 进程 env `MULTICA_MEMORY_TYPE` 默认（A4） |
 | Q2 | segment 与节点 | segment 来源记录不可变；segment 可关联多个节点、节点可引用多个 segment；修改既有节点还是新建节点由 memory agent 决定 |
 | Q3 | 图模型 | 严格分层 induction DAG（`summarizes` 边）+ 正交 typed relation 边（可成环、稀疏） |
 | Q4 | 关系语义 | 一律可撤销假设（`inferred`）；仅原始 segment 声明的为 `asserted` |
@@ -391,8 +393,8 @@ type JudgeSink interface {
 配置（草案，最终落 `cli_args`/server config 时细化）：
 
 ```yaml
-reviewer:
-  type: legacy | graph
+memory:
+  type: legacy | graph  # 对应 memory_type 开关
   graph:
     storage_dir: ...
     max_levels: 4

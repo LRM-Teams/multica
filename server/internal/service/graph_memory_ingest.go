@@ -24,7 +24,7 @@ import (
 // discovery the consolidation scheduler uses (graphMemoryDirForWorkspace).
 //
 // Nil-safe by design: a task whose workspace has no memory_graph directory,
-// or whose reviewer.type is not "graph", is skipped silently. The pi agent
+// or whose memory_type is not "graph", is skipped silently. The pi agent
 // backend for summarization is built lazily on first use (same env contract
 // as the scheduler job: MULTICA_PI_PATH / MULTICA_PI_MODEL); a backend
 // construction failure degrades to the ingester's extractive fallback rather
@@ -73,9 +73,9 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 		return fmt.Errorf("graph memory ingest: load task %s: %w", seg.AgentRunID, err)
 	}
 
-	// Per-workspace reviewer.type gate (design §1/A4): legacy workspaces
+	// Per-workspace memory_type gate (design §1/A4): legacy workspaces
 	// never grow staging segments.
-	if rt := resolveGraphReviewerType(ctx, h.queries, task.WorkspaceID, graphMemoryEnvReviewerType()); rt != "graph" {
+	if rt := resolveGraphMemoryType(ctx, h.queries, task.WorkspaceID, graphMemoryEnvMemoryType()); rt != "graph" {
 		return nil
 	}
 

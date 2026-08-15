@@ -14,35 +14,35 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// Graph memory reviewer profile (design §1 reviewer.type, adjustment A4):
+// Graph memory reviewer profile (design §1 memory_type, adjustment A4):
 // per-workspace reviewer configuration that overrides the process-level
-// MULTICA_REVIEWER_TYPE env default. One row per workspace; an absent row
+// MULTICA_MEMORY_TYPE env default. One row per workspace; an absent row
 // means "no workspace override" and the env default applies.
 
-const defaultGraphReviewerType = "legacy"
+const defaultGraphMemoryType = "legacy"
 
 type graphMemoryProfileResponse struct {
 	WorkspaceID      string `json:"workspace_id"`
-	ReviewerType     string `json:"reviewer_type"`
+	MemoryType       string `json:"memory_type"`
 	ExploreAgents    int32  `json:"explore_agents"`
 	ExploreMaxRounds int32  `json:"explore_max_rounds"`
 	UpdatedAt        string `json:"updated_at,omitempty"`
 }
 
 type updateGraphMemoryProfileRequest struct {
-	ReviewerType     string `json:"reviewer_type"`
+	MemoryType       string `json:"memory_type"`
 	ExploreAgents    int32  `json:"explore_agents"`
 	ExploreMaxRounds int32  `json:"explore_max_rounds"`
 }
 
-func validGraphReviewerType(t string) bool {
+func validGraphMemoryType(t string) bool {
 	return t == "legacy" || t == "graph"
 }
 
 func graphMemoryProfileFromRow(p db.GraphMemoryProfile) graphMemoryProfileResponse {
 	resp := graphMemoryProfileResponse{
 		WorkspaceID:      uuidToString(p.WorkspaceID),
-		ReviewerType:     p.ReviewerType,
+		MemoryType:       p.MemoryType,
 		ExploreAgents:    p.ExploreAgents,
 		ExploreMaxRounds: p.ExploreMaxRounds,
 	}
@@ -55,7 +55,7 @@ func graphMemoryProfileFromRow(p db.GraphMemoryProfile) graphMemoryProfileRespon
 func defaultGraphMemoryProfile(workspaceID string) graphMemoryProfileResponse {
 	return graphMemoryProfileResponse{
 		WorkspaceID:      workspaceID,
-		ReviewerType:     defaultGraphReviewerType,
+		MemoryType:       defaultGraphMemoryType,
 		ExploreAgents:    4,
 		ExploreMaxRounds: 3,
 	}
@@ -85,7 +85,7 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !roleAllowed(member.Role, "owner", "admin") {
-		writeError(w, http.StatusForbidden, "only workspace owner/admin can configure the graph memory reviewer")
+		writeError(w, http.StatusForbidden, "only workspace owner/admin can configure the graph memory profile")
 		return
 	}
 
@@ -94,12 +94,12 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	req.ReviewerType = strings.ToLower(strings.TrimSpace(req.ReviewerType))
-	if req.ReviewerType == "" {
-		req.ReviewerType = defaultGraphReviewerType
+	req.MemoryType = strings.ToLower(strings.TrimSpace(req.MemoryType))
+	if req.MemoryType == "" {
+		req.MemoryType = defaultGraphMemoryType
 	}
-	if !validGraphReviewerType(req.ReviewerType) {
-		writeError(w, http.StatusBadRequest, "reviewer_type must be 'legacy' or 'graph'")
+	if !validGraphMemoryType(req.MemoryType) {
+		writeError(w, http.StatusBadRequest, "memory_type must be 'legacy' or 'graph'")
 		return
 	}
 	if req.ExploreAgents < 1 || req.ExploreAgents > 16 {
@@ -113,7 +113,7 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 
 	profile, err := h.Queries.UpsertGraphMemoryProfile(r.Context(), db.UpsertGraphMemoryProfileParams{
 		WorkspaceID:      parseUUID(workspaceID),
-		ReviewerType:     req.ReviewerType,
+		MemoryType:       req.MemoryType,
 		ExploreAgents:    req.ExploreAgents,
 		ExploreMaxRounds: req.ExploreMaxRounds,
 	})
@@ -124,17 +124,17 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, graphMemoryProfileFromRow(profile))
 }
 
-// graphMemoryReviewerTypeForWorkspace resolves the effective reviewer type
+// graphMemoryTypeForWorkspace resolves the effective reviewer type
 // for a workspace: the per-workspace profile when one exists, else empty
 // (callers fall back to the process env default). A lookup error fails open
 // to "" so a transient DB hiccup never flips a workspace's memory pipeline.
-func (h *Handler) graphMemoryReviewerTypeForWorkspace(ctx context.Context, workspaceID pgtype.UUID) string {
+func (h *Handler) graphMemoryTypeForWorkspace(ctx context.Context, workspaceID pgtype.UUID) string {
 	profile, err := h.Queries.GetGraphMemoryProfile(ctx, workspaceID)
 	if err != nil {
 		return ""
 	}
-	if !validGraphReviewerType(profile.ReviewerType) {
+	if !validGraphMemoryType(profile.MemoryType) {
 		return ""
 	}
-	return profile.ReviewerType
+	return profile.MemoryType
 }

@@ -56,11 +56,11 @@ const (
 	DefaultMemoryCurationRunTimeout = 10 * time.Minute
 
 	// Graph memory reviewer (design: docs/superpowers/specs/2026-08-14-graph-memory-reviewer-design.zh-CN.md).
-	ReviewerTypeLegacy = "legacy"
-	ReviewerTypeGraph  = "graph"
-	// DefaultReviewerType keeps the legacy memory pipeline active unless the
-	// operator opts into the graph reviewer via MULTICA_REVIEWER_TYPE=graph.
-	DefaultReviewerType              = ReviewerTypeLegacy
+	MemoryTypeLegacy = "legacy"
+	MemoryTypeGraph  = "graph"
+	// DefaultMemoryType keeps the legacy memory pipeline active unless the
+	// operator opts into the graph reviewer via MULTICA_MEMORY_TYPE=graph.
+	DefaultMemoryType                = MemoryTypeLegacy
 	DefaultGraphExploreAgents        = 1
 	DefaultGraphExploreMaxRounds     = 3
 	DefaultGraphRewardTimeoutSeconds = 600
@@ -108,10 +108,10 @@ type Config struct {
 	MemoryCurationL3ReviewEnabled bool          // run the local Pi L3 reviewer during daemon-side curation
 	MemoryCurationL3ReviewTimeout time.Duration // per-agent L3 reviewer timeout
 	MemoryCurationRunTimeout      time.Duration // wall-clock timeout for one daemon-claimed curation run
-	// ReviewerType selects the memory reviewer pipeline: "legacy" (default)
-	// or "graph" (design §1 reviewer.type switch). Any other value is a
+	// MemoryType selects the memory reviewer pipeline: "legacy" (default)
+	// or "graph" (design §1 memory_type switch). Any other value is a
 	// configuration error and fails LoadConfig.
-	ReviewerType string
+	MemoryType string
 	// GraphMemoryDir is the root of the memorygraph.Store layout (design
 	// §4.1). Empty in env resolves to <WorkspacesRoot>/memory_graph.
 	GraphMemoryDir string
@@ -464,17 +464,17 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		return Config{}, err
 	}
 
-	// Graph memory reviewer (design §1/§6). reviewer.type fails loud on any
+	// Graph memory reviewer (design §1/§6). memory_type fails loud on any
 	// value outside legacy|graph: a typo must not silently pin the daemon to
 	// the wrong memory pipeline.
-	reviewerType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_REVIEWER_TYPE")))
-	if reviewerType == "" {
-		reviewerType = DefaultReviewerType
+	memoryType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
+	if memoryType == "" {
+		memoryType = DefaultMemoryType
 	}
-	switch reviewerType {
-	case ReviewerTypeLegacy, ReviewerTypeGraph:
+	switch memoryType {
+	case MemoryTypeLegacy, MemoryTypeGraph:
 	default:
-		return Config{}, fmt.Errorf("MULTICA_REVIEWER_TYPE: invalid reviewer type %q (want %q or %q)", reviewerType, ReviewerTypeLegacy, ReviewerTypeGraph)
+		return Config{}, fmt.Errorf("MULTICA_MEMORY_TYPE: invalid memory type %q (want %q or %q)", memoryType, MemoryTypeLegacy, MemoryTypeGraph)
 	}
 	graphMemoryDir := strings.TrimSpace(os.Getenv("MULTICA_GRAPH_MEMORY_DIR"))
 	if graphMemoryDir == "" {
@@ -510,7 +510,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
 		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
 		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
-		ReviewerType:                   reviewerType,
+		MemoryType:                     memoryType,
 		GraphMemoryDir:                 graphMemoryDir,
 		GraphEmbedBaseURL:              strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_BASE_URL")),
 		GraphEmbedAPIKey:               strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_API_KEY")),

@@ -316,11 +316,11 @@ type AgentTaskResponse struct {
 	// regardless of issue / chat / autopilot / quick-create — sees the same
 	// shared context. Empty when the workspace owner hasn't set it.
 	WorkspaceContext string `json:"workspace_context,omitempty"`
-	// ReviewerType mirrors the workspace's graph_memory_profile.reviewer_type
+	// MemoryType mirrors the workspace's graph_memory_profile.memory_type
 	// (design §1/A4): the daemon uses it as a per-task override of its
-	// MULTICA_REVIEWER_TYPE env default. Empty when the workspace has no
+	// MULTICA_MEMORY_TYPE env default. Empty when the workspace has no
 	// profile row (the daemon env default then applies) or on old servers.
-	ReviewerType  string         `json:"reviewer_type,omitempty"`
+	MemoryType    string         `json:"memory_type,omitempty"`
 	ThreadName    string         `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
 	Status        string         `json:"status"`
 	Priority      int32          `json:"priority"`

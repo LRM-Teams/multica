@@ -1514,6 +1514,11 @@ func TestIsACPSessionNotFound(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "grok session/load path not found",
+			err:  &acpRPCError{Method: "session/load", Code: -32603, Message: "Path not found.", Data: `{"code":"FS_NOT_FOUND","detail":"No such file or directory (os error 2)"}`},
+			want: true,
+		},
+		{
 			name: "invalid params without session wording",
 			err:  &acpRPCError{Method: "session/set_model", Code: -32602, Message: "model not available: bogus-model"},
 			want: false,

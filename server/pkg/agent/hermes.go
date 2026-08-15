@@ -302,10 +302,12 @@ func (e *acpRPCError) Error() string {
 // session id it no longer knows. Runtimes signal this with codes and
 // wording that vary — Hermes says "Session not found" under -32603
 // (Internal error), Kiro puts "No session found with id ..." in
-// `data` under -32603, and kimi-cli raises invalid_params (-32602)
+// `data` under -32603, kimi-cli raises invalid_params (-32602)
 // with {"session_id": "Session not found"} in `data` for every
-// unknown-session path (src/kimi_cli/acp/server.py) — so neither the
-// code nor the text alone is discriminating and both are matched.
+// unknown-session path (src/kimi_cli/acp/server.py), and Grok
+// session/load returns -32603 Path not found / FS_NOT_FOUND when the
+// id belongs to another cwd. Neither the code nor the text alone is
+// discriminating, so both are matched.
 func isACPSessionNotFound(err error) bool {
 	var rpcErr *acpRPCError
 	if !errors.As(err, &rpcErr) {
@@ -316,7 +318,10 @@ func isACPSessionNotFound(err error) bool {
 	}
 	text := strings.ToLower(rpcErr.Message + " " + rpcErr.Data)
 	return strings.Contains(text, "session not found") ||
-		strings.Contains(text, "no session found")
+		strings.Contains(text, "no session found") ||
+		strings.Contains(text, "path not found") ||
+		strings.Contains(text, "fs_not_found") ||
+		strings.Contains(text, "no such file or directory")
 }
 
 func (c *hermesClient) handleResponse(raw map[string]json.RawMessage) {

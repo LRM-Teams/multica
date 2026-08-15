@@ -7,7 +7,7 @@ import (
 
 func TestBuildSuperviseServiceArgsDefaultProfile(t *testing.T) {
 	got := buildSuperviseServiceArgs("")
-	want := []string{"daemon", "supervise"}
+	want := []string{"computer", "supervise"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("buildSuperviseServiceArgs(\"\") = %v, want %v", got, want)
 	}
@@ -15,7 +15,7 @@ func TestBuildSuperviseServiceArgsDefaultProfile(t *testing.T) {
 
 func TestBuildSuperviseServiceArgsNamedProfile(t *testing.T) {
 	got := buildSuperviseServiceArgs("staging")
-	want := []string{"daemon", "supervise", "--profile", "staging"}
+	want := []string{"computer", "supervise", "--profile", "staging"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("buildSuperviseServiceArgs(\"staging\") = %v, want %v", got, want)
 	}
@@ -65,7 +65,7 @@ func TestBestEffortSyncInstalledServiceUnitDelegatesToSyncer(t *testing.T) {
 	if c.profile != "staging" || c.exePath != "/versions/v0.4.2/multica" {
 		t.Fatalf("SyncUnit args = %+v", c)
 	}
-	if !reflect.DeepEqual(c.args, []string{"daemon", "supervise", "--profile", "staging"}) {
+	if !reflect.DeepEqual(c.args, []string{"computer", "supervise", "--profile", "staging"}) {
 		t.Fatalf("SyncUnit service args = %v", c.args)
 	}
 }

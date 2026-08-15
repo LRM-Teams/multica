@@ -70,35 +70,35 @@ var computerStartCmd = &cobra.Command{
 	Short: "Start the resident Computer",
 	Long:  "Start the machine-wide resident Computer that polls for tasks and executes them using local agent CLIs (Claude, Codex).\nRuns detached in the background by default. Use --foreground to run in the current terminal.",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonStart,
+	RunE:  runComputerStart,
 }
 
 var computerStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the resident Computer",
 	Args:  cobra.NoArgs,
-	RunE:  runDaemonStop,
+	RunE:  runComputerStop,
 }
 
 var computerStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show resident Computer status",
 	Args:  cobra.NoArgs,
-	RunE:  runDaemonStatus,
+	RunE:  runComputerStatus,
 }
 
 var computerRestartCmd = &cobra.Command{
 	Use:   "restart [/<workspace>]",
 	Short: "Restart the resident Computer (stop + start)",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonRestart,
+	RunE:  runComputerRestart,
 }
 
 var computerLogsCmd = &cobra.Command{
 	Use:   "logs [/<workspace>]",
 	Short: "Show resident Computer service logs",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonLogs,
+	RunE:  runComputerLogs,
 }
 
 var computerDoctorCmd = &cobra.Command{
@@ -198,6 +198,8 @@ func init() {
 
 	computerCmd.AddCommand(computerServiceCmd)
 	computerCmd.AddCommand(computerRunnerCmd)
+	computerSuperviseCmd.Hidden = true
+	computerCmd.AddCommand(computerSuperviseCmd)
 	computerCmd.AddCommand(computerStartCmd)
 	computerCmd.AddCommand(computerStopCmd)
 	computerCmd.AddCommand(computerStatusCmd)

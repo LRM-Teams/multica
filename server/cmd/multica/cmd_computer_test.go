@@ -267,16 +267,23 @@ func TestComputerIsPrimaryVisibleSurface(t *testing.T) {
 }
 
 func hasSubcommand(cmd interface{ Commands() []*cobra.Command }, name string) bool {
+	return findSubcommand(cmd, name) != nil
+}
+
+func findSubcommand(cmd interface{ Commands() []*cobra.Command }, name string) *cobra.Command {
 	for _, c := range cmd.Commands() {
 		if c.Name() == name {
-			return true
+			return c
 		}
 	}
-	return false
+	return nil
 }
 
 func TestRetiredProfileSelfHostAndOSServiceSurfacesAreNotPublic(t *testing.T) {
-	for _, name := range []string{"supervise", "install-service", "uninstall-service", "service-status"} {
+	if cmd := findSubcommand(computerCmd, "supervise"); cmd == nil || !cmd.Hidden {
+		t.Fatal("computer supervise must exist as a hidden OS-service entry")
+	}
+	for _, name := range []string{"install-service", "uninstall-service", "service-status"} {
 		if hasSubcommand(computerCmd, name) {
 			t.Fatalf("retired Computer subcommand %q is still reachable", name)
 		}

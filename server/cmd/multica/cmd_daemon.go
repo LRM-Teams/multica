@@ -16,107 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/computer"
 )
 
-// TODO(standalone-daemon): Remove this unused command group after callers
-// stop constructing daemonCmd in tests. The public CLI no longer registers
-// `multica daemon`; Computer is the only resident.
-var daemonCmd = &cobra.Command{
-	Use:    "daemon",
-	Short:  "Control the local agent runtime daemon",
-	Hidden: true,
-	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-		// The hidden compatibility spelling must still target the one Computer;
-		// accepting a profile/custom server here would recreate the retired
-		// second-resident model behind an invisible flag.
-		return rejectRetiredComputerFlags(cmd)
-	},
-}
-
-var daemonStartCmd = &cobra.Command{
-	Use:   "start",
-	Short: "Start the local agent runtime daemon",
-	Long:  "Start the daemon process that polls for tasks and executes them using local agent CLIs (Claude, Codex).\nRuns in the background by default. Use --foreground to run in the current terminal.",
-	RunE:  runDaemonStart,
-}
-
-var daemonStopCmd = &cobra.Command{
-	Use:   "stop",
-	Short: "Stop the running daemon",
-	RunE:  runDaemonStop,
-}
-
-var daemonStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show daemon status",
-	RunE:  runDaemonStatus,
-}
-
-var daemonRestartCmd = &cobra.Command{
-	Use:   "restart",
-	Short: "Restart the running daemon (stop + start)",
-	RunE:  runDaemonRestart,
-}
-
-var daemonLogsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "Show daemon logs",
-	RunE:  runDaemonLogs,
-}
-
-func init() {
-	f := daemonStartCmd.Flags()
-	f.Bool("foreground", false, "Run in the foreground instead of background")
-	f.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
-	f.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
-	f.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
-	f.Duration("poll-interval", 0, "Task poll interval (env: MULTICA_DAEMON_POLL_INTERVAL)")
-	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
-	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
-	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	f.Bool("no-auto-update", false, "Deprecated no-op; automatic installation is disabled and release detection remains active")
-	f.Duration("auto-update-interval", 0, "Release detection interval (default 5m; detection never installs automatically)")
-	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
-	_ = f.MarkHidden("computer-generation")
-	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
-	_ = f.MarkHidden("machine-attestation-source-pid")
-
-	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
-	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
-
-	daemonStatusCmd.Flags().String("output", "table", "Output format: table or json")
-
-	rf := daemonRestartCmd.Flags()
-	rf.Bool("foreground", false, "Run in the foreground instead of background")
-	rf.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
-	rf.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
-	rf.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
-	rf.Duration("poll-interval", 0, "Task poll interval (env: MULTICA_DAEMON_POLL_INTERVAL)")
-	rf.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
-	rf.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
-	rf.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	rf.Bool("no-auto-update", false, "Deprecated no-op; automatic installation is disabled and release detection remains active")
-	rf.Duration("auto-update-interval", 0, "Release detection interval (default 5m; detection never installs automatically)")
-
-	daemonCmd.AddCommand(daemonStartCmd)
-	daemonCmd.AddCommand(daemonStopCmd)
-	daemonCmd.AddCommand(daemonRestartCmd)
-	daemonCmd.AddCommand(daemonStatusCmd)
-	daemonCmd.AddCommand(daemonLogsCmd)
-}
-
-// daemonDeprecatedAliasNotices prints the deprecation guidance for the hidden
-// `multica daemon ...` lifecycle alias, which now delegates to the same
-// machine-wide Computer. Not printed when running as `multica computer ...`.
-func daemonDeprecatedAliasNotices() {
-	if computerMode {
-		return
-	}
-	fmt.Fprintln(os.Stderr, "Note: `multica daemon ...` is deprecated and will be removed in a future release. Use `multica computer ...` instead.")
-}
-
-// --- daemon start ---
-
-func runDaemonStart(cmd *cobra.Command, args []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerStart(cmd *cobra.Command, args []string) error {
 	binding, selected, err := resolveWorkspaceBinding(args)
 	if err != nil {
 		return err
@@ -230,8 +130,7 @@ func runActiveComputerBinary(target string) error {
 
 // --- daemon restart ---
 
-func runDaemonRestart(cmd *cobra.Command, args []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerRestart(cmd *cobra.Command, args []string) error {
 	binding, selected, err := resolveWorkspaceBinding(args)
 	if err != nil {
 		return err // validate before stopping the one resident
@@ -255,8 +154,7 @@ func runDaemonRestart(cmd *cobra.Command, args []string) error {
 
 // --- daemon stop ---
 
-func runDaemonStop(cmd *cobra.Command, _ []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerStop(cmd *cobra.Command, _ []string) error {
 	lc := &computer.Lifecycle{}
 	label := "Computer"
 
@@ -280,8 +178,7 @@ func runDaemonStop(cmd *cobra.Command, _ []string) error {
 
 // --- daemon status ---
 
-func runDaemonStatus(cmd *cobra.Command, _ []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerStatus(cmd *cobra.Command, _ []string) error {
 	lc := &computer.Lifecycle{}
 
 	health := lc.Status()
@@ -377,8 +274,7 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 
 // --- daemon logs ---
 
-func runDaemonLogs(cmd *cobra.Command, args []string) error {
-	daemonDeprecatedAliasNotices()
+func runComputerLogs(cmd *cobra.Command, args []string) error {
 	lc := &computer.Lifecycle{}
 
 	follow, _ := cmd.Flags().GetBool("follow")

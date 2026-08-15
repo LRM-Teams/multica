@@ -104,7 +104,7 @@ func init() {
 // environment/config the same way a manually-run supervise process already
 // reads them, so the installed service doesn't need to duplicate every flag.
 func buildSuperviseServiceArgs(profile string) []string {
-	args := []string{"daemon", "supervise"}
+	args := []string{"computer", "supervise"}
 	if profile != "" {
 		args = append(args, "--profile", profile)
 	}

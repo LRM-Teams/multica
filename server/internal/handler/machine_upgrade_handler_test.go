@@ -512,141 +512,24 @@ func TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration(t *testing.T
 	}
 }
 
-func TestMachineUpgrade_LegacyHeartbeatBootstrapsV0413AndRequiresFullTargetReregistration(t *testing.T) {
+func TestMachineUpgrade_LegacyHeartbeatDoesNotBootstrapPendingUpdate(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	firstRuntimeID, secondRuntimeID, daemonID := createLegacyMachineUpgradeSiblingRuntimes(t, testUserID)
+	firstRuntimeID, _, daemonID := createLegacyMachineUpgradeSiblingRuntimes(t, testUserID)
 	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v0.4.14")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
-	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_runtime_update WHERE id = $1`, created.ID)
-	})
 
 	ack, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ack.PendingMachineUpgrade != nil || ack.PendingUpdate == nil || ack.PendingUpdate.ID != created.ID || ack.PendingUpdate.TargetVersion != "v0.4.14" {
-		t.Fatalf("legacy heartbeat acknowledgement = %+v, want same-ID PendingUpdate", ack)
+	if ack.PendingUpdate != nil || ack.PendingMachineUpgrade != nil {
+		t.Fatalf("pre-0.4.14 heartbeat still received an upgrade carrier %+v", ack)
 	}
 	op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if err != nil || op == nil || op.Phase != MachineUpgradeStarting || op.AcceptedAt != nil || op.AcceptedGeneration == nil || *op.AcceptedGeneration != legacyMachineUpgradeAcceptanceMarker || !sameMachineRuntimeSet(op.AcceptedRuntimeIDs, []string{firstRuntimeID, secondRuntimeID}) {
-		t.Fatalf("legacy claim = %+v err=%v", op, err)
-	}
-
-	report := func(status string) {
-		req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+firstRuntimeID+"/update/"+created.ID+"/result", map[string]string{"status": status})
-		req = withRouteParams(req, "runtimeId", firstRuntimeID, "updateId", created.ID)
-		w := httptest.NewRecorder()
-		testHandler.ReportUpdateResult(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("legacy %s report = %d: %s", status, w.Code, w.Body.String())
-		}
-	}
-	report("running")
-	op, _ = testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if op.Phase != MachineUpgradeStaging || op.AcceptedAt == nil || op.ResolvedTarget == nil || *op.ResolvedTarget != "v0.4.14" {
-		t.Fatalf("legacy running receipt = %+v", op)
-	}
-	report("ready_to_apply")
-	op, _ = testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if op.Phase != MachineUpgradeHandoff {
-		t.Fatalf("legacy ready receipt = %+v", op)
-	}
-
-	// One updated sibling is never enough to complete an old-protocol update.
-	testHandler.attestLegacyMachineUpgradeRegistration(httptest.NewRequest(http.MethodPost, "/api/daemon/register", nil), firstRuntime, "v0.4.14")
-	op, _ = testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if op.Phase != MachineUpgradeConverging || len(op.AttestedRuntimeIDs) != 1 {
-		t.Fatalf("one legacy successor attestation = %+v", op)
-	}
-	testHandler.attestLegacyMachineUpgradeRegistration(httptest.NewRequest(http.MethodPost, "/api/daemon/register", nil), secondRuntime, "v0.4.14")
-	op, _ = testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if op.Phase != MachineUpgradeCompleted || op.Result == nil || *op.Result != "completed" || !sameMachineRuntimeSet(op.AttestedRuntimeIDs, []string{firstRuntimeID, secondRuntimeID}) {
-		t.Fatalf("legacy full successor proof = %+v", op)
-	}
-}
-
-func TestMachineUpgrade_LegacyBootstrapProjectsDaemonFailure(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	firstRuntimeID, _, daemonID := createLegacyMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v0.4.14")
-	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_runtime_update WHERE id = $1`, created.ID)
-	})
-	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
-		t.Fatal(err)
-	}
-	req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+firstRuntimeID+"/update/"+created.ID+"/result", map[string]string{
-		"status": "failed", "error": "checksum mismatch",
-	})
-	req = withRouteParams(req, "runtimeId", firstRuntimeID, "updateId", created.ID)
-	w := httptest.NewRecorder()
-	testHandler.ReportUpdateResult(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("legacy failure report = %d: %s", w.Code, w.Body.String())
-	}
-	op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if err != nil || op == nil || op.Phase != MachineUpgradeFailed || op.ErrorCode == nil || *op.ErrorCode != "legacy_update_failed" || op.ErrorMessage == nil || *op.ErrorMessage != "checksum mismatch" {
-		t.Fatalf("legacy failure projection = %+v err=%v", op, err)
-	}
-}
-
-func TestMachineUpgrade_LegacyBootstrapTimesOutWithoutReceipt(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	firstRuntimeID, _, daemonID := createLegacyMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v0.4.14")
-	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_runtime_update WHERE id = $1`, created.ID)
-	})
-	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := testPool.Exec(context.Background(), `UPDATE machine_upgrade SET updated_at = now() - interval '121 seconds' WHERE id = $1`, created.ID); err != nil {
-		t.Fatal(err)
-	}
-	op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if err != nil || op == nil || op.Phase != MachineUpgradeTimeout || op.ErrorCode == nil || *op.ErrorCode != "legacy_update_timeout" {
-		t.Fatalf("legacy receipt timeout = %+v err=%v", op, err)
-	}
-}
-
-func TestMachineUpgrade_LegacyBootstrapTimesOutWhenStandaloneSuccessorNeverRegisters(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	firstRuntimeID, _, daemonID := createLegacyMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v0.4.14")
-	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_runtime_update WHERE id = $1`, created.ID)
-	})
-	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
-		t.Fatal(err)
-	}
-	for _, status := range []string{"running", "ready_to_apply"} {
-		req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+firstRuntimeID+"/update/"+created.ID+"/result", map[string]string{"status": status})
-		req = withRouteParams(req, "runtimeId", firstRuntimeID, "updateId", created.ID)
-		w := httptest.NewRecorder()
-		testHandler.ReportUpdateResult(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("legacy %s report = %d: %s", status, w.Code, w.Body.String())
-		}
-	}
-	if _, err := testPool.Exec(context.Background(), `UPDATE machine_upgrade SET updated_at = now() - interval '91 seconds' WHERE id = $1`, created.ID); err != nil {
-		t.Fatal(err)
-	}
-	op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if err != nil || op == nil || op.Phase != MachineUpgradeTimeout || op.ErrorMessage == nil || !strings.Contains(*op.ErrorMessage, "multica daemon restart") {
-		t.Fatalf("legacy successor timeout = %+v err=%v", op, err)
+	if err != nil || op == nil || op.Phase != MachineUpgradeQueued || op.AcceptedGeneration != nil {
+		t.Fatalf("pre-0.4.14 heartbeat claimed machine upgrade = %+v err=%v", op, err)
 	}
 }
 

@@ -67,7 +67,6 @@ const (
 
 type UpdateStore interface {
 	Create(ctx context.Context, runtimeID, targetVersion string) (*UpdateRequest, error)
-	CreateWithID(ctx context.Context, id, runtimeID, targetVersion string) (*UpdateRequest, error)
 	Get(ctx context.Context, id string) (*UpdateRequest, error)
 	LatestForRuntime(ctx context.Context, runtimeID string) (*UpdateRequest, error)
 	HasPending(ctx context.Context, runtimeID string) (bool, error)
@@ -128,15 +127,10 @@ func NewInMemoryUpdateStore() *InMemoryUpdateStore {
 }
 
 func (s *InMemoryUpdateStore) Create(_ context.Context, runtimeID, targetVersion string) (*UpdateRequest, error) {
-	return s.CreateWithID(context.Background(), randomID(), runtimeID, targetVersion)
-}
-
-// CreateWithID lets a bootstrap carrier reuse the canonical Machine Upgrade
-// ID. It avoids a second durable linkage table while keeping the old wire
-// endpoint's update_id authenticated and idempotent.
-func (s *InMemoryUpdateStore) CreateWithID(_ context.Context, id, runtimeID, targetVersion string) (*UpdateRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	id := randomID()
 
 	// Clean up old requests.
 	now := time.Now()
@@ -633,10 +627,6 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing.Status == requestedStatus {
 		slog.Debug("ignoring idempotent update report", "runtime_id", runtimeID, "update_id", updateID, "status", existing.Status)
-		// PopPending records running before the old daemon sees the heartbeat
-		// response. Its explicit running report is nevertheless the canonical
-		// machine receipt, so do not skip the bridge projection here.
-		h.projectLegacyMachineUpgradeResult(r, rt, existing, requestedStatus)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
@@ -703,35 +693,8 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		// just a progress signal from the daemon to confirm it received the
 		// update command and is executing it.
 	}
-	h.projectLegacyMachineUpgradeResult(r, rt, existing, requestedStatus)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// projectLegacyMachineUpgradeResult mirrors only an old carrier's durable
-// receipt/progress into its same-ID daemon operation. Historical runtime
-// updates cannot affect a Machine Upgrade because their IDs do not match.
-func (h *Handler) projectLegacyMachineUpgradeResult(r *http.Request, rt db.AgentRuntime, carrier *UpdateRequest, status UpdateStatus) {
-	if h == nil || h.MachineUpgradeStore == nil || carrier == nil {
-		return
-	}
-	op, err := h.MachineUpgradeStore.Get(r.Context(), runtimeDaemonKey(rt), carrier.ID)
-	if err != nil || op == nil || op.AcceptedGeneration == nil || *op.AcceptedGeneration != legacyMachineUpgradeAcceptanceMarker {
-		return
-	}
-	var updated *MachineUpgrade
-	switch status {
-	case UpdateRunning:
-		updated, _ = h.MachineUpgradeStore.AcceptLegacy(r.Context(), op.DaemonID, op.ID, uuidToString(rt.ID), carrier.TargetVersion)
-	case UpdateReady, UpdateCompleted:
-		h.advanceLegacyMachineUpgradeToHandoff(r.Context(), rt, op, carrier.TargetVersion)
-		updated, _ = h.MachineUpgradeStore.Get(r.Context(), op.DaemonID, op.ID)
-	case UpdateFailed:
-		updated, _ = h.MachineUpgradeStore.Progress(r.Context(), op.DaemonID, op.ID, MachineUpgradeFailed, "legacy_update_failed", carrier.Error)
-	}
-	if updated != nil {
-		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
-	}
 }
 
 func updateReportTransitionAllowed(from, to UpdateStatus) bool {

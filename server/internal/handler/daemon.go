@@ -507,7 +507,6 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	h.cacheDaemonRegisterToken(r.Context(), daemonToken, wsUUID, req.DaemonID)
 	for _, registered := range registeredRuntimes {
 		h.completeRuntimeUpdateOnTargetRegister(r, registered.runtime, req.CLIVersion)
-		h.attestLegacyMachineUpgradeRegistration(r, registered.runtime, req.CLIVersion)
 		h.attestMachineUpgradeRegistration(r, registered.runtime, req.CLIVersion, req.MachineUpgradeGeneration)
 		h.attestMachineUpgradeRollbackRegistration(r, registered.runtime, req.CLIVersion, req.MachineUpgradeRollbackGeneration)
 		// Inserted is false for normal daemon reconnects/upserts, so
@@ -583,116 +582,6 @@ func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.A
 	}
 	if err := h.UpdateStore.Complete(r.Context(), update.ID, "Daemon registered updated CLI "+version); err != nil {
 		slog.Warn("failed to complete runtime update during register", "error", err, "runtime_id", runtimeID, "update_id", update.ID)
-	}
-}
-
-// claimLegacyMachineUpgrade binds a queued daemon upgrade to the legacy
-// PendingUpdate carrier. The MachineUpgrade row remains the lifecycle owner;
-// daemon_runtime_update only transports work to a daemon that predates
-// machine_upgrade_v1.
-func (h *Handler) claimLegacyMachineUpgrade(ctx context.Context, rt db.AgentRuntime) error {
-	if h == nil || h.MachineUpgradeStore == nil || h.UpdateStore == nil {
-		return nil
-	}
-	runtimeID := uuidToString(rt.ID)
-	runtimeIDs, err := h.machineUpgradeRuntimeIDs(ctx, rt)
-	if err != nil {
-		return err
-	}
-	sourceVersion := ""
-	if current := runtimeCurrentVersion(runtimeMetadata(rt)); current != nil {
-		sourceVersion = *current
-	}
-	op, err := h.MachineUpgradeStore.ClaimQueuedLegacy(ctx, runtimeDaemonKey(rt), runtimeID, sourceVersion, runtimeIDs)
-	if err != nil || op == nil {
-		return err
-	}
-	target, err := h.resolveLegacyMachineUpgradeTarget(ctx, op)
-	if err != nil {
-		_, _ = h.MachineUpgradeStore.Progress(ctx, op.DaemonID, op.ID, MachineUpgradeFailed, "release_target_unavailable", err.Error())
-		return err
-	}
-	carrier, err := h.UpdateStore.CreateWithID(ctx, op.ID, runtimeID, target)
-	if err != nil {
-		_, _ = h.MachineUpgradeStore.Progress(ctx, op.DaemonID, op.ID, MachineUpgradeFailed, "legacy_update_create_failed", err.Error())
-		return err
-	}
-	if carrier.ID != op.ID {
-		return errors.New("legacy update carrier did not retain machine upgrade ID")
-	}
-	h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
-		"runtime": h.runtimeToResponse(ctx, rt),
-	})
-	return nil
-}
-
-func (h *Handler) resolveLegacyMachineUpgradeTarget(ctx context.Context, op *MachineUpgrade) (string, error) {
-	if op == nil {
-		return "", errors.New("machine upgrade operation is missing")
-	}
-	target := strings.TrimSpace(op.RequestedTarget)
-	if target != "" && target != "latest" {
-		return target, nil
-	}
-	if h.RuntimeReleaseSource == nil {
-		return "", errors.New("latest release is unavailable")
-	}
-	release, err := h.RuntimeReleaseSource.Latest(ctx)
-	if err != nil {
-		return "", err
-	}
-	if release == nil || strings.TrimSpace(release.TagName) == "" {
-		return "", errors.New("latest release is unavailable")
-	}
-	return strings.TrimSpace(release.TagName), nil
-}
-
-// reconcileLegacyMachineUpgrade turns durable carrier timeouts and recovered
-// reports into canonical terminal/progress states. PopPending itself is not an
-// acceptance receipt, so a merely claimed carrier remains "starting".
-func (h *Handler) reconcileLegacyMachineUpgrade(ctx context.Context, rt db.AgentRuntime) {
-	if h == nil || h.MachineUpgradeStore == nil || h.UpdateStore == nil {
-		return
-	}
-	op, err := h.MachineUpgradeStore.LatestForDaemon(ctx, runtimeDaemonKey(rt))
-	if err != nil || op == nil || op.AcceptedGeneration == nil || *op.AcceptedGeneration != legacyMachineUpgradeAcceptanceMarker || op.Phase.terminal() {
-		return
-	}
-	carrier, err := h.UpdateStore.Get(ctx, op.ID)
-	if err != nil || carrier == nil || carrier.RuntimeID != uuidToString(rt.ID) {
-		return
-	}
-	switch carrier.Status {
-	case UpdateFailed:
-		_, _ = h.MachineUpgradeStore.Progress(ctx, op.DaemonID, op.ID, MachineUpgradeFailed, "legacy_update_failed", carrier.Error)
-	case UpdateTimeout:
-		_, _ = h.MachineUpgradeStore.Progress(ctx, op.DaemonID, op.ID, MachineUpgradeTimeout, "legacy_update_timeout", carrier.Error)
-	case UpdateReady, UpdateCompleted:
-		h.advanceLegacyMachineUpgradeToHandoff(ctx, rt, op, carrier.TargetVersion)
-	}
-}
-
-func (h *Handler) advanceLegacyMachineUpgradeToHandoff(ctx context.Context, rt db.AgentRuntime, op *MachineUpgrade, resolvedTarget string) {
-	if h == nil || h.MachineUpgradeStore == nil || op == nil {
-		return
-	}
-	current := op
-	if current.Phase == MachineUpgradeStarting {
-		updated, err := h.MachineUpgradeStore.AcceptLegacy(ctx, current.DaemonID, current.ID, uuidToString(rt.ID), resolvedTarget)
-		if err != nil || updated == nil {
-			return
-		}
-		current = updated
-	}
-	if current.Phase == MachineUpgradeStaging {
-		updated, err := h.MachineUpgradeStore.Progress(ctx, current.DaemonID, current.ID, MachineUpgradeVerifying, "", "")
-		if err != nil || updated == nil {
-			return
-		}
-		current = updated
-	}
-	if current.Phase == MachineUpgradeVerifying {
-		_, _ = h.MachineUpgradeStore.Progress(ctx, current.DaemonID, current.ID, MachineUpgradeHandoff, "", "")
 	}
 }
 
@@ -1248,18 +1137,6 @@ func (h *Handler) processHeartbeat(
 		}
 		ack.PendingMemoryCuration = pendingCuration
 	}
-	// Capable Computers receive computer:upgrade on one current Binding
-	// socket. Heartbeat ClaimQueued stays only for packages that still speak
-	// PendingUpdate.
-	// TODO(heartbeat-upgrade-claim): Remove after v0.4.13 is no longer a
-	// supported direct self-upgrade source.
-	if !agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMachineUpgrade) && h.MachineUpgradeStore != nil && runtimeCurrentVersion(runtimeMetadata(rt)) != nil {
-		if err := h.claimLegacyMachineUpgrade(ctx, rt); err != nil {
-			slog.Warn("legacy machine upgrade claim failed", "runtime_id", runtimeID, "error", err)
-		}
-	}
-	h.reconcileLegacyMachineUpgrade(ctx, rt)
-
 	// A heartbeat arriving IS the runtime being reachable right now — this is
 	// the fix for the 2026-08-01/02 incident where InitiateUpdate's old
 	// 120-second delivery window meant a sleeping laptop simply missed its

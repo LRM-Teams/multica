@@ -104,34 +104,17 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	if !live {
 		return errors.New("current Workspace Runner unavailable during launch reconcile")
 	}
-	rows, err := h.DB.Query(ctx, `
-		SELECT agent_id::text, COALESCE(runtime_id::text, ''), launch_id, status
-		FROM agent_activity_launch
-		WHERE workspace_id::text = $1 AND daemon_id = $2 AND daemon_instance_id = $3
-		  AND status IN ('accepted', 'active')
-		  AND NOT EXISTS (
-			SELECT 1 FROM agent_restart_operation operation
-			WHERE operation.agent_id = agent_activity_launch.agent_id
-			  AND operation.status = 'running' AND operation.step <> 'starting'
-		  )
-		ORDER BY agent_id`, identity.WorkspaceID, identity.DaemonID, daemonInstanceID)
-	if err != nil {
-		return fmt.Errorf("load observed Runner launches: %w", err)
-	}
+	skip := h.restartAgentsNotInStartingStep(ctx, identity.WorkspaceID)
 	observed := make([]runnerObservedLaunch, 0)
-	for rows.Next() {
-		var launch runnerObservedLaunch
-		if err := rows.Scan(&launch.agentID, &launch.runtimeID, &launch.launchID, &launch.status); err != nil {
-			rows.Close()
-			return err
+	for _, obs := range h.observations().listInstance(identity.WorkspaceID, identity.DaemonID, daemonInstanceID) {
+		if skip[obs.agentID] {
+			continue
 		}
-		observed = append(observed, launch)
+		if obs.status != "accepted" && obs.status != protocol.AgentStatusActive {
+			continue
+		}
+		observed = append(observed, runnerObservedLaunch{agentID: obs.agentID, runtimeID: obs.runtimeID, launchID: obs.launchID, status: obs.status})
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
 	for _, action := range reduceRunnerLaunches(desired, observed) {
 		if !h.DaemonHub.NotifyWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, action.eventType, action.payload) {
 			return errors.New("current Workspace Runner unavailable during launch reconcile")
@@ -184,6 +167,28 @@ func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemon
 	}
 	rows.Close()
 	return desired, nil
+}
+
+func (h *Handler) restartAgentsNotInStartingStep(ctx context.Context, workspaceID string) map[string]bool {
+	skip := map[string]bool{}
+	if h == nil || h.DB == nil {
+		return skip
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT agent_id::text FROM agent_restart_operation
+		WHERE workspace_id::text = $1 AND status = 'running' AND step <> 'starting'`, workspaceID)
+	if err != nil {
+		return skip
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var agentID string
+		if err := rows.Scan(&agentID); err != nil {
+			return skip
+		}
+		skip[agentID] = true
+	}
+	return skip
 }
 
 func (h *Handler) reconcileConnectedRuntime(ctx context.Context, workspaceID string, runtimeID pgtype.UUID) {

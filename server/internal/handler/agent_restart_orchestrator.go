@@ -19,14 +19,15 @@ const (
 )
 
 type activeAgentRestartState struct {
-	operationID  string
-	workspaceID  string
-	agentID      string
-	runtimeID    string
-	computerID   string
-	storageKind  agentRestartStorageKind
-	step         string
-	stopLaunchID string
+	operationID    string
+	workspaceID    string
+	agentID        string
+	runtimeID      string
+	computerID     string
+	storageKind    agentRestartStorageKind
+	step           string
+	stopLaunchID   string
+	startSessionID string
 }
 
 // beginAgentRestartOperation starts the server-owned product operation at
@@ -47,25 +48,26 @@ func (h *Handler) beginAgentRestartOperation(ctx context.Context, state activeAg
 	}
 	state = *locked
 	if state.stopLaunchID == "" {
-		err = tx.QueryRow(ctx, `
-			SELECT launch_id::text
-			FROM agent_activity_launch
-			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
-			  AND daemon_id = $4 AND status IN ('accepted', 'active')
-		`, state.workspaceID, state.agentID, state.runtimeID, state.computerID).Scan(&state.stopLaunchID)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if obs, ok := h.observations().get(state.workspaceID, state.agentID); ok &&
+			obs.runtimeID == state.runtimeID && obs.daemonID == state.computerID &&
+			(obs.status == "accepted" || obs.status == protocol.AgentStatusActive) {
+			state.stopLaunchID = obs.launchID
+			if state.storageKind == agentRestartStorageRestart {
+				state.startSessionID = obs.sessionID
+			}
+		} else {
 			err = tx.QueryRow(ctx, `
 				SELECT launch_id::text FROM agent_runner_launch_projection
 				WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
 			`, state.workspaceID, state.agentID, state.runtimeID).Scan(&state.stopLaunchID)
-		}
-		if err != nil {
-			return fmt.Errorf("resolve Agent stop launch fence: %w", err)
+			if err != nil {
+				return fmt.Errorf("resolve Agent stop launch fence: %w", err)
+			}
 		}
 		if _, err := tx.Exec(ctx, `
-			UPDATE agent_restart_operation SET stop_launch_id = $2, updated_at = now()
-			WHERE id = $1 AND status = 'running' AND step = $3
-		`, state.operationID, state.stopLaunchID, agentRestartStepStopping); err != nil {
+			UPDATE agent_restart_operation SET stop_launch_id = $2, start_session_id = $3, updated_at = now()
+			WHERE id = $1 AND status = 'running' AND step = $4
+		`, state.operationID, state.stopLaunchID, state.startSessionID, agentRestartStepStopping); err != nil {
 			return err
 		}
 	}
@@ -154,15 +156,7 @@ func (h *Handler) advanceAgentRestartAfterWorkspaceReset(ctx context.Context, st
 func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentRestartState) (protocol.WorkspaceRunnerAgentStartPayload, error) {
 	sessionID := ""
 	if state.storageKind == agentRestartStorageRestart {
-		err := tx.QueryRow(ctx, `
-			SELECT COALESCE(provider_session_id, '')
-			FROM agent_activity_launch
-			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
-			  AND daemon_id = $4 AND launch_id = $5
-		`, state.workspaceID, state.agentID, state.runtimeID, state.computerID, state.stopLaunchID).Scan(&sessionID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return protocol.WorkspaceRunnerAgentStartPayload{}, fmt.Errorf("load stopped launch provider session: %w", err)
-		}
+		sessionID = state.startSessionID
 	}
 	launchID := uuid.NewString()
 	command, err := tx.Exec(ctx, `
@@ -206,12 +200,13 @@ func lockActiveAgentRestartState(ctx context.Context, tx pgx.Tx, operationID str
 	err := tx.QueryRow(ctx, `
 		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
 		       operation.runtime_id::text, runtime.daemon_id::text,
-		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
+		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, ''),
+		       COALESCE(operation.start_session_id, '')
 		FROM agent_restart_operation operation
 		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
 		WHERE operation.id = $1 AND operation.status = 'running'
 		FOR UPDATE OF operation
-	`, operationID).Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.computerID, &state.storageKind, &state.step, &state.stopLaunchID)
+	`, operationID).Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.computerID, &state.storageKind, &state.step, &state.stopLaunchID, &state.startSessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -288,12 +283,13 @@ func (h *Handler) activeAgentRestartForRunner(ctx context.Context, identity daem
 	err = h.DB.QueryRow(ctx, `
 		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
 		       operation.runtime_id::text, runtime.daemon_id::text,
-		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
+		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, ''),
+		       COALESCE(operation.start_session_id, '')
 		FROM agent_restart_operation operation
 		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
 		WHERE operation.workspace_id = $1 AND operation.agent_id = $2
 		  AND operation.status = 'running' AND runtime.daemon_id = $3
-	`, workspaceID, agentUUID, identity.DaemonID).Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.computerID, &state.storageKind, &state.step, &state.stopLaunchID)
+	`, workspaceID, agentUUID, identity.DaemonID).Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.computerID, &state.storageKind, &state.step, &state.stopLaunchID, &state.startSessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -304,7 +300,8 @@ func (h *Handler) resumeAgentRestartOperations(ctx context.Context, identity dae
 	rows, err := h.DB.Query(ctx, `
 		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
 		       operation.runtime_id::text, runtime.daemon_id::text,
-		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, '')
+		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, ''),
+		       COALESCE(operation.start_session_id, '')
 		FROM agent_restart_operation operation
 		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
 		WHERE operation.workspace_id::text = $1 AND operation.status = 'running'
@@ -318,7 +315,7 @@ func (h *Handler) resumeAgentRestartOperations(ctx context.Context, identity dae
 	var states []activeAgentRestartState
 	for rows.Next() {
 		var state activeAgentRestartState
-		if err := rows.Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.computerID, &state.storageKind, &state.step, &state.stopLaunchID); err != nil {
+		if err := rows.Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.computerID, &state.storageKind, &state.step, &state.stopLaunchID, &state.startSessionID); err != nil {
 			return err
 		}
 		states = append(states, state)

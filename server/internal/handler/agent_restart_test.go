@@ -389,17 +389,17 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&oldLaunchID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES ($1, $2, $3, 'agent-restart-test-daemon', 'runner-instance', $4, 'active')
-	`, testWorkspaceID, agentID, runtimeID, oldLaunchID); err != nil {
-		t.Fatal(err)
-	}
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	runnerHandler := *testHandler
+	runnerHandler.runnerObservations = newRunnerObservationStore()
+	runnerHandler.runnerActivityCursor = newRunnerActivityCursorStore()
 	runnerHandler.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"agent-restart-test-daemon/" + testWorkspaceID + "/runner-instance": true,
 	}}
+	runnerHandler.observations().putStatus(testWorkspaceID, "agent-restart-test-daemon", "runner-instance", agentID, runtimeID, oldLaunchID, protocol.AgentStatusActive)
+	previousObservations := testHandler.runnerObservations
+	testHandler.runnerObservations = runnerHandler.runnerObservations
+	t.Cleanup(func() { testHandler.runnerObservations = previousObservations })
 	sessionFrame, err := json.Marshal(protocol.AgentSessionPayload{
 		AgentID: agentID, LaunchID: oldLaunchID, ProviderSessionID: providerSessionID,
 	})

@@ -22,18 +22,16 @@ func TestWorkspaceRunnerInactiveLaunchAcceptsOnlyStoppedActivityAndFencesReplace
 	agentID := createHandlerTestAgentOnRuntime(t, "terminal-stop-"+uuid.NewString()[:8], oldRuntimeID)
 	const daemonInstanceID = "instance-stop"
 	oldLaunchID := "launch-old-" + uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES ($1, $2, $3, $4, $5, $6, 'active')`, testWorkspaceID, agentID, oldRuntimeID, identity.DaemonID, daemonInstanceID, oldLaunchID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, newRuntimeID); err != nil {
 		t.Fatal(err)
 	}
 	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		identity.DaemonID + "/" + identity.WorkspaceID + "/" + daemonInstanceID: true,
 	}}
+	h.observations().putStatus(testWorkspaceID, identity.DaemonID, daemonInstanceID, agentID, oldRuntimeID, oldLaunchID, protocol.AgentStatusActive)
 	writeFrame := func(eventType string, payload any) error {
 		t.Helper()
 		raw, err := json.Marshal(payload)
@@ -97,12 +95,7 @@ func TestWorkspaceRunnerInactiveLaunchAcceptsOnlyStoppedActivityAndFencesReplace
 		FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&newLaunchID, &newDispatchID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_activity_launch
-		SET runtime_id = $4, launch_id = $3, status = 'active'
-		WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID, newLaunchID, newRuntimeID); err != nil {
-		t.Fatal(err)
-	}
+	h.observations().putStatus(testWorkspaceID, identity.DaemonID, daemonInstanceID, agentID, newRuntimeID, newLaunchID, protocol.AgentStatusActive)
 	current := protocol.AgentActivityPayload{Snapshot: protocol.AgentActivitySnapshot{
 		AgentID: agentID, LaunchID: newLaunchID, DaemonInstanceID: daemonInstanceID,
 		ClientSequence: 1, ProducerFactID: "new-idle", ObservedAt: time.Now().UTC(),
@@ -152,28 +145,25 @@ func TestReapStaleRunnerActivityMarksAgentOfflineForComputerDisconnect(t *testin
 	agentID := createHandlerTestAgent(t, "stale-runner-"+uuid.NewString()[:8], nil)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	launchID := "launch-" + uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES ($1, $2, $3, 'daemon-1', 'instance-1', $4, 'active')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
-		t.Fatal(err)
-	}
+	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", agentID, handlerTestRuntimeID(t), launchID, protocol.AgentStatusActive)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_snapshot (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, client_sequence, producer_fact_id, activity_kind, observed_at, received_at)
 		VALUES ($1, $2, $3, 'daemon-1', 'instance-1', $4, 1, 'fact-1', 'working', $5, $5)`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID, now.Add(-runnerActivityStaleAfter-time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := testHandler.ReapStaleRunnerActivity(ctx, now); err != nil {
+	if err := h.ReapStaleRunnerActivity(ctx, now); err != nil {
 		t.Fatal(err)
 	}
-	var kind, detail, launchStatus string
+	var kind, detail string
 	if err := testPool.QueryRow(ctx, `SELECT activity_kind, detail_kind FROM agent_activity_snapshot WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&kind, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&launchStatus); err != nil {
-		t.Fatal(err)
-	}
-	if kind != protocol.ActivityKindOffline || detail != "machine_disconnected" || launchStatus != protocol.AgentStatusInactive {
-		t.Fatalf("stale projection = kind:%q detail:%q launch:%q", kind, detail, launchStatus)
+	obs, ok := h.observations().get(testWorkspaceID, agentID)
+	if kind != protocol.ActivityKindOffline || detail != "machine_disconnected" || !ok || obs.status != protocol.AgentStatusInactive {
+		t.Fatalf("stale projection = kind:%q detail:%q observation=%+v ok=%v", kind, detail, obs, ok)
 	}
 }
 
@@ -184,33 +174,28 @@ func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "ready-fence-"+uuid.NewString()[:8], nil)
 	launchID := "launch-" + uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES ($1, $2, $3, 'daemon-1', 'old-instance', $4, 'active')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
-		t.Fatal(err)
-	}
+	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "old-instance", agentID, handlerTestRuntimeID(t), launchID, protocol.AgentStatusActive)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_snapshot (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, client_sequence, producer_fact_id, activity_kind, observed_at)
 		VALUES ($1, $2, $3, 'daemon-1', 'old-instance', $4, 1, 'fact-1', 'online', now())`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
 		t.Fatal(err)
 	}
-	if err := testHandler.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", nil); err != nil {
+	if err := h.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", nil); err != nil {
 		t.Fatal(err)
 	}
-	var kind, detail, status, instanceID string
+	var kind, detail string
 	if err := testPool.QueryRow(ctx, `SELECT activity_kind, detail_kind FROM agent_activity_snapshot WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&kind, &detail); err != nil {
-		t.Fatal(err)
-	}
-	if err := testPool.QueryRow(ctx, `SELECT status, daemon_instance_id FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status, &instanceID); err != nil {
 		t.Fatal(err)
 	}
 	if kind != protocol.ActivityKindOffline || detail != "computer_restarted" {
 		t.Fatalf("ready Activity = kind:%q detail:%q", kind, detail)
 	}
-	if status != protocol.AgentStatusActive || instanceID != "old-instance" {
-		t.Fatalf("ready must not persist residency; leftover launch = status:%q instance:%q", status, instanceID)
+	if _, ok := h.observations().get(testWorkspaceID, agentID); ok {
+		t.Fatal("ready must forget prior instance residency")
 	}
-	h := *testHandler
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"daemon-1/" + testWorkspaceID + "/new-instance": true,
 	}}
@@ -221,11 +206,9 @@ func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T
 	if err := h.HandleWorkspaceRunnerFrame(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", protocol.EventAgentStatus, active); err != nil {
 		t.Fatalf("replacement agent:status: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT status, daemon_instance_id FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status, &instanceID); err != nil {
-		t.Fatal(err)
-	}
-	if status != protocol.AgentStatusActive || instanceID != "new-instance" {
-		t.Fatalf("replacement launch = status:%q instance:%q", status, instanceID)
+	obs, ok := h.observations().get(testWorkspaceID, agentID)
+	if !ok || obs.status != protocol.AgentStatusActive || obs.daemonInstanceID != "new-instance" {
+		t.Fatalf("replacement observation=%+v ok=%v", obs, ok)
 	}
 }
 
@@ -236,24 +219,19 @@ func TestWorkspaceRunnerReadyKeepsSameInstanceRunningLaunchActive(t *testing.T) 
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "ready-same-"+uuid.NewString()[:8], nil)
 	launchID := "launch-" + uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES ($1, $2, $3, 'daemon-1', 'instance-1', $4, 'active')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
-		t.Fatal(err)
-	}
+	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", agentID, handlerTestRuntimeID(t), launchID, protocol.AgentStatusActive)
 	// Same-process reconnect reports ready before it can replay agent:status.
 	// An empty runningAgents list must not deactivate that still-live launch.
-	if err := testHandler.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", nil); err != nil {
+	if err := h.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", nil); err != nil {
 		t.Fatal(err)
 	}
-	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status); err != nil {
-		t.Fatal(err)
+	obs, ok := h.observations().get(testWorkspaceID, agentID)
+	if !ok || obs.status != protocol.AgentStatusActive {
+		t.Fatalf("same-instance ready observation=%+v ok=%v, want active so reconnect can replay agent:status", obs, ok)
 	}
-	if status != protocol.AgentStatusActive {
-		t.Fatalf("same-instance ready status=%q, want active so reconnect can replay agent:status", status)
-	}
-	h := *testHandler
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
@@ -275,16 +253,15 @@ func TestRunnerActivityProbeResponseMustMatchPendingProbe(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	launchID := "launch-" + uuid.NewString()
 	probeID := "probe-" + uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES ($1, $2, $3, 'daemon-1', 'instance-1', $4, 'active')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
-		t.Fatal(err)
-	}
+	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", agentID, handlerTestRuntimeID(t), launchID, protocol.AgentStatusActive)
 	base := protocol.AgentActivityPayload{Snapshot: protocol.AgentActivitySnapshot{
 		AgentID: agentID, LaunchID: launchID, DaemonInstanceID: "instance-1", ClientSequence: 1, ProducerFactID: "fact-1",
 		ObservedAt: now, ActivityKind: protocol.ActivityKindThinking, DetailKind: "thinking_started",
 	}}
-	if err := testHandler.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", base); err != nil {
+	if err := h.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", base); err != nil {
 		t.Fatalf("record original Activity: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
@@ -294,7 +271,7 @@ func TestRunnerActivityProbeResponseMustMatchPendingProbe(t *testing.T) {
 	}
 	probeReply := base
 	probeReply.Snapshot.ProbeID = probeID
-	err := testHandler.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", probeReply)
+	err := h.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", probeReply)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,12 +291,11 @@ func TestRunnerActivityRejectsLateProbeAfterLaunchWasFenced(t *testing.T) {
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "late-probe-"+uuid.NewString()[:8], nil)
 	launchID := "launch-" + uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES ($1, $2, $3, 'daemon-1', 'instance-1', $4, 'inactive')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
-		t.Fatal(err)
-	}
-	err := testHandler.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", protocol.AgentActivityPayload{Snapshot: protocol.AgentActivitySnapshot{
+	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", agentID, handlerTestRuntimeID(t), launchID, protocol.AgentStatusInactive)
+	err := h.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", protocol.AgentActivityPayload{Snapshot: protocol.AgentActivitySnapshot{
 		AgentID: agentID, LaunchID: launchID, DaemonInstanceID: "instance-1", ClientSequence: 1, ProducerFactID: "late-fact",
 		ObservedAt: time.Now().UTC(), ActivityKind: protocol.ActivityKindWorking, DetailKind: "model_response_started", ProbeID: "expired-probe",
 	}})

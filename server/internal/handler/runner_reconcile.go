@@ -104,7 +104,7 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	if !live {
 		return errors.New("current Workspace Runner unavailable during launch reconcile")
 	}
-	skip := h.restartAgentsNotInStartingStep(ctx, identity.WorkspaceID)
+	skip := h.restartAgentsOnActiveOperation(ctx, identity.WorkspaceID)
 	observed := make([]runnerObservedLaunch, 0)
 	for _, obs := range h.observations().listInstance(identity.WorkspaceID, identity.DaemonID, daemonInstanceID) {
 		if skip[obs.agentID] {
@@ -139,7 +139,7 @@ func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemon
 		LEFT JOIN agent_restart_operation launch_operation
 		  ON launch_operation.id = desired.start_dispatch_id
 		WHERE desired.workspace_id::text = $1 AND runtime.daemon_id = $2
-		  AND (active_operation.id IS NULL OR active_operation.step = 'starting')
+		  AND active_operation.id IS NULL
 		  AND NOT EXISTS (
 			SELECT 1 FROM agent_restart_operation failed_reset
 			WHERE failed_reset.agent_id = desired.agent_id
@@ -169,14 +169,14 @@ func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemon
 	return desired, nil
 }
 
-func (h *Handler) restartAgentsNotInStartingStep(ctx context.Context, workspaceID string) map[string]bool {
+func (h *Handler) restartAgentsOnActiveOperation(ctx context.Context, workspaceID string) map[string]bool {
 	skip := map[string]bool{}
 	if h == nil || h.DB == nil {
 		return skip
 	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT agent_id::text FROM agent_restart_operation
-		WHERE workspace_id::text = $1 AND status = 'running' AND step <> 'starting'`, workspaceID)
+		WHERE workspace_id::text = $1 AND status = 'running'`, workspaceID)
 	if err != nil {
 		return skip
 	}

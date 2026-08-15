@@ -296,49 +296,6 @@ func (h *Handler) activeAgentRestartForRunner(ctx context.Context, identity daem
 	return &state, err
 }
 
-func (h *Handler) resumeAgentRestartOperations(ctx context.Context, identity daemonws.ClientIdentity) error {
-	rows, err := h.DB.Query(ctx, `
-		SELECT operation.id::text, operation.workspace_id::text, operation.agent_id::text,
-		       operation.runtime_id::text, runtime.daemon_id::text,
-		       operation.action_kind, operation.step, COALESCE(operation.stop_launch_id::text, ''),
-		       COALESCE(operation.start_session_id, '')
-		FROM agent_restart_operation operation
-		JOIN agent_runtime runtime ON runtime.id = operation.runtime_id
-		WHERE operation.workspace_id::text = $1 AND operation.status = 'running'
-		  AND runtime.daemon_id = $2
-		ORDER BY operation.created_at, operation.id
-	`, identity.WorkspaceID, identity.DaemonID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var states []activeAgentRestartState
-	for rows.Next() {
-		var state activeAgentRestartState
-		if err := rows.Scan(&state.operationID, &state.workspaceID, &state.agentID, &state.runtimeID, &state.computerID, &state.storageKind, &state.step, &state.stopLaunchID, &state.startSessionID); err != nil {
-			return err
-		}
-		states = append(states, state)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, state := range states {
-		switch state.step {
-		case agentRestartStepStopping:
-			if err := h.beginAgentRestartOperation(ctx, state); err != nil {
-				return err
-			}
-		case agentRestartStepResettingWorkspace:
-			if err := h.sendAgentRestartCommand(state, protocol.EventDaemonAgentResetWorkspace,
-				protocol.WorkspaceRunnerAgentResetWorkspacePayload{OperationID: state.operationID, AgentID: state.agentID}); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func restartStateFromOperation(op *AgentRestartOperation, workspaceID, computerID string) activeAgentRestartState {
 	state := activeAgentRestartState{
 		operationID: op.ID, workspaceID: workspaceID, agentID: op.AgentID,

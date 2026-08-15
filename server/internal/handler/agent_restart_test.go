@@ -439,18 +439,6 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.AgentID != agentID || start.RuntimeID != runtimeID || start.LaunchID == oldLaunchID || start.Config.SessionID != providerSessionID {
 		t.Fatalf("replacement restart command event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
-	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reconnectActions := reduceRunnerLaunches(desired, nil)
-	if len(reconnectActions) != 1 {
-		t.Fatalf("restart reconnect actions=%+v, want one start", reconnectActions)
-	}
-	reconnectStart, ok := reconnectActions[0].payload.(protocol.WorkspaceRunnerAgentStartPayload)
-	if !ok || reconnectActions[0].eventType != protocol.EventDaemonAgentStart || reconnectStart.LaunchID != start.LaunchID || reconnectStart.StartDispatchID != operation.ID || reconnectStart.Config.SessionID != providerSessionID {
-		t.Fatalf("restart reconnect start=%+v, want persisted session %q", reconnectActions, providerSessionID)
-	}
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance active handled=%v err=%v", handled, err)
 	}
@@ -624,7 +612,7 @@ func TestWorkspaceRunnerActiveStatusCompletesRestartOperation(t *testing.T) {
 	}
 }
 
-func TestAgentRestartUnavailableRunnerRemainsResumableUntilReady(t *testing.T) {
+func TestAgentRestartUnavailableRunnerDoesNotFabricateCompletion(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -641,22 +629,20 @@ func TestAgentRestartUnavailableRunnerRemainsResumableUntilReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	if operation.Status != agentRestartRunning || operation.Step != agentRestartStepStopping || operation.FinishedAt != nil {
-		t.Fatalf("unavailable Runner operation should remain resumable = %+v", operation)
+		t.Fatalf("unavailable Runner operation should stay running = %+v", operation)
 	}
 	notifier := &capturedAgentRestartNotifier{}
 	testHandler.AgentRestartNotifier = notifier
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID}
-	if err := testHandler.resumeAgentRestartOperations(context.Background(), identity); err != nil {
-		t.Fatalf("resume restart operation on Runner ready: %v", err)
+	if err := testHandler.recordWorkspaceRunnerReady(context.Background(), identity, "runner-instance", nil); err != nil {
+		t.Fatalf("Runner ready after undelivered restart: %v", err)
 	}
-	_, _, eventType, commandID, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
-	if !ok || eventType != protocol.EventDaemonAgentStop || commandID != operation.ID || stop.LaunchID == "" {
-		t.Fatalf("resumed command event=%q command=%q payload=%+v", eventType, commandID, payload)
+	if _, _, eventType, _, payload := notifier.snapshot(); eventType != "" || payload != nil {
+		t.Fatalf("ready redrove undelivered restart event=%q payload=%+v", eventType, payload)
 	}
 }
 
-func TestAgentRestartReconnectRedrivesWorkspaceResetWithSameOperationID(t *testing.T) {
+func TestAgentRestartReadyDoesNotRedriveWorkspaceReset(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -686,17 +672,15 @@ func TestAgentRestartReconnectRedrivesWorkspaceResetWithSameOperationID(t *testi
 
 	redriven := &capturedAgentRestartNotifier{}
 	testHandler.AgentRestartNotifier = redriven
-	if err := testHandler.resumeAgentRestartOperations(context.Background(), identity); err != nil {
-		t.Fatalf("redrive workspace reset after reconnect: %v", err)
+	if err := testHandler.recordWorkspaceRunnerReady(context.Background(), identity, "runner-instance", nil); err != nil {
+		t.Fatalf("Runner ready during workspace reset: %v", err)
 	}
-	_, _, eventType, commandID, payload := redriven.snapshot()
-	reset, ok := payload.(protocol.WorkspaceRunnerAgentResetWorkspacePayload)
-	if !ok || eventType != protocol.EventDaemonAgentResetWorkspace || commandID != operation.ID || reset.OperationID != operation.ID || reset.AgentID != agentID {
-		t.Fatalf("redriven reset event=%q command=%q payload=%+v", eventType, commandID, payload)
+	if _, _, eventType, _, payload := redriven.snapshot(); eventType != "" || payload != nil {
+		t.Fatalf("ready redrove workspace reset event=%q payload=%+v", eventType, payload)
 	}
 }
 
-func TestAgentRestartReconnectReusesPersistedFreshStartFence(t *testing.T) {
+func TestAgentRestartReconcileDoesNotRedriveStart(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -710,33 +694,18 @@ func TestAgentRestartReconnectReusesPersistedFreshStartFence(t *testing.T) {
 	if create.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
 	}
-	var operation AgentRestartOperation
-	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
-		t.Fatal(err)
-	}
 	_, _, _, _, payload := notifier.snapshot()
 	stop := payload.(protocol.WorkspaceRunnerAgentStopPayload)
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance session stop handled=%v err=%v", handled, err)
 	}
-	_, _, _, _, payload = notifier.snapshot()
-	firstStart, ok := payload.(protocol.WorkspaceRunnerAgentStartPayload)
-	if !ok {
-		t.Fatalf("session replacement payload=%T, want start", payload)
-	}
-
 	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
 	if err != nil {
 		t.Fatal(err)
 	}
-	actions := reduceRunnerLaunches(desired, nil)
-	if len(actions) != 1 || actions[0].eventType != protocol.EventDaemonAgentStart {
-		t.Fatalf("reconnect actions=%+v, want one start", actions)
-	}
-	redriven, ok := actions[0].payload.(protocol.WorkspaceRunnerAgentStartPayload)
-	if !ok || redriven.LaunchID != firstStart.LaunchID || redriven.StartDispatchID != operation.ID || redriven.Config.SessionID != "" {
-		t.Fatalf("redriven start=%+v, first=%+v operation=%s", actions[0].payload, firstStart, operation.ID)
+	if actions := reduceRunnerLaunches(desired, nil); len(actions) != 0 {
+		t.Fatalf("reconcile redrove restart start: %+v", actions)
 	}
 }
 

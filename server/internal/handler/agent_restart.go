@@ -219,9 +219,9 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 	if runtime.DaemonID.Valid {
 		state := restartStateFromOperation(op, uuidToString(lockedAgent.WorkspaceID), runtime.DaemonID.String)
 		if err := h.beginAgentRestartOperation(r.Context(), state); err != nil {
-			// Relay publication and socket acceptance are not completion proof.
-			// Keep the operation resumable until Runner ready or timeout instead
-			// of fabricating a terminal result at the transport boundary.
+			// Relay publication is not completion. Leave the operation running;
+			// do not invent a terminal result, and do not redrive it later on
+			// Runner ready.
 			slog.Warn(
 				"Agent Restart command not yet delivered",
 				"workspace_id", uuidToString(lockedAgent.WorkspaceID),

@@ -392,25 +392,9 @@ func (h *Handler) machineUpgradeRuntimeIDs(ctx context.Context, rt db.AgentRunti
 // non-terminal Machine Upgrade when this authenticated Binding socket
 // reports the resolved target. The successor does not send an operation
 // ID or generation.
-func (h *Handler) completeMachineUpgradeOnCurrentSocket(ctx context.Context, identity daemonws.ClientIdentity) {
-	if h == nil || h.MachineUpgradeStore == nil {
-		return
-	}
-	computerID := strings.TrimSpace(identity.DaemonID)
-	version := strings.TrimSpace(identity.ClientVersion)
-	if computerID == "" || version == "" {
-		return
-	}
-	updated, err := h.MachineUpgradeStore.CompleteOnCurrentVersion(ctx, computerID, version)
-	if err != nil {
-		slog.Warn("machine upgrade socket completion failed", "error", err, "computer_id", computerID)
-		return
-	}
-	if updated == nil || updated.Phase != MachineUpgradeCompleted {
-		return
-	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/", nil)
-	h.publishComputerUpgradeProjection(req, computerID)
+func (h *Handler) completeMachineUpgradeOnCurrentSocket(_ context.Context, _ daemonws.ClientIdentity) {
+	// TODO(computer-upgrade-queued): delete leftover machine_upgrade
+	// completion. New upgrades finish on computer:upgrade:done.
 }
 
 // attestMachineUpgradeRegistration runs after a register transaction has

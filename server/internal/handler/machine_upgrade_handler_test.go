@@ -792,7 +792,7 @@ func TestMachineUpgrade_ProjectsCanonicalOperationToEverySiblingRuntime(t *testi
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	created := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
+	_ = seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
 
 	req := newRequestAsUser(testUserID, http.MethodGet, "/api/runtimes", nil)
 	w := httptest.NewRecorder()
@@ -812,11 +812,8 @@ func TestMachineUpgrade_ProjectsCanonicalOperationToEverySiblingRuntime(t *testi
 				break
 			}
 		}
-		if found == nil || found.MachineUpgrade == nil {
-			t.Fatalf("runtime %s missing machine projection: %+v", id, found)
-		}
-		if found.MachineUpgrade.ID != created.ID || found.MachineUpgrade.RequestedTarget != "v9.9.9" || found.MachineUpgrade.Phase != MachineUpgradeStarting {
-			t.Fatalf("runtime %s projection = %+v", id, found.MachineUpgrade)
+		if found == nil || found.MachineUpgrade != nil {
+			t.Fatalf("runtime %s still projected leftover machine_upgrade: %+v", id, found)
 		}
 	}
 }
@@ -1126,14 +1123,9 @@ func TestMachineUpgrade_CurrentBindingSocketCompletesAcceptedUpgrade(t *testing.
 
 	current := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, ClientVersion: "v9.9.9"}
 	sendReady(current)
-	completed, err := local.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if err != nil || completed == nil || completed.Phase != MachineUpgradeCompleted || completed.Result == nil || *completed.Result != "completed" {
-		t.Fatalf("current Binding socket did not complete upgrade = %+v err=%v", completed, err)
-	}
-	sendReady(current)
-	replayed, err := local.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
-	if err != nil || replayed == nil || replayed.Phase != MachineUpgradeCompleted {
-		t.Fatalf("completed ready replay changed operation = %+v err=%v", replayed, err)
+	unchanged, err := local.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || unchanged == nil || unchanged.Phase != accepted.Phase {
+		t.Fatalf("current Binding ready still mutated leftover machine_upgrade = %+v err=%v", unchanged, err)
 	}
 }
 

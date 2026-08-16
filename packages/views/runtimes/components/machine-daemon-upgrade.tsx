@@ -8,8 +8,6 @@ import {
   runtimeCurrentVersion,
   runtimeLaunchedBy,
   isNewerCliVersion,
-  isMachineUpgradeFailureSuperseded,
-  isMachineUpgradeTargetSuperseded,
 } from "@multica/core/runtimes";
 import { api, ApiError } from "@multica/core/api";
 import { useWSEvent } from "@multica/core/realtime";
@@ -47,25 +45,7 @@ export function MachineDaemonUpgrade({
   const isManaged = launchedBy === "desktop";
   const isSandbox = isSandboxRuntime(runtime);
   const currentVersion = cliVersion ?? runtimeCurrentVersion(runtime);
-  const machineUpgrade = runtime.machine_upgrade ?? null;
-  const recordedMachineTarget =
-    machineUpgrade?.resolved_target?.trim() || machineUpgrade?.requested_target?.trim() || null;
-  // Terminal operations stop owning target selection after their recorded
-  // release has caught up and the daemon advertises a newer exact release.
-  const isSupersededMachineTarget = isMachineUpgradeTargetSuperseded(
-    machineUpgrade,
-    currentVersion,
-    daemonTargetVersion,
-  );
-  // Failure presentation is narrower: only obsolete failed operations should
-  // disappear from the projected status.
-  const isSupersededMachineFailure = isMachineUpgradeFailureSuperseded(
-    machineUpgrade,
-    currentVersion,
-    daemonTargetVersion,
-  );
-  const machineTarget = isSupersededMachineTarget ? null : recordedMachineTarget;
-  const targetVersion = machineTarget ?? daemonTargetVersion ?? null;
+  const targetVersion = daemonTargetVersion ?? null;
   const updateState = runtime.update_state;
   const runtimeHealth = runtime.runtime_health;
   const pinnedVersion =
@@ -143,29 +123,7 @@ export function MachineDaemonUpgrade({
     }
   };
 
-  const projectedMachineStatus: RuntimeUpdateStatus | null = (() => {
-    switch (machineUpgrade?.phase) {
-      case "queued":
-      case "starting":
-        return "running";
-      case "staging":
-      case "verifying":
-      case "handoff":
-      case "converging":
-      case "rollback_pending":
-        return "running";
-      case "completed":
-        return "completed";
-      case "failed":
-      case "rolled_back":
-      case "cancelled":
-        return isSupersededMachineFailure ? null : "failed";
-      case "timeout":
-        return isSupersededMachineFailure ? null : "timeout";
-      default:
-        return null;
-    }
-  })();
+  const projectedMachineStatus: RuntimeUpdateStatus | null = null;
   // A runtime page is a projection: no sibling needs to have initiated the
   // request locally to render the daemon's canonical active operation.
   const effectiveStatus = status ?? projectedMachineStatus;
@@ -229,12 +187,6 @@ export function MachineDaemonUpgrade({
   const versionLabel = currentVersion ?? t(($) => $.update.version_unknown);
 
   const progressLabel = (() => {
-    if (
-      machineUpgrade?.phase === "handoff" ||
-      machineUpgrade?.phase === "converging"
-    ) {
-      return t(($) => $.machine.ops.upgrade_progress_applying);
-    }
     if (derivedStatus === "pending" || effectiveStatus === "pending") {
       return t(($) => $.machine.ops.upgrade_progress_pending);
     }

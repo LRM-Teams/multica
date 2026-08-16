@@ -337,7 +337,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     expect(screen.queryByTestId("machine-daemon-upgrade-btn")).not.toBeInTheDocument();
   });
 
-  it("projects a sibling's starting machine upgrade as active", () => {
+  it("does not treat a leftover machine_upgrade row as an active upgrade", () => {
     const runtime = makeRuntime({
       runtime_health: "ok",
       target_version: null,
@@ -361,72 +361,11 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
         canUpdate
       />,
     );
-    expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
-    expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
-    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Downloading and installing…");
+    expect(screen.getByTestId("machine-daemon-upgrade")).not.toHaveAttribute("data-state", "active");
+    expect(screen.queryByTestId("machine-daemon-upgrade-progress")).not.toBeInTheDocument();
   });
 
-  it("keeps rollback recovery active until every sibling has attested", () => {
-    const runtime = makeRuntime({
-      runtime_health: "ok",
-      target_version: null,
-      machine_upgrade: {
-        id: "machine-upgrade-1",
-        daemon_id: "daemon-1",
-        request_id: "request-1",
-        requested_target: "0.4.0",
-        resolved_target: "0.4.0",
-        phase: "rollback_pending",
-        error_message: "candidate failed; restoring the previous version",
-        created_at: "2026-08-06T00:00:00Z",
-        updated_at: "2026-08-06T00:00:00Z",
-      },
-    });
-    wrap(
-      <MachineDaemonUpgrade
-        runtime={runtime}
-        cliVersion="0.3.99"
-        daemonTargetVersion={null}
-        updateError={null}
-        isOnline
-        canUpdate
-      />,
-    );
-    expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
-    expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
-  });
-
-  it("labels a successor handoff as restarting instead of downloading", () => {
-    const runtime = makeRuntime({
-      runtime_health: "ok",
-      target_version: null,
-      machine_upgrade: {
-        id: "machine-upgrade-1",
-        daemon_id: "daemon-1",
-        request_id: "request-1",
-        requested_target: "0.4.0",
-        resolved_target: "0.4.0",
-        phase: "handoff",
-        created_at: "2026-08-06T00:00:00Z",
-        updated_at: "2026-08-06T00:00:00Z",
-      },
-    });
-    wrap(
-      <MachineDaemonUpgrade
-        runtime={runtime}
-        cliVersion="0.3.99"
-        daemonTargetVersion={null}
-        updateError={null}
-        isOnline={false}
-        canUpdate
-      />,
-    );
-    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent(
-      "Restarting to switch version…",
-    );
-  });
-
-  it("hides stale handoff chrome once the running version matches the target", () => {
+  it("does not keep leftover handoff chrome after the running version matches", () => {
     const runtime = makeRuntime({
       runtime_health: "ok",
       machine_upgrade: {

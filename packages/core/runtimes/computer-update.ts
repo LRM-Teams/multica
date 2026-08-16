@@ -154,23 +154,13 @@ export function isMachineUpgradeTargetSuperseded(
 }
 
 /**
- * Prefer machine-upgrade resolution, then daemon target, then legacy
- * runtime target — same order as Computers detail upgrade UI.
+ * Prefer the daemon target, then the legacy runtime target.
+ * machine_upgrade is leftover and must not own target selection.
  */
 export function resolveComputerUpdateTarget(
   runtime: AgentRuntime,
 ): string | null {
-  const fromUpgrade =
-    runtime.machine_upgrade?.resolved_target?.trim() ||
-    runtime.machine_upgrade?.requested_target?.trim() ||
-    null;
   const daemonTarget = runtime.daemon_target_version?.trim();
-  const isSupersededTarget = isMachineUpgradeTargetSuperseded(
-    runtime.machine_upgrade,
-    runtimeCurrentVersion(runtime),
-    daemonTarget,
-  );
-  if (fromUpgrade && !isSupersededTarget) return fromUpgrade;
   if (daemonTarget) return daemonTarget;
   return runtimeTargetVersion(runtime);
 }

@@ -60,8 +60,8 @@ type AgentRuntimeResponse struct {
 	UpdateState         string  `json:"update_state"`
 	RuntimeHealth       string  `json:"runtime_health"`
 	UpdateError         *string `json:"update_error,omitempty"`
-	// MachineUpgrade is the canonical daemon-scoped lifecycle. Older clients
-	// ignore it; compatibility fields above continue to project legacy rows.
+	// TODO(computer-upgrade-queued): remove after leftover clients stop
+	// reading machine_upgrade. New upgrades are socket-only.
 	MachineUpgrade *MachineUpgrade             `json:"machine_upgrade,omitempty"`
 	AutoUpdate     *DaemonUpdateStatusResponse `json:"auto_update"`
 	OwnerID        *string                     `json:"owner_id"`
@@ -119,10 +119,10 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 
 func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) AgentRuntimeResponse {
 	update := h.latestRuntimeUpdate(ctx, rt)
-	return h.runtimeToResponseWithResolvedUpdate(ctx, rt, update, h.latestMachineUpgrade(ctx, rt))
+	return h.runtimeToResponseWithResolvedUpdate(ctx, rt, update, nil)
 }
 
-func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest, machineUpgrade *MachineUpgrade) AgentRuntimeResponse {
+func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest, _ *MachineUpgrade) AgentRuntimeResponse {
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
 	daemonHeartbeat := h.daemonHeartbeatForRuntime(ctx, rt)
 	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
@@ -130,7 +130,6 @@ func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db
 	if daemonHeartbeat != nil {
 		resp.DaemonLastSeenAt = timestampToPtr(daemonHeartbeat.LastSeenAt)
 	}
-	resp.MachineUpgrade = machineUpgrade
 	return resp
 }
 
@@ -1261,7 +1260,6 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) agentRuntimeResponsesForList(ctx context.Context, runtimes []db.AgentRuntime) []AgentRuntimeResponse {
 	resp := make([]AgentRuntimeResponse, len(runtimes))
 	updates := h.runtimeUpdatesForList(ctx, runtimes)
-	machineUpgrades := h.machineUpgradesForList(ctx, runtimes)
 	autoUpdates := h.daemonUpdateStatusesForList(ctx, runtimes)
 	daemonHeartbeats := h.daemonHeartbeatsForList(ctx, runtimes)
 	now := time.Now()
@@ -1269,7 +1267,6 @@ func (h *Handler) agentRuntimeResponsesForList(ctx context.Context, runtimes []d
 		update := updates[uuidToString(rt.ID)]
 		release := h.runtimeReleaseForResponse(ctx, rt, update)
 		resp[i] = runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, autoUpdates[runtimeDaemonKey(rt)])
-		resp[i].MachineUpgrade = machineUpgrades[runtimeDaemonKey(rt)]
 		hb := daemonHeartbeats[runtimeDaemonKey(rt)]
 		resp[i].ComputerConnected = h.computerConnectedByRunner(runtimeDaemonKey(rt), uuidToString(rt.WorkspaceID), hb, now)
 		if hb != nil {

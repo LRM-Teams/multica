@@ -2221,6 +2221,50 @@ func TestExecuteAndDrain_DoesNotEmitEmptyThinkingPhase(t *testing.T) {
 	}
 }
 
+func TestExecuteAndDrainDoesNotPublishResidentActivity(t *testing.T) {
+	// Inbox/issue tasks share a live resident, but their stream must not
+	// steal the Activity tab. Working/tool rows belong to handoffIdleMessages.
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	ack, err := runner.processes.Start(agentProcessStartRequest{
+		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.SetManaged(
+		protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	d.client = NewClient(srv.URL)
+
+	backend := messageStreamBackend{messages: []agent.Message{
+		{Type: agent.MessageText, Content: "pong71"},
+		{Type: agent.MessageToolUse, Tool: "read_file", CallID: "call-1", Input: map[string]any{"path": "MEMORY.md"}},
+	}}
+	if _, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", agent.ExecOptions{}, slog.Default(), canonicalInboxTaskForTest(Task{
+		ID: "task-no-activity", AgentID: "agent-a", RuntimeID: "runtime-1", WorkspaceID: "workspace-1",
+	})); err != nil {
+		t.Fatalf("executeAndDrainForTask: %v", err)
+	}
+	if len(activities) != 0 {
+		t.Fatalf("task path published resident Activity: %+v", activities)
+	}
+}
+
 func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	t.Parallel()
 

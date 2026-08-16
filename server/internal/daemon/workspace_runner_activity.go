@@ -47,6 +47,10 @@ func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase 
 	if !found || runner.activity == nil || launch.ProcessInstanceID == "" {
 		return
 	}
+	if launch.QueueState == protocol.AgentStartQueueRunning && phase != "Managed start" {
+		// After APM admits Running, later Messages must not repaint Starting.
+		return
+	}
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting,
 		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),

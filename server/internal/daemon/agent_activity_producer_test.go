@@ -27,7 +27,7 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 	}{
 		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
 		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "model_response_started", entryKind: "narrative", entryText: "Working"},
-		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, detail: "thinking_started"},
+		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, detail: "thinking_started", entryKind: "narrative", entryText: "Thinking"},
 		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "ls -la"},
 		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
 		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compaction_finished", entryKind: "narrative", entryText: "Context compaction finished"},
@@ -108,8 +108,51 @@ func TestAgentActivityProducerObserveUsesDeterministicFactIdentity(t *testing.T)
 	if err := producer.Observe(observation); err != nil {
 		t.Fatal(err)
 	}
-	if len(sent) != 2 || sent[0].Snapshot.ProducerFactID == "" || sent[0].Snapshot.ProducerFactID != sent[1].Snapshot.ProducerFactID || sent[0].Snapshot.ClientSequence != 1 || sent[1].Snapshot.ClientSequence != 2 {
+	if len(sent) != 1 || sent[0].Snapshot.ProducerFactID == "" || sent[0].Snapshot.ClientSequence != 1 {
 		t.Fatalf("observed payloads = %+v", sent)
+	}
+}
+
+func TestAgentActivityProducerCoalescesSameRaftStage(t *testing.T) {
+	at := time.Date(2026, time.August, 16, 9, 41, 19, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) {
+		sent = append(sent, payload)
+	})
+	installActivityProducerAgent(t, producer)
+	stage := AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}
+
+	if err := producer.Observe(AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.Observe(AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at.Add(time.Millisecond)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.Observe(AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: stage, At: at.Add(2 * time.Millisecond)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.Observe(AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: stage, At: at.Add(3 * time.Millisecond)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.Observe(AgentObservation{
+		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool,
+		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-1", ToolInput: map[string]any{"command": "multica message send --target dm:@qa-bot"}},
+		At:   at.Add(4 * time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sent) != 3 {
+		t.Fatalf("coalesced Activity count = %d, want thinking + working + tool", len(sent))
+	}
+	want := []string{"thinking_started", "model_response_started", "sending_message"}
+	for i, detail := range want {
+		if sent[i].Snapshot.DetailKind != detail {
+			t.Fatalf("Activity[%d] detail = %q, want %q", i, sent[i].Snapshot.DetailKind, detail)
+		}
+	}
+	if len(sent[0].Entries) != 1 || sent[0].Entries[0].Kind != "narrative" {
+		t.Fatalf("thinking Activity entries = %+v, want one narrative", sent[0].Entries)
 	}
 }
 
@@ -228,6 +271,43 @@ func TestAgentActivityProducerReplacedTransportKeepsNewestRunnerConnected(t *tes
 	}
 	if len(first) != 0 || len(second) != 1 {
 		t.Fatalf("replaced transport delivery first=%d second=%d", len(first), len(second))
+	}
+}
+
+func TestReplayManagedStartDoesNotRepaintStarting(t *testing.T) {
+	now := time.Date(2026, time.August, 16, 11, 54, 25, 0, time.UTC)
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	d := New(Config{WorkspacesRoot: t.TempDir(), DaemonID: "computer-1"}, nil)
+	d.runnerInstanceID = "daemon-1"
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.processes.ProcessSpawned(agentProcessCallback{AgentID: "agent-a", LaunchID: ack.LaunchID, ProcessInstanceID: "resident-" + ack.LaunchID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.processes.RuntimeReady(agentProcessCallback{AgentID: "agent-a", LaunchID: ack.LaunchID, ProcessInstanceID: "resident-" + ack.LaunchID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.SetManaged(protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID}); err != nil {
+		t.Fatal(err)
+	}
+	runner.publishManagedAgentStartActivity("agent-a", "runtime-1")
+	before := len(activities)
+	if !runner.replayManagedAgentStartPublication(protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: ack.LaunchID, StartDispatchID: "launch-a-dispatch",
+	}, nil) {
+		t.Fatal("replay did not succeed")
+	}
+	if len(activities) != before {
+		t.Fatalf("replay painted %d extra Activity facts, want 0", len(activities)-before)
 	}
 }
 
@@ -453,7 +533,7 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 	if finish.Snapshot.ActivityKind != protocol.ActivityKindWorking || finish.Snapshot.DetailKind != "compaction_finished" || len(finish.Entries) != 1 {
 		t.Fatalf("inferred compaction finish = %+v", finish)
 	}
-	if thinking := activities[4]; thinking.Snapshot.ActivityKind != protocol.ActivityKindThinking || len(thinking.Entries) != 0 {
+	if thinking := activities[4]; thinking.Snapshot.ActivityKind != protocol.ActivityKindThinking || len(thinking.Entries) != 1 {
 		t.Fatalf("resumed thinking Activity = %+v", thinking)
 	}
 

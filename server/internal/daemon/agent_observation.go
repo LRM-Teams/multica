@@ -113,7 +113,7 @@ func (observation AgentObservation) Validate() error {
 	}
 
 	switch observation.Kind {
-	case AgentObservationRuntimeReady, AgentObservationRuntimeWorking:
+	case AgentObservationRuntimeReady:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}
@@ -129,7 +129,7 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationRuntimeStarting, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
+	case AgentObservationRuntimeStarting, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}

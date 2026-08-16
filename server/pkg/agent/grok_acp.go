@@ -21,6 +21,7 @@ var ErrGrokACPTurnBusy = errors.New("grok ACP turn busy")
 // turn; leaving a child alive after those boundaries would leak chat context.
 type GrokACPBackend interface {
 	Backend
+	ResidentMessageInput
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -100,11 +101,67 @@ func (b *grokACPBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 		defer close(msgCh)
 		defer close(resCh)
 		started := time.Now()
-		result := b.executeTurn(ctx, prompt, opts, msgCh)
+		result := b.executeTurn(ctx, prompt, opts, msgCh, nil)
 		result.DurationMs = time.Since(started).Milliseconds()
 		resCh <- result
 	}()
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
+}
+
+// AcceptMessageBatch starts one Grok ACP turn for canonical Message bodies
+// while the resident runtime is idle. Acceptance is the successful
+// session/prompt write, not the end-of-turn response.
+func (b *grokACPBackend) AcceptMessageBatch(ctx context.Context, messages []ResidentMessage) (ResidentMessageAcceptance, error) {
+	if len(messages) == 0 {
+		done := make(chan error)
+		close(done)
+		return ResidentMessageAcceptance{Done: done}, nil
+	}
+	prompt, err := formatResidentMessageBatch(messages)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *grokACPBackend) acceptIdleInputPrompt(ctx context.Context, prompt string) (ResidentMessageAcceptance, error) {
+	if !b.running.CompareAndSwap(false, true) {
+		return ResidentMessageAcceptance{}, fmt.Errorf("%w: idle input overlaps an active turn", ErrGrokACPTurnBusy)
+	}
+
+	accepted := make(chan error, 1)
+	done := make(chan error, 1)
+	msgCh := make(chan Message, 256)
+	turnCtx, cancelTurn := context.WithCancel(context.Background())
+	go func() {
+		defer cancelTurn()
+		result := b.executeTurn(turnCtx, prompt, b.cfg.ResidentOptions, msgCh, func(err error) {
+			accepted <- err
+		})
+		close(msgCh)
+		b.running.Store(false)
+		done <- errorForResidentTurn(result)
+		close(done)
+	}()
+
+	select {
+	case err := <-accepted:
+		if err != nil {
+			return ResidentMessageAcceptance{}, err
+		}
+		return ResidentMessageAcceptance{Done: done, Messages: msgCh}, nil
+	case <-ctx.Done():
+		select {
+		case err := <-accepted:
+			if err != nil {
+				return ResidentMessageAcceptance{}, err
+			}
+			return ResidentMessageAcceptance{Done: done, Messages: msgCh}, nil
+		default:
+			cancelTurn()
+			return ResidentMessageAcceptance{}, ctx.Err()
+		}
+	}
 }
 
 // RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller
@@ -152,9 +209,12 @@ func (b *grokACPBackend) runtimeAlive() (bool, bool) {
 	return processAlive(p.cmd.Process)
 }
 
-func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message, reportAcceptance func(error)) Result {
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
+		if reportAcceptance != nil {
+			reportAcceptance(err)
+		}
 		// ForceKill() can now interrupt a process stuck in ensureProcess's own
 		// handshake (task #62 follow-up), not just a turn already past it —
 		// check forceKilled here too so a user-initiated restart during
@@ -176,10 +236,21 @@ func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts Ex
 	p.stateMu.Unlock()
 
 	p.client.resetToolCallFailure()
-	_, err = p.client.request(ctx, "session/prompt", map[string]any{
+	promptID, promptDone, err := p.client.beginRequest("session/prompt", map[string]any{
 		"sessionId": p.sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": prompt}},
 	})
+	if reportAcceptance != nil {
+		reportAcceptance(err)
+	}
+	if err != nil {
+		p.stateMu.Lock()
+		p.message = nil
+		p.stateMu.Unlock()
+		b.disposeProcess(p)
+		return Result{Status: "failed", Error: fmt.Sprintf("grok ACP session/prompt: %v", err)}
+	}
+	_, err = p.client.awaitRequest(ctx, promptID, promptDone)
 	p.stateMu.Lock()
 	p.message = nil
 	p.stateMu.Unlock()

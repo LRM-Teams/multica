@@ -415,10 +415,9 @@ func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 	}
 	if upgrade.Route == computer.UpgradeRouteLive {
 		fmt.Fprintf(os.Stdout,
-			"Computer upgrade accepted: %s (target %s, phase %s). The live Computer owns download, verification, handoff, and convergence.\n",
-			strVal(upgrade.Operation, "id"),
+			"Computer upgrade accepted: %s (target %s). The live Computer owns download, verification, handoff, and convergence.\n",
+			strVal(upgrade.Operation, "request_id"),
 			upgrade.ResolvedTarget,
-			strVal(upgrade.Operation, "phase"),
 		)
 		return nil
 	}

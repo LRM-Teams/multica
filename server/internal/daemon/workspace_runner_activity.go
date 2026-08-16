@@ -203,6 +203,10 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	switch message.Type {
 	case agent.MessageThinking:
 		kind = AgentObservationRuntimeThinking
+	case agent.MessageText:
+		// Raft 1.0.16: runtime text is Working / model_response_started.
+		// Do not parse reply content into the timeline.
+		kind = AgentObservationRuntimeWorking
 	case agent.MessageCompactionStarted:
 		kind = AgentObservationRuntimeCompacting
 	case agent.MessageCompactionFinished:

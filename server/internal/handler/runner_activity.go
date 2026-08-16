@@ -70,7 +70,6 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
-		h.completeMachineUpgradeOnCurrentSocket(ctx, identity)
 		if err := h.resumeAgentRestartOperations(ctx, identity); err != nil {
 			return err
 		}
@@ -142,6 +141,39 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return fmt.Errorf("decode mixed-run activity transition: %w", err)
 		}
 		return h.recordMixedRunActivityTransition(ctx, identity, transition)
+	case protocol.EventComputerUpgradeProgress:
+		var progress protocol.ComputerUpgradeProgressPayload
+		if err := json.Unmarshal(raw, &progress); err != nil {
+			return fmt.Errorf("decode Computer upgrade progress: %w", err)
+		}
+		if err := progress.Validate(); err != nil {
+			return err
+		}
+		h.publishComputerUpgradeSocketEvent(identity, protocol.EventComputerUpgradeProgress, map[string]any{
+			"computer_id": identity.DaemonID,
+			"requestId":   progress.RequestID,
+			"phase":       progress.Phase,
+			"message":     progress.Message,
+			"percent":     progress.Percent,
+		})
+		return nil
+	case protocol.EventComputerUpgradeDone:
+		var done protocol.ComputerUpgradeDonePayload
+		if err := json.Unmarshal(raw, &done); err != nil {
+			return fmt.Errorf("decode Computer upgrade done: %w", err)
+		}
+		if err := done.Validate(); err != nil {
+			return err
+		}
+		h.publishComputerUpgradeSocketEvent(identity, protocol.EventComputerUpgradeDone, map[string]any{
+			"computer_id": identity.DaemonID,
+			"requestId":   done.RequestID,
+			"ok":          done.OK,
+			"newVersion":  done.NewVersion,
+			"error":       done.Error,
+			"rolledBack":  done.RolledBack,
+		})
+		return nil
 	default:
 		return nil
 	}

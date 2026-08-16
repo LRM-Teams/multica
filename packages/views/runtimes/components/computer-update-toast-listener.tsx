@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
+import { useWSEvent } from "@multica/core/realtime";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -18,7 +19,10 @@ import {
 } from "@multica/core/runtimes";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { createSafeId } from "@multica/core/utils";
-import type { MachineUpgradePhase, RuntimeUpdateStatus } from "@multica/core/types";
+import type {
+  ComputerUpgradeDonePayload,
+  ComputerUpgradeProgressPayload,
+} from "@multica/core/types";
 import { useT } from "../../i18n";
 import {
   ComputerUpdateToast,
@@ -66,37 +70,7 @@ function browserStorage(): Storage | null {
   }
 }
 
-function phaseToUpdateStatus(
-  phase: MachineUpgradePhase | string | undefined,
-): RuntimeUpdateStatus | null {
-  switch (phase) {
-    case "queued":
-    case "starting":
-      return "queued";
-    case "staging":
-    case "verifying":
-    case "handoff":
-    case "converging":
-    case "rollback_pending":
-      return "running";
-    case "completed":
-      return "completed";
-    case "failed":
-    case "rolled_back":
-    case "cancelled":
-      return "failed";
-    case "timeout":
-      return "timeout";
-    default:
-      return null;
-  }
-}
 
-function isTerminalMachineStatus(status: RuntimeUpdateStatus | null): boolean {
-  return (
-    status === "completed" || status === "failed" || status === "timeout"
-  );
-}
 
 function getOrCreateMap<K, V>(
   ref: { current: Map<K, V> | null },
@@ -120,23 +94,21 @@ export function ComputerUpdateToastListener() {
   const wsId = useWorkspaceId();
   const userId = useAuthStore((s) => s.user?.id);
   const { t } = useT("layout");
-  const qc = useQueryClient();
   const { data: runtimes } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
 
   const localByMachineRef = useRef<Map<string, LocalPhase> | null>(null);
-  const pollTimersRef = useRef<Map<
-    string,
-    ReturnType<typeof setInterval>
-  > | null>(null);
+  const requestByMachineRef = useRef<Map<string, {
+    requestId: string;
+    daemonId: string;
+    targetVersion: string;
+    machineTitle: string;
+    runtimeId: string;
+  }> | null>(null);
   /** toastId → last published content key (skip identical re-push). */
   const publishedContentRef = useRef<Map<string, string> | null>(null);
-  /** machineKey → last polled RuntimeUpdateStatus (skip identical poll ticks). */
-  const lastPollStatusRef = useRef<Map<string, RuntimeUpdateStatus> | null>(
-    null,
-  );
   const startUpdateRef = useRef<
     ((candidate: ComputerUpdateCandidate) => void) | null
   >(null);
@@ -183,31 +155,6 @@ export function ComputerUpdateToastListener() {
   );
   const copyRef = useRef(copy);
   copyRef.current = copy;
-
-  const clearPoll = useCallback((machineKey: string) => {
-    const timers = pollTimersRef.current;
-    if (!timers) return;
-    const timer = timers.get(machineKey);
-    if (timer) {
-      clearInterval(timer);
-      timers.delete(machineKey);
-    }
-    lastPollStatusRef.current?.delete(machineKey);
-  }, []);
-
-  useEffect(() => {
-    const timers = getOrCreateMap(pollTimersRef);
-    return () => {
-      for (const timer of timers.values()) clearInterval(timer);
-      timers.clear();
-    };
-  }, []);
-
-  const refreshRuntimes = useCallback(() => {
-    qc.invalidateQueries({
-      predicate: (query) => query.queryKey[0] === "runtimes",
-    });
-  }, [qc]);
 
   const syncToasts = useCallback(
     (nextCandidates: ComputerUpdateCandidate[]) => {
@@ -391,7 +338,6 @@ export function ComputerUpdateToastListener() {
         candidate.targetVersion,
       );
     }
-    clearPoll(candidate.machineKey);
     getOrCreateMap(localByMachineRef).delete(candidate.machineKey);
     const toastId = computerUpdateToastId(candidate.machineKey);
     toast.dismiss(toastId);
@@ -403,7 +349,6 @@ export function ComputerUpdateToastListener() {
     if (!wsId) return;
     const c = copyRef.current;
     const toastId = computerUpdateToastId(candidate.machineKey);
-    clearPoll(candidate.machineKey);
     const localByMachine = getOrCreateMap(localByMachineRef);
     localByMachine.set(candidate.machineKey, {
       phase: "updating",
@@ -419,115 +364,32 @@ export function ComputerUpdateToastListener() {
 
     void (async () => {
       try {
-        const update = await api.initiateMachineUpgrade(
+        const requestId = createSafeId();
+        getOrCreateMap(requestByMachineRef).set(candidate.machineKey, {
+          requestId,
+          daemonId: candidate.daemonId,
+          targetVersion: candidate.targetVersion,
+          machineTitle: candidate.machineTitle,
+          runtimeId: candidate.runtimeId,
+        });
+        await api.initiateMachineUpgrade(
           candidate.daemonId,
           candidate.targetVersion,
-          createSafeId(),
+          requestId,
         );
         const storage = browserStorage();
         if (storage) {
           clearComputerUpdateDismiss(storage, wsId, candidate.machineKey);
         }
-
-        const timers = getOrCreateMap(pollTimersRef);
-        const lastStatus = getOrCreateMap(lastPollStatusRef);
-        const timer = setInterval(() => {
-          void (async () => {
-            try {
-              const result = await api.getMachineUpgrade(
-                candidate.daemonId,
-                update.id,
-              );
-              const status = phaseToUpdateStatus(result.phase);
-              if (status == null) return;
-
-              // Skip no-op poll ticks (still "queued" / still "running").
-              if (lastStatus.get(candidate.machineKey) === status) {
-                if (!isTerminalMachineStatus(status)) return;
-              }
-              lastStatus.set(candidate.machineKey, status);
-
-              if (status === "queued") {
-                localByMachine.set(candidate.machineKey, {
-                  phase: "updating",
-                  progress: c.progressPending,
-                  targetVersion: candidate.targetVersion,
-                  machineTitle: candidate.machineTitle,
-                  daemonId: candidate.daemonId,
-                  runtimeId: candidate.runtimeId,
-                });
-                syncToasts(candidatesRef.current);
-                return;
-              }
-              if (status === "running") {
-                localByMachine.set(candidate.machineKey, {
-                  phase: "updating",
-                  progress: c.progressRunning,
-                  targetVersion: candidate.targetVersion,
-                  machineTitle: candidate.machineTitle,
-                  daemonId: candidate.daemonId,
-                  runtimeId: candidate.runtimeId,
-                });
-                syncToasts(candidatesRef.current);
-                return;
-              }
-              if (!isTerminalMachineStatus(status)) return;
-
-              clearPoll(candidate.machineKey);
-              refreshRuntimes();
-
-              if (status === "failed" || status === "timeout") {
-                localByMachine.set(candidate.machineKey, {
-                  phase: "failed",
-                  error:
-                    result.error_message?.trim() || c.failedGeneric,
-                  targetVersion: candidate.targetVersion,
-                  machineTitle: candidate.machineTitle,
-                  daemonId: candidate.daemonId,
-                  runtimeId: candidate.runtimeId,
-                });
-                publishedContentRef.current?.delete(toastId);
-                syncToasts(candidatesRef.current);
-                return;
-              }
-
-              if (storage) {
-                dismissComputerUpdate(
-                  storage,
-                  wsId,
-                  candidate.machineKey,
-                  candidate.targetVersion,
-                );
-              }
-              localByMachine.delete(candidate.machineKey);
-              publishedContentRef.current?.delete(toastId);
-              toast.custom(
-                (id) => (
-                  <ComputerUpdateToast
-                    phase="success"
-                    title={c.successTitle(candidate.machineTitle)}
-                    versionLine={c.successBody(candidate.targetVersion)}
-                    updateLabel={c.update}
-                    laterLabel={c.later}
-                    retryLabel={c.retry}
-                    dismissLabel={c.dismiss}
-                    onDismiss={() => toast.dismiss(id)}
-                  />
-                ),
-                {
-                  ...computerUpdateSuccessToastOptions,
-                  id: toastId,
-                },
-              );
-              // Success is auto-dismiss; do not keep it in the sticky published map.
-              publishedContentRef.current?.delete(toastId);
-              syncToasts(candidatesRef.current);
-            } catch {
-              // ignore poll errors; next tick retries
-            }
-          })();
-        }, 2000);
-        timers.set(candidate.machineKey, timer);
+        localByMachine.set(candidate.machineKey, {
+          phase: "updating",
+          progress: c.progressRunning,
+          targetVersion: candidate.targetVersion,
+          machineTitle: candidate.machineTitle,
+          daemonId: candidate.daemonId,
+          runtimeId: candidate.runtimeId,
+        });
+        syncToasts(candidatesRef.current);
       } catch (err) {
         let message = c.failedGeneric;
         if (
@@ -554,6 +416,72 @@ export function ComputerUpdateToastListener() {
       }
     })();
   };
+
+  useWSEvent("computer:upgrade:progress", (raw) => {
+    const payload = raw as ComputerUpgradeProgressPayload;
+    const requests = requestByMachineRef.current;
+    if (!requests) return;
+    for (const [machineKey, request] of requests) {
+      if (request.daemonId !== payload.computer_id || request.requestId !== payload.requestId) continue;
+      const localByMachine = getOrCreateMap(localByMachineRef);
+      localByMachine.set(machineKey, {
+        phase: "updating",
+        progress: copyRef.current.progressRunning,
+        targetVersion: request.targetVersion,
+        machineTitle: request.machineTitle,
+        daemonId: request.daemonId,
+        runtimeId: request.runtimeId,
+      });
+      syncToasts(candidatesRef.current);
+      return;
+    }
+  });
+  useWSEvent("computer:upgrade:done", (raw) => {
+    const payload = raw as ComputerUpgradeDonePayload;
+    const requests = requestByMachineRef.current;
+    if (!requests) return;
+    for (const [machineKey, request] of requests) {
+      if (request.daemonId !== payload.computer_id || request.requestId !== payload.requestId) continue;
+      requests.delete(machineKey);
+      const localByMachine = getOrCreateMap(localByMachineRef);
+      const toastId = computerUpdateToastId(machineKey);
+      if (!payload.ok) {
+        localByMachine.set(machineKey, {
+          phase: "failed",
+          error: payload.error?.trim() || copyRef.current.failedGeneric,
+          targetVersion: request.targetVersion,
+          machineTitle: request.machineTitle,
+          daemonId: request.daemonId,
+          runtimeId: request.runtimeId,
+        });
+        publishedContentRef.current?.delete(toastId);
+        syncToasts(candidatesRef.current);
+        return;
+      }
+      const storage = browserStorage();
+      if (storage && wsId) {
+        dismissComputerUpdate(storage, wsId, machineKey, request.targetVersion);
+      }
+      localByMachine.delete(machineKey);
+      publishedContentRef.current?.delete(toastId);
+      toast.custom(
+        (id) => (
+          <ComputerUpdateToast
+            phase="success"
+            title={copyRef.current.successTitle(request.machineTitle)}
+            versionLine={copyRef.current.successBody(request.targetVersion)}
+            updateLabel={copyRef.current.update}
+            laterLabel={copyRef.current.later}
+            retryLabel={copyRef.current.retry}
+            dismissLabel={copyRef.current.dismiss}
+            onDismiss={() => toast.dismiss(id)}
+          />
+        ),
+        { ...computerUpdateSuccessToastOptions, id: toastId },
+      );
+      return;
+    }
+  });
 
   // Only re-sync when eligibility fingerprint or locale copy changes —
   // not on every runtime-list array identity churn.

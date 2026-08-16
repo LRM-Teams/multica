@@ -117,7 +117,6 @@ import type {
   DashboardUsageByAgent,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
-  MachineUpgrade,
   RuntimeRestart,
   AgentRestartMode,
   AgentRestartPreflight,
@@ -462,8 +461,6 @@ import {
   DeleteComputerResponseSchema,
   EMPTY_DELETE_COMPUTER_RESPONSE,
   type DeleteComputerResponse,
-  MachineUpgradeSchema,
-  EMPTY_MACHINE_UPGRADE,
   NotePageSchema,
   NotePageListResponseSchema,
   EMPTY_NOTE_PAGE,
@@ -2282,20 +2279,10 @@ export class ApiClient {
     daemonId: string,
     targetVersion: string,
     requestId: string,
-  ): Promise<MachineUpgrade> {
-    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades`, {
+  ): Promise<{ request_id: string }> {
+    return this.fetch<{ request_id: string }>(`/api/daemons/${daemonId}/upgrades`, {
       method: "POST",
       body: JSON.stringify({ target_version: targetVersion, request_id: requestId }),
-    });
-    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
-      endpoint: "POST /api/daemons/:daemonId/upgrades",
-    });
-  }
-
-  async getMachineUpgrade(daemonId: string, upgradeId: string): Promise<MachineUpgrade> {
-    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades/${upgradeId}`);
-    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
-      endpoint: "GET /api/daemons/:daemonId/upgrades/:upgradeId",
     });
   }
 

@@ -124,7 +124,6 @@ type BusinessSamplerCollector struct {
 	descHeartbeatAgeHist            *prometheus.Desc
 	descWorkspaceTotal              *prometheus.Desc
 	descReminderScheduledOverdue    *prometheus.Desc
-	descMachineUpgradeOperations    *prometheus.Desc
 	descResearchRuns                *prometheus.Desc
 	descResearchTasks               *prometheus.Desc
 	descResearchAttempts            *prometheus.Desc
@@ -213,10 +212,6 @@ func NewBusinessSamplerCollector(opts *BusinessSamplerOptions) *BusinessSamplerC
 			"multica_reminder_scheduled_overdue",
 			"Count of agent_reminder rows still status=scheduled with fire_at older than the overdue threshold (1h, aligned with #67). Platform-ops aggregate; sampled from the database.",
 			nil, nil),
-		descMachineUpgradeOperations: prometheus.NewDesc(
-			"multica_machine_upgrade_operations",
-			"Current canonical Machine Upgrade operations by bounded phase and outcome. Sampled from the database; machine, runtime, operation, and user identities are never labels.",
-			[]string{"phase", "outcome"}, nil),
 		descResearchRuns: prometheus.NewDesc(
 			"multica_research_runs",
 			"Current research sessions by durable run status and bounded orchestrator version.",
@@ -275,7 +270,6 @@ func (c *BusinessSamplerCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.descHeartbeatAgeHist,
 		c.descWorkspaceTotal,
 		c.descReminderScheduledOverdue,
-		c.descMachineUpgradeOperations,
 		c.descResearchRuns,
 		c.descResearchTasks,
 		c.descResearchAttempts,
@@ -379,10 +373,6 @@ func (c *BusinessSamplerCollector) emit(ch chan<- prometheus.Metric, snap *sampl
 	// zero series for task queues.
 	ch <- prometheus.MustNewConstMetric(
 		c.descReminderScheduledOverdue, prometheus.GaugeValue, snap.reminderScheduledOverdue)
-	for key, value := range snap.machineUpgrades {
-		ch <- prometheus.MustNewConstMetric(
-			c.descMachineUpgradeOperations, prometheus.GaugeValue, value, key.phase, key.outcome)
-	}
 
 	for key, value := range snap.researchRuns {
 		ch <- prometheus.MustNewConstMetric(
@@ -444,31 +434,6 @@ type runtimeOnlineKey struct {
 type researchMetricKey struct {
 	first  string
 	second string
-}
-
-type machineUpgradeMetricKey struct {
-	phase   string
-	outcome string
-}
-
-func normalizeMachineUpgradePhase(raw string) string {
-	switch raw {
-	case "queued", "starting", "staging", "verifying", "handoff", "converging", "rollback_pending", "completed", "rolled_back", "failed", "timeout", "cancelled":
-		return raw
-	default:
-		return "other"
-	}
-}
-
-func normalizeMachineUpgradeOutcome(raw string) string {
-	switch raw {
-	case "", "none":
-		return "none"
-	case "completed", "rolled_back", "failed", "timeout", "cancelled":
-		return raw
-	default:
-		return "other"
-	}
 }
 
 func normalizeResearchRunStatus(raw string) string {
@@ -567,9 +532,8 @@ type samplerSnapshot struct {
 	taskRunning map[taskRunningKey]float64
 	taskStuck   map[string]float64
 
-	runtimeOnline   map[runtimeOnlineKey]float64
-	heartbeatAge    map[string]samplerHistogram
-	machineUpgrades map[machineUpgradeMetricKey]float64
+	runtimeOnline map[runtimeOnlineKey]float64
+	heartbeatAge  map[string]samplerHistogram
 
 	researchRuns     map[researchMetricKey]float64
 	researchTasks    map[researchMetricKey]float64
@@ -601,7 +565,6 @@ func newSamplerSnapshot(t time.Time) *samplerSnapshot {
 		taskStuck:        map[string]float64{},
 		runtimeOnline:    map[runtimeOnlineKey]float64{},
 		heartbeatAge:     map[string]samplerHistogram{},
-		machineUpgrades:  map[machineUpgradeMetricKey]float64{},
 		researchRuns:     map[researchMetricKey]float64{},
 		researchTasks:    map[researchMetricKey]float64{},
 		researchAttempts: map[researchMetricKey]float64{},
@@ -652,9 +615,6 @@ func (c *BusinessSamplerCollector) refreshFromDB(ctx context.Context, now time.T
 	})
 	c.runQuery(ctx, conn, "reminder_scheduled_overdue", func(ctx context.Context, tx pgx.Tx) error {
 		return c.queryReminderScheduledOverdue(ctx, tx, snap)
-	})
-	c.runQuery(ctx, conn, "machine_upgrade_operations", func(ctx context.Context, tx pgx.Tx) error {
-		return c.queryMachineUpgradeOperations(ctx, tx, snap)
 	})
 	c.runQuery(ctx, conn, "research_execution", func(ctx context.Context, tx pgx.Tx) error {
 		return c.queryResearchExecution(ctx, tx, snap)

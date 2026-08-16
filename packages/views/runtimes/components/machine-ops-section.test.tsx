@@ -10,6 +10,10 @@ import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import type { RuntimeMachine } from "./runtime-machines";
 
+vi.mock("@multica/core/realtime", () => ({
+  useWSEvent: vi.fn(),
+}));
+
 vi.mock("@multica/core/auth", () => ({
   useAuthStore: (sel: (s: { user: { id: string } | null }) => unknown) =>
     sel({ user: { id: "user-mine" } }),
@@ -66,7 +70,6 @@ vi.mock("@multica/core/api", () => ({
   api: {
     deleteComputer: deleteComputerMock,
     initiateMachineUpgrade: vi.fn(),
-    getMachineUpgrade: vi.fn(),
     initiateRestart: vi.fn(),
     getRestart: vi.fn(),
   },
@@ -203,17 +206,6 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     const runtime = makeRuntime({
       current_version: "0.4.18",
       runtime_health: "ok",
-      machine_upgrade: {
-        id: "machine-upgrade-1",
-        daemon_id: "daemon-1",
-        request_id: "request-1",
-        requested_target: "v0.4.17",
-        resolved_target: "v0.4.17",
-        phase: "failed",
-        error_message: "prepare journal: candidate version v0.4.13 is not staged",
-        created_at: "2026-08-07T00:00:00Z",
-        updated_at: "2026-08-07T00:00:01Z",
-      },
     });
 
     wrap(
@@ -285,17 +277,6 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
       current_version: "0.4.24-alpha.9",
       runtime_health: "update_available",
       target_version: "v0.4.24-alpha.11",
-      machine_upgrade: {
-        id: "machine-upgrade-failed-latest",
-        daemon_id: "daemon-1",
-        request_id: "request-failed-latest",
-        requested_target: "latest",
-        phase: "failed",
-        error_code: "target_resolution_failed",
-        error_message: "resolve latest machine upgrade target: context deadline exceeded",
-        created_at: "2026-08-11T09:58:31Z",
-        updated_at: "2026-08-11T09:58:46Z",
-      },
     });
 
     wrap(
@@ -333,19 +314,10 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     expect(screen.queryByTestId("machine-daemon-upgrade-btn")).not.toBeInTheDocument();
   });
 
-  it("projects a sibling's queued machine upgrade as active", () => {
+  it("does not treat an idle computer as an active upgrade", () => {
     const runtime = makeRuntime({
       runtime_health: "ok",
       target_version: null,
-      machine_upgrade: {
-        id: "machine-upgrade-1",
-        daemon_id: "daemon-1",
-        request_id: "request-1",
-        requested_target: "0.4.0",
-        phase: "queued",
-        created_at: "2026-08-06T00:00:00Z",
-        updated_at: "2026-08-06T00:00:00Z",
-      },
     });
     wrap(
       <MachineDaemonUpgrade
@@ -357,84 +329,13 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
         canUpdate
       />,
     );
-    expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
-    expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
-    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Waiting for the Computer to accept the update…");
+    expect(screen.getByTestId("machine-daemon-upgrade")).not.toHaveAttribute("data-state", "active");
+    expect(screen.queryByTestId("machine-daemon-upgrade-progress")).not.toBeInTheDocument();
   });
 
-  it("keeps rollback recovery active until every sibling has attested", () => {
+  it("does not keep leftover handoff chrome after the running version matches", () => {
     const runtime = makeRuntime({
       runtime_health: "ok",
-      target_version: null,
-      machine_upgrade: {
-        id: "machine-upgrade-1",
-        daemon_id: "daemon-1",
-        request_id: "request-1",
-        requested_target: "0.4.0",
-        resolved_target: "0.4.0",
-        phase: "rollback_pending",
-        error_message: "candidate failed; restoring the previous version",
-        created_at: "2026-08-06T00:00:00Z",
-        updated_at: "2026-08-06T00:00:00Z",
-      },
-    });
-    wrap(
-      <MachineDaemonUpgrade
-        runtime={runtime}
-        cliVersion="0.3.99"
-        daemonTargetVersion={null}
-        updateError={null}
-        isOnline
-        canUpdate
-      />,
-    );
-    expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
-    expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
-  });
-
-  it("labels a successor handoff as restarting instead of downloading", () => {
-    const runtime = makeRuntime({
-      runtime_health: "ok",
-      target_version: null,
-      machine_upgrade: {
-        id: "machine-upgrade-1",
-        daemon_id: "daemon-1",
-        request_id: "request-1",
-        requested_target: "0.4.0",
-        resolved_target: "0.4.0",
-        phase: "handoff",
-        created_at: "2026-08-06T00:00:00Z",
-        updated_at: "2026-08-06T00:00:00Z",
-      },
-    });
-    wrap(
-      <MachineDaemonUpgrade
-        runtime={runtime}
-        cliVersion="0.3.99"
-        daemonTargetVersion={null}
-        updateError={null}
-        isOnline={false}
-        canUpdate
-      />,
-    );
-    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent(
-      "Restarting to switch version…",
-    );
-  });
-
-  it("hides stale handoff chrome once the running version matches the target", () => {
-    const runtime = makeRuntime({
-      runtime_health: "ok",
-      machine_upgrade: {
-        id: "machine-upgrade-1",
-        daemon_id: "daemon-1",
-        request_id: "request-1",
-        requested_target: "v0.4.19",
-        resolved_target: "v0.4.19",
-        phase: "handoff",
-        created_at: "2026-08-07T00:00:00Z",
-        updated_at: "2026-08-07T00:00:01Z",
-      },
     });
     wrap(
       <MachineDaemonUpgrade

@@ -120,7 +120,7 @@ func (upgrade *hostMachineUpgrade) localRequestHandler() http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "phase": "queued"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "phase": "starting"})
 	}
 }
 

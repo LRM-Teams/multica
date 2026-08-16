@@ -183,6 +183,10 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err != nil {
 		return err
 	}
+	if err := d.adoptWorkspaceRunner(runner); err != nil {
+		return err
+	}
+	defer d.detachWorkspaceRunner(runner)
 	var (
 		readyOnce sync.Once
 		readyErr  error

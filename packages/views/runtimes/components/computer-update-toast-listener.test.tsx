@@ -27,6 +27,10 @@ vi.mock("sonner", () => ({
   },
 }));
 
+vi.mock("@multica/core/realtime", () => ({
+  useWSEvent: vi.fn(),
+}));
+
 vi.mock("@multica/core/api", () => ({
   api: {
     initiateMachineUpgrade: mocks.initiateMachineUpgrade,

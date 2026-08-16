@@ -12,6 +12,7 @@ import {
   isMachineUpgradeTargetSuperseded,
 } from "@multica/core/runtimes";
 import { api, ApiError } from "@multica/core/api";
+import { useWSEvent } from "@multica/core/realtime";
 import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUpCircle, Loader2 } from "lucide-react";
@@ -77,16 +78,11 @@ export function MachineDaemonUpgrade({
   // Keep the last target we tried so a failed attempt still shows `→ target`
   // even if the server drops target_version after health flips to failed.
   const [lastAttemptTarget, setLastAttemptTarget] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestIdRef = useRef<string | null>(null);
 
   const cleanup = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    requestIdRef.current = null;
   }, []);
-
-  useEffect(() => () => cleanup(), [cleanup]);
 
   // Do NOT useEffect-clear local poll status when version catches up —
   // react-doctor flags that. isApplying / isActive already gate chrome on
@@ -98,48 +94,33 @@ export function MachineDaemonUpgrade({
     });
   }, [qc]);
 
+  const computerId = runtime.daemon_id?.trim() ?? "";
+  useWSEvent("computer:upgrade:progress", (payload) => {
+    if (payload.computer_id !== computerId || payload.requestId !== requestIdRef.current) return;
+    setStatus("running");
+    setUpdating(true);
+  });
+  useWSEvent("computer:upgrade:done", (payload) => {
+    if (payload.computer_id !== computerId || payload.requestId !== requestIdRef.current) return;
+    setUpdating(false);
+    cleanup();
+    setStatus(payload.ok ? "completed" : "failed");
+    refreshRuntimes();
+  });
+
   const handleUpdate = async () => {
     const aim = targetVersion ?? lastAttemptTarget;
     if (!aim) return;
-    cleanup();
+    const daemonID = runtime.daemon_id?.trim();
+    if (!daemonID) return;
+    const requestId = createSafeId();
+    requestIdRef.current = requestId;
     setUpdating(true);
     setLastAttemptTarget(aim);
-    // Immediate local feedback (≤200ms) before first poll tick.
     setStatus("pending");
     try {
-      const daemonID = runtime.daemon_id?.trim();
-      if (!daemonID) {
-        throw new Error("runtime has no daemon identity");
-      }
-      const update = await api.initiateMachineUpgrade(daemonID, aim, createSafeId());
-      pollRef.current = setInterval(async () => {
-        try {
-          const result = await api.getMachineUpgrade(daemonID, update.id);
-          const nextStatus: RuntimeUpdateStatus = (() => {
-            switch (result.phase) {
-              case "queued":
-              case "starting":
-                return "running";
-              case "completed": return "completed";
-              case "timeout": return "timeout";
-              case "failed": case "rolled_back": case "cancelled": return "failed";
-              default: return "running";
-            }
-          })();
-          setStatus(nextStatus);
-          if (
-            nextStatus === "completed" ||
-            nextStatus === "failed" ||
-            nextStatus === "timeout"
-          ) {
-            setUpdating(false);
-            cleanup();
-            refreshRuntimes();
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, 2000);
+      await api.initiateMachineUpgrade(daemonID, aim, requestId);
+      setStatus("running");
     } catch (err) {
       if (
         err instanceof ApiError &&

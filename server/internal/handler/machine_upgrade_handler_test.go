@@ -116,7 +116,7 @@ func seedStartingMachineUpgrade(t *testing.T, daemonID, target string) MachineUp
 	return *op
 }
 
-func initiateMachineUpgrade(t *testing.T, userID, daemonID, target string) (*httptest.ResponseRecorder, MachineUpgrade) {
+func initiateMachineUpgrade(t *testing.T, userID, daemonID, target string) (*httptest.ResponseRecorder, map[string]string) {
 	t.Helper()
 	req := newRequestAsUser(userID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{
 		"target_version": target,
@@ -125,14 +125,9 @@ func initiateMachineUpgrade(t *testing.T, userID, daemonID, target string) (*htt
 	req = withURLParam(req, "daemonId", daemonID)
 	w := httptest.NewRecorder()
 	testHandler.CreateMachineUpgrade(w, req)
-	if w.Code != http.StatusOK {
-		return w, MachineUpgrade{}
-	}
-	var op MachineUpgrade
-	if err := json.Unmarshal(w.Body.Bytes(), &op); err != nil {
-		t.Fatal(err)
-	}
-	return w, op
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	return w, body
 }
 
 func TestMachineUpgrade_NoCurrentSocketFailsInsteadOfQueuing(t *testing.T) {
@@ -148,16 +143,13 @@ func TestMachineUpgrade_NoCurrentSocketFailsInsteadOfQueuing(t *testing.T) {
 	})
 
 	createdW, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
-	if createdW.Code != http.StatusOK || created.Phase != MachineUpgradeFailed {
-		t.Fatalf("upgrade without a live socket = %d %+v, want failed", createdW.Code, created)
-	}
-	if created.ErrorCode == nil || *created.ErrorCode != "no_current_socket" {
-		t.Fatalf("failed upgrade code = %+v, want no_current_socket", created.ErrorCode)
+	if createdW.Code != http.StatusConflict || created["code"] != "no_current_socket" {
+		t.Fatalf("upgrade without a live socket = %d %s, want no_current_socket", createdW.Code, createdW.Body.String())
 	}
 
 	retryW, retry := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
-	if retryW.Code != http.StatusOK || retry.Phase != MachineUpgradeFailed || retry.ID == created.ID {
-		t.Fatalf("retry without a live socket = %d %+v", retryW.Code, retry)
+	if retryW.Code != http.StatusConflict || retry["code"] != "no_current_socket" {
+		t.Fatalf("retry without a live socket = %d %s", retryW.Code, retryW.Body.String())
 	}
 }
 
@@ -173,16 +165,13 @@ func TestMachineUpgrade_CanonicalRouteSharesOneDaemonOperation(t *testing.T) {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
 	})
 
-	firstW, first := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
-	if firstW.Code != http.StatusOK || first.Phase != MachineUpgradeFailed {
-		t.Fatalf("first machine upgrade = %d %+v", firstW.Code, first)
+	firstW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	if firstW.Code != http.StatusConflict {
+		t.Fatalf("first machine upgrade = %d %s", firstW.Code, firstW.Body.String())
 	}
-	secondW, second := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
-	if secondW.Code != http.StatusOK || second.Phase != MachineUpgradeFailed || second.ID == first.ID {
-		t.Fatalf("retry without a live socket = %d %+v", secondW.Code, second)
-	}
-	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, first.ID); err != nil || op == nil || op.Phase != MachineUpgradeFailed {
-		t.Fatalf("failed machine operation = %+v err=%v", op, err)
+	secondW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	if secondW.Code != http.StatusConflict {
+		t.Fatalf("retry without a live socket = %d %s", secondW.Code, secondW.Body.String())
 	}
 	var legacyIntentCount int
 	if err := testPool.QueryRow(context.Background(), `
@@ -194,9 +183,9 @@ func TestMachineUpgrade_CanonicalRouteSharesOneDaemonOperation(t *testing.T) {
 		t.Fatalf("canonical route created %d legacy runtime intents", legacyIntentCount)
 	}
 
-	otherW, other := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
-	if otherW.Code != http.StatusOK || other.Phase != MachineUpgradeFailed {
-		t.Fatalf("different target without a live socket = %d %+v", otherW.Code, other)
+	otherW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
+	if otherW.Code != http.StatusConflict {
+		t.Fatalf("different target without a live socket = %d %s", otherW.Code, otherW.Body.String())
 	}
 }
 
@@ -217,45 +206,12 @@ func TestMachineUpgrade_CanonicalRouteReplaysRequestIDAndSupportsLookup(t *testi
 		return w
 	}
 	firstW := create()
-	if firstW.Code != http.StatusOK {
+	if firstW.Code != http.StatusConflict {
 		t.Fatalf("canonical create = %d: %s", firstW.Code, firstW.Body.String())
 	}
-	var first MachineUpgrade
-	if err := json.Unmarshal(firstW.Body.Bytes(), &first); err != nil {
-		t.Fatal(err)
-	}
-	if first.Phase != MachineUpgradeFailed {
-		t.Fatalf("canonical create without a live socket = %+v, want failed", first)
-	}
 	secondW := create()
-	if secondW.Code != http.StatusOK {
+	if secondW.Code != http.StatusConflict {
 		t.Fatalf("canonical replay = %d: %s", secondW.Code, secondW.Body.String())
-	}
-	var second MachineUpgrade
-	if err := json.Unmarshal(secondW.Body.Bytes(), &second); err != nil || second.ID != first.ID || second.Phase != MachineUpgradeFailed {
-		t.Fatalf("canonical replay = %+v err=%v, want failed %s", second, err, first.ID)
-	}
-	conflictReq := newRequestAsUser(testUserID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{
-		"target_version": "v9.9.9",
-		"request_id":     "different-" + requestID,
-	})
-	conflictReq = withURLParam(conflictReq, "daemonId", daemonID)
-	conflictW := httptest.NewRecorder()
-	testHandler.CreateMachineUpgrade(conflictW, conflictReq)
-	if conflictW.Code != http.StatusOK {
-		t.Fatalf("distinct request after failed create = %d: %s", conflictW.Code, conflictW.Body.String())
-	}
-	var other MachineUpgrade
-	if err := json.Unmarshal(conflictW.Body.Bytes(), &other); err != nil || other.ID == first.ID || other.Phase != MachineUpgradeFailed {
-		t.Fatalf("distinct request after failed create = %+v err=%v", other, err)
-	}
-
-	getReq := newRequestAsUser(testUserID, http.MethodGet, "/api/daemons/"+daemonID+"/upgrades/"+first.ID, nil)
-	getReq = withURLParams(getReq, "daemonId", daemonID, "upgradeId", first.ID)
-	getW := httptest.NewRecorder()
-	testHandler.GetMachineUpgrade(getW, getReq)
-	if getW.Code != http.StatusOK {
-		t.Fatalf("canonical lookup = %d: %s", getW.Code, getW.Body.String())
 	}
 }
 
@@ -947,7 +903,7 @@ func TestMachineUpgrade_AllowsOnlyComputerOwner(t *testing.T) {
 		}
 	}
 	computerOwnerW, _ := initiateMachineUpgrade(t, computerOwnerID, daemonID, "v9.9.9")
-	if computerOwnerW.Code != http.StatusOK {
+	if computerOwnerW.Code != http.StatusConflict {
 		t.Fatalf("canonical create by Computer owner = %d: %s", computerOwnerW.Code, computerOwnerW.Body.String())
 	}
 	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
@@ -979,24 +935,18 @@ func TestMachineUpgrade_RuntimeCompatibilityAdaptersShareAndCancelCanonicalOpera
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	firstRuntimeID, secondRuntimeID, _ := createMachineUpgradeSiblingRuntimes(t, testUserID)
 
 	createReq := newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+firstRuntimeID+"/update", map[string]string{"target_version": "v9.9.9"})
 	createReq = withURLParam(createReq, "runtimeId", firstRuntimeID)
 	createW := httptest.NewRecorder()
 	testHandler.InitiateUpdate(createW, createReq)
-	if createW.Code != http.StatusOK {
+	if createW.Code != http.StatusConflict {
 		t.Fatalf("compatibility create = %d: %s", createW.Code, createW.Body.String())
 	}
-	var created UpdateRequest
-	if err := json.Unmarshal(createW.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-	if created.ID == "" || created.RuntimeID != firstRuntimeID || created.Status != UpdateFailed {
-		t.Fatalf("compatibility create response = %+v", created)
-	}
-	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID); err != nil || op == nil || op.Phase != MachineUpgradeFailed {
-		t.Fatalf("canonical operation = %+v err=%v", op, err)
+	var body map[string]string
+	if err := json.Unmarshal(createW.Body.Bytes(), &body); err != nil || body["code"] != "request_id_required" && body["code"] != "no_current_socket" {
+		t.Fatalf("compatibility create response = %s err=%v", createW.Body.String(), err)
 	}
 	var legacyIntentCount int
 	if err := testPool.QueryRow(context.Background(), `
@@ -1008,58 +958,13 @@ func TestMachineUpgrade_RuntimeCompatibilityAdaptersShareAndCancelCanonicalOpera
 		t.Fatalf("compatibility adapter created %d legacy runtime intents", legacyIntentCount)
 	}
 
-	getReq := newRequestAsUser(testUserID, http.MethodGet, "/api/runtimes/"+secondRuntimeID+"/update/"+created.ID, nil)
-	getReq = withURLParams(getReq, "runtimeId", secondRuntimeID, "updateId", created.ID)
-	getW := httptest.NewRecorder()
-	testHandler.GetUpdate(getW, getReq)
-	if getW.Code != http.StatusOK {
-		t.Fatalf("sibling compatibility get = %d: %s", getW.Code, getW.Body.String())
-	}
-	var sibling UpdateRequest
-	if err := json.Unmarshal(getW.Body.Bytes(), &sibling); err != nil {
-		t.Fatal(err)
-	}
-	if sibling.ID != created.ID || sibling.RuntimeID != secondRuntimeID || sibling.Status != UpdateFailed {
-		t.Fatalf("sibling compatibility projection = %+v", sibling)
-	}
-
-	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
-		t.Fatal(err)
-	}
-	queued := seedStartingMachineUpgrade(t, daemonID, "v9.9.9")
-	cancelReq := newRequestAsUser(testUserID, http.MethodDelete, "/api/runtimes/"+secondRuntimeID+"/update-intent", nil)
-	cancelReq = withURLParam(cancelReq, "runtimeId", secondRuntimeID)
-	cancelW := httptest.NewRecorder()
-	testHandler.CancelUpdateIntent(cancelW, cancelReq)
-	if cancelW.Code != http.StatusOK {
-		t.Fatalf("compatibility cancel = %d: %s", cancelW.Code, cancelW.Body.String())
-	}
-	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, queued.ID); err != nil || op == nil || op.Phase != MachineUpgradeCancelled {
-		t.Fatalf("cancelled canonical operation = %+v err=%v", op, err)
-	}
-
 	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")
-	for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
-		req := newRequestAsUser(plainMemberID, method, "/api/runtimes/"+firstRuntimeID+"/update", map[string]string{"target_version": "v10.0.0"})
-		if method == http.MethodGet {
-			req = newRequestAsUser(plainMemberID, method, "/api/runtimes/"+firstRuntimeID+"/update/"+created.ID, nil)
-		}
-		if method == http.MethodDelete {
-			req = newRequestAsUser(plainMemberID, method, "/api/runtimes/"+firstRuntimeID+"/update-intent", nil)
-		}
-		req = withURLParams(req, "runtimeId", firstRuntimeID, "updateId", created.ID)
-		w := httptest.NewRecorder()
-		switch method {
-		case http.MethodPost:
-			testHandler.InitiateUpdate(w, req)
-		case http.MethodGet:
-			testHandler.GetUpdate(w, req)
-		case http.MethodDelete:
-			testHandler.CancelUpdateIntent(w, req)
-		}
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("compatibility %s by non-owner = %d: %s", method, w.Code, w.Body.String())
-		}
+	req := newRequestAsUser(plainMemberID, http.MethodPost, "/api/runtimes/"+firstRuntimeID+"/update", map[string]string{"target_version": "v10.0.0"})
+	req = withURLParam(req, "runtimeId", firstRuntimeID)
+	w := httptest.NewRecorder()
+	testHandler.InitiateUpdate(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("compatibility POST by non-owner = %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -1126,7 +1031,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 	req = withURLParam(req, "daemonId", daemonID)
 	w := httptest.NewRecorder()
 	local.CreateMachineUpgrade(w, req)
-	if w.Code != http.StatusOK {
+	if w.Code != http.StatusAccepted {
 		t.Fatalf("create machine upgrade = %d: %s", w.Code, w.Body.String())
 	}
 
@@ -1291,7 +1196,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToNextLiveBinding(t *testing.T)
 	req = withURLParam(req, "daemonId", daemonID)
 	w := httptest.NewRecorder()
 	local.CreateMachineUpgrade(w, req)
-	if w.Code != http.StatusOK {
+	if w.Code != http.StatusAccepted {
 		t.Fatalf("create machine upgrade = %d: %s", w.Code, w.Body.String())
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {

@@ -13,9 +13,13 @@ vi.mock("@multica/core/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/api")>();
   return {
     ...actual,
-    api: { initiateMachineUpgrade: vi.fn(), getMachineUpgrade: vi.fn() },
+    api: { initiateMachineUpgrade: vi.fn() },
   };
 });
+
+vi.mock("@multica/core/realtime", () => ({
+  useWSEvent: vi.fn(),
+}));
 
 vi.mock("@multica/ui/lib/error-toast", () => ({
   showErrorToast: vi.fn(),
@@ -137,16 +141,7 @@ describe("UpdateSection manual commands", () => {
 describe("UpdateSection starting state", () => {
   it("shows the running label after clicking Update on a live socket", async () => {
     vi.mocked(api.initiateMachineUpgrade).mockResolvedValue({
-      id: "intent:rt-1",
-      daemon_id: "daemon-1", request_id: "req-1", requested_target: "latest", phase: "starting",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-    vi.mocked(api.getMachineUpgrade).mockResolvedValue({
-      id: "intent:rt-1",
-      daemon_id: "daemon-1", request_id: "req-1", requested_target: "latest", phase: "starting",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      request_id: "req-1",
     });
     vi.useFakeTimers();
     try {
@@ -164,41 +159,20 @@ describe("UpdateSection starting state", () => {
     }
   });
 
-  it("shows the give-up reason as a failure once the server stops auto-retrying, not a stale queued label", async () => {
-    vi.mocked(api.initiateMachineUpgrade).mockResolvedValue({
-      id: "intent:rt-1",
-      daemon_id: "daemon-1", request_id: "req-1", requested_target: "latest", phase: "starting",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-    vi.mocked(api.getMachineUpgrade).mockResolvedValue({
-      id: "intent:rt-1",
-      daemon_id: "daemon-1", request_id: "req-1", requested_target: "latest", phase: "failed",
-      error_message:
-        "gave up after 8 consecutive failed attempts — cancel and retry manually once the underlying issue is resolved",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-    vi.useFakeTimers();
-    try {
-      renderSection();
-      fireEvent.click(screen.getByRole("button", { name: "Update" }));
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000);
-      });
-
-      expect(
-        screen.queryByText("Queued — will start when this runtime is next online."),
-      ).toBeNull();
-      expect(
-        screen.getByText(
-          "gave up after 8 consecutive failed attempts — cancel and retry manually once the underlying issue is resolved",
-        ),
-      ).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
+  it("shows a failure when dispatch is rejected", async () => {
+    vi.mocked(api.initiateMachineUpgrade).mockRejectedValue(
+      new ApiError("Computer upgrade needs the current Binding socket", 409, {
+        code: "no_current_socket",
+        error: "Computer upgrade needs the current Binding socket",
+      }),
+    );
+    renderSection();
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    await act(async () => {});
+    expect(
+      screen.queryByText("Queued — will start when this runtime is next online."),
+    ).toBeNull();
+    expect(screen.getByText("Failed to initiate update")).toBeInTheDocument();
   });
 });
 

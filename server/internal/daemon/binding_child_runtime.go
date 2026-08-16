@@ -166,6 +166,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		Drain:        d.beginBindingDrain,
 		ReleaseDrain: d.releaseClaimBarrier,
 		Exit:         cancel,
+		Emit:         d.emitComputerUpgrade,
 		Prepare:      config.PrepareUpgrade,
 	})
 	d.bindingMachineUpgrade = executor.Execute

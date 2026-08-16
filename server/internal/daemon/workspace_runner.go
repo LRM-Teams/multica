@@ -18,6 +18,12 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 	writeFrame := func(eventType string, payload any) error {
 		return runner.sendOnConnection(connection, eventType, payload)
 	}
+	if runner.setComputerUpgradeEmit != nil {
+		runner.setComputerUpgradeEmit(func(eventType string, payload any) {
+			_ = writeFrame(eventType, payload)
+		})
+		defer runner.setComputerUpgradeEmit(nil)
+	}
 	failConnection := func(err error) {
 		if err == nil {
 			return

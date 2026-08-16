@@ -101,6 +101,27 @@ func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonH
 	}
 }
 
+func (d *Daemon) setComputerUpgradeEmit(emit func(string, any)) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.computerUpgradeEmit = emit
+	d.mu.Unlock()
+}
+
+func (d *Daemon) emitComputerUpgrade(eventType string, payload any) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	emit := d.computerUpgradeEmit
+	d.mu.Unlock()
+	if emit != nil {
+		emit(eventType, payload)
+	}
+}
+
 func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
 	if d == nil {
 		return errors.New("DaemonCore is unavailable")

@@ -10,6 +10,10 @@ import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import type { RuntimeMachine } from "./runtime-machines";
 
+vi.mock("@multica/core/realtime", () => ({
+  useWSEvent: vi.fn(),
+}));
+
 vi.mock("@multica/core/auth", () => ({
   useAuthStore: (sel: (s: { user: { id: string } | null }) => unknown) =>
     sel({ user: { id: "user-mine" } }),

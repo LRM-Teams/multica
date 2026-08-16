@@ -196,7 +196,7 @@ func (h *Handler) ReportMachineUpgradeProgress(w http.ResponseWriter, r *http.Re
 // cannot acquire independent lineages.
 func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
-	rt, member, ok := h.requireMachineUpgradeManager(w, r, daemonID)
+	rt, _, ok := h.requireMachineUpgradeManager(w, r, daemonID)
 	if !ok {
 		return
 	}
@@ -209,12 +209,12 @@ func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "request_id is required")
 		return
 	}
-	op, _, err := h.createMachineUpgrade(r, rt, member, req, false)
+	requestID, err := h.dispatchMachineUpgrade(r, rt, req)
 	if err != nil {
 		h.writeMachineUpgradeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, op)
+	writeJSON(w, http.StatusAccepted, map[string]string{"request_id": requestID})
 }
 
 func (h *Handler) GetMachineUpgrade(w http.ResponseWriter, r *http.Request) {
@@ -260,22 +260,34 @@ func (h *Handler) CancelMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) createMachineUpgrade(
 	r *http.Request,
 	rt db.AgentRuntime,
-	member db.Member,
+	_ db.Member,
 	req createMachineUpgradeRequest,
-	allowImplicitRequestID bool,
+	_ bool,
 ) (*MachineUpgrade, bool, error) {
-	if h.MachineUpgradeStore == nil {
-		return nil, false, errors.New("machine upgrade store is not configured")
+	requestID, err := h.dispatchMachineUpgrade(r, rt, req)
+	if err != nil {
+		return nil, false, err
 	}
+	target := strings.TrimSpace(req.TargetVersion)
+	if target == "" {
+		target = "latest"
+	}
+	return &MachineUpgrade{ID: requestID, RequestID: requestID, RequestedTarget: target, Phase: MachineUpgradeStarting}, true, nil
+}
+
+// dispatchMachineUpgrade is the Raft 1.0.16 click path: authorize, then send
+// computer:upgrade on the current Binding socket. It does not create a cloud
+// machine_upgrade row.
+func (h *Handler) dispatchMachineUpgrade(r *http.Request, rt db.AgentRuntime, req createMachineUpgradeRequest) (string, error) {
 	daemonID := runtimeDaemonKey(rt)
 	if daemonID == "" {
-		return nil, false, &machineUpgradeInputError{code: "machine_upgrade_identity_missing", message: "runtime has no daemon identity"}
+		return "", &machineUpgradeInputError{code: "machine_upgrade_identity_missing", message: "runtime has no daemon identity"}
 	}
 	if pinnedVersion, pinned := runtimePinnedVersion(rt); pinned {
-		return nil, false, &machineUpgradeInputError{code: "runtime_pinned", message: "this computer is pinned to version " + pinnedVersion}
+		return "", &machineUpgradeInputError{code: "runtime_pinned", message: "this computer is pinned to version " + pinnedVersion}
 	}
 	if launchedBy(runtimeMetadata(rt)) == "desktop" {
-		return nil, false, &machineUpgradeInputError{code: "desktop_managed", message: "this computer is managed by the Desktop updater"}
+		return "", &machineUpgradeInputError{code: "desktop_managed", message: "this computer is managed by the Desktop updater"}
 	}
 	target := strings.TrimSpace(req.TargetVersion)
 	if target == "" {
@@ -283,56 +295,19 @@ func (h *Handler) createMachineUpgrade(
 	}
 	requestID := strings.TrimSpace(req.RequestID)
 	if requestID == "" {
-		if !allowImplicitRequestID {
-			return nil, false, &machineUpgradeInputError{code: "request_id_required", message: "request_id is required"}
-		}
-		// Installed runtime clients predate request IDs. They are adapters, not
-		// independent mutation owners: a same-target retry projects the active
-		// canonical operation, while a different target is a real conflict.
-		active, err := h.MachineUpgradeStore.LatestForDaemon(r.Context(), daemonID)
-		if err != nil {
-			return nil, false, err
-		}
-		if active != nil && !active.Phase.terminal() {
-			if active.RequestedTarget == target {
-				return active, false, nil
-			}
-			return nil, false, &machineUpgradeConflictError{active: active}
-		}
-		requestID = randomID()
+		return "", &machineUpgradeInputError{code: "request_id_required", message: "request_id is required"}
 	}
-	op, created, err := h.MachineUpgradeStore.Create(r.Context(), daemonID, uuidToString(member.UserID), requestID, target)
-	if err != nil {
-		return nil, false, err
+	if !h.dispatchComputerUpgradeToRunners(r.Context(), daemonID, requestID, target) {
+		return "", &machineUpgradeInputError{code: "no_current_socket", message: "Computer upgrade needs the current Binding socket"}
 	}
-	if created {
-		// Authority is the current Binding socket. Without one there is
-		// nothing to wait for — fail now instead of parking a queue.
-		if !h.dispatchComputerUpgradeToRunners(r.Context(), runtimeDaemonKey(rt), op) {
-			failed, failErr := h.MachineUpgradeStore.Progress(
-				r.Context(), daemonID, op.ID, MachineUpgradeFailed,
-				"no_current_socket",
-				"Computer upgrade needs the current Binding socket",
-			)
-			if failErr != nil {
-				return nil, false, failErr
-			}
-			if failed != nil {
-				op = failed
-			}
-			h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
-			return op, false, nil
-		}
-		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
-	}
-	return op, created, nil
+	return requestID, nil
 }
 
 // dispatchComputerUpgradeToRunners is the Raft 1.0.16 connect-socket path:
 // command goes to one current DaemonCore socket. Upgrade is machine-wide; the
 // child forwards it to Computer Host, and Host drains every Binding locally.
-func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computerID string, op *MachineUpgrade) bool {
-	if h == nil || h.DaemonHub == nil || op == nil || strings.TrimSpace(computerID) == "" {
+func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computerID, requestID, target string) bool {
+	if h == nil || h.DaemonHub == nil || strings.TrimSpace(computerID) == "" || strings.TrimSpace(requestID) == "" {
 		return false
 	}
 	rows, err := h.DB.Query(ctx, `
@@ -344,7 +319,7 @@ func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computer
 		return false
 	}
 	defer rows.Close()
-	payload := protocol.ComputerUpgradePayload{RequestID: op.ID, OperationID: op.ID, TargetVersion: op.RequestedTarget}
+	payload := protocol.ComputerUpgradePayload{RequestID: requestID, OperationID: requestID, TargetVersion: target}
 	for rows.Next() {
 		var workspaceID pgtype.UUID
 		if err := rows.Scan(&workspaceID); err != nil {
@@ -544,6 +519,13 @@ func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Re
 // publishComputerUpgradeProjection invalidates the Computer projection in
 // every active Workspace binding. Upgrade lifecycle does not belong to a
 // Runtime, and the Workspace that initiated the mutation has no special role.
+func (h *Handler) publishComputerUpgradeSocketEvent(identity daemonws.ClientIdentity, eventType string, payload map[string]any) {
+	if h == nil || strings.TrimSpace(identity.WorkspaceID) == "" {
+		return
+	}
+	h.publish(eventType, identity.WorkspaceID, "system", "", payload)
+}
+
 func (h *Handler) publishComputerUpgradeProjection(r *http.Request, computerID string) {
 	computerID = strings.TrimSpace(computerID)
 	if computerID == "" {

@@ -56,6 +56,8 @@ export type WSEventType =
   | "daemon:register"
   | "daemon:runtime_updated"
   | "computer:updated"
+  | "computer:upgrade:progress"
+  | "computer:upgrade:done"
   | "skill:created"
   | "skill:updated"
   | "skill:deleted"
@@ -169,6 +171,23 @@ export interface DaemonRuntimeUpdatedPayload {
 
 export interface ComputerUpdatedPayload {
   computer_id: string;
+}
+
+export interface ComputerUpgradeProgressPayload {
+  computer_id: string;
+  requestId: string;
+  phase?: string;
+  message?: string;
+  percent?: number;
+}
+
+export interface ComputerUpgradeDonePayload {
+  computer_id: string;
+  requestId: string;
+  ok: boolean;
+  newVersion?: string;
+  error?: string;
+  rolledBack?: boolean;
 }
 
 export interface VoiceCallUpdatedPayload {
@@ -597,6 +616,8 @@ export interface WSEventPayloadMap {
   "daemon:register": unknown;
   "daemon:runtime_updated": DaemonRuntimeUpdatedPayload;
   "computer:updated": ComputerUpdatedPayload;
+  "computer:upgrade:progress": ComputerUpgradeProgressPayload;
+  "computer:upgrade:done": ComputerUpgradeDonePayload;
   "skill:created": unknown;
   "skill:updated": unknown;
   "skill:deleted": unknown;

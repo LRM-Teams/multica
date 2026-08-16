@@ -185,10 +185,20 @@ func (upgrade *hostMachineUpgrade) prepareChildUpgrade(ctx context.Context, iden
 	upgrade.initiatorWorkspaceID = identity.WorkspaceID
 	manifestURL := upgrade.manifestBaseURL
 	upgrade.mu.Unlock()
-	if err := upgrade.host.PrepareSiblingMachineUpgrade(ctx, identity.WorkspaceID); err != nil {
+	// Host busy covers only this prepare call, matching Raft 1.0.16:
+	// success, same-version, and sibling failure all release before return.
+	// initiatorWorkspaceID stays so the successor restart can still observe
+	// the Binding that actually swapped the binary.
+	defer func() {
 		upgrade.mu.Lock()
 		if upgrade.activeID == pending.ID {
 			upgrade.activeID = ""
+		}
+		upgrade.mu.Unlock()
+	}()
+	if err := upgrade.host.PrepareSiblingMachineUpgrade(ctx, identity.WorkspaceID); err != nil {
+		upgrade.mu.Lock()
+		if upgrade.initiatorWorkspaceID == identity.WorkspaceID {
 			upgrade.initiatorWorkspaceID = ""
 		}
 		upgrade.mu.Unlock()

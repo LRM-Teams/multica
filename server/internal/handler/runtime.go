@@ -55,16 +55,13 @@ type AgentRuntimeResponse struct {
 	// DaemonTargetVersion is the one release target for the physical daemon.
 	// Runtime TargetVersion below is retained only as a legacy lifecycle
 	// projection; Computer clients must use this daemon-scoped field.
-	DaemonTargetVersion *string `json:"daemon_target_version,omitempty"`
-	TargetVersion       *string `json:"target_version,omitempty"`
-	UpdateState         string  `json:"update_state"`
-	RuntimeHealth       string  `json:"runtime_health"`
-	UpdateError         *string `json:"update_error,omitempty"`
-	// TODO(computer-upgrade-queued): remove after leftover clients stop
-	// reading machine_upgrade. New upgrades are socket-only.
-	MachineUpgrade *MachineUpgrade             `json:"machine_upgrade,omitempty"`
-	AutoUpdate     *DaemonUpdateStatusResponse `json:"auto_update"`
-	OwnerID        *string                     `json:"owner_id"`
+	DaemonTargetVersion *string                     `json:"daemon_target_version,omitempty"`
+	TargetVersion       *string                     `json:"target_version,omitempty"`
+	UpdateState         string                      `json:"update_state"`
+	RuntimeHealth       string                      `json:"runtime_health"`
+	UpdateError         *string                     `json:"update_error,omitempty"`
+	AutoUpdate          *DaemonUpdateStatusResponse `json:"auto_update"`
+	OwnerID             *string                     `json:"owner_id"`
 	// Visibility is "private" (default — only the owner / workspace admins
 	// can bind agents) or "public" (any workspace member can). See migration
 	// 083 and canUseRuntimeForAgent.
@@ -119,10 +116,10 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 
 func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) AgentRuntimeResponse {
 	update := h.latestRuntimeUpdate(ctx, rt)
-	return h.runtimeToResponseWithResolvedUpdate(ctx, rt, update, nil)
+	return h.runtimeToResponseWithResolvedUpdate(ctx, rt, update)
 }
 
-func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest, _ *MachineUpgrade) AgentRuntimeResponse {
+func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
 	daemonHeartbeat := h.daemonHeartbeatForRuntime(ctx, rt)
 	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
@@ -177,41 +174,6 @@ func attachDaemonTargetVersions(responses []AgentRuntimeResponse) {
 		}
 		responses[i].DaemonTargetVersion = &target
 	}
-}
-
-func (h *Handler) latestMachineUpgrade(ctx context.Context, rt db.AgentRuntime) *MachineUpgrade {
-	if h == nil || h.MachineUpgradeStore == nil {
-		return nil
-	}
-	op, err := h.MachineUpgradeStore.LatestForDaemon(ctx, runtimeDaemonKey(rt))
-	if err != nil {
-		slog.Warn("failed to load machine upgrade state", "error", err, "runtime_id", uuidToString(rt.ID))
-		return nil
-	}
-	return op
-}
-
-func (h *Handler) machineUpgradesForList(ctx context.Context, runtimes []db.AgentRuntime) map[string]*MachineUpgrade {
-	result := make(map[string]*MachineUpgrade)
-	if h == nil || h.MachineUpgradeStore == nil || len(runtimes) == 0 {
-		return result
-	}
-	daemons := make([]string, 0, len(runtimes))
-	seen := make(map[string]struct{})
-	for _, rt := range runtimes {
-		if daemonID := runtimeDaemonKey(rt); daemonID != "" {
-			if _, ok := seen[daemonID]; !ok {
-				seen[daemonID] = struct{}{}
-				daemons = append(daemons, daemonID)
-			}
-		}
-	}
-	upgrades, err := h.MachineUpgradeStore.LatestForDaemons(ctx, daemons)
-	if err != nil {
-		slog.Warn("failed to load machine upgrade states", "error", err)
-		return result
-	}
-	return upgrades
 }
 
 // daemonHeartbeatForRuntime is the single-runtime counterpart to

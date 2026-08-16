@@ -111,8 +111,6 @@ export type {
   DashboardRunTimeDaily,
   RuntimeUpdate,
   RuntimeUpdateStatus,
-  MachineUpgrade,
-  MachineUpgradePhase,
   RuntimeRestart,
   RuntimeRestartStatus,
   RuntimeModel,

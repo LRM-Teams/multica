@@ -4,7 +4,6 @@ import {
   runtimeCurrentVersion,
   runtimeTargetVersion,
 } from "./runtime-health-state";
-import { isNewerCliVersion } from "./cli-version";
 
 /** Same aggregation key as attentionMachineKey — one toast per daemon. */
 export function computerUpdateMachineKey(runtime: AgentRuntime): string {
@@ -84,78 +83,8 @@ export function machineTitleFromRuntime(runtime: AgentRuntime): string {
   return runtime.id;
 }
 
-function hasSupersedingDaemonTarget(
-  machineUpgrade: AgentRuntime["machine_upgrade"],
-  currentVersion: string | null,
-  daemonTargetVersion: string | null | undefined,
-): boolean {
-  const recordedTarget =
-    machineUpgrade?.resolved_target?.trim() ||
-    machineUpgrade?.requested_target?.trim() ||
-    null;
-  const daemonTarget = daemonTargetVersion?.trim() || null;
-  return (
-    !!recordedTarget &&
-    !!daemonTarget &&
-    isNewerCliVersion(daemonTarget, currentVersion) &&
-    !isNewerCliVersion(recordedTarget, currentVersion)
-  );
-}
-
-/**
- * A terminal legacy request such as `latest` stops owning failure presentation
- * once the server can offer a newer exact release.
- */
-export function isMachineUpgradeFailureSuperseded(
-  machineUpgrade: AgentRuntime["machine_upgrade"],
-  currentVersion: string | null,
-  daemonTargetVersion: string | null | undefined,
-): boolean {
-  const phase = machineUpgrade?.phase;
-  const isTerminalFailure =
-    phase === "failed" ||
-    phase === "rolled_back" ||
-    phase === "cancelled" ||
-    phase === "timeout";
-  return (
-    isTerminalFailure &&
-    hasSupersedingDaemonTarget(
-      machineUpgrade,
-      currentVersion,
-      daemonTargetVersion,
-    )
-  );
-}
-
-/**
- * A terminal operation stops owning target selection after its recorded target
- * has caught up and the daemon advertises a newer exact release.
- */
-export function isMachineUpgradeTargetSuperseded(
-  machineUpgrade: AgentRuntime["machine_upgrade"],
-  currentVersion: string | null,
-  daemonTargetVersion: string | null | undefined,
-): boolean {
-  const phase = machineUpgrade?.phase;
-  const isTerminal =
-    phase === "completed" ||
-    phase === "failed" ||
-    phase === "rolled_back" ||
-    phase === "cancelled" ||
-    phase === "timeout";
-  return (
-    isTerminal &&
-    hasSupersedingDaemonTarget(
-      machineUpgrade,
-      currentVersion,
-      daemonTargetVersion,
-    )
-  );
-}
-
 /**
  * Prefer the daemon target, then the legacy runtime target.
- * machine_upgrade is leftover and must not own target selection.
  */
 export function resolveComputerUpdateTarget(
   runtime: AgentRuntime,

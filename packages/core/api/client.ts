@@ -115,7 +115,6 @@ import type {
   DashboardUsageByAgent,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
-  MachineUpgrade,
   RuntimeRestart,
   AgentRestartMode,
   AgentRestartPreflight,

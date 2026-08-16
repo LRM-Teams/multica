@@ -70,7 +70,6 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
-		h.completeMachineUpgradeOnCurrentSocket(ctx, identity)
 		if err := h.resumeAgentRestartOperations(ctx, identity); err != nil {
 			return err
 		}

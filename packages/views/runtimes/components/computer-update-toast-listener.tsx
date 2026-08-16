@@ -19,7 +19,6 @@ import {
 } from "@multica/core/runtimes";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { createSafeId } from "@multica/core/utils";
-import type { MachineUpgradePhase, RuntimeUpdateStatus } from "@multica/core/types";
 import { useT } from "../../i18n";
 import {
   ComputerUpdateToast,
@@ -67,37 +66,7 @@ function browserStorage(): Storage | null {
   }
 }
 
-function phaseToUpdateStatus(
-  phase: MachineUpgradePhase | string | undefined,
-): RuntimeUpdateStatus | null {
-  switch (phase) {
-    case "queued":
-    case "starting":
-      return "running";
-    case "staging":
-    case "verifying":
-    case "handoff":
-    case "converging":
-    case "rollback_pending":
-      return "running";
-    case "completed":
-      return "completed";
-    case "failed":
-    case "rolled_back":
-    case "cancelled":
-      return "failed";
-    case "timeout":
-      return "timeout";
-    default:
-      return null;
-  }
-}
 
-function isTerminalMachineStatus(status: RuntimeUpdateStatus | null): boolean {
-  return (
-    status === "completed" || status === "failed" || status === "timeout"
-  );
-}
 
 function getOrCreateMap<K, V>(
   ref: { current: Map<K, V> | null },
@@ -135,16 +104,8 @@ export function ComputerUpdateToastListener() {
     machineTitle: string;
     runtimeId: string;
   }> | null>(null);
-  const pollTimersRef = useRef<Map<
-    string,
-    ReturnType<typeof setInterval>
-  > | null>(null);
   /** toastId → last published content key (skip identical re-push). */
   const publishedContentRef = useRef<Map<string, string> | null>(null);
-  /** machineKey → last polled RuntimeUpdateStatus (skip identical poll ticks). */
-  const lastPollStatusRef = useRef<Map<string, RuntimeUpdateStatus> | null>(
-    null,
-  );
   const startUpdateRef = useRef<
     ((candidate: ComputerUpdateCandidate) => void) | null
   >(null);
@@ -191,25 +152,6 @@ export function ComputerUpdateToastListener() {
   );
   const copyRef = useRef(copy);
   copyRef.current = copy;
-
-  const clearPoll = useCallback((machineKey: string) => {
-    const timers = pollTimersRef.current;
-    if (!timers) return;
-    const timer = timers.get(machineKey);
-    if (timer) {
-      clearInterval(timer);
-      timers.delete(machineKey);
-    }
-    lastPollStatusRef.current?.delete(machineKey);
-  }, []);
-
-  useEffect(() => {
-    const timers = getOrCreateMap(pollTimersRef);
-    return () => {
-      for (const timer of timers.values()) clearInterval(timer);
-      timers.clear();
-    };
-  }, []);
 
   const refreshRuntimes = useCallback(() => {
     qc.invalidateQueries({
@@ -399,7 +341,6 @@ export function ComputerUpdateToastListener() {
         candidate.targetVersion,
       );
     }
-    clearPoll(candidate.machineKey);
     getOrCreateMap(localByMachineRef).delete(candidate.machineKey);
     const toastId = computerUpdateToastId(candidate.machineKey);
     toast.dismiss(toastId);
@@ -411,7 +352,6 @@ export function ComputerUpdateToastListener() {
     if (!wsId) return;
     const c = copyRef.current;
     const toastId = computerUpdateToastId(candidate.machineKey);
-    clearPoll(candidate.machineKey);
     const localByMachine = getOrCreateMap(localByMachineRef);
     localByMachine.set(candidate.machineKey, {
       phase: "updating",

@@ -22,6 +22,10 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { api, ApiError } from "@multica/core/api";
 import { useWSEvent } from "@multica/core/realtime";
+import type {
+  ComputerUpgradeDonePayload,
+  ComputerUpgradeProgressPayload,
+} from "@multica/core/types";
 import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { deriveUpdateStatus } from "@multica/core/runtimes";
@@ -150,12 +154,14 @@ export function UpdateSection({
     [cleanup, refreshRuntimes],
   );
 
-  useWSEvent("computer:upgrade:progress", (payload) => {
+  useWSEvent("computer:upgrade:progress", (raw) => {
+    const payload = raw as ComputerUpgradeProgressPayload;
     if (payload.computer_id !== daemonId || payload.requestId !== requestIdRef.current) return;
     setStatus("running");
     setUpdating(true);
   });
-  useWSEvent("computer:upgrade:done", (payload) => {
+  useWSEvent("computer:upgrade:done", (raw) => {
+    const payload = raw as ComputerUpgradeDonePayload;
     if (payload.computer_id !== daemonId || payload.requestId !== requestIdRef.current) return;
     if (payload.ok) {
       markCompleted(t(($) => $.update.status.completed));

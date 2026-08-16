@@ -161,7 +161,7 @@ describe("UpdateSection starting state", () => {
 
   it("shows a failure when dispatch is rejected", async () => {
     vi.mocked(api.initiateMachineUpgrade).mockRejectedValue(
-      new ApiError("Computer upgrade needs the current Binding socket", 409, {
+      new ApiError("Computer upgrade needs the current Binding socket", 409, "Conflict", {
         code: "no_current_socket",
         error: "Computer upgrade needs the current Binding socket",
       }),

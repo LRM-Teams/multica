@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   deriveUpdateStatus,
@@ -15,7 +15,12 @@ import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUpCircle, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
-import type { AgentRuntime, RuntimeUpdateStatus } from "@multica/core/types";
+import type {
+  AgentRuntime,
+  ComputerUpgradeDonePayload,
+  ComputerUpgradeProgressPayload,
+  RuntimeUpdateStatus,
+} from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { formatRuntimeUpdateError } from "./update-error";
 
@@ -75,12 +80,14 @@ export function MachineDaemonUpgrade({
   }, [qc]);
 
   const computerId = runtime.daemon_id?.trim() ?? "";
-  useWSEvent("computer:upgrade:progress", (payload) => {
+  useWSEvent("computer:upgrade:progress", (raw) => {
+    const payload = raw as ComputerUpgradeProgressPayload;
     if (payload.computer_id !== computerId || payload.requestId !== requestIdRef.current) return;
     setStatus("running");
     setUpdating(true);
   });
-  useWSEvent("computer:upgrade:done", (payload) => {
+  useWSEvent("computer:upgrade:done", (raw) => {
+    const payload = raw as ComputerUpgradeDonePayload;
     if (payload.computer_id !== computerId || payload.requestId !== requestIdRef.current) return;
     setUpdating(false);
     cleanup();
@@ -254,7 +261,7 @@ export function MachineDaemonUpgrade({
   if (isFailed) {
     const reason =
       formatRuntimeUpdateError({
-        rawError: machineUpgrade?.error_message ?? updateError,
+        rawError: updateError,
         currentVersion,
         targetVersion: displayTarget,
         t,

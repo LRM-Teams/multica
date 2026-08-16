@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
 import { useWSEvent } from "@multica/core/realtime";
@@ -19,6 +19,10 @@ import {
 } from "@multica/core/runtimes";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { createSafeId } from "@multica/core/utils";
+import type {
+  ComputerUpgradeDonePayload,
+  ComputerUpgradeProgressPayload,
+} from "@multica/core/types";
 import { useT } from "../../i18n";
 import {
   ComputerUpdateToast,
@@ -90,7 +94,6 @@ export function ComputerUpdateToastListener() {
   const wsId = useWorkspaceId();
   const userId = useAuthStore((s) => s.user?.id);
   const { t } = useT("layout");
-  const qc = useQueryClient();
   const { data: runtimes } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
@@ -152,12 +155,6 @@ export function ComputerUpdateToastListener() {
   );
   const copyRef = useRef(copy);
   copyRef.current = copy;
-
-  const refreshRuntimes = useCallback(() => {
-    qc.invalidateQueries({
-      predicate: (query) => query.queryKey[0] === "runtimes",
-    });
-  }, [qc]);
 
   const syncToasts = useCallback(
     (nextCandidates: ComputerUpdateCandidate[]) => {
@@ -420,7 +417,8 @@ export function ComputerUpdateToastListener() {
     })();
   };
 
-  useWSEvent("computer:upgrade:progress", (payload) => {
+  useWSEvent("computer:upgrade:progress", (raw) => {
+    const payload = raw as ComputerUpgradeProgressPayload;
     const requests = requestByMachineRef.current;
     if (!requests) return;
     for (const [machineKey, request] of requests) {
@@ -438,7 +436,8 @@ export function ComputerUpdateToastListener() {
       return;
     }
   });
-  useWSEvent("computer:upgrade:done", (payload) => {
+  useWSEvent("computer:upgrade:done", (raw) => {
+    const payload = raw as ComputerUpgradeDonePayload;
     const requests = requestByMachineRef.current;
     if (!requests) return;
     for (const [machineKey, request] of requests) {

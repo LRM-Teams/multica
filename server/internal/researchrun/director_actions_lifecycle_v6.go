@@ -31,6 +31,9 @@ func (s *PostgresStore) executeV6WorkLifecycleAction(ctx context.Context, propos
 	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.TargetID) {
 		return ErrInvalidContract
 	}
+	if strings.TrimSpace(payload.AssigneeAgentID) != "" && !validV6ActionUUID(payload.AssigneeAgentID) {
+		return ErrInvalidContract
+	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -269,7 +272,7 @@ func (s *PostgresStore) executeV6ReportReviewAction(ctx context.Context, proposa
 		ExpectedRevision int    `json:"expected_revision"`
 		Reason           string `json:"reason"`
 	}
-	if json.Unmarshal(action.Payload, &payload) != nil || payload.ReportID == "" || payload.ExpectedRevision < 1 {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.ReportID) || payload.ExpectedRevision < 1 {
 		return ErrInvalidContract
 	}
 	decision := map[string]string{"publish_report": "published", "reject_report": "technical_failure", "revise_report": "needs_revision"}[action.Kind]

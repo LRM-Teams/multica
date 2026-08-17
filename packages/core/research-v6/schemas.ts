@@ -186,7 +186,3 @@ export function parseResearchV6ResumeVerdictStrict(
 ): ResearchV6ResumeVerdict {
   return ResearchV6ResumeVerdictSchema.parse(raw) as ResearchV6ResumeVerdict;
 }
-
-function invalidV6Response(name: string): never {
-  throw new Error(`${name} failed schema validation`);
-}

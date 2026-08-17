@@ -95,6 +95,31 @@ describe("ApiClient session-scoped Research reads", () => {
     ).rejects.toThrow("response failed session validation");
   });
 
+  it("sends exact immutable research references with natural-language steering", async () => {
+    stubResponse({ id: "m1", session_id: "s1", body: "check this" });
+    const client = new ApiClient("https://api.example.test");
+    const selectedRef = {
+      stable_id: "insight:00000000-0000-4000-8000-000000000306",
+      kind: "insight",
+      entity_id: "00000000-0000-4000-8000-000000000306",
+      revision: 2,
+      content_hash: `sha256:${"c".repeat(64)}`,
+      display_summary: "Latency boundary",
+    };
+
+    await client.postResearchMessage("s1", {
+      body: "check this",
+      selected_research_refs: [selectedRef],
+    });
+
+    const fetchMock = vi.mocked(fetch);
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(JSON.parse(String(request?.body))).toEqual({
+      body: "check this",
+      selected_research_refs: [selectedRef],
+    });
+  });
+
   it.each(["confirm", "stop"] as const)(
     "rejects a cross-session %s mutation response",
     async (operation) => {

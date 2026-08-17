@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {
   ResearchCanvasChangeCard,
+  canvasChangeTargetNodeIds,
   isCanvasChangeProcessMessage,
 } from "./research-canvas-change-card";
 import type { ResearchMessage } from "@multica/core/types";
@@ -17,6 +19,7 @@ vi.mock("../../i18n/use-t", () => ({
             input_count: "Merged {{count}} input nodes",
             conclusion_count: "{{count}} conclusions",
             graph_version: "Graph v{{version}}",
+            show_on_canvas: "Show on constellation",
             ops: {
               goal_modified: "Goal version impact",
               integration_formed: "Results merged",
@@ -85,5 +88,39 @@ describe("ResearchCanvasChangeCard (Slice F)", () => {
   it("maps the production retry command without treating unrelated process cards as changes", () => {
     expect(isCanvasChangeProcessMessage(processMessage("node_command_retry"))).toBe(true);
     expect(isCanvasChangeProcessMessage(processMessage("source_upsert"))).toBe(false);
+  });
+
+  it("focuses the server-declared merge result before its input nodes", async () => {
+    const user = userEvent.setup();
+    const onFocusNode = vi.fn();
+    const message = processMessage("graph_merge");
+    message.meta = {
+      op: "graph_merge",
+      node_id: "result-node",
+      input_node_ids: ["input-a", "input-b", "input-a"],
+    };
+
+    expect(canvasChangeTargetNodeIds(message)).toEqual([
+      "result-node",
+      "input-a",
+      "input-b",
+    ]);
+    render(
+      <ResearchCanvasChangeCard message={message} onFocusNode={onFocusNode} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show on constellation" }));
+    expect(onFocusNode).toHaveBeenCalledWith("result-node");
+  });
+
+  it("does not invent a canvas target when the process metadata has no node id", () => {
+    const onFocusNode = vi.fn();
+    const message = processMessage("goal_modified");
+
+    expect(canvasChangeTargetNodeIds(message)).toEqual([]);
+    render(
+      <ResearchCanvasChangeCard message={message} onFocusNode={onFocusNode} />,
+    );
+    expect(screen.queryByRole("button", { name: "Show on constellation" })).toBeNull();
   });
 });

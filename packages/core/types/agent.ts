@@ -1207,9 +1207,9 @@ export interface RuntimeModel {
   default?: boolean;
   /**
    * Per-model reasoning/effort catalog discovered by the daemon. Currently
-   * populated for claude, codex, opencode, and pi runtimes; omitted (or undefined)
-   * for every other provider, which the UI treats as "no thinking-level
-   * picker for this model". See MUL-2339.
+   * populated for claude, codex, grok, opencode, and pi runtimes; omitted (or
+   * undefined) for every other provider, which the UI treats as "no
+   * thinking-level picker for this model". See MUL-2339.
    */
   thinking?: RuntimeModelThinking;
 }

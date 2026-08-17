@@ -9,6 +9,7 @@ import { cn } from "@multica/ui/lib/utils";
 import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
 import type { MotionDirective } from "../../motion/directives";
 import type { StarEntityView } from "../lib/star-canvas-view-model";
+import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
 
 export interface StarGraphEntityLabels {
   tierHeaders: Record<StarGraphTier, string>;
@@ -24,6 +25,9 @@ export function StarGraphEntityLayer({
   nodeAccessibleNames,
   lensHints,
   motionDirectives,
+  expansionControl,
+  visibleLabelNodeIds,
+  sTierPresentation,
   labels,
   onSelectNode,
   onOpenNode,
@@ -33,6 +37,9 @@ export function StarGraphEntityLayer({
   nodeAccessibleNames?: ReadonlyMap<string, string>;
   lensHints?: D5LensDisplayHints;
   motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
+  expansionControl?: StarGraphExpansionControl;
+  visibleLabelNodeIds?: ReadonlySet<string>;
+  sTierPresentation?: "label" | "point";
   labels: StarGraphEntityLabels;
   onSelectNode?: (nodeId: string) => void;
   onOpenNode?: (nodeId: string) => void;
@@ -42,14 +49,27 @@ export function StarGraphEntityLayer({
       {entities.map((entity) => {
         const selected = entity.id === selectedNodeId;
         const focusable = selected || (!selectedNodeId && entity === entities[0]);
-        const state = resolveStarGraphState(
-          selected ? [entity.view.state, "selected"] : [entity.view.state],
-        );
         const motion = motionDirectives?.get(entity.id) ?? null;
+        const expandable =
+          expansionControl?.expandableNodeIds.has(entity.id) ?? false;
+        const expansionLoading =
+          expansionControl?.loadingNodeIds?.has(entity.id) ?? false;
+        const expansionFailed =
+          expansionControl?.failedNodeIds?.has(entity.id) ?? false;
+        const state = resolveStarGraphState([
+          entity.view.state,
+          ...(selected ? (["selected"] as const) : []),
+          ...(expansionLoading ? (["pending-review"] as const) : []),
+          ...(expansionFailed ? (["failed"] as const) : []),
+        ]);
         const dimmed =
           selected ? false : lensHints?.dimmedNodeIds.has(entity.id) ?? false;
         const emphasized =
           selected ? false : lensHints?.emphasizedNodeIds.has(entity.id) ?? false;
+        const contentHidden =
+          entity.view.tier !== "s" &&
+          visibleLabelNodeIds != null &&
+          !visibleLabelNodeIds.has(entity.id);
         return (
           <StarGraphNode
             key={entity.id}
@@ -65,6 +85,7 @@ export function StarGraphEntityLayer({
                 : labels.tierHeaders[entity.view.tier]
             }
             agentBadge={entity.view.agentBadge}
+            sTierPresentation={sTierPresentation}
             metrics={entity.view.metrics}
             metricText={
               entity.view.metrics
@@ -88,11 +109,24 @@ export function StarGraphEntityLayer({
                   }
                 : undefined
             }
-            busy={entity.view.state === "run"}
-            accessibleName={nodeAccessibleNames?.get(entity.id)}
+            busy={entity.view.state === "run" || expansionLoading}
+            selected={selected}
+            expanded={
+              expandable
+                ? expansionControl?.expandedNodeIds.has(entity.id) ?? false
+                : undefined
+            }
+            invalid={expansionFailed}
+            accessibleName={[
+              nodeAccessibleNames?.get(entity.id) || entity.view.title,
+              expansionFailed ? expansionControl?.failureLabel : null,
+            ]
+              .filter(Boolean)
+              .join("，")}
             className={cn(
               dimmed && "sg-lens-dim",
               emphasized && "sg-lens-emphasis",
+              contentHidden && "sg-semantic-content-hidden",
               motion?.className,
               motion?.markerClass,
             )}
@@ -102,6 +136,11 @@ export function StarGraphEntityLayer({
               ...motion?.style,
             }}
             onOpen={() => {
+              if (expandable && expansionControl) {
+                onSelectNode?.(entity.id);
+                expansionControl.onToggleNode(entity.id);
+                return;
+              }
               // Opening is a single semantic command. The open owner also
               // writes selection before presenting detail; calling both here
               // duplicates store writes when the session uses one handler for

@@ -134,7 +134,8 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 func (h *Handler) loadRunnerDesiredLaunches(ctx context.Context, identity daemonws.ClientIdentity) ([]runnerDesiredLaunch, error) {
 	rows, err := h.DB.Query(ctx, `
 		SELECT desired.agent_id::text, desired.runtime_id::text,
-		       desired.launch_id::text, desired.start_dispatch_id::text, ''
+		       desired.launch_id::text, desired.start_dispatch_id::text,
+			       COALESCE(desired.provider_session_id, '')
 		FROM agent_runner_launch_projection desired
 		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
 		WHERE desired.workspace_id::text = $1 AND runtime.daemon_id = $2

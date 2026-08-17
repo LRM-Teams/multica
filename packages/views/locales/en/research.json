@@ -152,6 +152,8 @@
     "hide_chat": "Close",
     "delivery": "Sources & report",
     "send": "Send",
+    "selected_ref_revision": "revision {{revision}}",
+    "selected_ref_remove": "Remove reference: {{summary}}",
     "stopping": "Stopping…",
     "stop_aria": "Stop generation",
     "stop_tooltip": "Stop the fleet mid-generation. Keep what already streamed; send again to resume.",
@@ -1161,6 +1163,10 @@
       "mobile_description": "Fleet conversation and selected research node details.",
       "chat_tab": "Chat with director",
       "detail_tab": "Node detail",
+      "director_role": "Director",
+      "director_fallback": "Research Director",
+      "director_active": "Active research lead",
+      "director_standby": "Waiting for the next research action",
       "hide": "Hide panel",
       "show": "Show panel"
     },
@@ -1314,6 +1320,10 @@
       "title": "Node report",
       "empty_summary": "No report summary is available for this node yet.",
       "lineage_title": "Lineage",
+      "section_navigation": "Node report sections",
+      "overview_section": "Conclusion overview",
+      "detail_section": "Evidence and execution",
+      "document_count": "{{count}} documents",
       "lineage": {
         "derived_from": "Derived from",
         "merged_from": "Merged inputs",
@@ -1326,11 +1336,22 @@
       },
       "goal_version": "Goal version {{version}}"
     },
+    "report_sandbox": {
+      "title": "Research report",
+      "isolated_document": "Isolated report document",
+      "frame_title": "Research report document",
+      "loading": "Opening isolated report…",
+      "unavailable_title": "Interactive report unavailable",
+      "unavailable_body": "The isolated document could not be opened safely. The verified plain-text version remains available below.",
+      "refresh_capability": "Request a fresh link",
+      "plain_text_title": "Plain-text report"
+    },
     "change_receipt": {
       "title": "Canvas update · {{label}}",
       "input_count": "Merged {{count}} input nodes",
       "conclusion_count": "{{count}} conclusions",
       "graph_version": "Graph v{{version}}",
+      "show_on_canvas": "Show on constellation",
       "ops": {
         "goal_steered": "Goal updated",
         "goal_modified": "Goal version impact",

@@ -32,6 +32,36 @@
   transform-origin: 0 0;
   will-change: transform;
 }
+.sg-collapse-ghost-layer {
+  z-index: 4;
+  pointer-events: none;
+}
+.sg-collapse-ghost {
+  pointer-events: none;
+  animation: sg-collapse-ghost 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  filter: saturate(0.72) drop-shadow(0 8px 18px rgb(45 212 191 / 18%));
+  will-change: transform, opacity, filter;
+}
+@keyframes sg-collapse-ghost {
+  0% {
+    opacity: 0.76;
+    transform: translate(0, 0) scale(0.98);
+  }
+  68% {
+    opacity: 0.42;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(
+      var(--collapse-target-x),
+      var(--collapse-target-y)
+    ) scale(0.22);
+    filter: saturate(0.45) blur(2px);
+  }
+}
+.sg-canvas-world.sg-camera-transitioning {
+  transition: transform 380ms cubic-bezier(0.16, 1, 0.3, 1);
+}
 .sg-canvas-interaction {
   position: absolute;
   inset: 0;
@@ -92,6 +122,100 @@
   stroke: var(--muted-foreground);
   stroke-dasharray: 3 5;
   opacity: 0.48;
+}
+.sg-edge-expansion-base {
+  animation: sg-edge-expansion-base 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sg-edge-expansion-trace {
+  fill: none;
+  stroke: color-mix(in oklab, var(--brand) 78%, white);
+  stroke-width: 2.5;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  vector-effect: non-scaling-stroke;
+  animation: sg-edge-expansion-trace 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sg-collapse-relation-layer {
+  z-index: 3;
+  overflow: visible;
+  filter: drop-shadow(0 7px 14px rgb(72 211 228 / 16%));
+}
+.sg-collapse-relation {
+  opacity: 0.8;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: sg-collapse-relation 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sg-collapse-relation-layer-low-performance {
+  filter: none;
+}
+@keyframes sg-collapse-relation {
+  0% { opacity: 0.8; stroke-dashoffset: 0; }
+  72% { opacity: 0.52; }
+  100% { opacity: 0; stroke-dashoffset: 1; }
+}
+@keyframes sg-edge-expansion-base {
+  from { opacity: 0; }
+}
+@keyframes sg-edge-expansion-trace {
+  0% { opacity: 0.9; stroke-dashoffset: 1; }
+  78% { opacity: 0.72; }
+  100% { opacity: 0; stroke-dashoffset: 0; }
+}
+.sg-fusion-ghost {
+  position: absolute;
+  display: block;
+  border: 1px solid color-mix(in oklab, var(--research-lane-3) 72%, white);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 42% 34%, rgb(34 103 112 / 82%), #091a26 72%);
+  box-shadow:
+    inset 0 0 16px rgb(72 211 228 / 14%),
+    0 0 18px color-mix(in oklab, var(--research-lane-3) 18%, transparent);
+  transform-origin: center;
+  animation: sg-fusion-converge 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sg-fusion-ghost-m,
+.sg-fusion-ghost-l,
+.sg-fusion-ghost-xl,
+.sg-fusion-ghost-xxl {
+  border-color: color-mix(in oklab, var(--success) 70%, white);
+  background:
+    radial-gradient(circle at 42% 34%, rgb(28 86 61 / 82%), #09251c 72%);
+}
+.sg-fusion-ghost-low-performance {
+  box-shadow: none;
+  animation-name: sg-fusion-converge-low-performance;
+}
+@keyframes sg-fusion-converge {
+  0% {
+    opacity: 0.92;
+    transform: translate(0, 0) scale(1);
+    filter: brightness(1.12);
+  }
+  64% {
+    opacity: 0.68;
+    filter: brightness(1.34);
+  }
+  100% {
+    opacity: 0;
+    transform:
+      translate(var(--fusion-target-x, 0), var(--fusion-target-y, 0))
+      scale(0.16);
+    filter: brightness(1.5);
+  }
+}
+@keyframes sg-fusion-converge-low-performance {
+  from {
+    opacity: 0.9;
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform:
+      translate(var(--fusion-target-x, 0), var(--fusion-target-y, 0))
+      scale(0.16);
+  }
 }
 .sg-cluster-boundary {
   position: absolute;
@@ -228,6 +352,15 @@
   opacity: 0.6;
   cursor: wait;
 }
+.sg-node .sg-core > *,
+.sg-node .sg-document-badge {
+  transition: opacity 180ms ease;
+}
+.sg-semantic-content-hidden .sg-core > *,
+.sg-semantic-content-hidden .sg-document-badge {
+  opacity: 0;
+  pointer-events: none;
+}
 
 @media (max-width: 767px) {
   .sg-canvas-root .sg-map-key {
@@ -261,11 +394,38 @@
 @media (prefers-reduced-motion: reduce) {
   .sg-canvas-world {
     will-change: auto;
+    transition: none;
   }
   .sg-edge-challenge,
   .sg-edge-newdir {
     animation: none;
   }
+  .sg-edge-expansion-base {
+    animation: none;
+  }
+  .sg-edge-expansion-trace {
+    display: none;
+  }
+  .sg-collapse-relation-layer {
+    display: none;
+  }
+  .sg-fusion-ghost-layer,
+  .sg-fusion-ghost {
+    display: none;
+  }
+  .sg-node .sg-core > *,
+  .sg-node .sg-document-badge {
+    transition: none;
+  }
+  .sg-collapse-ghost {
+    animation-name: sg-collapse-ghost-reduced;
+    animation-duration: 160ms;
+    filter: none;
+  }
+}
+@keyframes sg-collapse-ghost-reduced {
+  from { opacity: 0.48; }
+  to { opacity: 0; }
 }
 @keyframes sg-edge-flow {
   to { stroke-dashoffset: -26; }

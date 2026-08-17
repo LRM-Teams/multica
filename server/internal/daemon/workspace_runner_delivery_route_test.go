@@ -11,7 +11,7 @@ import (
 // table. Deleting a name without replacing the branch is a contract break.
 var requiredDeliveryRouteTests = []string{
 	"TestWorkspaceRunnerConsumedDeliveryAcknowledgesWithoutProcess",
-	"TestWorkspaceRunnerStartingLaunchBuffersDeliveryWithoutHandoff",
+	"TestWorkspaceRunnerStartingLaunchBuffersWithoutProviderDelivery",
 	"TestWorkspaceRunnerQueuedAPMAcceptsDeliveryWithoutStartingProvider",
 	"TestWorkspaceRunnerTerminalFailureDeliveryAcknowledgesAndKeepsPending",
 	"TestWorkspaceRunnerIdleSnapshotDeliveryRestartsAndAcknowledges",

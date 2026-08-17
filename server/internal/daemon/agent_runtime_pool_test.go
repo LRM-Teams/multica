@@ -1425,7 +1425,7 @@ func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) 
 	firstComplete := make(chan struct{})
 	var firstCompleteErr error
 
-	err = pool.handoffIdleMessages(
+	err = pool.deliverIdleMessages(
 		context.Background(),
 		"agent-a", "runtime-a",
 		nil, // no messages needed — AcceptMessageBatch is mocked
@@ -1471,7 +1471,7 @@ func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) 
 	backend.messages = secondMessages
 	backend.mu.Unlock()
 
-	err = pool.handoffIdleMessages(
+	err = pool.deliverIdleMessages(
 		context.Background(),
 		"agent-a", "runtime-a",
 		nil, nil, nil, nil, nil,
@@ -1513,7 +1513,7 @@ func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) 
 
 	thirdComplete := make(chan struct{})
 	var thirdCompleteErr error
-	err = pool.handoffIdleMessages(
+	err = pool.deliverIdleMessages(
 		context.Background(),
 		"agent-a", "runtime-a",
 		nil, nil, nil, nil,

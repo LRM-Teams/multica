@@ -33,10 +33,11 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compaction_finished", entryKind: "narrative", entryText: "Context compaction finished"},
 		{name: "runtime idle", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Idle"},
 		{name: "runtime diagnostic", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeDiagnostic, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "Provider reported a warning"},
-		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "narrative", entryText: "Message received"},
+		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1"}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "narrative", entryText: "Message received"},
 		{name: "freshness held", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "2 newer messages available — review then resend"},
 		{name: "draft sent", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1", Target: "#one"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "target: #one\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent"},
 		{name: "error", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed", Message: "runtime failed: upstream unavailable"}, At: at}, kind: protocol.ActivityKindError, detail: "runtime_error", entryKind: "narrative", entryText: "runtime failed: upstream unavailable", processID: "process-1"},
+		{name: "stopped by user", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationOffline, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ReasonCode: "stopped"}, At: at}, kind: protocol.ActivityKindOffline, detail: "stopped", entryKind: "narrative", entryText: "Agent stopped by user"},
 	}
 
 	for _, test := range tests {
@@ -435,7 +436,7 @@ func TestReplayManagedStartDoesNotRepaintStarting(t *testing.T) {
 	}
 }
 
-func TestMessageHandoffWithoutManagedLaunchDoesNotInventActivityIdentity(t *testing.T) {
+func TestMessageAcceptanceWithoutManagedLaunchDoesNotInventActivityIdentity(t *testing.T) {
 	now := time.Date(2026, time.August, 7, 0, 0, 0, 0, time.UTC)
 	var activities []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-instance-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
@@ -445,32 +446,61 @@ func TestMessageHandoffWithoutManagedLaunchDoesNotInventActivityIdentity(t *test
 	d.runnerInstanceID = "daemon-instance-1"
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
-	var frames []string
-	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, _ any) error {
-		frames = append(frames, eventType)
-		return nil
-	})
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(string, any) error { return nil })
 	runner.activity = producer
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	runner.observeMessageAccepted("agent-1", "runtime-1", []protocol.AgentMessageProjection{{
+	messages := []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:agent-1", Seq: 1,
-	}}, true)
-
-	wantFrames := []string{protocol.EventAgentMessageHandoff}
-	if len(frames) != len(wantFrames) {
-		t.Fatalf("Runner frames=%v, want %v", frames, wantFrames)
-	}
-	for i := range wantFrames {
-		if frames[i] != wantFrames[i] {
-			t.Fatalf("Runner frames=%v, want %v", frames, wantFrames)
-		}
-	}
+	}}
+	runner.broadcastMessageReceivedActivity("agent-1", "runtime-1", messages)
 	if len(activities) != 0 {
-		t.Fatalf("Message handoff invented Activity without a managed launch: %+v", activities)
+		t.Fatalf("Message acceptance invented Activity without a managed launch: %+v", activities)
+	}
+}
+
+func TestPendingAndProviderAcceptancePublishOneMessageReceivedActivity(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 6, 0, 0, 0, time.UTC)
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-instance-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-instance-1"
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(string, any) error { return nil })
+	runner.activity = producer
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	registerTestRunnerInbox(t, runner, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	if err := producer.SetManaged(
+		protocol.AgentStatusPayload{AgentID: "agent-1", LaunchID: "test-launch-agent-1", Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-1", LaunchID: "test-launch-agent-1", RuntimeGeneration: 1},
+	); err != nil {
+		t.Fatalf("SetManaged: %v", err)
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "dm:agent-1", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "dm:agent-1", Seq: 1},
+	}
+
+	// Pending acceptance is not a runtime receipt and must not emit Activity.
+	if _, err := runner.acceptMessageDelivery(context.Background(), delivery); err != nil {
+		t.Fatalf("acceptMessageDelivery: %v", err)
+	}
+	// Raft records Message received once after the native provider accepts the body.
+	messages := []protocol.AgentMessageProjection{delivery.Message}
+	runner.broadcastMessageReceivedActivity("agent-1", "runtime-1", messages)
+
+	if len(activities) != 1 || activities[0].Snapshot.DetailKind != "message_received" {
+		t.Fatalf("Message received Activity = %+v, want one entry", activities)
 	}
 }
 
@@ -704,7 +734,7 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 		backend: failingResidentMessageRuntime{},
 	}
 
-	err := d.handoffIdleMessageBatch(context.Background(), "agent-a", "runtime-1", []protocol.AgentMessageProjection{{
+	err := d.deliverIdleMessageBatch(context.Background(), "agent-a", "runtime-1", []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:agent-a", Seq: 1, Content: "hello",
 	}})
 	if err == nil || !strings.Contains(err.Error(), "runtime Message handoff unavailable") {

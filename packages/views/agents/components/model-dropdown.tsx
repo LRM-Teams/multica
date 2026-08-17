@@ -34,18 +34,15 @@ export function ModelDropdown({
   value,
   onChange,
   disabled,
-  // Create/hire flows (LRM-808): empty model is rejected by the API. Prefer
-  // an explicit pick (and optionally seed the first catalog entry) instead of
-  // showing a fake "provider default" that submits blank.
+  // Create/hire flows (LRM-808): empty model is rejected by the API, so keep
+  // the picker visibly required until the user explicitly chooses a model.
   required = false,
-  autoSelectFirst = false,
 }: {
   runtimeId: string | null;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   required?: boolean;
-  autoSelectFirst?: boolean;
 }) {
   const { t } = useT("agents");
   const queryClient = useQueryClient();
@@ -111,23 +108,6 @@ export function ModelDropdown({
       onChangeRef.current("");
     }
   }, [supported, value]);
-
-  // Seed a concrete catalog model on create/hire so "Create" does not
-  // silently 400 with "model is required" while the trigger still reads
-  // like a default is already chosen.
-  // react-doctor-disable-next-line react-doctor/no-event-handler -- auto-selection reacts to the external catalog response, not a local event handler.
-  useEffect(() => {
-    if (!autoSelectFirst || !supported || catalogLoading) return;
-    if (value.trim()) return;
-    const first = models[0]?.id?.trim();
-    if (first) onChangeRef.current(first);
-  }, [
-    autoSelectFirst,
-    supported,
-    catalogLoading,
-    models,
-    value,
-  ]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return grouped;

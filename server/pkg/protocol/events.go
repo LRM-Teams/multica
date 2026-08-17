@@ -144,7 +144,6 @@ const (
 	// boundary deduplicated it. It is never a provider-turn completion receipt.
 	EventAgentDeliver               = "agent:deliver"
 	EventAgentDeliverAck            = "agent:deliver:ack"
-	EventAgentMessageHandoff        = "agent:message_handoff"
 	EventMixedRunActivityTransition = "mixed_run:activity_transition"
 	EventMixedRunActivityAck        = "mixed_run:activity_transition:ack"
 	EventDaemonAgentStart           = "agent:start"

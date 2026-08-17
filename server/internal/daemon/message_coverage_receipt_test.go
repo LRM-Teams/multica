@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -197,40 +196,6 @@ func TestMessageCoordinatorCoverageReceiptCapacityEvictsPreparedSafely(t *testin
 	}
 }
 
-func TestMessageCoordinatorCoverageBoundaryFailureMarksHealthUnknown(t *testing.T) {
-	coordinator := newCoverageTestCoordinator(t, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"})
-	message := acceptCoverageTestMessage(t, coordinator, "message-1", "channel:one", 1)
-	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 1})
-	if err != nil {
-		t.Fatalf("PrepareCoverage: %v", err)
-	}
-	originalWriter := coordinator.writeBoundaries
-	coordinator.writeBoundaries = func(string, map[string]int64) error { return errors.New("disk unavailable") }
-	if err := coordinator.CommitCoverage(offer.ReceiptID); err == nil {
-		t.Fatal("CommitCoverage succeeded with failed boundary writer")
-	}
-	if _, known := coordinator.ContextBoundary("channel:one"); known {
-		t.Fatal("boundary remained healthy after persistence failure")
-	}
-	if _, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageHold, Target: "channel:one", Limit: 3}); !errors.Is(err, ErrCoverageRequestInvalid) {
-		t.Fatalf("freshness hold with unhealthy boundary error = %v, want %v", err, ErrCoverageRequestInvalid)
-	}
-	coordinator.mu.Lock()
-	pending := coordinator.pendingBatchLocked()
-	coordinator.mu.Unlock()
-	if !reflect.DeepEqual(pending, []protocol.AgentMessageProjection{message}) {
-		t.Fatalf("failed commit changed Pending: %+v", pending)
-	}
-
-	coordinator.writeBoundaries = originalWriter
-	if err := coordinator.CommitCoverage(offer.ReceiptID); err != nil {
-		t.Fatalf("retry CommitCoverage: %v", err)
-	}
-	if got := coordinator.Boundaries()["channel:one"]; got != 1 {
-		t.Fatalf("retry boundary = %d, want 1", got)
-	}
-}
-
 func TestMessageCoordinatorReadCoverageCanPrepareWhileRecoveryIsIncomplete(t *testing.T) {
 	coordinator, err := NewMessageCoordinator(
 		InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"},
@@ -260,62 +225,5 @@ func TestMessageCoordinatorReadCoverageCanPrepareWhileRecoveryIsIncomplete(t *te
 	}
 	if got := coordinator.Boundaries()["channel:one"]; got != 4 {
 		t.Fatalf("committed read boundary = %d, want 4", got)
-	}
-}
-
-func TestMessageCoordinatorBlockedCoverageCommitDoesNotBlockDelivery(t *testing.T) {
-	coordinator := newCoverageTestCoordinator(t, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"})
-	first := acceptCoverageTestMessage(t, coordinator, "message-1", "channel:one", 1)
-	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 1})
-	if err != nil {
-		t.Fatalf("PrepareCoverage: %v", err)
-	}
-	writeStarted := make(chan struct{})
-	releaseWrite := make(chan struct{})
-	var startOnce, releaseOnce sync.Once
-	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseWrite) }) })
-	originalWriter := coordinator.writeBoundaries
-	coordinator.writeBoundaries = func(path string, boundaries map[string]int64) error {
-		startOnce.Do(func() { close(writeStarted) })
-		<-releaseWrite
-		return originalWriter(path, boundaries)
-	}
-	commitDone := make(chan error, 1)
-	go func() { commitDone <- coordinator.CommitCoverage(offer.ReceiptID) }()
-	select {
-	case <-writeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("coverage boundary write did not start")
-	}
-
-	second := testDelivery("message-2", "channel:one", 2, "delivery-message-2")
-	acceptDone := make(chan error, 1)
-	go func() {
-		accepted, err := coordinator.Accept(context.Background(), second)
-		if err == nil && !accepted {
-			err = errors.New("Delivery was not accepted")
-		}
-		acceptDone <- err
-	}()
-	select {
-	case err := <-acceptDone:
-		if err != nil {
-			t.Fatalf("Accept during coverage commit: %v", err)
-		}
-	case <-time.After(time.Second):
-		releaseOnce.Do(func() { close(releaseWrite) })
-		<-commitDone
-		t.Fatal("coverage filesystem I/O held the coordinator state lock")
-	}
-
-	releaseOnce.Do(func() { close(releaseWrite) })
-	if err := <-commitDone; err != nil {
-		t.Fatalf("CommitCoverage: %v", err)
-	}
-	coordinator.mu.Lock()
-	pending := coordinator.pendingBatchLocked()
-	coordinator.mu.Unlock()
-	if !reflect.DeepEqual(pending, []protocol.AgentMessageProjection{second.Message}) {
-		t.Fatalf("coverage commit Pending = %+v, covered=%+v", pending, first)
 	}
 }

@@ -19,8 +19,7 @@ vi.mock("@tanstack/react-query", () => ({
       models: [
         {
           id: "claude-opus-5",
-          label: "Opus 5",
-          default: true,
+          label: "Claude Opus 5",
           thinking: {
             supported_levels: [
               { value: "low", label: "Low" },

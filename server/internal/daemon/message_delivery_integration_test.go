@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -116,9 +115,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if err := ensureMulticaAgentRoot(root); err != nil {
 		t.Fatal(err)
 	}
-	if err := seedIdleMessageAcceptanceBoundaries(context.Background(), pool, root, workspaceID, agentID); err != nil {
-		t.Fatalf("seed initial Context Boundaries: %v", err)
-	}
 	fakeRuntime := &idleMessageFakeRuntime{}
 	d := New(Config{DaemonID: daemonID, WorkspacesRoot: workspacesRoot}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.mu.Lock()
@@ -138,14 +134,9 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	)
 	serverHandler.AgentDeliveryNotifier = hub
 	acks := make(chan protocol.AgentDeliverAckPayload, 2)
-	handoffs := make(chan protocol.AgentMessageHandoffPayload, 2)
 	hub.SetAgentDeliveryAckHandler(func(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 		acks <- ack
 		return serverHandler.HandleAgentDeliveryAck(ctx, identity, ack)
-	})
-	hub.SetAgentMessageHandoffHandler(func(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.AgentMessageHandoffPayload) error {
-		handoffs <- payload
-		return serverHandler.HandleAgentMessageHandoff(ctx, identity, payload)
 	})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: workspaceID})
@@ -179,8 +170,8 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	// and ACKs before the fake runtime is ever asked.
 	markTestLaunchRunning(t, runner, agentID)
 	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
-	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
-		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
+	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
+		return d.canonicalRuntimes.deliverBusyInboxNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
 	}, 20*time.Millisecond, 30*time.Millisecond)
 	teardownRunner := startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
 	defer teardownRunner()
@@ -215,39 +206,12 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		t.Fatal("canonical delivery was not acknowledged")
 	}
 
-	select {
-	case handoff := <-handoffs:
-		if handoff.AgentID != agentID || handoff.RuntimeID != runtimeID || handoff.Count != 1 {
-			t.Fatalf("handoff = %+v", handoff)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Message handoff receipt was not emitted")
-	}
-	for i := 0; i < 100; i++ {
-		runtime.Gosched()
-	}
-	select {
-	case duplicate := <-handoffs:
-		t.Fatalf("duplicate Message handoff receipt = %+v", duplicate)
-	default:
-	}
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 || len(batches[0]) != 1 || batches[0][0].ID != created.ID {
-		t.Fatalf("runtime batches = %+v, want exactly one concrete Message handoff", batches)
+		t.Fatalf("runtime batches = %+v, want exactly one concrete Message acceptance", batches)
 	}
 	target := "channel:" + channelID
 	if seq, err := d.CredentialProxy().SeenUpToSeq(agentID, target); err != nil || seq != created.Seq {
 		t.Fatalf("Credential Proxy boundary = %d, %v", seq, err)
-	}
-	raw, err := os.ReadFile(filepath.Join(root, consumedSeqsFileName))
-	if err != nil {
-		t.Fatalf("read boundary file: %v", err)
-	}
-	var boundaries map[string]int64
-	if err := json.Unmarshal(raw, &boundaries); err != nil || boundaries[target] != created.Seq {
-		t.Fatalf("boundary file = %s, err=%v", raw, err)
-	}
-	if strings.Contains(string(raw), "hello") || strings.Contains(string(raw), created.ID) {
-		t.Fatalf("boundary file persisted a Message body or identity: %s", raw)
 	}
 	// A second canonical Message arrives while the same runtime session is
 	// busy. The Machine acknowledges transport acceptance, coalesces a
@@ -295,12 +259,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if got := coordinator.Boundaries()[target]; got != created.Seq {
 		t.Fatalf("boundary after busy Notice = %d, want %d", got, created.Seq)
 	}
-	select {
-	case duplicate := <-handoffs:
-		t.Fatalf("busy Notice emitted a Message handoff receipt = %+v", duplicate)
-	default:
-	}
-
 	checkRecorder := httptest.NewRecorder()
 	checkRequest := httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(
 		fmt.Sprintf(`{"agent_id":%q}`, agentID),
@@ -412,44 +370,9 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 	}
 }
 
-func seedIdleMessageAcceptanceBoundaries(ctx context.Context, pool *pgxpool.Pool, root, workspaceID, agentID string) error {
-	rows, err := pool.Query(ctx, `
-		SELECT CASE WHEN message.thread_root_message_id IS NULL
-		            THEN 'channel:' || message.channel_id::text
-		            ELSE 'thread:' || message.thread_root_message_id::text END,
-		       max(message.seq)
-		FROM channel_message message
-		JOIN channel_member member
-		  ON member.channel_id=message.channel_id
-		 AND member.workspace_id=message.workspace_id
-		 AND member.member_type='agent'
-		 AND member.member_id=$2
-		WHERE message.workspace_id=$1 AND message.deleted_at IS NULL
-		  AND NOT (message.author_type='agent' AND message.author_id=$2)
-		GROUP BY 1`, workspaceID, agentID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	boundaries := make(map[string]int64)
-	for rows.Next() {
-		var target string
-		var seq int64
-		if err := rows.Scan(&target, &seq); err != nil {
-			return err
-		}
-		boundaries[target] = seq
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return writeConsumedSeqs(filepath.Join(root, consumedSeqsFileName), boundaries)
-}
-
 // recordingResidentMessage delegates native idle Message input to an injected
 // backend and remembers every batch the Agent runtime actually accepted, so a
-// test can distinguish "handoff completed" from "handoff was attempted but the
-// coordinator crashed inside the pre-persist window".
+// test can distinguish completed delivery from provider rejection.
 type recordingResidentMessage struct {
 	agent.Backend
 	mu       sync.Mutex
@@ -521,9 +444,6 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	if err := ensureMulticaAgentRoot(root); err != nil {
 		t.Fatal(err)
 	}
-	if err := seedIdleMessageAcceptanceBoundaries(context.Background(), pool, root, workspaceID, agentID); err != nil {
-		t.Fatalf("seed initial Context Boundaries: %v", err)
-	}
 
 	hub := daemonws.NewHub()
 	eventBus := events.New()
@@ -543,17 +463,6 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	defer server.Close()
 
 	target := "channel:" + channelID
-	readBoundary := func() map[string]int64 {
-		raw, err := os.ReadFile(filepath.Join(root, consumedSeqsFileName))
-		if err != nil {
-			return map[string]int64{}
-		}
-		var boundaries map[string]int64
-		if err := json.Unmarshal(raw, &boundaries); err != nil {
-			return map[string]int64{}
-		}
-		return boundaries
-	}
 
 	// connect wires one Daemon to a fresh websocket on the same Agent root and
 	// returns the daemon, its observation channels, the runtime batch recorder,
@@ -639,23 +548,23 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			return nil
 		}
 	}
-	waitBoundary := func(target string, want int64) map[string]int64 {
+	waitBoundary := func(d *Daemon, target string, want int64) {
 		deadline := time.Now().Add(2 * time.Second)
 		for {
-			boundaries := readBoundary()
-			if boundaries[target] == want {
-				return boundaries
+			boundary, err := d.CredentialProxy().SeenUpToSeq(agentID, target)
+			if err == nil && boundary == want {
+				return
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("Context Boundary did not reach %d for %s: %v", want, target, boundaries)
-				return boundaries
+				t.Fatalf("Context Boundary did not reach %d for %s: got %d, err %v", want, target, boundary, err)
+				return
 			}
 			runtime.Gosched()
 		}
 	}
 
 	// Phase A — provider rejection. The body remains Pending, the delivery is
-	// not acknowledged, and the durable boundary does not advance.
+	// not acknowledged, and the in-memory boundary does not advance.
 	dA, acksA, batchesA, observedA, teardownA := connect(failingResidentMessageRuntime{})
 	idA, seqA := postMessage()
 	select {
@@ -666,8 +575,8 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	if got := waitBatch(observedA, batchesA, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("rejected runtime handoff attempt = %+v, want %s", got, idA)
 	}
-	if got := readBoundary(); got[target] >= seqA {
-		t.Fatalf("boundary advanced to %d before handoff (seq=%d): %v", got[target], seqA, got)
+	if got, err := dA.CredentialProxy().SeenUpToSeq(agentID, target); err != nil || got >= seqA {
+		t.Fatalf("boundary before delivery = %d, %v; want below %d", got, err, seqA)
 	}
 	// Disconnect: the Server still owns the unacknowledged delivery.
 	teardownA()
@@ -675,15 +584,11 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 
 	// Phase B — fresh daemon, same Agent root. Server redelivery and local
 	// Pending dedup converge on one provider handoff: nothing is lost or doubled.
-	_, acksB, batchesB, observedB, teardownB := connect(&idleMessageFakeRuntime{})
+	dB, acksB, batchesB, observedB, teardownB := connect(&idleMessageFakeRuntime{})
 	if got := waitBatch(observedB, batchesB, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("restarted runtime batches = %+v, want canonical Message %s handed off", got, idA)
 	}
 	waitAck(acksB, seqA)
-	// Runtime observation proves only that native handoff started. Boundary
-	// persistence is a separate commit stage and may finish just afterward.
-	if got := waitBoundary(target, seqA); got[target] != seqA {
-		t.Fatalf("restarted boundary = %v, want %d", got, seqA)
-	}
+	waitBoundary(dB, target, seqA)
 	teardownB()
 }

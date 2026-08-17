@@ -227,7 +227,7 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.activityKind = protocol.ActivityKindOffline
 		if data.ReasonCode == "stopped" {
 			projection.detailKind = "stopped"
-			entry, err = activityNarrativeEntry(projection.detailKind, "Stopped")
+			entry, err = activityNarrativeEntry(projection.detailKind, "Agent stopped by user")
 		} else {
 			projection.detailKind = "runtime_unavailable"
 			entry, err = activityNarrativeEntry(projection.detailKind, "Offline")

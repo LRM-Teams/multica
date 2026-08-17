@@ -27,7 +27,23 @@ import {
   type GraphEdgeLike,
 } from "../../lib/canvas-keyboard-nav";
 import type { MotionDirective } from "../../motion/directives";
-import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
+import { selectStarGraphCollapseRelations } from "../lib/star-graph-collapse-relations";
+import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
+import {
+  buildStarGraphExpansionMotion,
+  selectStarGraphExpansionRelationIds,
+} from "../lib/star-graph-expansion-motion";
+import {
+  buildStarGraphFusionGhosts,
+  type StarGraphFusionTransition,
+} from "../lib/star-graph-fusion-transition";
+import { selectSemanticLabelNodeIds } from "../lib/star-graph-semantic-labels";
+import type {
+  StarCanvasViewModel,
+  StarEntityView,
+  StarRelationView,
+} from "../lib/star-canvas-view-model";
+import { selectStarGraphCollapseGhosts } from "../lib/star-graph-collapse-ghosts";
 import {
   computeClusterHiddenCounts,
   edgeBudgetForViewport,
@@ -37,16 +53,20 @@ import {
   STAR_GRAPH_SEMANTIC_NODE_BUDGET,
 } from "../lib/star-graph-visible-budget";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
+import { StarGraphCollapseRelationLayer } from "./star-graph-collapse-relation-layer";
+import { StarGraphCollapseGhostLayer } from "./star-graph-collapse-ghost-layer";
 import {
-  centerCameraOnPoint,
   computeEntityBounds,
   computeEntityBoundsForIds,
   fitCameraToBounds,
+  focusCameraOnEntity,
+  planExpansionTransactionCamera,
   zoomCamera,
   zoomPercent,
   type StarGraphCamera,
 } from "./star-graph-canvas-utils";
 import { StarGraphEdges } from "./star-graph-edges";
+import { StarGraphFusionGhostLayer } from "./star-graph-fusion-ghost-layer";
 import {
   StarGraphEntityLayer,
   type StarGraphEntityLabels,
@@ -61,6 +81,11 @@ export interface StarGraphCanvasProps {
   selectedNodeId?: string | null;
   onSelectNode?: (nodeId: string) => void;
   onOpenNode?: (nodeId: string) => void;
+  /** Server-declared one-layer expansion state; absent keeps legacy behavior. */
+  expansionControl?: StarGraphExpansionControl;
+  /** Server-declared committed absorption used only for outgoing-node ghosts. */
+  fusionTransition?: StarGraphFusionTransition | null;
+  fusionLowPerformance?: boolean;
   summaryTitle?: string;
   summaryDetail?: string;
   filterHiddenNote?: string;
@@ -79,6 +104,12 @@ export interface StarGraphCanvasProps {
   rightPanelWidth?: number;
   nodeAccessibleNames?: ReadonlyMap<string, string>;
   relatedNodeIds?: ReadonlySet<string>;
+  /** V6-only semantic policy: S-tier relations appear only for the selected S node. */
+  hideUnselectedSTierRelations?: boolean;
+  /** V6-only screen-space label selection for M+ landmarks. */
+  semanticLandmarkLabels?: boolean;
+  /** V6 micro-node treatment; legacy runs retain labeled S nodes. */
+  sTierPresentation?: "label" | "point";
   /** When set and no persisted viewport exists, initial camera fits these entities only. */
   initialFitEntityIdList?: readonly string[];
   entityBudget?: number;
@@ -100,6 +131,9 @@ export function StarGraphCanvas({
   selectedNodeId = null,
   onSelectNode,
   onOpenNode,
+  expansionControl,
+  fusionTransition,
+  fusionLowPerformance = false,
   summaryTitle,
   summaryDetail,
   filterHiddenNote,
@@ -113,6 +147,9 @@ export function StarGraphCanvas({
   rightPanelWidth = 0,
   nodeAccessibleNames,
   relatedNodeIds,
+  hideUnselectedSTierRelations = false,
+  semanticLandmarkLabels = false,
+  sTierPresentation = "label",
   initialFitEntityIdList,
   entityBudget = STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   hiddenCountLabel,
@@ -125,6 +162,12 @@ export function StarGraphCanvas({
 }: StarGraphCanvasProps) {
   const { t } = useT("research");
   const rootRef = useRef<HTMLDivElement>(null);
+  const previousEntitiesRef = useRef<readonly StarEntityView[]>(model.entities);
+  const previousModelRef = useRef<StarCanvasViewModel | null>(null);
+  const collapseRelationSnapshotRef = useRef<{
+    sequence: string;
+    relations: readonly StarRelationView[];
+  } | null>(null);
   const initialCameraRef = useRef(false);
   const storedViewport = useResearchCanvasStore((s) =>
     cameraSessionId
@@ -138,6 +181,87 @@ export function StarGraphCanvas({
     () => storedViewport ?? DEFAULT_CAMERA,
   );
   const [liveText, setLiveText] = useState("");
+  const collapseSnapshotRef = useRef<{
+    sequence: string;
+    ghosts: ReturnType<typeof selectStarGraphCollapseGhosts>;
+  } | null>(null);
+  const collapseGhosts = useMemo(
+    () => {
+      const transition = expansionControl?.transition;
+      if (transition?.kind !== "collapse") {
+        collapseSnapshotRef.current = null;
+        return [];
+      }
+      const sequence = String(transition.sequence);
+      if (collapseSnapshotRef.current?.sequence === sequence) {
+        return collapseSnapshotRef.current.ghosts;
+      }
+      const ghosts = selectStarGraphCollapseGhosts(
+        previousModelRef.current,
+        model,
+        transition,
+      );
+      collapseSnapshotRef.current = { sequence, ghosts };
+      return ghosts;
+    },
+    [expansionControl?.transition, model],
+  );
+  useEffect(() => {
+    previousModelRef.current = model;
+  }, [model]);
+  const [cameraTransitioning, setCameraTransitioning] = useState(false);
+  const [framedExpansionSequence, setFramedExpansionSequence] = useState<string | null>(null);
+  const entityMotionDirectives = useMemo(() => {
+    const expansionDirectives = buildStarGraphExpansionMotion(
+      model,
+      expansionControl?.transition,
+      expansionControl?.lowPerformance,
+    );
+    if (expansionDirectives.size === 0) return motionDirectives;
+    return new Map([
+      ...(motionDirectives?.entries() ?? []),
+      ...expansionDirectives.entries(),
+    ]);
+  }, [expansionControl?.lowPerformance, expansionControl?.transition, model, motionDirectives]);
+  const expansionRelationIds = useMemo(
+    () =>
+      selectStarGraphExpansionRelationIds(
+        model,
+        expansionControl?.transition,
+      ),
+    [expansionControl?.transition, model],
+  );
+  const collapseRelations = useMemo(() => {
+    const transition = expansionControl?.transition;
+    if (transition?.kind !== "collapse") {
+      collapseRelationSnapshotRef.current = null;
+      return [];
+    }
+    const sequence = String(transition.sequence);
+    if (collapseRelationSnapshotRef.current?.sequence === sequence) {
+      return collapseRelationSnapshotRef.current.relations;
+    }
+    const relations = selectStarGraphCollapseRelations(
+      previousModelRef.current,
+      model,
+      transition,
+    );
+    collapseRelationSnapshotRef.current = { sequence, relations };
+    return relations;
+  }, [expansionControl?.transition, model]);
+  const fusionGhosts = useMemo(
+    () =>
+      buildStarGraphFusionGhosts(
+        previousEntitiesRef.current,
+        model.entities,
+        fusionTransition,
+      ),
+    [fusionTransition, model.entities],
+  );
+  useEffect(() => {
+    previousEntitiesRef.current = model.entities;
+    previousModelRef.current = model;
+  }, [model]);
   const dragRef = useRef<{ startX: number; startY: number; cameraX: number; cameraY: number } | null>(
     null,
   );
@@ -233,6 +357,14 @@ export function StarGraphCanvas({
     [cameraSessionId, setSessionViewport, setStoredViewport],
   );
 
+  const stopCameraTransition = useCallback(() => {
+    setCameraTransitioning(false);
+  }, []);
+
+  const beginCameraTransition = useCallback(() => {
+    setCameraTransitioning(true);
+  }, []);
+
   const bounds = useMemo(() => computeEntityBounds(model.entities), [model.entities]);
 
   const typedNodeIndex = useMemo(
@@ -288,16 +420,34 @@ export function StarGraphCanvas({
     [displayEntities, visibleEntityIds],
   );
 
+  const visibleLabelNodeIds = useMemo(
+    () =>
+      selectSemanticLabelNodeIds(visibleEntities, {
+        zoom: camera.zoom,
+        selectedNodeId,
+        enabled: semanticLandmarkLabels,
+      }),
+    [camera.zoom, selectedNodeId, semanticLandmarkLabels, visibleEntities],
+  );
+
+  const nodeTierById = useMemo(
+    () => new Map(model.entities.map((entity) => [entity.id, entity.tier])),
+    [model.entities],
+  );
+
   const visibleRelations = useMemo(
     () =>
       filterRelationsToVisibleEntities(model.relations, visibleEntityIds, {
         budget: edgeBudgetForViewport(viewport.width),
         focusNodeId: selectedNodeId ?? model.rootId,
         relatedNodeIds,
+        nodeTierById: hideUnselectedSTierRelations ? nodeTierById : undefined,
       }),
     [
       model.relations,
       model.rootId,
+      hideUnselectedSTierRelations,
+      nodeTierById,
       relatedNodeIds,
       selectedNodeId,
       viewport.width,
@@ -401,8 +551,9 @@ export function StarGraphCanvas({
 
   const fitToContent = useCallback(() => {
     if (!bounds || viewport.width <= 0 || viewport.height <= 0) return;
+    beginCameraTransition();
     setCamera(fitCameraToBounds(bounds, viewport));
-  }, [bounds, setCamera, viewport]);
+  }, [beginCameraTransition, bounds, setCamera, viewport]);
 
   const focusNodeButton = useCallback((nodeId: string) => {
     const buttons = rootRef.current?.querySelectorAll<HTMLElement>(
@@ -422,9 +573,15 @@ export function StarGraphCanvas({
       if (!nodeId || viewport.width <= 0 || viewport.height <= 0) return;
       const entity = model.entities.find((candidate) => candidate.id === nodeId);
       if (!entity) return;
+      if (nodeId === model.rootId) {
+        fitToContent();
+        focusNodeButton(nodeId);
+        return;
+      }
+      beginCameraTransition();
       setCamera((current) =>
-        centerCameraOnPoint(
-          { x: entity.x, y: entity.y },
+        focusCameraOnEntity(
+          entity,
           viewport,
           current,
           { rightPanelWidth },
@@ -432,7 +589,16 @@ export function StarGraphCanvas({
       );
       focusNodeButton(nodeId);
     },
-    [focusNodeButton, model.entities, rightPanelWidth, setCamera, viewport],
+    [
+      beginCameraTransition,
+      fitToContent,
+      focusNodeButton,
+      model.entities,
+      model.rootId,
+      rightPanelWidth,
+      setCamera,
+      viewport,
+    ],
   );
 
   useEffect(() => {
@@ -441,26 +607,29 @@ export function StarGraphCanvas({
   }, [focusSelectedEntity, rightPanelWidth, selectedNodeId]);
 
   const handleZoomIn = useCallback(() => {
+    stopCameraTransition();
     setCamera((current) =>
       zoomCamera(current, current.zoom * 1.12, {
         x: viewport.width / 2,
         y: viewport.height / 2,
       }),
     );
-  }, [setCamera, viewport.height, viewport.width]);
+  }, [setCamera, stopCameraTransition, viewport.height, viewport.width]);
 
   const handleZoomOut = useCallback(() => {
+    stopCameraTransition();
     setCamera((current) =>
       zoomCamera(current, current.zoom / 1.12, {
         x: viewport.width / 2,
         y: viewport.height / 2,
       }),
     );
-  }, [setCamera, viewport.height, viewport.width]);
+  }, [setCamera, stopCameraTransition, viewport.height, viewport.width]);
 
   const handleWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
       event.preventDefault();
+      stopCameraTransition();
       const rect = rootRef.current?.getBoundingClientRect();
       if (!rect) return;
       const anchor = {
@@ -470,7 +639,7 @@ export function StarGraphCanvas({
       const delta = event.deltaY > 0 ? 0.92 : 1.08;
       setCamera((current) => zoomCamera(current, current.zoom * delta, anchor));
     },
-    [setCamera],
+    [setCamera, stopCameraTransition],
   );
 
   const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -478,6 +647,7 @@ export function StarGraphCanvas({
     if ((event.target as HTMLElement).closest('[data-testid="star-graph-node"], button')) {
       return;
     }
+    stopCameraTransition();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       startX: event.clientX,
@@ -485,7 +655,7 @@ export function StarGraphCanvas({
       cameraX: camera.x,
       cameraY: camera.y,
     };
-  }, [camera.x, camera.y]);
+  }, [camera.x, camera.y, stopCameraTransition]);
 
   const handlePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
@@ -519,7 +689,13 @@ export function StarGraphCanvas({
           return;
         }
         case "openDetail":
-          if (focusId) onOpenNode?.(focusId);
+          if (!focusId) return;
+          if (expansionControl?.expandableNodeIds.has(focusId)) {
+            onSelectNode?.(focusId);
+            expansionControl.onToggleNode(focusId);
+          } else {
+            onOpenNode?.(focusId);
+          }
           return;
         case "closeOverlay":
           keyboardNav?.onCloseOverlay?.(action.layer);
@@ -547,6 +723,7 @@ export function StarGraphCanvas({
       nodeAccessibleNames,
       onOpenNode,
       onSelectNode,
+      expansionControl,
     ],
   );
 
@@ -595,6 +772,25 @@ export function StarGraphCanvas({
     };
   }, [bounds, viewport.height, viewport.width]);
 
+  const expansionTransition = expansionControl?.transition;
+  const expansionSequence = expansionTransition
+    ? String(expansionTransition.sequence)
+    : null;
+  if (expansionTransition && expansionSequence !== framedExpansionSequence) {
+    const nextCamera = planExpansionTransactionCamera(
+      model,
+      expansionTransition,
+      viewport,
+      camera,
+      { rightPanelWidth },
+    );
+    if (nextCamera) {
+      setFramedExpansionSequence(expansionSequence);
+      setCameraState(nextCamera);
+      setCameraTransitioning(true);
+    }
+  }
+
   return (
     <div
       ref={rootRef}
@@ -642,11 +838,22 @@ export function StarGraphCanvas({
       )}
 
       <div
-        className="sg-canvas-world"
+        className={cn(
+          "sg-canvas-world",
+          cameraTransitioning && "sg-camera-transitioning",
+        )}
         style={{
           width: worldSize.width,
           height: worldSize.height,
           transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
+        }}
+        onTransitionEnd={(event) => {
+          if (
+            event.currentTarget === event.target &&
+            event.propertyName === "transform"
+          ) {
+            setCameraTransitioning(false);
+          }
         }}
       >
         <StarGraphClusterLayer
@@ -669,16 +876,37 @@ export function StarGraphCanvas({
             challenge: mapKeyLabels.relations.challenge.label,
             newdir: mapKeyLabels.relations.newdir.label,
           }}
+          revealingRelationIds={expansionRelationIds}
+          revealLowPerformance={expansionControl?.lowPerformance}
+        />
+        <StarGraphCollapseRelationLayer
+          relations={collapseRelations}
+          width={worldSize.width}
+          height={worldSize.height}
+          lowPerformance={expansionControl?.lowPerformance}
+        />
+        <StarGraphFusionGhostLayer
+          ghosts={fusionGhosts}
+          lowPerformance={fusionLowPerformance}
         />
         <StarGraphEntityLayer
           entities={visibleEntities}
           selectedNodeId={selectedNodeId}
           nodeAccessibleNames={nodeAccessibleNames}
           lensHints={focusedLensHints}
-          motionDirectives={motionDirectives}
+          motionDirectives={entityMotionDirectives}
+          expansionControl={expansionControl}
+          visibleLabelNodeIds={visibleLabelNodeIds}
+          sTierPresentation={sTierPresentation}
           labels={entityLabels}
           onSelectNode={onSelectNode}
           onOpenNode={onOpenNode}
+        />
+        <StarGraphCollapseGhostLayer
+          ghosts={collapseGhosts}
+          labels={entityLabels}
+          lowPerformance={expansionControl?.lowPerformance}
+          sTierPresentation={sTierPresentation}
         />
       </div>
 

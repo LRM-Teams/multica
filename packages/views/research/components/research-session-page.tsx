@@ -103,6 +103,7 @@ import {
 } from "../lib/research-session-ui-state";
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
+import { ResearchDirectorChatHeader } from "./research-director-chat-header";
 import { ResearchCanvasChangeCard, isCanvasChangeProcessMessage } from "./research-canvas-change-card";
 import { ResearchChatCard } from "./research-chat-card";
 import {
@@ -336,6 +337,13 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       }
     },
     [data?.nodes, displayTypedGraph, handleSelectCanvasNode],
+  );
+  const handleFocusCanvasChangeNode = useCallback(
+    (nodeId: string) => {
+      handleD5LensChange("relations");
+      handleFocusDetailNode(nodeId);
+    },
+    [handleD5LensChange, handleFocusDetailNode],
   );
   useEffect(() => {
     if (!data) return;
@@ -696,6 +704,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const { session, messages, report, sources } = data;
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
+  const directorMember =
+    fleet.members.find(
+      (member) => member.agent_id === fleet.lead_agent_id,
+    ) ??
+    fleet.members.find((member) => member.is_lead) ??
+    null;
   const linkedNodeId = nav.searchParams.get("node");
   const selectedNode = (() => {
     const base = resolveResearchCanvasNode(selectedNodeId ?? linkedNodeId, {
@@ -963,6 +977,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           snapshotNodeCount={data.nodes.length}
           typedGraphSessionId={sessionId}
           typedGraphVersion={displayTypedGraph?.graph_version ?? null}
+          projectionSource={projectionGateway.source}
           typedGraphHasNextPage={canvasUsesV5 && typedGraphHasNextPage === true}
           typedGraphLoadMorePending={canvasUsesV5 && typedGraphFetchingNextPage}
           onLoadMoreTypedGraph={
@@ -1021,16 +1036,16 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           }
           chatPanel={
             <>
-            <div
-              className="flex items-center gap-2 border-b px-3 py-2.5"
-              data-testid="research-chat-header"
-              data-chat-mode={chatMode}
-            >
-              <div className="text-sm font-semibold text-foreground">
-                {t(($) => $.panel.chat)}
-              </div>
-              <ResearchChatModeChip mode={chatMode} />
-            </div>
+            <ResearchDirectorChatHeader
+              director={directorMember}
+              activity={
+                directorMember
+                  ? presence[directorMember.agent_id]?.activity
+                  : null
+              }
+              modeChip={<ResearchChatModeChip mode={chatMode} />}
+              mode={chatMode}
+            />
             <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
               {t(($) => $.panel.fleet)}:{" "}
               {fleet.members
@@ -1161,7 +1176,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                         className="scroll-mt-3 space-y-2"
                       >
                         {isCanvasChangeProcessMessage(item.message) ? (
-                          <ResearchCanvasChangeCard message={item.message} />
+                          <ResearchCanvasChangeCard
+                            message={item.message}
+                            onFocusNode={handleFocusCanvasChangeNode}
+                          />
                         ) : (
                           <ResearchChatCard
                             message={item.message}

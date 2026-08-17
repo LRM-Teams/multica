@@ -391,7 +391,6 @@ func parseCodexDebugModelsCatalog(raw []byte) []Model {
 			ID:       m.Slug,
 			Label:    label,
 			Provider: "openai",
-			Default:  len(out) == 0, // first listable = preferred
 		}
 		if len(m.SupportedReasoningLevel) > 0 {
 			levels := make([]ThinkingLevel, 0, len(m.SupportedReasoningLevel))

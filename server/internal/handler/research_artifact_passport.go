@@ -100,3 +100,31 @@ func (h *Handler) createResearchMessageWithPassport(
 	}
 	return msg, nil
 }
+
+func (h *Handler) createResearchMessageWithPassportAndV6Steering(
+	ctx context.Context,
+	params db.CreateResearchMessageParams,
+	clientRequestID string,
+	selectedRefs json.RawMessage,
+) (db.ResearchMessage, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.ResearchMessage{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	msg, err := h.Queries.WithTx(tx).CreateResearchMessage(ctx, params)
+	if err != nil {
+		return db.ResearchMessage{}, err
+	}
+	if err = ensureResearchMessagePassportTx(ctx, tx, params.WorkspaceID, params.SessionID, msg.ID); err != nil {
+		return db.ResearchMessage{}, err
+	}
+	if err = researchrun.QueueV6SteeringMessageTx(ctx, tx, util.UUIDToString(params.WorkspaceID), util.UUIDToString(params.SessionID),
+		util.UUIDToString(msg.ID), clientRequestID, selectedRefs); err != nil {
+		return db.ResearchMessage{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return db.ResearchMessage{}, err
+	}
+	return msg, nil
+}

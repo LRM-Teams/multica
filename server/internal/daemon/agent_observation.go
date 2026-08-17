@@ -62,9 +62,7 @@ type AgentRuntimeStageObservationData struct {
 func (AgentRuntimeStageObservationData) agentObservationData() {}
 
 type AgentMessageAcceptanceObservationData struct {
-	RuntimeID    string
-	HandoffID    string
-	MessageCount int
+	RuntimeID string
 }
 
 func (AgentMessageAcceptanceObservationData) agentObservationData() {}
@@ -154,8 +152,8 @@ func (observation AgentObservation) Validate() error {
 		if !ok {
 			return observationDataTypeError(observation.Kind)
 		}
-		if strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.HandoffID) == "" || data.MessageCount < 1 {
-			return errors.New("Agent Message acceptance Runtime, handoff, and count are required")
+		if strings.TrimSpace(data.RuntimeID) == "" {
+			return errors.New("Agent Message acceptance Runtime is required")
 		}
 		return nil
 

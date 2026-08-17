@@ -76,6 +76,19 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     );
   });
 
+  it("requests resync instead of throwing for a cross-run delta page", async () => {
+    response({
+      run_id: "00000000-0000-4000-8000-000000000099",
+      deltas: [],
+      next_cursor: null,
+      resync_required: false,
+    });
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6DirectorProjectionDeltaPage(WORKSPACE_ID, RUN_ID, 47),
+    ).resolves.toMatchObject({ run_id: RUN_ID, deltas: [], resync_required: true });
+  });
+
   it("sends the full snapshot identity when resuming", async () => {
     response({ run_id: RUN_ID, deltas: [], next_cursor: null, resync_required: true });
     const client = new ApiClient("https://api.example.test");
@@ -97,11 +110,11 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     );
   });
 
-  it("rejects a cross-workspace response", async () => {
+  it("degrades a cross-workspace response to a safe local identity", async () => {
     response({ ...snapshot(), workspace_id: "00000000-0000-4000-8000-000000000099" });
     const client = new ApiClient("https://api.example.test");
     await expect(
       client.getResearchV6DirectorProjectionSnapshot(WORKSPACE_ID, RUN_ID),
-    ).rejects.toThrow("workspace/run identity");
+    ).resolves.toMatchObject({ workspace_id: WORKSPACE_ID, run_id: RUN_ID });
   });
 });

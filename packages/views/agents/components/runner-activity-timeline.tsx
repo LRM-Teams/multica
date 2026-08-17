@@ -13,16 +13,7 @@ import {
   isLongActivityCommand,
 } from "./tabs/activity-command-body";
 import { ActivitySubtext } from "./tabs/activity-subtext";
-
-const TONE_DOT: Record<string, string> = {
-  neutral: "bg-muted-foreground/40",
-  active: "bg-brand",
-  info: "bg-blue-500",
-  warning: "bg-amber-500",
-  running: "bg-running",
-  error: "bg-destructive",
-  success: "bg-emerald-500",
-};
+import { runnerActivityToneDotClass } from "../runner-activity-tone";
 
 const TIMESTAMP_CLASS =
   "ml-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/55";
@@ -142,7 +133,7 @@ function RunnerActivityTimelineItem({
         <span
           className={cn(
             "relative z-[1] mt-1.5 size-1.5 shrink-0 rounded-full",
-            TONE_DOT[row.tone] ?? TONE_DOT.neutral,
+            runnerActivityToneDotClass(row.tone),
           )}
           aria-hidden
         />

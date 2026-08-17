@@ -210,7 +210,7 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	}
 	var data AgentObservationData = stage
 	if kind == AgentObservationError {
-		data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
+		data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed", Message: message.Content}
 	} else if kind == AgentObservationRuntimeTool {
 		data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID, ToolInput: message.Input}
 	}
@@ -239,7 +239,7 @@ func (runner *WorkspaceRunner) observeMessageTurnCompletion(agentID, runtimeID s
 	at := time.Now().UTC()
 	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
 	if turnErr != nil {
-		runner.failManagedRuntime(agentID, runtimeID, launch.LaunchID, managedRuntimeFailureRuntime, "provider_turn_failed", at)
+		runner.failManagedRuntime(agentID, runtimeID, launch.LaunchID, managedRuntimeFailureRuntime, "provider_turn_failed", turnErr.Error(), at)
 		return
 	}
 	_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
@@ -249,27 +249,27 @@ func (runner *WorkspaceRunner) observeMessageTurnCompletion(agentID, runtimeID s
 // failManagedRuntime owns the Raft-style runtime-error transition. Activity
 // projection remains in agentActivityProducer; this method only coordinates
 // the lifecycle facts that must change together.
-func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode string, at time.Time) protocol.AgentStatusPayload {
-	status := runner.prepareManagedRuntimeFailure(agentID, runtimeID, launchID, stage, reasonCode)
+func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) protocol.AgentStatusPayload {
+	status := runner.prepareManagedRuntimeFailure(agentID, runtimeID, launchID, stage, reasonCode, message)
 	if status.AgentID != "" {
-		runner.publishManagedRuntimeFailure(status, runtimeID, stage, reasonCode, at)
+		runner.publishManagedRuntimeFailure(status, runtimeID, stage, reasonCode, message, at)
 	}
 	return status
 }
 
-func (runner *WorkspaceRunner) prepareManagedRuntimeFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode string) protocol.AgentStatusPayload {
+func (runner *WorkspaceRunner) prepareManagedRuntimeFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string) protocol.AgentStatusPayload {
 	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: agentID, LaunchID: launchID}) {
 		// Lifecycle stop already owns this launch. Its quiescence fence is the
 		// only path allowed to publish inactive for the stop launch.
 		return protocol.AgentStatusPayload{}
 	}
 	if runner.residency != nil {
-		runner.residency.rememberFailure(agentID, runtimeID, launchID, stage, reasonCode)
+		runner.residency.rememberFailure(agentID, runtimeID, launchID, stage, reasonCode, message)
 	}
 	return protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive}
 }
 
-func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.AgentStatusPayload, runtimeID string, stage managedRuntimeFailureStage, reasonCode string, at time.Time) {
+func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.AgentStatusPayload, runtimeID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) {
 	runner.activity.InterruptCompactionIfActive(status.AgentID, status.LaunchID)
 	_ = runner.activity.SetManaged(status, protocol.AgentSessionPayload{AgentID: status.AgentID, LaunchID: status.LaunchID})
 	runner.sendAgentFrame(protocol.EventAgentStatus, status)
@@ -279,7 +279,7 @@ func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.Agen
 	}
 	runner.observeActivity(AgentObservation{
 		AgentID: status.AgentID, LaunchID: status.LaunchID, Kind: kind,
-		Data: AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: reasonCode}, At: at,
+		Data: AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: reasonCode, Message: message}, At: at,
 	}, "Runtime failure")
 }
 

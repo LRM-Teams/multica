@@ -399,7 +399,7 @@ func (runner *WorkspaceRunner) republishTerminalFailure(agentID string, res agen
 	}
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, LaunchID: res.launchID, Kind: kind,
-		Data: AgentErrorObservationData{RuntimeID: res.runtimeID, ReasonCode: res.terminalReason},
+		Data: AgentErrorObservationData{RuntimeID: res.runtimeID, ReasonCode: res.terminalReason, Message: res.terminalDetail},
 		At:   time.Now().UTC(),
 	}, "Runtime failure")
 }

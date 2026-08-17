@@ -111,8 +111,7 @@ func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending 
 	if err != nil {
 		return err
 	}
-	releaseChannel := cli.ReleaseChannelForEnvironment(cli.ServiceEnvironment(executor.config.Identity.Environment))
-	target, err := resolveMachineUpgradeTarget(pending.TargetVersion, string(releaseChannel), firstNonEmpty(executor.config.ManifestURL, prepared.ManifestURL))
+	target, err := resolveMachineUpgradeTarget(pending.TargetVersion, string(executor.config.Identity.releaseChannel()), firstNonEmpty(executor.config.ManifestURL, prepared.ManifestURL))
 	if err != nil {
 		_ = executor.reportFailure(ctx, pending.ID, "target_resolution_failed", err)
 		return err

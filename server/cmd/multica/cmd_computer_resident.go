@@ -46,10 +46,6 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	channel, err := cli.ResolveReleaseChannel(machineConfig)
-	if err != nil {
-		return err
-	}
 	bindingsRoot := computer.RootDir("")
 	computerGeneration, _ := cmd.Flags().GetInt64("computer-generation")
 	if computerGeneration == 0 {
@@ -119,8 +115,8 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		ControlPort: computer.HealthPort(profile), ResidentRoot: bindingsRoot,
 		Identity: computer.HostProcessIdentity{
 			ComputerID: computerID, ComputerGeneration: computerGeneration,
-			Environment: string(serviceTarget.Environment), ReleaseChannel: string(channel),
-			Version: version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
+			Environment: string(serviceTarget.Environment),
+			Version:     version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
 			MachineAttestationFrom: machineAttestationSourcePID,
 		},
 		ReleaseManifestURL:              os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),

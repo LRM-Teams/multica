@@ -48,7 +48,7 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
 		Identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
-			Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: cloud.URL,
+			Version: "v1.0.0", ServerURL: cloud.URL,
 		},
 		ResidentRoot: root,
 		ControlURL:   host.URL,

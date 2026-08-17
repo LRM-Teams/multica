@@ -140,7 +140,7 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	}
 	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{identity: HostProcessIdentity{
 		ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
-		Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: cloud.URL,
+		Version: "v1.0.0", ServerURL: cloud.URL,
 	}})
 	host.upgrade = upgrade
 
@@ -495,7 +495,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	upgrade := newHostMachineUpgrade(incumbent, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 31, Environment: "test",
-			Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+			Version: "v1.0.0", ServerURL: server.URL,
 		},
 		residentRoot: root,
 		cancel:       func() { upgradeCancelled <- struct{}{} },
@@ -505,7 +505,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
 		Identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 31, Environment: "test",
-			Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+			Version: "v1.0.0", ServerURL: server.URL,
 		},
 		ResidentRoot: root,
 		ControlURL:   hostControl.URL,
@@ -565,7 +565,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	successorUpgrade := newHostMachineUpgrade(successor, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 32, Environment: "test",
-			Version: "v2.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+			Version: "v2.0.0", ServerURL: server.URL,
 		},
 		residentRoot: root,
 	})
@@ -651,7 +651,7 @@ func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
 	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 251, Environment: "test",
-			Version: "v2.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+			Version: "v2.0.0", ServerURL: server.URL,
 		},
 		residentRoot:                    filepath.Join(home, ".multica", "computer"),
 		previousPackageUpgradeBootstrap: true,

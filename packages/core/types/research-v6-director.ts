@@ -225,6 +225,7 @@ export interface ResearchV6DirectorReportMetadata {
   input_count: number;
   latest_review: ResearchV6DirectorReportReview;
   sandbox_url?: string;
+  report_origin?: string;
 }
 
 export interface ResearchV6DirectorReportInputRef {
@@ -249,6 +250,7 @@ export interface ResearchV6DirectorReportDetail {
   input_refs: ResearchV6DirectorReportInputRef[];
   reviews: ResearchV6DirectorReportReview[];
   sandbox_url?: string;
+  report_origin?: string;
 }
 
 export interface ResearchV6DirectorSelectedRef {

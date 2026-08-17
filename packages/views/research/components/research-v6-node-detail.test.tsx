@@ -7,9 +7,24 @@ import type {
 import enResearch from "../../locales/en/research.json";
 import { ResearchV6NodeDetail } from "./research-v6-node-detail";
 
+vi.mock("../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (selector: (bundle: typeof enResearch) => unknown) => selector(enResearch),
+    t: (
+      selector: (bundle: typeof enResearch) => unknown,
+      values?: Record<string, string | number>,
+    ) => {
+      const value = selector(enResearch);
+      if (typeof value !== "string" || !values) return value;
+      return Object.entries(values).reduce(
+        (result, [key, replacement]) =>
+          result.replace(`{{${key}}}`, String(replacement)),
+        value,
+      );
+    },
   }),
 }));
 
@@ -78,9 +93,9 @@ describe("ResearchV6NodeDetail", () => {
     fireEvent.click(screen.getByRole("button", { name: /Supporting result/i }));
     expect(onFocusNode).toHaveBeenCalledWith("input");
     expect(screen.getByText("Version history")).toBeTruthy();
-    expect(screen.getByText(/r1/)).toBeTruthy();
+    expect(screen.getByText(/Revision 1/)).toBeTruthy();
     expect(screen.getByText("Canonical source")).toBeTruthy();
     expect(screen.getByText("Content hash")).toBeTruthy();
-    expect(screen.getByText("Agents · 1")).toBeTruthy();
+    expect(screen.getAllByText("Agents · 1")).toHaveLength(2);
   });
 });

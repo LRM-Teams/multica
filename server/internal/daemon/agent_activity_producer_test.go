@@ -411,7 +411,7 @@ func TestMessageHandoffWithoutManagedLaunchDoesNotInventActivityIdentity(t *test
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	runner.observeMessageAccepted("agent-1", "runtime-1", []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:agent-1", Seq: 1,
-	}})
+	}}, true)
 
 	wantFrames := []string{protocol.EventAgentMessageHandoff}
 	if len(frames) != len(wantFrames) {

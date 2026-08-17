@@ -105,6 +105,13 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 		return errors.New("current Workspace Runner unavailable during launch reconcile")
 	}
 	skip := h.restartAgentsOnActiveOperation()
+	eligibleDesired := desired[:0]
+	for _, launch := range desired {
+		if !skip[launch.agentID] {
+			eligibleDesired = append(eligibleDesired, launch)
+		}
+	}
+	desired = eligibleDesired
 	observed := make([]runnerObservedLaunch, 0)
 	for _, obs := range h.observations().listInstance(identity.WorkspaceID, identity.DaemonID, daemonInstanceID) {
 		if skip[obs.agentID] {

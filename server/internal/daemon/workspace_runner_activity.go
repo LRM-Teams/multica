@@ -297,7 +297,7 @@ func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.Agen
 	}, "Runtime failure")
 }
 
-func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
+func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string, messages []protocol.AgentMessageProjection, publishHandoff bool) {
 	if len(messages) == 0 {
 		return
 	}
@@ -315,6 +315,9 @@ func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string,
 			AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationMessageBodyAccepted,
 			Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID, HandoffID: handoffID, MessageCount: len(messages)}, At: time.Now().UTC(),
 		}, "Message accepted")
+	}
+	if !publishHandoff {
+		return
 	}
 	targets := make([]string, 0, len(targetSet))
 	for target := range targetSet {

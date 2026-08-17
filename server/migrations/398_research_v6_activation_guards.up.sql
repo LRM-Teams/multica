@@ -29,26 +29,9 @@ $$;
 CREATE CONSTRAINT TRIGGER research_v6_branch_xxl_guard AFTER INSERT OR UPDATE OF current_xxl_version_id ON research_branch
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION research_v6_branch_xxl_guard_fn();
 
-CREATE FUNCTION research_v6_report_publish_guard_fn() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
- IF NEW.status='published' THEN
-  IF NEW.package_hash IS NULL OR NEW.document_content_hash IS NULL OR NEW.document_storage_key IS NULL
-   OR NEW.input_snapshot_hash IS NULL OR NEW.published_at IS NULL
-   OR NOT EXISTS(SELECT 1 FROM research_report_resource r WHERE r.report_id=NEW.id AND r.report_revision=NEW.revision AND r.role='document' AND r.upload_status='verified')
-   OR NOT EXISTS(SELECT 1 FROM research_report_input i WHERE i.report_id=NEW.id AND i.report_revision=NEW.revision) THEN
-    RAISE EXCEPTION 'published V6 report package is incomplete' USING ERRCODE='23514';
-  END IF;
- END IF;
- RETURN NEW;
-END;
-$$;
-CREATE CONSTRAINT TRIGGER research_v6_report_publish_guard AFTER INSERT OR UPDATE OF status ON research_report
- DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION research_v6_report_publish_guard_fn();
-
 CREATE TABLE research_v6_activation_evidence (
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(), requirement TEXT NOT NULL, evidence_id TEXT NOT NULL,
  revision TEXT NOT NULL, passed BOOLEAN NOT NULL, recorded_by UUID NOT NULL REFERENCES "user"(id),
  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(requirement,evidence_id,revision),
  CHECK(length(btrim(requirement))>0 AND length(btrim(evidence_id))>0 AND length(btrim(revision))>0)
 );
-

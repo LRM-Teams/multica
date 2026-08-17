@@ -109,7 +109,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
   - **依赖**：无
   - **完成标准**：单测：合法 digest 通过；带 content/diff 的 JSON 无法解码或 Validate 失败；超限失败。
 
-- [ ] **J1-T2 denylist（发现与脏路径共用）**
+- [x] **J1-T2 denylist（发现与脏路径共用）**
+  - **已落地（2026-08-17）**：`server/internal/computer/work_journal_denylist.go` — `WorkJournalDeniedRepoRoot` / `WorkJournalDeniedDirtyPath` / `FilterWorkJournalDirtyPaths`。目录段含 `node_modules`、`.next`、`dist`、`build`、`target`、`vendor`、`__pycache__`、`.cache`、`.ssh`、`.gnupg`、`.git` 则跳过仓或丢 dirty 条；basename `.env*` / `id_rsa*` / `*.pem` / `credentials.json` 丢 dirty。测：`work_journal_denylist_test.go`。
   - **目标**：噪声和密钥目录进不了 Digest。
   - **要做**：单一 denylist（代码常量 + 测）：至少 `node_modules`、`.git` 对象以外的依赖/缓存（`.next`、`dist`、`build`、`target`、`vendor`、`__pycache__`、`.cache`）、`.ssh`、`.gnupg`、basename 匹配 `.env*` / `id_rsa` / `*.pem` / `credentials.json`。发现 git 根时跳过 denylist 路径下的仓库；dirty path 命中则丢弃该条，不丢整个仓。
   - **不要做**：把 denylist 做成每用户随便改的远程配置（一期代码内置即可）；因一个脏路径丢弃整个仓的 commits。
@@ -215,9 +216,9 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 | 顺序 | 下一步 |
 |------|--------|
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
-| 2 | **J1-T2** denylist → J1-T3 → J1-T4 → J1-T5 |
+| 2 | ~~J1-T2~~ denylist（已完成）→ **J1-T3** → J1-T4 → J1-T5 |
 | 3 | J2（平台包 + PR + 归仓） |
 | 4 | J3（剧本 → 派发 → UI → 落笔记） |
 | 5 | 仅当产品需要时再开 J4 |
 
-**当前焦点：** Slice J1。下一个 checkbox：**J1-T2**。
+**当前焦点：** Slice J1。下一个 checkbox：**J1-T3**。

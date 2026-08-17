@@ -51,28 +51,30 @@ func notePeriodBriefInstruction(folderPageID, windowLabel string) string {
 }
 
 type createNotePeriodBriefRequest struct {
-	Window    string   `json:"window"` // day | week | month
-	Date      string   `json:"date"`
-	Timezone  string   `json:"timezone"`
-	AgentID   string   `json:"agent_id"`
-	Sources   []string `json:"sources"`
-	ChannelID string   `json:"channel_id"`
+	Window            string   `json:"window"` // day | week | month
+	Date              string   `json:"date"`
+	Timezone          string   `json:"timezone"`
+	AgentID           string   `json:"agent_id"`
+	CollectorAgentIDs []string `json:"collector_agent_ids"`
+	Sources           []string `json:"sources"`
+	ChannelID         string   `json:"channel_id"`
 }
 
 type createNotePeriodBriefResponse struct {
-	Page           NotePageResponse                `json:"page"`
-	Job            NoteWorkerJobResponse           `json:"job"`
-	Window         noteRetrospectiveWindowResponse `json:"window"`
-	SourcesUsed    []string                        `json:"sources_used"`
-	SourcesEmpty   []string                        `json:"sources_empty"`
-	SourcesSkipped []string                        `json:"sources_skipped"`
-	FactCount      int                             `json:"fact_count"`
+	Page              NotePageResponse                `json:"page"`
+	Job               NoteWorkerJobResponse           `json:"job"`
+	Window            noteRetrospectiveWindowResponse `json:"window"`
+	SourcesUsed       []string                        `json:"sources_used"`
+	SourcesEmpty      []string                        `json:"sources_empty"`
+	SourcesSkipped    []string                        `json:"sources_skipped"`
+	FactCount         int                             `json:"fact_count"`
+	CollectorAgentIDs []string                        `json:"collector_agent_ids"`
 }
 
-// CreateNotePeriodBrief gathers platform Facts + Owner Work Digests for a
-// window, writes a private draft note, and dispatches a Worker job with the
-// period_brief instruction. Digest failures/disabled states degrade into
-// sources_empty — they do not fail the whole request. No model runs here.
+// CreateNotePeriodBrief gathers platform Facts (+ optional legacy Owner Digests),
+// accepts human-selected collector Agents, writes a private draft note, and
+// dispatches a Worker job with the period_brief instruction. Collector wakes
+// land in K1; this path only validates and echoes the selection. No model runs here.
 func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, userIDString, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
@@ -87,13 +89,13 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	collectorIDs, ok := h.parsePeriodBriefCollectorAgentIDs(w, r.Context(), workspaceID, req.CollectorAgentIDs)
+	if !ok {
+		return
+	}
 	ownedComputers, err := h.listOwnedComputerIDsInWorkspace(r.Context(), workspaceID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list Computers")
-		return
-	}
-	if len(ownedComputers) == 0 {
-		writeError(w, http.StatusForbidden, "computer owner required")
 		return
 	}
 
@@ -173,11 +175,56 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 			End:      window.End.UTC().Format(time.RFC3339),
 			Label:    window.Label,
 		},
-		SourcesUsed:    used,
-		SourcesEmpty:   empty,
-		SourcesSkipped: skipped,
-		FactCount:      bundle.FactCount(),
+		SourcesUsed:       used,
+		SourcesEmpty:      empty,
+		SourcesSkipped:    skipped,
+		FactCount:         bundle.FactCount(),
+		CollectorAgentIDs: collectorIDs,
 	})
+}
+
+// parsePeriodBriefCollectorAgentIDs requires at least one non-archived Agent in
+// the workspace. Order is preserved; duplicates are dropped.
+func (h *Handler) parsePeriodBriefCollectorAgentIDs(
+	w http.ResponseWriter,
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	raw []string,
+) ([]string, bool) {
+	if len(raw) == 0 {
+		writeError(w, http.StatusBadRequest, "collector_agent_ids is required")
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, id := range raw {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		agentUUID, ok := parseUUIDOrBadRequest(w, trimmed, "collector_agent_ids")
+		if !ok {
+			return nil, false
+		}
+		agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+			ID:          agentUUID,
+			WorkspaceID: workspaceID,
+		})
+		if err != nil || agent.ArchivedAt.Valid {
+			writeError(w, http.StatusBadRequest, "collector agent not found: "+trimmed)
+			return nil, false
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		writeError(w, http.StatusBadRequest, "collector_agent_ids is required")
+		return nil, false
+	}
+	return out, true
 }
 
 type notePeriodBriefDigestPack struct {

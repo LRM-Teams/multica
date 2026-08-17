@@ -9,6 +9,11 @@ import {
   resolvePeriodBriefAgent,
   resolvePeriodBriefSynthesizerId,
 } from "./period-brief-agent";
+import {
+  defaultPeriodBriefCollectorIds,
+  isPeriodBriefCollectorOnline,
+  togglePeriodBriefCollectorId,
+} from "./period-brief-collectors";
 
 describe("periodBriefLooksStructured", () => {
   it("accepts the fixture Brief with reporting headings", () => {
@@ -45,5 +50,44 @@ describe("resolvePeriodBriefSynthesizerId", () => {
     const without = agents.filter((a) => a.name !== PERIOD_BRIEF_AGENT_NAME);
     expect(resolvePeriodBriefSynthesizerId(without, "a3")).toBe("a3");
     expect(resolvePeriodBriefSynthesizerId(without, null)).toBe("a1");
+  });
+});
+
+describe("defaultPeriodBriefCollectorIds", () => {
+  it("includes online local and cloud agents but not the synthesizer", () => {
+    const agents = [
+      {
+        id: "local-1",
+        name: "coder",
+        runtime_id: "r1",
+        runtime_mode: "local" as const,
+        runtime_status: "online" as const,
+      },
+      {
+        id: "cloud-1",
+        name: "cloud",
+        runtime_id: "r2",
+        runtime_mode: "cloud" as const,
+        runtime_status: "online" as const,
+      },
+      {
+        id: "off-1",
+        name: "sleep",
+        runtime_id: "r3",
+        runtime_mode: "local" as const,
+        runtime_status: "offline" as const,
+      },
+      {
+        id: "weekly-1",
+        name: PERIOD_BRIEF_AGENT_NAME,
+        runtime_id: "r1",
+        runtime_mode: "local" as const,
+        runtime_status: "online" as const,
+      },
+    ];
+    expect(defaultPeriodBriefCollectorIds(agents)).toEqual(["local-1", "cloud-1"]);
+    expect(isPeriodBriefCollectorOnline(agents[2])).toBe(false);
+    expect(togglePeriodBriefCollectorId(["local-1"], "cloud-1")).toEqual(["local-1", "cloud-1"]);
+    expect(togglePeriodBriefCollectorId(["local-1", "cloud-1"], "local-1")).toEqual(["cloud-1"]);
   });
 });

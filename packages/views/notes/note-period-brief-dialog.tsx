@@ -4,11 +4,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, ClipboardList, Loader2 } from "lucide-react";
+import { Bot, Check, ClipboardList, Cloud, Laptop, Loader2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
-import { useAuthStore } from "@multica/core/auth";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -16,7 +15,12 @@ import {
   isPeriodBriefAgent,
   resolvePeriodBriefSynthesizerId,
 } from "@multica/core/notes/period-brief-agent";
-import { computerListOptions, localMachineWorkUncollected, runtimeListOptions } from "@multica/core/runtimes";
+import {
+  defaultPeriodBriefCollectorIds,
+  isPeriodBriefCollectorOnline,
+  togglePeriodBriefCollectorId,
+} from "@multica/core/notes/period-brief-collectors";
+import { runtimeListOptions } from "@multica/core/runtimes";
 import { agentListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   CreateNotePeriodBriefResponse,
@@ -53,13 +57,8 @@ export function NotePeriodBriefDialog({
   const { t } = useT("layout");
   const timezone = useViewingTimezone();
   const wsId = useWorkspaceId();
-  const userId = useAuthStore((s) => s.user?.id);
   const queryClient = useQueryClient();
   const { openNoteWorkerChat } = useOpenNoteWorkerChat();
-  const { data: computers, isSuccess: computersLoaded } = useQuery({
-    ...computerListOptions(wsId),
-    enabled: Boolean(wsId),
-  });
   const { data: agents = [] } = useQuery({
     ...agentListOptions(wsId),
     enabled: Boolean(wsId),
@@ -68,8 +67,6 @@ export function NotePeriodBriefDialog({
     ...runtimeListOptions(wsId),
     enabled: Boolean(wsId) && open,
   });
-  const machineWorkUncollected =
-    computersLoaded && localMachineWorkUncollected(computers, userId);
   const today = useMemo(() => {
     try {
       return new Intl.DateTimeFormat("en-CA", {
@@ -85,26 +82,37 @@ export function NotePeriodBriefDialog({
   const [windowKind, setWindowKind] = useState<NoteRetrospectiveWindow>("week");
   const [date, setDate] = useState(today);
   const [agentId, setAgentId] = useState<string | null>(null);
+  const [collectorIds, setCollectorIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [ensuring, setEnsuring] = useState(false);
   const ensureAttemptedRef = useRef(false);
+  const collectorsSeededRef = useRef(false);
 
   const resolvedPreferredAgentId = resolvePeriodBriefSynthesizerId(agents, preferredAgentId);
+  const defaultCollectors = useMemo(
+    () => defaultPeriodBriefCollectorIds(agents, runtimes),
+    [agents, runtimes],
+  );
 
-  // Reset agent pick when the dialog opens — adjust during render (prev ref), not an effect.
+  // Reset when the dialog opens — adjust during render (prev ref), not an effect.
   const prevOpenRef = useRef(open);
   if (open !== prevOpenRef.current) {
     prevOpenRef.current = open;
     if (open) {
       setAgentId(resolvedPreferredAgentId);
+      setCollectorIds(defaultCollectors);
       setWindowKind("week");
       setDate(today);
       setSubmitting(false);
       setEnsuring(false);
       ensureAttemptedRef.current = false;
+      collectorsSeededRef.current = defaultCollectors.length > 0;
     }
   } else if (open && resolvedPreferredAgentId && !agentId) {
     setAgentId(resolvedPreferredAgentId);
+  } else if (open && !collectorsSeededRef.current && defaultCollectors.length > 0 && collectorIds.length === 0) {
+    setCollectorIds(defaultCollectors);
+    collectorsSeededRef.current = true;
   }
 
   useEffect(() => {
@@ -129,7 +137,6 @@ export function NotePeriodBriefDialog({
         void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
         setAgentId((current) => {
           if (!current) return result.agent.id;
-          // Upgrade to 周报 only while still on a non-specialist pick.
           if (!agents.some((agent) => isPeriodBriefAgent(agent) && agent.id === current)) {
             return result.agent.id;
           }
@@ -147,11 +154,16 @@ export function NotePeriodBriefDialog({
     };
   }, [open, wsId, agents, runtimes, queryClient]);
 
-  const canSubmit = Boolean(agentId) && agents.length > 0 && !submitting && !ensuring;
+  const canSubmit =
+    Boolean(agentId) && collectorIds.length > 0 && agents.length > 0 && !submitting && !ensuring;
 
   const submit = async () => {
     if (!agentId) {
       showErrorToast(t(($) => $.notes_page.period_brief_agent_required));
+      return;
+    }
+    if (collectorIds.length === 0) {
+      showErrorToast(t(($) => $.notes_page.period_brief_collectors_required));
       return;
     }
     setSubmitting(true);
@@ -161,6 +173,7 @@ export function NotePeriodBriefDialog({
         date,
         timezone,
         agent_id: agentId,
+        collector_agent_ids: collectorIds,
       });
       if (!result.job?.id) {
         throw new Error(t(($) => $.notes_page.period_brief_failed));
@@ -239,6 +252,57 @@ export function NotePeriodBriefDialog({
             </p>
           </div>
           <div className="space-y-2">
+            <Label>{t(($) => $.notes_page.period_brief_collectors_label)}</Label>
+            <p className="text-xs text-muted-foreground">
+              {t(($) => $.notes_page.period_brief_collectors_hint)}
+            </p>
+            <div
+              className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-1"
+              data-testid="period-brief-collectors"
+            >
+              {agents.length === 0 ? (
+                <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                  {t(($) => $.notes_page.ai_agent_empty)}
+                </div>
+              ) : (
+                agents.map((agent) => {
+                  const selected = collectorIds.includes(agent.id);
+                  const online = isPeriodBriefCollectorOnline(agent, runtimes);
+                  const name = resolveActorDisplayName(agent, agent.name || agent.id);
+                  const RuntimeIcon = agent.runtime_mode === "cloud" ? Cloud : Laptop;
+                  return (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
+                        selected && "bg-muted text-foreground",
+                        !online && "opacity-60",
+                      )}
+                      onClick={() => setCollectorIds((current) => togglePeriodBriefCollectorId(current, agent.id))}
+                      disabled={submitting || ensuring}
+                      data-testid={`period-brief-collector-${agent.id}`}
+                    >
+                      <RuntimeIcon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {name}
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {agent.runtime_mode === "cloud"
+                            ? t(($) => $.notes_page.period_brief_collector_cloud)
+                            : t(($) => $.notes_page.period_brief_collector_local)}
+                          {!online
+                            ? ` · ${t(($) => $.notes_page.period_brief_collector_offline)}`
+                            : ""}
+                        </span>
+                      </span>
+                      {selected ? <Check className="size-4 text-primary" /> : null}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          <div className="space-y-2">
             <Label>{t(($) => $.notes_page.period_brief_agent_label)}</Label>
             <p className="text-xs text-muted-foreground">
               {t(($) => $.notes_page.period_brief_agent_hint, {
@@ -285,11 +349,6 @@ export function NotePeriodBriefDialog({
               )}
             </div>
           </div>
-          {machineWorkUncollected ? (
-            <p className="text-xs text-muted-foreground" data-testid="local-machine-work-uncollected">
-              {t(($) => $.notes_page.period_brief_local_work_uncollected)}
-            </p>
-          ) : null}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>

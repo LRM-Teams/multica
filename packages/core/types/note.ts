@@ -253,12 +253,15 @@ export interface CreateNoteRetrospectiveResponse {
   child_pages_used?: string[];
 }
 
-/** Period Work Brief synthesis (J3-T2/J3-T3). */
+/** Period Work Brief synthesis (ADR 0019 / K0). */
 export interface CreateNotePeriodBriefRequest {
   window: NoteRetrospectiveWindow;
   date?: string;
   timezone?: string;
+  /** Synthesizer Agent (defaults to Period Brief Agent / 周报 in the UI). */
   agent_id: string;
+  /** Collector Agents on selected runtimes (local and/or cloud). At least one. */
+  collector_agent_ids: string[];
   sources?: NoteRetrospectiveSource[];
   channel_id?: string;
 }
@@ -271,4 +274,6 @@ export interface CreateNotePeriodBriefResponse {
   sources_empty: string[];
   sources_skipped: string[];
   fact_count: number;
+  /** Echo of accepted collector Agent ids (order preserved, deduped). */
+  collector_agent_ids?: string[];
 }

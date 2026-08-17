@@ -51,6 +51,7 @@
     "./notes/worker-reply-actions": "./notes/worker-reply-actions.ts",
     "./notes/period-brief": "./notes/period-brief.ts",
     "./notes/period-brief-agent": "./notes/period-brief-agent.ts",
+    "./notes/period-brief-collectors": "./notes/period-brief-collectors.ts",
     "./user-activity": "./user-activity/index.ts",
     "./user-activity/queries": "./user-activity/queries.ts",
     "./user-activity/mutations": "./user-activity/mutations.ts",

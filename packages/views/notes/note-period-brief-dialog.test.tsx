@@ -5,24 +5,28 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent, ComputerConnection } from "@multica/core/types";
+import type { Agent } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
 import { NotePeriodBriefDialog } from "./note-period-brief-dialog";
 
-const { listComputers, listAgents, listRuntimes, createNotePeriodBrief, createNoteRetrospective, openNoteWorkerChat, ensurePeriodBriefAgent } =
-  vi.hoisted(() => ({
-    listComputers: vi.fn(),
-    listAgents: vi.fn(),
-    listRuntimes: vi.fn(),
-    createNotePeriodBrief: vi.fn(),
-    createNoteRetrospective: vi.fn(),
-    openNoteWorkerChat: vi.fn(),
-    ensurePeriodBriefAgent: vi.fn(),
-  }));
+const {
+  listAgents,
+  listRuntimes,
+  createNotePeriodBrief,
+  createNoteRetrospective,
+  openNoteWorkerChat,
+  ensurePeriodBriefAgent,
+} = vi.hoisted(() => ({
+  listAgents: vi.fn(),
+  listRuntimes: vi.fn(),
+  createNotePeriodBrief: vi.fn(),
+  createNoteRetrospective: vi.fn(),
+  openNoteWorkerChat: vi.fn(),
+  ensurePeriodBriefAgent: vi.fn(),
+}));
 
 vi.mock("@multica/core/api", () => ({
   api: {
-    listComputers: (...args: unknown[]) => listComputers(...args),
     listAgents: (...args: unknown[]) => listAgents(...args),
     listRuntimes: (...args: unknown[]) => listRuntimes(...args),
     createNotePeriodBrief: (...args: unknown[]) => createNotePeriodBrief(...args),
@@ -47,34 +51,24 @@ vi.mock("./use-open-note-worker-chat", () => ({
   useOpenNoteWorkerChat: () => ({ openNoteWorkerChat }),
 }));
 
-function computer(overrides: Partial<ComputerConnection> = {}): ComputerConnection {
-  return {
-    daemon_id: "computer-1",
-    owner_id: "user-1",
-    connected: true,
-    last_seen_at: "2026-08-17T00:00:00Z",
-    work_journal_enabled: false,
-    ...overrides,
-  };
-}
-
 function agent(overrides: Partial<Agent> = {}): Agent {
   return {
     id: "agent-1",
     workspace_id: "ws-1",
     workspace_role: "member",
     runtime_id: "runtime-1",
-    name: "Brief Agent",
-    display_name: "Brief Agent",
+    name: "coder",
+    display_name: "Coder",
     description: "",
     instructions: "",
     avatar_url: null,
     runtime_mode: "local",
+    runtime_status: "online",
     runtime_config: {},
     custom_args: [],
     status: "idle",
     max_concurrent_tasks: 1,
-    model: "",
+    model: "m1",
     owner_id: "user-1",
     skills: [],
     created_at: "2026-01-01T00:00:00Z",
@@ -107,85 +101,105 @@ function renderDialog(locale: "en" | "zh-Hans" = "en") {
 
 describe("NotePeriodBriefDialog", () => {
   beforeEach(() => {
-    listComputers.mockReset();
     listAgents.mockReset();
     listRuntimes.mockReset();
     createNotePeriodBrief.mockReset();
     createNoteRetrospective.mockReset();
     openNoteWorkerChat.mockReset();
     ensurePeriodBriefAgent.mockReset();
-    listComputers.mockResolvedValue([computer()]);
-    listAgents.mockResolvedValue([agent()]);
-    listRuntimes.mockResolvedValue([]);
+    listAgents.mockResolvedValue([
+      agent(),
+      agent({
+        id: "cloud-1",
+        name: "cloud-coder",
+        display_name: "Cloud Coder",
+        runtime_id: "runtime-cloud",
+        runtime_mode: "cloud",
+        runtime_status: "online",
+      }),
+      agent({
+        id: "weekly-1",
+        name: "weekly-report",
+        display_name: "周报",
+        runtime_status: "online",
+      }),
+    ]);
+    listRuntimes.mockResolvedValue([
+      { id: "runtime-1", status: "online", runtime_mode: "local" },
+      { id: "runtime-cloud", status: "online", runtime_mode: "cloud" },
+    ]);
     ensurePeriodBriefAgent.mockResolvedValue({
       agent: agent({ id: "weekly-1", name: "weekly-report", display_name: "周报", model: "m1" }),
-      created: true,
+      created: false,
     });
     createNotePeriodBrief.mockResolvedValue({
       page: { id: "page-1", title: "工作介绍 本周 · 底稿" },
-      job: { id: "job-1", agent_id: "agent-1", channel_id: "dm-1" },
+      job: { id: "job-1", agent_id: "weekly-1", channel_id: "dm-1" },
       window: { kind: "week", timezone: "UTC", start: "", end: "", label: "本周" },
       sources_used: ["issue_activity"],
-      sources_empty: ["machine_work_journal"],
+      sources_empty: [],
       sources_skipped: [],
       fact_count: 3,
+      collector_agent_ids: ["agent-1", "cloud-1"],
     });
   });
 
-  it("shows the uncollected hint without blocking submit", async () => {
+  it("defaults synthesizer to 周报 and collectors to online non-synthesizer agents", async () => {
+    const user = userEvent.setup();
     renderDialog("zh-Hans");
     await waitFor(() => {
-      expect(screen.getByTestId("local-machine-work-uncollected").textContent).toBe("本机工作未采集");
-    });
-    expect(screen.getByRole("button", { name: /开始介绍/ })).not.toBeDisabled();
-  });
-
-  it("calls createNotePeriodBrief (not retrospective) and opens Worker chat", async () => {
-    const user = userEvent.setup();
-    const { onCreated } = renderDialog("zh-Hans");
-    await waitFor(() => {
-      expect(screen.getByText("Brief Agent")).toBeTruthy();
+      expect(screen.getByTestId("period-brief-default-agent")).toBeTruthy();
+      expect(screen.getByTestId("period-brief-collectors")).toBeTruthy();
     });
     await user.click(screen.getByRole("button", { name: /开始介绍/ }));
     await waitFor(() => {
       expect(createNotePeriodBrief).toHaveBeenCalledWith(
         expect.objectContaining({
           window: "week",
-          agent_id: "agent-1",
+          agent_id: "weekly-1",
+          collector_agent_ids: expect.arrayContaining(["agent-1", "cloud-1"]),
         }),
       );
     });
+    const payload = createNotePeriodBrief.mock.calls[0]?.[0] as {
+      collector_agent_ids: string[];
+    };
+    expect(payload.collector_agent_ids).not.toContain("weekly-1");
     expect(createNoteRetrospective).not.toHaveBeenCalled();
+  });
+
+  it("lets the user toggle collectors including cloud runtimes", async () => {
+    const user = userEvent.setup();
+    const { onCreated } = renderDialog("zh-Hans");
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-collector-cloud-1")).toBeTruthy();
+    });
+    // Uncheck local coder; keep cloud.
+    await user.click(screen.getByTestId("period-brief-collector-agent-1"));
+    await user.click(screen.getByRole("button", { name: /开始介绍/ }));
+    await waitFor(() => {
+      expect(createNotePeriodBrief).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent_id: "weekly-1",
+          collector_agent_ids: ["cloud-1"],
+        }),
+      );
+    });
     expect(openNoteWorkerChat).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "job-1", agent_id: "agent-1" }),
+      expect.objectContaining({ id: "job-1", agent_id: "weekly-1" }),
     );
     expect(onCreated).toHaveBeenCalled();
   });
 
-  it("prefers the weekly-report agent as default synthesizer", async () => {
-    listAgents.mockResolvedValue([
-      agent({ id: "agent-1", name: "wendy", display_name: "Wendy" }),
-      agent({ id: "weekly-1", name: "weekly-report", display_name: "周报" }),
-    ]);
+  it("blocks submit when no collector is selected", async () => {
+    const user = userEvent.setup();
     renderDialog("zh-Hans");
     await waitFor(() => {
-      expect(screen.getByTestId("period-brief-default-agent")).toBeTruthy();
+      expect(screen.getByTestId("period-brief-collector-agent-1")).toBeTruthy();
     });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /开始介绍/ }));
-    await waitFor(() => {
-      expect(createNotePeriodBrief).toHaveBeenCalledWith(
-        expect.objectContaining({ agent_id: "weekly-1" }),
-      );
-    });
-  });
-
-  it("hides the hint when Journal is on", async () => {
-    listComputers.mockResolvedValue([computer({ work_journal_enabled: true })]);
-    renderDialog();
-    await waitFor(() => {
-      expect(listComputers).toHaveBeenCalled();
-    });
-    expect(screen.queryByTestId("local-machine-work-uncollected")).toBeNull();
+    await user.click(screen.getByTestId("period-brief-collector-agent-1"));
+    await user.click(screen.getByTestId("period-brief-collector-cloud-1"));
+    expect(screen.getByRole("button", { name: /开始介绍/ })).toBeDisabled();
+    expect(createNotePeriodBrief).not.toHaveBeenCalled();
   });
 });

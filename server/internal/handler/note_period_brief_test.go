@@ -13,26 +13,54 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemonws"
 )
 
-func TestCreateNotePeriodBriefRejectsNonComputerOwner(t *testing.T) {
+func TestCreateNotePeriodBriefRejectsEmptyCollectors(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	memberID := createRuntimeLocalSkillTestMember(t, "member")
-	agentID := createHandlerTestAgent(t, "Period Brief Member Agent "+uuid.NewString()[:8], nil)
+	agentID := createHandlerTestAgent(t, "Period Brief No Collector "+uuid.NewString()[:8], nil)
 
 	rec := httptest.NewRecorder()
-	req := newRequestAsUser(memberID, http.MethodPost, "/api/notes/period-briefs", map[string]any{
+	req := newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
 		"window":   "day",
 		"date":     time.Now().UTC().Format("2006-01-02"),
 		"timezone": "UTC",
 		"agent_id": agentID,
 	})
 	testHandler.CreateNotePeriodBrief(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("non-owner period brief = %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing collectors = %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "computer owner required") {
-		t.Fatalf("expected computer owner required, got %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "collector_agent_ids is required") {
+		t.Fatalf("expected collector_agent_ids required, got %s", rec.Body.String())
+	}
+}
+
+func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	memberID := createRuntimeLocalSkillTestMember(t, "member")
+	agentID := createHandlerTestAgent(t, "Period Brief Member Agent "+uuid.NewString()[:8], nil)
+	collectorID := createHandlerTestAgent(t, "Period Brief Collector "+uuid.NewString()[:8], nil)
+
+	rec := httptest.NewRecorder()
+	req := newRequestAsUser(memberID, http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                time.Now().UTC().Format("2006-01-02"),
+		"timezone":            "UTC",
+		"agent_id":            agentID,
+		"collector_agent_ids": []string{collectorID},
+	})
+	testHandler.CreateNotePeriodBrief(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("member with collectors = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.CollectorAgentIDs) != 1 || resp.CollectorAgentIDs[0] != collectorID {
+		t.Fatalf("collector_agent_ids = %#v, want [%s]", resp.CollectorAgentIDs, collectorID)
 	}
 }
 
@@ -44,16 +72,18 @@ func TestCreateNotePeriodBriefDispatchesWithDisabledDigest(t *testing.T) {
 	go serveComputerWorkJournalFixture(t, conn, daemonID)
 
 	agentID := createHandlerTestAgent(t, "Period Brief Agent "+uuid.NewString()[:8], nil)
+	collectorID := createHandlerTestAgent(t, "Period Brief Collector "+uuid.NewString()[:8], nil)
 	local := *testHandler
 	local.DaemonHub = hub
 
 	day := time.Now().UTC().Format("2006-01-02")
 	rec := httptest.NewRecorder()
 	local.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
-		"window":   "day",
-		"date":     day,
-		"timezone": "UTC",
-		"agent_id": agentID,
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            agentID,
+		"collector_agent_ids": []string{collectorID},
 	}))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
@@ -61,6 +91,9 @@ func TestCreateNotePeriodBriefDispatchesWithDisabledDigest(t *testing.T) {
 	var resp createNotePeriodBriefResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.CollectorAgentIDs) != 1 || resp.CollectorAgentIDs[0] != collectorID {
+		t.Fatalf("collector_agent_ids = %#v", resp.CollectorAgentIDs)
 	}
 	if resp.Page.ID == "" || !strings.Contains(resp.Page.Title, "工作介绍") {
 		t.Fatalf("page = %#v", resp.Page)
@@ -150,6 +183,7 @@ func TestCreateNotePeriodBriefDispatchesWithHarvestedDigest(t *testing.T) {
 	go serveComputerWorkJournalFixture(t, conn, daemonID)
 
 	agentID := createHandlerTestAgent(t, "Period Brief On Agent "+uuid.NewString()[:8], nil)
+	collectorID := createHandlerTestAgent(t, "Period Brief Harvest Collector "+uuid.NewString()[:8], nil)
 	local := *testHandler
 	local.DaemonHub = hub
 
@@ -162,10 +196,11 @@ func TestCreateNotePeriodBriefDispatchesWithHarvestedDigest(t *testing.T) {
 	day := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC).Format("2006-01-02")
 	rec := httptest.NewRecorder()
 	local.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
-		"window":   "day",
-		"date":     day,
-		"timezone": "UTC",
-		"agent_id": agentID,
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            agentID,
+		"collector_agent_ids": []string{collectorID},
 	}))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
@@ -200,15 +235,17 @@ func TestCreateNotePeriodBriefSurvivesOfflineComputer(t *testing.T) {
 	}
 	_ = setupComputerWorkDigestOwner(t, testUserID)
 	agentID := createHandlerTestAgent(t, "Period Brief Offline Agent "+uuid.NewString()[:8], nil)
+	collectorID := createHandlerTestAgent(t, "Period Brief Offline Collector "+uuid.NewString()[:8], nil)
 	local := *testHandler
 	local.DaemonHub = daemonws.NewHub()
 
 	rec := httptest.NewRecorder()
 	local.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
-		"window":   "day",
-		"date":     time.Now().UTC().Format("2006-01-02"),
-		"timezone": "UTC",
-		"agent_id": agentID,
+		"window":              "day",
+		"date":                time.Now().UTC().Format("2006-01-02"),
+		"timezone":            "UTC",
+		"agent_id":            agentID,
+		"collector_agent_ids": []string{collectorID},
 	}))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("offline computer should still dispatch: %d %s", rec.Code, rec.Body.String())

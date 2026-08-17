@@ -1339,6 +1339,7 @@
       "input_count": "Merged {{count}} input nodes",
       "conclusion_count": "{{count}} conclusions",
       "graph_version": "Graph v{{version}}",
+      "show_on_canvas": "Show on constellation",
       "ops": {
         "goal_steered": "Goal updated",
         "goal_modified": "Goal version impact",

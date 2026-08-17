@@ -338,6 +338,13 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     },
     [data?.nodes, displayTypedGraph, handleSelectCanvasNode],
   );
+  const handleFocusCanvasChangeNode = useCallback(
+    (nodeId: string) => {
+      handleD5LensChange("relations");
+      handleFocusDetailNode(nodeId);
+    },
+    [handleD5LensChange, handleFocusDetailNode],
+  );
   useEffect(() => {
     if (!data) return;
     const linkedNodeId = nav.searchParams.get("node");
@@ -1168,7 +1175,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                         className="scroll-mt-3 space-y-2"
                       >
                         {isCanvasChangeProcessMessage(item.message) ? (
-                          <ResearchCanvasChangeCard message={item.message} />
+                          <ResearchCanvasChangeCard
+                            message={item.message}
+                            onFocusNode={handleFocusCanvasChangeNode}
+                          />
                         ) : (
                           <ResearchChatCard
                             message={item.message}

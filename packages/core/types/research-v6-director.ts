@@ -333,7 +333,7 @@ export interface ResearchV6DirectorDetailTransport {
     nodeId: string,
     view: ResearchV6DirectorNodeDetailView,
     signal?: AbortSignal,
-  ): Promise<ResearchV6DirectorNodeDetail | null>;
+  ): Promise<ResearchV6DirectorNodeDetail>;
   listReports(
     workspaceId: string,
     runId: string,
@@ -344,5 +344,5 @@ export interface ResearchV6DirectorDetailTransport {
     runId: string,
     reportId: string,
     signal?: AbortSignal,
-  ): Promise<ResearchV6DirectorReportDetail | null>;
+  ): Promise<ResearchV6DirectorReportDetail>;
 }

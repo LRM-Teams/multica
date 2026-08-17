@@ -302,8 +302,8 @@ export function parseResearchV6DirectorProjectionSnapshot(
 
 export function parseResearchV6DirectorProjectionDelta(
   value: unknown,
-): ResearchV6DirectorProjectionDelta | null {
-  return parseWithFallback(value, ResearchV6DirectorProjectionDeltaSchema, null, {
+): ResearchV6DirectorProjectionDelta {
+  return parseWithFallback(value, ResearchV6DirectorProjectionDeltaSchema, EMPTY_DIRECTOR_DELTA, {
     endpoint: "Director V6 projection delta",
   });
 }
@@ -339,8 +339,8 @@ export function parseResearchV6DirectorProjectionSliceRequest(
 
 export function parseResearchV6DirectorNodeDetail(
   value: unknown,
-): ResearchV6DirectorNodeDetail | null {
-  return parseWithFallback(value, ResearchV6DirectorNodeDetailSchema, null, {
+): ResearchV6DirectorNodeDetail {
+  return parseWithFallback(value, ResearchV6DirectorNodeDetailSchema, EMPTY_DIRECTOR_NODE_DETAIL, {
     endpoint: "GET Director V6 projection node detail",
   });
 }
@@ -360,8 +360,8 @@ export function parseResearchV6DirectorReportList(
 
 export function parseResearchV6DirectorReportDetail(
   value: unknown,
-): ResearchV6DirectorReportDetail | null {
-  return parseWithFallback(value, ResearchV6DirectorReportDetailSchema, null, {
+): ResearchV6DirectorReportDetail {
+  return parseWithFallback(value, ResearchV6DirectorReportDetailSchema, EMPTY_DIRECTOR_REPORT_DETAIL, {
     endpoint: "GET Director V6 report detail",
   });
 }

@@ -107,9 +107,9 @@ describe("Director V6 projection wire schemas", () => {
 
   it("degrades malformed detail and report payloads without throwing", async () => {
     const schemas = await import("./director-schemas");
-    expect(schemas.parseResearchV6DirectorNodeDetail({})).toBeNull();
-    expect(schemas.parseResearchV6DirectorReportDetail({})).toBeNull();
-    expect(schemas.parseResearchV6DirectorProjectionDelta({})).toBeNull();
+    expect(schemas.parseResearchV6DirectorNodeDetail({}).node.id).toBe("invalid-response");
+    expect(schemas.parseResearchV6DirectorReportDetail({}).id).toBeTruthy();
+    expect(schemas.parseResearchV6DirectorProjectionDelta({}).event_sequence).toBe(0);
   });
 
   it("fixes derivation expansion depth to exactly one layer", () => {

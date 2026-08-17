@@ -232,6 +232,10 @@ func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.idempotency_conflict", "request ID was reused with different content", false)
 	case errors.Is(err, researchrun.ErrWorkItemChanged), errors.Is(err, researchrun.ErrWorkItemLeaseLost):
 		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.state_version_conflict", "research work item changed", true)
+	case errors.Is(err, researchrun.ErrV6NodeAlreadyAbsorbed):
+		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.successor_conflict", "research input already has a canonical successor", false)
+	case errors.Is(err, researchrun.ErrV6InvalidTierTransition):
+		writeRonaldoV6Error(w, http.StatusUnprocessableEntity, "research.v6.invalid_tier_transition", "research tier transition is not allowed", false)
 	case errors.Is(err, researchrun.ErrV6DirectorUnavailable):
 		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.director_unavailable", "research Director is unavailable", false)
 	case errors.Is(err, researchrun.ErrRunNotFound):

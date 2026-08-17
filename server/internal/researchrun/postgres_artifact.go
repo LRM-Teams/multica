@@ -14,21 +14,24 @@ import (
 )
 
 type registerArtifactPassportInput struct {
-	WorkspaceID            string
-	SessionID              string
-	EntityID               string
-	Kind                   ArtifactEntityKind
-	SourceCreatedAt        *time.Time
-	ProvenanceCompleteness ArtifactProvenanceCompleteness
-	GoalVersion            *int32
-	PlanVersion            *int32
-	SchemaName             string
-	SchemaVersion          string
-	AccessLevel            ArtifactAccessLevel
-	HashOrigin             ArtifactHashOrigin
-	ContentHash            string
-	ProducedByTaskID       string
-	ProducedByAttemptID    string
+	WorkspaceID             string
+	SessionID               string
+	EntityID                string
+	Kind                    ArtifactEntityKind
+	SourceCreatedAt         *time.Time
+	ProvenanceCompleteness  ArtifactProvenanceCompleteness
+	GoalVersion             *int32
+	PlanVersion             *int32
+	SchemaName              string
+	SchemaVersion           string
+	AccessLevel             ArtifactAccessLevel
+	HashOrigin              ArtifactHashOrigin
+	ContentHash             string
+	ProducedByTaskID        string
+	ProducedByAttemptID     string
+	ProducedByWorkItemID    string
+	ProducedByWorkAttemptID string
+	ProducedByAgentID       string
 }
 
 type mutableArtifactVersion struct {
@@ -285,14 +288,17 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 			INSERT INTO research_artifact_version (
 				workspace_id, session_id, artifact_id, version, schema_name, schema_version,
 				canonicalization_version, content_hash, access_level, goal_version, plan_version,
-				hash_origin, produced_by_task_id, produced_by_attempt_id
+				hash_origin, produced_by_task_id, produced_by_attempt_id,
+				produced_by_work_item_id, produced_by_work_item_attempt_id, produced_by_agent_id
 			) VALUES (
 				$1::uuid, $2::uuid, $3::uuid, 1, $4, $5,
-				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, NULLIF($13, '')::uuid
+				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, NULLIF($13, '')::uuid,
+				NULLIF($14, '')::uuid, NULLIF($15, '')::uuid, NULLIF($16, '')::uuid
 			)
 		`, in.WorkspaceID, in.SessionID, in.EntityID, in.SchemaName, in.SchemaVersion,
 			ArtifactCanonicalizationVersion, contentHash, string(in.AccessLevel),
-			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByTaskID, in.ProducedByAttemptID); err != nil {
+			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByTaskID, in.ProducedByAttemptID,
+			in.ProducedByWorkItemID, in.ProducedByWorkAttemptID, in.ProducedByAgentID); err != nil {
 			return err
 		}
 	}

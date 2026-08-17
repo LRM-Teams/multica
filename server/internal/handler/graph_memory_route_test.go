@@ -4,7 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 // Spec §4: the route registry and lineage tables exist with the designed
@@ -36,4 +39,79 @@ func TestGraphMemoryRouteSchema(t *testing.T) {
 		t.Fatalf("graph_memory_channel_lineage missing: %v", err)
 	}
 	_ = pgtype.UUID{}
+}
+
+// createGraphMemoryTestWorkspace inserts a dedicated workspace so route and
+// lineage rows cannot collide with other tests.
+func createGraphMemoryTestWorkspace(t *testing.T) pgtype.UUID {
+	t.Helper()
+	var id pgtype.UUID
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`, "Graph Memory Route Test", "graph-memory-route-test-"+uuid.NewString()[:8], "", "GMR").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, id)
+	})
+	return id
+}
+
+// createGraphMemoryTestChannel inserts a channel bound to no project
+// (migration 112 columns; project_id from migration 123 stays NULL).
+func createGraphMemoryTestChannel(t *testing.T, workspaceID pgtype.UUID) pgtype.UUID {
+	t.Helper()
+	var id pgtype.UUID
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`, workspaceID, "route-test-"+uuid.NewString()[:8], testUserID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// Concurrency (spec §14 test 8): repeated/concurrent resolution yields
+// exactly one active generation and one lineage row.
+func TestResolveChannelRouteConcurrentSingleGeneration(t *testing.T) {
+	if testPool == nil {
+		t.Skip("test database unavailable")
+	}
+	ctx := context.Background()
+	workspaceID := createGraphMemoryTestWorkspace(t)
+	channelID := createGraphMemoryTestChannel(t, workspaceID) // bound to no project
+	const n = 8
+	results := make(chan service.GraphRouteResolution, n)
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			r, err := service.ResolveChannelRoute(ctx, testPool, workspaceID.String(), channelID.String())
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- r
+		}()
+	}
+	for i := 0; i < n; i++ {
+		select {
+		case r := <-results:
+			if r.Generation != 1 || r.GraphKind != "channel" || r.RoutingMode != "standalone" {
+				t.Fatalf("resolution = %+v, want standalone channel generation 1", r)
+			}
+		case err := <-errs:
+			t.Fatal(err)
+		}
+	}
+	var lineageRows int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM graph_memory_channel_lineage WHERE channel_id = $1`, channelID).Scan(&lineageRows); err != nil {
+		t.Fatal(err)
+	}
+	if lineageRows != 1 {
+		t.Fatalf("lineage rows = %d, want exactly 1", lineageRows)
+	}
 }

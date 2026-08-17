@@ -36,6 +36,7 @@ type SlicePages = InfiniteData<ResearchV6DirectorProjectionSnapshot, string | nu
 
 export interface UseResearchV6DirectorCanvasResult {
   canvas: ResearchV6DirectorCanvasAdapterResult | null;
+  snapshotId: string | null;
   expansionControl: StarGraphExpansionControl | undefined;
   isLoading: boolean;
   isFetching: boolean;
@@ -242,6 +243,7 @@ export function useResearchV6DirectorCanvas({
 
   return {
     canvas,
+    snapshotId,
     expansionControl,
     isLoading: snapshotQuery.isLoading,
     isFetching: snapshotQuery.isFetching,

@@ -399,6 +399,18 @@
     "syncing_title": "Execution data is still syncing",
     "syncing_body": "The run ledger is available, but its canvas projection has not arrived yet. Existing canvas data remains visible."
   },
+  "v6_detail": {
+    "loading": "Loading canonical node facts…",
+    "load_failed": "Canonical node facts could not be loaded.",
+    "relations": "Projection relations",
+    "agents": "Agents",
+    "work_items": "Work items",
+    "attempts": "Attempts",
+    "evidence": "Evidence",
+    "discussions": "Discussions",
+    "reports": "Reports",
+    "history": "Revision history"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

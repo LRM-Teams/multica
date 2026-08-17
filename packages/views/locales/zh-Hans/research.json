@@ -399,6 +399,18 @@
     "syncing_title": "执行数据仍在同步",
     "syncing_body": "运行账本已可用，但画布投影尚未到达；现有画布内容会继续显示。"
   },
+  "v6_detail": {
+    "loading": "正在加载节点的权威事实…",
+    "load_failed": "暂时无法加载节点的权威事实。",
+    "relations": "投影关系",
+    "agents": "Agent",
+    "work_items": "工作项",
+    "attempts": "执行尝试",
+    "evidence": "证据",
+    "discussions": "讨论",
+    "reports": "报告",
+    "history": "版本历史"
+  },
   "node": {
     "goal": "目标",
     "subquestion": "子问题",

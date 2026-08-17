@@ -6,6 +6,7 @@ import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
+import { researchV6DirectorNodeDetailOptions } from "@multica/core/research-v6/director-queries";
 import { useAuthStore } from "@multica/core/auth";
 import type {
   AgentPanelIdentitySnapshot,
@@ -126,6 +127,7 @@ import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
 import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
+import { ResearchV6NodeDetailSection } from "./research-v6-node-detail-section";
 import { ResearchSessionBoundary } from "./research-session-boundary";
 import {
   ResearchSessionInterruptBanner,
@@ -266,6 +268,19 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     enabled: directorV6Enabled,
     expansionFailureLabel: t(($) => $.panel.expansion_failed),
     realtimeBus: directorRealtimeBus,
+  });
+  const directorNodeDetail = useQuery({
+    ...researchV6DirectorNodeDetailOptions(
+      directorTransport,
+      wsId,
+      sessionId,
+      directorCanvas.snapshotId ?? "",
+      selectedNodeId ?? "",
+      "full",
+    ),
+    enabled: Boolean(
+      directorV6Enabled && directorCanvas.snapshotId && selectedNodeId,
+    ),
   });
   // The current durable run contract is session-keyed. Probe the V6 projection
   // with that stable key for legacy runs only; Director V6 uses the strict
@@ -1085,15 +1100,35 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 graphNodes={detailGraphNodes}
                 graphEdges={detailGraphEdges}
                 onFocusNode={handleFocusDetailNode}
+                directorDetailSection={
+                  directorV6Enabled ? (
+                    <ResearchV6NodeDetailSection
+                      detail={directorNodeDetail.data}
+                      loading={directorNodeDetail.isLoading}
+                      error={
+                        directorNodeDetail.error instanceof Error
+                          ? directorNodeDetail.error
+                          : null
+                      }
+                      onRetry={() => void directorNodeDetail.refetch()}
+                      onFocusNode={handleFocusDetailNode}
+                    />
+                  ) : undefined
+                }
                 open
                 placement="inline"
                 onClose={() => handleSelectCanvasNode(null)}
                 onOpenReport={() => reportControllerRef.current?.open()}
-                onNodeCommand={(action) =>
-                  nodeCommand.mutate({ node: selectedNode, action })
+                onNodeCommand={
+                  directorV6Enabled
+                    ? undefined
+                    : (action) =>
+                        nodeCommand.mutate({ node: selectedNode, action })
                 }
                 pendingNodeCommand={
-                  nodeCommand.isPending ? nodeCommand.variables?.action : null
+                  !directorV6Enabled && nodeCommand.isPending
+                    ? nodeCommand.variables?.action
+                    : null
                 }
               />
             ) : (

@@ -32,7 +32,7 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useT } from "../../i18n/use-t";
 import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
 import {
@@ -635,6 +635,7 @@ export function ResearchNodeDetailBody({
   onFocusNode,
   onClose,
   showClose,
+  directorDetailSection,
 }: {
   node: ResearchGraphNode;
   sources: ResearchSource[];
@@ -645,6 +646,7 @@ export function ResearchNodeDetailBody({
   onFocusNode?: (nodeId: string) => void;
   onClose?: () => void;
   showClose?: boolean;
+  directorDetailSection?: ReactNode;
 }) {
   const { t } = useT("research");
   const visual = visualForNodeType(node.node_type);
@@ -817,6 +819,7 @@ export function ResearchNodeDetailBody({
       </header>
 
       <div className="space-y-4 p-4">
+        {directorDetailSection}
         {disputeModel ? (
           <section data-testid="research-dispute-node-detail" className="rounded-lg border bg-muted/10 p-3">
             {node.node_type === "dispute" ? (
@@ -1264,6 +1267,7 @@ export function ResearchNodeDetail({
   onNodeCommand,
   pendingNodeCommand = null,
   onFocusNode,
+  directorDetailSection,
 }: {
   node: ResearchGraphNode;
   sources?: ResearchSource[];
@@ -1279,6 +1283,7 @@ export function ResearchNodeDetail({
   onNodeCommand?: (action: ResearchNodeCommandAction) => void;
   pendingNodeCommand?: ResearchNodeCommandAction | null;
   onFocusNode?: (nodeId: string) => void;
+  directorDetailSection?: ReactNode;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -1318,17 +1323,18 @@ export function ResearchNodeDetail({
           data-placement="inline"
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
-        <ResearchNodeDetailBody
-          node={node}
-          sources={sources}
-          run={run}
-          members={members}
-          graphNodes={graphNodes}
-          graphEdges={graphEdges}
-          onFocusNode={onFocusNode}
-          onClose={onClose}
-          showClose={Boolean(onClose)}
-        />
+          <ResearchNodeDetailBody
+            node={node}
+            sources={sources}
+            run={run}
+            members={members}
+            graphNodes={graphNodes}
+            graphEdges={graphEdges}
+            onFocusNode={onFocusNode}
+            onClose={onClose}
+            showClose={Boolean(onClose)}
+            directorDetailSection={directorDetailSection}
+          />
         {showActions ? (
           <footer
             data-testid="research-node-detail-actions"
@@ -1416,6 +1422,7 @@ export function ResearchNodeDetail({
             onFocusNode={onFocusNode}
             onClose={onClose}
             showClose
+            directorDetailSection={directorDetailSection}
           />
         </div>
       </dialog>
@@ -1448,6 +1455,7 @@ export function ResearchNodeDetail({
           graphEdges={graphEdges}
           onFocusNode={onFocusNode}
           onClose={onClose}
+          directorDetailSection={directorDetailSection}
         />
       </SheetContent>
     </Sheet>

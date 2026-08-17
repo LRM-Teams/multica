@@ -18,12 +18,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 	writeFrame := func(eventType string, payload any) error {
 		return runner.sendOnConnection(connection, eventType, payload)
 	}
-	if runner.setComputerUpgradeEmit != nil {
-		runner.setComputerUpgradeEmit(func(eventType string, payload any) {
-			_ = writeFrame(eventType, payload)
-		})
-		defer runner.setComputerUpgradeEmit(nil)
-	}
 	failConnection := func(err error) {
 		if err == nil {
 			return
@@ -113,7 +107,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				if json.Unmarshal(message.Payload, &restart) != nil || restart.Validate() != nil {
 					continue
 				}
-				command = protocol.ComputerUpgradePayload{RequestID: restart.RequestID, OperationID: restart.OperationID}
+				command = protocol.ComputerUpgradePayload{RequestID: restart.Operation()}
 			} else if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
 				continue
 			}

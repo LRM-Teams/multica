@@ -1074,7 +1074,8 @@ func TestHandleTask_InboxUsageStartsExecutionBeforeProvider(t *testing.T) {
 			mu.Unlock()
 			w.WriteHeader(http.StatusOK)
 		case "/api/daemon/agent-inbox/events/event-usage/complete":
-			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"acked_seq":1,"terminal_outcome":"completed","resume_unsafe":false}`))
 		case "/api/daemon/agent-memory-writes":
 			// Memory write telemetry is reported after a successful inbox task.
 			w.WriteHeader(http.StatusOK)

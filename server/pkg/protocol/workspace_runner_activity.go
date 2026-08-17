@@ -105,22 +105,15 @@ type WorkspaceRunnerPingPayload struct {
 }
 
 // ComputerUpgradePayload is the Raft 1.0.16 connect-socket command for one
-// machine-owned upgrade. RequestID is the operation the Host must execute.
+// machine-owned upgrade. RequestID correlates the command, successor marker,
+// progress, and completion.
 type ComputerUpgradePayload struct {
 	RequestID     string `json:"requestId"`
-	OperationID   string `json:"operationId,omitempty"`
 	TargetVersion string `json:"targetVersion,omitempty"`
 }
 
-func (p ComputerUpgradePayload) Operation() string {
-	if id := strings.TrimSpace(p.OperationID); id != "" {
-		return id
-	}
-	return strings.TrimSpace(p.RequestID)
-}
-
 func (p ComputerUpgradePayload) Validate() error {
-	if p.Operation() == "" {
+	if strings.TrimSpace(p.RequestID) == "" {
 		return fmt.Errorf("Computer upgrade request identity is required")
 	}
 	return nil

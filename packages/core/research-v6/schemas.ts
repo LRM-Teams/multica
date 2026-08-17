@@ -180,3 +180,13 @@ export function parseResearchV6ResumeVerdict(raw: unknown): ResearchV6ResumeVerd
     ? (result.data as ResearchV6ResumeVerdict)
     : { ok: false, resync_required: true };
 }
+/** Strict production HTTP boundary: an invalid verdict is not a resync verdict. */
+export function parseResearchV6ResumeVerdictStrict(
+  raw: unknown,
+): ResearchV6ResumeVerdict {
+  return ResearchV6ResumeVerdictSchema.parse(raw) as ResearchV6ResumeVerdict;
+}
+
+function invalidV6Response(name: string): never {
+  throw new Error(`${name} failed schema validation`);
+}

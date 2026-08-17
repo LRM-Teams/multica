@@ -144,10 +144,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err := hostControl.reportRuntimeSet(ctx, response.Runtimes, response.DaemonToken, response.DaemonTokenExpiresAt); err != nil {
 		return fmt.Errorf("report Binding child Runtime set: %w", err)
 	}
-	runtimeID := ""
-	if len(response.Runtimes) > 0 {
-		runtimeID = response.Runtimes[0].ID
-	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	executor := computer.NewBindingMachineUpgradeExecutor(computer.BindingMachineUpgradeConfig{
@@ -161,13 +157,13 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		Child: bindingChildControlIdentity{
 			WorkspaceID: workspaceID, RunnerGeneration: bootstrap.RunnerGeneration, PID: os.Getpid(),
 		},
-		RuntimeID:    runtimeID,
-		DaemonToken:  response.DaemonToken,
 		Drain:        d.beginBindingDrain,
 		ReleaseDrain: d.releaseClaimBarrier,
 		Exit:         cancel,
-		Emit:         d.emitComputerUpgrade,
-		Prepare:      config.PrepareUpgrade,
+		Emit: func(eventType string, payload any) {
+			_ = d.emitComputerUpgrade(eventType, payload)
+		},
+		Prepare: config.PrepareUpgrade,
 	})
 	d.bindingMachineUpgrade = executor.Execute
 	d.notifyRuntimeSetChanged()
@@ -418,6 +414,31 @@ func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstr
 				return
 			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc(computer.BindingComputerUpgradeDonePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !d.localControlAuthorized(r) {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		var request struct {
+			Identity computer.BindingChildIdentity       `json:"identity"`
+			Done     protocol.ComputerUpgradeDonePayload `json:"done"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() || request.Done.Validate() != nil {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if err := d.emitComputerUpgrade(protocol.EventComputerUpgradeDone, request.Done); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

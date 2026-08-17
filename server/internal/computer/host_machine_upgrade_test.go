@@ -215,14 +215,14 @@ func TestHostMachineUpgradePrepareConcurrentDifferentOperationIsBusy(t *testing.
 			return nil, errors.New("bad token")
 		}
 		switch operation {
-		case "runner-drain":
+		case "runner:drain":
 			select {
 			case <-started:
 			default:
 				close(started)
 			}
 			<-release
-		case "runner-release":
+		case "runner:release":
 		default:
 			return nil, errors.New("unexpected child control request")
 		}
@@ -268,11 +268,11 @@ func TestHostMachineUpgradePrepareSiblingFailureReleasesBusy(t *testing.T) {
 			return nil, errors.New("bad token")
 		}
 		switch operation {
-		case "runner-drain":
+		case "runner:drain":
 			if refuses.Load() {
 				return nil, ErrComputerControlBusy
 			}
-		case "runner-release":
+		case "runner:release":
 		default:
 			return nil, errors.New("unexpected child control request")
 		}
@@ -407,7 +407,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 			return nil, errors.New("bad token")
 		}
 		switch operation {
-		case "runner-drain":
+		case "runner:drain":
 			prepares.Add(1)
 		case "runner-ready":
 			reregistrations.Add(1)
@@ -579,7 +579,7 @@ func newReadyHostForChildUpgrade(t *testing.T, controlToken, workspaceID string,
 			return nil, errors.New("bad token")
 		}
 		switch operation {
-		case "runner-drain", "runner-release":
+		case "runner:drain", "runner:release":
 		default:
 			return nil, errors.New("unexpected child control request")
 		}

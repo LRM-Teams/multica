@@ -28,8 +28,8 @@ var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: "workspace-detach"}, {Name: "workspace-environment"}, {Name: "workspace-capacity"},
 	{Name: "workspace-diagnostics"}, {Name: "runner-attestation"}, {Name: "runner-status"},
 	{Name: "runner-start"}, {Name: "runner-stop"}, {Name: "runner-restart"},
-	{Name: "runner-drain"}, {Name: "runner-release"}, {Name: "runner-ready"},
-	{Name: "computer-upgrade-prepare"},
+	{Name: "runner:drain"}, {Name: "runner:release"}, {Name: "runner-ready"},
+	{Name: "runner:prepare"},
 }
 
 func localControlOperationSpecFor(name string) (localControlOperationSpec, bool) {
@@ -52,11 +52,11 @@ func localControlOperationForPath(path string) string {
 	case bindingChildMachineActionsPath:
 		return "runner-attestation"
 	case bindingChildPrepareUpgradePath:
-		return "computer-upgrade-prepare"
+		return "runner:prepare"
 	case BindingPrepareMachineUpgradePath:
-		return "runner-drain"
+		return "runner:drain"
 	case BindingReleaseMachineUpgradePath:
-		return "runner-release"
+		return "runner:release"
 	case bindingChildComputerUpgradePath:
 		return "upgrade-start"
 	case BindingComputerUpgradeEventPath:

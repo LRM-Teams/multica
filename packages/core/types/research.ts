@@ -317,6 +317,22 @@ export interface ResearchStageEval {
 
 export type ResearchMessageCardKind = "chat" | "process" | string;
 
+/** Exact immutable research context attached to one natural-language message. */
+export interface ResearchSelectedReference {
+  stable_id: string;
+  kind: string;
+  entity_id: string;
+  revision: number;
+  content_hash: string;
+  display_summary: string;
+}
+
+export interface PostResearchMessageRequest {
+  body: string;
+  target_agent_id?: string;
+  selected_research_refs?: ResearchSelectedReference[];
+}
+
 /**
  * Agent clarification question (LRM-822).
  * Carried on ResearchMessage.meta with op: "clarification_question".

@@ -152,6 +152,8 @@
     "hide_chat": "关闭",
     "delivery": "来源与报告",
     "send": "发送",
+    "selected_ref_revision": "第 {{revision}} 版",
+    "selected_ref_remove": "移除引用：{{summary}}",
     "stopping": "停止中…",
     "stop_aria": "停止生成",
     "stop_tooltip": "中断当前生成。已产出内容会保留；再发一条即可恢复。",

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -23,17 +24,27 @@ const (
 	notePeriodBriefFolderTitle   = "工作介绍"
 	notePeriodBriefSourceJournal = "machine_work_journal"
 	notePeriodBriefDigestTimeout = 20 * time.Second
+)
 
-	// Stable English instruction locked to the period_brief playbook (J3-T1).
-	notePeriodBriefInstruction = "Write a Period Work Brief for a manager or colleague — a reporting narrative, not a collaboration wrap-up and not slide deck copy.\n" +
+// Stable English instruction locked to the period_brief playbook (J3-T1 / J3-T4).
+// folderPageID is the private 工作介绍/ folder — Brief lands as a child via human confirm.
+func notePeriodBriefInstruction(folderPageID, windowLabel string) string {
+	folder := strings.TrimSpace(folderPageID)
+	label := strings.TrimSpace(windowLabel)
+	if label == "" {
+		label = "period"
+	}
+	return "Write a Period Work Brief for a manager or colleague — a reporting narrative, not a collaboration wrap-up and not slide deck copy.\n" +
 		"1) Open with one clear claim about the period.\n" +
 		"2) Give 3–7 main threads; each thread has at most 3 bullets and should cite Issue/PR/repo-path evidence when available.\n" +
 		"3) Call out delegated leverage (what agents or teammates carried).\n" +
 		"4) State what remains unfinished.\n" +
 		"5) Put unscoped local machine work (本机未归类) in its own section — never mix it into the team narrative.\n" +
 		"6) Do not list raw commits; do not invent claims without evidence.\n" +
-		"7) Deliver the Brief with `multica message send --note-write` to a new private page under 工作介绍/ titled like `工作介绍 {window label}` — do not treat the draft Facts page as the finished Brief."
-)
+		"7) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
+		"`. The body must be only the Brief markdown. Title it like `工作介绍 " + label +
+		"`. The human confirms 「新建子笔记」 under 工作介绍/ — never treat the draft Facts page as the finished Brief, and never pass the draft page id to --note-page-id."
+}
 
 type createNotePeriodBriefRequest struct {
 	Window    string   `json:"window"` // day | week | month
@@ -143,7 +154,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	job, ok := h.dispatchNotePeriodBriefWorker(w, r, workspaceID, userID, userIDString, page, agent, notePeriodBriefInstruction, strings.TrimSpace(req.ChannelID), factsText, digestText)
+	job, ok := h.dispatchNotePeriodBriefWorker(w, r, workspaceID, userID, userIDString, folderID, page, agent, window.Label, strings.TrimSpace(req.ChannelID), factsText, digestText)
 	if !ok {
 		return
 	}
@@ -279,14 +290,18 @@ func (h *Handler) dispatchNotePeriodBriefWorker(
 	r *http.Request,
 	workspaceID, userID pgtype.UUID,
 	userIDString string,
+	folderID pgtype.UUID,
 	page notePageRow,
 	agent db.Agent,
-	instruction, channelID, factsText, digestText string,
+	windowLabel, channelID, factsText, digestText string,
 ) (NoteWorkerJobResponse, bool) {
 	ch, ok := h.resolveNoteWorkerChannel(w, r, workspaceID, userIDString, agent, channelID)
 	if !ok {
 		return NoteWorkerJobResponse{}, false
 	}
+
+	folderPageID := uuidToString(folderID)
+	instruction := notePeriodBriefInstruction(folderPageID, windowLabel)
 
 	jobID := uuid.New()
 	jobUUID := parseUUID(jobID.String())
@@ -298,7 +313,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 		return NoteWorkerJobResponse{}, false
 	}
 
-	visibleContent, parts, err := h.buildNoteWorkerChannelMessage(r.Context(), ch, agent, page, instruction)
+	visibleContent, parts, err := h.buildNotePeriodBriefChannelMessage(r.Context(), ch, agent, folderID, page, instruction)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return NoteWorkerJobResponse{}, false
@@ -327,7 +342,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 	h.publishToUsers(protocol.EventChannelMessage, uuidToString(workspaceID), "member", userIDString, recipientIDs, msg)
 
 	workerPrompt := wrapNoteWorkerChannelWakePrompt(
-		buildNotePeriodBriefPrompt(instruction, uuidToString(page.ID), page.Title, page.Content, factsText, digestText),
+		buildNotePeriodBriefPrompt(instruction, uuidToString(page.ID), folderPageID, windowLabel, page.Title, page.Content, factsText, digestText),
 		h.agentMessageTargetForPrompt(r.Context(), ch, msg),
 	)
 	task, err := h.enqueueChannelAgentPrompt(
@@ -365,6 +380,46 @@ WHERE id = $3`, task.ID, parseUUID(msg.ID), jobUUID); err != nil {
 		return NoteWorkerJobResponse{}, false
 	}
 	return resp, true
+}
+
+// buildNotePeriodBriefChannelMessage posts a note_brief sticky on the 工作介绍/
+// folder (write target for Create child) while snapshotting the draft body for
+// human context. Task NoteBrief context still points at the draft for notes get.
+func (h *Handler) buildNotePeriodBriefChannelMessage(
+	ctx context.Context,
+	ch ChannelResponse,
+	agent db.Agent,
+	folderID pgtype.UUID,
+	draft notePageRow,
+	instruction string,
+) (string, []protocol.MessagePart, error) {
+	title := strings.TrimSpace(draft.Title)
+	if title == "" {
+		title = notePeriodBriefFolderTitle
+	}
+	body := strings.TrimSpace(instruction)
+	if ch.Kind == "group" {
+		handle := strings.TrimSpace(agent.Name)
+		if handle == "" {
+			handle = uuidToString(agent.ID)
+		}
+		body = "@" + handle + " " + body
+	}
+	brief := protocol.MessagePart{
+		Type:  protocol.MessagePartTypeNoteBrief,
+		RefID: uuidToString(folderID),
+		Label: title,
+		Text:  draft.Content,
+	}
+	content, parts, err := messageparts.Normalize(body, []protocol.MessagePart{brief})
+	if err != nil {
+		return "", nil, err
+	}
+	content, parts, err = h.enrichChannelMessageMentions(ctx, ch, content, parts)
+	if err != nil {
+		return "", nil, err
+	}
+	return content, parts, nil
 }
 
 func formatNotePeriodBriefFacts(facts noteRetrospectiveFacts) string {

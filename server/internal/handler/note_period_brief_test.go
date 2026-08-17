@@ -77,6 +77,39 @@ func TestCreateNotePeriodBriefDispatchesWithDisabledDigest(t *testing.T) {
 	if !strings.Contains(resp.Page.Content, "disabled: true") {
 		t.Fatalf("draft missing disabled digest marker: %s", resp.Page.Content)
 	}
+	if resp.Page.ParentID == nil || *resp.Page.ParentID == "" {
+		t.Fatalf("draft must be under 工作介绍/: %#v", resp.Page)
+	}
+	folderID := *resp.Page.ParentID
+
+	if resp.Job.ChannelMessageID == nil {
+		t.Fatal("expected channel_message_id")
+	}
+	var partsRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT parts FROM channel_message WHERE id = $1`, *resp.Job.ChannelMessageID).Scan(&partsRaw); err != nil {
+		t.Fatalf("load channel parts: %v", err)
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(partsRaw, &parts); err != nil {
+		t.Fatalf("unmarshal parts: %v", err)
+	}
+	foundBrief := false
+	for _, part := range parts {
+		if part["type"] != "note_brief" {
+			continue
+		}
+		foundBrief = true
+		if part["ref_id"] != folderID {
+			t.Fatalf("note_brief sticky ref_id = %v, want folder %s (not draft %s)", part["ref_id"], folderID, resp.Page.ID)
+		}
+		if part["ref_id"] == resp.Page.ID {
+			t.Fatalf("note_brief must not sticky the draft page")
+		}
+	}
+	if !foundBrief {
+		t.Fatalf("expected note_brief part: %s", partsRaw)
+	}
 
 	var wake map[string]any
 	var contextRaw []byte
@@ -90,6 +123,12 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 	prompt, _ := wake["prompt"].(string)
 	if !strings.Contains(prompt, "<facts>") || !strings.Contains(prompt, "<digest>") {
 		t.Fatalf("wake prompt missing facts/digest partitions: %s", prompt)
+	}
+	if !strings.Contains(prompt, "--note-write --note-page-id "+folderID) {
+		t.Fatalf("wake prompt must require note-write to folder: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Never pass the draft page id ("+resp.Page.ID+")") {
+		t.Fatalf("wake prompt must forbid draft write target: %s", prompt)
 	}
 	if !strings.Contains(prompt, "disabled: true") && !strings.Contains(prompt, "disabled:‹") {
 		// escaped angle brackets shouldn't apply to "disabled: true"

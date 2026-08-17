@@ -201,7 +201,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
   - **依赖**：J3-T2
   - **完成标准**：组件测：点击走 period-brief API 而非仅 `createNoteRetrospective`；locale 中英齐全。
 
-- [ ] **J3-T4 产物落入 Notes**
+- [x] **J3-T4 产物落入 Notes**
+  - **已落地（2026-08-17）**：频道 `note_brief` sticky 挂「工作介绍/」文件夹；wake prompt/`--note-write --note-page-id <folder>` 禁止写底稿；人点「新建子笔记」落 Brief。Go 测断言 sticky≠draft；组件测 fixture 结构稿写入子页；`periodBriefLooksStructured` 拒纯 commit 列表。
   - **目标**：Agent 写出 Brief 后，人在笔记里看到汇报稿并可改。
   - **要做**：instruction 要求 `--note-write`（新建 Brief 页，或写入指定 page）。标题建议 `工作介绍 {窗口标签}`，放在 Owner 私有树（可与 `回顾/` 并列，例如 `工作介绍/`，**不要**覆盖回顾列表页）。人点确认才落正文（现有 note_write 按钮即可）。
   - **不要做**：等 N3 待审 writeback 才交货；Agent 直写 `replace_page`；把底稿 Facts 页当成 Brief 展示给领导。
@@ -227,7 +228,7 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
 | 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ ~~J1-T5~~ 开关（已完成） |
 | 3 | ~~J2-T1~~ Facts 包 → ~~J2-T2~~ Issue 挂 PR → ~~J2-T3~~ Digest 归仓（J2 完成） |
-| 4 | ~~J3-T1~~ 剧本 → ~~J3-T2~~ 合成派发 → ~~J3-T3~~ UI（已完成）→ **J3-T4** 产物落入 Notes |
+| 4 | ~~J3-T1~~ 剧本 → ~~J3-T2~~ 合成派发 → ~~J3-T3~~ UI → ~~J3-T4~~ 产物落入 Notes（J3 完成） |
 | 5 | 仅当产品需要时再开 J4 |
 
-**当前焦点：** Slice J3。下一个 checkbox：**J3-T4**。
+**当前焦点：** Slice J3 已完成。可选下一步：**J4**（自定义窗口 / 每周节奏）。

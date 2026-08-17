@@ -19,7 +19,7 @@ func activityNarrativeEntry(detailKind, text string) (protocol.AgentActivityEntr
 	if err != nil {
 		return protocol.AgentActivityEntry{}, err
 	}
-	return protocol.AgentActivityEntry{Kind: "narrative", Position: 0, Body: body}, nil
+	return protocol.AgentActivityEntry{Kind: "narrative", Body: body}, nil
 }
 
 func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error) {
@@ -27,7 +27,7 @@ func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error
 	if err != nil {
 		return protocol.AgentActivityEntry{}, err
 	}
-	return protocol.AgentActivityEntry{Kind: "system", Position: 0, Body: body}, nil
+	return protocol.AgentActivityEntry{Kind: "system", Body: body}, nil
 }
 
 const (
@@ -57,6 +57,7 @@ type agentActivityProducerKey struct {
 type agentActivityProducerState struct {
 	snapshot           protocol.AgentActivitySnapshot
 	detail             string
+	latestActivity     protocol.AgentActivityPayload
 	status             protocol.AgentStatusPayload
 	session            protocol.AgentSessionPayload
 	connected          bool
@@ -211,7 +212,7 @@ func (p *agentActivityProducer) AttachTransport(send func(protocol.AgentActivity
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentStatus, Payload: state.status})
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentSession, Payload: state.session})
 		if !state.snapshot.ObservedAt.IsZero() {
-			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot, Detail: state.detail}})
+			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: state.latestActivity})
 		}
 	}
 	return p.transportGeneration, frames
@@ -287,6 +288,7 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 	}
 	state.snapshot = snapshot
 	state.detail = detail
+	state.latestActivity = payload
 	state.lastClientSequence = snapshot.ClientSequence
 	state.lastHeartbeatAt = snapshot.ObservedAt
 	if state.connected && p.send != nil {
@@ -316,8 +318,9 @@ func (p *agentActivityProducer) Tick() {
 		state.snapshot = heartbeat
 		state.lastClientSequence = heartbeat.ClientSequence
 		state.lastHeartbeatAt = now
+		state.latestActivity = protocol.AgentActivityPayload{Snapshot: heartbeat, Detail: state.detail, IsHeartbeat: true}
 		if state.connected && p.send != nil {
-			p.send(protocol.AgentActivityPayload{Snapshot: heartbeat, Detail: state.detail, IsHeartbeat: true})
+			p.send(state.latestActivity)
 		}
 	}
 }
@@ -346,8 +349,9 @@ func (p *agentActivityProducer) Probe(probe protocol.AgentActivityProbePayload) 
 	return payload, nil
 }
 
-// ReconnectFrames reports only current status, session, and Snapshot for every
-// managed Agent. It intentionally cannot replay intermediate Entries.
+// ReconnectFrames reports current status, session, and Raft's latest complete
+// Activity frame for every managed Agent. Replaying the complete frame keeps
+// its Timeline Entry attached to the Snapshot across a connection loss.
 func (p *agentActivityProducer) ReconnectFrames() []agentActivityReconnectFrame {
 	if p == nil {
 		return nil
@@ -360,7 +364,7 @@ func (p *agentActivityProducer) ReconnectFrames() []agentActivityReconnectFrame 
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentStatus, Payload: state.status})
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentSession, Payload: state.session})
 		if !state.snapshot.ObservedAt.IsZero() {
-			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot, Detail: state.detail}})
+			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: state.latestActivity})
 		}
 	}
 	return frames

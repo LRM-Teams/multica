@@ -20,6 +20,14 @@ export interface StarGraphBounds {
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
 const MAX_AUTO_FIT_ZOOM = 1;
+const MAX_SEMANTIC_FOCUS_ZOOM = 1.45;
+
+const SEMANTIC_FOCUS_DIAMETER: Readonly<Record<string, number>> = {
+  m: 132,
+  l: 160,
+  xl: 190,
+  xxl: 210,
+};
 
 export function computeEntityBounds(entities: readonly StarEntityView[]): StarGraphBounds | null {
   if (entities.length === 0) return null;
@@ -107,6 +115,33 @@ export function centerCameraOnPoint(
     x: targetX - point.x * camera.zoom,
     y: targetY - point.y * camera.zoom,
   };
+}
+
+/**
+ * Bring an M+ landmark to a readable screen size without undoing a closer
+ * camera chosen by the user. S nodes retain the current scale because their
+ * detail belongs in the inspector rather than inside the point itself.
+ */
+export function focusCameraOnEntity(
+  entity: Pick<StarEntityView, "x" | "y" | "radius" | "tier">,
+  viewport: { width: number; height: number },
+  camera: StarGraphCamera,
+  options: { rightPanelWidth?: number; padding?: number } = {},
+): StarGraphCamera {
+  const targetDiameter = SEMANTIC_FOCUS_DIAMETER[entity.tier];
+  const semanticZoom = targetDiameter
+    ? targetDiameter / Math.max(entity.radius * 2, 1)
+    : camera.zoom;
+  const zoom = Math.max(
+    camera.zoom,
+    clamp(semanticZoom, MIN_ZOOM, MAX_SEMANTIC_FOCUS_ZOOM),
+  );
+  return centerCameraOnPoint(
+    { x: entity.x, y: entity.y },
+    viewport,
+    { ...camera, zoom },
+    options,
+  );
 }
 
 export function relationEdgeClass(_kind: string, edgeType: string): string {

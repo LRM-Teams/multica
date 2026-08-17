@@ -102,7 +102,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		return fmt.Errorf("listen for Binding child IPC: %w", err)
 	}
 	defer childControlListener.Close()
-	go d.serveBindingMachineControlHTTP(ctx, childControlListener, bootstrap)
+	go d.serveBindingMachineControlRPC(ctx, childControlListener, bootstrap)
 	defer func() { _ = d.canonicalRuntimes.closeAll() }()
 
 	bindings, err := d.configuredWorkspaceBindings()
@@ -283,7 +283,7 @@ func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, i
 	}
 }
 
-func (d *Daemon) serveBindingMachineControlHTTP(ctx context.Context, listener net.Listener, bootstrap computer.BindingChildBootstrap) {
+func (d *Daemon) serveBindingMachineControlRPC(ctx context.Context, listener net.Listener, bootstrap computer.BindingChildBootstrap) {
 	registry := d.bindingMachineControlRegistry(bootstrap)
 	d.logger.Info("Binding child IPC listening", "addr", listener.Addr().String())
 	if err := computer.ServeLocalControlRPC(ctx, listener, registry); err != nil && d.logger != nil {

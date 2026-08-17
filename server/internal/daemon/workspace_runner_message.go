@@ -170,6 +170,11 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 	if !accepted {
 		result.outcome = messageDeliveryDeduplicated
 	}
+	if accepted {
+		// Raft 1.0.16 broadcasts Message received when an ordinary inbox
+		// body is accepted, including the pending/busy path.
+		runner.observeMessageAccepted(delivery.AgentID, runtimeID, []protocol.AgentMessageProjection{delivery.Message})
+	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
 	))

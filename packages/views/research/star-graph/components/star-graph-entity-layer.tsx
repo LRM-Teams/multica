@@ -26,6 +26,7 @@ export function StarGraphEntityLayer({
   lensHints,
   motionDirectives,
   expansionControl,
+  visibleLabelNodeIds,
   sTierPresentation,
   labels,
   onSelectNode,
@@ -37,6 +38,7 @@ export function StarGraphEntityLayer({
   lensHints?: D5LensDisplayHints;
   motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
   expansionControl?: StarGraphExpansionControl;
+  visibleLabelNodeIds?: ReadonlySet<string>;
   sTierPresentation?: "label" | "point";
   labels: StarGraphEntityLabels;
   onSelectNode?: (nodeId: string) => void;
@@ -64,6 +66,10 @@ export function StarGraphEntityLayer({
           selected ? false : lensHints?.dimmedNodeIds.has(entity.id) ?? false;
         const emphasized =
           selected ? false : lensHints?.emphasizedNodeIds.has(entity.id) ?? false;
+        const contentHidden =
+          entity.view.tier !== "s" &&
+          visibleLabelNodeIds != null &&
+          !visibleLabelNodeIds.has(entity.id);
         return (
           <StarGraphNode
             key={entity.id}
@@ -120,6 +126,7 @@ export function StarGraphEntityLayer({
             className={cn(
               dimmed && "sg-lens-dim",
               emphasized && "sg-lens-emphasis",
+              contentHidden && "sg-semantic-content-hidden",
               motion?.className,
               motion?.markerClass,
             )}

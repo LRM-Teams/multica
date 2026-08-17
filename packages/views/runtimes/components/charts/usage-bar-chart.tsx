@@ -1,4 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
+// react-doctor-disable-next-line react-doctor/prefer-dynamic-import -- this refactor only moves the existing eager Recharts imports from eight chart wrappers into their shared renderer; route loading is unchanged.
 import {
   Bar,
   BarChart,

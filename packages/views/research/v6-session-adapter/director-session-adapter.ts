@@ -16,6 +16,7 @@ export interface ResearchV6DirectorCanvasProjection {
 
 export interface ResearchV6DirectorCanvasAdapterResult {
   graph: TypedGraphResponse;
+  projectionNodeById: ReadonlyMap<string, ResearchV6DirectorProjectionNode>;
   expandableNodeIds: ReadonlySet<string>;
   hiddenChildCountByNodeId: ReadonlyMap<string, number>;
   densityBins: readonly ResearchV6DirectorDensityBin[];
@@ -127,6 +128,7 @@ export function adaptResearchV6DirectorCanvas(
         supersedes: {},
       },
     },
+    projectionNodeById: new Map(projection.nodes.map((node) => [node.id, node])),
     expandableNodeIds,
     hiddenChildCountByNodeId,
     densityBins: projection.densityBins ?? [],

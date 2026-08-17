@@ -142,6 +142,25 @@
     "fleet_collapse": "收起调研团",
     "detail_close": "关闭详情"
   },
+  "v6_detail": {
+    "execution": "执行状态",
+    "conclusion": "结论状态",
+    "integration": "整合状态",
+    "loading": "正在读取固定版本的节点记录…",
+    "load_failed": "节点记录加载失败。",
+    "retry": "重试",
+    "linked_records": "关联记录",
+    "agents": "Agent",
+    "work_items": "工作项",
+    "attempts": "尝试",
+    "evidence": "证据",
+    "discussions": "讨论",
+    "reports": "报告",
+    "branches": "所属分支",
+    "reference_in_chat": "在对话中引用",
+    "referenced": "已加入对话引用",
+    "reference_unavailable": "该投影节点没有不可变版本和内容哈希，不能附加到消息。"
+  },
   "panel": {
     "graph": "调研探索图",
     "sources": "来源图谱",

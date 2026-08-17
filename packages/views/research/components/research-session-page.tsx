@@ -6,6 +6,12 @@ import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
+import { researchV6DirectorNodeDetailOptions } from "@multica/core/research-v6/director-queries";
+import {
+  researchV6DirectorSelectedRefFromNode,
+  researchV6DirectorSelectionIdentity,
+  useResearchV6DirectorSelectionStore,
+} from "@multica/core/research-v6";
 import { useAuthStore } from "@multica/core/auth";
 import type {
   AgentPanelIdentitySnapshot,
@@ -120,6 +126,8 @@ import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
+import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
+import { ResearchV6NodeDetail } from "./research-v6-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -264,6 +272,35 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     expansionFailureLabel: t(($) => $.panel.expansion_failed),
     realtimeBus: directorRealtimeBus,
   });
+  const selectedDirectorProjectionNode = selectedNodeId
+    ? directorCanvas.canvas?.projectionNodeById.get(selectedNodeId) ?? null
+    : null;
+  const directorNodeDetail = useQuery({
+    ...researchV6DirectorNodeDetailOptions(
+      directorTransport,
+      wsId,
+      sessionId,
+      directorCanvas.snapshotId ?? "00000000-0000-0000-0000-000000000000",
+      selectedDirectorProjectionNode?.id ?? "unselected",
+      "full",
+    ),
+    enabled:
+      directorV6Enabled &&
+      Boolean(directorCanvas.snapshotId && selectedDirectorProjectionNode),
+  });
+  const directorSelectionIdentity = researchV6DirectorSelectionIdentity(
+    wsId,
+    sessionId,
+  );
+  const selectedDirectorReference = useResearchV6DirectorSelectionStore(
+    (state) => state.byProjection[directorSelectionIdentity] ?? null,
+  );
+  const selectDirectorReference = useResearchV6DirectorSelectionStore(
+    (state) => state.select,
+  );
+  const clearDirectorReference = useResearchV6DirectorSelectionStore(
+    (state) => state.clear,
+  );
   // The current durable run contract is session-keyed. Probe the V6 projection
   // with that stable key for legacy runs only; Director V6 uses the strict
   // workspace/run/snapshot projection contract above and never falls through
@@ -440,11 +477,19 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   useAutoScroll(chatScrollRef, chatOpen);
 
   const send = useMutation({
-    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    mutationFn: (body: string) =>
+      api.postResearchMessage(sessionId, {
+        body,
+        selected_research_refs:
+          directorV6Enabled && selectedDirectorReference
+            ? [selectedDirectorReference]
+            : undefined,
+      }),
     onSuccess: () => {
       // Focus before clearBody so empty-state native disabled does not dump focus to BODY.
       composerRef.current?.focus();
       dispatch({ type: "clearBody" });
+      if (directorV6Enabled) clearDirectorReference(wsId, sessionId);
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
       void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
     },
@@ -867,13 +912,18 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     waiting: t(($) => $.step_card.generated.waiting),
   };
   const chatFeed = buildFleetChatFeed(messages, fleetStepLabels);
-  const runningCards = presenceRunningCards(presence, fleet.members);
-  const waitingCard = nextStageWaitingCard(
-    session.current_stage,
-    session.status,
-    fleetStepLabels,
-  );
-  const showStop = canStop || runningCards.length > 0;
+  const runningCards = directorV6Enabled
+    ? []
+    : presenceRunningCards(presence, fleet.members);
+  const waitingCard = directorV6Enabled
+    ? null
+    : nextStageWaitingCard(
+        session.current_stage,
+        session.status,
+        fleetStepLabels,
+      );
+  const showStop =
+    !directorV6Enabled && (canStop || runningCards.length > 0);
   // LRM-992 — drawer/FAB four-state mode (align with fleet strip language).
   // Live stream / stop chrome counts as in-progress activity (not empty stub).
   const chatHasFeed =
@@ -950,7 +1000,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         projectionSource={projectionSource}
         session={session}
         contract={data.run?.contract}
-        canConfirm={canConfirm}
+        canConfirm={!directorV6Enabled && canConfirm}
         canHandoff={canHandoff}
         createProject={ui.createProject}
         createChannel={ui.createChannel}
@@ -967,10 +1017,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}
         onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
-        members={fleet.members}
+        members={directorV6Enabled ? [] : fleet.members}
         sources={sources}
         pendingSubstantiveGoal={
-          latestRound?.goal_patch_proposal?.trim()
+          !directorV6Enabled && latestRound?.goal_patch_proposal?.trim()
             ? latestRound.goal_patch_proposal
             : null
         }
@@ -1066,7 +1116,33 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             reportControllerRef.current = controller;
           }}
           detailPanel={
-            selectedNode ? (
+            directorV6Enabled ? (
+              selectedDirectorProjectionNode ? (
+                <ResearchV6NodeDetail
+                  node={selectedDirectorProjectionNode}
+                  detail={directorNodeDetail.data}
+                  loading={directorNodeDetail.isLoading}
+                  error={directorNodeDetail.isError}
+                  selectedForChat={
+                    selectedDirectorReference?.stable_id ===
+                    `${selectedDirectorProjectionNode.canonical_ref.kind}:${selectedDirectorProjectionNode.canonical_ref.id}`
+                  }
+                  onRetry={() => void directorNodeDetail.refetch()}
+                  onReference={() => {
+                    const reference = researchV6DirectorSelectedRefFromNode(
+                      selectedDirectorProjectionNode,
+                    );
+                    if (reference) {
+                      selectDirectorReference(wsId, sessionId, reference);
+                    }
+                  }}
+                />
+              ) : (
+                <p className="p-4 text-sm text-muted-foreground">
+                  {t(($) => $.panel.aux_detail_empty)}
+                </p>
+              )
+            ) : selectedNode ? (
               <ResearchNodeDetail
                 node={selectedNode}
                 sources={sources}
@@ -1079,8 +1155,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 placement="inline"
                 onClose={() => handleSelectCanvasNode(null)}
                 onOpenReport={() => reportControllerRef.current?.open()}
-                onNodeCommand={(action) =>
-                  nodeCommand.mutate({ node: selectedNode, action })
+                onNodeCommand={
+                  directorV6Enabled
+                    ? undefined
+                    : (action) =>
+                        nodeCommand.mutate({ node: selectedNode, action })
                 }
                 pendingNodeCommand={
                   nodeCommand.isPending ? nodeCommand.variables?.action : null
@@ -1104,14 +1183,16 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}
             />
-            <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
-              {t(($) => $.panel.fleet)}:{" "}
-              {fleet.members
-                .filter((m) => m.status !== "archived")
-                .map((m) => m.display_name || m.name || m.role)
-                .join(" · ")}
-            </div>
-            {latestRound ? (
+            {!directorV6Enabled ? (
+              <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
+                {t(($) => $.panel.fleet)}:{" "}
+                {fleet.members
+                  .filter((m) => m.status !== "archived")
+                  .map((m) => m.display_name || m.name || m.role)
+                  .join(" · ")}
+              </div>
+            ) : null}
+            {!directorV6Enabled && latestRound ? (
               <div className="border-b px-3 py-2">
                 <ResearchProductRoundCardView
                   card={latestRound}
@@ -1161,7 +1242,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 />
               </div>
             ) : null}
-            {Object.keys(presence).length > 0 ? (
+            {!directorV6Enabled && Object.keys(presence).length > 0 ? (
               <div className="flex flex-wrap gap-1.5 border-b px-3 py-2">
                 {fleet.members
                   .filter((m) => presence[m.agent_id]?.activity)
@@ -1330,6 +1411,18 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           composer={
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
+                {directorV6Enabled && selectedDirectorReference ? (
+                  <ul
+                    className="mb-2"
+                    aria-label={selectedDirectorReference.display_summary}
+                  >
+                    <ResearchSelectedRefChip
+                      reference={selectedDirectorReference}
+                      disabled={send.isPending}
+                      onRemove={() => clearDirectorReference(wsId, sessionId)}
+                    />
+                  </ul>
+                ) : null}
                 <Textarea
                   ref={composerRef}
                   data-testid="research-chat-composer"

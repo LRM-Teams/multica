@@ -142,6 +142,25 @@
     "fleet_collapse": "Collapse research fleet",
     "detail_close": "Close detail"
   },
+  "v6_detail": {
+    "execution": "Execution",
+    "conclusion": "Conclusion",
+    "integration": "Integration",
+    "loading": "Loading the pinned node record…",
+    "load_failed": "The node record could not be loaded.",
+    "retry": "Retry",
+    "linked_records": "Linked records",
+    "agents": "Agents",
+    "work_items": "Work items",
+    "attempts": "Attempts",
+    "evidence": "Evidence",
+    "discussions": "Discussions",
+    "reports": "Reports",
+    "branches": "Branches",
+    "reference_in_chat": "Reference in chat",
+    "referenced": "Referenced in chat",
+    "reference_unavailable": "This projection node has no immutable revision and content hash, so it cannot be attached to a message."
+  },
   "panel": {
     "graph": "Exploration map",
     "sources": "Source map",

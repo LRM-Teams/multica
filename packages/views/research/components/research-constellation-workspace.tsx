@@ -562,6 +562,12 @@ export function ResearchConstellationWorkspace({
       onSelectNode(resolved);
       setRailMode("detail");
 
+      if (projectionSource === "v6") {
+        setRailOpen(true);
+        closeOverlay();
+        return;
+      }
+
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
@@ -583,6 +589,7 @@ export function ResearchConstellationWorkspace({
       onSelectNode,
       openAgentInspector,
       openReport,
+      projectionSource,
       setRailMode,
       setRailOpen,
       snapshotNodes,

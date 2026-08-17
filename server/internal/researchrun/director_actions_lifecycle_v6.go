@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -184,6 +185,21 @@ func firstNonEmptyV6(values ...string) string {
 		}
 	}
 	return "Director decision"
+}
+
+func withV6ActionKind(raw json.RawMessage, kind string) json.RawMessage {
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil {
+		return raw
+	}
+	if strings.TrimSpace(fmt.Sprint(value["kind"])) == "" {
+		value["kind"] = kind
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return encoded
 }
 
 func (s *PostgresStore) recordV6DirectorNoOp(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64, reason string) error {

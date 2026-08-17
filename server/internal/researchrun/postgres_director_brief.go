@@ -415,6 +415,9 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 				"expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
 				"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
 				"branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+		"collaboration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
+			"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text, "expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
+			"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
 		"branch.create.v1": map[string]any{"type": "object", "additionalProperties": false,
 			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
 				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},

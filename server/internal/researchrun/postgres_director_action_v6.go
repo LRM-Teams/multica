@@ -189,6 +189,9 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			err = s.executeV6CreateAgentAction(ctx, proposal, cycleID, action, stateVersion)
 		case "create_work_item", "create_task":
 			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_match", "open_discussion", "create_dispute", "create_integration", "create_review":
+			action.Payload = withV6ActionKind(action.Payload, action.Kind)
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
 		case "create_branch":
 			err = s.executeV6CreateBranchAction(ctx, proposal, cycleID, action, stateVersion)
 		case "create_report":

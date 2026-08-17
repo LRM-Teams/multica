@@ -629,8 +629,12 @@ func TestCodexRawErrorNotificationTerminal(t *testing.T) {
 	c.notificationProtocol = "raw"
 	done := false
 	var activities []string
+	var messages []Message
 	c.onSemanticActivity = func(activity string) {
 		activities = append(activities, activity)
+	}
+	c.onMessage = func(message Message) {
+		messages = append(messages, message)
 	}
 	c.onTurnDone = func(aborted bool) {
 		if aborted {
@@ -649,6 +653,9 @@ func TestCodexRawErrorNotificationTerminal(t *testing.T) {
 	}
 	if got, want := strings.Join(activities, ","), "error:terminal"; got != want {
 		t.Fatalf("semantic activity = %q, want %q", got, want)
+	}
+	if len(messages) != 1 || messages[0].Type != MessageError || messages[0].Content != "boom" {
+		t.Fatalf("messages = %+v, want one terminal MessageError", messages)
 	}
 }
 

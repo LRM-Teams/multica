@@ -1611,6 +1611,9 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 			}
 			if !willRetry {
 				c.setTurnError(errMsg)
+				if c.onMessage != nil {
+					c.onMessage(Message{Type: MessageError, Content: errMsg})
+				}
 				if c.onTurnDone != nil {
 					c.onTurnDone(false)
 				}

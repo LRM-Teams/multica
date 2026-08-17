@@ -65,7 +65,7 @@ export function ResearchNodeReportModal({
     >
       <DialogContent
         data-testid="research-node-report-modal"
-        className="flex max-h-[min(860px,92vh)] max-w-[min(1120px,95vw)] flex-col overflow-hidden border-emerald-900/60 bg-[#07111b] p-0 text-slate-100"
+        className="flex max-h-[min(860px,92vh)] max-w-[min(1120px,95vw)] flex-col overflow-hidden border-emerald-900/60 bg-background p-0 text-slate-100"
       >
         <DialogHeader className="border-b border-emerald-950 bg-[radial-gradient(circle_at_18%_0%,rgba(34,197,94,0.16),transparent_52%)] px-6 py-5 text-left">
           <div className="flex flex-wrap items-start justify-between gap-4 pr-7">
@@ -212,7 +212,7 @@ function ReportNavLink({
   return (
     <a
       href={href}
-      className="flex min-h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-xs text-slate-400 transition-colors hover:bg-emerald-950/55 hover:text-emerald-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400"
+      className="flex min-h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-xs text-emerald-100/70 transition-colors hover:bg-emerald-950/55 hover:text-emerald-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400"
     >
       <span className="[&>svg]:size-3.5" aria-hidden>
         {icon}

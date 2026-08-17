@@ -318,6 +318,13 @@ func (host *Host) DeliverComputerUpgrade(ctx context.Context, command protocol.C
 	return host.supervisor.DeliverComputerUpgrade(ctx, host.control.token, command)
 }
 
+func (host *Host) DeliverComputerUpgradeDone(ctx context.Context, done protocol.ComputerUpgradeDonePayload) error {
+	if host == nil || host.supervisor == nil || host.control == nil {
+		return errors.New("Computer Host is unavailable")
+	}
+	return host.supervisor.DeliverComputerUpgradeDone(ctx, host.control.token, done)
+}
+
 func (host *Host) PrepareChildUpgrade(ctx context.Context, identity BindingChildIdentity, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (BindingMachineUpgradePrepared, error) {
 	if host == nil || host.upgrade == nil {
 		return BindingMachineUpgradePrepared{}, errors.New("Computer Machine Upgrade coordinator is unavailable")

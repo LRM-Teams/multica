@@ -407,6 +407,14 @@ func (supervisor *BindingSupervisor) DeliverComputerUpgrade(ctx context.Context,
 	return RequestBindingComputerUpgrade(ctx, targets[0].controlURL, controlToken, targets[0].identity, command)
 }
 
+func (supervisor *BindingSupervisor) DeliverComputerUpgradeDone(ctx context.Context, controlToken string, done protocol.ComputerUpgradeDonePayload) error {
+	targets := supervisor.availableMachineControlTargets()
+	if len(targets) == 0 {
+		return errors.New("Computer has no ready Binding for Machine Upgrade completion")
+	}
+	return RequestBindingComputerUpgradeDone(ctx, targets[0].controlURL, controlToken, targets[0].identity, done)
+}
+
 func (supervisor *BindingSupervisor) ReregisterBindings(ctx context.Context, controlToken string, workspaceIDs []string) error {
 	wanted := make(map[string]struct{}, len(workspaceIDs))
 	for _, workspaceID := range workspaceIDs {

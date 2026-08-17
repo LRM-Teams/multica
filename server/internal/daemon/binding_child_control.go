@@ -101,7 +101,7 @@ func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonH
 	}
 }
 
-func (d *Daemon) setComputerUpgradeEmit(emit func(string, any)) {
+func (d *Daemon) setComputerUpgradeEmit(emit func(string, any) error) {
 	if d == nil {
 		return
 	}
@@ -110,16 +110,17 @@ func (d *Daemon) setComputerUpgradeEmit(emit func(string, any)) {
 	d.mu.Unlock()
 }
 
-func (d *Daemon) emitComputerUpgrade(eventType string, payload any) {
+func (d *Daemon) emitComputerUpgrade(eventType string, payload any) error {
 	if d == nil {
-		return
+		return errors.New("DaemonCore is unavailable")
 	}
 	d.mu.Lock()
 	emit := d.computerUpgradeEmit
 	d.mu.Unlock()
-	if emit != nil {
-		emit(eventType, payload)
+	if emit == nil {
+		return errors.New("Binding socket is not connected")
 	}
+	return emit(eventType, payload)
 }
 
 func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {

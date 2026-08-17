@@ -162,6 +162,24 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     );
   });
 
+  it("renders V6 S nodes as accessible text-free state points", () => {
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        sTierPresentation="point"
+      />,
+    );
+
+    const workPoint = screen.getByRole("button", { name: /Probe A/ });
+    expect(workPoint).toHaveAttribute("data-tier", "s");
+    expect(workPoint).toHaveAttribute("data-presentation", "point");
+    expect(within(workPoint).queryByTestId("star-graph-s-label")).toBeNull();
+    expect(workPoint.textContent).not.toContain("Probe A");
+    expect(screen.getByRole("button", { name: /Stable A/ }).textContent).toContain(
+      "Stable A",
+    );
+  });
+
   it("selects a node without treating map-key buttons as canvas nodes", () => {
     const onSelectNode = vi.fn();
     render(<StarGraphCanvas model={fixtureModel()} onSelectNode={onSelectNode} />);
@@ -186,6 +204,67 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(onOpenNode).toHaveBeenCalledOnce();
     expect(onOpenNode).toHaveBeenCalledWith("stable-a");
     expect(onSelectNode).not.toHaveBeenCalled();
+  });
+
+  it("delegates expandable nodes to the server-backed one-layer toggle", () => {
+    const onSelectNode = vi.fn();
+    const onOpenNode = vi.fn();
+    const onToggleNode = vi.fn();
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        onSelectNode={onSelectNode}
+        onOpenNode={onOpenNode}
+        expansionControl={{
+          expandableNodeIds: new Set(["stable-a"]),
+          expandedNodeIds: new Set(),
+          loadingNodeIds: new Set(["stable-a"]),
+          onToggleNode,
+        }}
+      />,
+    );
+
+    const node = screen.getByRole("button", { name: /Stable A/ });
+    expect(node).toHaveAttribute("aria-expanded", "false");
+    expect(node).toHaveAttribute("aria-busy", "true");
+    expect(within(node).getByTestId("star-graph-disclosure")).toHaveAttribute(
+      "data-disclosure-state",
+      "loading",
+    );
+    fireEvent.click(node);
+
+    expect(onSelectNode).toHaveBeenCalledWith("stable-a");
+    expect(onToggleNode).toHaveBeenCalledWith("stable-a");
+    expect(onOpenNode).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed expansion retryable without changing canonical graph data", () => {
+    const onToggleNode = vi.fn();
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        expansionControl={{
+          expandableNodeIds: new Set(["stable-a"]),
+          expandedNodeIds: new Set(),
+          failedNodeIds: new Set(["stable-a"]),
+          failureLabel: "Expansion failed; activate to retry",
+          onToggleNode,
+        }}
+      />,
+    );
+
+    const node = screen.getByRole("button", {
+      name: /Stable A.*Expansion failed; activate to retry/,
+    });
+    expect(node).toHaveAttribute("aria-invalid", "true");
+    expect(node).toHaveAttribute("aria-expanded", "false");
+    expect(within(node).getByTestId("star-graph-disclosure")).toHaveAttribute(
+      "data-disclosure-state",
+      "failed",
+    );
+    fireEvent.click(node);
+    expect(onToggleNode).toHaveBeenCalledWith("stable-a");
+    expect(screen.getAllByTestId("star-graph-node")).toHaveLength(3);
   });
 
   it("degrades safely for an empty graph", () => {

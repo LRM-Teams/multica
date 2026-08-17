@@ -83,6 +83,15 @@ describe("buildMotionDirective — AC1 deterministic per-verb output", () => {
     expect(appear.style["--motion-rise-px"]).toBe("4px");
   });
 
+  it("keeps merge crystallization but removes blur under low-performance", () => {
+    expect(buildMotionDirective("merge", "t1", baseOpts).style["--motion-fusion-blur"])
+      .toBe("5px");
+    expect(
+      buildMotionDirective("merge", "t1", { ...baseOpts, lowPerformance: true })
+        .style["--motion-fusion-blur"],
+    ).toBe("0px");
+  });
+
   it("keeps glow enabled unless low-performance disables it", () => {
     expect(buildMotionDirective("escalate", "t1", baseOpts).glowDisabled).toBe(false);
     expect(
@@ -147,6 +156,13 @@ describe("semanticMotionCss — Rule ② DOM contrast keyframes", () => {
     for (const name of required) {
       expect(css).toContain(name);
     }
+  });
+
+  it("crystallizes an integration instead of using a generic opacity fade", () => {
+    const css = semanticMotionCss();
+    expect(css).toContain("transform: scale(0.68)");
+    expect(css).toContain("blur(var(--motion-fusion-blur, 5px))");
+    expect(css).toContain("transform: scale(1.035)");
   });
 
   it("eliminates the hardcoded brand hex in research-motion-revise (Rule ② zero-hardcoded-hex)", () => {

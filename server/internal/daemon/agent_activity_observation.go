@@ -174,8 +174,9 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "starting"
 		entry, err = activityNarrativeEntry(projection.detailKind, "Starting…")
 	case AgentObservationRuntimeWorking:
+		// Runtime text advances Raft's current model-response state, but the
+		// final reply belongs to Chat and does not create a generic Timeline row.
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "model_response_started"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Working")
 	case AgentObservationRuntimeThinking:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindThinking, "thinking_started"
 		entry, err = activityNarrativeEntry(projection.detailKind, "Thinking")

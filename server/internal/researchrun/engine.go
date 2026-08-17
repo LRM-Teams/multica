@@ -18,6 +18,8 @@ type Engine struct {
 	clock              Clock
 	leaseDuration      time.Duration
 	leaseRenewInterval time.Duration
+	v6Agents           AgentLifecycleAdapter
+	v6Inbox            InboxDispatchAdapter
 }
 
 const (
@@ -27,6 +29,16 @@ const (
 
 func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) ResearchRun {
 	return newEngine(store, dispatcher, projector)
+}
+
+// NewEngineWithV6Adapters wires external effects without granting adapters any
+// canonical-store mutation capability. V6 remains gated by supported-version
+// policy until the activation slice.
+func NewEngineWithV6Adapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, agents AgentLifecycleAdapter, inbox InboxDispatchAdapter) ResearchRun {
+	engine := newEngine(store, dispatcher, projector)
+	engine.v6Agents = agents
+	engine.v6Inbox = inbox
+	return engine
 }
 
 func newEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
@@ -88,9 +100,10 @@ func (e *Engine) SubmitResult(ctx context.Context, sessionID, workspaceID, taskI
 }
 
 func (e *Engine) ReconcileDue(ctx context.Context, limit int) (int, error) {
+	v6Processed, v6Err := e.ReconcileV6Work(ctx, limit)
 	ids, err := e.store.ListDueRunIDs(ctx, limit)
 	if err != nil {
-		return 0, err
+		return v6Processed, errors.Join(v6Err, err)
 	}
 	processed := 0
 	errs := []error{}
@@ -104,7 +117,67 @@ func (e *Engine) ReconcileDue(ctx context.Context, limit int) (int, error) {
 		}
 		processed++
 	}
-	return processed, errors.Join(errs...)
+	return processed + v6Processed, errors.Join(append(errs, v6Err)...)
+}
+
+func (e *Engine) WorkManifest(ctx context.Context, access V6AttemptAccess) (V6WorkManifest, error) {
+	return (workManifestModule{store: e.store}).Get(ctx, access)
+}
+
+func (e *Engine) WorkCatalog(ctx context.Context, in V6CatalogRequest) (V6CatalogPage, error) {
+	return (workCatalogModule{store: e.store}).Get(ctx, in)
+}
+
+func (e *Engine) AcknowledgeWorkCatalog(ctx context.Context, in AcknowledgeV6CatalogInput) error {
+	return (workCatalogModule{store: e.store}).Acknowledge(ctx, in)
+}
+
+func (e *Engine) SubmitV6Work(ctx context.Context, in V6SubmissionInput) (V6SubmissionOutcome, error) {
+	return (v6SubmissionModule{store: e.store}).Submit(ctx, in)
+}
+
+func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
+	if e == nil || e.store == nil {
+		return 0, errors.New("research run engine is unavailable")
+	}
+	steering, steeringErr := e.store.ProcessV6SteeringTriggers(ctx, limit)
+	proposals, proposalErr := e.store.ApplyReceivedV6DirectorProposals(ctx, limit)
+	applied, applyErr := e.store.ApplyReceivedV6Submissions(ctx, limit)
+	recovered, err := e.store.RecoverExpiredV6WorkItems(ctx, limit)
+	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
+	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
+	return recovered + steering + proposals + applied + prepared + delivered, errors.Join(err, steeringErr, proposalErr, applyErr, prepareErr, deliveryErr)
+}
+
+func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {
+	return (directorModule{store: e.store}).Assign(ctx, in)
+}
+func (e *Engine) MarkV6DirectorUnavailable(ctx context.Context, in MarkV6DirectorUnavailableInput) (V6DirectorAssignment, error) {
+	return (directorModule{store: e.store}).MarkUnavailable(ctx, in)
+}
+func (e *Engine) StartV6DirectorCycle(ctx context.Context, in StartV6DirectorCycleInput) (V6DirectorCycle, error) {
+	return (directorBriefModule{store: e.store}).Start(ctx, in)
+}
+func (e *Engine) AddV6TeamMember(ctx context.Context, in AddV6TeamMemberInput) (V6TeamMember, error) {
+	return (teamV6Module{store: e.store}).Add(ctx, in)
+}
+func (e *Engine) ArchiveV6TeamMember(ctx context.Context, in ArchiveV6TeamMemberInput) (V6TeamMember, error) {
+	return (teamV6Module{store: e.store}).Archive(ctx, in)
+}
+func (e *Engine) RecordV6MatchDecision(ctx context.Context, in RecordV6MatchDecisionInput) (V6MatchDecision, error) {
+	return (matchV6Module{store: e.store}).Record(ctx, in)
+}
+func (e *Engine) OpenV6Discussion(ctx context.Context, in OpenV6DiscussionInput) (V6Discussion, error) {
+	return (discussionV6Module{store: e.store}).Open(ctx, in)
+}
+func (e *Engine) ApplyV6SteeringAssessment(ctx context.Context, in ApplyV6SteeringAssessmentInput) (V6SteeringAssessment, error) {
+	return (steeringV6Module{store: e.store}).Apply(ctx, in)
+}
+func (e *Engine) DirectorBriefPage(ctx context.Context, access V6AttemptAccess, cursor string) (V6DirectorBriefPage, error) {
+	return (directorBriefModule{store: e.store}).Page(ctx, access, cursor)
+}
+func (e *Engine) AcknowledgeDirectorBrief(ctx context.Context, in AcknowledgeV6DirectorBriefInput) error {
+	return (directorBriefModule{store: e.store}).Acknowledge(ctx, in)
 }
 
 func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr error) {

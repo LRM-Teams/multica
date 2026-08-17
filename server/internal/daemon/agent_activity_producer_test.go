@@ -26,7 +26,7 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		processID   string
 	}{
 		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
-		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "model_response_started", entryKind: "narrative", entryText: "Working"},
+		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "model_response_started"},
 		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, detail: "thinking_started", entryKind: "narrative", entryText: "Thinking"},
 		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "ls -la"},
 		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
@@ -173,6 +173,43 @@ func TestAgentActivityProducerCoalescesTextStagesAndPreservesToolEvents(t *testi
 	if len(sent[0].Entries) != 1 || sent[0].Entries[0].Kind != "narrative" {
 		t.Fatalf("thinking Activity entries = %+v, want one narrative", sent[0].Entries)
 	}
+	if len(sent[1].Entries) != 0 {
+		t.Fatalf("working Activity entries = %+v, want current-state update only", sent[1].Entries)
+	}
+}
+
+func TestAgentActivityProducerDoesNotPutFinalReplyAfterCommandsOnTimeline(t *testing.T) {
+	at := time.Date(2026, time.August, 17, 6, 11, 0, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) {
+		sent = append(sent, payload)
+	})
+	installActivityProducerAgent(t, producer)
+	stage := AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}
+	observations := []AgentObservation{
+		{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-1", ToolInput: map[string]any{"command": "pwd"}}, At: at},
+		{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-2", ToolInput: map[string]any{"command": "git status --short"}}, At: at.Add(time.Millisecond)},
+		{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: stage, At: at.Add(2 * time.Millisecond)},
+		{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle, Data: stage, At: at.Add(3 * time.Millisecond)},
+	}
+	for _, observation := range observations {
+		if err := producer.Observe(observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(sent) != 4 {
+		t.Fatalf("Activity count = %d, want two commands + state-only reply + Idle", len(sent))
+	}
+	wantEntryCounts := []int{1, 1, 0, 1}
+	for index, want := range wantEntryCounts {
+		if len(sent[index].Entries) != want {
+			t.Fatalf("Activity[%d] entries = %+v, want %d", index, sent[index].Entries, want)
+		}
+	}
+	if sent[2].Snapshot.DetailKind != "model_response_started" || sent[3].Snapshot.DetailKind != "idle" {
+		t.Fatalf("terminal Activity snapshots = %q then %q, want model_response_started then idle", sent[2].Snapshot.DetailKind, sent[3].Snapshot.DetailKind)
+	}
 }
 
 func TestAgentActivityProducerObserveRejectsMissingOrStaleLaunch(t *testing.T) {
@@ -260,7 +297,7 @@ func TestReplayManagedAgentStartDoesNotRepaintLiveActivity(t *testing.T) {
 	}
 }
 
-func TestResidentTextProjectsWorkingLikeRaft(t *testing.T) {
+func TestResidentTextUpdatesWorkingWithoutAddingTimelineEntry(t *testing.T) {
 	var activities []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
 		activities = append(activities, payload)
@@ -283,6 +320,9 @@ func TestResidentTextProjectsWorkingLikeRaft(t *testing.T) {
 	runner.observeResidentMessageRuntime("agent-1", "runtime-1", agent.Message{Type: agent.MessageText, Content: "working on it"})
 	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.DetailKind != "model_response_started" {
 		t.Fatalf("text Activity = %+v, want Raft model_response_started", activities)
+	}
+	if len(activities[0].Entries) != 0 {
+		t.Fatalf("text Activity entries = %+v, want final reply kept out of Timeline", activities[0].Entries)
 	}
 }
 
@@ -501,12 +541,8 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 			t.Fatalf("Activity[%d] = %+v", index, activities[index].Snapshot)
 		}
 	}
-	var workingBody protocol.AgentActivityNarrativeBody
-	if err := json.Unmarshal(activities[1].Entries[0].Body, &workingBody); err != nil {
-		t.Fatal(err)
-	}
-	if workingBody.Text != "Working" || workingBody.DetailKind != "model_response_started" || strings.Contains(workingBody.Text, "pong-reset") {
-		t.Fatalf("text Activity body = %+v, want Working without reply content", workingBody)
+	if len(activities[1].Entries) != 0 {
+		t.Fatalf("text Activity entries = %+v, want current-state update without a Timeline row", activities[1].Entries)
 	}
 	var toolBody protocol.AgentActivityNarrativeBody
 	if err := json.Unmarshal(activities[2].Entries[0].Body, &toolBody); err != nil {

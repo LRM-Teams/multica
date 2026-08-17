@@ -412,6 +412,7 @@ type DispatchRequest struct {
 	Target       ExecutionTarget `json:"target,omitempty"`
 	ManifestID   string          `json:"manifest_id,omitempty"`
 	ManifestHash string          `json:"manifest_hash,omitempty"`
+	WorkItemID   string          `json:"work_item_id,omitempty"`
 	Prompt       string          `json:"prompt"`
 	Key          string          `json:"key"`
 	RequestHash  string          `json:"request_hash"`

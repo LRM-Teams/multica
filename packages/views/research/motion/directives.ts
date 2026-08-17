@@ -107,6 +107,7 @@ export function buildMotionDirective(
     case "merge":
       liveStyle.animationName = "research-motion-merge";
       liveStyle.opacity = "0.4";
+      liveStyle["--motion-fusion-blur"] = opts.lowPerformance ? "0px" : "5px";
       break;
     case "conflict":
       liveStyle.animationName = "research-motion-conflict";
@@ -190,9 +191,37 @@ export function semanticMotionCss(): string {
   from { opacity: 0; transform: translateY(var(--motion-rise-px, 8px)) scale(0.96); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
+@keyframes research-motion-anchored-appear {
+  0% {
+    opacity: 0.08;
+    transform: translate(var(--motion-anchor-x, 0), var(--motion-anchor-y, 0)) scale(0.48);
+    filter: blur(var(--motion-anchor-blur, 4px)) brightness(1.25);
+  }
+  72% { opacity: 1; filter: blur(0) brightness(1.08); }
+  100% { opacity: 1; transform: translate(0, 0) scale(1); filter: none; }
+}
 @keyframes research-motion-merge {
-  from { opacity: 0.4; }
-  to   { opacity: 1; }
+  0% {
+    opacity: 0.32;
+    transform: scale(0.68);
+    filter: blur(var(--motion-fusion-blur, 5px)) brightness(1.38);
+  }
+  68% { opacity: 1; transform: scale(1.035); filter: blur(0) brightness(1.12); }
+  100% { opacity: 1; transform: scale(1); filter: none; }
+}
+@keyframes research-motion-expansion-reveal {
+  0% {
+    opacity: 0.12;
+    transform: translate(var(--expansion-origin-x, 0), var(--expansion-origin-y, 0)) scale(0.52);
+    filter: blur(var(--expansion-blur, 5px)) brightness(1.35);
+  }
+  70% { opacity: 1; filter: blur(0) brightness(1.12); }
+  100% { opacity: 1; transform: translate(0, 0) scale(1); filter: none; }
+}
+@keyframes research-motion-expansion-collapse {
+  0% { transform: scale(0.94); filter: brightness(1.3); }
+  58% { transform: scale(1.035); filter: brightness(1.16); }
+  100% { transform: scale(1); filter: none; }
 }
 @keyframes research-motion-conflict {
   from { transform: translateX(calc(var(--motion-gap-px, 12px) * -1)); }

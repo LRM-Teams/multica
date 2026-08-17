@@ -55,7 +55,7 @@ func RequestBindingComputerUpgrade(ctx context.Context, controlEndpoint, token s
 	if err != nil {
 		return err
 	}
-	return callLocalJSONWithTimeout(ctx, controlEndpoint, "upgrade-start", 35*time.Second,
+	return callLocalJSONWithTimeout(ctx, controlEndpoint, LocalControlUpgradeStartOperation, 35*time.Second,
 		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": strings.TrimSpace(token)},
 		json.RawMessage(body), nil)
 }
@@ -72,7 +72,7 @@ func RequestBindingComputerUpgradeEvent(ctx context.Context, controlEndpoint, to
 	if err != nil {
 		return err
 	}
-	return callLocalJSONWithTimeout(ctx, controlEndpoint, "upgrade-status", 5*time.Second,
+	return callLocalJSONWithTimeout(ctx, controlEndpoint, LocalControlUpgradeStatusOperation, 5*time.Second,
 		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": strings.TrimSpace(token)},
 		json.RawMessage(body), nil)
 }

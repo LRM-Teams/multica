@@ -180,6 +180,7 @@ func startResidentProcess(exe string, args []string, log *os.File) (procHandle, 
 		child.Stdout = log
 		child.Stderr = log
 		child.SysProcAttr = SysProcAttr(breakaway)
+		configureChildParentDeath(child)
 		if err := child.Start(); err != nil {
 			return nil, err
 		}

@@ -17,6 +17,8 @@ type persistedRunnerState struct {
 	WorkspaceID      string    `json:"workspace_id"`
 	RunnerGeneration int64     `json:"runner_generation"`
 	OwnerPID         int       `json:"owner_pid"`
+	RunnerPID        int       `json:"runner_pid"`
+	RunnerIdentity   string    `json:"runner_identity,omitempty"`
 	StartedAt        time.Time `json:"started_at"`
 }
 
@@ -159,6 +161,26 @@ func removeRunnerState(root, workspaceID string, generation int64, pid int) erro
 	return os.Remove(filepath.Dir(path))
 }
 
+func discardRunnerStateAfterSpawnFailure(root, workspaceID string, generation int64, pid int) error {
+	path := runnerStatePath(root, workspaceID)
+	if path == "" {
+		return nil
+	}
+	state, err := readRunnerState(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil || state.RunnerGeneration != generation || state.RunnerPID != pid {
+		return err
+	}
+	for _, current := range []string{runnerConnectedPath(root, workspaceID), runnerPIDPath(root, workspaceID), path} {
+		if err := os.Remove(current); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return os.Remove(filepath.Dir(path))
+}
+
 func readRunnerState(path string) (persistedRunnerState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -220,10 +242,16 @@ func recoverRunnerStates(root string, logger *slog.Logger) error {
 		if pidErr == nil {
 			alive, known = processAlive(pid)
 		}
-		if known && alive {
+		identityMatches := false
+		if pidErr == nil && state.RunnerIdentity != "" {
+			identityMatches = processIdentityValue(pid) == state.RunnerIdentity
+		}
+		if known && alive && identityMatches {
 			if err := terminateProcess(pid); err != nil && logger != nil {
 				logger.Warn("could not terminate orphaned Runner", "workspace_id", state.WorkspaceID, "pid", pid, "error", err)
 			}
+		} else if known && alive && logger != nil {
+			logger.Warn("refusing to terminate orphaned Runner with mismatched process identity", "workspace_id", state.WorkspaceID, "pid", pid)
 		}
 		for _, current := range []string{filepath.Join(filepath.Dir(path), "runner.connected"), filepath.Join(filepath.Dir(path), "runner.pid"), path} {
 			if err := os.Remove(current); err != nil && !os.IsNotExist(err) {

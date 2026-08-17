@@ -82,3 +82,24 @@ func TestRecoverRunnerStatesRemovesDeadOwnerState(t *testing.T) {
 		t.Fatalf("dead runner state still exists: %v", err)
 	}
 }
+
+func TestRecoverRunnerStatesRefusesMismatchedPIDIdentity(t *testing.T) {
+	root := t.TempDir()
+	state := persistedRunnerState{
+		WorkspaceID: "workspace-mismatch", RunnerGeneration: 1, OwnerPID: 999998,
+		RunnerPID: os.Getpid(), RunnerIdentity: "not-this-process",
+		StartedAt: time.Now().UTC(),
+	}
+	if err := writeRunnerState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRunnerPID(root, state.WorkspaceID, state.RunnerPID); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverRunnerStates(root, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(runnerStatePath(root, state.WorkspaceID)); !os.IsNotExist(err) {
+		t.Fatalf("mismatched runner state still exists: %v", err)
+	}
+}

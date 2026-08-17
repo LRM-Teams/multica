@@ -94,7 +94,7 @@ func TestHostMachineUpgradeLocalDeliveryRunsInService(t *testing.T) {
 		if headers["X-Multica-Control-Token"] != controlToken {
 			return nil, errors.New("bad token")
 		}
-		if operation == "upgrade-start" {
+		if operation == LocalControlUpgradeStartOperation {
 			var request struct {
 				Command protocol.ComputerUpgradePayload `json:"command"`
 			}

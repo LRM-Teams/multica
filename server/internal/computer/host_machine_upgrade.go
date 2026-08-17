@@ -102,6 +102,7 @@ func (upgrade *hostMachineUpgrade) localRequestHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		request.Canonicalize()
 		operationID := strings.TrimSpace(request.OperationID)
 		if operationID == "" {
 			http.Error(w, "operationId is required", http.StatusBadRequest)
@@ -138,6 +139,7 @@ func (upgrade *hostMachineUpgrade) authorized(r *http.Request) bool {
 // after the service has claimed machine-upgrade ownership. All package work
 // continues in the Computer service process.
 func (upgrade *hostMachineUpgrade) startServiceUpgrade(identity BindingChildIdentity, command protocol.ComputerUpgradePayload) error {
+	command.Canonicalize()
 	operationID := strings.TrimSpace(command.Operation())
 	if operationID == "" {
 		return errors.New("Computer upgrade request identity is required")

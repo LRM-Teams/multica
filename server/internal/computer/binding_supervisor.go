@@ -197,6 +197,7 @@ func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
 		supervisor.mu.Unlock()
 		next.cancel()
 		_ = child.Stop()
+		_ = discardRunnerStateAfterSpawnFailure(supervisor.config.StateRoot, next.workspaceID, next.generation, child.PID())
 		supervisor.observeExit(next.workspaceID, next.generation, child, RunnerExitCrash)
 		return
 	}
@@ -204,7 +205,8 @@ func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
 	supervisor.mu.Unlock()
 	stateErr := writeRunnerState(supervisor.config.StateRoot, persistedRunnerState{
 		WorkspaceID: next.workspaceID, RunnerGeneration: next.generation,
-		OwnerPID: os.Getpid(), StartedAt: supervisor.config.Now().UTC(),
+		OwnerPID: os.Getpid(), RunnerPID: child.PID(),
+		RunnerIdentity: processIdentityValue(child.PID()), StartedAt: supervisor.config.Now().UTC(),
 	})
 	if stateErr == nil {
 		stateErr = writeRunnerPID(supervisor.config.StateRoot, next.workspaceID, child.PID())
@@ -215,6 +217,8 @@ func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
 		}
 		next.cancel()
 		_ = child.Stop()
+		_ = discardRunnerStateAfterSpawnFailure(supervisor.config.StateRoot, next.workspaceID, next.generation, child.PID())
+		supervisor.observeExit(next.workspaceID, next.generation, child, RunnerExitCrash)
 		return
 	}
 	if activatable, ok := child.(activatableBindingChild); ok {
@@ -265,13 +269,16 @@ func (supervisor *BindingSupervisor) observeReady(workspaceID string, generation
 	}
 	if child != nil {
 		startedAt := supervisor.config.Now().UTC()
+		state := persistedRunnerState{}
 		if state, err := readRunnerState(runnerStatePath(supervisor.config.StateRoot, workspaceID)); err == nil && !state.StartedAt.IsZero() {
 			startedAt = state.StartedAt
 		}
-		_ = writeRunnerState(supervisor.config.StateRoot, persistedRunnerState{
+		state = persistedRunnerState{
 			WorkspaceID: workspaceID, RunnerGeneration: generation,
-			OwnerPID: os.Getpid(), StartedAt: startedAt,
-		})
+			OwnerPID: os.Getpid(), RunnerPID: child.PID(),
+			RunnerIdentity: processIdentityValue(child.PID()), StartedAt: startedAt,
+		}
+		_ = writeRunnerState(supervisor.config.StateRoot, state)
 		_ = writeRunnerConnected(supervisor.config.StateRoot, workspaceID, persistedRunnerConnected{PID: child.PID(), ConnectedAt: supervisor.config.Now().UTC(), RunnerEndpoint: controlEndpoint})
 	}
 }

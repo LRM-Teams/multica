@@ -78,7 +78,10 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 	register(LocalControlUpgradeStatusOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
 		return host.upgrade.status(), nil
 	})
-	register(LocalControlUpgradeCancelOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
+	register(LocalControlUpgradeCancelOperation, func(_ context.Context, headers map[string]string, _ json.RawMessage) (any, error) {
+		if !host.authorizeLocal(headers) {
+			return nil, errors.New("local control authentication failed")
+		}
 		if err := host.upgrade.cancelActive(); err != nil {
 			return nil, err
 		}
@@ -97,7 +100,16 @@ func (host *Host) processHealthResult(state *hostProcessState) map[string]any {
 	if ready {
 		status = "running"
 	}
-	return map[string]any{"status": status, "pid": os.Getpid(), "os": runtime.GOOS, "uptime": time.Since(started).Truncate(time.Second).String(), "computer_id": identity.ComputerID, "computer_generation": identity.ComputerGeneration, "environment": identity.Environment, "cli_version": identity.Version, "connected": ready && len(desired) > 0, "workspaces": desired}
+	return map[string]any{
+		"status": status, "pid": os.Getpid(), "os": runtime.GOOS,
+		"uptime":    time.Since(started).Truncate(time.Second).String(),
+		"daemon_id": identity.ComputerID, "computer_id": identity.ComputerID,
+		"computer_generation": identity.ComputerGeneration,
+		"device_name":         identity.DeviceName, "server_url": identity.ServerURL,
+		"environment": identity.Environment, "release_channel": identity.releaseChannel(),
+		"cli_version": identity.Version, "connected": ready && len(desired) > 0,
+		"workspaces": desired,
+	}
 }
 
 func (host *Host) authorizeLocal(headers map[string]string) bool {

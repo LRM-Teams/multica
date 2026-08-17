@@ -119,6 +119,13 @@ func (p ComputerUpgradePayload) Operation() string {
 	return strings.TrimSpace(p.RequestID)
 }
 
+func (p *ComputerUpgradePayload) Canonicalize() {
+	if p == nil || strings.TrimSpace(p.RequestID) != "" {
+		return
+	}
+	p.RequestID = strings.TrimSpace(p.OperationID)
+}
+
 func (p ComputerUpgradePayload) Validate() error {
 	if p.Operation() == "" {
 		return fmt.Errorf("Computer upgrade request identity is required")

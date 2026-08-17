@@ -554,9 +554,8 @@ composer-2 - Composer 2
 	}
 }
 
-func TestParseHermesSessionNewModels(t *testing.T) {
-	// Mirrors the real shape emitted by hermes'
-	// acp_adapter/server.py _build_model_state -> SessionModelState.
+func TestParseACPSessionNewModels(t *testing.T) {
+	// Mirrors a typical ACP session/new model catalog.
 	raw := []byte(`{
       "sessionId": "ses_123",
       "models": {
@@ -586,7 +585,7 @@ func TestParseHermesSessionNewModels(t *testing.T) {
 	}
 }
 
-func TestParseHermesSessionNewModelsSnakeCaseAndUnknownNames(t *testing.T) {
+func TestParseACPSessionNewModelsSnakeCaseAndUnknownNames(t *testing.T) {
 	raw := []byte(`{
       "session_id": "ses_123",
       "models": {
@@ -612,9 +611,8 @@ func TestParseHermesSessionNewModelsSnakeCaseAndUnknownNames(t *testing.T) {
 	}
 }
 
-func TestParseHermesSessionNewModelsMissingField(t *testing.T) {
-	// session/new without the models field — older hermes or
-	// failed _build_model_state — should yield nil so the caller
+func TestParseACPSessionNewModelsMissingField(t *testing.T) {
+	// session/new without the models field should yield nil so the caller
 	// can distinguish "no catalog" from "empty catalog".
 	raw := []byte(`{"sessionId": "ses_123"}`)
 	if got := parseACPSessionNewModels(raw); got != nil && len(got) != 0 {
@@ -622,7 +620,7 @@ func TestParseHermesSessionNewModelsMissingField(t *testing.T) {
 	}
 }
 
-func TestParseHermesSessionNewModelsGarbage(t *testing.T) {
+func TestParseACPSessionNewModelsGarbage(t *testing.T) {
 	if got := parseACPSessionNewModels([]byte("not json")); got != nil {
 		t.Errorf("expected nil for non-JSON, got %+v", got)
 	}

@@ -21,7 +21,7 @@ import (
 // `provider/model` form (e.g. "openai/gpt-4o" from opencode).
 // Default is a *display* hint: the UI badges the entry the
 // runtime advertises as its preferred pick (e.g. Claude Code's
-// shipped default, or hermes' currentModelId). It has no effect
+// shipped default, or an ACP server's currentModelId). It has no effect
 // at execution time — when agent.model is empty the daemon passes
 // "" to the backend so each provider's own CLI resolves its own
 // default, which is always closer to what the user's account /
@@ -901,7 +901,7 @@ type acpDiscoveryProvider struct {
 // implements the standard `initialize` + `session/new` flow and
 // advertises its model catalog in the response under
 // `models.availableModels` / `models.currentModelId`. This covers
-// Hermes and Kimi today; future ACP backends can plug in by adding
+// Kimi today; future ACP backends can plug in by adding
 // an acpDiscoveryProvider entry instead of duplicating the loop.
 func discoverACPModels(ctx context.Context, executablePath string, p acpDiscoveryProvider) ([]Model, error) {
 	if executablePath == "" {
@@ -1026,7 +1026,7 @@ func discoverACPModels(ctx context.Context, executablePath string, p acpDiscover
 }
 
 // parseACPSessionNewModels extracts the model catalog from an ACP
-// `session/new` response. Both Hermes and Kimi (and any other ACP
+// `session/new` response. Kimi (and any other ACP
 // agent that follows the standard schema) emit:
 //
 //	{

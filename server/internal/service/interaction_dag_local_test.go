@@ -46,7 +46,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RecordsLocalSegment(t *testin
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 2, "assistant", "", "hi there", "", "some output"))
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 3, "tool", "read_file", "", `{"path":"/x"}`, "file contents"))
 
-	segID, err := svc.RecordLocalSegmentForEvent(
+	segID, _, err := svc.RecordLocalSegmentForEvent(
 		context.Background(), "proj-1", taskID, "issue-1", "delegation",
 		map[string]any{"sandbox_ids": []string{"sbx-1"}},
 	)
@@ -109,7 +109,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RepeatCloseIsIdempotent(t *te
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 1, "user", "", "first", "", ""))
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 2, "assistant", "", "second", "", ""))
 
-	segID1, err := svc.RecordLocalSegmentForEvent(
+	segID1, _, err := svc.RecordLocalSegmentForEvent(
 		context.Background(), "proj-1", taskID, "issue-1", "delegation", nil,
 	)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RepeatCloseIsIdempotent(t *te
 	// Second close: same task.
 	store.addTestTaskMessage(taskID, 3)
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 3, "user", "", "third", "", ""))
-	segID2, err := svc.RecordLocalSegmentForEvent(
+	segID2, _, err := svc.RecordLocalSegmentForEvent(
 		context.Background(), "proj-1", taskID, "issue-1", "completion", nil,
 	)
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_NeverIncludesSecrets(t *testi
 	store.addTestTaskMessage(taskID, 1)
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 1, "user", "", "hello", "", ""))
 
-	_, err := svc.RecordLocalSegmentForEvent(
+	_, _, err := svc.RecordLocalSegmentForEvent(
 		context.Background(), "proj-1", taskID, "issue-1", "delegation", nil,
 	)
 	require.NoError(t, err)
@@ -173,7 +173,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_DisabledServiceIsNoop(t *test
 	msgs := newFakeMessageStore()
 	svc := NewInteractionDAGServiceWithMessages(store, msgs, &fakeArealSegmentClient{}, false)
 
-	segID, err := svc.RecordLocalSegmentForEvent(
+	segID, _, err := svc.RecordLocalSegmentForEvent(
 		context.Background(), "proj-1", "task-1", "issue-1", "delegation", nil,
 	)
 	require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_EmptySequenceRange(t *testing
 	taskID := "task-empty-1"
 	// No task messages added to either store.
 
-	segID, err := svc.RecordLocalSegmentForEvent(
+	segID, _, err := svc.RecordLocalSegmentForEvent(
 		context.Background(), "proj-1", taskID, "issue-1", "delegation", nil,
 	)
 	require.NoError(t, err)
@@ -237,7 +237,7 @@ func TestAssembleAssembledDag_EmitsDualSourceFields(t *testing.T) {
 	taskID := "local-run"
 	store.addTestTaskMessage(taskID, 1)
 	msgs.addTaskMessage(taskID, makeFakeTaskMessage(taskID, 1, "user", "", "hi", "", ""))
-	_, err := svc.RecordLocalSegmentForEvent(context.Background(), "proj-dual", taskID, "local-issue", "completion", nil)
+	_, _, err := svc.RecordLocalSegmentForEvent(context.Background(), "proj-dual", taskID, "local-issue", "completion", nil)
 	require.NoError(t, err)
 
 	// Assert both segments have the right source fields.

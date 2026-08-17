@@ -253,6 +253,9 @@ func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceRunner(t *testing.
 	if !strings.Contains(string(childRaw), "runner.Run(runCtx)") {
 		t.Fatal("Binding child does not own WorkspaceRunner.Run")
 	}
+	if !strings.Contains(string(childRaw), "adoptWorkspaceRunner(runner)") {
+		t.Fatal("Binding child does not publish its Workspace Runner for Credential Proxy lookup")
+	}
 	if !strings.Contains(string(supervisorRaw), "type BindingSupervisor struct") || !strings.Contains(string(supervisorRaw), "child.Wait()") {
 		t.Fatal("computer package does not own Binding child supervision")
 	}

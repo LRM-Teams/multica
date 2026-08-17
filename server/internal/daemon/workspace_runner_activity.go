@@ -47,6 +47,10 @@ func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase 
 	if !found || runner.activity == nil || launch.ProcessInstanceID == "" {
 		return
 	}
+	if launch.QueueState == protocol.AgentStartQueueRunning && phase != "Managed start" {
+		// After APM admits Running, later Messages must not repaint Starting.
+		return
+	}
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting,
 		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
@@ -203,9 +207,8 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	case agent.MessageThinking:
 		kind = AgentObservationRuntimeThinking
 	case agent.MessageText:
-		// Raft maps provider text to working / model_response_started. That
-		// is the live "the model is producing" fact; dropping it leaves the
-		// compact surface stuck on Thinking or a previous tool.
+		// Raft 1.0.16: runtime text is Working / model_response_started.
+		// Do not parse reply content into the timeline.
 		kind = AgentObservationRuntimeWorking
 	case agent.MessageCompactionStarted:
 		kind = AgentObservationRuntimeCompacting

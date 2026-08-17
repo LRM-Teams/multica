@@ -1,69 +1,69 @@
 package daemon
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 )
 
-// agentRuntimeSessionStore is the machine-local provider session identity
-// the next start will resume. Restart keeps the stored id; session reset
-// and full reset clear it so the next start cannot resume a stale session.
+// agentRuntimeSessionStore is the in-process resume cache for one DaemonCore.
+//
+// Raft 1.0.16 keeps the same fact in idleRestartSnapshots: the id last
+// applied by agent:start / the live RuntimeSession. It is not a disk
+// pointer and is not keyed by cwd. A new DaemonCore starts empty and
+// waits for the next start payload.
+//
+// Restart keeps the cached id. Session reset and full reset clear it so
+// the next start cannot resume a stale session.
 type agentRuntimeSessionStore struct {
-	root string
-	mu   sync.Mutex
+	mu       sync.Mutex
+	sessions map[string]string
 }
 
 func newAgentRuntimeSessionStore(workspacesRoot string) *agentRuntimeSessionStore {
-	return &agentRuntimeSessionStore{root: strings.TrimSpace(workspacesRoot)}
+	// TODO(raft-session-resume): drop leftover disk files after v0.4.24-alpha.67
+	// is no longer a supported direct self-upgrade source. Raft never stored
+	// the resume id at workspaces/.multica/runtime-sessions/<agent>/<runtime>.
+	if root := strings.TrimSpace(workspacesRoot); root != "" {
+		_ = os.RemoveAll(filepath.Join(root, ".multica", "runtime-sessions"))
+	}
+	return &agentRuntimeSessionStore{sessions: make(map[string]string)}
 }
 
 func (s *agentRuntimeSessionStore) Get(agentID, runtimeID string) (string, error) {
-	if s == nil || s.root == "" {
-		return "", errors.New("session identity store is not configured")
+	if s == nil {
+		return "", nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	body, err := os.ReadFile(s.path(agentID, runtimeID))
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(body)), nil
+	return s.sessions[sessionKey(agentID, runtimeID)], nil
 }
 
 func (s *agentRuntimeSessionStore) Put(agentID, runtimeID, sessionID string) error {
-	if s == nil || s.root == "" {
-		return errors.New("session identity store is not configured")
+	if s == nil {
+		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path := s.path(agentID, runtimeID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+	if s.sessions == nil {
+		s.sessions = make(map[string]string)
 	}
+	key := sessionKey(agentID, runtimeID)
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+		delete(s.sessions, key)
 		return nil
 	}
-	return os.WriteFile(path, []byte(sessionID+"\n"), 0o600)
+	s.sessions[key] = sessionID
+	return nil
 }
 
 func (s *agentRuntimeSessionStore) Invalidate(commandID, agentID, runtimeID string) error {
-	if s == nil {
-		return errors.New("session identity store is not configured")
-	}
 	_ = commandID
 	return s.Put(agentID, runtimeID, "")
 }
 
-func (s *agentRuntimeSessionStore) path(agentID, runtimeID string) string {
-	return filepath.Join(s.root, ".multica", "runtime-sessions", strings.TrimSpace(agentID), strings.TrimSpace(runtimeID))
+func sessionKey(agentID, runtimeID string) string {
+	return strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
 }

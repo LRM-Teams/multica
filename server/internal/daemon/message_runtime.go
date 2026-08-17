@@ -144,7 +144,7 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			d.reportAgentMemoryWrites(reportCtx, memoryTask)
 			if sessionID, ok := standaloneChatSessionIDFromMessages(preparedMessages); ok {
 				if reply := standaloneAssistantTextFromCapture(capture); reply != "" {
-					if err := d.client.ReportStandaloneChatReply(reportCtx, sessionID, reply); err != nil && d.logger != nil {
+					if err := d.client.ReportStandaloneChatReply(reportCtx, sessionID, reply, runtimeID); err != nil && d.logger != nil {
 						d.logger.Warn("standalone chat reply writeback failed", "session_id", sessionID, "error", err)
 					}
 				}
@@ -341,6 +341,12 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
 		memories, _ := prepareExecutionMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
+		// Graph reviewer (design §1 memory_type=graph): same replacement
+		// contract as runTask — graph recall wins on success, legacy stands
+		// on miss or error.
+		if graphMemories := d.graphExecutionMemories(ctx, messageTask, d.logger); graphMemories != nil {
+			memories = graphMemories
+		}
 		chatSessionID, _ := standaloneChatSessionID(message.Target)
 		message.RuntimeContext = execenv.RenderTurnContext(execenv.TaskContextForEnv{
 			MessageDelivery: true,

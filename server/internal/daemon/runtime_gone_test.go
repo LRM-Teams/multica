@@ -252,7 +252,7 @@ func TestHandleRuntimeGone_BackoffOnFailure(t *testing.T) {
 		t.Fatalf("register endpoint called %d times on failure path, want 1 (second call should be coalesced)", got)
 	}
 	// Local state pruning still happened for both, even though re-register
-	// failed: the workspace is now empty, which workspaceSyncLoop will
+	// failed: the workspace is now empty, which Binding refresh will
 	// retry on the next tick.
 	if got := d.workspaces["ws-1"].runtimeIDs; len(got) != 0 {
 		t.Fatalf("workspace runtimeIDs after failed recovery = %v, want []", got)
@@ -607,7 +607,7 @@ func TestTryClaimRegisterSlot_StragglerAfterFailedSiblingRetriesPastBackoff(t *t
 	// same-wave straggler whose entryAt predates the failure but who only
 	// reaches the gate after the failure backoff has expired must be allowed
 	// to claim — otherwise the workspace stays unregistered until
-	// workspaceSyncLoop notices, and that loop only fires when the workspace's
+	// Binding refresh notices, and that loop only fires when the workspace's
 	// runtimeIDs fully drain (partial deletions wouldn't trigger it).
 	t.Parallel()
 

@@ -558,8 +558,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
-		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
-		r.Post("/computer/machine-upgrades/{upgradeId}/takeover", h.CommitComputerMachineUpgradeTakeover)
 		r.Get("/connect", h.DaemonWebSocket)
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
@@ -571,9 +569,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
-		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/accept", h.AcceptMachineUpgrade)
-		r.Get("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}", h.GetDaemonMachineUpgrade)
-		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/progress", h.ReportMachineUpgradeProgress)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
@@ -583,6 +578,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
+		r.Post("/graph-memory/judge", h.ReportGraphMemoryJudge)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/progress", h.ReportTaskProgress)
@@ -687,6 +683,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
 					r.Get("/memory-curation/profile", h.GetMemoryCuratorProfile)
 					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)
+					r.Get("/graph-memory/profile", h.GetGraphMemoryProfile)
+					r.Put("/graph-memory/profile", h.UpdateGraphMemoryProfile)
 					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
 					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)
@@ -1235,12 +1233,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/activity", h.GetRuntimeTaskActivity)
 					r.Get("/agent-workspaces", h.ListRuntimeAgentWorkspaces)
 					r.Delete("/agent-workspaces/{dirName}", h.DeleteRuntimeAgentWorkspace)
-					// Installed clients still use these runtime-scoped paths. They
-					// delegate to the daemon-scoped Machine Upgrade record and must
-					// never recreate a runtime-owned update lineage.
-					r.Post("/update", h.InitiateUpdate)
-					r.Get("/update/{updateId}", h.GetUpdate)
-					r.Delete("/update-intent", h.CancelUpdateIntent)
 					r.Post("/restart", h.InitiateRestart)
 					r.Get("/restart/{restartId}", h.GetRestart)
 					r.Post("/models", h.InitiateListModels)
@@ -1260,12 +1252,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
-			// Canonical daemon-identity Machine Upgrade lifecycle. Runtime-scoped
-			// update routes remain compatibility adapters for installed clients.
+			// Computer upgrade dispatch. Progress and completion come back on
+			// the current Binding socket, not as HTTP receipts.
 			r.Route("/api/daemons/{daemonId}/upgrades", func(r chi.Router) {
 				r.Post("/", h.CreateMachineUpgrade)
-				r.Get("/{upgradeId}", h.GetMachineUpgrade)
-				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
 			// Public Computer Workspace-connection establishment. Deletion is

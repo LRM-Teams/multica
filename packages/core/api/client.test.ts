@@ -1346,6 +1346,36 @@ describe("ApiClient", () => {
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
   });
 
+  it("reads and updates the graph memory profile through workspace routes", async () => {
+    const profile = {
+      workspace_id: "ws-1",
+      memory_type: "graph",
+      explore_agents: 4,
+      explore_max_rounds: 3,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(profile), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(profile), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    const loaded = await client.getGraphMemoryProfile("ws-1");
+    await client.updateGraphMemoryProfile("ws-1", {
+      memory_type: "graph",
+      explore_agents: 4,
+      explore_max_rounds: 3,
+    });
+
+    expect(loaded.memory_type).toBe("graph");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.example.test/api/workspaces/ws-1/graph-memory/profile");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual({
+      memory_type: "graph",
+      explore_agents: 4,
+      explore_max_rounds: 3,
+    });
+  });
+
   it("queues a staged memory curation run with dry-run preserved", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: "run-1", status: "queued" }), {

@@ -44,6 +44,14 @@ type BusinessMetrics struct {
 	freshnessHoldResolution                *prometheus.HistogramVec
 	agentDeleteDuration                    *prometheus.HistogramVec
 
+	// Graph memory reviewer (design §7 observability).
+	graphMemoryRecall         *prometheus.CounterVec
+	graphMemoryExploreRounds  prometheus.Histogram
+	graphMemoryJudge          *prometheus.CounterVec
+	graphMemoryIngest         *prometheus.CounterVec
+	graphMemoryVersionSwitch  prometheus.Counter
+	graphMemoryBacktestBypass prometheus.Gauge
+
 	activeMu    sync.Mutex
 	activeTasks map[string]activeTaskLabels
 
@@ -196,10 +204,59 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Help:    "End-to-end server duration of user-facing Agent delete (archive) requests.",
 			Buckets: agentDeleteDurationBuckets,
 		}, metricLabels("multica_agent_delete_duration_seconds")),
+		graphMemoryRecall: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "multica",
+			Subsystem: "graph_memory",
+			Name:      "recall_total",
+			Help:      "Total graph memory recalls by outcome (found or miss).",
+		}, metricLabels("multica_graph_memory_recall_total")),
+		graphMemoryExploreRounds: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "multica",
+			Subsystem: "graph_memory",
+			Name:      "explore_rounds",
+			Help:      "Explore-agent rounds used per graph memory recall.",
+			Buckets:   []float64{1, 2, 3, 4, 5, 8, 10},
+		}),
+		graphMemoryJudge: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "multica",
+			Subsystem: "graph_memory",
+			Name:      "judge_total",
+			Help:      "Total graph memory judge results by pass/fail against the relevance threshold.",
+		}, metricLabels("multica_graph_memory_judge_total")),
+		graphMemoryIngest: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "multica",
+			Subsystem: "graph_memory",
+			Name:      "ingest_total",
+			Help:      "Total graph memory segment ingests by outcome (ok, extractive fallback, or error).",
+		}, metricLabels("multica_graph_memory_ingest_total")),
+		graphMemoryVersionSwitch: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "multica",
+			Subsystem: "graph_memory",
+			Name:      "version_switch_total",
+			Help:      "Total graph memory version switches after TTT consolidation.",
+		}),
+		graphMemoryBacktestBypass: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "multica",
+			Subsystem: "graph_memory",
+			Name:      "backtest_bypass_ratio",
+			Help:      "Fraction of backtested queries accepted on graph distance alone (no full explore run) in the last consolidation.",
+		}),
 		activeTasks: map[string]activeTaskLabels{},
 		events:      newBusinessEventMetrics(),
 	}
 	m.prewarmFailureReasons()
+	// Prewarm the graph-memory result vecs so their families are visible in
+	// the registry before the first recall/judge (same intent as
+	// prewarmFailureReasons).
+	for _, result := range []string{"found", "miss"} {
+		m.graphMemoryRecall.WithLabelValues(result).Add(0)
+	}
+	for _, result := range []string{"passed", "failed"} {
+		m.graphMemoryJudge.WithLabelValues(result).Add(0)
+	}
+	for _, result := range []string{"ok", "fallback", "error"} {
+		m.graphMemoryIngest.WithLabelValues(result).Add(0)
+	}
 	return m
 }
 
@@ -228,6 +285,12 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.channelTriggerDepth,
 		m.freshnessHoldResolution,
 		m.agentDeleteDuration,
+		m.graphMemoryRecall,
+		m.graphMemoryExploreRounds,
+		m.graphMemoryJudge,
+		m.graphMemoryIngest,
+		m.graphMemoryVersionSwitch,
+		m.graphMemoryBacktestBypass,
 	}, m.events.collectors()...)
 }
 
@@ -410,6 +473,69 @@ func (m *BusinessMetrics) recordUnpricedTokens(provider, modelAlias, tokenType s
 		return
 	}
 	m.llmUnpricedTokens.WithLabelValues(provider, modelAlias, NormalizeTokenType(tokenType)).Add(float64(tokens))
+}
+
+func (m *BusinessMetrics) RecordGraphMemoryRecall(found bool, rounds int) {
+	if m == nil {
+		return
+	}
+	result := "miss"
+	if found {
+		result = "found"
+	}
+	m.graphMemoryRecall.WithLabelValues(result).Inc()
+}
+
+// ObserveGraphExploreRounds records the exploration rounds of one recall.
+func (m *BusinessMetrics) ObserveGraphExploreRounds(rounds int) {
+	if m == nil || rounds < 0 {
+		return
+	}
+	m.graphMemoryExploreRounds.Observe(float64(rounds))
+}
+
+// RecordGraphJudge records one judge outcome against the relevance
+// threshold τ (design §5.3).
+func (m *BusinessMetrics) RecordGraphJudge(passed bool) {
+	if m == nil {
+		return
+	}
+	result := "failed"
+	if passed {
+		result = "passed"
+	}
+	m.graphMemoryJudge.WithLabelValues(result).Inc()
+}
+
+// RecordGraphMemoryIngest records one segment-ingest outcome (design §5.1,
+// review R14): "ok" (LLM summary), "fallback" (deterministic extractive
+// summary after an LLM failure), or "error" (staging write failure).
+func (m *BusinessMetrics) RecordGraphMemoryIngest(result string) {
+	if m == nil {
+		return
+	}
+	switch result {
+	case "ok", "fallback", "error":
+		m.graphMemoryIngest.WithLabelValues(result).Inc()
+	}
+}
+
+// RecordGraphVersionSwitch records one current-pointer switch after a TTT
+// consolidation selected a new winner version (design §5.4 step 6).
+func (m *BusinessMetrics) RecordGraphVersionSwitch() {
+	if m == nil {
+		return
+	}
+	m.graphMemoryVersionSwitch.Inc()
+}
+
+// RecordGraphBacktestBypass records the backtest bypass rate of one
+// consolidation (design §7: 回测免跑率).
+func (m *BusinessMetrics) RecordGraphBacktestBypass(ratio float64) {
+	if m == nil || ratio < 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+		return
+	}
+	m.graphMemoryBacktestBypass.Set(ratio)
 }
 
 func (m *BusinessMetrics) markTaskInProgress(taskID, source, runtimeMode string) {

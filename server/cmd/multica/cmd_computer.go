@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/pkg/protocol"
+
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -68,35 +70,35 @@ var computerStartCmd = &cobra.Command{
 	Short: "Start the resident Computer",
 	Long:  "Start the machine-wide resident Computer that polls for tasks and executes them using local agent CLIs (Claude, Codex).\nRuns detached in the background by default. Use --foreground to run in the current terminal.",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonStart,
+	RunE:  runComputerStart,
 }
 
 var computerStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the resident Computer",
 	Args:  cobra.NoArgs,
-	RunE:  runDaemonStop,
+	RunE:  runComputerStop,
 }
 
 var computerStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show resident Computer status",
 	Args:  cobra.NoArgs,
-	RunE:  runDaemonStatus,
+	RunE:  runComputerStatus,
 }
 
 var computerRestartCmd = &cobra.Command{
 	Use:   "restart [/<workspace>]",
 	Short: "Restart the resident Computer (stop + start)",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonRestart,
+	RunE:  runComputerRestart,
 }
 
 var computerLogsCmd = &cobra.Command{
 	Use:   "logs [/<workspace>]",
 	Short: "Show resident Computer service logs",
 	Args:  optionalWorkspacePath,
-	RunE:  runDaemonLogs,
+	RunE:  runComputerLogs,
 }
 
 var computerDoctorCmd = &cobra.Command{
@@ -196,6 +198,8 @@ func init() {
 
 	computerCmd.AddCommand(computerServiceCmd)
 	computerCmd.AddCommand(computerRunnerCmd)
+	computerSuperviseCmd.Hidden = true
+	computerCmd.AddCommand(computerSuperviseCmd)
 	computerCmd.AddCommand(computerStartCmd)
 	computerCmd.AddCommand(computerStopCmd)
 	computerCmd.AddCommand(computerStatusCmd)
@@ -220,6 +224,14 @@ func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(workspaceID) != bootstrap.WorkspaceID {
 		return fmt.Errorf("workspace-id %q does not match Binding child bootstrap %q", workspaceID, bootstrap.WorkspaceID)
 	}
+	ctx, stop := notifyShutdownContext(context.Background())
+	defer stop()
+	return runInProcessBindingChild(ctx, bootstrap, func(ready computer.BindingChildReady) error {
+		return computer.WriteBindingChildReady(os.Stdout, ready)
+	}, nil)
+}
+
+func runInProcessBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstrap, publishReady func(computer.BindingChildReady) error, host *computer.Host) error {
 	cfg, err := daemon.LoadConfig(daemon.Overrides{
 		ServerURL:      bootstrap.ServerBaseURL,
 		WorkspacesRoot: bootstrap.WorkspacesRoot,
@@ -241,16 +253,22 @@ func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read Computer Host control token: %w", err)
 	}
 	cfg.LocalControlToken = controlToken
-	ctx, stop := notifyShutdownContext(context.Background())
-	defer stop()
 	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID, "runner_generation", bootstrap.RunnerGeneration)
+	var prepareUpgrade func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error)
+	if host != nil {
+		identity := computer.BindingChildIdentity{
+			WorkspaceID: bootstrap.WorkspaceID, RunnerGeneration: bootstrap.RunnerGeneration, PID: os.Getpid(),
+		}
+		prepareUpgrade = func(ctx context.Context, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error) {
+			return host.PrepareChildUpgrade(ctx, identity, pending)
+		}
+	}
 	return daemon.RunBindingChild(ctx, daemon.BindingChildRunConfig{
-		Daemon:    cfg,
-		Bootstrap: bootstrap,
-		Logger:    logger,
-		PublishReady: func(ready computer.BindingChildReady) error {
-			return computer.WriteBindingChildReady(os.Stdout, ready)
-		},
+		Daemon:         cfg,
+		Bootstrap:      bootstrap,
+		Logger:         logger,
+		PublishReady:   publishReady,
+		PrepareUpgrade: prepareUpgrade,
 	})
 }
 
@@ -397,10 +415,9 @@ func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 	}
 	if upgrade.Route == computer.UpgradeRouteLive {
 		fmt.Fprintf(os.Stdout,
-			"Computer upgrade accepted: %s (target %s, phase %s). The live Computer owns download, verification, handoff, and convergence.\n",
-			strVal(upgrade.Operation, "id"),
+			"Computer upgrade accepted: %s (target %s). The live Computer owns download, verification, handoff, and convergence.\n",
+			strVal(upgrade.Operation, "request_id"),
 			upgrade.ResolvedTarget,
-			strVal(upgrade.Operation, "phase"),
 		)
 		return nil
 	}

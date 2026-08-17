@@ -251,7 +251,7 @@ func TestInteractionDAG_RecordingErrorIsBestEffort(t *testing.T) {
 	svc2 := newSeamTaskService(store2, client2)
 	parentID := testUUID(5)
 	require.NoError(t, svc2.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
-	_, err := svc2.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-p", "key-p", "delegation", leanSnap())
+	_, _, err := svc2.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-p", "key-p", "delegation", leanSnap())
 	require.NoError(t, err)
 	child := db.AgentInboxEvent{ID: testUUID(2), ParentTaskID: parentID, Context: arealProxyContext("sess-c", "key-c")}
 	require.NoError(t, svc2.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-c", util.UUIDToString(child.ID), "issue-1"))

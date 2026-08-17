@@ -18,7 +18,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
-	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
@@ -117,12 +116,13 @@ type Daemon struct {
 	runnerDiagnosticStore      *diagnosticlog.Store
 	bindingHostControl         *bindingHostControlClient
 	bindingDiagnostics         *bindingChildDiagnosticForwarder
+	bindingMachineUpgrade      func(context.Context, protocol.ComputerUpgradePayload) error
+	computerUpgradeEmit        func(string, any)
 	bindingChildMachineActions func(context.Context, string, *HeartbeatResponse)
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
 	runtimeIndex map[string]Runtime // runtimeID -> Runtime for provider lookups
-	reloading    sync.Mutex         // prevents concurrent workspace syncs
 	runtimeSet   *runtimeSetWatcher // multi-subscriber pub/sub for runtime-set changes
 
 	versionsMu    sync.RWMutex      // guards agentVersions
@@ -161,7 +161,6 @@ type Daemon struct {
 	managedTaskCancels map[int64]context.CancelFunc
 	taskSlotCounter    atomic.Int64 // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, tasks are not capacity-limited — see nextTaskSlot)
 	ready              atomic.Bool  // true after Binding child preflight completes
-	serverConnected    atomic.Bool  // last authenticated Computer-level server round-trip succeeded
 
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
@@ -210,6 +209,13 @@ type Daemon struct {
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 	activeCurationRuns   map[string]string // runtime id -> claimed run id
 
+	// graphMemoryOnce/graphMemoryProv hold the lazily-initialized graph
+	// memory reviewer (design §5.2). Initialization runs on the first
+	// graph-mode recall; a failure permanently falls back to legacy memory
+	// injection (graphMemoryProv stays nil) after one warn log.
+	graphMemoryOnce sync.Once
+	graphMemoryProv *graphMemoryProvider
+
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.
 	canonicalRuntimes *canonicalAgentRuntimePool
@@ -243,7 +249,6 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 	// Tag every daemon HTTP request with the daemon's CLI version so the
 	// server can split logs/metrics by client version (parallel to the CLI).
 	client.SetVersion(cfg.CLIVersion)
-	client.SetComputerGeneration(cfg.ComputerGeneration)
 	d := &Daemon{
 		cfg:                       cfg,
 		client:                    client,
@@ -341,7 +346,7 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 	workspaceID, removed := d.removeStaleRuntime(runtimeID)
 	if !removed {
 		// Already gone from local state — a parallel recovery already
-		// cleaned this up, or workspaceSyncLoop pruned the whole workspace.
+		// cleaned this up, or Binding refresh pruned the whole workspace.
 		return
 	}
 
@@ -358,7 +363,7 @@ func (d *Daemon) handleRuntimeGone(runtimeID string) {
 	err := d.reregisterWorkspaceAfterRuntimeGone(d.recoveryContext(), workspaceID)
 	d.recordRegisterCompletion(workspaceID, time.Now(), err)
 	if err != nil {
-		// Logged at Warn (not Error) because workspaceSyncLoop retries
+		// Logged at Warn (not Error) because Binding refresh retries
 		// independently every DefaultWorkspaceSyncInterval, so a transient
 		// failure here is not a stuck state — just an extra wait.
 		d.logger.Warn("re-register after runtime gone failed",
@@ -406,7 +411,7 @@ func (d *Daemon) tryClaimRegisterSlot(workspaceID string, entryAt, now time.Time
 // reregisterNextAttempt by the failure backoff and intentionally does NOT
 // stamp lastCompletedAt — a failed register did not cover any workspace
 // state, so a same-wave straggler whose entryAt predates the failure must
-// still be allowed to retry once the backoff expires. workspaceSyncLoop only
+// still be allowed to retry once the backoff expires. Binding refresh only
 // retries when the workspace's runtimeIDs fully drain, so partial-deletion
 // recovery has to come from the straggler path.
 func (d *Daemon) recordRegisterCompletion(workspaceID string, completedAt time.Time, err error) {
@@ -474,9 +479,8 @@ func (d *Daemon) removeStaleRuntime(runtimeID string) (string, bool) {
 
 // workspaceNeedsRuntimeRecovery reports whether a tracked workspace currently
 // has zero runtime IDs — the state reached when handleRuntimeGone pruned every
-// runtime and its inline re-register failed. workspaceSyncLoop calls this on
-// each tick so the workspace can recover without waiting for an external
-// trigger.
+// runtime and its inline re-register failed. Binding refresh calls this so
+// the workspace can recover without waiting for an external trigger.
 func (d *Daemon) workspaceNeedsRuntimeRecovery(workspaceID string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -613,31 +617,11 @@ func (d *Daemon) deregisterRuntimes() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := d.client.Deregister(ctx, runtimeIDs); err != nil {
+	if err := d.client.Deregister(ctx, d.cfg.WorkspaceID, runtimeIDs); err != nil {
 		d.logger.Warn("failed to deregister runtimes on shutdown", "error", err)
 	} else {
 		d.logger.Info("deregistered runtimes", "count", len(runtimeIDs))
 	}
-}
-
-// resolveAuth loads the auth token from the CLI config for the active profile.
-func (d *Daemon) resolveAuth() error {
-	cfg, err := cli.LoadCLIConfigForProfile(d.cfg.Profile)
-	if err != nil {
-		return fmt.Errorf("load CLI config: %w", err)
-	}
-	if cfg.Token == "" {
-		loginHint := "'multica login'"
-		if d.cfg.Profile != "" {
-			loginHint = fmt.Sprintf("'multica login --profile %s'", d.cfg.Profile)
-		}
-		d.logger.Warn("not authenticated — run " + loginHint + " to authenticate, then restart the daemon")
-		return fmt.Errorf("not authenticated: run %s first", loginHint)
-	}
-	d.client.SetToken(cfg.Token)
-	d.logger.Info("authenticated")
-	d.logger.Debug("auth token loaded", "profile", d.cfg.Profile, "token_len", len(cfg.Token))
-	return nil
 }
 
 // allRuntimeIDs returns all runtime IDs across all watched workspaces.
@@ -755,16 +739,15 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 
 	includeCredentialTransport := d.client.WorkspaceDaemonTokenAvailable(workspaceID, time.Now())
 	req := map[string]any{
-		"workspace_id":        workspaceID,
-		"daemon_id":           d.cfg.DaemonID,
-		"legacy_daemon_ids":   d.cfg.LegacyDaemonIDs,
-		"device_name":         d.cfg.DeviceName,
-		"os":                  runtime.GOOS,
-		"cli_version":         d.cfg.CLIVersion,
-		"launched_by":         d.cfg.LaunchedBy,
-		"capabilities":        daemonRegistrationCapabilities(includeCredentialTransport),
-		"runtimes":            runtimes,
-		"computer_generation": d.cfg.ComputerGeneration,
+		"workspace_id":      workspaceID,
+		"daemon_id":         d.cfg.DaemonID,
+		"legacy_daemon_ids": d.cfg.LegacyDaemonIDs,
+		"device_name":       d.cfg.DeviceName,
+		"os":                runtime.GOOS,
+		"cli_version":       d.cfg.CLIVersion,
+		"launched_by":       d.cfg.LaunchedBy,
+		"capabilities":      daemonRegistrationCapabilities(includeCredentialTransport),
+		"runtimes":          runtimes,
 	}
 	// MULTICA_SANDBOX_INSTANCE_ID is set by mintSandboxRuntimeEnv for daemon-
 	// enabled env-dispatch sandboxes. Forwarding it lets the server record
@@ -821,294 +804,6 @@ func newWorkspaceState(workspaceID string, runtimeIDs []string, serverCapabiliti
 		runtimeIDs:         runtimeIDs,
 		serverCapabilities: append([]string(nil), serverCapabilities...),
 	}
-}
-
-// DefaultTokenRenewalInterval is how often the daemon asks the server to
-// extend its PAT. The server-side threshold is 7 days of remaining lifetime;
-// polling every ~3 days gives at least two chances to renew before the
-// window closes, so a single failed call (network blip, server restart) does
-// not push the token out of the renewal window.
-const DefaultTokenRenewalInterval = 3 * 24 * time.Hour
-
-// preflightAuth runs the two auth-sensitive startup steps in their
-// required order: a synchronous PAT renewal first, then the initial
-// workspace sync. The order matters — running tryRenewToken before any
-// other API call is what surfaces a user-actionable "run multica login"
-// WARN when the PAT is already revoked or expired. If we let the
-// workspace sync go first, its 401 would short-circuit Run before the
-// renewal loop's first tick ever fires, and the operator would see only
-// a generic auth failure in the workspace-sync log with no hint that
-// re-login is the fix.
-//
-// The renewal is best-effort: tryRenewToken logs and returns, never
-// propagating errors. preflightAuth's exit status is driven entirely by
-// the workspace sync — so a transient renewal failure (network blip,
-// 500) does not by itself block startup. A successful sync with zero
-// workspaces is fine: a newly-signed-up user may start the daemon
-// before creating their first workspace, and workspaceSyncLoop will
-// register runtimes once one appears.
-func (d *Daemon) preflightAuth(ctx context.Context) error {
-	d.tryRenewToken(ctx)
-	return d.syncWorkspacesFromAPI(ctx)
-}
-
-// tokenRenewalLoop keeps the daemon's PAT alive by periodically asking the
-// server to extend its expires_at in-place. The startup renewal happens
-// synchronously in preflightAuth so a daemon coming back online after a
-// week of downtime gets a fresh expiry before its next heartbeat could
-// 401; this loop owns the long-running ~3-day cadence after that.
-//
-// The server is authoritative on the renewal threshold (it sees expires_at;
-// we don't), so this loop is intentionally dumb: call, log, sleep, repeat.
-// On 401 we surface a clear "re-login required" warning because the daemon
-// has no way to recover automatically — but we keep the loop running so the
-// user sees the same warning on every cycle until they fix it, rather than
-// silently exiting and forcing them to read scrollback to find the cause.
-func (d *Daemon) tokenRenewalLoop(ctx context.Context) {
-	ticker := time.NewTicker(DefaultTokenRenewalInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			d.tryRenewToken(ctx)
-		}
-	}
-}
-
-// tryRenewToken performs one renewal round-trip with a short, isolated
-// timeout. Errors are logged but never propagated — there is no caller to
-// handle them. Failures are debug-level except for 401, which gets a
-// user-actionable warning.
-func (d *Daemon) tryRenewToken(ctx context.Context) {
-	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	resp, err := d.client.RenewToken(reqCtx)
-	if err != nil {
-		if isUnauthorizedError(err) {
-			loginHint := "'multica login'"
-			if d.cfg.Profile != "" {
-				loginHint = fmt.Sprintf("'multica login --profile %s'", d.cfg.Profile)
-			}
-			d.logger.Warn("auth token rejected by server — run "+loginHint+" to re-authenticate, then restart the daemon", "error", err)
-			return
-		}
-		d.logger.Debug("token renewal failed; will retry on next cycle", "error", err)
-		return
-	}
-	if resp.Renewed {
-		d.logger.Info("auth token renewed", "expires_at", resp.ExpiresAt)
-	} else {
-		d.logger.Debug("auth token not yet eligible for renewal", "expires_at", resp.ExpiresAt)
-	}
-}
-
-// workspaceSyncLoop periodically refreshes the selected workspace from the API.
-func (d *Daemon) workspaceSyncLoop(ctx context.Context) {
-	ticker := time.NewTicker(DefaultWorkspaceSyncInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := d.syncWorkspacesFromAPI(ctx); err != nil {
-				d.logger.Debug("workspace sync failed", "error", err)
-			}
-		}
-	}
-}
-
-// syncWorkspacesFromAPI intersects current membership with the explicit local
-// Computer Binding set. Membership discovery is never authorization to create
-// or run an unbound Workspace.
-func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
-	d.reloading.Lock()
-	defer d.reloading.Unlock()
-
-	apiCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	workspaces, err := d.client.ListWorkspaces(apiCtx)
-	if err != nil {
-		d.serverConnected.Store(false)
-		return fmt.Errorf("list workspaces: %w", err)
-	}
-	d.serverConnected.Store(true)
-	// Preserve the legacy zero-membership startup behavior for narrowly
-	// constructed internal/test daemons that do not opt into the machine-wide
-	// Binding store. A real Computer always sets BindingsRoot and therefore
-	// still requires at least one explicit Workspace connection.
-	if len(workspaces) == 0 && strings.TrimSpace(d.cfg.BindingsRoot) == "" && strings.TrimSpace(d.cfg.WorkspaceID) == "" {
-		return nil
-	}
-	bindings, err := d.configuredWorkspaceBindings()
-	if err != nil {
-		return err
-	}
-	selectedID := strings.TrimSpace(d.cfg.WorkspaceID)
-	d.logger.Debug("workspace sync: fetched workspaces", "count", len(workspaces), "bindings", len(bindings), "selected_workspace_id", selectedID)
-
-	apiIDs := make(map[string]string, len(bindings)) // id -> name
-	for _, ws := range workspaces {
-		if binding, ok := bindings[ws.ID]; ok {
-			apiIDs[ws.ID] = ws.Name
-			if binding.Credential != "" && binding.CredentialExpiresAt.After(time.Now()) {
-				d.client.SetWorkspaceDaemonToken(ws.ID, binding.Credential, binding.CredentialExpiresAt)
-			}
-		}
-	}
-	for id := range apiIDs {
-		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
-		// longer a supported direct self-upgrade source. Do not treat HTTP
-		// heartbeat failure as DaemonCore disconnect; the Runner socket is
-		// the live slot.
-		if err := d.client.ComputerHeartbeat(apiCtx, id, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil {
-			d.logger.Warn("Workspace Computer heartbeat rejected", "workspace_id", id, "error", err)
-		}
-	}
-	// Work out the eventual machine-wide error, but reconcile revoked/missing
-	// memberships first. A selected Workspace is only a caller readiness scope;
-	// it is never an exclusive resident profile and its failure must not prevent
-	// healthy sibling connections from being restored.
-	var eligibilityErr error
-	if selectedID != "" {
-		if _, ok := bindings[selectedID]; !ok {
-			d.logger.Warn("selected Workspace has no active Computer connection", "workspace_id", selectedID)
-		} else if _, ok := apiIDs[selectedID]; !ok {
-			d.logger.Warn("selected Workspace is unavailable; continuing healthy sibling connections", "workspace_id", selectedID)
-		}
-	}
-	if len(apiIDs) == 0 && len(bindings) > 0 {
-		eligibilityErr = fmt.Errorf("none of the configured Workspace connections are available to the signed-in user")
-	}
-	if len(bindings) == 0 {
-		eligibilityErr = fmt.Errorf("Computer has no active Workspace connections; run `multica setup /<workspace-slug>`")
-	}
-
-	d.mu.Lock()
-	currentIDs := make(map[string]bool, len(d.workspaces))
-	for id := range d.workspaces {
-		currentIDs[id] = true
-	}
-	d.mu.Unlock()
-
-	var registered int
-	var removed int
-	// Stop every currently tracked Workspace that is no longer in the
-	// intersection before attempting new registration. Siblings that remain in
-	// apiIDs are untouched.
-	for id := range currentIDs {
-		if _, ok := apiIDs[id]; ok {
-			continue
-		}
-		d.mu.Lock()
-		if ws, exists := d.workspaces[id]; exists {
-			for _, rid := range ws.runtimeIDs {
-				delete(d.runtimeIndex, rid)
-				d.client.ClearRuntimeDaemonToken(rid)
-			}
-		}
-		delete(d.workspaces, id)
-		d.client.ClearWorkspaceDaemonToken(id)
-		d.mu.Unlock()
-		d.logger.Info("stopped watching Workspace", "workspace_id", id)
-		removed++
-	}
-	if removed > 0 {
-		if d.reminderCache != nil {
-			d.reminderCache.suspend()
-		}
-		d.notifyRuntimeSetChanged()
-	}
-	if eligibilityErr != nil {
-		return eligibilityErr
-	}
-
-	for id, name := range apiIDs {
-		if currentIDs[id] {
-			if len(d.cfg.Agents) == 0 {
-				continue // a zero-Agent Binding is connected and needs no runtime recovery
-			}
-			if d.client.WorkspaceDaemonTokenNeedsRefresh(id, time.Now()) {
-				d.logger.Info("workspace daemon token needs refresh; re-registering", "workspace_id", id, "name", name)
-				if err := d.reregisterWorkspaceAfterRuntimeGone(ctx, id); err != nil {
-					d.logger.Warn("daemon token refresh register failed", "workspace_id", id, "error", err)
-					continue
-				}
-				registered++
-				continue
-			}
-			// Only intervene further if the workspace lost all of its
-			// runtimes (most commonly because handleRuntimeGone pruned them
-			// and its inline re-register failed).
-			if !d.workspaceNeedsRuntimeRecovery(id) {
-				continue
-			}
-			d.logger.Info("workspace has no runtimes; retrying registration", "workspace_id", id, "name", name)
-			if err := d.reregisterWorkspaceAfterRuntimeGone(ctx, id); err != nil {
-				d.logger.Warn("retry register failed", "workspace_id", id, "error", err)
-				continue
-			}
-			registered++
-			continue
-		}
-		if len(d.cfg.Agents) == 0 {
-			d.mu.Lock()
-			d.workspaces[id] = newWorkspaceState(id, nil)
-			d.mu.Unlock()
-			d.logger.Info("watching Workspace Binding", "workspace_id", id, "name", name)
-			registered++
-			continue
-		}
-		resp, err := d.registerRuntimesForWorkspace(ctx, id)
-		if err != nil {
-			d.logger.Error("failed to register runtimes", "workspace_id", id, "name", name, "error", err)
-			continue
-		}
-		runtimeIDs := make([]string, len(resp.Runtimes))
-		for i, rt := range resp.Runtimes {
-			runtimeIDs[i] = rt.ID
-			d.logger.Info("registered runtime", "workspace_id", id, "runtime_id", rt.ID, "provider", rt.Provider)
-		}
-		d.mu.Lock()
-		d.workspaces[id] = newWorkspaceState(id, runtimeIDs, resp.ServerCapabilities...)
-		for _, rt := range resp.Runtimes {
-			d.runtimeIndex[rt.ID] = rt
-		}
-		d.mu.Unlock()
-
-		// Tell the server about any tasks the previous daemon process was
-		// running on these runtimes. Without this, an issue can stay stuck
-		// at in_progress until the slow heartbeat sweeper or the in-flight
-		// task timeout (2.5h) kicks in.
-		for _, rid := range runtimeIDs {
-			if err := d.client.RecoverOrphans(ctx, rid); err != nil {
-				d.logger.Warn("recover-orphans failed", "runtime_id", rid, "error", err)
-			}
-		}
-
-		d.logger.Info("watching workspace", "workspace_id", id, "name", name, "runtimes", len(resp.Runtimes))
-		registered++
-	}
-
-	if registered > 0 || removed > 0 {
-		d.notifyRuntimeSetChanged()
-	}
-
-	// A connected Workspace with zero configured Agents is a valid Computer
-	// connection and deliberately has no runtime IDs to register.
-	if len(d.cfg.Agents) > 0 && len(d.allRuntimeIDs()) == 0 && registered == 0 {
-		return fmt.Errorf("failed to register runtimes for configured Workspace connections")
-	}
-	if registered > 0 || removed > 0 {
-		d.logger.Debug("workspace sync done", "registered", registered, "removed", removed, "tracked", len(apiIDs))
-	}
-	return nil
 }
 
 func (d *Daemon) configuredWorkspaceBindings() (map[string]computer.WorkspaceBinding, error) {
@@ -1961,7 +1656,7 @@ func shouldInterruptAgent(status string, err error) bool {
 // interval and returns a channel that is closed when the running agent
 // should be interrupted. The polling goroutine stops when ctx is cancelled,
 // so callers should pass the runCtx that was set up around the agent run.
-func (d *Daemon) watchTaskCancellation(ctx context.Context, taskID string, pollInterval time.Duration, taskLog *slog.Logger) <-chan struct{} {
+func (d *Daemon) watchTaskCancellation(ctx context.Context, taskID, runtimeID string, pollInterval time.Duration, taskLog *slog.Logger) <-chan struct{} {
 	cancelled := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(pollInterval)
@@ -1971,7 +1666,7 @@ func (d *Daemon) watchTaskCancellation(ctx context.Context, taskID string, pollI
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				status, err := d.client.GetTaskStatus(ctx, taskID)
+				status, err := d.client.GetTaskStatus(ctx, taskID, runtimeID)
 				if !shouldInterruptAgent(status, err) {
 					continue
 				}
@@ -2105,7 +1800,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// status="suppressed" to "cancelled" generically, with no inbox/legacy
 	// distinction, so this is safe for inbox tasks without any server-side
 	// change.
-	cancelledByPoll := d.watchTaskCancellation(runCtx, task.ID, pollInterval, taskLog)
+	cancelledByPoll := d.watchTaskCancellation(runCtx, task.ID, task.RuntimeID, pollInterval, taskLog)
 	go func() {
 		select {
 		case <-cancelledByPoll:
@@ -2204,7 +1899,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 
 	if !task.isInboxTask() {
-		_ = d.client.ReportProgress(ctx, task.ID, "Finishing task", 2, 2)
+		_ = d.client.ReportProgress(ctx, task.ID, "Finishing task", 2, 2, task.RuntimeID)
 	}
 
 	// Final pre-completion check: if the server already moved the task to a
@@ -2216,7 +1911,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// comment. This one closes a narrower race (cancelled in the gap
 	// between the last poll tick and the backend returning) rather than
 	// the main cancellation path, but was equally dead for every real task.
-	if status, err := d.client.GetTaskStatus(ctx, task.ID); shouldInterruptAgent(status, err) {
+	if status, err := d.client.GetTaskStatus(ctx, task.ID, task.RuntimeID); shouldInterruptAgent(status, err) {
 		d.recordStandaloneChatCheckpoint(task, "result_discarded", "discarded", providerStatus, taskResultDiscardReason(status, err), executionID, provider, 0)
 		taskLog.Info("task cancelled during execution, discarding result", "status", status, "error", err)
 		return
@@ -2636,6 +2331,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	executionMemories := serverMemories
 	if !restrictedExecution {
 		executionMemories, _ = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
+		// Graph reviewer (design §1 memory_type=graph): a successful graph
+		// recall replaces the legacy scoped-memory snapshot; errors and
+		// misses keep the legacy result.
+		if graphMemories := d.graphExecutionMemories(ctx, memoryTask, taskLog); graphMemories != nil {
+			executionMemories = graphMemories
+		}
 	}
 
 	// Prepare the agent's durable execution environment.
@@ -3462,6 +3163,9 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 	return taskfailure.Classify(errMsg).String()
 }
 
+// executeAndDrainForTask runs one inbox/issue task. It reports task messages
+// and logs only. User-facing Runner Activity stays on the resident Message
+// seam; this path must not Observe or overwrite that timeline.
 func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
 	taskID := task.ID
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
@@ -3610,9 +3314,12 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					// Not Multica agent_session / agent_session_id (inbox
 					// wake/drain UUID) — different "session", task #109.
 					if msg.SessionID != "" && sessionPinned.CompareAndSwap(false, true) {
-						d.recordProviderSession(task.AgentID, task.RuntimeID, msg.SessionID)
+						// Pin is task-scoped (session + cwd). Do not write the
+						// DaemonCore resume cache: that cache is the resident
+						// RuntimeSession, same as Raft's start.config.sessionId.
+						// An issue-run cwd would poison the next agent-home restart.
 						pinCtx, pinCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						if err := d.client.PinTaskSession(pinCtx, taskID, msg.SessionID, opts.Cwd); err != nil {
+						if err := d.client.PinTaskSession(pinCtx, taskID, msg.SessionID, opts.Cwd, task.RuntimeID); err != nil {
 							taskLog.Warn("pin task session failed (task still runs; resume pointer lost for this cycle)", "error", err)
 						}
 						pinCancel()

@@ -1,0 +1,599 @@
+package memorygraph
+
+import (
+	"context"
+	"math"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// ---------------------------------------------------------------------------
+// fake full-backtest runner
+// ---------------------------------------------------------------------------
+
+// fakeFullBacktestRunner records RunExplore calls and returns a fixed
+// (rounds, found) result, or a per-version result when roundsFor is set.
+// forbid lists queries that must never trigger a full backtest (the
+// coverage/conservative-default assertions).
+type fakeFullBacktestRunner struct {
+	t *testing.T
+
+	mu        sync.Mutex
+	queries   []string
+	rounds    int
+	found     bool
+	roundsFor func(version int) (rounds int, found bool)
+	forbid    map[string]bool
+}
+
+func (f *fakeFullBacktestRunner) RunExplore(_ context.Context, version int, query string) (int, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.forbid[query] {
+		f.t.Errorf("RunExplore must not be called for query %q (neighborhood coverage did not pass)", query)
+	}
+	f.queries = append(f.queries, query)
+	if f.roundsFor != nil {
+		rounds, found := f.roundsFor(version)
+		return rounds, found, nil
+	}
+	return f.rounds, f.found, nil
+}
+
+func (f *fakeFullBacktestRunner) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.queries)
+}
+
+// ---------------------------------------------------------------------------
+// BacktestQueries
+// ---------------------------------------------------------------------------
+
+func TestBacktestQueriesCollectsWindowAndRegression(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+
+	// Window w1: one judged query at v1 (in window), one unjudged (skipped),
+	// one judged at v2 (outside the (prev, fromVersion] window).
+	if err := store.AppendQueryLog("w1", &QueryLogEntry{
+		TraceID: "t-in", Query: "alpha", Version: 1, Found: true, Rounds: 3,
+		JudgeDone: true, JudgeScore: 0.9, RelevantNodes: []string{"n1"},
+	}); err != nil {
+		t.Fatalf("AppendQueryLog: %v", err)
+	}
+	if err := store.AppendQueryLog("w1", &QueryLogEntry{
+		TraceID: "t-unjudged", Query: "alpha", Version: 1,
+	}); err != nil {
+		t.Fatalf("AppendQueryLog: %v", err)
+	}
+	if _, err := store.CreateVersionFrom(1, "ttt"); err != nil { // v2
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+	if err := store.AppendQueryLog("w1", &QueryLogEntry{
+		TraceID: "t-next", Query: "alpha", Version: 2, Found: true, Rounds: 1,
+		JudgeDone: true, JudgeScore: 0.9, RelevantNodes: []string{"n1"},
+	}); err != nil {
+		t.Fatalf("AppendQueryLog: %v", err)
+	}
+	if err := store.AppendRegression(&RegressionEntry{
+		Query: "alpha", RelevantNodes: []string{"n1"}, AddedVersion: 1, Reason: "degraded before",
+	}); err != nil {
+		t.Fatalf("AppendRegression: %v", err)
+	}
+	if err := store.AppendRegression(&RegressionEntry{
+		Query: "alpha deep", RelevantNodes: []string{"n1"}, AddedVersion: 1, Reason: "slow query",
+		BaselineRounds: 5,
+	}); err != nil {
+		t.Fatalf("AppendRegression: %v", err)
+	}
+
+	queries, err := BacktestQueries(store, 1)
+	if err != nil {
+		t.Fatalf("BacktestQueries: %v", err)
+	}
+	if len(queries) != 3 {
+		t.Fatalf("BacktestQueries = %d queries, want 3 (window t-in + 2 regression)", len(queries))
+	}
+	var window *BacktestQuery
+	var regressions []*BacktestQuery
+	for _, q := range queries {
+		if q.Regression {
+			regressions = append(regressions, q)
+		} else {
+			window = q
+		}
+	}
+	if window == nil || window.TraceID != "t-in" || !window.JudgeDone || window.JudgeScore != 0.9 {
+		t.Fatalf("window query = %+v, want judged t-in", window)
+	}
+	// The window baseline is the recorded adopted-path rounds + found flag.
+	if window.BaselineRounds != 3 || !window.BaselineFound {
+		t.Fatalf("window baseline = rounds %d found %v, want 3/true", window.BaselineRounds, window.BaselineFound)
+	}
+	if len(regressions) != 2 {
+		t.Fatalf("regression queries = %d, want 2", len(regressions))
+	}
+	sort.Slice(regressions, func(i, j int) bool { return regressions[i].BaselineRounds < regressions[j].BaselineRounds })
+	// baseline_rounds absent in the first entry -> DefaultBacktestBaselineRounds;
+	// the second entry's recorded value is honored. Regression entries always
+	// pass baseline-side by construction.
+	if regressions[0].BaselineRounds != DefaultBacktestBaselineRounds || !regressions[0].BaselineFound {
+		t.Fatalf("regression[0] baseline = rounds %d found %v, want %d/true",
+			regressions[0].BaselineRounds, regressions[0].BaselineFound, DefaultBacktestBaselineRounds)
+	}
+	if regressions[1].BaselineRounds != 5 || !regressions[1].BaselineFound {
+		t.Fatalf("regression[1] baseline = rounds %d found %v, want 5/true",
+			regressions[1].BaselineRounds, regressions[1].BaselineFound)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// candidate evaluation
+// ---------------------------------------------------------------------------
+
+// Runner-absent conservative default (A2): a covered query passes on the
+// neighborhood coverage signal alone; the runner is never invoked.
+func TestEvaluateCoveredQueryPassesWithoutRunner(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	seedGraphNode(t, store, 1, "n2", "alpha target")
+	if err := store.SaveEdges(1, []*Edge{
+		{EdgeID: "h1", Type: EdgeTypeSummarizes, From: "n1", To: "n2", CreatedBy: CreatorIngester, CreatedVersion: 1},
+	}, nil); err != nil {
+		t.Fatalf("SaveEdges: %v", err)
+	}
+	cand, err := store.CreateVersionFrom(1, "ttt") // v2
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+	// Candidate improves retrieval for the query: n2 now dominates BM25.
+	seedGraphNode(t, store, cand, "n2", "alpha alpha alpha target")
+
+	q := &BacktestQuery{
+		TraceID: "t1", Query: "alpha", RelevantNodes: []string{"n2"},
+		BaselineRounds: 1, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
+	}
+	// No runner wired: the conservative default accepts covered queries.
+	bt := NewBacktester(store, BacktestConfig{})
+
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{q})
+	if !stats.Passed {
+		t.Fatalf("candidate failed gates: %v", stats.GateFailures)
+	}
+	if len(stats.Queries) != 1 {
+		t.Fatalf("queries = %d, want 1", len(stats.Queries))
+	}
+	qs := stats.Queries[0]
+	if !qs.Covered || !qs.Found || !qs.AcceptedWithoutExplore || qs.RequiresFullBacktest || qs.FullBacktestRan {
+		t.Fatalf("query stat = %+v, want covered + accepted without explore", qs)
+	}
+	if qs.Rounds != 1 {
+		t.Fatalf("rounds = %v, want 1 (the baseline-rounds estimate)", qs.Rounds)
+	}
+	if qs.Regressed {
+		t.Fatalf("query stat = %+v, want not regressed", qs)
+	}
+	if stats.MeanRounds != 1 {
+		t.Fatalf("mean rounds = %v, want 1", stats.MeanRounds)
+	}
+}
+
+// Step-3 failure (A2): ground truth outside the n-hop neighborhood of the
+// top-k hits fails the query outright — no agent run, recall miss, and a
+// regression because the query passed baseline-side.
+func TestEvaluateUncoveredQueryFailsOutright(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	cand, err := store.CreateVersionFrom(1, "ttt")
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+	// Candidate rewrites n1 so the query no longer retrieves anything.
+	seedGraphNode(t, store, cand, "n1", "zzz qqq")
+
+	q := &BacktestQuery{
+		TraceID: "t1", Query: "alpha", RelevantNodes: []string{"n1"},
+		BaselineRounds: 1, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
+	}
+	runner := &fakeFullBacktestRunner{t: t, rounds: 1, found: true, forbid: map[string]bool{"alpha": true}}
+	bt := NewBacktester(store, BacktestConfig{Runner: runner})
+
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{q})
+	qs := stats.Queries[0]
+	if qs.Covered || qs.Found || qs.FullBacktestRan || qs.AcceptedWithoutExplore {
+		t.Fatalf("query stat = %+v, want uncovered outright failure", qs)
+	}
+	if !qs.Regressed {
+		t.Fatalf("query stat = %+v, want regressed (baseline pass -> candidate miss)", qs)
+	}
+	if runner.callCount() != 0 {
+		t.Fatalf("runner called %d times, want 0 (no agent run on uncovered queries)", runner.callCount())
+	}
+	// Recall gate: candidate recall 0 vs baseline 1.
+	if stats.Passed {
+		t.Fatalf("candidate passed despite the recall miss")
+	}
+	if !strings.Contains(strings.Join(stats.GateFailures, ";"), "recall") {
+		t.Fatalf("gate failures = %v, want a recall failure", stats.GateFailures)
+	}
+}
+
+// The n of the coverage check is the number of rounds the original query
+// needed (A2 step 2): the same hit set covers a two-hop ground truth only
+// when n reaches 2.
+func TestEvaluateNeighborhoodHonorsBaselineRounds(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha seed")
+	seedGraphNode(t, store, 1, "n2", "middle")
+	seedGraphNode(t, store, 1, "n3", "deep target")
+	if err := store.SaveEdges(1, []*Edge{
+		{EdgeID: "h1", Type: EdgeTypeSummarizes, From: "n1", To: "n2", CreatedBy: CreatorIngester, CreatedVersion: 1},
+		{EdgeID: "h2", Type: EdgeTypeSummarizes, From: "n2", To: "n3", CreatedBy: CreatorIngester, CreatedVersion: 1},
+	}, nil); err != nil {
+		t.Fatalf("SaveEdges: %v", err)
+	}
+	cand, err := store.CreateVersionFrom(1, "ttt") // unchanged copy
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+
+	// Retrieval hits only n1; n3 is two hops away over the hierarchy.
+	mk := func(rounds int) *BacktestQuery {
+		return &BacktestQuery{
+			Query: "alpha", RelevantNodes: []string{"n3"},
+			BaselineRounds: rounds, BaselineFound: true,
+		}
+	}
+	// No runner wired: isolate the coverage check.
+	bt := NewBacktester(store, BacktestConfig{})
+
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{mk(1), mk(2)})
+	one, two := stats.Queries[0], stats.Queries[1]
+	if one.Covered || one.Found {
+		t.Fatalf("n=1 stat = %+v, want uncovered miss (n3 two hops from hit)", one)
+	}
+	if !two.Covered || !two.Found || two.Rounds != 2 {
+		t.Fatalf("n=2 stat = %+v, want covered pass with rounds estimate 2", two)
+	}
+}
+
+// A covered query runs the full explore backtest when a runner is wired
+// (A2 step 4); rounds within baseline+tolerance are not a regression.
+func TestEvaluateCoveredQueryRunsFullBacktest(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	cand, err := store.CreateVersionFrom(1, "ttt")
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+
+	q := &BacktestQuery{
+		TraceID: "t1", Query: "alpha", RelevantNodes: []string{"n1"},
+		BaselineRounds: 3, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
+	}
+	runner := &fakeFullBacktestRunner{t: t, rounds: 4, found: true} // baseline 3 + tolerance 1
+	bt := NewBacktester(store, BacktestConfig{Runner: runner})
+
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{q})
+	if !stats.Passed {
+		t.Fatalf("candidate failed gates: %v", stats.GateFailures)
+	}
+	qs := stats.Queries[0]
+	if !qs.Covered || !qs.RequiresFullBacktest || !qs.FullBacktestRan || qs.AcceptedWithoutExplore {
+		t.Fatalf("query stat = %+v, want full backtest executed", qs)
+	}
+	if !qs.Found || qs.Rounds != 4 {
+		t.Fatalf("query stat = %+v, want found with 4 rounds", qs)
+	}
+	if qs.Regressed {
+		t.Fatalf("query stat = %+v, want not regressed (rounds within tolerance)", qs)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("runner calls = %d, want 1", runner.callCount())
+	}
+	if stats.MeanRounds != 4 || stats.P95Rounds != 4 {
+		t.Fatalf("mean/p95 = %v/%v, want 4/4", stats.MeanRounds, stats.P95Rounds)
+	}
+	// Cost diff vs parent: the candidate is an unchanged copy.
+	if stats.ChangedNodes != 0 || stats.EdgeChurn != 0 || stats.EmbedBytes != 0 {
+		t.Fatalf("cost diff = nodes %d churn %d embed %d, want 0/0/0",
+			stats.ChangedNodes, stats.EdgeChurn, stats.EmbedBytes)
+	}
+}
+
+// Rounds overflow (A2): full-backtest rounds beyond baseline + tolerance
+// count as a regression. For a regression-set entry that fails hard gate 4;
+// for a window query it is recorded for audit without failing the
+// regression gate.
+func TestEvaluateRoundsOverflowRegresses(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	cand, err := store.CreateVersionFrom(1, "ttt")
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+
+	regression := &BacktestQuery{
+		Query: "alpha", RelevantNodes: []string{"n1"},
+		BaselineRounds: 2, BaselineFound: true, Regression: true,
+	}
+	window := &BacktestQuery{
+		TraceID: "t1", Query: "alpha", RelevantNodes: []string{"n1"},
+		BaselineRounds: 2, BaselineFound: true, JudgeDone: true, JudgeScore: 0.9,
+	}
+	// 5 rounds > baseline 2 + tolerance 1 for both queries.
+	runner := &fakeFullBacktestRunner{t: t, rounds: 5, found: true}
+	bt := NewBacktester(store, BacktestConfig{Runner: runner})
+
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{regression, window})
+	if stats.Passed {
+		t.Fatalf("candidate passed despite the regression-set rounds overflow")
+	}
+	joined := strings.Join(stats.GateFailures, ";")
+	if !strings.Contains(joined, "regression") {
+		t.Fatalf("gate failures = %v, want a regression failure", stats.GateFailures)
+	}
+	for _, qs := range stats.Queries {
+		if !qs.Regressed {
+			t.Fatalf("query stat = %+v, want regressed (rounds overflow)", qs)
+		}
+		if !qs.Found || qs.Rounds != 5 {
+			t.Fatalf("query stat = %+v, want found with 5 rounds (recall intact)", qs)
+		}
+	}
+	// The recall gate is unaffected by rounds overflow: both queries still
+	// pass candidate-side.
+	if stats.Recall != 1.0 || stats.BaselineRecall != 1.0 {
+		t.Fatalf("recall = %v baseline = %v, want 1/1", stats.Recall, stats.BaselineRecall)
+	}
+}
+
+// An uncovered regression-set entry fails hard gate 4 (关键 query 不退化).
+func TestEvaluateRegressionUncoveredRejectsCandidate(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	cand, err := store.CreateVersionFrom(1, "ttt")
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+	seedGraphNode(t, store, cand, "n1", "zzz qqq") // retrieval regression
+
+	q := &BacktestQuery{
+		Query: "alpha", RelevantNodes: []string{"n1"},
+		BaselineRounds: 1, BaselineFound: true, Regression: true,
+	}
+	// The full backtest would find the answer, but uncovered queries never
+	// reach it (A2 step 3).
+	runner := &fakeFullBacktestRunner{t: t, rounds: 1, found: true, forbid: map[string]bool{"alpha": true}}
+	bt := NewBacktester(store, BacktestConfig{Runner: runner})
+
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, []*BacktestQuery{q})
+	if stats.Passed {
+		t.Fatalf("candidate passed despite regression miss")
+	}
+	joined := strings.Join(stats.GateFailures, ";")
+	if !strings.Contains(joined, "regression") {
+		t.Fatalf("gate failures = %v, want a regression failure", stats.GateFailures)
+	}
+}
+
+func TestEvaluateRecallToleranceBoundary(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	cand, err := store.CreateVersionFrom(1, "ttt")
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+	// Candidate is an unchanged copy: "alpha" retrieves n1 (covered), the
+	// "nomatch" queries retrieve nothing and miss outright.
+
+	// Recall values are exact in binary: 4 queries, baseline recall 1.0,
+	// tolerance 0.25 -> the gate is recall >= 0.75.
+	mkQueries := func(hits, misses int) []*BacktestQuery {
+		var qs []*BacktestQuery
+		for i := 0; i < hits; i++ {
+			qs = append(qs, &BacktestQuery{Query: "alpha", RelevantNodes: []string{"n1"}, BaselineRounds: 1, BaselineFound: true})
+		}
+		for i := 0; i < misses; i++ {
+			qs = append(qs, &BacktestQuery{Query: "nomatch", RelevantNodes: []string{"n1"}, BaselineRounds: 1, BaselineFound: true})
+		}
+		return qs
+	}
+
+	bt := NewBacktester(store, BacktestConfig{RecallTolerance: 0.25})
+
+	// Exactly at the boundary: 3/4 = 0.75 >= 1.0 - 0.25 -> passes.
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, mkQueries(3, 1))
+	if stats.Recall != 0.75 || stats.BaselineRecall != 1.0 {
+		t.Fatalf("recall = %v baseline = %v, want 0.75/1.0", stats.Recall, stats.BaselineRecall)
+	}
+	if !stats.Passed {
+		t.Fatalf("boundary recall 0.75 with tolerance 0.25 must pass: %v", stats.GateFailures)
+	}
+
+	// One more miss drops below the boundary: 0.5 < 0.75 -> rejected.
+	stats = bt.EvaluateCandidate(context.Background(), cand, 1, mkQueries(2, 2))
+	if stats.Passed {
+		t.Fatalf("recall 0.5 with tolerance 0.25 must fail")
+	}
+	if !strings.Contains(strings.Join(stats.GateFailures, ";"), "recall") {
+		t.Fatalf("gate failures = %v, want a recall failure", stats.GateFailures)
+	}
+}
+
+func TestEvaluateValidateGateRejectsCorruptCandidate(t *testing.T) {
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "n1", "alpha beta")
+	cand, err := store.CreateVersionFrom(1, "ttt")
+	if err != nil {
+		t.Fatalf("CreateVersionFrom: %v", err)
+	}
+	// Corrupt the candidate on disk (bypassing the safe applier): a
+	// hierarchy edge pointing at a nonexistent node.
+	if err := store.SaveEdges(cand, []*Edge{
+		{EdgeID: "hx", Type: EdgeTypeSummarizes, From: "n1", To: "ghost", CreatedBy: "ttt-0", CreatedVersion: cand},
+	}, nil); err != nil {
+		t.Fatalf("SaveEdges: %v", err)
+	}
+
+	bt := NewBacktester(store, BacktestConfig{})
+	stats := bt.EvaluateCandidate(context.Background(), cand, 1, nil)
+	if stats.Passed {
+		t.Fatalf("corrupt candidate passed the validate gate")
+	}
+	if !strings.Contains(strings.Join(stats.GateFailures, ";"), "validate") {
+		t.Fatalf("gate failures = %v, want a validate failure", stats.GateFailures)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// selection & statistics helpers
+// ---------------------------------------------------------------------------
+
+func TestSelectWinnerMinCost(t *testing.T) {
+	w := DefaultConsolidateConfig().CostWeights
+
+	// Two survivors: the lower-rounds candidate wins.
+	cands := []CandidateStats{
+		{Version: 2, Passed: true, MeanRounds: 1, P95Rounds: 2, EmbedBytes: 100, ChangedNodes: 1},
+		{Version: 3, Passed: true, MeanRounds: 5, P95Rounds: 9, EmbedBytes: 500, ChangedNodes: 3, EdgeChurn: 2},
+	}
+	if got := SelectWinner(cands, w); got != 0 {
+		t.Fatalf("SelectWinner = %d, want 0", got)
+	}
+	// The loser carries every norm at 1; the winner's norms are all 0.
+	wantLoser := w.Round*5 + w.Tail*9 + w.Embed + w.Node + w.Graph
+	if cands[1].Cost != wantLoser {
+		t.Fatalf("loser cost = %v, want %v", cands[1].Cost, wantLoser)
+	}
+	if cands[0].Cost != w.Round*1+w.Tail*2 {
+		t.Fatalf("winner cost = %v, want raw rounds terms only", cands[0].Cost)
+	}
+
+	// Single survivor: zero norm vector, cost is the raw rounds terms.
+	single := []CandidateStats{
+		{Version: 2, Passed: false},
+		{Version: 3, Passed: true, MeanRounds: 4, P95Rounds: 6, EmbedBytes: 900, ChangedNodes: 7, EdgeChurn: 5},
+	}
+	if got := SelectWinner(single, w); got != 1 {
+		t.Fatalf("SelectWinner single = %d, want 1", got)
+	}
+	if single[1].Cost != w.Round*4+w.Tail*6 {
+		t.Fatalf("single survivor cost = %v, want %v", single[1].Cost, w.Round*4+w.Tail*6)
+	}
+
+	// No survivors.
+	if got := SelectWinner([]CandidateStats{{Version: 2}}, w); got != -1 {
+		t.Fatalf("SelectWinner none = %d, want -1", got)
+	}
+
+	// Ties break toward the lowest version.
+	tied := []CandidateStats{
+		{Version: 5, Passed: true, MeanRounds: 1},
+		{Version: 3, Passed: true, MeanRounds: 1},
+	}
+	if got := SelectWinner(tied, w); got != 1 {
+		t.Fatalf("SelectWinner tie = %d, want index 1 (version 3)", got)
+	}
+}
+
+func TestPercentileLinearInterpolation(t *testing.T) {
+	// Linear interpolation between closest ranks (numpy "linear" method):
+	// rank = p/100*(n-1); result = xs[floor] + frac*(xs[ceil]-xs[floor]).
+	xs := []float64{1, 2, 3, 4}
+	cases := []struct {
+		p    float64
+		want float64
+	}{
+		{0, 1},
+		{50, 2.5},
+		{95, 3.85}, // rank 2.85 -> 3 + 0.85*(4-3); interpolation is not exact in binary
+		{100, 4},
+	}
+	for _, tc := range cases {
+		if got := percentile(xs, tc.p); math.Abs(got-tc.want) > 1e-12 {
+			t.Fatalf("percentile(%v, %v) = %v, want %v", xs, tc.p, got, tc.want)
+		}
+	}
+	if got := percentile([]float64{7}, 95); got != 7 {
+		t.Fatalf("single value percentile = %v, want 7", got)
+	}
+	if got := percentile(nil, 95); got != 0 {
+		t.Fatalf("empty percentile = %v, want 0", got)
+	}
+	// Unsorted input is handled and not mutated.
+	unsorted := []float64{4, 1, 3, 2}
+	if got := percentile(unsorted, 50); got != 2.5 {
+		t.Fatalf("unsorted percentile = %v, want 2.5", got)
+	}
+	if unsorted[0] != 4 || unsorted[1] != 1 {
+		t.Fatalf("percentile mutated its input: %v", unsorted)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ComputeBaselineCoverage (R10: judge-time baseline on the current version)
+// ---------------------------------------------------------------------------
+
+// baselineFixtureStore builds v1 with the hierarchy a -> b -> c, so "alpha"
+// retrieves a and c sits exactly 2 hops from the hit set.
+func baselineFixtureStore(t *testing.T) (*Store, *Graph, *HybridRetriever) {
+	t.Helper()
+	store := newTestStore(t)
+	seedGraphNode(t, store, 1, "a", "alpha beta routing")
+	seedGraphNode(t, store, 1, "b", "gamma delta summary")
+	seedGraphNode(t, store, 1, "c", "epsilon zeta leaf")
+	if err := store.SaveEdges(1, []*Edge{
+		{EdgeID: "h1", Type: EdgeTypeSummarizes, From: "a", To: "b", CreatedBy: CreatorConsolidator, CreatedVersion: 1},
+		{EdgeID: "h2", Type: EdgeTypeSummarizes, From: "b", To: "c", CreatedBy: CreatorConsolidator, CreatedVersion: 1},
+	}, nil); err != nil {
+		t.Fatalf("SaveEdges: %v", err)
+	}
+	g, err := LoadGraph(store, 1)
+	if err != nil {
+		t.Fatalf("LoadGraph: %v", err)
+	}
+	retr := NewHybridRetriever(store, nil, DefaultRetrievalConfig())
+	if err := retr.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	return store, g, retr
+}
+
+// TestComputeBaselineCoverage: the R10 baseline is the A2 machinery applied
+// on the current version at judge time — hybrid top-k hits plus the n-hop
+// coverage check with n = the adopted path's rounds.
+func TestComputeBaselineCoverage(t *testing.T) {
+	_, g, retr := baselineFixtureStore(t)
+	ctx := context.Background()
+
+	// n=2: c is inside the 2-hop neighborhood of the hit a -> covered.
+	sig := ComputeBaselineCoverage(ctx, retr, g, "alpha", []string{"c"}, 2)
+	if !sig.Covered {
+		t.Fatalf("Covered = false, want true (c within 2 hops of a)")
+	}
+	if len(sig.TopK) == 0 || sig.TopK[0] != "a" {
+		t.Fatalf("TopK = %v, want [a ...]", sig.TopK)
+	}
+
+	// n=1: c is 2 hops out -> not covered.
+	sig = ComputeBaselineCoverage(ctx, retr, g, "alpha", []string{"c"}, 1)
+	if sig.Covered {
+		t.Fatalf("Covered = true, want false (c outside the 1-hop neighborhood)")
+	}
+
+	// The hit node itself is always inside its own neighborhood.
+	sig = ComputeBaselineCoverage(ctx, retr, g, "alpha", []string{"a"}, 1)
+	if !sig.Covered {
+		t.Fatalf("Covered = false, want true (hit node covers itself)")
+	}
+
+	// No ground truth -> not covered; zero rounds normalize to the default.
+	sig = ComputeBaselineCoverage(ctx, retr, g, "alpha", nil, 0)
+	if sig.Covered {
+		t.Fatalf("Covered = true, want false for an empty ground truth set")
+	}
+}

@@ -35,11 +35,10 @@ func TestClient_IdentityHeaders_PostJSON(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("tok")
 	c.SetVersion("9.9.9")
 
-	if err := c.postJSON(context.Background(), "/api/daemon/test", map[string]any{}, nil); err != nil {
-		t.Fatalf("postJSON: %v", err)
+	if err := c.postJSONWithToken(context.Background(), "/api/daemon/test", map[string]any{}, nil, "tok"); err != nil {
+		t.Fatalf("postJSONWithToken: %v", err)
 	}
 }
 
@@ -60,12 +59,11 @@ func TestClient_IdentityHeaders_GetJSON(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("tok")
 	c.SetVersion("1.2.3")
 
 	var out map[string]any
-	if err := c.getJSON(context.Background(), "/api/daemon/test", &out); err != nil {
-		t.Fatalf("getJSON: %v", err)
+	if err := c.getJSONWithToken(context.Background(), "/api/daemon/test", &out, "tok"); err != nil {
+		t.Fatalf("getJSONWithToken: %v", err)
 	}
 }
 
@@ -83,8 +81,8 @@ func TestClient_VersionOmittedWhenUnset(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	if err := c.postJSON(context.Background(), "/api/daemon/test", nil, nil); err != nil {
-		t.Fatalf("postJSON: %v", err)
+	if err := c.postJSONWithToken(context.Background(), "/api/daemon/test", nil, nil, ""); err != nil {
+		t.Fatalf("postJSONWithToken: %v", err)
 	}
 }
 
@@ -106,7 +104,6 @@ func TestClient_RuntimeScopedCallsUseRuntimeDaemonToken(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
 	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(time.Hour))
 
 	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1", "cred-cached"); err != nil {
@@ -139,7 +136,6 @@ func TestClient_MemoryCenterCallsUseRuntimeDaemonToken(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
 	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(time.Hour))
 	ctx := context.Background()
 	if _, err := c.SyncAgentMemoryCenter(ctx, AgentMemoryCenterSyncReport{AgentID: "agent-1", RuntimeID: "rt-1"}); err != nil {
@@ -156,13 +152,10 @@ func TestClient_MemoryCenterCallsUseRuntimeDaemonToken(t *testing.T) {
 	}
 }
 
-func TestClient_RuntimeScopedCallsSkipExpiredRuntimeDaemonToken(t *testing.T) {
+func TestClient_RuntimeScopedCallsDoNotFallBackToHumanToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Path; got != "/api/daemon/runtimes/rt-1/agents/agent-1/credential" {
-			t.Fatalf("path = %q, want ensure credential path", got)
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer mul-profile" {
-			t.Fatalf("Authorization = %q, want bootstrap profile token", got)
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q, want omitted Binding token", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"cred-1","agent_id":"agent-1","token_prefix":"mac_abc","token":"mac_secret"}`))
@@ -170,7 +163,6 @@ func TestClient_RuntimeScopedCallsSkipExpiredRuntimeDaemonToken(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
 	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(-time.Hour))
 
 	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1", ""); err != nil {
@@ -227,7 +219,6 @@ func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("profile-token")
 	lease := AgentInboxLease{ID: "event-1", DeliveryID: "delivery-1", LeaseToken: "lease-1"}
 	internal := json.RawMessage(`{"decision":"SILENT","confidence":0.1}`)
 	usage := []TaskUsageEntry{{Provider: "openai", Model: "gpt-5", InputTokens: 7, OutputTokens: 2}}
@@ -256,16 +247,10 @@ func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
 	}
 }
 
-func TestClient_RegisterForWorkspaceUsesBootstrapThenWorkspaceDaemonToken(t *testing.T) {
-	var calls atomic.Int64
+func TestClient_RegisterForWorkspaceUsesWorkspaceDaemonToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := calls.Add(1)
-		wantAuth := "Bearer mul-profile"
-		if call == 2 {
-			wantAuth = "Bearer mdt-workspace"
-		}
-		if got := r.Header.Get("Authorization"); got != wantAuth {
-			t.Fatalf("call %d Authorization = %q, want %q", call, got, wantAuth)
+		if got := r.Header.Get("Authorization"); got != "Bearer mdt-workspace" {
+			t.Fatalf("Authorization = %q, want Binding token", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"runtimes":[{"id":"rt-1","workspace_id":"ws-1","provider":"pi"}]}`))
@@ -273,23 +258,83 @@ func TestClient_RegisterForWorkspaceUsesBootstrapThenWorkspaceDaemonToken(t *tes
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
-	if _, err := c.RegisterForWorkspace(context.Background(), "ws-1", map[string]any{}); err != nil {
-		t.Fatalf("first RegisterForWorkspace: %v", err)
-	}
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
 	if _, err := c.RegisterForWorkspace(context.Background(), "ws-1", map[string]any{}); err != nil {
-		t.Fatalf("second RegisterForWorkspace: %v", err)
-	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("calls = %d, want 2", got)
+		t.Fatalf("RegisterForWorkspace: %v", err)
 	}
 }
 
-func TestClient_RegisterForWorkspaceSkipsExpiredWorkspaceDaemonToken(t *testing.T) {
+func TestClient_PinTaskSessionUsesRuntimeDaemonTokenWithoutProfileFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer mul-profile" {
-			t.Fatalf("Authorization = %q, want bootstrap profile token", got)
+		if got := r.URL.Path; got != "/api/daemon/tasks/task-1/session" {
+			t.Fatalf("path = %q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer mdt-runtime" {
+			t.Fatalf("Authorization = %q, want runtime daemon token", got)
+		}
+		if vals := r.Header.Values("X-Computer-Generation"); len(vals) != 0 {
+			t.Fatalf("X-Computer-Generation = %v, want omitted", vals)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(time.Hour))
+
+	if err := c.PinTaskSession(context.Background(), "task-1", "sess-1", "/work", "rt-1"); err != nil {
+		t.Fatalf("PinTaskSession: %v", err)
+	}
+}
+
+func TestClient_DeregisterUsesWorkspaceDaemonTokenWithoutProfileFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/daemon/deregister" {
+			t.Fatalf("path = %q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer mdt-workspace" {
+			t.Fatalf("Authorization = %q, want workspace daemon token", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(time.Hour))
+
+	if err := c.Deregister(context.Background(), "ws-1", []string{"rt-1"}); err != nil {
+		t.Fatalf("Deregister: %v", err)
+	}
+}
+
+func TestClient_TaskScopedCallsOmitComputerGenerationHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if vals := r.Header.Values("X-Computer-Generation"); len(vals) != 0 {
+			t.Fatalf("%s sent X-Computer-Generation = %v", r.URL.Path, vals)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer mdt-runtime" {
+			t.Fatalf("Authorization for %s = %q", r.URL.Path, got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"running"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(time.Hour))
+
+	if err := c.ReportProgress(context.Background(), "task-1", "working", 1, 2, "rt-1"); err != nil {
+		t.Fatalf("ReportProgress: %v", err)
+	}
+	if _, err := c.GetTaskStatus(context.Background(), "task-1", "rt-1"); err != nil {
+		t.Fatalf("GetTaskStatus: %v", err)
+	}
+}
+
+func TestClient_RegisterForWorkspaceUsesOnlyBindingToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q, want omitted human token", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"runtimes":[{"id":"rt-1","workspace_id":"ws-1","provider":"pi"}]}`))
@@ -297,7 +342,6 @@ func TestClient_RegisterForWorkspaceSkipsExpiredWorkspaceDaemonToken(t *testing.
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-workspace", time.Now().Add(-time.Hour))
 
 	if _, err := c.RegisterForWorkspace(context.Background(), "ws-1", map[string]any{}); err != nil {
@@ -360,8 +404,8 @@ func TestPostJSONWithRetry_TransientThenSuccess(t *testing.T) {
 
 	c := NewClient(srv.URL)
 	schedule := []time.Duration{time.Nanosecond, time.Nanosecond, time.Nanosecond}
-	if err := c.postJSONWithRetry(context.Background(), "/x", map[string]any{}, nil, schedule); err != nil {
-		t.Fatalf("postJSONWithRetry: %v", err)
+	if err := c.postJSONWithRetryToken(context.Background(), "/x", map[string]any{}, nil, schedule, "mdt-runtime"); err != nil {
+		t.Fatalf("postJSONWithRetryToken: %v", err)
 	}
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("expected 3 attempts (2 transient + 1 success), got %d", got)
@@ -380,7 +424,7 @@ func TestPostJSONWithRetry_TransientExhausts(t *testing.T) {
 
 	c := NewClient(srv.URL)
 	schedule := []time.Duration{time.Nanosecond, time.Nanosecond}
-	err := c.postJSONWithRetry(context.Background(), "/x", map[string]any{}, nil, schedule)
+	err := c.postJSONWithRetryToken(context.Background(), "/x", map[string]any{}, nil, schedule, "mdt-runtime")
 	if err == nil {
 		t.Fatal("expected error after schedule exhausted, got nil")
 	}
@@ -404,7 +448,7 @@ func TestPostJSONWithRetry_PermanentBailsImmediately(t *testing.T) {
 
 	c := NewClient(srv.URL)
 	schedule := []time.Duration{time.Nanosecond, time.Nanosecond, time.Nanosecond}
-	err := c.postJSONWithRetry(context.Background(), "/x", map[string]any{}, nil, schedule)
+	err := c.postJSONWithRetryToken(context.Background(), "/x", map[string]any{}, nil, schedule, "mdt-runtime")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -432,7 +476,7 @@ func TestPostJSONWithRetry_CtxCancelStopsRetries(t *testing.T) {
 	c := NewClient(srv.URL)
 	schedule := []time.Duration{time.Second, time.Second, time.Second}
 	start := time.Now()
-	err := c.postJSONWithRetry(ctx, "/x", map[string]any{}, nil, schedule)
+	err := c.postJSONWithRetryToken(ctx, "/x", map[string]any{}, nil, schedule, "mdt-runtime")
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected error after ctx cancel, got nil")

@@ -151,6 +151,9 @@ func (runner *WorkspaceRunner) replayManagedAgentStartPublication(start protocol
 			}
 		}
 	}
+	// Raft 1.0.16 reconnects replay status/session/current Snapshot only.
+	// Starting… is a spawn fact; repeating it on socket replay paints a
+	// new timeline pair after every Binding child reconnect.
 	return true
 }
 

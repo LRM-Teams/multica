@@ -166,6 +166,21 @@ func (d *Daemon) attachWorkspaceRunner(runner *WorkspaceRunner) {
 	d.workspaceRunnerMu.Unlock()
 }
 
+// adoptWorkspaceRunner publishes the Binding child's owned Runner as the
+// Credential Proxy / handoff lookup. Binding child constructs that Runner
+// before Run; if it stays off this map, ensureWorkspaceRunner mints a second
+// empty inbox and message send returns 409 "Message coordinator is unavailable".
+func (d *Daemon) adoptWorkspaceRunner(runner *WorkspaceRunner) error {
+	if d == nil {
+		return errors.New("Workspace Runner Daemon is required")
+	}
+	if runner == nil || runner.WorkspaceID() == "" {
+		return errors.New("Workspace Runner identity is required")
+	}
+	d.attachWorkspaceRunner(runner)
+	return nil
+}
+
 func (d *Daemon) detachWorkspaceRunner(runner *WorkspaceRunner) {
 	if d == nil || runner == nil {
 		return

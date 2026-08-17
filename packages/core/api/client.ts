@@ -45,6 +45,8 @@ import type {
   MemoryCurationRunDetail,
   MemoryCuratorProfile,
   UpdateMemoryCuratorProfileRequest,
+  GraphMemoryProfile,
+  UpdateGraphMemoryProfileRequest,
   StartMemoryCurationRunRequest,
   StartMemoryCurationRunResponse,
   MemoryCurationBackfillRequest,
@@ -115,7 +117,6 @@ import type {
   DashboardUsageByAgent,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
-  MachineUpgrade,
   RuntimeRestart,
   AgentRestartMode,
   AgentRestartPreflight,
@@ -407,6 +408,7 @@ import {
   EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
   EMPTY_MEMORY_CURATION_RUN_DETAIL,
   EMPTY_MEMORY_CURATOR_PROFILE,
+  EMPTY_GRAPH_MEMORY_PROFILE,
   EvolutionMetricsSchema,
   EvolutionTrainingExampleListSchema,
   EvolutionTrainingExampleSchema,
@@ -420,6 +422,7 @@ import {
   WorkspaceMemoryCurationStatusSchema,
   MemoryCurationRunDetailSchema,
   MemoryCuratorProfileSchema,
+  GraphMemoryProfileSchema,
   StartMemoryCurationRunResponseSchema,
   MemoryCurationBackfillResponseSchema,
   EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE,
@@ -458,8 +461,6 @@ import {
   DeleteComputerResponseSchema,
   EMPTY_DELETE_COMPUTER_RESPONSE,
   type DeleteComputerResponse,
-  MachineUpgradeSchema,
-  EMPTY_MACHINE_UPGRADE,
   NotePageSchema,
   NotePageListResponseSchema,
   EMPTY_NOTE_PAGE,
@@ -2260,20 +2261,10 @@ export class ApiClient {
     daemonId: string,
     targetVersion: string,
     requestId: string,
-  ): Promise<MachineUpgrade> {
-    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades`, {
+  ): Promise<{ request_id: string }> {
+    return this.fetch<{ request_id: string }>(`/api/daemons/${daemonId}/upgrades`, {
       method: "POST",
       body: JSON.stringify({ target_version: targetVersion, request_id: requestId }),
-    });
-    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
-      endpoint: "POST /api/daemons/:daemonId/upgrades",
-    });
-  }
-
-  async getMachineUpgrade(daemonId: string, upgradeId: string): Promise<MachineUpgrade> {
-    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades/${upgradeId}`);
-    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
-      endpoint: "GET /api/daemons/:daemonId/upgrades/:upgradeId",
     });
   }
 
@@ -3137,6 +3128,28 @@ export class ApiClient {
     );
     return parseWithFallback(raw, MemoryCuratorProfileSchema, EMPTY_MEMORY_CURATOR_PROFILE, {
       endpoint: "PUT /api/workspaces/{id}/memory-curation/profile",
+    });
+  }
+
+  async getGraphMemoryProfile(workspaceId: string): Promise<GraphMemoryProfile> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/profile`,
+    );
+    return parseWithFallback(raw, GraphMemoryProfileSchema, EMPTY_GRAPH_MEMORY_PROFILE, {
+      endpoint: "GET /api/workspaces/{id}/graph-memory/profile",
+    });
+  }
+
+  async updateGraphMemoryProfile(
+    workspaceId: string,
+    data: UpdateGraphMemoryProfileRequest,
+  ): Promise<GraphMemoryProfile> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/profile`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(raw, GraphMemoryProfileSchema, EMPTY_GRAPH_MEMORY_PROFILE, {
+      endpoint: "PUT /api/workspaces/{id}/graph-memory/profile",
     });
   }
 

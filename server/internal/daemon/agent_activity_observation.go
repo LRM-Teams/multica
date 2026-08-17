@@ -54,6 +54,14 @@ func (p *agentActivityProducer) observeLocked(observation AgentObservation) erro
 		snapshot.DetailKind = projection.detailKind
 		snapshot.ProcessInstanceID = projection.processInstanceID
 	}
+	// Raft 1.0.16 queueTrajectoryText: same activityKind+detailKind is a
+	// progress heartbeat candidate, not another timeline fact.
+	if !projection.preserveCurrent &&
+		state.snapshot.ActivityKind == snapshot.ActivityKind &&
+		state.snapshot.DetailKind == snapshot.DetailKind &&
+		state.snapshot.ActivityKind != "" {
+		return nil
+	}
 	snapshot.ClientSequence = 0
 	snapshot.ProducerFactID = ""
 	snapshot.ObservedAt = observation.At.UTC()
@@ -166,12 +174,10 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		entry, err = activityNarrativeEntry(projection.detailKind, "Starting…")
 	case AgentObservationRuntimeWorking:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "model_response_started"
-		if data, ok := observation.Data.(AgentRuntimeObservationData); ok {
-			projection.processInstanceID = data.ProcessInstanceID
-		}
 		entry, err = activityNarrativeEntry(projection.detailKind, "Working")
 	case AgentObservationRuntimeThinking:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindThinking, "thinking_started"
+		entry, err = activityNarrativeEntry(projection.detailKind, "Thinking")
 	case AgentObservationRuntimeTool:
 		data := observation.Data.(AgentRuntimeStageObservationData)
 		projection.activityKind = protocol.ActivityKindWorking
@@ -196,6 +202,9 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
 		entry, err = activitySystemEntry("Runtime warning", "Provider reported a warning")
 	case AgentObservationMessageBodyAccepted:
+		// Raft 1.0.16 shows "Message received" when an ordinary inbox
+		// body is accepted. Keep the presentation detail the UI already
+		// maps; do not wait for native write completion.
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "message_received"
 		entry, err = activityNarrativeEntry(projection.detailKind, "Message received")
 	case AgentObservationFreshnessHeld:

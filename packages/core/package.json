@@ -148,6 +148,7 @@
     "./research-v6/director-projection-client": "./hooks/research-v6/director-projection-client.ts",
     "./research-v6/director-queries": "./hooks/research-v6/director-queries.ts",
     "./research-v6/director-display-store": "./hooks/research-v6/director-display-store.ts",
+    "./research-v6/director-expansion-controller": "./hooks/research-v6/director-expansion-controller.ts",
     "./research-v6/store": "./hooks/research-v6/store.ts",
     "./research-v6/registry": "./research-v6/registry.ts",
     "./research-v6/schemas": "./research-v6/schemas.ts",

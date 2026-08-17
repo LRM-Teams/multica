@@ -32,6 +32,7 @@ interface ResearchV6DirectorDisplayState {
     requestToken: string,
     sliceKey: string,
     revealedNodeIds: readonly string[],
+    transitionNodeIds?: readonly string[],
   ) => void;
   failExpansion: (
     rootNodeId: string,
@@ -89,10 +90,19 @@ export const useResearchV6DirectorDisplayStore =
       }));
     },
 
-    commitExpansion(rootNodeId, requestToken, sliceKey, revealedNodeIds) {
+    commitExpansion(
+      rootNodeId,
+      requestToken,
+      sliceKey,
+      revealedNodeIds,
+      transitionNodeIds,
+    ) {
       set((state) => {
         if (state.requestTokenByRoot[rootNodeId] !== requestToken) return state;
         const revealed = [...new Set(revealedNodeIds)].filter(
+          (nodeId) => nodeId !== rootNodeId,
+        );
+        const animated = [...new Set(transitionNodeIds ?? revealed)].filter(
           (nodeId) => nodeId !== rootNodeId,
         );
         return {
@@ -109,7 +119,7 @@ export const useResearchV6DirectorDisplayStore =
             sequence: state.nextTransitionSequence,
             kind: "expand",
             rootNodeId,
-            revealedNodeIds: revealed,
+            revealedNodeIds: animated,
           },
           nextTransitionSequence: state.nextTransitionSequence + 1,
         };
@@ -135,7 +145,15 @@ export const useResearchV6DirectorDisplayStore =
     collapseRoot(rootNodeId) {
       set((state) => {
         const expanded = state.expandedByRoot[rootNodeId];
-        if (!expanded) return state;
+        if (!expanded) {
+          return {
+            requestTokenByRoot: withoutKey(
+              state.requestTokenByRoot,
+              rootNodeId,
+            ),
+            failureByRoot: withoutKey(state.failureByRoot, rootNodeId),
+          };
+        }
         return {
           expandedByRoot: withoutKey(state.expandedByRoot, rootNodeId),
           requestTokenByRoot: withoutKey(

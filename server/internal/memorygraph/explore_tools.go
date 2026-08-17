@@ -209,6 +209,17 @@ func (s *ExploreToolServer) decodeExploreRequest(w http.ResponseWriter, r *http.
 	return true
 }
 
+// viewAllows reports whether the graph view attached to the retriever (if
+// any) permits access to n (spec §5: the view is reapplied at every
+// traversal step so edges can never bypass scope). Without a retriever or
+// with an inactive (zero) view, all nodes are allowed — legacy behavior.
+func (s *ExploreToolServer) viewAllows(n *Node) bool {
+	if s.retr == nil || !s.retr.viewActive() {
+		return true
+	}
+	return s.retr.cfg.View.Allows(n)
+}
+
 // loadGraph loads the pinned version graph.
 func (s *ExploreToolServer) loadGraph() (*Graph, error) {
 	g, err := LoadGraph(s.store, s.version)
@@ -266,7 +277,9 @@ func (s *ExploreToolServer) handleView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		n := g.Node(req.NodeID)
-		if n == nil {
+		// A node outside the caller's graph view returns the same not-found
+		// shape as a missing node: fail closed, no existence leak (spec §5).
+		if n == nil || !s.viewAllows(n) {
 			exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
 			return
 		}
@@ -331,7 +344,8 @@ func (s *ExploreToolServer) handleExpand(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	node := g.Node(req.NodeID)
-	if node == nil {
+	// Same fail-closed not-found shape as /view for out-of-view anchors.
+	if node == nil || !s.viewAllows(node) {
 		exploreWriteError(w, http.StatusNotFound, "NODE_NOT_FOUND", "node not found")
 		return
 	}
@@ -384,6 +398,12 @@ func (s *ExploreToolServer) expandCandidates(g *Graph, node *Node, relationFilte
 			return
 		}
 		seen[id] = true
+		// Reapply the graph view on every offered neighbor (spec §5): an
+		// edge must never surface a node the caller may not see. Staging
+		// docs have no graph node and pass through (scope-resolved upstream).
+		if n := g.Node(id); n != nil && !s.viewAllows(n) {
+			return
+		}
 		c := expandCandidate{NodeID: id, Via: via, Level: -1, Snippet: s.snippet(g, id)}
 		if n := g.Node(id); n != nil {
 			c.Level = n.Level

@@ -349,6 +349,58 @@ func (s *Store) WriteStagingSegment(segmentID string, content []byte) error {
 	return nil
 }
 
+// WriteStagingSegmentMeta persists the scope/provenance sidecar
+// staging/segments/<segment_id>.scope.json. Like the segment body it
+// accompanies, the sidecar is immutable: it fails if the meta already
+// exists.
+func (s *Store) WriteStagingSegmentMeta(segmentID string, meta *SegmentMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := validateFileID("segment_id", segmentID); err != nil {
+		return err
+	}
+	body, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal staging segment meta %s: %w", segmentID, err)
+	}
+	if err := os.MkdirAll(s.stagingDir(), 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(s.stagingDir(), segmentID+".scope.json")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("staging segment meta %s already exists", segmentID)
+		}
+		return fmt.Errorf("write staging segment meta %s: %w", segmentID, err)
+	}
+	defer f.Close()
+	if _, err := f.Write(body); err != nil {
+		return fmt.Errorf("write staging segment meta %s: %w", segmentID, err)
+	}
+	return nil
+}
+
+// ReadStagingSegmentMeta reads staging/segments/<segment_id>.scope.json.
+func (s *Store) ReadStagingSegmentMeta(segmentID string) (*SegmentMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := validateFileID("segment_id", segmentID); err != nil {
+		return nil, err
+	}
+	body, err := os.ReadFile(filepath.Join(s.stagingDir(), segmentID+".scope.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read staging segment meta %s: %w", segmentID, err)
+	}
+	var meta SegmentMeta
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return nil, fmt.Errorf("parse staging segment meta %s: %w", segmentID, err)
+	}
+	return &meta, nil
+}
+
 // ReadStagingSegment reads staging/segments/<segment_id>.md.
 func (s *Store) ReadStagingSegment(segmentID string) ([]byte, error) {
 	s.mu.Lock()

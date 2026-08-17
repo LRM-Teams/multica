@@ -95,7 +95,55 @@ type Node struct {
 	CreatedVersion int        `yaml:"created_version" json:"created_version"`
 	UpdatedVersion int        `yaml:"updated_version" json:"updated_version"`
 
+	// Scope and provenance (spec §5). Empty Visibility reads as "project"
+	// for pre-scope graphs. Provenance is monotonic: consolidation may merge
+	// source IDs but never remove them.
+	Visibility       string   `yaml:"visibility,omitempty" json:"visibility,omitempty"`
+	ChannelID        string   `yaml:"channel_id,omitempty" json:"channel_id,omitempty"`
+	SourceAgentIDs   []string `yaml:"source_agent_ids,omitempty" json:"source_agent_ids,omitempty"`
+	SourceChannelIDs []string `yaml:"source_channel_ids,omitempty" json:"source_channel_ids,omitempty"`
+	SourceTaskIDs    []string `yaml:"source_task_ids,omitempty" json:"source_task_ids,omitempty"`
+
 	Body string `yaml:"-" json:"body"` // markdown body = embedding chunk
+}
+
+// GraphView is the caller's visibility scope, reapplied at every retrieval
+// and traversal step so edges can never bypass scope (spec §5). The zero
+// value is inactive (no filtering), preserving legacy behavior for existing
+// callers.
+type GraphView struct {
+	AllowProject bool
+	ChannelID    string // exact-channel visibility allowed; "" = none
+}
+
+// Allows reports whether n is visible under v. Empty Visibility reads as
+// "project"; unknown visibility values fail closed.
+func (v GraphView) Allows(n *Node) bool {
+	vis := n.Visibility
+	if vis == "" {
+		vis = "project"
+	}
+	switch vis {
+	case "project":
+		return v.AllowProject
+	case "channel":
+		return v.ChannelID != "" && n.ChannelID == v.ChannelID
+	default:
+		return false
+	}
+}
+
+// SegmentMeta is the scope/provenance sidecar for one staged segment
+// (staging/segments/<id>.scope.json), written by the scoped ingest writer
+// (spec §5).
+type SegmentMeta struct {
+	WorkspaceID       string `json:"workspace_id"`
+	Visibility        string `json:"visibility"` // "project" | "channel"
+	ChannelID         string `json:"channel_id,omitempty"`
+	ProjectID         string `json:"project_id,omitempty"`
+	AgentID           string `json:"agent_id,omitempty"`
+	TaskID            string `json:"task_id,omitempty"`
+	LineageGeneration int64  `json:"lineage_generation,omitempty"`
 }
 
 // Edge is a first-class object (Q6/7). For hierarchy edges only EdgeID,

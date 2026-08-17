@@ -23,7 +23,8 @@ describe("LRM-1250 S4 send pending a11y", () => {
   it("Enter path keeps pending/empty guard (zero-change contract)", () => {
     const enterBlock = sliceAround('data-testid="research-chat-composer"', 80, 700);
     expect(enterBlock).toContain("if (!ui.body.trim() || send.isPending) return;");
-    expect(enterBlock).toContain("send.mutate(ui.body.trim())");
+    expect(enterBlock).toContain("send.mutate({");
+    expect(enterBlock).toContain("body: ui.body.trim()");
   });
 
   it("send button: empty native disabled; pending aria-disabled + click guard", () => {

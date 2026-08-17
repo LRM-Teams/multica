@@ -154,6 +154,7 @@
     "send": "Send",
     "selected_ref_revision": "revision {{revision}}",
     "selected_ref_remove": "Remove reference: {{summary}}",
+    "selected_refs": "Selected research references",
     "stopping": "Stopping…",
     "stop_aria": "Stop generation",
     "stop_tooltip": "Stop the fleet mid-generation. Keep what already streamed; send again to resume.",

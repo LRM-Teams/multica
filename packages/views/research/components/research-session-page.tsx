@@ -32,6 +32,7 @@ import type {
   ResearchGraphNode,
   ResearchNodeCommandAction,
   ResearchProductRoundCard,
+  PostResearchMessageRequest,
 } from "@multica/core/types";
 import { createSafeId } from "@multica/core/utils";
 import { memberListOptions } from "@multica/core/workspace/queries";
@@ -76,6 +77,7 @@ import {
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import { guardPrematureGateProjection } from "../lib/research-projection-contract";
+import { researchSelectedReferenceFromNode } from "../lib/research-selected-reference";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
 import {
@@ -123,6 +125,7 @@ import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
 import { ResearchServerErrorPage } from "./research-server-error-page";
+import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
 import { ResearchSessionBoundary } from "./research-session-boundary";
 import {
   ResearchSessionInterruptBanner,
@@ -357,9 +360,15 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
       selectSessionCanvasNode(sessionId, node?.id ?? null);
-      if (node) dispatch({ type: "setFamily", family: dimensionFamilyOf(node) });
+      if (node) {
+        dispatch({ type: "setFamily", family: dimensionFamilyOf(node) });
+        if (directorV6Enabled) {
+          const reference = researchSelectedReferenceFromNode(node);
+          if (reference) dispatch({ type: "attachResearchRef", reference });
+        }
+      }
     },
-    [selectSessionCanvasNode, sessionId],
+    [directorV6Enabled, selectSessionCanvasNode, sessionId],
   );
   const handleFocusDetailNode = useCallback(
     (nodeId: string) => {
@@ -440,7 +449,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   useAutoScroll(chatScrollRef, chatOpen);
 
   const send = useMutation({
-    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    mutationFn: (request: PostResearchMessageRequest) =>
+      api.postResearchMessage(sessionId, request),
     onSuccess: () => {
       // Focus before clearBody so empty-state native disabled does not dump focus to BODY.
       composerRef.current?.focus();
@@ -782,9 +792,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     (productRounds.rounds.length ?? 0) - 1
   ];
 
-  const postUser = (body: string) => send.mutate(body);
+  const postUser = (body: string) => send.mutate({ body });
   const postUserCommitted = (body: string) =>
-    send.mutateAsync(body).then(() => undefined);
+    send.mutateAsync({ body }).then(() => undefined);
   const stopAndPostUser = async (body: string) => {
     const stopRequest = api.stopResearchSession(sessionId).catch((error: unknown) => {
       showErrorToast(error instanceof Error ? error.message : String(error));
@@ -1219,7 +1229,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   mode="error"
                   errorMessage={chatErrorMessage}
                   onRetry={() => {
-                    if (ui.body.trim()) send.mutate(ui.body.trim());
+                    if (ui.body.trim()) send.mutate({ body: ui.body.trim() });
                     else void send.reset();
                   }}
                 />
@@ -1330,6 +1340,23 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           composer={
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
+                {directorV6Enabled && ui.selectedResearchRefs.length > 0 ? (
+                  <ul
+                    className="mb-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto"
+                    aria-label={t(($) => $.panel.selected_refs)}
+                  >
+                    {ui.selectedResearchRefs.map((reference) => (
+                      <ResearchSelectedRefChip
+                        key={reference.stable_id}
+                        reference={reference}
+                        disabled={send.isPending}
+                        onRemove={(stableId) =>
+                          dispatch({ type: "removeResearchRef", stableId })
+                        }
+                      />
+                    ))}
+                  </ul>
+                ) : null}
                 <Textarea
                   ref={composerRef}
                   data-testid="research-chat-composer"
@@ -1341,7 +1368,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
                     e.preventDefault();
                     if (!ui.body.trim() || send.isPending) return;
-                    send.mutate(ui.body.trim());
+                    send.mutate({
+                      body: ui.body.trim(),
+                      ...(directorV6Enabled && ui.selectedResearchRefs.length > 0
+                        ? { selected_research_refs: ui.selectedResearchRefs }
+                        : {}),
+                    });
                   }}
                   placeholder={
                     isPaused
@@ -1398,7 +1430,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                       data-testid="research-session-composer-send"
                       onClick={() => {
                         if (!ui.body.trim() || send.isPending) return;
-                        send.mutate(ui.body.trim());
+                        send.mutate({
+                          body: ui.body.trim(),
+                          ...(directorV6Enabled && ui.selectedResearchRefs.length > 0
+                            ? { selected_research_refs: ui.selectedResearchRefs }
+                            : {}),
+                        });
                       }}
                     >
                       {send.isPending

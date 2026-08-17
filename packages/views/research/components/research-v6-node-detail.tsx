@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  ResearchV6DirectorEntityRef,
   ResearchV6DirectorNodeDetail,
   ResearchV6DirectorProjectionEdge,
   ResearchV6DirectorProjectionNode,
@@ -17,6 +18,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useT } from "../../i18n/use-t";
+import { Time } from "../../i18n/time";
 
 function relatedNodeId(
   edge: ResearchV6DirectorProjectionEdge,
@@ -63,6 +65,18 @@ export function ResearchV6NodeDetail({
         [t(($) => $.v6_detail.discussions), detail.discussion_refs.length],
         [t(($) => $.v6_detail.reports), detail.report_refs.length],
       ] satisfies Array<[string, number]>).filter((entry) => entry[1] > 0)
+    : [];
+  const recordGroups: Array<[string, ResearchV6DirectorEntityRef[]]> = detail
+    ? ([
+        [t(($) => $.v6_detail.agents), detail.agent_refs],
+        [t(($) => $.v6_detail.work_items), detail.work_item_refs],
+        [t(($) => $.v6_detail.attempts), detail.attempt_refs],
+        [t(($) => $.v6_detail.evidence), detail.evidence_refs],
+        [t(($) => $.v6_detail.discussions), detail.discussion_refs],
+        [t(($) => $.v6_detail.reports), detail.report_refs],
+      ] satisfies Array<[string, ResearchV6DirectorEntityRef[]]>).filter(
+        (entry) => entry[1].length > 0,
+      )
     : [];
   const relations = detail
     ? [
@@ -111,6 +125,46 @@ export function ResearchV6NodeDetail({
         ))}
       </dl>
 
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-y border-border/70 py-3 text-xs">
+        <div className="min-w-0">
+          <dt className="text-[10px] font-medium text-muted-foreground">
+            {t(($) => $.v6_detail.source)}
+          </dt>
+          <dd className="mt-0.5 truncate font-medium" title={node.canonical_ref.id}>
+            {node.canonical_ref.kind} · {node.canonical_ref.id}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-[10px] font-medium text-muted-foreground">
+            {t(($) => $.v6_detail.version)}
+          </dt>
+          <dd className="mt-0.5 truncate font-medium tabular-nums">
+            {node.canonical_ref.revision
+              ? `r${node.canonical_ref.revision}`
+              : node.canonical_ref.version_id ?? t(($) => $.v6_detail.current)}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-[10px] font-medium text-muted-foreground">
+            {t(($) => $.v6_detail.updated_at)}
+          </dt>
+          <dd className="mt-0.5 truncate font-medium tabular-nums">
+            <Time kind="full" value={node.updated_at} />
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-[10px] font-medium text-muted-foreground">
+            {t(($) => $.v6_detail.content_hash)}
+          </dt>
+          <dd
+            className="mt-0.5 truncate font-mono text-[10px]"
+            title={node.canonical_ref.content_hash}
+          >
+            {node.canonical_ref.content_hash ?? t(($) => $.v6_detail.unavailable)}
+          </dd>
+        </div>
+      </dl>
+
       {state.termination ? (
         <div className="space-y-1 rounded-xl bg-muted/45 px-3 py-2.5">
           <p className="text-xs font-semibold">{state.termination.reason_code}</p>
@@ -153,6 +207,32 @@ export function ResearchV6NodeDetail({
               </li>
             ))}
           </ul>
+          <div className="space-y-1.5">
+            {recordGroups.map(([label, records]) => (
+              <details key={label} className="rounded-lg bg-muted/35 px-2.5 py-2">
+                <summary className="cursor-pointer text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {label} · {records.length}
+                </summary>
+                <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto overscroll-contain">
+                  {records.map((reference) => (
+                    <li
+                      key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.version_id ?? "current"}`}
+                      className="flex min-w-0 items-center justify-between gap-2 text-[10px] text-muted-foreground"
+                    >
+                      <span className="truncate" title={`${reference.kind}:${reference.id}`}>
+                        {reference.kind} · {reference.id}
+                      </span>
+                      <span className="shrink-0 tabular-nums">
+                        {reference.revision
+                          ? `r${reference.revision}`
+                          : reference.version_id ?? t(($) => $.v6_detail.current)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ))}
+          </div>
         </div>
       ) : null}
 

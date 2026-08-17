@@ -52,7 +52,7 @@ describe("ResearchV6NodeDetail", () => {
       ],
       outgoing: [],
       history_refs: [{ kind: "insight", id: "current", revision: 1 }],
-      agent_refs: [],
+      agent_refs: [{ kind: "agent", id: "agent-1", revision: 3 }],
       work_item_refs: [],
       attempt_refs: [],
       evidence_refs: [],
@@ -79,5 +79,8 @@ describe("ResearchV6NodeDetail", () => {
     expect(onFocusNode).toHaveBeenCalledWith("input");
     expect(screen.getByText("Version history")).toBeTruthy();
     expect(screen.getByText(/r1/)).toBeTruthy();
+    expect(screen.getByText("Canonical source")).toBeTruthy();
+    expect(screen.getByText("Content hash")).toBeTruthy();
+    expect(screen.getByText("Agents · 1")).toBeTruthy();
   });
 });

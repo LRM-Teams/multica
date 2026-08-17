@@ -316,17 +316,18 @@ LIMIT 300`, workspaceID, userID, start, end)
 			agentName = toAgentName
 		}
 		out = append(out, noteRetrospectiveIssueFact{
-			IssueID:     uuidToString(issueID),
-			Identifier:  identifier,
-			Title:       title,
-			Action:      action,
-			Detail:      formatIssueActivityDetail(action, details),
-			At:          createdAt.UTC(),
-			ActorType:   actorType,
-			ActorID:     actorIDStr,
-			AgentID:     agentID,
-			AgentName:   agentName,
-			Attribution: attr,
+			IssueID:      uuidToString(issueID),
+			Identifier:   identifier,
+			Title:        title,
+			Action:       action,
+			Detail:       formatIssueActivityDetail(action, details),
+			At:           createdAt.UTC(),
+			ActorType:    actorType,
+			ActorID:      actorIDStr,
+			AgentID:      agentID,
+			AgentName:    agentName,
+			Attribution:  attr,
+			PullRequests: []noteRetrospectivePullRequestFact{},
 		})
 	}
 	return out, rows.Err()

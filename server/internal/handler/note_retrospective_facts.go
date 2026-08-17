@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Default sources for Period Work Synthesis (J2 / J3). Retrospectives still
@@ -51,6 +52,9 @@ func (h *Handler) loadNoteRetrospectiveFactsBundle(
 			if err != nil {
 				return noteRetrospectiveFactsBundle{}, err
 			}
+			if err := h.attachNoteRetrospectiveIssuePullRequests(ctx, workspaceID, items); err != nil {
+				return noteRetrospectiveFactsBundle{}, err
+			}
 			out.Facts.Issues = items
 			if len(items) == 0 {
 				out.SourcesEmpty = append(out.SourcesEmpty, source)
@@ -82,4 +86,59 @@ func (h *Handler) loadNoteRetrospectiveFactsBundle(
 		}
 	}
 	return out, nil
+}
+
+// attachNoteRetrospectiveIssuePullRequests folds currently linked PRs onto each
+// issue fact. Unlinked issues get an empty slice (never nil). Failure is
+// returned — PR evidence is part of the Facts contract, not decorative.
+func (h *Handler) attachNoteRetrospectiveIssuePullRequests(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	facts []noteRetrospectiveIssueFact,
+) error {
+	if len(facts) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(facts))
+	issueIDs := make([]pgtype.UUID, 0, len(facts))
+	for _, fact := range facts {
+		if fact.IssueID == "" {
+			continue
+		}
+		if _, ok := seen[fact.IssueID]; ok {
+			continue
+		}
+		seen[fact.IssueID] = struct{}{}
+		issueIDs = append(issueIDs, parseUUID(fact.IssueID))
+	}
+	byIssue := make(map[string][]noteRetrospectivePullRequestFact, len(issueIDs))
+	if len(issueIDs) > 0 {
+		if h == nil || h.Queries == nil {
+			return nil
+		}
+		rows, err := h.Queries.ListPullRequestsByIssues(ctx, db.ListPullRequestsByIssuesParams{
+			IssueIds:    issueIDs,
+			WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			key := uuidToString(row.IssueID)
+			byIssue[key] = append(byIssue[key], noteRetrospectivePullRequestFact{
+				Number: row.PrNumber,
+				URL:    row.HtmlUrl,
+				State:  row.State,
+				Title:  row.Title,
+			})
+		}
+	}
+	for i := range facts {
+		prs := byIssue[facts[i].IssueID]
+		if prs == nil {
+			prs = []noteRetrospectivePullRequestFact{}
+		}
+		facts[i].PullRequests = prs
+	}
+	return nil
 }

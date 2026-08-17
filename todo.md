@@ -147,15 +147,16 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 
 **本 Slice 完成标准：** 同一时间窗能取出平台 Facts，Issue 带链接 PR，并能把 Digest 仓库标成「当前 Workspace」或「本机未归类」。仍不跑模型。
 
-- [ ] **J2-T1 窗口 Facts 包（不写回顾笔记）**
-  - **进行中（2026-08-17）**：抽出 `loadNoteRetrospective*Facts` 为可复用函数，不写笔记、不跑模型。
+- [x] **J2-T1 窗口 Facts 包（不写回顾笔记）**
+  - **已落地（2026-08-17）**：`loadNoteRetrospectiveFactsBundle`（`note_retrospective_facts.go`）按窗口+sources 拉 Issue/笔记/run，带 used/empty/skipped；CreateNoteRetrospective 复用；`notePeriodWorkDefaultSources` 含三源。测：窗口内外过滤 + 亲手/委派/仅相关归因。
   - **目标**：合成入口能拿到与回顾同源的 Facts，而不必先插入一篇「回顾 YYYY-Www」列表页。
   - **要做**：抽出 `loadNoteRetrospective*Facts` 为可复用函数（同包或小 module），输入 `workspace, user, start, end, sources`。本入口默认源：`issue_activity`、`touched_notes`、`agent_runs`。保留亲手/委派/仅相关归因。
   - **不要做**：改回顾 markdown 模板当 Brief；在 loader 里调模型；删除现有「生成回顾」按钮（可并存）。
   - **依赖**：现有 retrospective loader；建议 J1 已可返回 digest（合成要两端，但本任务可先单测平台侧）
   - **完成标准**：Go 测：窗口内 Issue/笔记/run 出现；窗口外不出现；归因与现回顾测试一致。
 
-- [ ] **J2-T2 Issue 挂链接 PR**
+- [x] **J2-T2 Issue 挂链接 PR**
+  - **已落地（2026-08-17）**：Issue fact 附 `PullRequests[]`（number/url/state/title）；`attachNoteRetrospectiveIssuePullRequests` 复用 `ListPullRequestsByIssues`；未链为空切片。测：有链可见 url+state，无链为空。
   - **目标**：Facts 里的 Issue 带窗口内（或当前仍链接的）PR 标识与状态，而不是另开一节 PR 流水。
   - **要做**：复用 `issue_pull_request` / `ListPullRequestsByIssue`（或 `attachPullRequestsToIssues`）。每条 Issue fact 附 `pull_requests[]`：number、url、state、title。无 PR 则空数组。
   - **不要做**：把 GitHub API 同步放进这条任务；把 PR patch 塞进 Facts。
@@ -221,7 +222,7 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 |------|--------|
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
 | 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ ~~J1-T5~~ 开关（已完成） |
-| 3 | J2（平台包 + PR + 归仓） |
+| 3 | ~~J2-T1~~ 平台 Facts 包 → ~~J2-T2~~ Issue 挂 PR（已完成）→ **J2-T3** |
 | 4 | J3（剧本 → 派发 → UI → 落笔记） |
 | 5 | 仅当产品需要时再开 J4 |
 

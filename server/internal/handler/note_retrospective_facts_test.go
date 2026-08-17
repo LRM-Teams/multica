@@ -164,6 +164,80 @@ func TestLoadNoteRetrospectiveFactsBundleHonorsSourceFilter(t *testing.T) {
 	}
 }
 
+func TestLoadNoteRetrospectiveFactsBundleAttachesLinkedPullRequests(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	linkedIssue, _ := createIssueForNoteRefTest(t, testWorkspaceID, "PR-linked issue "+uuid.NewString())
+	bareIssue, _ := createIssueForNoteRefTest(t, testWorkspaceID, "Bare issue "+uuid.NewString())
+
+	var pullRequestID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO github_pull_request (
+  workspace_id, installation_id, repo_owner, repo_name, pr_number,
+  title, state, html_url, pr_created_at, pr_updated_at
+)
+VALUES ($1, 1, 'multica-ai', 'multica', 4242,
+        'wire SSO login', 'open', 'https://github.com/multica-ai/multica/pull/4242', now(), now())
+RETURNING id`, testWorkspaceID).Scan(&pullRequestID); err != nil {
+		t.Fatalf("insert PR: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM issue_pull_request WHERE pull_request_id = $1`, pullRequestID)
+		_, _ = testPool.Exec(ctx, `DELETE FROM github_pull_request WHERE id = $1`, pullRequestID)
+	})
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO issue_pull_request (issue_id, pull_request_id) VALUES ($1, $2)`,
+		linkedIssue, pullRequestID); err != nil {
+		t.Fatalf("link PR: %v", err)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details, created_at)
+VALUES
+  ($1, $2, 'member', $3, 'status_changed', '{"from":"todo","to":"done"}'::jsonb, $5),
+  ($1, $4, 'member', $3, 'status_changed', '{"from":"todo","to":"done"}'::jsonb, $5 + interval '5 seconds')
+`, testWorkspaceID, linkedIssue, testUserID, bareIssue, now.Add(-time.Minute)); err != nil {
+		t.Fatalf("insert activities: %v", err)
+	}
+
+	bundle, err := testHandler.loadNoteRetrospectiveFactsBundle(
+		ctx, parseUUID(testWorkspaceID), parseUUID(testUserID),
+		now.Add(-2*time.Hour), now.Add(time.Hour),
+		[]string{noteRetrospectiveSourceIssue},
+	)
+	if err != nil {
+		t.Fatalf("load facts: %v", err)
+	}
+
+	byIssue := map[string]noteRetrospectiveIssueFact{}
+	for _, fact := range bundle.Facts.Issues {
+		byIssue[fact.IssueID] = fact
+	}
+	linked, ok := byIssue[linkedIssue]
+	if !ok {
+		t.Fatalf("missing linked issue fact: %+v", bundle.Facts.Issues)
+	}
+	if len(linked.PullRequests) != 1 {
+		t.Fatalf("linked PRs = %+v, want 1", linked.PullRequests)
+	}
+	pr := linked.PullRequests[0]
+	if pr.Number != 4242 || pr.State != "open" || pr.Title != "wire SSO login" ||
+		pr.URL != "https://github.com/multica-ai/multica/pull/4242" {
+		t.Fatalf("PR fact = %+v", pr)
+	}
+	bare, ok := byIssue[bareIssue]
+	if !ok {
+		t.Fatalf("missing bare issue fact: %+v", bundle.Facts.Issues)
+	}
+	if bare.PullRequests == nil || len(bare.PullRequests) != 0 {
+		t.Fatalf("bare issue PRs = %#v, want empty slice", bare.PullRequests)
+	}
+}
+
 type noteRetrospectiveIDSet map[string]struct{}
 
 func (s noteRetrospectiveIDSet) has(id string) bool {

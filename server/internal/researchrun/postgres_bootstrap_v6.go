@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -54,8 +55,29 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,$5,$6,1,'idle')`, membershipID, in.WorkspaceID, runID, in.DirectorAgentID, mission, missionHash); err != nil {
 		return Run{}, 0, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO research_branch(workspace_id,session_id,client_key,objective,entry_conditions,exit_conditions,budget_share,status,goal_version,scope,state_version)
-		VALUES($1::uuid,$2::uuid,'root',$3,'[]'::jsonb,'[]'::jsonb,1,'active',1,'{}'::jsonb,1)`, in.WorkspaceID, runID, strings.TrimSpace(in.Goal)); err != nil {
+	branchID := uuid.NewString()
+	branchCreatedAt := time.Now().UTC()
+	if _, err = tx.Exec(ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,objective,entry_conditions,exit_conditions,budget_share,status,goal_version,scope,state_version,created_at,updated_at)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'root',$4,'[]'::jsonb,'[]'::jsonb,1,'active',1,'{}'::jsonb,1,$5,$5)`, branchID, in.WorkspaceID, runID, strings.TrimSpace(in.Goal), branchCreatedAt); err != nil {
+		return Run{}, 0, err
+	}
+	if err = registerV6BranchArtifactTx(ctx, tx, in.WorkspaceID, runID, branchID, branchCreatedAt, 1, map[string]any{
+		"parent_branch_id": "", "objective": strings.TrimSpace(in.Goal), "entry_conditions": json.RawMessage(`[]`),
+		"exit_conditions": json.RawMessage(`[]`), "budget_share": 1.0, "status": "active",
+	}); err != nil {
+		return Run{}, 0, err
+	}
+	var sessionCreatedAt time.Time
+	if err = tx.QueryRow(ctx, `SELECT created_at FROM research_session WHERE id=$1::uuid AND workspace_id=$2::uuid`, runID, in.WorkspaceID).Scan(&sessionCreatedAt); err != nil {
+		return Run{}, 0, err
+	}
+	if err = ensureSessionPolicyStateTx(ctx, tx, in.WorkspaceID, runID); err != nil {
+		return Run{}, 0, err
+	}
+	if err = registerRunSessionArtifactTx(ctx, tx, in.WorkspaceID, runID, sessionCreatedAt); err != nil {
+		return Run{}, 0, err
+	}
+	if err = registerInitialContractRevisionArtifactTx(ctx, tx, in.WorkspaceID, runID); err != nil {
 		return Run{}, 0, err
 	}
 	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap", "user", in.CreatedBy, map[string]any{

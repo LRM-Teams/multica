@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -134,8 +135,15 @@ func (s *PostgresStore) executeV6CreateBranchAction(ctx context.Context, proposa
 		return ErrWorkItemChanged
 	}
 	branchID := uuid.NewString()
-	if _, err = tx.Exec(ctx, `INSERT INTO research_branch(id,workspace_id,session_id,parent_branch_id,objective,entry_conditions,exit_conditions,budget_share,status,goal_version,scope,state_version,created_by_director_cycle_id)
-		VALUES($1::uuid,$2::uuid,$3::uuid,NULLIF($4,'')::uuid,$5,'[]'::jsonb,'[]'::jsonb,$6,'active',$7,$8::jsonb,1,$9::uuid)`, branchID, proposal.WorkspaceID, proposal.RunID, payload.ParentBranchID, payload.Objective, payload.BudgetShare, goalVersion, normalizedV6JSON(payload.Scope, `{}`), cycleID); err != nil {
+	createdAt := time.Now().UTC()
+	if _, err = tx.Exec(ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,parent_branch_id,objective,entry_conditions,exit_conditions,budget_share,status,goal_version,scope,state_version,created_by_director_cycle_id,created_at,updated_at)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'director:'||$1::text,NULLIF($4,'')::uuid,$5,'[]'::jsonb,'[]'::jsonb,$6,'active',$7,$8::jsonb,1,$9::uuid,$10,$10)`, branchID, proposal.WorkspaceID, proposal.RunID, payload.ParentBranchID, payload.Objective, payload.BudgetShare, goalVersion, normalizedV6JSON(payload.Scope, `{}`), cycleID, createdAt); err != nil {
+		return err
+	}
+	if err = registerV6BranchArtifactTx(ctx, tx, proposal.WorkspaceID, proposal.RunID, branchID, createdAt, int32(goalVersion), map[string]any{
+		"parent_branch_id": payload.ParentBranchID, "objective": payload.Objective, "entry_conditions": json.RawMessage(`[]`),
+		"exit_conditions": json.RawMessage(`[]`), "budget_share": payload.BudgetShare, "status": "active",
+	}); err != nil {
 		return err
 	}
 	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_branch_created", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"action_id": action.ActionID, "branch_id": branchID}); err != nil {

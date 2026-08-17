@@ -39,6 +39,18 @@ func TestBootstrapV6TransactionRecovery(t *testing.T) {
 				if count := countSessions(); count != 1 {
 					t.Fatalf("V6 session count=%d want 1", count)
 				}
+				var branchKey string
+				if err := run.pool.QueryRow(run.ctx, `
+					SELECT client_key FROM research_branch
+					WHERE workspace_id = $1::uuid AND session_id = (
+						SELECT id FROM research_session WHERE workspace_id = $1::uuid AND title = $2 AND orchestrator_version = $3
+					)
+				`, run.fixture.workspaceID, title, OrchestratorVersionV6).Scan(&branchKey); err != nil {
+					t.Fatal(err)
+				}
+				if branchKey != "root" {
+					t.Fatalf("V6 root branch client_key=%q", branchKey)
+				}
 			},
 			recover: func() error {
 				if countSessions() == 1 {

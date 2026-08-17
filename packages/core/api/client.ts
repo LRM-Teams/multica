@@ -5186,24 +5186,24 @@ export class ApiClient {
     runId: string,
     fromSequenceExclusive: number,
   ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6DeltaStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6Delta } = await import("../research-v6/schemas");
     const raw = await this.fetch(
       `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
     );
     if (raw == null) return null;
-    return parseResearchV6DeltaStrict(raw);
+    return parseResearchV6Delta(raw);
   }
 
   async resumeResearchV6Projection(
     runId: string,
     lastConfirmedSequence: number,
   ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdictStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
       method: "POST",
       body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
     });
-    return parseResearchV6ResumeVerdictStrict(raw);
+    return parseResearchV6ResumeVerdict(raw);
   }
 
   // ---- Ronaldo / Director V6 Projection (authoritative unreleased contract) ----

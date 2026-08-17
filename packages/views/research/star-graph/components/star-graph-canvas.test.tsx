@@ -188,6 +188,34 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(onSelectNode).not.toHaveBeenCalled();
   });
 
+  it("delegates expandable nodes to the server-backed one-layer toggle", () => {
+    const onSelectNode = vi.fn();
+    const onOpenNode = vi.fn();
+    const onToggleNode = vi.fn();
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        onSelectNode={onSelectNode}
+        onOpenNode={onOpenNode}
+        expansionControl={{
+          expandableNodeIds: new Set(["stable-a"]),
+          expandedNodeIds: new Set(),
+          loadingNodeIds: new Set(["stable-a"]),
+          onToggleNode,
+        }}
+      />,
+    );
+
+    const node = screen.getByRole("button", { name: /Stable A/ });
+    expect(node).toHaveAttribute("aria-expanded", "false");
+    expect(node).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(node);
+
+    expect(onSelectNode).toHaveBeenCalledWith("stable-a");
+    expect(onToggleNode).toHaveBeenCalledWith("stable-a");
+    expect(onOpenNode).not.toHaveBeenCalled();
+  });
+
   it("degrades safely for an empty graph", () => {
     render(
       <StarGraphCanvas

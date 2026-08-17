@@ -64,6 +64,8 @@ export interface StarGraphNodeProps {
   tabIndex?: number;
   /** Explicitly busy (spinner/pulse). */
   busy?: boolean;
+  /** Server-backed disclosure state; omitted for ordinary graph nodes. */
+  expanded?: boolean;
   /** Grid position on the canvas (left/top in % or px). Optional. */
   style?: React.CSSProperties;
   onOpen?: () => void;
@@ -85,6 +87,7 @@ export function StarGraphNode({
   metrics,
   metricText,
   busy,
+  expanded,
   accessibleName,
   tabIndex,
   style,
@@ -121,6 +124,8 @@ export function StarGraphNode({
       data-node-id={nodeId}
       tabIndex={tabIndex}
       aria-label={readable}
+      aria-busy={busy || undefined}
+      aria-expanded={expanded}
       onClick={onOpen}
       data-tier={tier}
       data-state={state}

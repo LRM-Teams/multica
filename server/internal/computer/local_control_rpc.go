@@ -344,6 +344,22 @@ type localControlCodedError interface {
 	ControlCode() string
 }
 
+type localControlErrorWithCode struct {
+	code string
+	err  error
+}
+
+func (err localControlErrorWithCode) Error() string       { return err.err.Error() }
+func (err localControlErrorWithCode) Unwrap() error       { return err.err }
+func (err localControlErrorWithCode) ControlCode() string { return err.code }
+
+func withLocalControlCode(code string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return localControlErrorWithCode{code: code, err: err}
+}
+
 func localControlError(err error) (string, string) {
 	code := "operation_failed"
 	var coded localControlCodedError

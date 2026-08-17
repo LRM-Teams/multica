@@ -212,7 +212,11 @@ func (control *HostControl) rpcPrepareUpgrade(ctx context.Context, headers map[s
 	if control.callbacks.PrepareUpgrade == nil {
 		return nil, errors.New("Binding child control payload rejected")
 	}
-	return control.callbacks.PrepareUpgrade(ctx, request.Identity, request.Payload)
+	_, err := control.callbacks.PrepareUpgrade(ctx, request.Identity, request.Payload)
+	if errors.Is(err, ErrComputerControlBusy) {
+		return nil, withLocalControlCode(bindingChildControlBusyCode, err)
+	}
+	return nil, err
 }
 
 func (control *HostControl) rpcRuntimeSet(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {

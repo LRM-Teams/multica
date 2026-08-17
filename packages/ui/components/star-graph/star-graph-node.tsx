@@ -48,6 +48,8 @@ export interface StarGraphNodeProps {
   subLabel?: string;
   /** Short tier header (e.g. "MASTER SYNTHESIS", "STABLE RESULT"). */
   headerLabel?: string;
+  /** Canonical role marker; intentionally independent from the visual tier. */
+  semanticRole?: "goal";
   /** S-tier agent badge (e.g. "A1"). Only rendered for tier `s`. */
   agentBadge?: string;
   /** S-tier body treatment. `point` keeps text in the accessible name only. */
@@ -90,6 +92,7 @@ export function StarGraphNode({
   title,
   subLabel,
   headerLabel,
+  semanticRole,
   agentBadge,
   sTierPresentation = "label",
   metrics,
@@ -141,6 +144,7 @@ export function StarGraphNode({
       aria-invalid={invalid || undefined}
       onClick={onOpen}
       data-tier={tier}
+      data-semantic-role={semanticRole}
       data-state={state}
       data-presentation={rendersAsPoint ? "point" : "label"}
       data-testid="star-graph-node"

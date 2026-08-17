@@ -132,6 +132,7 @@ export function ResearchListPage() {
     null,
   );
   const lastCreateErrorRef = useRef<string | null>(null);
+  const createRequestIdRef = useRef<string | null>(null);
 
   const {
     goal,
@@ -210,11 +211,15 @@ export function ResearchListPage() {
           language: params.language,
           source_weights: params.source_weights,
           ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
+          ...(createRequestIdRef.current
+            ? { client_request_id: createRequestIdRef.current }
+            : {}),
         },
         wsId,
       );
     },
     onSuccess: (res) => {
+      createRequestIdRef.current = null;
       // Seed snapshot from kickoff payload so the session page paints a busy graph
       // without waiting on the first GET / WS round-trip.
       qc.setQueryData(researchKeys.snapshot(wsId, res.session.id), {
@@ -407,6 +412,8 @@ export function ResearchListPage() {
       params: result.params,
     }));
     lastCreateParamsRef.current = result.params;
+    // A fresh submit is a new intent; retryCreate deliberately keeps this key.
+    createRequestIdRef.current = crypto.randomUUID();
     create.mutate(result.params);
   };
 

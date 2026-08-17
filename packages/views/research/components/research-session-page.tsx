@@ -1165,7 +1165,15 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                     selectedDirectorReference?.stable_id ===
                     `${selectedDirectorProjectionNode.canonical_ref.kind}:${selectedDirectorProjectionNode.canonical_ref.id}`
                   }
+                  projectionNodeById={
+                    directorCanvas.canvas?.projectionNodeById ?? new Map()
+                  }
                   onRetry={() => void directorNodeDetail.refetch()}
+                  onFocusNode={(nodeId) => {
+                    if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;
+                    handleD5LensChange("relations");
+                    selectSessionCanvasNode(sessionId, nodeId);
+                  }}
                   onReference={() => {
                     const reference = researchV6DirectorSelectedRefFromNode(
                       selectedDirectorProjectionNode,

@@ -23,6 +23,7 @@ import type {
 } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { useWS } from "@multica/core/realtime";
 import type { WSEventType } from "@multica/core/types/events";
 import {
@@ -118,6 +119,7 @@ import {
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchDirectorChatHeader } from "./research-director-chat-header";
+import { ResearchDirectorAssignmentPicker } from "./research-director-assignment-picker";
 import { ResearchCanvasChangeCard, isCanvasChangeProcessMessage } from "./research-canvas-change-card";
 import { ResearchChatCard } from "./research-chat-card";
 import {
@@ -227,6 +229,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchPresenceOptions(wsId, sessionId),
   );
   const presence = presenceData ?? {};
+  const { data: workspaceAgents = [] } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: Boolean(wsId && data?.run?.run.orchestrator_version === "research-run-v6"),
+  });
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const {
     data: typedGraphPages,
@@ -399,6 +405,19 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const [selectedDirectorReportId, setSelectedDirectorReportId] = useState<
     string | null
   >(null);
+  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(null);
+  const directorAssignment = useMutation({
+    mutationFn: ({ agentId, reason }: { agentId: string; reason: string }) =>
+      api.replaceResearchV6Director(wsId, sessionId, {
+        directorAgentId: agentId,
+        expectedStateVersion: data?.run?.run.state_version ?? 0,
+        reason,
+        clientRequestId: crypto.randomUUID(),
+      }),
+    onSuccess: (assignment) => {
+      if (assignment) setAssignedDirectorAgentId(assignment.directorAgentId);
+    },
+  });
   const directorReports = useQuery({
     ...researchV6DirectorReportsOptions(directorTransport, wsId, sessionId),
     enabled: directorV6Enabled,
@@ -1222,20 +1241,25 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             <ResearchDirectorChatHeader
               director={directorMember}
               fallbackName={
-                directorV6Enabled
-                  ? t(($) => $.d5.rail.director_ronaldo)
-                  : undefined
+                undefined
               }
               activity={
                 directorMember
                   ? presence[directorMember.agent_id]?.activity
-                  : directorV6Enabled && session.status === "running"
-                    ? t(($) => $.d5.rail.director_active)
-                    : null
+                  : null
               }
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}
             />
+            {directorV6Enabled ? (
+              <ResearchDirectorAssignmentPicker
+                agents={workspaceAgents}
+                currentAgentId={assignedDirectorAgentId}
+                pending={directorAssignment.isPending}
+                error={directorAssignment.error instanceof Error ? directorAssignment.error.message : null}
+                onAssign={(agentId, reason) => directorAssignment.mutate({ agentId, reason })}
+              />
+            ) : null}
             {!directorV6Enabled ? (
               <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
                 {t(($) => $.panel.fleet)}:{" "}

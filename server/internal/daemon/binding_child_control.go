@@ -32,7 +32,7 @@ func (client *bindingHostControlClient) recordLifecycleDiagnostic(ctx context.Co
 }
 
 func (client *bindingHostControlClient) forwardMachineActions(ctx context.Context, ack HeartbeatResponse) error {
-	return client.client.ForwardMachineActions(ctx, ack)
+	return client.client.ForwardComputerControl(ctx, ack)
 }
 
 // handleComputerControlCommand is the Raft 1.0.16 child callback: the

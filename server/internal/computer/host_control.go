@@ -168,7 +168,7 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 		return nil, control.callbacks.Diagnostic(ctx, request.Identity, request.WorkspaceID, request.Event)
 	})
 	register(LocalControlRunnerStatusOperation, control.rpcRawCallback(registry, LocalControlRunnerStatusOperation, control.callbacks.LifecycleDiagnostic))
-	register(LocalControlRunnerAttestationOperation, control.rpcRawCallback(registry, LocalControlRunnerAttestationOperation, control.callbacks.MachineActions))
+	register(LocalControlComputerControlOperation, control.rpcRawCallback(registry, LocalControlComputerControlOperation, control.callbacks.MachineActions))
 	register(LocalControlRunnerPrepareOperation, control.rpcPrepareUpgrade)
 	register(LocalControlRunnerReadyOperation, control.rpcRuntimeSet)
 }
@@ -610,7 +610,7 @@ func (client *HostControlClient) RecordLifecycleDiagnostic(ctx context.Context, 
 	return client.postRaw(ctx, bindingChildLifecycleDiagnosticPath, transition)
 }
 
-func (client *HostControlClient) ForwardMachineActions(ctx context.Context, actions any) error {
+func (client *HostControlClient) ForwardComputerControl(ctx context.Context, actions any) error {
 	return client.postRaw(ctx, bindingChildMachineActionsPath, actions)
 }
 

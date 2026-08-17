@@ -155,7 +155,7 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}}, "runtime-token", time.Now().Add(time.Hour).Format(time.RFC3339Nano)); err != nil {
 		t.Fatalf("report Runtime set: %v", err)
 	}
-	if err := hostClient.ForwardMachineActions(context.Background(), protocol.DaemonHeartbeatAckPayload{
+	if err := hostClient.ForwardComputerControl(context.Background(), protocol.DaemonHeartbeatAckPayload{
 		RuntimeID:             "runtime-a",
 		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v1.0.0"},
 	}); err != nil {

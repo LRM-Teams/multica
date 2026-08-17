@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -25,9 +24,6 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 	}
 	register(LocalControlServiceStatusOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
 		return host.processHealthResult(state), nil
-	})
-	register(LocalControlMachineAttestationOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
-		return host.processAttestationResult(state), nil
 	})
 	register(LocalControlRestartServiceOperation, func(_ context.Context, headers map[string]string, _ json.RawMessage) (any, error) {
 		if !host.authorizeLocal(headers) {
@@ -102,13 +98,6 @@ func (host *Host) processHealthResult(state *hostProcessState) map[string]any {
 		status = "running"
 	}
 	return map[string]any{"status": status, "pid": os.Getpid(), "os": runtime.GOOS, "uptime": time.Since(started).Truncate(time.Second).String(), "computer_id": identity.ComputerID, "computer_generation": identity.ComputerGeneration, "environment": identity.Environment, "cli_version": identity.Version, "connected": ready && len(desired) > 0, "workspaces": desired}
-}
-
-func (host *Host) processAttestationResult(state *hostProcessState) MachineAttestation {
-	state.mu.RLock()
-	identity, started, workspaces := state.identity, state.startedAt, append([]string(nil), state.desired...)
-	state.mu.RUnlock()
-	return MachineAttestation{ComputerVersion: identity.Version, ServiceGeneration: fmt.Sprintf("computer-%d", identity.ComputerGeneration), ComputerGeneration: identity.ComputerGeneration, ServicePID: os.Getpid(), ManagedWorkspaceIDs: workspaces, ManagedSetRevision: started.UTC().Format(time.RFC3339Nano) + ":" + strings.Join(workspaces, ","), SourceServicePID: identity.MachineAttestationFrom}
 }
 
 func (host *Host) authorizeLocal(headers map[string]string) bool {

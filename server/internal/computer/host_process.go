@@ -150,7 +150,6 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	mux := http.NewServeMux()
 	host.RegisterRoutes(mux)
 	mux.HandleFunc("/health", host.processHealthHandler(state))
-	mux.HandleFunc(MachineAttestationPath, host.processAttestationHandler(state))
 	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
 	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
 	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
@@ -333,29 +332,6 @@ func (host *Host) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID st
 		if err := logger.Record(event); err != nil && host.logger != nil {
 			host.logger.Warn("Computer could not aggregate Binding diagnostic", "workspace_id", workspaceID, "error", err)
 		}
-	}
-}
-
-func (host *Host) processAttestationHandler(state *hostProcessState) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		state.mu.RLock()
-		identity := state.identity
-		startedAt := state.startedAt
-		workspaceIDs := append([]string(nil), state.desired...)
-		state.mu.RUnlock()
-		attestation := MachineAttestation{
-			ComputerVersion: identity.Version, ServiceGeneration: fmt.Sprintf("computer-%d", identity.ComputerGeneration),
-			ComputerGeneration: identity.ComputerGeneration, ServicePID: os.Getpid(),
-			ManagedWorkspaceIDs: workspaceIDs,
-			ManagedSetRevision:  startedAt.UTC().Format(time.RFC3339Nano) + ":" + strings.Join(workspaceIDs, ","),
-			SourceServicePID:    identity.MachineAttestationFrom,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(attestation)
 	}
 }
 

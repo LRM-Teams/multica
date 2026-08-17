@@ -16,7 +16,6 @@ import (
 const localControlMaxFrame = 1 << 20
 
 const (
-	LocalControlMachineAttestationOperation   = "machine:attestation"
 	LocalControlRestartServiceOperation       = "service:restart"
 	LocalControlUpgradeStartOperation         = "upgrade:start"
 	LocalControlUpgradeStatusOperation        = "upgrade:status"
@@ -25,7 +24,7 @@ const (
 	LocalControlWorkspaceEnvironmentOperation = "workspace:environment"
 	LocalControlWorkspaceCapacityOperation    = "workspace:capacity"
 	LocalControlWorkspaceDiagnosticsOperation = "workspace:diagnostics"
-	LocalControlRunnerAttestationOperation    = "runner:attestation"
+	LocalControlComputerControlOperation      = "computer:control"
 	LocalControlRunnerStatusOperation         = "runner:status"
 	LocalControlRunnerReadyOperation          = "runner:ready"
 	LocalControlRunnerDrainOperation          = "runner:drain"
@@ -38,13 +37,13 @@ type localControlOperationSpec struct {
 }
 
 var localControlOperationSpecs = []localControlOperationSpec{
-	{Name: LocalControlMachineAttestationOperation}, {Name: LocalControlRestartServiceOperation}, {Name: LocalControlUpgradeStartOperation},
+	{Name: LocalControlRestartServiceOperation}, {Name: LocalControlUpgradeStartOperation},
 	{Name: LocalControlUpgradeStatusOperation}, {Name: LocalControlUpgradeCancelOperation}, {Name: LocalControlServiceStatusOperation},
 	{Name: "service:start"}, {Name: "service:stop"}, {Name: "service:diagnostics"},
 	{Name: "workspace:list"}, {Name: "workspace:status"}, {Name: "workspace:start"},
 	{Name: "workspace:stop"}, {Name: "workspace:restart"}, {Name: "workspace:attach"},
 	{Name: "workspace:detach"}, {Name: LocalControlWorkspaceEnvironmentOperation}, {Name: LocalControlWorkspaceCapacityOperation},
-	{Name: LocalControlWorkspaceDiagnosticsOperation}, {Name: LocalControlRunnerAttestationOperation}, {Name: LocalControlRunnerStatusOperation},
+	{Name: LocalControlWorkspaceDiagnosticsOperation}, {Name: LocalControlComputerControlOperation}, {Name: LocalControlRunnerStatusOperation},
 	{Name: "runner:start"}, {Name: "runner:stop"}, {Name: "runner:restart"},
 	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: LocalControlRunnerReadyOperation},
 	{Name: LocalControlRunnerPrepareOperation},
@@ -68,7 +67,7 @@ func localControlOperationForPath(path string) string {
 	case bindingChildLifecycleDiagnosticPath:
 		return LocalControlRunnerStatusOperation
 	case bindingChildMachineActionsPath:
-		return LocalControlRunnerAttestationOperation
+		return LocalControlComputerControlOperation
 	case bindingChildPrepareUpgradePath:
 		return LocalControlRunnerPrepareOperation
 	case BindingPrepareMachineUpgradePath:

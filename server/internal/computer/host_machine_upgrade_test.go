@@ -365,7 +365,7 @@ func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 	})
 
 	client := NewHostControlClient(endpoint, "owner-secret", identity)
-	err := client.ForwardMachineActions(context.Background(), protocol.DaemonHeartbeatAckPayload{
+	err := client.ForwardComputerControl(context.Background(), protocol.DaemonHeartbeatAckPayload{
 		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-b", TargetVersion: "v10.0.0"},
 	})
 	if !errors.Is(err, ErrComputerControlBusy) {

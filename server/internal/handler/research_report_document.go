@@ -31,10 +31,12 @@ func (h *Handler) researchReportSandboxURL(reportID, packageHash string) (string
 	if err != nil || len(ancestors) == 0 {
 		return "", fmt.Errorf("report frame policy unavailable")
 	}
-	for _, ancestor := range ancestors {
-		if strings.EqualFold(ancestor, base.Scheme+"://"+base.Host) {
-			return "", fmt.Errorf("report origin must be isolated from application origins")
-		}
+	applicationOrigins := append([]string(nil), ancestors...)
+	if strings.TrimSpace(h.cfg.PublicURL) != "" {
+		applicationOrigins = append(applicationOrigins, h.cfg.PublicURL)
+	}
+	if !researchrun.ValidateV6ReportOrigin(h.cfg.ResearchReportOrigin, applicationOrigins) {
+		return "", fmt.Errorf("report origin must be isolated from application origins")
 	}
 	exp := time.Now().Add(5 * time.Minute).Unix()
 	base.Path = "/research/" + reportID + "/" + packageHash + "/index.html"

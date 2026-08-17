@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { Button } from "@multica/ui/components/ui/button";
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, ShieldCheck } from "lucide-react";
 import { useT } from "../../i18n/use-t";
 import { validateResearchV6ReportSandboxUrl } from "../lib/research-v6-report-sandbox";
 
@@ -19,6 +19,17 @@ export interface ResearchV6ReportSandboxDocument {
   packageHash: string;
   sandboxUrl: string;
   plainTextFallback: string;
+  revision?: number;
+  status?: string;
+  inputCount?: number;
+}
+
+export interface ResearchV6ReportHistoryItem {
+  id: string;
+  revision: number;
+  status: string;
+  title: string;
+  publishedAt?: string | null;
 }
 
 type FramePhase = "idle" | "loading" | "ready" | "unavailable";
@@ -29,6 +40,10 @@ export function ResearchV6ReportModal({
   appOrigin,
   onOpenChange,
   onRequestFreshCapability,
+  history = [],
+  onSelectReport,
+  selectedReportId,
+  loading = false,
   loadTimeoutMs = 15_000,
 }: {
   open: boolean;
@@ -36,6 +51,10 @@ export function ResearchV6ReportModal({
   appOrigin: string;
   onOpenChange: (open: boolean) => void;
   onRequestFreshCapability?: () => void;
+  history?: readonly ResearchV6ReportHistoryItem[];
+  onSelectReport?: (reportId: string) => void;
+  selectedReportId?: string | null;
+  loading?: boolean;
   loadTimeoutMs?: number;
 }) {
   const { t } = useT("research");
@@ -47,11 +66,14 @@ export function ResearchV6ReportModal({
     open ? "open" : "closed",
     report?.id ?? "missing",
     report?.packageHash ?? "missing",
+    loading ? "fetching" : "settled",
     verdict.ok ? verdict.url : verdict.reason,
   ].join(":");
   const initialPhase: FramePhase = !open
     ? "idle"
-    : verdict.ok
+    : loading
+      ? "loading"
+      : verdict.ok
       ? "loading"
       : "unavailable";
   const [frameState, setFrameState] = useState<{
@@ -73,6 +95,30 @@ export function ResearchV6ReportModal({
     return () => globalThis.clearTimeout(timer);
   }, [frameIdentity, frameUrl, loadTimeoutMs, phase]);
 
+  useEffect(() => {
+    if (!frameUrl || (phase !== "loading" && phase !== "ready")) return;
+    const PerformanceObserverType = globalThis.PerformanceObserver;
+    if (!PerformanceObserverType) return;
+    let blockedDuration = 0;
+    let longTaskCount = 0;
+    const observer = new PerformanceObserverType((list) => {
+      for (const entry of list.getEntries()) {
+        blockedDuration += entry.duration;
+        longTaskCount += 1;
+      }
+      if (blockedDuration >= 2_500 || longTaskCount >= 8) {
+        observer.disconnect();
+        setFrameState({ identity: frameIdentity, phase: "unavailable" });
+      }
+    });
+    try {
+      observer.observe({ entryTypes: ["longtask"] });
+    } catch {
+      observer.disconnect();
+    }
+    return () => observer.disconnect();
+  }, [frameIdentity, frameUrl, phase]);
+
   const unavailable = phase === "unavailable";
   const fallback = report?.plainTextFallback.trim() ?? "";
 
@@ -83,13 +129,54 @@ export function ResearchV6ReportModal({
         data-testid="research-v6-report-modal"
       >
         <DialogHeader className="shrink-0 border-b border-border/70 bg-card px-4 py-3 text-left sm:px-5">
-          <DialogTitle className="truncate pr-8 text-base sm:text-lg">
-            {report?.title || t(($) => $.d5.report_sandbox.title)}
-          </DialogTitle>
-          <DialogDescription className="truncate text-[11px]">
-            {t(($) => $.d5.report_sandbox.isolated_document)}
-            {report?.packageHash ? ` · ${report.packageHash}` : ""}
-          </DialogDescription>
+          <div className="flex min-w-0 items-start justify-between gap-4 pr-8">
+            <div className="min-w-0">
+              <DialogTitle className="truncate text-base sm:text-lg">
+                {report?.title || t(($) => $.d5.report_sandbox.title)}
+              </DialogTitle>
+              <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5 truncate text-[11px]">
+                <ShieldCheck className="size-3 shrink-0 text-success" aria-hidden="true" />
+                <span className="truncate">
+                  {t(($) => $.d5.report_sandbox.isolated_document)}
+                  {report?.packageHash ? ` · ${report.packageHash}` : ""}
+                </span>
+              </DialogDescription>
+              {report?.revision || report?.status || report?.inputCount != null ? (
+                <p className="mt-1.5 truncate text-[10px] text-muted-foreground">
+                  {report.revision
+                    ? t(($) => $.d5.report_sandbox.revision_label, {
+                        revision: report.revision,
+                      })
+                    : null}
+                  {report.status ? ` · ${report.status}` : ""}
+                  {report.inputCount != null
+                    ? ` · ${t(($) => $.d5.report_sandbox.input_count, {
+                        count: report.inputCount,
+                      }))}`
+                    : ""}
+                </p>
+              ) : null}
+            </div>
+            {history.length > 1 && onSelectReport ? (
+              <label className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
+                <span>{t(($) => $.d5.report_sandbox.revision_history)}</span>
+                <select
+                  className="h-8 max-w-48 rounded-lg border border-border bg-background px-2 text-xs text-foreground"
+                  value={selectedReportId ?? report?.id ?? ""}
+                  onChange={(event) => onSelectReport(event.target.value)}
+                >
+                  {history.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {t(($) => $.d5.report_sandbox.revision_option, {
+                        revision: item.revision,
+                        status: item.status,
+                      })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
         </DialogHeader>
 
         <div className="relative min-h-0 flex-1 bg-background">

@@ -190,6 +190,8 @@ func TestStopWhenNotRunning(t *testing.T) {
 
 func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SHUTDOWN_SOURCE", "")
+	t.Setenv("MULTICA_SHUTDOWN_ACTION", "")
 	lc := &Lifecycle{}
 
 	if err := os.MkdirAll(filepath.Dir(PIDPath("")), 0o755); err != nil {
@@ -210,7 +212,11 @@ func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restore := setRequestShutdown(func(int) error { return nil })
+	var shutdown ShutdownRequest
+	restore := setRequestShutdown(func(_ int, audit ShutdownRequest) error {
+		shutdown = audit
+		return nil
+	})
 	defer restore()
 
 	res := lc.Stop()
@@ -226,6 +232,9 @@ func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("Stop returned error: %v", res.Err)
 	}
+	if shutdown.Source != "cli" || shutdown.Action != "stop" || shutdown.RequestPID != os.Getpid() {
+		t.Fatalf("shutdown audit = %+v", shutdown)
+	}
 	if _, err := os.Stat(PIDPath("")); !os.IsNotExist(err) {
 		t.Fatalf("Stop did not clear the PID file: %v", err)
 	}
@@ -233,12 +242,18 @@ func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 
 func TestRestartDoesNotStartSuccessorUntilResidentStopIsProven(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SHUTDOWN_SOURCE", "")
+	t.Setenv("MULTICA_SHUTDOWN_ACTION", "")
 	lc := &Lifecycle{}
 	lc.Probe = func(context.Context, int) map[string]any {
 		return map[string]any{"status": "running", "pid": float64(os.Getpid())}
 	}
 	lc.Sleep = func(time.Duration) {}
-	restoreShutdown := setRequestShutdown(func(int) error { return nil })
+	var shutdown ShutdownRequest
+	restoreShutdown := setRequestShutdown(func(_ int, audit ShutdownRequest) error {
+		shutdown = audit
+		return nil
+	})
 	defer restoreShutdown()
 	spawnCalls := 0
 	restoreSpawn := setSpawnResident(func(string, []string, *os.File) (procHandle, error) {
@@ -253,6 +268,9 @@ func TestRestartDoesNotStartSuccessorUntilResidentStopIsProven(t *testing.T) {
 	}
 	if spawnCalls != 0 {
 		t.Fatalf("Restart spawned %d successors before stop proof", spawnCalls)
+	}
+	if shutdown.Action != "restart" {
+		t.Fatalf("shutdown action = %q, want restart", shutdown.Action)
 	}
 }
 
@@ -285,7 +303,7 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 	}
 	lc.Sleep = func(time.Duration) {}
 
-	restore := setRequestShutdown(func(int) error { return os.ErrClosed })
+	restore := setRequestShutdown(func(int, ShutdownRequest) error { return os.ErrClosed })
 	defer restore()
 
 	res := lc.Stop()
@@ -340,7 +358,7 @@ func TestStartBackgroundRejectsAmbiguousIdentityBeforeSpawning(t *testing.T) {
 }
 
 // setRequestShutdown temporarily replaces the graceful-shutdown transport.
-func setRequestShutdown(fn func(int) error) func() {
+func setRequestShutdown(fn func(int, ShutdownRequest) error) func() {
 	old := requestShutdown
 	requestShutdown = fn
 	return func() { requestShutdown = old }

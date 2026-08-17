@@ -1,17 +1,55 @@
 package computer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
+	var logs bytes.Buffer
+	host := &Host{logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	canceled := make(chan struct{})
+	state := &hostProcessState{cancel: func() { close(canceled) }}
+	handler := host.processShutdownHandler(state)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/shutdown", nil)
+	request.Header.Set(shutdownSourceHeader, "desktop")
+	request.Header.Set(shutdownActionHeader, "restart")
+	request.Header.Set(shutdownRequestPIDHeader, "8123")
+
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown handler did not cancel the Computer context")
+	}
+	got := logs.String()
+	for _, want := range []string{
+		"Computer shutdown requested",
+		"source=desktop",
+		"action=restart",
+		"request_pid=8123",
+		"remote_address=192.0.2.1:1234",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("shutdown log %q does not contain %q", got, want)
+		}
+	}
+}
 
 func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7101)}

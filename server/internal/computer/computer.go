@@ -306,6 +306,10 @@ type StopResult struct {
 // falling back to a forced kill, then waits for the port to be released and
 // clears the PID file.
 func (l *Lifecycle) Stop() StopResult {
+	return l.stop("stop")
+}
+
+func (l *Lifecycle) stop(action string) StopResult {
 	v := l.view()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -333,7 +337,16 @@ func (l *Lifecycle) Stop() StopResult {
 	// On Windows the process is spawned with DETACHED_PROCESS so it shares no
 	// console, meaning GenerateConsoleCtrlEvent can't reach it; HTTP works on
 	// both platforms and triggers the same context-cancel path as self-restart.
-	if err := requestShutdown(v.health); err != nil {
+	source := strings.TrimSpace(os.Getenv("MULTICA_SHUTDOWN_SOURCE"))
+	if source == "" {
+		source = "cli"
+	}
+	if requestedAction := strings.TrimSpace(os.Getenv("MULTICA_SHUTDOWN_ACTION")); requestedAction != "" {
+		action = requestedAction
+	}
+	if err := requestShutdown(v.health, ShutdownRequest{
+		Source: source, Action: action, RequestPID: os.Getpid(),
+	}); err != nil {
 		res.GracefulFailed = true
 		fmt.Fprintf(v.stderr, "Graceful shutdown request failed: %v — falling back to forced kill.\n", err)
 		if kerr := process.Kill(); kerr != nil {

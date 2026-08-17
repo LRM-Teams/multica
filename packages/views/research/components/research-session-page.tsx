@@ -6,7 +6,11 @@ import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
-import { researchV6DirectorNodeDetailOptions } from "@multica/core/research-v6/director-queries";
+import {
+  researchV6DirectorNodeDetailOptions,
+  researchV6DirectorReportOptions,
+  researchV6DirectorReportsOptions,
+} from "@multica/core/research-v6/director-queries";
 import {
   researchV6DirectorSelectedRefFromNode,
   researchV6DirectorSelectionIdentity,
@@ -128,6 +132,7 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
 import { ResearchV6NodeDetail } from "./research-v6-node-detail";
+import { ResearchV6ReportModal } from "./research-v6-report-modal";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -391,6 +396,30 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchSessionUiReducer,
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
+  const [selectedDirectorReportId, setSelectedDirectorReportId] = useState<
+    string | null
+  >(null);
+  const directorReports = useQuery({
+    ...researchV6DirectorReportsOptions(directorTransport, wsId, sessionId),
+    enabled: directorV6Enabled,
+  });
+  const directorReportId =
+    (selectedDirectorReportId &&
+    directorReports.data?.some((item) => item.id === selectedDirectorReportId)
+      ? selectedDirectorReportId
+      : null) ??
+    directorReports.data?.find((item) => item.status === "published")?.id ??
+    directorReports.data?.[0]?.id ??
+    null;
+  const directorReportDetail = useQuery({
+    ...researchV6DirectorReportOptions(
+      directorTransport,
+      wsId,
+      sessionId,
+      directorReportId ?? "00000000-0000-0000-0000-000000000000",
+    ),
+    enabled: directorV6Enabled && ui.deliveryOpen && Boolean(directorReportId),
+  });
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
       selectSessionCanvasNode(sessionId, node?.id ?? null);
@@ -1016,7 +1045,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         confirmPending={confirm.isPending}
         rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}
-        onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
+        onOpenDelivery={() => {
+          dispatch({ type: "setDeliveryOpen", value: true });
+          if (directorV6Enabled) void directorReports.refetch();
+        }}
         members={directorV6Enabled ? [] : fleet.members}
         sources={sources}
         pendingSubstantiveGoal={
@@ -1530,6 +1562,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           onViewReport={() => {
             dismissCompletion();
             dispatch({ type: "setDeliveryOpen", value: true });
+            if (directorV6Enabled) void directorReports.refetch();
           }}
           onNewResearch={() => {
             dismissCompletion();
@@ -1545,28 +1578,70 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
 
       {/* Portal-friendly mount: keep delivery modal outside the canvas
           `relative`/`overflow` section so it cannot collapse into a corner float. */}
-      <ResearchDeliveryDrawer
-        open={ui.deliveryOpen}
-        onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
-        report={report}
-        sources={sources}
-        titleFallback={session.title}
-        boundary={humanBoundary}
-        sessionStatus={session.status}
-        loading={
-          isFetching && deliveryContentCount(report, sources.length) <= 0
-        }
-        error={
-          isError
-            ? error instanceof Error && error.message
-              ? error.message
-              : t(($) => $.session_page.load_failed)
-            : null
-        }
-        onRetry={() => {
-          void refetch();
-        }}
-      />
+      {directorV6Enabled ? (
+        <ResearchV6ReportModal
+          open={ui.deliveryOpen}
+          onOpenChange={(open) =>
+            dispatch({ type: "setDeliveryOpen", value: open })
+          }
+          appOrigin={
+            typeof window === "undefined" ? "" : window.location.origin
+          }
+          report={
+            directorReportDetail.data
+              ? {
+                  id: directorReportDetail.data.id,
+                  title: directorReportDetail.data.title,
+                  packageHash: directorReportDetail.data.package_hash,
+                  sandboxUrl: directorReportDetail.data.sandbox_url ?? "",
+                  plainTextFallback: directorReportDetail.data.plain_text,
+                  revision: directorReportDetail.data.revision,
+                  status: directorReportDetail.data.status,
+                  inputCount:
+                    directorReports.data?.find(
+                      (item) => item.id === directorReportDetail.data.id,
+                    )?.input_count ?? directorReportDetail.data.input_refs.length,
+                }
+              : null
+          }
+          history={(directorReports.data ?? []).map((item) => ({
+            id: item.id,
+            revision: item.revision,
+            status: item.status,
+            title: item.title,
+            publishedAt: item.published_at,
+          }))}
+          onSelectReport={setSelectedDirectorReportId}
+          selectedReportId={directorReportId}
+          loading={directorReports.isLoading || directorReportDetail.isFetching}
+          onRequestFreshCapability={() => {
+            void directorReportDetail.refetch();
+          }}
+        />
+      ) : (
+        <ResearchDeliveryDrawer
+          open={ui.deliveryOpen}
+          onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
+          report={report}
+          sources={sources}
+          titleFallback={session.title}
+          boundary={humanBoundary}
+          sessionStatus={session.status}
+          loading={
+            isFetching && deliveryContentCount(report, sources.length) <= 0
+          }
+          error={
+            isError
+              ? error instanceof Error && error.message
+                ? error.message
+                : t(($) => $.session_page.load_failed)
+              : null
+          }
+          onRetry={() => {
+            void refetch();
+          }}
+        />
+      )}
     </div>
   );
 

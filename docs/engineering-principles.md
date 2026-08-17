@@ -445,14 +445,16 @@
   - **物**：migration `299_research_target_repair`；`server/internal/researchrun/repair.go`、`postgres_repair.go`；`TestFailureDispositionOnlyChoosesAllowedRepairActions`、`TestEveryDurableInboxFailureReasonResolvesToAllowedRepair`、`TestClassesWithoutLicensedRepairRecordNothing`、`TestRepairKeyIsStableAndMovesWithCanonicalIdentity`、`TestTargetRepairIsIdempotentPerCanonicalFailure`、`TestTargetRepairSplitsOnTargetConfigurationChange`、`TestRepairActionMatrixIsEnforcedByDatabaseAndMatchesExecutor`、`TestConcurrentWorkersConvergeOnOneTargetRepair`、`TestMigration299DownUpRestoresTargetRepairSchema`。
 - 本条在 schema、状态机、迁移、回放、故障注入和系统评测均见红并通过前保持 `仅文档`；实施 PR 必须逐项把约束升级为类型、唯一约束、事务或测试，并在本条记录具体装置。
 
-### 4.19 罗纳尔多分层调研 V6 — `仅文档`（设计已定，Implementation 尚未落地）
+### 4.19 罗纳尔多分层调研 V6 — `可执行`（生产激活仍由证据门禁关闭）
+
+本条已从说明性设计升级为可执行合同。装置包括：`research-run-v6.schema.json` 的固定 hash 与九 envelope strict/二次 validator；390–408 migration 的 scoped FK、append-only/version/single-successor/吸收约束；`researchTxOperation` registry 与 recovery matrix；Director Brief/Manifest/Catalog 的有界分页和持久恢复；团队 20 人确认门槛与 50 人硬上限；Projection Snapshot/Delta/Slice、重建 hash 和未知类型降级；每消息 Steering Assessment；Web/Desktop 独立 Report origin、短期 capability、CSP 与精确 iframe sandbox；`AssessV6Activation` 的逐项、带 revision 证据审计。对应实现和测试指针见 builtin `research-fleet-source-map.md`。
 
 - 完整产品语义见 [`docs/superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md)；机器载荷和跨对象约束见 [`docs/research-run-v6-contract.md`](research-run-v6-contract.md)；表、事务和恢复见 [`docs/research-run-v6-storage-contract.md`](research-run-v6-storage-contract.md)；HTTP、Realtime 和 Report origin 见 [`docs/research-run-v6-http-contract.md`](research-run-v6-http-contract.md)；文件级顺序和退出条件见 [`docs/superpowers/plans/2026-08-14-ronaldo-research-director-implementation-plan.zh-CN.md`](superpowers/plans/2026-08-14-ronaldo-research-director-implementation-plan.zh-CN.md)。实现不得从已废弃 §4.18 选择冲突行为拼成第三套协议。
 - 新 Run 由用户选择唯一 Director，初始团队只有罗纳尔多；其他 Agent 全部由 Director 动态创建和管理。Research、Match、Discussion、Integration、Director 与 Report 共用一个持久 Work Item 调度面，Agent 会话不保存 canonical progress。
 - Result/Insight 按 S/M/L/XL/XXL 压缩；promotion 需要至少两个 fresh 同级输入，assimilation 不提升等级。每个输入版本最多一个 canonical successor；已吸收节点不自动恢复，跨 Branch 只能复用 successor。每个 Branch 最多一个当前 XXL，同一 XXL 可以服务多个 Branch。
 - Director 上下文每轮从持久 Research Brief 与 Control Brief 重建；终止节点只给聚合总结。Director 不可用时进入 `awaiting_director` 并通知用户，不自动换人。每个 Run active team membership 上限 50，Research token 总量不设产品上限。
 - Report 是挂在 Goal 上的不可变 HTML 交付物，不是 graph node。JavaScript 只允许在独立 origin、`sandbox="allow-scripts"`、无同源/存储/外部网络/主应用桥接的 iframe 中运行；只有 Director 可以发布。
-- 本节在 migration、strict V6 schema、事务恢复、V1–V5 golden、Director context bound、single-successor race、大图 Projection、Web/Desktop UI、HTML sandbox 负向测试和 `AssessV6Activation` 全部通过前保持 `仅文档`，默认版本必须继续是 V5。
+- 实现存在不等于允许生产激活。migration、Schema hash、V1–V5 golden、九 envelope、恢复矩阵、single-successor race、Director context bound、50 人上限、Projection rebuild/50k S、Web/Desktop sandbox、独立 Report origin、builtin 文档和 V5 回滚演练必须各自提供稳定 evidence ID 与 revision；审计缺一即拒绝。审计本身不修改 supported decoder/default。回滚只关闭新建 V6，既有 V6 进入 paused/maintenance，禁止用 V5 decoder 读取或删除事实。
 
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 

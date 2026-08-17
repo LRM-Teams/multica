@@ -672,6 +672,29 @@ func (p *canonicalAgentRuntimePool) ensureResidentProcess(ctx context.Context, a
 	return starter.EnsureResidentProcess(ctx)
 }
 
+func (p *canonicalAgentRuntimePool) residentProviderSession(agentID, runtimeID string) string {
+	if p == nil {
+		return ""
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return ""
+	}
+	backend := slot.backend
+	slot.mu.Unlock()
+	session, ok := backend.(agent.ResidentRuntimeSession)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(session.ProviderSessionID())
+}
+
 func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string) bool {
 	if p == nil {
 		return false

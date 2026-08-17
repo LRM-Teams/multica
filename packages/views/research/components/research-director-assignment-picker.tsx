@@ -68,10 +68,10 @@ export function ResearchDirectorAssignmentPicker({
         </Button>
       </div>
       <input
-        aria-label={t(($) => $.inspector.reason)}
+        aria-label={t(($) => $.reason)}
         value={reason}
         onChange={(event) => setReason(event.target.value)}
-        placeholder={t(($) => $.inspector.reason)}
+        placeholder={t(($) => $.reason)}
         className={cn(
           "mt-2 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground",
           error && "border-destructive/70",

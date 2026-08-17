@@ -162,6 +162,18 @@ export function parseResearchV6Delta(raw: unknown): ResearchV6Delta | null {
   return result.success ? (result.data as ResearchV6Delta) : null;
 }
 
+/** HTTP boundary parser: malformed deltas degrade to an empty resync delta. */
+export function parseResearchV6DeltaStrict(raw: unknown): ResearchV6Delta {
+  return parseWithFallback(raw, ResearchV6DeltaSchema, {
+    run_id: "",
+    from_event_sequence: 0,
+    through_event_sequence: 0,
+    graph_content_hash: null,
+    nodes: [],
+    edges: [],
+  }, { endpoint: "GET research V6 projection delta" });
+}
+
 export function parseResearchV6Snapshot(raw: unknown): ResearchV6Snapshot {
   const result = ResearchV6SnapshotSchema.safeParse(raw);
   return result.success ? (result.data as ResearchV6Snapshot) : EMPTY_RESEARCH_V6_SNAPSHOT;

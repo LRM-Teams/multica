@@ -452,11 +452,7 @@ func (upgrade *hostMachineUpgrade) resolveTarget(requested, manifestBaseURL stri
 		}
 		return cli.NormalizeReleaseTag(requested), nil
 	}
-	channel, err := cli.NormalizeReleaseChannel(upgrade.config.identity.ReleaseChannel)
-	if err != nil {
-		return "", err
-	}
-	release, err := cli.FetchReleaseForChannelWithOverride(channel, manifestBaseURL)
+	release, err := cli.FetchReleaseForChannelWithOverride(upgrade.config.identity.releaseChannel(), manifestBaseURL)
 	if err != nil {
 		return "", err
 	}

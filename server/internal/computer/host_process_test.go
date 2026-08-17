@@ -148,7 +148,7 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 			Listener: listener,
 			Identity: HostProcessIdentity{
 				ComputerID: "computer-a", ComputerGeneration: 9, Environment: "test",
-				Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: upstream.URL,
+				Version: "v1.0.0", ServerURL: upstream.URL,
 			},
 			DesiredWorkspaceIDs: func() ([]string, error) { return []string{"workspace-a"}, nil },
 		})

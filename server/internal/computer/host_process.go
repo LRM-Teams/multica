@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 )
 
@@ -25,11 +26,14 @@ type HostProcessIdentity struct {
 	ComputerID             string
 	ComputerGeneration     int64
 	Environment            string
-	ReleaseChannel         string
 	Version                string
 	ServerURL              string
 	DeviceName             string
 	MachineAttestationFrom int
+}
+
+func (identity HostProcessIdentity) releaseChannel() cli.ReleaseChannel {
+	return cli.ReleaseChannelForEnvironment(cli.ServiceEnvironment(identity.Environment))
 }
 
 // HostProcessConfig is the process boundary around Host. It contains only
@@ -277,7 +281,7 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 			"daemon_id": identity.ComputerID, "computer_id": identity.ComputerID,
 			"computer_generation": identity.ComputerGeneration,
 			"device_name":         identity.DeviceName, "server_url": identity.ServerURL,
-			"environment": identity.Environment, "release_channel": identity.ReleaseChannel,
+			"environment": identity.Environment, "release_channel": identity.releaseChannel(),
 			"cli_version": identity.Version, "connected": ready && len(desired) > 0,
 			"active_task_count": int64(0), "agents": []string{}, "workspaces": workspaces,
 		})

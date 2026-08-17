@@ -17,6 +17,7 @@ vi.mock("./thread-reply-preview", () => ({
 }));
 
 const copyTextMock = vi.fn();
+const createNoteFromTextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/voice-playback", () => ({
   claimVoiceAutoplay: () => false,
@@ -31,6 +32,13 @@ vi.mock("../lib/voice-playback", () => ({
   }),
   voicePlaybackScope: (channelId: string, threadRootMessageId?: string | null) =>
     `${channelId}:${threadRootMessageId ?? "main"}`,
+}));
+
+vi.mock("../../notes/use-create-note-from-chat", () => ({
+  useCreateNoteFromChat: () => ({
+    createNoteFromText: (...args: unknown[]) => createNoteFromTextMock(...args),
+    busy: false,
+  }),
 }));
 
 // The author avatar renders an ActorProfileTrigger; on mobile it navigates to
@@ -273,6 +281,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: string;
           feishu_badge: string;
           copy_action: string;
+          create_note_action: string;
           expand_action: string;
           collapse_action: string;
           copied_toast: string;
@@ -362,6 +371,7 @@ vi.mock("../../i18n/use-t", () => ({
           feishu_badge: "Feishu",
           actions_menu: "Message actions",
           copy_action: "Copy",
+          create_note_action: "Create note",
           expand_action: "See more",
           collapse_action: "See less",
           copied_toast: "Copied",
@@ -542,6 +552,7 @@ describe("ChannelMessageBubble", () => {
 
   beforeEach(() => {
     copyTextMock.mockReset();
+    createNoteFromTextMock.mockReset();
     getActorAvatarUrlMock.mockReset();
     getActorAvatarUrlMock.mockReturnValue(null);
     getAgentHonorLevelMock.mockReset();
@@ -676,6 +687,40 @@ describe("ChannelMessageBubble", () => {
 
     // Author name: never wrap (role/time shrink first on narrow).
     expect(screen.getByText("Research Agent").className).toMatch(/whitespace-nowrap/);
+  });
+
+  it("offers create note on the hover action bar", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "Here is the data." })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+        onOpenThread={vi.fn()}
+      />,
+    );
+
+    const bar = screen.getByTestId("message-action-bar");
+    const createNote = within(bar).getByRole("button", { name: "Create note" });
+    expect(createNote).toHaveAttribute("data-testid", "message-action-create-note");
+    await user.click(createNote);
+    expect(createNoteFromTextMock).toHaveBeenCalledWith("Here is the data.");
+  });
+
+  it("hides create note when the message has no visible text", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "   " })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+      />,
+    );
+
+    expect(
+      within(screen.getByTestId("message-action-bar")).queryByRole("button", {
+        name: "Create note",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("LRM-1126: compact rows align the action bar to the first body line", () => {
@@ -869,7 +914,7 @@ describe("ChannelMessageBubble", () => {
       expect(compactBar.className).not.toMatch(/-translate-y-1\/2/);
     });
 
-    it("D2: 124x34 bar geometry — four size-7 controls, each with its own focus ring", () => {
+    it("D2: 154x34 bar geometry — five size-7 controls, each with its own focus ring", () => {
       render(
         <ChannelMessageBubble
           message={makeMessage()}
@@ -881,8 +926,8 @@ describe("ChannelMessageBubble", () => {
       );
       const bar = screen.getByTestId("message-action-bar");
       const controls = Array.from(bar.querySelectorAll("button"));
-      // 4 × 28 + 3 × 2 (gap-0.5) + 2 × 2 (p-0.5) + 2 × 1 (edge) = 124; 28+4+2 = 34.
-      expect(controls).toHaveLength(4);
+      // 5 × 28 + 4 × 2 (gap-0.5) + 2 × 2 (p-0.5) + 2 × 1 (edge) = 154; 28+4+2 = 34.
+      expect(controls).toHaveLength(5);
       expect(bar).toHaveClass("gap-0.5");
       expect(bar).toHaveClass("p-0.5");
       for (const control of controls) {
@@ -1831,6 +1876,7 @@ describe("ChannelMessageBubble", () => {
     expect(menu).toBeInTheDocument();
     expect(within(menu).getByRole("button", { name: "Add reaction" })).toBeInTheDocument();
     expect(within(menu).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Create note" })).toBeInTheDocument();
     expect(within(menu).queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
     expect(within(menu).queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
   });

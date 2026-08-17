@@ -626,6 +626,7 @@
     "more_actions": "More actions",
     "actions_menu": "Message actions",
     "copy_action": "Copy",
+    "create_note_action": "Create note",
     "expand_action": "See more",
     "collapse_action": "See less",
     "note_brief_collapsed_hint": "Expand note",

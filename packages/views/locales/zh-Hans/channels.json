@@ -626,6 +626,7 @@
     "more_actions": "更多操作",
     "actions_menu": "消息操作",
     "copy_action": "复制",
+    "create_note_action": "新建笔记",
     "expand_action": "查看更多",
     "collapse_action": "收起",
     "note_brief_collapsed_hint": "展开笔记",

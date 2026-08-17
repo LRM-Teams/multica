@@ -60,7 +60,10 @@ describe("Director V6 canvas adapter", () => {
     });
 
     expect(result.graph.nodes[0]?.level).toBe("m");
-    expect(result.graph.nodes[0]?.payload.projection_tier).toBe("FUTURE_TIER");
+    expect(
+      (result.graph.nodes[0]?.payload as { projection_tier?: string } | undefined)
+        ?.projection_tier,
+    ).toBe("FUTURE_TIER");
   });
 
   it("copies server tiers and never promotes from title or counts", () => {

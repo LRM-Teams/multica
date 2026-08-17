@@ -130,6 +130,7 @@ export interface StarGraphCanvasProps {
 
 const DEFAULT_CAMERA: StarGraphCamera = { x: 0, y: 0, zoom: 1 };
 const EMPTY_CANVAS_FILTER: ResearchCanvasFilter = emptyCanvasFilter();
+const TRANSITION_BEACON_MS = 1_600;
 
 export function StarGraphCanvas({
   model,
@@ -780,6 +781,30 @@ export function StarGraphCanvas({
   }, [bounds, viewport.height, viewport.width]);
 
   const expansionTransition = expansionControl?.transition;
+  const transitionBeaconKey = fusionTransition
+    ? `fusion:${fusionTransition.sequence}`
+    : expansionTransition
+      ? `expansion:${expansionTransition.sequence}`
+      : null;
+  const transitionBeaconLabel = fusionTransition
+    ? t(($) => $.d5.transition_beacon.fusion)
+    : expansionTransition?.kind === "expand"
+      ? t(($) => $.d5.transition_beacon.expand)
+      : expansionTransition?.kind === "collapse"
+        ? t(($) => $.d5.transition_beacon.collapse)
+        : null;
+  const [visibleTransitionKey, setVisibleTransitionKey] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!transitionBeaconKey) return;
+    setVisibleTransitionKey(transitionBeaconKey);
+    const timeout = window.setTimeout(
+      () => setVisibleTransitionKey(null),
+      TRANSITION_BEACON_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [transitionBeaconKey]);
   const expansionSequence = expansionTransition
     ? String(expansionTransition.sequence)
     : null;
@@ -816,6 +841,24 @@ export function StarGraphCanvas({
       {keyboardNav ? (
         <div className="sr-only" aria-live="polite" data-testid="star-graph-canvas-live">
           {liveText}
+        </div>
+      ) : null}
+      {transitionBeaconKey &&
+        transitionBeaconLabel &&
+        visibleTransitionKey === transitionBeaconKey ? (
+        <div
+          key={transitionBeaconKey}
+          className="sg-transition-beacon"
+          role="status"
+          aria-live="polite"
+          data-testid="star-graph-transition-beacon"
+        >
+          <span className="sg-transition-beacon-orbit" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span>{transitionBeaconLabel}</span>
         </div>
       ) : null}
       {(summaryTitle || summaryDetail || filterHiddenNote || hiddenEntityCount > 0 || onLoadMore) && (

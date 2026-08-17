@@ -406,6 +406,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     string | null
   >(null);
   const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(null);
+  const assignedDirectorAgent = workspaceAgents.find(
+    (agent) => agent.id === assignedDirectorAgentId,
+  );
   const directorAssignment = useMutation({
     mutationFn: ({ agentId, reason }: { agentId: string; reason: string }) =>
       api.replaceResearchV6Director(wsId, sessionId, {
@@ -1241,7 +1244,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             <ResearchDirectorChatHeader
               director={directorMember}
               fallbackName={
-                undefined
+                directorV6Enabled
+                  ? assignedDirectorAgent?.display_name || assignedDirectorAgent?.name
+                  : undefined
               }
               activity={
                 directorMember

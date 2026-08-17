@@ -36,6 +36,7 @@ type SlicePages = InfiniteData<ResearchV6DirectorProjectionSnapshot, string | nu
 
 export interface UseResearchV6DirectorCanvasResult {
   canvas: ResearchV6DirectorCanvasAdapterResult | null;
+  snapshotId: string | null;
   expansionControl: StarGraphExpansionControl | undefined;
   isLoading: boolean;
   isFetching: boolean;
@@ -116,12 +117,30 @@ export function useResearchV6DirectorCanvas({
             transport,
             realtimeBus,
             {
-              onInvalidateSliceKeys: (sliceKeys) =>
-                controller?.invalidateSliceKeys(sliceKeys),
+              onInvalidateSliceKeys: (sliceKeys) => {
+                controller?.invalidateSliceKeys(sliceKeys);
+                if (firstPage && sliceKeys.includes(firstPage.slice_key)) {
+                  void queryClient.invalidateQueries({
+                    queryKey: researchV6DirectorProjectionKeys.snapshot(
+                      workspaceId,
+                      runId,
+                    ),
+                  });
+                }
+              },
             },
           )
         : null,
-    [controller, realtimeBus, runId, snapshotId, transport, workspaceId],
+    [
+      controller,
+      firstPage,
+      queryClient,
+      realtimeBus,
+      runId,
+      snapshotId,
+      transport,
+      workspaceId,
+    ],
   );
   useEffect(() => {
     if (!liveController) return;
@@ -236,6 +255,8 @@ export function useResearchV6DirectorCanvas({
 
   return {
     canvas,
+    snapshotId:
+      liveController?.getClient().getState().snapshotId ?? snapshotId,
     expansionControl,
     isLoading: snapshotQuery.isLoading,
     isFetching: snapshotQuery.isFetching,

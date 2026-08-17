@@ -17,6 +17,7 @@ const (
 	BindingPrepareMachineUpgradePath    = "/computer-control/prepare-machine-upgrade"
 	BindingReleaseMachineUpgradePath    = "/computer-control/release-machine-upgrade"
 	BindingComputerUpgradePath          = "/computer-control/computer-upgrade"
+	BindingComputerUpgradeDonePath      = "/computer-control/computer-upgrade-done"
 	BindingPrepareEnvironmentSwitchPath = "/computer-control/prepare-environment-switch"
 	BindingReleaseEnvironmentSwitchPath = "/computer-control/release-environment-switch"
 	BindingReregisterRuntimePath        = "/computer-control/reregister-runtime"
@@ -71,6 +72,35 @@ func RequestBindingComputerUpgrade(ctx context.Context, controlURL, token string
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		return fmt.Errorf("Binding child machine control %s returned %s: %s", BindingComputerUpgradePath, response.Status, strings.TrimSpace(string(message)))
+	}
+	return nil
+}
+
+func RequestBindingComputerUpgradeDone(ctx context.Context, controlURL, token string, identity BindingChildIdentity, done protocol.ComputerUpgradeDonePayload) error {
+	if !validBindingChildControlURL(controlURL) || strings.TrimSpace(token) == "" || identity.Validate() != nil || done.Validate() != nil {
+		return fmt.Errorf("Binding child machine control is not configured")
+	}
+	body, err := json.Marshal(struct {
+		Identity BindingChildIdentity                `json:"identity"`
+		Done     protocol.ComputerUpgradeDonePayload `json:"done"`
+	}{Identity: identity, Done: done})
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(controlURL, "/")+BindingComputerUpgradeDonePath, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Multica-Control-Token", strings.TrimSpace(token))
+	response, err := (&http.Client{Timeout: 35 * time.Second}).Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("Binding child machine control %s returned %s: %s", BindingComputerUpgradeDonePath, response.Status, strings.TrimSpace(string(message)))
 	}
 	return nil
 }

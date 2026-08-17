@@ -96,7 +96,7 @@ func (h *Handler) dispatchComputerUpgradeToRunners(ctx context.Context, computer
 		return false
 	}
 	defer rows.Close()
-	payload := protocol.ComputerUpgradePayload{RequestID: requestID, OperationID: requestID, TargetVersion: target}
+	payload := protocol.ComputerUpgradePayload{RequestID: requestID, TargetVersion: target}
 	for rows.Next() {
 		var workspaceID pgtype.UUID
 		if err := rows.Scan(&workspaceID); err != nil {

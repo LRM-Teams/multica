@@ -54,12 +54,16 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 }
 
 func TestComputerUpgradePayloadUsesRaftRequestIdentity(t *testing.T) {
-	payload := ComputerUpgradePayload{RequestID: "upgrade-1", OperationID: "operation-1", TargetVersion: "0.4.24-alpha.59"}
+	payload := ComputerUpgradePayload{RequestID: "upgrade-1", TargetVersion: "0.4.24-alpha.59"}
 	if err := payload.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Operation() != "operation-1" {
-		t.Fatalf("Operation() = %q, want operation-1", payload.Operation())
+	wire, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), "operationId") {
+		t.Fatalf("Computer upgrade payload restored operation identity: %s", wire)
 	}
 	if err := (ComputerUpgradePayload{}).Validate(); err == nil {
 		t.Fatal("empty Computer upgrade payload was accepted")

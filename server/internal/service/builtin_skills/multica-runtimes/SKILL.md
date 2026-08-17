@@ -35,28 +35,14 @@ The chain is:
 
 Machine Upgrade is Computer-scoped. Internally, historical route and database
 fields still use `daemon` names; installed clients may also call legacy runtime-scoped HTTP update
-paths. Those are compatibility adapters over the same Computer operation and do
-not create runtime-owned update state. Startup keeps incomplete local upgrade
-journals fail-closed; only a proven later Active generation may supersede a
-retained `candidate_ready` marker, and the marker remains available for diagnosis.
-For standalone upgrades, the target first proves its exact local binary,
-PID, Computer generation, and accepted Workspace binding set. That local
-proof completes the handoff. The successor then heartbeats, registers
-runtimes, connects its WebSocket, and notifies the server that the upgrade
-completed. Heartbeat and register claim the new Computer generation. There
-is no predecessor-to-candidate cloud CAS. Runtime registration is recovery
-and convergence evidence; Runtime cardinality is not Computer takeover
-identity. A candidate rejected before the local proof cannot fence the
-incumbent and requires no remote rollback.
-
-Standalone takeover also carries a candidate-generation-bound local protocol
-marker from launcher to candidate. A v2 launcher waits for the explicit
-`takeover_ready` state. When a
-new candidate is spawned by a pre-v2 launcher, it projects the historical
-`running`/`handoff` loopback shape from the durable receipt so that launcher can
-authorize the same local proof. A v2 candidate continues into preflight,
-registration, and WebSocket after that local prepare. A pre-v2 candidate
-still waits for the incumbent loopback commit before those steps.
+paths. Those are compatibility adapters over the same Computer request and do
+not create runtime-owned update state. Before swapping the PATH binary, the
+Computer-owned executor stores the request ID plus source and target versions
+in a Raft-shaped pending marker. The successor waits for a current Binding
+socket and sends correlated `computer:upgrade:done`; a different running
+version is an explicit rollback result. A failed socket write leaves the marker
+for the next startup. There is no cloud receipt, accepted generation,
+Runtime/Workspace-set attestation, or predecessor-to-candidate cloud CAS.
 
 ## CLI
 
@@ -69,12 +55,12 @@ multica computer upgrade --target-version <version>
 
 `computer upgrade` is the only local upgrade command. It first checks the
 machine-wide resident. With a live resident, the CLI uses the saved human
-session to create the canonical server Machine Upgrade operation, then delivers
-that same operation ID through the owner-authenticated loopback surface. The
-server may concurrently deliver it over the DaemonCore WebSocket; Computer Host
-deduplicates both paths by operation ID and remains the sole owner of download,
-verification, handoff, rollback, and convergence. Host never uses a Workspace
-execution credential to create a human operation. If no resident owns the
+session to authorize and dispatch the request, then delivers that same request
+ID through the owner-authenticated loopback surface. The server may concurrently
+deliver it over the DaemonCore WebSocket; Computer Host deduplicates both paths
+by request ID and remains the sole owner of download, verification, handoff,
+rollback, and convergence. The request ID is correlation, not a cloud operation
+row. If no resident owns the
 machine, the command may swap the on-PATH Computer (`$HOME/.local/bin/multica`)
 under the machine lock; that offline result is not proof of a running successor.
 Held resident ownership
@@ -87,9 +73,9 @@ Computer owners can perform this action. A Workspace owner/admin does not gain
 lifecycle control over another person's Computer; the initiating Workspace is
 only an entry point, and every active Workspace connection observes the same
 Computer upgrade.
-Upgrade changes are projected to those Workspaces as `computer:updated`; the
-event carries only `computer_id`, and clients refetch their Workspace-scoped
-Computer projection. It is not a Runtime update event.
+Upgrade progress and completion are transient `computer:upgrade:progress` and
+`computer:upgrade:done` events correlated by request ID. Runtime version
+convergence is a UI fallback if the terminal event is lost after socket write.
 
 The resident Computer is machine-wide: it runs as one detached process and is
 controlled by the Computer lifecycle, not an OS supervisor:
@@ -100,8 +86,14 @@ multica computer stop       # stop it gracefully
 multica computer restart    # stop + start
 multica computer status     # read-only status (identity, resident, Workspace connections)
 multica computer logs       # tail the resident service log
-multica computer doctor     # read-only diagnostics (--fix only clears a confirmed-stopped stale PID)
+multica computer doctor     # read-only diagnostics; --fix cleans safe local residue and reports each mutation
 ```
+
+`multica computer doctor --fix` removes a confirmed-stopped stale resident
+PID, deletes upgrade staging older than 24 hours, and quarantines per-Binding
+coordinator state older than 24 hours when no corresponding Binding exists.
+It preserves recent state, every persisted Binding, Agent Workspaces, Binding
+credentials, Machine Upgrade journals, and advisory lock files.
 
 The service environment determines the package source: production uses stable
 packages, while test uses preview packages. Production uses `https://www.leagent.me`

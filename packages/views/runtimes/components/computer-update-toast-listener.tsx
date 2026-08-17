@@ -9,12 +9,15 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   clearComputerUpdateDismiss,
+  computerUpdateMachineKey,
   computerUpdateCandidatesFingerprint,
   computerUpdateToastContentKey,
   computerUpdateToastId,
   dismissComputerUpdate,
+  isNewerCliVersion,
   isComputerUpdateDismissed,
   listComputerUpdateCandidates,
+  runtimeCurrentVersion,
   type ComputerUpdateCandidate,
 } from "@multica/core/runtimes";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
@@ -51,6 +54,10 @@ type ToastCopy = {
   versionUnknown: string;
   progressPending: string;
   progressRunning: string;
+  progressDownloading: string;
+  progressVerifying: string;
+  progressApplying: string;
+  progressRestarting: string;
   failedGeneric: string;
   pinned: string;
   promptTitle: (name: string) => string;
@@ -59,6 +66,7 @@ type ToastCopy = {
   failedTitle: (name: string) => string;
   successTitle: (name: string) => string;
   successBody: (version: string) => string;
+  rolledBack: (version: string) => string;
 };
 
 function browserStorage(): Storage | null {
@@ -69,8 +77,6 @@ function browserStorage(): Storage | null {
     return null;
   }
 }
-
-
 
 function getOrCreateMap<K, V>(
   ref: { current: Map<K, V> | null },
@@ -98,6 +104,8 @@ export function ComputerUpdateToastListener() {
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
+  const runtimesRef = useRef(runtimes);
+  runtimesRef.current = runtimes;
 
   const localByMachineRef = useRef<Map<string, LocalPhase> | null>(null);
   const requestByMachineRef = useRef<Map<string, {
@@ -126,6 +134,14 @@ export function ComputerUpdateToastListener() {
     () => computerUpdateCandidatesFingerprint(candidates),
     [candidates],
   );
+  const runtimeVersionsFingerprint = useMemo(() => {
+    const rows = (runtimes ?? []).map(
+      (runtime) =>
+        `${computerUpdateMachineKey(runtime)}\0${runtimeCurrentVersion(runtime) ?? ""}`,
+    );
+    rows.sort();
+    return rows.join("\n");
+  }, [runtimes]);
 
   const copy = useMemo<ToastCopy>(
     () => ({
@@ -136,6 +152,10 @@ export function ComputerUpdateToastListener() {
       versionUnknown: t(($) => $.computer_update.version_unknown),
       progressPending: t(($) => $.computer_update.progress_pending),
       progressRunning: t(($) => $.computer_update.progress_running),
+      progressDownloading: t(($) => $.computer_update.progress_downloading),
+      progressVerifying: t(($) => $.computer_update.progress_verifying),
+      progressApplying: t(($) => $.computer_update.progress_applying),
+      progressRestarting: t(($) => $.computer_update.progress_restarting),
       failedGeneric: t(($) => $.computer_update.failed_generic),
       pinned: t(($) => $.computer_update.pinned),
       promptTitle: (name) =>
@@ -150,6 +170,8 @@ export function ComputerUpdateToastListener() {
         t(($) => $.computer_update.success_title, { name }),
       successBody: (version) =>
         t(($) => $.computer_update.success_body, { version }),
+      rolledBack: (version) =>
+        t(($) => $.computer_update.rolled_back, { version }),
     }),
     [t],
   );
@@ -280,6 +302,29 @@ export function ComputerUpdateToastListener() {
       };
 
       for (const [machineKey, local] of localByMachine.entries()) {
+        const versionsCaughtUp =
+          local.phase === "updating" &&
+          (runtimesRef.current ?? []).some((runtime) => {
+            if (computerUpdateMachineKey(runtime) !== machineKey) return false;
+            const currentVersion = runtimeCurrentVersion(runtime);
+            return (
+              !!currentVersion &&
+              !isNewerCliVersion(local.targetVersion, currentVersion)
+            );
+          });
+        if (versionsCaughtUp) {
+          requestByMachineRef.current?.delete(machineKey);
+          localByMachine.delete(machineKey);
+          if (storage) {
+            dismissComputerUpdate(storage, wsId, machineKey, local.targetVersion);
+          }
+          upsertToast(machineKey, "success", {
+            title: c.successTitle(local.machineTitle),
+            versionLine: c.successBody(local.targetVersion),
+            local,
+          });
+          continue;
+        }
         if (local.phase === "updating" || local.phase === "failed") {
           upsertToast(machineKey, local.phase, {
             title:
@@ -381,14 +426,13 @@ export function ComputerUpdateToastListener() {
         if (storage) {
           clearComputerUpdateDismiss(storage, wsId, candidate.machineKey);
         }
-        localByMachine.set(candidate.machineKey, {
-          phase: "updating",
-          progress: c.progressRunning,
-          targetVersion: candidate.targetVersion,
-          machineTitle: candidate.machineTitle,
-          daemonId: candidate.daemonId,
-          runtimeId: candidate.runtimeId,
-        });
+        const current = localByMachine.get(candidate.machineKey);
+        if (current?.phase === "updating" && current.progress === c.progressPending) {
+          localByMachine.set(candidate.machineKey, {
+            ...current,
+            progress: c.progressRunning,
+          });
+        }
         syncToasts(candidatesRef.current);
       } catch (err) {
         let message = c.failedGeneric;
@@ -423,10 +467,27 @@ export function ComputerUpdateToastListener() {
     if (!requests) return;
     for (const [machineKey, request] of requests) {
       if (request.daemonId !== payload.computer_id || request.requestId !== payload.requestId) continue;
+      const c = copyRef.current;
+      const progress = (() => {
+        switch (payload.phase) {
+          case "downloading":
+          case "staging":
+            return c.progressDownloading;
+          case "verifying":
+            return c.progressVerifying;
+          case "applying":
+          case "handoff":
+            return c.progressApplying;
+          case "restarting":
+            return c.progressRestarting;
+          default:
+            return c.progressRunning;
+        }
+      })();
       const localByMachine = getOrCreateMap(localByMachineRef);
       localByMachine.set(machineKey, {
         phase: "updating",
-        progress: copyRef.current.progressRunning,
+        progress,
         targetVersion: request.targetVersion,
         machineTitle: request.machineTitle,
         daemonId: request.daemonId,
@@ -448,7 +509,11 @@ export function ComputerUpdateToastListener() {
       if (!payload.ok) {
         localByMachine.set(machineKey, {
           phase: "failed",
-          error: payload.error?.trim() || copyRef.current.failedGeneric,
+          error:
+            payload.error?.trim() ||
+            (payload.rolledBack && payload.newVersion
+              ? copyRef.current.rolledBack(payload.newVersion)
+              : copyRef.current.failedGeneric),
           targetVersion: request.targetVersion,
           machineTitle: request.machineTitle,
           daemonId: request.daemonId,
@@ -484,10 +549,11 @@ export function ComputerUpdateToastListener() {
   });
 
   // Only re-sync when eligibility fingerprint or locale copy changes —
-  // not on every runtime-list array identity churn.
+  // not on every runtime-list array identity churn. Version changes are also
+  // observed because a reconnect can replace the transient upgrade-done event.
   useEffect(() => {
     syncToasts(candidatesRef.current);
-  }, [candidatesFingerprint, copy, syncToasts]);
+  }, [candidatesFingerprint, copy, runtimeVersionsFingerprint, syncToasts]);
 
   return null;
 }

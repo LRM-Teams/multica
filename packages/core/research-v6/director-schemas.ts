@@ -16,27 +16,15 @@ const hash = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 const uuid = z.string().uuid();
 const sequence = z.number().int().nonnegative();
 const timestamp = z.string().datetime({ offset: true });
+const forwardCompatibleToken = z
+  .string()
+  .min(1)
+  .max(160)
+  .regex(/^[a-z][a-z0-9_]*$/);
 
 export const ResearchV6DirectorEntityRefSchema = z
   .object({
-    kind: z.enum([
-      "goal",
-      "branch",
-      "task",
-      "attempt",
-      "work_item",
-      "agent",
-      "result",
-      "insight",
-      "discussion",
-      "dispute",
-      "integration",
-      "report",
-      "source_snapshot",
-      "observation",
-      "claim",
-      "evidence_link",
-    ]),
+    kind: forwardCompatibleToken,
     id: uuid,
     revision: z.number().int().positive().optional(),
     version_id: uuid.optional(),
@@ -46,42 +34,12 @@ export const ResearchV6DirectorEntityRefSchema = z
 
 export const ResearchV6DirectorProjectionStateSchema = z
   .object({
-    execution: z.enum([
-      "pending",
-      "running",
-      "succeeded",
-      "failed",
-      "cancelled",
-      "lost",
-    ]),
-    conclusion: z.enum([
-      "proposed",
-      "accepted",
-      "challenged",
-      "refuted",
-      "invalid",
-    ]),
-    integration: z.enum([
-      "unmatched",
-      "candidate",
-      "discussing",
-      "absorbed",
-      "excluded",
-    ]),
+    execution: forwardCompatibleToken,
+    conclusion: forwardCompatibleToken,
+    integration: forwardCompatibleToken,
     termination: z
       .object({
-        reason_code: z.enum([
-          "invalid_direction",
-          "dead_end",
-          "no_semantic_gain",
-          "duplicate",
-          "out_of_scope",
-          "stopped_by_user",
-          "stopped_by_director",
-          "resource_failure",
-          "superseded",
-          "other",
-        ]),
+        reason_code: forwardCompatibleToken,
         reason_detail: z.string().min(1).max(32_768),
       })
       .strict()
@@ -92,8 +50,8 @@ export const ResearchV6DirectorProjectionStateSchema = z
 export const ResearchV6DirectorProjectionNodeSchema = z
   .object({
     id: key,
-    kind: z.enum(["goal", "work_s", "result_s", "insight"]),
-    tier: z.enum(["GOAL", "S", "M", "L", "XL", "XXL"]),
+    kind: forwardCompatibleToken,
+    tier: z.string().min(1).max(16).regex(/^[A-Z][A-Z0-9_]*$/),
     canonical_ref: ResearchV6DirectorEntityRefSchema,
     branch_ids: z
       .array(uuid)
@@ -113,14 +71,7 @@ export const ResearchV6DirectorProjectionNodeSchema = z
 export const ResearchV6DirectorProjectionEdgeSchema = z
   .object({
     id: key,
-    kind: z.enum([
-      "derived_from",
-      "absorbed_into",
-      "produced_by",
-      "belongs_to",
-      "challenges",
-      "collapsed_path",
-    ]),
+    kind: forwardCompatibleToken,
     from_node_id: key,
     to_node_id: key,
     canonical: z.boolean(),
@@ -316,6 +267,19 @@ const EMPTY_DIRECTOR_SNAPSHOT: ResearchV6DirectorProjectionSnapshot = {
   density_bins: [],
   has_more: false,
 };
+const EMPTY_DIRECTOR_DELTA: ResearchV6DirectorProjectionDelta = {
+  contract_kind: "projection_delta", schema_version: 6, workspace_id: EMPTY_ID, run_id: EMPTY_ID,
+  snapshot_id: EMPTY_ID, event_sequence: 0, previous_projection_hash: EMPTY_HASH, projection_hash: EMPTY_HASH,
+  upsert_nodes: [], remove_node_ids: [], upsert_edges: [], remove_edge_ids: [], invalidate_slice_keys: [],
+};
+const EMPTY_DIRECTOR_NODE_DETAIL: ResearchV6DirectorNodeDetail = {
+  snapshot_id: EMPTY_ID, through_event_sequence: 0, projection_hash: EMPTY_HASH, view: "brief",
+  node: { id: "invalid-response", kind: "goal", tier: "GOAL", canonical_ref: { kind: "goal", id: EMPTY_ID }, branch_ids: [], state: { execution: "failed", conclusion: "invalid", integration: "excluded" }, catalog_summary: "Invalid response", absorbed: false, terminal: true, expandable: false, hidden_child_count: 0, updated_at: "1970-01-01T00:00:00.000Z" },
+  incoming: [], outgoing: [], history_refs: [], agent_refs: [], work_item_refs: [], attempt_refs: [], evidence_refs: [], discussion_refs: [], report_refs: [],
+};
+const EMPTY_DIRECTOR_REPORT_DETAIL: ResearchV6DirectorReportDetail = {
+  id: EMPTY_ID, revision: 1, status: "technical_failure", title: "Invalid response", summary: "", plain_text: "", package_hash: EMPTY_HASH, document_content_hash: EMPTY_HASH, outline: [], citations: [], input_refs: [], reviews: [],
+};
 
 function invalidRequest(name: string): never {
   throw new Error(`${name} failed schema validation`);
@@ -332,9 +296,9 @@ export function parseResearchV6DirectorProjectionSnapshot(
 export function parseResearchV6DirectorProjectionDelta(
   value: unknown,
 ): ResearchV6DirectorProjectionDelta {
-  return parseWithFallback(value, ResearchV6DirectorProjectionDeltaSchema, null, {
+  return parseWithFallback(value, ResearchV6DirectorProjectionDeltaSchema, EMPTY_DIRECTOR_DELTA, {
     endpoint: "Director V6 projection delta",
-  }) ?? invalidRequest("Director V6 projection delta");
+  });
 }
 
 export function parseResearchV6DirectorProjectionDeltaPage(
@@ -371,9 +335,9 @@ export function parseResearchV6DirectorProjectionSliceRequest(
 export function parseResearchV6DirectorNodeDetail(
   value: unknown,
 ): ResearchV6DirectorNodeDetail {
-  return parseWithFallback(value, ResearchV6DirectorNodeDetailSchema, null, {
+  return parseWithFallback(value, ResearchV6DirectorNodeDetailSchema, EMPTY_DIRECTOR_NODE_DETAIL, {
     endpoint: "GET Director V6 projection node detail",
-  }) ?? invalidRequest("Director V6 projection node detail response");
+  });
 }
 
 export function parseResearchV6DirectorReportList(
@@ -392,7 +356,7 @@ export function parseResearchV6DirectorReportList(
 export function parseResearchV6DirectorReportDetail(
   value: unknown,
 ): ResearchV6DirectorReportDetail {
-  return parseWithFallback(value, ResearchV6DirectorReportDetailSchema, null, {
+  return parseWithFallback(value, ResearchV6DirectorReportDetailSchema, EMPTY_DIRECTOR_REPORT_DETAIL, {
     endpoint: "GET Director V6 report detail",
-  }) ?? invalidRequest("Director V6 report detail response");
+  });
 }

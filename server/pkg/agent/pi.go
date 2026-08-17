@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -79,9 +80,9 @@ func buildPiEnv(extra map[string]string) []string {
 		agentDir = strings.TrimSpace(os.Getenv(piCodingAgentDirEnvKey))
 	}
 	if agentDir == "" {
-		home := strings.TrimSpace(extra["HOME"])
-		if home == "" {
-			home = strings.TrimSpace(os.Getenv("HOME"))
+		home := ""
+		if currentUser, err := user.Current(); err == nil {
+			home = strings.TrimSpace(currentUser.HomeDir)
 		}
 		if home == "" {
 			home, _ = os.UserHomeDir()

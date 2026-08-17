@@ -51,6 +51,18 @@ function edge(
 }
 
 describe("Director V6 canvas adapter", () => {
+  it("degrades an unknown future tier to the neutral M visual", () => {
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 1,
+      nodes: [node("future", "FUTURE_TIER")],
+      edges: [],
+    });
+
+    expect(result.graph.nodes[0]?.level).toBe("m");
+    expect(result.graph.nodes[0]?.payload.projection_tier).toBe("FUTURE_TIER");
+  });
+
   it("copies server tiers and never promotes from title or counts", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,

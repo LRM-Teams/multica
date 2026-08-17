@@ -66,18 +66,29 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
+	type branchBrief struct {
+		id, parent, objective, status string
+		scope                         json.RawMessage
+		version                       int64
+	}
+	branches := []branchBrief{}
 	for rows.Next() {
-		var id, parent, objective, status string
-		var branchScope json.RawMessage
-		var version int64
-		if err = rows.Scan(&id, &parent, &objective, &branchScope, &status, &version); err != nil {
+		var branch branchBrief
+		if err = rows.Scan(&branch.id, &branch.parent, &branch.objective, &branch.scope, &branch.status, &branch.version); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
-		item := map[string]any{"branch": map[string]any{"id": id, "state_version": version}, "objective": objective, "scope": jsonObjectOrEmpty(branchScope), "status": status, "frontier_nodes": []any{}, "has_more": false}
-		frontier, hasMore, frontierErr := s.loadV6BranchFrontierBrief(ctx, in.WorkspaceID, in.RunID, id)
+		branches = append(branches, branch)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return DirectorBriefFacts{}, err
+	}
+	rows.Close()
+	for _, branch := range branches {
+		item := map[string]any{"branch": map[string]any{"id": branch.id, "state_version": branch.version}, "objective": branch.objective, "scope": jsonObjectOrEmpty(branch.scope), "status": branch.status, "frontier_nodes": []any{}, "has_more": false}
+		frontier, hasMore, frontierErr := s.loadV6BranchFrontierBrief(ctx, in.WorkspaceID, in.RunID, branch.id)
 		if frontierErr != nil {
-			rows.Close()
 			return DirectorBriefFacts{}, frontierErr
 		}
 		item["frontier_nodes"] = frontier
@@ -85,16 +96,11 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		if hasMore {
 			item["next_cursor"] = "64"
 		}
-		if parent != "" {
-			item["parent_branch_id"] = parent
+		if branch.parent != "" {
+			item["parent_branch_id"] = branch.parent
 		}
 		facts.Branches = append(facts.Branches, item)
 	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		return DirectorBriefFacts{}, err
-	}
-	rows.Close()
 	rows, err = s.pool.Query(ctx, `SELECT id::text,kind,status,COALESCE(NULLIF(target_kind,''),kind),updated_at,COALESCE(assigned_agent_id::text,'') FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND kind IN ('research','match','discussion','integration','director','report','review') ORDER BY updated_at,id LIMIT 512`, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return DirectorBriefFacts{}, err
@@ -397,7 +403,7 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 	hashValue := map[string]any{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
 	jsonObject := map[string]any{"type": "object"}
 	return map[string]any{
-		"no_op.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"message_id", "reason"}, "properties": map[string]any{"message_id": map[string]any{"type": "string", "format": "uuid"}, "reason": text}},
+		"no_op.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"reason"}, "properties": map[string]any{"message_id": map[string]any{"type": "string", "format": "uuid"}, "reason": text}},
 		"steering_assessment.v1": map[string]any{"type": "object", "additionalProperties": false,
 			"required": []string{"message_id", "assessment_kind", "interpretation", "reason", "impacts"}, "properties": map[string]any{
 				"message_id": map[string]any{"type": "string", "format": "uuid"}, "assessment_kind": map[string]any{"enum": []string{"no_op", "local_change", "goal_revision", "full_reassessment"}},
@@ -415,6 +421,9 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 				"expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
 				"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
 				"branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+		"collaboration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
+			"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text, "expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
+			"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
 		"branch.create.v1": map[string]any{"type": "object", "additionalProperties": false,
 			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
 				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},
@@ -423,6 +432,12 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 				"assignee_agent_id": uuidValue, "title": text, "inputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 1024, "items": map[string]any{
 					"type": "object", "additionalProperties": false, "required": []string{"branch_id", "node_artifact_version_id", "input_role", "content_hash"}, "properties": map[string]any{
 						"branch_id": uuidValue, "node_artifact_version_id": uuidValue, "input_role": map[string]any{"enum": []string{"branch_xxl", "branch_maximum", "unresolved_gap"}}, "content_hash": hashValue}}}}},
+		"target.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"target_id"}, "properties": map[string]any{
+			"target_id": uuidValue, "assignee_agent_id": uuidValue, "mission": text, "scope": jsonObject, "reason": text}},
+		"agent.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"agent_id"}, "properties": map[string]any{
+			"agent_id": uuidValue, "mission_prompt": text, "model_config": jsonObject, "tool_config": jsonObject, "permission_config": jsonObject, "reason": text}},
+		"run.action.v1":    map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"reason": text}},
+		"report.review.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"report_id", "expected_revision", "reason"}, "properties": map[string]any{"report_id": uuidValue, "expected_revision": map[string]any{"type": "integer", "minimum": 1}, "reason": text}},
 	}
 }
 

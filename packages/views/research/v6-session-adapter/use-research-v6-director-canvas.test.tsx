@@ -65,7 +65,7 @@ describe("useResearchV6DirectorCanvas", () => {
       loadSnapshot: async () =>
         snapshot("default", [{ id: "root", tier: "L", expandable: true }]),
       loadSlice: async () =>
-        snapshot("expand:root", [{ id: "child", tier: "S", expandable: false }]),
+        snapshot("expand:root", [{ id: "child", tier: "L", expandable: false }]),
     } as Pick<
       ResearchV6DirectorProjectionTransport,
       "loadSnapshot" | "loadSlice"

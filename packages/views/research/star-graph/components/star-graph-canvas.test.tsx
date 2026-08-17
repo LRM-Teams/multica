@@ -209,6 +209,10 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     const node = screen.getByRole("button", { name: /Stable A/ });
     expect(node).toHaveAttribute("aria-expanded", "false");
     expect(node).toHaveAttribute("aria-busy", "true");
+    expect(within(node).getByTestId("star-graph-disclosure")).toHaveAttribute(
+      "data-disclosure-state",
+      "loading",
+    );
     fireEvent.click(node);
 
     expect(onSelectNode).toHaveBeenCalledWith("stable-a");
@@ -236,6 +240,10 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     });
     expect(node).toHaveAttribute("aria-invalid", "true");
     expect(node).toHaveAttribute("aria-expanded", "false");
+    expect(within(node).getByTestId("star-graph-disclosure")).toHaveAttribute(
+      "data-disclosure-state",
+      "failed",
+    );
     fireEvent.click(node);
     expect(onToggleNode).toHaveBeenCalledWith("stable-a");
     expect(screen.getAllByTestId("star-graph-node")).toHaveLength(3);

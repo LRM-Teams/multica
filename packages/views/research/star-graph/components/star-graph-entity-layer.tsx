@@ -45,14 +45,19 @@ export function StarGraphEntityLayer({
       {entities.map((entity) => {
         const selected = entity.id === selectedNodeId;
         const focusable = selected || (!selectedNodeId && entity === entities[0]);
-        const state = resolveStarGraphState(
-          selected ? [entity.view.state, "selected"] : [entity.view.state],
-        );
         const motion = motionDirectives?.get(entity.id) ?? null;
         const expandable =
           expansionControl?.expandableNodeIds.has(entity.id) ?? false;
         const expansionLoading =
           expansionControl?.loadingNodeIds?.has(entity.id) ?? false;
+        const expansionFailed =
+          expansionControl?.failedNodeIds?.has(entity.id) ?? false;
+        const state = resolveStarGraphState([
+          entity.view.state,
+          ...(selected ? (["selected"] as const) : []),
+          ...(expansionLoading ? (["pending-review"] as const) : []),
+          ...(expansionFailed ? (["failed"] as const) : []),
+        ]);
         const dimmed =
           selected ? false : lensHints?.dimmedNodeIds.has(entity.id) ?? false;
         const emphasized =
@@ -101,7 +106,13 @@ export function StarGraphEntityLayer({
                 ? expansionControl?.expandedNodeIds.has(entity.id) ?? false
                 : undefined
             }
-            accessibleName={nodeAccessibleNames?.get(entity.id)}
+            invalid={expansionFailed}
+            accessibleName={[
+              nodeAccessibleNames?.get(entity.id),
+              expansionFailed ? expansionControl?.failureLabel : null,
+            ]
+              .filter(Boolean)
+              .join("，")}
             className={cn(
               dimmed && "sg-lens-dim",
               emphasized && "sg-lens-emphasis",

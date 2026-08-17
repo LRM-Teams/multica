@@ -216,6 +216,31 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(onOpenNode).not.toHaveBeenCalled();
   });
 
+  it("keeps a failed expansion retryable without changing canonical graph data", () => {
+    const onToggleNode = vi.fn();
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        expansionControl={{
+          expandableNodeIds: new Set(["stable-a"]),
+          expandedNodeIds: new Set(),
+          failedNodeIds: new Set(["stable-a"]),
+          failureLabel: "Expansion failed; activate to retry",
+          onToggleNode,
+        }}
+      />,
+    );
+
+    const node = screen.getByRole("button", {
+      name: /Stable A.*Expansion failed; activate to retry/,
+    });
+    expect(node).toHaveAttribute("aria-invalid", "true");
+    expect(node).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(node);
+    expect(onToggleNode).toHaveBeenCalledWith("stable-a");
+    expect(screen.getAllByTestId("star-graph-node")).toHaveLength(3);
+  });
+
   it("degrades safely for an empty graph", () => {
     render(
       <StarGraphCanvas

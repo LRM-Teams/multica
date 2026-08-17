@@ -9,5 +9,8 @@ export interface StarGraphExpansionControl {
   expandableNodeIds: ReadonlySet<string>;
   expandedNodeIds: ReadonlySet<string>;
   loadingNodeIds?: ReadonlySet<string>;
+  failedNodeIds?: ReadonlySet<string>;
+  /** Localized suffix announced for a failed disclosure request. */
+  failureLabel?: string;
   onToggleNode: (nodeId: string) => void;
 }

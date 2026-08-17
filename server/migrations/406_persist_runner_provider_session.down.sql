@@ -1,8 +1,4 @@
-ALTER TABLE agent_runner_launch_projection
-  ADD COLUMN provider_session_id TEXT;
-
--- A runtime move starts a different provider process and must not inherit the
--- previous runtime's session. Reconnects keep the existing projection row.
+-- Restore the projection trigger without provider session persistence.
 CREATE OR REPLACE FUNCTION project_agent_runner_launch()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -20,20 +16,21 @@ BEGIN
      OR OLD.runtime_id IS DISTINCT FROM NEW.runtime_id
      OR (OLD.archived_at IS NOT NULL AND NEW.archived_at IS NULL) THEN
     INSERT INTO agent_runner_launch_projection (
-      agent_id, workspace_id, runtime_id, launch_id, start_dispatch_id,
-      provider_session_id
+      agent_id, workspace_id, runtime_id, launch_id, start_dispatch_id
     ) VALUES (
       NEW.id, NEW.workspace_id, NEW.runtime_id,
-      gen_random_uuid(), gen_random_uuid(), NULL
+      gen_random_uuid(), gen_random_uuid()
     )
     ON CONFLICT (agent_id) DO UPDATE SET
       workspace_id = EXCLUDED.workspace_id,
       runtime_id = EXCLUDED.runtime_id,
       launch_id = EXCLUDED.launch_id,
       start_dispatch_id = EXCLUDED.start_dispatch_id,
-      provider_session_id = NULL,
       updated_at = now();
   END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+ALTER TABLE agent_runner_launch_projection
+  DROP COLUMN provider_session_id;

@@ -5,7 +5,7 @@ package researchrun
 // application boundary remains responsible for parsing untrusted input.
 type V6WorkItemKind string
 type V6WorkItemStatus string
-type V6NodeTier string
+type V6NodeTier = V6Tier
 type V6DiscussionStatus string
 type V6ReportStatus string
 
@@ -26,12 +26,6 @@ const (
 	V6WorkFailed      V6WorkItemStatus = "failed"
 	V6WorkCancelled   V6WorkItemStatus = "cancelled"
 	V6WorkStale       V6WorkItemStatus = "stale"
-
-	V6TierS   V6NodeTier = "S"
-	V6TierM   V6NodeTier = "M"
-	V6TierL   V6NodeTier = "L"
-	V6TierXL  V6NodeTier = "XL"
-	V6TierXXL V6NodeTier = "XXL"
 )
 
 func allV6WorkItemKinds() []V6WorkItemKind {

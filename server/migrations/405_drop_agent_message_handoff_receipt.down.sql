@@ -1,3 +1,4 @@
+-- Restore the retired receipt only when rolling this migration back.
 CREATE TABLE agent_message_handoff_receipt (
     workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
     agent_id UUID NOT NULL REFERENCES agent(id) ON DELETE CASCADE,

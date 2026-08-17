@@ -393,3 +393,13 @@ func TestGraphMemoryJobInertWithoutScopedWriterReady(t *testing.T) {
 		t.Fatalf("legacy env = %q, want legacy", got)
 	}
 }
+
+// Spec §10: the graph memory job registers unconditionally; the only
+// activation control is the per-workspace scoped-writer readiness gate.
+func TestGraphMemoryJobsSpecRequiresNoEnvGate(t *testing.T) {
+	t.Setenv("MULTICA_GRAPH_CONSOLIDATION_ENABLED", "")
+	spec := GraphMemoryJobs(nil, nil)
+	if spec.Name != JobNameGraphMemoryConsolidation || spec.Handler == nil {
+		t.Fatalf("graph memory job must register without any env switch: %+v", spec)
+	}
+}

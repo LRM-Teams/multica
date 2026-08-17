@@ -461,16 +461,14 @@ func main() {
 			schedulerRegistered = true
 		}
 	}
-	// Graph memory consolidation (design §5.4) is opt-in while the reviewer
-	// rolls out: MULTICA_GRAPH_CONSOLIDATION_ENABLED gates registration, and
-	// the handler additionally requires a graph reviewer per workspace
-	// (graph_memory_profile, falling back to MULTICA_MEMORY_TYPE; A4).
-	if enabled := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_GRAPH_CONSOLIDATION_ENABLED"))); enabled == "true" || enabled == "1" || enabled == "on" {
-		if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
-			slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)
-		} else {
-			schedulerRegistered = true
-		}
+	// Graph memory consolidation registers unconditionally (spec §10): the
+	// per-workspace scoped_writer_ready gate (jobs_graph_memory.go) keeps it
+	// inert until the scoped writer acceptance gates pass, so no
+	// process-level switch is needed or permitted to activate it early.
+	if err := schedulerMgr.Register(scheduler.GraphMemoryJobs(pool, businessMetrics)); err != nil {
+		slog.Warn("scheduler: failed to register graph memory consolidation job", "error", err)
+	} else {
+		schedulerRegistered = true
 	}
 	if err := schedulerMgr.Register(scheduler.ChannelVoiceTranscriptionJob(h)); err != nil {
 		slog.Warn("scheduler: failed to register channel voice transcription job", "error", err)

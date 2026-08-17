@@ -305,17 +305,6 @@ type AgentDeliverAckPayload struct {
 	Traceparent string `json:"traceparent,omitempty"`
 }
 
-// AgentMessageHandoffPayload is the content-free observation emitted after a
-// concrete batch crosses the runtime input boundary. Message bodies never
-// travel back to the Server through this Activity seam.
-type AgentMessageHandoffPayload struct {
-	AgentID   string   `json:"agent_id"`
-	RuntimeID string   `json:"runtime_id"`
-	HandoffID string   `json:"handoff_id"`
-	Count     int      `json:"count"`
-	Targets   []string `json:"targets"`
-}
-
 // SandboxJobAvailablePayload is sent from server to a shared sandbox node as a
 // wakeup hint. The node still claims work through the HTTP claim endpoint.
 type SandboxJobAvailablePayload struct {

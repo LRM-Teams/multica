@@ -37,13 +37,13 @@ Verified Raft Computer behavior:
 | State | ACK | Pending | Side effect |
 |---|---|---|---|
 | already consumed | yes | no | drop |
-| starting or queued | yes | yes | no provider handoff |
+| starting or queued | yes | yes | no provider delivery |
 | terminal failure | yes | yes | publish error |
 | idle snapshot | yes | yes | restore original launch |
 | spawn cooldown | yes | yes | do not restart yet |
 | no process, no snapshot | no | no | inactive + `runtime_unavailable` |
-| live + busy | yes | yes | Notice, no body handoff |
-| live + idle | yes | no after handoff | body handoff |
+| live + busy | yes | yes | Notice, no body delivery |
+| live + idle | yes | no after delivery | body delivery |
 | live + provider reject | no | yes | Server retries |
 
 ### Forbidden
@@ -80,13 +80,14 @@ Identity and ordering have separate jobs:
 
 - `message_id` identifies the canonical Message;
 - `delivery_id` identifies delivery to one Agent and correlates retries/ACKs;
-- `target + seq` orders context and powers the Computer's durable
-  `consumed-seqs.json` boundary.
+- `target + seq` orders context and powers the Computer's process-local
+  Context Boundary.
 
-The local Context Boundary remains necessary. Server ACK state prevents loss;
-the local target sequence boundary prevents an accepted retry from entering the
-Provider twice and records actual context coverage. ACK never advances that
-boundary.
+The process-local Context Boundary remains necessary. Server ACK state prevents
+loss; the target sequence boundary prevents a retry from entering the Provider
+twice within one daemon process and records actual context coverage. ACK never
+advances that boundary. A daemon restart clears the boundary and may
+conservatively replay context.
 
 Provider failure and lifecycle presentation follow the verified Raft phases:
 

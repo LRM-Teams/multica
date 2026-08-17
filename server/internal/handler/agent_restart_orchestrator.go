@@ -182,6 +182,13 @@ func prepareAgentRestartStart(ctx context.Context, tx pgx.Tx, state activeAgentR
 }
 
 func clearAgentRuntimeSessionState(ctx context.Context, tx pgx.Tx, agentID, runtimeID string) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_runner_launch_projection
+		SET provider_session_id = NULL, updated_at = now()
+		WHERE agent_id = $1 AND runtime_id = $2
+	`, agentID, runtimeID); err != nil {
+		return fmt.Errorf("clear desired Runner provider session: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `UPDATE chat_session SET session_id = NULL, updated_at = now() WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeID); err != nil {
 		return fmt.Errorf("clear chat provider sessions: %w", err)
 	}

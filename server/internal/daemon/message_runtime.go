@@ -33,13 +33,13 @@ func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*Messag
 		return nil, fmt.Errorf("create Agent root for Message coordinator: %w", err)
 	}
 	coordinator, err := NewMessageCoordinator(key, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
-		return d.handoffIdleMessageBatch(ctx, key.AgentID, runtimeID, messages)
+		return d.deliverIdleMessageBatch(ctx, key.AgentID, runtimeID, messages)
 	}, nil)
 	if err != nil {
 		return nil, err
 	}
-	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
-		return d.canonicalRuntimes.handoffBusyNotice(ctx, key.AgentID, runtimeID, snapshot, commitIfCurrent)
+	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
+		return d.canonicalRuntimes.deliverBusyInboxNotice(ctx, key.AgentID, runtimeID, snapshot, commitIfCurrent)
 	}, 0, 0)
 	coordinator.ConfigureQueueActivity(func(messages []protocol.AgentMessageProjection, delta int) {
 		d.reportMixedRunMessageQueueActivity(key.AgentID, runtimeID, messages, delta)
@@ -98,7 +98,7 @@ func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (s
 	return runID, runAgentID, hex.EncodeToString(sum[:]), true
 }
 
-func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+func (d *Daemon) deliverIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
 	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
@@ -112,9 +112,7 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	if mixed {
 		canonicalActionTurn = d.allocateCanonicalActionTurnToken()
 	}
-	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
-		runner.observeMessageLifecycle(agentID, runtimeID)
-	}, func() {
+	err = d.canonicalRuntimes.deliverIdleMessages(ctx, agentID, runtimeID, preparedMessages, nil, func() {
 		if mixed {
 			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:start", protocol.MixedRunActivityActiveTurn, 1)
@@ -122,8 +120,8 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			// only after the trusted upload (or capture-gap) is acknowledged.
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:start", protocol.MixedRunActivityUnfinishedCaptureBatch, 1)
 		}
-		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
-		runner.observeMessageAccepted(agentID, runtimeID, preparedMessages, true)
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_delivery_accepted", "accepted", "")
+		runner.broadcastMessageReceivedActivity(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
 		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
 		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
@@ -151,9 +149,9 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			}
 			cancel()
 		}
-		// Raft-aligned turn end: never auto body-handoff Pending solely because
+		// Raft-aligned turn end: never auto-deliver Pending bodies solely because
 		// the prior turn finished. If Pending remains, schedule a content-free
-		// Notice; body handoff waits for idle Accept→Flush, recovery Flush, or
+		// Notice; body delivery waits for idle Accept→Flush, recovery Flush, or
 		// agent `message check`.
 		runner.notifyPendingMessagesAfterTurn(agentID)
 		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
@@ -168,7 +166,7 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 			outcome = "deferred"
 		}
-		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "runtime_handoff_accepted", outcome, canonicalMessageFailureReason(err))
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "runtime_delivery_accepted", outcome, canonicalMessageFailureReason(err))
 	}
 	if err != nil && !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		// Setup and native-acceptance failures happen before a completion

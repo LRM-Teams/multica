@@ -193,7 +193,7 @@ does not restore it. Run the target server image's migration step before any
 runtime roll, then verify migrations `304` and
 `305_workspace_runner_activity_agent_fk_indexes` are recorded. Migration
 `305` adds the foreign-key indexes required to keep Agent deletion bounded as
-Workspace Runner Activity and Message-handoff rows accumulate.
+Workspace Runner Activity rows accumulate.
 
 Apply the server migrations before rolling Computers. Migration
 `386_remove_attachment_and_reminder_projection_protocol` removes the obsolete

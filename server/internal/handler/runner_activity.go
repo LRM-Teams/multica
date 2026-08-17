@@ -464,6 +464,17 @@ func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.Cli
 		if !h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.LaunchID, session.ProviderSessionID) {
 			return errors.New("stale or unknown Workspace Runner session")
 		}
+		command, err := h.DB.Exec(ctx, `
+			UPDATE agent_runner_launch_projection
+			SET provider_session_id = NULLIF($1, ''), updated_at = now()
+			WHERE workspace_id::text = $2 AND agent_id::text = $3 AND launch_id::text = $4
+		`, session.ProviderSessionID, identity.WorkspaceID, session.AgentID, session.LaunchID)
+		if err != nil {
+			return fmt.Errorf("persist Runner provider session: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("Runner provider session launch is no longer desired")
+		}
 		return nil
 	})
 }

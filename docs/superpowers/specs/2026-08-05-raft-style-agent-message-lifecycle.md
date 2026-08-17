@@ -59,7 +59,7 @@ normalizes them into canonical Message Parts.
 
 Frontend chat remains a projection of canonical Messages through the existing
 realtime invalidation path. Activity is a separate best-effort narrative:
-concrete runtime handoff shows `Message received`, while Agent tools show their
+concrete runtime delivery shows `Message received`, while Agent tools show their
 own stages such as `Checking messages`, `Reading history`, and `Searching
 messages`.
 
@@ -106,19 +106,17 @@ messages`.
     Message ID and emoji, so that reaction semantics are independent of target
     cursors.
 16. As an Agent, I want my Context Boundary to advance only after concrete
-    context handoff, explicit reading, or accepted held context, so that freshness
+    context delivery, explicit reading, or accepted held context, so that freshness
     checks never skip unseen Messages.
-17. As an Agent, I want a malformed or unwritable local boundary file treated as
-    unknown coverage, so that corruption can cause safe replay but never silent
-    omission.
-18. As an Agent, I want a coordinator restart to reconstruct Pending from
-    canonical Messages, so that Message bodies do not need a second durable local
-    ledger.
-19. As an Agent, I want live Deliveries merged with recovery pages without
-    duplicates or gaps, so that reconnect races do not lose Messages.
-20. As an Agent, I want freshness-dependent sends held while recovery is
-    incomplete or failed, so that an empty in-memory Pending set is not mistaken
-    for current context.
+17. As an Agent, I want a daemon restart to begin with unknown Context Boundary
+    coverage, so that conservative replay is allowed but unseen context is never
+    skipped.
+18. As an Agent, I want the Server to retry unacknowledged canonical Messages,
+    so that Message bodies do not need a second durable local ledger.
+19. As an Agent, I want retries deduplicated within one daemon process, so that a
+    reconnect does not duplicate context while that process remains alive.
+20. As an Agent, I accept conservative context replay after daemon restart in
+    exchange for the simpler Raft-aligned in-memory ledger.
 21. As an Agent, I want a held send to show at most the newest three Message
     bodies while reporting the full newer count, so that the response is bounded
     without concealing that more context exists.
@@ -214,7 +212,8 @@ messages`.
 - Each Workspace and Agent pair has exactly one long-running coordinator on a
   Computer.
 - Each Agent's local root is isolated under the machine data root by Workspace
-  ID and Agent ID. The boundary file and Draft file live under that Agent root.
+  ID and Agent ID. Draft state lives under that Agent root; Context Boundaries do
+  not.
 
 ### Delivery protocol
 
@@ -226,7 +225,7 @@ messages`.
   tracing context.
 - The coordinator sends the acknowledgement only after it has accepted the
   Delivery into its owned Pending projection or recognized it as a duplicate.
-- An acknowledgement proves neither read nor runtime handoff nor Context
+- An acknowledgement proves neither read nor runtime delivery nor Context
   Boundary advancement.
 - The Server retries unacknowledged live Deliveries with the same delivery
   identity for that attempt lineage. The coordinator deduplicates across retries
@@ -237,41 +236,29 @@ messages`.
 - Pending is an in-memory, rebuildable projection of canonical Messages newer
   than the local Context Boundary.
 - Message bodies are never persisted in a second machine-local inbox ledger.
-- The only durable local receive state is a target-to-maximum-sequence map named
-  `consumed-seqs.json` under the Agent root.
-- Boundary writes use atomic replacement and must be durably completed before
-  the coordinator forgets the corresponding Pending coverage.
-- A boundary advances only after a successful concrete runtime handoff, a
+- Context Boundaries are process-local memory, matching Raft's visible-delivery
+  ledger; daemon restart begins with an empty boundary and may replay context.
+- A boundary advances only after a successful concrete runtime delivery, a
   successful explicit `message check` or `message read`, or freshness-held
   context returned to the Agent.
 - Search, resolve, reactions, Notices, and delivery acknowledgements never
   advance a boundary.
-- A missing, malformed, regressed, or unwritable boundary file means unknown
-  coverage. The system may replay context but may not skip it or authorize a
-  freshness-dependent send based on it.
+- A new daemon process starts with unknown coverage and an empty boundary map.
+  The system may replay context but may not skip it.
 - Held output may include only the newest three bodies, but the accepted coverage
   boundary advances through the maximum sequence of the complete Pending set for
   that target. Omitted Messages remain retrievable through explicit read.
 
 ### Startup and reconnect recovery
 
-- Coordinator startup and every machine reconnect begin an internal recovery
-  sync using the complete local target boundary map.
-- The Server does not persist that map. It statelessly pages canonical Messages
-  newer than each supplied boundary and eligible Messages for targets absent
-  from the map.
-- Recovery uses an explicit snapshot high-watermark or an equivalent ordering
-  fence so that Messages created during pagination are delivered through the
-  live stream or included in the snapshot, never lost between them.
-- Live Deliveries are accepted while recovery is running and merged with
-  recovery pages by Message ID and target sequence.
-- Recovery becomes complete only after every page has been validated and merged.
-  A partial page set cannot establish freshness.
-- While recovery is incomplete or failed, reads may report their bounded data
-  and Deliveries may continue to be accepted, but sends requiring freshness fail
-  closed as held or unavailable.
-- Recovery has bounded page sizes and an explicit `hasMore` continuation. It
-  does not silently truncate eligible history.
+- A network reconnect keeps the same daemon process, coordinator, and in-memory
+  boundary map; Server retries merge into the existing Pending projection.
+- A daemon or machine restart creates a new empty boundary map. The Server
+  retries canonical Messages for which it still owns delivery responsibility,
+  accepting conservative at-least-once replay.
+- Provider session restoration is separate from Context Boundary recovery: the
+  Server may pass the prior provider session ID in the new managed start while
+  the new daemon ledger remains empty.
 
 ### Runtime delivery and Notices
 
@@ -298,7 +285,7 @@ messages`.
 
 - Activity is best-effort user-facing narrative and is not a Message state
   machine, transport acknowledgement, or read receipt.
-- A successful daemon-to-runtime concrete body handoff emits one `Message
+- A successful daemon-to-runtime concrete body delivery emits one `Message
   received` Activity per batch, including startup context, idle input, and gated
   busy flushes.
 - Starting `message check` emits `Checking messages…` with the
@@ -466,8 +453,8 @@ messages`.
   canonical inbox tests, and message command tests are prior art. The new suite
   should deepen those seams instead of creating parallel test-only architecture.
 - The primary harness covers an idle delivery from canonical Message creation to
-  chat projection, `agent:deliver`, acknowledgement, runtime body handoff,
-  boundary persistence, and exactly one `Message received` Activity.
+  chat projection, `agent:deliver`, acknowledgement, runtime body delivery,
+  boundary advancement, and exactly one `Message received` Activity.
 - The harness covers busy delivery: the Message remains Pending, acknowledgement
   is transport-only, a coalesced content-free Notice reaches the runtime, no
   boundary advances, and no `Message received` Activity appears.
@@ -478,17 +465,12 @@ messages`.
   messages…` projection. Read advances only the returned target's boundary;
   search and resolve do not.
 - Crash tests stop the coordinator after server delivery acknowledgement but
-  before runtime handoff, restart with the same Agent root, complete recovery,
-  and prove the canonical Message is handed off rather than lost.
-- Boundary failure tests corrupt, delete, regress, and make the boundary file
-  unwritable. They prove conservative replay or held behavior and prohibit
-  sequence skipping.
-- Recovery tests interleave paginated snapshot reads with live Deliveries on
-  several targets, including a target absent from the boundary map. They prove
-  no gaps, deterministic ordering, deduplication, and freshness remaining
-  unknown until all pages merge.
+  before runtime delivery, restart the daemon with an empty in-memory ledger,
+  and prove the Server conservatively redelivers the canonical Message.
+- Restart tests prove the in-memory boundary resets and at-least-once replay
+  re-establishes it without losing the Message.
 - Delivery tests lose acknowledgements and resend the same delivery identity.
-  They prove idempotent coordinator acceptance and one concrete runtime handoff.
+  They prove idempotent coordinator acceptance and one concrete runtime delivery.
 - Notice tests prove three-second coalescing, same-session fingerprint
   suppression, fifteen-second retry debt, deferred unsafe runtime states, and
   absence of bodies and attachment data.
@@ -519,7 +501,7 @@ messages`.
 - Tests use fake time for coalescing, retries, and Draft expiry. They do not sleep
   for real timing windows.
 - Every failure-path test distinguishes Message truth, transport acceptance,
-  runtime handoff, Context Boundary, and Activity projection so that one green
+  runtime delivery, Context Boundary, and Activity projection so that one green
   layer cannot conceal another layer's failure.
 
 ## Out of Scope
@@ -554,10 +536,8 @@ messages`.
   Agent delivery, read state, freshness, Draft, and command behavior.
 - The direct Message Delivery lifecycle ADR remains the architectural rationale
   and domain vocabulary source for this spec.
-- Raft is the behavioral reference for coordinator, Notice, Draft, command, and
-  Activity semantics. Multica deliberately strengthens crash recovery and
-  boundary persistence where a purely in-memory implementation would permit
-  loss.
+- Raft is the behavioral reference for coordinator, Notice, Draft, command,
+  Activity, and process-local Context Boundary semantics.
 - `Message received` and the other Activity labels are frontend copy, not wire
   event names or canonical state transitions.
 - The implementation must begin only after this spec is split into vertical,

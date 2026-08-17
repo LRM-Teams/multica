@@ -190,7 +190,8 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 		case "create_work_item", "create_task":
 			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
 		case "create_match", "open_discussion", "create_dispute", "create_integration", "create_review":
-			action.Payload = withV6ActionKind(action.Payload, action.Kind)
+			collaborationKind := map[string]string{"create_match": "match", "open_discussion": "discussion", "create_dispute": "resolve_conflict", "create_integration": "integration", "create_review": "review"}[action.Kind]
+			action.Payload = withV6ActionKind(action.Payload, collaborationKind)
 			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
 		case "create_branch":
 			err = s.executeV6CreateBranchAction(ctx, proposal, cycleID, action, stateVersion)

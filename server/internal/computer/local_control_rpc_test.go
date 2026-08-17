@@ -17,8 +17,8 @@ func TestRaftLocalControlOperationNames(t *testing.T) {
 		"workspace-restart": true, "workspace-attach": true, "workspace-detach": true,
 		"workspace-environment": true, "workspace-capacity": true, "workspace-diagnostics": true,
 		"runner-attestation": true, "runner-status": true, "runner-start": true, "runner-stop": true,
-		"runner-restart": true, "runner:drain": true, "runner:release": true, "runner-ready": true,
-		"runner:prepare": true,
+		"runner-restart": true, LocalControlRunnerDrainOperation: true, LocalControlRunnerReleaseOperation: true, "runner-ready": true,
+		LocalControlRunnerPrepareOperation: true,
 	}
 	for operation := range want {
 		if _, ok := localControlOperationSpecFor(operation); !ok {

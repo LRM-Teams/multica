@@ -176,7 +176,7 @@ func (executor *BindingMachineUpgradeExecutor) prepareHost(ctx context.Context, 
 		return BindingMachineUpgradePrepared{}, err
 	}
 	var prepared BindingMachineUpgradePrepared
-	if err := callLocalJSONWithTimeout(ctx, executor.config.ServiceEndpoint, "runner:prepare", 30*time.Second,
+	if err := callLocalJSONWithTimeout(ctx, executor.config.ServiceEndpoint, LocalControlRunnerPrepareOperation, 30*time.Second,
 		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": executor.config.ControlToken},
 		json.RawMessage(body), &prepared); err != nil {
 		if strings.Contains(err.Error(), bindingChildControlBusyCode) {

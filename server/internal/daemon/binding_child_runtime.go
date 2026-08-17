@@ -318,13 +318,13 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 			panic(err)
 		}
 	}
-	register("runner:drain", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(computer.LocalControlRunnerDrainOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		if _, err := decodeIdentity(headers, raw); err != nil {
 			return nil, err
 		}
 		return nil, d.beginBindingDrain(ctx)
 	})
-	register("runner:release", func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(computer.LocalControlRunnerReleaseOperation, func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		if _, err := decodeIdentity(headers, raw); err != nil {
 			return nil, err
 		}

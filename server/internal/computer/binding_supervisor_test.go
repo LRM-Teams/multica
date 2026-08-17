@@ -204,9 +204,9 @@ func TestBindingSupervisorPreparesEveryBindingForMachineControls(t *testing.T) {
 	var environmentReleases atomic.Int32
 	control := localControlTestServer(t, func(_ context.Context, operation string, _ map[string]string, raw json.RawMessage) (any, error) {
 		switch operation {
-		case "runner:drain":
+		case LocalControlRunnerDrainOperation:
 			prepares.Add(1)
-		case "runner:release":
+		case LocalControlRunnerReleaseOperation:
 			releases.Add(1)
 		case "workspace-environment":
 			var request struct {
@@ -271,9 +271,9 @@ func TestBindingSupervisorReleasesPreparedSiblingsWhenMachineUpgradePrepareFails
 	var releasedA atomic.Bool
 	controlA := localControlTestServer(t, func(_ context.Context, operation string, _ map[string]string, _ json.RawMessage) (any, error) {
 		switch operation {
-		case "runner:drain":
+		case LocalControlRunnerDrainOperation:
 			preparedA.Store(true)
-		case "runner:release":
+		case LocalControlRunnerReleaseOperation:
 			releasedA.Store(true)
 		}
 		return nil, nil
@@ -312,9 +312,9 @@ func TestBindingSupervisorMachineUpgradeFailsForMissingDesiredChildButReleaseIsB
 	var releases atomic.Int32
 	control := localControlTestServer(t, func(_ context.Context, operation string, _ map[string]string, _ json.RawMessage) (any, error) {
 		switch operation {
-		case "runner:drain":
+		case LocalControlRunnerDrainOperation:
 			prepares.Add(1)
-		case "runner:release":
+		case LocalControlRunnerReleaseOperation:
 			releases.Add(1)
 		}
 		return nil, nil

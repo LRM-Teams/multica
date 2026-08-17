@@ -15,6 +15,12 @@ import (
 
 const localControlMaxFrame = 1 << 20
 
+const (
+	LocalControlRunnerDrainOperation   = "runner:drain"
+	LocalControlRunnerPrepareOperation = "runner:prepare"
+	LocalControlRunnerReleaseOperation = "runner:release"
+)
+
 type localControlOperationSpec struct {
 	Name string
 }
@@ -28,8 +34,8 @@ var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: "workspace-detach"}, {Name: "workspace-environment"}, {Name: "workspace-capacity"},
 	{Name: "workspace-diagnostics"}, {Name: "runner-attestation"}, {Name: "runner-status"},
 	{Name: "runner-start"}, {Name: "runner-stop"}, {Name: "runner-restart"},
-	{Name: "runner:drain"}, {Name: "runner:release"}, {Name: "runner-ready"},
-	{Name: "runner:prepare"},
+	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: "runner-ready"},
+	{Name: LocalControlRunnerPrepareOperation},
 }
 
 func localControlOperationSpecFor(name string) (localControlOperationSpec, bool) {
@@ -52,11 +58,11 @@ func localControlOperationForPath(path string) string {
 	case bindingChildMachineActionsPath:
 		return "runner-attestation"
 	case bindingChildPrepareUpgradePath:
-		return "runner:prepare"
+		return LocalControlRunnerPrepareOperation
 	case BindingPrepareMachineUpgradePath:
-		return "runner:drain"
+		return LocalControlRunnerDrainOperation
 	case BindingReleaseMachineUpgradePath:
-		return "runner:release"
+		return LocalControlRunnerReleaseOperation
 	case bindingChildComputerUpgradePath:
 		return "upgrade-start"
 	case BindingComputerUpgradeEventPath:

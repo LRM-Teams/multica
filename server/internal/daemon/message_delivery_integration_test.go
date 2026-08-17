@@ -505,6 +505,12 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		teardown = func() {
 			stopRunner()
 			d.detachWorkspaceRunner(runner)
+			// The runner's Run defer normally closes these resources, but the
+			// crash/restart path can detach immediately after the websocket has
+			// stopped while a process-manager cleanup is still in flight. Close
+			// them explicitly so t.TempDir never races a late .multica write.
+			runner.processes.Close()
+			runner.activity.Close()
 			runner.inboxes.Close()
 			if err := d.canonicalRuntimes.closeAll(); err != nil {
 				t.Errorf("close canonical runtime: %v", err)

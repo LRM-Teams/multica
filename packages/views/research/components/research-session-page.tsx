@@ -1146,9 +1146,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           formingMode={
             canvasMode === "forming" || canvasMode === "stalled" ? canvasMode : undefined
           }
-          formingStage={session.current_stage}
-          formingMembers={fleet.members}
-          formingTasks={data.run?.tasks ?? []}
+          formingStage={directorV6Enabled ? undefined : session.current_stage}
+          formingMembers={directorV6Enabled ? [] : fleet.members}
+          formingTasks={directorV6Enabled ? [] : (data.run?.tasks ?? [])}
           formingMessages={messages}
           registerReportController={(controller) => {
             reportControllerRef.current = controller;

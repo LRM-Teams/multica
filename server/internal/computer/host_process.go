@@ -200,6 +200,9 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 
 	select {
 	case <-processCtx.Done():
+		if host.logger != nil {
+			host.logger.Info("Computer shutdown context canceled", "source", "context_cancellation", "error", processCtx.Err())
+		}
 	case err = <-serveErr:
 		if err != nil {
 			cancel()
@@ -356,6 +359,26 @@ func (host *Host) processShutdownHandler(state *hostProcessState) http.HandlerFu
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
+		}
+		source := strings.TrimSpace(r.Header.Get(shutdownSourceHeader))
+		if source == "" {
+			source = "unknown"
+		}
+		action := strings.TrimSpace(r.Header.Get(shutdownActionHeader))
+		if action == "" {
+			action = "unknown"
+		}
+		requestPID := strings.TrimSpace(r.Header.Get(shutdownRequestPIDHeader))
+		if requestPID == "" {
+			requestPID = "unknown"
+		}
+		if host.logger != nil {
+			host.logger.Info("Computer shutdown requested",
+				"source", source,
+				"action", action,
+				"request_pid", requestPID,
+				"remote_address", r.RemoteAddr,
+			)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "shutting down"})

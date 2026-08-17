@@ -231,6 +231,15 @@ func (upgrade *hostMachineUpgrade) observeInitiatorExit(identity BindingChildIde
 	upgrade.targetVersion = journal.Target
 	upgrade.mu.Unlock()
 	if upgrade.config.cancel != nil {
+		if upgrade.host != nil && upgrade.host.logger != nil {
+			upgrade.host.logger.Info("Computer shutdown requested",
+				"source", "machine_upgrade",
+				"action", "restart",
+				"reason", "initiator_exit",
+				"workspace_id", identity.WorkspaceID,
+				"target_version", journal.Target,
+			)
+		}
 		upgrade.config.cancel()
 	}
 }
@@ -599,6 +608,14 @@ func (upgrade *hostMachineUpgrade) scheduleCurrentBinaryRestart() {
 	}
 	upgrade.mu.Unlock()
 	if upgrade.config.cancel != nil {
+		if upgrade.host != nil && upgrade.host.logger != nil {
+			upgrade.host.logger.Info("Computer shutdown requested",
+				"source", "machine_upgrade",
+				"action", "restart",
+				"reason", "current_binary_restart",
+				"target_version", upgrade.config.identity.Version,
+			)
+		}
 		upgrade.config.cancel()
 	}
 }

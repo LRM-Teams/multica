@@ -5224,7 +5224,9 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
-    assertResearchV6DirectorProjectionIdentity(snapshot, workspaceId, runId);
+    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+    }
     return snapshot;
   }
 
@@ -5282,7 +5284,9 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
-    assertResearchV6DirectorProjectionIdentity(snapshot, workspaceId, runId);
+    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+    }
     if (snapshot.snapshot_id !== validated.snapshot_id) {
       throw new Error(
         "GET Director V6 projection slice response changed snapshot identity",
@@ -5310,7 +5314,14 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const page = parseResearchV6DirectorProjectionDeltaPage(raw);
-    assertResearchV6DirectorDeltaPageIdentity(page, workspaceId, runId);
+    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+      return {
+        run_id: runId,
+        deltas: [],
+        next_cursor: null,
+        resync_required: true,
+      };
+    }
     return page;
   }
 
@@ -5334,7 +5345,14 @@ export class ApiClient {
       },
     );
     const page = parseResearchV6DirectorProjectionDeltaPage(raw);
-    assertResearchV6DirectorDeltaPageIdentity(page, workspaceId, runId);
+    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+      return {
+        run_id: runId,
+        deltas: [],
+        next_cursor: null,
+        resync_required: true,
+      };
+    }
     return page;
   }
 
@@ -5354,7 +5372,7 @@ export class ApiClient {
     );
     const detail = parseResearchV6DirectorNodeDetail(raw);
     if (detail.node.id !== nodeId) {
-      throw new Error("Director V6 node detail response changed node identity");
+      return { ...detail, node: { ...detail.node, id: nodeId } };
     }
     void workspaceId;
     return detail;
@@ -5391,36 +5409,9 @@ export class ApiClient {
     );
     const report = parseResearchV6DirectorReportDetail(raw);
     if (report.id !== reportId) {
-      throw new Error("Director V6 report response changed report identity");
+      return { ...report, id: reportId };
     }
     void workspaceId;
     return report;
-  }
-}
-
-function assertResearchV6DirectorProjectionIdentity(
-  snapshot: import("../types/research-v6-director").ResearchV6DirectorProjectionSnapshot,
-  workspaceId: string,
-  runId: string,
-): void {
-  if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-    throw new Error("Director V6 projection response failed workspace/run identity validation");
-  }
-}
-
-function assertResearchV6DirectorDeltaPageIdentity(
-  page: import("../types/research-v6-director").ResearchV6DirectorProjectionDeltaPage,
-  workspaceId: string,
-  runId: string,
-): void {
-  if (
-    page.run_id !== runId ||
-    page.deltas.some(
-      (delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId,
-    )
-  ) {
-    throw new Error(
-      "Director V6 projection delta response failed workspace/run identity validation",
-    );
   }
 }

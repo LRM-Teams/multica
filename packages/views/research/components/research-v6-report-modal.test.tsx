@@ -34,6 +34,7 @@ describe("ResearchV6ReportModal", () => {
   it("mounts the capability in the exact restricted iframe sandbox", async () => {
     render(
       <ResearchV6ReportModal
+        appOrigin={location.origin}
         open
         report={report}
         onOpenChange={() => {}}
@@ -50,6 +51,7 @@ describe("ResearchV6ReportModal", () => {
   it("fails closed for a same-origin capability and exposes plain text", async () => {
     render(
       <ResearchV6ReportModal
+        appOrigin={location.origin}
         open
         report={{ ...report, sandboxUrl: `${location.origin}/report-1` }}
         onOpenChange={() => {}}

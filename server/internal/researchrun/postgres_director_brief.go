@@ -66,18 +66,29 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
+	type branchBrief struct {
+		id, parent, objective, status string
+		scope                         json.RawMessage
+		version                       int64
+	}
+	branches := []branchBrief{}
 	for rows.Next() {
-		var id, parent, objective, status string
-		var branchScope json.RawMessage
-		var version int64
-		if err = rows.Scan(&id, &parent, &objective, &branchScope, &status, &version); err != nil {
+		var branch branchBrief
+		if err = rows.Scan(&branch.id, &branch.parent, &branch.objective, &branch.scope, &branch.status, &branch.version); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
-		item := map[string]any{"branch": map[string]any{"id": id, "state_version": version}, "objective": objective, "scope": jsonObjectOrEmpty(branchScope), "status": status, "frontier_nodes": []any{}, "has_more": false}
-		frontier, hasMore, frontierErr := s.loadV6BranchFrontierBrief(ctx, in.WorkspaceID, in.RunID, id)
+		branches = append(branches, branch)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return DirectorBriefFacts{}, err
+	}
+	rows.Close()
+	for _, branch := range branches {
+		item := map[string]any{"branch": map[string]any{"id": branch.id, "state_version": branch.version}, "objective": branch.objective, "scope": jsonObjectOrEmpty(branch.scope), "status": branch.status, "frontier_nodes": []any{}, "has_more": false}
+		frontier, hasMore, frontierErr := s.loadV6BranchFrontierBrief(ctx, in.WorkspaceID, in.RunID, branch.id)
 		if frontierErr != nil {
-			rows.Close()
 			return DirectorBriefFacts{}, frontierErr
 		}
 		item["frontier_nodes"] = frontier
@@ -85,16 +96,11 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		if hasMore {
 			item["next_cursor"] = "64"
 		}
-		if parent != "" {
-			item["parent_branch_id"] = parent
+		if branch.parent != "" {
+			item["parent_branch_id"] = branch.parent
 		}
 		facts.Branches = append(facts.Branches, item)
 	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		return DirectorBriefFacts{}, err
-	}
-	rows.Close()
 	rows, err = s.pool.Query(ctx, `SELECT id::text,kind,status,COALESCE(NULLIF(target_kind,''),kind),updated_at,COALESCE(assigned_agent_id::text,'') FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND kind IN ('research','match','discussion','integration','director','report','review') ORDER BY updated_at,id LIMIT 512`, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return DirectorBriefFacts{}, err

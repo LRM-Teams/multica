@@ -192,12 +192,7 @@ export function parseResearchV6ResumeVerdict(raw: unknown): ResearchV6ResumeVerd
 export function parseResearchV6ResumeVerdictStrict(
   raw: unknown,
 ): ResearchV6ResumeVerdict {
-  return parseWithFallback(raw, ResearchV6ResumeVerdictSchema, {
-    ok: false,
-    resync_required: true,
-  } satisfies ResearchV6ResumeVerdict, {
-    endpoint: "POST research V6 projection resume",
-  });
+  return ResearchV6ResumeVerdictSchema.parse(raw) as ResearchV6ResumeVerdict;
 }
 
 function invalidV6Response(name: string): never {

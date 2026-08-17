@@ -83,6 +83,7 @@ const (
 	txOpTaskInquiryTargetsBind     researchTxOperation = "task_inquiry_targets.bind"
 	txOpV6WorkItemClaim            researchTxOperation = "v6_work_item.claim"
 	txOpV6WorkItemComplete         researchTxOperation = "v6_work_item.complete"
+	txOpV6ReportWorkCreate         researchTxOperation = "v6_report_work.create"
 	txOpV6SubmissionRecord         researchTxOperation = "v6_submission.record"
 	txOpV6WorkItemRecover          researchTxOperation = "v6_work_item.recover"
 	txOpV6CatalogAcknowledge       researchTxOperation = "v6_catalog.acknowledge"
@@ -101,6 +102,11 @@ const (
 	txOpV6SteeringTriggerClaim     researchTxOperation = "v6_steering_trigger.claim"
 	txOpV6DirectorProposalClaim    researchTxOperation = "v6_director_proposal.claim"
 	txOpV6DirectorProposalComplete researchTxOperation = "v6_director_proposal.complete"
+	txOpV6ReportUploadCreate       researchTxOperation = "v6_report_upload.create"
+	txOpV6ReportUploadComplete     researchTxOperation = "v6_report_upload.complete"
+	txOpV6ReportPackageClaim       researchTxOperation = "v6_report_package.claim"
+	txOpV6ReportPackageAccept      researchTxOperation = "v6_report_package.accept"
+	txOpV6ReportReview             researchTxOperation = "v6_report.review"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

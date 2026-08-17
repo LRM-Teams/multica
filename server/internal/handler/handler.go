@@ -131,22 +131,25 @@ type Handler struct {
 	// Nil-safe: the endpoint accepts and drops reports when unwired.
 	GraphMemoryJudge *service.GraphMemoryJudgeService
 	// GraphMemoryStatus backs the graph governance status API (spec §10).
-	GraphMemoryStatus     *service.GraphMemoryStatusService
-	AgentFleetRankService *service.AgentFleetRankService
-	AgentHonorService     *service.AgentHonorService
-	IssueService          *service.IssueService
-	HonorService          *service.HonorService
-	EmailService          *service.EmailService
-	EnvCheckpointService  EnvCheckpointServiceAPI
-	UpdateStore           UpdateStore
-	UpdateIntentStore     UpdateIntentStore
-	MachineUpgradeStore   MachineUpgradeStore
-	RestartStore          RestartStore
-	RuntimeReleaseSource  RuntimeReleaseSource
-	ModelListStore        ModelListStore
-	LocalSkillListStore   LocalSkillListStore
-	LocalSkillImportStore LocalSkillImportStore
-	LivenessStore         LivenessStore
+	GraphMemoryStatus *service.GraphMemoryStatusService
+	// GraphMemoryConsolidation runs manual consolidations behind the
+	// graph+ready gate (spec §10). Nil when the handler has no DB pool.
+	GraphMemoryConsolidation *service.GraphMemoryConsolidationService
+	AgentFleetRankService    *service.AgentFleetRankService
+	AgentHonorService        *service.AgentHonorService
+	IssueService             *service.IssueService
+	HonorService             *service.HonorService
+	EmailService             *service.EmailService
+	EnvCheckpointService     EnvCheckpointServiceAPI
+	UpdateStore              UpdateStore
+	UpdateIntentStore        UpdateIntentStore
+	MachineUpgradeStore      MachineUpgradeStore
+	RestartStore             RestartStore
+	RuntimeReleaseSource     RuntimeReleaseSource
+	ModelListStore           ModelListStore
+	LocalSkillListStore      LocalSkillListStore
+	LocalSkillImportStore    LocalSkillImportStore
+	LivenessStore            LivenessStore
 	// MemberPresenceStore tracks human online/offline from realtime WS
 	// sessions (LRM-462). Distinct from LivenessStore (daemon heartbeats).
 	MemberPresenceStore MemberPresenceStore
@@ -328,6 +331,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		cfg: cfg,
 	}
 	if pool, ok := txStarter.(*pgxpool.Pool); ok {
+		h.GraphMemoryConsolidation = service.NewGraphMemoryConsolidationService(queries, pool, "")
 		h.WorkGraph = workgraph.NewStore(pool)
 		h.WorkGraph.OnNodesReady = func(ctx context.Context, workspaceID string, issueIDs []string) {
 			for _, issueID := range issueIDs {

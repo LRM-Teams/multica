@@ -29,7 +29,14 @@ import {
 import type { MotionDirective } from "../../motion/directives";
 import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
 import { buildStarGraphExpansionMotion } from "../lib/star-graph-expansion-motion";
-import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
+import {
+  buildStarGraphFusionGhosts,
+  type StarGraphFusionTransition,
+} from "../lib/star-graph-fusion-transition";
+import type {
+  StarCanvasViewModel,
+  StarEntityView,
+} from "../lib/star-canvas-view-model";
 import {
   computeClusterHiddenCounts,
   edgeBudgetForViewport,
@@ -49,6 +56,7 @@ import {
   type StarGraphCamera,
 } from "./star-graph-canvas-utils";
 import { StarGraphEdges } from "./star-graph-edges";
+import { StarGraphFusionGhostLayer } from "./star-graph-fusion-ghost-layer";
 import {
   StarGraphEntityLayer,
   type StarGraphEntityLabels,
@@ -65,6 +73,9 @@ export interface StarGraphCanvasProps {
   onOpenNode?: (nodeId: string) => void;
   /** Server-declared one-layer expansion state; absent keeps legacy behavior. */
   expansionControl?: StarGraphExpansionControl;
+  /** Server-declared committed absorption used only for outgoing-node ghosts. */
+  fusionTransition?: StarGraphFusionTransition | null;
+  fusionLowPerformance?: boolean;
   summaryTitle?: string;
   summaryDetail?: string;
   filterHiddenNote?: string;
@@ -107,6 +118,8 @@ export function StarGraphCanvas({
   onSelectNode,
   onOpenNode,
   expansionControl,
+  fusionTransition,
+  fusionLowPerformance = false,
   summaryTitle,
   summaryDetail,
   filterHiddenNote,
@@ -133,6 +146,7 @@ export function StarGraphCanvas({
 }: StarGraphCanvasProps) {
   const { t } = useT("research");
   const rootRef = useRef<HTMLDivElement>(null);
+  const previousEntitiesRef = useRef<readonly StarEntityView[]>(model.entities);
   const initialCameraRef = useRef(false);
   const storedViewport = useResearchCanvasStore((s) =>
     cameraSessionId
@@ -158,6 +172,18 @@ export function StarGraphCanvas({
       ...expansionDirectives.entries(),
     ]);
   }, [expansionControl?.lowPerformance, expansionControl?.transition, model, motionDirectives]);
+  const fusionGhosts = useMemo(
+    () =>
+      buildStarGraphFusionGhosts(
+        previousEntitiesRef.current,
+        model.entities,
+        fusionTransition,
+      ),
+    [fusionTransition, model.entities],
+  );
+  useEffect(() => {
+    previousEntitiesRef.current = model.entities;
+  }, [model.entities]);
   const dragRef = useRef<{ startX: number; startY: number; cameraX: number; cameraY: number } | null>(
     null,
   );
@@ -704,6 +730,10 @@ export function StarGraphCanvas({
             challenge: mapKeyLabels.relations.challenge.label,
             newdir: mapKeyLabels.relations.newdir.label,
           }}
+        />
+        <StarGraphFusionGhostLayer
+          ghosts={fusionGhosts}
+          lowPerformance={fusionLowPerformance}
         />
         <StarGraphEntityLayer
           entities={visibleEntities}

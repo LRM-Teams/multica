@@ -40,6 +40,24 @@ func TestEffectiveMemoryTypePrecedence(t *testing.T) {
 	}
 }
 
+// Effective per-task graph profile precedence (spec §10): task-scoped values
+// delivered by the server win over the daemon env config; zero/absent task
+// values inherit the env defaults.
+func TestEffectiveGraphProfilePrecedence(t *testing.T) {
+	cfg := Config{MemoryType: MemoryTypeLegacy, GraphExploreAgents: 4, GraphExploreMaxRounds: 3}
+	task := Task{MemoryType: MemoryTypeGraph, ExploreAgents: 8, ExploreMaxRounds: 6}
+	p := effectiveGraphProfile(cfg, task)
+	if p.memoryType != MemoryTypeGraph || p.exploreAgents != 8 || p.exploreMaxRounds != 6 {
+		t.Fatalf("task-scoped profile must win: %+v", p)
+	}
+	// Zero explore values inherit the env defaults; env remains the
+	// memory_type default only when the task carries no valid override.
+	p = effectiveGraphProfile(cfg, Task{})
+	if p.memoryType != MemoryTypeLegacy || p.exploreAgents != 4 || p.exploreMaxRounds != 3 {
+		t.Fatalf("env defaults must apply: %+v", p)
+	}
+}
+
 // A task-scoped legacy override disables the graph recall path even when the
 // daemon env selects the graph reviewer — and the override is task-scoped,
 // not process-global: the lazy provider must stay uninitialized.

@@ -98,3 +98,40 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 		t.Fatalf("UpdateGraphMemoryProfile invalid type: status=%d body=%s, want 400", w.Code, w.Body.String())
 	}
 }
+
+// Effective profile values for the claimed-task path (spec §10): the helper
+// returns the workspace's persisted memory type and explore knobs; a
+// workspace without a profile row yields the zero value so callers fall back
+// to the process env defaults.
+func TestGraphMemoryProfileForWorkspaceReturnsExploreValues(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	ctx := context.Background()
+
+	var workspaceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id::text
+	`, "Graph Memory Profile Values Test", "graph-memory-profile-values-"+uuid.NewString()[:8], "", "GMV").Scan(&workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO graph_memory_profile (workspace_id, memory_type, explore_agents, explore_max_rounds)
+		VALUES ($1, 'graph', 7, 9)`, workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	got := testHandler.graphMemoryProfileForWorkspace(ctx, parseUUID(workspaceID))
+	if got.memoryType != "graph" || got.exploreAgents != 7 || got.exploreMaxRounds != 9 {
+		t.Fatalf("profile values = %+v", got)
+	}
+	// No row -> zero value; callers then fall back to env defaults.
+	got = testHandler.graphMemoryProfileForWorkspace(ctx, parseUUID("00000000-0000-0000-0000-000000000009"))
+	if got != (graphMemoryProfileValues{}) {
+		t.Fatalf("missing profile must yield zero values, got %+v", got)
+	}
+}

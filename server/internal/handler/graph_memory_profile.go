@@ -124,17 +124,26 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, graphMemoryProfileFromRow(profile))
 }
 
-// graphMemoryTypeForWorkspace resolves the effective reviewer type
-// for a workspace: the per-workspace profile when one exists, else empty
-// (callers fall back to the process env default). A lookup error fails open
-// to "" so a transient DB hiccup never flips a workspace's memory pipeline.
-func (h *Handler) graphMemoryTypeForWorkspace(ctx context.Context, workspaceID pgtype.UUID) string {
+// graphMemoryProfileValues is the effective per-workspace graph memory
+// profile delivered to runtimes. A zero value means "no workspace profile":
+// every field then falls back to the process env default (spec §10).
+type graphMemoryProfileValues struct {
+	memoryType       string
+	exploreAgents    int32
+	exploreMaxRounds int32
+}
+
+// graphMemoryProfileForWorkspace loads the workspace's profile row. Lookup
+// errors fail open to the zero value so a transient DB hiccup never flips a
+// workspace's memory pipeline.
+func (h *Handler) graphMemoryProfileForWorkspace(ctx context.Context, workspaceID pgtype.UUID) graphMemoryProfileValues {
 	profile, err := h.Queries.GetGraphMemoryProfile(ctx, workspaceID)
-	if err != nil {
-		return ""
+	if err != nil || !validGraphMemoryType(profile.MemoryType) {
+		return graphMemoryProfileValues{}
 	}
-	if !validGraphMemoryType(profile.MemoryType) {
-		return ""
+	return graphMemoryProfileValues{
+		memoryType:       profile.MemoryType,
+		exploreAgents:    profile.ExploreAgents,
+		exploreMaxRounds: profile.ExploreMaxRounds,
 	}
-	return profile.MemoryType
 }

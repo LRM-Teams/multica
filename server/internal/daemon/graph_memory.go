@@ -350,6 +350,30 @@ func effectiveMemoryType(configured, taskScoped string) string {
 	return MemoryTypeLegacy
 }
 
+// graphMemoryEffectiveProfile is the per-task effective graph profile:
+// valid task-scoped values from the server win; anything absent falls back
+// to the daemon process env config (spec §10: env values are defaults only).
+type graphMemoryEffectiveProfile struct {
+	memoryType       string
+	exploreAgents    int
+	exploreMaxRounds int
+}
+
+func effectiveGraphProfile(cfg Config, task Task) graphMemoryEffectiveProfile {
+	p := graphMemoryEffectiveProfile{
+		memoryType:       effectiveMemoryType(cfg.MemoryType, task.MemoryType),
+		exploreAgents:    cfg.GraphExploreAgents,
+		exploreMaxRounds: cfg.GraphExploreMaxRounds,
+	}
+	if task.ExploreAgents > 0 {
+		p.exploreAgents = task.ExploreAgents
+	}
+	if task.ExploreMaxRounds > 0 {
+		p.exploreMaxRounds = task.ExploreMaxRounds
+	}
+	return p
+}
+
 // graphExecutionMemories recalls from every graph the task is scoped to
 // (project and/or channel, spec §3/§8) and returns the aggregated recall
 // blobs, or nil when nothing was found. Graph failure = no data injected:

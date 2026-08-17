@@ -109,6 +109,11 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 	if err := json.Unmarshal(envelope, &proposal); err != nil {
 		return fmt.Errorf("%w: director proposal", ErrInvalidContract)
 	}
+	for _, value := range []string{proposal.WorkspaceID, proposal.RunID, proposal.WorkItemID, proposal.AttemptID, proposal.ManifestID, proposal.DirectorAssignmentID, proposal.BriefID} {
+		if !validV6ActionUUID(value) {
+			return fmt.Errorf("%w: director proposal UUID", ErrInvalidContract)
+		}
+	}
 	order, err := validateV6DirectorActionDAG(proposal.Actions)
 	if err != nil {
 		return err

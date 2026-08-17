@@ -58,6 +58,9 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 		VALUES($1::uuid,$2::uuid,'root',$3,'[]'::jsonb,'[]'::jsonb,1,'active',1,'{}'::jsonb,1)`, in.WorkspaceID, runID, strings.TrimSpace(in.Goal)); err != nil {
 		return Run{}, 0, err
 	}
+	if err = ensureSessionPolicyStateTx(ctx, tx, in.WorkspaceID, runID); err != nil {
+		return Run{}, 0, err
+	}
 	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap", "user", in.CreatedBy, map[string]any{
 		"orchestrator_version": OrchestratorVersionV6, "director_assignment_id": assignmentID, "director_agent_id": in.DirectorAgentID, "membership_id": membershipID,
 	})

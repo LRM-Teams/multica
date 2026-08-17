@@ -74,6 +74,10 @@ func (h *Handler) handleMemoryCurationBackfillWithRequest(w http.ResponseWriter,
 		writeError(w, http.StatusForbidden, "only workspace owner/admin can run team curation")
 		return
 	}
+	if h.graphMemoryTypeForWorkspace(r.Context(), parseUUID(workspaceID)) == "graph" {
+		writeLegacyCurationNotApplicable(w)
+		return
+	}
 	profile, err := h.loadMemoryCuratorProfile(r, workspaceID, uuidToString(member.UserID))
 	if err != nil {
 		if err == pgx.ErrNoRows {

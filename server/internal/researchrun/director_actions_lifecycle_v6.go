@@ -335,10 +335,12 @@ func (s *PostgresStore) executeV6ReviseGoalAction(ctx context.Context, proposal 
 		return ErrInvalidContract
 	}
 	var payload struct {
-		Goal                          string          `json:"goal"`
-		Scope                         json.RawMessage `json:"scope"`
-		Audience, Freshness, Language string          `json:"audience"`
-		SourcePolicy                  json.RawMessage `json:"source_policy"`
+		Goal         string          `json:"goal"`
+		Scope        json.RawMessage `json:"scope"`
+		Audience     string          `json:"audience"`
+		Freshness    string          `json:"freshness"`
+		Language     string          `json:"language"`
+		SourcePolicy json.RawMessage `json:"source_policy"`
 	}
 	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Goal) == "" {
 		return ErrInvalidContract

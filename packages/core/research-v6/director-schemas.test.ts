@@ -77,7 +77,7 @@ describe("Director V6 projection wire schemas", () => {
   it("keeps unknown future enum values without dropping the projection", () => {
     const value = snapshot();
     value.nodes[0] = {
-      ...value.nodes[0],
+      ...value.nodes[0]!,
       kind: "future_result",
       tier: "FUTURE_TIER",
       canonical_ref: { kind: "future_artifact", id: ID },

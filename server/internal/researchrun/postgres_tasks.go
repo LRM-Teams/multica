@@ -296,7 +296,7 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		manifestModule := NewArtifactContextModule()
 		var planErr error
 		purpose := manifestPurposeForTaskKind(in.Request.Task.Kind)
-		manifestPlan, planErr = manifestModule.PlanDispatchManifestForPurpose(ctx, tx, workspaceID, in.SessionID, stateVersion, purpose)
+		manifestPlan, planErr = manifestModule.PlanDispatchManifestForTask(ctx, tx, workspaceID, in.SessionID, stateVersion, purpose, in.Request.Task)
 		if planErr != nil {
 			return Attempt{}, RunEvent{}, planErr
 		}
@@ -308,6 +308,7 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 			Plan:              manifestPlan,
 			ExpectedWatermark: expectedWatermark,
 			Purpose:           purpose,
+			Task:              in.Request.Task,
 			BeforeCASHook:     s.dispatchManifestBeforeCASHook,
 			PlannedHook:       s.dispatchManifestPlannedHook,
 		})

@@ -59,6 +59,12 @@ var businessMetricLabels = map[string][]string{
 	"multica_channel_trigger_depth":                      {},
 	"multica_freshness_hold_resolution_seconds":          {labelOutcome},
 	"multica_agent_delete_duration_seconds":              {labelResult},
+	"multica_graph_memory_recall_total":                  {labelResult},
+	"multica_graph_memory_explore_rounds":                {},
+	"multica_graph_memory_judge_total":                   {labelResult},
+	"multica_graph_memory_ingest_total":                  {labelResult},
+	"multica_graph_memory_version_switch_total":          {},
+	"multica_graph_memory_backtest_bypass_ratio":         {},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},
@@ -128,7 +134,6 @@ var (
 		"cursor":        "cursor",
 		"gemini":        "gemini",
 		"grok":          "grok",
-		"hermes":        "hermes",
 		"kiro":          "kiro",
 		"kimi":          "kimi",
 		"multica_agent": "multica_agent",

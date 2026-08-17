@@ -35,7 +35,6 @@ import type {
   AgentHealthResponse,
   AgentRuntime,
   ComputerConnection,
-  MachineUpgrade,
   StickerCatalogResponse,
   ListIssuesResponse,
   TimelineEntry,
@@ -111,7 +110,6 @@ export const AgentRestartPreflightSchema = z.object({
     session: AgentRestartModeStateSchema,
     full: AgentRestartModeStateSchema,
   }),
-  active_operation: AgentRestartOperationSchema.nullish(),
   provider_capabilities: z.object({
     force_restart: z.boolean().catch(false),
     custom_model_id: z.boolean().catch(false),
@@ -618,32 +616,6 @@ export const AgentRuntimeSchema = z.object({
     .enum(["ok", "update_available", "updating", "failed", "offline"])
     .catch("offline"),
   update_error: z.string().nullable().optional(),
-  machine_upgrade: z
-    .object({
-      id: z.string(),
-      daemon_id: z.string(),
-      request_id: z.string(),
-      requested_target: z.string(),
-      resolved_target: z.string().nullable().optional(),
-      phase: z.string(),
-      result: z.string().nullable().optional(),
-      error_code: z.string().nullable().optional(),
-      error_message: z.string().nullable().optional(),
-      accepted_at: z.string().nullable().optional(),
-      accepted_generation: z.string().nullable().optional(),
-      accepted_runtime_ids: z.array(z.string()).optional(),
-      attested_runtime_ids: z.array(z.string()).optional(),
-      source_version: z.string().nullable().optional(),
-      rollback_generation: z.string().nullable().optional(),
-      rollback_runtime_ids: z.array(z.string()).optional(),
-      completed_at: z.string().nullable().optional(),
-      created_at: z.string(),
-      updated_at: z.string(),
-    })
-    .loose()
-    .nullable()
-    .optional()
-    .catch(null),
   // Unknown/malformed future update observations degrade only this optional
   // field. The runtime row remains usable by older installed desktop builds.
   auto_update: DaemonUpdateStatusSchema.nullable().optional().catch(null),
@@ -666,41 +638,6 @@ export const ComputerConnectionSchema = z.object({
 }).loose();
 export const ComputerConnectionListSchema = z.array(ComputerConnectionSchema);
 export const EMPTY_COMPUTER_CONNECTION_LIST: ComputerConnection[] = [];
-
-export const MachineUpgradeSchema = z.object({
-  id: z.string(),
-  daemon_id: z.string(),
-  request_id: z.string(),
-  requested_target: z.string(),
-  resolved_target: z.string().nullable().optional(),
-  phase: z.string().default("failed"),
-  result: z.string().nullable().optional(),
-  error_code: z.string().nullable().optional(),
-  error_message: z.string().nullable().optional(),
-  accepted_at: z.string().nullable().optional(),
-  accepted_generation: z.string().nullable().optional(),
-  accepted_runtime_ids: z.array(z.string()).default([]),
-  attested_runtime_ids: z.array(z.string()).default([]),
-  source_version: z.string().nullable().optional(),
-  rollback_generation: z.string().nullable().optional(),
-  rollback_runtime_ids: z.array(z.string()).default([]),
-  completed_at: z.string().nullable().optional(),
-  created_at: z.string(),
-  updated_at: z.string(),
-}).loose();
-
-export const EMPTY_MACHINE_UPGRADE: MachineUpgrade = {
-  id: "",
-  daemon_id: "",
-  request_id: "",
-  requested_target: "",
-  phase: "failed",
-  accepted_runtime_ids: [],
-  attested_runtime_ids: [],
-  rollback_runtime_ids: [],
-  created_at: "",
-  updated_at: "",
-};
 
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive
@@ -1464,6 +1401,22 @@ export const EMPTY_MEMORY_CURATOR_PROFILE = {
   updated_at: "",
 };
 
+export const GraphMemoryProfileSchema = z.object({
+  workspace_id: z.string().default(""),
+  memory_type: z.enum(["legacy", "graph"]).catch("legacy"),
+  explore_agents: z.number().int().default(4),
+  explore_max_rounds: z.number().int().default(3),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_GRAPH_MEMORY_PROFILE = {
+  workspace_id: "",
+  memory_type: "legacy" as const,
+  explore_agents: 4,
+  explore_max_rounds: 3,
+  updated_at: "",
+};
+
 export const StartMemoryCurationRunResponseSchema = z.object({
   id: z.string(),
   status: z.string().default("queued"),
@@ -1655,6 +1608,7 @@ const ChannelMessageQuoteSnapshotSchema = z.object({
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   createdAt: z.string().default(""),
+  selectedText: z.string().nullable().optional(),
 }).loose().transform((value) => stripLegacyQuoteAvatar(value));
 
 const ChannelMessageQuoteSchema = z.object({

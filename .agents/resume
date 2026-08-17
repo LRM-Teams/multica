@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is not installed; run .agents/setup first." >&2
+  exit 1
+fi
+
+if ! sudo docker info >/dev/null 2>&1; then
+  status="$(amp orb service status docker-daemon 2>&1 || true)"
+  if [[ "$status" == *"could not be found"* ]]; then
+    amp orb service start docker-daemon --command 'sudo dockerd'
+  else
+    amp orb service restart docker-daemon
+  fi
+
+  for _ in $(seq 1 20); do
+    sudo docker info >/dev/null 2>&1 && break
+    sleep 0.25
+  done
+  sudo docker info >/dev/null
+fi
+
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+  sudo docker compose up -d postgres
+fi
+
+echo "✓ Orb services ready"

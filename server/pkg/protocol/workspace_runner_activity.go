@@ -14,10 +14,19 @@ const (
 	EventWorkspaceRunnerReady = "ready"
 	EventWorkspaceRunnerPing  = "ping"
 	EventWorkspaceRunnerPong  = "pong"
-	EventAgentStartAck        = "agent:start:ack"
-	EventAgentActivity        = "agent:activity"
-	EventAgentActivityProbe   = "agent:activity_probe"
-	EventAgentSession         = "agent:session"
+
+	// Computer control uses Raft 1.0.16 names on the DaemonCore connect
+	// socket. The child does not swap the machine binary; it forwards the
+	// command to Computer Host through the injected Host callback.
+	EventComputerUpgrade         = "computer:upgrade"
+	EventComputerRestart         = "computer:restart"
+	EventComputerUpgradeProgress = "computer:upgrade:progress"
+	EventComputerUpgradeDone     = "computer:upgrade:done"
+	EventComputerRestartDone     = "computer:restart:done"
+	EventAgentStartAck           = "agent:start:ack"
+	EventAgentActivity           = "agent:activity"
+	EventAgentActivityProbe      = "agent:activity_probe"
+	EventAgentSession            = "agent:session"
 
 	AgentStatusActive   = "active"
 	AgentStatusInactive = "inactive"
@@ -93,6 +102,74 @@ type WorkspaceRunnerReadyPayload struct {
 // Activity.
 type WorkspaceRunnerPingPayload struct {
 	PingID string `json:"pingId"`
+}
+
+// ComputerUpgradePayload is the Raft 1.0.16 connect-socket command for one
+// machine-owned upgrade. RequestID is the operation the Host must execute.
+type ComputerUpgradePayload struct {
+	RequestID     string `json:"requestId"`
+	OperationID   string `json:"operationId,omitempty"`
+	TargetVersion string `json:"targetVersion,omitempty"`
+}
+
+func (p ComputerUpgradePayload) Operation() string {
+	if id := strings.TrimSpace(p.OperationID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(p.RequestID)
+}
+
+func (p ComputerUpgradePayload) Validate() error {
+	if p.Operation() == "" {
+		return fmt.Errorf("Computer upgrade request identity is required")
+	}
+	return nil
+}
+
+// ComputerRestartPayload is the Raft 1.0.16 connect-socket restart command.
+type ComputerRestartPayload struct {
+	RequestID   string `json:"requestId"`
+	OperationID string `json:"operationId,omitempty"`
+}
+
+func (p ComputerRestartPayload) Operation() string {
+	if id := strings.TrimSpace(p.OperationID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(p.RequestID)
+}
+
+func (p ComputerRestartPayload) Validate() error {
+	if p.Operation() == "" {
+		return fmt.Errorf("Computer restart request identity is required")
+	}
+	return nil
+}
+
+// ComputerUpgradeProgressPayload and ComputerUpgradeDonePayload are emitted on
+// the same DaemonConnection that received the command. Host owns the swap;
+// the child only writes these frames.
+type ComputerUpgradeProgressPayload struct {
+	RequestID string `json:"requestId"`
+	Phase     string `json:"phase,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Percent   *int   `json:"percent,omitempty"`
+}
+
+func (p ComputerUpgradeProgressPayload) Validate() error {
+	return validateRequiredIDs(p.RequestID)
+}
+
+type ComputerUpgradeDonePayload struct {
+	RequestID  string `json:"requestId"`
+	OK         bool   `json:"ok"`
+	NewVersion string `json:"newVersion,omitempty"`
+	Error      string `json:"error,omitempty"`
+	RolledBack bool   `json:"rolledBack,omitempty"`
+}
+
+func (p ComputerUpgradeDonePayload) Validate() error {
+	return validateRequiredIDs(p.RequestID)
 }
 
 type WorkspaceRunnerPongPayload struct {

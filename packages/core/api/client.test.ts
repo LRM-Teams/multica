@@ -6,6 +6,34 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("posts an explicit Goal delivery bootstrap and fails malformed responses closed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ goal: { id: 42, status: "future-state" } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.bootstrapChannelGoalControlPlane("channel-1", {
+      project_title: "Minecraft delivery",
+      repository_url: "https://github.com/LRM-Teams/minecraft",
+      default_branch_hint: "dev",
+    })).resolves.toEqual({ goal: null });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/channels/channel-1/goal/bootstrap",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          project_title: "Minecraft delivery",
+          repository_url: "https://github.com/LRM-Teams/minecraft",
+          default_branch_hint: "dev",
+        }),
+      }),
+    );
+  });
+
   it("loads one Workspace Runner Activity summary projection and fails closed on drift", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ items: [{ agent_id: 42, summary: null }] }), {
@@ -338,7 +366,7 @@ describe("ApiClient", () => {
     await client.sendChannelThreadMessage("ch-1", "root-1", {
       content: "hello",
       clientMessageId: "client-1",
-      quoteMessageId: "quote-1",
+      quote: { messageId: "quote-1" },
     });
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
@@ -346,12 +374,12 @@ describe("ApiClient", () => {
     expect(bodies[0]).toMatchObject({
       content: "hello",
       client_message_id: "client-1",
-      quote_message_id: "quote-1",
+      quote: { message_id: "quote-1" },
     });
     expect(bodies[0]).not.toHaveProperty("show_in_channel");
   });
 
-  it("sends quote_message_id for channel and thread quoted messages", async () => {
+  it("sends structured quotes for channel and thread quoted messages", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ id: "m-1" }), {
         status: 200,
@@ -365,24 +393,24 @@ describe("ApiClient", () => {
     await client.sendChannelMessage("ch-1", {
       content: "hello",
       clientMessageId: "client-1",
-      quoteMessageId: "quote-1",
+      quote: { messageId: "quote-1", selectedText: "chosen excerpt" },
     });
     await client.sendChannelThreadMessage("ch-1", "root-1", {
       content: "reply",
       clientMessageId: "client-2",
-      quoteMessageId: "quote-2",
+      quote: { messageId: "quote-2" },
     });
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
     expect(bodies[0]).toMatchObject({
       content: "hello",
       client_message_id: "client-1",
-      quote_message_id: "quote-1",
+      quote: { message_id: "quote-1", selected_text: "chosen excerpt" },
     });
     expect(bodies[1]).toMatchObject({
       content: "reply",
       client_message_id: "client-2",
-      quote_message_id: "quote-2",
+      quote: { message_id: "quote-2" },
     });
     expect(bodies[0]).not.toHaveProperty("reply_to_message_id");
     expect(bodies[1]).not.toHaveProperty("reply_to_message_id");
@@ -1318,6 +1346,36 @@ describe("ApiClient", () => {
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
   });
 
+  it("reads and updates the graph memory profile through workspace routes", async () => {
+    const profile = {
+      workspace_id: "ws-1",
+      memory_type: "graph",
+      explore_agents: 4,
+      explore_max_rounds: 3,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(profile), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(profile), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    const loaded = await client.getGraphMemoryProfile("ws-1");
+    await client.updateGraphMemoryProfile("ws-1", {
+      memory_type: "graph",
+      explore_agents: 4,
+      explore_max_rounds: 3,
+    });
+
+    expect(loaded.memory_type).toBe("graph");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.example.test/api/workspaces/ws-1/graph-memory/profile");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual({
+      memory_type: "graph",
+      explore_agents: 4,
+      explore_max_rounds: 3,
+    });
+  });
+
   it("queues a staged memory curation run with dry-run preserved", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: "run-1", status: "queued" }), {
@@ -1453,7 +1511,7 @@ describe("ApiClient", () => {
   });
 
   describe("agent reset", () => {
-    it("starts a Raft reset mode with the Idempotency-Key header", async () => {
+    it("starts a Raft reset mode", async () => {
       const op = {
         id: "op-1",
         agent_id: "a-1",
@@ -1471,11 +1529,7 @@ describe("ApiClient", () => {
       vi.stubGlobal("fetch", fetchMock);
       const client = new ApiClient("https://api.example.test");
 
-      const result = await client.resetAgent(
-        "a-1",
-        "full",
-        "idem-uuid-1",
-      );
+      const result = await client.resetAgent("a-1", "full");
 
       expect(result.id).toBe("op-1");
       expect(fetchMock).toHaveBeenCalledWith(
@@ -1483,7 +1537,6 @@ describe("ApiClient", () => {
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({ mode: "full" }),
-          headers: expect.objectContaining({ "Idempotency-Key": "idem-uuid-1" }),
         }),
       );
     });
@@ -1514,30 +1567,6 @@ describe("ApiClient", () => {
       expect(result.actions.restart.supported).toBe(true);
       expect(result.actions.full.supported).toBe(false);
       expect(result.actions.full.disabled_reason).toBe("agent_active");
-    });
-
-    it("polls a single operation by id", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            id: "op-1",
-            agent_id: "a-1",
-            runtime_id: "rt-1",
-            mode: "restart",
-            status: "succeeded",
-            created_at: "2026-07-24T00:00:00Z",
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-      const client = new ApiClient("https://api.example.test");
-
-      const op = await client.getAgentRestartOperation("a-1", "op-1");
-      expect(op.status).toBe("succeeded");
-      expect(fetchMock.mock.calls[0]?.[0]).toBe(
-        "https://api.example.test/api/members/agents/a-1/reset/op-1",
-      );
     });
 
     it("fails closed when reset preflight is malformed", async () => {
@@ -1573,7 +1602,7 @@ describe("ApiClient", () => {
       );
       const client = new ApiClient("https://api.example.test");
 
-      const result = await client.resetAgent("a-1", "restart", "idem-1");
+      const result = await client.resetAgent("a-1", "restart");
 
       expect(result).toMatchObject({
         id: "",

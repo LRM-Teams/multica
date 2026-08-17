@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type BindingRunnerLauncher struct {
@@ -22,9 +24,28 @@ type BindingRunnerLauncher struct {
 	HostControlURL     string
 	BindingsRoot       string
 	WorkspacesRoot     string
+	// Run starts one Binding in this Computer process. When set, Spawn no
+	// longer execs `computer __runner`.
+	Run BindingChildRunFunc
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	PreviousPackageUpgradeBootstrap bool
+	PreviousPackageUpgradeSourcePID int
+	sourceProcessAlive              func(int) (bool, bool)
 }
 
 func (launcher BindingRunnerLauncher) Spawn(workspaceID string, runnerGeneration int64) (BindingChild, error) {
+	bootstrap := BindingChildBootstrap{
+		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: workspaceID,
+		ComputerID: launcher.ComputerID, ComputerGeneration: launcher.ComputerGeneration,
+		RunnerGeneration: runnerGeneration, Environment: launcher.Environment, Profile: launcher.Profile,
+		ServerBaseURL: launcher.ServerBaseURL, HostControlURL: launcher.HostControlURL,
+		BindingsRoot: launcher.BindingsRoot, WorkspacesRoot: launcher.WorkspacesRoot,
+		PreviousPackageUpgradeBootstrap: launcher.previousPackageBootstrapActive(),
+	}
+	if launcher.Run != nil {
+		return StartInProcessBinding(bootstrap, launcher.Run)
+	}
 	executable := launcher.Executable
 	if executable == nil {
 		executable = os.Executable
@@ -33,13 +54,19 @@ func (launcher BindingRunnerLauncher) Spawn(workspaceID string, runnerGeneration
 	if err != nil {
 		return nil, err
 	}
-	return StartBindingRunner(exe, BindingChildBootstrap{
-		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: workspaceID,
-		ComputerID: launcher.ComputerID, ComputerGeneration: launcher.ComputerGeneration,
-		RunnerGeneration: runnerGeneration, Environment: launcher.Environment, Profile: launcher.Profile,
-		ServerBaseURL: launcher.ServerBaseURL, HostControlURL: launcher.HostControlURL,
-		BindingsRoot: launcher.BindingsRoot, WorkspacesRoot: launcher.WorkspacesRoot,
-	})
+	return StartBindingRunner(exe, bootstrap)
+}
+
+func (launcher BindingRunnerLauncher) previousPackageBootstrapActive() bool {
+	if !launcher.PreviousPackageUpgradeBootstrap || launcher.PreviousPackageUpgradeSourcePID < 1 {
+		return false
+	}
+	alive := launcher.sourceProcessAlive
+	if alive == nil {
+		alive = processAlive
+	}
+	isAlive, known := alive(launcher.PreviousPackageUpgradeSourcePID)
+	return isAlive || !known
 }
 
 type BindingChildSpawner func(workspaceID string, runnerGeneration int64) (BindingChild, error)
@@ -301,9 +328,23 @@ func (supervisor *BindingSupervisor) Snapshot(workspaceID string) (RunnerRecord,
 // implementation. If any child rejects preparation, already-prepared siblings
 // are released so a failed machine operation cannot strand them paused.
 func (supervisor *BindingSupervisor) PrepareMachineUpgrade(ctx context.Context, controlToken string) error {
+	return supervisor.PrepareSiblingMachineUpgrade(ctx, controlToken, "")
+}
+
+func (supervisor *BindingSupervisor) PrepareSiblingMachineUpgrade(ctx context.Context, controlToken, initiatorWorkspaceID string) error {
 	targets, err := supervisor.machineControlTargets(nil)
 	if err != nil {
 		return err
+	}
+	if initiator := strings.TrimSpace(initiatorWorkspaceID); initiator != "" {
+		filtered := targets[:0]
+		for _, current := range targets {
+			if current.identity.WorkspaceID == initiator {
+				continue
+			}
+			filtered = append(filtered, current)
+		}
+		targets = filtered
 	}
 	prepared := make([]bindingMachineControlTarget, 0, len(targets))
 	for _, current := range targets {
@@ -356,6 +397,14 @@ func (supervisor *BindingSupervisor) ReleaseEnvironmentSwitch(ctx context.Contex
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func (supervisor *BindingSupervisor) DeliverComputerUpgrade(ctx context.Context, controlToken string, command protocol.ComputerUpgradePayload) error {
+	targets := supervisor.availableMachineControlTargets()
+	if len(targets) == 0 {
+		return errors.New("Computer has no ready Binding for Machine Upgrade")
+	}
+	return RequestBindingComputerUpgrade(ctx, targets[0].controlURL, controlToken, targets[0].identity, command)
 }
 
 func (supervisor *BindingSupervisor) ReregisterBindings(ctx context.Context, controlToken string, workspaceIDs []string) error {

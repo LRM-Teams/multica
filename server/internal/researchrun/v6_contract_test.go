@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const frozenV6ContractSHA256 = "f3f2c5f39d8d9490ad84d081f09f8245023dc22ae188935f54b5f393ff58bdcd"
+const frozenV6ContractSHA256 = "2ce8b8af85c9cec5e508fa1c6b01c6963d998899d09b99d33f8110aca3b59f88"
 
 func TestV6DesignContractIsFrozenAndNotProductionEnabled(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "docs", "contracts", "research-run-v6.schema.json")
@@ -31,11 +31,10 @@ func TestV6DesignContractIsFrozenAndNotProductionEnabled(t *testing.T) {
 		t.Fatal("V6 contract has no $defs object")
 	}
 	for _, required := range []string{
-		"plan_result", "task_result", "prompt_context", "gate_input",
-		"question", "hypothesis", "branch", "inquiry_edge", "task",
-		"search_plan", "query_execution", "source_candidate", "status_update",
-		"integration_contribution", "insight", "dispute", "divergence",
-		"report_revision", "evaluation",
+		"director_brief", "director_action_proposal", "work_manifest",
+		"atomic_result_submission", "discussion_turn_submission",
+		"integration_submission", "report_package_submission",
+		"projection_snapshot", "projection_delta",
 	} {
 		if _, exists := definitions[required]; !exists {
 			t.Errorf("V6 contract missing definition %q", required)
@@ -45,6 +44,6 @@ func TestV6DesignContractIsFrozenAndNotProductionEnabled(t *testing.T) {
 		t.Fatalf("default orchestrator=%q; V6 design must remain disabled", OrchestratorVersion)
 	}
 	if err = ensureSupportedOrchestratorVersion("research-run-v6"); !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("V6 became production-supported before E-K exits: %v", err)
+		t.Fatalf("V6 became production-supported before Ronaldo activation exits: %v", err)
 	}
 }

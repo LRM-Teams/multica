@@ -23,6 +23,8 @@ const (
 	bindingChildLifecycleDiagnosticPath = "/binding-child/lifecycle-diagnostics"
 	bindingChildMachineActionsPath      = "/binding-child/machine-actions"
 	bindingChildRuntimeSetPath          = "/binding-child/runtime-set"
+	bindingChildPrepareUpgradePath      = "/binding-child/prepare-upgrade"
+	bindingChildControlBusyCode         = "control_busy"
 )
 
 // BindingChildIdentity fences every child-to-Host request by the immutable
@@ -49,6 +51,7 @@ type HostControlCallbacks struct {
 	Diagnostic          func(context.Context, BindingChildIdentity, string, diagnosticlog.Event) error
 	LifecycleDiagnostic func(context.Context, BindingChildIdentity, json.RawMessage) error
 	MachineActions      func(context.Context, BindingChildIdentity, json.RawMessage) error
+	PrepareUpgrade      func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
 	Released            func(BindingChildIdentity)
 }
 
@@ -76,6 +79,7 @@ func (control *HostControl) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(bindingChildDiagnosticPath, control.diagnosticHandler())
 	mux.HandleFunc(bindingChildLifecycleDiagnosticPath, control.lifecycleDiagnosticHandler())
 	mux.HandleFunc(bindingChildMachineActionsPath, control.machineActionsHandler())
+	mux.HandleFunc(bindingChildPrepareUpgradePath, control.prepareUpgradeHandler())
 	mux.HandleFunc(bindingChildRuntimeSetPath, control.runtimeSetHandler())
 }
 
@@ -254,6 +258,39 @@ func (control *HostControl) machineActionsHandler() http.HandlerFunc {
 	return control.rawHandler(control.callbacks.MachineActions)
 }
 
+func (control *HostControl) prepareUpgradeHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Identity BindingChildIdentity `json:"identity"`
+			Payload  json.RawMessage      `json:"payload"`
+		}
+		if !control.begin(w, r, &request) {
+			return
+		}
+		if !control.current(request.Identity) {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if control.callbacks.PrepareUpgrade == nil {
+			http.Error(w, "Binding child control payload rejected", http.StatusBadRequest)
+			return
+		}
+		prepared, err := control.callbacks.PrepareUpgrade(r.Context(), request.Identity, request.Payload)
+		if err != nil {
+			if errors.Is(err, ErrComputerControlBusy) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]string{"code": bindingChildControlBusyCode})
+				return
+			}
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(prepared)
+	}
+}
+
 func (control *HostControl) rawHandler(callback func(context.Context, BindingChildIdentity, json.RawMessage) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request rawControlRequest
@@ -264,7 +301,17 @@ func (control *HostControl) rawHandler(callback func(context.Context, BindingChi
 			http.Error(w, "inactive Binding child generation", http.StatusConflict)
 			return
 		}
-		if len(request.Payload) == 0 || callback == nil || callback(r.Context(), request.Identity, request.Payload) != nil {
+		if len(request.Payload) == 0 || callback == nil {
+			http.Error(w, "Binding child control payload rejected", http.StatusBadRequest)
+			return
+		}
+		if err := callback(r.Context(), request.Identity, request.Payload); err != nil {
+			if errors.Is(err, ErrComputerControlBusy) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]string{"code": bindingChildControlBusyCode})
+				return
+			}
 			http.Error(w, "Binding child control payload rejected", http.StatusBadRequest)
 			return
 		}
@@ -477,7 +524,13 @@ func (client *HostControlClient) post(ctx context.Context, path string, input, o
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, response.Body)
+		var failure struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&failure)
+		if response.StatusCode == http.StatusConflict && failure.Code == bindingChildControlBusyCode {
+			return ErrComputerControlBusy
+		}
 		return fmt.Errorf("Binding Host control %s returned %s", path, response.Status)
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent {

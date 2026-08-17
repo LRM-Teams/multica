@@ -2,11 +2,8 @@ package handler
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net/http"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -75,20 +72,12 @@ func (h *Handler) projectRunnerLaunchPresence(workspaceID string, launch *runner
 	return AgentPresenceOnline
 }
 
-func (h *Handler) loadRunnerLaunchPresence(ctx context.Context, workspaceID, agentID pgtype.UUID) (*runnerLaunchPresence, error) {
-	var launch runnerLaunchPresence
-	err := h.DB.QueryRow(ctx, `
-		SELECT daemon_id, daemon_instance_id, status
-		FROM agent_activity_launch
-		WHERE workspace_id = $1 AND agent_id = $2`, workspaceID, agentID).
-		Scan(&launch.daemonID, &launch.daemonInstanceID, &launch.status)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (h *Handler) loadRunnerLaunchPresence(_ context.Context, workspaceID, agentID string) (*runnerLaunchPresence, error) {
+	obs, ok := h.observations().get(workspaceID, agentID)
+	if !ok {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("load Runner launch Presence: %w", err)
-	}
-	return &launch, nil
+	return &runnerLaunchPresence{daemonID: obs.daemonID, daemonInstanceID: obs.daemonInstanceID, status: obs.status}, nil
 }
 
 func (h *Handler) publishAgentPresence(workspaceID, agentID, presence string) {
@@ -132,13 +121,8 @@ func (h *Handler) GetAgentPresence(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT a.id,
-		       COALESCE(l.daemon_id, ''),
-		       COALESCE(l.daemon_instance_id, ''),
-		       COALESCE(l.status, '')
+		SELECT a.id
 		FROM agent a
-		LEFT JOIN agent_activity_launch l
-		  ON l.workspace_id = a.workspace_id AND l.agent_id = a.id
 		WHERE a.workspace_id = $1 AND a.archived_at IS NULL
 		ORDER BY a.created_at ASC, a.id ASC`, workspaceID)
 	if err != nil {
@@ -150,14 +134,15 @@ func (h *Handler) GetAgentPresence(w http.ResponseWriter, r *http.Request) {
 	items := make([]AgentPresenceItem, 0)
 	for rows.Next() {
 		var agentID pgtype.UUID
-		var launch runnerLaunchPresence
-		if err := rows.Scan(&agentID, &launch.daemonID, &launch.daemonInstanceID, &launch.status); err != nil {
+		if err := rows.Scan(&agentID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list Agent Presence")
 			return
 		}
+		obs, _ := h.observations().get(workspaceIDText, util.UUIDToString(agentID))
+		launch := &runnerLaunchPresence{daemonID: obs.daemonID, daemonInstanceID: obs.daemonInstanceID, status: obs.status}
 		items = append(items, AgentPresenceItem{
 			AgentID:  util.UUIDToString(agentID),
-			Presence: h.projectRunnerLaunchPresence(workspaceIDText, &launch),
+			Presence: h.projectRunnerLaunchPresence(workspaceIDText, launch),
 		})
 	}
 	if err := rows.Err(); err != nil {

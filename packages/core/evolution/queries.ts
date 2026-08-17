@@ -15,6 +15,7 @@ export const evolutionKeys = {
   memoryCurationStatus: (wsId: string) => ["evolution", wsId, "memory-curation-status"] as const,
   memoryCurationRun: (wsId: string, runId: string) => ["evolution", wsId, "memory-curation-run", runId] as const,
   memoryCuratorProfile: (wsId: string) => ["evolution", wsId, "memory-curator-profile"] as const,
+  graphMemoryProfile: (wsId: string) => ["evolution", wsId, "graph-memory-profile"] as const,
   memoryCurationDailySummary: (wsId: string, since = "", until = "") =>
     ["evolution", wsId, "memory-curation-daily-summary", since, until] as const,
   memoryCurationCandidates: (wsId: string, date: string, kind = "all") =>
@@ -74,6 +75,14 @@ export function memoryCuratorProfileOptions(wsId: string) {
   return queryOptions({
     queryKey: evolutionKeys.memoryCuratorProfile(wsId),
     queryFn: () => api.getMemoryCuratorProfile(wsId),
+    enabled: !!wsId,
+  });
+}
+
+export function graphMemoryProfileOptions(wsId: string) {
+  return queryOptions({
+    queryKey: evolutionKeys.graphMemoryProfile(wsId),
+    queryFn: () => api.getGraphMemoryProfile(wsId),
     enabled: !!wsId,
   });
 }

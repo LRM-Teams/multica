@@ -26,6 +26,10 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		AgentSessionPayload{AgentID: "agent-1", LaunchID: "launch-1", ProviderSessionID: "session-1", RuntimeGeneration: 2},
 		AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started"}},
 		AgentActivityProbePayload{AgentID: "agent-1", LaunchID: "launch-1", ProbeID: "probe-1"},
+		ComputerUpgradePayload{RequestID: "upgrade-1", TargetVersion: "0.4.24-alpha.59"},
+		ComputerRestartPayload{RequestID: "restart-1"},
+		ComputerUpgradeProgressPayload{RequestID: "upgrade-1", Phase: "staging"},
+		ComputerUpgradeDonePayload{RequestID: "upgrade-1", OK: true, NewVersion: "0.4.24-alpha.59"},
 	}
 
 	var encoded strings.Builder
@@ -37,15 +41,28 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		encoded.Write(data)
 	}
 	wire := encoded.String()
-	for _, field := range []string{`"workspaceId"`, `"daemonInstanceId"`, `"runningAgents"`, `"launchId"`, `"queueState"`, `"clientSeq"`, `"producerFactId"`, `"observedAtMs"`, `"probeId"`} {
+	for _, field := range []string{`"workspaceId"`, `"daemonInstanceId"`, `"runningAgents"`, `"launchId"`, `"queueState"`, `"clientSeq"`, `"producerFactId"`, `"observedAtMs"`, `"probeId"`, `"requestId"`, `"targetVersion"`, `"newVersion"`} {
 		if !strings.Contains(wire, field) {
 			t.Fatalf("runner Activity wire %s does not contain %s", wire, field)
 		}
 	}
-	for _, field := range []string{`"workspace_id"`, `"daemon_instance_id"`, `"start_dispatch_id"`, `"launch_id"`, `"client_sequence"`, `"producer_fact_id"`} {
+	for _, field := range []string{`"workspace_id"`, `"daemon_instance_id"`, `"start_dispatch_id"`, `"launch_id"`, `"client_sequence"`, `"producer_fact_id"`, `"request_id"`, `"target_version"`, `"new_version"`} {
 		if strings.Contains(wire, field) {
 			t.Fatalf("runner Activity wire %s contains HTTP field %s", wire, field)
 		}
+	}
+}
+
+func TestComputerUpgradePayloadUsesRaftRequestIdentity(t *testing.T) {
+	payload := ComputerUpgradePayload{RequestID: "upgrade-1", OperationID: "operation-1", TargetVersion: "0.4.24-alpha.59"}
+	if err := payload.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Operation() != "operation-1" {
+		t.Fatalf("Operation() = %q, want operation-1", payload.Operation())
+	}
+	if err := (ComputerUpgradePayload{}).Validate(); err == nil {
+		t.Fatal("empty Computer upgrade payload was accepted")
 	}
 }
 

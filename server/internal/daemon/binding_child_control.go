@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type bindingChildControlIdentity = computer.BindingChildIdentity
@@ -39,6 +41,113 @@ func (client *bindingHostControlClient) recordLifecycleDiagnostic(ctx context.Co
 
 func (client *bindingHostControlClient) forwardMachineActions(ctx context.Context, ack HeartbeatResponse) error {
 	return client.client.ForwardMachineActions(ctx, ack)
+}
+
+// handleComputerControlCommand is the Raft 1.0.16 child callback: the
+// DaemonCore connect socket received computer:upgrade / computer:restart.
+// The Binding child executes the machine upgrade in-process. Host only
+// drains sibling Bindings and respawns after this child exits.
+func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
+	if ack == nil || ack.RuntimeID == "" {
+		return
+	}
+	if ack.RuntimeGone {
+		go d.handleRuntimeGone(ack.RuntimeID)
+		return
+	}
+	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
+}
+
+func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *HeartbeatResponse) {
+	if d == nil || ack == nil {
+		return
+	}
+	if d.bindingHostControl == nil {
+		d.handleWSHeartbeatAck(ctx, ack)
+		return
+	}
+	local := *ack
+	local.PendingUpdate = nil
+	local.PendingMachineUpgrade = nil
+	local.PendingRestart = nil
+	local.ReleaseManifestBaseURL = ""
+	d.handleWSHeartbeatAck(ctx, &local)
+
+	machine := HeartbeatResponse{
+		RuntimeID:              ack.RuntimeID,
+		Status:                 ack.Status,
+		PendingUpdate:          ack.PendingUpdate,
+		PendingMachineUpgrade:  ack.PendingMachineUpgrade,
+		PendingRestart:         ack.PendingRestart,
+		ReleaseManifestBaseURL: ack.ReleaseManifestBaseURL,
+	}
+	if machine.PendingUpdate == nil && machine.PendingMachineUpgrade == nil && machine.PendingRestart == nil && machine.ReleaseManifestBaseURL == "" {
+		return
+	}
+	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, machine); err != nil && d.logger != nil {
+		d.logger.Warn("forward Binding child machine action to Host failed", "runtime_id", ack.RuntimeID, "reason", "host_unavailable")
+	}
+}
+
+func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
+	return protocol.DaemonHeartbeatRequestPayload{
+		RuntimeID:                 runtimeID,
+		ComputerGeneration:        d.cfg.ComputerGeneration,
+		SupportsBatchImport:       true,
+		SupportsMemoryCuration:    true,
+		ActiveMemoryCurationRunID: d.activeMemoryCurationRun(runtimeID),
+	}
+}
+
+func (d *Daemon) setComputerUpgradeEmit(emit func(string, any)) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.computerUpgradeEmit = emit
+	d.mu.Unlock()
+}
+
+func (d *Daemon) emitComputerUpgrade(eventType string, payload any) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	emit := d.computerUpgradeEmit
+	d.mu.Unlock()
+	if emit != nil {
+		emit(eventType, payload)
+	}
+}
+
+func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
+	if d == nil {
+		return errors.New("DaemonCore is unavailable")
+	}
+	switch action {
+	case protocol.EventComputerUpgrade:
+		if d.bindingMachineUpgrade == nil {
+			// Raft 1.0.16: a DaemonCore not constructed by Computer
+			// ignores computer:upgrade instead of inventing a Host path.
+			if d.logger != nil {
+				d.logger.Info("ignoring computer:upgrade — not launched by a Computer service")
+			}
+			return nil
+		}
+		return d.bindingMachineUpgrade(ctx, command)
+	case protocol.EventComputerRestart:
+		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: command.Operation()}}
+		if d.bindingHostControl == nil {
+			return errors.New("Computer Host callback is unavailable")
+		}
+		forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return d.bindingHostControl.forwardMachineActions(forwardCtx, ack)
+	default:
+		return fmt.Errorf("unsupported Computer control action %q", action)
+	}
 }
 
 func (client *bindingHostControlClient) reportRuntimeSet(ctx context.Context, runtimes []Runtime, daemonToken, expiresAt string) error {

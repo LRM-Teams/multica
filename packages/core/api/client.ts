@@ -45,6 +45,8 @@ import type {
   MemoryCurationRunDetail,
   MemoryCuratorProfile,
   UpdateMemoryCuratorProfileRequest,
+  GraphMemoryProfile,
+  UpdateGraphMemoryProfileRequest,
   StartMemoryCurationRunRequest,
   StartMemoryCurationRunResponse,
   MemoryCurationBackfillRequest,
@@ -115,7 +117,6 @@ import type {
   DashboardUsageByAgent,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
-  MachineUpgrade,
   RuntimeRestart,
   AgentRestartMode,
   AgentRestartPreflight,
@@ -143,6 +144,7 @@ import type {
   ChannelMentionCandidatesResponse,
   ChannelMemberManagementCapabilities,
   ChannelMessage,
+  ChannelMessageQuoteInput,
   ChannelMessagesPage,
   MarkChannelReadResult,
   ChannelReaction,
@@ -154,6 +156,7 @@ import type {
   ChannelProjectFileContent,
   ChannelGoalEnvelope,
   CreateChannelGoalRequest,
+  BootstrapChannelGoalControlPlaneRequest,
   UpdateChannelGoalRequest,
   ChannelGoalProcessEnvelope,
   ChannelGoalProcessListEnvelope,
@@ -405,6 +408,7 @@ import {
   EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
   EMPTY_MEMORY_CURATION_RUN_DETAIL,
   EMPTY_MEMORY_CURATOR_PROFILE,
+  EMPTY_GRAPH_MEMORY_PROFILE,
   EvolutionMetricsSchema,
   EvolutionTrainingExampleListSchema,
   EvolutionTrainingExampleSchema,
@@ -418,6 +422,7 @@ import {
   WorkspaceMemoryCurationStatusSchema,
   MemoryCurationRunDetailSchema,
   MemoryCuratorProfileSchema,
+  GraphMemoryProfileSchema,
   StartMemoryCurationRunResponseSchema,
   MemoryCurationBackfillResponseSchema,
   EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE,
@@ -456,8 +461,6 @@ import {
   DeleteComputerResponseSchema,
   EMPTY_DELETE_COMPUTER_RESPONSE,
   type DeleteComputerResponse,
-  MachineUpgradeSchema,
-  EMPTY_MACHINE_UPGRADE,
   NotePageSchema,
   NotePageListResponseSchema,
   EMPTY_NOTE_PAGE,
@@ -1809,16 +1812,13 @@ export class ApiClient {
     );
   }
 
-  // Client sends only Raft's `mode` (never a path/force/runtime_id). The UUID
-  // Idempotency-Key makes a resend return the same operation.
+  // Client sends only Raft's `mode` (never a path/force/runtime_id).
   async resetAgent(
     id: string,
     mode: AgentRestartMode,
-    idempotencyKey: string,
   ): Promise<AgentRestartOperation> {
     const raw = await this.fetch<unknown>(`/api/members/agents/${id}/reset`, {
       method: "POST",
-      headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ mode }),
     });
     return parseWithFallback(
@@ -1826,21 +1826,6 @@ export class ApiClient {
       AgentRestartOperationSchema,
       EMPTY_AGENT_RESTART_OPERATION,
       { endpoint: "POST /api/members/agents/{id}/reset" },
-    );
-  }
-
-  async getAgentRestartOperation(
-    id: string,
-    operationId: string,
-  ): Promise<AgentRestartOperation> {
-    const raw = await this.fetch<unknown>(
-      `/api/members/agents/${id}/reset/${operationId}`,
-    );
-    return parseWithFallback(
-      raw,
-      AgentRestartOperationSchema,
-      EMPTY_AGENT_RESTART_OPERATION,
-      { endpoint: "GET /api/members/agents/{id}/reset/{operationId}" },
     );
   }
 
@@ -2276,20 +2261,10 @@ export class ApiClient {
     daemonId: string,
     targetVersion: string,
     requestId: string,
-  ): Promise<MachineUpgrade> {
-    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades`, {
+  ): Promise<{ request_id: string }> {
+    return this.fetch<{ request_id: string }>(`/api/daemons/${daemonId}/upgrades`, {
       method: "POST",
       body: JSON.stringify({ target_version: targetVersion, request_id: requestId }),
-    });
-    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
-      endpoint: "POST /api/daemons/:daemonId/upgrades",
-    });
-  }
-
-  async getMachineUpgrade(daemonId: string, upgradeId: string): Promise<MachineUpgrade> {
-    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades/${upgradeId}`);
-    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
-      endpoint: "GET /api/daemons/:daemonId/upgrades/:upgradeId",
     });
   }
 
@@ -3153,6 +3128,28 @@ export class ApiClient {
     );
     return parseWithFallback(raw, MemoryCuratorProfileSchema, EMPTY_MEMORY_CURATOR_PROFILE, {
       endpoint: "PUT /api/workspaces/{id}/memory-curation/profile",
+    });
+  }
+
+  async getGraphMemoryProfile(workspaceId: string): Promise<GraphMemoryProfile> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/profile`,
+    );
+    return parseWithFallback(raw, GraphMemoryProfileSchema, EMPTY_GRAPH_MEMORY_PROFILE, {
+      endpoint: "GET /api/workspaces/{id}/graph-memory/profile",
+    });
+  }
+
+  async updateGraphMemoryProfile(
+    workspaceId: string,
+    data: UpdateGraphMemoryProfileRequest,
+  ): Promise<GraphMemoryProfile> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/profile`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(raw, GraphMemoryProfileSchema, EMPTY_GRAPH_MEMORY_PROFILE, {
+      endpoint: "PUT /api/workspaces/{id}/graph-memory/profile",
     });
   }
 
@@ -4150,7 +4147,7 @@ export class ApiClient {
       parts?: MessagePart[];
       replyToMessageId?: string | null;
       clientMessageId?: string | null;
-      quoteMessageId?: string | null;
+      quote?: ChannelMessageQuoteInput | null;
     },
   ): Promise<ChannelMessage> {
     // Channel attachments bind from structured `parts` (type: "attachment").
@@ -4158,15 +4155,18 @@ export class ApiClient {
     const body: {
       content: string;
       reply_to_message_id?: string;
-      quote_message_id?: string;
+      quote?: { message_id: string; selected_text?: string };
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content: input.content };
     if (input.replyToMessageId) {
       body.reply_to_message_id = input.replyToMessageId;
     }
-    if (input.quoteMessageId) {
-      body.quote_message_id = input.quoteMessageId;
+    if (input.quote) {
+      body.quote = { message_id: input.quote.messageId };
+      if (input.quote.selectedText) {
+        body.quote.selected_text = input.quote.selectedText;
+      }
     }
     if (input.parts && input.parts.length > 0) {
       body.parts = input.parts;
@@ -4232,22 +4232,25 @@ export class ApiClient {
       parts?: MessagePart[];
       replyToMessageId?: string | null;
       clientMessageId?: string | null;
-      quoteMessageId?: string | null;
+      quote?: ChannelMessageQuoteInput | null;
     },
   ): Promise<ChannelMessage> {
     // Same as sendChannelMessage: attachment truth is `parts`, not attachment_ids.
     const body: {
       content: string;
       reply_to_message_id?: string;
-      quote_message_id?: string;
+      quote?: { message_id: string; selected_text?: string };
       parts?: MessagePart[];
       client_message_id?: string;
     } = { content: input.content };
     if (input.replyToMessageId) {
       body.reply_to_message_id = input.replyToMessageId;
     }
-    if (input.quoteMessageId) {
-      body.quote_message_id = input.quoteMessageId;
+    if (input.quote) {
+      body.quote = { message_id: input.quote.messageId };
+      if (input.quote.selectedText) {
+        body.quote.selected_text = input.quote.selectedText;
+      }
     }
     if (input.parts && input.parts.length > 0) {
       body.parts = input.parts;
@@ -4309,6 +4312,19 @@ export class ApiClient {
     });
     return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
       endpoint: "POST /api/channels/:id/goal",
+    });
+  }
+
+  async bootstrapChannelGoalControlPlane(
+    channelId: string,
+    input: BootstrapChannelGoalControlPlaneRequest,
+  ): Promise<ChannelGoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal/bootstrap`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
+      endpoint: "POST /api/channels/:id/goal/bootstrap",
     });
   }
 

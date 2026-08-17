@@ -61,19 +61,39 @@ func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
 	}
 }
 
+func TestDaemonConnectionURLIsWorkspaceScoped(t *testing.T) {
+	got, err := daemonConnectionURL("https://api.example.com/multica", "workspace-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "wss://api.example.com/multica/api/daemon/connect?workspace_id=workspace-1"
+	if got != want {
+		t.Fatalf("daemonConnectionURL() = %q, want %q", got, want)
+	}
+}
+
+func TestDaemonConnectionConnectedTracksSocketLifetime(t *testing.T) {
+	connection := newDaemonConnection("workspace-1", context.Background(), func(string, any) error { return nil }, func() {})
+	if !connection.Connected() {
+		t.Fatal("new DaemonConnection must start connected")
+	}
+	connection.Close()
+	if connection.Connected() {
+		t.Fatal("closed DaemonConnection must not stay connected")
+	}
+}
+
 func TestWorkspaceRunnerConnectionSerializesConcurrentWrites(t *testing.T) {
 	var active atomic.Int64
 	var maximum atomic.Int64
-	connection := &workspaceRunnerConnection{
-		write: func(string, any) error {
-			current := active.Add(1)
-			for current > maximum.Load() && !maximum.CompareAndSwap(maximum.Load(), current) {
-			}
-			time.Sleep(time.Millisecond)
-			active.Add(-1)
-			return nil
-		},
-	}
+	connection := newDaemonConnection("workspace-1", context.Background(), func(string, any) error {
+		current := active.Add(1)
+		for current > maximum.Load() && !maximum.CompareAndSwap(maximum.Load(), current) {
+		}
+		time.Sleep(time.Millisecond)
+		active.Add(-1)
+		return nil
+	}, func() {})
 	var writes sync.WaitGroup
 	for index := 0; index < 20; index++ {
 		writes.Add(1)
@@ -148,16 +168,10 @@ func TestWorkspaceRunnerControlHeartbeatUsesExactWorkspaceRuntimeSet(t *testing.
 		payload   any
 	}
 	frames := make(chan controlFrame, 3)
-	connection := &workspaceRunnerConnection{
-		workspaceID: "workspace-1",
-		ctx:         ctx,
-		cancel:      cancel,
-		write: func(eventType string, payload any) error {
-			frames <- controlFrame{eventType: eventType, payload: payload}
-			return nil
-		},
-		close: func() {},
-	}
+	connection := newDaemonConnection("workspace-1", ctx, func(eventType string, payload any) error {
+		frames <- controlFrame{eventType: eventType, payload: payload}
+		return nil
+	}, func() {})
 	runner.replaceConnection(connection)
 	done := make(chan struct{})
 	go func() {
@@ -193,24 +207,25 @@ func TestWorkspaceRunnerControlHeartbeatUsesExactWorkspaceRuntimeSet(t *testing.
 
 func TestWorkspaceRunnerReconnectReplacesConnectionContextAndWriter(t *testing.T) {
 	runner := &WorkspaceRunner{}
-	firstCtx, firstCancel := context.WithCancel(context.Background())
-	secondCtx, secondCancel := context.WithCancel(context.Background())
 	var firstClosed, secondClosed atomic.Int64
-	first := &workspaceRunnerConnection{ctx: firstCtx, cancel: firstCancel, write: func(string, any) error { return nil }, close: func() { firstClosed.Add(1) }}
-	second := &workspaceRunnerConnection{ctx: secondCtx, cancel: secondCancel, write: func(string, any) error { return nil }, close: func() { secondClosed.Add(1) }}
+	first := newDaemonConnection("workspace-1", context.Background(), func(string, any) error { return nil }, func() { firstClosed.Add(1) })
+	second := newDaemonConnection("workspace-1", context.Background(), func(string, any) error { return nil }, func() { secondClosed.Add(1) })
 	runner.replaceConnection(first)
 	runner.replaceConnection(second)
 	select {
-	case <-firstCtx.Done():
+	case <-first.ctx.Done():
 	default:
 		t.Fatal("reconnect did not cancel the replaced connection context")
+	}
+	if first.Connected() {
+		t.Fatal("replaced DaemonConnection must not stay connected")
 	}
 	if firstClosed.Load() != 1 || runner.connection != second {
 		t.Fatalf("first close count=%d current=%p want second=%p", firstClosed.Load(), runner.connection, second)
 	}
 	runner.releaseConnection(second)
 	select {
-	case <-secondCtx.Done():
+	case <-second.ctx.Done():
 	default:
 		t.Fatal("release did not cancel the current connection context")
 	}
@@ -237,6 +252,9 @@ func TestComputerSupervisesProcessAndBindingChildOwnsWorkspaceRunner(t *testing.
 	}
 	if !strings.Contains(string(childRaw), "runner.Run(runCtx)") {
 		t.Fatal("Binding child does not own WorkspaceRunner.Run")
+	}
+	if !strings.Contains(string(childRaw), "adoptWorkspaceRunner(runner)") {
+		t.Fatal("Binding child does not publish its Workspace Runner for Credential Proxy lookup")
 	}
 	if !strings.Contains(string(supervisorRaw), "type BindingSupervisor struct") || !strings.Contains(string(supervisorRaw), "child.Wait()") {
 		t.Fatal("computer package does not own Binding child supervision")

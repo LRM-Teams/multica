@@ -144,7 +144,7 @@ export function useUpdateAgent(wsId: string) {
           toast.success(t(($) => $.detail.agent_updated_toast));
           return;
         }
-        await api.resetAgent(id, "restart", crypto.randomUUID());
+        await api.resetAgent(id, "restart");
         toast.success(t(($) => $.detail.agent_updated_toast));
       } catch {
         // Config already saved. Restart owns no toast surface; the explicit

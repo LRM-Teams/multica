@@ -1,0 +1,2 @@
+ALTER TABLE graph_memory_profile RENAME CONSTRAINT graph_memory_profile_memory_type_check TO graph_memory_profile_reviewer_type_check;
+ALTER TABLE graph_memory_profile RENAME COLUMN memory_type TO reviewer_type;

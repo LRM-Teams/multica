@@ -554,11 +554,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 		r.Post("/register", h.DaemonRegister)
 		r.Post("/deregister", h.DaemonDeregister)
-		r.Post("/starting", h.DaemonMarkStarting)
 		r.Post("/heartbeat", h.DaemonHeartbeat)
+		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+		// longer a supported direct self-upgrade source.
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
-		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
-		r.Post("/computer/machine-upgrades/{upgradeId}/takeover", h.CommitComputerMachineUpgradeTakeover)
+		r.Get("/connect", h.DaemonWebSocket)
+		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+		// longer a supported direct self-upgrade source.
 		r.Get("/ws", h.DaemonWebSocket)
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
@@ -567,9 +569,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
-		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/accept", h.AcceptMachineUpgrade)
-		r.Get("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}", h.GetDaemonMachineUpgrade)
-		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/progress", h.ReportMachineUpgradeProgress)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
@@ -579,6 +578,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
+		r.Post("/graph-memory/judge", h.ReportGraphMemoryJudge)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/progress", h.ReportTaskProgress)
@@ -683,6 +683,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
 					r.Get("/memory-curation/profile", h.GetMemoryCuratorProfile)
 					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)
+					r.Get("/graph-memory/profile", h.GetGraphMemoryProfile)
+					r.Put("/graph-memory/profile", h.UpdateGraphMemoryProfile)
 					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
 					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)
@@ -1146,7 +1148,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
 					r.Post("/reset", h.ResetAgent)
-					r.Get("/reset/{operationId}", h.GetAgentRestartOperation)
 					// Workspace Runner Activity is the only public Agent Activity
 					// contract. It is a server-owned presentation read model; there is
 					// no compatibility translation from the removed event timeline.
@@ -1232,12 +1233,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/activity", h.GetRuntimeTaskActivity)
 					r.Get("/agent-workspaces", h.ListRuntimeAgentWorkspaces)
 					r.Delete("/agent-workspaces/{dirName}", h.DeleteRuntimeAgentWorkspace)
-					// Installed clients still use these runtime-scoped paths. They
-					// delegate to the daemon-scoped Machine Upgrade record and must
-					// never recreate a runtime-owned update lineage.
-					r.Post("/update", h.InitiateUpdate)
-					r.Get("/update/{updateId}", h.GetUpdate)
-					r.Delete("/update-intent", h.CancelUpdateIntent)
 					r.Post("/restart", h.InitiateRestart)
 					r.Get("/restart/{restartId}", h.GetRestart)
 					r.Post("/models", h.InitiateListModels)
@@ -1257,12 +1252,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
-			// Canonical daemon-identity Machine Upgrade lifecycle. Runtime-scoped
-			// update routes remain compatibility adapters for installed clients.
+			// Computer upgrade dispatch. Progress and completion come back on
+			// the current Binding socket, not as HTTP receipts.
 			r.Route("/api/daemons/{daemonId}/upgrades", func(r chi.Router) {
 				r.Post("/", h.CreateMachineUpgrade)
-				r.Get("/{upgradeId}", h.GetMachineUpgrade)
-				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
 			// Public Computer Workspace-connection establishment. Deletion is
@@ -1541,6 +1534,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/goal", h.GetChannelGoal)
 					r.Post("/goal", h.CreateChannelGoal)
 					r.Patch("/goal", h.UpdateChannelGoal)
+					r.Post("/goal/bootstrap", h.BootstrapChannelGoalControlPlane)
 					r.Get("/goal/subgoals", h.ListChannelGoalSubgoals)
 					r.Post("/goal/subgoals", h.CreateChannelGoalSubgoal)
 					r.Post("/goal/subgoals/batch", h.BatchCreateChannelGoalSubgoals)

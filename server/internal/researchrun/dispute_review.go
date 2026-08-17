@@ -9,6 +9,7 @@ type DisputeReviewPosition struct {
 	PositionID    string
 	AuthorAgentID string
 	ClaimIDs      []string
+	EvidenceIDs   []string
 	ScopeHash     string
 }
 
@@ -50,7 +51,8 @@ func PlanDisputeReview(input DisputeReviewInput) ([]DisputeReviewTask, error) {
 	excludedAuthors := sortedStringSet(authors)
 	tasks := make([]DisputeReviewTask, 0, len(input.Positions)+2)
 	for _, position := range input.Positions {
-		visible := append([]string{input.SubjectArtifactID}, position.ClaimIDs...)
+		visible := append([]string{input.DisputeID, input.SubjectArtifactID, position.PositionID}, position.ClaimIDs...)
+		visible = append(visible, position.EvidenceIDs...)
 		visible = uniqueSortedStrings(visible)
 		tasks = append(tasks, DisputeReviewTask{
 			TaskKey:            "dispute-review:" + input.DisputeID + ":" + position.PositionID,
@@ -62,17 +64,25 @@ func PlanDisputeReview(input DisputeReviewInput) ([]DisputeReviewTask, error) {
 		})
 	}
 	if input.Kind == "method" {
+		methodVisible := []string{input.DisputeID, input.SubjectArtifactID}
+		for _, position := range input.Positions {
+			methodVisible = append(methodVisible, position.PositionID)
+			methodVisible = append(methodVisible, position.ClaimIDs...)
+			methodVisible = append(methodVisible, position.EvidenceIDs...)
+		}
 		tasks = append(tasks, DisputeReviewTask{
 			TaskKey:            "dispute-method-review:" + input.DisputeID,
 			Purpose:            "review_measurement_sample_bias_and_comparability",
 			RequiredCapability: "methodologist",
-			VisibleArtifactIDs: []string{input.SubjectArtifactID},
+			VisibleArtifactIDs: uniqueSortedStrings(methodVisible),
 			ExcludedAgentIDs:   append([]string(nil), excludedAuthors...),
 		})
 	}
-	allClaims := []string{input.SubjectArtifactID}
+	allClaims := []string{input.DisputeID, input.SubjectArtifactID}
 	for _, position := range input.Positions {
+		allClaims = append(allClaims, position.PositionID)
 		allClaims = append(allClaims, position.ClaimIDs...)
+		allClaims = append(allClaims, position.EvidenceIDs...)
 	}
 	tasks = append(tasks, DisputeReviewTask{
 		TaskKey:            "dispute-distinguish:" + input.DisputeID,

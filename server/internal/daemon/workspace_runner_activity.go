@@ -47,6 +47,10 @@ func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase 
 	if !found || runner.activity == nil || launch.ProcessInstanceID == "" {
 		return
 	}
+	if launch.QueueState == protocol.AgentStartQueueRunning && phase != "Managed start" {
+		// After APM admits Running, later Messages must not repaint Starting.
+		return
+	}
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting,
 		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
@@ -69,10 +73,9 @@ func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID st
 	}, "Resident runtime ready")
 }
 
-// publishManagedAgentStartActivity runs only after the active status has been
-// written on a Workspace Runner connection. The server fences Activity on an
-// active launch, so publishing these snapshots from completeManagedAgentStart
-// would put them on the wire before the status that authorizes them.
+// publishManagedAgentStartActivity runs only after a new provider spawn has
+// written active status. Replayed starts must not call this: Raft's
+// rebindRunningStart republishes status/session and leaves lastActivity alone.
 func (runner *WorkspaceRunner) publishManagedAgentStartActivity(agentID, runtimeID string) {
 	runner.observeRuntimeStarting(agentID, runtimeID, "Managed start")
 	runner.observeResidentRuntimeReady(agentID, runtimeID)
@@ -203,6 +206,10 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	switch message.Type {
 	case agent.MessageThinking:
 		kind = AgentObservationRuntimeThinking
+	case agent.MessageText:
+		// Raft 1.0.16: runtime text is Working / model_response_started.
+		// Do not parse reply content into the timeline.
+		kind = AgentObservationRuntimeWorking
 	case agent.MessageCompactionStarted:
 		kind = AgentObservationRuntimeCompacting
 	case agent.MessageCompactionFinished:
@@ -290,7 +297,7 @@ func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.Agen
 	}, "Runtime failure")
 }
 
-func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
+func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string, messages []protocol.AgentMessageProjection, publishHandoff bool) {
 	if len(messages) == 0 {
 		return
 	}
@@ -308,6 +315,9 @@ func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string,
 			AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationMessageBodyAccepted,
 			Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID, HandoffID: handoffID, MessageCount: len(messages)}, At: time.Now().UTC(),
 		}, "Message accepted")
+	}
+	if !publishHandoff {
+		return
 	}
 	targets := make([]string, 0, len(targetSet))
 	for target := range targetSet {

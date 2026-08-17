@@ -82,13 +82,6 @@ func TestDaemonRegister_RevokedWorkspaceBindingDoesNotFallbackToSession(t *testi
 
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/daemon/starting" {
-			// Best-effort mark-starting call registerRuntimesForWorkspace now
-			// fires before the register retries this test is about; not
-			// this test's concern.
-			w.WriteHeader(http.StatusOK)
-			return
-		}
 		if got := r.URL.Path; got != "/api/daemon/register" {
 			t.Fatalf("path = %q, want /api/daemon/register", got)
 		}
@@ -124,7 +117,6 @@ func TestDaemonRegister_RevokedWorkspaceBindingDoesNotFallbackToSession(t *testi
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SetToken("mul-profile")
 	c.SetWorkspaceDaemonToken("ws-1", "mdt-old", time.Now().Add(time.Hour))
 	c.SetRuntimeDaemonToken("old-rt", "mdt-old", time.Now().Add(time.Hour))
 
@@ -1562,7 +1554,7 @@ func TestWatchTaskCancellation_TaskDeleted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	cancelled := d.watchTaskCancellation(ctx, "task-deleted", 10*time.Millisecond, slog.Default())
+	cancelled := d.watchTaskCancellation(ctx, "task-deleted", "rt-1", 10*time.Millisecond, slog.Default())
 
 	select {
 	case <-cancelled:
@@ -1592,7 +1584,7 @@ func TestWatchTaskCancellation_StatusCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	cancelled := d.watchTaskCancellation(ctx, "task-cancelled", 10*time.Millisecond, slog.Default())
+	cancelled := d.watchTaskCancellation(ctx, "task-cancelled", "rt-1", 10*time.Millisecond, slog.Default())
 
 	select {
 	case <-cancelled:
@@ -1618,7 +1610,7 @@ func TestWatchTaskCancellation_RunningTaskNotInterrupted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	cancelled := d.watchTaskCancellation(ctx, "task-running", 10*time.Millisecond, slog.Default())
+	cancelled := d.watchTaskCancellation(ctx, "task-running", "rt-1", 10*time.Millisecond, slog.Default())
 
 	select {
 	case <-cancelled:
@@ -2229,6 +2221,50 @@ func TestExecuteAndDrain_DoesNotEmitEmptyThinkingPhase(t *testing.T) {
 	}
 }
 
+func TestExecuteAndDrainDoesNotPublishResidentActivity(t *testing.T) {
+	// Inbox/issue tasks share a live resident, but their stream must not
+	// steal the Activity tab. Working/tool rows belong to handoffIdleMessages.
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	ack, err := runner.processes.Start(agentProcessStartRequest{
+		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-a", StartDispatchID: "launch-a-dispatch",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.SetManaged(
+		protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive},
+		protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	d.client = NewClient(srv.URL)
+
+	backend := messageStreamBackend{messages: []agent.Message{
+		{Type: agent.MessageText, Content: "pong71"},
+		{Type: agent.MessageToolUse, Tool: "read_file", CallID: "call-1", Input: map[string]any{"path": "MEMORY.md"}},
+	}}
+	if _, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", agent.ExecOptions{}, slog.Default(), canonicalInboxTaskForTest(Task{
+		ID: "task-no-activity", AgentID: "agent-a", RuntimeID: "runtime-1", WorkspaceID: "workspace-1",
+	})); err != nil {
+		t.Fatalf("executeAndDrainForTask: %v", err)
+	}
+	if len(activities) != 0 {
+		t.Fatalf("task path published resident Activity: %+v", activities)
+	}
+}
+
 func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	t.Parallel()
 
@@ -2246,10 +2282,14 @@ func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
+	d.client.SetRuntimeDaemonToken("rt-pin", "mdt-runtime", time.Now().Add(time.Hour))
 
 	backend := statusStreamBackend{sessionID: "sess-pin-1", statusCount: 1}
 	opts := agent.ExecOptions{Cwd: "/work/task-pin"}
-	result, _, err := d.executeAndDrain(context.Background(), backend, "prompt", opts, slog.Default(), "task-pin")
+	result, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", opts, slog.Default(), canonicalInboxTaskForTest(Task{
+		ID:        "task-pin",
+		RuntimeID: "rt-pin",
+	}))
 	if err != nil {
 		t.Fatalf("executeAndDrain error: %v", err)
 	}
@@ -2274,7 +2314,7 @@ func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	}
 }
 
-func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
+func TestExecuteAndDrain_DoesNotRecordIssueRunSessionIntoResidentCache(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, slog.Default())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2285,8 +2325,11 @@ func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
 
 	agentID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	runtimeID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	backend := statusStreamBackend{sessionID: "live-provider-sess", statusCount: 1}
-	_, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", agent.ExecOptions{Cwd: "/work"}, slog.Default(), Task{
+	if err := d.agentRuntimeSessions.Put(agentID, runtimeID, "resident-session"); err != nil {
+		t.Fatal(err)
+	}
+	backend := statusStreamBackend{sessionID: "issue-run-session", statusCount: 1}
+	_, _, err := d.executeAndDrainForTask(context.Background(), backend, "prompt", agent.ExecOptions{Cwd: "/work/issue-run"}, slog.Default(), Task{
 		ID:        "task-live-session",
 		AgentID:   agentID,
 		RuntimeID: runtimeID,
@@ -2295,19 +2338,13 @@ func TestExecuteAndDrain_RecordsLiveProviderSessionForRestart(t *testing.T) {
 		t.Fatalf("executeAndDrainForTask: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	var got string
-	for time.Now().Before(deadline) {
-		got, err = d.agentRuntimeSessions.Get(agentID, runtimeID)
-		if err != nil {
-			t.Fatalf("read session store: %v", err)
-		}
-		if got == "live-provider-sess" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	got, err := d.agentRuntimeSessions.Get(agentID, runtimeID)
+	if err != nil {
+		t.Fatalf("read session store: %v", err)
 	}
-	t.Fatalf("session store = %q, want live-provider-sess (production never recorded the live provider session)", got)
+	if got != "resident-session" {
+		t.Fatalf("resident cache = %q, want resident-session (issue-run must not overwrite start.config.sessionId)", got)
+	}
 }
 
 // TestExecuteAndDrain_PinsTaskSessionOnlyOnce covers the

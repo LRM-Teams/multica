@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,78 @@ while IFS= read -r line; do
   esac
 done
 `
+}
+
+func TestGrokImplementsCanonicalIdleMessageInput(t *testing.T) {
+	backend := NewGrokACPBackend(Config{})
+	defer backend.Close()
+	if _, ok := backend.(ResidentMessageInput); !ok {
+		t.Fatal("Grok resident backend cannot accept an idle canonical Message batch")
+	}
+}
+
+func TestGrokAcceptsCanonicalIdleMessageAtNativePromptBoundary(t *testing.T) {
+	writer := &requestCaptureWriter{lines: make(chan []byte, 1)}
+	client := &acpClient{stdin: writer, pending: make(map[int]*pendingRPC)}
+	process := &grokACPProcess{client: client, sessionID: "session-grok"}
+	backend := newGrokACPBackend(Config{})
+	backend.process.Store(process)
+
+	type result struct {
+		acceptance ResidentMessageAcceptance
+		err        error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		acceptance, err := backend.AcceptMessageBatch(context.Background(), []ResidentMessage{{
+			ID:          "message-1",
+			Target:      "channel:internal-id",
+			ReplyTarget: "dm:@frank",
+			Seq:         7,
+			Content:     "please reply",
+			PartsJSON:   json.RawMessage(`[{"type":"text","text":"please reply"}]`),
+		}})
+		resultCh <- result{acceptance: acceptance, err: err}
+	}()
+
+	request := decodeCapturedRequest(t, writer.lines)
+	if request["method"] != "session/prompt" {
+		t.Fatalf("Grok idle Message method = %#v, want session/prompt", request["method"])
+	}
+	raw, err := json.Marshal(request["params"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Canonical Messages received while the runtime was idle", "message-1", "dm:@frank", "please reply"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("Grok idle Message prompt %s does not contain %q", raw, want)
+		}
+	}
+	if strings.Contains(string(raw), "channel:internal-id") {
+		t.Fatalf("Grok idle Message prompt exposed internal target: %s", raw)
+	}
+
+	var got result
+	select {
+	case got = <-resultCh:
+		if got.err != nil {
+			t.Fatalf("AcceptMessageBatch: %v", got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Grok did not acknowledge the native prompt write")
+	}
+	select {
+	case err := <-got.acceptance.Done:
+		t.Fatalf("Grok idle Message turn completed before native response: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	respondToNoticeRequest(t, request, client.handleLine)
+	for range got.acceptance.Messages {
+	}
+	if err := <-got.acceptance.Done; err != nil {
+		t.Fatalf("Grok idle Message turn: %v", err)
+	}
 }
 
 func TestGrokACPBackendStartsIsolatedAlwaysApprovedProcess(t *testing.T) {
@@ -91,6 +164,64 @@ func TestGrokACPBackendReusesOneChildForCompatibleTurns(t *testing.T) {
 	}
 	if p := b.process.Load(); p != nil {
 		b.disposeProcess(p)
+	}
+}
+
+func fakeGrokACPStaleLoadThenNewScript() string {
+	return `#!/bin/sh
+printf x >> "$GROK_TEST_STARTS"
+if [ -n "$GROK_TEST_ARGS" ]; then
+  printf '%s\n' "$@" > "$GROK_TEST_ARGS"
+fi
+: > "$GROK_TEST_RPC"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{}}}}\n' "$id" ;;
+    *'"session/load"'*)
+      printf '%s\n' "$line" >> "$GROK_TEST_RPC"
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"Path not found.","data":{"code":"FS_NOT_FOUND","detail":"No such file or directory (os error 2)"}}}\n' "$id"
+      ;;
+    *'"session/new"'*)
+      printf '%s\n' "$line" >> "$GROK_TEST_RPC"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fresh-grok-session"}}\n' "$id"
+      ;;
+    *'"session/prompt"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+  esac
+done
+`
+}
+
+func TestGrokACPBackendFallsBackToNewWhenSessionLoadPathMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "grok")
+	writeTestExecutable(t, path, []byte(fakeGrokACPStaleLoadThenNewScript()))
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rpcPath := filepath.Join(dir, "rpc")
+	b := newGrokACPBackend(Config{ExecutablePath: path, Env: map[string]string{
+		"GROK_HOME": dir, "GROK_TEST_STARTS": filepath.Join(dir, "starts"), "GROK_TEST_RPC": rpcPath,
+	}})
+	t.Cleanup(b.Close)
+
+	s, err := b.Execute(context.Background(), "hello", ExecOptions{Cwd: dir, ResumeSessionID: "stale-issue-run"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := <-s.Result
+	if got.Status != "completed" || got.SessionID != "fresh-grok-session" {
+		t.Fatalf("result = %+v, want completed fresh-grok-session", got)
+	}
+	rpc, err := os.ReadFile(rpcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rpc), `"session/load"`) || !strings.Contains(string(rpc), `"session/new"`) {
+		t.Fatalf("rpc log = %s, want session/load then session/new", rpc)
+	}
+	if b.process.Load() == nil {
+		t.Fatal("stale session/load disposed the process instead of keeping the fresh session")
 	}
 }
 

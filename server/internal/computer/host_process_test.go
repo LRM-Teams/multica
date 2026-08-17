@@ -69,39 +69,61 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	}
 }
 
+func TestHostProcessProjectsPreviousPackageTakeoverUntilLauncherExits(t *testing.T) {
+	var sourceAlive atomic.Bool
+	sourceAlive.Store(true)
+	state := &hostProcessState{
+		identity: HostProcessIdentity{
+			ComputerID: "computer-a", ComputerGeneration: 251, Version: "v0.4.24-alpha.57",
+			MachineAttestationFrom: 57261,
+		},
+		startedAt: time.Now(), ready: true,
+		previousPackageUpgradeBootstrap: true,
+		sourceProcessAlive: func(pid int) (bool, bool) {
+			if pid != 57261 {
+				t.Fatalf("source pid = %d, want 57261", pid)
+			}
+			return sourceAlive.Load(), true
+		},
+	}
+	handler := (&Host{}).processHealthHandler(state)
+	readStatus := func() string {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+		var health map[string]any
+		if err := json.NewDecoder(recorder.Body).Decode(&health); err != nil {
+			t.Fatal(err)
+		}
+		status, _ := health["status"].(string)
+		return status
+	}
+	if got := readStatus(); got != "takeover_ready" {
+		t.Fatalf("previous launcher alive: status = %q, want takeover_ready", got)
+	}
+	sourceAlive.Store(false)
+	if got := readStatus(); got != "running" {
+		t.Fatalf("previous launcher exited: status = %q, want running", got)
+	}
+}
+
 func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	const token = "owner-secret"
-	reregistered := make(chan struct{}, 2)
 	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != token {
 			http.Error(w, "unexpected child control request", http.StatusBadRequest)
 			return
 		}
-		reregistered <- struct{}{}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer childControl.Close()
 
-	attested := make(chan struct{}, 2)
-	acceptStarted := make(chan struct{}, 1)
-	acceptGate := make(chan struct{})
 	var acceptCount atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
 			acceptCount.Add(1)
-			select {
-			case acceptStarted <- struct{}{}:
-			default:
-			}
-			<-acceptGate
-			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
-				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: stringPointer("generation-a"),
-				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
-			})
-		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
-			attested <- struct{}{}
-			w.WriteHeader(http.StatusNoContent)
+			t.Error("Host accepted a forwarded heartbeat Machine Upgrade")
+			http.Error(w, "Host must not execute Machine Upgrade", http.StatusConflict)
 		default:
 			http.NotFound(w, r)
 		}
@@ -126,7 +148,7 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 			Listener: listener,
 			Identity: HostProcessIdentity{
 				ComputerID: "computer-a", ComputerGeneration: 9, Environment: "test",
-				Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: upstream.URL,
+				Version: "v1.0.0", ServerURL: upstream.URL,
 			},
 			DesiredWorkspaceIDs: func() ([]string, error) { return []string{"workspace-a"}, nil },
 		})
@@ -146,31 +168,9 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("forward Machine Upgrade: %v", err)
 	}
-	select {
-	case <-acceptStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Computer Host did not accept Machine Upgrade")
-	}
-	if err := hostClient.ForwardMachineActions(context.Background(), protocol.DaemonHeartbeatAckPayload{
-		RuntimeID:             "runtime-a",
-		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v1.0.0"},
-	}); err != nil {
-		t.Fatalf("forward duplicate Machine Upgrade: %v", err)
-	}
 	time.Sleep(50 * time.Millisecond)
-	close(acceptGate)
-	if got := acceptCount.Load(); got != 1 {
-		t.Fatalf("Machine Upgrade accept count = %d, want one machine-scoped owner", got)
-	}
-	select {
-	case <-reregistered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Computer Host did not ask the Binding child to re-register")
-	}
-	select {
-	case <-attested:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Computer Host did not attest the already-current Machine Upgrade")
+	if got := acceptCount.Load(); got != 0 {
+		t.Fatalf("Host executed forwarded heartbeat upgrade %d times, want 0", got)
 	}
 	cancel()
 	if err := <-done; err != nil {

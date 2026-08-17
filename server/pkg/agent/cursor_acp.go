@@ -42,7 +42,7 @@ type CursorACPBackend interface {
 //   - initialize → authMethods includes cursor_login
 //   - session/new requires authenticate(methodId=cursor_login) after agent login
 //   - mcpServers must be an array
-//   - permission is server→client session/request_permission (hermesClient)
+//   - permission is server→client session/request_permission (acpClient)
 type cursorACPBackend struct {
 	cfg Config
 
@@ -71,7 +71,7 @@ type cursorACPBackend struct {
 type cursorACPProcess struct {
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
-	client     *hermesClient
+	client     *acpClient
 	readerDone chan struct{}
 	stderrDone chan struct{}
 	sessionID  string
@@ -424,7 +424,7 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 		return nil, fmt.Errorf("start cursor ACP: %w", err)
 	}
 	p := &cursorACPProcess{cmd: cmd, stdin: stdin, readerDone: make(chan struct{}), stderrDone: make(chan struct{})}
-	p.client = &hermesClient{
+	p.client = &acpClient{
 		cfg: b.cfg, stdin: stdin, pending: make(map[int]*pendingRPC), pendingTools: make(map[string]*pendingToolCall),
 		onMessage: func(msg Message) {
 			p.stateMu.Lock()

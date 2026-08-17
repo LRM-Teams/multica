@@ -93,9 +93,6 @@ func (h *Handler) requireDaemonRuntimeAccess(w http.ResponseWriter, r *http.Requ
 	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(rt.WorkspaceID)) {
 		return db.AgentRuntime{}, false
 	}
-	if rt.DaemonID.Valid && !h.requireCurrentComputerGeneration(w, r, rt.DaemonID.String) {
-		return db.AgentRuntime{}, false
-	}
 	return rt, true
 }
 
@@ -172,23 +169,20 @@ func (h *Handler) verifyDaemonWorkspaceAccess(r *http.Request, workspaceID strin
 // ---------------------------------------------------------------------------
 
 type DaemonRegisterRequest struct {
-	WorkspaceID        string `json:"workspace_id"`
-	DaemonID           string `json:"daemon_id"`
-	ComputerGeneration int64  `json:"computer_generation,omitempty"`
+	WorkspaceID string `json:"workspace_id"`
+	DaemonID    string `json:"daemon_id"`
 	// LegacyDaemonIDs lists prior hostname-derived daemon_ids this machine
 	// may have registered under before switching to a persistent UUID. The
 	// handler merges any matching runtime rows into the new row so agents
 	// and tasks keep working without manual intervention.
-	LegacyDaemonIDs                  []string                          `json:"legacy_daemon_ids"`
-	DeviceName                       string                            `json:"device_name"`
-	OS                               string                            `json:"os"`
-	CLIVersion                       string                            `json:"cli_version"` // multica CLI version
-	LaunchedBy                       string                            `json:"launched_by"` // "desktop" when spawned by the Electron app
-	Capabilities                     []string                          `json:"capabilities"`
-	MachineUpgradeGeneration         string                            `json:"machine_upgrade_generation,omitempty"`
-	MachineUpgradeRollbackGeneration string                            `json:"machine_upgrade_rollback_generation,omitempty"`
-	SandboxInstanceID                string                            `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
-	UpdateObservation                *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
+	LegacyDaemonIDs   []string                          `json:"legacy_daemon_ids"`
+	DeviceName        string                            `json:"device_name"`
+	OS                string                            `json:"os"`
+	CLIVersion        string                            `json:"cli_version"` // multica CLI version
+	LaunchedBy        string                            `json:"launched_by"` // "desktop" when spawned by the Electron app
+	Capabilities      []string                          `json:"capabilities"`
+	SandboxInstanceID string                            `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
+	UpdateObservation *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
 	// PinnedVersion mirrors the daemon's MULTICA_PINNED_VERSION (task #81);
 	// empty means not pinned. Sent unconditionally on every register so
 	// unpinning a machine clears the stale value server-side too.
@@ -251,8 +245,6 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	req.WorkspaceID = strings.TrimSpace(req.WorkspaceID)
 	req.DaemonID = strings.TrimSpace(req.DaemonID)
 	req.DeviceName = strings.TrimSpace(req.DeviceName)
-	req.MachineUpgradeGeneration = strings.TrimSpace(req.MachineUpgradeGeneration)
-	req.MachineUpgradeRollbackGeneration = strings.TrimSpace(req.MachineUpgradeRollbackGeneration)
 
 	if req.DaemonID == "" {
 		writeError(w, http.StatusBadRequest, "daemon_id is required")
@@ -290,22 +282,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		ownerID = member.UserID
 	}
-	if req.ComputerGeneration > 0 {
-		if err := h.authorizeComputerConnectionRequest(r.Context(), r, req.DaemonID, req.WorkspaceID); err != nil {
-			if errors.Is(err, errComputerConnectionUnauthorized) {
-				writeError(w, http.StatusForbidden, err.Error())
-			} else {
-				writeError(w, http.StatusInternalServerError, "failed to authorize Computer connection")
-			}
-			return
-		}
-		if err := h.claimComputerGeneration(r.Context(), req.DaemonID, req.ComputerGeneration); err != nil {
-			writeCodedError(w, http.StatusConflict, "stale_computer_generation", err.Error())
-			return
-		}
-	} else if !h.requireCurrentComputerGeneration(w, r, req.DaemonID) {
-		return
-	}
+	// Live ownership is the current connect socket. Register no longer
+	// claims or fences a cloud Computer generation.
 
 	// Registration and permanent removal share one workspace+daemon advisory
 	// lock. Holding it across the tombstone check, runtime upserts, and token
@@ -406,9 +384,6 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			"launched_by":  req.LaunchedBy,
 			"capabilities": capabilities,
 		}
-		if req.MachineUpgradeGeneration != "" {
-			metadataMap["machine_upgrade_generation"] = req.MachineUpgradeGeneration
-		}
 		// Persist the structured device_name the daemon already sends so the
 		// API can expose it without re-parsing the glued device_info string.
 		if req.DeviceName != "" {
@@ -507,9 +482,6 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	h.cacheDaemonRegisterToken(r.Context(), daemonToken, wsUUID, req.DaemonID)
 	for _, registered := range registeredRuntimes {
 		h.completeRuntimeUpdateOnTargetRegister(r, registered.runtime, req.CLIVersion)
-		h.attestLegacyMachineUpgradeRegistration(r, registered.runtime, req.CLIVersion)
-		h.attestMachineUpgradeRegistration(r, registered.runtime, req.CLIVersion, req.MachineUpgradeGeneration)
-		h.attestMachineUpgradeRollbackRegistration(r, registered.runtime, req.CLIVersion, req.MachineUpgradeRollbackGeneration)
 		// Inserted is false for normal daemon reconnects/upserts, so
 		// runtime_ready is a first-ready-per-runtime-row signal.
 		if registered.inserted {
@@ -583,116 +555,6 @@ func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.A
 	}
 	if err := h.UpdateStore.Complete(r.Context(), update.ID, "Daemon registered updated CLI "+version); err != nil {
 		slog.Warn("failed to complete runtime update during register", "error", err, "runtime_id", runtimeID, "update_id", update.ID)
-	}
-}
-
-// claimLegacyMachineUpgrade binds a queued daemon upgrade to the legacy
-// PendingUpdate carrier. The MachineUpgrade row remains the lifecycle owner;
-// daemon_runtime_update only transports work to a daemon that predates
-// machine_upgrade_v1.
-func (h *Handler) claimLegacyMachineUpgrade(ctx context.Context, rt db.AgentRuntime) error {
-	if h == nil || h.MachineUpgradeStore == nil || h.UpdateStore == nil {
-		return nil
-	}
-	runtimeID := uuidToString(rt.ID)
-	runtimeIDs, err := h.machineUpgradeRuntimeIDs(ctx, rt)
-	if err != nil {
-		return err
-	}
-	sourceVersion := ""
-	if current := runtimeCurrentVersion(runtimeMetadata(rt)); current != nil {
-		sourceVersion = *current
-	}
-	op, err := h.MachineUpgradeStore.ClaimQueuedLegacy(ctx, runtimeDaemonKey(rt), runtimeID, sourceVersion, runtimeIDs)
-	if err != nil || op == nil {
-		return err
-	}
-	target, err := h.resolveLegacyMachineUpgradeTarget(ctx, op)
-	if err != nil {
-		_, _ = h.MachineUpgradeStore.Progress(ctx, op.DaemonID, op.ID, MachineUpgradeFailed, "release_target_unavailable", err.Error())
-		return err
-	}
-	carrier, err := h.UpdateStore.CreateWithID(ctx, op.ID, runtimeID, target)
-	if err != nil {
-		_, _ = h.MachineUpgradeStore.Progress(ctx, op.DaemonID, op.ID, MachineUpgradeFailed, "legacy_update_create_failed", err.Error())
-		return err
-	}
-	if carrier.ID != op.ID {
-		return errors.New("legacy update carrier did not retain machine upgrade ID")
-	}
-	h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
-		"runtime": h.runtimeToResponse(ctx, rt),
-	})
-	return nil
-}
-
-func (h *Handler) resolveLegacyMachineUpgradeTarget(ctx context.Context, op *MachineUpgrade) (string, error) {
-	if op == nil {
-		return "", errors.New("machine upgrade operation is missing")
-	}
-	target := strings.TrimSpace(op.RequestedTarget)
-	if target != "" && target != "latest" {
-		return target, nil
-	}
-	if h.RuntimeReleaseSource == nil {
-		return "", errors.New("latest release is unavailable")
-	}
-	release, err := h.RuntimeReleaseSource.Latest(ctx)
-	if err != nil {
-		return "", err
-	}
-	if release == nil || strings.TrimSpace(release.TagName) == "" {
-		return "", errors.New("latest release is unavailable")
-	}
-	return strings.TrimSpace(release.TagName), nil
-}
-
-// reconcileLegacyMachineUpgrade turns durable carrier timeouts and recovered
-// reports into canonical terminal/progress states. PopPending itself is not an
-// acceptance receipt, so a merely claimed carrier remains "starting".
-func (h *Handler) reconcileLegacyMachineUpgrade(ctx context.Context, rt db.AgentRuntime) {
-	if h == nil || h.MachineUpgradeStore == nil || h.UpdateStore == nil {
-		return
-	}
-	op, err := h.MachineUpgradeStore.LatestForDaemon(ctx, runtimeDaemonKey(rt))
-	if err != nil || op == nil || op.AcceptedGeneration == nil || *op.AcceptedGeneration != legacyMachineUpgradeAcceptanceMarker || op.Phase.terminal() {
-		return
-	}
-	carrier, err := h.UpdateStore.Get(ctx, op.ID)
-	if err != nil || carrier == nil || carrier.RuntimeID != uuidToString(rt.ID) {
-		return
-	}
-	switch carrier.Status {
-	case UpdateFailed:
-		_, _ = h.MachineUpgradeStore.Progress(ctx, op.DaemonID, op.ID, MachineUpgradeFailed, "legacy_update_failed", carrier.Error)
-	case UpdateTimeout:
-		_, _ = h.MachineUpgradeStore.Progress(ctx, op.DaemonID, op.ID, MachineUpgradeTimeout, "legacy_update_timeout", carrier.Error)
-	case UpdateReady, UpdateCompleted:
-		h.advanceLegacyMachineUpgradeToHandoff(ctx, rt, op, carrier.TargetVersion)
-	}
-}
-
-func (h *Handler) advanceLegacyMachineUpgradeToHandoff(ctx context.Context, rt db.AgentRuntime, op *MachineUpgrade, resolvedTarget string) {
-	if h == nil || h.MachineUpgradeStore == nil || op == nil {
-		return
-	}
-	current := op
-	if current.Phase == MachineUpgradeStarting {
-		updated, err := h.MachineUpgradeStore.AcceptLegacy(ctx, current.DaemonID, current.ID, uuidToString(rt.ID), resolvedTarget)
-		if err != nil || updated == nil {
-			return
-		}
-		current = updated
-	}
-	if current.Phase == MachineUpgradeStaging {
-		updated, err := h.MachineUpgradeStore.Progress(ctx, current.DaemonID, current.ID, MachineUpgradeVerifying, "", "")
-		if err != nil || updated == nil {
-			return
-		}
-		current = updated
-	}
-	if current.Phase == MachineUpgradeVerifying {
-		_, _ = h.MachineUpgradeStore.Progress(ctx, current.DaemonID, current.ID, MachineUpgradeHandoff, "", "")
 	}
 }
 
@@ -879,63 +741,6 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// DaemonMarkStarting records that a daemon is up and probing its agent CLIs,
-// before it has finished the (possibly ~20s) version-detection loop that
-// precedes a full DaemonRegister call. Best-effort and deliberately narrow:
-// it only touches runtime rows that already exist for this daemon_id (see
-// MarkAgentRuntimesStarting) — a daemon that has never registered before has
-// nothing to mark "starting" yet, and goes straight from nonexistent to
-// online on its first successful register, same as today.
-func (h *Handler) DaemonMarkStarting(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		WorkspaceID string `json:"workspace_id"`
-		DaemonID    string `json:"daemon_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	req.WorkspaceID = strings.TrimSpace(req.WorkspaceID)
-	req.DaemonID = strings.TrimSpace(req.DaemonID)
-	if req.DaemonID == "" {
-		writeError(w, http.StatusBadRequest, "daemon_id is required")
-		return
-	}
-	if req.WorkspaceID == "" {
-		writeError(w, http.StatusBadRequest, "workspace_id is required")
-		return
-	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, req.WorkspaceID, "workspace_id")
-	if !ok {
-		return
-	}
-	req.WorkspaceID = uuidToString(wsUUID)
-
-	// Same dual auth path as DaemonRegister: a daemon token (mdt_) proves
-	// workspace access directly; a PAT/JWT requires a membership check. In
-	// practice this call always arrives before any daemon token exists for
-	// the current process (in-memory only, never persisted across restarts —
-	// see applyRegisterDaemonToken), but mirroring the same check keeps this
-	// endpoint's auth semantics identical to register's rather than assuming.
-	if daemonWsID := middleware.DaemonWorkspaceIDFromContext(r.Context()); daemonWsID != "" {
-		if daemonWsID != req.WorkspaceID {
-			writeError(w, http.StatusNotFound, "workspace not found")
-			return
-		}
-	} else if _, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found"); !ok {
-		return
-	}
-
-	if err := h.Queries.MarkAgentRuntimesStarting(r.Context(), db.MarkAgentRuntimesStartingParams{
-		DaemonID:    strToText(req.DaemonID),
-		WorkspaceID: wsUUID,
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to mark runtimes starting")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
 type DaemonHeartbeatRequest struct {
 	RuntimeID                 string                            `json:"runtime_id"`
 	SupportsBatchImport       bool                              `json:"supports_batch_import,omitempty"`
@@ -1070,10 +875,6 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		outcome = "workspace_denied"
 		return
 	}
-	if rt.DaemonID.Valid && !h.requireCurrentComputerGeneration(w, r, rt.DaemonID.String) {
-		outcome = "stale_computer_generation"
-		return
-	}
 	authMs = time.Since(start).Milliseconds()
 
 	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport, req.SupportsMemoryCuration, req.ActiveMemoryCurationRunID, req.UpdateObservation)
@@ -1100,9 +901,6 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"status": ack.Status}
 	if ack.PendingUpdate != nil {
 		resp["pending_update"] = ack.PendingUpdate
-	}
-	if ack.PendingMachineUpgrade != nil {
-		resp["pending_machine_upgrade"] = ack.PendingMachineUpgrade
 	}
 	if ack.PendingModelList != nil {
 		resp["pending_model_list"] = ack.PendingModelList
@@ -1164,9 +962,6 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 		if (dynamicRunner && identity.DaemonID != rt.DaemonID.String) ||
 			(!dynamicRunner && identity.DaemonID != "" && identity.DaemonID != rt.DaemonID.String) {
 			return nil, fmt.Errorf("runtime not assigned to connection Computer")
-		}
-		if err := h.checkCurrentComputerGeneration(ctx, rt.DaemonID.String, payload.ComputerGeneration, payload.ComputerGeneration > 0); err != nil {
-			return nil, err
 		}
 	}
 	ack, _, err := h.processHeartbeat(ctx, rt, payload.SupportsBatchImport, payload.SupportsMemoryCuration, payload.ActiveMemoryCurationRunID, payload.UpdateObservation)
@@ -1305,28 +1100,6 @@ func (h *Handler) processHeartbeat(
 		}
 		ack.PendingMemoryCuration = pendingCuration
 	}
-	if agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMachineUpgrade) && h.MachineUpgradeStore != nil {
-		pending, err := h.MachineUpgradeStore.ClaimQueued(ctx, runtimeDaemonKey(rt))
-		if err != nil {
-			return nil, m, err
-		}
-		if pending != nil {
-			target := pending.RequestedTarget
-			ack.PendingMachineUpgrade = &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: pending.ID, TargetVersion: target}
-			h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{"runtime": h.runtimeToResponse(ctx, rt)})
-		}
-	} else if h.MachineUpgradeStore != nil && runtimeCurrentVersion(runtimeMetadata(rt)) != nil {
-		// Installed 0.4.13 daemons do not understand PendingMachineUpgrade,
-		// but they do understand PendingUpdate and report its lifecycle. Claim
-		// the canonical operation once, then use that old wire action strictly
-		// as the bootstrap carrier. A queued operation is not shown as started
-		// until the old daemon sends its running receipt.
-		if err := h.claimLegacyMachineUpgrade(ctx, rt); err != nil {
-			slog.Warn("legacy machine upgrade claim failed", "runtime_id", runtimeID, "error", err)
-		}
-	}
-	h.reconcileLegacyMachineUpgrade(ctx, rt)
-
 	// A heartbeat arriving IS the runtime being reachable right now — this is
 	// the fix for the 2026-08-01/02 incident where InitiateUpdate's old
 	// 120-second delivery window meant a sleeping laptop simply missed its

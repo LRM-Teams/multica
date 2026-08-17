@@ -130,7 +130,7 @@ func TestClearSystemdExecStartDropInsRemovesEmptyDir(t *testing.T) {
 func TestWriteSystemdUnitFileRendersExecStart(t *testing.T) {
 	dir := t.TempDir()
 	unitPath := filepath.Join(dir, "multica-daemon.service")
-	if err := writeSystemdUnitFile(unitPath, "/opt/multica/versions/v0.4.1/multica", []string{"daemon", "supervise"}); err != nil {
+	if err := writeSystemdUnitFile(unitPath, "/opt/multica/versions/v0.4.1/multica", []string{"computer", "supervise"}); err != nil {
 		t.Fatalf("writeSystemdUnitFile: %v", err)
 	}
 	body, err := os.ReadFile(unitPath)
@@ -138,7 +138,7 @@ func TestWriteSystemdUnitFileRendersExecStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(body)
-	if !strings.Contains(got, "ExecStart=/opt/multica/versions/v0.4.1/multica daemon supervise") {
+	if !strings.Contains(got, "ExecStart=/opt/multica/versions/v0.4.1/multica computer supervise") {
 		t.Fatalf("unit body missing expected ExecStart:\n%s", got)
 	}
 	if !strings.Contains(got, "Restart=always") {

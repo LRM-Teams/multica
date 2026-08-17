@@ -96,6 +96,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { useActorName } from "@multica/core/workspace/hooks";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-name";
 import { projectListOptions } from "@multica/core/projects/queries";
@@ -232,9 +233,16 @@ import {
 } from "./channel-notify-level";
 import { ChannelHashLandmark } from "./channel-hash-landmark";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
-import { ComposerQuotePreview } from "./message-quote";
-import type { QuoteTarget } from "./message-quote-types";
+import {
+  ComposerQuotePreview,
+  createComposerMessageQuoteTarget,
+} from "./message-quote";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
+import type { ResolvedMessageSelection } from "../lib/selection-quote";
+import {
+  composerQuotePayloadScope,
+  useComposerQuote,
+} from "../hooks/use-composer-quote";
 import {
   Composer,
   ConversationHeader,
@@ -251,7 +259,7 @@ import {
   ChannelListSkeleton,
   InitialChannelsShellSkeleton,
 } from "./conversation-sidebar-list-skeleton";
-import { type MentionPreviewResolver } from "./message-preview";
+import { mentionResolverFrom, type MentionPreviewResolver } from "./message-preview";
 import {
   ConversationUnreadAffordance,
   isConversationMuted,
@@ -520,6 +528,7 @@ export function ChannelsPage({
   const { t: tAgents } = useT("agents");
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
+  const { getActorName } = useActorName();
   const wsPaths = useWorkspacePaths();
   const { searchParams, replace, getShareableUrl, push } = useNavigation();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
@@ -755,12 +764,6 @@ export function ChannelsPage({
   // reply, and vice versa.
   const channelSend = useComposerSend();
   const threadSend = useComposerSend();
-  const [quoteState, setQuoteState] = useState<{
-    channelId: string | null;
-    target: QuoteTarget | null;
-    threadRootId: string | null;
-    threadTarget: QuoteTarget | null;
-  }>({ channelId: null, target: null, threadRootId: null, threadTarget: null });
   const threadEditorRef = useRef<ContentEditorRef>(null);
   // #772 send-failure → composer-restore state (channel main + channel thread).
   const [channelSendError, setChannelSendError] =
@@ -1028,30 +1031,64 @@ export function ChannelsPage({
   const channelPendingVoiceHere = active
     ? pendingVoices[voiceTargetId(active.id)] ?? null
     : null;
-  const quoteChannelId = active?.id ?? null;
-  const quoteThreadRootId = openThreadRoot?.id ?? null;
-  if (quoteState.channelId !== quoteChannelId || quoteState.threadRootId !== quoteThreadRootId) {
-    setQuoteState({
-      channelId: quoteChannelId,
-      target: null,
-      threadRootId: quoteThreadRootId,
-      threadTarget: null,
-    });
-  }
-  const quoteTarget = quoteState.channelId === quoteChannelId ? quoteState.target : null;
-  const threadQuoteTarget = quoteState.threadRootId === quoteThreadRootId ? quoteState.threadTarget : null;
-  const setQuoteTarget = useCallback((target: QuoteTarget | null) => {
-    setQuoteState((current) => ({ ...current, target }));
-  }, []);
-  const setThreadQuoteTarget = useCallback((target: QuoteTarget | null) => {
-    setQuoteState((current) => ({ ...current, threadTarget: target }));
-  }, []);
-  // LRM-695 — text-selection Quote/Copy mini-menu over the channel message area
-  // (desktop, fine pointer). Quote appends a `>` blockquote (author as plain
-  // text, no @) to the channel composer via the editor markdown pipeline.
+  const buildComposerQuote = useCallback(
+    (message: ChannelMessage) =>
+      createComposerMessageQuoteTarget(
+        message,
+        {
+          attachment: t(($) => $.quote.attachment_summary),
+          attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
+          image: t(($) => $.quote.image_summary),
+          images: (count) => t(($) => $.quote.images_summary, { count }),
+          empty: t(($) => $.quote.empty_summary),
+        },
+        mentionResolverFrom(getActorName),
+      ),
+    [getActorName, t],
+  );
+  const channelQuote = useComposerQuote(active?.id ?? "");
+  const threadQuote = useComposerQuote(
+    `${active?.id ?? ""}:thread:${openThreadRoot?.id ?? ""}`,
+  );
+  const selectChannelQuote = channelQuote.select;
+  const selectThreadQuote = threadQuote.select;
+  const handleQuoteMessage = useCallback(
+    (message: ChannelMessage) => {
+      selectChannelQuote(buildComposerQuote(message));
+      editorRef.current?.focus();
+    },
+    [buildComposerQuote, selectChannelQuote],
+  );
+  const handleThreadQuoteMessage = useCallback(
+    (message: ChannelMessage) => {
+      selectThreadQuote(buildComposerQuote(message));
+      threadEditorRef.current?.focus();
+    },
+    [buildComposerQuote, selectThreadQuote],
+  );
+  const handleThreadQuoteSelection = useCallback(
+    (selection: ResolvedMessageSelection) => {
+      selectThreadQuote({
+        messageId: selection.messageId,
+        selectedText: selection.text,
+        author: selection.author ?? t(($) => $.quote.type_unknown),
+        summary: selection.text,
+      });
+      threadEditorRef.current?.focus();
+    },
+    [selectThreadQuote, t],
+  );
   const channelSelectionMenu = useSelectionQuoteMenu({
     containerRef: channelMessageAreaRef,
-    onQuote: (md: string) => editorRef.current?.insertMarkdown(md),
+    onQuote: (selection) => {
+      channelQuote.select({
+        messageId: selection.messageId!,
+        selectedText: selection.text,
+        author: selection.author ?? t(($) => $.quote.type_unknown),
+        summary: selection.text,
+      });
+      editorRef.current?.focus();
+    },
   });
   const setConversationDraft = useCallback((key: ComposerDraftKey, value: string) => {
     if (!value.trim()) {
@@ -1098,8 +1135,8 @@ export function ChannelsPage({
   }, [urlDeepLinkMessage, urlDeepLinkThread, activeChannelId, qc]);
   // Land on the conversation whenever the active channel changes; the Tasks tab
   // is a per-channel view, not a sticky global mode. Reset during render (the
-  // React "adjust state on prop change" pattern used elsewhere in this file for
-  // quoteState) rather than an effect, so there's no extra render / stale frame.
+  // React "adjust state on prop change" pattern rather than an effect, so
+  // there's no extra render / stale frame.
   if (channelViewChannelIdRef.current !== activeChannelId) {
     channelViewChannelIdRef.current = activeChannelId;
     setChannelView("chat");
@@ -2152,16 +2189,22 @@ export function ChannelsPage({
     // channel's draft.
     const draftKey = activeDraftKey;
     const channelIdForSend = active.id;
+    const quoteTarget = channelQuote.target;
+    const quote = channelQuote.input;
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
     const dispatched = channelSend.send({
-      payloadKey: composePayloadKey(content, attachmentIds, quoteTarget?.id ?? ""),
+      payloadKey: composePayloadKey(
+        content,
+        attachmentIds,
+        composerQuotePayloadScope(channelIdForSend, quoteTarget),
+      ),
       buildVars: (clientMessageId) => ({
         channelId: channelIdForSend,
         content,
         parts,
-        quoteMessageId: quoteTarget?.id ?? undefined,
         clientMessageId,
+        quote,
       }),
       mutate: (vars, cbs) => {
         sendMessage.mutate(vars, {
@@ -2180,6 +2223,7 @@ export function ChannelsPage({
       // reload/channel-switch mid-flight loses it.
       onCommitted: () => {
         setChannelSendError(null);
+        channelQuote.clear(quoteTarget);
         if (draftKey) storeClearComposerDraft(draftKey);
       },
       // #772: no permanent failed bubble. Restore the failed text into the
@@ -2202,7 +2246,6 @@ export function ChannelsPage({
       prepareVoicePlayback(voicePlaybackScope(active.id));
       editorRef.current?.clearContent();
       channelPending.clear();
-      setQuoteTarget(null);
       // NB: the persisted draft is intentionally NOT cleared here (#1276 INV-1) —
       // it is cleared in onCommitted (confirmed success) so the text survives any
       // non-success outcome, including a reload/switch during the in-flight window.
@@ -2220,23 +2263,29 @@ export function ChannelsPage({
     channelId: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
+    quote = channelQuote.input,
   ): boolean => {
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = channelSend.send({
-      payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
+      payloadKey: composePayloadKey(
+        content,
+        [attachment.id],
+        composerQuotePayloadScope("voice", quote ?? null),
+      ),
       buildVars: (clientMessageId) => ({
         channelId,
         content,
         parts,
-        quoteMessageId: quoteTarget?.id ?? undefined,
         clientMessageId,
+        quote,
       }),
       mutate: sendMessage.mutate,
       // Only a send that actually committed clears the record.
       onCommitted: () => {
         settlePendingVoiceRetry(voiceTargetId(channelId));
         forgetPendingVoice(voiceTargetId(channelId));
+        channelQuote.clear(quote);
       },
       onVisibleError: (kind) => {
         // The retry (if this was one) has settled — failed, but settled.
@@ -2257,11 +2306,11 @@ export function ChannelsPage({
           channelId,
           durationMs,
           attachment,
+          quote,
         });
       },
     });
     if (dispatched) {
-      setQuoteTarget(null);
       if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
       if (typingStartedRef.current) {
         typingStartedRef.current = false;
@@ -2281,7 +2330,7 @@ export function ChannelsPage({
   ): boolean => {
     if (!active || !activeDraftEmpty || channelPending.pending.length > 0) return false;
     if (channelPendingVoiceHere) return false;
-    return submitChannelVoice(active.id, durationMs, attachment);
+    return submitChannelVoice(active.id, durationMs, attachment, channelQuote.input);
   };
 
   // Retry deliberately skips the compose-time guards: they exist to stop you
@@ -2299,6 +2348,7 @@ export function ChannelsPage({
       channelPendingVoiceHere.channelId,
       channelPendingVoiceHere.durationMs,
       channelPendingVoiceHere.attachment,
+      channelPendingVoiceHere.quote,
     );
     // The send lock can refuse the dispatch (held / auto-repeat trigger). No
     // request means nothing will settle it, so don't leave the mark behind.
@@ -2312,19 +2362,21 @@ export function ChannelsPage({
     const parts = buildChatMessageParts(content, threadPending.readyAttachmentParts);
     if (parts.length === 0) return;
     const attachmentIds = threadPending.readyAttachmentParts.map((p) => p.attachment_id);
+    const quoteTarget = threadQuote.target;
+    const quote = threadQuote.input;
     const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,
         attachmentIds,
-        `${threadRoot.id}:${threadQuoteTarget?.id ?? ""}`,
+        composerQuotePayloadScope(threadRoot.id, quoteTarget),
       ),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         messageId: threadRoot.id,
         content,
         parts,
-        quoteMessageId: threadQuoteTarget?.id ?? undefined,
         clientMessageId,
+        quote,
       }),
       mutate: (vars, cbs) => {
         sendThreadMessage.mutate(vars, {
@@ -2335,7 +2387,10 @@ export function ChannelsPage({
           },
         });
       },
-      onCommitted: () => setChannelThreadSendError(null),
+      onCommitted: () => {
+        setChannelThreadSendError(null);
+        threadQuote.clear(quoteTarget);
+      },
       onVisibleError: () => {
         // #772 (channel thread): restore failed text into the thread composer
         // (via editor defaultValue + remount) unless it holds new text; bar shown.
@@ -2355,7 +2410,6 @@ export function ChannelsPage({
       prepareVoicePlayback(voicePlaybackScope(active.id, threadRoot.id));
       threadEditorRef.current?.clearContent();
       threadPending.clear();
-      setThreadQuoteTarget(null);
       setThreadDraftEmpty(true);
     }
   };
@@ -2367,6 +2421,7 @@ export function ChannelsPage({
     threadRootId: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
+    quote = threadQuote.input,
   ): boolean => {
     const content = "";
     const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
@@ -2374,20 +2429,24 @@ export function ChannelsPage({
       payloadKey: composePayloadKey(
         content,
         [attachment.id],
-        `${threadRootId}:voice:${threadQuoteTarget?.id ?? ""}`,
+        composerQuotePayloadScope(
+          `${threadRootId}:voice`,
+          quote ?? null,
+        ),
       ),
       buildVars: (clientMessageId) => ({
         channelId,
         messageId: threadRootId,
         content,
         parts,
-        quoteMessageId: threadQuoteTarget?.id ?? undefined,
         clientMessageId,
+        quote,
       }),
       mutate: sendThreadMessage.mutate,
       onCommitted: () => {
         settlePendingVoiceRetry(voiceTargetId(channelId, threadRootId));
         forgetPendingVoice(voiceTargetId(channelId, threadRootId));
+        threadQuote.clear(quote);
       },
       onVisibleError: (kind) => {
         settlePendingVoiceRetry(voiceTargetId(channelId, threadRootId));
@@ -2404,11 +2463,11 @@ export function ChannelsPage({
           threadRootId,
           durationMs,
           attachment,
+          quote,
         });
       },
     });
     if (dispatched) {
-      setThreadQuoteTarget(null);
       setThreadDraftEmpty(true);
     }
     return dispatched;
@@ -2421,7 +2480,13 @@ export function ChannelsPage({
   ): boolean => {
     if (!active || !threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
     if (threadPendingVoiceHere) return false;
-    return submitThreadVoice(active.id, threadRoot.id, durationMs, attachment);
+    return submitThreadVoice(
+      active.id,
+      threadRoot.id,
+      durationMs,
+      attachment,
+      threadQuote.input,
+    );
   };
 
   // Re-sends to the recording's OWN channel + thread root.
@@ -2434,6 +2499,7 @@ export function ChannelsPage({
       threadPendingVoiceHere.threadRootId ?? "",
       threadPendingVoiceHere.durationMs,
       threadPendingVoiceHere.attachment,
+      threadPendingVoiceHere.quote,
     );
     if (!dispatched) settlePendingVoiceRetry(threadPendingVoiceHere.targetId);
   };
@@ -2461,7 +2527,12 @@ export function ChannelsPage({
           messageId: message.thread_root_message_id,
           content: message.content,
           parts: message.parts,
-          quoteMessageId: message.quote_message_id ?? undefined,
+          quote: message.quote_message_id
+            ? {
+                messageId: message.quote_message_id,
+                selectedText: message.quote?.snapshot?.selectedText ?? undefined,
+              }
+            : undefined,
           clientMessageId: message.client_message_id,
         });
         return;
@@ -2470,7 +2541,12 @@ export function ChannelsPage({
         channelId: active.id,
         content: message.content,
         parts: message.parts,
-        quoteMessageId: message.quote_message_id ?? undefined,
+        quote: message.quote_message_id
+          ? {
+              messageId: message.quote_message_id,
+              selectedText: message.quote?.snapshot?.selectedText ?? undefined,
+            }
+          : undefined,
         clientMessageId: message.client_message_id,
       });
     },
@@ -3532,15 +3608,11 @@ export function ChannelsPage({
         onRetry={() => refetchThread()}
         highlightMessageId={isThreadDeepLink ? highlightMessageId : undefined}
         onReact={handleReactToMessage}
-        onQuoteMessage={setThreadQuoteTarget}
-        onInsertSelectionQuote={(md: string) =>
-          threadEditorRef.current?.insertMarkdown(md)
-        }
+        onQuoteMessage={handleThreadQuoteMessage}
+        onQuoteSelection={handleThreadQuoteSelection}
         onRetrySend={handleRetrySend}
         onOpenAgent={handleOpenAgentPanel}
         onOpenMember={handleOpenMemberPanel}
-        quoteTarget={threadQuoteTarget}
-        onClearQuote={() => setThreadQuoteTarget(null)}
         sendError={channelThreadSendError}
         // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- thread send helpers recreate with surface state; panel remounts with root
         onRestorePrevious={handleRestoreChannelThreadPrevious}
@@ -3582,17 +3654,25 @@ export function ChannelsPage({
         onVoiceSend={handleThreadVoiceSend}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
         composerPrefixExtra={
-          <ComposerPendingVoice
-            pending={threadPendingVoiceHere}
-            retrying={
-              threadPendingVoiceHere !== null &&
-              retryingVoiceTargetId === threadPendingVoiceHere.targetId
-            }
-            onRetry={retryThreadVoice}
-            onDelete={() =>
-              threadPendingVoiceHere && forgetPendingVoice(threadPendingVoiceHere.targetId)
-            }
-          />
+          <>
+            {threadQuote.target ? (
+              <ComposerQuotePreview
+                target={threadQuote.target}
+                onCancel={threadQuote.cancel}
+              />
+            ) : null}
+            <ComposerPendingVoice
+              pending={threadPendingVoiceHere}
+              retrying={
+                threadPendingVoiceHere !== null &&
+                retryingVoiceTargetId === threadPendingVoiceHere.targetId
+              }
+              onRetry={retryThreadVoice}
+              onDelete={() =>
+                threadPendingVoiceHere && forgetPendingVoice(threadPendingVoiceHere.targetId)
+              }
+            />
+          </>
         }
         sendDisabled={
           (threadDraftEmpty && threadPending.readyAttachmentParts.length === 0) ||
@@ -4183,7 +4263,7 @@ export function ChannelsPage({
                 onOpenThread={isActiveArchived ? undefined : handleOpenThread}
                 onScrollToMessage={setHighlightMessageId}
                 onReact={handleReactToMessage}
-                onQuoteMessage={isActiveArchived ? undefined : setQuoteTarget}
+                onQuoteMessage={isActiveArchived ? undefined : handleQuoteMessage}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
                 onRetrySend={isActiveArchived ? undefined : handleRetrySend}
                 onOpenAgent={handleOpenAgentPanel}
@@ -4251,8 +4331,14 @@ export function ChannelsPage({
                     onVoiceSend={handleVoiceSend}
                     isMobile={isMobile}
                     // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
-                    prefix={channelSendError || quoteTarget || channelPendingVoiceHere ? (
+                    prefix={channelQuote.target || channelSendError || channelPendingVoiceHere ? (
                       <>
+                        {channelQuote.target ? (
+                          <ComposerQuotePreview
+                            target={channelQuote.target}
+                            onCancel={channelQuote.cancel}
+                          />
+                        ) : null}
                         <ComposerSendErrorBar
                           error={channelSendError}
                           onRetry={handleSend}
@@ -4270,13 +4356,6 @@ export function ChannelsPage({
                             forgetPendingVoice(channelPendingVoiceHere.targetId)
                           }
                         />
-                        {quoteTarget ? (
-                          <ComposerQuotePreview
-                            quote={quoteTarget}
-                            onCancel={() => setQuoteTarget(null)}
-                            cancelLabel={t(($) => $.quote.cancel)}
-                          />
-                        ) : null}
                       </>
                     ) : undefined}
                     // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer tray slot; identity is not memo-sensitive

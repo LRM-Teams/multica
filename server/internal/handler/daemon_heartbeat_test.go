@@ -44,6 +44,28 @@ func createTestAgentRuntimeWithDaemonID(t *testing.T, daemonID string) db.AgentR
 	return rt
 }
 
+func TestComputerConnectedByRunner_SocketIsAuthoritativeWhenHubAvailable(t *testing.T) {
+	h := &Handler{DaemonHub: daemonws.NewHub()}
+	now := time.Now()
+	hb := &db.DaemonHeartbeat{LastSeenAt: pgtimestamptz(now.Add(-10 * time.Second))}
+	if h.computerConnectedByRunner("daemon-1", "workspace-1", hb, now) {
+		t.Fatal("fresh heartbeat must not mark a Computer online without a current Runner socket")
+	}
+}
+
+func TestComputerConnectedByRunner_FallsBackToHeartbeatWhenHubUnavailable(t *testing.T) {
+	h := &Handler{}
+	now := time.Now()
+	fresh := &db.DaemonHeartbeat{LastSeenAt: pgtimestamptz(now.Add(-10 * time.Second))}
+	if !h.computerConnectedByRunner("daemon-1", "workspace-1", fresh, now) {
+		t.Fatal("legacy composition without Hub must use heartbeat freshness")
+	}
+	stale := &db.DaemonHeartbeat{LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute))}
+	if h.computerConnectedByRunner("daemon-1", "workspace-1", stale, now) {
+		t.Fatal("legacy composition without Hub must treat a stale heartbeat as offline")
+	}
+}
+
 func TestComputerConnected_NilHeartbeatIsDisconnected(t *testing.T) {
 	if computerConnected(nil, time.Now()) {
 		t.Fatal("computerConnected(nil) = true, want false — a daemon that has never sent a heartbeat cannot be connected")

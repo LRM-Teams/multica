@@ -218,14 +218,16 @@ func containsEnvEntry(env []string, want string) bool {
 }
 
 func TestBuildPiArgsBasicFlags(t *testing.T) {
-	args := buildPiArgs("hello world", "/tmp/s.jsonl", ExecOptions{
+	const sessionID = "019ffcb7-0848-7087-a6fd-c14da72509ea"
+	args := buildPiArgs("hello world", sessionID, ExecOptions{
+		Cwd:           "/agent-root",
 		Model:         "anthropic/claude-sonnet-4-20250514",
 		SystemPrompt:  "be helpful",
 		ThinkingLevel: "high",
 	}, slog.Default())
 
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"-p", "--mode json", "--session /tmp/s.jsonl", "--provider anthropic", "--model claude-sonnet-4-20250514", "--thinking high", "--append-system-prompt"} {
+	for _, want := range []string{"-p", "--mode json", "--session-id " + sessionID, "--session-dir /agent-root/.pi-sessions", "--provider anthropic", "--model claude-sonnet-4-20250514", "--thinking high", "--append-system-prompt"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected %q in args, got: %v", want, args)
 		}
@@ -237,9 +239,51 @@ func TestBuildPiArgsBasicFlags(t *testing.T) {
 	}
 }
 
+func TestBuildPiArgsUsesAgentLocalDirectoryForOpaqueSessionID(t *testing.T) {
+	cwd := filepath.Join(t.TempDir(), "agent-root")
+	const sessionID = "019ffcb7-0848-7087-a6fd-c14da72509ea"
+
+	for name, args := range map[string][]string{
+		"one-shot": buildPiArgs("hello", sessionID, ExecOptions{Cwd: cwd}, slog.Default()),
+		"rpc":      buildPiRPCArgs(sessionID, ExecOptions{Cwd: cwd}, slog.Default()),
+	} {
+		joined := strings.Join(args, " ")
+		want := "--session-id " + sessionID + " --session-dir " + filepath.Join(cwd, ".pi-sessions")
+		if !strings.Contains(joined, want) {
+			t.Fatalf("%s args = %v, want %q", name, args, want)
+		}
+		if strings.Contains(joined, "--session ") {
+			t.Fatalf("%s treated opaque session ID as a path: %v", name, args)
+		}
+	}
+}
+
+func TestBuildPiArgsNeverInterpretsSessionIDAsPath(t *testing.T) {
+	args := buildPiArgs("hello", "/tmp/legacy.jsonl", ExecOptions{Cwd: "/agent-root"}, slog.Default())
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--session-id /tmp/legacy.jsonl") {
+		t.Fatalf("session value was not passed through the opaque-ID flag: %v", args)
+	}
+	if strings.Contains(joined, "--session /tmp/legacy.jsonl") {
+		t.Fatalf("session ID was interpreted as a file path: %v", args)
+	}
+}
+
+func TestBuildPiArgsBlocksCustomSessionIdentityOverrides(t *testing.T) {
+	const sessionID = "019ffcb7-0848-7087-a6fd-c14da72509ea"
+	args := buildPiArgs("hello", sessionID, ExecOptions{
+		Cwd:        "/agent-root",
+		CustomArgs: []string{"--session-id", "wrong-id", "--session-dir", "/tmp/wrong"},
+	}, slog.Default())
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "wrong-id") || strings.Contains(joined, "/tmp/wrong") {
+		t.Fatalf("custom args overrode daemon-owned Pi session identity: %v", args)
+	}
+}
+
 func TestBuildPiArgsForExecutionMovesPromptToStdinOnEveryPlatform(t *testing.T) {
 	prompt := strings.Repeat("group context\n", 32*1024)
-	args, stdinPrompt := buildPiArgsForExecution(prompt, "/tmp/s.jsonl", ExecOptions{}, slog.Default())
+	args, stdinPrompt := buildPiArgsForExecution(prompt, "019ffcb7-0848-7087-a6fd-c14da72509ea", ExecOptions{Cwd: "/agent-root"}, slog.Default())
 	if stdinPrompt != prompt {
 		t.Fatalf("stdin prompt was not preserved")
 	}

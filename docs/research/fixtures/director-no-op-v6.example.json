@@ -1,0 +1,29 @@
+{
+  "contract_kind": "director_action_proposal",
+  "schema_version": 6,
+  "client_request_id": "00000000-0000-4000-8000-000000000111",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "work_item_id": "00000000-0000-4000-8000-000000000112",
+  "attempt_id": "00000000-0000-4000-8000-000000000113",
+  "manifest_id": "00000000-0000-4000-8000-000000000114",
+  "manifest_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "director_assignment_id": "00000000-0000-4000-8000-000000000004",
+  "director_generation": 1,
+  "brief_id": "00000000-0000-4000-8000-000000000001",
+  "brief_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "reviewed_page_count": 1,
+  "expected_state_version": 12,
+  "through_event_sequence": 45,
+  "actions": [
+    {
+      "action_id": "no-change-required",
+      "kind": "no_op",
+      "reason": "当前 Frontier 已覆盖这条消息涉及的范围，Goal、分支和工作安排均不需要修改。",
+      "idempotency_key": "director.no-op.message-000111",
+      "payload_schema": "research.no_op.v1",
+      "payload": {},
+      "depends_on_action_ids": []
+    }
+  ]
+}

@@ -29,14 +29,13 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 		controlToken = "host-control-token"
 	)
 	readyFrames := make(chan protocol.WorkspaceRunnerReadyPayload, 1)
+	runtimeWakeConnected := make(chan struct{}, 1)
 	var registerCalls atomic.Int32
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/daemon/computer/heartbeat":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "generation": 11})
-		case r.URL.Path == "/api/daemon/starting":
-			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/daemon/register":
 			registerCalls.Add(1)
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -48,7 +47,7 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/daemon/deregister":
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/api/daemon/ws" && r.URL.Query().Get("workspace_id") == workspaceID:
+		case r.URL.Path == "/api/daemon/connect" && r.URL.Query().Get("workspace_id") == workspaceID:
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
@@ -69,6 +68,18 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 					return
 				}
 			}
+		case r.URL.Path == "/api/daemon/connect" && r.URL.Query().Get("runtime_ids") == "runtime-a":
+			if got := r.Header.Get("Authorization"); got != "Bearer scoped-daemon-token" {
+				http.Error(w, "runtime wake socket used the wrong Binding credential", http.StatusUnauthorized)
+				return
+			}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			runtimeWakeConnected <- struct{}{}
+			<-r.Context().Done()
 		default:
 			http.NotFound(w, r)
 		}
@@ -136,6 +147,11 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("real child never connected its Workspace Runner")
 	}
+	select {
+	case <-runtimeWakeConnected:
+	case <-ctx.Done():
+		t.Fatal("real child never authenticated its runtime wake socket with the scoped Binding credential")
+	}
 	hostServer.Close()
 	exited := make(chan computer.RunnerExitClass, 1)
 	go func() { exited <- child.Wait() }()
@@ -163,8 +179,6 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 		switch {
 		case r.URL.Path == "/api/daemon/computer/heartbeat":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "generation": 21})
-		case r.URL.Path == "/api/daemon/starting":
-			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/daemon/register":
 			var request struct {
 				WorkspaceID string `json:"workspace_id"`
@@ -190,7 +204,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/daemon/deregister":
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/api/daemon/ws":
+		case r.URL.Path == "/api/daemon/connect":
 			workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
@@ -328,9 +342,89 @@ func waitForBindingLifecycle(t *testing.T, ctx context.Context, host *computer.H
 	}
 }
 
+func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *testing.T) {
+	const (
+		workspaceID  = "workspace-a"
+		computerID   = "computer-a"
+		controlToken = "host-control-token"
+	)
+	var registerCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/daemon/computer/heartbeat":
+			t.Errorf("DaemonCore liveness must not POST /api/daemon/computer/heartbeat")
+			http.Error(w, "heartbeat retired for liveness", http.StatusGone)
+		case r.URL.Path == "/api/daemon/register":
+			registerCalls.Add(1)
+			http.Error(w, `{"error":"at least one runtime is required"}`, http.StatusBadRequest)
+		case r.URL.Path == "/api/daemon/connect":
+			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	root := t.TempDir()
+	workspacesRoot := filepath.Join(root, "workspaces")
+	if err := os.MkdirAll(workspacesRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := computer.NewBindingsStore(root).AddOrRepair(computer.WorkspaceBinding{
+		Environment: "test", WorkspaceID: workspaceID, ComputerID: computerID,
+		Credential: "binding-token", CredentialExpiresAt: time.Now().Add(time.Hour), Active: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
+	hostMux := http.NewServeMux()
+	host.host.RegisterRoutes(hostMux)
+	hostServer := httptest.NewServer(hostMux)
+	t.Cleanup(hostServer.Close)
+	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
+	t.Setenv("MULTICA_BINDING_CHILD_ZERO_RUNTIME", "1")
+	bootstrap := computer.BindingChildBootstrap{
+		ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
+		ComputerID: computerID, ComputerGeneration: 31, RunnerGeneration: 1,
+		Environment: "test", ServerBaseURL: server.URL, HostControlURL: hostServer.URL,
+		BindingsRoot: root, WorkspacesRoot: workspacesRoot,
+	}
+	child, err := computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, bootstrap)
+	if err != nil {
+		t.Fatalf("start Binding child process: %v", err)
+	}
+	t.Cleanup(func() { _ = child.Stop() })
+	installLiveBindingChild(t, host, workspaceID, child.PID())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ready, err := child.AwaitReady(ctx)
+	if err != nil {
+		t.Fatalf("zero-runtime DaemonCore must publish Ready after Workspace Runner connect: %v", err)
+	}
+	if ready.PID != child.PID() || ready.WorkspaceID != workspaceID || ready.RunnerGeneration != 1 {
+		t.Fatalf("Binding child Ready = %+v, pid=%d", ready, child.PID())
+	}
+	if got := registerCalls.Load(); got != 0 {
+		t.Fatalf("zero-runtime Binding child posted register %d times", got)
+	}
+}
+
 func TestRunBindingChildProcessHelper(t *testing.T) {
 	providerPath := os.Getenv(bindingChildRuntimeHelperEnv)
-	if providerPath == "" {
+	zeroRuntime := os.Getenv("MULTICA_BINDING_CHILD_ZERO_RUNTIME") == "1"
+	if providerPath == "" && !zeroRuntime {
 		return
 	}
 	bootstrap, err := computer.ReadBindingChildBootstrap(os.Stdin)
@@ -338,13 +432,17 @@ func TestRunBindingChildProcessHelper(t *testing.T) {
 		os.Exit(2)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	agents := map[string]AgentEntry{}
+	if !zeroRuntime {
+		agents["pi"] = AgentEntry{Path: providerPath}
+	}
 	err = RunBindingChild(context.Background(), BindingChildRunConfig{
 		Daemon: Config{
 			DaemonID: bootstrap.ComputerID, ComputerGeneration: bootstrap.ComputerGeneration,
 			Environment: bootstrap.Environment, ServerBaseURL: bootstrap.ServerBaseURL,
 			BindingsRoot: bootstrap.BindingsRoot, WorkspacesRoot: bootstrap.WorkspacesRoot,
 			LocalControlToken: os.Getenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN"),
-			Agents:            map[string]AgentEntry{"pi": {Path: providerPath}},
+			Agents:            agents,
 			PollInterval:      time.Hour, HeartbeatInterval: time.Hour,
 		},
 		Bootstrap: bootstrap,
@@ -404,6 +502,31 @@ func TestBindingChildCredentialProxyHasAChildOwnedListener(t *testing.T) {
 	_ = health.Body.Close()
 	if health.StatusCode != http.StatusNotFound {
 		t.Fatalf("Binding child exposed Host /health with status %d", health.StatusCode)
+	}
+}
+
+func TestExpiredBindingDoesNotInstallWorkspaceToken(t *testing.T) {
+	d := newDaemonForRole(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	err := d.prepareBindingExecutionCredential(computer.WorkspaceBinding{
+		WorkspaceID: "workspace-a", ComputerID: "computer-a",
+		Credential: "expired-binding-token", CredentialExpiresAt: time.Now().Add(-time.Hour), Active: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no live execution credential") {
+		t.Fatalf("expired Binding should fail closed without a human PAT, got %v", err)
+	}
+	if d.client.tokenForWorkspace("workspace-a") != "" {
+		t.Fatal("expired Binding must not install a workspace token")
+	}
+}
+
+func TestCurrentBindingBootstrapRejectsExpiredCredential(t *testing.T) {
+	d := newDaemonForRole(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), daemonProcessBindingChild)
+	err := d.prepareBindingExecutionCredential(computer.WorkspaceBinding{
+		WorkspaceID: "workspace-a", ComputerID: "computer-a",
+		Credential: "expired-binding-token", CredentialExpiresAt: time.Now().Add(-time.Hour), Active: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no live execution credential") {
+		t.Fatalf("current-package expired Binding error = %v", err)
 	}
 }
 

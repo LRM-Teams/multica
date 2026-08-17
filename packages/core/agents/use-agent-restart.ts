@@ -27,10 +27,9 @@ export function agentRestartPreflightOptions(agentId: string, enabled: boolean) 
 }
 
 /**
- * Drives Raft's three reset modes for one Agent. Each click mints a fresh
- * idempotency key and performs one `resetAgent(mode)` request. Durable progress
- * belongs to the server operation and normal Agent status surfaces; the modal
- * closes after acceptance and does not maintain a second polling state machine.
+ * Drives Raft's three reset modes for one Agent. Each click performs one
+ * `resetAgent(mode)` request. Progress belongs to normal Agent status
+ * surfaces; the modal closes after acceptance.
  */
 export function useAgentRestart(agentId: string, open: boolean) {
   const qc = useQueryClient();
@@ -38,11 +37,7 @@ export function useAgentRestart(agentId: string, open: boolean) {
 
   const resetAgent = useMutation({
     mutationFn: async (mode: AgentRestartMode) => {
-      const operation = await api.resetAgent(
-        agentId,
-        mode,
-        crypto.randomUUID(),
-      );
+      const operation = await api.resetAgent(agentId, mode);
       if (!operation.id || operation.status === "failed") {
         throw new Error(
           operation.reason_code || "Agent Restart request was not accepted",

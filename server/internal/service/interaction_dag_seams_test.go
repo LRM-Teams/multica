@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/multica-ai/multica/server/internal/memorygraph"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -84,7 +86,7 @@ func TestDelegation_LinksGrandparentEdge(t *testing.T) {
 	// Grandparent already closed its segment (sess-gp -> "sess-gp-3").
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-gp", util.UUIDToString(gpID), "issue-1"))
 	client.closeSegmentID = 3
-	_, err := svc.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-gp", "key-gp", "completion", leanSnap())
+	_, _, err := svc.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-gp", "key-gp", "completion", leanSnap())
 	require.NoError(t, err)
 
 	// Parent (with grandparent) now delegates.
@@ -167,7 +169,7 @@ func TestCompletion_ClosesChildSegmentAndRecordsDelegationEdge(t *testing.T) {
 	// Parent already closed its segment at delegation (sess-p -> "sess-p-1").
 	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-p", util.UUIDToString(parentID), "issue-1"))
 	client.closeSegmentID = 1
-	_, err := svc.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-p", "key-p", "delegation", leanSnap())
+	_, _, err := svc.Training.DAG.CloseSegmentForEvent(context.Background(), "proj-1", "sess-p", "key-p", "delegation", leanSnap())
 	require.NoError(t, err)
 
 	// Child completes.
@@ -297,4 +299,147 @@ func TestSeams_BestEffortOnCloseError(t *testing.T) {
 	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
 	assert.Empty(t, store.segmentSnapshots, "close failure must not record a segment")
 	assert.Empty(t, store.edges, "close failure must not record an edge")
+}
+
+// fakeSegmentIngestHook records the exports it receives on a channel so tests
+// can synchronize with the async (goroutine) seam hook.
+type fakeSegmentIngestHook struct {
+	calls chan memorygraph.SegmentExport
+}
+
+func newFakeSegmentIngestHook() *fakeSegmentIngestHook {
+	return &fakeSegmentIngestHook{calls: make(chan memorygraph.SegmentExport, 8)}
+}
+
+func (f *fakeSegmentIngestHook) Ingest(_ context.Context, seg memorygraph.SegmentExport) error {
+	f.calls <- seg
+	return nil
+}
+
+// awaitIngest returns the next recorded export, failing the test if the hook
+// does not fire promptly.
+func awaitIngest(t *testing.T, h *fakeSegmentIngestHook) memorygraph.SegmentExport {
+	t.Helper()
+	select {
+	case seg := <-h.calls:
+		return seg
+	case <-time.After(5 * time.Second):
+		t.Fatal("segment ingest hook did not fire")
+		return memorygraph.SegmentExport{}
+	}
+}
+
+// TestSeamHook_FiresOnDelegationSegmentClose: the delegation seam records the
+// parent segment, then the ingest hook fires with the new segment id.
+func TestSeamHook_FiresOnDelegationSegmentClose(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{closeSegmentID: 7, exportPayload: json.RawMessage(shardExport)}
+	svc := newSeamTaskService(store, client)
+	hook := newFakeSegmentIngestHook()
+	svc.SetSegmentIngestHook(hook)
+
+	parentID := testUUID(1)
+	parent := db.AgentInboxEvent{ID: parentID, Context: arealProxyContext("sess-1", "key-1")}
+	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parentID), "issue-1"))
+
+	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
+	require.Len(t, store.segmentSnapshots, 1)
+
+	seg := awaitIngest(t, hook)
+	assert.Equal(t, "sess-1-7", seg.SegmentID)
+	assert.Equal(t, util.UUIDToString(parentID), seg.AgentRunID)
+	assert.Equal(t, "delegation", seg.ClosingEvent)
+	assert.Equal(t, shardExport, string(seg.Trajectory), "trained seam forwards the AReaL trajectory export (R1)")
+}
+
+// TestSeamHook_FiresOnTerminalLeafClose: the terminal seam for a leaf task
+// (no parent) fires the hook with an empty closing event.
+func TestSeamHook_FiresOnTerminalLeafClose(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{closeSegmentID: 4, exportPayload: json.RawMessage(shardExport)}
+	svc := newSeamTaskService(store, client)
+	hook := newFakeSegmentIngestHook()
+	svc.SetSegmentIngestHook(hook)
+
+	taskID := testUUID(1)
+	task := db.AgentInboxEvent{ID: taskID, Context: arealProxyContext("sess-1", "key-1")}
+	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(taskID), "issue-1"))
+
+	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
+	require.Len(t, store.segmentSnapshots, 1)
+
+	seg := awaitIngest(t, hook)
+	assert.Equal(t, "sess-1-4", seg.SegmentID)
+	assert.Equal(t, util.UUIDToString(taskID), seg.AgentRunID)
+	assert.Empty(t, seg.ClosingEvent, "leaf closing event stays empty")
+	assert.Equal(t, shardExport, string(seg.Trajectory), "trained seam forwards the AReaL trajectory export (R1)")
+}
+
+// TestSeamHook_LocalPathPassesMessageSnapshot: the local (non-training
+// env-dispatch) seam forwards the allowlisted task_message snapshot it just
+// recorded, so the ingester summarizes real segment content (R1).
+func TestSeamHook_LocalPathPassesMessageSnapshot(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{}
+	msgs := newFakeMessageStore()
+	checker := &fakeEnvDispatchChecker{hasRun: true}
+	svc := newSeamTaskServiceWithChecker(store, client, msgs, checker)
+	hook := newFakeSegmentIngestHook()
+	svc.SetSegmentIngestHook(hook)
+
+	taskID := testUUID(1)
+	taskIDStr := util.UUIDToString(taskID)
+	task := db.AgentInboxEvent{ID: taskID, Context: nil} // no areal_proxy: local path
+	store.addTestTaskMessage(taskIDStr, 1)
+	store.addTestTaskMessage(taskIDStr, 2)
+	msgs.addTaskMessage(taskIDStr, taskMsg(taskID, 1, "user", "please investigate the cache"))
+	msgs.addTaskMessage(taskIDStr, taskMsg(taskID, 2, "assistant", "found the eviction bug"))
+
+	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
+	require.Len(t, store.segmentSnapshots, 1)
+
+	seg := awaitIngest(t, hook)
+	assert.Equal(t, "multica:"+taskIDStr, seg.SegmentID)
+	assert.Equal(t, taskIDStr, seg.AgentRunID)
+	traj := string(seg.Trajectory)
+	assert.Contains(t, traj, "please investigate the cache", "snapshot carries the user message")
+	assert.Contains(t, traj, "found the eviction bug", "snapshot carries the assistant message")
+	assert.Empty(t, client.closeCalls, "local path makes zero AReaL calls")
+}
+
+// TestSeamHook_NilHookIsNoop: with no hook wired (the default), the seams
+// behave exactly as before.
+func TestSeamHook_NilHookIsNoop(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{closeSegmentID: 2, exportPayload: json.RawMessage(shardExport)}
+	svc := newSeamTaskService(store, client)
+
+	taskID := testUUID(1)
+	task := db.AgentInboxEvent{ID: taskID, Context: arealProxyContext("sess-1", "key-1")}
+	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(taskID), "issue-1"))
+
+	svc.closeSegmentForTerminal(context.Background(), task, "proj-1", leanSnap())
+	assert.Len(t, store.segmentSnapshots, 1)
+}
+
+// TestSeamHook_NoFireWhenCloseFails: a bridge close failure records no
+// segment and must not fire the ingest hook.
+func TestSeamHook_NoFireWhenCloseFails(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	client := &fakeArealSegmentClient{closeSegmentErr: errors.New("bridge down"), exportPayload: json.RawMessage(shardExport)}
+	svc := newSeamTaskService(store, client)
+	hook := newFakeSegmentIngestHook()
+	svc.SetSegmentIngestHook(hook)
+
+	parentID := testUUID(1)
+	parent := db.AgentInboxEvent{ID: parentID, Context: arealProxyContext("sess-1", "key-1")}
+	require.NoError(t, svc.Training.DAG.RecordSessionAgentRun(context.Background(), "proj-1", "sess-1", util.UUIDToString(parentID), "issue-1"))
+
+	svc.closeSegmentForDelegation(context.Background(), parent, "proj-1", leanSnap())
+	assert.Empty(t, store.segmentSnapshots)
+	select {
+	case seg := <-hook.calls:
+		t.Fatalf("hook must not fire on close failure, got %+v", seg)
+	case <-time.After(200 * time.Millisecond):
+	}
 }

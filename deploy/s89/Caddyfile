@@ -6,7 +6,10 @@
 }
 
 (multica_app) {
-	@multica_ws path /ws /ws/* /api/daemon/ws /api/sandbox/node/ws
+	# Canonical DaemonCore socket is /api/daemon/connect.
+	# TODO(computer-liveness): Remove /api/daemon/ws after v0.4.24-alpha.55
+	# is no longer a supported direct self-upgrade source.
+	@multica_ws path /ws /ws/* /api/daemon/connect /api/daemon/ws /api/sandbox/node/ws
 	reverse_proxy @multica_ws backend:8080 {
 		flush_interval -1
 	}

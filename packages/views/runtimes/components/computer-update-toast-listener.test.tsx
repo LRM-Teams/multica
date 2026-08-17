@@ -27,10 +27,13 @@ vi.mock("sonner", () => ({
   },
 }));
 
+vi.mock("@multica/core/realtime", () => ({
+  useWSEvent: vi.fn(),
+}));
+
 vi.mock("@multica/core/api", () => ({
   api: {
     initiateMachineUpgrade: mocks.initiateMachineUpgrade,
-    getMachineUpgrade: vi.fn(),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -63,17 +66,6 @@ function s143Runtime(): AgentRuntime {
     daemon_target_version: "v0.4.24-alpha.12",
     update_state: "idle",
     runtime_health: "update_available",
-    machine_upgrade: {
-      id: "machine-upgrade-alpha-11",
-      daemon_id: "1298b34b-b7de-4309-bdfb-71043265052d",
-      request_id: "request-alpha-11",
-      requested_target: "v0.4.24-alpha.11",
-      resolved_target: "v0.4.24-alpha.11",
-      phase: "completed",
-      result: "completed",
-      created_at: "2026-08-11T13:00:00Z",
-      updated_at: "2026-08-11T13:05:00Z",
-    },
     owner_id: "user-1",
     last_seen_at: new Date().toISOString(),
     created_at: "2026-08-11T12:00:00Z",

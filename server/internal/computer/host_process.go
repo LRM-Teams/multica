@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 )
 
@@ -25,11 +26,14 @@ type HostProcessIdentity struct {
 	ComputerID             string
 	ComputerGeneration     int64
 	Environment            string
-	ReleaseChannel         string
 	Version                string
 	ServerURL              string
 	DeviceName             string
 	MachineAttestationFrom int
+}
+
+func (identity HostProcessIdentity) releaseChannel() cli.ReleaseChannel {
+	return cli.ReleaseChannelForEnvironment(cli.ServiceEnvironment(identity.Environment))
 }
 
 // HostProcessConfig is the process boundary around Host. It contains only
@@ -44,6 +48,9 @@ type HostProcessConfig struct {
 	Changes             <-chan struct{}
 	ReadyTimeout        time.Duration
 	ReleaseManifestURL  string
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	PreviousPackageUpgradeBootstrap bool
 }
 
 type hostProcessState struct {
@@ -53,6 +60,10 @@ type hostProcessState struct {
 	ready     bool
 	desired   []string
 	cancel    context.CancelFunc
+	// TODO(previous-package-bootstrap): Remove these two fields with the
+	// v0.4.24-alpha.55 health projection.
+	previousPackageUpgradeBootstrap bool
+	sourceProcessAlive              func(int) (bool, bool)
 }
 
 // RunProcess owns the resident Computer control plane around Host. The
@@ -96,7 +107,8 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	defer cancel()
 	state := &hostProcessState{
 		identity: config.Identity, startedAt: time.Now(), desired: append([]string(nil), initial...),
-		cancel: cancel,
+		cancel: cancel, previousPackageUpgradeBootstrap: config.PreviousPackageUpgradeBootstrap,
+		sourceProcessAlive: processAlive,
 	}
 	host.processIdentity = config.Identity
 	if strings.TrimSpace(config.ResidentRoot) != "" {
@@ -111,10 +123,14 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 			go store.RunCleanup(processCtx)
 		}
 	}
-	host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{
-		identity: config.Identity, releaseManifestURL: config.ReleaseManifestURL,
-		residentRoot: config.ResidentRoot, cancel: cancel,
-	})
+	if host.upgrade == nil {
+		host.upgrade = newHostMachineUpgrade(host, hostMachineUpgradeConfig{})
+	}
+	host.upgrade.config.identity = config.Identity
+	host.upgrade.config.releaseManifestURL = config.ReleaseManifestURL
+	host.upgrade.config.residentRoot = config.ResidentRoot
+	host.upgrade.config.cancel = cancel
+	host.upgrade.config.previousPackageUpgradeBootstrap = config.PreviousPackageUpgradeBootstrap
 
 	loadDesired := func() []string {
 		ids, loadErr := config.DesiredWorkspaceIDs()
@@ -228,10 +244,24 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 		startedAt := state.startedAt
 		ready := state.ready
 		desired := append([]string(nil), state.desired...)
+		previousPackageUpgradeBootstrap := state.previousPackageUpgradeBootstrap
+		sourceProcessAlive := state.sourceProcessAlive
 		state.mu.RUnlock()
 		status := "starting"
 		if ready {
 			status = "running"
+			// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55
+			// is no longer a supported direct self-upgrade source.
+			// v0.4.24-alpha.55 waits for this historical readiness spelling
+			// before it accepts the successor's machine attestation. Keep the
+			// projection only while that exact launcher process is still alive;
+			// after it releases the child and exits, normal health is "running".
+			if previousPackageUpgradeBootstrap && identity.MachineAttestationFrom > 0 && sourceProcessAlive != nil {
+				alive, known := sourceProcessAlive(identity.MachineAttestationFrom)
+				if alive || !known {
+					status = "takeover_ready"
+				}
+			}
 		}
 		workspaces := make([]map[string]any, 0, len(desired))
 		for _, workspaceID := range desired {
@@ -251,7 +281,7 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 			"daemon_id": identity.ComputerID, "computer_id": identity.ComputerID,
 			"computer_generation": identity.ComputerGeneration,
 			"device_name":         identity.DeviceName, "server_url": identity.ServerURL,
-			"environment": identity.Environment, "release_channel": identity.ReleaseChannel,
+			"environment": identity.Environment, "release_channel": identity.releaseChannel(),
 			"cli_version": identity.Version, "connected": ready && len(desired) > 0,
 			"active_task_count": int64(0), "agents": []string{}, "workspaces": workspaces,
 		})

@@ -46,10 +46,6 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	channel, err := cli.ResolveReleaseChannel(machineConfig)
-	if err != nil {
-		return err
-	}
 	bindingsRoot := computer.RootDir("")
 	computerGeneration, _ := cmd.Flags().GetInt64("computer-generation")
 	if computerGeneration == 0 {
@@ -59,6 +55,9 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	machineAttestationSourcePID, _ := cmd.Flags().GetInt("machine-attestation-source-pid")
+	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source.
+	previousPackageUpgradeBootstrap, _ := cmd.Flags().GetBool("machine-upgrade-detached-candidate")
 	controlToken, err := computer.EnsureControlToken(profile)
 	if err != nil {
 		return err
@@ -75,13 +74,21 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	defer stop()
 
 	logger := logger_pkg.NewLogger("computer")
+	var host *computer.Host
 	launcher := computer.BindingRunnerLauncher{
 		ComputerID: computerID, ComputerGeneration: computerGeneration,
 		Environment: string(serviceTarget.Environment), Profile: profile, ServerBaseURL: serviceTarget.Origin,
 		HostControlURL: fmt.Sprintf("http://127.0.0.1:%d", computer.HealthPort(profile)),
 		BindingsRoot:   bindingsRoot, WorkspacesRoot: workspacesRoot,
+		Run: func(ctx context.Context, bootstrap computer.BindingChildBootstrap, publishReady func(computer.BindingChildReady) error) error {
+			return runInProcessBindingChild(ctx, bootstrap, publishReady, host)
+		},
+		// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
+		// longer a supported direct self-upgrade source.
+		PreviousPackageUpgradeBootstrap: previousPackageUpgradeBootstrap,
+		PreviousPackageUpgradeSourcePID: machineAttestationSourcePID,
 	}
-	host, err := computer.NewHost(computer.HostConfig{
+	host, err = computer.NewHost(computer.HostConfig{
 		Spawn: launcher.Spawn, Logger: logger, ControlToken: controlToken,
 		MaxAgentProcesses: maxAgentProcesses,
 	})
@@ -108,11 +115,12 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		ControlPort: computer.HealthPort(profile), ResidentRoot: bindingsRoot,
 		Identity: computer.HostProcessIdentity{
 			ComputerID: computerID, ComputerGeneration: computerGeneration,
-			Environment: string(serviceTarget.Environment), ReleaseChannel: string(channel),
-			Version: version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
+			Environment: string(serviceTarget.Environment),
+			Version:     version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
 			MachineAttestationFrom: machineAttestationSourcePID,
 		},
-		ReleaseManifestURL: os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),
+		ReleaseManifestURL:              os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),
+		PreviousPackageUpgradeBootstrap: previousPackageUpgradeBootstrap,
 		DesiredWorkspaceIDs: func() ([]string, error) {
 			bindings, err := bindingStore.AllActiveForEnvironment(string(serviceTarget.Environment))
 			if err != nil {
@@ -139,9 +147,6 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		if err := spawnDetachedComputerBinary(restartBin, profile, host.MachineUpgradeTarget()); err != nil {
 			if rollbackErr := cli.RollbackExecutable(restartBin); rollbackErr != nil {
 				return fmt.Errorf("start detached Computer successor: %w; restore previous Computer: %v", err, rollbackErr)
-			}
-			if journalErr := host.MarkMachineUpgradeRollbackPending(); journalErr != nil {
-				return fmt.Errorf("start detached Computer successor: %w; previous binary restored but rollback journal failed: %v", err, journalErr)
 			}
 			if restoreErr := spawnDetachedComputerBinary(restartBin, profile, ""); restoreErr != nil {
 				return fmt.Errorf("start detached Computer successor: %w; restored previous binary but restart failed: %v", err, restoreErr)

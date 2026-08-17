@@ -51,7 +51,7 @@ func TestCodexRuntimeStatsUseCurrentThreadOccupancy(t *testing.T) {
 }
 
 func TestClaudeACPUsageUpdateTracksContextOccupancy(t *testing.T) {
-	c := &hermesClient{}
+	c := &acpClient{}
 	c.handleUsageUpdate(json.RawMessage(`{"sessionUpdate":"usage_update","used":120000,"size":200000}`))
 	stats := c.currentRuntimeStats()
 	if stats == nil || stats.ContextTokens == nil || *stats.ContextTokens != 120_000 {

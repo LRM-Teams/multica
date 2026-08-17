@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/computer"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func (d *Daemon) listenBindingCredentialProxy() (net.Listener, error) {
@@ -47,6 +48,7 @@ type BindingChildRunConfig struct {
 	PublishReady   func(computer.BindingChildReady) error
 	RefreshEvery   time.Duration
 	HostLeaseEvery time.Duration
+	PrepareUpgrade func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error)
 }
 
 // RunBindingChild owns one Workspace Runner and all of its workspace-scoped
@@ -115,21 +117,20 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if !ok {
 		return fmt.Errorf("Workspace Binding %q is not active for this Computer generation", workspaceID)
 	}
-	if binding.Credential == "" || !binding.CredentialExpiresAt.After(time.Now()) {
-		return fmt.Errorf("Workspace Binding %q has no live execution credential", workspaceID)
-	}
-	d.client.SetWorkspaceDaemonToken(workspaceID, binding.Credential, binding.CredentialExpiresAt)
-	if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil {
-		return fmt.Errorf("validate Workspace Binding %q: %w", workspaceID, err)
+	if err := d.prepareBindingExecutionCredential(binding); err != nil {
+		return err
 	}
 	response := &RegisterResponse{
 		DaemonToken: binding.Credential, DaemonTokenExpiresAt: binding.CredentialExpiresAt.UTC().Format(time.RFC3339Nano),
 	}
-	if len(d.cfg.Agents) > 0 {
-		response, err = d.registerRuntimesForWorkspace(ctx, workspaceID)
-		if err != nil {
-			return err
+	response, err = func() (*RegisterResponse, error) {
+		if len(d.cfg.Agents) == 0 {
+			return response, nil
 		}
+		return d.registerRuntimesForWorkspace(ctx, workspaceID)
+	}()
+	if err != nil {
+		return err
 	}
 	runtimeIDs := make([]string, 0, len(response.Runtimes))
 	d.mu.Lock()
@@ -143,6 +144,32 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err := hostControl.reportRuntimeSet(ctx, response.Runtimes, response.DaemonToken, response.DaemonTokenExpiresAt); err != nil {
 		return fmt.Errorf("report Binding child Runtime set: %w", err)
 	}
+	runtimeID := ""
+	if len(response.Runtimes) > 0 {
+		runtimeID = response.Runtimes[0].ID
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	executor := computer.NewBindingMachineUpgradeExecutor(computer.BindingMachineUpgradeConfig{
+		Identity: computer.HostProcessIdentity{
+			ComputerID: bootstrap.ComputerID, ComputerGeneration: bootstrap.ComputerGeneration,
+			Environment: bootstrap.Environment, Version: config.Daemon.CLIVersion, ServerURL: bootstrap.ServerBaseURL,
+		},
+		ResidentRoot: bootstrap.BindingsRoot,
+		ControlURL:   bootstrap.HostControlURL,
+		ControlToken: config.Daemon.LocalControlToken,
+		Child: bindingChildControlIdentity{
+			WorkspaceID: workspaceID, RunnerGeneration: bootstrap.RunnerGeneration, PID: os.Getpid(),
+		},
+		RuntimeID:    runtimeID,
+		DaemonToken:  response.DaemonToken,
+		Drain:        d.beginBindingDrain,
+		ReleaseDrain: d.releaseClaimBarrier,
+		Exit:         cancel,
+		Emit:         d.emitComputerUpgrade,
+		Prepare:      config.PrepareUpgrade,
+	})
+	d.bindingMachineUpgrade = executor.Execute
 	d.notifyRuntimeSetChanged()
 	if len(runtimeIDs) > 0 {
 		defer d.deregisterRuntimes()
@@ -156,13 +183,15 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err != nil {
 		return err
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	if err := d.adoptWorkspaceRunner(runner); err != nil {
+		return err
+	}
+	defer d.detachWorkspaceRunner(runner)
 	var (
 		readyOnce sync.Once
 		readyErr  error
 	)
-	runner.onReady = func() {
+	publishReady := func() {
 		readyOnce.Do(func() {
 			readyErr = config.PublishReady(computer.BindingChildReady{
 				ProtocolVersion: computer.BindingChildProtocolVersion,
@@ -174,6 +203,10 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			}
 		})
 	}
+	// DaemonCore liveness is the Workspace Runner socket, matching Raft
+	// /daemon/connect. Ready waits for that connect, including zero-runtime
+	// Computers.
+	runner.onReady = publishReady
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(runCtx, taskWakeups)
 	go d.residentCrashWatchLoop(runCtx)
@@ -188,7 +221,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	refreshDone := make(chan error, 1)
 	go func() {
-		refreshDone <- d.bindingWorkspaceRefreshLoop(runCtx, workspaceID, binding.Credential, refreshEvery)
+		refreshDone <- d.bindingWorkspaceRefreshLoop(runCtx, workspaceID, response.DaemonToken, refreshEvery)
 	}()
 	hostLeaseEvery := config.HostLeaseEvery
 	if hostLeaseEvery <= 0 {
@@ -236,6 +269,15 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if readyErr != nil {
 		return fmt.Errorf("publish Binding child Ready: %w", readyErr)
 	}
+	return nil
+}
+
+func (d *Daemon) prepareBindingExecutionCredential(binding computer.WorkspaceBinding) error {
+	workspaceID := strings.TrimSpace(binding.WorkspaceID)
+	if strings.TrimSpace(binding.Credential) == "" || !binding.CredentialExpiresAt.After(time.Now()) {
+		return fmt.Errorf("Workspace Binding %q has no live execution credential", workspaceID)
+	}
+	d.client.SetWorkspaceDaemonToken(workspaceID, binding.Credential, binding.CredentialExpiresAt)
 	return nil
 }
 
@@ -297,7 +339,10 @@ func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, i
 				lastBindingCredential = strings.TrimSpace(binding.Credential)
 				continue
 			}
-			if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil && d.logger != nil {
+			// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+			// longer a supported direct self-upgrade source. Socket ownership
+			// is liveness; this HTTP probe only refreshes leftover last_seen.
+			if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID); err != nil && d.logger != nil {
 				d.logger.Warn("Binding child heartbeat failed; will retry", "workspace_id", workspaceID, "error", err)
 			}
 		}
@@ -348,6 +393,35 @@ func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstr
 	}
 	mux.HandleFunc(computer.BindingPrepareMachineUpgradePath, handle(true))
 	mux.HandleFunc(computer.BindingReleaseMachineUpgradePath, handle(false))
+	mux.HandleFunc(computer.BindingComputerUpgradePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !d.localControlAuthorized(r) {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		var request struct {
+			Identity computer.BindingChildIdentity   `json:"identity"`
+			Command  protocol.ComputerUpgradePayload `json:"command"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if err := d.handleComputerControlCommand(r.Context(), protocol.EventComputerUpgrade, request.Command); err != nil {
+			if errors.Is(err, computer.ErrComputerControlBusy) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc(computer.BindingPrepareEnvironmentSwitchPath, func(w http.ResponseWriter, r *http.Request) {
 		if !decodeIdentity(w, r) {
 			return
@@ -404,8 +478,11 @@ func (d *Daemon) reregisterBindingWorkspace(ctx context.Context, workspaceID str
 		return fmt.Errorf("Workspace Binding %q has no live execution credential", workspaceID)
 	}
 	d.client.SetWorkspaceDaemonToken(workspaceID, binding.Credential, binding.CredentialExpiresAt)
-	if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil {
-		return fmt.Errorf("validate Workspace Binding %q: %w", workspaceID, err)
+	// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
+	// longer a supported direct self-upgrade source. Binding validity is
+	// the credential plus the Runner socket, not this HTTP probe.
+	if err := d.client.ComputerHeartbeat(ctx, workspaceID, d.cfg.DaemonID); err != nil && d.logger != nil {
+		d.logger.Warn("Binding child heartbeat failed during Runtime refresh", "workspace_id", workspaceID, "error", err)
 	}
 	if len(d.cfg.Agents) > 0 {
 		return d.reregisterWorkspaceAfterRuntimeGone(ctx, workspaceID)

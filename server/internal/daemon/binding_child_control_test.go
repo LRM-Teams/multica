@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type bindingControlTestCurrentSet struct {
@@ -232,7 +234,59 @@ func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
 	}
 }
 
-func TestBindingChildForwardsMachineUpgradeToHost(t *testing.T) {
+func TestStandaloneDaemonIgnoresConnectSocketUpgrade(t *testing.T) {
+	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err := child.handleComputerControlCommand(context.Background(), protocol.EventComputerUpgrade, protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v9.9.9",
+	})
+	if err != nil {
+		t.Fatalf("standalone DaemonCore upgrade error = %v, want ignore", err)
+	}
+}
+
+func TestBindingChildExecutesConnectSocketUpgradeLocally(t *testing.T) {
+	executed := make(chan protocol.ComputerUpgradePayload, 1)
+	hostHits := make(chan struct{}, 1)
+	host := newBindingControlTestHost(t, "host-control-token", 0, computer.HostControlCallbacks{
+		MachineActions: func(context.Context, computer.BindingChildIdentity, json.RawMessage) error {
+			hostHits <- struct{}{}
+			return errors.New("Host must not execute a connect-socket Machine Upgrade")
+		},
+	})
+	installLiveBindingChild(t, host, "workspace-a", 101)
+	mux := http.NewServeMux()
+	host.host.RegisterRoutes(mux)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	child.bindingHostControl = newBindingHostControlClient(server.URL, "host-control-token", bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	child.bindingMachineUpgrade = func(_ context.Context, command protocol.ComputerUpgradePayload) error {
+		executed <- command
+		return nil
+	}
+	if err := child.handleComputerControlCommand(context.Background(), protocol.EventComputerUpgrade, protocol.ComputerUpgradePayload{
+		RequestID: "upgrade-a", TargetVersion: "v9.9.9",
+	}); err != nil {
+		t.Fatalf("handleComputerControlCommand: %v", err)
+	}
+
+	select {
+	case command := <-executed:
+		if command.Operation() != "upgrade-a" || command.TargetVersion != "v9.9.9" {
+			t.Fatalf("child executor command = %+v", command)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DaemonCore connect-socket upgrade was not executed in the Binding child")
+	}
+	select {
+	case <-hostHits:
+		t.Fatal("connect-socket Machine Upgrade was forwarded to Host")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestBindingChildForwardsRestartToHost(t *testing.T) {
 	const controlToken = "host-control-token"
 	forwarded := make(chan HeartbeatResponse, 1)
 	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{
@@ -253,22 +307,27 @@ func TestBindingChildForwardsMachineUpgradeToHost(t *testing.T) {
 	host.host.RegisterRoutes(mux)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
+	control := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	if err := control.reportRuntimeSet(context.Background(), []Runtime{
+		{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
+	}, "child-daemon-token", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("report runtime set: %v", err)
+	}
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	child.bindingHostControl = newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	child.bindingHostControl = control
 	child.handleWorkspaceRunnerControlAck(context.Background(), &HeartbeatResponse{
-		RuntimeID:             "runtime-a",
-		PendingMachineUpgrade: &PendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v9.9.9"},
-		PendingRestart:        &PendingRestart{ID: "restart-a"},
+		RuntimeID:      "runtime-a",
+		PendingRestart: &PendingRestart{ID: "restart-a"},
 	})
 
 	select {
 	case ack := <-forwarded:
-		if ack.PendingMachineUpgrade == nil || ack.PendingMachineUpgrade.ID != "upgrade-a" || ack.PendingRestart == nil {
+		if ack.PendingRestart == nil || ack.PendingRestart.ID != "restart-a" || ack.PendingMachineUpgrade != nil {
 			t.Fatalf("Host machine action = %+v", ack)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Binding child did not forward Machine Upgrade to Host")
+		t.Fatal("Binding child did not forward restart to Host")
 	}
 }
 

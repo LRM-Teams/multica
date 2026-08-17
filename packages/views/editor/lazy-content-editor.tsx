@@ -12,10 +12,13 @@
  */
 
 import {
+  useCallback,
   forwardRef,
   lazy,
   Suspense,
   useEffect,
+  useImperativeHandle,
+  useRef,
   useState,
   type ComponentProps,
 } from "react";
@@ -73,6 +76,30 @@ export const ContentEditor = forwardRef<
 >(function LazyContentEditor(props, ref) {
   const seeded = Boolean(props.defaultValue && String(props.defaultValue).trim());
   const [armed, setArmed] = useState(seeded);
+  const loadedRef = useRef<ContentEditorRef | null>(null);
+
+  const setLoadedRef = useCallback((editor: ContentEditorRef | null) => {
+    loadedRef.current = editor;
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    getMarkdown: () => loadedRef.current?.getMarkdown() ?? props.defaultValue ?? "",
+    clearContent: () => loadedRef.current?.clearContent(),
+    focus: () => {
+      if (loadedRef.current) loadedRef.current.focus();
+      else setArmed(true);
+    },
+    blur: () => loadedRef.current?.blur(),
+    uploadFile: (file) => loadedRef.current?.uploadFile(file),
+    hasActiveUploads: () => loadedRef.current?.hasActiveUploads() ?? false,
+    insertText: (text) => loadedRef.current?.insertText(text),
+    insertBlankLineAtStart: () => loadedRef.current?.insertBlankLineAtStart(),
+    openIssueReferences: () => loadedRef.current?.openIssueReferences(),
+    getSelectedText: () => loadedRef.current?.getSelectedText() ?? "",
+    insertIssueReference: (attrs) => loadedRef.current?.insertIssueReference(attrs),
+    insertRunReference: (attrs) => loadedRef.current?.insertRunReference(attrs),
+    openPageAI: () => loadedRef.current?.openPageAI() ?? false,
+  }), [props.defaultValue]);
 
   useEffect(() => {
     if (seeded) setArmed(true);
@@ -90,7 +117,7 @@ export const ContentEditor = forwardRef<
 
   return (
     <Suspense fallback={<ComposerFallback className={props.className} />}>
-      <LoadedContentEditor {...props} ref={ref} />
+      <LoadedContentEditor {...props} ref={setLoadedRef} />
     </Suspense>
   );
 });

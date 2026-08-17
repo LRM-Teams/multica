@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -67,7 +66,6 @@ const (
 
 type UpdateStore interface {
 	Create(ctx context.Context, runtimeID, targetVersion string) (*UpdateRequest, error)
-	CreateWithID(ctx context.Context, id, runtimeID, targetVersion string) (*UpdateRequest, error)
 	Get(ctx context.Context, id string) (*UpdateRequest, error)
 	LatestForRuntime(ctx context.Context, runtimeID string) (*UpdateRequest, error)
 	HasPending(ctx context.Context, runtimeID string) (bool, error)
@@ -128,15 +126,10 @@ func NewInMemoryUpdateStore() *InMemoryUpdateStore {
 }
 
 func (s *InMemoryUpdateStore) Create(_ context.Context, runtimeID, targetVersion string) (*UpdateRequest, error) {
-	return s.CreateWithID(context.Background(), randomID(), runtimeID, targetVersion)
-}
-
-// CreateWithID lets a bootstrap carrier reuse the canonical Machine Upgrade
-// ID. It avoids a second durable linkage table while keeping the old wire
-// endpoint's update_id authenticated and idempotent.
-func (s *InMemoryUpdateStore) CreateWithID(_ context.Context, id, runtimeID, targetVersion string) (*UpdateRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	id := randomID()
 
 	// Clean up old requests.
 	now := time.Now()
@@ -360,127 +353,6 @@ func invalidUpdateTransition(from, to UpdateStatus) error {
 	return &updateTransitionError{from: from, to: to}
 }
 
-// InitiateUpdate is the temporary runtime-scoped compatibility adapter for
-// installed clients. Its runtime only supplies authorization and the daemon
-// identity; createMachineUpgrade remains the sole mutation owner.
-func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
-	if !ok {
-		return
-	}
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
-	if !ok {
-		return
-	}
-	if !canOwnRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the computer owner can update this runtime")
-		return
-	}
-
-	var req createMachineUpgradeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	op, _, err := h.createMachineUpgrade(r, rt, member, req, true)
-	if err != nil {
-		h.writeMachineUpgradeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, runtimeUpdateFromMachineUpgrade(op, uuidToString(rt.ID)))
-}
-
-// GetUpdate projects a daemon-scoped Machine Upgrade through the legacy
-// runtime response shape. It deliberately never reads the retired
-// runtime-owned update state.
-func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
-	if !ok {
-		return
-	}
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
-	if !ok {
-		return
-	}
-	if !canOwnRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the computer owner can inspect this update")
-		return
-	}
-	if h.MachineUpgradeStore == nil {
-		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
-		return
-	}
-	op, err := h.MachineUpgradeStore.Get(r.Context(), runtimeDaemonKey(rt), chi.URLParam(r, "updateId"))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load machine upgrade: "+err.Error())
-		return
-	}
-	if op == nil {
-		writeError(w, http.StatusNotFound, "update not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, runtimeUpdateFromMachineUpgrade(op, uuidToString(rt.ID)))
-}
-
-// CancelUpdateIntent is retained at its historical URL. It cancels only the
-// current queued Machine Upgrade; accepted work keeps the canonical conflict
-// boundary and is never silently withdrawn.
-func (h *Handler) CancelUpdateIntent(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
-	if !ok {
-		return
-	}
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
-	if !ok {
-		return
-	}
-	if !canOwnRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the computer owner can cancel this update")
-		return
-	}
-	if h.MachineUpgradeStore == nil {
-		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
-		return
-	}
-	op, err := h.MachineUpgradeStore.LatestForDaemon(r.Context(), runtimeDaemonKey(rt))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load machine upgrade: "+err.Error())
-		return
-	}
-	if op == nil || op.Phase.terminal() {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-		return
-	}
-	if _, err := h.MachineUpgradeStore.Cancel(r.Context(), op.DaemonID, op.ID); err != nil {
-		if errors.Is(err, errMachineUpgradeAlreadyAccepted) {
-			writeCodedError(w, http.StatusConflict, "machine_upgrade_already_accepted", err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to cancel machine upgrade: "+err.Error())
-		return
-	}
-	h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
 // maybeMaterializeUpdateIntent turns a durable UpdateIntent into a concrete
 // daemon_runtime_update attempt the moment a heartbeat proves the runtime is
 // reachable. Called unconditionally on every heartbeat (handler/daemon.go,
@@ -633,10 +505,6 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing.Status == requestedStatus {
 		slog.Debug("ignoring idempotent update report", "runtime_id", runtimeID, "update_id", updateID, "status", existing.Status)
-		// PopPending records running before the old daemon sees the heartbeat
-		// response. Its explicit running report is nevertheless the canonical
-		// machine receipt, so do not skip the bridge projection here.
-		h.projectLegacyMachineUpgradeResult(r, rt, existing, requestedStatus)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
@@ -703,35 +571,8 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		// just a progress signal from the daemon to confirm it received the
 		// update command and is executing it.
 	}
-	h.projectLegacyMachineUpgradeResult(r, rt, existing, requestedStatus)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// projectLegacyMachineUpgradeResult mirrors only an old carrier's durable
-// receipt/progress into its same-ID daemon operation. Historical runtime
-// updates cannot affect a Machine Upgrade because their IDs do not match.
-func (h *Handler) projectLegacyMachineUpgradeResult(r *http.Request, rt db.AgentRuntime, carrier *UpdateRequest, status UpdateStatus) {
-	if h == nil || h.MachineUpgradeStore == nil || carrier == nil {
-		return
-	}
-	op, err := h.MachineUpgradeStore.Get(r.Context(), runtimeDaemonKey(rt), carrier.ID)
-	if err != nil || op == nil || op.AcceptedGeneration == nil || *op.AcceptedGeneration != legacyMachineUpgradeAcceptanceMarker {
-		return
-	}
-	var updated *MachineUpgrade
-	switch status {
-	case UpdateRunning:
-		updated, _ = h.MachineUpgradeStore.AcceptLegacy(r.Context(), op.DaemonID, op.ID, uuidToString(rt.ID), carrier.TargetVersion)
-	case UpdateReady, UpdateCompleted:
-		h.advanceLegacyMachineUpgradeToHandoff(r.Context(), rt, op, carrier.TargetVersion)
-		updated, _ = h.MachineUpgradeStore.Get(r.Context(), op.DaemonID, op.ID)
-	case UpdateFailed:
-		updated, _ = h.MachineUpgradeStore.Progress(r.Context(), op.DaemonID, op.ID, MachineUpgradeFailed, "legacy_update_failed", carrier.Error)
-	}
-	if updated != nil {
-		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
-	}
 }
 
 func updateReportTransitionAllowed(from, to UpdateStatus) bool {

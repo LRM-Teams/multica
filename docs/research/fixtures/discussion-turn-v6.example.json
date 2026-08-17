@@ -1,0 +1,26 @@
+{
+  "contract_kind": "discussion_turn_submission",
+  "schema_version": 6,
+  "client_request_id": "00000000-0000-4000-8000-000000000501",
+  "workspace_id": "00000000-0000-4000-8000-000000000002",
+  "run_id": "00000000-0000-4000-8000-000000000003",
+  "work_item_id": "00000000-0000-4000-8000-000000000502",
+  "attempt_id": "00000000-0000-4000-8000-000000000504",
+  "manifest_id": "00000000-0000-4000-8000-000000000505",
+  "manifest_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "discussion_id": "00000000-0000-4000-8000-000000000503",
+  "discussion_revision": 1,
+  "input_set_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "agent_id": "00000000-0000-4000-8000-000000000205",
+  "visible_message": "两份结果的测试对象和负载区间一致；第二份补足了第一份缺失的尾延迟数据，可以融合。",
+  "contribution": {
+    "common_findings": ["并发达到同一区间后，尾延迟出现可复现拐点。"],
+    "unique_findings": ["第二份结果提供了三次独立复现实验。"],
+    "conflicts": [],
+    "scope": { "workload": "production-like", "region": "CN" },
+    "omissions": ["尚未覆盖低配实例。"],
+    "vote": "accept",
+    "reason": "共同结论一致，新增材料提高证据覆盖且没有改变适用范围。"
+  },
+  "evidence_refs": []
+}

@@ -57,6 +57,8 @@ type workspaceRunnerDependencies struct {
 	controlHeartbeatPayload  func(string) protocol.DaemonHeartbeatRequestPayload
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
+	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
+	setComputerUpgradeEmit   func(func(string, any))
 	now                      func() time.Time
 	onTransition             func(agentLifecycleTransition)
 }
@@ -92,13 +94,15 @@ type WorkspaceRunner struct {
 	controlHeartbeatPayload  func(string) protocol.DaemonHeartbeatRequestPayload
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
+	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
+	setComputerUpgradeEmit   func(func(string, any))
 
 	residency *agentResidencyStore
 	life      context.Context
 	lifeStop  context.CancelFunc
 
 	connectionMu sync.Mutex
-	connection   *workspaceRunnerConnection
+	connection   *DaemonConnection
 	onReady      func()
 }
 
@@ -165,6 +169,8 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		controlHeartbeatPayload:  dependencies.controlHeartbeatPayload,
 		controlHeartbeatAck:      dependencies.controlHeartbeatAck,
 		controlHeartbeatChanges:  dependencies.controlHeartbeatChanges,
+		handleComputerControl:    dependencies.handleComputerControl,
+		setComputerUpgradeEmit:   dependencies.setComputerUpgradeEmit,
 		residency:                newAgentResidencyStore(now),
 		life:                     life,
 		lifeStop:                 lifeStop,
@@ -211,20 +217,7 @@ func (runner *WorkspaceRunner) Run(ctx context.Context) {
 	}
 }
 
-type workspaceRunnerConnection struct {
-	workspaceID string
-	ctx         context.Context
-	cancel      context.CancelFunc
-
-	writeMu sync.Mutex
-	write   func(string, any) error
-	close   func()
-	once    sync.Once
-
-	deliveries *workspaceRunnerDeliveryDispatcher
-}
-
-func (runner *WorkspaceRunner) sendOnConnection(connection *workspaceRunnerConnection, eventType string, payload any) error {
+func (runner *WorkspaceRunner) sendOnConnection(connection *DaemonConnection, eventType string, payload any) error {
 	runner.connectionMu.Lock()
 	defer runner.connectionMu.Unlock()
 	if runner.connection != connection {
@@ -236,29 +229,13 @@ func (runner *WorkspaceRunner) sendOnConnection(connection *workspaceRunnerConne
 func (runner *WorkspaceRunner) sendOnCurrentConnection(eventType string, payload any) error {
 	runner.connectionMu.Lock()
 	defer runner.connectionMu.Unlock()
-	if runner.connection == nil {
+	if runner.connection == nil || !runner.connection.Connected() {
 		return errors.New("Workspace Runner connection is unavailable")
 	}
 	return runner.connection.Write(eventType, payload)
 }
 
-func (connection *workspaceRunnerConnection) Write(eventType string, payload any) error {
-	connection.writeMu.Lock()
-	defer connection.writeMu.Unlock()
-	return connection.write(eventType, payload)
-}
-
-func (connection *workspaceRunnerConnection) Close() {
-	if connection == nil {
-		return
-	}
-	connection.once.Do(func() {
-		connection.cancel()
-		connection.close()
-	})
-}
-
-func (runner *WorkspaceRunner) replaceConnection(next *workspaceRunnerConnection) {
+func (runner *WorkspaceRunner) replaceConnection(next *DaemonConnection) {
 	runner.connectionMu.Lock()
 	previous := runner.connection
 	runner.connection = next
@@ -268,7 +245,7 @@ func (runner *WorkspaceRunner) replaceConnection(next *workspaceRunnerConnection
 	}
 }
 
-func (runner *WorkspaceRunner) releaseConnection(current *workspaceRunnerConnection) {
+func (runner *WorkspaceRunner) releaseConnection(current *DaemonConnection) {
 	runner.connectionMu.Lock()
 	if runner.connection == current {
 		runner.connection = nil
@@ -286,7 +263,7 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	if token == "" {
 		return fmt.Errorf("workspace daemon token unavailable")
 	}
-	wsURL, err := workspaceRunnerURL(runner.serverBaseURL, workspaceID)
+	wsURL, err := daemonConnectionURL(runner.serverBaseURL, workspaceID)
 	if err != nil {
 		return err
 	}
@@ -305,12 +282,10 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	connectionCtx, cancel := context.WithCancel(ctx)
-	connection := &workspaceRunnerConnection{
-		workspaceID: workspaceID, ctx: connectionCtx, cancel: cancel,
-		write: func(eventType string, payload any) error { return writeWorkspaceRunnerFrame(conn, eventType, payload) },
-		close: func() { _ = conn.Close() },
-	}
+	connection := newDaemonConnection(workspaceID, ctx,
+		func(eventType string, payload any) error { return writeDaemonConnectionFrame(conn, eventType, payload) },
+		func() { _ = conn.Close() },
+	)
 	runner.replaceConnection(connection)
 	defer runner.releaseConnection(connection)
 	stopWatch := make(chan struct{})
@@ -331,6 +306,15 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	}
 	if runner.onReady != nil {
 		runner.onReady()
+	}
+	// Replay after ready so the Hub has claimed this socket as the current
+	// Runner. agent:status active sent before that claim is dropped as stale.
+	if runner.activity != nil {
+		for _, frame := range runner.activity.ReconnectFrames() {
+			if err := connection.Write(frame.EventType, frame.Payload); err != nil {
+				return err
+			}
+		}
 	}
 	return runner.serveConnection(connection, conn)
 }
@@ -407,6 +391,8 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		controlHeartbeatPayload:  d.controlPlaneHeartbeatPayload,
 		controlHeartbeatAck:      d.handleWorkspaceRunnerControlAck,
 		controlHeartbeatChanges:  func() (<-chan struct{}, func()) { return nil, func() {} },
+		handleComputerControl:    d.handleComputerControlCommand,
+		setComputerUpgradeEmit:   d.setComputerUpgradeEmit,
 		now:                      time.Now,
 		onTransition:             onTransition,
 	})

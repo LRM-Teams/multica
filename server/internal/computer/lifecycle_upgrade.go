@@ -1,12 +1,9 @@
 package computer
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -31,6 +28,10 @@ type UpgradeOptions struct {
 	TargetVersion   string
 	RequestID       string
 	DownloadTimeout time.Duration
+	// CreateLiveIntent authorizes the Computer owner and dispatches
+	// computer:upgrade on the current Binding socket. The returned request_id
+	// is the only identity; there is no cloud receipt.
+	CreateLiveIntent func(context.Context, string, string, string) (map[string]any, error)
 }
 
 // UpgradeResult distinguishes a live canonical operation from an offline
@@ -63,7 +64,7 @@ func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (Upgrad
 	}
 
 	if health := l.upgradeHealth(ctx); Alive(health) {
-		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget)
+		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget, options.CreateLiveIntent)
 	}
 	if err := rejectLivePIDWithoutControl(l.view().pidPath); err != nil {
 		return UpgradeResult{}, err
@@ -110,7 +111,7 @@ func (l *Lifecycle) Upgrade(ctx context.Context, options UpgradeOptions) (Upgrad
 		if !Alive(health) {
 			return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: Computer ownership changed while routing the upgrade; retry")
 		}
-		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget)
+		return l.requestLiveUpgrade(ctx, health, requestID, requestedTarget, options.CreateLiveIntent)
 	}
 	return result, nil
 }
@@ -159,71 +160,34 @@ func (l *Lifecycle) requestLiveUpgrade(
 	ctx context.Context,
 	health map[string]any,
 	requestID, targetVersion string,
+	createIntent func(context.Context, string, string, string) (map[string]any, error),
 ) (UpgradeResult, error) {
 	daemonID, _ := health["daemon_id"].(string)
 	daemonID = strings.TrimSpace(daemonID)
 	if daemonID == "" {
 		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live Computer did not prove its machine identity")
 	}
-	controlToken, err := ReadControlToken("")
+	if createIntent == nil {
+		return UpgradeResult{}, errors.New("live Computer upgrade requires a human-authorized server lifecycle intent")
+	}
+	operation, err := createIntent(ctx, daemonID, requestID, targetVersion)
 	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: read owner control credential: %w", err)
+		return UpgradeResult{}, fmt.Errorf("create Computer upgrade lifecycle intent: %w", err)
 	}
-	body, err := json.Marshal(map[string]string{
-		"request_id":     requestID,
-		"target_version": targetVersion,
-	})
-	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: encode owner request: %w", err)
+	operationRequestID, _ := operation["request_id"].(string)
+	operationRequestID = strings.TrimSpace(operationRequestID)
+	if operationRequestID == "" {
+		return UpgradeResult{}, errors.New("Computer upgrade lifecycle intent is missing request id")
 	}
-	port := l.view().health
-	url := fmt.Sprintf("http://127.0.0.1:%d/machine-upgrades", port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: build owner request: %w", err)
+	if operationRequestID != requestID {
+		return UpgradeResult{}, fmt.Errorf("Computer upgrade lifecycle intent has request id %q, want %q", operationRequestID, requestID)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Multica-Control-Token", controlToken)
-	client := &http.Client{Timeout: 30 * time.Second}
-	response, err := client.Do(req)
-	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: request upgrade through live owner: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		if response.StatusCode == http.StatusConflict {
-			return UpgradeResult{}, fmt.Errorf("machine upgrade request rejected: %s", strings.TrimSpace(string(message)))
-		}
-		return UpgradeResult{}, fmt.Errorf(
-			"upgrade_service_unreachable: local control returned %s: %s",
-			response.Status,
-			strings.TrimSpace(string(message)),
-		)
-	}
-	var operation map[string]any
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&operation); err != nil {
-		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: decode live owner response: %w", err)
-	}
-	operationID, _ := operation["id"].(string)
-	if strings.TrimSpace(operationID) == "" {
-		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live owner response is missing operation id")
-	}
-	phase, _ := operation["phase"].(string)
-	if strings.TrimSpace(phase) == "" {
-		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live owner response is missing operation phase")
-	}
-	resolvedTarget, _ := operation["resolved_target"].(string)
-	if strings.TrimSpace(resolvedTarget) == "" {
-		resolvedTarget, _ = operation["requested_target"].(string)
-	}
-	if strings.TrimSpace(resolvedTarget) == "" {
-		resolvedTarget = targetVersion
-	}
+	// The cloud POST already sent computer:upgrade on the current Binding
+	// socket. Do not re-deliver through Host /machine-upgrades.
 	return UpgradeResult{
 		Route:           UpgradeRouteLive,
 		RequestedTarget: targetVersion,
-		ResolvedTarget:  resolvedTarget,
+		ResolvedTarget:  targetVersion,
 		Operation:       operation,
 	}, nil
 }

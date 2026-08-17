@@ -60,6 +60,8 @@ type dispatchManifestPlan struct {
 	EvaluationGrantID       string
 	EvaluationGrantRevision int64
 	Purpose                 ArtifactPurpose
+	PolicyVersion           string
+	IsolationAllowlist      map[string]struct{}
 }
 
 func isDispatchManifestCandidateKind(kind ArtifactEntityKind) bool {
@@ -88,6 +90,48 @@ func (m ArtifactContextModule) PlanDispatchManifestForPurpose(
 	)
 }
 
+func (m ArtifactContextModule) PlanDispatchManifestForTask(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, stateVersion int64, purpose ArtifactPurpose, task Task) (dispatchManifestPlan, error) {
+	plan, err := m.PlanDispatchManifestForPurpose(ctx, tx, workspaceID, sessionID, stateVersion, purpose)
+	if err != nil {
+		return plan, err
+	}
+	return isolateDisputeReviewManifest(plan, task), nil
+}
+
+func isolateDisputeReviewManifest(plan dispatchManifestPlan, task Task) dispatchManifestPlan {
+	var criteria struct {
+		TaskContext struct {
+			Mode               string   `json:"mode"`
+			VisibleArtifactIDs []string `json:"visible_artifact_ids"`
+		} `json:"task_context"`
+	}
+	if json.Unmarshal(task.AcceptanceCriteria, &criteria) != nil || criteria.TaskContext.Mode != "dispute_review" {
+		return plan
+	}
+	allowed := map[string]struct{}{task.ID: {}}
+	for _, id := range criteria.TaskContext.VisibleArtifactIDs {
+		if id != "" {
+			allowed[id] = struct{}{}
+		}
+	}
+	kept := make([]artifactVersionCandidate, 0, len(plan.Entries))
+	for _, candidate := range plan.Entries {
+		_, explicit := allowed[candidate.ArtifactID]
+		foundation := candidate.Kind == ArtifactKindRunSession || candidate.Kind == ArtifactKindContractRevision || candidate.Kind == ArtifactKindMethodDecision
+		if explicit || foundation {
+			kept = append(kept, candidate)
+			continue
+		}
+		candidate.OmissionReason = "irrelevant"
+		plan.Omissions = append(plan.Omissions, candidate)
+	}
+	plan.Entries, plan.IsolationAllowlist = kept, allowed
+	sortManifestEntryCandidates(plan.Entries)
+	plan.ManifestHash = hashManifestEntries(plan.Entries)
+	plan.OmissionHash = hashManifestOmissions(plan.Omissions)
+	return plan
+}
+
 func (m ArtifactContextModule) planDispatchManifestWithClearance(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -97,6 +141,10 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 	purpose ArtifactPurpose,
 ) (dispatchManifestPlan, error) {
 	candidates, err := loadArtifactVersionCandidates(ctx, tx, workspaceID, sessionID)
+	if err != nil {
+		return dispatchManifestPlan{}, err
+	}
+	policyVersion, err := artifactContextPolicyVersionTx(ctx, tx, workspaceID, sessionID)
 	if err != nil {
 		return dispatchManifestPlan{}, err
 	}
@@ -114,7 +162,7 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 			omissions = append(omissions, candidate)
 			continue
 		}
-		admitted, deny := m.policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts())
+		admitted, deny := m.policy.AdmissionAllowedFacts(policyVersion, candidate.legacyAdmissionFacts())
 		if !admitted {
 			candidate.OmissionReason = m.policy.ManifestOmissionReason(deny)
 			omissions = append(omissions, candidate)
@@ -133,7 +181,7 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		candidate.RepresentationHash = contentHashFromPayload(candidate.RepresentationBytes)
 		entries = append(entries, candidate)
 	}
-	if err = auditManifestCandidateDispositions(candidates, entries, omissions, clearance, purpose, m.policy); err != nil {
+	if err = auditManifestCandidateDispositions(candidates, entries, omissions, clearance, purpose, m.policy, policyVersion); err != nil {
 		return dispatchManifestPlan{}, err
 	}
 	sortManifestEntryCandidates(entries)
@@ -158,7 +206,19 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		ManifestHash:        manifestHash,
 		OmissionHash:        hashManifestOmissions(omissions),
 		Purpose:             purpose,
+		PolicyVersion:       policyVersion,
 	}, nil
+}
+
+func artifactContextPolicyVersionTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) (string, error) {
+	var version string
+	if err := tx.QueryRow(ctx, `SELECT orchestrator_version FROM research_session WHERE workspace_id=$1::uuid AND id=$2::uuid`, workspaceID, sessionID).Scan(&version); err != nil {
+		return "", err
+	}
+	if version == OrchestratorVersionV6 {
+		return ResearchV6ContextPolicy, nil
+	}
+	return LegacyV1V5CompatPolicy, nil
 }
 
 func (candidate artifactVersionCandidate) legacyAdmissionFacts() legacyAdmissionFacts {
@@ -429,7 +489,12 @@ func auditManifestCandidateDispositions(
 	clearance ArtifactClearance,
 	purpose ArtifactPurpose,
 	policy ArtifactPolicy,
+	policyVersions ...string,
 ) error {
+	policyVersion := LegacyV1V5CompatPolicy
+	if len(policyVersions) > 0 && policyVersions[0] != "" {
+		policyVersion = policyVersions[0]
+	}
 	want := make(map[string]artifactVersionCandidate, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.VersionRowID == "" {
@@ -489,7 +554,7 @@ func auditManifestCandidateDispositions(
 		} else if policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
 			expected = "omission"
 			expectedReason = policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
-		} else if admitted, deny := policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts()); !admitted {
+		} else if admitted, deny := policy.AdmissionAllowedFacts(policyVersion, candidate.legacyAdmissionFacts()); !admitted {
 			expected = "omission"
 			expectedReason = policy.ManifestOmissionReason(deny)
 		} else if allowed, deny := policy.CanReadNormal(
@@ -520,6 +585,7 @@ type persistDispatchManifestInput struct {
 	Plan              dispatchManifestPlan
 	ExpectedWatermark int64
 	Purpose           ArtifactPurpose
+	Task              Task
 	BeforeCASHook     func(context.Context, *dispatchManifestPlan) error
 	PlannedHook       func(context.Context, dispatchManifestPlan) error
 }
@@ -556,6 +622,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	if err != nil {
 		return dispatchManifestPlan{}, err
 	}
+	authorized = isolateDisputeReviewManifest(authorized, in.Task)
 	authorized.NormalGrantID = plan.NormalGrantID
 	authorized.NormalGrantRevision = plan.NormalGrantRevision
 	authorized.EvaluationGrantID = plan.EvaluationGrantID
@@ -590,7 +657,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		AttemptID:           in.AttemptID,
 		TaskID:              in.TaskID,
 		Purpose:             plan.Purpose,
-		PolicyVersion:       LegacyV1V5CompatPolicy,
+		PolicyVersion:       plan.PolicyVersion,
 		PolicyWatermark:     plan.PolicyWatermark,
 		ThroughStateVersion: plan.ThroughStateVersion,
 		Entries:             plan.Entries,
@@ -619,7 +686,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		  $6, $7, $8, $9, $10::uuid, $11, NULLIF($12, '')::uuid, NULLIF($13, 0), $14, $15
 		)
 	`, plan.ManifestID, in.WorkspaceID, in.SessionID, in.AttemptID, in.TaskID,
-		plan.Purpose, LegacyV1V5CompatPolicy, plan.PolicyWatermark, plan.ThroughStateVersion,
+		plan.Purpose, plan.PolicyVersion, plan.PolicyWatermark, plan.ThroughStateVersion,
 		plan.NormalGrantID, plan.NormalGrantRevision, plan.EvaluationGrantID, plan.EvaluationGrantRevision,
 		plan.ManifestHash, plan.OmissionHash); err != nil {
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
@@ -751,7 +818,7 @@ func persistManifestGrantsTx(
 		  $6, false, $7, $8, 'active'
 		)
 	`, plan.NormalGrantID, workspaceID, sessionID, principalID,
-		plan.Purpose, defaultTaskExecutionClearance(), LegacyV1V5CompatPolicy, plan.NormalGrantRevision); err != nil {
+		plan.Purpose, defaultTaskExecutionClearance(), plan.PolicyVersion, plan.NormalGrantRevision); err != nil {
 		return fmt.Errorf("insert task execution grant: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -763,7 +830,7 @@ func persistManifestGrantsTx(
 		return fmt.Errorf("record task execution grant: %w", err)
 	}
 	if plan.EvaluationGrantID != "" {
-		if _, err := tx.Exec(ctx, `INSERT INTO research_artifact_policy_grant (id,workspace_id,session_id,principal_kind,principal_id,purpose,normal_clearance,evaluation_private,policy_version,revision,status) VALUES ($1::uuid,$2::uuid,$3::uuid,'agent',$4::uuid,$5,NULL,true,$6,$7,'active')`, plan.EvaluationGrantID, workspaceID, sessionID, principalID, plan.Purpose, LegacyV1V5CompatPolicy, plan.EvaluationGrantRevision); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO research_artifact_policy_grant (id,workspace_id,session_id,principal_kind,principal_id,purpose,normal_clearance,evaluation_private,policy_version,revision,status) VALUES ($1::uuid,$2::uuid,$3::uuid,'agent',$4::uuid,$5,NULL,true,$6,$7,'active')`, plan.EvaluationGrantID, workspaceID, sessionID, principalID, plan.Purpose, plan.PolicyVersion, plan.EvaluationGrantRevision); err != nil {
 			return fmt.Errorf("insert evaluation grant: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO research_artifact_policy_mutation (workspace_id,session_id,watermark,mutation_kind,policy_grant_id,old_grant_revision,new_grant_revision,new_grant_status) VALUES ($1::uuid,$2::uuid,$3,'grant_create',$4::uuid,0,$5,'active')`, workspaceID, sessionID, watermark, plan.EvaluationGrantID, plan.EvaluationGrantRevision); err != nil {

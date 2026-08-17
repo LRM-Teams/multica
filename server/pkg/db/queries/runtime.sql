@@ -82,13 +82,10 @@ WHERE a.id = @agent_id AND a.workspace_id = @workspace_id
 -- forever, so a FUTURE real (silence-based) disconnect would incorrectly
 -- still read as "stopped" instead of "disconnected".
 --
--- starting_since is unconditionally cleared here for the same reason: a
--- completed register is the authoritative "no longer starting" fact,
--- regardless of whether MarkAgentRuntimesStarting ran first on this row
--- (normal path) or was skipped/lost (best-effort call failed, or this is a
--- brand-new row with nothing to have marked) — leaving this out would risk
--- a stuck starting_since surviving a crash between mark-starting and
--- register.
+-- starting_since is unconditionally cleared here: a completed register is
+-- the authoritative "no longer starting" fact. The retired
+-- /api/daemon/starting write path is gone, but leftover rows from older
+-- daemons must still drop the stamp on the next successful register.
 --
 -- owner_id uses first-owner-wins: COALESCE(existing, excluded). A later PAT
 -- re-register (e.g. admin helping install-service) must not steal ownership
@@ -127,21 +124,6 @@ DO UPDATE SET
     starting_since = NULL,
     pinned_version = NULLIF($10, '')
 RETURNING *, (xmax = 0) AS inserted;
-
--- name: MarkAgentRuntimesStarting :exec
--- Called once, best-effort, right before the daemon's cold-start agent CLI
--- version-probe loop (which can take ~20s on a cold cache) — the window
--- during which the server otherwise has no fact newer than whatever this
--- daemon's runtimes looked like before it stopped. Deliberately a no-op
--- when no rows match (e.g. a daemon that has never registered before has
--- no prior runtime row to attach "starting" to — see task's decision ①:
--- first-ever setup has no starting phase to observe, it goes straight to
--- online). Read-side treats starting_since as stale after a short TTL, so
--- letting this row sit unset forever if register never follows is safe by
--- construction, not merely tolerated.
-UPDATE agent_runtime
-SET starting_since = now()
-WHERE daemon_id = $1 AND workspace_id = $2;
 
 -- name: PrecreateAgentRuntime :one
 -- Inserts a pending (offline) agent_runtime row keyed by a caller-supplied

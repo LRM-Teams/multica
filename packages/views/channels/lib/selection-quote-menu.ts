@@ -14,7 +14,6 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { useT } from "../../i18n/use-t";
 import { SelectionQuoteMenu } from "../components/selection-quote-menu";
 import {
-  buildSelectionQuoteMarkdown,
   isFinePointerViewport,
   resolveMessageSelection,
   type ResolvedMessageSelection,
@@ -27,10 +26,9 @@ export interface UseSelectionQuoteMenuOptions {
    */
   containerRef: RefObject<HTMLElement | null>;
   /**
-   * Append the built quote markdown to the active composer (channel or thread).
-   * The caller decides which editor receives it.
+   * Set the active composer's structured quote target.
    */
-  onQuote: (markdown: string) => void;
+  onQuote: (selection: ResolvedMessageSelection) => void;
 }
 
 export interface SelectionQuoteMenuHandle {
@@ -120,9 +118,11 @@ export function useSelectionQuoteMenu({
   handlersRef.current = { handlePointerUp, handleSelectionChange, handleScrollOrResize };
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const doc = container.ownerDocument;
+    if (typeof document === "undefined") return;
+    // The message area is conditional while a conversation loads. Bind to the
+    // document even when its ref is not populated yet; resolveCurrent reads the
+    // live ref after pointerup and still rejects selections outside the area.
+    const doc = containerRef.current?.ownerDocument ?? document;
     const onPointerUp = () => handlersRef.current.handlePointerUp();
     const onSelectionChange = () => handlersRef.current.handleSelectionChange();
     const onScrollOrResize = () => handlersRef.current.handleScrollOrResize();
@@ -145,7 +145,7 @@ export function useSelectionQuoteMenu({
   const handleQuote = useCallback(() => {
     const current = resolved;
     if (!current) return;
-    onQuoteRef.current(buildSelectionQuoteMarkdown(current.author, current.text));
+    onQuoteRef.current(current);
     liveSelectionRef.current?.removeAllRanges();
     dismiss();
   }, [resolved, dismiss]);

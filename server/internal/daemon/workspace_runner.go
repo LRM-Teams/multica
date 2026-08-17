@@ -4,21 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const workspaceRunnerWriteTimeout = 10 * time.Second
 
-func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnection, conn *websocket.Conn) error {
+func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, conn *websocket.Conn) error {
 	workspaceID := connection.workspaceID
 	writeFrame := func(eventType string, payload any) error {
 		return runner.sendOnConnection(connection, eventType, payload)
+	}
+	if runner.setComputerUpgradeEmit != nil {
+		runner.setComputerUpgradeEmit(func(eventType string, payload any) {
+			_ = writeFrame(eventType, payload)
+		})
+		defer runner.setComputerUpgradeEmit(nil)
 	}
 	failConnection := func(err error) {
 		if err == nil {
@@ -41,7 +45,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 	if runner.mixedRunActivityReplay != nil {
 		runner.mixedRunActivityReplay(writeFrame)
 	}
-	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
+	transportGeneration, _ := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && runner.logger != nil {
 			runner.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
 		}
@@ -61,11 +65,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 		}
 	}()
-	for _, frame := range reconnectFrames {
-		if err := writeFrame(frame.EventType, frame.Payload); err != nil {
-			return err
-		}
-	}
 	var controlStarted bool
 	var stopControl context.CancelFunc
 	var controlDone chan struct{}
@@ -106,6 +105,33 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			if err := writeFrame(protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
 				return err
+			}
+		case protocol.EventComputerUpgrade, protocol.EventComputerRestart:
+			var command protocol.ComputerUpgradePayload
+			if message.Type == protocol.EventComputerRestart {
+				var restart protocol.ComputerRestartPayload
+				if json.Unmarshal(message.Payload, &restart) != nil || restart.Validate() != nil {
+					continue
+				}
+				command = protocol.ComputerUpgradePayload{RequestID: restart.RequestID, OperationID: restart.OperationID}
+			} else if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
+				continue
+			}
+			if runner.handleComputerControl == nil {
+				if runner.logger != nil {
+					runner.logger.Info("ignoring Computer control; Host callback is unavailable", "workspace_id", workspaceID, "action", message.Type)
+				}
+				continue
+			}
+			if err := runner.handleComputerControl(connection.ctx, message.Type, command); err != nil {
+				if runner.logger != nil {
+					runner.logger.Warn("forward Computer control to Host failed", "workspace_id", workspaceID, "action", message.Type, "request_id", command.RequestID, "error", err)
+				}
+				if message.Type == protocol.EventComputerUpgrade && errors.Is(err, computer.ErrComputerControlBusy) {
+					_ = writeFrame(protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{
+						RequestID: command.RequestID, OK: false, Error: "control_busy",
+					})
+				}
 			}
 		case protocol.EventDaemonHeartbeatAck:
 			var ack HeartbeatResponse
@@ -236,7 +262,7 @@ func (runner *WorkspaceRunner) ownsRuntime(runtimeID string) bool {
 	return false
 }
 
-func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, connection *workspaceRunnerConnection) {
+func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, connection *DaemonConnection) {
 	if runner == nil || runner.controlHeartbeatPayload == nil {
 		return
 	}
@@ -284,37 +310,4 @@ func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, co
 			}
 		}
 	}
-}
-
-func writeWorkspaceRunnerFrame(conn *websocket.Conn, eventType string, payload any) error {
-	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
-	if err != nil {
-		return err
-	}
-	if err := conn.SetWriteDeadline(time.Now().Add(workspaceRunnerWriteTimeout)); err != nil {
-		return err
-	}
-	return conn.WriteMessage(websocket.TextMessage, frame)
-}
-
-func workspaceRunnerURL(baseURL, workspaceID string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return "", fmt.Errorf("invalid daemon server URL: %w", err)
-	}
-	switch u.Scheme {
-	case "http":
-		u.Scheme = "ws"
-	case "https":
-		u.Scheme = "wss"
-	case "ws", "wss":
-	default:
-		return "", fmt.Errorf("daemon server URL must use http, https, ws, or wss")
-	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/daemon/ws"
-	q := u.Query()
-	q.Set("workspace_id", workspaceID)
-	u.RawQuery = q.Encode()
-	u.Fragment = ""
-	return u.String(), nil
 }

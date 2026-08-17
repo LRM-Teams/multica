@@ -268,7 +268,7 @@ func TestShadowEquivalenceFixtureCoversAcceptedPlanAndDurableFamilies(t *testing
 
 	projection, err := loadLegacyShadowDomainProjectionTx(
 		ctx, tx, fixture.fixture.workspaceID, fixture.run.SessionID,
-		ArtifactPurposeTaskExecution, "",
+		ArtifactPurposeTaskExecution, LegacyV1V5CompatPolicy, "",
 	)
 	if err != nil {
 		t.Fatal(err)

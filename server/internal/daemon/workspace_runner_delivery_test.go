@@ -950,11 +950,10 @@ func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
 	staleSend := func() error {
 		return runner.sendOnConnection(firstConnection, protocol.EventAgentDeliverAck, map[string]any{"request": 0})
 	}
-	secondCtx, secondCancel := context.WithCancel(context.Background())
-	secondConnection := &workspaceRunnerConnection{workspaceID: "workspace-1", ctx: secondCtx, cancel: secondCancel, write: func(string, any) error {
+	secondConnection := newDaemonConnection("workspace-1", context.Background(), func(string, any) error {
 		second++
 		return nil
-	}, close: func() {}}
+	}, func() {})
 	runner.replaceConnection(secondConnection)
 	defer runner.releaseConnection(secondConnection)
 	if err := staleSend(); err == nil {
@@ -970,6 +969,95 @@ func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
 	if d.sendWorkspaceRunnerAgentFrame("agent-1", protocol.EventAgentDeliverAck, nil) {
 		t.Fatal("detached Runner accepted Message frame")
 	}
+}
+
+func TestBindingChildWorkspaceRunnerIsTheCredentialProxyInbox(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir(), DaemonID: "computer-1"}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+
+	owned, err := d.newWorkspaceRunner("workspace-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(owned)
+		owned.Close()
+		owned.inboxes.Close()
+	})
+	if err := d.adoptWorkspaceRunner(owned); err != nil {
+		t.Fatalf("adopt Binding child Workspace Runner: %v", err)
+	}
+
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerTestRunnerInbox(t, owned, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+
+	resolved, err := d.resolveWorkspaceRunnerByAgent("agent-1")
+	if err != nil {
+		t.Fatalf("Credential Proxy could not find Binding child Inbox: %v", err)
+	}
+	if resolved != owned {
+		t.Fatal("Credential Proxy resolved a different Workspace Runner than the Binding child")
+	}
+
+	ensured, err := d.ensureWorkspaceRunner("workspace-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensured != owned {
+		t.Fatal("handoff minted a second Workspace Runner for the same Binding child")
+	}
+
+	if _, err := d.CredentialProxy().PreflightMessageSend("agent-1", "channel:one"); err != nil {
+		t.Fatalf("message send preflight: %v", err)
+	}
+}
+
+func TestUnadoptedBindingChildWorkspaceRunnerLeavesMessageSendUnavailable(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir(), DaemonID: "computer-1"}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+
+	owned, err := d.newWorkspaceRunner("workspace-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		owned.Close()
+		owned.inboxes.Close()
+	})
+
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerTestRunnerInbox(t, owned, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+
+	if _, err := d.CredentialProxy().PreflightMessageSend("agent-1", "channel:one"); err == nil || !strings.Contains(err.Error(), "Message coordinator is unavailable") {
+		t.Fatalf("unadopted Binding child send = %v, want Message coordinator is unavailable", err)
+	}
+
+	ensured, err := d.ensureWorkspaceRunner("workspace-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensured == owned {
+		t.Fatal("unadopted Binding child Runner was already on the Daemon lookup map")
+	}
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(ensured)
+		ensured.Close()
+		ensured.inboxes.Close()
+	})
 }
 
 func TestWorkspaceRunnerDeliveryStopFenceRejectsLateStartResume(t *testing.T) {

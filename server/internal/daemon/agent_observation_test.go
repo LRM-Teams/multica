@@ -14,7 +14,7 @@ func TestAgentObservationValidationMatrix(t *testing.T) {
 	tool := AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "read_file", ToolCallID: "call-1"}
 	valid := []AgentObservation{
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeReady, Data: runtime, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at},
+		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeWorking, Data: stage, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeThinking, Data: stage, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeTool, Data: tool, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at},

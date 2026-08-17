@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -45,32 +46,68 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 		writeError(w, http.StatusConflict, "channel is archived")
 		return
 	}
+	result := h.bootstrapChannelGoalControlPlane(w, r, workspaceID, channelID, "agent", agentID)
+	if result != nil {
+		writeJSON(w, http.StatusCreated, result)
+	}
+}
+
+// BootstrapChannelGoalControlPlane gives a human channel manager the same
+// atomic recovery path as the manager agent. It is intentionally explicit:
+// repository evidence may prefill the UI, but only this confirmed request can
+// create and bind durable delivery records.
+func (h *Handler) BootstrapChannelGoalControlPlane(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceIDString := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok || !h.requireChannelWritable(w, r.Context(), workspaceIDString, channelID) ||
+		!h.requireChannelManager(w, r, workspaceIDString, channelID, parseUUID(userID)) {
+		return
+	}
+	result := h.bootstrapChannelGoalControlPlane(
+		w, r, parseUUID(workspaceIDString), channelID, "member", parseUUID(userID),
+	)
+	if result != nil {
+		writeJSON(w, http.StatusCreated, channelGoalEnvelope{Goal: &result.Goal})
+	}
+}
+
+func (h *Handler) bootstrapChannelGoalControlPlane(
+	w http.ResponseWriter,
+	r *http.Request,
+	workspaceID, channelID pgtype.UUID,
+	actorType string,
+	actorID pgtype.UUID,
+) *BootstrapAgentChannelGoalControlPlaneResponse {
 
 	var req BootstrapAgentChannelGoalControlPlaneRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
+		return nil
 	}
 	req.ProjectTitle = strings.TrimSpace(req.ProjectTitle)
 	req.RepositoryURL = strings.TrimSpace(req.RepositoryURL)
 	req.DefaultBranchHint = strings.TrimSpace(req.DefaultBranchHint)
 	if req.ProjectTitle == "" || len(req.ProjectTitle) > 240 {
 		writeError(w, http.StatusBadRequest, "project_title is required and must be at most 240 characters")
-		return
+		return nil
 	}
 	ref, err := validateGithubRepoRef(mustMarshalJSON(githubRepoRef{
 		URL: req.RepositoryURL, DefaultBranchHint: req.DefaultBranchHint,
 	}))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return nil
 	}
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start goal bootstrap")
-		return
+		return nil
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
@@ -86,7 +123,7 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 		} else {
 			writeError(w, http.StatusInternalServerError, "failed to load channel goal")
 		}
-		return
+		return nil
 	}
 
 	var boundProjectID pgtype.UUID
@@ -95,7 +132,7 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 		WHERE workspace_id = $1 AND id = $2 AND kind = 'group' AND archived_at IS NULL
 		FOR UPDATE`, workspaceID, channelID).Scan(&boundProjectID); err != nil {
 		writeError(w, http.StatusNotFound, "channel not found")
-		return
+		return nil
 	}
 
 	created := false
@@ -104,16 +141,16 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 		project, err = qtx.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{ID: boundProjectID, WorkspaceID: workspaceID})
 		if err != nil {
 			writeError(w, http.StatusConflict, "bound project is unavailable")
-			return
+			return nil
 		}
 	} else {
 		project, err = qtx.CreateProject(r.Context(), db.CreateProjectParams{
 			WorkspaceID: workspaceID, Title: req.ProjectTitle, Status: "in_progress", Priority: "none",
-			LeadType: pgtype.Text{String: "agent", Valid: true}, LeadID: agentID,
+			LeadType: pgtype.Text{String: actorType, Valid: true}, LeadID: actorID,
 		})
 		if err != nil {
 			h.writeProjectWriteError(w, r, err, "create")
-			return
+			return nil
 		}
 		created = true
 	}
@@ -121,7 +158,7 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 	resources, err := qtx.ListProjectResources(r.Context(), project.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to inspect project resources")
-		return
+		return nil
 	}
 	var repoResource db.ProjectResource
 	resourceCreated := false
@@ -135,7 +172,7 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 		_ = json.Unmarshal(ref, &requested)
 		if strings.TrimSuffix(existing.URL, ".git") != strings.TrimSuffix(requested.URL, ".git") {
 			writeError(w, http.StatusConflict, "bound project already has a different github_repo")
-			return
+			return nil
 		}
 		repoResource = resource
 		break
@@ -143,7 +180,7 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 	if !repoResource.ID.Valid {
 		repoResource, err = qtx.CreateProjectResource(r.Context(), db.CreateProjectResourceParams{
 			ProjectID: project.ID, WorkspaceID: workspaceID, ResourceType: "github_repo",
-			ResourceRef: ref, Position: int32(len(resources)),
+			ResourceRef: ref, Position: int32(len(resources)), CreatedBy: actorID,
 		})
 		if err != nil {
 			if isUniqueViolation(err) {
@@ -151,19 +188,19 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 			} else {
 				writeError(w, http.StatusInternalServerError, "failed to attach github repository")
 			}
-			return
+			return nil
 		}
 		resourceCreated = true
 	}
 	if !boundProjectID.Valid {
 		if _, err := tx.Exec(r.Context(), `UPDATE channel SET project_id=$1, updated_at=now() WHERE workspace_id=$2 AND id=$3`, project.ID, workspaceID, channelID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to bind project to channel")
-			return
+			return nil
 		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit goal bootstrap")
-		return
+		return nil
 	}
 
 	projectResp := projectToResponse(project)
@@ -173,25 +210,25 @@ func (h *Handler) BootstrapAgentChannelGoalControlPlane(w http.ResponseWriter, r
 	}
 	resourceResp := projectResourceToResponse(repoResource)
 	if created {
-		h.publish(protocol.EventProjectCreated, uuidToString(workspaceID), "agent", uuidToString(agentID), map[string]any{"project": projectResp})
+		h.publish(protocol.EventProjectCreated, uuidToString(workspaceID), actorType, uuidToString(actorID), map[string]any{"project": projectResp})
 	}
 	if resourceCreated {
-		h.publish(protocol.EventProjectResourceCreated, uuidToString(workspaceID), "agent", uuidToString(agentID), map[string]any{"resource": resourceResp, "project_id": projectResp.ID})
+		h.publish(protocol.EventProjectResourceCreated, uuidToString(workspaceID), actorType, uuidToString(actorID), map[string]any{"resource": resourceResp, "project_id": projectResp.ID})
 	}
-	h.publish(protocol.EventChannelUpdated, uuidToString(workspaceID), "agent", uuidToString(agentID), map[string]any{"id": uuidToString(channelID), "project_id": projectResp.ID})
+	h.publish(protocol.EventChannelUpdated, uuidToString(workspaceID), actorType, uuidToString(actorID), map[string]any{"id": uuidToString(channelID), "project_id": projectResp.ID})
 
 	goal, err := scanChannelGoal(h.DB.QueryRow(r.Context(), `
 		SELECT `+channelGoalColumns+` FROM channel_goal
 		WHERE workspace_id = $1 AND channel_id = $2 AND id = $3`, workspaceID, channelID, goalID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "goal bootstrap completed but goal refresh failed")
-		return
+		return nil
 	}
 	h.hydrateChannelGoalControlPlane(r.Context(), &goal)
-	h.publishChannelGoalUpdated(uuidToString(workspaceID), uuidToString(channelID), "agent", uuidToString(agentID), goal)
-	writeJSON(w, http.StatusCreated, BootstrapAgentChannelGoalControlPlaneResponse{
+	h.publishChannelGoalUpdated(uuidToString(workspaceID), uuidToString(channelID), actorType, uuidToString(actorID), goal)
+	return &BootstrapAgentChannelGoalControlPlaneResponse{
 		Project: projectResp, Resource: resourceResp, Created: created, Goal: goal,
-	})
+	}
 }
 
 func mustMarshalJSON(value any) json.RawMessage {

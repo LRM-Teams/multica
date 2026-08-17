@@ -49,6 +49,7 @@ const channelListMemberAvatarLimit = 5
 const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
+const channelQuoteSelectedTextMaxLen = 4000
 const channelOutputContractInstruction = "Channel output contract: use the runtime brief as the source of truth for visible output. Never print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
 const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Reply only to the Message target for chat transport supplied below: it is the current message's source location. A top-level group message stays in the main channel, a thread message stays in that thread, and a DM stays in that DM. Never create or switch to a thread based on message content or tone. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful answer using the requested supported delivery modality (no acknowledgement sticker first). Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
@@ -291,12 +292,13 @@ type ChannelMessageQuote struct {
 }
 
 type ChannelMessageQuoteSnapshot struct {
-	Type       string                 `json:"type"`
-	AuthorID   *string                `json:"authorId,omitempty"`
-	AuthorName string                 `json:"authorName"`
-	Content    string                 `json:"content"`
-	Parts      []protocol.MessagePart `json:"parts,omitempty"`
-	CreatedAt  string                 `json:"createdAt"`
+	Type         string                 `json:"type"`
+	AuthorID     *string                `json:"authorId,omitempty"`
+	AuthorName   string                 `json:"authorName"`
+	Content      string                 `json:"content"`
+	Parts        []protocol.MessagePart `json:"parts,omitempty"`
+	CreatedAt    string                 `json:"createdAt"`
+	SelectedText *string                `json:"selectedText,omitempty"`
 }
 
 type ChannelReactionResponse struct {
@@ -387,13 +389,19 @@ type ChannelMentionCandidatesResponse struct {
 }
 
 type SendChannelMessageRequest struct {
-	Content             string                 `json:"content"`
-	Parts               []protocol.MessagePart `json:"parts"`
-	AttachmentIDs       []string               `json:"attachment_ids"`
-	ReplyToMessageID    *string                `json:"reply_to_message_id"`
-	QuoteMessageID      *string                `json:"quote_message_id"`
-	QuoteMessageIDCamel *string                `json:"quoteMessageId"`
-	ClientMessageID     *string                `json:"client_message_id"`
+	Content             string                          `json:"content"`
+	Parts               []protocol.MessagePart          `json:"parts"`
+	AttachmentIDs       []string                        `json:"attachment_ids"`
+	ReplyToMessageID    *string                         `json:"reply_to_message_id"`
+	QuoteMessageID      *string                         `json:"quote_message_id"`
+	QuoteMessageIDCamel *string                         `json:"quoteMessageId"`
+	Quote               *SendChannelMessageQuoteRequest `json:"quote"`
+	ClientMessageID     *string                         `json:"client_message_id"`
+}
+
+type SendChannelMessageQuoteRequest struct {
+	MessageID    string  `json:"message_id"`
+	SelectedText *string `json:"selected_text"`
 }
 
 type UpdateChannelMessageRequest struct {
@@ -2969,7 +2977,8 @@ func (h *Handler) validateChannelReplyTarget(w http.ResponseWriter, ctx context.
 	return replyToID, true
 }
 
-func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID, rawSnake, rawCamel *string, threadRootID pgtype.UUID) (pgtype.UUID, []byte, bool) {
+func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID, request SendChannelMessageRequest, threadRootID pgtype.UUID) (pgtype.UUID, []byte, bool) {
+	rawSnake, rawCamel := request.QuoteMessageID, request.QuoteMessageIDCamel
 	raw := rawSnake
 	if rawCamel != nil {
 		if raw != nil && strings.TrimSpace(*raw) != strings.TrimSpace(*rawCamel) {
@@ -2978,8 +2987,33 @@ func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.C
 		}
 		raw = rawCamel
 	}
+	if request.Quote != nil {
+		structuredID := strings.TrimSpace(request.Quote.MessageID)
+		if raw != nil && strings.TrimSpace(*raw) != structuredID {
+			writeError(w, http.StatusBadRequest, "quote.message_id conflicts with legacy quote message ID")
+			return pgtype.UUID{}, nil, false
+		}
+		raw = &request.Quote.MessageID
+	}
 	if raw == nil || strings.TrimSpace(*raw) == "" {
+		if request.Quote != nil && request.Quote.SelectedText != nil {
+			writeError(w, http.StatusBadRequest, "quote.selected_text requires quote.message_id")
+			return pgtype.UUID{}, nil, false
+		}
 		return pgtype.UUID{}, nil, true
+	}
+	var selectedText *string
+	if request.Quote != nil && request.Quote.SelectedText != nil {
+		trimmed := strings.TrimSpace(*request.Quote.SelectedText)
+		if trimmed == "" {
+			writeError(w, http.StatusBadRequest, "quote.selected_text must not be blank")
+			return pgtype.UUID{}, nil, false
+		}
+		if len([]rune(trimmed)) > channelQuoteSelectedTextMaxLen {
+			writeError(w, http.StatusBadRequest, "quote.selected_text is too long")
+			return pgtype.UUID{}, nil, false
+		}
+		selectedText = &trimmed
 	}
 	quoteID, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(*raw), "quote_message_id")
 	if !ok {
@@ -3023,12 +3057,13 @@ func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.C
 		}
 	}
 	snapshot := ChannelMessageQuoteSnapshot{
-		Type:       authorType,
-		AuthorID:   uuidToPtr(authorID),
-		AuthorName: authorName,
-		Content:    content,
-		Parts:      decodedParts,
-		CreatedAt:  timestampToString(createdAt),
+		Type:         authorType,
+		AuthorID:     uuidToPtr(authorID),
+		AuthorName:   authorName,
+		Content:      content,
+		Parts:        decodedParts,
+		CreatedAt:    timestampToString(createdAt),
+		SelectedText: selectedText,
 	}
 	rawSnapshot, err := json.Marshal(snapshot)
 	if err != nil {
@@ -3928,7 +3963,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req.QuoteMessageID, req.QuoteMessageIDCamel, rootID)
+	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req, rootID)
 	if !ok {
 		return
 	}
@@ -4816,7 +4851,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req.QuoteMessageID, req.QuoteMessageIDCamel, pgtype.UUID{})
+	quoteMessageID, quoteSnapshot, ok := h.resolveChannelQuoteTarget(w, r.Context(), workspaceID, channelID, req, pgtype.UUID{})
 	if !ok {
 		return
 	}
@@ -7396,12 +7431,31 @@ func (h *Handler) matchesChannelMessageIdempotencyPayload(ctx context.Context, e
 	if !sameNullableUUID(existing.ReplyToMessageID, in.ReplyToMessageID) || !sameNullableUUID(existing.QuoteMessageID, in.QuoteMessageID) || !sameNullableUUID(existing.ThreadRootMessageID, in.ThreadRootMessageID) {
 		return false, nil
 	}
+	if !sameQuoteSelectedText(existing.quoteSnapshotRaw, in.QuoteSnapshot) {
+		return false, nil
+	}
 	expectedAttachments := channelAttachmentIDSet(attachmentIDs)
 	existingAttachments, err := h.channelMessageAttachmentIDSet(ctx, in.WorkspaceID, parseUUID(existing.ID))
 	if err != nil {
 		return false, err
 	}
 	return sameStringSet(existingAttachments, expectedAttachments), nil
+}
+
+// sameQuoteSelectedText deliberately compares only immutable request data.
+// Source content and author fields in the snapshot may change independently.
+func sameQuoteSelectedText(a, b []byte) bool {
+	var left, right ChannelMessageQuoteSnapshot
+	if len(a) > 0 && json.Unmarshal(a, &left) != nil {
+		return false
+	}
+	if len(b) > 0 && json.Unmarshal(b, &right) != nil {
+		return false
+	}
+	if left.SelectedText == nil || right.SelectedText == nil {
+		return left.SelectedText == nil && right.SelectedText == nil
+	}
+	return *left.SelectedText == *right.SelectedText
 }
 
 func (h *Handler) channelMessageAttachmentIDSet(ctx context.Context, workspaceID, messageID pgtype.UUID) (map[string]struct{}, error) {

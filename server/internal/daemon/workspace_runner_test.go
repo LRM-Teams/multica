@@ -22,7 +22,7 @@ func TestWorkspaceRunnerURLIsScopedWithoutRuntimeIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "wss://api.example.com/multica/api/daemon/ws?workspace_id=workspace-1"
+	const want = "wss://api.example.com/multica/api/daemon/connect?workspace_id=workspace-1"
 	if got != want {
 		t.Fatalf("workspaceRunnerURL() = %q, want %q", got, want)
 	}
@@ -945,7 +945,7 @@ func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 	defer server.Close()
 
 	d := New(Config{
-		ServerBaseURL: server.URL, DaemonID: "daemon-1", ComputerGeneration: 7,
+		ServerBaseURL: server.URL, DaemonID: "daemon-1",
 		WorkspacesRoot: t.TempDir(), HeartbeatInterval: 10 * time.Millisecond,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
@@ -964,8 +964,8 @@ func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
 	go runner.runConnection(ctx)
 	select {
 	case heartbeat := <-heartbeats:
-		if heartbeat.RuntimeID != "runtime-1" || heartbeat.ComputerGeneration != 7 {
-			t.Fatalf("heartbeat = %+v, want runtime-1 generation 7", heartbeat)
+		if heartbeat.RuntimeID != "runtime-1" {
+			t.Fatalf("heartbeat = %+v, want runtime-1", heartbeat)
 		}
 	case <-ctx.Done():
 		t.Fatal("Workspace Runner did not send the current control-plane heartbeat")

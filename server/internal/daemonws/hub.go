@@ -27,6 +27,9 @@ const (
 	agentDeliveryRetryInterval = time.Second
 	runnerInboundWatchdog      = 70 * time.Second
 	runnerPingInterval         = 20 * time.Second
+	legacyRunnerAttachmentCap  = "workspace_runner_attachment_v1"
+	legacyAttachmentReplayReq  = "agent:attachment.replay_request"
+	legacyAttachmentReplayEnd  = "agent:attachment.replay_end"
 )
 
 // ClientIdentity captures the already-authenticated daemon connection scope.
@@ -64,6 +67,13 @@ func (c *client) supportsRunnerCapability(capability string) bool {
 	}
 	_, supported := c.runnerCapabilities[capability]
 	return supported
+}
+
+func (c *client) isLegacyUpgradeRunner() bool {
+	return c != nil &&
+		c.supportsRunnerCapability(legacyRunnerAttachmentCap) &&
+		c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerControlPlane) &&
+		!c.supportsRunnerCapability(protocol.DaemonCapabilityWorkspaceRunnerAgentProcess)
 }
 
 const eventDedupCapacity = 128
@@ -953,6 +963,18 @@ func (h *Hub) IsCurrentWorkspaceRunner(daemonID, workspaceID, daemonInstanceID s
 	return c != nil && c.runnerDaemonInstanceID == daemonInstanceID
 }
 
+// HasWorkspaceRunner reports whether this Computer currently holds a live
+// DaemonCore / Workspace Runner socket for the Workspace. Socket presence is
+// Computer liveness: connect is online, disconnect is offline.
+func (h *Hub) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}] != nil
+}
+
 // WorkspaceRunnerSupportsCapability reports only the active ready connection's
 // declared capabilities. A replaced Runner cannot lend its protocol support to
 // its successor.
@@ -968,6 +990,22 @@ func (h *Hub) WorkspaceRunnerSupportsCapability(daemonID, workspaceID, capabilit
 	}
 	_, supported := c.runnerCapabilities[capability]
 	return supported
+}
+
+// CurrentWorkspaceRunnerInstance is the live Computer process on this
+// daemon/workspace socket. Observed Agent residency is only meaningful for
+// this instance; a persisted active row from a dead process is not residency.
+func (h *Hub) CurrentWorkspaceRunnerInstance(daemonID, workspaceID string) (string, bool) {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
+		return "", false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
+	if c == nil || c.runnerDaemonInstanceID == "" {
+		return "", false
+	}
+	return c.runnerDaemonInstanceID, true
 }
 
 // WorkspaceRunnerIdentity returns a copy of the current ready connection's
@@ -1136,7 +1174,7 @@ func (h *Hub) register(c *client) {
 }
 
 func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerReadyPayload) bool {
-	if c == nil || ready.Validate() != nil || ready.WorkspaceID != c.identity.WorkspaceID {
+	if c == nil || !validWorkspaceRunnerReady(ready) || ready.WorkspaceID != c.identity.WorkspaceID {
 		return false
 	}
 	key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
@@ -1158,6 +1196,34 @@ func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerRead
 	}
 	c.startRunnerWatchdog()
 	return true
+}
+
+func validWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
+	return ready.Validate() == nil || validLegacyUpgradeWorkspaceRunnerReady(ready)
+}
+
+// validLegacyUpgradeWorkspaceRunnerReady is a server-only rolling-upgrade
+// adapter for the immediately preceding Computer release. That release can
+// carry machine upgrade actions over the Runner control plane but advertises
+// the retired Attachment capability instead of the current Agent process one.
+// Validate a copy with the current capability added, then retain the original
+// capability set on the connection so new Agent process commands stay fenced.
+func validLegacyUpgradeWorkspaceRunnerReady(ready protocol.WorkspaceRunnerReadyPayload) bool {
+	var supportsLegacyAttachment, supportsControlPlane bool
+	for _, capability := range ready.ActiveCapabilities {
+		switch capability {
+		case legacyRunnerAttachmentCap:
+			supportsLegacyAttachment = true
+		case protocol.DaemonCapabilityWorkspaceRunnerControlPlane:
+			supportsControlPlane = true
+		}
+	}
+	if !supportsLegacyAttachment || !supportsControlPlane {
+		return false
+	}
+	compatible := ready
+	compatible.ActiveCapabilities = append(append([]string(nil), ready.ActiveCapabilities...), protocol.DaemonCapabilityWorkspaceRunnerAgentProcess)
+	return compatible.Validate() == nil
 }
 
 func (h *Hub) isCurrentWorkspaceRunner(c *client) bool {
@@ -1384,6 +1450,8 @@ func (c *client) handleFrame(raw []byte) {
 			c.hub.unregister(c)
 			_ = c.conn.Close()
 		}
+	case legacyAttachmentReplayReq:
+		c.handleLegacyUpgradeReplayRequest(msg.Payload)
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
 	case protocol.EventDaemonLivenessProbe:
@@ -1443,6 +1511,41 @@ func (c *client) handleFrame(raw []byte) {
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.
+	}
+}
+
+// handleLegacyUpgradeReplayRequest completes the immediately preceding
+// Computer release's retired startup handshake without replaying or mutating
+// Attachment state. Echoing its validated cursors lets that client start the
+// current control-plane heartbeat and receive its pending machine upgrade.
+func (c *client) handleLegacyUpgradeReplayRequest(raw json.RawMessage) {
+	if c == nil || !c.hub.isCurrentWorkspaceRunner(c) || !c.isLegacyUpgradeRunner() {
+		return
+	}
+	var request struct {
+		RuntimeCursors map[string]int64 `json:"runtimeCursors"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil || request.RuntimeCursors == nil {
+		return
+	}
+	for runtimeID, cursor := range request.RuntimeCursors {
+		if strings.TrimSpace(runtimeID) == "" || len(runtimeID) > 200 || cursor < 0 {
+			return
+		}
+	}
+	frame, err := json.Marshal(protocol.Message{
+		Type:    legacyAttachmentReplayEnd,
+		Payload: mustMarshalRaw(request),
+	})
+	if err != nil {
+		return
+	}
+	c.runnerLastInbound.Store(time.Now().UnixNano())
+	select {
+	case c.send <- frame:
+	default:
+		c.hub.unregister(c)
+		_ = c.conn.Close()
 	}
 }
 

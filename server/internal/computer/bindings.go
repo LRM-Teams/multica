@@ -3,6 +3,7 @@ package computer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,6 +109,38 @@ func (s *BindingsStore) AddOrRepair(b WorkspaceBinding) error {
 			return err
 		}
 		return s.addOrRepair(all, b)
+	})
+}
+
+// RefreshCredential atomically rotates only the execution credential of an
+// existing active Binding. Identity and display metadata remain owned by the
+// explicit setup/repair flow.
+func (s *BindingsStore) RefreshCredential(environment, workspaceID, computerID, credential string, expiresAt time.Time) error {
+	environment = normalizeBindingEnvironment(environment)
+	workspaceID = strings.TrimSpace(workspaceID)
+	computerID = strings.TrimSpace(computerID)
+	credential = strings.TrimSpace(credential)
+	if workspaceID == "" || computerID == "" || credential == "" || expiresAt.IsZero() {
+		return errors.New("Binding credential refresh identity is incomplete")
+	}
+	return s.withMutationLock(func() error {
+		all, err := s.All()
+		if err != nil {
+			return err
+		}
+		for i := range all {
+			binding := &all[i]
+			if binding.Environment != environment || binding.WorkspaceID != workspaceID {
+				continue
+			}
+			if !binding.Active || strings.TrimSpace(binding.ComputerID) != computerID {
+				return fmt.Errorf("Workspace Binding %q is not active for Computer %q", workspaceID, computerID)
+			}
+			binding.Credential = credential
+			binding.CredentialExpiresAt = expiresAt
+			return s.write(all)
+		}
+		return fmt.Errorf("Workspace Binding %q does not exist in environment %q", workspaceID, environment)
 	})
 }
 

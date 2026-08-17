@@ -31,6 +31,21 @@ const report = {
 };
 
 describe("ResearchV6ReportModal", () => {
+  it("keeps the isolated loading surface while report metadata is pending", () => {
+    render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        pending
+        report={null}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId("research-v6-report-loading")).toBeTruthy();
+    expect(screen.queryByTestId("research-v6-report-frame")).toBeNull();
+  });
+
   it("mounts the capability in the exact restricted iframe sandbox", async () => {
     render(
       <ResearchV6ReportModal

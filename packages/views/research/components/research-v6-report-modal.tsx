@@ -30,6 +30,7 @@ export function ResearchV6ReportModal({
   onOpenChange,
   onRequestFreshCapability,
   loadTimeoutMs = 15_000,
+  pending = false,
 }: {
   open: boolean;
   report: ResearchV6ReportSandboxDocument | null;
@@ -37,6 +38,7 @@ export function ResearchV6ReportModal({
   onOpenChange: (open: boolean) => void;
   onRequestFreshCapability?: () => void;
   loadTimeoutMs?: number;
+  pending?: boolean;
 }) {
   const { t } = useT("research");
   const verdict = validateResearchV6ReportSandboxUrl(
@@ -47,13 +49,16 @@ export function ResearchV6ReportModal({
     open ? "open" : "closed",
     report?.id ?? "missing",
     report?.packageHash ?? "missing",
+    pending ? "pending" : "settled",
     verdict.ok ? verdict.url : verdict.reason,
   ].join(":");
   const initialPhase: FramePhase = !open
     ? "idle"
-    : verdict.ok
+    : pending
       ? "loading"
-      : "unavailable";
+      : verdict.ok
+        ? "loading"
+        : "unavailable";
   const [frameState, setFrameState] = useState<{
     identity: string;
     phase: FramePhase;

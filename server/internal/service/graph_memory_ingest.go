@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/multica-ai/multica/server/internal/memorygraph"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -32,7 +34,8 @@ import (
 // than failing the hook.
 type GraphMemoryIngestHook struct {
 	queries *db.Queries
-	root    string // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT per call
+	pool    *pgxpool.Pool // channel route resolution (spec §4); nil only in tests
+	root    string        // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT per call
 	bm      *obsmetrics.BusinessMetrics
 	model   string
 
@@ -43,34 +46,59 @@ type GraphMemoryIngestHook struct {
 
 // NewGraphMemoryIngestHook returns the production ingest hook. queries must
 // be non-nil (the hook resolves the segment's workspace from the task row);
-// bm may be nil. root may be empty, in which case MULTICA_WORKSPACES_ROOT is
-// resolved per ingest.
-func NewGraphMemoryIngestHook(queries *db.Queries, root string, bm *obsmetrics.BusinessMetrics) *GraphMemoryIngestHook {
+// pool must be non-nil in production (channel-origin tasks resolve their
+// write target through the route registry); bm may be nil. root may be
+// empty, in which case MULTICA_WORKSPACES_ROOT is resolved per ingest.
+func NewGraphMemoryIngestHook(queries *db.Queries, pool *pgxpool.Pool, root string, bm *obsmetrics.BusinessMetrics) *GraphMemoryIngestHook {
 	return &GraphMemoryIngestHook{
 		queries: queries,
+		pool:    pool,
 		root:    root,
 		bm:      bm,
 		model:   strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
 	}
 }
 
-// graphScopeForTask resolves the canonical graph scope one task writes to:
-// the owning project of the task's issue when present, else the task's
-// channel, else no scope (unscoped tasks never touch the graph, spec §2).
-func (h *GraphMemoryIngestHook) graphScopeForTask(ctx context.Context, task db.AgentInboxEvent) (memorygraph.GraphDirKind, string, error) {
+// projectForTask resolves the owning project of the task's issue when
+// present (the task row carries issue_id, not project_id); "" otherwise.
+func (h *GraphMemoryIngestHook) projectForTask(ctx context.Context, task db.AgentInboxEvent) (string, error) {
 	if task.IssueID.Valid {
 		issue, err := h.queries.GetIssue(ctx, task.IssueID)
 		if err != nil {
-			return "", "", fmt.Errorf("graph memory ingest: load issue %s: %w", util.UUIDToString(task.IssueID), err)
+			return "", fmt.Errorf("graph memory ingest: load issue %s: %w", util.UUIDToString(task.IssueID), err)
 		}
-		if issue.ProjectID.Valid {
-			return memorygraph.GraphDirKindProject, util.UUIDToString(issue.ProjectID), nil
+		return util.UUIDToString(issue.ProjectID), nil
+	}
+	return "", nil
+}
+
+// ingestScopeForTask derives the write target and segment scope metadata
+// from the canonical task scope and the server-resolved route (spec §4/§5).
+// The route argument is only consulted when the task has a channel; it must
+// come from ResolveChannelRoute (server binding is authoritative — a stale
+// task.ProjectID never selects the target).
+func ingestScopeForTask(workspaceID, projectID, channelID string, route GraphRouteResolution, agentID, taskID string) (memorygraph.SegmentMeta, memorygraph.GraphDirKind, string, bool) {
+	meta := memorygraph.SegmentMeta{
+		WorkspaceID: workspaceID,
+		ProjectID:   projectID,
+		AgentID:     agentID,
+		TaskID:      taskID,
+	}
+	switch {
+	case channelID != "":
+		if route.GraphOwnerID == "" {
+			return memorygraph.SegmentMeta{}, "", "", false
 		}
+		meta.Visibility = "channel" // channel-origin defaults to channel-only (§5)
+		meta.ChannelID = channelID
+		meta.LineageGeneration = route.Generation
+		return meta, memorygraph.GraphDirKind(route.GraphKind), route.GraphOwnerID, true
+	case projectID != "":
+		meta.Visibility = "project"
+		return meta, memorygraph.GraphDirKindProject, projectID, true
+	default:
+		return memorygraph.SegmentMeta{}, "", "", false
 	}
-	if task.ChannelID.Valid {
-		return memorygraph.GraphDirKindChannel, util.UUIDToString(task.ChannelID), nil
-	}
-	return "", "", nil
 }
 
 // Ingest implements SegmentIngestHook.
@@ -103,17 +131,30 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 	if err != nil {
 		return err
 	}
-	// Interim scoped resolution (refined to the route registry in the scoped
-	// writer task): issue-bound tasks write the owning project's graph (the
-	// task row carries issue_id, not project_id); channel-only tasks write
-	// the channel graph; unscoped tasks never create graphs (spec §2).
+	// Scoped write target (spec §4/§5): channel-origin tasks resolve their
+	// target through the route registry (the server binding is
+	// authoritative); project-only tasks write the owning project's graph;
+	// unscoped tasks never create graphs (spec §2).
 	wsID := util.UUIDToString(task.WorkspaceID)
-	kind, ownerID, err := h.graphScopeForTask(ctx, task)
+	projectID, err := h.projectForTask(ctx, task)
 	if err != nil {
 		return err
 	}
-	if ownerID == "" {
-		return nil
+	channelID := util.UUIDToString(task.ChannelID)
+	var route GraphRouteResolution
+	if channelID != "" {
+		if h.pool == nil {
+			return fmt.Errorf("graph memory ingest: pool not configured for channel route resolution")
+		}
+		route, err = ResolveChannelRoute(ctx, h.pool, wsID, channelID)
+		if err != nil {
+			return err
+		}
+	}
+	meta, kind, ownerID, ok := ingestScopeForTask(wsID, projectID, channelID, route,
+		util.UUIDToString(task.AgentID), util.UUIDToString(task.ID))
+	if !ok {
+		return nil // unscoped task: no graph (spec §2)
 	}
 	dir, err := memorygraph.EnsureScopedDir(root, wsID, kind, ownerID)
 	if err != nil {
@@ -128,7 +169,13 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 	// no cross-workspace state is shared between ingests.
 	ingester := memorygraph.NewIngester(store, h.agentBackend(), "pi", h.model, 0)
 	ingester.SetMetrics(h.bm)
-	return ingester.Ingest(ctx, seg)
+	if err := ingester.Ingest(ctx, seg); err != nil {
+		return err
+	}
+	if err := store.WriteStagingSegmentMeta(seg.SegmentID, &meta); err != nil {
+		return fmt.Errorf("graph memory ingest: segment meta: %w", err)
+	}
+	return nil
 }
 
 // workspacesRoot returns the configured root or resolves the env default.

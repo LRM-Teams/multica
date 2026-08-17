@@ -395,7 +395,7 @@ func main() {
 	// per-workspace memory_graph staging area, and the judge service runs
 	// the async judge + delayed-reward flow for daemon-reported recalls.
 	// Both are nil-safe per workspace (no memory_graph dir -> skip).
-	taskSvc.SetSegmentIngestHook(service.NewGraphMemoryIngestHook(queries, "", businessMetrics))
+	taskSvc.SetSegmentIngestHook(service.NewGraphMemoryIngestHook(queries, pool, "", businessMetrics))
 	var graphRewardClient *arealrl.Client
 	if tc.BridgeStubURL != "" {
 		graphRewardClient = arealrl.New(tc.BridgeStubURL, tc.AdminAPIKey)

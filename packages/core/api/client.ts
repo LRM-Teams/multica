@@ -5312,7 +5312,7 @@ export class ApiClient {
     nodeId: string,
     view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
     options?: { signal?: AbortSignal },
-  ): Promise<import("../types/research-v6-director").ResearchV6DirectorNodeDetail> {
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorNodeDetail | null> {
     const { parseResearchV6DirectorNodeDetail } = await import(
       "../research-v6/director-schemas"
     );
@@ -5321,7 +5321,7 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const detail = parseResearchV6DirectorNodeDetail(raw);
-    if (detail.node.id !== nodeId) {
+    if (detail && detail.node.id !== nodeId) {
       throw new Error("Director V6 node detail response changed node identity");
     }
     // The workspace is enforced by the authenticated route and the canonical
@@ -5351,7 +5351,7 @@ export class ApiClient {
     runId: string,
     reportId: string,
     options?: { signal?: AbortSignal },
-  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportDetail> {
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportDetail | null> {
     const { parseResearchV6DirectorReportDetail } = await import(
       "../research-v6/director-schemas"
     );
@@ -5360,7 +5360,7 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const report = parseResearchV6DirectorReportDetail(raw);
-    if (report.id !== reportId) {
+    if (report && report.id !== reportId) {
       throw new Error("Director V6 report response changed report identity");
     }
     void workspaceId;

@@ -317,10 +317,6 @@ const EMPTY_DIRECTOR_SNAPSHOT: ResearchV6DirectorProjectionSnapshot = {
   has_more: false,
 };
 
-function invalidRequest(name: string): never {
-  throw new Error(`${name} failed schema validation`);
-}
-
 export function parseResearchV6DirectorProjectionSnapshot(
   value: unknown,
 ): ResearchV6DirectorProjectionSnapshot {
@@ -331,10 +327,10 @@ export function parseResearchV6DirectorProjectionSnapshot(
 
 export function parseResearchV6DirectorProjectionDelta(
   value: unknown,
-): ResearchV6DirectorProjectionDelta {
+): ResearchV6DirectorProjectionDelta | null {
   return parseWithFallback(value, ResearchV6DirectorProjectionDeltaSchema, null, {
     endpoint: "Director V6 projection delta",
-  }) ?? invalidRequest("Director V6 projection delta");
+  });
 }
 
 export function parseResearchV6DirectorProjectionDeltaPage(
@@ -354,26 +350,24 @@ export function parseResearchV6DirectorProjectionResumeRequest(
   value: unknown,
 ): ResearchV6DirectorProjectionResumeRequest {
   const result = ResearchV6DirectorProjectionResumeRequestSchema.safeParse(value);
-  return result.success
-    ? (result.data as ResearchV6DirectorProjectionResumeRequest)
-    : invalidRequest("Director V6 projection resume request");
+  if (!result.success) throw new Error("Director V6 projection resume request is invalid");
+  return result.data as ResearchV6DirectorProjectionResumeRequest;
 }
 
 export function parseResearchV6DirectorProjectionSliceRequest(
   value: unknown,
 ): ResearchV6DirectorProjectionSliceRequest {
   const result = ResearchV6DirectorProjectionSliceRequestSchema.safeParse(value);
-  return result.success
-    ? (result.data as ResearchV6DirectorProjectionSliceRequest)
-    : invalidRequest("Director V6 projection slice request");
+  if (!result.success) throw new Error("Director V6 projection slice request is invalid");
+  return result.data as ResearchV6DirectorProjectionSliceRequest;
 }
 
 export function parseResearchV6DirectorNodeDetail(
   value: unknown,
-): ResearchV6DirectorNodeDetail {
+): ResearchV6DirectorNodeDetail | null {
   return parseWithFallback(value, ResearchV6DirectorNodeDetailSchema, null, {
     endpoint: "GET Director V6 projection node detail",
-  }) ?? invalidRequest("Director V6 projection node detail response");
+  });
 }
 
 export function parseResearchV6DirectorReportList(
@@ -391,8 +385,8 @@ export function parseResearchV6DirectorReportList(
 
 export function parseResearchV6DirectorReportDetail(
   value: unknown,
-): ResearchV6DirectorReportDetail {
+): ResearchV6DirectorReportDetail | null {
   return parseWithFallback(value, ResearchV6DirectorReportDetailSchema, null, {
     endpoint: "GET Director V6 report detail",
-  }) ?? invalidRequest("Director V6 report detail response");
+  });
 }

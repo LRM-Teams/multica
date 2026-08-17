@@ -252,3 +252,23 @@ export interface CreateNoteRetrospectiveResponse {
   layers_used?: string[];
   child_pages_used?: string[];
 }
+
+/** Period Work Brief synthesis (J3-T2/J3-T3). */
+export interface CreateNotePeriodBriefRequest {
+  window: NoteRetrospectiveWindow;
+  date?: string;
+  timezone?: string;
+  agent_id: string;
+  sources?: NoteRetrospectiveSource[];
+  channel_id?: string;
+}
+
+export interface CreateNotePeriodBriefResponse {
+  page: NotePage;
+  job: NoteWorkerJob;
+  window: NoteRetrospectiveWindowInfo;
+  sources_used: string[];
+  sources_empty: string[];
+  sources_skipped: string[];
+  fact_count: number;
+}

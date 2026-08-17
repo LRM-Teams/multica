@@ -193,7 +193,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
   - **依赖**：J1-T4、J1-T5、J2-T1、J2-T3、J3-T1
   - **完成标准**：Handler 测：Owner 派发成功且 job 带 brief；非 Owner 403；Journal 关闭时仍派发且 digest 分区标明 disabled；prompt 转义防 `</digest>` 截断。
 
-- [ ] **J3-T3 Notes UI「本期工作介绍」**
+- [x] **J3-T3 Notes UI「本期工作介绍」**
+  - **已落地（2026-08-17）**：Notes 顶栏与「生成回顾」并存；`NotePeriodBriefDialog` 选日/周/月 + Agent → `POST /api/notes/period-briefs` → 打开 Worker DM；Journal 未开提示不阻断。组件测断言走 `createNotePeriodBrief` 而非 retrospective；中英 locale 齐全。
   - **目标**：人不必先生成回顾再手改 instruction。
   - **要做**：Notes 页入口（与「生成回顾」并存、文案分开）。选窗口（先复用日/周/月）→ 选执行 Agent → 调用 J3-T2 → 打开 Worker 目的地（DM）。未开 Journal 时显示降级说明，不阻断。
   - **不要做**：和「生成回顾」做成一个按钮两套合同；在 UI 里渲染原始 digest 当成品。
@@ -226,7 +227,7 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
 | 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ ~~J1-T5~~ 开关（已完成） |
 | 3 | ~~J2-T1~~ Facts 包 → ~~J2-T2~~ Issue 挂 PR → ~~J2-T3~~ Digest 归仓（J2 完成） |
-| 4 | ~~J3-T1~~ 剧本 → ~~J3-T2~~ 合成派发（已完成）→ **J3-T3** UI |
+| 4 | ~~J3-T1~~ 剧本 → ~~J3-T2~~ 合成派发 → ~~J3-T3~~ UI（已完成）→ **J3-T4** 产物落入 Notes |
 | 5 | 仅当产品需要时再开 J4 |
 
-**当前焦点：** Slice J3。下一个 checkbox：**J3-T3**。
+**当前焦点：** Slice J3。下一个 checkbox：**J3-T4**。

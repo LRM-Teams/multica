@@ -68,6 +68,7 @@ import type {
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteRetrospectiveResponse,
+  CreateNotePeriodBriefResponse,
   IssueNoteRef,
   IssueNoteRefListResponse,
 } from "../types";
@@ -338,6 +339,32 @@ export const EMPTY_NOTE_WORKER_JOB: NoteWorkerJob = {
   failure_reason: null,
   created_at: "",
   updated_at: "",
+};
+
+export const CreateNotePeriodBriefResponseSchema: z.ZodType<CreateNotePeriodBriefResponse> = z.object({
+  page: NotePageSchema,
+  job: NoteWorkerJobSchema,
+  window: z.object({
+    kind: z.string().default(""),
+    timezone: z.string().default(""),
+    start: z.string().default(""),
+    end: z.string().default(""),
+    label: z.string().default(""),
+  }).loose(),
+  sources_used: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_empty: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_skipped: z.array(z.string()).nullish().transform((v) => v ?? []),
+  fact_count: z.number().default(0),
+}).loose();
+
+export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefResponse = {
+  page: EMPTY_NOTE_PAGE,
+  job: EMPTY_NOTE_WORKER_JOB,
+  window: { kind: "", timezone: "", start: "", end: "", label: "" },
+  sources_used: [],
+  sources_empty: [],
+  sources_skipped: [],
+  fact_count: 0,
 };
 
 export const ChannelGoalSchema = z.object({

@@ -252,6 +252,8 @@ import type {
   CreateNoteWritebackRequest,
   CreateNoteRetrospectiveRequest,
   CreateNoteRetrospectiveResponse,
+  CreateNotePeriodBriefRequest,
+  CreateNotePeriodBriefResponse,
   IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
@@ -482,6 +484,8 @@ import {
   EMPTY_NOTE_WRITEBACK_LIST,
   CreateNoteRetrospectiveResponseSchema,
   EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE,
+  CreateNotePeriodBriefResponseSchema,
+  EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1285,6 +1289,16 @@ export class ApiClient {
     });
     return parseWithFallback(raw, CreateNoteRetrospectiveResponseSchema, EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE, {
       endpoint: "POST /api/notes/retrospectives",
+    });
+  }
+
+  async createNotePeriodBrief(data: CreateNotePeriodBriefRequest): Promise<CreateNotePeriodBriefResponse> {
+    const raw = await this.fetch<unknown>("/api/notes/period-briefs", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreateNotePeriodBriefResponseSchema, EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE, {
+      endpoint: "POST /api/notes/period-briefs",
     });
   }
 

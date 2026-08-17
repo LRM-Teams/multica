@@ -213,8 +213,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
   const setD5RailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const setD5RailMode = useResearchUiStore((s) => s.setD5RailMode);
-  // react-doctor-disable-next-line react-doctor/prefer-useReducer -- these independent UI concerns are intentionally owned by their respective stores/hooks.
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
+  // react-doctor-disable-next-line react-doctor/prefer-useReducer -- these independent UI concerns are intentionally owned by their respective stores/hooks.
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
     dismissedSessionId === sessionId || isCompletionGuideDismissed(sessionId);

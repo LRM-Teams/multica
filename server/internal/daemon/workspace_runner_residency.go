@@ -15,6 +15,7 @@ type agentResidency struct {
 	terminal        bool
 	terminalStage   managedRuntimeFailureStage
 	terminalReason  string
+	terminalDetail  string
 	idle            bool
 	cooldownUntil   time.Time
 }
@@ -73,7 +74,7 @@ func (s *agentResidencyStore) rememberIdle(agentID, runtimeID, launchID, startDi
 	}
 }
 
-func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reason string) {
+func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reason, detail string) {
 	if s == nil || agentID == "" {
 		return
 	}
@@ -82,7 +83,7 @@ func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, launchID strin
 	current := s.byAgent[agentID]
 	res := agentResidency{
 		runtimeID: runtimeID, launchID: launchID, startDispatchID: current.startDispatchID,
-		terminalStage: stage, terminalReason: reason,
+		terminalStage: stage, terminalReason: reason, terminalDetail: detail,
 	}
 	if stage == managedRuntimeFailureSpawn {
 		res.idle = true

@@ -90,6 +90,7 @@ type AgentErrorObservationData struct {
 	RuntimeID         string
 	ProcessInstanceID string
 	ReasonCode        string
+	Message           string
 }
 
 func (AgentErrorObservationData) agentObservationData() {}
@@ -194,6 +195,9 @@ func (observation AgentObservation) Validate() error {
 		}
 		if strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.ReasonCode) == "" {
 			return errors.New("Agent error observation Runtime and reason are required")
+		}
+		if observation.Kind == AgentObservationError && strings.TrimSpace(data.Message) == "" {
+			return errors.New("Agent error observation message is required")
 		}
 		return nil
 

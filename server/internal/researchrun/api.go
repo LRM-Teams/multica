@@ -27,4 +27,21 @@ type ResearchRun interface {
 	ReconcileDue(context.Context, int) (int, error)
 }
 
+// ResearchRunSubmission is the narrow Agent-facing V6 boundary. It exposes
+// frozen inputs and typed submissions without granting access to canonical
+// child-table stores.
+type ResearchRunSubmission interface {
+	WorkManifest(context.Context, V6AttemptAccess) (V6WorkManifest, error)
+	WorkCatalog(context.Context, V6CatalogRequest) (V6CatalogPage, error)
+	AcknowledgeWorkCatalog(context.Context, AcknowledgeV6CatalogInput) error
+	SubmitV6Work(context.Context, V6SubmissionInput) (V6SubmissionOutcome, error)
+}
+
+// ResearchRunReconciler is the scheduler-only V6 recovery boundary.
+type ResearchRunReconciler interface {
+	ReconcileV6Work(context.Context, int) (int, error)
+}
+
 var _ ResearchRun = (*Engine)(nil)
+var _ ResearchRunSubmission = (*Engine)(nil)
+var _ ResearchRunReconciler = (*Engine)(nil)

@@ -18,12 +18,28 @@ const (
 	V6WorkReport      V6WorkItemKind = "report"
 	V6WorkReview      V6WorkItemKind = "review"
 
+	V6WorkPending     V6WorkItemStatus = "pending"
+	V6WorkReady       V6WorkItemStatus = "ready"
+	V6WorkDispatching V6WorkItemStatus = "dispatching"
+	V6WorkRunning     V6WorkItemStatus = "running"
+	V6WorkSucceeded   V6WorkItemStatus = "succeeded"
+	V6WorkFailed      V6WorkItemStatus = "failed"
+	V6WorkCancelled   V6WorkItemStatus = "cancelled"
+	V6WorkStale       V6WorkItemStatus = "stale"
+
 	V6TierS   V6NodeTier = "S"
 	V6TierM   V6NodeTier = "M"
 	V6TierL   V6NodeTier = "L"
 	V6TierXL  V6NodeTier = "XL"
 	V6TierXXL V6NodeTier = "XXL"
 )
+
+func allV6WorkItemKinds() []V6WorkItemKind {
+	return []V6WorkItemKind{
+		V6WorkResearch, V6WorkMatch, V6WorkDiscussion, V6WorkIntegration,
+		V6WorkDirector, V6WorkReport, V6WorkReview,
+	}
+}
 
 type V6WorkItem struct {
 	ID, WorkspaceID, RunID, TargetKind, TargetID string

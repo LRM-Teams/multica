@@ -172,6 +172,23 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 }
 
 func encodeResearchDispatchInboxContext(request researchrun.DispatchRequest, requestHash string) ([]byte, error) {
+	if request.WorkItemID != "" {
+		if request.ManifestID == "" || request.ManifestHash == "" || request.AttemptID == "" || request.Run.SessionID == "" {
+			return nil, fmt.Errorf("research V6 dispatch identity is incomplete")
+		}
+		encoded, err := json.Marshal(map[string]any{
+			"type":          "research_run_work_item",
+			"run_id":        request.Run.SessionID,
+			"work_item_id":  request.WorkItemID,
+			"attempt_id":    request.AttemptID,
+			"manifest_id":   request.ManifestID,
+			"manifest_hash": request.ManifestHash,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("encode research V6 dispatch inbox context: %w", err)
+		}
+		return encoded, nil
+	}
 	contextPayload := map[string]any{
 		"type":                              "research_run_task",
 		"research_dispatch_key":             request.Key,

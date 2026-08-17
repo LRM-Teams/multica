@@ -88,9 +88,10 @@ func (e *Engine) SubmitResult(ctx context.Context, sessionID, workspaceID, taskI
 }
 
 func (e *Engine) ReconcileDue(ctx context.Context, limit int) (int, error) {
+	v6Processed, v6Err := e.ReconcileV6Work(ctx, limit)
 	ids, err := e.store.ListDueRunIDs(ctx, limit)
 	if err != nil {
-		return 0, err
+		return v6Processed, errors.Join(v6Err, err)
 	}
 	processed := 0
 	errs := []error{}
@@ -104,7 +105,30 @@ func (e *Engine) ReconcileDue(ctx context.Context, limit int) (int, error) {
 		}
 		processed++
 	}
-	return processed, errors.Join(errs...)
+	return processed + v6Processed, errors.Join(append(errs, v6Err)...)
+}
+
+func (e *Engine) WorkManifest(ctx context.Context, access V6AttemptAccess) (V6WorkManifest, error) {
+	return (workManifestModule{store: e.store}).Get(ctx, access)
+}
+
+func (e *Engine) WorkCatalog(ctx context.Context, in V6CatalogRequest) (V6CatalogPage, error) {
+	return (workCatalogModule{store: e.store}).Get(ctx, in)
+}
+
+func (e *Engine) AcknowledgeWorkCatalog(ctx context.Context, in AcknowledgeV6CatalogInput) error {
+	return (workCatalogModule{store: e.store}).Acknowledge(ctx, in)
+}
+
+func (e *Engine) SubmitV6Work(ctx context.Context, in V6SubmissionInput) (V6SubmissionOutcome, error) {
+	return (v6SubmissionModule{store: e.store}).Submit(ctx, in)
+}
+
+func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
+	if e == nil || e.store == nil {
+		return 0, errors.New("research run engine is unavailable")
+	}
+	return e.store.RecoverExpiredV6WorkItems(ctx, limit)
 }
 
 func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr error) {

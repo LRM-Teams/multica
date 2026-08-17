@@ -1318,6 +1318,10 @@
       "title": "节点报告",
       "empty_summary": "该节点还没有可展示的报告摘要。",
       "lineage_title": "演进关系",
+      "section_navigation": "节点报告章节",
+      "overview_section": "结论概览",
+      "detail_section": "证据与执行",
+      "document_count": "{{count}} 份文档",
       "lineage": {
         "derived_from": "派生自",
         "merged_from": "融合输入",

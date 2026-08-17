@@ -1318,6 +1318,10 @@
       "title": "Node report",
       "empty_summary": "No report summary is available for this node yet.",
       "lineage_title": "Lineage",
+      "section_navigation": "Node report sections",
+      "overview_section": "Conclusion overview",
+      "detail_section": "Evidence and execution",
+      "document_count": "{{count}} documents",
       "lineage": {
         "derived_from": "Derived from",
         "merged_from": "Merged inputs",

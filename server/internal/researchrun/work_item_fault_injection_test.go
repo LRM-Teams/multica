@@ -65,7 +65,7 @@ func seedV6RecoveryAttempt(t *testing.T, run *transactionRecoveryRun, membership
 		WorkspaceID: run.fixture.workspaceID, SessionID: run.fixture.sessionID, EntityID: attemptID,
 		Kind: ArtifactKindAttempt, ProvenanceCompleteness: ArtifactProvenanceComplete,
 		GoalVersion: &goalVersion, PlanVersion: &planVersion,
-		SchemaName: "research_work_item_attempt", SchemaVersion: OrchestratorVersionV6,
+		SchemaName: string(ArtifactKindAttempt), SchemaVersion: OrchestratorVersionV6,
 		AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction, ContentHash: hash,
 	}); err != nil {
 		t.Fatal(err)

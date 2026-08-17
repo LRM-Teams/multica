@@ -373,7 +373,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		}
 		h.WorkGraph.OnGraphDelta = h.wakeGoalCoordinatorForGraphDelta
 		researchStore := researchrun.NewPostgresStore(pool)
-		h.ResearchRun = researchrun.NewEngineWithReportAdapters(researchStore, &researchRunDispatcher{handler: h}, &researchRunProjector{handler: h}, researchReportStorageAdapter{store: h.Storage}, h.ResearchReportRenderer, cfg.ResearchReportFrameAncestors)
+		dispatcher := &researchRunDispatcher{handler: h}
+		h.ResearchRun = researchrun.NewEngineWithRuntimeAdapters(researchStore, dispatcher, &researchRunProjector{handler: h}, researchReportStorageAdapter{store: h.Storage}, h.ResearchReportRenderer, cfg.ResearchReportFrameAncestors, &researchV6AgentLifecycleAdapter{handler: h}, &researchV6InboxDispatchAdapter{dispatcher: dispatcher})
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit

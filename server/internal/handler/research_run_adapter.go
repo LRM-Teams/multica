@@ -55,12 +55,23 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 
 	workspaceID := parseUUID(request.Run.WorkspaceID)
 	agentID := parseUUID(request.AgentID)
-	member, err := h.Queries.GetResearchFleetMemberByAgent(ctx, db.GetResearchFleetMemberByAgentParams{
-		WorkspaceID: workspaceID,
-		AgentID:     agentID,
-	})
-	if statusErr := requireActiveResearchFleetMember(member, err); statusErr != nil {
-		return researchrun.DispatchResult{}, statusErr
+	var orchestratorVersion string
+	if err = h.DB.QueryRow(ctx, `SELECT orchestrator_version FROM research_session WHERE workspace_id=$1 AND id=$2`, workspaceID, parseUUID(request.Run.SessionID)).Scan(&orchestratorVersion); err != nil {
+		return researchrun.DispatchResult{}, fmt.Errorf("load research run version: %w", err)
+	}
+	if orchestratorVersion == researchrun.OrchestratorVersionV6 {
+		var active bool
+		if err = h.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_team_membership WHERE workspace_id=$1 AND session_id=$2 AND agent_id=$3 AND state IN ('idle','working'))`, workspaceID, parseUUID(request.Run.SessionID), agentID).Scan(&active); err != nil || !active {
+			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research V6 agent is not an active team member"))
+		}
+	} else {
+		member, memberErr := h.Queries.GetResearchFleetMemberByAgent(ctx, db.GetResearchFleetMemberByAgentParams{
+			WorkspaceID: workspaceID,
+			AgentID:     agentID,
+		})
+		if statusErr := requireActiveResearchFleetMember(member, memberErr); statusErr != nil {
+			return researchrun.DispatchResult{}, statusErr
+		}
 	}
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
 	if err != nil {
@@ -177,12 +188,14 @@ func encodeResearchDispatchInboxContext(request researchrun.DispatchRequest, req
 			return nil, fmt.Errorf("research V6 dispatch identity is incomplete")
 		}
 		encoded, err := json.Marshal(map[string]any{
-			"type":          "research_run_work_item",
-			"run_id":        request.Run.SessionID,
-			"work_item_id":  request.WorkItemID,
-			"attempt_id":    request.AttemptID,
-			"manifest_id":   request.ManifestID,
-			"manifest_hash": request.ManifestHash,
+			"type":                           "research_run_work_item",
+			"research_dispatch_key":          request.Key,
+			"research_dispatch_request_hash": requestHash,
+			"run_id":                         request.Run.SessionID,
+			"work_item_id":                   request.WorkItemID,
+			"attempt_id":                     request.AttemptID,
+			"manifest_id":                    request.ManifestID,
+			"manifest_hash":                  request.ManifestHash,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("encode research V6 dispatch inbox context: %w", err)

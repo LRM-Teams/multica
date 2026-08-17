@@ -848,10 +848,16 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const isPaused = session.status === "paused";
   const completionKind = resolveCompletionGuideKind(session.status);
   const showCompletionGuide = Boolean(completionKind) && !completionDismissed;
-  const startedStages = RESEARCH_STAGE_ORDER.filter(
-    (stage) =>
-      resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
-  );
+  // Director V6 has no fixed S1-S4 lifecycle. Keep the historical markers
+  // available only for V1-V5 sessions instead of projecting legacy stages
+  // onto the server-owned Director graph.
+  const startedStages = directorV6Enabled
+    ? []
+    : RESEARCH_STAGE_ORDER.filter(
+        (stage) =>
+          resolveStageStepState(stage, session.current_stage, session.status) !==
+          "upcoming",
+      );
   const latestRound: ResearchProductRoundCard | undefined = productRounds?.rounds?.[
     (productRounds.rounds.length ?? 0) - 1
   ];
@@ -1207,10 +1213,17 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             <>
             <ResearchDirectorChatHeader
               director={directorMember}
+              fallbackName={
+                directorV6Enabled
+                  ? t(($) => $.d5.rail.director_ronaldo)
+                  : undefined
+              }
               activity={
                 directorMember
                   ? presence[directorMember.agent_id]?.activity
-                  : null
+                  : directorV6Enabled && session.status === "running"
+                    ? t(($) => $.d5.rail.director_active)
+                    : null
               }
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}

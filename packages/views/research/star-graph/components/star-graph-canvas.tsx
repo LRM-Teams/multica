@@ -83,6 +83,8 @@ export interface StarGraphCanvasProps {
   rightPanelWidth?: number;
   nodeAccessibleNames?: ReadonlyMap<string, string>;
   relatedNodeIds?: ReadonlySet<string>;
+  /** V6-only semantic policy: S-tier relations appear only for the selected S node. */
+  hideUnselectedSTierRelations?: boolean;
   /** When set and no persisted viewport exists, initial camera fits these entities only. */
   initialFitEntityIdList?: readonly string[];
   entityBudget?: number;
@@ -118,6 +120,7 @@ export function StarGraphCanvas({
   rightPanelWidth = 0,
   nodeAccessibleNames,
   relatedNodeIds,
+  hideUnselectedSTierRelations = false,
   initialFitEntityIdList,
   entityBudget = STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   hiddenCountLabel,
@@ -316,11 +319,12 @@ export function StarGraphCanvas({
         budget: edgeBudgetForViewport(viewport.width),
         focusNodeId: selectedNodeId ?? model.rootId,
         relatedNodeIds,
-        nodeTierById,
+        nodeTierById: hideUnselectedSTierRelations ? nodeTierById : undefined,
       }),
     [
       model.relations,
       model.rootId,
+      hideUnselectedSTierRelations,
       nodeTierById,
       relatedNodeIds,
       selectedNodeId,

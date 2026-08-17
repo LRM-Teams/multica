@@ -63,6 +63,13 @@ type ResidentRuntimeStarter interface {
 	EnsureResidentProcess(ctx context.Context) error
 }
 
+// ResidentRuntimeSession identifies the provider session owned by a live
+// resident process. Providers that know this identity at startup expose it so
+// the daemon can publish the session without waiting for the first turn event.
+type ResidentRuntimeSession interface {
+	ProviderSessionID() string
+}
+
 var (
 	_ ResidentRuntimeStarter = (*codexAppServerBackend)(nil)
 	_ ResidentRuntimeStarter = (*piRPCBackend)(nil)

@@ -18,6 +18,7 @@ type Engine struct {
 	clock              Clock
 	leaseDuration      time.Duration
 	leaseRenewInterval time.Duration
+	v6Agents           AgentLifecycleAdapter
 }
 
 const (
@@ -27,6 +28,15 @@ const (
 
 func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) ResearchRun {
 	return newEngine(store, dispatcher, projector)
+}
+
+// NewEngineWithV6Adapters wires external effects without granting adapters any
+// canonical-store mutation capability. V6 remains gated by supported-version
+// policy until the activation slice.
+func NewEngineWithV6Adapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, agents AgentLifecycleAdapter) ResearchRun {
+	engine := newEngine(store, dispatcher, projector)
+	engine.v6Agents = agents
+	return engine
 }
 
 func newEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
@@ -128,7 +138,31 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	if e == nil || e.store == nil {
 		return 0, errors.New("research run engine is unavailable")
 	}
-	return e.store.RecoverExpiredV6WorkItems(ctx, limit)
+	recovered, err := e.store.RecoverExpiredV6WorkItems(ctx, limit)
+	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, clock: e.clock}).Deliver(ctx, limit)
+	return recovered + delivered, errors.Join(err, deliveryErr)
+}
+
+func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {
+	return (directorModule{store: e.store}).Assign(ctx, in)
+}
+func (e *Engine) MarkV6DirectorUnavailable(ctx context.Context, in MarkV6DirectorUnavailableInput) (V6DirectorAssignment, error) {
+	return (directorModule{store: e.store}).MarkUnavailable(ctx, in)
+}
+func (e *Engine) StartV6DirectorCycle(ctx context.Context, in StartV6DirectorCycleInput) (V6DirectorCycle, error) {
+	return (directorBriefModule{store: e.store}).Start(ctx, in)
+}
+func (e *Engine) AddV6TeamMember(ctx context.Context, in AddV6TeamMemberInput) (V6TeamMember, error) {
+	return (teamV6Module{store: e.store}).Add(ctx, in)
+}
+func (e *Engine) ArchiveV6TeamMember(ctx context.Context, in ArchiveV6TeamMemberInput) (V6TeamMember, error) {
+	return (teamV6Module{store: e.store}).Archive(ctx, in)
+}
+func (e *Engine) DirectorBriefPage(ctx context.Context, access V6AttemptAccess, cursor string) (V6DirectorBriefPage, error) {
+	return (directorBriefModule{store: e.store}).Page(ctx, access, cursor)
+}
+func (e *Engine) AcknowledgeDirectorBrief(ctx context.Context, in AcknowledgeV6DirectorBriefInput) error {
+	return (directorBriefModule{store: e.store}).Acknowledge(ctx, in)
 }
 
 func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr error) {

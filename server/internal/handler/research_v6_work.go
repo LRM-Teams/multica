@@ -169,6 +169,59 @@ func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "outcome": outcome})
 }
 
+func (h *Handler) GetAgentResearchV6DirectorBrief(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.researchV6Submission(w)
+	if !ok {
+		return
+	}
+	access, ok := h.authorizeResearchV6Attempt(w, r)
+	if !ok {
+		return
+	}
+	page, err := service.DirectorBriefPage(r.Context(), access, r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeResearchV6DomainError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", `"`+page.PageHash+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(page.Bytes)
+}
+
+type acknowledgeResearchV6DirectorBriefRequest struct {
+	ClientRequestID string `json:"client_request_id"`
+	BriefID         string `json:"brief_id"`
+	BriefHash       string `json:"brief_hash"`
+	PageKey         string `json:"page_key"`
+	PageHash        string `json:"page_hash"`
+}
+
+func (h *Handler) AcknowledgeAgentResearchV6DirectorBrief(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.researchV6Submission(w)
+	if !ok {
+		return
+	}
+	access, ok := h.authorizeResearchV6Attempt(w, r)
+	if !ok {
+		return
+	}
+	var request acknowledgeResearchV6DirectorBriefRequest
+	if !decodeResearchJSON(w, r, &request) {
+		return
+	}
+	err := service.AcknowledgeDirectorBrief(r.Context(), researchrun.AcknowledgeV6DirectorBriefInput{
+		V6AttemptAccess: access, ClientRequestID: request.ClientRequestID,
+		BriefID: request.BriefID, BriefHash: request.BriefHash,
+		PageKey: request.PageKey, PageHash: request.PageHash,
+	})
+	if err != nil {
+		writeResearchV6DomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"acknowledged": true})
+}
+
 func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, researchrun.ErrInvalidContract):
@@ -179,6 +232,8 @@ func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.idempotency_conflict", "request ID was reused with different content", false)
 	case errors.Is(err, researchrun.ErrWorkItemChanged), errors.Is(err, researchrun.ErrWorkItemLeaseLost):
 		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.state_version_conflict", "research work item changed", true)
+	case errors.Is(err, researchrun.ErrV6DirectorUnavailable):
+		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.director_unavailable", "research Director is unavailable", false)
 	case errors.Is(err, researchrun.ErrRunNotFound):
 		writeRonaldoV6Error(w, http.StatusNotFound, "research.v6.not_found", "research V6 object not found", false)
 	default:

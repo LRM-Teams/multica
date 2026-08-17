@@ -76,6 +76,31 @@ describe("Director V6 canvas adapter", () => {
     expect(result.graph.nodes.map((item) => item.level)).toEqual(["s", "xl"]);
   });
 
+  it("groups nodes into server-declared Branch territories", () => {
+    const branchA = "00000000-0000-4000-8000-000000000101";
+    const branchB = "00000000-0000-4000-8000-000000000102";
+    const result = adaptResearchV6DirectorCanvas({
+      runId: RUN_ID,
+      eventSequence: 9,
+      nodes: [
+        node("one", "M", { branch_ids: [branchA] }),
+        node("two", "L", { branch_ids: [branchB, branchA] }),
+      ],
+      edges: [],
+    });
+
+    expect(result.graph.nodes.find((item) => item.id === "one")?.cluster_id).toBe(
+      branchA,
+    );
+    expect(result.graph.nodes.find((item) => item.id === "two")?.cluster_id).toBe(
+      branchB,
+    );
+    expect(result.graph.clusters.map((cluster) => cluster.id)).toEqual([
+      branchA,
+      branchB,
+    ]);
+  });
+
   it("keeps the Goal tier canonical while using the top-size D5 presentation", () => {
     const result = adaptResearchV6DirectorCanvas({
       runId: RUN_ID,

@@ -3163,6 +3163,9 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 	return taskfailure.Classify(errMsg).String()
 }
 
+// executeAndDrainForTask runs one inbox/issue task. It reports task messages
+// and logs only. User-facing Runner Activity stays on the resident Message
+// seam; this path must not Observe or overwrite that timeline.
 func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
 	taskID := task.ID
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both

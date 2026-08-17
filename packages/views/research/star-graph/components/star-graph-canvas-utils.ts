@@ -1,4 +1,8 @@
-import type { StarEntityView } from "../lib/star-canvas-view-model";
+import type { StarGraphExpansionTransition } from "../lib/star-graph-expansion";
+import type {
+  StarCanvasViewModel,
+  StarEntityView,
+} from "../lib/star-canvas-view-model";
 
 export interface StarGraphCamera {
   x: number;
@@ -142,6 +146,43 @@ export function focusCameraOnEntity(
     { ...camera, zoom },
     options,
   );
+}
+
+/**
+ * Plans camera continuity for one explicit Projection disclosure transaction.
+ * It only frames ids named by the transaction and never discovers descendants.
+ */
+export function planExpansionTransactionCamera(
+  model: StarCanvasViewModel,
+  transition: StarGraphExpansionTransition | null | undefined,
+  viewport: { width: number; height: number },
+  camera: StarGraphCamera,
+  options: { rightPanelWidth?: number; padding?: number } = {},
+): StarGraphCamera | null {
+  if (!transition || viewport.width <= 0 || viewport.height <= 0) return null;
+  const root = model.entities.find(
+    (entity) => entity.id === transition.rootNodeId,
+  );
+  if (!root) return null;
+
+  if (transition.kind === "collapse") {
+    return focusCameraOnEntity(root, viewport, camera, options);
+  }
+
+  const revealedIds = new Set(transition.revealedNodeIds);
+  const disclosed = model.entities.filter(
+    (entity) => entity.id === root.id || revealedIds.has(entity.id),
+  );
+  if (disclosed.length <= 1) return null;
+  const bounds = computeEntityBounds(disclosed);
+  if (!bounds) return null;
+
+  const rightPanelWidth = Math.max(0, options.rightPanelWidth ?? 0);
+  const safeViewport = {
+    width: Math.max(viewport.width - rightPanelWidth, 1),
+    height: viewport.height,
+  };
+  return fitCameraToBounds(bounds, safeViewport, options.padding ?? 72);
 }
 
 export function relationEdgeClass(_kind: string, edgeType: string): string {

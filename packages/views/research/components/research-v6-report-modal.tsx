@@ -18,6 +18,7 @@ export interface ResearchV6ReportSandboxDocument {
   title: string;
   packageHash: string;
   sandboxUrl: string;
+  reportOrigin: string;
   plainTextFallback: string;
   revision?: number;
   status?: string;
@@ -61,6 +62,7 @@ export function ResearchV6ReportModal({
   const verdict = validateResearchV6ReportSandboxUrl(
     report?.sandboxUrl ?? "",
     appOrigin,
+    report?.reportOrigin ?? "",
   );
   const frameIdentity = [
     open ? "open" : "closed",

@@ -174,7 +174,9 @@ export function ResearchV6NodeDetail({
         </div>
       ) : null}
 
-      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border/70 sm:grid-cols-4">
+      <section className="space-y-2" aria-label={t(($) => $.v6_detail.projection_state)}>
+        <h3 className="text-xs font-semibold">{t(($) => $.v6_detail.projection_state)}</h3>
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border/70 sm:grid-cols-4">
         {[
           [t(($) => $.v6_detail.absorbed), node.absorbed ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
           [t(($) => $.v6_detail.terminal), node.terminal ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
@@ -186,7 +188,8 @@ export function ResearchV6NodeDetail({
             <dd className="mt-1 truncate text-xs font-semibold">{value}</dd>
           </div>
         ))}
-      </dl>
+        </dl>
+      </section>
 
       {loading ? (
         <p className="text-xs text-muted-foreground" role="status">

@@ -26,56 +26,52 @@ type FramePhase = "idle" | "loading" | "ready" | "unavailable";
 export function ResearchV6ReportModal({
   open,
   report,
+  appOrigin,
   onOpenChange,
   onRequestFreshCapability,
   loadTimeoutMs = 15_000,
 }: {
   open: boolean;
   report: ResearchV6ReportSandboxDocument | null;
+  appOrigin: string;
   onOpenChange: (open: boolean) => void;
   onRequestFreshCapability?: () => void;
   loadTimeoutMs?: number;
 }) {
   const { t } = useT("research");
-  const [frameUrl, setFrameUrl] = useState<string | null>(null);
-  const [phase, setPhase] = useState<FramePhase>("idle");
-  const reportId = report?.id ?? null;
-  const reportPackageHash = report?.packageHash ?? null;
-  const reportSandboxUrl = report?.sandboxUrl ?? null;
-
-  // react-doctor-disable-next-line react-doctor/no-set-state-in-effect -- A short-lived server capability is external security state; validate it against the mounted app origin before an iframe can exist.
-  useEffect(() => {
-    if (!open) {
-      setFrameUrl(null);
-      setPhase("idle");
-      return;
-    }
-    if (!reportSandboxUrl) {
-      setFrameUrl(null);
-      setPhase("unavailable");
-      return;
-    }
-    const verdict = validateResearchV6ReportSandboxUrl(
-      reportSandboxUrl,
-      globalThis.location?.origin ?? "",
-    );
-    if (!verdict.ok) {
-      setFrameUrl(null);
-      setPhase("unavailable");
-      return;
-    }
-    setFrameUrl(verdict.url);
-    setPhase("loading");
-  }, [open, reportId, reportPackageHash, reportSandboxUrl]);
+  const verdict = validateResearchV6ReportSandboxUrl(
+    report?.sandboxUrl ?? "",
+    appOrigin,
+  );
+  const frameIdentity = [
+    open ? "open" : "closed",
+    report?.id ?? "missing",
+    report?.packageHash ?? "missing",
+    verdict.ok ? verdict.url : verdict.reason,
+  ].join(":");
+  const initialPhase: FramePhase = !open
+    ? "idle"
+    : verdict.ok
+      ? "loading"
+      : "unavailable";
+  const [frameState, setFrameState] = useState<{
+    identity: string;
+    phase: FramePhase;
+  }>({ identity: frameIdentity, phase: initialPhase });
+  if (frameState.identity !== frameIdentity) {
+    setFrameState({ identity: frameIdentity, phase: initialPhase });
+  }
+  const phase =
+    frameState.identity === frameIdentity ? frameState.phase : initialPhase;
+  const frameUrl = open && verdict.ok && phase !== "unavailable" ? verdict.url : null;
 
   useEffect(() => {
     if (phase !== "loading" || !frameUrl) return;
     const timer = globalThis.setTimeout(() => {
-      setFrameUrl(null);
-      setPhase("unavailable");
+      setFrameState({ identity: frameIdentity, phase: "unavailable" });
     }, loadTimeoutMs);
     return () => globalThis.clearTimeout(timer);
-  }, [frameUrl, loadTimeoutMs, phase]);
+  }, [frameIdentity, frameUrl, loadTimeoutMs, phase]);
 
   const unavailable = phase === "unavailable";
   const fallback = report?.plainTextFallback.trim() ?? "";
@@ -104,10 +100,11 @@ export function ResearchV6ReportModal({
               data-testid="research-v6-report-frame"
               loading="eager"
               onError={() => {
-                setFrameUrl(null);
-                setPhase("unavailable");
+                setFrameState({ identity: frameIdentity, phase: "unavailable" });
               }}
-              onLoad={() => setPhase("ready")}
+              onLoad={() =>
+                setFrameState({ identity: frameIdentity, phase: "ready" })
+              }
               referrerPolicy="no-referrer"
               sandbox="allow-scripts"
               src={frameUrl}

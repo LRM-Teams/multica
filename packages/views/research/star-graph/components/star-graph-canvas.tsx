@@ -66,6 +66,10 @@ import {
   type StarGraphCamera,
 } from "./star-graph-canvas-utils";
 import { StarGraphEdges } from "./star-graph-edges";
+import {
+  StarGraphDensityLayer,
+  type StarGraphDensityBin,
+} from "./star-graph-density-layer";
 import { StarGraphFusionGhostLayer } from "./star-graph-fusion-ghost-layer";
 import {
   StarGraphEntityLayer,
@@ -83,6 +87,8 @@ export interface StarGraphCanvasProps {
   onOpenNode?: (nodeId: string) => void;
   /** Server-declared one-layer expansion state; absent keeps legacy behavior. */
   expansionControl?: StarGraphExpansionControl;
+  /** Projection-owned far-zoom display bins; never canonical graph nodes. */
+  densityBins?: readonly StarGraphDensityBin[];
   /** Server-declared committed absorption used only for outgoing-node ghosts. */
   fusionTransition?: StarGraphFusionTransition | null;
   fusionLowPerformance?: boolean;
@@ -132,6 +138,7 @@ export function StarGraphCanvas({
   onSelectNode,
   onOpenNode,
   expansionControl,
+  densityBins = [],
   fusionTransition,
   fusionLowPerformance = false,
   summaryTitle,
@@ -856,6 +863,7 @@ export function StarGraphCanvas({
           }
         }}
       >
+        <StarGraphDensityLayer bins={densityBins} zoom={camera.zoom} />
         <StarGraphClusterLayer
           clusters={model.clusters}
           frontiers={model.frontiers}

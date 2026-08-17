@@ -92,6 +92,11 @@ const (
 	txOpV6DirectorUnavailable     researchTxOperation = "v6_director.unavailable"
 	txOpV6DirectorCycleCreate     researchTxOperation = "v6_director_cycle.create"
 	txOpV6DirectorBriefAck        researchTxOperation = "v6_director_brief.acknowledge"
+	txOpV6SubmissionApply         researchTxOperation = "v6_submission.apply"
+	txOpV6DiscussionOpen          researchTxOperation = "v6_discussion.open"
+	txOpV6MatchDecisionRecord     researchTxOperation = "v6_match_decision.record"
+	txOpV6DispatchPrepare         researchTxOperation = "v6_dispatch.prepare"
+	txOpV6DispatchComplete        researchTxOperation = "v6_dispatch.complete"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

@@ -53,10 +53,20 @@ type boundV6SecondStage struct {
 }
 
 func (v boundV6SecondStage) ValidateV6Payload(schemaID string, payload json.RawMessage) error {
-	if strings.TrimSpace(schemaID) == "" || schemaID != v.schemaID {
+	if strings.TrimSpace(schemaID) == "" {
 		return fmt.Errorf("task schema %q is not authorized", schemaID)
 	}
-	if len(v.schema) == 0 || string(v.schema) == "null" || string(v.schema) == "{}" {
+	schema := v.schema
+	if schemaID != v.schemaID {
+		var registry struct {
+			PayloadSchemas map[string]json.RawMessage `json:"payload_schemas"`
+		}
+		if json.Unmarshal(v.schema, &registry) != nil {
+			return fmt.Errorf("task schema %q is not authorized", schemaID)
+		}
+		schema = registry.PayloadSchemas[schemaID]
+	}
+	if len(schema) == 0 || string(schema) == "null" || string(schema) == "{}" {
 		return fmt.Errorf("task schema %q has no frozen validator", schemaID)
 	}
 	value, err := decodeSingleV6JSON(payload)
@@ -67,7 +77,7 @@ func (v boundV6SecondStage) ValidateV6Payload(schemaID string, payload json.RawM
 	if err != nil {
 		return err
 	}
-	return validateV6SchemaValue(value, v.schema, definitions.Definitions, "$.task_specific_payload")
+	return validateV6SchemaValue(value, schema, definitions.Definitions, "$.task_specific_payload")
 }
 
 func (m v6SubmissionModule) Submit(ctx context.Context, in V6SubmissionInput) (V6SubmissionOutcome, error) {

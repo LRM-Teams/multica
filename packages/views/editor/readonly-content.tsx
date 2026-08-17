@@ -41,16 +41,12 @@ import type { Attachment } from "@multica/core/types";
 import { useNavigation } from "../navigation";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
-import { ActorProfileTrigger } from "../common/actor-profile-popover";
-import { useOpenAgentPanel } from "../common/agent-panel-context";
-import { useOpenMemberPanel } from "../common/member-panel-context";
+import { ActorMentionProfileTrigger } from "../common/actor-mention-profile-trigger";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
 } from "../common/mention-token";
 import { useAuthStore } from "@multica/core/auth";
-import { useAgentPanelStore } from "@multica/core/agents/stores";
-import { useMemberPanelStore } from "@multica/core/workspace";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { isAllowedFileCardHref } from "@multica/ui/markdown";
@@ -191,15 +187,6 @@ function ReadonlyLink({
 }) {
   const slug = useWorkspaceSlug();
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
-  // #349/#447 / LRM-893: @agent → agent panel; @member → member Profile dock
-  // (avatar click parity). Context preferred, global store fallback.
-  const openAgentPanelFromContext = useOpenAgentPanel();
-  const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
-  const closeAgentPanel = useAgentPanelStore((s) => s.close);
-  const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
-  const openMemberPanelFromContext = useOpenMemberPanel();
-  const openMemberPanelFromStore = useMemberPanelStore((s) => s.open);
-  const openMemberPanel = openMemberPanelFromContext ?? openMemberPanelFromStore;
 
   if (href?.startsWith("slash://skill/")) {
     return <span className="slash-command">{children}</span>;
@@ -237,24 +224,10 @@ function ReadonlyLink({
         </span>
       );
       if (type === "member" || type === "agent") {
-        const openOnClick =
-          type === "agent" && openAgentPanel
-            ? () => openAgentPanel(id)
-            : type === "member" && openMemberPanel
-              ? () => {
-                  closeAgentPanel();
-                  openMemberPanel(id);
-                }
-              : undefined;
         return (
-          <ActorProfileTrigger
-            memberType={type === "agent" ? "agent" : "user"}
-            memberId={id}
-            triggerElement="span"
-            onClickCapture={openOnClick}
-          >
+          <ActorMentionProfileTrigger actorType={type} actorId={id}>
             {chip}
-          </ActorProfileTrigger>
+          </ActorMentionProfileTrigger>
         );
       }
       return chip;

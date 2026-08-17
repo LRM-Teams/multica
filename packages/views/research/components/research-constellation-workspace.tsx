@@ -350,6 +350,32 @@ export function ResearchConstellationWorkspace({
       if (onScreen) {
         const directive = motion.directiveFor(entity.id);
         if (directive) {
+          const transition = motion.transitionFor(entity.id);
+          const anchor = transition?.anchorId
+            ? canvasModel.entities.find(
+                (candidate) => candidate.id === transition.anchorId,
+              )
+            : null;
+          if (
+            transition?.verb === "appear" &&
+            anchor &&
+            anchor.id !== entity.id
+          ) {
+            map.set(entity.id, {
+              ...directive,
+              className: `${directive.className} research-motion-anchored-appear`,
+              style: {
+                ...directive.style,
+                animationName: "research-motion-anchored-appear",
+                "--motion-anchor-x": `${anchor.x - entity.x}px`,
+                "--motion-anchor-y": `${anchor.y - entity.y}px`,
+                "--motion-anchor-blur": motion.profile.lowPerformance
+                  ? "0px"
+                  : "4px",
+              },
+            });
+            continue;
+          }
           map.set(entity.id, directive);
           continue;
         }
@@ -373,6 +399,7 @@ export function ResearchConstellationWorkspace({
     motion.markerFor,
     motion.profile.lowPerformance,
     motion.queueSize,
+    motion.transitionFor,
     relatedNodeIds,
     selectedNode?.id,
   ]);

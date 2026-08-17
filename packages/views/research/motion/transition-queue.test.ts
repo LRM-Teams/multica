@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createTransitionQueue,
+  liveTransitionForEntity,
   transitionQueueReducer,
   liveQueueSize,
   DEFAULT_MOTION_PROFILE,
@@ -244,5 +245,27 @@ describe("Low-performance — Rule ⑤", () => {
     expect(liveQueueSize(final)).toBeLessThanOrEqual(MOTION_QUEUE_CAP);
     const settled = fullySettle(final);
     expect(liveQueueSize(settled)).toBe(0);
+  });
+});
+
+describe("liveTransitionForEntity", () => {
+  it("exposes the server event anchor without deriving graph topology", () => {
+    let state = createTransitionQueue({ nowMs: 0 });
+    state = transitionQueueReducer(state, {
+      type: "enqueue",
+      event: {
+        transition_kind: "branch_spawned",
+        related_ids: ["new-node"],
+        anchor_id: "parent-node",
+      },
+      nowMs: 10,
+    });
+
+    expect(liveTransitionForEntity(state, "new-node")).toMatchObject({
+      verb: "appear",
+      anchorId: "parent-node",
+      relatedIds: ["new-node"],
+    });
+    expect(liveTransitionForEntity(state, "unrelated")).toBeNull();
   });
 });

@@ -156,6 +156,17 @@
     "evidence": "Evidence",
     "discussions": "Discussions",
     "reports": "Reports",
+    "relationships": "Direct relationships",
+    "related_node_unavailable": "Expand this layer to locate the node",
+    "relation_kind": {
+      "derived_from": "Derived from",
+      "absorbed_into": "Absorbed into",
+      "produced_by": "Produced by",
+      "belongs_to": "Belongs to",
+      "challenges": "Challenges",
+      "collapsed_path": "Collapsed path"
+    },
+    "history": "Version history",
     "branches": "Branches",
     "reference_in_chat": "Reference in chat",
     "referenced": "Referenced in chat",

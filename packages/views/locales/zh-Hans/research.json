@@ -156,6 +156,17 @@
     "evidence": "证据",
     "discussions": "讨论",
     "reports": "报告",
+    "relationships": "直接关系",
+    "related_node_unavailable": "展开这一层后可定位该节点",
+    "relation_kind": {
+      "derived_from": "派生自",
+      "absorbed_into": "被融合至",
+      "produced_by": "产出者",
+      "belongs_to": "归属于",
+      "challenges": "质疑",
+      "collapsed_path": "折叠路径"
+    },
+    "history": "版本历史",
     "branches": "所属分支",
     "reference_in_chat": "在对话中引用",
     "referenced": "已加入对话引用",

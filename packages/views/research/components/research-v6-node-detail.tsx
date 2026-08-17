@@ -2,11 +2,30 @@
 
 import type {
   ResearchV6DirectorNodeDetail,
+  ResearchV6DirectorProjectionEdge,
   ResearchV6DirectorProjectionNode,
 } from "@multica/core/types/research-v6-director";
 import { Button } from "@multica/ui/components/ui/button";
-import { GitBranch, Link2, MessageSquareText, RefreshCw } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  GitBranch,
+  History,
+  Link2,
+  LocateFixed,
+  MessageSquareText,
+  RefreshCw,
+} from "lucide-react";
 import { useT } from "../../i18n/use-t";
+
+function relatedNodeId(
+  edge: ResearchV6DirectorProjectionEdge,
+  selectedNodeId: string,
+): string {
+  return edge.from_node_id === selectedNodeId
+    ? edge.to_node_id
+    : edge.from_node_id;
+}
 
 export function ResearchV6NodeDetail({
   node,
@@ -14,16 +33,20 @@ export function ResearchV6NodeDetail({
   loading,
   error,
   selectedForChat,
+  projectionNodeById,
   onRetry,
   onReference,
+  onFocusNode,
 }: {
   node: ResearchV6DirectorProjectionNode;
   detail?: ResearchV6DirectorNodeDetail;
   loading: boolean;
   error: boolean;
   selectedForChat: boolean;
+  projectionNodeById: ReadonlyMap<string, ResearchV6DirectorProjectionNode>;
   onRetry: () => void;
   onReference: () => void;
+  onFocusNode: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
   const state = detail?.node.state ?? node.state;
@@ -40,6 +63,12 @@ export function ResearchV6NodeDetail({
         [t(($) => $.v6_detail.discussions), detail.discussion_refs.length],
         [t(($) => $.v6_detail.reports), detail.report_refs.length],
       ] satisfies Array<[string, number]>).filter((entry) => entry[1] > 0)
+    : [];
+  const relations = detail
+    ? [
+        ...detail.incoming.map((edge) => ({ edge, direction: "incoming" as const })),
+        ...detail.outgoing.map((edge) => ({ edge, direction: "outgoing" as const })),
+      ]
     : [];
 
   return (
@@ -121,6 +150,78 @@ export function ResearchV6NodeDetail({
                 className="rounded-lg bg-muted/55 px-2 py-1 text-[11px] text-muted-foreground"
               >
                 {label} · {count}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {relations.length > 0 ? (
+        <div className="space-y-2">
+          <h3 className="flex items-center gap-2 text-xs font-semibold">
+            <LocateFixed className="size-3.5 text-primary" aria-hidden="true" />
+            {t(($) => $.v6_detail.relationships)}
+          </h3>
+          <ul className="space-y-1.5">
+            {relations.map(({ edge, direction }) => {
+              const relatedId = relatedNodeId(edge, node.id);
+              const relatedNode = projectionNodeById.get(relatedId);
+              const DirectionIcon =
+                direction === "incoming" ? ArrowDownLeft : ArrowUpRight;
+              return (
+                <li key={`${direction}:${edge.id}`}>
+                  <button
+                    type="button"
+                    className="flex min-h-10 w-full items-center gap-2 rounded-lg bg-muted/45 px-2.5 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    disabled={!relatedNode}
+                    onClick={() => onFocusNode(relatedId)}
+                  >
+                    <DirectionIcon
+                      className="size-3.5 shrink-0 text-primary"
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-medium">
+                        {relatedNode?.title ??
+                          relatedNode?.catalog_summary ??
+                          t(($) => $.v6_detail.related_node_unavailable)}
+                      </span>
+                      <span className="block truncate text-[10px] text-muted-foreground">
+                        {t(($) => $.v6_detail.relation_kind[edge.kind])}
+                      </span>
+                    </span>
+                    {relatedNode ? (
+                      <span className="shrink-0 text-[10px] font-semibold text-primary">
+                        {relatedNode.tier}
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+
+      {detail && detail.history_refs.length > 0 ? (
+        <div className="space-y-2">
+          <h3 className="flex items-center gap-2 text-xs font-semibold">
+            <History className="size-3.5 text-primary" aria-hidden="true" />
+            {t(($) => $.v6_detail.history)}
+          </h3>
+          <ul className="flex flex-wrap gap-1.5">
+            {detail.history_refs.map((reference) => (
+              <li
+                key={`${reference.kind}:${reference.id}:${reference.revision ?? reference.version_id ?? "current"}`}
+                className="max-w-full rounded-lg bg-muted/55 px-2 py-1 text-[11px] text-muted-foreground"
+                title={`${reference.kind}:${reference.id}`}
+              >
+                <span>{reference.kind}</span>
+                {reference.revision ? (
+                  <span> · r{reference.revision}</span>
+                ) : reference.version_id ? (
+                  <span> · {reference.version_id}</span>
+                ) : null}
               </li>
             ))}
           </ul>

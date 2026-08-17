@@ -200,6 +200,20 @@ export function semanticMotionCss(): string {
   68% { opacity: 1; transform: scale(1.035); filter: blur(0) brightness(1.12); }
   100% { opacity: 1; transform: scale(1); filter: none; }
 }
+@keyframes research-motion-expansion-reveal {
+  0% {
+    opacity: 0.12;
+    transform: translate(var(--expansion-origin-x, 0), var(--expansion-origin-y, 0)) scale(0.52);
+    filter: blur(var(--expansion-blur, 5px)) brightness(1.35);
+  }
+  70% { opacity: 1; filter: blur(0) brightness(1.12); }
+  100% { opacity: 1; transform: translate(0, 0) scale(1); filter: none; }
+}
+@keyframes research-motion-expansion-collapse {
+  0% { transform: scale(0.94); filter: brightness(1.3); }
+  58% { transform: scale(1.035); filter: brightness(1.16); }
+  100% { transform: scale(1); filter: none; }
+}
 @keyframes research-motion-conflict {
   from { transform: translateX(calc(var(--motion-gap-px, 12px) * -1)); }
   to   { transform: translateX(0); }

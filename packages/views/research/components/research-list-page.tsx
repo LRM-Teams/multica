@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import {
   researchFleetOptions,
   researchKeys,
@@ -86,6 +87,8 @@ type ComposerDraft = {
   params: ResearchCreateParamsDraft;
   paramsOpen: boolean;
   fieldErrors: CreateComposerFieldErrors | null;
+  orchestratorVersion: "research-run-v5" | "research-run-v6";
+  directorAgentId: string;
 };
 
 function emptyComposer(uiLanguage?: string): ComposerDraft {
@@ -98,6 +101,8 @@ function emptyComposer(uiLanguage?: string): ComposerDraft {
     params: defaultCreateParams(uiLanguage),
     paramsOpen: false,
     fieldErrors: null,
+    orchestratorVersion: "research-run-v5",
+    directorAgentId: "",
   };
 }
 
@@ -143,6 +148,8 @@ export function ResearchListPage() {
     params: createParams,
     paramsOpen,
     fieldErrors,
+    orchestratorVersion,
+    directorAgentId,
   } = composer;
   const goalDirty = goal !== goalBaseline;
   const defaultTemplatePrompt = selectedTemplate
@@ -180,6 +187,10 @@ export function ResearchListPage() {
 
   const online = useBrowserOnline();
   const fleetQuery = useQuery(researchFleetOptions(wsId));
+  const agentsQuery = useQuery(agentListOptions(wsId));
+  const availableDirectors = (agentsQuery.data ?? []).filter(
+    (agent) => agent.archived_at == null,
+  );
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
@@ -213,6 +224,9 @@ export function ResearchListPage() {
           ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
           ...(createRequestIdRef.current
             ? { client_request_id: createRequestIdRef.current }
+            : {}),
+          ...(orchestratorVersion === "research-run-v6"
+            ? { orchestrator_version: orchestratorVersion, director_agent_id: directorAgentId }
             : {}),
         },
         wsId,
@@ -393,6 +407,10 @@ export function ResearchListPage() {
       params: createParams,
       uiLanguage: language,
     });
+    if (orchestratorVersion === "research-run-v6" && !directorAgentId) {
+      setComposer((prev) => ({ ...prev, paramsOpen: true }));
+      return;
+    }
     if (!result.ok) {
       // Keep draft (goal / depth / weights / language); surface near-field errors.
       const openParams = Boolean(result.errors.depth || result.errors.weights);
@@ -743,6 +761,42 @@ export function ResearchListPage() {
                   }))
                 }
               />
+              <div className="mt-2 rounded-xl border border-border/60 bg-card/50 p-3" data-testid="research-create-director-options">
+                <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+                  <span>{t(($) => $.d5.rail.director_role)}</span>
+                  <select
+                    value={orchestratorVersion}
+                    onChange={(event) =>
+                      setComposer((prev) => ({
+                        ...prev,
+                        orchestratorVersion: event.target.value as ComposerDraft["orchestratorVersion"],
+                        directorAgentId: event.target.value === "research-run-v6" ? prev.directorAgentId : "",
+                      }))
+                    }
+                    className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option value="research-run-v5">{t(($) => $.panel.fleet)}</option>
+                    <option value="research-run-v6">{t(($) => $.d5.rail.director_role)}</option>
+                  </select>
+                </label>
+                {orchestratorVersion === "research-run-v6" ? (
+                  <select
+                    aria-label={t(($) => $.d5.rail.director_role)}
+                    value={directorAgentId}
+                    onChange={(event) =>
+                      setComposer((prev) => ({ ...prev, directorAgentId: event.target.value }))
+                    }
+                    className="mt-2 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                  >
+                    <option value="">{t(($) => $.d5.rail.director_fallback)}</option>
+                    {availableDirectors.map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.display_name || agent.name || agent.id}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+              </div>
 
               {visibleCreateError ? (
                 <div

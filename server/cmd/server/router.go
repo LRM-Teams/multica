@@ -693,6 +693,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)
 					r.Get("/graph-memory/profile", h.GetGraphMemoryProfile)
 					r.Put("/graph-memory/profile", h.UpdateGraphMemoryProfile)
+					r.Get("/graph-memory/status", h.GetGraphMemoryStatus)
 					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
 					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)

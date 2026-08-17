@@ -129,7 +129,9 @@ type Handler struct {
 	// GraphMemoryJudge runs the server-side async judge + delayed-reward
 	// flow for graph-memory recalls reported by daemons (design §5.3).
 	// Nil-safe: the endpoint accepts and drops reports when unwired.
-	GraphMemoryJudge      *service.GraphMemoryJudgeService
+	GraphMemoryJudge *service.GraphMemoryJudgeService
+	// GraphMemoryStatus backs the graph governance status API (spec §10).
+	GraphMemoryStatus     *service.GraphMemoryStatusService
 	AgentFleetRankService *service.AgentFleetRankService
 	AgentHonorService     *service.AgentHonorService
 	IssueService          *service.IssueService
@@ -298,6 +300,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		Bus:                   bus,
 		TaskService:           taskSvc,
 		AgentFleetRankService: agentFleetRankService,
+		GraphMemoryStatus:     service.NewGraphMemoryStatusService(queries, ""),
 		AgentHonorService:     service.NewAgentHonorService(queries, agentFleetRankService),
 		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
 		HonorService:          service.NewHonorService(queries),

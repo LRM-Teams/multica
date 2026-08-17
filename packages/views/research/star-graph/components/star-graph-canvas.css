@@ -32,6 +32,33 @@
   transform-origin: 0 0;
   will-change: transform;
 }
+.sg-collapse-ghost-layer {
+  z-index: 4;
+  pointer-events: none;
+}
+.sg-collapse-ghost {
+  pointer-events: none;
+  animation: sg-collapse-ghost 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  filter: saturate(0.72) drop-shadow(0 8px 18px rgb(45 212 191 / 18%));
+  will-change: transform, opacity, filter;
+}
+@keyframes sg-collapse-ghost {
+  0% {
+    opacity: 0.76;
+    transform: translate(0, 0) scale(0.98);
+  }
+  68% {
+    opacity: 0.42;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(
+      var(--collapse-target-x),
+      var(--collapse-target-y)
+    ) scale(0.22);
+    filter: saturate(0.45) blur(2px);
+  }
+}
 .sg-canvas-world.sg-camera-transitioning {
   transition: transform 380ms cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -390,6 +417,15 @@
   .sg-node .sg-document-badge {
     transition: none;
   }
+  .sg-collapse-ghost {
+    animation-name: sg-collapse-ghost-reduced;
+    animation-duration: 160ms;
+    filter: none;
+  }
+}
+@keyframes sg-collapse-ghost-reduced {
+  from { opacity: 0.48; }
+  to { opacity: 0; }
 }
 @keyframes sg-edge-flow {
   to { stroke-dashoffset: -26; }

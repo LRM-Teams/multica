@@ -43,6 +43,7 @@ import type {
   StarEntityView,
   StarRelationView,
 } from "../lib/star-canvas-view-model";
+import { selectStarGraphCollapseGhosts } from "../lib/star-graph-collapse-ghosts";
 import {
   computeClusterHiddenCounts,
   edgeBudgetForViewport,
@@ -53,6 +54,7 @@ import {
 } from "../lib/star-graph-visible-budget";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import { StarGraphCollapseRelationLayer } from "./star-graph-collapse-relation-layer";
+import { StarGraphCollapseGhostLayer } from "./star-graph-collapse-ghost-layer";
 import {
   computeEntityBounds,
   computeEntityBoundsForIds,
@@ -178,6 +180,35 @@ export function StarGraphCanvas({
     () => storedViewport ?? DEFAULT_CAMERA,
   );
   const [liveText, setLiveText] = useState("");
+  const previousModelRef = useRef<StarCanvasViewModel | null>(null);
+  const collapseSnapshotRef = useRef<{
+    sequence: string;
+    ghosts: ReturnType<typeof selectStarGraphCollapseGhosts>;
+  } | null>(null);
+  const collapseGhosts = useMemo(
+    () => {
+      const transition = expansionControl?.transition;
+      if (transition?.kind !== "collapse") {
+        collapseSnapshotRef.current = null;
+        return [];
+      }
+      const sequence = String(transition.sequence);
+      if (collapseSnapshotRef.current?.sequence === sequence) {
+        return collapseSnapshotRef.current.ghosts;
+      }
+      const ghosts = selectStarGraphCollapseGhosts(
+        previousModelRef.current,
+        model,
+        transition,
+      );
+      collapseSnapshotRef.current = { sequence, ghosts };
+      return ghosts;
+    },
+    [expansionControl?.transition, model],
+  );
+  useEffect(() => {
+    previousModelRef.current = model;
+  }, [model]);
   const [cameraTransitioning, setCameraTransitioning] = useState(false);
   const cameraTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const entityMotionDirectives = useMemo(() => {
@@ -856,6 +887,12 @@ export function StarGraphCanvas({
           labels={entityLabels}
           onSelectNode={onSelectNode}
           onOpenNode={onOpenNode}
+        />
+        <StarGraphCollapseGhostLayer
+          ghosts={collapseGhosts}
+          labels={entityLabels}
+          lowPerformance={expansionControl?.lowPerformance}
+          sTierPresentation={sTierPresentation}
         />
       </div>
 

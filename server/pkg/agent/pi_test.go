@@ -215,8 +215,8 @@ func TestBuildPiEnvPinsDefaultCodingAgentDir(t *testing.T) {
 
 	env := buildPiEnv(nil)
 	want := piCodingAgentDirEnvKey + "=" + filepath.Join(home, ".pi", "agent")
-	if !containsEnvEntry(env, want) {
-		t.Fatalf("Pi coding agent dir was not pinned to the effective home: %v", env)
+	if countEnvEntry(env, want) != 1 {
+		t.Fatalf("Pi coding agent dir was not pinned exactly once to the effective home: %v", env)
 	}
 }
 
@@ -225,9 +225,24 @@ func TestBuildPiEnvPreservesExplicitCodingAgentDir(t *testing.T) {
 	explicit := filepath.Join(t.TempDir(), "explicit")
 
 	env := buildPiEnv(map[string]string{piCodingAgentDirEnvKey: explicit})
-	if !containsEnvEntry(env, piCodingAgentDirEnvKey+"="+explicit) {
-		t.Fatalf("explicit Pi coding agent dir override was not preserved: %v", env)
+	if countEnvEntry(env, piCodingAgentDirEnvKey+"="+explicit) != 1 {
+		t.Fatalf("explicit Pi coding agent dir override was not preserved exactly once: %v", env)
 	}
+	for _, entry := range env {
+		if strings.HasPrefix(entry, piCodingAgentDirEnvKey+"=") && entry != piCodingAgentDirEnvKey+"="+explicit {
+			t.Fatalf("inherited Pi coding agent dir leaked alongside explicit override: %v", env)
+		}
+	}
+}
+
+func countEnvEntry(env []string, want string) int {
+	count := 0
+	for _, entry := range env {
+		if entry == want {
+			count++
+		}
+	}
+	return count
 }
 
 func containsEnvEntry(env []string, want string) bool {

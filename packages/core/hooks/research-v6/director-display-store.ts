@@ -44,7 +44,7 @@ interface ResearchV6DirectorDisplayState {
   clear: () => void;
 }
 
-function projectionIdentity(
+export function researchV6DirectorDisplayIdentity(
   workspaceId: string,
   runId: string,
   snapshotId: string,
@@ -68,7 +68,11 @@ export const useResearchV6DirectorDisplayStore =
     ...EMPTY_DISPLAY,
 
     setProjectionIdentity(workspaceId, runId, snapshotId) {
-      const identity = projectionIdentity(workspaceId, runId, snapshotId);
+      const identity = researchV6DirectorDisplayIdentity(
+        workspaceId,
+        runId,
+        snapshotId,
+      );
       set((state) =>
         state.identity === identity
           ? state

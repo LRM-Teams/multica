@@ -50,6 +50,8 @@ export interface StarGraphNodeProps {
   headerLabel?: string;
   /** S-tier agent badge (e.g. "A1"). Only rendered for tier `s`. */
   agentBadge?: string;
+  /** S-tier body treatment. `point` keeps text in the accessible name only. */
+  sTierPresentation?: "label" | "point";
   /** Live metrics for XL/XXL/L. */
   metrics?: StarGraphNodeMetrics;
   /** Fully formatted localized metric strings supplied by the product layer. */
@@ -65,6 +67,8 @@ export interface StarGraphNodeProps {
   tabIndex?: number;
   /** Explicitly busy (spinner/pulse). */
   busy?: boolean;
+  /** Independent selection state; canonical lifecycle state may have higher visual priority. */
+  selected?: boolean;
   /** Server-backed disclosure state; omitted for ordinary graph nodes. */
   expanded?: boolean;
   /** Request-level failure; distinct from canonical node lifecycle. */
@@ -87,9 +91,11 @@ export function StarGraphNode({
   subLabel,
   headerLabel,
   agentBadge,
+  sTierPresentation = "label",
   metrics,
   metricText,
   busy,
+  selected,
   expanded,
   invalid,
   accessibleName,
@@ -121,6 +127,7 @@ export function StarGraphNode({
     (token.tier === "xxl" || token.tier === "xl" || token.tier === "l") &&
     hasDocuments;
   const metricSummary = metricsSummaryText(metrics, metricText, showDocumentBadge);
+  const rendersAsPoint = token.tier === "s" && sTierPresentation === "point";
 
   return (
     <button
@@ -129,11 +136,13 @@ export function StarGraphNode({
       tabIndex={tabIndex}
       aria-label={readable}
       aria-busy={busy || undefined}
+      aria-pressed={selected || undefined}
       aria-expanded={expanded}
       aria-invalid={invalid || undefined}
       onClick={onOpen}
       data-tier={tier}
       data-state={state}
+      data-presentation={rendersAsPoint ? "point" : "label"}
       data-testid="star-graph-node"
       className={cn(
         "sg-node",
@@ -141,6 +150,8 @@ export function StarGraphNode({
         token.ringCount > 0 ? `sg-ring-${token.ringCount}` : undefined,
         token.glow > 0 ? `sg-glow-${token.glow}` : undefined,
         busy || state === "run" ? "sg-state-run" : undefined,
+        rendersAsPoint ? "sg-s-point" : undefined,
+        selected ? "sg-is-selected" : undefined,
         className,
       )}
       style={{
@@ -150,12 +161,12 @@ export function StarGraphNode({
       }}
     >
       <span className="sg-core">
-        {token.tier === "s" ? (
+        {token.tier === "s" && !rendersAsPoint ? (
           <SNodeContent
             shortLabel={title}
             agentBadge={agentBadge}
           />
-        ) : (
+        ) : token.tier !== "s" ? (
           <>
             {headerLabel && (
               <span
@@ -188,14 +199,14 @@ export function StarGraphNode({
               </span>
             )}
           </>
-        )}
+        ) : null}
       </span>
       {showDocumentBadge && (
         <span data-testid="star-graph-document-badge" className="sg-document-badge">
           {metricText?.documentBadge ?? `DOC · ${documentCount}`}
         </span>
       )}
-      {stateToken.glyph !== "none" && (
+      {!rendersAsPoint && stateToken.glyph !== "none" && (
         <span
           data-testid="star-graph-glyph"
           data-glyph={stateToken.glyph}

@@ -59,6 +59,7 @@ import { useSemanticTransition } from "../motion/use-semantic-transition";
 import {
   StarGraphCanvas,
   type StarGraphExpansionControl,
+  type StarGraphFusionTransition,
 } from "../star-graph";
 import { TrajectoryExplorer } from "../trajectory-explorer";
 import {
@@ -234,6 +235,24 @@ export function ResearchConstellationWorkspace({
     style.textContent = semanticMotionCss();
     document.head.appendChild(style);
   }, []);
+
+  const fusionTransition = useMemo<StarGraphFusionTransition | null>(() => {
+    if (projectionSource !== "v6" || !typedGraph || !prevGraphRef.current) {
+      return null;
+    }
+    if (prevGraphRef.current.session_id !== typedGraph.session_id) return null;
+    const integration = buildTypedGraphMotionEvents(
+      prevGraphRef.current,
+      typedGraph,
+    ).find((event) => event.transition_kind === "integration_formed");
+    const [successorNodeId, ...sourceNodeIds] = integration?.related_ids ?? [];
+    if (!successorNodeId || sourceNodeIds.length === 0) return null;
+    return {
+      sequence: typedGraph.graph_version,
+      successorNodeId,
+      sourceNodeIds,
+    };
+  }, [projectionSource, typedGraph]);
 
   useEffect(() => {
     const node = hostRef.current;
@@ -724,6 +743,8 @@ export function ResearchConstellationWorkspace({
             onSelectNode={handleCanvasFocus}
             onOpenNode={handleCanvasSelect}
             expansionControl={expansionControl}
+            fusionTransition={fusionTransition}
+            fusionLowPerformance={motion.profile.lowPerformance}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
             filterHiddenNote={filterHiddenNote}
@@ -736,6 +757,8 @@ export function ResearchConstellationWorkspace({
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
             hideUnselectedSTierRelations={projectionSource === "v6"}
+            semanticLandmarkLabels={projectionSource === "v6"}
+            sTierPresentation={projectionSource === "v6" ? "point" : "label"}
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}

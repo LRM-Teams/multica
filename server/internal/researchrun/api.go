@@ -47,6 +47,7 @@ type ResearchRunDirectorControl interface {
 	ArchiveV6TeamMember(context.Context, ArchiveV6TeamMemberInput) (V6TeamMember, error)
 	RecordV6MatchDecision(context.Context, RecordV6MatchDecisionInput) (V6MatchDecision, error)
 	OpenV6Discussion(context.Context, OpenV6DiscussionInput) (V6Discussion, error)
+	ApplyV6SteeringAssessment(context.Context, ApplyV6SteeringAssessmentInput) (V6SteeringAssessment, error)
 }
 
 // ResearchRunReconciler is the scheduler-only V6 recovery boundary.

@@ -163,7 +163,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
   - **依赖**：J2-T1
   - **完成标准**：测：链了 PR 的 Issue 在包里能看到 url+state；未链的为空数组。
 
-- [ ] **J2-T3 Digest 归仓：Workspace vs 未归类**
+- [x] **J2-T3 Digest 归仓：Workspace vs 未归类**
+  - **已落地（2026-08-17）**：`normalizeGitRemoteURL` + `scopeWorkDigestRepos` / `scopeWorkDigestForWorkspace`；匹配 Workspace `github_repo` → `workspace`，否则 `unscoped`，仓不丢。测：https/ssh 等价匹配；无关仓 unscoped。
   - **目标**：Agent 合成时能区分「这是本 Workspace 的活」和「这台机器上的其他仓」。
   - **要做**：用 Workspace 已绑 Git 项目的 remote URL 与 digest `remotes` 做规范化匹配（去 `.git`、大小写、ssh/https 等价）。匹配上 → `scope=workspace`；否则 `scope=unscoped`。匹配失败不得丢弃该仓。
   - **不要做**：把未归类仓静默删掉；用本地文件夹名猜 Workspace。
@@ -222,8 +223,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 |------|--------|
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
 | 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ ~~J1-T5~~ 开关（已完成） |
-| 3 | ~~J2-T1~~ 平台 Facts 包 → ~~J2-T2~~ Issue 挂 PR（已完成）→ **J2-T3** |
-| 4 | J3（剧本 → 派发 → UI → 落笔记） |
+| 3 | ~~J2-T1~~ Facts 包 → ~~J2-T2~~ Issue 挂 PR → ~~J2-T3~~ Digest 归仓（J2 完成） |
+| 4 | **J3-T1** 剧本 → 派发 → UI → 落笔记 |
 | 5 | 仅当产品需要时再开 J4 |
 
 **当前焦点：** Slice J1。下一个 checkbox：**J1-T5**。

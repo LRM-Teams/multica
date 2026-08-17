@@ -111,7 +111,7 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 		decoder.DisallowUnknownFields()
 		return decoder.Decode(target)
 	}
-	register("workspace-capacity", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(LocalControlWorkspaceCapacityOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		var request capacityControlRequest
 		if err := decode(headers, raw, &request); err != nil {
 			return nil, err
@@ -154,7 +154,7 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 		}
 		return response, nil
 	})
-	register("workspace-diagnostics", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(LocalControlWorkspaceDiagnosticsOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		var request diagnosticControlRequest
 		if err := decode(headers, raw, &request); err != nil {
 			return nil, err
@@ -167,10 +167,10 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 		}
 		return nil, control.callbacks.Diagnostic(ctx, request.Identity, request.WorkspaceID, request.Event)
 	})
-	register("runner-status", control.rpcRawCallback(registry, "runner-status", control.callbacks.LifecycleDiagnostic))
-	register("runner-attestation", control.rpcRawCallback(registry, "runner-attestation", control.callbacks.MachineActions))
+	register(LocalControlRunnerStatusOperation, control.rpcRawCallback(registry, LocalControlRunnerStatusOperation, control.callbacks.LifecycleDiagnostic))
+	register(LocalControlRunnerAttestationOperation, control.rpcRawCallback(registry, LocalControlRunnerAttestationOperation, control.callbacks.MachineActions))
 	register(LocalControlRunnerPrepareOperation, control.rpcPrepareUpgrade)
-	register("runner-ready", control.rpcRuntimeSet)
+	register(LocalControlRunnerReadyOperation, control.rpcRuntimeSet)
 }
 
 func (control *HostControl) rpcRawCallback(_ *LocalControlRegistry, _ string, callback func(context.Context, BindingChildIdentity, json.RawMessage) error) LocalControlHandler {

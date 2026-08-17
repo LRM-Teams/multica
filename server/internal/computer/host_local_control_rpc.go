@@ -23,20 +23,20 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 			panic(err)
 		}
 	}
-	register("service-status", func(context.Context, map[string]string, json.RawMessage) (any, error) {
+	register(LocalControlServiceStatusOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
 		return host.processHealthResult(state), nil
 	})
-	register("machine-attestation", func(context.Context, map[string]string, json.RawMessage) (any, error) {
+	register(LocalControlMachineAttestationOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
 		return host.processAttestationResult(state), nil
 	})
-	register("restart-service", func(_ context.Context, headers map[string]string, _ json.RawMessage) (any, error) {
+	register(LocalControlRestartServiceOperation, func(_ context.Context, headers map[string]string, _ json.RawMessage) (any, error) {
 		if !host.authorizeLocal(headers) {
 			return nil, errors.New("local control authentication failed")
 		}
 		go state.cancel()
 		return map[string]string{"status": "shutting down"}, nil
 	})
-	register("workspace-environment", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(LocalControlWorkspaceEnvironmentOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		if !host.authorizeLocal(headers) {
 			return nil, errors.New("local control authentication failed")
 		}
@@ -54,7 +54,7 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 		}
 		return map[string]string{"status": "prepared"}, err
 	})
-	register("upgrade-start", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(LocalControlUpgradeStartOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		if !host.authorizeLocal(headers) {
 			return nil, errors.New("local control authentication failed")
 		}
@@ -79,10 +79,10 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 	})
 	// Status/cancel are retained as explicit RPC operations; their journal
 	// implementation is owned by the upgrade coordinator.
-	register("upgrade-status", func(context.Context, map[string]string, json.RawMessage) (any, error) {
+	register(LocalControlUpgradeStatusOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
 		return host.upgrade.status(), nil
 	})
-	register("upgrade-cancel", func(context.Context, map[string]string, json.RawMessage) (any, error) {
+	register(LocalControlUpgradeCancelOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
 		if err := host.upgrade.cancelActive(); err != nil {
 			return nil, err
 		}

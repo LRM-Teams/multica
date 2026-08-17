@@ -10,14 +10,14 @@ import (
 
 func TestRaftLocalControlOperationNames(t *testing.T) {
 	want := map[string]bool{
-		"machine-attestation": true, "restart-service": true, "upgrade-start": true,
-		"upgrade-status": true, "upgrade-cancel": true,
-		"service-status": true, "service-start": true, "service-stop": true, "service-diagnostics": true,
-		"workspace-list": true, "workspace-status": true, "workspace-start": true, "workspace-stop": true,
-		"workspace-restart": true, "workspace-attach": true, "workspace-detach": true,
-		"workspace-environment": true, "workspace-capacity": true, "workspace-diagnostics": true,
-		"runner-attestation": true, "runner-status": true, "runner-start": true, "runner-stop": true,
-		"runner-restart": true, LocalControlRunnerDrainOperation: true, LocalControlRunnerReleaseOperation: true, "runner-ready": true,
+		LocalControlMachineAttestationOperation: true, LocalControlRestartServiceOperation: true, LocalControlUpgradeStartOperation: true,
+		LocalControlUpgradeStatusOperation: true, LocalControlUpgradeCancelOperation: true,
+		LocalControlServiceStatusOperation: true, "service:start": true, "service:stop": true, "service:diagnostics": true,
+		"workspace:list": true, "workspace:status": true, "workspace:start": true, "workspace:stop": true,
+		"workspace:restart": true, "workspace:attach": true, "workspace:detach": true,
+		LocalControlWorkspaceEnvironmentOperation: true, LocalControlWorkspaceCapacityOperation: true, LocalControlWorkspaceDiagnosticsOperation: true,
+		LocalControlRunnerAttestationOperation: true, LocalControlRunnerStatusOperation: true, "runner:start": true, "runner:stop": true,
+		"runner:restart": true, LocalControlRunnerDrainOperation: true, LocalControlRunnerReleaseOperation: true, LocalControlRunnerReadyOperation: true,
 		LocalControlRunnerPrepareOperation: true,
 	}
 	for operation := range want {
@@ -31,14 +31,14 @@ func TestLocalControlOperationUsesTypedResultAndStructuredError(t *testing.T) {
 	if _, ok := localControlOperationSpecFor("/health"); ok {
 		t.Fatal("local control operation lookup accepted an HTTP path")
 	}
-	if got := localControlOperationSpecForMust("service-status").Name; got != "service-status" {
+	if got := localControlOperationSpecForMust(LocalControlServiceStatusOperation).Name; got != LocalControlServiceStatusOperation {
 		t.Fatalf("operation name = %q", got)
 	}
 }
 
 func TestLocalControlRegistryDispatchesTypedHandler(t *testing.T) {
 	registry := NewLocalControlRegistry()
-	if err := registry.Register("runner-ready", func(_ context.Context, headers map[string]string, args json.RawMessage) (any, error) {
+	if err := registry.Register(LocalControlRunnerReadyOperation, func(_ context.Context, headers map[string]string, args json.RawMessage) (any, error) {
 		if headers["X-Test"] != "present" || string(args) != `{"workspace_id":"ws-1"}` {
 			t.Fatalf("handler input = headers=%v args=%s", headers, args)
 		}
@@ -46,7 +46,7 @@ func TestLocalControlRegistryDispatchesTypedHandler(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := registry.handler("runner-ready"); !ok {
+	if _, ok := registry.handler(LocalControlRunnerReadyOperation); !ok {
 		t.Fatal("registered operation was not dispatchable")
 	}
 }
@@ -57,17 +57,17 @@ func TestLocalControlRegistryRejectsUnknownAndDuplicateOperations(t *testing.T) 
 	if err := registry.Register("not-real", handler); err == nil {
 		t.Fatal("unknown operation was accepted")
 	}
-	if err := registry.Register("runner-ready", handler); err != nil {
+	if err := registry.Register(LocalControlRunnerReadyOperation, handler); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Register("runner-ready", handler); err == nil {
+	if err := registry.Register(LocalControlRunnerReadyOperation, handler); err == nil {
 		t.Fatal("duplicate operation was accepted")
 	}
 }
 
 func TestLocalControlRPCServerReturnsTypedResultWithoutHTTPAdapter(t *testing.T) {
 	registry := NewLocalControlRegistry()
-	if err := registry.Register("runner-ready", func(_ context.Context, _ map[string]string, _ json.RawMessage) (any, error) {
+	if err := registry.Register(LocalControlRunnerReadyOperation, func(_ context.Context, _ map[string]string, _ json.RawMessage) (any, error) {
 		return struct {
 			Ready bool `json:"ready"`
 		}{Ready: true}, nil
@@ -78,7 +78,7 @@ func TestLocalControlRPCServerReturnsTypedResultWithoutHTTPAdapter(t *testing.T)
 	defer left.Close()
 	defer right.Close()
 	go serveLocalControlRPCConnection(context.Background(), right, registry)
-	if err := writeLocalControlFrame(left, localControlRPCMessage{Operation: "runner-ready"}); err != nil {
+	if err := writeLocalControlFrame(left, localControlRPCMessage{Operation: LocalControlRunnerReadyOperation}); err != nil {
 		t.Fatal(err)
 	}
 	var response localControlRPCMessage

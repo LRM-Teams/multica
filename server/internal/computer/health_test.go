@@ -9,7 +9,7 @@ import (
 func TestRequestShutdownSendsAuditMetadata(t *testing.T) {
 	requests := make(chan map[string]string, 1)
 	endpoint := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
-		if operation != "restart-service" {
+		if operation != LocalControlRestartServiceOperation {
 			t.Fatalf("operation = %q", operation)
 		}
 		requests <- headers

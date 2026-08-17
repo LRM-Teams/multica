@@ -13,9 +13,9 @@ func TestHostControlRPCDispatchesCapacityOperation(t *testing.T) {
 	})
 	registry := NewLocalControlRegistry()
 	control.RegisterRPCHandlers(registry)
-	handler, ok := registry.handler("workspace-capacity")
+	handler, ok := registry.handler(LocalControlWorkspaceCapacityOperation)
 	if !ok {
-		t.Fatal("workspace-capacity RPC was not registered")
+		t.Fatal("workspace:capacity RPC was not registered")
 	}
 	args, err := json.Marshal(capacityControlRequest{
 		Identity: identity, Operation: "acquire", WorkspaceID: identity.WorkspaceID,
@@ -41,9 +41,9 @@ func TestHostControlRPCRejectsStaleRunnerGeneration(t *testing.T) {
 	})
 	registry := NewLocalControlRegistry()
 	control.RegisterRPCHandlers(registry)
-	handler, ok := registry.handler("workspace-capacity")
+	handler, ok := registry.handler(LocalControlWorkspaceCapacityOperation)
 	if !ok {
-		t.Fatal("workspace-capacity RPC was not registered")
+		t.Fatal("workspace:capacity RPC was not registered")
 	}
 	args, err := json.Marshal(capacityControlRequest{
 		Identity:  BindingChildIdentity{WorkspaceID: "ws-1", RunnerGeneration: 1, PID: 1234},

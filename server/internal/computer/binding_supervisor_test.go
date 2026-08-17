@@ -208,7 +208,7 @@ func TestBindingSupervisorPreparesEveryBindingForMachineControls(t *testing.T) {
 			prepares.Add(1)
 		case LocalControlRunnerReleaseOperation:
 			releases.Add(1)
-		case "workspace-environment":
+		case LocalControlWorkspaceEnvironmentOperation:
 			var request struct {
 				Action string `json:"action"`
 			}

@@ -331,7 +331,7 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		d.releaseClaimBarrier()
 		return nil, nil
 	})
-	register("upgrade-start", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(computer.LocalControlUpgradeStartOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		if err := authorized(headers); err != nil {
 			return nil, err
 		}
@@ -346,7 +346,7 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		}
 		return nil, d.handleComputerControlCommand(ctx, protocol.EventComputerUpgrade, request.Command)
 	})
-	register("upgrade-status", func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(computer.LocalControlUpgradeStatusOperation, func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		if err := authorized(headers); err != nil {
 			return nil, err
 		}
@@ -367,7 +367,7 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		d.emitComputerUpgrade(request.EventType, payload)
 		return nil, nil
 	})
-	register("workspace-environment", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(computer.LocalControlWorkspaceEnvironmentOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		identity, err := decodeIdentity(headers, raw)
 		if err != nil {
 			return nil, err
@@ -408,7 +408,7 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		prepared = true
 		return nil, nil
 	})
-	register("runner-ready", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	register(computer.LocalControlRunnerReadyOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
 		identity, err := decodeIdentity(headers, raw)
 		if err != nil {
 			return nil, err

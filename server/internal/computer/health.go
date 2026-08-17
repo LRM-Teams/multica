@@ -31,7 +31,7 @@ type ServiceProbe func(ctx context.Context, endpoint string) map[string]any
 // endpoint simply not being up) is reported as a "stopped" status.
 func ProbeHealth(ctx context.Context, endpoint string) map[string]any {
 	var result map[string]any
-	if err := callLocalJSON(ctx, endpoint, "service-status", 2*time.Second, nil, nil, &result); err != nil {
+	if err := callLocalJSON(ctx, endpoint, LocalControlServiceStatusOperation, 2*time.Second, nil, nil, &result); err != nil {
 		return map[string]any{"status": "stopped"}
 	}
 	return result
@@ -50,7 +50,7 @@ func ReleaseEnvironmentSwitch(ctx context.Context, endpoint, controlToken string
 }
 
 func requestEnvironmentSwitchControl(ctx context.Context, endpoint, controlToken, action string) error {
-	return callLocalJSON(ctx, endpoint, "workspace-environment", 0,
+	return callLocalJSON(ctx, endpoint, LocalControlWorkspaceEnvironmentOperation, 0,
 		map[string]string{"X-Multica-Control-Token": strings.TrimSpace(controlToken)},
 		map[string]string{"action": action}, nil)
 }
@@ -78,5 +78,5 @@ func RequestShutdown(endpoint string, audit ShutdownRequest) error {
 	if audit.RequestPID > 0 {
 		headers[shutdownRequestPIDHeader] = fmt.Sprintf("%d", audit.RequestPID)
 	}
-	return callLocalJSON(context.Background(), endpoint, "restart-service", 2*time.Second, headers, nil, nil)
+	return callLocalJSON(context.Background(), endpoint, LocalControlRestartServiceOperation, 2*time.Second, headers, nil, nil)
 }

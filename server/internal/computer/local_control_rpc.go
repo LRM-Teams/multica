@@ -16,9 +16,21 @@ import (
 const localControlMaxFrame = 1 << 20
 
 const (
-	LocalControlRunnerDrainOperation   = "runner:drain"
-	LocalControlRunnerPrepareOperation = "runner:prepare"
-	LocalControlRunnerReleaseOperation = "runner:release"
+	LocalControlMachineAttestationOperation   = "machine:attestation"
+	LocalControlRestartServiceOperation       = "service:restart"
+	LocalControlUpgradeStartOperation         = "upgrade:start"
+	LocalControlUpgradeStatusOperation        = "upgrade:status"
+	LocalControlUpgradeCancelOperation        = "upgrade:cancel"
+	LocalControlServiceStatusOperation        = "service:status"
+	LocalControlWorkspaceEnvironmentOperation = "workspace:environment"
+	LocalControlWorkspaceCapacityOperation    = "workspace:capacity"
+	LocalControlWorkspaceDiagnosticsOperation = "workspace:diagnostics"
+	LocalControlRunnerAttestationOperation    = "runner:attestation"
+	LocalControlRunnerStatusOperation         = "runner:status"
+	LocalControlRunnerReadyOperation          = "runner:ready"
+	LocalControlRunnerDrainOperation          = "runner:drain"
+	LocalControlRunnerPrepareOperation        = "runner:prepare"
+	LocalControlRunnerReleaseOperation        = "runner:release"
 )
 
 type localControlOperationSpec struct {
@@ -26,15 +38,15 @@ type localControlOperationSpec struct {
 }
 
 var localControlOperationSpecs = []localControlOperationSpec{
-	{Name: "machine-attestation"}, {Name: "restart-service"}, {Name: "upgrade-start"},
-	{Name: "upgrade-status"}, {Name: "upgrade-cancel"}, {Name: "service-status"},
-	{Name: "service-start"}, {Name: "service-stop"}, {Name: "service-diagnostics"},
-	{Name: "workspace-list"}, {Name: "workspace-status"}, {Name: "workspace-start"},
-	{Name: "workspace-stop"}, {Name: "workspace-restart"}, {Name: "workspace-attach"},
-	{Name: "workspace-detach"}, {Name: "workspace-environment"}, {Name: "workspace-capacity"},
-	{Name: "workspace-diagnostics"}, {Name: "runner-attestation"}, {Name: "runner-status"},
-	{Name: "runner-start"}, {Name: "runner-stop"}, {Name: "runner-restart"},
-	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: "runner-ready"},
+	{Name: LocalControlMachineAttestationOperation}, {Name: LocalControlRestartServiceOperation}, {Name: LocalControlUpgradeStartOperation},
+	{Name: LocalControlUpgradeStatusOperation}, {Name: LocalControlUpgradeCancelOperation}, {Name: LocalControlServiceStatusOperation},
+	{Name: "service:start"}, {Name: "service:stop"}, {Name: "service:diagnostics"},
+	{Name: "workspace:list"}, {Name: "workspace:status"}, {Name: "workspace:start"},
+	{Name: "workspace:stop"}, {Name: "workspace:restart"}, {Name: "workspace:attach"},
+	{Name: "workspace:detach"}, {Name: LocalControlWorkspaceEnvironmentOperation}, {Name: LocalControlWorkspaceCapacityOperation},
+	{Name: LocalControlWorkspaceDiagnosticsOperation}, {Name: LocalControlRunnerAttestationOperation}, {Name: LocalControlRunnerStatusOperation},
+	{Name: "runner:start"}, {Name: "runner:stop"}, {Name: "runner:restart"},
+	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: LocalControlRunnerReadyOperation},
 	{Name: LocalControlRunnerPrepareOperation},
 }
 
@@ -50,13 +62,13 @@ func localControlOperationSpecFor(name string) (localControlOperationSpec, bool)
 func localControlOperationForPath(path string) string {
 	switch path {
 	case bindingChildCapacityPath:
-		return "workspace-capacity"
+		return LocalControlWorkspaceCapacityOperation
 	case bindingChildDiagnosticPath:
-		return "workspace-diagnostics"
+		return LocalControlWorkspaceDiagnosticsOperation
 	case bindingChildLifecycleDiagnosticPath:
-		return "runner-status"
+		return LocalControlRunnerStatusOperation
 	case bindingChildMachineActionsPath:
-		return "runner-attestation"
+		return LocalControlRunnerAttestationOperation
 	case bindingChildPrepareUpgradePath:
 		return LocalControlRunnerPrepareOperation
 	case BindingPrepareMachineUpgradePath:
@@ -64,15 +76,15 @@ func localControlOperationForPath(path string) string {
 	case BindingReleaseMachineUpgradePath:
 		return LocalControlRunnerReleaseOperation
 	case bindingChildComputerUpgradePath:
-		return "upgrade-start"
+		return LocalControlUpgradeStartOperation
 	case BindingComputerUpgradeEventPath:
-		return "upgrade-status"
+		return LocalControlUpgradeStatusOperation
 	case BindingPrepareEnvironmentSwitchPath, BindingReleaseEnvironmentSwitchPath:
-		return "workspace-environment"
+		return LocalControlWorkspaceEnvironmentOperation
 	case BindingReregisterRuntimePath:
-		return "runner-ready"
+		return LocalControlRunnerReadyOperation
 	case bindingChildRuntimeSetPath:
-		return "runner-ready"
+		return LocalControlRunnerReadyOperation
 	default:
 		return ""
 	}

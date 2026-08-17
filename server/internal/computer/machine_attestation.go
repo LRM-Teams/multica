@@ -29,7 +29,7 @@ type MachineAttestation struct {
 // ProbeMachineAttestation asks the resident through service IPC.
 func ProbeMachineAttestation(ctx context.Context, endpoint string) (MachineAttestation, error) {
 	var attestation MachineAttestation
-	if err := callLocalJSON(ctx, endpoint, "machine-attestation", 2*time.Second, nil, nil, &attestation); err != nil {
+	if err := callLocalJSON(ctx, endpoint, LocalControlMachineAttestationOperation, 2*time.Second, nil, nil, &attestation); err != nil {
 		return MachineAttestation{}, fmt.Errorf("machine-attestation control: %w", err)
 	}
 	return attestation, nil

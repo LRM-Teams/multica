@@ -657,3 +657,34 @@ detail data, and event-sequenced deltas so a client can render hierarchy,
 discussion, conflict, provenance, and change without parsing Agent prose. A
 snapshot is pinned to one event sequence; reconnecting clients resume after that
 sequence or reload a snapshot when the retained delta range has expired.
+
+## Period Work
+
+### Period Work Brief
+
+A note that states what the Computer Owner accomplished in a time window, written
+for colleagues or a manager. It is a filtered narrative in Notes, not an activity
+list and not a slide file.
+_Avoid_: retrospective as the deliverable, PPT, standup dump, weekly report file
+
+### Machine Work Journal
+
+The Computer-local record of work traces on that machine for its Computer Owner,
+independent of whether Multica dispatched the work. The observation boundary is
+the Owner's machine, not an Agent Workspace and not the Workspace membership.
+_Avoid_: runtime-root allowlist as the product scope, OS surveillance, keymouse,
+C2 as a single forbidden blob
+
+### Work Digest
+
+The bounded summary a Computer returns for one time window: discovered git
+repositories, commits, and dirty paths. It does not contain file bodies, diffs,
+secrets, or diagnostics.
+_Avoid_: git dump, full working tree, Daily, session transcript
+
+### Period Work Synthesis
+
+The Agent job that reads platform facts plus Work Digests and writes one Period
+Work Brief. Selection and grouping happen here; fact collection does not.
+_Avoid_: LLM inside the retrospective API, template-only brief, silent note overwrite
+

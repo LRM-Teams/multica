@@ -623,6 +623,13 @@
 - **聊天提案写笔记（Messages）**：人点按钮才用点击者 ACL 写入。出按钮的条件：Agent 发了 `--note-write`，**或**人上一条在要求插入/写入笔记（含「给我按钮」）且这条回复像待写入正文（不是一句「好的」）。禁止把本地 `notes/*.md` 当成产品笔记。省略 `--note-page-id` → 「新建笔记」；有 UUID / `/notes/<uuid>` / sticky `note_brief` → 「插入笔记下方 / 新建子笔记」。
 - **物**：`docs/notes-editor-worker-contract.md`；`docs/agent-memory-model.md` §10；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` / `note_writeback_events.go` / `appendAgentNoteWritePart` + 误用、dispatch/ACL、prompt breakout、白名单、`--note-write` 测。
 
+### 4.24 时段工作介绍：整机工作志 + Agent 合成笔记 — `仅文档`
+
+- **口径（2026-08-17）**：Computer Owner 可在自己的机器上启用 Machine Work Journal。观察边界是整机工作痕迹（HOME 下 git 与脏路径，denylist 去噪声/密钥），**不**要求活由 Multica 下发，也**不**限 Agent Workspace。平台 Facts 与 Work Digest 汇合后交给 Agent 做 Period Work Synthesis，产物是 Notes 里的 Period Work Brief，给人向领导/同事汇报。不导出 PPT。
+- **仍禁止**：键鼠、截屏、剪贴板、文件正文、Daily 当源、密钥与 runtime 诊断、把 digest 暴露给非 Owner、把回顾 API 改成跑模型。
+- **指针**：ADR `docs/adr/0018-machine-work-journal-period-brief.md`；术语 `CONTEXT.md` → Period Work。
+- **欠债**：实现按仓库根目录 `todo.md`（时段工作介绍）切片落地；完成后以 Digest 协议类型、Owner-only 测、denylist 测升级本条为 `可执行`。
+
 ### 4.23 Context compaction 是可见 Activity，不是 Message acceptance 或进程生命周期 — `可执行`（②统一 lifecycle event + ③单一 gate/投影 + ⑤状态机回归；owner: @Codex）
 - Provider 原生事件先归一成 `MessageCompactionStarted` / `MessageCompactionFinished`；resident runtime 的主动压缩必须在独立 `ResidentMessagePreparation` gate 完成，不能共享 20 秒 native Message acceptance timeout，也不能把压缩超时解释成进程重启。
 - Activity 必须按 Raft 阶段投影：开始写一次 `Working/compacting_context`，显式或推断完成写一次 `Working/compaction_finished`，5 分钟未见完成只写一次 `Working/compaction_stale`；之后每分钟 heartbeat 只更新 Snapshot、不追加 Timeline。只有 provider turn 完成才投影 `Online/idle`。

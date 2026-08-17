@@ -223,3 +223,20 @@ func (s *PostgresStore) recordV6DirectorNoOp(ctx context.Context, proposal v6Dir
 	}
 	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
 }
+
+func (s *PostgresStore) executeV6ReportReviewAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
+	if action.PayloadSchema != "report.review.v1" {
+		return ErrInvalidContract
+	}
+	var payload struct {
+		ReportID         string `json:"report_id"`
+		ExpectedRevision int    `json:"expected_revision"`
+		Reason           string `json:"reason"`
+	}
+	if json.Unmarshal(action.Payload, &payload) != nil || payload.ReportID == "" || payload.ExpectedRevision < 1 {
+		return ErrInvalidContract
+	}
+	decision := map[string]string{"publish_report": "published", "reject_report": "technical_failure", "revise_report": "needs_revision"}[action.Kind]
+	_, err := s.ReviewV6Report(ctx, ReviewV6ReportInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, ReportID: payload.ReportID, DirectorAssignmentID: proposal.DirectorAssignmentID, DirectorCycleID: cycleID, Decision: decision, Reason: firstNonEmptyV6(payload.Reason, action.Reason), ExpectedRevision: payload.ExpectedRevision, ExpectedStateVersion: expectedState})
+	return err
+}

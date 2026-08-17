@@ -200,6 +200,13 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			err = s.executeV6ReportReviewAction(ctx, proposal, cycleID, action, stateVersion)
 		case "challenge_node", "terminate_node":
 			err = s.executeV6NodeDecisionAction(ctx, proposal, action, stateVersion)
+		case "assign_steward":
+			err = s.executeV6AssignStewardAction(ctx, proposal, action, stateVersion)
+		case "revise_goal":
+			err = s.executeV6ReviseGoalAction(ctx, proposal, action, stateVersion)
+		case "adjudicate_discussion":
+			action.Payload = withV6ActionKind(action.Payload, "discussion")
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
 		case "cancel_work_item", "retry_work_item", "reassign_work_item":
 			err = s.executeV6WorkLifecycleAction(ctx, proposal, action, stateVersion)
 		case "update_agent", "archive_agent":

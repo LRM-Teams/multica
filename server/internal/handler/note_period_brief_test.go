@@ -95,6 +95,55 @@ func TestCreateNotePeriodBriefDispatchesWithDisabledDigest(t *testing.T) {
 	if len(resp.CollectorAgentIDs) != 1 || resp.CollectorAgentIDs[0] != collectorID {
 		t.Fatalf("collector_agent_ids = %#v", resp.CollectorAgentIDs)
 	}
+	if len(resp.CollectorJobs) != 1 {
+		t.Fatalf("collector_jobs = %#v, want 1", resp.CollectorJobs)
+	}
+	collectorJob := resp.CollectorJobs[0]
+	if collectorJob.ID == "" || collectorJob.AgentID != collectorID || collectorJob.Status != "dispatched" {
+		t.Fatalf("collector job = %#v", collectorJob)
+	}
+	if collectorJob.PageID == "" || collectorJob.PageID == resp.Page.ID {
+		t.Fatalf("collector pack page must be distinct from synthesizer draft: %#v", collectorJob)
+	}
+	if !strings.Contains(collectorJob.Instruction, "structured Period Work collector pack") {
+		t.Fatalf("collector instruction missing pack contract: %s", collectorJob.Instruction)
+	}
+	if !strings.Contains(collectorJob.Instruction, "--note-write --note-page-id "+collectorJob.PageID) {
+		t.Fatalf("collector instruction must note-write to pack page: %s", collectorJob.Instruction)
+	}
+	if strings.Contains(collectorJob.Instruction, "Write a Period Work Brief") {
+		t.Fatalf("collector must not be asked to write the final Brief")
+	}
+	var packTitle, packContent string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT title, content FROM note_page WHERE id = $1`, collectorJob.PageID).Scan(&packTitle, &packContent); err != nil {
+		t.Fatalf("load pack page: %v", err)
+	}
+	if !strings.Contains(packTitle, "采集包") {
+		t.Fatalf("pack title = %q", packTitle)
+	}
+	if !strings.Contains(packContent, "Stub awaiting Agent pack") {
+		t.Fatalf("pack stub missing: %s", packContent)
+	}
+	var collectorWake map[string]any
+	var collectorContextRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT context FROM agent_inbox_event WHERE id = $1`, *collectorJob.TaskID).Scan(&collectorContextRaw); err != nil {
+		t.Fatalf("load collector wake: %v", err)
+	}
+	if err := json.Unmarshal(collectorContextRaw, &collectorWake); err != nil {
+		t.Fatalf("unmarshal collector wake: %v", err)
+	}
+	collectorPrompt, _ := collectorWake["prompt"].(string)
+	if !strings.Contains(collectorPrompt, "Period Work Collector") {
+		t.Fatalf("collector wake missing collector contract: %s", collectorPrompt)
+	}
+	if !strings.Contains(collectorPrompt, "<window>") || !strings.Contains(collectorPrompt, "</window>") {
+		t.Fatalf("collector wake missing window partition: %s", collectorPrompt)
+	}
+	if strings.Contains(collectorPrompt, "RequestComputerWorkDigest") || strings.Contains(collectorPrompt, "Host Digest") {
+		t.Fatalf("collector wake must not teach Host Digest: %s", collectorPrompt)
+	}
 	if resp.Page.ID == "" || !strings.Contains(resp.Page.Title, "工作介绍") {
 		t.Fatalf("page = %#v", resp.Page)
 	}

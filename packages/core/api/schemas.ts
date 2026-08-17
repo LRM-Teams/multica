@@ -357,6 +357,7 @@ export const CreateNotePeriodBriefResponseSchema: z.ZodType<CreateNotePeriodBrie
   sources_skipped: z.array(z.string()).nullish().transform((v) => v ?? []),
   fact_count: z.number().default(0),
   collector_agent_ids: z.array(z.string()).nullish().transform((v) => v ?? []),
+  collector_jobs: z.array(NoteWorkerJobSchema).nullish().transform((v) => v ?? []),
 }).loose();
 
 export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefResponse = {
@@ -368,6 +369,7 @@ export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefRespo
   sources_skipped: [],
   fact_count: 0,
   collector_agent_ids: [],
+  collector_jobs: [],
 };
 
 export const ChannelGoalSchema = z.object({

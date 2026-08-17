@@ -276,4 +276,6 @@ export interface CreateNotePeriodBriefResponse {
   fact_count: number;
   /** Echo of accepted collector Agent ids (order preserved, deduped). */
   collector_agent_ids?: string[];
+  /** One Note Worker job per collector (pack page + wake). */
+  collector_jobs?: NoteWorkerJob[];
 }

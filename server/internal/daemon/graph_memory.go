@@ -60,13 +60,15 @@ type graphMemoryJudgeKicker interface {
 // explore agent replace the legacy scoped-file injection when
 // memory_type=graph.
 type graphMemoryProvider struct {
-	store    *memorygraph.Store
-	retr     *memorygraph.HybridRetriever
-	explorer *memorygraph.Explorer
-	recorder *memorygraph.QueryRecorder
-	kicker   graphMemoryJudgeKicker // nil → judge kick skipped silently
-	logger   *slog.Logger
-	metrics  graphMemoryMetrics
+	store          *memorygraph.Store
+	retr           *memorygraph.HybridRetriever
+	backend        memorygraph.AgentBackend
+	traces         *memorygraph.TraceRecorder
+	baseExploreCfg memorygraph.ExploreConfig
+	recorder       *memorygraph.QueryRecorder
+	kicker         graphMemoryJudgeKicker // nil → judge kick skipped silently
+	logger         *slog.Logger
+	metrics        graphMemoryMetrics
 
 	// retrMu guards the lazy retriever build: the indexes are built on first
 	// use and rebuilt whenever the store's current-version pointer moved or
@@ -150,14 +152,30 @@ func newGraphMemoryProvider(cfg Config, dir string, kicker graphMemoryJudgeKicke
 	explorerCfg.MaxRounds = cfg.GraphExploreMaxRounds
 	explorerCfg.Model = strings.TrimSpace(entry.Model)
 	return &graphMemoryProvider{
-		store:    store,
-		retr:     retr,
-		explorer: memorygraph.NewExplorer(store, retr, backend, explorerCfg, "pi", memorygraph.NewTraceRecorder(dir)),
-		recorder: memorygraph.NewQueryRecorder(store, graphMemoryQueryLogWindow),
-		kicker:   kicker,
-		logger:   logger,
-		metrics:  noopGraphMemoryMetrics{},
+		store:          store,
+		retr:           retr,
+		backend:        backend,
+		traces:         memorygraph.NewTraceRecorder(dir),
+		baseExploreCfg: explorerCfg,
+		recorder:       memorygraph.NewQueryRecorder(store, graphMemoryQueryLogWindow),
+		kicker:         kicker,
+		logger:         logger,
+		metrics:        noopGraphMemoryMetrics{},
 	}, nil
+}
+
+// exploreConfigFor applies the per-call effective profile over the process
+// config: profile values win when set; process (env) values are defaults
+// only (spec §10, §13 P1-1).
+func (p *graphMemoryProvider) exploreConfigFor(profile graphMemoryEffectiveProfile) memorygraph.ExploreConfig {
+	cfg := p.baseExploreCfg
+	if profile.exploreAgents > 0 {
+		cfg.Agents = profile.exploreAgents
+	}
+	if profile.exploreMaxRounds > 0 {
+		cfg.MaxRounds = profile.exploreMaxRounds
+	}
+	return cfg
 }
 
 // ensureRetriever builds the hybrid indexes on first use and rebuilds them
@@ -207,7 +225,7 @@ func (p *graphMemoryProvider) ensureRetriever(ctx context.Context) error {
 // content keeps the exact "## Graph Memory Recall" shape, so
 // renderPromotedMemorySnapshot needs no changes. A recall miss (Found=false)
 // is data, not an error: it returns a nil slice (no injection).
-func (p *graphMemoryProvider) prepareGraphExecutionMemory(ctx context.Context, taskID, runtimeID, query string) ([]execenv.MemoryContextForEnv, error) {
+func (p *graphMemoryProvider) prepareGraphExecutionMemory(ctx context.Context, taskID, runtimeID, query string, profile graphMemoryEffectiveProfile) ([]execenv.MemoryContextForEnv, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
@@ -215,7 +233,8 @@ func (p *graphMemoryProvider) prepareGraphExecutionMemory(ctx context.Context, t
 	if err := p.ensureRetriever(ctx); err != nil {
 		return nil, err
 	}
-	recall, err := p.explorer.Explore(ctx, query)
+	explorer := memorygraph.NewExplorer(p.store, p.retr, p.backend, p.exploreConfigFor(profile), "pi", p.traces)
+	recall, err := explorer.Explore(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("graph memory: explore: %w", err)
 	}
@@ -412,7 +431,8 @@ func (d *Daemon) graphProfileForWorkspace(workspaceID string) (graphMemoryEffect
 // errors are logged and the task continues with legacy user/agent memory
 // only — never a legacy project/channel/daily fallback (spec §13 P0-7).
 func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
-	if effectiveMemoryType(d.cfg.MemoryType, task.MemoryType) != MemoryTypeGraph {
+	profile := effectiveGraphProfile(d.cfg, task)
+	if profile.memoryType != MemoryTypeGraph {
 		return nil
 	}
 	query := graphRecallQuery(task)
@@ -425,7 +445,7 @@ func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slo
 		if provider == nil {
 			continue
 		}
-		memories, err := provider.prepareGraphExecutionMemory(ctx, task.ID, task.RuntimeID, query)
+		memories, err := provider.prepareGraphExecutionMemory(ctx, task.ID, task.RuntimeID, query, profile)
 		if err != nil {
 			// Graph failure never breaks the task and never restores legacy
 			// project/channel/daily memory (spec §8, §13 P0-7).

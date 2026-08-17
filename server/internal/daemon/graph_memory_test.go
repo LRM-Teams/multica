@@ -58,6 +58,25 @@ func TestEffectiveGraphProfilePrecedence(t *testing.T) {
 	}
 }
 
+// Per-call explore config (spec §10, §13 P1-1): the effective profile
+// overrides the process explore config per recall; zero profile values keep
+// the process (env) defaults.
+func TestExploreConfigForProfileOverridesPerCall(t *testing.T) {
+	p := &graphMemoryProvider{baseExploreCfg: memorygraph.DefaultExploreConfig()}
+	p.baseExploreCfg.Agents = 4
+	p.baseExploreCfg.MaxRounds = 3
+
+	cfg := p.exploreConfigFor(graphMemoryEffectiveProfile{exploreAgents: 11, exploreMaxRounds: 7})
+	if cfg.Agents != 11 || cfg.MaxRounds != 7 {
+		t.Fatalf("per-call profile must override process config: %+v", cfg)
+	}
+	// Zero values keep the process defaults (env is default-only, spec §10).
+	cfg = p.exploreConfigFor(graphMemoryEffectiveProfile{})
+	if cfg.Agents != 4 || cfg.MaxRounds != 3 {
+		t.Fatalf("process defaults must apply for zero overrides: %+v", cfg)
+	}
+}
+
 // Workspace graph profile cache (spec §10): the resident/channel delivery
 // path caches the server-delivered effective profile per workspace; an empty
 // delivery from an old server never clobbers a cached entry.

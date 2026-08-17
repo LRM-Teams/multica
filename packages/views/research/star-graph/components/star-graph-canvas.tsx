@@ -27,6 +27,7 @@ import {
   type GraphEdgeLike,
 } from "../../lib/canvas-keyboard-nav";
 import type { MotionDirective } from "../../motion/directives";
+import { selectStarGraphCollapseRelations } from "../lib/star-graph-collapse-relations";
 import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
 import {
   buildStarGraphExpansionMotion,
@@ -40,6 +41,7 @@ import { selectSemanticLabelNodeIds } from "../lib/star-graph-semantic-labels";
 import type {
   StarCanvasViewModel,
   StarEntityView,
+  StarRelationView,
 } from "../lib/star-canvas-view-model";
 import { selectStarGraphCollapseGhosts } from "../lib/star-graph-collapse-ghosts";
 import {
@@ -51,6 +53,7 @@ import {
   STAR_GRAPH_SEMANTIC_NODE_BUDGET,
 } from "../lib/star-graph-visible-budget";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
+import { StarGraphCollapseRelationLayer } from "./star-graph-collapse-relation-layer";
 import { StarGraphCollapseGhostLayer } from "./star-graph-collapse-ghost-layer";
 import {
   computeEntityBounds,
@@ -159,6 +162,11 @@ export function StarGraphCanvas({
   const { t } = useT("research");
   const rootRef = useRef<HTMLDivElement>(null);
   const previousEntitiesRef = useRef<readonly StarEntityView[]>(model.entities);
+  const previousModelRef = useRef<StarCanvasViewModel | null>(null);
+  const collapseRelationSnapshotRef = useRef<{
+    sequence: string;
+    relations: readonly StarRelationView[];
+  } | null>(null);
   const initialCameraRef = useRef(false);
   const storedViewport = useResearchCanvasStore((s) =>
     cameraSessionId
@@ -223,6 +231,24 @@ export function StarGraphCanvas({
       ),
     [expansionControl?.transition, model],
   );
+  const collapseRelations = useMemo(() => {
+    const transition = expansionControl?.transition;
+    if (transition?.kind !== "collapse") {
+      collapseRelationSnapshotRef.current = null;
+      return [];
+    }
+    const sequence = String(transition.sequence);
+    if (collapseRelationSnapshotRef.current?.sequence === sequence) {
+      return collapseRelationSnapshotRef.current.relations;
+    }
+    const relations = selectStarGraphCollapseRelations(
+      previousModelRef.current,
+      model,
+      transition,
+    );
+    collapseRelationSnapshotRef.current = { sequence, relations };
+    return relations;
+  }, [expansionControl?.transition, model]);
   const fusionGhosts = useMemo(
     () =>
       buildStarGraphFusionGhosts(
@@ -234,7 +260,8 @@ export function StarGraphCanvas({
   );
   useEffect(() => {
     previousEntitiesRef.current = model.entities;
-  }, [model.entities]);
+    previousModelRef.current = model;
+  }, [model]);
   const dragRef = useRef<{ startX: number; startY: number; cameraX: number; cameraY: number } | null>(
     null,
   );
@@ -837,6 +864,12 @@ export function StarGraphCanvas({
           }}
           revealingRelationIds={expansionRelationIds}
           revealLowPerformance={expansionControl?.lowPerformance}
+        />
+        <StarGraphCollapseRelationLayer
+          relations={collapseRelations}
+          width={worldSize.width}
+          height={worldSize.height}
+          lowPerformance={expansionControl?.lowPerformance}
         />
         <StarGraphFusionGhostLayer
           ghosts={fusionGhosts}

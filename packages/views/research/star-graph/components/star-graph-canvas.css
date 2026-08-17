@@ -135,6 +135,25 @@
   vector-effect: non-scaling-stroke;
   animation: sg-edge-expansion-trace 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
+.sg-collapse-relation-layer {
+  z-index: 3;
+  overflow: visible;
+  filter: drop-shadow(0 7px 14px rgb(72 211 228 / 16%));
+}
+.sg-collapse-relation {
+  opacity: 0.8;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: sg-collapse-relation 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sg-collapse-relation-layer-low-performance {
+  filter: none;
+}
+@keyframes sg-collapse-relation {
+  0% { opacity: 0.8; stroke-dashoffset: 0; }
+  72% { opacity: 0.52; }
+  100% { opacity: 0; stroke-dashoffset: 1; }
+}
 @keyframes sg-edge-expansion-base {
   from { opacity: 0; }
 }
@@ -385,6 +404,9 @@
     animation: none;
   }
   .sg-edge-expansion-trace {
+    display: none;
+  }
+  .sg-collapse-relation-layer {
     display: none;
   }
   .sg-fusion-ghost-layer,

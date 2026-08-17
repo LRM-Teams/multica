@@ -228,6 +228,15 @@
   opacity: 0.6;
   cursor: wait;
 }
+.sg-node .sg-core > *,
+.sg-node .sg-document-badge {
+  transition: opacity 180ms ease;
+}
+.sg-semantic-content-hidden .sg-core > *,
+.sg-semantic-content-hidden .sg-document-badge {
+  opacity: 0;
+  pointer-events: none;
+}
 
 @media (max-width: 767px) {
   .sg-canvas-root .sg-map-key {
@@ -265,6 +274,10 @@
   .sg-edge-challenge,
   .sg-edge-newdir {
     animation: none;
+  }
+  .sg-node .sg-core > *,
+  .sg-node .sg-document-badge {
+    transition: none;
   }
 }
 @keyframes sg-edge-flow {

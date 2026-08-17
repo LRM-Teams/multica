@@ -29,6 +29,7 @@ import {
 import type { MotionDirective } from "../../motion/directives";
 import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
 import { buildStarGraphExpansionMotion } from "../lib/star-graph-expansion-motion";
+import { selectSemanticLabelNodeIds } from "../lib/star-graph-semantic-labels";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import {
   computeClusterHiddenCounts,
@@ -85,6 +86,8 @@ export interface StarGraphCanvasProps {
   relatedNodeIds?: ReadonlySet<string>;
   /** V6-only semantic policy: S-tier relations appear only for the selected S node. */
   hideUnselectedSTierRelations?: boolean;
+  /** V6-only screen-space label selection for M+ landmarks. */
+  semanticLandmarkLabels?: boolean;
   /** When set and no persisted viewport exists, initial camera fits these entities only. */
   initialFitEntityIdList?: readonly string[];
   entityBudget?: number;
@@ -121,6 +124,7 @@ export function StarGraphCanvas({
   nodeAccessibleNames,
   relatedNodeIds,
   hideUnselectedSTierRelations = false,
+  semanticLandmarkLabels = false,
   initialFitEntityIdList,
   entityBudget = STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   hiddenCountLabel,
@@ -306,6 +310,16 @@ export function StarGraphCanvas({
   const visibleEntities = useMemo(
     () => displayEntities.filter((entity) => visibleEntityIds.has(entity.id)),
     [displayEntities, visibleEntityIds],
+  );
+
+  const visibleLabelNodeIds = useMemo(
+    () =>
+      selectSemanticLabelNodeIds(visibleEntities, {
+        zoom: camera.zoom,
+        selectedNodeId,
+        enabled: semanticLandmarkLabels,
+      }),
+    [camera.zoom, selectedNodeId, semanticLandmarkLabels, visibleEntities],
   );
 
   const nodeTierById = useMemo(
@@ -712,6 +726,7 @@ export function StarGraphCanvas({
           lensHints={focusedLensHints}
           motionDirectives={entityMotionDirectives}
           expansionControl={expansionControl}
+          visibleLabelNodeIds={visibleLabelNodeIds}
           labels={entityLabels}
           onSelectNode={onSelectNode}
           onOpenNode={onOpenNode}

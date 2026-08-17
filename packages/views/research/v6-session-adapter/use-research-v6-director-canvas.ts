@@ -43,6 +43,7 @@ export interface UseResearchV6DirectorCanvasResult {
   hasNextSnapshotPage: boolean;
   loadNextSnapshotPage: () => void;
   loadMoreExpansion: (rootNodeId: string) => void;
+  refetch: () => void;
 }
 
 export function useResearchV6DirectorCanvas({
@@ -247,6 +248,9 @@ export function useResearchV6DirectorCanvas({
     loadMoreExpansion: (rootNodeId) => {
       if (!controller) return;
       void controller.loadMore(rootNodeId, expansionFailureLabel);
+    },
+    refetch: () => {
+      void snapshotQuery.refetch();
     },
   };
 }

@@ -121,6 +121,7 @@ export function ResearchConstellationWorkspace({
   typedGraphLoadMorePending = false,
   onLoadMoreTypedGraph,
   expansionControl,
+  densityBins,
   className,
 }: {
   typedGraph: TypedGraphResponse | undefined;
@@ -139,6 +140,7 @@ export function ResearchConstellationWorkspace({
   onLoadMoreTypedGraph?: () => void;
   /** V6 Projection-owned one-layer disclosure state. */
   expansionControl?: StarGraphExpansionControl;
+  densityBins?: readonly import("../star-graph").StarGraphDensityBin[];
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
@@ -743,6 +745,7 @@ export function ResearchConstellationWorkspace({
             onSelectNode={handleCanvasFocus}
             onOpenNode={handleCanvasSelect}
             expansionControl={expansionControl}
+            densityBins={densityBins}
             fusionTransition={fusionTransition}
             fusionLowPerformance={motion.profile.lowPerformance}
             summaryTitle={summaryTitle}

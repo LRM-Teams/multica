@@ -5381,7 +5381,7 @@ export class ApiClient {
     runId: string,
     reportId: string,
     options?: { signal?: AbortSignal },
-  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportDetail | null> {
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportDetail> {
     const { parseResearchV6DirectorReportDetail } = await import(
       "../research-v6/director-schemas"
     );
@@ -5390,7 +5390,7 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const report = parseResearchV6DirectorReportDetail(raw);
-    if (report && report.id !== reportId) {
+    if (report.id !== reportId) {
       throw new Error("Director V6 report response changed report identity");
     }
     void workspaceId;

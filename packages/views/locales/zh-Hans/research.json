@@ -178,6 +178,7 @@
       "collapsed_path": "折叠路径"
     },
     "history": "版本历史",
+    "revision": " · 第 {{revision}} 版",
     "branches": "所属分支",
     "reference_in_chat": "在对话中引用",
     "referenced": "已加入对话引用",

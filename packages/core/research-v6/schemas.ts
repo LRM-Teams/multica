@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseWithFallback } from "../api/schema";
 import type {
   ResearchV6Delta,
   ResearchV6ResumeVerdict,
@@ -163,7 +164,9 @@ export function parseResearchV6Delta(raw: unknown): ResearchV6Delta | null {
 
 /** Strict production HTTP boundary: malformed successful responses must throw. */
 export function parseResearchV6DeltaStrict(raw: unknown): ResearchV6Delta {
-  return ResearchV6DeltaSchema.parse(raw) as ResearchV6Delta;
+  return parseWithFallback(raw, ResearchV6DeltaSchema, null, {
+    endpoint: "GET research V6 projection deltas",
+  }) ?? invalidV6Response("research V6 projection delta");
 }
 
 export function parseResearchV6Snapshot(raw: unknown): ResearchV6Snapshot {
@@ -173,7 +176,9 @@ export function parseResearchV6Snapshot(raw: unknown): ResearchV6Snapshot {
 
 /** Strict production boundary used by capability probes. */
 export function parseResearchV6SnapshotStrict(raw: unknown): ResearchV6Snapshot {
-  return ResearchV6SnapshotSchema.parse(raw) as ResearchV6Snapshot;
+  return parseWithFallback(raw, ResearchV6SnapshotSchema, EMPTY_RESEARCH_V6_SNAPSHOT, {
+    endpoint: "GET research V6 projection snapshot",
+  });
 }
 
 export function parseResearchV6ResumeVerdict(raw: unknown): ResearchV6ResumeVerdict {
@@ -187,5 +192,14 @@ export function parseResearchV6ResumeVerdict(raw: unknown): ResearchV6ResumeVerd
 export function parseResearchV6ResumeVerdictStrict(
   raw: unknown,
 ): ResearchV6ResumeVerdict {
-  return ResearchV6ResumeVerdictSchema.parse(raw) as ResearchV6ResumeVerdict;
+  return parseWithFallback(raw, ResearchV6ResumeVerdictSchema, {
+    ok: false,
+    resync_required: true,
+  } satisfies ResearchV6ResumeVerdict, {
+    endpoint: "POST research V6 projection resume",
+  });
+}
+
+function invalidV6Response(name: string): never {
+  throw new Error(`${name} failed schema validation`);
 }

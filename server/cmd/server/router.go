@@ -156,6 +156,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		AllowedEmails:                         splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
 		AllowedEmailDomains:                   splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
 		DisableWorkspaceCreation:              os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+		ResearchV6BootstrapEnabled:            os.Getenv("RESEARCH_V6_BOOTSTRAP_ENABLED") == "true",
 		PublicURL:                             strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
 		ResearchReportOrigin:                  strings.TrimRight(strings.TrimSpace(os.Getenv("RESEARCH_REPORT_ORIGIN")), "/"),
 		ResearchReportCapabilitySecret:        strings.TrimSpace(os.Getenv("RESEARCH_REPORT_CAPABILITY_SECRET")),

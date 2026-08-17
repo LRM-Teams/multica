@@ -4849,10 +4849,11 @@ export class ApiClient {
       !sessionId ||
       !workspaceId ||
       (expectedWorkspaceId != null && workspaceId !== expectedWorkspaceId) ||
-      !response.fleet.id ||
-      response.fleet.workspace_id !== workspaceId ||
-      (response.session.fleet_id !== "" &&
-        response.session.fleet_id !== response.fleet.id) ||
+      (response.fleet != null &&
+        (!response.fleet.id ||
+          response.fleet.workspace_id !== workspaceId ||
+          (response.session.fleet_id !== "" &&
+            response.session.fleet_id !== response.fleet.id))) ||
       scopedEntities.some((entity) => entity.session_id !== sessionId) ||
       (response.run?.run.session_id != null &&
         response.run.run.session_id !== sessionId) ||

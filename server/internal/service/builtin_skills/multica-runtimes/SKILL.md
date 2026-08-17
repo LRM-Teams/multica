@@ -86,8 +86,14 @@ multica computer stop       # stop it gracefully
 multica computer restart    # stop + start
 multica computer status     # read-only status (identity, resident, Workspace connections)
 multica computer logs       # tail the resident service log
-multica computer doctor     # read-only diagnostics (--fix only clears a confirmed-stopped stale PID)
+multica computer doctor     # read-only diagnostics; --fix cleans safe local residue and reports each mutation
 ```
+
+`multica computer doctor --fix` removes a confirmed-stopped stale resident
+PID, deletes upgrade staging older than 24 hours, and quarantines per-Binding
+coordinator state older than 24 hours when no corresponding Binding exists.
+It preserves recent state, every persisted Binding, Agent Workspaces, Binding
+credentials, Machine Upgrade journals, and advisory lock files.
 
 The service environment determines the package source: production uses stable
 packages, while test uses preview packages. Production uses `https://www.leagent.me`

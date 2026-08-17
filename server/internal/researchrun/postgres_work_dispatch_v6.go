@@ -63,6 +63,22 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,$7::uuid,$8,$9::uuid,$10,'dispatching',$11::jsonb)`, attemptID, workspaceID, runID, workItemID, attemptNumber, agentID, membershipID, dispatchKey, manifestID, manifestHash, manifest); err != nil {
 		return false, err
 	}
+	attemptHash, err := ArtifactContentHash(ArtifactKindAttempt, v6WorkAttemptArtifactContent(
+		workItemID, attemptNumber, agentID, membershipID, dispatchKey, manifestID, manifestHash,
+	))
+	if err != nil {
+		return false, err
+	}
+	goalVersion32 := int32(goalVersion)
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: runID, EntityID: attemptID,
+		Kind: ArtifactKindAttempt, ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion: &goalVersion32, SchemaName: string(ArtifactKindAttempt),
+		SchemaVersion: OrchestratorVersionV6, AccessLevel: ArtifactAccessRaw,
+		HashOrigin: ArtifactHashOriginProduction, ContentHash: attemptHash,
+	}); err != nil {
+		return false, err
+	}
 	if expectedSchema == string(V6ContractAtomicResultSubmission) {
 		if err = persistV6CatalogPagesTx(ctx, tx, workspaceID, runID, attemptID, throughSequence, manifest); err != nil {
 			return false, err
@@ -78,13 +94,22 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='working' WHERE id=$1::uuid`, membershipID); err != nil {
 		return false, err
 	}
-	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatch_prepared", dispatchKey, "system", "", map[string]any{"work_item_id": workItemID, "attempt_id": attemptID, "manifest_id": manifestID, "manifest_hash": manifestHash, "attempt_number": attemptNumber}); err != nil {
+	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatch_prepared", dispatchKey, "system", "", map[string]any{"work_item_id": workItemID, "work_item_attempt_id": attemptID, "manifest_id": manifestID, "manifest_hash": manifestHash, "attempt_number": attemptNumber}); err != nil {
 		return false, err
 	}
 	if err = s.commitResearchTx(ctx, txOpV6DispatchPrepare, tx); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func v6WorkAttemptArtifactContent(workItemID string, attemptNumber int, agentID, membershipID, dispatchKey, manifestID, manifestHash string) map[string]any {
+	return map[string]any{
+		"work_item_id": workItemID, "attempt_number": attemptNumber,
+		"assigned_agent_id": agentID, "membership_id": membershipID,
+		"dispatch_key": dispatchKey, "manifest_id": manifestID,
+		"manifest_hash": manifestHash,
+	}
 }
 
 func persistV6CatalogPagesTx(ctx context.Context, tx pgx.Tx, workspaceID, runID, attemptID string, throughSequence int64, manifest json.RawMessage) error {
@@ -302,7 +327,7 @@ func (s *PostgresStore) CompleteV6DispatchOutbox(ctx context.Context, outboxID, 
 	if command.RowsAffected() != 1 {
 		return ErrWorkItemLeaseLost
 	}
-	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatched", "v6-work-item-dispatched:"+attemptID, "system", "", map[string]any{"work_item_id": workItemID, "attempt_id": attemptID, "inbox_task_id": inboxTaskID}); err != nil {
+	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatched", "v6-work-item-dispatched:"+attemptID, "system", "", map[string]any{"work_item_id": workItemID, "work_item_attempt_id": attemptID, "inbox_task_id": inboxTaskID}); err != nil {
 		return err
 	}
 	return s.commitResearchTx(ctx, txOpV6DispatchComplete, tx)

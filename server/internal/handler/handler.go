@@ -66,6 +66,9 @@ type Config struct {
 	// invitation only. The public /api/config endpoint mirrors this flag so
 	// the UI can hide every "Create workspace" affordance — see #3433.
 	DisableWorkspaceCreation bool
+	// ResearchV6BootstrapEnabled exposes the explicit V6 creation path only in
+	// fixture/acceptance environments. It does not change supported/default versions.
+	ResearchV6BootstrapEnabled bool
 	// PublicURL is the absolute base URL the API is reachable at from the
 	// public internet, with no trailing slash (e.g. "https://app.multica.ai").
 	// Empty when unset. Not used for auth or workspace resolution.
@@ -373,7 +376,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		}
 		h.WorkGraph.OnGraphDelta = h.wakeGoalCoordinatorForGraphDelta
 		researchStore := researchrun.NewPostgresStore(pool)
-		h.ResearchRun = researchrun.NewEngineWithReportAdapters(researchStore, &researchRunDispatcher{handler: h}, &researchRunProjector{handler: h}, researchReportStorageAdapter{store: h.Storage}, h.ResearchReportRenderer, cfg.ResearchReportFrameAncestors)
+		dispatcher := &researchRunDispatcher{handler: h}
+		h.ResearchRun = researchrun.NewEngineWithRuntimeAdapters(researchStore, dispatcher, &researchRunProjector{handler: h}, researchReportStorageAdapter{store: h.Storage}, h.ResearchReportRenderer, cfg.ResearchReportFrameAncestors, &researchV6AgentLifecycleAdapter{handler: h}, &researchV6InboxDispatchAdapter{dispatcher: dispatcher})
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit

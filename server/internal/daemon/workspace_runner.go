@@ -144,7 +144,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
 				continue
 			}
-			ack, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(workspaceID, start, failConnection)
+			ack, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(start, failConnection)
 			if err != nil {
 				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {

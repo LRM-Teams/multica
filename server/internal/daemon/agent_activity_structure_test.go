@@ -48,3 +48,34 @@ func TestAgentActivityProductionUsesOnlyTypedMessageObservationSeams(t *testing.
 		t.Fatal(err)
 	}
 }
+
+func TestRaftStartingActivityHasOneBroadcastCallSite(t *testing.T) {
+	callSites := make([]string, 0, 1)
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(raw), ".broadcastActivity(") {
+			callSites = append(callSites, filepath.Base(path))
+		}
+		for _, retired := range []string{"publishManagedAgentStartActivity", "observeRuntimeStarting", "publishManagedProviderSpawn"} {
+			if strings.Contains(string(raw), retired) {
+				t.Errorf("%s retains retired pre-Raft Starting seam %q", path, retired)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(callSites) != 1 || callSites[0] != "workspace_runner_agent_process.go" {
+		t.Fatalf("broadcastActivity production call sites = %v, want only Raft startAgentNow", callSites)
+	}
+}

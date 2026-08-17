@@ -20,6 +20,11 @@ func (h *Handler) PutAgentResearchV6ReportUpload(w http.ResponseWriter, r *http.
 		return
 	}
 	id := chi.URLParam(r, "uploadId")
+	if parsed, valid := parseUUIDOrBadRequest(w, id, "uploadId"); !valid {
+		return
+	} else {
+		id = uuidToString(parsed)
+	}
 	var key, media, hash string
 	var size int64
 	err := h.DB.QueryRow(r.Context(), `SELECT storage_key,media_type,content_hash,byte_size FROM research_report_upload_session WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND work_item_id=$4::uuid AND work_item_attempt_id=$5::uuid AND agent_id=$6::uuid AND status='pending' AND expires_at>now()`, access.WorkspaceID, access.RunID, id, access.WorkItemID, access.AttemptID, access.AgentID).Scan(&key, &media, &hash, &size)
@@ -95,10 +100,15 @@ func (h *Handler) CompleteAgentResearchV6ReportUpload(w http.ResponseWriter, r *
 	if !decodeResearchJSON(w, r, &req) {
 		return
 	}
-	object, err := service.CompleteV6ReportUpload(r.Context(), access, chi.URLParam(r, "uploadId"), req.ClientRequestID)
+	uploadID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "uploadId"), "uploadId")
+	if !valid {
+		return
+	}
+	canonicalUploadID := uuidToString(uploadID)
+	object, err := service.CompleteV6ReportUpload(r.Context(), access, canonicalUploadID, req.ClientRequestID)
 	if err != nil {
 		writeResearchV6DomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"resource_id": chi.URLParam(r, "uploadId"), "verified": true, "content_hash": object.ContentHash})
+	writeJSON(w, http.StatusOK, map[string]any{"resource_id": canonicalUploadID, "verified": true, "content_hash": object.ContentHash})
 }

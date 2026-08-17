@@ -107,6 +107,7 @@ export function buildMotionDirective(
     case "merge":
       liveStyle.animationName = "research-motion-merge";
       liveStyle.opacity = "0.4";
+      liveStyle["--motion-fusion-blur"] = opts.lowPerformance ? "0px" : "5px";
       break;
     case "conflict":
       liveStyle.animationName = "research-motion-conflict";
@@ -191,8 +192,13 @@ export function semanticMotionCss(): string {
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 @keyframes research-motion-merge {
-  from { opacity: 0.4; }
-  to   { opacity: 1; }
+  0% {
+    opacity: 0.32;
+    transform: scale(0.68);
+    filter: blur(var(--motion-fusion-blur, 5px)) brightness(1.38);
+  }
+  68% { opacity: 1; transform: scale(1.035); filter: blur(0) brightness(1.12); }
+  100% { opacity: 1; transform: scale(1); filter: none; }
 }
 @keyframes research-motion-conflict {
   from { transform: translateX(calc(var(--motion-gap-px, 12px) * -1)); }

@@ -312,38 +312,43 @@ func TestGraphConsolidationStateMigratesLegacyFormat(t *testing.T) {
 	}
 }
 
-// Per-workspace memory_type resolution (design §1/A4): the profile row
-// wins over the env default; the env default wins over the legacy fallback;
-// a lookup failure fails open to the env default.
-func TestResolveGraphMemoryMemoryType(t *testing.T) {
+// Per-workspace activation gate (spec §10/§13): the profile row wins over
+// the env default; the env default wins over the legacy fallback; a lookup
+// failure falls back to the env type with readiness false, and graph mode
+// additionally requires the scoped-writer readiness flag.
+func TestResolveGraphMemoryGate(t *testing.T) {
 	ctx := context.Background()
 	wsDir := "/root/3f6b1c2e-7a8d-4e5f-9a0b-1c2d3e4f5a6b/memory_graph/projects/1f2e3d4c-5b6a-4978-8c7d-6e5f4a3b2c1d"
 	rootDir := "/root/memory_graph"
 
-	profile := func(rt string, err error) graphMemoryTypeLookup {
-		return func(context.Context, string) (string, error) { return rt, err }
+	gate := func(memoryType string, ready bool, err error) graphMemoryGateLookup {
+		return func(context.Context, string) (graphMemoryWorkspaceGate, error) {
+			return graphMemoryWorkspaceGate{memoryType: memoryType, scopedWriterReady: ready}, err
+		}
 	}
 
 	cases := []struct {
 		name   string
 		dir    string
 		env    string
-		lookup graphMemoryTypeLookup
+		lookup graphMemoryGateLookup
 		want   string
 	}{
-		{"profile graph beats env legacy", wsDir, "legacy", profile("graph", nil), "graph"},
-		{"profile legacy beats env graph", wsDir, "graph", profile("legacy", nil), "legacy"},
-		{"missing row falls back to env", wsDir, "graph", profile("", errors.New("no rows")), "graph"},
-		{"invalid profile value falls back to env", wsDir, "graph", profile("bogus", nil), "graph"},
-		{"root-level dir has no workspace, env applies", rootDir, "graph", profile("legacy", nil), "graph"},
-		{"no profile and empty env defaults legacy", wsDir, "", profile("", errors.New("no rows")), "legacy"},
+		{"ready graph profile beats env legacy", wsDir, "legacy", gate("graph", true, nil), "graph"},
+		{"not-ready graph profile skips", wsDir, "legacy", gate("graph", false, nil), "skip_not_ready"},
+		{"legacy profile beats env graph", wsDir, "graph", gate("legacy", false, nil), "legacy"},
+		{"missing row falls back to env with readiness false", wsDir, "graph", gate("", false, errors.New("no rows")), "skip_not_ready"},
+		{"missing row with legacy env stays legacy", wsDir, "legacy", gate("", false, errors.New("no rows")), "legacy"},
+		{"invalid profile value is not graph", wsDir, "graph", gate("bogus", true, nil), "legacy"},
+		{"root-level dir has no workspace, env applies", rootDir, "graph", gate("graph", true, nil), "skip_not_ready"},
+		{"no profile and empty env defaults legacy", wsDir, "", gate("", false, errors.New("no rows")), "legacy"},
 		{"invalid env defaults legacy", rootDir, "bogus", nil, "legacy"},
-		{"nil lookup resolves env only", wsDir, "graph", nil, "graph"},
+		{"nil lookup resolves env only, readiness false", wsDir, "graph", nil, "skip_not_ready"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolveGraphMemoryType(ctx, tc.dir, tc.env, tc.lookup); got != tc.want {
-				t.Fatalf("resolveGraphMemoryType = %q, want %q", got, tc.want)
+			if got := resolveGraphMemoryGate(ctx, tc.dir, tc.env, tc.lookup); got != tc.want {
+				t.Fatalf("resolveGraphMemoryGate = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -356,5 +361,35 @@ func TestGraphMemoryJobSpecValid(t *testing.T) {
 	}
 	if job.Name != JobNameGraphMemoryConsolidation {
 		t.Fatalf("name = %q, want %q", job.Name, JobNameGraphMemoryConsolidation)
+	}
+}
+
+// Spec §13 P0/P1: graph jobs stay inert until the per-workspace
+// scoped-writer readiness flag is accepted; no profile row falls back to
+// the env type with readiness false.
+func TestGraphMemoryJobInertWithoutScopedWriterReady(t *testing.T) {
+	// Canonical workspace dir so the gate lookup is consulted.
+	wsDir := "/root/3f6b1c2e-7a8d-4e5f-9a0b-1c2d3e4f5a6b/memory_graph/projects/1f2e3d4c-5b6a-4978-8c7d-6e5f4a3b2c1d"
+	lookup := func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error) {
+		return graphMemoryWorkspaceGate{memoryType: "graph", scopedWriterReady: false}, nil
+	}
+	if got := resolveGraphMemoryGate(context.Background(), wsDir, "graph", lookup); got != "skip_not_ready" {
+		t.Fatalf("gate = %q, want skip_not_ready (spec §13 P0/P1: jobs inert until writer gates pass)", got)
+	}
+	lookup = func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error) {
+		return graphMemoryWorkspaceGate{memoryType: "graph", scopedWriterReady: true}, nil
+	}
+	if got := resolveGraphMemoryGate(context.Background(), wsDir, "graph", lookup); got != "graph" {
+		t.Fatalf("gate = %q, want graph", got)
+	}
+	lookup = func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error) {
+		return graphMemoryWorkspaceGate{}, errors.New("no profile row")
+	}
+	// No profile row: the env default decides type, and readiness is false.
+	if got := resolveGraphMemoryGate(context.Background(), "any-dir", "graph", lookup); got != "skip_not_ready" {
+		t.Fatalf("env-graph without readiness = %q, want skip_not_ready", got)
+	}
+	if got := resolveGraphMemoryGate(context.Background(), "any-dir", "legacy", lookup); got != "legacy" {
+		t.Fatalf("legacy env = %q, want legacy", got)
 	}
 }

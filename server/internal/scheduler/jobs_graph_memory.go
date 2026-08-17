@@ -108,46 +108,55 @@ func GraphMemoryJobs(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) JobSpec
 	}
 }
 
-// graphMemoryTypeLookup resolves the per-workspace reviewer type from
-// graph_memory_profile; it must return an error (e.g. pgx.ErrNoRows) when
-// no profile row exists.
-type graphMemoryTypeLookup func(ctx context.Context, workspaceID string) (string, error)
+// graphMemoryWorkspaceGate is the per-workspace activation gate for graph
+// jobs (spec §10/§13): memory_type from the profile (env default when no
+// row) plus the scoped-writer readiness flag. Jobs stay inert until both
+// are satisfied — removing the process-level registration switch must not
+// activate an incomplete writer.
+type graphMemoryWorkspaceGate struct {
+	memoryType        string
+	scopedWriterReady bool
+}
 
-// graphMemoryProfileLookup builds the lookup over the sqlc queries; nil
-// pool yields a nil lookup (env-only resolution).
-func graphMemoryProfileLookup(pool *pgxpool.Pool) graphMemoryTypeLookup {
+type graphMemoryGateLookup func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error)
+
+func graphMemoryGateLookupForPool(pool *pgxpool.Pool) graphMemoryGateLookup {
 	if pool == nil {
 		return nil
 	}
 	q := db.New(pool)
-	return func(ctx context.Context, workspaceID string) (string, error) {
-		profile, err := q.GetGraphMemoryProfile(ctx, pgtype.UUID{Bytes: uuid.MustParse(workspaceID), Valid: true})
+	return func(ctx context.Context, workspaceID string) (graphMemoryWorkspaceGate, error) {
+		ws, err := uuid.Parse(workspaceID)
 		if err != nil {
-			return "", err
+			return graphMemoryWorkspaceGate{}, err
 		}
-		return profile.MemoryType, nil
+		gate, err := q.GetGraphMemoryScopedGate(ctx, pgtype.UUID{Bytes: ws, Valid: true})
+		if err != nil {
+			return graphMemoryWorkspaceGate{}, err
+		}
+		return graphMemoryWorkspaceGate{memoryType: gate.MemoryType, scopedWriterReady: gate.ScopedWriterReady}, nil
 	}
 }
 
-// resolveGraphMemoryType resolves memory_type for one
-// memory_graph directory (design §1/A4): the per-workspace profile row wins
-// when the directory maps to a workspace (canonical layout
-// <root>/<ws>/memory_graph/<kind>s/<owner>, spec §3);
-// otherwise the MULTICA_MEMORY_TYPE env default applies, then "legacy".
-// Lookup errors (including a missing row) fail open to the env default so a
-// transient DB hiccup never flips a workspace's memory pipeline.
-func resolveGraphMemoryType(ctx context.Context, dir, envType string, lookup graphMemoryTypeLookup) string {
-	if lookup != nil {
-		if wsID, ok := graphDirWorkspaceID(dir); ok {
-			if rt, err := lookup(ctx, wsID); err == nil && (rt == "legacy" || rt == "graph") {
-				return rt
-			}
+// resolveGraphMemoryGate maps one graph dir to its scheduling decision:
+// "graph" (run), "legacy" (skip, not graph mode), or "skip_not_ready"
+// (graph mode but scoped writer gates not accepted). The workspace is
+// derived from the canonical dir path; lookup errors fall back to the env
+// type with readiness false.
+func resolveGraphMemoryGate(ctx context.Context, dir, envType string, lookup graphMemoryGateLookup) string {
+	gate := graphMemoryWorkspaceGate{memoryType: envType}
+	if wsID, ok := graphDirWorkspaceID(dir); ok && lookup != nil {
+		if row, err := lookup(ctx, wsID); err == nil {
+			gate = row
 		}
 	}
-	if envType == "graph" || envType == "legacy" {
-		return envType
+	if gate.memoryType != "graph" {
+		return "legacy"
 	}
-	return "legacy"
+	if !gate.scopedWriterReady {
+		return "skip_not_ready"
+	}
+	return "graph"
 }
 
 // graphDirWorkspaceID extracts the workspace id from a canonical graph dir
@@ -163,7 +172,7 @@ func graphDirWorkspaceID(dir string) (string, bool) {
 func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		envType := strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_MEMORY_TYPE")))
-		lookup := graphMemoryProfileLookup(pool)
+		lookup := graphMemoryGateLookupForPool(pool)
 		if lookup == nil && envType != "graph" {
 			// Without a DB there is no per-workspace override to resolve; the
 			// env default gates the whole sweep.
@@ -184,10 +193,12 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 
 		consolidated := 0
 		for _, dir := range dirs {
-			// Per-workspace memory_type (A4): only graph-enabled dirs
-			// consolidate; the rest are logged and skipped.
-			if rt := resolveGraphMemoryType(ctx, dir, envType, lookup); rt != "graph" {
-				slog.Info("graph memory consolidation skipped: reviewer not graph", "dir", dir, "memory_type", rt)
+			// Per-workspace activation gate (spec §10/§13): only dirs in
+			// graph mode with the scoped-writer readiness flag accepted
+			// consolidate; the rest (legacy mode or not-ready) are logged
+			// and skipped.
+			if decision := resolveGraphMemoryGate(ctx, dir, envType, lookup); decision != "graph" {
+				slog.Info("graph memory consolidation skipped", "dir", dir, "decision", decision)
 				continue
 			}
 			// Per-workspace errors are logged and the loop continues: one

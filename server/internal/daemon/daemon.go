@@ -2329,12 +2329,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	memoryTask.AgentID = agentID
 	executionMemories := serverMemories
 	if !restrictedExecution {
-		executionMemories, _ = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
-		// Graph reviewer (design §1 memory_type=graph): a successful graph
-		// recall replaces the legacy scoped-memory snapshot; errors and
-		// misses keep the legacy result.
-		if graphMemories := d.graphExecutionMemories(ctx, memoryTask, taskLog); graphMemories != nil {
-			executionMemories = graphMemories
+		if effectiveMemoryType(d.cfg.MemoryType, memoryTask.MemoryType) == MemoryTypeGraph {
+			// Graph mode (spec §8): merge — legacy user/agent memory is
+			// always retained; the graph owns project/channel/daily; a
+			// graph miss or error injects no project/channel/daily data.
+			executionMemories = mergeGraphModeExecutionMemory(
+				agentRootPath, memoryTask, serverMemories,
+				d.graphExecutionMemories(ctx, memoryTask, taskLog),
+			)
+		} else {
+			executionMemories, _ = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
 		}
 	}
 

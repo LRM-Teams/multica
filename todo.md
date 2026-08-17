@@ -117,7 +117,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
   - **依赖**：J1-T1
   - **完成标准**：测：HOME 下 `~/code/app/node_modules/pkg` 不算仓；`.env` 不出现在 dirty；普通 `~/code/app` 仍被发现。
 
-- [ ] **J1-T3 Computer 侧索引 + 窗口收割**
+- [x] **J1-T3 Computer 侧索引 + 窗口收割**
+  - **已落地（2026-08-17）**：`HarvestWorkJournal` 在 `server/internal/computer/work_journal.go`（Host 同级，不进 BindingSupervisor）。临时 HOME 测：窗口内 commit + dirty 入 digest，`node_modules` 仓省略；`Enabled=false` → `disabled: true` 且 repos 空。`git log --no-patch --numstat`，无 `--patch`。
   - **目标**：机器级 Computer 进程在 Owner HOME 发现 git 根，按窗口收割，不进 DaemonCore。
   - **要做**：模块放 `server/internal/computer/`（Host 同级，不挂 BindingSupervisor）。开启后：索引 `$HOME` 下 `.git` 目录的父路径；对窗口 `git log`（不要 `--patch`）+ `git status --porcelain`。Journal 关闭时收割返回空 repos 且带 `disabled: true`。索引可落本机文件，**不要**把仓库清单默认同步进服务端 DB。
   - **不要做**：inotify 全盘长驻；扫 `/` 或他人 HOME；在每个 Workspace DaemonCore 里各扫一遍；调用 Agent 进程来 git。
@@ -216,9 +217,9 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 | 顺序 | 下一步 |
 |------|--------|
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
-| 2 | ~~J1-T2~~ denylist（已完成）→ **J1-T3** → J1-T4 → J1-T5 |
+| 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ **J1-T4** → J1-T5 |
 | 3 | J2（平台包 + PR + 归仓） |
 | 4 | J3（剧本 → 派发 → UI → 落笔记） |
 | 5 | 仅当产品需要时再开 J4 |
 
-**当前焦点：** Slice J1。下一个 checkbox：**J1-T3**。
+**当前焦点：** Slice J1。下一个 checkbox：**J1-T4**。

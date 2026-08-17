@@ -127,12 +127,6 @@ func NewHost(config HostConfig) (*Host, error) {
 		}
 		return nil
 	}
-	callbacks.LifecycleDiagnostic = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
-		if external.LifecycleDiagnostic != nil {
-			return external.LifecycleDiagnostic(ctx, identity, raw)
-		}
-		return nil
-	}
 	callbacks.MachineActions = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
 		if host.upgrade != nil {
 			if err := host.upgrade.handleChildAction(ctx, identity, raw); err != nil {

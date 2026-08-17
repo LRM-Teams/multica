@@ -17,14 +17,13 @@ import (
 )
 
 const (
-	bindingChildCapacityPath            = "/binding-child/capacity"
-	bindingChildDiagnosticPath          = "/binding-child/diagnostics"
-	bindingChildLifecycleDiagnosticPath = "/binding-child/lifecycle-diagnostics"
-	bindingChildMachineActionsPath      = "/binding-child/machine-actions"
-	bindingChildRuntimeSetPath          = "/binding-child/runtime-set"
-	bindingChildPrepareUpgradePath      = "/binding-child/prepare-upgrade"
-	bindingChildComputerUpgradePath     = "/binding-child/computer-upgrade"
-	bindingChildControlBusyCode         = "control_busy"
+	bindingChildCapacityPath        = "/binding-child/capacity"
+	bindingChildDiagnosticPath      = "/binding-child/diagnostics"
+	bindingChildMachineActionsPath  = "/binding-child/machine-actions"
+	bindingChildRuntimeSetPath      = "/binding-child/runtime-set"
+	bindingChildPrepareUpgradePath  = "/binding-child/prepare-upgrade"
+	bindingChildComputerUpgradePath = "/binding-child/computer-upgrade"
+	bindingChildControlBusyCode     = "control_busy"
 )
 
 // BindingChildIdentity fences every child-to-Host request by the immutable
@@ -46,14 +45,13 @@ func (identity BindingChildIdentity) Validate() error {
 // authentication, generation fencing, capacity, and request routing; it never
 // imports the Binding execution package.
 type HostControlCallbacks struct {
-	Current             func(BindingChildIdentity) bool
-	RuntimeSet          func(context.Context, BindingChildIdentity, json.RawMessage, string, time.Time) error
-	Diagnostic          func(context.Context, BindingChildIdentity, string, diagnosticlog.Event) error
-	LifecycleDiagnostic func(context.Context, BindingChildIdentity, json.RawMessage) error
-	MachineActions      func(context.Context, BindingChildIdentity, json.RawMessage) error
-	PrepareUpgrade      func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
-	ComputerUpgrade     func(context.Context, BindingChildIdentity, json.RawMessage) error
-	Released            func(BindingChildIdentity)
+	Current         func(BindingChildIdentity) bool
+	RuntimeSet      func(context.Context, BindingChildIdentity, json.RawMessage, string, time.Time) error
+	Diagnostic      func(context.Context, BindingChildIdentity, string, diagnosticlog.Event) error
+	MachineActions  func(context.Context, BindingChildIdentity, json.RawMessage) error
+	PrepareUpgrade  func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
+	ComputerUpgrade func(context.Context, BindingChildIdentity, json.RawMessage) error
+	Released        func(BindingChildIdentity)
 }
 
 // HostControl is the Computer-owned local control Interface shared by all
@@ -83,7 +81,6 @@ func NewHostControl(token string, capacity *ProcessCapacity, callbacks HostContr
 func (control *HostControl) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(bindingChildCapacityPath, control.capacityHandler())
 	mux.HandleFunc(bindingChildDiagnosticPath, control.diagnosticHandler())
-	mux.HandleFunc(bindingChildLifecycleDiagnosticPath, control.lifecycleDiagnosticHandler())
 	mux.HandleFunc(bindingChildMachineActionsPath, control.machineActionsHandler())
 	mux.HandleFunc(bindingChildPrepareUpgradePath, control.prepareUpgradeHandler())
 	mux.HandleFunc(bindingChildComputerUpgradePath, control.rawHandler(control.callbacks.ComputerUpgrade))
@@ -167,7 +164,6 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 		}
 		return nil, control.callbacks.Diagnostic(ctx, request.Identity, request.WorkspaceID, request.Event)
 	})
-	register(LocalControlRunnerStatusOperation, control.rpcRawCallback(registry, LocalControlRunnerStatusOperation, control.callbacks.LifecycleDiagnostic))
 	register(LocalControlComputerControlOperation, control.rpcRawCallback(registry, LocalControlComputerControlOperation, control.callbacks.MachineActions))
 	register(LocalControlRunnerPrepareOperation, control.rpcPrepareUpgrade)
 	register(LocalControlRunnerReadyOperation, control.rpcRuntimeSet)
@@ -405,10 +401,6 @@ type rawControlRequest struct {
 	Payload  json.RawMessage      `json:"payload"`
 }
 
-func (control *HostControl) lifecycleDiagnosticHandler() http.HandlerFunc {
-	return control.rawHandler(control.callbacks.LifecycleDiagnostic)
-}
-
 func (control *HostControl) machineActionsHandler() http.HandlerFunc {
 	return control.rawHandler(control.callbacks.MachineActions)
 }
@@ -604,10 +596,6 @@ func (client *HostControlClient) ReleaseCapacity(ctx context.Context, grant Proc
 
 func (client *HostControlClient) RecordDiagnostic(ctx context.Context, workspaceID string, event diagnosticlog.Event) error {
 	return client.post(ctx, bindingChildDiagnosticPath, diagnosticControlRequest{Identity: client.identity, WorkspaceID: workspaceID, Event: event}, nil)
-}
-
-func (client *HostControlClient) RecordLifecycleDiagnostic(ctx context.Context, transition any) error {
-	return client.postRaw(ctx, bindingChildLifecycleDiagnosticPath, transition)
 }
 
 func (client *HostControlClient) ForwardComputerControl(ctx context.Context, actions any) error {

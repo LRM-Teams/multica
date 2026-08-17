@@ -16,7 +16,7 @@ func TestRaftLocalControlOperationNames(t *testing.T) {
 		"workspace:list": true, "workspace:status": true, "workspace:start": true, "workspace:stop": true,
 		"workspace:restart": true, "workspace:attach": true, "workspace:detach": true,
 		LocalControlWorkspaceEnvironmentOperation: true, LocalControlWorkspaceCapacityOperation: true, LocalControlWorkspaceDiagnosticsOperation: true,
-		LocalControlComputerControlOperation: true, LocalControlRunnerStatusOperation: true, "runner:start": true, "runner:stop": true,
+		LocalControlComputerControlOperation: true, "runner:start": true, "runner:stop": true,
 		"runner:restart": true, LocalControlRunnerDrainOperation: true, LocalControlRunnerReleaseOperation: true, LocalControlRunnerReadyOperation: true,
 		LocalControlRunnerPrepareOperation: true,
 	}

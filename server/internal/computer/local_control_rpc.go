@@ -25,7 +25,6 @@ const (
 	LocalControlWorkspaceCapacityOperation    = "workspace:capacity"
 	LocalControlWorkspaceDiagnosticsOperation = "workspace:diagnostics"
 	LocalControlComputerControlOperation      = "computer:control"
-	LocalControlRunnerStatusOperation         = "runner:status"
 	LocalControlRunnerReadyOperation          = "runner:ready"
 	LocalControlRunnerDrainOperation          = "runner:drain"
 	LocalControlRunnerPrepareOperation        = "runner:prepare"
@@ -43,7 +42,7 @@ var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: "workspace:list"}, {Name: "workspace:status"}, {Name: "workspace:start"},
 	{Name: "workspace:stop"}, {Name: "workspace:restart"}, {Name: "workspace:attach"},
 	{Name: "workspace:detach"}, {Name: LocalControlWorkspaceEnvironmentOperation}, {Name: LocalControlWorkspaceCapacityOperation},
-	{Name: LocalControlWorkspaceDiagnosticsOperation}, {Name: LocalControlComputerControlOperation}, {Name: LocalControlRunnerStatusOperation},
+	{Name: LocalControlWorkspaceDiagnosticsOperation}, {Name: LocalControlComputerControlOperation},
 	{Name: "runner:start"}, {Name: "runner:stop"}, {Name: "runner:restart"},
 	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: LocalControlRunnerReadyOperation},
 	{Name: LocalControlRunnerPrepareOperation},
@@ -64,8 +63,6 @@ func localControlOperationForPath(path string) string {
 		return LocalControlWorkspaceCapacityOperation
 	case bindingChildDiagnosticPath:
 		return LocalControlWorkspaceDiagnosticsOperation
-	case bindingChildLifecycleDiagnosticPath:
-		return LocalControlRunnerStatusOperation
 	case bindingChildMachineActionsPath:
 		return LocalControlComputerControlOperation
 	case bindingChildPrepareUpgradePath:

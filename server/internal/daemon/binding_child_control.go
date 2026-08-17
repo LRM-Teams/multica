@@ -27,10 +27,6 @@ func (client *bindingHostControlClient) recordDiagnostic(ctx context.Context, wo
 	return client.client.RecordDiagnostic(ctx, workspaceID, event)
 }
 
-func (client *bindingHostControlClient) recordLifecycleDiagnostic(ctx context.Context, transition agentLifecycleTransition) error {
-	return client.client.RecordLifecycleDiagnostic(ctx, transition)
-}
-
 func (client *bindingHostControlClient) forwardMachineActions(ctx context.Context, ack HeartbeatResponse) error {
 	return client.client.ForwardComputerControl(ctx, ack)
 }
@@ -159,7 +155,6 @@ func (client *bindingHostControlClient) reportRuntimeSet(ctx context.Context, ru
 type bindingChildDiagnosticEnvelope struct {
 	workspaceID string
 	event       *diagnosticlog.Event
-	transition  *agentLifecycleTransition
 }
 
 type bindingChildDiagnosticForwarder struct {
@@ -196,21 +191,6 @@ func (forwarder *bindingChildDiagnosticForwarder) record(workspaceID string, eve
 	}
 }
 
-func (forwarder *bindingChildDiagnosticForwarder) recordLifecycle(transition agentLifecycleTransition) error {
-	if forwarder == nil || forwarder.client == nil {
-		return errors.New("Binding Host lifecycle diagnostic aggregation is unavailable")
-	}
-	envelope := bindingChildDiagnosticEnvelope{transition: &transition}
-	select {
-	case <-forwarder.ctx.Done():
-		return errors.New("Binding Host lifecycle diagnostic aggregation is closed")
-	case forwarder.queue <- envelope:
-		return nil
-	default:
-		return errors.New("Binding Host diagnostic aggregation queue is full")
-	}
-}
-
 func (forwarder *bindingChildDiagnosticForwarder) run() {
 	defer close(forwarder.done)
 	for {
@@ -220,9 +200,6 @@ func (forwarder *bindingChildDiagnosticForwarder) run() {
 		case envelope := <-forwarder.queue:
 			if envelope.event != nil {
 				_ = forwarder.client.recordDiagnostic(forwarder.ctx, envelope.workspaceID, *envelope.event)
-			}
-			if envelope.transition != nil {
-				_ = forwarder.client.recordLifecycleDiagnostic(forwarder.ctx, *envelope.transition)
 			}
 		}
 	}

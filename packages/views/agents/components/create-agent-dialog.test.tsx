@@ -26,31 +26,24 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
-// ModelDropdown talks to the api; seed a concrete model so Create stays
-// enabled under LRM-808 (empty model is rejected server-side).
+// ModelDropdown talks to the API. Keep model selection explicit: catalog
+// order is not a default contract, and Raft's Claude catalog starts with Opus.
 vi.mock("./model-dropdown", () => ({
   ModelDropdown: ({
     onChange,
     value,
-    autoSelectFirst,
   }: {
     onChange: (value: string) => void;
     value: string;
-    autoSelectFirst?: boolean;
-  }) => {
-    if (autoSelectFirst && !value.trim()) {
-      queueMicrotask(() => onChange("composer-1.5"));
-    }
-    return (
-      <button
-        type="button"
-        data-testid="create-model"
-        onClick={() => onChange(value)}
-      >
-        {value}
-      </button>
-    );
-  },
+  }) => (
+    <button
+      type="button"
+      data-testid="create-model"
+      onClick={() => onChange(value || "claude-sonnet-5")}
+    >
+      {value || "Select a model"}
+    </button>
+  ),
 }));
 
 vi.mock("./thinking-dropdown", () => ({
@@ -209,7 +202,11 @@ describe("CreateAgentDialog workspace runtime selection", () => {
     fireEvent.change(screen.getByPlaceholderText("e.g. deep-research-agent"), {
       target: { value: "research-agent" },
     });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+    fireEvent.click(screen.getByTestId("create-model"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Create" })).toBeEnabled(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));

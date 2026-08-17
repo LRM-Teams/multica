@@ -34,7 +34,6 @@ export function ExecutionConfigFields({
   thinkingLevel,
   onThinkingChange,
   modelRequired = false,
-  autoSelectFirstModel = false,
   disabled = false,
 }: {
   runtimes: RuntimeDevice[];
@@ -52,7 +51,6 @@ export function ExecutionConfigFields({
   thinkingLevel: string;
   onThinkingChange: (level: string) => void;
   modelRequired?: boolean;
-  autoSelectFirstModel?: boolean;
   disabled?: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -91,14 +89,13 @@ export function ExecutionConfigFields({
         onChange={onModelChange}
         disabled={disabled || !runtimeId}
         required={modelRequired}
-        autoSelectFirst={autoSelectFirstModel}
       />
       <ThinkingDropdown
         runtimeId={runtimeId || null}
         model={model}
         value={thinkingLevel}
         onChange={onThinkingChange}
-        disabled={disabled || !runtimeId || !model}
+        disabled={disabled || !runtimeId}
       />
     </div>
   );

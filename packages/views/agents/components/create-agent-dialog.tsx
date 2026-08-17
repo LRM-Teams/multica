@@ -432,7 +432,6 @@ export function CreateAgentDialog({
               thinkingLevel={thinkingLevel}
               onThinkingChange={setThinkingLevel}
               modelRequired
-              autoSelectFirstModel
             />
 
             {/* --- Optional sections (instructions / skills) ---

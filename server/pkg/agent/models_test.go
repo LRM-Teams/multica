@@ -50,71 +50,43 @@ func TestClaudeStaticModelsExposeOnlyCurrentCleanLineup(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"sonnet", "opus", "haiku", "claude-fable-5", "claude-sonnet-5", "claude-opus-5"} {
+	for _, want := range []string{
+		"opus", "fable", "sonnet", "haiku",
+		"claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+		"claude-fable-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5",
+	} {
 		if _, ok := ids[want]; !ok {
 			t.Errorf("missing Claude model %q in: %+v", want, models)
 		}
 	}
 	for id, wantLabel := range map[string]string{
-		"sonnet":         "Sonnet 5",
-		"opus":           "Opus 5",
-		"haiku":          "Haiku",
-		"claude-fable-5": "Fable 5",
-		"claude-sonnet-5": "Sonnet 5 (pin)",
-		"claude-opus-5":   "Opus 5 (pin)",
+		"opus":              "Claude Opus",
+		"fable":             "Claude Fable",
+		"sonnet":            "Claude Sonnet",
+		"haiku":             "Claude Haiku",
+		"claude-opus-5":     "Claude Opus 5",
+		"claude-opus-4-8":   "Claude Opus 4.8",
+		"claude-opus-4-7":   "Claude Opus 4.7",
+		"claude-opus-4-6":   "Claude Opus 4.6",
+		"claude-fable-5":    "Claude Fable 5",
+		"claude-sonnet-5":   "Claude Sonnet 5",
+		"claude-sonnet-4-6": "Claude Sonnet 4.6",
+		"claude-haiku-4-5":  "Claude Haiku 4.5",
 	} {
 		if got := ids[id].Label; got != wantLabel {
 			t.Errorf("visible label for %q = %q, want %q", id, got, wantLabel)
 		}
 	}
-	if len(models) != 6 {
-		t.Fatalf("visible Claude lineup = %+v, want the three official aliases plus Fable 5 and pinned Sonnet 5/Opus 5", models)
+	if len(models) != 12 {
+		t.Fatalf("visible Claude lineup = %+v, want Raft's aliases and versioned models", models)
 	}
-	if defaults != 1 || !ids["sonnet"].Default {
-		t.Errorf("expected Sonnet to remain the sole default, got defaults=%d models=%+v", defaults, models)
+	if defaults != 0 {
+		t.Errorf("expected Raft-aligned Claude models to have no default, got defaults=%d models=%+v", defaults, models)
 	}
 	for _, model := range models {
 		if strings.Contains(strings.ToLower(model.Label), "latest") || strings.Contains(strings.ToLower(model.Label), "pinned") {
 			t.Errorf("visible label leaks implementation state: %+v", model)
 		}
-	}
-}
-
-func TestCodexStaticModelsExposesGPT55(t *testing.T) {
-	// Codex CLI has no `models list` subcommand so the catalog is
-	// hand-maintained. Regression guard for multica-ai/multica#2009 —
-	// GPT-5.5 must be selectable, and the badge default must point at
-	// the latest release rather than lagging a version behind.
-	models := codexStaticModels()
-	ids := map[string]Model{}
-	for _, m := range models {
-		ids[m.ID] = m
-	}
-	for _, want := range []string{
-		"gpt-5.5", "gpt-5.5-mini",
-		"gpt-5.4", "gpt-5.4-mini",
-		"gpt-5.3-codex", "gpt-5",
-		"o3", "o3-mini",
-	} {
-		if _, ok := ids[want]; !ok {
-			t.Errorf("missing expected Codex model %q in: %+v", want, models)
-		}
-	}
-	latest, ok := ids["gpt-5.5"]
-	if !ok || !latest.Default {
-		t.Errorf("expected `gpt-5.5` to be the default Codex entry, got %+v", latest)
-	}
-	defaults := 0
-	for _, m := range models {
-		if m.Default {
-			defaults++
-		}
-		if m.Provider != "openai" {
-			t.Errorf("all Codex entries must carry Provider=openai, got %+v", m)
-		}
-	}
-	if defaults != 1 {
-		t.Errorf("expected exactly one default Codex entry, got %d", defaults)
 	}
 }
 
@@ -147,7 +119,6 @@ func TestStaticCatalogsHaveAtMostOneDefault(t *testing.T) {
 	// usually means a copy/paste slip when adding new models.
 	catalogs := map[string][]Model{
 		"claude": claudeStaticModels(),
-		"codex":  codexStaticModels(),
 		"cursor": cursorStaticModels(),
 	}
 	for provider, models := range catalogs {
@@ -680,7 +651,7 @@ func TestParseCodexDebugModelsCatalog_ListOnly(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len=%d want 2 (hide filtered)", len(got))
 	}
-	if got[0].ID != "gpt-5.6-sol" || !got[0].Default {
+	if got[0].ID != "gpt-5.6-sol" || got[0].Default {
 		t.Fatalf("first=%+v", got[0])
 	}
 	if got[0].Thinking == nil || len(got[0].Thinking.SupportedLevels) != 1 {
@@ -691,30 +662,26 @@ func TestParseCodexDebugModelsCatalog_ListOnly(t *testing.T) {
 	}
 }
 
-func TestDiscoverClaudeModels_FallsBackToStatic(t *testing.T) {
+func TestListClaudeModelsIsStatic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	modelCacheMu.Lock()
-	delete(modelCache, "claude")
-	delete(modelCache, "claude:/nonexistent/claude")
-	modelCacheMu.Unlock()
 	got, err := ListModels(ctx, "claude", "/nonexistent/claude")
 	if err != nil {
-		t.Fatalf("expected static fallback (no error) when Claude cannot list models, got %v", err)
+		t.Fatalf("list static Claude models: %v", err)
 	}
-	if len(got) == 0 {
-		t.Fatal("expected static fallback lineup when Claude cannot list models, got empty list")
+	if len(got) != len(claudeStaticModels()) {
+		t.Fatalf("static Claude model count = %d, want %d", len(got), len(claudeStaticModels()))
 	}
 	ids := map[string]bool{}
 	for _, m := range got {
 		if m.ID == "" {
-			t.Errorf("fallback model has empty ID: %+v", m)
+			t.Errorf("static model has empty ID: %+v", m)
 		}
 		ids[m.ID] = true
 	}
 	for _, want := range []string{"sonnet", "opus", "haiku", "claude-fable-5"} {
 		if !ids[want] {
-			t.Errorf("static fallback missing %q: %+v", want, got)
+			t.Errorf("static catalog missing %q: %+v", want, got)
 		}
 	}
 }

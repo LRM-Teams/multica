@@ -125,9 +125,5 @@ function ThinkingRow({
 
 function pickModelEntry(models: RuntimeModel[], model: string): RuntimeModel | undefined {
   if (model) return models.find((m) => m.id === model);
-  return (
-    models.find((m) => m.default) ??
-    models.find((m) => (m.thinking?.supported_levels.length ?? 0) > 0) ??
-    models[0]
-  );
+  return models.find((m) => m.default);
 }

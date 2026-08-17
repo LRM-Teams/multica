@@ -60,6 +60,21 @@ describe("AgentActivityStatus", () => {
     expect(screen.queryByText("Command activity")).toBeNull();
   });
 
+  it("shows a terminal error instead of Offline when presence disconnects", () => {
+    state.availability = "offline";
+    state.summary = {
+      label: "Error: runtime failed: upstream unavailable",
+      tone: "error",
+      visibility: "visible",
+    };
+    const { container } = render(<AgentActivityStatus agentId="agent-1" />);
+    const status = screen.getByTestId("agent-activity-status");
+    expect(status).toHaveTextContent("Error: runtime failed: upstream unavailable");
+    expect(status).not.toHaveTextContent("Offline");
+    expect(status).toHaveAttribute("data-activity-tone", "error");
+    expect(container.querySelector(".bg-destructive")).not.toBeNull();
+  });
+
   it("uses binary presence for non-dynamic Online summaries", () => {
     state.summary = { label: "Online", tone: "success", visibility: "visible" };
     render(<AgentActivityStatus agentId="agent-1" />);

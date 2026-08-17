@@ -52,7 +52,7 @@ export function StarGraphCollapseGhostLayer({
             "--collapse-target-x": `${targetX - entity.x}px`,
             "--collapse-target-y": `${targetY - entity.y}px`,
             filter: lowPerformance ? "none" : undefined,
-          } satisfies CollapseGhostStyle}
+          } as CollapseGhostStyle}
         />
       ))}
     </div>

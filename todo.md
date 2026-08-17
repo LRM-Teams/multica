@@ -148,6 +148,7 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 **本 Slice 完成标准：** 同一时间窗能取出平台 Facts，Issue 带链接 PR，并能把 Digest 仓库标成「当前 Workspace」或「本机未归类」。仍不跑模型。
 
 - [ ] **J2-T1 窗口 Facts 包（不写回顾笔记）**
+  - **进行中（2026-08-17）**：抽出 `loadNoteRetrospective*Facts` 为可复用函数，不写笔记、不跑模型。
   - **目标**：合成入口能拿到与回顾同源的 Facts，而不必先插入一篇「回顾 YYYY-Www」列表页。
   - **要做**：抽出 `loadNoteRetrospective*Facts` 为可复用函数（同包或小 module），输入 `workspace, user, start, end, sources`。本入口默认源：`issue_activity`、`touched_notes`、`agent_runs`。保留亲手/委派/仅相关归因。
   - **不要做**：改回顾 markdown 模板当 Brief；在 loader 里调模型；删除现有「生成回顾」按钮（可并存）。

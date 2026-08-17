@@ -103,16 +103,13 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 	}
 
 	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
-	hostMux := http.NewServeMux()
-	host.host.RegisterRoutes(hostMux)
-	hostServer := httptest.NewServer(hostMux)
-	t.Cleanup(hostServer.Close)
+	hostServerURL, hostListener := localHostControlRPCListener(t, host.host)
 	t.Setenv(bindingChildRuntimeHelperEnv, providerPath)
 	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
 	bootstrap := computer.BindingChildBootstrap{
 		ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
 		ComputerID: computerID, ComputerGeneration: 11, RunnerGeneration: 1,
-		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: hostServer.URL,
+		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: hostServerURL,
 		BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 	}
 	child, err := computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, bootstrap)
@@ -153,7 +150,7 @@ func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("real child never authenticated its runtime wake socket with the scoped Binding credential")
 	}
-	hostServer.Close()
+	_ = hostListener.Close()
 	exited := make(chan computer.RunnerExitClass, 1)
 	go func() { exited <- child.Wait() }()
 	select {
@@ -281,11 +278,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hostMux := http.NewServeMux()
-	host.RegisterRoutes(hostMux)
-	hostServer := httptest.NewServer(hostMux)
-	serviceEndpoint = hostServer.URL
-	t.Cleanup(hostServer.Close)
+	serviceEndpoint = localHostControlRPC(t, host)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -394,16 +387,13 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *te
 	}
 
 	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
-	hostMux := http.NewServeMux()
-	host.host.RegisterRoutes(hostMux)
-	hostServer := httptest.NewServer(hostMux)
-	t.Cleanup(hostServer.Close)
+	hostServerURL := localHostControlRPC(t, host.host)
 	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
 	t.Setenv("MULTICA_BINDING_CHILD_ZERO_RUNTIME", "1")
 	bootstrap := computer.BindingChildBootstrap{
 		ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
 		ComputerID: computerID, ComputerGeneration: 31, RunnerGeneration: 1,
-		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: hostServer.URL,
+		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: hostServerURL,
 		BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 	}
 	child, err := computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, bootstrap)

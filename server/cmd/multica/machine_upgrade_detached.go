@@ -18,7 +18,16 @@ var spawnDetachedComputerBinary = startDetachedComputerBinary
 var probeDetachedSuccessorAttestation = func(profile string) (computer.MachineAttestation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	return computer.ProbeMachineAttestation(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile)))
+	health := computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile)))
+	if health["status"] != "running" {
+		return computer.MachineAttestation{}, fmt.Errorf("detached successor is not ready")
+	}
+	pid, ok := health["pid"].(float64)
+	if !ok {
+		return computer.MachineAttestation{}, fmt.Errorf("detached successor health did not include pid")
+	}
+	version, _ := health["cli_version"].(string)
+	return computer.MachineAttestation{ServicePID: int(pid), ComputerVersion: version}, nil
 }
 
 // startDetachedComputerBinary launches the committed target as the next Computer

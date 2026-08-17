@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -359,6 +360,13 @@ func installLiveBindingChild(t *testing.T, current *bindingControlTestHost, work
 
 func localHostControlRPC(t *testing.T, host *computer.Host) string {
 	t.Helper()
+	endpoint, listener := localHostControlRPCListener(t, host)
+	t.Cleanup(func() { _ = listener.Close() })
+	return endpoint
+}
+
+func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net.Listener) {
+	t.Helper()
 	registry := computer.NewLocalControlRegistry()
 	host.RegisterControlRPCHandlers(registry)
 	endpoint := computer.ServiceControlEndpoint(t.TempDir())
@@ -367,8 +375,7 @@ func localHostControlRPC(t *testing.T, host *computer.Host) string {
 		t.Fatal(err)
 	}
 	go computer.ServeLocalControlRPC(context.Background(), listener, registry)
-	t.Cleanup(func() { _ = listener.Close() })
-	return endpoint
+	return endpoint, listener
 }
 
 func newBindingControlTestHost(t *testing.T, controlToken string, maxProcesses int, callbacks computer.HostControlCallbacks) *bindingControlTestHost {

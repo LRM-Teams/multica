@@ -60,6 +60,9 @@ type workspaceRunnerDependencies struct {
 	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
 	now                      func() time.Time
 	onTransition             func(agentLifecycleTransition)
+	// rememberGraphProfile caches the server-delivered effective graph
+	// memory profile for this runner's workspace (spec §10). Nil disables.
+	rememberGraphProfile func(memoryType string, exploreAgents, exploreMaxRounds int)
 }
 
 // WorkspaceRunner is one long-lived orchestration boundary for an
@@ -94,6 +97,7 @@ type WorkspaceRunner struct {
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
 	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
+	rememberGraphProfile     func(memoryType string, exploreAgents, exploreMaxRounds int)
 
 	residency *agentResidencyStore
 	life      context.Context
@@ -163,6 +167,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		mixedRunActivityAck:      dependencies.mixedRunActivityAck,
 		mixedRunActivityReplay:   dependencies.mixedRunActivityReplay,
 		handleReminderInput:      dependencies.handleReminderInput,
+		rememberGraphProfile:     dependencies.rememberGraphProfile,
 		controlHeartbeatInterval: dependencies.controlHeartbeatInterval,
 		controlHeartbeatPayload:  dependencies.controlHeartbeatPayload,
 		controlHeartbeatAck:      dependencies.controlHeartbeatAck,
@@ -374,6 +379,9 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		},
 		handleReminderInput: func(ctx context.Context, payload protocol.ReminderOwnerInputPayload) {
 			d.handleReminderOwnerInput(ctx, payload)
+		},
+		rememberGraphProfile: func(memoryType string, exploreAgents, exploreMaxRounds int) {
+			d.rememberGraphProfile(workspaceID, memoryType, exploreAgents, exploreMaxRounds)
 		},
 		controlHeartbeatInterval: d.cfg.HeartbeatInterval,
 		controlHeartbeatPayload:  d.controlPlaneHeartbeatPayload,

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // Graph memory reviewer profile (design §1 memory_type, adjustment A4):
@@ -136,6 +137,22 @@ type graphMemoryProfileValues struct {
 // graphMemoryProfileForWorkspace loads the workspace's profile row. Lookup
 // errors fail open to the zero value so a transient DB hiccup never flips a
 // workspace's memory pipeline.
+// applyGraphMemoryProfileToDelivery stamps the workspace's effective graph
+// memory profile onto an outgoing Agent delivery (spec §10): the daemon
+// caches it per workspace for the resident-message memory path. A workspace
+// without a profile row leaves the payload untouched (daemon env defaults
+// apply).
+func (h *Handler) applyGraphMemoryProfileToDelivery(ctx context.Context, workspaceID string, delivery *protocol.AgentDeliverPayload) {
+	if delivery == nil {
+		return
+	}
+	if profile := h.graphMemoryProfileForWorkspace(ctx, parseUUID(workspaceID)); profile.memoryType != "" {
+		delivery.MemoryType = profile.memoryType
+		delivery.ExploreAgents = int(profile.exploreAgents)
+		delivery.ExploreMaxRounds = int(profile.exploreMaxRounds)
+	}
+}
+
 func (h *Handler) graphMemoryProfileForWorkspace(ctx context.Context, workspaceID pgtype.UUID) graphMemoryProfileValues {
 	profile, err := h.Queries.GetGraphMemoryProfile(ctx, workspaceID)
 	if err != nil || !validGraphMemoryType(profile.MemoryType) {

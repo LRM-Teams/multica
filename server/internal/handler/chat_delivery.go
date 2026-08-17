@@ -357,6 +357,7 @@ func (h *Handler) notifyStandaloneChatDelivery(ctx context.Context, agent db.Age
 		return
 	}
 	workspaceID := uuidToString(agent.WorkspaceID)
+	h.applyGraphMemoryProfileToDelivery(ctx, workspaceID, &delivery)
 	if daemonID == nil || strings.TrimSpace(*daemonID) == "" || !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(workspaceID, *daemonID, delivery) {
 		slog.Debug("standalone chat live delivery deferred to recovery",
 			"workspace_id", workspaceID,
@@ -436,6 +437,7 @@ func (h *Handler) redeliverUnacknowledgedStandaloneChat(ctx context.Context, ide
 				Parts:   parts,
 			},
 		}
+		h.applyGraphMemoryProfileToDelivery(ctx, identity.WorkspaceID, &delivery)
 		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {
 			slog.Debug("standalone chat redelivery deferred", "delivery_id", delivery.DeliveryID)
 		}

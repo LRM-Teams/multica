@@ -58,6 +58,27 @@ func TestEffectiveGraphProfilePrecedence(t *testing.T) {
 	}
 }
 
+// Workspace graph profile cache (spec §10): the resident/channel delivery
+// path caches the server-delivered effective profile per workspace; an empty
+// delivery from an old server never clobbers a cached entry.
+func TestWorkspaceGraphProfileCacheRoundTrip(t *testing.T) {
+	d := &Daemon{}
+	d.rememberGraphProfile(testWSID, MemoryTypeGraph, 9, 5)
+	p, ok := d.graphProfileForWorkspace(testWSID)
+	if !ok || p.memoryType != MemoryTypeGraph || p.exploreAgents != 9 || p.exploreMaxRounds != 5 {
+		t.Fatalf("cached profile = %+v, ok=%v", p, ok)
+	}
+	// An empty delivery (old server) must not clobber a cached profile.
+	d.rememberGraphProfile(testWSID, "", 0, 0)
+	p, ok = d.graphProfileForWorkspace(testWSID)
+	if !ok || p.memoryType != MemoryTypeGraph {
+		t.Fatalf("empty delivery must not clobber cache: %+v, ok=%v", p, ok)
+	}
+	if _, ok := d.graphProfileForWorkspace("00000000-0000-0000-0000-000000000000"); ok {
+		t.Fatal("unknown workspace must miss the cache")
+	}
+}
+
 // A task-scoped legacy override disables the graph recall path even when the
 // daemon env selects the graph reviewer — and the override is task-scoped,
 // not process-global: the lazy provider must stay uninitialized.

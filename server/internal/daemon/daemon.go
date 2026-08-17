@@ -216,6 +216,12 @@ type Daemon struct {
 	graphProvMu sync.Mutex
 	graphProvs  map[string]*graphMemoryProvider // keyed by canonical graph dir
 
+	// graphProfiles caches the server-delivered effective graph memory
+	// profile per workspace (spec §10): deliveries on the resident/channel
+	// path carry it, and the resident-message memory prep applies it.
+	graphProfileMu sync.Mutex
+	graphProfiles  map[string]graphMemoryEffectiveProfile // keyed by workspace id
+
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.
 	canonicalRuntimes *canonicalAgentRuntimePool

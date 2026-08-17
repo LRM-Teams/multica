@@ -458,6 +458,12 @@ func (runner *WorkspaceRunner) handleMessageDelivery(
 		}
 		return nil
 	}
+	// Cache the delivery's effective graph memory profile for this workspace
+	// (spec §10): resident-message memory prep applies it per call. An empty
+	// profile from an old server never clobbers the cached entry.
+	if runner.rememberGraphProfile != nil {
+		runner.rememberGraphProfile(delivery.MemoryType, delivery.ExploreAgents, delivery.ExploreMaxRounds)
+	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "ack_attempted", string(acceptance.outcome), "",
 	))

@@ -293,6 +293,13 @@ type AgentDeliverPayload struct {
 	Traceparent string                 `json:"traceparent,omitempty"`
 	RunID       string                 `json:"runId,omitempty"`
 	RunAgentID  string                 `json:"runAgentId,omitempty"`
+	// MemoryType / ExploreAgents / ExploreMaxRounds carry the workspace's
+	// effective graph memory profile at delivery time (spec §10). The daemon
+	// caches them per workspace for the resident-message memory path; empty
+	// means "no workspace profile" (env defaults apply).
+	MemoryType       string `json:"memory_type,omitempty"`
+	ExploreAgents    int    `json:"explore_agents,omitempty"`
+	ExploreMaxRounds int    `json:"explore_max_rounds,omitempty"`
 }
 
 // AgentDeliverAckPayload confirms only per-Agent provider acceptance, Pending

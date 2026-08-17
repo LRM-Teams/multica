@@ -374,6 +374,38 @@ func effectiveGraphProfile(cfg Config, task Task) graphMemoryEffectiveProfile {
 	return p
 }
 
+// rememberGraphProfile caches the server-delivered effective graph profile
+// for one workspace (spec §10). Empty memory types never clobber a cached
+// entry: an old server simply leaves the previous value (or the env
+// default) in effect.
+func (d *Daemon) rememberGraphProfile(workspaceID, memoryType string, exploreAgents, exploreMaxRounds int) {
+	switch memoryType {
+	case MemoryTypeLegacy, MemoryTypeGraph:
+	default:
+		return // empty or unrecognized: never clobber the cache
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return
+	}
+	d.graphProfileMu.Lock()
+	defer d.graphProfileMu.Unlock()
+	if d.graphProfiles == nil {
+		d.graphProfiles = map[string]graphMemoryEffectiveProfile{}
+	}
+	d.graphProfiles[workspaceID] = graphMemoryEffectiveProfile{
+		memoryType:       memoryType,
+		exploreAgents:    exploreAgents,
+		exploreMaxRounds: exploreMaxRounds,
+	}
+}
+
+func (d *Daemon) graphProfileForWorkspace(workspaceID string) (graphMemoryEffectiveProfile, bool) {
+	d.graphProfileMu.Lock()
+	defer d.graphProfileMu.Unlock()
+	p, ok := d.graphProfiles[workspaceID]
+	return p, ok
+}
+
 // graphExecutionMemories recalls from every graph the task is scoped to
 // (project and/or channel, spec §3/§8) and returns the aggregated recall
 // blobs, or nil when nothing was found. Graph failure = no data injected:

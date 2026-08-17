@@ -340,6 +340,11 @@ func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runti
 	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
 	for _, message := range messages {
 		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
+		if profile, ok := d.graphProfileForWorkspace(workspaceID); ok {
+			messageTask.MemoryType = profile.memoryType
+			messageTask.ExploreAgents = profile.exploreAgents
+			messageTask.ExploreMaxRounds = profile.exploreMaxRounds
+		}
 		var memories []execenv.MemoryContextForEnv
 		if effectiveMemoryType(d.cfg.MemoryType, messageTask.MemoryType) == MemoryTypeGraph {
 			// Same merge contract as runTask (spec §8): legacy user/agent

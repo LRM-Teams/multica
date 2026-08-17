@@ -316,6 +316,7 @@ func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Conte
 			DeliveryID: "message:" + message.ID + ":agent:" + agentIDText,
 			Message:    message,
 		}
+		h.applyGraphMemoryProfileToDelivery(ctx, identity.WorkspaceID, &delivery)
 		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {
 			slog.Debug("Computer Agent Message redelivery deferred", "workspace_id", identity.WorkspaceID, "computer_id", identity.DaemonID, "agent_id", agentIDText, "delivery_id", delivery.DeliveryID, "seq", seq)
 		}
@@ -476,6 +477,7 @@ func (h *Handler) notifyCanonicalMessageDelivery(ctx context.Context, ch Channel
 		slog.Warn("load Agent Message delivery daemon failed", "workspace_id", ch.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", uuidToString(recipient.RuntimeID), "message_id", delivery.Message.ID, "error", err)
 		return
 	}
+	h.applyGraphMemoryProfileToDelivery(ctx, ch.WorkspaceID, &delivery)
 	if daemonID == nil || strings.TrimSpace(*daemonID) == "" || !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(ch.WorkspaceID, *daemonID, delivery) {
 		slog.Debug("Agent Message live delivery deferred to recovery", "workspace_id", ch.WorkspaceID, "agent_id", delivery.AgentID, "daemon_id", daemonID, "message_id", delivery.Message.ID, "delivery_id", delivery.DeliveryID)
 	}

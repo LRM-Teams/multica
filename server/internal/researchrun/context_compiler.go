@@ -49,6 +49,11 @@ func (contextCompilerModule) CompileDirectorBrief(facts DirectorBriefFacts, now 
 		workStart := index * v6DirectorBriefWorkPerPage
 		branches := sliceV6Any(facts.Branches, branchStart, v6DirectorBriefBranchesPerPage)
 		work := sliceV6Any(facts.WorkItems, workStart, v6DirectorBriefWorkPerPage)
+		terminalSummaries := append([]any{}, facts.TerminalSummaries...)
+		unresolvedDisputes := append([]any{}, facts.UnresolvedDisputes...)
+		discussions := append([]any{}, facts.Discussions...)
+		reports := append([]any{}, facts.Reports...)
+		steering := append([]any{}, facts.Steering...)
 		key := fmt.Sprintf("brief:%d:%d", facts.ThroughSequence, index)
 		keys[index] = key
 		pageDescriptor := map[string]any{"page_key": key, "page_kind": "overview", "page_ordinal": index, "page_count": pageCount, "has_more": index+1 < pageCount}
@@ -60,8 +65,8 @@ func (contextCompilerModule) CompileDirectorBrief(facts DirectorBriefFacts, now 
 			"workspace_id": facts.WorkspaceID, "run_id": facts.RunID, "director_assignment_id": facts.AssignmentID,
 			"director_generation": facts.DirectorGeneration, "state_version": facts.StateVersion, "through_event_sequence": facts.ThroughSequence,
 			"page": pageDescriptor, "goal": facts.Goal, "created_at": createdAt,
-			"research": map[string]any{"overview": "Current fresh Branch Frontier summaries.", "branch_count": len(facts.Branches), "branches": branches, "terminal_summaries": facts.TerminalSummaries, "unresolved_disputes": facts.UnresolvedDisputes},
-			"control":  map[string]any{"director_state": facts.DirectorState, "active_team_count": len(facts.Team), "team_hard_cap": 50, "creation_threshold": 20, "team": facts.Team, "work_items": work, "discussions": facts.Discussions, "reports": facts.Reports, "latest_steering": facts.Steering, "changes": []any{}},
+			"research": map[string]any{"overview": "Current fresh Branch Frontier summaries.", "branch_count": len(facts.Branches), "branches": branches, "terminal_summaries": terminalSummaries, "unresolved_disputes": unresolvedDisputes},
+			"control":  map[string]any{"director_state": facts.DirectorState, "active_team_count": len(facts.Team), "team_hard_cap": 50, "creation_threshold": 20, "team": facts.Team, "work_items": work, "discussions": discussions, "reports": reports, "latest_steering": steering, "changes": []any{}},
 		}
 		canonical, err := marshalV6CanonicalJSON(page)
 		if err != nil {

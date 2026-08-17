@@ -79,7 +79,7 @@ func (s *PostgresStore) applyNextReceivedV6Submission(ctx context.Context) (bool
 			"system", "", map[string]any{"submission_id": submissionID, "contract_kind": kind, "reason": err.Error()}); eventErr != nil {
 			return false, eventErr
 		}
-	} else if err = applyTx.Commit(ctx); err != nil {
+	} else if err = commitResearchTx(ctx, txOpV6SubmissionApply, applyTx, nil); err != nil {
 		return false, err
 	}
 	if err = s.commitResearchTx(ctx, txOpV6SubmissionApply, tx); err != nil {

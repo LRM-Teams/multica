@@ -20,17 +20,10 @@ export class ResearchV6DirectorExpansionController {
       runId: string;
       snapshotId: string;
     },
-  ) {
-    useResearchV6DirectorDisplayStore
-      .getState()
-      .setProjectionIdentity(
-        identity.workspaceId,
-        identity.runId,
-        identity.snapshotId,
-      );
-  }
+  ) {}
 
   async toggle(rootNodeId: string, failureMessage: string): Promise<void> {
+    this.ensureIdentity();
     if (
       useResearchV6DirectorDisplayStore.getState().expandedByRoot[rootNodeId]
     ) {
@@ -41,16 +34,19 @@ export class ResearchV6DirectorExpansionController {
   }
 
   async loadMore(rootNodeId: string, failureMessage: string): Promise<void> {
+    this.ensureIdentity();
     await this.load(rootNodeId, true, failureMessage);
   }
 
   collapse(rootNodeId: string): void {
+    this.ensureIdentity();
     this.controllers.get(rootNodeId)?.abort();
     this.controllers.delete(rootNodeId);
     useResearchV6DirectorDisplayStore.getState().collapseRoot(rootNodeId);
   }
 
   invalidateSliceKeys(sliceKeys: readonly string[]): void {
+    this.ensureIdentity();
     const state = useResearchV6DirectorDisplayStore.getState();
     const invalidated = new Set(sliceKeys);
     for (const [rootNodeId, expansion] of Object.entries(state.expandedByRoot)) {
@@ -146,5 +142,15 @@ export class ResearchV6DirectorExpansionController {
       this.identity.snapshotId,
       rootNodeId,
     );
+  }
+
+  private ensureIdentity(): void {
+    useResearchV6DirectorDisplayStore
+      .getState()
+      .setProjectionIdentity(
+        this.identity.workspaceId,
+        this.identity.runId,
+        this.identity.snapshotId,
+      );
   }
 }

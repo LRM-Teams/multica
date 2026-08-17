@@ -124,7 +124,7 @@ func TestAgentActivityProducerObserveUsesRaftSeqFactIdentity(t *testing.T) {
 	}
 }
 
-func TestAgentActivityProducerCoalescesSameRaftStage(t *testing.T) {
+func TestAgentActivityProducerCoalescesTextStagesAndPreservesToolEvents(t *testing.T) {
 	at := time.Date(2026, time.August, 16, 9, 41, 19, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) {
@@ -147,16 +147,23 @@ func TestAgentActivityProducerCoalescesSameRaftStage(t *testing.T) {
 	}
 	if err := producer.Observe(AgentObservation{
 		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool,
-		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-1", ToolInput: map[string]any{"command": "multica message send --target dm:@qa-bot"}},
+		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-1", ToolInput: map[string]any{"command": "pwd"}},
 		At:   at.Add(4 * time.Millisecond),
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	if len(sent) != 3 {
-		t.Fatalf("coalesced Activity count = %d, want thinking + working + tool", len(sent))
+	if err := producer.Observe(AgentObservation{
+		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool,
+		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-2", ToolInput: map[string]any{"command": "git status --short"}},
+		At:   at.Add(5 * time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
 	}
-	want := []string{"thinking_started", "model_response_started", "sending_message"}
+
+	if len(sent) != 4 {
+		t.Fatalf("coalesced Activity count = %d, want thinking + working + both tools", len(sent))
+	}
+	want := []string{"thinking_started", "model_response_started", "running_command", "running_command"}
 	for i, detail := range want {
 		if sent[i].Snapshot.DetailKind != detail {
 			t.Fatalf("Activity[%d] detail = %q, want %q", i, sent[i].Snapshot.DetailKind, detail)

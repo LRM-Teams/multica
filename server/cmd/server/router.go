@@ -697,6 +697,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/graph-memory/consolidations", h.StartGraphMemoryConsolidation)
 					r.Get("/graph-memory/consolidations", h.ListGraphMemoryConsolidations)
 					r.Get("/graph-memory/consolidations/{runId}", h.GetGraphMemoryConsolidation)
+					r.Get("/graph-memory/audit", h.GetGraphMemoryAudit)
 					r.Get("/memory-curation/daily-summary", h.ListMemoryCurationDailySummary)
 					r.Get("/memory-curation/candidates", h.ListMemoryCurationCandidates)
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)

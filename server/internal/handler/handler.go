@@ -135,21 +135,23 @@ type Handler struct {
 	// GraphMemoryConsolidation runs manual consolidations behind the
 	// graph+ready gate (spec §10). Nil when the handler has no DB pool.
 	GraphMemoryConsolidation *service.GraphMemoryConsolidationService
-	AgentFleetRankService    *service.AgentFleetRankService
-	AgentHonorService        *service.AgentHonorService
-	IssueService             *service.IssueService
-	HonorService             *service.HonorService
-	EmailService             *service.EmailService
-	EnvCheckpointService     EnvCheckpointServiceAPI
-	UpdateStore              UpdateStore
-	UpdateIntentStore        UpdateIntentStore
-	MachineUpgradeStore      MachineUpgradeStore
-	RestartStore             RestartStore
-	RuntimeReleaseSource     RuntimeReleaseSource
-	ModelListStore           ModelListStore
-	LocalSkillListStore      LocalSkillListStore
-	LocalSkillImportStore    LocalSkillImportStore
-	LivenessStore            LivenessStore
+	// GraphMemoryAudit backs the query/judge/backtest audit API (spec §10).
+	GraphMemoryAudit      *service.GraphMemoryAuditService
+	AgentFleetRankService *service.AgentFleetRankService
+	AgentHonorService     *service.AgentHonorService
+	IssueService          *service.IssueService
+	HonorService          *service.HonorService
+	EmailService          *service.EmailService
+	EnvCheckpointService  EnvCheckpointServiceAPI
+	UpdateStore           UpdateStore
+	UpdateIntentStore     UpdateIntentStore
+	MachineUpgradeStore   MachineUpgradeStore
+	RestartStore          RestartStore
+	RuntimeReleaseSource  RuntimeReleaseSource
+	ModelListStore        ModelListStore
+	LocalSkillListStore   LocalSkillListStore
+	LocalSkillImportStore LocalSkillImportStore
+	LivenessStore         LivenessStore
 	// MemberPresenceStore tracks human online/offline from realtime WS
 	// sessions (LRM-462). Distinct from LivenessStore (daemon heartbeats).
 	MemberPresenceStore MemberPresenceStore
@@ -304,6 +306,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		TaskService:           taskSvc,
 		AgentFleetRankService: agentFleetRankService,
 		GraphMemoryStatus:     service.NewGraphMemoryStatusService(queries, ""),
+		GraphMemoryAudit:      service.NewGraphMemoryAuditService(""),
 		AgentHonorService:     service.NewAgentHonorService(queries, agentFleetRankService),
 		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
 		HonorService:          service.NewHonorService(queries),

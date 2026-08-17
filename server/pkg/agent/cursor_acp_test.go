@@ -54,7 +54,7 @@ while IFS= read -r line; do
       printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"cursor-session-resumed"}}\n' "$id"
       ;;
     *'"session/prompt"'*)
-      # server→client permission callback (live CLI; hermesClient auto-approves)
+      # server→client permission callback (live CLI; acpClient auto-approves)
       printf '%s\n' '{"jsonrpc":"2.0","id":9001,"method":"session/request_permission","params":{"sessionId":"cursor-session-1","toolCall":{"toolCallId":"t1","title":"run"},"options":[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]}}'
       printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id"
       ;;

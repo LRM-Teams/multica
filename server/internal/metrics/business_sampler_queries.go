@@ -355,39 +355,6 @@ WHERE status = 'scheduled'
 	return nil
 }
 
-// queryMachineUpgradeOperations exposes the canonical server-owned lifecycle
-// without turning machine identity into a Prometheus dimension. Database
-// constraints already bound phase/result; the normalizers remain the metric
-// boundary so compatibility rows or future enum additions collapse safely.
-func (c *BusinessSamplerCollector) queryMachineUpgradeOperations(
-	ctx context.Context, tx pgx.Tx, snap *samplerSnapshot,
-) error {
-	const stmt = `
-SELECT phase, COALESCE(result, ''), count(*) AS n
-FROM machine_upgrade
-GROUP BY 1, 2
-LIMIT 100
-`
-	rows, err := tx.Query(ctx, stmt)
-	if err != nil {
-		return fmt.Errorf("machine_upgrade_operations: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var rawPhase, rawOutcome string
-		var n int64
-		if err := rows.Scan(&rawPhase, &rawOutcome, &n); err != nil {
-			return fmt.Errorf("machine_upgrade_operations scan: %w", err)
-		}
-		key := machineUpgradeMetricKey{
-			phase:   normalizeMachineUpgradePhase(rawPhase),
-			outcome: normalizeMachineUpgradeOutcome(rawOutcome),
-		}
-		snap.machineUpgrades[key] += float64(n)
-	}
-	return rows.Err()
-}
-
 // queryResearchExecution samples the durable execution ledger. Each SELECT
 // has a statically bounded label space and its own LIMIT, so one category
 // cannot truncate another category or create user-controlled Prometheus

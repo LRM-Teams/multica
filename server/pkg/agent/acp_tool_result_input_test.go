@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-// #103: Cursor ACP uses hermesClient; completed tool_call_update must
+// #103: Cursor ACP uses acpClient; completed tool_call_update must
 // carry Input on MessageToolResult so Activity backfill sees path.
-func TestHermesToolResultCarriesStartedInput(t *testing.T) {
+func TestACPToolResultCarriesStartedInput(t *testing.T) {
 	t.Parallel()
 	var got []Message
-	c := &hermesClient{
+	c := &acpClient{
 		pendingTools: make(map[string]*pendingToolCall),
 		onMessage: func(m Message) {
 			got = append(got, m)
@@ -34,7 +34,7 @@ func TestHermesToolResultCarriesStartedInput(t *testing.T) {
 		t.Fatalf("no MessageToolResult in %#v", got)
 	}
 	if result.Tool != "write_file" && result.Tool == "" {
-		// hermesToolNameFromTitle may map edit kind differently; require non-empty Input.path
+		// acpToolNameFromTitle may map edit kind differently; require non-empty Input.path
 	}
 	if path, _ := result.Input["path"].(string); path != "/ws/a.go" {
 		t.Fatalf("ToolResult.Input.path=%v full=%v tool=%q", result.Input["path"], result.Input, result.Tool)

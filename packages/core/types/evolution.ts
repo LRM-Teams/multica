@@ -461,6 +461,22 @@ export interface UpdateMemoryCuratorProfileRequest {
   confidence_threshold: number;
 }
 
+export type GraphMemoryType = "legacy" | "graph";
+
+export interface GraphMemoryProfile {
+  workspace_id: string;
+  memory_type: GraphMemoryType;
+  explore_agents: number;
+  explore_max_rounds: number;
+  updated_at: string;
+}
+
+export interface UpdateGraphMemoryProfileRequest {
+  memory_type: GraphMemoryType;
+  explore_agents: number;
+  explore_max_rounds: number;
+}
+
 export interface StartMemoryCurationRunRequest {
   agent_ids?: string[];
   all_agents?: boolean;

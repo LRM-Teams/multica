@@ -66,7 +66,7 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 		t.Error("cursor must not advertise ThinkingDiscovery today")
 	}
 
-	// Model selection — every built-in currently true (hermes/antigravity regressions).
+	// Model selection — every built-in currently true (antigravity regressions).
 	for _, name := range KnownAgentTypes() {
 		if !Capabilities(name).ModelSelectionSupported {
 			t.Errorf("%q must support model selection", name)

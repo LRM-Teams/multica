@@ -109,6 +109,12 @@ type TaskService struct {
 	// Wired by the handler in env_dispatch.go (newEnvDispatchDepsAdapter).
 	EnvDispatchCheck EnvDispatchRunChecker
 
+	// segmentIngestHook, when non-nil, feeds each recorded interaction-dag
+	// segment into the graph-memory reviewer's staging area. Fired
+	// asynchronously and best-effort from the segment-close seams. Nil =
+	// no-op. Wired via SetSegmentIngestHook.
+	segmentIngestHook SegmentIngestHook
+
 	// EphemeralSandboxCleaner, when non-nil, enables the Phase 5 sandbox
 	// cleanup hook at task terminal. Nil = no-op (sandbox cleanup not
 	// configured). Wired by the handler to the env-sandbox-lifecycle adapter.

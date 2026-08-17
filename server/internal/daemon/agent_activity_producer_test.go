@@ -367,6 +367,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 
 	for _, message := range []agent.Message{
 		{Type: agent.MessageThinking},
+		{Type: agent.MessageText, Content: "pong-reset"},
 		{Type: agent.MessageToolUse, Tool: "exec_command", Input: map[string]any{"command": "ls -la"}},
 		{Type: agent.MessageStatus, Status: "reconnecting"},
 		{Type: agent.MessageDiagnostic, Title: "Codex config warning", Level: "warning", Diagnostic: "configWarning", Content: "User namespaces are unavailable"},
@@ -374,8 +375,8 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	} {
 		runner.observeResidentMessageRuntime("agent-a", "runtime-1", message)
 	}
-	wantKinds := []string{protocol.ActivityKindThinking, protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindError}
-	wantDetails := []string{"thinking_started", "running_command", "running_command", "runtime_error"}
+	wantKinds := []string{protocol.ActivityKindThinking, protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindError}
+	wantDetails := []string{"thinking_started", "model_response_started", "running_command", "running_command", "runtime_error"}
 	if len(activities) != len(wantKinds) {
 		t.Fatalf("Activity count = %d, want %d", len(activities), len(wantKinds))
 	}
@@ -384,19 +385,26 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 			t.Fatalf("Activity[%d] = %+v", index, activities[index].Snapshot)
 		}
 	}
+	var workingBody protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(activities[1].Entries[0].Body, &workingBody); err != nil {
+		t.Fatal(err)
+	}
+	if workingBody.Text != "Working" || workingBody.DetailKind != "model_response_started" || strings.Contains(workingBody.Text, "pong-reset") {
+		t.Fatalf("text Activity body = %+v, want Working without reply content", workingBody)
+	}
 	var toolBody protocol.AgentActivityNarrativeBody
-	if err := json.Unmarshal(activities[1].Entries[0].Body, &toolBody); err != nil {
+	if err := json.Unmarshal(activities[2].Entries[0].Body, &toolBody); err != nil {
 		t.Fatal(err)
 	}
 	if toolBody.Text != "ls -la" || toolBody.DetailKind != "running_command" {
 		t.Fatalf("tool-use Activity body = %+v", toolBody)
 	}
 	var diagnostic protocol.AgentActivitySystemBody
-	if err := json.Unmarshal(activities[2].Entries[0].Body, &diagnostic); err != nil {
+	if err := json.Unmarshal(activities[3].Entries[0].Body, &diagnostic); err != nil {
 		t.Fatal(err)
 	}
-	if activities[2].Entries[0].Kind != "system" || diagnostic.Title != "Runtime warning" || diagnostic.Text != "Provider reported a warning" {
-		t.Fatalf("runtime diagnostic Activity = kind:%q body:%+v", activities[2].Entries[0].Kind, diagnostic)
+	if activities[3].Entries[0].Kind != "system" || diagnostic.Title != "Runtime warning" || diagnostic.Text != "Provider reported a warning" {
+		t.Fatalf("runtime diagnostic Activity = kind:%q body:%+v", activities[3].Entries[0].Kind, diagnostic)
 	}
 	var errorBody protocol.AgentActivityNarrativeBody
 	if err := json.Unmarshal(activities[len(activities)-1].Entries[0].Body, &errorBody); err != nil {

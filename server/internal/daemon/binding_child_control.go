@@ -45,8 +45,8 @@ func (client *bindingHostControlClient) forwardMachineActions(ctx context.Contex
 
 // handleComputerControlCommand is the Raft 1.0.16 child callback: the
 // DaemonCore connect socket received computer:upgrade / computer:restart.
-// Binding children do not swap the machine binary; they forward the command
-// to Computer Host through the injected Host control seam.
+// The Binding child executes the machine upgrade in-process. Host only
+// drains sibling Bindings and respawns after this child exits.
 func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatResponse) {
 	if ack == nil || ack.RuntimeID == "" {
 		return
@@ -101,28 +101,53 @@ func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonH
 	}
 }
 
+func (d *Daemon) setComputerUpgradeEmit(emit func(string, any)) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.computerUpgradeEmit = emit
+	d.mu.Unlock()
+}
+
+func (d *Daemon) emitComputerUpgrade(eventType string, payload any) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	emit := d.computerUpgradeEmit
+	d.mu.Unlock()
+	if emit != nil {
+		emit(eventType, payload)
+	}
+}
+
 func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
 	if d == nil {
 		return errors.New("DaemonCore is unavailable")
 	}
-	ack := HeartbeatResponse{Status: "ok"}
 	switch action {
 	case protocol.EventComputerUpgrade:
-		ack.PendingMachineUpgrade = &PendingMachineUpgrade{ID: command.Operation(), TargetVersion: command.TargetVersion}
+		if d.bindingMachineUpgrade == nil {
+			// Raft 1.0.16: a DaemonCore not constructed by Computer
+			// ignores computer:upgrade instead of inventing a Host path.
+			if d.logger != nil {
+				d.logger.Info("ignoring computer:upgrade — not launched by a Computer service")
+			}
+			return nil
+		}
+		return d.bindingMachineUpgrade(ctx, command)
 	case protocol.EventComputerRestart:
-		ack.PendingRestart = &PendingRestart{ID: command.Operation()}
+		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: command.Operation()}}
+		if d.bindingHostControl == nil {
+			return errors.New("Computer Host callback is unavailable")
+		}
+		forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return d.bindingHostControl.forwardMachineActions(forwardCtx, ack)
 	default:
 		return fmt.Errorf("unsupported Computer control action %q", action)
 	}
-	if d.bindingHostControl == nil {
-		return errors.New("Computer Host callback is unavailable")
-	}
-	forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := d.bindingHostControl.forwardMachineActions(forwardCtx, ack); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (client *bindingHostControlClient) reportRuntimeSet(ctx context.Context, runtimes []Runtime, daemonToken, expiresAt string) error {

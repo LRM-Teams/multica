@@ -58,33 +58,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	var lockedResult ResultEnvelope
 	var lockedHash string
 	if state.run.OrchestratorVersion == OrchestratorVersionV6 {
-		if state.task.Kind == TaskKindPlan {
-			lockedPlan, planHash, decodeErr := DecodeAndValidateResearchV6PlanResult(in.Raw)
-			if decodeErr != nil {
-				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
-			}
-			in.V6Plan, lockedHash, lockedResult = &lockedPlan, planHash, researchV6PlanEnvelope(lockedPlan)
-		} else if isEvidenceTask(state.task.Kind) && state.task.ExpectedResult == "research_evidence_v6" {
-			lockedEvidence, evidenceHash, decodeErr := DecodeAndValidateV6EvidenceResult(in.Raw)
-			if decodeErr != nil {
-				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
-			}
-			in.V6Evidence, lockedHash, lockedResult = &lockedEvidence, evidenceHash, researchV6EvidenceEnvelope(lockedEvidence)
-		} else if state.task.Kind == TaskKindIntegrate && state.task.ExpectedResult == "research_integration_v6" {
-			lockedIntegration, integrationHash, decodeErr := decodeAndHashV6IntegrationResult(in.Raw)
-			if decodeErr != nil {
-				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
-			}
-			in.V6Integration, lockedHash, lockedResult = &lockedIntegration, integrationHash, researchV6IntegrationEnvelope(lockedIntegration)
-		} else if state.task.Kind == TaskKindDeliberate && state.task.ExpectedResult == "research_deliberation_v6" {
-			lockedDeliberation, deliberationHash, decodeErr := DecodeAndValidateV6DeliberationResult(in.Raw)
-			if decodeErr != nil {
-				return AcceptResultOutcome{}, fmt.Errorf("%w: result no longer matches locked run/task contract: %v", ErrInvalidTransition, decodeErr)
-			}
-			in.V6Deliberation, lockedHash, lockedResult = &lockedDeliberation, deliberationHash, researchV6DeliberationEnvelope(lockedDeliberation)
-		} else {
-			return AcceptResultOutcome{}, fmt.Errorf("%w: V6 task result adapter is not available for %s", ErrUnsupportedVersion, state.task.Kind)
-		}
+		return AcceptResultOutcome{}, fmt.Errorf("%w: Ronaldo V6 uses the generic Work Item submission boundary", ErrUnsupportedVersion)
 	} else {
 		lockedResult, lockedHash, err = DecodeAndValidateResultForVersion(state.run.OrchestratorVersion, in.Raw, state.task, state.run.Config)
 		if err != nil {
@@ -127,14 +101,6 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 			return AcceptResultOutcome{}, err
 		}
 	}
-	if in.V6Plan != nil {
-		prepared, prepareErr := prepareResearchV6PlanMaterialization(state.run.SessionID, state.attemptID, in.AgentID, state.run.StateVersion, *in.V6Plan)
-		if prepareErr != nil {
-			return AcceptResultOutcome{}, prepareErr
-		}
-		in.Result = prepared.Result
-	}
-
 	if !state.stale && state.task.Kind == TaskKindReplan {
 		state.targetPlan = state.run.PlanVersion + 1
 		if err = prepareReplan(ctx, tx, state); err != nil {

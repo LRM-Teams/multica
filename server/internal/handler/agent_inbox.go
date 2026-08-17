@@ -1533,6 +1533,11 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	if ws, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && ws.Context.Valid {
 		resp.WorkspaceContext = ws.Context.String
 	}
+	// Per-workspace graph memory reviewer override (design §1/A4): the
+	// daemon treats this as a task-scoped override of its env default.
+	if memoryType := h.graphMemoryTypeForWorkspace(ctx, event.WorkspaceID); memoryType != "" {
+		resp.MemoryType = memoryType
+	}
 	if resp.Agent != nil {
 		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, event.WorkspaceID, service.MemoryExecutionScope{
 			InitiatorType: resp.InitiatorType,

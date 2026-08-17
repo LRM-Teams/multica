@@ -203,9 +203,8 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	case agent.MessageThinking:
 		kind = AgentObservationRuntimeThinking
 	case agent.MessageText:
-		// Raft maps provider text to working / model_response_started. That
-		// is the live "the model is producing" fact; dropping it leaves the
-		// compact surface stuck on Thinking or a previous tool.
+		// Raft 1.0.16: runtime text is Working / model_response_started.
+		// Do not parse reply content into the timeline.
 		kind = AgentObservationRuntimeWorking
 	case agent.MessageCompactionStarted:
 		kind = AgentObservationRuntimeCompacting

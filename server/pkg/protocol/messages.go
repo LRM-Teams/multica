@@ -782,6 +782,37 @@ type TaskMessagePayload struct {
 	CreatedAt  string         `json:"created_at,omitempty"`
 }
 
+// GraphMemoryJudgeKickPayload is sent from daemon to server after a
+// graph-memory recall was handed to the downstream agent, kicking the
+// asynchronous judge + delayed-reward flow (design §5.3, Q18/Q28). The
+// daemon has no DB access for the judge's downstream history and no RL
+// bridge configuration, so judging and reward composition run server-side
+// (service.GraphMemoryJudgeService); the daemon only reports the recall.
+type GraphMemoryJudgeKickPayload struct {
+	TraceID string   `json:"trace_id"`
+	TaskID  string   `json:"task_id"` // agent_run_id of the downstream task
+	Query   string   `json:"query"`
+	Summary string   `json:"summary,omitempty"`
+	NodeIDs []string `json:"node_ids,omitempty"`
+	Rounds  int      `json:"rounds"`
+	Version int      `json:"version"`
+	// AgentRuns carries the per-trajectory round/error accounting of K-way
+	// explore (Q17) so the server-side reward composer can apply the
+	// round-cost term per run.
+	AgentRuns []GraphMemoryExploreRunPayload `json:"agent_runs,omitempty"`
+}
+
+// GraphMemoryExploreRunPayload is the wire shape of one explore trajectory
+// inside GraphMemoryJudgeKickPayload (mirrors memorygraph.ExploreRun minus
+// the fields the judge/reward flow does not need).
+type GraphMemoryExploreRunPayload struct {
+	RunID  string `json:"run_id"`
+	Seed   int    `json:"seed"`
+	Found  bool   `json:"found"`
+	Rounds int    `json:"rounds"`
+	Error  string `json:"error,omitempty"`
+}
+
 // DaemonRegisterPayload is sent from daemon to server on connection.
 type DaemonRegisterPayload struct {
 	DaemonID string        `json:"daemon_id"`
@@ -890,7 +921,7 @@ type ChannelTypingPayload struct {
 // identical semantics.
 type DaemonHeartbeatRequestPayload struct {
 	RuntimeID                 string                   `json:"runtime_id"`
-	ComputerGeneration        int64                    `json:"computer_generation,omitempty"`
+	ComputerGeneration        int64                    `json:"computer_generation,omitempty"` // ignored; liveness is the connect socket
 	SupportsBatchImport       bool                     `json:"supports_batch_import,omitempty"`
 	SupportsMemoryCuration    bool                     `json:"supports_memory_curation,omitempty"`
 	ActiveMemoryCurationRunID string                   `json:"active_memory_curation_run_id,omitempty"`

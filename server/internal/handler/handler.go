@@ -135,21 +135,24 @@ type Handler struct {
 	SandboxHub                 *sandboxws.Hub
 	Bus                        *events.Bus
 	TaskService                *service.TaskService
-	AgentFleetRankService      *service.AgentFleetRankService
-	AgentHonorService          *service.AgentHonorService
-	IssueService               *service.IssueService
-	HonorService               *service.HonorService
-	EmailService               *service.EmailService
-	EnvCheckpointService       EnvCheckpointServiceAPI
-	UpdateStore                UpdateStore
-	UpdateIntentStore          UpdateIntentStore
-	MachineUpgradeStore        MachineUpgradeStore
-	RestartStore               RestartStore
-	RuntimeReleaseSource       RuntimeReleaseSource
-	ModelListStore             ModelListStore
-	LocalSkillListStore        LocalSkillListStore
-	LocalSkillImportStore      LocalSkillImportStore
-	LivenessStore              LivenessStore
+	// GraphMemoryJudge runs the server-side async judge + delayed-reward
+	// flow for graph-memory recalls reported by daemons (design §5.3).
+	// Nil-safe: the endpoint accepts and drops reports when unwired.
+	GraphMemoryJudge      *service.GraphMemoryJudgeService
+	AgentFleetRankService *service.AgentFleetRankService
+	AgentHonorService     *service.AgentHonorService
+	IssueService          *service.IssueService
+	HonorService          *service.HonorService
+	EmailService          *service.EmailService
+	EnvCheckpointService  EnvCheckpointServiceAPI
+	UpdateStore           UpdateStore
+	UpdateIntentStore     UpdateIntentStore
+	RestartStore          RestartStore
+	RuntimeReleaseSource  RuntimeReleaseSource
+	ModelListStore        ModelListStore
+	LocalSkillListStore   LocalSkillListStore
+	LocalSkillImportStore LocalSkillImportStore
+	LivenessStore         LivenessStore
 	// MemberPresenceStore tracks human online/offline from realtime WS
 	// sessions (LRM-462). Distinct from LivenessStore (daemon heartbeats).
 	MemberPresenceStore MemberPresenceStore
@@ -312,7 +315,6 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		EmailService:          emailService,
 		UpdateStore:           NewPostgresUpdateStore(updateDB),
 		UpdateIntentStore:     NewPostgresUpdateIntentStore(updateDB),
-		MachineUpgradeStore:   NewPostgresMachineUpgradeStore(updateDB),
 		RestartStore:          NewInMemoryRestartStore(),
 		RuntimeReleaseSource:  NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
 		ModelListStore:        NewInMemoryModelListStore(),

@@ -502,7 +502,7 @@ func maybeSweepIdleTrainingSessions(ctx context.Context, deps *TrainingSessionDe
 	if deps.DAG != nil && deps.DAG.Enabled() {
 		runID := util.UUIDToString(task.ID)
 		if existing, segErr := deps.DAG.SegmentIDForAgentRun(ctx, runID); segErr != nil || existing == "" {
-			if _, clsErr := deps.DAG.CloseSegmentForEvent(ctx, util.UUIDToString(projectID), cfg.SessionID, cfg.APIKey, "", nil); clsErr != nil {
+			if _, _, clsErr := deps.DAG.CloseSegmentForEvent(ctx, util.UUIDToString(projectID), cfg.SessionID, cfg.APIKey, "", nil); clsErr != nil {
 				slog.Warn("training: idle-sweep segment close failed",
 					"task_id", runID,
 					"session_id", cfg.SessionID,

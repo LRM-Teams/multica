@@ -224,13 +224,14 @@ func TestComputerLifecycleCommandsAreMachineWideWithOnlyDefinedSelectors(t *test
 	}
 }
 
-// #2487: the hidden `daemon` group is a compatibility alias over the same
-// machine-wide Computer, and computer-mode resolves profile to the default.
-func TestDaemonGroupHiddenAliasAndComputerModeForcesDefaultProfile(t *testing.T) {
-	if !daemonCmd.Hidden {
-		t.Fatal("daemon group should be hidden (compatibility alias) per #2487")
+func TestDaemonGroupIsRemoved(t *testing.T) {
+	if hasSubcommand(rootCmd, "daemon") {
+		t.Fatal("standalone multica daemon must not remain; Computer is the only resident")
 	}
+}
 
+// Computer-mode resolves profile to the default machine-wide Computer.
+func TestComputerModeForcesDefaultProfile(t *testing.T) {
 	old := computerMode
 	computerMode = true
 	t.Cleanup(func() { computerMode = old })
@@ -254,14 +255,9 @@ func TestComputerModeRespectsProfileWhenNotInComputerMode(t *testing.T) {
 	}
 }
 
-// #2496: `computer` is the primary visible surface; the `daemon` group is the
-// hidden deprecated alias. Computer terminology governs the CLI help.
-func TestComputerIsPrimaryVisibleSurfaceAndDaemonHiddenAlias(t *testing.T) {
+func TestComputerIsPrimaryVisibleSurface(t *testing.T) {
 	if computerCmd.Hidden {
 		t.Fatal("computer group must be the visible primary surface, not hidden")
-	}
-	if !daemonCmd.Hidden {
-		t.Fatal("daemon group is the retired compatibility alias and must be hidden (#2496)")
 	}
 	for _, name := range []string{"start", "stop", "restart", "status", "logs", "upgrade", "doctor"} {
 		if !hasSubcommand(computerCmd, name) {
@@ -271,26 +267,25 @@ func TestComputerIsPrimaryVisibleSurfaceAndDaemonHiddenAlias(t *testing.T) {
 }
 
 func hasSubcommand(cmd interface{ Commands() []*cobra.Command }, name string) bool {
-	for _, c := range cmd.Commands() {
-		if c.Name() == name {
-			return true
-		}
-	}
-	return false
+	return findSubcommand(cmd, name) != nil
 }
 
-// The `daemon` alias is the hidden, retired compatibility surface (#2496); it
-// delegates to the same Computer and is not shown in primary help.
-func TestDaemonAliasHiddenCompatibilitySurface(t *testing.T) {
-	if !daemonCmd.Hidden {
-		t.Fatal("daemon alias must be hidden")
+func findSubcommand(cmd interface{ Commands() []*cobra.Command }, name string) *cobra.Command {
+	for _, c := range cmd.Commands() {
+		if c.Name() == name {
+			return c
+		}
 	}
+	return nil
 }
 
 func TestRetiredProfileSelfHostAndOSServiceSurfacesAreNotPublic(t *testing.T) {
-	for _, name := range []string{"supervise", "install-service", "uninstall-service", "service-status"} {
-		if hasSubcommand(daemonCmd, name) {
-			t.Fatalf("retired daemon subcommand %q is still reachable", name)
+	if cmd := findSubcommand(computerCmd, "supervise"); cmd == nil || !cmd.Hidden {
+		t.Fatal("computer supervise must exist as a hidden OS-service entry")
+	}
+	for _, name := range []string{"install-service", "uninstall-service", "service-status"} {
+		if hasSubcommand(computerCmd, name) {
+			t.Fatalf("retired Computer subcommand %q is still reachable", name)
 		}
 	}
 	if hasSubcommand(setupCmd, "self-host") {

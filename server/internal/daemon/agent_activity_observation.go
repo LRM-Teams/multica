@@ -166,9 +166,6 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		entry, err = activityNarrativeEntry(projection.detailKind, "Starting…")
 	case AgentObservationRuntimeWorking:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "model_response_started"
-		if data, ok := observation.Data.(AgentRuntimeObservationData); ok {
-			projection.processInstanceID = data.ProcessInstanceID
-		}
 		entry, err = activityNarrativeEntry(projection.detailKind, "Working")
 	case AgentObservationRuntimeThinking:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindThinking, "thinking_started"

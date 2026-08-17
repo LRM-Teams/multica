@@ -58,6 +58,7 @@ type workspaceRunnerDependencies struct {
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
 	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
+	setComputerUpgradeEmit   func(func(string, any))
 	now                      func() time.Time
 	onTransition             func(agentLifecycleTransition)
 }
@@ -94,6 +95,7 @@ type WorkspaceRunner struct {
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
 	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
+	setComputerUpgradeEmit   func(func(string, any))
 
 	residency *agentResidencyStore
 	life      context.Context
@@ -168,6 +170,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		controlHeartbeatAck:      dependencies.controlHeartbeatAck,
 		controlHeartbeatChanges:  dependencies.controlHeartbeatChanges,
 		handleComputerControl:    dependencies.handleComputerControl,
+		setComputerUpgradeEmit:   dependencies.setComputerUpgradeEmit,
 		residency:                newAgentResidencyStore(now),
 		life:                     life,
 		lifeStop:                 lifeStop,
@@ -389,6 +392,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		controlHeartbeatAck:      d.handleWorkspaceRunnerControlAck,
 		controlHeartbeatChanges:  func() (<-chan struct{}, func()) { return nil, func() {} },
 		handleComputerControl:    d.handleComputerControlCommand,
+		setComputerUpgradeEmit:   d.setComputerUpgradeEmit,
 		now:                      time.Now,
 		onTransition:             onTransition,
 	})

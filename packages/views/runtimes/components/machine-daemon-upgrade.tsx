@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   deriveUpdateStatus,
@@ -8,15 +8,19 @@ import {
   runtimeCurrentVersion,
   runtimeLaunchedBy,
   isNewerCliVersion,
-  isMachineUpgradeFailureSuperseded,
-  isMachineUpgradeTargetSuperseded,
 } from "@multica/core/runtimes";
 import { api, ApiError } from "@multica/core/api";
+import { useWSEvent } from "@multica/core/realtime";
 import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUpCircle, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
-import type { AgentRuntime, RuntimeUpdateStatus } from "@multica/core/types";
+import type {
+  AgentRuntime,
+  ComputerUpgradeDonePayload,
+  ComputerUpgradeProgressPayload,
+  RuntimeUpdateStatus,
+} from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { formatRuntimeUpdateError } from "./update-error";
 
@@ -46,25 +50,7 @@ export function MachineDaemonUpgrade({
   const isManaged = launchedBy === "desktop";
   const isSandbox = isSandboxRuntime(runtime);
   const currentVersion = cliVersion ?? runtimeCurrentVersion(runtime);
-  const machineUpgrade = runtime.machine_upgrade ?? null;
-  const recordedMachineTarget =
-    machineUpgrade?.resolved_target?.trim() || machineUpgrade?.requested_target?.trim() || null;
-  // Terminal operations stop owning target selection after their recorded
-  // release has caught up and the daemon advertises a newer exact release.
-  const isSupersededMachineTarget = isMachineUpgradeTargetSuperseded(
-    machineUpgrade,
-    currentVersion,
-    daemonTargetVersion,
-  );
-  // Failure presentation is narrower: only obsolete failed operations should
-  // disappear from the projected status.
-  const isSupersededMachineFailure = isMachineUpgradeFailureSuperseded(
-    machineUpgrade,
-    currentVersion,
-    daemonTargetVersion,
-  );
-  const machineTarget = isSupersededMachineTarget ? null : recordedMachineTarget;
-  const targetVersion = machineTarget ?? daemonTargetVersion ?? null;
+  const targetVersion = daemonTargetVersion ?? null;
   const updateState = runtime.update_state;
   const runtimeHealth = runtime.runtime_health;
   const pinnedVersion =
@@ -77,16 +63,11 @@ export function MachineDaemonUpgrade({
   // Keep the last target we tried so a failed attempt still shows `→ target`
   // even if the server drops target_version after health flips to failed.
   const [lastAttemptTarget, setLastAttemptTarget] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestIdRef = useRef<string | null>(null);
 
   const cleanup = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    requestIdRef.current = null;
   }, []);
-
-  useEffect(() => () => cleanup(), [cleanup]);
 
   // Do NOT useEffect-clear local poll status when version catches up —
   // react-doctor flags that. isApplying / isActive already gate chrome on
@@ -98,46 +79,35 @@ export function MachineDaemonUpgrade({
     });
   }, [qc]);
 
+  const computerId = runtime.daemon_id?.trim() ?? "";
+  useWSEvent("computer:upgrade:progress", (raw) => {
+    const payload = raw as ComputerUpgradeProgressPayload;
+    if (payload.computer_id !== computerId || payload.requestId !== requestIdRef.current) return;
+    setStatus("running");
+    setUpdating(true);
+  });
+  useWSEvent("computer:upgrade:done", (raw) => {
+    const payload = raw as ComputerUpgradeDonePayload;
+    if (payload.computer_id !== computerId || payload.requestId !== requestIdRef.current) return;
+    setUpdating(false);
+    cleanup();
+    setStatus(payload.ok ? "completed" : "failed");
+    refreshRuntimes();
+  });
+
   const handleUpdate = async () => {
     const aim = targetVersion ?? lastAttemptTarget;
     if (!aim) return;
-    cleanup();
+    const daemonID = runtime.daemon_id?.trim();
+    if (!daemonID) return;
+    const requestId = createSafeId();
+    requestIdRef.current = requestId;
     setUpdating(true);
     setLastAttemptTarget(aim);
-    // Immediate local feedback (≤200ms) before first poll tick.
     setStatus("pending");
     try {
-      const daemonID = runtime.daemon_id?.trim();
-      if (!daemonID) {
-        throw new Error("runtime has no daemon identity");
-      }
-      const update = await api.initiateMachineUpgrade(daemonID, aim, createSafeId());
-      pollRef.current = setInterval(async () => {
-        try {
-          const result = await api.getMachineUpgrade(daemonID, update.id);
-          const nextStatus: RuntimeUpdateStatus = (() => {
-            switch (result.phase) {
-              case "queued": return "queued";
-              case "completed": return "completed";
-              case "timeout": return "timeout";
-              case "failed": case "rolled_back": case "cancelled": return "failed";
-              default: return "running";
-            }
-          })();
-          setStatus(nextStatus);
-          if (
-            nextStatus === "completed" ||
-            nextStatus === "failed" ||
-            nextStatus === "timeout"
-          ) {
-            setUpdating(false);
-            cleanup();
-            refreshRuntimes();
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, 2000);
+      await api.initiateMachineUpgrade(daemonID, aim, requestId);
+      setStatus("running");
     } catch (err) {
       if (
         err instanceof ApiError &&
@@ -160,31 +130,9 @@ export function MachineDaemonUpgrade({
     }
   };
 
-  const projectedMachineStatus: RuntimeUpdateStatus | null = (() => {
-    switch (machineUpgrade?.phase) {
-      case "queued":
-      case "starting":
-        return "queued";
-      case "staging":
-      case "verifying":
-      case "handoff":
-      case "converging":
-      case "rollback_pending":
-        return "running";
-      case "completed":
-        return "completed";
-      case "failed":
-      case "rolled_back":
-      case "cancelled":
-        return isSupersededMachineFailure ? null : "failed";
-      case "timeout":
-        return isSupersededMachineFailure ? null : "timeout";
-      default:
-        return null;
-    }
-  })();
+  const projectedMachineStatus: RuntimeUpdateStatus | null = null;
   // A runtime page is a projection: no sibling needs to have initiated the
-  // request locally to render the daemon's canonical queued/active operation.
+  // request locally to render the daemon's canonical active operation.
   const effectiveStatus = status ?? projectedMachineStatus;
   const derivedStatus = deriveUpdateStatus({
     pollStatus: effectiveStatus,
@@ -211,8 +159,6 @@ export function MachineDaemonUpgrade({
     (updating ||
       derivedStatus === "pending" ||
       derivedStatus === "running" ||
-      // poll may report "queued" before pending (older type packages omit it)
-      effectiveStatus === "queued" ||
       isApplying);
   // Health may flip off `update_available` after a failed attempt — still failed.
   const isFailed =
@@ -248,17 +194,7 @@ export function MachineDaemonUpgrade({
   const versionLabel = currentVersion ?? t(($) => $.update.version_unknown);
 
   const progressLabel = (() => {
-    if (
-      machineUpgrade?.phase === "handoff" ||
-      machineUpgrade?.phase === "converging"
-    ) {
-      return t(($) => $.machine.ops.upgrade_progress_applying);
-    }
-    if (
-      derivedStatus === "pending" ||
-      effectiveStatus === "queued" ||
-      effectiveStatus === "pending"
-    ) {
+    if (derivedStatus === "pending" || effectiveStatus === "pending") {
       return t(($) => $.machine.ops.upgrade_progress_pending);
     }
     if (derivedStatus === "running") {
@@ -325,7 +261,7 @@ export function MachineDaemonUpgrade({
   if (isFailed) {
     const reason =
       formatRuntimeUpdateError({
-        rawError: machineUpgrade?.error_message ?? updateError,
+        rawError: updateError,
         currentVersion,
         targetVersion: displayTarget,
         t,

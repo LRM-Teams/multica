@@ -60,7 +60,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 
 	root := t.TempDir()
 	client := NewClient(upstream.URL)
-	client.SetToken("daemon-token")
+	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	probe := &canonicalRuntimeFactoryProbe{}
 	starter := &residentProcessStartProbe{}
 	d := &Daemon{
@@ -245,7 +245,7 @@ func TestEnsureResidentMessageRuntimeSpawnsProviderProcess(t *testing.T) {
 
 	starter := &residentProcessStartProbe{}
 	client := NewClient(upstream.URL)
-	client.SetToken("daemon-token")
+	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	d := &Daemon{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
@@ -327,7 +327,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureDoesNotKeepBackend(t *testing.T
 
 	starter := &residentProcessStartProbe{err: errors.New("codex app-server did not start")}
 	client := NewClient(upstream.URL)
-	client.SetToken("daemon-token")
+	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	d := &Daemon{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
@@ -376,7 +376,7 @@ func TestEnsureResidentMessageRuntimeNonStarterDoesNotKeepBackend(t *testing.T) 
 	defer upstream.Close()
 
 	client := NewClient(upstream.URL)
-	client.SetToken("daemon-token")
+	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	d := &Daemon{
 		cfg: Config{
 			ServerBaseURL:  upstream.URL,
@@ -560,7 +560,7 @@ func newResidentStartTestDaemon(t *testing.T, workspaceID, runtimeID, agentID st
 	}))
 	t.Cleanup(upstream.Close)
 	client := NewClient(upstream.URL)
-	client.SetToken("daemon-token")
+	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	workspacesRoot := t.TempDir()
 	return &Daemon{
 		cfg: Config{
@@ -601,7 +601,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 	defer upstream.Close()
 
 	client := NewClient(upstream.URL)
-	client.SetToken("daemon-token")
+	client.SetRuntimeDaemonToken(runtimeID, "daemon-token", time.Now().Add(time.Hour))
 	var (
 		factoryMu sync.Mutex
 		backends  []agent.PiRPCBackend

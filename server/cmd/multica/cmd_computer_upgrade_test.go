@@ -32,12 +32,6 @@ type computerUpgradeSubprocessRequest struct {
 	TargetVersion string `json:"target_version"`
 }
 
-type computerUpgradeLocalExecutionRequest struct {
-	RequestID     string `json:"requestId"`
-	OperationID   string `json:"operationId"`
-	TargetVersion string `json:"targetVersion"`
-}
-
 func TestComputerUpgradeSubprocessLiveOwnerCreatesHumanIntentBeforeLocalExecution(t *testing.T) {
 	home := t.TempDir()
 	controlDir := filepath.Join(home, ".multica", "computer")
@@ -75,33 +69,25 @@ func TestComputerUpgradeSubprocessLiveOwnerCreatesHumanIntentBeforeLocalExecutio
 			return
 		}
 		attempt := intentCount.Add(1)
+		// Socket-only create: the cloud POST already dispatched
+		// computer:upgrade. There is no receipt id/phase.
+		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":               fmt.Sprintf("upgrade-%d", attempt),
-			"request_id":       request.RequestID,
-			"requested_target": request.TargetVersion,
-			"phase":            "queued",
+			"request_id": request.RequestID,
+			"attempt":    attempt,
 		})
 	}))
 	defer intentServer.Close()
 	writeComputerUpgradeHumanConfig(t, home, intentServer.URL)
 
-	requestSeen := make(chan computerUpgradeLocalExecutionRequest, 2)
+	var localExecutions atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "running", "daemon_id": "daemon-1"})
 	})
 	mux.HandleFunc("/machine-upgrades", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-Multica-Control-Token"); got != "owner-secret" {
-			http.Error(w, "bad owner token", http.StatusUnauthorized)
-			return
-		}
-		var request computerUpgradeLocalExecutionRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		requestSeen <- request
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": request.OperationID, "phase": "queued"})
+		localExecutions.Add(1)
+		http.Error(w, "CLI must not re-deliver a socket-dispatched upgrade", http.StatusConflict)
 	})
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
@@ -119,16 +105,15 @@ func TestComputerUpgradeSubprocessLiveOwnerCreatesHumanIntentBeforeLocalExecutio
 		if !strings.Contains(string(output), "live Computer owns download, verification, handoff, and convergence") {
 			t.Fatalf("subprocess output = %q, want live-owner confirmation", output)
 		}
-	}
-
-	for attempt, target := range targets {
-		request := <-requestSeen
-		if strings.TrimSpace(request.RequestID) == "" || request.OperationID != fmt.Sprintf("upgrade-%d", attempt+1) || request.TargetVersion != target.want {
-			t.Fatalf("local execution request %d = %+v, want human operation upgrade-%d and target %s", attempt+1, request, attempt+1, target.want)
+		if !strings.Contains(string(output), target.want) {
+			t.Fatalf("subprocess output = %q, want target %s", output, target.want)
 		}
 	}
 	if got := intentCount.Load(); got != int32(len(targets)) {
 		t.Fatalf("human lifecycle intents = %d, want %d", got, len(targets))
+	}
+	if got := localExecutions.Load(); got != 0 {
+		t.Fatalf("local /machine-upgrades deliveries = %d, want 0", got)
 	}
 }
 
@@ -168,43 +153,40 @@ func TestComputerUpgradeSubprocessAbsentResidentInstallsForNextStart(t *testing.
 }
 
 func TestComputerUpgradeSubprocessLiveOwnerFailuresNeverMutateVersionStore(t *testing.T) {
-	tests := []struct {
-		name       string
-		statusCode int
-		body       string
-		want       string
-	}{
-		{name: "authentication failure", statusCode: http.StatusUnauthorized, body: "local control authentication failed", want: "upgrade_service_unreachable"},
-		{name: "distinct mutation conflict", statusCode: http.StatusConflict, body: "upgrade_already_in_progress", want: "machine upgrade request rejected: upgrade_already_in_progress"},
-		{name: "malformed canonical response", statusCode: http.StatusOK, body: "{}", want: "response is missing operation id"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			home := t.TempDir()
-			writeComputerUpgradeControlToken(t, home, "wrong-owner-secret")
-			intentServer := newComputerUpgradeHumanIntentServer(t)
-			defer intentServer.Close()
-			writeComputerUpgradeHumanConfig(t, home, intentServer.URL)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/health":
-					_ = json.NewEncoder(w).Encode(map[string]any{"status": "running", "daemon_id": "daemon-1"})
-				case "/machine-upgrades":
-					http.Error(w, tt.body, tt.statusCode)
-				default:
-					http.NotFound(w, r)
-				}
-			}))
-			defer server.Close()
-			controlPort := server.Listener.Addr().(*net.TCPAddr).Port
+	home := t.TempDir()
+	writeComputerUpgradeControlToken(t, home, "wrong-owner-secret")
+	intentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemons/daemon-1/upgrades" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "invalid human session", http.StatusUnauthorized)
+	}))
+	defer intentServer.Close()
+	writeComputerUpgradeHumanConfig(t, home, intentServer.URL)
+	var localExecutions atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "running", "daemon_id": "daemon-1"})
+		case "/machine-upgrades":
+			localExecutions.Add(1)
+			http.Error(w, "CLI must not re-deliver a socket-dispatched upgrade", http.StatusConflict)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	controlPort := server.Listener.Addr().(*net.TCPAddr).Port
 
-			output, err := runComputerUpgradeSubprocess(t, home, controlPort, "http://127.0.0.1:1/unreachable")
-			if err == nil || !strings.Contains(string(output), tt.want) {
-				t.Fatalf("subprocess error = %v output = %q, want %q", err, output, tt.want)
-			}
-			assertComputerUpgradeVersionStoreUnchanged(t, home)
-		})
+	output, err := runComputerUpgradeSubprocess(t, home, controlPort, "http://127.0.0.1:1/unreachable")
+	if err == nil || !strings.Contains(string(output), "POST /api/daemons/daemon-1/upgrades returned 401") {
+		t.Fatalf("subprocess error = %v output = %q, want cloud authorization failure", err, output)
 	}
+	if got := localExecutions.Load(); got != 0 {
+		t.Fatalf("local executions after rejected cloud dispatch = %d, want zero", got)
+	}
+	assertComputerUpgradeVersionStoreUnchanged(t, home)
 }
 
 func TestComputerUpgradeSubprocessRejectsHumanIntentFailureBeforeLocalExecution(t *testing.T) {
@@ -283,33 +265,28 @@ func TestComputerUpgradeSubprocessStaleDeadPIDAllowsOfflineFallback(t *testing.T
 	}
 }
 
-func TestComputerUpgradeSubprocessDistinctConcurrentMutationGetsStableConflict(t *testing.T) {
+func TestComputerUpgradeSubprocessCloudDispatchConflictNeverHitsLocalOwner(t *testing.T) {
 	home := t.TempDir()
 	writeComputerUpgradeControlToken(t, home, "owner-secret")
-	intentServer := newComputerUpgradeHumanIntentServer(t)
+	intentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemons/daemon-1/upgrades" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": "no_current_socket", "error": "Computer upgrade needs the current Binding socket"})
+	}))
 	defer intentServer.Close()
 	writeComputerUpgradeHumanConfig(t, home, intentServer.URL)
-	firstEntered := make(chan struct{})
-	secondRejected := make(chan struct{})
-	var requestCount atomic.Int32
+	var localExecutions atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "running", "daemon_id": "daemon-1"})
 		case "/machine-upgrades":
-			var request computerUpgradeLocalExecutionRequest
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if requestCount.Add(1) == 1 {
-				close(firstEntered)
-				<-secondRejected
-				_ = json.NewEncoder(w).Encode(map[string]any{"id": request.OperationID, "phase": "queued"})
-				return
-			}
-			http.Error(w, "upgrade_already_in_progress", http.StatusConflict)
-			close(secondRejected)
+			localExecutions.Add(1)
+			http.Error(w, "CLI must not re-deliver a socket-dispatched upgrade", http.StatusConflict)
 		default:
 			http.NotFound(w, r)
 		}
@@ -317,23 +294,12 @@ func TestComputerUpgradeSubprocessDistinctConcurrentMutationGetsStableConflict(t
 	defer server.Close()
 	controlPort := server.Listener.Addr().(*net.TCPAddr).Port
 
-	type result struct {
-		output []byte
-		err    error
+	output, err := runComputerUpgradeSubprocess(t, home, controlPort, "http://127.0.0.1:1/unreachable")
+	if err == nil || !strings.Contains(string(output), "no_current_socket") {
+		t.Fatalf("subprocess error = %v output = %q, want cloud no_current_socket", err, output)
 	}
-	firstResult := make(chan result, 1)
-	go func() {
-		output, err := newComputerUpgradeSubprocessCommand(home, controlPort, "http://127.0.0.1:1/unreachable").CombinedOutput()
-		firstResult <- result{output: output, err: err}
-	}()
-	<-firstEntered
-	secondOutput, secondErr := newComputerUpgradeSubprocessCommand(home, controlPort, "http://127.0.0.1:1/unreachable").CombinedOutput()
-	first := <-firstResult
-	if first.err != nil || !strings.Contains(string(first.output), "live Computer owns download, verification, handoff, and convergence") {
-		t.Fatalf("first mutation = %v output %q, want canonical success", first.err, first.output)
-	}
-	if secondErr == nil || !strings.Contains(string(secondOutput), "machine upgrade request rejected: upgrade_already_in_progress") {
-		t.Fatalf("second mutation = %v output %q, want stable conflict", secondErr, secondOutput)
+	if got := localExecutions.Load(); got != 0 {
+		t.Fatalf("local executions after cloud conflict = %d, want zero", got)
 	}
 	assertComputerUpgradeVersionStoreUnchanged(t, home)
 }
@@ -399,7 +365,6 @@ func writeComputerUpgradeHumanConfig(t *testing.T, home, serverURL string) {
 
 func newComputerUpgradeHumanIntentServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	var operations atomic.Int32
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/daemons/daemon-1/upgrades" || r.Header.Get("Authorization") != "Bearer human-token" || r.Header.Get("X-Workspace-ID") != "workspace-1" {
 			http.Error(w, "invalid human lifecycle intent request", http.StatusForbidden)
@@ -410,11 +375,9 @@ func newComputerUpgradeHumanIntentServer(t *testing.T) *httptest.Server {
 			http.Error(w, "invalid lifecycle intent body", http.StatusBadRequest)
 			return
 		}
+		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":               fmt.Sprintf("upgrade-%d", operations.Add(1)),
-			"request_id":       request.RequestID,
-			"requested_target": request.TargetVersion,
-			"phase":            "queued",
+			"request_id": request.RequestID,
 		})
 	}))
 }

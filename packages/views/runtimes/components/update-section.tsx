@@ -21,6 +21,11 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { api, ApiError } from "@multica/core/api";
+import { useWSEvent } from "@multica/core/realtime";
+import type {
+  ComputerUpgradeDonePayload,
+  ComputerUpgradeProgressPayload,
+} from "@multica/core/types";
 import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { deriveUpdateStatus } from "@multica/core/runtimes";
@@ -120,13 +125,10 @@ export function UpdateSection({
   const [error, setError] = useState("");
   const [output, setOutput] = useState("");
   const [updating, setUpdating] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestIdRef = useRef<string | null>(null);
 
   const cleanup = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    requestIdRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -152,53 +154,38 @@ export function UpdateSection({
     [cleanup, refreshRuntimes],
   );
 
+  useWSEvent("computer:upgrade:progress", (raw) => {
+    const payload = raw as ComputerUpgradeProgressPayload;
+    if (payload.computer_id !== daemonId || payload.requestId !== requestIdRef.current) return;
+    setStatus("running");
+    setUpdating(true);
+  });
+  useWSEvent("computer:upgrade:done", (raw) => {
+    const payload = raw as ComputerUpgradeDonePayload;
+    if (payload.computer_id !== daemonId || payload.requestId !== requestIdRef.current) return;
+    if (payload.ok) {
+      markCompleted(t(($) => $.update.status.completed));
+      return;
+    }
+    setError(payload.error || t(($) => $.update.unknown_error));
+    setStatus("failed");
+    setUpdating(false);
+    cleanup();
+    refreshRuntimes();
+  });
+
   const handleUpdate = async () => {
     if (!targetVersion) return;
-    cleanup();
+    const requestId = createSafeId();
+    requestIdRef.current = requestId;
     setUpdating(true);
     setStatus("pending");
     setError("");
     setOutput("");
 
     try {
-      const update = await api.initiateMachineUpgrade(daemonId, targetVersion, createSafeId());
-
-      pollRef.current = setInterval(async () => {
-        try {
-          const result = await api.getMachineUpgrade(daemonId, update.id);
-          const nextStatus: RuntimeUpdateStatus = (() => {
-            switch (result.phase) {
-              case "queued": return "queued";
-              case "completed": return "completed";
-              case "timeout": return "timeout";
-              case "failed": case "rolled_back": case "cancelled": return "failed";
-              default: return "running";
-            }
-          })();
-          setStatus(nextStatus);
-
-          if (nextStatus === "completed") {
-            markCompleted(
-              t(($) => $.update.status.completed),
-            );
-          } else if (nextStatus === "failed" || nextStatus === "timeout") {
-            setError(
-              formatRuntimeUpdateError({
-                rawError: result.error_message,
-                currentVersion,
-                targetVersion,
-                t,
-              }) ||
-                t(($) => $.update.unknown_error),
-            );
-            setUpdating(false);
-            cleanup();
-            refreshRuntimes();
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, 2000);
+      await api.initiateMachineUpgrade(daemonId, targetVersion, requestId);
+      setStatus("running");
     } catch (err) {
       // Task #81 (b) — the button is disabled whenever we already know the
       // machine is pinned, so this 409 only fires on a genuine bypass (the

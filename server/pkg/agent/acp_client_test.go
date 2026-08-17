@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-func TestNewDoesNotRegisterHermesRuntime(t *testing.T) {
+func TestNewRejectsRemovedHermesProviderName(t *testing.T) {
 	t.Parallel()
 	if _, err := New("hermes", Config{ExecutablePath: "/nonexistent/hermes"}); err == nil {
-		t.Fatal("hermes is ACP transport for kiro, not a registered runtime")
+		t.Fatal("removed hermes provider name must not construct a backend")
 	}
 }
 
@@ -141,11 +141,11 @@ func TestResolveResumedSessionIDEmptyResponse(t *testing.T) {
 	}
 }
 
-// ── buildHermesSessionParams ──
+// ── buildACPSessionParams ──
 
-func TestBuildHermesSessionParamsIncludesModel(t *testing.T) {
+func TestBuildACPSessionParamsIncludesModel(t *testing.T) {
 	t.Parallel()
-	params := buildHermesSessionParams("/tmp/work", "gpt-4o", nil)
+	params := buildACPSessionParams("/tmp/work", "gpt-4o", nil)
 	if params["cwd"] != "/tmp/work" {
 		t.Errorf("cwd: got %v, want /tmp/work", params["cwd"])
 	}
@@ -157,18 +157,18 @@ func TestBuildHermesSessionParamsIncludesModel(t *testing.T) {
 	}
 }
 
-func TestBuildHermesSessionParamsOmitsEmptyModel(t *testing.T) {
+func TestBuildACPSessionParamsOmitsEmptyModel(t *testing.T) {
 	t.Parallel()
-	params := buildHermesSessionParams("/tmp/work", "", nil)
+	params := buildACPSessionParams("/tmp/work", "", nil)
 	if _, present := params["model"]; present {
 		t.Error("expected model key to be omitted when model is empty")
 	}
 }
 
-func TestBuildHermesSessionParamsPassesThroughMcpServers(t *testing.T) {
+func TestBuildACPSessionParamsPassesThroughMcpServers(t *testing.T) {
 	t.Parallel()
 	servers := []any{map[string]any{"name": "fetch", "command": "uvx", "args": []string{}, "env": []map[string]any{}}}
-	params := buildHermesSessionParams("/tmp/work", "", servers)
+	params := buildACPSessionParams("/tmp/work", "", servers)
 	got, ok := params["mcpServers"].([]any)
 	if !ok {
 		t.Fatalf("mcpServers: got %T, want []any", params["mcpServers"])
@@ -178,11 +178,11 @@ func TestBuildHermesSessionParamsPassesThroughMcpServers(t *testing.T) {
 	}
 }
 
-func TestBuildHermesSessionParamsNilMcpServersBecomesEmptyArray(t *testing.T) {
+func TestBuildACPSessionParamsNilMcpServersBecomesEmptyArray(t *testing.T) {
 	t.Parallel()
 	// ACP requires the field; nil must surface as `[]` so the wire request
 	// stays well-formed even when no MCP servers are configured.
-	params := buildHermesSessionParams("/tmp/work", "", nil)
+	params := buildACPSessionParams("/tmp/work", "", nil)
 	got, ok := params["mcpServers"].([]any)
 	if !ok {
 		t.Fatalf("mcpServers: got %T, want []any", params["mcpServers"])
@@ -392,9 +392,9 @@ func TestBuildACPMcpServersReturnsErrorOnMalformedJSON(t *testing.T) {
 	}
 }
 
-// ── hermesToolNameFromTitle ──
+// ── acpToolNameFromTitle ──
 
-func TestHermesToolNameFromTitle(t *testing.T) {
+func TestACPToolNameFromTitle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		title string
@@ -433,19 +433,19 @@ func TestHermesToolNameFromTitle(t *testing.T) {
 		{"custom_tool: args", "other", "custom_tool"},
 	}
 	for _, tt := range tests {
-		got := hermesToolNameFromTitle(tt.title, tt.kind)
+		got := acpToolNameFromTitle(tt.title, tt.kind)
 		if got != tt.want {
-			t.Errorf("hermesToolNameFromTitle(%q, %q) = %q, want %q", tt.title, tt.kind, got, tt.want)
+			t.Errorf("acpToolNameFromTitle(%q, %q) = %q, want %q", tt.title, tt.kind, got, tt.want)
 		}
 	}
 }
 
 // ── handleLine routing ──
 
-func TestHermesClientHandleLineResponse(t *testing.T) {
+func TestACPClientHandleLineResponse(t *testing.T) {
 	t.Parallel()
 
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 	}
 	pr := &pendingRPC{ch: make(chan rpcResult, 1), method: "session/new"}
@@ -463,10 +463,10 @@ func TestHermesClientHandleLineResponse(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleLineError(t *testing.T) {
+func TestACPClientHandleLineError(t *testing.T) {
 	t.Parallel()
 
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 	}
 	pr := &pendingRPC{ch: make(chan rpcResult, 1), method: "initialize"}
@@ -483,16 +483,16 @@ func TestHermesClientHandleLineError(t *testing.T) {
 	}
 }
 
-// TestHermesClientHandleLineErrorWithData guards #2192-class regressions: when
+// TestACPClientHandleLineErrorWithData guards #2192-class regressions: when
 // an ACP backend returns -32603 (Internal error), the meaningful reason lives
 // in the `data` field. Dropping it leaves operators with a bare "Internal
 // error" and no way to tell apart "session expired", "model unavailable",
 // "auth lost", etc. Kiro CLI 2.2.x emits `data` as a string; some backends use
 // objects/arrays — both must round-trip into the wrapped Go error.
-func TestHermesClientHandleLineErrorWithStringData(t *testing.T) {
+func TestACPClientHandleLineErrorWithStringData(t *testing.T) {
 	t.Parallel()
 
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 	}
 	pr := &pendingRPC{ch: make(chan rpcResult, 1), method: "session/prompt"}
@@ -510,10 +510,10 @@ func TestHermesClientHandleLineErrorWithStringData(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleLineErrorWithObjectData(t *testing.T) {
+func TestACPClientHandleLineErrorWithObjectData(t *testing.T) {
 	t.Parallel()
 
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 	}
 	pr := &pendingRPC{ch: make(chan rpcResult, 1), method: "session/prompt"}
@@ -531,10 +531,10 @@ func TestHermesClientHandleLineErrorWithObjectData(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleLineErrorWithNullData(t *testing.T) {
+func TestACPClientHandleLineErrorWithNullData(t *testing.T) {
 	t.Parallel()
 
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 	}
 	pr := &pendingRPC{ch: make(chan rpcResult, 1), method: "initialize"}
@@ -572,12 +572,12 @@ func (b *bufferWriter) String() string {
 	return b.buf.String()
 }
 
-// TestHermesClientAutoApprovesPermissionRequest asserts that the ACP
+// TestACPClientAutoApprovesPermissionRequest asserts that the ACP
 // client selects an actual allow option offered by each provider. ACP
 // standardizes option kinds but not option IDs: Kimi calls its
 // session-scoped option `approve_for_session`, while Grok uses
 // `allow_always`.
-func TestHermesClientAutoApprovesPermissionRequest(t *testing.T) {
+func TestACPClientAutoApprovesPermissionRequest(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -607,7 +607,7 @@ func TestHermesClientAutoApprovesPermissionRequest(t *testing.T) {
 			t.Parallel()
 
 			w := &bufferWriter{}
-			c := &hermesClient{
+			c := &acpClient{
 				cfg:     Config{Logger: slog.Default()},
 				stdin:   w,
 				pending: make(map[int]*pendingRPC),
@@ -644,11 +644,11 @@ func TestHermesClientAutoApprovesPermissionRequest(t *testing.T) {
 	}
 }
 
-func TestHermesClientRejectsPermissionRequestWithoutAllowOption(t *testing.T) {
+func TestACPClientRejectsPermissionRequestWithoutAllowOption(t *testing.T) {
 	t.Parallel()
 
 	w := &bufferWriter{}
-	c := &hermesClient{
+	c := &acpClient{
 		cfg:     Config{Logger: slog.Default()},
 		stdin:   w,
 		pending: make(map[int]*pendingRPC),
@@ -677,16 +677,16 @@ func TestHermesClientRejectsPermissionRequestWithoutAllowOption(t *testing.T) {
 	}
 }
 
-// TestHermesClientReplesMethodNotFoundForUnknownAgentRequest ensures
+// TestACPClientReplesMethodNotFoundForUnknownAgentRequest ensures
 // that any agent → client request we don't explicitly handle gets a
 // proper JSON-RPC error back, not silence. Silence would block the
 // agent for however long its internal timeout is, same as the
 // session/request_permission hang this change fixes.
-func TestHermesClientReplesMethodNotFoundForUnknownAgentRequest(t *testing.T) {
+func TestACPClientReplesMethodNotFoundForUnknownAgentRequest(t *testing.T) {
 	t.Parallel()
 
 	w := &bufferWriter{}
-	c := &hermesClient{
+	c := &acpClient{
 		cfg:     Config{Logger: slog.Default()},
 		stdin:   w,
 		pending: make(map[int]*pendingRPC),
@@ -717,11 +717,11 @@ func TestHermesClientReplesMethodNotFoundForUnknownAgentRequest(t *testing.T) {
 
 // ── session/update notification handling ──
 
-func TestHermesClientHandleAgentMessage(t *testing.T) {
+func TestACPClientHandleAgentMessage(t *testing.T) {
 	t.Parallel()
 
 	var got Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = msg
@@ -739,11 +739,11 @@ func TestHermesClientHandleAgentMessage(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleSessionNotificationAgentMessage(t *testing.T) {
+func TestACPClientHandleSessionNotificationAgentMessage(t *testing.T) {
 	t.Parallel()
 
 	var got Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = msg
@@ -761,22 +761,22 @@ func TestHermesClientHandleSessionNotificationAgentMessage(t *testing.T) {
 	}
 }
 
-// Regression for #1997: Hermes ACP can flush queued session updates from
+// Regression for #1997: an ACP server can flush queued session updates from
 // the previous turn (history replay on session/resume, or chunks queued
 // before our session/prompt response is sent) before the current turn
 // actually starts. Until acceptNotification gates them out, those updates
 // were appended to output and re-sent to the UI, making the previous
 // answer appear duplicated alongside the new one. The Backend wires the
 // gate to a streamingCurrentTurn flag set just before session/prompt; here
-// we exercise the gate directly on hermesClient.
-func TestHermesClientAcceptNotificationGate(t *testing.T) {
+// we exercise the gate directly on acpClient.
+func TestACPClientAcceptNotificationGate(t *testing.T) {
 	t.Parallel()
 
 	var (
 		got    []Message
 		accept bool
 	)
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		acceptNotification: func(string) bool {
 			return accept
@@ -803,11 +803,11 @@ func TestHermesClientAcceptNotificationGate(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleAgentThought(t *testing.T) {
+func TestACPClientHandleAgentThought(t *testing.T) {
 	t.Parallel()
 
 	var got Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = msg
@@ -825,11 +825,11 @@ func TestHermesClientHandleAgentThought(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleToolCallStart(t *testing.T) {
+func TestACPClientHandleToolCallStart(t *testing.T) {
 	t.Parallel()
 
 	var got Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = msg
@@ -853,11 +853,11 @@ func TestHermesClientHandleToolCallStart(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleSessionNotificationToolCall(t *testing.T) {
+func TestACPClientHandleSessionNotificationToolCall(t *testing.T) {
 	t.Parallel()
 
 	var got []Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = append(got, msg)
@@ -887,13 +887,13 @@ func TestHermesClientHandleSessionNotificationToolCall(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleSessionNotificationTurnEnd(t *testing.T) {
+func TestACPClientHandleSessionNotificationTurnEnd(t *testing.T) {
 	t.Parallel()
 
-	var got hermesPromptResult
-	c := &hermesClient{
+	var got acpPromptResult
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
-		onPromptDone: func(result hermesPromptResult) {
+		onPromptDone: func(result acpPromptResult) {
 			got = result
 		},
 	}
@@ -909,11 +909,11 @@ func TestHermesClientHandleSessionNotificationTurnEnd(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleToolCallComplete(t *testing.T) {
+func TestACPClientHandleToolCallComplete(t *testing.T) {
 	t.Parallel()
 
 	var got Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = msg
@@ -934,7 +934,7 @@ func TestHermesClientHandleToolCallComplete(t *testing.T) {
 	}
 }
 
-// TestHermesClientKimiStreamingToolCall walks the real kimi frame
+// TestACPClientKimiStreamingToolCall walks the real kimi frame
 // sequence for a single Shell call:
 //  1. tool_call with empty content (LLM hasn't started emitting args yet)
 //  2. tool_call_update status=in_progress carrying the cumulative args
@@ -945,11 +945,11 @@ func TestHermesClientHandleToolCallComplete(t *testing.T) {
 // the UI doesn't show a command like `{"comma` — and the MessageToolUse
 // must carry the parsed args as the Input map (`{"command": "echo hi"}`
 // → Input["command"] = "echo hi") rather than a raw string.
-func TestHermesClientKimiStreamingToolCall(t *testing.T) {
+func TestACPClientKimiStreamingToolCall(t *testing.T) {
 	t.Parallel()
 
 	var got []Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = append(got, msg)
@@ -1003,15 +1003,15 @@ func TestHermesClientKimiStreamingToolCall(t *testing.T) {
 	}
 }
 
-// TestHermesClientKimiMalformedArgsFallback: if the accumulated args
+// TestACPClientKimiMalformedArgsFallback: if the accumulated args
 // aren't valid JSON (streaming glitch, tool with non-JSON args), we
 // still surface the text under Input.text rather than silently
 // dropping it.
-func TestHermesClientKimiMalformedArgsFallback(t *testing.T) {
+func TestACPClientKimiMalformedArgsFallback(t *testing.T) {
 	t.Parallel()
 
 	var got []Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = append(got, msg)
@@ -1029,16 +1029,16 @@ func TestHermesClientKimiMalformedArgsFallback(t *testing.T) {
 	}
 }
 
-// TestHermesClientHandleToolCallCompleteOrphan: if a completion frame
+// TestACPClientHandleToolCallCompleteOrphan: if a completion frame
 // arrives without a preceding tool_call (out-of-order / missed frame),
 // still emit ToolUse synthesised from the update's own title/rawInput
 // before ToolResult. Keeps the UI from showing a bare result with no
 // header.
-func TestHermesClientHandleToolCallCompleteOrphan(t *testing.T) {
+func TestACPClientHandleToolCallCompleteOrphan(t *testing.T) {
 	t.Parallel()
 
 	var got []Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = append(got, msg)
@@ -1061,14 +1061,13 @@ func TestHermesClientHandleToolCallCompleteOrphan(t *testing.T) {
 	}
 }
 
-// TestHermesClientHandleToolCallRawOutputTakesPrecedence keeps hermes
-// behaviour unchanged: when the update has both `rawOutput` (hermes
+// TestACPClientHandleToolCallRawOutputTakesPrecedence: when the update has both `rawOutput`
 // convention) and `content` (would be ambiguous), honour rawOutput.
-func TestHermesClientHandleToolCallRawOutputTakesPrecedence(t *testing.T) {
+func TestACPClientHandleToolCallRawOutputTakesPrecedence(t *testing.T) {
 	t.Parallel()
 
 	var got Message
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			got = msg
@@ -1139,11 +1138,11 @@ func TestExtractACPToolCallText(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleToolCallInProgressIgnored(t *testing.T) {
+func TestACPClientHandleToolCallInProgressIgnored(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			called = true
@@ -1158,10 +1157,10 @@ func TestHermesClientHandleToolCallInProgressIgnored(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleUsageUpdate(t *testing.T) {
+func TestACPClientHandleUsageUpdate(t *testing.T) {
 	t.Parallel()
 
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 	}
 
@@ -1182,10 +1181,10 @@ func TestHermesClientHandleUsageUpdate(t *testing.T) {
 	}
 }
 
-func TestHermesClientHandleUsageUpdateCumulative(t *testing.T) {
+func TestACPClientHandleUsageUpdateCumulative(t *testing.T) {
 	t.Parallel()
 
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 	}
 
@@ -1208,13 +1207,13 @@ func TestHermesClientHandleUsageUpdateCumulative(t *testing.T) {
 
 // ── extractPromptResult ──
 
-func TestHermesClientExtractPromptResult(t *testing.T) {
+func TestACPClientExtractPromptResult(t *testing.T) {
 	t.Parallel()
 
-	var got hermesPromptResult
-	c := &hermesClient{
+	var got acpPromptResult
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
-		onPromptDone: func(result hermesPromptResult) {
+		onPromptDone: func(result acpPromptResult) {
 			got = result
 		},
 	}
@@ -1236,13 +1235,13 @@ func TestHermesClientExtractPromptResult(t *testing.T) {
 	}
 }
 
-func TestHermesClientExtractPromptResultNoUsage(t *testing.T) {
+func TestACPClientExtractPromptResultNoUsage(t *testing.T) {
 	t.Parallel()
 
-	var got hermesPromptResult
-	c := &hermesClient{
+	var got acpPromptResult
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
-		onPromptDone: func(result hermesPromptResult) {
+		onPromptDone: func(result acpPromptResult) {
 			got = result
 		},
 	}
@@ -1258,11 +1257,11 @@ func TestHermesClientExtractPromptResultNoUsage(t *testing.T) {
 	}
 }
 
-func TestHermesClientIgnoresUnknownNotification(t *testing.T) {
+func TestACPClientIgnoresUnknownNotification(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 		onMessage: func(msg Message) {
 			called = true
@@ -1277,10 +1276,10 @@ func TestHermesClientIgnoresUnknownNotification(t *testing.T) {
 	}
 }
 
-func TestHermesClientIgnoresInvalidJSON(t *testing.T) {
+func TestACPClientIgnoresInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	c := &hermesClient{
+	c := &acpClient{
 		pending: make(map[int]*pendingRPC),
 	}
 
@@ -1290,14 +1289,14 @@ func TestHermesClientIgnoresInvalidJSON(t *testing.T) {
 	c.handleLine("{}")
 }
 
-func TestHermesProviderErrorSniffer(t *testing.T) {
+func TestACPProviderErrorSniffer(t *testing.T) {
 	t.Parallel()
 
-	// Real sample of the stderr hermes emits when the configured
+	// Real sample of the stderr an ACP server emits when the configured
 	// LLM endpoint rejects the requested model. We verify the
 	// sniffer extracts the `Error: ...` line so the task error
 	// tells the user *why* it failed.
-	s := newACPProviderErrorSniffer("hermes")
+	s := newACPProviderErrorSniffer("acp")
 	lines := []string{
 		"2026-04-20 23:41:47 [INFO] acp_adapter.server: Prompt on session abc",
 		`⚠️  API call failed (attempt 1/3): BadRequestError [HTTP 400]`,
@@ -1319,10 +1318,10 @@ func TestHermesProviderErrorSniffer(t *testing.T) {
 	}
 }
 
-func TestHermesProviderErrorSnifferIgnoresInfoLines(t *testing.T) {
+func TestACPProviderErrorSnifferIgnoresInfoLines(t *testing.T) {
 	t.Parallel()
 
-	s := newACPProviderErrorSniffer("hermes")
+	s := newACPProviderErrorSniffer("acp")
 	s.Write([]byte("2026-04-20 23:41:45 [INFO] acp_adapter.entry: Loaded env\n"))
 	s.Write([]byte("2026-04-20 23:41:47 [INFO] agent.auxiliary_client: Vision auto-detect...\n"))
 	if msg := s.message(); msg != "" {
@@ -1330,12 +1329,12 @@ func TestHermesProviderErrorSnifferIgnoresInfoLines(t *testing.T) {
 	}
 }
 
-func TestHermesProviderErrorSnifferHandlesPartialLines(t *testing.T) {
+func TestACPProviderErrorSnifferHandlesPartialLines(t *testing.T) {
 	t.Parallel()
 
 	// Writer may be called mid-line; the sniffer must buffer until
 	// it sees a newline so the regex doesn't miss the header.
-	s := newACPProviderErrorSniffer("hermes")
+	s := newACPProviderErrorSniffer("acp")
 	s.Write([]byte(`⚠️  API call failed (attempt 1/3):`))
 	s.Write([]byte(` BadRequestError [HTTP 400]` + "\n"))
 	s.Write([]byte(`   📝 Error: something went wrong` + "\n"))
@@ -1345,10 +1344,10 @@ func TestHermesProviderErrorSnifferHandlesPartialLines(t *testing.T) {
 	}
 }
 
-func TestHermesProviderErrorSnifferBoundedBuffer(t *testing.T) {
+func TestACPProviderErrorSnifferBoundedBuffer(t *testing.T) {
 	t.Parallel()
 
-	s := newACPProviderErrorSniffer("hermes")
+	s := newACPProviderErrorSniffer("acp")
 	for i := 0; i < 20; i++ {
 		// Each line differs so dedup doesn't merge them.
 		s.Write([]byte(`⚠️  API call failed (HTTP 400) attempt ` + string(rune('a'+i%26)) + `: Non-retryable error` + "\n"))
@@ -1358,7 +1357,7 @@ func TestHermesProviderErrorSnifferBoundedBuffer(t *testing.T) {
 	}
 }
 
-func fakeHermesACPUsageWithDefaultModelScript() string {
+func fakeACPUsageWithDefaultModelScript() string {
 	return `#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
@@ -1379,16 +1378,16 @@ done
 }
 
 
-// fakeHermesACPRateLimitScript impersonates hermes for the GitHub
+// fakeACPRateLimitScript impersonates an ACP server for the GitHub
 // multica#1952 scenario: the upstream LLM returns HTTP 429 (rate
-// limited / no credit), hermes retries internally and ultimately
+// limited / no credit), the server retries internally and ultimately
 // emits both a sniffable stderr error block AND a synthetic agent
 // text turn ("API call failed after 3 retries..."), then completes
 // session/prompt with stopReason=end_turn (NOT an RPC error). The
 // daemon must still treat this as a failed run, not a successful
-// one — which means the hermes backend has to promote the status
+// one — which means the ACP backend has to promote the status
 // to "failed" even though `output` is non-empty.
-func fakeHermesACPRateLimitScript() string {
+func fakeACPRateLimitScript() string {
 	return `#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
@@ -1400,10 +1399,10 @@ while IFS= read -r line; do
       printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"ses_429"}}\n' "$id"
       ;;
     *'"method":"session/prompt"'*)
-      # Mimic hermes' real-world stderr block on a 429.
+      # Mimic a real-world ACP stderr block on a 429.
       printf '%s\n' '⚠️  API call failed (attempt 3/3): RateLimitError [HTTP 429]' >&2
       printf '%s\n' '   📝 Error: HTTP 429: The usage limit has been reached' >&2
-      # Mimic hermes injecting the failure as a synthetic agent turn so
+      # Mimic the server injecting the failure as a synthetic agent turn so
       # the chat shows *something*; this puts text in output and used to
       # mask the failure from the daemon.
       printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_429","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"API call failed after 3 retries: HTTP 429: The usage limit has been reached"}}}}\n'
@@ -1415,21 +1414,21 @@ done
 `
 }
 
-// TestHermesProviderErrorSnifferTerminalVsTransient verifies the
+// TestACPProviderErrorSnifferTerminalVsTransient verifies the
 // sniffer reports terminalMessage()=="" for a per-attempt warning
 // that did NOT escalate to an exhausted/non-retryable failure, but
 // still returns the same string from message() so callers wanting
 // diagnostic text can use it. This is what prevents the
 // promote-on-any-sniff false positive (a transient `attempt 1/3`
 // followed by a successful retry must stay "completed").
-func TestHermesProviderErrorSnifferTerminalVsTransient(t *testing.T) {
+func TestACPProviderErrorSnifferTerminalVsTransient(t *testing.T) {
 	t.Parallel()
 
 	// Transient: the sniffer DID see something matching acpErrorHeaderRe
 	// (so `message()` is non-empty for diagnostic purposes), but the
 	// signal is just "attempt 1/3 against a retryable rate limit" — no
 	// terminal markers at all.
-	s := newACPProviderErrorSniffer("hermes")
+	s := newACPProviderErrorSniffer("acp")
 	s.Write([]byte("⚠️  API call failed (attempt 1/3): retryable upstream blip\n"))
 	if msg := s.message(); msg == "" {
 		t.Fatalf("sniffer should still capture transient warnings for diagnostics")
@@ -1445,13 +1444,13 @@ func TestHermesProviderErrorSnifferTerminalVsTransient(t *testing.T) {
 	}
 }
 
-// TestHermesProviderErrorSnifferTerminalNonRetryable verifies that a
+// TestACPProviderErrorSnifferTerminalNonRetryable verifies that a
 // non-retryable error (BadRequest / Authentication / Non-retryable)
 // is treated as terminal even on attempt 1/3 — those errors don't
 // retry, so the very first failure is the final disposition. Also
 // covers ❌ / [ERROR] / "after N retries" markers that adapters
 // emit on give-up.
-func TestHermesProviderErrorSnifferTerminalNonRetryable(t *testing.T) {
+func TestACPProviderErrorSnifferTerminalNonRetryable(t *testing.T) {
 	t.Parallel()
 
 	for _, line := range []string{
@@ -1461,7 +1460,7 @@ func TestHermesProviderErrorSnifferTerminalNonRetryable(t *testing.T) {
 		`❌ API call failed after 3 retries: RateLimitError [HTTP 429]`,
 		`[ERROR] API call failed: upstream returned HTTP 500`,
 	} {
-		s := newACPProviderErrorSniffer("hermes")
+		s := newACPProviderErrorSniffer("acp")
 		s.Write([]byte(line + "\n"))
 		if msg := s.terminalMessage(); msg == "" {
 			t.Errorf("expected %q to be classified as terminal", line)
@@ -1469,10 +1468,10 @@ func TestHermesProviderErrorSnifferTerminalNonRetryable(t *testing.T) {
 	}
 }
 
-// TestHermesBackendPromotesProviderErrorWithNonEmptyOutput pins the
-// fix for GitHub multica#1952: a hermes run that hits a 429 (or any
+// TestACPBackendPromotesProviderErrorWithNonEmptyOutput pins the
+// fix for GitHub multica#1952: an ACP run that hits a 429 (or any
 // upstream provider error) must surface as Status=failed even though
-// hermes' synthetic "API call failed..." agent turn means the output
+// a synthetic "API call failed..." agent turn means the output
 // buffer is non-empty. Before the fix the sniffer-promotion was
 // gated on `finalOutput == ""`, so the run silently completed.
 
@@ -1491,7 +1490,7 @@ func TestIsACPSessionNotFound(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "hermes session not found in message",
+			name: "session not found in message",
 			err:  &acpRPCError{Method: "session/prompt", Code: -32603, Message: "Session not found"},
 			want: true,
 		},
@@ -1511,6 +1510,11 @@ func TestIsACPSessionNotFound(t *testing.T) {
 			// "Session not found"}) for every unknown-session path
 			// (src/kimi_cli/acp/server.py), so -32602 must match too.
 			err:  &acpRPCError{Method: "session/set_model", Code: -32602, Message: "Invalid params", Data: `{"session_id": "Session not found"}`},
+			want: true,
+		},
+		{
+			name: "grok session/load path not found",
+			err:  &acpRPCError{Method: "session/load", Code: -32603, Message: "Path not found.", Data: `{"code":"FS_NOT_FOUND","detail":"No such file or directory (os error 2)"}`},
 			want: true,
 		},
 		{
@@ -1544,12 +1548,12 @@ func TestIsACPSessionNotFound(t *testing.T) {
 	}
 }
 
-// fakeHermesACPStaleResumeScript impersonates the failure shape from
+// fakeACPStaleResumeScript impersonates the failure shape from
 // GitHub multica#4010: session/resume succeeds and echoes back the
-// requested sessionId (hermes' observed behavior even when it no longer
+// requested sessionId (observed ACP behavior even when it no longer
 // knows the session), and the subsequent session/prompt then fails with
 // JSON-RPC -32603 "Session not found".
-func fakeHermesACPStaleResumeScript() string {
+func fakeACPStaleResumeScript() string {
 	return `#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
@@ -1570,7 +1574,7 @@ done
 `
 }
 
-// TestHermesBackendClearsSessionIDWhenResumedSessionNotFound pins the
+// TestACPBackendClearsSessionIDWhenResumedSessionNotFound pins the
 // fix for GitHub multica#4010: when a resumed session turns out to be
 // gone on the agent side (resume echoes the requested id, prompt then
 // fails -32603 "Session not found"), the Result must carry an empty
@@ -1579,12 +1583,12 @@ done
 // never fires and every future dispatch on the same (agent, issue)
 // loops on the dead session.
 
-// fakeHermesACPStaleResumeSetModelScript is the model-override variant
-// of fakeHermesACPStaleResumeScript: session/resume echoes the requested
+// fakeACPStaleResumeSetModelScript is the model-override variant
+// of fakeACPStaleResumeScript: session/resume echoes the requested
 // sessionId back, and the dead session then surfaces at
 // session/set_model (which runs before session/prompt whenever the
 // caller picked a model) with the same -32603 "Session not found".
-func fakeHermesACPStaleResumeSetModelScript() string {
+func fakeACPStaleResumeSetModelScript() string {
 	return `#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
@@ -1605,20 +1609,20 @@ done
 `
 }
 
-// TestHermesBackendClearsSessionIDWhenSetModelSessionNotFound pins the
+// TestACPBackendClearsSessionIDWhenSetModelSessionNotFound pins the
 // set_model sibling of the prompt-path fix above: with a model
 // override, session/set_model runs before session/prompt, so a dead
 // resumed session surfaces there instead. The Result must carry an
 // empty SessionID here too, or the daemon's fresh-session retry never
 // fires for any agent configured with a model.
 
-// fakeHermesACPTransientRetryScript emits a single retryable per-
+// fakeACPTransientRetryScript emits a single retryable per-
 // attempt warning to stderr and then completes with a normal agent
 // text turn — the situation where the upstream LLM blipped on
 // attempt 1/3 but a subsequent attempt succeeded and produced a
 // real answer. The previous (too-broad) promotion logic would have
 // flipped this to status=failed; the fix must keep it as completed.
-func fakeHermesACPTransientRetryScript() string {
+func fakeACPTransientRetryScript() string {
 	return `#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
@@ -1630,7 +1634,7 @@ while IFS= read -r line; do
       printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"ses_ok"}}\n' "$id"
       ;;
     *'"method":"session/prompt"'*)
-      # Per-attempt rate-limit warning that hermes routinely logs on
+      # Per-attempt rate-limit warning that ACP servers routinely log on
       # transient blips — the request DOES retry and succeed below.
       printf '%s\n' '⚠️  API call failed (attempt 1/3): RateLimitError [HTTP 429]' >&2
       # Real agent answer streamed back as a normal text turn.
@@ -1643,7 +1647,7 @@ done
 `
 }
 
-// TestHermesBackendDoesNotPromoteOnTransientRetry pins the
+// TestACPBackendDoesNotPromoteOnTransientRetry pins the
 // regression GPT-Boy flagged on the multica#1952 fix: a per-attempt
 // ⚠️ warning on stderr that does NOT include any terminal marker
 // ("after N retries", Non-retryable, ❌, [ERROR], BadRequest /
@@ -1715,7 +1719,7 @@ func TestFilterACPMcpServersByCapabilityStdioAlwaysPassesThrough(t *testing.T) {
 	servers := []any{
 		map[string]any{"name": "fetch", "command": "uvx"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{}, "hermes", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{}, "acp", slog.Default())
 	if len(got) != 1 {
 		t.Fatalf("len: got %d, want 1", len(got))
 	}
@@ -1728,7 +1732,7 @@ func TestFilterACPMcpServersByCapabilityDropsUnsupportedHttp(t *testing.T) {
 		map[string]any{"type": "http", "name": "http-drop", "url": "https://x/mcp"},
 		map[string]any{"type": "sse", "name": "sse-keep", "url": "https://x/sse"},
 	}
-	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{SSE: true}, "hermes", slog.Default())
+	got := filterACPMcpServersByCapability(servers, acpMcpTransportCapabilities{SSE: true}, "acp", slog.Default())
 	if len(got) != 2 {
 		t.Fatalf("len: got %d, want 2 (http should be dropped, sse kept)", len(got))
 	}
@@ -1771,13 +1775,13 @@ func TestFilterACPMcpServersByCapabilityKeepsAllWhenBothSupported(t *testing.T) 
 
 func TestFilterACPMcpServersByCapabilityEmptyInputReturnsEmpty(t *testing.T) {
 	t.Parallel()
-	got := filterACPMcpServersByCapability(nil, acpMcpTransportCapabilities{HTTP: true, SSE: true}, "hermes", slog.Default())
+	got := filterACPMcpServersByCapability(nil, acpMcpTransportCapabilities{HTTP: true, SSE: true}, "acp", slog.Default())
 	if len(got) != 0 {
 		t.Errorf("len: got %d, want 0", len(got))
 	}
 }
 
-// TestHermesExecuteFailsClosedOnMalformedMcpConfig pins the contract that
+// TestACPExecuteFailsClosedOnMalformedMcpConfig pins the contract that
 // a malformed mcp_config aborts the launch *before* the child is spawned.
 // Silently launching with no MCP servers would look indistinguishable
 // from "the saved config was applied" and is exactly the surprise the
@@ -1785,7 +1789,7 @@ func TestFilterACPMcpServersByCapabilityEmptyInputReturnsEmpty(t *testing.T) {
 
 // fakeACPRecordingScript impersonates an ACP agent that records every
 // JSON-RPC frame it receives to a file (one per line) before responding.
-// The runtime name parameter lets the same script drive Hermes / Kimi /
+// The runtime name parameter lets the same script drive Kimi /
 // Kiro fakes — only the session/load vs session/resume method differs.
 //
 // `caps` is the JSON for `agentCapabilities` returned from initialize so
@@ -1842,16 +1846,16 @@ func findRecordedFrame(t *testing.T, recordPath, method string) map[string]any {
 	return nil
 }
 
-// TestHermesResumeIncludesMcpServers pins the contract that
+// TestACPResumeIncludesMcpServers pins the contract that
 // session/resume carries the managed MCP set. Without this, a resumed
-// Hermes task lost access to MCP tools that a fresh task on the same
+// An ACP task lost access to MCP tools that a fresh task on the same
 // agent would have — which is the inconsistency Elon's review flagged.
 
-// TestHermesDropsRemoteMcpWhenCapabilityNotAdvertised pins the contract
+// TestACPDropsRemoteMcpWhenCapabilityNotAdvertised pins the contract
 // that when the runtime's initialize response advertises no http/sse
 // support, those entries are filtered out of session/new — sending them
 // anyway is a protocol violation that reliably tanks the request.
 
-// TestHermesKeepsRemoteMcpWhenCapabilityAdvertised confirms the gate
+// TestACPKeepsRemoteMcpWhenCapabilityAdvertised confirms the gate
 // doesn't over-filter: when the runtime advertises http+sse, all entries
 // must pass through to session/new.

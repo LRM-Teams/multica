@@ -37,7 +37,7 @@ func TestV6SteeringTriggerTransactionBoundary(t *testing.T) {
 }
 
 func TestV6DirectorProposalClaimTransactionBoundary(t *testing.T) {
-	assertV6SteeringSourceContains(t, "postgres_director_action_v6.go", "FOR UPDATE OF sub SKIP LOCKED", "status='processing'", "validateV6DirectorActionDAG")
+	assertV6SteeringSourceContains(t, "postgres_director_action_v6.go", "FOR UPDATE SKIP LOCKED", "status='processing'", "validateV6DirectorActionDAG")
 }
 
 func TestV6DirectorProposalCompletionTransactionBoundary(t *testing.T) {

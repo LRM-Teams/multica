@@ -5295,7 +5295,6 @@ export class ApiClient {
         edges: [],
         density_bins: [],
         has_more: false,
-        next_cursor: undefined,
       };
     }
     return snapshot;

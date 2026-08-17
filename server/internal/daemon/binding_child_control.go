@@ -19,16 +19,8 @@ type bindingChildControlIdentity = computer.BindingChildIdentity
 // daemon package's Workspace execution interfaces.
 type bindingHostControlClient struct{ client *computer.HostControlClient }
 
-func newBindingHostControlClient(baseURL, token string, identity bindingChildControlIdentity) *bindingHostControlClient {
-	return &bindingHostControlClient{client: computer.NewHostControlClient(baseURL, token, identity)}
-}
-
-func (client *bindingHostControlClient) Attest(ctx context.Context) error {
-	return client.client.Attest(ctx)
-}
-
-func (client *bindingHostControlClient) AwaitAttest(ctx context.Context) error {
-	return client.client.AwaitAttest(ctx)
+func newBindingHostControlClient(endpoint, token string, identity bindingChildControlIdentity) *bindingHostControlClient {
+	return &bindingHostControlClient{client: computer.NewHostControlClient(endpoint, token, identity)}
 }
 
 func (client *bindingHostControlClient) recordDiagnostic(ctx context.Context, workspaceID string, event diagnosticlog.Event) error {
@@ -128,7 +120,7 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 	}
 	switch action {
 	case protocol.EventComputerUpgrade:
-		if d.bindingMachineUpgrade == nil {
+		if d.bindingHostControl == nil {
 			// Raft 1.0.16: a DaemonCore not constructed by Computer
 			// ignores computer:upgrade instead of inventing a Host path.
 			if d.logger != nil {
@@ -136,7 +128,17 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 			}
 			return nil
 		}
-		return d.bindingMachineUpgrade(ctx, command)
+		// Drain is runner-owned and may wait for active provider work; do not
+		// hold the service IPC request open while the service claims the
+		// machine-wide operation.
+		go func() { _ = d.beginBindingDrain(ctx) }()
+		forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := d.bindingHostControl.client.RequestComputerUpgrade(forwardCtx, command); err != nil {
+			d.releaseClaimBarrier()
+			return err
+		}
+		return nil
 	case protocol.EventComputerRestart:
 		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: command.Operation()}}
 		if d.bindingHostControl == nil {

@@ -22,7 +22,7 @@ import (
 
 const bindingChildRuntimeHelperEnv = "MULTICA_BINDING_CHILD_RUNTIME_HELPER"
 
-func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
+func TestBindingChildProcessFallbackRunsTheRealWorkspaceRunner(t *testing.T) {
 	const (
 		workspaceID  = "workspace-a"
 		computerID   = "computer-a"
@@ -112,7 +112,7 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 	bootstrap := computer.BindingChildBootstrap{
 		ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
 		ComputerID: computerID, ComputerGeneration: 11, RunnerGeneration: 1,
-		Environment: "test", ServerBaseURL: server.URL, HostControlURL: hostServer.URL,
+		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: hostServer.URL,
 		BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 	}
 	child, err := computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, bootstrap)
@@ -121,6 +121,7 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = child.Stop() })
 	installLiveBindingChild(t, host, workspaceID, child.PID())
+	child.Activate()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -131,7 +132,7 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 	if ready.PID != child.PID() || ready.WorkspaceID != workspaceID || ready.RunnerGeneration != 1 {
 		t.Fatalf("Binding child Ready = %+v, pid=%d", ready, child.PID())
 	}
-	if err := computer.RequestBindingReregisterRuntime(ctx, ready.ControlURL, controlToken, computer.BindingChildIdentity{
+	if err := computer.RequestBindingReregisterRuntime(ctx, ready.RunnerEndpoint, controlToken, computer.BindingChildIdentity{
 		WorkspaceID: workspaceID, RunnerGeneration: ready.RunnerGeneration, PID: ready.PID,
 	}); err != nil {
 		t.Fatalf("request child-owned Runtime re-registration: %v", err)
@@ -157,11 +158,16 @@ func TestBindingChildProcessRunsTheRealWorkspaceRunner(t *testing.T) {
 	go func() { exited <- child.Wait() }()
 	select {
 	case class := <-exited:
-		if class != computer.RunnerExitCrash {
-			t.Fatalf("orphaned Binding child exit = %s, want crash", class)
-		}
+		t.Fatalf("Binding child exited after Host loss with class %s", class)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if err := child.Stop(); err != nil {
+		t.Fatalf("stop Binding child after Host loss: %v", err)
+	}
+	select {
+	case <-exited:
 	case <-ctx.Done():
-		t.Fatal("Binding child survived its Computer Host")
+		t.Fatal("Binding child did not stop through its process handle")
 	}
 }
 
@@ -260,14 +266,14 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 
 	t.Setenv(bindingChildRuntimeHelperEnv, providerPath)
 	t.Setenv("MULTICA_BINDING_CHILD_CONTROL_TOKEN", controlToken)
-	var hostControlURL string
+	var serviceEndpoint string
 	host, err := computer.NewHost(computer.HostConfig{
 		ControlToken: controlToken,
 		Spawn: func(workspaceID string, runnerGeneration int64) (computer.BindingChild, error) {
 			return computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, computer.BindingChildBootstrap{
 				ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
 				ComputerID: computerID, ComputerGeneration: 21, RunnerGeneration: runnerGeneration,
-				Environment: "test", ServerBaseURL: server.URL, HostControlURL: hostControlURL,
+				Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: serviceEndpoint,
 				BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 			})
 		},
@@ -278,7 +284,7 @@ func TestComputerHostRunsTwoRealIsolatedBindingChildProcesses(t *testing.T) {
 	hostMux := http.NewServeMux()
 	host.RegisterRoutes(hostMux)
 	hostServer := httptest.NewServer(hostMux)
-	hostControlURL = hostServer.URL
+	serviceEndpoint = hostServer.URL
 	t.Cleanup(hostServer.Close)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -397,7 +403,7 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *te
 	bootstrap := computer.BindingChildBootstrap{
 		ProtocolVersion: computer.BindingChildProtocolVersion, WorkspaceID: workspaceID,
 		ComputerID: computerID, ComputerGeneration: 31, RunnerGeneration: 1,
-		Environment: "test", ServerBaseURL: server.URL, HostControlURL: hostServer.URL,
+		Environment: "test", ServerBaseURL: server.URL, ServiceEndpoint: hostServer.URL,
 		BindingsRoot: root, WorkspacesRoot: workspacesRoot,
 	}
 	child, err := computer.StartBindingProcess(os.Args[0], []string{"-test.run=TestRunBindingChildProcessHelper"}, bootstrap)
@@ -406,6 +412,7 @@ func TestBindingChildPublishesReadyWithoutAgentRuntimesOrWorkspaceRunnerWS(t *te
 	}
 	t.Cleanup(func() { _ = child.Stop() })
 	installLiveBindingChild(t, host, workspaceID, child.PID())
+	child.Activate()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

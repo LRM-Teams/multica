@@ -12,7 +12,7 @@ import (
 func TestDiagnoseReadOnlyAndReflectsResident(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{"status": "running", "connected": true, "daemon_id": "d1"}
 	}
 
@@ -28,7 +28,7 @@ func TestDiagnoseReadOnlyAndReflectsResident(t *testing.T) {
 func TestDiagnoseRunningButServerDisconnected(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{"status": "running", "connected": false, "agents": []any{"fresh-agent"}}
 	}
 
@@ -41,7 +41,7 @@ func TestDiagnoseRunningButServerDisconnected(t *testing.T) {
 func TestDiagnoseStoppedIsDisconnected(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any { return map[string]any{"status": "stopped"} }
+	lc.Probe = func(context.Context, string) map[string]any { return map[string]any{"status": "stopped"} }
 
 	d := lc.Diagnose()
 	if d.Resident != "stopped" || d.Connected {
@@ -73,7 +73,7 @@ func TestDiagnoseReportsConfigResidentDriftAndPreservedMigrationEvidence(t *test
 	}
 
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{
 			"status":          "running",
 			"connected":       true,

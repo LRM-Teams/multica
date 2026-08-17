@@ -1,7 +1,6 @@
 package computer
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -17,13 +16,13 @@ import (
 )
 
 const (
-	bindingChildAttestPath              = "/binding-child/attest"
 	bindingChildCapacityPath            = "/binding-child/capacity"
 	bindingChildDiagnosticPath          = "/binding-child/diagnostics"
 	bindingChildLifecycleDiagnosticPath = "/binding-child/lifecycle-diagnostics"
 	bindingChildMachineActionsPath      = "/binding-child/machine-actions"
 	bindingChildRuntimeSetPath          = "/binding-child/runtime-set"
 	bindingChildPrepareUpgradePath      = "/binding-child/prepare-upgrade"
+	bindingChildComputerUpgradePath     = "/binding-child/computer-upgrade"
 	bindingChildControlBusyCode         = "control_busy"
 )
 
@@ -52,6 +51,7 @@ type HostControlCallbacks struct {
 	LifecycleDiagnostic func(context.Context, BindingChildIdentity, json.RawMessage) error
 	MachineActions      func(context.Context, BindingChildIdentity, json.RawMessage) error
 	PrepareUpgrade      func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
+	ComputerUpgrade     func(context.Context, BindingChildIdentity, json.RawMessage) error
 	Released            func(BindingChildIdentity)
 }
 
@@ -74,12 +74,12 @@ func NewHostControl(token string, capacity *ProcessCapacity, callbacks HostContr
 }
 
 func (control *HostControl) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc(bindingChildAttestPath, control.attestHandler())
 	mux.HandleFunc(bindingChildCapacityPath, control.capacityHandler())
 	mux.HandleFunc(bindingChildDiagnosticPath, control.diagnosticHandler())
 	mux.HandleFunc(bindingChildLifecycleDiagnosticPath, control.lifecycleDiagnosticHandler())
 	mux.HandleFunc(bindingChildMachineActionsPath, control.machineActionsHandler())
 	mux.HandleFunc(bindingChildPrepareUpgradePath, control.prepareUpgradeHandler())
+	mux.HandleFunc(bindingChildComputerUpgradePath, control.rawHandler(control.callbacks.ComputerUpgrade))
 	mux.HandleFunc(bindingChildRuntimeSetPath, control.runtimeSetHandler())
 }
 
@@ -127,20 +127,6 @@ func (control *HostControl) begin(w http.ResponseWriter, r *http.Request, target
 		return false
 	}
 	return true
-}
-
-func (control *HostControl) attestHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var identity BindingChildIdentity
-		if !control.begin(w, r, &identity) {
-			return
-		}
-		if !control.current(identity) {
-			http.Error(w, "inactive Binding child generation", http.StatusConflict)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}
 }
 
 type capacityControlRequest struct {
@@ -415,39 +401,13 @@ type HostControlClient struct {
 	baseURL  string
 	token    string
 	identity BindingChildIdentity
-	http     *http.Client
+	control  *localControlClient
+	initErr  error
 }
 
-func NewHostControlClient(baseURL, token string, identity BindingChildIdentity) *HostControlClient {
-	return &HostControlClient{
-		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"), token: strings.TrimSpace(token), identity: identity,
-		http: &http.Client{Timeout: 5 * time.Second},
-	}
-}
-
-func (client *HostControlClient) Attest(ctx context.Context) error {
-	return client.post(ctx, bindingChildAttestPath, client.identity, nil)
-}
-
-func (client *HostControlClient) AwaitAttest(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var lastErr error
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if err := client.Attest(ctx); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("attest Binding child to Host: %w: %v", ctx.Err(), lastErr)
-		case <-ticker.C:
-		}
-	}
+func NewHostControlClient(endpoint, token string, identity BindingChildIdentity) *HostControlClient {
+	controlClient, baseURL, err := localControlClientFor(endpoint, 5*time.Second)
+	return &HostControlClient{baseURL: baseURL, token: strings.TrimSpace(token), identity: identity, control: controlClient, initErr: err}
 }
 
 func (client *HostControlClient) AcquireCapacity(ctx context.Context, request ProcessCapacityRequest) (ProcessCapacityGrant, bool, error) {
@@ -485,6 +445,10 @@ func (client *HostControlClient) ForwardMachineActions(ctx context.Context, acti
 	return client.postRaw(ctx, bindingChildMachineActionsPath, actions)
 }
 
+func (client *HostControlClient) RequestComputerUpgrade(ctx context.Context, command any) error {
+	return client.postRaw(ctx, bindingChildComputerUpgradePath, command)
+}
+
 func (client *HostControlClient) ReportRuntimeSet(ctx context.Context, runtimes any, daemonToken, expiresAt string) error {
 	return client.post(ctx, bindingChildRuntimeSetPath, struct {
 		Identity             BindingChildIdentity `json:"identity"`
@@ -502,41 +466,26 @@ func (client *HostControlClient) postRaw(ctx context.Context, path string, paylo
 }
 
 func (client *HostControlClient) post(ctx context.Context, path string, input, output any) error {
-	if client == nil || client.baseURL == "" || client.token == "" || client.identity.Validate() != nil {
+	if client == nil || client.initErr != nil || client.control == nil || client.token == "" || client.identity.Validate() != nil {
 		return errors.New("Binding Host control client is not configured")
 	}
-	body, err := json.Marshal(input)
-	if err != nil {
-		return err
+	operation := localControlOperationForPath(path)
+	if operation == "" {
+		return fmt.Errorf("unknown Binding Host control operation for %s", path)
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Multica-Control-Token", client.token)
-	response, err := client.http.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		var failure struct {
-			Code string `json:"code"`
-		}
-		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&failure)
-		if response.StatusCode == http.StatusConflict && failure.Code == bindingChildControlBusyCode {
+	var raw json.RawMessage
+	if err := client.control.callAt(ctx, operation, path, map[string]string{
+		"Content-Type": "application/json", "X-Multica-Control-Token": client.token,
+	}, input, &raw); err != nil {
+		if strings.Contains(err.Error(), bindingChildControlBusyCode) {
 			return ErrComputerControlBusy
 		}
-		return fmt.Errorf("Binding Host control %s returned %s", path, response.Status)
+		return err
 	}
-	if output == nil || response.StatusCode == http.StatusNoContent {
+	if output == nil || len(raw) == 0 {
 		return nil
 	}
-	if err := json.NewDecoder(response.Body).Decode(output); err != nil {
+	if err := json.Unmarshal(raw, output); err != nil {
 		return fmt.Errorf("decode Binding Host control %s: %w", path, err)
 	}
 	return nil

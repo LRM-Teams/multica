@@ -20,14 +20,21 @@ type crashingSupervisorChild struct{ pid int }
 
 type readySupervisorChild struct {
 	*supervisorTestChild
-	controlURL string
+	controlEndpoint string
 }
+
+type activatingSupervisorChild struct {
+	*supervisorTestChild
+	activate func()
+}
+
+func (child *activatingSupervisorChild) Activate() { child.activate() }
 
 func (child *readySupervisorChild) AwaitReady(context.Context) (BindingChildReady, error) {
 	return BindingChildReady{
 		ProtocolVersion: BindingChildProtocolVersion,
 		PID:             child.pid,
-		ControlURL:      child.controlURL,
+		RunnerEndpoint:  child.controlEndpoint,
 	}, nil
 }
 
@@ -44,6 +51,38 @@ func (child *supervisorTestChild) Wait() RunnerExitClass { return <-child.wait }
 func (child *supervisorTestChild) Stop() error {
 	child.stopOnce.Do(func() { child.wait <- RunnerExitGraceful })
 	return nil
+}
+
+func TestBindingSupervisorRegistersChildBeforeActivation(t *testing.T) {
+	activated := make(chan bool, 1)
+	var supervisor *BindingSupervisor
+	var err error
+	supervisor, err = NewBindingSupervisor(BindingSupervisorConfig{
+		Spawn: func(workspaceID string, generation int64) (BindingChild, error) {
+			const pid = 101
+			return &activatingSupervisorChild{
+				supervisorTestChild: newSupervisorTestChild(pid),
+				activate: func() {
+					activated <- supervisor.Current(BindingChildIdentity{
+						WorkspaceID: workspaceID, RunnerGeneration: generation, PID: pid,
+					})
+				},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor.Reconcile(context.Background(), []string{"workspace-a"})
+	select {
+	case current := <-activated:
+		if !current {
+			t.Fatal("in-process Binding activated before supervisor registration")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-process Binding was not activated")
+	}
+	supervisor.Stop()
 }
 
 func TestBindingSupervisorRetainsSiblingAndFencesGenerationPID(t *testing.T) {
@@ -188,7 +227,7 @@ func TestBindingSupervisorPreparesEveryBindingForMachineControls(t *testing.T) {
 			if workspaceID == "workspace-b" {
 				pid = 402
 			}
-			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(pid), controlURL: control.URL}, nil
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(pid), controlEndpoint: control.URL}, nil
 		},
 	})
 	if err != nil {
@@ -247,11 +286,11 @@ func TestBindingSupervisorReleasesPreparedSiblingsWhenMachineUpgradePrepareFails
 
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Spawn: func(workspaceID string, _ int64) (BindingChild, error) {
-			controlURL, pid := controlA.URL, 501
+			controlEndpoint, pid := controlA.URL, 501
 			if workspaceID == "workspace-b" {
-				controlURL, pid = controlB.URL, 502
+				controlEndpoint, pid = controlB.URL, 502
 			}
-			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(pid), controlURL: controlURL}, nil
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(pid), controlEndpoint: controlEndpoint}, nil
 		},
 	})
 	if err != nil {
@@ -290,7 +329,7 @@ func TestBindingSupervisorMachineUpgradeFailsForMissingDesiredChildButReleaseIsB
 			if workspaceID == "workspace-b" {
 				return crashingSupervisorChild{pid: 702}, nil
 			}
-			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(701), controlURL: control.URL}, nil
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(701), controlEndpoint: control.URL}, nil
 		},
 	})
 	if err != nil {
@@ -322,7 +361,7 @@ func TestComputerHostWaitsForRealBindingReady(t *testing.T) {
 	host, err := NewHost(HostConfig{
 		ControlToken: "control-token",
 		Spawn: func(string, int64) (BindingChild, error) {
-			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(601), controlURL: control.URL}, nil
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(601), controlEndpoint: control.URL}, nil
 		},
 	})
 	if err != nil {

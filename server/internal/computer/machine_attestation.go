@@ -2,9 +2,7 @@ package computer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 )
@@ -28,24 +26,11 @@ type MachineAttestation struct {
 	ManagedSetRevision  string   `json:"managed_set_revision"`
 }
 
-// ProbeMachineAttestation asks the resident on the existing control port.
-func ProbeMachineAttestation(ctx context.Context, port int) (MachineAttestation, error) {
-	addr := fmt.Sprintf("http://127.0.0.1:%d%s", port, MachineAttestationPath)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr, nil)
-	if err != nil {
-		return MachineAttestation{}, err
-	}
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
-	if err != nil {
-		return MachineAttestation{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return MachineAttestation{}, fmt.Errorf("machine-attestation control returned %s", resp.Status)
-	}
+// ProbeMachineAttestation asks the resident through service IPC.
+func ProbeMachineAttestation(ctx context.Context, endpoint string) (MachineAttestation, error) {
 	var attestation MachineAttestation
-	if err := json.NewDecoder(resp.Body).Decode(&attestation); err != nil {
-		return MachineAttestation{}, err
+	if err := callLocalJSON(ctx, endpoint, "machine-attestation", 2*time.Second, nil, nil, &attestation); err != nil {
+		return MachineAttestation{}, fmt.Errorf("machine-attestation control: %w", err)
 	}
 	return attestation, nil
 }

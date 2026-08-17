@@ -225,11 +225,11 @@ func TestComputerUpgradeSubprocessRejectsHumanIntentFailureBeforeLocalExecution(
 
 func TestComputerUpgradeSubprocessLivePIDWithUnavailableControlFailsClosed(t *testing.T) {
 	home := t.TempDir()
-	pidDir := filepath.Join(home, ".multica", "computer")
+	pidDir := filepath.Join(home, ".multica", "computer", "run")
 	if err := os.MkdirAll(pidDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pidDir, "daemon.pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(pidDir, "service.pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,11 +246,11 @@ func TestComputerUpgradeSubprocessStaleDeadPIDAllowsOfflineFallback(t *testing.T
 		t.Skip("the Windows adapter is cross-compiled separately; this subprocess fixture is a POSIX script")
 	}
 	home := t.TempDir()
-	pidDir := filepath.Join(home, ".multica", "computer")
+	pidDir := filepath.Join(home, ".multica", "computer", "run")
 	if err := os.MkdirAll(pidDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pidDir, "daemon.pid"), []byte("2147483647\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(pidDir, "service.pid"), []byte("2147483647\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	feed := newComputerUpgradeSubprocessReleaseFeed(t, "v1.2.3")
@@ -460,7 +460,9 @@ func TestComputerUpgradeSubprocessHelper(t *testing.T) {
 	if err != nil || controlPort <= 0 {
 		t.Fatalf("invalid subprocess control port: %v", err)
 	}
-	computerUpgradeControlPort = func(string) int { return controlPort }
+	computerUpgradeServiceEndpoint = func(string) string {
+		return fmt.Sprintf("http://127.0.0.1:%d", controlPort)
+	}
 	args := []string{"computer", "upgrade"}
 	if target := strings.TrimSpace(os.Getenv(testComputerUpgradeTargetEnv)); target != "" {
 		args = append(args, "--target-version", target)

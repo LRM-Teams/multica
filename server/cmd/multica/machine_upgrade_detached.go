@@ -18,7 +18,7 @@ var spawnDetachedComputerBinary = startDetachedComputerBinary
 var probeDetachedSuccessorAttestation = func(profile string) (computer.MachineAttestation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	return computer.ProbeMachineAttestation(ctx, computer.HealthPort(profile))
+	return computer.ProbeMachineAttestation(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile)))
 }
 
 // startDetachedComputerBinary launches the committed target as the next Computer
@@ -34,7 +34,7 @@ func startDetachedComputerBinary(binaryPath, profile, expectedVersion string) er
 	deadline := time.Now().Add(detachedSuccessorPortReleaseTimeout)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		live := computer.Alive(computer.ProbeHealth(ctx, computer.HealthPort(profile)))
+		live := computer.Alive(computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile))))
 		cancel()
 		if !live {
 			break
@@ -78,7 +78,7 @@ func startDetachedComputerBinary(binaryPath, profile, expectedVersion string) er
 	readyDeadline := time.Now().Add(detachedSuccessorReadyTimeout)
 	for time.Now().Before(readyDeadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
+		health := computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile)))
 		cancel()
 		if health["status"] == "running" {
 			return acceptReadyDetachedCandidate(child, profile, expectedVersion, health)

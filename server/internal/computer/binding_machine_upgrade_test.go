@@ -50,12 +50,12 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 			ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
 			Version: "v1.0.0", ServerURL: cloud.URL,
 		},
-		ResidentRoot: root,
-		ControlURL:   host.URL,
-		ControlToken: controlToken,
-		Child:        BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
-		RuntimeID:    "runtime-a",
-		DaemonToken:  "runtime-token",
+		ResidentRoot:    root,
+		ServiceEndpoint: host.URL,
+		ControlToken:    controlToken,
+		Child:           BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
+		RuntimeID:       "runtime-a",
+		DaemonToken:     "runtime-token",
 		Exit: func() {
 			select {
 			case exited <- struct{}{}:
@@ -84,7 +84,7 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 		t.Fatal("Binding child Machine Upgrade did not exit after swap")
 	}
 	journal, err := readMachineUpgradeJournal(root)
-	if err != nil || journal == nil || journal.Target != "v2.0.0" {
+	if err != nil || journal == nil || journal.TargetVersion != "v2.0.0" {
 		t.Fatalf("activated marker = %+v err=%v", journal, err)
 	}
 }
@@ -139,12 +139,12 @@ func TestBindingMachineUpgradeLatestUsesTestEnvironmentRelease(t *testing.T) {
 			ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
 			Version: "v0.4.24-alpha.73", ServerURL: cloud.URL,
 		},
-		ResidentRoot: t.TempDir(),
-		ControlURL:   host.URL,
-		ControlToken: controlToken,
-		Child:        BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
-		RuntimeID:    "runtime-a",
-		DaemonToken:  "runtime-token",
+		ResidentRoot:    t.TempDir(),
+		ServiceEndpoint: host.URL,
+		ControlToken:    controlToken,
+		Child:           BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
+		RuntimeID:       "runtime-a",
+		DaemonToken:     "runtime-token",
 		StageRelease: func(target string, _ time.Duration, _ string) (string, error) {
 			stagedTarget = target
 			return "/tmp/staged", nil

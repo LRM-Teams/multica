@@ -42,13 +42,11 @@ func (d *Daemon) serveBindingCredentialProxy(ctx context.Context, listener net.L
 // Workspace Execution Binding child. The bootstrap fixes immutable identity;
 // Config supplies provider implementation settings inherited from the host.
 type BindingChildRunConfig struct {
-	Daemon         Config
-	Bootstrap      computer.BindingChildBootstrap
-	Logger         *slog.Logger
-	PublishReady   func(computer.BindingChildReady) error
-	RefreshEvery   time.Duration
-	HostLeaseEvery time.Duration
-	PrepareUpgrade func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error)
+	Daemon       Config
+	Bootstrap    computer.BindingChildBootstrap
+	Logger       *slog.Logger
+	PublishReady func(computer.BindingChildReady) error
+	RefreshEvery time.Duration
 }
 
 // RunBindingChild owns one Workspace Runner and all of its workspace-scoped
@@ -73,25 +71,15 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		return errors.New("Binding child bootstrap does not match daemon config")
 	}
 	config.Daemon.BindingStateRoot = filepath.Join(bootstrap.BindingsRoot, "binding-children", bootstrap.Environment, workspaceID)
-	bindingLease, err := computer.AcquireBindingChildLease(ctx, bootstrap.BindingsRoot, bootstrap.Environment, workspaceID)
-	if err != nil {
-		return err
-	}
-	defer bindingLease.Close()
 	config.Daemon.WorkspaceID = workspaceID
 	d := newDaemonForRole(config.Daemon, config.Logger, daemonProcessBindingChild)
 	d.rootCtx = ctx
-	hostControl := newBindingHostControlClient(bootstrap.HostControlURL, config.Daemon.LocalControlToken, bindingChildControlIdentity{
+	identity := bindingChildControlIdentity{
 		WorkspaceID:      workspaceID,
 		RunnerGeneration: bootstrap.RunnerGeneration,
 		PID:              os.Getpid(),
-	})
-	attestCtx, stopAttest := context.WithTimeout(ctx, 5*time.Second)
-	err = hostControl.AwaitAttest(attestCtx)
-	stopAttest()
-	if err != nil {
-		return err
 	}
+	hostControl := newBindingHostControlClient(bootstrap.ServiceEndpoint, config.Daemon.LocalControlToken, identity)
 	remoteAdmission := newRemoteAgentProcessAdmission(hostControl)
 	defer remoteAdmission.Close()
 	d.processAdmission = remoteAdmission
@@ -105,8 +93,14 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		return err
 	}
 	defer credentialProxyListener.Close()
-	childControlURL := "http://" + credentialProxyListener.Addr().String()
-	go d.serveBindingRuntimeHTTP(ctx, credentialProxyListener, bootstrap)
+	go d.serveBindingCredentialProxy(ctx, credentialProxyListener)
+	runnerEndpoint := computer.RunnerControlEndpoint(bootstrap.BindingsRoot, identity)
+	childControlListener, err := computer.ListenLocalControl(runnerEndpoint)
+	if err != nil {
+		return fmt.Errorf("listen for Binding child IPC: %w", err)
+	}
+	defer childControlListener.Close()
+	go d.serveBindingMachineControlHTTP(ctx, childControlListener, bootstrap)
 	defer func() { _ = d.canonicalRuntimes.closeAll() }()
 
 	bindings, err := d.configuredWorkspaceBindings()
@@ -144,32 +138,8 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if err := hostControl.reportRuntimeSet(ctx, response.Runtimes, response.DaemonToken, response.DaemonTokenExpiresAt); err != nil {
 		return fmt.Errorf("report Binding child Runtime set: %w", err)
 	}
-	runtimeID := ""
-	if len(response.Runtimes) > 0 {
-		runtimeID = response.Runtimes[0].ID
-	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	executor := computer.NewBindingMachineUpgradeExecutor(computer.BindingMachineUpgradeConfig{
-		Identity: computer.HostProcessIdentity{
-			ComputerID: bootstrap.ComputerID, ComputerGeneration: bootstrap.ComputerGeneration,
-			Environment: bootstrap.Environment, Version: config.Daemon.CLIVersion, ServerURL: bootstrap.ServerBaseURL,
-		},
-		ResidentRoot: bootstrap.BindingsRoot,
-		ControlURL:   bootstrap.HostControlURL,
-		ControlToken: config.Daemon.LocalControlToken,
-		Child: bindingChildControlIdentity{
-			WorkspaceID: workspaceID, RunnerGeneration: bootstrap.RunnerGeneration, PID: os.Getpid(),
-		},
-		RuntimeID:    runtimeID,
-		DaemonToken:  response.DaemonToken,
-		Drain:        d.beginBindingDrain,
-		ReleaseDrain: d.releaseClaimBarrier,
-		Exit:         cancel,
-		Emit:         d.emitComputerUpgrade,
-		Prepare:      config.PrepareUpgrade,
-	})
-	d.bindingMachineUpgrade = executor.Execute
 	d.notifyRuntimeSetChanged()
 	if len(runtimeIDs) > 0 {
 		defer d.deregisterRuntimes()
@@ -196,7 +166,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			readyErr = config.PublishReady(computer.BindingChildReady{
 				ProtocolVersion: computer.BindingChildProtocolVersion,
 				WorkspaceID:     workspaceID, RunnerGeneration: bootstrap.RunnerGeneration,
-				PID: os.Getpid(), ControlURL: childControlURL,
+				PID: os.Getpid(), RunnerEndpoint: runnerEndpoint,
 			})
 			if readyErr != nil {
 				cancel()
@@ -223,14 +193,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	go func() {
 		refreshDone <- d.bindingWorkspaceRefreshLoop(runCtx, workspaceID, response.DaemonToken, refreshEvery)
 	}()
-	hostLeaseEvery := config.HostLeaseEvery
-	if hostLeaseEvery <= 0 {
-		hostLeaseEvery = time.Second
-	}
-	hostLeaseDone := make(chan error, 1)
-	go func() {
-		hostLeaseDone <- bindingHostLeaseLoop(runCtx, hostControl, hostLeaseEvery)
-	}()
 	runnerDone := make(chan struct{})
 	go func() {
 		defer close(runnerDone)
@@ -249,12 +211,6 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 			cancel()
 			<-runnerDone
 			return fmt.Errorf("Binding child membership refresh: %w", err)
-		}
-	case err := <-hostLeaseDone:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			cancel()
-			<-runnerDone
-			return fmt.Errorf("Binding child lost Computer Host lease: %w", err)
 		}
 	case <-runnerDone:
 		if readyErr != nil {
@@ -279,30 +235,6 @@ func (d *Daemon) prepareBindingExecutionCredential(binding computer.WorkspaceBin
 	}
 	d.client.SetWorkspaceDaemonToken(workspaceID, binding.Credential, binding.CredentialExpiresAt)
 	return nil
-}
-
-func bindingHostLeaseLoop(ctx context.Context, host *bindingHostControlClient, interval time.Duration) error {
-	if host == nil {
-		return errors.New("Binding child Host control is unavailable")
-	}
-	if interval <= 0 {
-		interval = time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			attestCtx, cancel := context.WithTimeout(ctx, interval)
-			err := host.Attest(attestCtx)
-			cancel()
-			if err != nil {
-				return err
-			}
-		}
-	}
 }
 
 func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, initialCredential string, interval time.Duration) error {
@@ -349,11 +281,13 @@ func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, i
 	}
 }
 
-func (d *Daemon) serveBindingRuntimeHTTP(ctx context.Context, listener net.Listener, bootstrap computer.BindingChildBootstrap) {
+func (d *Daemon) serveBindingMachineControlHTTP(ctx context.Context, listener net.Listener, bootstrap computer.BindingChildBootstrap) {
 	mux := http.NewServeMux()
-	d.registerCredentialProxyRoutes(mux)
 	d.registerBindingMachineControlRoutes(mux, bootstrap)
-	d.serveLocalHTTP(ctx, listener, mux, "Binding child local control")
+	d.logger.Info("Binding child IPC listening", "addr", listener.Addr().String())
+	if err := computer.ServeLocalControl(ctx, listener, mux); err != nil && d.logger != nil {
+		d.logger.Warn("Binding child IPC error", "error", err)
+	}
 }
 
 func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstrap computer.BindingChildBootstrap) {
@@ -420,6 +354,30 @@ func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstr
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc(computer.BindingComputerUpgradeEventPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !d.localControlAuthorized(r) {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		var request struct {
+			Identity  computer.BindingChildIdentity `json:"identity"`
+			EventType string                        `json:"event_type"`
+			Payload   json.RawMessage               `json:"payload"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
+			http.Error(w, "inactive Binding runner generation", http.StatusConflict)
+			return
+		}
+		var payload any
+		if err := json.Unmarshal(request.Payload, &payload); err != nil {
+			http.Error(w, "invalid upgrade event", http.StatusBadRequest)
+			return
+		}
+		d.emitComputerUpgrade(request.EventType, payload)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc(computer.BindingPrepareEnvironmentSwitchPath, func(w http.ResponseWriter, r *http.Request) {

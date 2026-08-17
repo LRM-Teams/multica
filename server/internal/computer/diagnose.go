@@ -39,7 +39,7 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 	v := l.view()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := v.probe(ctx, v.health)
+	health := v.probe(ctx, v.service)
 
 	d := Diagnosis{
 		Resident:      "stopped",
@@ -104,7 +104,7 @@ func (l *Lifecycle) Fix(d Diagnosis) Diagnosis {
 	if d.Resident == "stopped" {
 		if _, err := os.Stat(v.pidPath); err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			h := v.probe(ctx, v.health)
+			h := v.probe(ctx, v.service)
 			cancel()
 			if !Alive(h) {
 				if os.Remove(v.pidPath) == nil {

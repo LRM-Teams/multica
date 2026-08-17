@@ -49,15 +49,6 @@ and convergence evidence; Runtime cardinality is not Computer takeover
 identity. A candidate rejected before the local proof cannot fence the
 incumbent and requires no remote rollback.
 
-Standalone takeover also carries a candidate-generation-bound local protocol
-marker from launcher to candidate. A v2 launcher waits for the explicit
-`takeover_ready` state. When a
-new candidate is spawned by a pre-v2 launcher, it projects the historical
-`running`/`handoff` loopback shape from the durable receipt so that launcher can
-authorize the same local proof. A v2 candidate continues into preflight,
-registration, and WebSocket after that local prepare. A pre-v2 candidate
-still waits for the incumbent loopback commit before those steps.
-
 ## CLI
 
 ```bash

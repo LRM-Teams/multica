@@ -1,6 +1,7 @@
 package computer
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"testing"
@@ -21,7 +22,7 @@ func TestRequestShutdownSendsAuditMetadata(t *testing.T) {
 	t.Cleanup(func() { _ = server.Close() })
 	port := listener.Addr().(*net.TCPAddr).Port
 
-	err = RequestShutdown(port, ShutdownRequest{Source: "desktop", Action: "restart", RequestPID: 8123})
+	err = RequestShutdown(fmt.Sprintf("http://127.0.0.1:%d", port), ShutdownRequest{Source: "desktop", Action: "restart", RequestPID: 8123})
 	if err != nil {
 		t.Fatal(err)
 	}

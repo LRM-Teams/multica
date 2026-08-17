@@ -98,82 +98,19 @@ func TestStartBindingRunnerRequiresWorkspace(t *testing.T) {
 	}
 }
 
-func TestBindingRunnerLauncherSpawnsInProcessChild(t *testing.T) {
-	started := make(chan BindingChildBootstrap, 1)
-	launcher := BindingRunnerLauncher{
-		ComputerID: "computer-a", ComputerGeneration: 3, Environment: "test",
-		ServerBaseURL: "https://test.example.com", HostControlURL: "http://127.0.0.1:19514",
-		BindingsRoot: t.TempDir(), WorkspacesRoot: t.TempDir(),
-		Run: func(_ context.Context, bootstrap BindingChildBootstrap, publishReady func(BindingChildReady) error) error {
-			started <- bootstrap
-			return publishReady(BindingChildReady{
-				ProtocolVersion: BindingChildProtocolVersion,
-				WorkspaceID:     bootstrap.WorkspaceID, RunnerGeneration: bootstrap.RunnerGeneration,
-				PID: os.Getpid(), ControlURL: "http://127.0.0.1:9",
-			})
-		},
-	}
-	child, err := launcher.Spawn("workspace-a", 7)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
-	defer child.Stop()
-	if _, isProcess := child.(*BindingRunner); isProcess {
-		t.Fatal("Computer Binding was spawned as an OS child")
-	}
-	if child.PID() != os.Getpid() {
-		t.Fatalf("in-process Binding pid = %d, want host pid %d", child.PID(), os.Getpid())
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	ready, err := child.(ReadyBindingChild).AwaitReady(ctx)
-	if err != nil {
-		t.Fatalf("AwaitReady: %v", err)
-	}
-	if ready.WorkspaceID != "workspace-a" || ready.RunnerGeneration != 7 || ready.PID != os.Getpid() {
-		t.Fatalf("ready = %+v", ready)
-	}
-	select {
-	case bootstrap := <-started:
-		if bootstrap.WorkspaceID != "workspace-a" || bootstrap.RunnerGeneration != 7 || bootstrap.ComputerID != "computer-a" {
-			t.Fatalf("in-process bootstrap = %+v", bootstrap)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("in-process Binding did not start")
-	}
-}
-
-func TestPreviousPackageBindingBootstrapEndsWithLauncherProcess(t *testing.T) {
-	launcher := BindingRunnerLauncher{
-		PreviousPackageUpgradeBootstrap: true,
-		PreviousPackageUpgradeSourcePID: 42,
-		sourceProcessAlive: func(pid int) (bool, bool) {
-			return pid == 42, true
-		},
-	}
-	if !launcher.previousPackageBootstrapActive() {
-		t.Fatal("live previous-package launcher did not enable the bounded Binding bootstrap")
-	}
-	launcher.sourceProcessAlive = func(int) (bool, bool) { return false, true }
-	if launcher.previousPackageBootstrapActive() {
-		t.Fatal("previous-package Binding bootstrap remained enabled after launcher exit")
-	}
-}
-
 func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.T) {
 	t.Setenv("MULTICA_BINDING_CHILD_HELPER", "ready")
 	bootstrap := BindingChildBootstrap{
-		ProtocolVersion:                 BindingChildProtocolVersion,
-		WorkspaceID:                     "workspace-a",
-		ComputerID:                      "computer-a",
-		ComputerGeneration:              11,
-		RunnerGeneration:                7,
-		Environment:                     "test",
-		ServerBaseURL:                   "https://test.example.com",
-		HostControlURL:                  "http://127.0.0.1:19514",
-		BindingsRoot:                    "/tmp/computer-a",
-		WorkspacesRoot:                  "/tmp/workspaces-a",
-		PreviousPackageUpgradeBootstrap: true,
+		ProtocolVersion:    BindingChildProtocolVersion,
+		WorkspaceID:        "workspace-a",
+		ComputerID:         "computer-a",
+		ComputerGeneration: 11,
+		RunnerGeneration:   7,
+		Environment:        "test",
+		ServerBaseURL:      "https://test.example.com",
+		ServiceEndpoint:    "http://127.0.0.1:19514",
+		BindingsRoot:       "/tmp/computer-a",
+		WorkspacesRoot:     "/tmp/workspaces-a",
 	}
 	raw, err := json.Marshal(bootstrap)
 	if err != nil {
@@ -182,14 +119,12 @@ func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.
 	if !strings.Contains(string(raw), `"computer_id":"computer-a"`) || strings.Contains(string(raw), `"daemon_id"`) {
 		t.Fatalf("Binding bootstrap identity wire = %s", raw)
 	}
-	if !strings.Contains(string(raw), `"previous_package_upgrade_bootstrap":true`) {
-		t.Fatalf("previous-package bootstrap marker was not forwarded to the Binding child: %s", raw)
-	}
 	child, err := StartBindingProcess(os.Args[0], []string{"-test.run=TestBindingChildProtocolHelper"}, bootstrap)
 	if err != nil {
 		t.Fatalf("StartBindingProcess: %v", err)
 	}
 	defer child.Stop()
+	child.Activate()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -218,7 +153,7 @@ func TestBindingChildReadyRejectsStaleGeneration(t *testing.T) {
 		RunnerGeneration:   7,
 		Environment:        "production",
 		ServerBaseURL:      "https://api.leagent.me",
-		HostControlURL:     "http://127.0.0.1:19514",
+		ServiceEndpoint:    "http://127.0.0.1:19514",
 		BindingsRoot:       "/tmp/computer-a",
 		WorkspacesRoot:     "/tmp/workspaces-a",
 	}
@@ -227,6 +162,7 @@ func TestBindingChildReadyRejectsStaleGeneration(t *testing.T) {
 		t.Fatalf("StartBindingProcess: %v", err)
 	}
 	defer child.Stop()
+	child.Activate()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -252,7 +188,7 @@ func TestBindingChildProtocolHelper(t *testing.T) {
 		WorkspaceID:      bootstrap.WorkspaceID,
 		RunnerGeneration: bootstrap.RunnerGeneration,
 		PID:              os.Getpid(),
-		ControlURL:       "http://127.0.0.1:19515",
+		RunnerEndpoint:   "http://127.0.0.1:19515",
 	}
 	if mode == "stale" {
 		ready.RunnerGeneration--

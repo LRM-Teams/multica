@@ -162,6 +162,24 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     );
   });
 
+  it("renders V6 S nodes as accessible text-free state points", () => {
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        sTierPresentation="point"
+      />,
+    );
+
+    const workPoint = screen.getByRole("button", { name: /Probe A/ });
+    expect(workPoint).toHaveAttribute("data-tier", "s");
+    expect(workPoint).toHaveAttribute("data-presentation", "point");
+    expect(within(workPoint).queryByTestId("star-graph-s-label")).toBeNull();
+    expect(workPoint.textContent).not.toContain("Probe A");
+    expect(screen.getByRole("button", { name: /Stable A/ }).textContent).toContain(
+      "Stable A",
+    );
+  });
+
   it("selects a node without treating map-key buttons as canvas nodes", () => {
     const onSelectNode = vi.fn();
     render(<StarGraphCanvas model={fixtureModel()} onSelectNode={onSelectNode} />);

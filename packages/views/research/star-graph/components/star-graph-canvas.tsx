@@ -85,6 +85,8 @@ export interface StarGraphCanvasProps {
   relatedNodeIds?: ReadonlySet<string>;
   /** V6-only semantic policy: S-tier relations appear only for the selected S node. */
   hideUnselectedSTierRelations?: boolean;
+  /** V6 micro-node treatment; legacy runs retain labeled S nodes. */
+  sTierPresentation?: "label" | "point";
   /** When set and no persisted viewport exists, initial camera fits these entities only. */
   initialFitEntityIdList?: readonly string[];
   entityBudget?: number;
@@ -121,6 +123,7 @@ export function StarGraphCanvas({
   nodeAccessibleNames,
   relatedNodeIds,
   hideUnselectedSTierRelations = false,
+  sTierPresentation = "label",
   initialFitEntityIdList,
   entityBudget = STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   hiddenCountLabel,
@@ -712,6 +715,7 @@ export function StarGraphCanvas({
           lensHints={focusedLensHints}
           motionDirectives={entityMotionDirectives}
           expansionControl={expansionControl}
+          sTierPresentation={sTierPresentation}
           labels={entityLabels}
           onSelectNode={onSelectNode}
           onOpenNode={onOpenNode}

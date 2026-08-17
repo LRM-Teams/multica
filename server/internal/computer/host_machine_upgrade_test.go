@@ -369,7 +369,7 @@ func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-b", TargetVersion: "v10.0.0"},
 	})
 	if !errors.Is(err, ErrComputerControlBusy) {
-		t.Fatalf("ForwardMachineActions = %v, want ErrComputerControlBusy", err)
+		t.Fatalf("ForwardComputerControl = %v, want ErrComputerControlBusy", err)
 	}
 }
 

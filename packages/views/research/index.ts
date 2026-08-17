@@ -3,6 +3,7 @@ export {
   ResearchSessionPage,
   ExplorationMap,
   ResearchExecutionPanel,
+  ResearchSelectedRefChip,
 } from "./components";
 export {
   researchExecutionPanelFixture,

@@ -4978,7 +4978,7 @@ export class ApiClient {
 
   async postResearchMessage(
     id: string,
-    data: { body: string; target_agent_id?: string },
+    data: import("../types/research").PostResearchMessageRequest,
   ): Promise<import("../types/research").ResearchMessage> {
     const { ResearchMessageSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/messages`, {

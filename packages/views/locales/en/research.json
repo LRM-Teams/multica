@@ -1369,7 +1369,11 @@
       "unavailable_title": "Interactive report unavailable",
       "unavailable_body": "The isolated document could not be opened safely. The verified plain-text version remains available below.",
       "refresh_capability": "Request a fresh link",
-      "plain_text_title": "Plain-text report"
+      "plain_text_title": "Plain-text report",
+      "revision_history": "Revision",
+      "revision_option": "Revision {{revision}} · {{status}}",
+      "revision_label": "Revision {{revision}}",
+      "input_count": "{{count}} frozen inputs"
     },
     "change_receipt": {
       "title": "Canvas update · {{label}}",

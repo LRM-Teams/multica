@@ -1369,7 +1369,11 @@
       "unavailable_title": "交互报告暂不可用",
       "unavailable_body": "报告未能在安全隔离环境中打开。你仍可在下方阅读已经校验的纯文本版本。",
       "refresh_capability": "获取新的访问链接",
-      "plain_text_title": "纯文本报告"
+      "plain_text_title": "纯文本报告",
+      "revision_history": "修订历史",
+      "revision_option": "第 {{revision}} 版 · {{status}}",
+      "revision_label": "第 {{revision}} 版",
+      "input_count": "{{count}} 个冻结输入"
     },
     "change_receipt": {
       "title": "画布变更 · {{label}}",

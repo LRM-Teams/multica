@@ -1277,7 +1277,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               mode={chatMode}
             />
             {directorV6Enabled ? (
-              {/* react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- picker is a deliberate slot in the shared chat shell and is gated by the V6 route. */}
+              /* react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- picker is a deliberate slot in the shared chat shell and is gated by the V6 route. */
               <ResearchDirectorAssignmentPicker
                 agents={workspaceAgents}
                 currentAgentId={assignedDirectorAgentId}

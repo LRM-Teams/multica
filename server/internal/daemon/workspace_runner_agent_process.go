@@ -274,7 +274,7 @@ func (runner *WorkspaceRunner) flushManagedAgentStartMessages(ctx context.Contex
 func (runner *WorkspaceRunner) prepareManagedAgentStartFailure(payload protocol.WorkspaceRunnerAgentStartPayload, stage managedRuntimeFailureStage, reason string) managedAgentStartOutcome {
 	at := runner.activity.now().UTC()
 	if runner.residency != nil {
-		runner.residency.rememberFailure(payload.AgentID, payload.RuntimeID, payload.LaunchID, stage, reason)
+		runner.residency.rememberFailure(payload.AgentID, payload.RuntimeID, payload.LaunchID, stage, reason, "")
 	}
 	return managedAgentStartOutcome{
 		status:       protocol.AgentStatusPayload{AgentID: payload.AgentID, LaunchID: payload.LaunchID, Status: protocol.AgentStatusInactive},
@@ -286,7 +286,7 @@ func (runner *WorkspaceRunner) publishManagedAgentStartFailure(payload protocol.
 	if outcome.status.AgentID == "" || !runner.processes.ownsManagedProcess(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}) {
 		return
 	}
-	runner.publishManagedRuntimeFailure(outcome.status, payload.RuntimeID, outcome.failureStage, outcome.failureReason, outcome.failureAt)
+	runner.publishManagedRuntimeFailure(outcome.status, payload.RuntimeID, outcome.failureStage, outcome.failureReason, "", outcome.failureAt)
 }
 
 func (runner *WorkspaceRunner) managedStartLogAttrs(payload protocol.WorkspaceRunnerAgentStartPayload, queueState, reason, outcome string, err error) []any {

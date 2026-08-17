@@ -36,7 +36,7 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "narrative", entryText: "Message received"},
 		{name: "freshness held", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "2 newer messages available — review then resend"},
 		{name: "draft sent", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1", Target: "#one"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "target: #one\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent"},
-		{name: "error", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed"}, At: at}, kind: protocol.ActivityKindError, detail: "runtime_error", entryKind: "narrative", entryText: "Agent execution failed", processID: "process-1"},
+		{name: "error", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed", Message: "provider usage limit reached"}, At: at}, kind: protocol.ActivityKindError, detail: "runtime_error", entryKind: "narrative", entryText: "provider usage limit reached", processID: "process-1"},
 	}
 
 	for _, test := range tests {
@@ -532,8 +532,8 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if err := json.Unmarshal(activities[len(activities)-1].Entries[0].Body, &errorBody); err != nil {
 		t.Fatal(err)
 	}
-	if errorBody.Text != "Agent execution failed" || errorBody.DetailKind != "runtime_error" {
-		t.Fatalf("runtime error Activity = %+v, want producer-owned safe narrative", errorBody)
+	if errorBody.Text != "sensitive provider text" || errorBody.DetailKind != "runtime_error" {
+		t.Fatalf("runtime error Activity = %+v, want provider error text", errorBody)
 	}
 }
 
@@ -721,7 +721,7 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Text != "Agent execution failed" {
+	if body.Text != "runtime Message handoff unavailable (simulated crash window)" {
 		t.Fatalf("failure narrative = %q", body.Text)
 	}
 	if _, found := runner.processes.Snapshot("agent-a"); found {

@@ -165,12 +165,17 @@ export function parseResearchV6Delta(raw: unknown): ResearchV6Delta | null {
 /** HTTP boundary parser: malformed deltas degrade to an empty resync delta. */
 export function parseResearchV6DeltaStrict(raw: unknown): ResearchV6Delta {
   return parseWithFallback(raw, ResearchV6DeltaSchema, {
-    run_id: "",
-    from_event_sequence: 0,
-    through_event_sequence: 0,
+    from_sequence_exclusive: 0,
+    through_sequence: 0,
     graph_content_hash: null,
-    nodes: [],
-    edges: [],
+    node_upserts: [],
+    edge_upserts: [],
+    node_tombstones: [],
+    edge_tombstones: [],
+    cluster_upserts: [],
+    cluster_tombstones: [],
+    affected_root_node_ids: [],
+    transition_kind: null,
   }, { endpoint: "GET research V6 projection delta" });
 }
 

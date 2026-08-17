@@ -31,6 +31,34 @@ func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector)
 	return newEngine(store, dispatcher, projector)
 }
 
+func (e *Engine) ProjectionV6Snapshot(ctx context.Context, request V6ProjectionPageRequest) (V6ProjectionSnapshot, error) {
+	if e == nil || e.store == nil {
+		return V6ProjectionSnapshot{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6Snapshot(ctx, request)
+}
+
+func (e *Engine) ProjectionV6Slice(ctx context.Context, request V6ProjectionSliceRequest) (V6ProjectionSnapshot, error) {
+	if e == nil || e.store == nil {
+		return V6ProjectionSnapshot{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6Slice(ctx, request)
+}
+
+func (e *Engine) ProjectionV6Deltas(ctx context.Context, request V6ProjectionDeltaRequest) (V6ProjectionDeltaPage, error) {
+	if e == nil || e.store == nil {
+		return V6ProjectionDeltaPage{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6Deltas(ctx, request)
+}
+
+func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, nodeID, view string) (V6ProjectionNodeDetail, error) {
+	if e == nil || e.store == nil {
+		return V6ProjectionNodeDetail{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, nodeID, view)
+}
+
 func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {
 	store.reportStorage = reportStorage
 	return newEngine(store, dispatcher, projector)

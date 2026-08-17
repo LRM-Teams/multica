@@ -107,6 +107,8 @@ const (
 	txOpV6ReportPackageClaim       researchTxOperation = "v6_report_package.claim"
 	txOpV6ReportPackageAccept      researchTxOperation = "v6_report_package.accept"
 	txOpV6ReportReview             researchTxOperation = "v6_report.review"
+	txOpV6ProjectionSnapshot       researchTxOperation = "v6_projection.snapshot"
+	txOpV6ProjectionSlice          researchTxOperation = "v6_projection.slice"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

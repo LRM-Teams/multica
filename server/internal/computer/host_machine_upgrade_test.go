@@ -106,7 +106,7 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			delivered <- request.Command.Operation()
+			delivered <- request.Command.RequestID
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -145,9 +145,9 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	}})
 	host.upgrade = upgrade
 
-	for _, operationID := range []string{"upgrade-a", "upgrade-b"} {
+	for _, requestID := range []string{"upgrade-a", "upgrade-b"} {
 		body, err := json.Marshal(protocol.ComputerUpgradePayload{
-			RequestID: "request-" + operationID, OperationID: operationID, TargetVersion: "v1.0.0",
+			RequestID: requestID, TargetVersion: "v1.0.0",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -157,15 +157,15 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 		response := httptest.NewRecorder()
 		upgrade.localRequestHandler()(response, request)
 		if response.Code != http.StatusOK {
-			t.Fatalf("local delivery %s status = %d body=%s", operationID, response.Code, response.Body.String())
+			t.Fatalf("local delivery %s status = %d body=%s", requestID, response.Code, response.Body.String())
 		}
 		select {
 		case got := <-delivered:
-			if got != operationID {
-				t.Fatalf("delivered operation = %q, want %q", got, operationID)
+			if got != requestID {
+				t.Fatalf("delivered request = %q, want %q", got, requestID)
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("local delivery did not hand off %s", operationID)
+			t.Fatalf("local delivery did not hand off %s", requestID)
 		}
 		deadline := time.Now().Add(time.Second)
 		for {
@@ -176,7 +176,7 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("active Machine Upgrade %q was not released after attesting %s", activeID, operationID)
+				t.Fatalf("active Machine Upgrade %q was not released after handing off %s", activeID, requestID)
 			}
 			time.Sleep(time.Millisecond)
 		}

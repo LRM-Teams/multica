@@ -67,7 +67,7 @@ func (executor *BindingMachineUpgradeExecutor) Execute(ctx context.Context, comm
 		return errors.New("Binding child Machine Upgrade executor is unavailable")
 	}
 	pending := protocol.DaemonHeartbeatPendingMachineUpgrade{
-		ID: command.Operation(), TargetVersion: strings.TrimSpace(command.TargetVersion),
+		ID: strings.TrimSpace(command.RequestID), TargetVersion: strings.TrimSpace(command.TargetVersion),
 	}
 	if pending.ID == "" {
 		return errors.New("Computer upgrade request identity is required")

@@ -139,7 +139,7 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 		}
 		return d.bindingMachineUpgrade(ctx, command)
 	case protocol.EventComputerRestart:
-		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: command.Operation()}}
+		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: strings.TrimSpace(command.RequestID)}}
 		if d.bindingHostControl == nil {
 			return errors.New("Computer Host callback is unavailable")
 		}

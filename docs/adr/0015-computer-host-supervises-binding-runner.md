@@ -34,8 +34,8 @@ one machine owner supervises N real execution children.
 - machine-wide provider-process capacity admission;
 - authenticated child control and diagnostic aggregation routing;
 - cross-child environment-switch and Machine Upgrade prepare/release;
-- Machine Upgrade accept, journal, stage, verify, activation, successor
-  re-registration, and attestation.
+- Machine Upgrade journal, stage, verify, activation, and successor
+  completion reconciliation.
 
 `internal/daemon` owns one Binding child's execution behavior:
 
@@ -52,9 +52,9 @@ or call `daemon.Daemon`. An executable
 architecture test enforces both directions: the Computer resident has no
 `daemon.*` dependency, while production daemon files cannot expose a resident
 `Run`, health/machine-attestation owner, restart/update executor, Machine
-Upgrade journal, takeover, stage, or successor lifecycle. The only
-Machine-Upgrade-related daemon behavior is child-local prepare/release and
-Runtime re-registration requested by the Computer.
+Upgrade journal, takeover, stage, or successor lifecycle. Daemon owns only the
+child-local prepare/release behavior and the current Binding socket used by the
+Computer-owned executor to publish progress and completion.
 
 The CLI is composition only. A Computer Host must not construct provider
 runtimes, Inbox/Activity owners, Agent Restart executor, Attachment registry,
@@ -97,20 +97,22 @@ Host reconciliation follows the Raft Computer policy:
 
 ## Machine Upgrade
 
-Machine Upgrade remains one Computer operation. The Host first asks every
+Machine Upgrade remains one Computer request. The Host first asks every
 current child to close and drain its child-local execution admission barrier.
 If one child rejects preparation, the Host releases every sibling already
-prepared. Re-registration and rollback convergence are also sent to the child;
-the Host never probes provider CLIs or creates Runtime execution objects.
+prepared. The Host never probes provider CLIs or creates Runtime execution
+objects.
 
 A successful process replacement stops all children with the Host process.
 The successor Computer reconstructs the desired set, waits for every real
-child Ready, then performs generation/runtime attestation.
-
-The accepted generation and complete Runtime/Workspace set are persisted in a
-permission-restricted Host journal before activation. A successor reads that
-journal only after every desired child is really Ready, asks the children to
-re-register, performs Computer-level attestation, and then clears the journal.
+child Ready, then reconciles the pending upgrade over one current Binding
+socket. Before swapping the executable, the executor persists a
+permission-restricted marker containing the original request ID and source and
+target versions. The successor reports correlated success, or correlated
+rollback when its running version differs from the target. It clears the marker
+only after the Binding accepts the completion frame; otherwise startup fails
+and the marker remains for retry. There is no accepted generation or complete
+Runtime/Workspace snapshot in this marker, and no cloud attestation receipt.
 An environment switch uses a distinct child barrier that waits for admitted
 work naturally; it does not reuse Machine Upgrade's terminate-and-drain path.
 

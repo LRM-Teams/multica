@@ -107,7 +107,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				if json.Unmarshal(message.Payload, &restart) != nil || restart.Validate() != nil {
 					continue
 				}
-				command = protocol.ComputerUpgradePayload{RequestID: restart.RequestID, OperationID: restart.OperationID}
+				command = protocol.ComputerUpgradePayload{RequestID: restart.Operation()}
 			} else if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
 				continue
 			}

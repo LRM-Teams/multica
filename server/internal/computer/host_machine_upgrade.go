@@ -86,15 +86,12 @@ func (upgrade *hostMachineUpgrade) localRequestHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		operationID := strings.TrimSpace(request.OperationID)
-		if operationID == "" {
-			http.Error(w, "operationId is required", http.StatusBadRequest)
-			return
-		}
-		if strings.TrimSpace(request.RequestID) == "" {
+		requestID := strings.TrimSpace(request.RequestID)
+		if requestID == "" {
 			http.Error(w, "requestId is required", http.StatusBadRequest)
 			return
 		}
+		request.RequestID = requestID
 		targetVersion := strings.TrimSpace(request.TargetVersion)
 		if targetVersion == "" {
 			targetVersion = "latest"
@@ -105,7 +102,7 @@ func (upgrade *hostMachineUpgrade) localRequestHandler() http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"id": operationID, "phase": "starting"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"requestId": requestID, "phase": "starting"})
 	}
 }
 

@@ -245,7 +245,7 @@
 - **Computer 生命周期所有权**：升级、重启和其他整机 mutation 只由 Computer owner 发起；Workspace owner/admin 只管理自己的 Workspace，不因页面中可见一台 Computer 就取得别人电脑的控制权。Workspace 页面只是发起入口和状态投影；一次 Computer 升级对该环境下全部 active Workspace connections 生效，所有连接必须看到同一 operation、版本和结果，禁止按发起 Workspace 分叉升级 lineage。
 - **Computer 升级只有一个 CLI 入口**：`multica computer upgrade` 先探测本机 resident；live owner 可控时只通过 owner-only loopback control 提交 canonical Machine Upgrade，不自行 stage。只有确认没有 resident owner 时才允许在 machine mutation lock 下离线下载、校验并提交 Active，且结果只表示供下次 Computer start 使用；resident ownership 存在但 control 不可达时必须返回 `upgrade_service_unreachable`，不能离线绕过。顶层 `multica update` 不存在；`--target-version` 是唯一显式包选择，普通升级继续由 production/test 环境固定包源。
 - **Computer 就是 PATH 那一份**：`$HOME/.local/bin/multica` 既是 CLI 也是 Computer。`computer upgrade` 把它换成新文件并留下 `.prev`；start / supervise 跑的也是这份，没有 VersionStore 子进程。
-- **Computer restart 与升级恢复共享单 owner 栅栏**：`computer restart` 只有在旧 resident 的 control port 已证明释放后才能分配并启动 successor；仅成功发送 shutdown 不构成 stop proof。Machine Upgrade 的 `accepted/staged` journal 只可在服务端确认同一 operation、generation、target 及 Runtime/Workspace 集合已 `failed` 后 CAS 清理；上报未 ACK 或身份不匹配必须保留。当前 PATH 版本已不是该 journal 的 source/target 时，不得用旧 journal 拦住启动。完整合同与回归见 `docs/machine-upgrade-rollout.md`。
+- **Computer restart 与升级恢复共享单 owner 栅栏**：`computer restart` 只有在旧 resident 的 control port 已证明释放后才能分配并启动 successor；仅成功发送 shutdown 不构成 stop proof。Machine Upgrade 在换 PATH 二进制前写 Raft 同形的 `upgrade-pending` marker（`requestId/fromVersion/targetVersion/startedAt/schemaVersion`）；successor 的 current Binding socket 补发同一 `requestId` 的 `computer:upgrade:done` 后才删 marker。Binding 未 ready 或 frame 写失败必须保留 marker 并让启动失败，下一次启动重试；不恢复 cloud receipt、operation table、generation 或 Runtime/Workspace attest。完整合同与回归见 `docs/machine-upgrade-rollout.md`。
 - **Computer CLI 单测不得触碰机器级 resident**：`HOME=t.TempDir()` 只能隔离文件，不能隔离固定 control port `19514`。任何会 start/stop/restart Computer 的命令测试必须替换 lifecycle seam，验证意图和结果而不访问真实端口或进程；真实进程测试必须使用显式隔离 control port，并独立证明不会命中默认 resident。
 - **包源随环境固定**：production 只用 `metainfo.json.environments.production` 的稳定版本；test 只用 `metainfo.json.environments.test` 的预发布版本。没有独立 `release_channel` 让用户制造“test 连稳定包”或“production 连预发布包”的组合。带版本 archive/checksum/manifest 不可变；不发布根目录 channel JSON，也不做隐式 fallback。
 - **页面引导**：Computer 页面用 `/api/config.environment` 决定命令类型，用 `daemon_server_url` 和 `daemon_app_url` 分别填 test API/Web origin。production 显示 `multica setup /<workspace>`；test 显示 `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>`。两个值当前可以相同，但协议不强制同源。页面不能读取本机 `~/.multica`，所以首次连接必须把目标写进命令；完成后本机配置保存 active environment。连接卡只保留平台选择、安装命令、setup 命令和等待状态；一行说明 setup 会激活目标环境、连接 Workspace 并启动 Computer。若 setup 将切换已有 active environment，CLI 必须在任何写入或登录前询问，除非自动化显式传 `--yes`。
@@ -350,7 +350,7 @@
 - 升级先把校验过的字节写到 ephemeral scratch，再 `SwapExecutable`：当前文件 rename 成 `.prev`，新文件落到同一 PATH。失败必须把 `.prev` 换回去。回滚只认 `.prev`，不再走 Previous generation CAS。
 - verify / recovery 只能 exec 那个 scratch 文件的 `--version`。`runStageUpdate` 的 status 字符串不是路径；journal `staged_path` 也必须是普通文件，缺失就 restage，不能拿 status 当可执行文件。
 - live resident 是唯一 mutation owner；无 resident 才允许离线 swap。Homebrew prefix 不自替换。
-- live CLI 先用保存的 human session 创建 canonical server operation，再把同一 operation ID 交给 Host loopback；server 的 `computer:upgrade` WS 派发与 loopback 可并发到达，Host 按 operation ID 去重。Workspace execution credential 只接受、推进和 attest 已有 operation，不能反调 human route 创建 operation。
+- live CLI 先用保存的 human session 鉴权并派发请求，再把同一 `requestId` 交给 Host loopback；server 的 `computer:upgrade` WS 派发与 loopback 可并发到达，Host 按 `requestId` 去重。这里没有 server operation row，也没有 Workspace execution credential 的 HTTP accept/progress/attest 旁路。
 - **物**：`server/internal/cli/exec_swap.go`、`stage_release.go`、`lifecycle_upgrade.go`；`TestSwapExecutable*`、`TestCommitStagedActivationSwapsInstallPathAndKeepsPrev`、`TestVerifyStagedBinaryUsesScratchPathFromRunStageUpdateStatus`、`TestRecoverStagedJournal*`、offline `computer upgrade` subprocess 证明 PATH + `.prev`。
 
 ### 4.12 Daemon 更新观测必须是单调、持久、可降级的事实 — `可执行`（① PostgreSQL daemon scope + ② typed envelope + ③ daemon 单一 coordinator + ⑤重启/CAS 回归；owner: @Barry）
@@ -575,18 +575,15 @@
 - **口径（2026-08-14）**：对齐 Raft Computer `serviceReconcileLoop` / `runnerStateMachine`，但保持 Multica 的 Workspace Binding cardinality：`internal/computer.Host` 每 5s 对账 desired Binding；crash 后 2s backoff；60s 内 3 次 crash 进入 degraded、不再自动拉起。摘掉 Binding 是 graceful stop，不是 unlinked/degraded。
 - **真实 process boundary**：`computer __runner` child 必须实际持有 `WorkspaceRunner + AgentProcessManager + Inbox/MessageCoordinator + Activity + provider runtimes`。Host 不构造这些 execution owners；删除 child 会删除完整 Binding behavior，不能只损失一个 sentinel。
 - **generation fence**：`computer_generation` 是整机 resident tenure；每个 Binding slot 的 `runner_generation` 在 spawn 时独立递增。Bootstrap、Ready、Host control、Runtime report、diagnostic、capacity grant 和 exit observation 全部校验 exact Workspace + generation + PID；旧 generation 必须 no-op / fail closed。
-- **package boundary**：`internal/computer` 拥有 resident/health/control、desired set、supervision、crash/backoff、machine capacity、diagnostic aggregation 与 Machine Upgrade journal/stage/activation/successor attestation；`internal/daemon` 只拥有 child execution。Public resident 直接 `computer.NewHost → Host.RunProcess`，禁止构造或依赖 `daemon.Daemon`；反向也禁止 daemon 生产代码持有 `computer.Host`。CLI 只 wiring，不新增 `computerhost` 包。
+- **package boundary**：`internal/computer` 拥有 resident/health/control、desired set、supervision、crash/backoff、machine capacity、diagnostic aggregation 与 Machine Upgrade prepare/journal/stage/activation/successor reconciliation；`internal/daemon` 只拥有 child execution 与 current Binding socket transport。Public resident 直接 `computer.NewHost → Host.RunProcess`，禁止构造或依赖 `daemon.Daemon`；反向也禁止 daemon 生产代码持有 `computer.Host`。CLI 只 wiring，不新增 `computerhost` 包。
 - **Machine Upgrade**：Host prepare 所有 current children；每个 child drain/terminate 自己的 execution。任一 prepare 失败必须 release 已暂停 siblings；already-current / rollback re-register 也由 generation-fenced child 执行，Host 禁止 provider probing。
 - **物**：`computer.Host` / `Host.RunProcess` / `hostMachineUpgrade` / `BindingSupervisor` / `HostControl` / `ProcessCapacity` / `BindingRunner`；真实 bootstrap/Ready/control process protocol；per-Binding child state root；双向 architecture guard；generation/crash/sibling/capacity/Machine Upgrade/process tests。完整判断见 [`ADR-0015`](adr/0015-computer-host-supervises-binding-runner.md)。
 
-### 4.19.5 Machine Upgrade 本机证明即完成，不做云端 generation CAS — `可执行`（①CAS 不存在 + ⑤ local-proof / receipt tests）
-- **口径（2026-08-13）**：对齐 Raft Computer：successor 本机 PID+version+control 证明即完成 handoff。云端 `CommitTakeover` generation CAS 删除。`/takeover` 只给旧 Computer 当 receipt，不得改 `computer_generation`。generation 由 successor 上线后的 heartbeat/register claim；Attest 只通知升级完成。
-- **物**：`machine_upgrade_takeover.go` 本机 proof 不再调用 cloud CAS；`PostgresMachineUpgradeStore.CommitTakeover` 不存在；`TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof`；`TestMachineUpgrade_TakeoverReceiptDoesNotCASComputerGeneration`。判断见 [`ADR-0016`](adr/0016-local-upgrade-proof-no-cloud-cas.md)。
-
-### 4.19.7 过期 Machine Upgrade journal 不得拦住新 PATH Computer — `可执行`（⑤ recovery 回归）
-- 对齐 Raft：正在跑的 PATH 二进制就是 Computer。journal 的 source/target 都对不上当前版本时，那是上一次升级留下的诊断记录，启动必须继续，禁止 fail closed，也禁止回滚到旧 source。
-- 当前版本仍是该 journal 的 source 或 target 时，按原相恢复：source 上续 accepted/staged，target 上续 successor，`rollback_pending` 只在这一对版本上才换回 `.prev`。
-- **物**：`machineUpgradeJournalSupersededByRunningPath`；`recoverInterruptedMachineUpgrade`；`TestInterruptedMachineUpgradeRecoveryDoesNotBlockNewerPATHWithStaleRollbackPending`；`TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplicitActivation`。
+### 4.19.5 Machine Upgrade completion 由 successor Binding 对账，不做 cloud receipt / generation CAS — `可执行`（①旧 receipt 不存在 + ⑤ marker/restart 回归）
+- **口径（2026-08-17，按 Raft successor marker 修正）**：一次点击的 `requestId` 是升级与 toast 的关联身份。执行 child 在 swap 前持久化 Raft camelCase marker；successor 等 current Binding Ready 后，用新 socket 发送 `computer:upgrade:done`。运行版本等于 target 时 `ok=true`；否则明确发送 `ok=false, rolledBack=true, newVersion=<running>`。发送失败保留 marker，下一次启动重试；发送成功后删除 marker。Web 版本追平只补偿 transient done 丢失，不是第二套升级状态机。
+- **禁止恢复**：cloud operation/receipt table、accepted generation、accepted Runtime/Workspace 集合、HTTP progress/attest 与 successor generation CAS 都不是当前合同。
+- **兼容边界**：只读旧 `target_version` marker，且只用于直接从 `v0.4.24-alpha.81` 升级；该版本退出支持后按代码 TODO 删除 reader。
+- **物**：`hostMachineUpgradeJournal`、`BindingMachineUpgradeExecutor`、`hostMachineUpgrade.recoverSuccessor`、`BindingComputerUpgradeDonePath`、`TestHostMachineUpgradeKeepsJournalUntilSuccessorCompletionIsDelivered`。判断见 [`ADR-0016`](adr/0016-local-upgrade-proof-no-cloud-cas.md)。
 
 ### 4.19.8 Computer 控制动作只走 current Workspace Runner — `可执行`（② capability + ③单一 carrier + ⑤正反向回归）
 - 声明 `workspace_runner_control_plane_v1` 的 current Runner 是该 Computer-Workspace Binding 内 Runtime heartbeat 与 Server pending action 的唯一 carrier。Runner 每次按当前 Workspace Runtime set 发送，Server 每次重新验证 Workspace、Computer 与 generation；ack 只在同一 Runner socket、同一 Workspace Runtime scope 内消费。
@@ -594,12 +591,6 @@
 - 控制 heartbeat 在 current Runner Ready 后立即启动，不等待额外 lifecycle replay。Server 对每个 heartbeat 逐个校验 Computer/Workspace ownership，不得要求当前 Runtime set 等于该 Computer 的全部历史 DB Runtime 行。Reminder reconnect 另按 current Runtime set 请求完整 snapshot，在线 mutation 直接发送 version-fenced upsert/cancel。reconnect replacement 先 fence 旧 socket，再由新 current Runner 恢复。多 Workspace 共用一台 Computer 时每个 Binding 独立发送和鉴权，禁止跨 Workspace 或跨 Computer 执行动作。
 - Agent Restart 不进入 control heartbeat pending action；它只由 4.15 的持久 orchestrator 经 current Workspace Runner 投递离散 `agent:stop/reset-workspace/start`。heartbeat 不得恢复 lifecycle envelope 或本机复合 executor，否则会与离散状态机形成两条控制路径。
 - **物**：`DaemonCapabilityWorkspaceRunnerControlPlane`；`WorkspaceRunner.runControlPlaneHeartbeats`；`HandleDaemonWSHeartbeat` 的 Workspace/Computer/generation fence；`TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat`、`TestWorkspaceRunnerControlHeartbeatUsesExactWorkspaceRuntimeSet`、`TestLegacyRuntimeWakeSocketDoesNotExecuteControlAcknowledgements`、`TestLivenessProbeAcknowledgesWithoutInvokingHeartbeatActions`、`TestWorkspaceRunnerHeartbeatRejectsRuntimeAssignedToAnotherComputer`；现场验收矩阵见 [`docs/daemon-control-plane-validation.md`](daemon-control-plane-validation.md)。
-
-### 4.19.6 Machine Upgrade 后继校对允许退役 provider — `可执行`（⑤ attest 回归）
-- Workspace 连接集合仍必须与 accept 快照完全一致。
-- Runtime 校对要求后继覆盖**当前仍在产品目录里**的 accepted runtime。目录里已经没有的 provider（例如删掉的 Antigravity）缺号算退役，不能把 Computer 卡在启动失败。
-- 后继多出来的 runtime（新 provider）允许。禁止手改 `accepted_runtime_ids` 来过关。
-- **物**：`agent.MissingRequiredRuntimeIDs`；`attestComputerMachineUpgrade`；`PostgresMachineUpgradeStore.AttestComputer`；`TestMissingRequiredRuntimeIDsRetiresUnknownCatalog`；`TestAttestComputerMachineUpgradeAllowsRetiredProviderGap`；`TestMachineUpgrade_ComputerAttestationAllowsRetiredProviderGap`。
 
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。

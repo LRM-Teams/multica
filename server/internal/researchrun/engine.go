@@ -116,6 +116,28 @@ func (e *Engine) Create(ctx context.Context, in StartInput) (Run, error) {
 	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)
 }
 
+func (e *Engine) BootstrapV6(ctx context.Context, in V6BootstrapInput) (Run, error) {
+	if e == nil || e.store == nil {
+		return Run{}, errors.New("research run engine is unavailable")
+	}
+	run, sequence, err := e.store.BootstrapV6(ctx, in, DefaultRunConfig(in.DepthTier))
+	if err != nil {
+		return Run{}, err
+	}
+	if _, err = e.StartV6DirectorCycle(ctx, StartV6DirectorCycleInput{
+		WorkspaceID: in.WorkspaceID, RunID: run.SessionID, TriggerKey: "bootstrap",
+		FromSequence: sequence, ThroughSequence: sequence, ExpectedStateVersion: run.StateVersion,
+		Now: e.clock.Now(),
+	}); err != nil {
+		return run, err
+	}
+	_, err = e.ReconcileV6Work(ctx, 32)
+	if err != nil && !errors.Is(err, ErrRunLeaseLost) {
+		return run, err
+	}
+	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)
+}
+
 func (e *Engine) Start(ctx context.Context, in StartInput) (Run, error) {
 	if e == nil || e.store == nil || e.dispatcher == nil {
 		return Run{}, errors.New("research run engine is unavailable")

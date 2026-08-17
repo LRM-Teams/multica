@@ -384,11 +384,13 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 type createResearchSessionRequest struct {
-	Goal          string                 `json:"goal"`
-	Title         string                 `json:"title"`
-	DepthTier     string                 `json:"depth_tier"` // shallow|standard|deep — LRM-676 product-round caps
-	Language      string                 `json:"language"`
-	SourceWeights *researchSourceWeights `json:"source_weights"`
+	Goal                string                 `json:"goal"`
+	Title               string                 `json:"title"`
+	DepthTier           string                 `json:"depth_tier"` // shallow|standard|deep — LRM-676 product-round caps
+	Language            string                 `json:"language"`
+	SourceWeights       *researchSourceWeights `json:"source_weights"`
+	OrchestratorVersion string                 `json:"orchestrator_version"`
+	DirectorAgentID     string                 `json:"director_agent_id"`
 }
 
 type researchSourceWeights struct {
@@ -452,6 +454,50 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 	sourcePolicyJSON, err := json.Marshal(sourcePolicy)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resolve source policy")
+		return
+	}
+	requestedVersion := strings.TrimSpace(req.OrchestratorVersion)
+	if requestedVersion == "" {
+		requestedVersion = researchrun.OrchestratorVersionV5
+	}
+	if requestedVersion == researchrun.OrchestratorVersionV6 {
+		if !h.cfg.ResearchV6BootstrapEnabled {
+			writeRonaldoV6Error(w, http.StatusConflict, "research.v6.not_activated", "research V6 bootstrap is disabled until activation evidence is complete", false)
+			return
+		}
+		directorID, valid := parseUUIDOrBadRequest(w, req.DirectorAgentID, "director_agent_id")
+		if !valid {
+			return
+		}
+		bootstrap, available := h.ResearchRun.(researchrun.ResearchRunV6Bootstrap)
+		if !available {
+			writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.capability_unavailable", "research V6 bootstrap is unavailable", true)
+			return
+		}
+		depthTier := normalizeResearchDepthTier(req.DepthTier)
+		createdRun, createErr := bootstrap.BootstrapV6(r.Context(), researchrun.V6BootstrapInput{
+			WorkspaceID: workspaceID, CreatedBy: userID, DirectorAgentID: uuidToString(directorID), Goal: req.Goal, Title: title,
+			DepthTier: depthTier, Language: language, SourcePolicy: sourcePolicyJSON,
+		})
+		if createErr != nil {
+			writeResearchV6DomainError(w, createErr)
+			return
+		}
+		session, loadErr := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: parseUUID(createdRun.SessionID), WorkspaceID: wsUUID})
+		if loadErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load initialized research V6 session")
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"session":  researchSessionToResponse(session),
+			"nodes":    []any{},
+			"edges":    []any{},
+			"messages": []any{},
+		})
+		return
+	}
+	if requestedVersion != researchrun.OrchestratorVersionV5 {
+		writeError(w, http.StatusBadRequest, "unsupported orchestrator_version")
 		return
 	}
 	fleet, members, err := h.ensureResearchFleet(r.Context(), wsUUID, parseUUID(userID))

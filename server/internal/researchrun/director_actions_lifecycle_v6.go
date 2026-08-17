@@ -240,3 +240,56 @@ func (s *PostgresStore) executeV6ReportReviewAction(ctx context.Context, proposa
 	_, err := s.ReviewV6Report(ctx, ReviewV6ReportInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, ReportID: payload.ReportID, DirectorAssignmentID: proposal.DirectorAssignmentID, DirectorCycleID: cycleID, Decision: decision, Reason: firstNonEmptyV6(payload.Reason, action.Reason), ExpectedRevision: payload.ExpectedRevision, ExpectedStateVersion: expectedState})
 	return err
 }
+
+func (s *PostgresStore) executeV6NodeDecisionAction(ctx context.Context, proposal v6DirectorProposal, action v6DirectorAction, expectedState int64) error {
+	if action.PayloadSchema != "target.action.v1" {
+		return ErrInvalidContract
+	}
+	var payload v6TargetActionPayload
+	if json.Unmarshal(action.Payload, &payload) != nil || payload.TargetID == "" {
+		return ErrInvalidContract
+	}
+	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, proposal.RunID, proposal.WorkspaceID); err != nil {
+		return err
+	}
+	var changed bool
+	if action.Kind == "challenge_node" {
+		result, resultErr := tx.Exec(ctx, `UPDATE research_result_node SET conclusion_state='challenged',reason_code='other',reason_detail=$4 WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_version_id=$3::uuid AND conclusion_state NOT IN ('invalid','refuted')`, proposal.WorkspaceID, proposal.RunID, payload.TargetID, firstNonEmptyV6(payload.Reason, action.Reason))
+		if resultErr != nil {
+			return resultErr
+		}
+		changed = result.RowsAffected() == 1
+		if !changed {
+			insight, insightErr := tx.Exec(ctx, `UPDATE research_insight_version SET status='challenged' WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND status NOT IN ('invalid','refuted','superseded','terminal')`, proposal.WorkspaceID, proposal.RunID, payload.TargetID)
+			if insightErr != nil {
+				return insightErr
+			}
+			changed = insight.RowsAffected() == 1
+		}
+	} else {
+		result, resultErr := tx.Exec(ctx, `UPDATE research_result_node SET conclusion_state='invalid',reason_code='stopped_by_director',reason_detail=$4 WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_version_id=$3::uuid AND conclusion_state NOT IN ('invalid','refuted')`, proposal.WorkspaceID, proposal.RunID, payload.TargetID, firstNonEmptyV6(payload.Reason, action.Reason))
+		if resultErr != nil {
+			return resultErr
+		}
+		changed = result.RowsAffected() == 1
+		if !changed {
+			insight, insightErr := tx.Exec(ctx, `UPDATE research_insight_version SET status='terminal' WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND status NOT IN ('invalid','refuted','superseded','terminal')`, proposal.WorkspaceID, proposal.RunID, payload.TargetID)
+			if insightErr != nil {
+				return insightErr
+			}
+			changed = insight.RowsAffected() == 1
+		}
+	}
+	if !changed {
+		return ErrInvalidTransition
+	}
+	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_node_"+action.Kind, "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"target_id": payload.TargetID, "reason": firstNonEmptyV6(payload.Reason, action.Reason)}); err != nil {
+		return err
+	}
+	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
+}

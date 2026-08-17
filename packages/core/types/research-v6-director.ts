@@ -188,3 +188,31 @@ export interface ResearchV6DirectorProjectionSliceRequest {
   snapshot_id: string;
   cursor?: string;
 }
+
+export interface ResearchV6DirectorProjectionTransport {
+  loadSnapshot(
+    workspaceId: string,
+    runId: string,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<ResearchV6DirectorProjectionSnapshot>;
+  loadSlice(
+    workspaceId: string,
+    runId: string,
+    request: ResearchV6DirectorProjectionSliceRequest,
+    signal?: AbortSignal,
+  ): Promise<ResearchV6DirectorProjectionSnapshot>;
+  loadDeltaPage(
+    workspaceId: string,
+    runId: string,
+    after: number,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<ResearchV6DirectorProjectionDeltaPage>;
+  resume(
+    workspaceId: string,
+    runId: string,
+    request: ResearchV6DirectorProjectionResumeRequest,
+    signal?: AbortSignal,
+  ): Promise<ResearchV6DirectorProjectionDeltaPage>;
+}

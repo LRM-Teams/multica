@@ -112,6 +112,27 @@ describe("Director V6 projection wire schemas", () => {
     expect(schemas.parseResearchV6DirectorProjectionDelta({}).event_sequence).toBe(0);
   });
 
+  it("keeps an unknown node detail view forward-compatible", async () => {
+    const schemas = await import("./director-schemas");
+    const parsed = schemas.parseResearchV6DirectorNodeDetail({
+      snapshot_id: SNAPSHOT_ID,
+      through_event_sequence: 47,
+      projection_hash: HASH,
+      view: "future_audit_view",
+      node: snapshot().nodes[0],
+      incoming: [],
+      outgoing: [],
+      history_refs: [],
+      agent_refs: [],
+      work_item_refs: [],
+      attempt_refs: [],
+      evidence_refs: [],
+      discussion_refs: [],
+      report_refs: [],
+    });
+    expect(parsed.view).toBe("future_audit_view");
+  });
+
   it("fixes derivation expansion depth to exactly one layer", () => {
     expect(
       parseResearchV6DirectorProjectionSliceRequest({

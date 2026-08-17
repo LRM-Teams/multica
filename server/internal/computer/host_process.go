@@ -155,13 +155,14 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
 	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
 	mux.HandleFunc("/machine-upgrades", host.upgrade.localRequestHandler())
+	registry := host.LocalControlRegistry(state)
 	var server *http.Server
 	serveControl := func() error {
 		if strings.TrimSpace(config.ServiceEndpoint) == "" || strings.HasPrefix(config.ServiceEndpoint, "http://") {
 			server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 			return server.Serve(config.Listener)
 		}
-		return ServeLocalControl(processCtx, config.Listener, mux)
+		return ServeLocalControlRPC(processCtx, config.Listener, registry)
 	}
 	serveErr := make(chan error, 1)
 	go func() {
@@ -187,14 +188,22 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	stopReady()
 	if err != nil {
 		cancel()
-		_ = server.Close()
+		if server != nil {
+			_ = server.Close()
+		} else {
+			_ = config.Listener.Close()
+		}
 		<-hostDone
 		<-serveErr
 		return err
 	}
 	if err := host.upgrade.recoverSuccessor(processCtx); err != nil {
 		cancel()
-		_ = server.Close()
+		if server != nil {
+			_ = server.Close()
+		} else {
+			_ = config.Listener.Close()
+		}
 		<-hostDone
 		<-serveErr
 		return fmt.Errorf("recover Computer Machine Upgrade: %w", err)

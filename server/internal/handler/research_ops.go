@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -382,8 +383,20 @@ func (h *Handler) PatchResearchReport(w http.ResponseWriter, r *http.Request) {
 }
 
 type postResearchMessageRequest struct {
-	Body          string `json:"body"`
-	TargetAgentID string `json:"target_agent_id"`
+	Body                 string                `json:"body"`
+	Content              string                `json:"content"`
+	TargetAgentID        string                `json:"target_agent_id"`
+	ClientRequestID      string                `json:"client_request_id"`
+	SelectedResearchRefs []selectedResearchRef `json:"selected_research_refs"`
+}
+
+type selectedResearchRef struct {
+	StableID       string `json:"stable_id"`
+	Kind           string `json:"kind"`
+	EntityID       string `json:"entity_id"`
+	Revision       int    `json:"revision"`
+	ContentHash    string `json:"content_hash"`
+	DisplaySummary string `json:"display_summary"`
 }
 
 func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
@@ -405,9 +418,33 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 	if !decodeResearchJSON(w, r, &req) {
 		return
 	}
+	if strings.TrimSpace(req.Content) != "" {
+		if strings.TrimSpace(req.Body) != "" && strings.TrimSpace(req.Body) != strings.TrimSpace(req.Content) {
+			writeError(w, http.StatusBadRequest, "body and content disagree")
+			return
+		}
+		req.Body = req.Content
+	}
 	if strings.TrimSpace(req.Body) == "" {
 		writeError(w, http.StatusBadRequest, "body is required")
 		return
+	}
+	if req.ClientRequestID == "" {
+		req.ClientRequestID = uuid.NewString()
+	}
+	if _, err = uuid.Parse(req.ClientRequestID); err != nil || len(req.SelectedResearchRefs) > 256 {
+		writeError(w, http.StatusBadRequest, "steering identity or selected refs are invalid")
+		return
+	}
+	for _, ref := range req.SelectedResearchRefs {
+		allowedKind := map[string]bool{"goal": true, "branch": true, "task": true, "attempt": true, "work_item": true, "agent": true,
+			"result": true, "insight": true, "discussion": true, "dispute": true, "integration": true, "report": true,
+			"source_snapshot": true, "observation": true, "claim": true, "evidence_link": true}
+		if _, parseErr := uuid.Parse(ref.EntityID); strings.TrimSpace(ref.StableID) != ref.Kind+":"+ref.EntityID || !allowedKind[ref.Kind] || parseErr != nil || ref.Revision < 1 ||
+			!strings.HasPrefix(ref.ContentHash, "sha256:") || len(ref.DisplaySummary) > 4096 {
+			writeError(w, http.StatusBadRequest, "selected research ref is invalid")
+			return
+		}
 	}
 
 	userID, userOK := requireUserID(w, r)
@@ -506,7 +543,9 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg, err := h.createResearchMessageWithPassport(r.Context(), db.CreateResearchMessageParams{
+	selectedRefs, _ := json.Marshal(req.SelectedResearchRefs)
+	messageMeta, _ := json.Marshal(map[string]any{"client_request_id": req.ClientRequestID, "selected_research_refs": req.SelectedResearchRefs})
+	params := db.CreateResearchMessageParams{
 		WorkspaceID:   wsUUID,
 		SessionID:     session.ID,
 		SenderType:    senderType,
@@ -514,8 +553,14 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		TargetAgentID: target,
 		Body:          strings.TrimSpace(req.Body),
 		CardKind:      "chat",
-		Meta:          []byte(`{}`),
-	})
+		Meta:          messageMeta,
+	}
+	var msg db.ResearchMessage
+	if senderType == "user" {
+		msg, err = h.createResearchMessageWithPassportAndV6Steering(r.Context(), params, req.ClientRequestID, selectedRefs)
+	} else {
+		msg, err = h.createResearchMessageWithPassport(r.Context(), params)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to post message")
 		return

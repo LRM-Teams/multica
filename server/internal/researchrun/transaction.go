@@ -81,6 +81,17 @@ const (
 	txOpInquiryStatusUpdate       researchTxOperation = "inquiry_status.update"
 	txOpStrategyPromotion         researchTxOperation = "strategy.promote"
 	txOpTaskInquiryTargetsBind    researchTxOperation = "task_inquiry_targets.bind"
+	txOpV6WorkItemClaim           researchTxOperation = "v6_work_item.claim"
+	txOpV6WorkItemComplete        researchTxOperation = "v6_work_item.complete"
+	txOpV6SubmissionRecord        researchTxOperation = "v6_submission.record"
+	txOpV6WorkItemRecover         researchTxOperation = "v6_work_item.recover"
+	txOpV6CatalogAcknowledge      researchTxOperation = "v6_catalog.acknowledge"
+	txOpV6TeamMemberAdd           researchTxOperation = "v6_team_member.add"
+	txOpV6TeamMemberArchive       researchTxOperation = "v6_team_member.archive"
+	txOpV6DirectorAssign          researchTxOperation = "v6_director.assign"
+	txOpV6DirectorUnavailable     researchTxOperation = "v6_director.unavailable"
+	txOpV6DirectorCycleCreate     researchTxOperation = "v6_director_cycle.create"
+	txOpV6DirectorBriefAck        researchTxOperation = "v6_director_brief.acknowledge"
 )
 
 type researchTxFaultHook func(context.Context, researchTxOperation, researchTxFaultPoint) error

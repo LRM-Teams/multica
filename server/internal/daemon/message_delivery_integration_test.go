@@ -501,7 +501,15 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			acks <- ack
 			return serverHandler.HandleAgentDeliveryAck(ctx, identity, ack)
 		})
-		teardown = startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
+		stopRunner := startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
+		teardown = func() {
+			stopRunner()
+			d.detachWorkspaceRunner(runner)
+			runner.inboxes.Close()
+			if err := d.canonicalRuntimes.closeAll(); err != nil {
+				t.Errorf("close canonical runtime: %v", err)
+			}
+		}
 		return d, acks, normal.snapshot, normal.observed, teardown
 	}
 
@@ -575,8 +583,12 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	if got := waitBatch(observedA, batchesA, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("rejected runtime handoff attempt = %+v, want %s", got, idA)
 	}
-	if got, err := dA.CredentialProxy().SeenUpToSeq(agentID, target); err != nil || got >= seqA {
-		t.Fatalf("boundary before delivery = %d, %v; want below %d", got, err, seqA)
+	runnerA, err := dA.resolveWorkspaceRunnerByAgent(agentID)
+	if err != nil {
+		t.Fatalf("resolve runner before delivery: %v", err)
+	}
+	if got, known, boundaryErr := runnerA.messageContextBoundary(agentID, target); boundaryErr != nil || (known && got >= seqA) {
+		t.Fatalf("boundary before delivery = %d (known=%t), %v; want unknown or below %d", got, known, boundaryErr, seqA)
 	}
 	// Disconnect: the Server still owns the unacknowledged delivery.
 	teardownA()

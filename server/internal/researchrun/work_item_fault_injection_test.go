@@ -190,6 +190,9 @@ func TestRecordV6SubmissionTransactionRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() {
+			_, _ = run.pool.Exec(context.Background(), `DELETE FROM research_v6_work_submission WHERE workspace_id=$1::uuid`, run.fixture.workspaceID)
+		})
 		access := V6AttemptAccess{WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, WorkItemID: workItemID, AttemptID: attemptID, AgentID: run.fixture.agentID}
 		invoke := func() error { _, err := run.store.RecordV6Submission(run.ctx, access, decoded, requestID); return err }
 		count := func() int {

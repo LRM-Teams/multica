@@ -35,13 +35,15 @@ export interface ResearchV6ReportHistoryItem {
 
 type FramePhase = "idle" | "loading" | "ready" | "unavailable";
 
+const EMPTY_REPORT_HISTORY: readonly ResearchV6ReportHistoryItem[] = [];
+
 export function ResearchV6ReportModal({
   open,
   report,
   appOrigin,
   onOpenChange,
   onRequestFreshCapability,
-  history = [],
+  history = EMPTY_REPORT_HISTORY,
   onSelectReport,
   selectedReportId,
   loading = false,

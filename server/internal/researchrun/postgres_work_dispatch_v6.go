@@ -73,7 +73,7 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID: workspaceID, SessionID: runID, EntityID: attemptID,
 		Kind: ArtifactKindAttempt, ProvenanceCompleteness: ArtifactProvenanceComplete,
-		GoalVersion: &goalVersion32, SchemaName: "research_work_item_attempt",
+		GoalVersion: &goalVersion32, SchemaName: string(ArtifactKindAttempt),
 		SchemaVersion: OrchestratorVersionV6, AccessLevel: ArtifactAccessRaw,
 		HashOrigin: ArtifactHashOriginProduction, ContentHash: attemptHash,
 	}); err != nil {

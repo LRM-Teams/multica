@@ -80,6 +80,18 @@ func NewEngineWithV6Adapters(store *PostgresStore, dispatcher Dispatcher, projec
 	return engine
 }
 
+// NewEngineWithRuntimeAdapters wires every V6 external effect while retaining
+// the report package boundary. Production uses this constructor so a process
+// restart cannot silently drop either half of the Director runtime.
+func NewEngineWithRuntimeAdapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage, renderer ReportRenderAdapter, frameAncestors []string, agents AgentLifecycleAdapter, inbox InboxDispatchAdapter) ResearchRun {
+	store.reportStorage, store.reportRenderer = reportStorage, renderer
+	store.reportFrameAncestors = append([]string(nil), frameAncestors...)
+	engine := newEngine(store, dispatcher, projector)
+	engine.v6Agents = agents
+	engine.v6Inbox = inbox
+	return engine
+}
+
 func newEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
 	return &Engine{
 		store: store, dispatcher: dispatcher, projector: projector, clock: systemClock{},

@@ -9,16 +9,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { useT } from "../../i18n";
 import { resolveAgentLiveStatus } from "../resolve-agent-live-status";
-
-const activityToneDotClass: Record<string, string> = {
-  neutral: "bg-muted-foreground/40",
-  active: "bg-warning",
-  info: "bg-warning",
-  warning: "bg-warning",
-  running: "bg-running",
-  error: "bg-destructive",
-  success: "bg-success",
-};
+import { runnerActivityToneDotClass } from "../runner-activity-tone";
 
 /**
  * Shared list Activity mark. Labels and tones are supplied by the server-owned
@@ -139,7 +130,7 @@ function AgentActivityStatusView({
       summary.tone === "active" ||
       summary.tone === "running");
   const activityTone = hasDynamicActivity ? summary.tone : "success";
-  const dotClass = activityToneDotClass[activityTone] ?? "bg-muted-foreground";
+  const dotClass = runnerActivityToneDotClass(activityTone);
   const pulses = isWorkingTone;
   const showLiveStatus = !!liveStatus && !hasDynamicActivity;
   return (

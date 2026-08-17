@@ -81,18 +81,19 @@ describe("AgentActivityStatus", () => {
     expect(screen.getByTestId("agent-activity-status")).toHaveTextContent("Online");
   });
 
-  it("also treats thinking as yellow active work", () => {
+  it("uses the shared blue info tone for thinking", () => {
     state.summary = { label: "Thinking...", tone: "info", visibility: "visible" };
     const { container } = render(<AgentActivityStatus agentId="agent-1" />);
     expect(screen.getByTestId("agent-activity-status")).toHaveTextContent("Thinking...");
     expect(container.querySelector(".animate-ping")).not.toBeNull();
-    expect(screen.getByTestId("agent-activity-status").querySelector(".bg-warning")).not.toBeNull();
+    expect(screen.getByTestId("agent-activity-status").querySelector(".bg-blue-500")).not.toBeNull();
   });
 
-  it("does not infer the running tone from display copy", () => {
-    state.summary = { label: "Running command...", tone: "warning", visibility: "visible" };
+  it("uses the shared amber warning tone for working", () => {
+    state.summary = { label: "Working...", tone: "warning", visibility: "visible" };
     const { container } = render(<AgentActivityStatus agentId="agent-1" />);
+    expect(screen.getByTestId("agent-activity-status")).toHaveTextContent("Working...");
     expect(container.querySelector(".bg-running")).toBeNull();
-    expect(container.querySelector(".bg-warning")).not.toBeNull();
+    expect(container.querySelector(".bg-amber-500")).not.toBeNull();
   });
 });

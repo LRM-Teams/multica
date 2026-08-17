@@ -1,5 +1,6 @@
 "use client";
 
+/* react-doctor-disable react-doctor/prefer-useReducer, react-doctor/jsx-no-jsx-as-prop -- intentional independent UI state and stable shell slots. */
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";

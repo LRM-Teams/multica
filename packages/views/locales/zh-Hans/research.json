@@ -186,6 +186,7 @@
     "module_detail_ico": "详",
     "aux_close": "关闭面板",
     "aux_detail_empty": "在画布上点选节点以查看详情。",
+    "expansion_failed": "这一层暂时无法展开，请再次激活节点重试。",
     "confirm": "确认调研完成",
     "confirm_continue": "确认并继续",
     "gate_approve": "批准",

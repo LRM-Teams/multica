@@ -78,7 +78,7 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	if _, err = tx.Exec(ctx, `UPDATE research_team_membership SET state='working' WHERE id=$1::uuid`, membershipID); err != nil {
 		return false, err
 	}
-	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatch_prepared", dispatchKey, "system", "", map[string]any{"work_item_id": workItemID, "attempt_id": attemptID, "manifest_id": manifestID, "manifest_hash": manifestHash, "attempt_number": attemptNumber}); err != nil {
+	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatch_prepared", dispatchKey, "system", "", map[string]any{"work_item_id": workItemID, "work_item_attempt_id": attemptID, "manifest_id": manifestID, "manifest_hash": manifestHash, "attempt_number": attemptNumber}); err != nil {
 		return false, err
 	}
 	if err = s.commitResearchTx(ctx, txOpV6DispatchPrepare, tx); err != nil {
@@ -302,7 +302,7 @@ func (s *PostgresStore) CompleteV6DispatchOutbox(ctx context.Context, outboxID, 
 	if command.RowsAffected() != 1 {
 		return ErrWorkItemLeaseLost
 	}
-	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatched", "v6-work-item-dispatched:"+attemptID, "system", "", map[string]any{"work_item_id": workItemID, "attempt_id": attemptID, "inbox_task_id": inboxTaskID}); err != nil {
+	if _, err = appendEvent(ctx, tx, workspaceID, runID, "v6_work_item_dispatched", "v6-work-item-dispatched:"+attemptID, "system", "", map[string]any{"work_item_id": workItemID, "work_item_attempt_id": attemptID, "inbox_task_id": inboxTaskID}); err != nil {
 		return err
 	}
 	return s.commitResearchTx(ctx, txOpV6DispatchComplete, tx)

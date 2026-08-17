@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
@@ -394,5 +396,140 @@ func TestMemoryCurationStageNormalization(t *testing.T) {
 		if got != want {
 			t.Fatalf("NormalizeStage(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+// newCurationGraphGateFixture builds one workspace with an enabled
+// team-curation curator profile (fresh curator + target runtimes, recent
+// activity) plus the graph_memory_profile memory_type row named by
+// memoryType. Returns the workspace id; cleanup is registered on t.
+func newCurationGraphGateFixture(t *testing.T, pool *pgxpool.Pool, memoryType string) string {
+	t.Helper()
+	ctx := t.Context()
+	suffix := uuid.NewString()[:8]
+	var userID, workspaceID, curatorRuntimeID, targetRuntimeID, curatorAgentID, targetAgentID string
+	if err := pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id::text`, "Graph Gate Curation "+suffix, "graph-gate-curation-"+suffix+"@example.test").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO workspace (name, slug) VALUES ($1, $2) RETURNING id::text`, "Graph Gate Curation "+suffix, "graph-gate-curation-"+suffix).Scan(&workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
+	})
+	if _, err := pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		VALUES ($1, $2, 'Graph Gate Curator Runtime', 'local', 'codex', 'online', 'test', $3, now())
+		RETURNING id::text
+	`, workspaceID, "graph-gate-curator-"+suffix, userID).Scan(&curatorRuntimeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		VALUES ($1, $2, 'Graph Gate Target Runtime', 'local', 'codex', 'online', 'test', $3, now())
+		RETURNING id::text
+	`, workspaceID, "graph-gate-target-"+suffix, userID).Scan(&targetRuntimeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
+	`, workspaceID, "graph_gate_curator_"+suffix, curatorRuntimeID, userID).Scan(&curatorAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, $2, 'local', $3, $4, 'composer-1.5') RETURNING id::text
+	`, workspaceID, "graph_gate_target_"+suffix, targetRuntimeID, userID).Scan(&targetAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id)
+		VALUES ($1, 'Graph gate activity', 'todo', 'none', 'member', $2)
+	`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
+	var issueID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM issue WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 1`, workspaceID).Scan(&issueID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'acked', '2026-07-09 12:00:00+00')
+	`, targetAgentID, issueID, targetRuntimeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO memory_curator_profile (
+		  workspace_id, user_id, enabled, self_review_enabled, team_curation_enabled,
+		  mode, runtime_id, curator_agent_id, target_scope, timezone, schedule_hour, catch_up_enabled
+		) VALUES ($1, $2, true, false, true, 'review', $3, $4, 'owned_all', 'Asia/Shanghai', 2, true)
+	`, workspaceID, userID, curatorRuntimeID, curatorAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO graph_memory_profile (workspace_id, memory_type) VALUES ($1, $2)`, workspaceID, memoryType); err != nil {
+		t.Fatal(err)
+	}
+	return workspaceID
+}
+
+func countCurationRuns(t *testing.T, pool *pgxpool.Pool, workspaceID string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM memory_curation_run WHERE workspace_id = $1`, workspaceID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Spec §10: legacy L1-L4, self-review, and team curation never run for
+// graph workspaces; legacy workspaces are unchanged.
+func TestMemoryCurationIntentSkipsGraphWorkspaces(t *testing.T) {
+	pool := integrationPool(t)
+	legacyWS := newCurationGraphGateFixture(t, pool, "legacy")
+	graphWS := newCurationGraphGateFixture(t, pool, "graph")
+
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// hourOffset=1 for team_curation: cycleLocal = plan - 1h, so plan hour 3
+	// lands on the profiles' schedule_hour=2.
+	plan := time.Date(2026, 7, 10, 3, 0, 0, 0, loc).UTC()
+	if _, err := makeMemoryCurationIntentHandler(pool, memorycuration.StageTeamCuration, 1)(t.Context(), HandlerInput{PlanTime: plan}); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCurationRuns(t, pool, graphWS); got != 0 {
+		t.Fatalf("graph workspace received %d legacy curation runs, want 0", got)
+	}
+	if got := countCurationRuns(t, pool, legacyWS); got != 1 {
+		t.Fatalf("legacy workspace received %d curation runs, want 1 (fixture sanity)", got)
+	}
+}
+
+func TestDefaultSelfReviewSkipsGraphWorkspaces(t *testing.T) {
+	pool := integrationPool(t)
+	legacyWS := newCurationGraphGateFixture(t, pool, "legacy")
+	graphWS := newCurationGraphGateFixture(t, pool, "graph")
+
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := time.Date(2026, 7, 10, defaultAgentSelfReviewScheduleHour, 0, 0, 0, loc).UTC()
+	if _, err := scheduleDefaultAgentSelfReviewRuns(t.Context(), pool, plan, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCurationRuns(t, pool, graphWS); got != 0 {
+		t.Fatalf("graph workspace received %d self-review runs, want 0", got)
+	}
+	if got := countCurationRuns(t, pool, legacyWS); got != 1 {
+		t.Fatalf("legacy workspace received %d self-review runs, want 1 (fixture sanity)", got)
 	}
 }

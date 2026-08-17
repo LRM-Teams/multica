@@ -43,6 +43,8 @@ func TestResearchTransactionRecoveryMatrixCoversRegistry(t *testing.T) {
 		txOpV6ReportPackageAccept:      "TestV6ReportPackageAcceptTransactionBoundary",
 		txOpV6ReportReview:             "TestV6ReportReviewTransactionBoundary",
 		txOpV6ReportWorkCreate:         "TestV6ReportWorkCreateTransactionBoundary",
+		txOpV6ProjectionSnapshot:       "TestV6ProjectionSnapshotTransactionBoundary",
+		txOpV6ProjectionSlice:          "TestV6ProjectionSliceTransactionBoundary",
 	}
 	for operation, testName := range bespoke {
 		covered[operation] = struct{}{}

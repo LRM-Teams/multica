@@ -1,5 +1,7 @@
-import { infiniteQueryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import type {
+  ResearchV6DirectorNodeDetailView,
+  ResearchV6DirectorDetailTransport,
   ResearchV6DirectorProjectionSliceRequest,
   ResearchV6DirectorProjectionTransport,
 } from "../../types/research-v6-director";
@@ -33,6 +35,31 @@ export const researchV6DirectorProjectionKeys = {
       "deltas",
       snapshotId,
       after,
+    ] as const,
+  nodeDetail: (
+    workspaceId: string,
+    runId: string,
+    snapshotId: string,
+    nodeId: string,
+    view: ResearchV6DirectorNodeDetailView,
+  ) =>
+    [
+      ...researchV6DirectorProjectionKeys.all(workspaceId, runId),
+      "node-detail",
+      snapshotId,
+      nodeId,
+      view,
+    ] as const,
+  reports: (workspaceId: string, runId: string) =>
+    [
+      ...researchV6DirectorProjectionKeys.all(workspaceId, runId),
+      "reports",
+    ] as const,
+  report: (workspaceId: string, runId: string, reportId: string) =>
+    [
+      ...researchV6DirectorProjectionKeys.all(workspaceId, runId),
+      "reports",
+      reportId,
     ] as const,
 };
 
@@ -120,5 +147,65 @@ export function researchV6DirectorDeltaOptions(
         signal,
       ),
     getNextPageParam: (page) => page.next_cursor,
+  });
+}
+
+export function researchV6DirectorNodeDetailOptions(
+  transport: ResearchV6DirectorDetailTransport,
+  workspaceId: string,
+  runId: string,
+  snapshotId: string,
+  nodeId: string,
+  view: ResearchV6DirectorNodeDetailView = "brief",
+) {
+  return queryOptions({
+    queryKey: researchV6DirectorProjectionKeys.nodeDetail(
+      workspaceId,
+      runId,
+      snapshotId,
+      nodeId,
+      view,
+    ),
+    queryFn: async ({ signal }) => {
+      const detail = await transport.loadNodeDetail(
+        workspaceId,
+        runId,
+        nodeId,
+        view,
+        signal,
+      );
+      if (detail.snapshot_id !== snapshotId) {
+        throw new Error("Director V6 node detail changed snapshot identity");
+      }
+      return detail;
+    },
+  });
+}
+
+export function researchV6DirectorReportsOptions(
+  transport: ResearchV6DirectorDetailTransport,
+  workspaceId: string,
+  runId: string,
+) {
+  return queryOptions({
+    queryKey: researchV6DirectorProjectionKeys.reports(workspaceId, runId),
+    queryFn: ({ signal }) => transport.listReports(workspaceId, runId, signal),
+  });
+}
+
+export function researchV6DirectorReportOptions(
+  transport: ResearchV6DirectorDetailTransport,
+  workspaceId: string,
+  runId: string,
+  reportId: string,
+) {
+  return queryOptions({
+    queryKey: researchV6DirectorProjectionKeys.report(
+      workspaceId,
+      runId,
+      reportId,
+    ),
+    queryFn: ({ signal }) =>
+      transport.loadReport(workspaceId, runId, reportId, signal),
   });
 }

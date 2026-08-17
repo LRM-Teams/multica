@@ -10,4 +10,5 @@
 export * from "./capability";
 export * from "./session-adapter";
 export * from "./director-session-adapter";
+export * from "./use-research-v6-director-canvas";
 export * from "./use-research-session-canvas";

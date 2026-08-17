@@ -121,6 +121,7 @@ export function ResearchConstellationWorkspace({
   typedGraphLoadMorePending = false,
   onLoadMoreTypedGraph,
   expansionControl,
+  densityBins,
   className,
 }: {
   typedGraph: TypedGraphResponse | undefined;
@@ -139,6 +140,7 @@ export function ResearchConstellationWorkspace({
   onLoadMoreTypedGraph?: () => void;
   /** V6 Projection-owned one-layer disclosure state. */
   expansionControl?: StarGraphExpansionControl;
+  densityBins?: readonly import("../star-graph").StarGraphDensityBin[];
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
@@ -560,6 +562,12 @@ export function ResearchConstellationWorkspace({
       onSelectNode(resolved);
       setRailMode("detail");
 
+      if (projectionSource === "v6") {
+        setRailOpen(true);
+        closeOverlay();
+        return;
+      }
+
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
@@ -581,6 +589,7 @@ export function ResearchConstellationWorkspace({
       onSelectNode,
       openAgentInspector,
       openReport,
+      projectionSource,
       setRailMode,
       setRailOpen,
       snapshotNodes,
@@ -743,6 +752,7 @@ export function ResearchConstellationWorkspace({
             onSelectNode={handleCanvasFocus}
             onOpenNode={handleCanvasSelect}
             expansionControl={expansionControl}
+            densityBins={densityBins}
             fusionTransition={fusionTransition}
             fusionLowPerformance={motion.profile.lowPerformance}
             summaryTitle={summaryTitle}

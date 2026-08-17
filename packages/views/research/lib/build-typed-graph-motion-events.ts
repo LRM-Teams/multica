@@ -62,6 +62,22 @@ export function buildTypedGraphMotionEvents(
       continue;
     }
 
+    // Assimilation can add fresh, server-declared absorbed inputs to an
+    // existing successor. Treat only the newly declared ids as this playback's
+    // sources; replayed projection pages remain idempotent and older inputs do
+    // not fly into the successor again.
+    const priorMerged = new Set(prior.merged_from ?? []);
+    const newlyMerged = (node.merged_from ?? []).filter(
+      (sourceId) => !priorMerged.has(sourceId),
+    );
+    if (newlyMerged.length > 0) {
+      pushUnique(events, {
+        transition_kind: "integration_formed",
+        related_ids: [node.id, ...newlyMerged],
+        anchor_id: newlyMerged[0] ?? null,
+      });
+    }
+
     const prevStatus = (prior.status || "").toLowerCase();
     const nextStatus = (node.status || "").toLowerCase();
     if (prevStatus !== nextStatus && RETIRED_STATUSES.has(nextStatus)) {

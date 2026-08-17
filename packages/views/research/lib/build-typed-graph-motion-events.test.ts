@@ -44,6 +44,46 @@ describe("buildTypedGraphMotionEvents", () => {
     expect(events.some((event) => event.transition_kind === "node_retired")).toBe(true);
   });
 
+  it("animates only newly assimilated inputs on an existing successor", () => {
+    const previous = {
+      ...base,
+      nodes: [
+        {
+          ...base.nodes[0],
+          id: "successor",
+          level: "m",
+          merged_from: ["input-a"],
+        },
+      ],
+    } as unknown as TypedGraphResponse;
+    const next = {
+      ...previous,
+      graph_version: 2,
+      nodes: [
+        {
+          ...previous.nodes[0],
+          merged_from: ["input-a", "input-b"],
+        },
+      ],
+    } as unknown as TypedGraphResponse;
+
+    expect(buildTypedGraphMotionEvents(previous, next)).toContainEqual({
+      transition_kind: "integration_formed",
+      related_ids: ["successor", "input-b"],
+      anchor_id: "input-b",
+    });
+  });
+
+  it("does not replay assimilation when merged inputs are unchanged", () => {
+    const previous = {
+      ...base,
+      nodes: [{ ...base.nodes[0], merged_from: ["input-a"] }],
+    } as unknown as TypedGraphResponse;
+    const next = { ...previous, graph_version: 2 } as TypedGraphResponse;
+
+    expect(buildTypedGraphMotionEvents(previous, next)).toEqual([]);
+  });
+
   it("returns nothing when graph_version is unchanged", () => {
     expect(buildTypedGraphMotionEvents(base, base)).toEqual([]);
   });

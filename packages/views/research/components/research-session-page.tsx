@@ -229,10 +229,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchPresenceOptions(wsId, sessionId),
   );
   const presence = presenceData ?? {};
-  const { data: workspaceAgents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: Boolean(wsId && data?.run?.run.orchestrator_version === "research-run-v6"),
-  });
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const {
     data: typedGraphPages,
@@ -270,9 +266,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     (assignment) =>
       assignment.role === "director" || assignment.role === "research_director",
   )?.agent_id ?? null;
-  const persistedDirectorAgent = workspaceAgents.find(
-    (agent) => agent.id === persistedDirectorAgentId,
-  );
   const directorTransport = useMemo(
     () => createResearchV6DirectorProjectionTransport(api),
     [],

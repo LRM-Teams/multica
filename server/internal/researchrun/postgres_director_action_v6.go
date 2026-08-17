@@ -213,7 +213,11 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 		case "update_agent", "archive_agent":
 			err = s.executeV6AgentLifecycleAction(ctx, proposal, cycleID, action, stateVersion)
 		case "update_branch", "pause_branch", "terminate_branch", "split_branch", "merge_branch":
-			err = s.executeV6BranchLifecycleAction(ctx, proposal, action, stateVersion)
+			if action.Kind == "split_branch" {
+				err = s.executeV6SplitBranchAction(ctx, proposal, cycleID, action, stateVersion)
+			} else {
+				err = s.executeV6BranchLifecycleAction(ctx, proposal, action, stateVersion)
+			}
 		case "pause_run", "resume_run", "complete_run", "fail_run":
 			err = s.executeV6RunLifecycleAction(ctx, proposal, action, stateVersion)
 		default:

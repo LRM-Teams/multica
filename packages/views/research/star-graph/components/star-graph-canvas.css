@@ -489,6 +489,15 @@
 .sg-node .sg-document-badge {
   transition: opacity 180ms ease;
 }
+
+/* Goal is a semantic root, not an XXL synthesis. Keep the existing size
+ * contract for compatibility, but give the root its own visual treatment. */
+.sg-node[data-semantic-role="goal"] {
+  border-color: var(--research-stage-explore);
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--research-stage-explore) 42%, transparent),
+    0 0 34px color-mix(in oklab, var(--research-stage-explore) 22%, transparent);
+}
 .sg-semantic-content-hidden .sg-core > *,
 .sg-semantic-content-hidden .sg-document-badge {
   opacity: 0;

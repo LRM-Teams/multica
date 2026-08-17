@@ -185,7 +185,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
   - **依赖**：现有 playbook 机制
   - **完成标准**：组件测：选剧本 → instruction 含「主线 / 未归类 / 不要罗列」等稳定关键词；destination 不是强制频道。
 
-- [ ] **J3-T2 合成派发（Facts+Digest 进 Worker，回顾不跑模型）**
+- [x] **J3-T2 合成派发（Facts+Digest 进 Worker，回顾不跑模型）**
+  - **已落地（2026-08-17）**：`POST /api/notes/period-briefs` — Owner 鉴权；Facts bundle + Owner Digest（失败/关闭进 `sources_empty`）；私有「工作介绍/」底稿；Worker `period_brief`；prompt 含 `<facts>`/`<digest>` 转义。测：非 Owner 403、disabled 仍派发、offline 不整单失败、`</digest>` 截断防护。
   - **目标**：一个产品动作完成拉取、汇合、派发 Synthesis。
   - **要做**：新 endpoint（例如 `POST /api/notes/period-briefs`）或等价：鉴权 Owner；解析窗口；拉平台 Facts（J2）；对 Owner 的在线 Computer 拉 Digest（J1，失败/未开启记入 `sources_empty`，不整单失败）；写一份 **私有底稿笔记**（或 Worker brief 分区）包含 Facts + Digest JSON/markdown；`createNoteWorkerJob` + `period_brief` instruction。Prompt 分区：`<system_contract>` / untrusted `<facts>` / untrusted `<digest>` / `<instruction>`，转义规则同 Worker。
   - **不要做**：在 retrospective handler 里调模型；Digest 明文进群频道；新 job 表以外的编排状态机。
@@ -225,7 +226,7 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
 | 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ ~~J1-T5~~ 开关（已完成） |
 | 3 | ~~J2-T1~~ Facts 包 → ~~J2-T2~~ Issue 挂 PR → ~~J2-T3~~ Digest 归仓（J2 完成） |
-| 4 | ~~J3-T1~~ 剧本（已完成）→ **J3-T2** 合成派发 |
+| 4 | ~~J3-T1~~ 剧本 → ~~J3-T2~~ 合成派发（已完成）→ **J3-T3** UI |
 | 5 | 仅当产品需要时再开 J4 |
 
-**当前焦点：** Slice J1。下一个 checkbox：**J1-T5**。
+**当前焦点：** Slice J3。下一个 checkbox：**J3-T3**。

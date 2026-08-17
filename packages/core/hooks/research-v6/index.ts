@@ -14,3 +14,6 @@ export type {
 export { useResearchV6ProjectionStore } from "./store";
 export type { ResearchV6RunSlice } from "./store";
 export { researchV6Keys } from "./queries";
+export * from "./director-projection-client";
+export * from "./director-queries";
+export * from "./director-selection-store";

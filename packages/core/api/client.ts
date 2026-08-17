@@ -5304,6 +5304,67 @@ export class ApiClient {
     assertResearchV6DirectorDeltaPageIdentity(page, workspaceId, runId);
     return page;
   }
+
+  async getResearchV6DirectorProjectionNodeDetail(
+    workspaceId: string,
+    runId: string,
+    nodeId: string,
+    view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorNodeDetail> {
+    const { parseResearchV6DirectorNodeDetail } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?view=${encodeURIComponent(view)}`,
+      { signal: options?.signal },
+    );
+    const detail = parseResearchV6DirectorNodeDetail(raw);
+    if (detail.node.id !== nodeId) {
+      throw new Error("Director V6 node detail response changed node identity");
+    }
+    // The workspace is enforced by the authenticated route and the canonical
+    // node response is pinned by snapshot/hash. The response has no workspace field.
+    void workspaceId;
+    return detail;
+  }
+
+  async getResearchV6DirectorReports(
+    workspaceId: string,
+    runId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportMetadata[]> {
+    const { parseResearchV6DirectorReportList } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/reports`,
+      { signal: options?.signal },
+    );
+    void workspaceId;
+    return parseResearchV6DirectorReportList(raw);
+  }
+
+  async getResearchV6DirectorReport(
+    workspaceId: string,
+    runId: string,
+    reportId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportDetail> {
+    const { parseResearchV6DirectorReportDetail } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(reportId)}`,
+      { signal: options?.signal },
+    );
+    const report = parseResearchV6DirectorReportDetail(raw);
+    if (report.id !== reportId) {
+      throw new Error("Director V6 report response changed report identity");
+    }
+    void workspaceId;
+    return report;
+  }
 }
 
 function assertResearchV6DirectorProjectionIdentity(

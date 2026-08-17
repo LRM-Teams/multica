@@ -164,7 +164,9 @@ export class ResearchV6DirectorLiveController {
       return;
     }
     if (result.kind === "applied") {
-      this.options.onInvalidateSliceKeys?.(delta.invalidate_slice_keys);
+      this.options.onInvalidateSliceKeys?.(
+        this.client.takeCommittedInvalidatedSliceKeys(),
+      );
     }
     this.emit();
   }
@@ -242,11 +244,24 @@ export class ResearchV6DirectorLiveController {
   }
 
   private async loadFreshSnapshot(): Promise<void> {
-    const snapshot = await this.transport.loadSnapshot(
-      this.identity.workspaceId,
-      this.identity.runId,
-    );
-    this.client.applySnapshotPage(snapshot);
+    const staleSliceKeys = [...this.client.getState().views.keys()];
+    let cursor: string | undefined;
+    let pageCount = 0;
+    do {
+      const snapshot = await this.transport.loadSnapshot(
+        this.identity.workspaceId,
+        this.identity.runId,
+        cursor,
+      );
+      if (pageCount === 0) this.client.replaceWithSnapshotPage(snapshot);
+      else this.client.applySnapshotPage(snapshot);
+      cursor = snapshot.has_more ? snapshot.next_cursor : undefined;
+      pageCount += 1;
+      if (pageCount >= 128 && cursor) {
+        throw new Error("Director V6 snapshot exceeded the bounded page limit");
+      }
+    } while (cursor);
+    this.options.onInvalidateSliceKeys?.(staleSliceKeys);
   }
 
   private setConnection(connection: ResearchV6DirectorConnectionStatus): void {

@@ -5,6 +5,9 @@ import type {
   ResearchV6DirectorProjectionResumeRequest,
   ResearchV6DirectorProjectionSliceRequest,
   ResearchV6DirectorProjectionSnapshot,
+  ResearchV6DirectorNodeDetail,
+  ResearchV6DirectorReportDetail,
+  ResearchV6DirectorReportMetadata,
 } from "../types/research-v6-director";
 
 const key = z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
@@ -214,6 +217,86 @@ export const ResearchV6DirectorProjectionSliceRequestSchema = z
   })
   .strict();
 
+const entityRefs = z.array(ResearchV6DirectorEntityRefSchema).max(10_000);
+
+export const ResearchV6DirectorNodeDetailSchema = z
+  .object({
+    snapshot_id: uuid,
+    through_event_sequence: sequence,
+    projection_hash: hash,
+    view: z.enum(["brief", "full", "history"]),
+    node: ResearchV6DirectorProjectionNodeSchema,
+    incoming: z.array(ResearchV6DirectorProjectionEdgeSchema).max(20_000),
+    outgoing: z.array(ResearchV6DirectorProjectionEdgeSchema).max(20_000),
+    history_refs: entityRefs,
+    agent_refs: entityRefs,
+    work_item_refs: entityRefs,
+    attempt_refs: entityRefs,
+    evidence_refs: entityRefs,
+    discussion_refs: entityRefs,
+    report_refs: entityRefs,
+  })
+  .strict();
+
+const reportReview = z
+  .object({
+    id: uuid.optional(),
+    decision: z.string().max(160),
+    reason: z.string().max(32_768),
+    input_state_version: sequence.optional(),
+    render_artifact_version_id: z.string().optional(),
+    render_diagnostics: z.unknown().optional(),
+    follow_up_work_item_refs: z.unknown().optional(),
+    created_at: timestamp.optional(),
+  })
+  .strict();
+
+export const ResearchV6DirectorReportMetadataSchema = z
+  .object({
+    id: uuid,
+    revision: z.number().int().positive(),
+    status: z.string().min(1).max(160),
+    title: z.string().max(4096),
+    summary: z.string().max(32_768),
+    package_hash: z.string(),
+    document_content_hash: z.string(),
+    published_at: timestamp.nullable(),
+    created_at: timestamp,
+    author_agent_id: z.string(),
+    input_count: z.number().int().nonnegative(),
+    latest_review: reportReview,
+    sandbox_url: z.string().url().optional(),
+  })
+  .strict();
+
+const reportInputRef = z
+  .object({
+    branch_id: uuid,
+    node_artifact_version_id: uuid,
+    input_role: z.string().min(1).max(160),
+    ordinal: z.number().int().nonnegative(),
+    content_hash: hash,
+  })
+  .strict();
+
+export const ResearchV6DirectorReportDetailSchema = z
+  .object({
+    id: uuid,
+    revision: z.number().int().positive(),
+    status: z.string().min(1).max(160),
+    title: z.string().max(4096),
+    summary: z.string().max(32_768),
+    plain_text: z.string(),
+    package_hash: z.string(),
+    document_content_hash: z.string(),
+    outline: z.unknown(),
+    citations: z.unknown(),
+    input_refs: z.array(reportInputRef).max(10_000),
+    reviews: z.array(reportReview).max(10_000),
+    sandbox_url: z.string().url().optional(),
+  })
+  .strict();
+
 export function parseResearchV6DirectorProjectionSnapshot(
   value: unknown,
 ): ResearchV6DirectorProjectionSnapshot {
@@ -250,4 +333,31 @@ export function parseResearchV6DirectorProjectionSliceRequest(
   return ResearchV6DirectorProjectionSliceRequestSchema.parse(
     value,
   ) as ResearchV6DirectorProjectionSliceRequest;
+}
+
+export function parseResearchV6DirectorNodeDetail(
+  value: unknown,
+): ResearchV6DirectorNodeDetail {
+  return ResearchV6DirectorNodeDetailSchema.parse(
+    value,
+  ) as ResearchV6DirectorNodeDetail;
+}
+
+export function parseResearchV6DirectorReportList(
+  value: unknown,
+): ResearchV6DirectorReportMetadata[] {
+  return z
+    .object({
+      reports: z.array(ResearchV6DirectorReportMetadataSchema).max(10_000),
+    })
+    .strict()
+    .parse(value).reports as ResearchV6DirectorReportMetadata[];
+}
+
+export function parseResearchV6DirectorReportDetail(
+  value: unknown,
+): ResearchV6DirectorReportDetail {
+  return ResearchV6DirectorReportDetailSchema.parse(
+    value,
+  ) as ResearchV6DirectorReportDetail;
 }

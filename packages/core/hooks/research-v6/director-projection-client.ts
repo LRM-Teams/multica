@@ -59,6 +59,7 @@ export class ResearchV6DirectorProjectionClient {
   private pendingDeltas = new Map<number, ResearchV6DirectorProjectionDelta>();
   private awaitingSequence: number | null = null;
   private resyncRequired = false;
+  private committedInvalidatedSliceKeys = new Set<string>();
   private gapTimer: { cancel(): void } | null = null;
   private readonly gapTimeoutMs: number;
   private readonly scheduleGapTimeout: NonNullable<
@@ -102,6 +103,7 @@ export class ResearchV6DirectorProjectionClient {
     if (!sameProjection) {
       this.views.clear();
       this.pendingDeltas.clear();
+      this.committedInvalidatedSliceKeys.clear();
       this.workspaceId = snapshot.workspace_id;
       this.runId = snapshot.run_id;
       this.snapshotId = snapshot.snapshot_id;
@@ -127,6 +129,29 @@ export class ResearchV6DirectorProjectionClient {
       hasMore: snapshot.has_more,
       nextCursor: snapshot.next_cursor ?? null,
     });
+  }
+
+  /** Start an explicit full repair, even when the server reuses snapshot identity. */
+  replaceWithSnapshotPage(snapshot: ResearchV6DirectorProjectionSnapshot): void {
+    this.views.clear();
+    this.pendingDeltas.clear();
+    this.workspaceId = null;
+    this.runId = null;
+    this.snapshotId = null;
+    this.projectionHash = null;
+    this.primarySliceKey = null;
+    this.lastConfirmedSequence = 0;
+    this.resyncRequired = false;
+    this.committedInvalidatedSliceKeys.clear();
+    this.cancelGapTimer();
+    this.applySnapshotPage(snapshot);
+  }
+
+  /** Invalidations committed while applying one frame and draining its buffer. */
+  takeCommittedInvalidatedSliceKeys(): string[] {
+    const keys = [...this.committedInvalidatedSliceKeys];
+    this.committedInvalidatedSliceKeys.clear();
+    return keys;
   }
 
   applyDelta(delta: ResearchV6DirectorProjectionDelta): ResearchV6DirectorApplyResult {
@@ -193,6 +218,9 @@ export class ResearchV6DirectorProjectionClient {
   }
 
   private commit(delta: ResearchV6DirectorProjectionDelta): void {
+    for (const sliceKey of delta.invalidate_slice_keys) {
+      this.committedInvalidatedSliceKeys.add(sliceKey);
+    }
     for (const [sliceKey, view] of this.views) {
       if (delta.invalidate_slice_keys.includes(sliceKey)) {
         this.views.delete(sliceKey);

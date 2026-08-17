@@ -1,10 +1,13 @@
 import type { ApiClient } from "./client";
-import type { ResearchV6DirectorProjectionTransport } from "../types/research-v6-director";
+import type {
+  ResearchV6DirectorDetailTransport,
+  ResearchV6DirectorProjectionTransport,
+} from "../types/research-v6-director";
 
 /** Real HTTP transport for the authoritative Director V6 projection contract. */
 export function createResearchV6DirectorProjectionTransport(
   api: ApiClient,
-): ResearchV6DirectorProjectionTransport {
+): ResearchV6DirectorProjectionTransport & ResearchV6DirectorDetailTransport {
   return {
     loadSnapshot: (workspaceId, runId, cursor, signal) =>
       api.getResearchV6DirectorProjectionSnapshot(workspaceId, runId, {
@@ -24,5 +27,13 @@ export function createResearchV6DirectorProjectionTransport(
       api.resumeResearchV6DirectorProjection(workspaceId, runId, request, {
         signal,
       }),
+    loadNodeDetail: (workspaceId, runId, nodeId, view, signal) =>
+      api.getResearchV6DirectorProjectionNodeDetail(workspaceId, runId, nodeId, view, {
+        signal,
+      }),
+    listReports: (workspaceId, runId, signal) =>
+      api.getResearchV6DirectorReports(workspaceId, runId, { signal }),
+    loadReport: (workspaceId, runId, reportId, signal) =>
+      api.getResearchV6DirectorReport(workspaceId, runId, reportId, { signal }),
   };
 }

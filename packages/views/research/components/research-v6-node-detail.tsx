@@ -125,6 +125,20 @@ export function ResearchV6NodeDetail({
         ))}
       </dl>
 
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border/70 sm:grid-cols-4">
+        {[
+          [t(($) => $.v6_detail.absorbed), node.absorbed ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.terminal), node.terminal ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.expandable), node.expandable ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.hidden_children), String(node.hidden_child_count)],
+        ].map(([label, value]) => (
+          <div key={label} className="min-w-0 bg-card px-3 py-2.5">
+            <dt className="text-[10px] font-medium text-muted-foreground">{label}</dt>
+            <dd className="mt-1 truncate text-xs font-semibold">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-y border-border/70 py-3 text-xs">
         <div className="min-w-0">
           <dt className="text-[10px] font-medium text-muted-foreground">

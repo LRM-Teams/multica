@@ -40,6 +40,23 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
   return "pending";
 }
 
+function rendererLevel(node: ResearchV6DirectorProjectionNode): "xxl" | "xl" | "l" | "m" | "s" {
+  switch (node.tier) {
+    case "GOAL":
+    case "XXL":
+      return "xxl";
+    case "XL":
+      return "xl";
+    case "L":
+      return "l";
+    case "S":
+      return "s";
+    case "M":
+    default:
+      return "m";
+  }
+}
+
 /**
  * Adapts only explicit Projection fields. It never calculates tier, absorption,
  * parenthood, confidence, or graph membership from text or node counts.
@@ -91,10 +108,9 @@ export function adaptResearchV6DirectorCanvas(
           expandable: node.expandable,
           hidden_child_count: node.hidden_child_count,
         },
-        // Goal is outside the S→XXL knowledge ladder. The existing D5 renderer
-        // has no Goal tier token, so it uses the top-size presentation while
-        // retaining canonical tier=GOAL in payload.
-        level: node.tier === "GOAL" ? "xxl" : node.tier.toLowerCase(),
+        // Unknown future tiers retain their canonical value in payload while
+        // degrading to the neutral M visual instead of breaking the canvas.
+        level: rendererLevel(node),
         cluster_id: null,
         confidence: null,
         goal_version_id: null,

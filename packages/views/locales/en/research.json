@@ -1206,6 +1206,11 @@
       "updating": "Constellation reorganizing (v{{version}})…",
       "updated": "Constellation updated to v{{version}}"
     },
+    "transition_beacon": {
+      "fusion": "Ronaldo is consolidating findings",
+      "expand": "Revealing the supporting layer",
+      "collapse": "Returning to the synthesis"
+    },
     "filter": {
       "trigger": "Filter",
       "active": "Filtered",

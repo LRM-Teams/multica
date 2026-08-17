@@ -1206,6 +1206,11 @@
       "updating": "星图正在重组（v{{version}}）…",
       "updated": "星图已更新至 v{{version}}"
     },
+    "transition_beacon": {
+      "fusion": "罗纳尔多正在融合调研成果",
+      "expand": "正在展开支撑这一结论的节点",
+      "collapse": "正在返回融合结果"
+    },
     "filter": {
       "trigger": "筛选",
       "active": "已筛选",

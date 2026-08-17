@@ -238,6 +238,23 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(onOpenNode).not.toHaveBeenCalled();
   });
 
+  it("shows a short semantic beacon for a committed fusion", () => {
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        fusionTransition={{
+          sequence: 8,
+          successorNodeId: "stable-a",
+          sourceNodeIds: ["goal"],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Ronaldo is consolidating findings",
+    );
+  });
+
   it("keeps a failed expansion retryable without changing canonical graph data", () => {
     const onToggleNode = vi.fn();
     render(

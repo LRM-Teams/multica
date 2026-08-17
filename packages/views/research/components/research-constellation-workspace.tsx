@@ -805,6 +805,7 @@ export function ResearchConstellationWorkspace({
         {showForming ? (
           <ResearchCanvasForming
             mode={formingMode ?? "forming"}
+            directorMode={projectionSource === "v6"}
             stage={formingStage}
             members={formingMembers ?? []}
             tasks={formingTasks ?? []}

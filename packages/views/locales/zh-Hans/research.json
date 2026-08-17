@@ -1335,6 +1335,7 @@
       "input_count": "融合 {{count}} 个输入节点",
       "conclusion_count": "{{count}} 条结论",
       "graph_version": "星图 v{{version}}",
+      "show_on_canvas": "在星图中查看",
       "ops": {
         "goal_steered": "目标已更新",
         "goal_modified": "目标版本影响",

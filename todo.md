@@ -89,7 +89,7 @@
 
 ## Slice K2 — 合成与落笔
 
-- [ ] **K2-T1 周报 Agent 合成 + `--note-write`**
+- [x] **K2-T1 周报 Agent 合成 + `--note-write`**
   - **目标**：整理员写出 Brief；人点确认落入 `工作介绍/`。
   - **依赖**：K1-T2、现有 note_write UI
   - **完成标准**：fixture 采集包 → Brief 含主线结构；sticky 仍指向文件夹而非底稿。
@@ -109,9 +109,10 @@
 | 2 | ~~K0-T2 UI 勾选采集员 + 整理员~~ |
 | 3 | ~~K1-T1 采集员 Worker / 剧本~~ |
 | 4 | ~~K1-T2 编排：多采集 → 再唤醒周报 Agent~~ |
-| 5 | **K2-T1** 周报 Agent 合成 + `--note-write` |
+| 5 | ~~K2-T1 周报 Agent 合成 + `--note-write`~~ |
+| 6 | **K2-T2** 拆除 Brief 对 Host Digest 的依赖 |
 
-**当前焦点：** Slice K2。下一个 checkbox：**K2-T1**。
+**当前焦点：** Slice K2。下一个 checkbox：**K2-T2**。
 
 ### 遗留说明（J1–J3）
 

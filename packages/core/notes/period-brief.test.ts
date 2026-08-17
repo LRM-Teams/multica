@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  PERIOD_BRIEF_COLLECTOR_PACK_FIXTURE,
   PERIOD_BRIEF_FIXTURE_MARKDOWN,
+  collectorPackLooksStructured,
+  periodBriefFromCollectorPackFixture,
   periodBriefLooksStructured,
 } from "./period-brief";
 import {
@@ -30,6 +33,19 @@ describe("periodBriefLooksStructured", () => {
       "ccddeef scope remotes",
     ].join("\n");
     expect(periodBriefLooksStructured(dump)).toBe(false);
+  });
+});
+
+describe("collector pack → Brief (K2-T1)", () => {
+  it("fixture pack is structured and synthesizes a structured Brief", () => {
+    expect(collectorPackLooksStructured(PERIOD_BRIEF_COLLECTOR_PACK_FIXTURE)).toBe(true);
+    const brief = periodBriefFromCollectorPackFixture(PERIOD_BRIEF_COLLECTOR_PACK_FIXTURE);
+    expect(periodBriefLooksStructured(brief)).toBe(true);
+    expect(brief).toContain("## 主线");
+    expect(brief).toContain("collector packs");
+    expect(brief).toContain("## 本机未归类");
+    expect(brief).toContain("~/tmp");
+    expect(brief).toBe(PERIOD_BRIEF_FIXTURE_MARKDOWN);
   });
 });
 

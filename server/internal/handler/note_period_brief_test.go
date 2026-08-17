@@ -114,6 +114,34 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 	if folderID == "" || !strings.Contains(prompt, "--note-write --note-page-id "+folderID) {
 		t.Fatalf("wake must note-write to folder: %s", prompt)
 	}
+	if resp.Job.ChannelMessageID == nil {
+		t.Fatal("expected synthesizer channel_message_id")
+	}
+	var partsRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT parts FROM channel_message WHERE id = $1`, *resp.Job.ChannelMessageID).Scan(&partsRaw); err != nil {
+		t.Fatalf("load synthesizer channel parts: %v", err)
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(partsRaw, &parts); err != nil {
+		t.Fatalf("unmarshal parts: %v", err)
+	}
+	foundSticky := false
+	for _, part := range parts {
+		if part["type"] != "note_brief" {
+			continue
+		}
+		foundSticky = true
+		if part["ref_id"] != folderID {
+			t.Fatalf("sticky note_brief ref_id = %v, want folder %s", part["ref_id"], folderID)
+		}
+		if part["ref_id"] == resp.Page.ID {
+			t.Fatalf("sticky must not point at draft page %s", resp.Page.ID)
+		}
+	}
+	if !foundSticky {
+		t.Fatalf("expected note_brief sticky on folder: %s", partsRaw)
+	}
 }
 
 func TestCreateNotePeriodBriefIncludesReadyCollectorPack(t *testing.T) {
@@ -127,33 +155,41 @@ func TestCreateNotePeriodBriefIncludesReadyCollectorPack(t *testing.T) {
 	synthID := createHandlerTestAgent(t, "Period Brief Ready Synth "+uuid.NewString()[:8], nil)
 	collectorID := createHandlerTestAgent(t, "Period Brief Ready Collector "+uuid.NewString()[:8], nil)
 
-	// First create to get pack page id is awkward; instead dispatch then
-	// simulate by writing pack content during wait via a short path:
-	// create request with wait, but update pack after collectors insert.
-	// We do a two-step: call Create with wait=0 after manually inserting ready
-	// content is hard mid-flight. Simpler: unit-test await helper separately
-	// and here only verify ready path by updating pack before await with
-	// wait budget and a goroutine.
+	packBody := `# 采集包 ready
+
+## Runtime
+- local / test-host
+
+## Repos / roots
+- /tmp/demo — SSO login path
+
+## Highlights
+- wired SSO login
+
+## Unscoped / unclear
+- scratch under /tmp
+`
 
 	day := time.Now().UTC().Format("2006-01-02")
+	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			var pageID string
-			err := testPool.QueryRow(context.Background(), `
-SELECT id::text FROM note_page
-WHERE owner_user_id = $1 AND title LIKE '采集包%' AND content LIKE $2
-ORDER BY created_at DESC LIMIT 1`,
-				testUserID, "%"+notePeriodBriefCollectorStubMarker+"%").Scan(&pageID)
-			if err == nil && pageID != "" {
-				_, _ = testPool.Exec(context.Background(), `
-UPDATE note_page SET content = $1, updated_at = now() WHERE id = $2`,
-					"# 采集包 ready\n\n## Highlights\n- wired SSO login\n", pageID)
+		for {
+			select {
+			case <-stop:
 				return
+			default:
 			}
-			time.Sleep(50 * time.Millisecond)
+			_, _ = testPool.Exec(context.Background(), `
+UPDATE note_page
+SET content = $1, updated_at = now()
+WHERE owner_user_id = $2
+  AND title LIKE '采集包%'
+  AND content LIKE $3
+  AND deleted_at IS NULL`,
+				packBody, testUserID, "%"+notePeriodBriefCollectorStubMarker+"%")
+			time.Sleep(40 * time.Millisecond)
 		}
 	}()
 
@@ -165,6 +201,7 @@ UPDATE note_page SET content = $1, updated_at = now() WHERE id = $2`,
 		"agent_id":            synthID,
 		"collector_agent_ids": []string{collectorID},
 	}))
+	close(stop)
 	<-done
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
@@ -190,6 +227,16 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 	packsInner := extractBetween(t, prompt, "<packs>\n", "\n</packs>")
 	if !strings.Contains(packsInner, "wired SSO login") {
 		t.Fatalf("packs partition missing ready content: %s", packsInner)
+	}
+	if !strings.Contains(packsInner, "## Highlights") {
+		t.Fatalf("packs partition missing pack structure: %s", packsInner)
+	}
+	folderID := ""
+	if resp.Page.ParentID != nil {
+		folderID = *resp.Page.ParentID
+	}
+	if folderID == "" || !strings.Contains(prompt, "--note-write --note-page-id "+folderID) {
+		t.Fatalf("synthesizer must note-write under folder: %s", prompt)
 	}
 }
 

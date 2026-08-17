@@ -33,7 +33,7 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 	defer cloud.Close()
 
 	host := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
-		if operation != "runner-drain" || headers["X-Multica-Control-Token"] != controlToken {
+		if operation != "computer-upgrade-prepare" || headers["X-Multica-Control-Token"] != controlToken {
 			return nil, fmt.Errorf("unexpected Host prepare")
 		}
 		return BindingMachineUpgradePrepared{
@@ -122,7 +122,7 @@ func TestBindingMachineUpgradeLatestUsesTestEnvironmentRelease(t *testing.T) {
 	defer feed.Close()
 
 	host := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
-		if operation != "runner-drain" || headers["X-Multica-Control-Token"] != controlToken {
+		if operation != "computer-upgrade-prepare" || headers["X-Multica-Control-Token"] != controlToken {
 			return nil, fmt.Errorf("unexpected Host prepare")
 		}
 		return BindingMachineUpgradePrepared{

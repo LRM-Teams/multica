@@ -169,7 +169,7 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 	})
 	register("runner-status", control.rpcRawCallback(registry, "runner-status", control.callbacks.LifecycleDiagnostic))
 	register("runner-attestation", control.rpcRawCallback(registry, "runner-attestation", control.callbacks.MachineActions))
-	register("runner-drain", control.rpcPrepareUpgrade)
+	register("computer-upgrade-prepare", control.rpcPrepareUpgrade)
 	register("runner-ready", control.rpcRuntimeSet)
 }
 

@@ -34,7 +34,7 @@ func (s *PostgresStore) prepareNextV6Dispatch(ctx context.Context) (bool, error)
 	var stateVersion, throughSequence int64
 	var payload json.RawMessage
 	err = tx.QueryRow(ctx, `SELECT w.workspace_id::text,w.session_id::text,w.id::text,w.assigned_agent_id::text,m.id::text,
-		m.mission_prompt,w.payload_schema_id,w.goal_version,s.state_version,w.input_event_sequence,w.payload
+		m.mission_prompt,w.expected_result_schema_id,w.goal_version,s.state_version,w.input_event_sequence,w.payload
 		FROM research_work_item w JOIN research_session s ON s.id=w.session_id
 		JOIN research_team_membership m ON m.workspace_id=w.workspace_id AND m.session_id=w.session_id AND m.agent_id=w.assigned_agent_id
 		AND m.state IN('idle','working') WHERE s.orchestrator_version='research-run-v6' AND w.status='ready' AND w.ready_at<=now()

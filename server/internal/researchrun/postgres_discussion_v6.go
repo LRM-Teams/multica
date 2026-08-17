@@ -208,9 +208,9 @@ func (s *PostgresStore) closeV6DiscussionIfReadyTx(ctx context.Context, tx pgx.T
 		}
 		key := "discussion-integration:" + discussionID + ":" + fmt.Sprint(revision)
 		if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(workspace_id,session_id,kind,status,target_kind,target_id,
-			client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,payload_schema_id,payload,ready_at)
+			client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,payload_schema_id,expected_result_schema_id,payload,ready_at)
 			SELECT d.workspace_id,d.session_id,'integration','ready','discussion',d.id,$2,$2,d.goal_version,s.state_version,
-			d.through_event_sequence,$3::uuid,'integration_submission',jsonb_build_object('discussion_id',d.id,
+			d.through_event_sequence,$3::uuid,'integration.task.v1','integration_submission',jsonb_build_object('discussion_id',d.id,
 			'discussion_revision',d.revision,'input_set_hash',d.input_set_hash,'branch_scope_hash',d.branch_scope_hash),now()
 			FROM research_discussion d JOIN research_session s ON s.id=d.session_id WHERE d.id=$1::uuid ON CONFLICT DO NOTHING`,
 			discussionID, key, integratorAgentID); err != nil {
@@ -226,9 +226,9 @@ func (s *PostgresStore) closeV6DiscussionIfReadyTx(ctx context.Context, tx pgx.T
 		}
 		key := "discussion-escalation:" + discussionID + ":" + fmt.Sprint(revision)
 		if _, err = tx.Exec(ctx, `INSERT INTO research_work_item(workspace_id,session_id,kind,status,target_kind,target_id,
-			client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,payload_schema_id,payload,ready_at)
+			client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,payload_schema_id,expected_result_schema_id,payload,ready_at)
 			SELECT $1::uuid,$2::uuid,'director','ready','discussion',$3::uuid,$4,$4,s.goal_version,s.state_version,
-			COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),$5::uuid,'director_action_proposal',
+			COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),$5::uuid,'director.action.registry.v1','director_action_proposal',
 			jsonb_build_object('discussion_id',$3,'reason','mixed_or_uncertain_votes'),now()
 			FROM research_session s WHERE s.id=$2::uuid ON CONFLICT DO NOTHING`, workspaceID, runID, discussionID, key, directorAgentID); err != nil {
 			return err

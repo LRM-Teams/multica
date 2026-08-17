@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -107,7 +108,46 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		return DirectorBriefFacts{}, err
 	}
 	rows.Close()
+	rows, err = s.pool.Query(ctx, `SELECT t.event_sequence,m.body,t.selected_refs
+		FROM research_v6_steering_trigger t JOIN research_message m ON m.id=t.research_message_id
+		LEFT JOIN research_steering_assessment a ON a.research_message_id=t.research_message_id
+		WHERE t.workspace_id=$1::uuid AND t.session_id=$2::uuid AND a.id IS NULL
+		ORDER BY t.event_sequence,t.id LIMIT 64`, in.WorkspaceID, in.RunID)
+	if err != nil {
+		return DirectorBriefFacts{}, err
+	}
+	for rows.Next() {
+		var sequence int64
+		var body string
+		var selected json.RawMessage
+		if err = rows.Scan(&sequence, &body, &selected); err != nil {
+			rows.Close()
+			return DirectorBriefFacts{}, err
+		}
+		var refs []map[string]any
+		_ = json.Unmarshal(selected, &refs)
+		briefRefs := make([]any, 0, len(refs))
+		for _, ref := range refs {
+			briefRef := map[string]any{"kind": ref["kind"], "id": ref["entity_id"], "revision": ref["revision"], "content_hash": ref["content_hash"]}
+			briefRefs = append(briefRefs, briefRef)
+		}
+		facts.Steering = append(facts.Steering, map[string]any{"from_sequence": sequence, "through_sequence": sequence,
+			"summary": truncateV6BriefText(body, 4096), "affected_refs": briefRefs})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return DirectorBriefFacts{}, err
+	}
+	rows.Close()
 	return facts, nil
+}
+
+func truncateV6BriefText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit]
 }
 
 func jsonObjectOrEmpty(raw json.RawMessage) any {
@@ -149,13 +189,31 @@ func (s *PostgresStore) PersistDirectorCycle(ctx context.Context, in StartV6Dire
 	if err != nil {
 		return V6DirectorCycle{}, err
 	}
+	idempotency := "director-cycle:" + in.TriggerKey
+	var replay V6DirectorCycle
+	err = tx.QueryRow(ctx, `SELECT c.id::text,c.session_id::text,c.director_assignment_id::text,c.brief_id::text,c.brief_hash,
+		c.work_item_id::text,c.director_generation,c.page_count,c.state_version,c.status
+		FROM research_director_cycle c JOIN research_work_item w ON w.id=c.work_item_id
+		WHERE c.workspace_id=$1::uuid AND c.session_id=$2::uuid AND w.client_key=$3`, in.WorkspaceID, in.RunID, idempotency).
+		Scan(&replay.ID, &replay.RunID, &replay.AssignmentID, &replay.BriefID, &replay.BriefHash, &replay.WorkItemID,
+			&replay.Generation, &replay.PageCount, &replay.StateVersion, &replay.Status)
+	if err == nil {
+		return replay, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return V6DirectorCycle{}, err
+	}
 	if stateVersion != in.ExpectedStateVersion || eventSequence != in.ThroughSequence {
 		return V6DirectorCycle{}, ErrWorkItemChanged
 	}
 	cycle := V6DirectorCycle{ID: uuid.NewString(), RunID: in.RunID, AssignmentID: assignmentID, BriefID: brief.BriefID, BriefHash: brief.BriefHash, Generation: generation, PageCount: len(brief.Pages), StateVersion: 1, Status: "pending", WorkItemID: uuid.NewString()}
-	idempotency := "director-cycle:" + in.TriggerKey
-	_, err = tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,target_id,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,priority,max_attempts,payload_schema_id,payload,state_version,ready_at)
-		VALUES($1::uuid,$2::uuid,$3::uuid,'director','ready','director_cycle',$4::uuid,$5,$5,$6,$7,$8,$9::uuid,1,3,'director_action_proposal',jsonb_build_object('brief_id',$10,'brief_hash',$11),1,now())`, cycle.WorkItemID, in.WorkspaceID, in.RunID, cycle.ID, idempotency, goalVersion, stateVersion, eventSequence, agentID, brief.BriefID, brief.BriefHash)
+	directorPayload, err := json.Marshal(map[string]any{"brief_id": brief.BriefID, "brief_hash": brief.BriefHash,
+		"task_specific_schema": map[string]any{"payload_schemas": v6DirectorActionPayloadSchemas()}})
+	if err != nil {
+		return V6DirectorCycle{}, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,target_id,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'director','ready','director_cycle',$4::uuid,$5,$5,$6,$7,$8,$9::uuid,1,3,'director.action.registry.v1','director_action_proposal',$10::jsonb,1,now())`, cycle.WorkItemID, in.WorkspaceID, in.RunID, cycle.ID, idempotency, goalVersion, stateVersion, eventSequence, agentID, directorPayload)
 	if err != nil {
 		return V6DirectorCycle{}, err
 	}
@@ -184,6 +242,23 @@ func (s *PostgresStore) PersistDirectorCycle(ctx context.Context, in StartV6Dire
 	}
 	_ = membershipID
 	return cycle, nil
+}
+
+func v6DirectorActionPayloadSchemas() map[string]any {
+	text := map[string]any{"type": "string", "minLength": 1, "maxLength": 32768}
+	ref := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "id"}, "properties": map[string]any{
+		"kind": map[string]any{"type": "string"}, "id": map[string]any{"type": "string", "format": "uuid"},
+		"expected_state_version": map[string]any{"type": "integer", "minimum": 0}, "disposition": map[string]any{"type": "string"}, "reason": text}}
+	return map[string]any{
+		"no_op.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"message_id", "reason"}, "properties": map[string]any{"message_id": map[string]any{"type": "string", "format": "uuid"}, "reason": text}},
+		"steering_assessment.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"message_id", "assessment_kind", "interpretation", "reason", "impacts"}, "properties": map[string]any{
+				"message_id": map[string]any{"type": "string", "format": "uuid"}, "assessment_kind": map[string]any{"enum": []string{"no_op", "local_change", "goal_revision", "full_reassessment"}},
+				"interpretation": text, "reason": text, "impacts": map[string]any{"type": "array", "maxItems": 512, "items": ref},
+				"revised_goal": text, "revised_scope": map[string]any{"type": "object"}, "revised_audience": map[string]any{"type": "string"},
+				"revised_freshness": map[string]any{"type": "string"}, "revised_language": map[string]any{"type": "string"},
+				"revised_source_policy": map[string]any{"type": "object"}, "revised_limits": map[string]any{"type": "object"}}},
+	}
 }
 
 func (s *PostgresStore) LoadDirectorBriefPage(ctx context.Context, access V6AttemptAccess, cursor string) (V6DirectorBriefPage, error) {

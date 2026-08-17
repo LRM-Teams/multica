@@ -18,33 +18,6 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestAgentMessageHandoffReceiptIsIdempotent(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	daemonID := "message-handoff-runner-" + uuid.NewString()[:8]
-	runtimeID := seedMachineLockedRuntime(t, daemonID, "message handoff")
-	agentID := createHandlerTestAgentOnRuntime(t, "message-handoff-activity-"+uuid.NewString()[:8], runtimeID)
-	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
-	payload := protocol.AgentMessageHandoffPayload{AgentID: agentID, RuntimeID: runtimeID, HandoffID: uuid.NewString(), Count: 2, Targets: []string{"channel:one"}}
-	if err := testHandler.HandleAgentMessageHandoff(ctx, identity, payload); err != nil {
-		t.Fatalf("first handoff receipt: %v", err)
-	}
-	if err := testHandler.HandleAgentMessageHandoff(ctx, identity, payload); err != nil {
-		t.Fatalf("duplicate handoff receipt: %v", err)
-	}
-	var count int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_message_handoff_receipt
-		WHERE workspace_id = $1 AND agent_id = $2 AND handoff_id = $3`, testWorkspaceID, agentID, payload.HandoffID).Scan(&count); err != nil {
-		t.Fatalf("count handoff receipt: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("Message handoff receipt count = %d, want 1", count)
-	}
-}
-
 type capturedAgentDeliveryNotifier struct {
 	workspaceID string
 	daemonID    string

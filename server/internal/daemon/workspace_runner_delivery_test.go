@@ -479,7 +479,7 @@ func TestWorkspaceRunnerQueuedAPMAcceptsDeliveryWithoutStartingProvider(t *testi
 	}
 }
 
-func TestWorkspaceRunnerStartingLaunchBuffersDeliveryWithoutHandoff(t *testing.T) {
+func TestWorkspaceRunnerStartingLaunchBuffersWithoutProviderDelivery(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {

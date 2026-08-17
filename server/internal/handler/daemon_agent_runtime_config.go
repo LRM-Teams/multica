@@ -12,7 +12,7 @@ import (
 
 // DaemonAgentRuntimeConfigResponse is the durable process configuration for
 // one Agent resident on a daemon runtime. It deliberately has no task,
-// delivery, lease, execution, or session identity: those are Message lifecycle
+// delivery, lease, execution, or session identity: those are message-delivery
 // facts and never process configuration.
 type DaemonAgentRuntimeConfigResponse struct {
 	WorkspaceID      string                  `json:"workspace_id"`

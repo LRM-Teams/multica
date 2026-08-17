@@ -197,7 +197,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureRetiresBusyBackend(t *testing.T
 	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
 	d := &Daemon{canonicalRuntimes: pool}
 
-	if err := pool.handoffIdleMessages(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
+	if err := pool.deliverIdleMessages(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:one", Seq: 1, Content: "hello",
 	}}, nil, nil, nil, nil); err != nil {
 		t.Fatalf("start resident turn: %v", err)
@@ -697,7 +697,7 @@ func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *tes
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello",
 		RunID: "run-1", RunAgentID: "run-agent-1", DeliveryID: "delivery-1",
 	}}
-	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, messages); err != nil {
+	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, messages); err != nil {
 		t.Fatalf("handoff mixed-run message: %v", err)
 	}
 	backend.messages <- agent.Message{Type: agent.MessageToolUse, Tool: "bash", CallID: "call-1"}

@@ -105,7 +105,7 @@ func TestResidentMessageSuccessReportsAndSyncsMemoryWrites(t *testing.T) {
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 1)}
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: backend}
 
-	if err := d.handoffIdleMessageBatch(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{
+	if err := d.deliverIdleMessageBatch(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:member-1", Seq: 1, Content: "remember this",
 		ChannelID: "channel-1", ChannelKind: "dm", InitiatorType: "member", InitiatorID: "member-1", InitiatorName: "JHP",
 	}}); err != nil {

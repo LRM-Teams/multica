@@ -212,7 +212,10 @@ func projectNarrativeTimelineRow(body protocol.AgentActivityNarrativeBody, fallb
 			}
 		}
 	case protocol.ActivityKindOffline:
-		if text != "" && text != row.Title {
+		if body.DetailKind == "stopped" {
+			row.Title = "Stopped"
+			row.Subtext = "Agent stopped by user"
+		} else if text != "" && text != row.Title {
 			row.Subtext = text
 		}
 	}

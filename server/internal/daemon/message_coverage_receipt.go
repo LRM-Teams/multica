@@ -3,7 +3,6 @@ package daemon
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -88,7 +87,7 @@ func (c *MessageCoordinator) ownsCoverageReceipt(receiptID string) bool {
 }
 
 // PrepareCoverage reserves one bounded, expiring receipt without changing the
-// durable Context Boundary or removing Pending.
+// in-memory Context Boundary or removing Pending.
 func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageOffer, error) {
 	if c == nil {
 		return CoverageOffer{}, fmt.Errorf("%w: Inbox coordinator is unavailable", ErrCoverageRequestInvalid)
@@ -99,12 +98,6 @@ func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageO
 	defer c.mu.Unlock()
 	if c.closed {
 		return CoverageOffer{}, fmt.Errorf("%w: Inbox coordinator is closed", ErrCoverageRequestInvalid)
-	}
-	if request.Kind == CoverageHold && !c.boundaryHealthy {
-		return CoverageOffer{}, fmt.Errorf("%w: Context Boundary health is unknown", ErrCoverageRequestInvalid)
-	}
-	if c.activeHandoff != nil {
-		return CoverageOffer{}, fmt.Errorf("%w: runtime Message handoff boundary is unsettled", ErrCoverageRequestInvalid)
 	}
 
 	covered, presented, hasMore, err := c.prepareCoverageMessagesLocked(request)
@@ -198,7 +191,7 @@ func (c *MessageCoordinator) prepareCoverageMessagesLocked(request CoverageReque
 	}
 }
 
-// CommitCoverage durably advances the represented target boundaries and then
+// CommitCoverage advances the represented in-memory target boundaries and then
 // removes only the exact still-matching Pending identities. Duplicate commit
 // of the same live receipt is idempotent.
 func (c *MessageCoordinator) CommitCoverage(receiptID string) error {
@@ -209,36 +202,32 @@ func (c *MessageCoordinator) CommitCoverage(receiptID string) error {
 	if receiptID == "" {
 		return ErrCoverageReceiptInvalid
 	}
-
-	c.boundaryCommitMu.Lock()
-	defer c.boundaryCommitMu.Unlock()
+	if !c.deliveryMu.TryLock() {
+		return ErrCoverageReceiptInProgress
+	}
+	defer c.deliveryMu.Unlock()
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	receipt := c.coverageReceipts[receiptID]
 	if receipt == nil || receipt.id != receiptID || receipt.key != c.key {
-		c.mu.Unlock()
 		return ErrCoverageReceiptInvalid
 	}
 	if !c.coverageNow().Before(receipt.expiresAt) {
 		delete(c.coverageReceipts, receiptID)
-		c.mu.Unlock()
 		return ErrCoverageReceiptExpired
 	}
 	if receipt.phase == coverageReceiptCommitted {
-		c.mu.Unlock()
 		return nil
 	}
 	if c.closed {
-		c.mu.Unlock()
 		return ErrCoverageReceiptInvalid
 	}
 	if receipt.phase != coverageReceiptPrepared {
-		c.mu.Unlock()
 		return ErrCoverageReceiptInProgress
 	}
 	if !c.coverageReceiptContentsCurrentLocked(receipt) {
 		delete(c.coverageReceipts, receiptID)
-		c.mu.Unlock()
 		return ErrCoverageReceiptInvalid
 	}
 	next := cloneBoundaries(c.boundaries)
@@ -248,23 +237,7 @@ func (c *MessageCoordinator) CommitCoverage(receiptID string) error {
 		}
 	}
 	receipt.phase = coverageReceiptCommitting
-	boundaryPath := filepath.Join(c.root, consumedSeqsFileName)
-	c.mu.Unlock()
-
-	writeErr := c.writeBoundaries(boundaryPath, next)
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.coverageReceipts[receiptID] != receipt || receipt.phase != coverageReceiptCommitting || c.closed {
-		return ErrCoverageReceiptInvalid
-	}
-	if writeErr != nil {
-		receipt.phase = coverageReceiptPrepared
-		c.boundaryHealthy = false
-		return fmt.Errorf("persist Context Boundary after coverage commit: %w", writeErr)
-	}
 	c.boundaries = next
-	c.boundaryHealthy = true
 	pendingChanged := false
 	var removed []protocol.AgentMessageProjection
 	for target, bySequence := range receipt.coveredIdentities {

@@ -2,12 +2,8 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -28,16 +24,6 @@ func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentPr
 	}
 	launch, found := runner.processes.Snapshot(agentID)
 	return launch, found && (runtimeID == "" || launch.RuntimeID == runtimeID)
-}
-
-func (runner *WorkspaceRunner) observeMessageLifecycle(agentID, runtimeID string) {
-	launch, found := runner.managedLaunch(agentID, runtimeID)
-	if !found || launch.ProcessInstanceID == "" || launch.QueueState == protocol.AgentStartQueueRunning {
-		// Starting is spawn Activity, not a per-handoff label. After the
-		// process is admitted as Running, later Messages must not repaint it.
-		return
-	}
-	runner.observeRuntimeStarting(agentID, runtimeID, "Message lifecycle")
 }
 
 // observeRuntimeStarting is Raft 1.0.16 spawn Activity: working / starting /
@@ -297,36 +283,19 @@ func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.Agen
 	}, "Runtime failure")
 }
 
-func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string, messages []protocol.AgentMessageProjection, publishHandoff bool) {
+// broadcastMessageReceivedActivity matches Raft 1.0.16's single write site:
+// the ordinary Message batch has crossed the provider runtime input boundary.
+// Pending acceptance and content-free Notices do not publish this Activity.
+func (runner *WorkspaceRunner) broadcastMessageReceivedActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
 	if len(messages) == 0 {
 		return
 	}
-	targetSet := make(map[string]struct{})
-	identity := make([]string, 0, len(messages))
-	for _, message := range messages {
-		targetSet[message.Target] = struct{}{}
-		identity = append(identity, message.ID+"\x00"+message.Target+"\x00"+strconv.FormatInt(message.Seq, 10))
-	}
-	sort.Strings(identity)
-	handoffID := hex.EncodeToString(sha256Sum(strings.Join(identity, "\x01")))
-
 	if launch, found := runner.managedLaunch(agentID, runtimeID); found && runner.activity != nil {
 		runner.observeActivity(AgentObservation{
 			AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationMessageBodyAccepted,
-			Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID, HandoffID: handoffID, MessageCount: len(messages)}, At: time.Now().UTC(),
+			Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
 		}, "Message accepted")
 	}
-	if !publishHandoff {
-		return
-	}
-	targets := make([]string, 0, len(targetSet))
-	for target := range targetSet {
-		targets = append(targets, target)
-	}
-	sort.Strings(targets)
-	runner.sendAgentFrame(protocol.EventAgentMessageHandoff, protocol.AgentMessageHandoffPayload{
-		AgentID: agentID, RuntimeID: runtimeID, HandoffID: handoffID, Count: len(messages), Targets: targets,
-	})
 }
 
 func (runner *WorkspaceRunner) observeMessageSendHold(agentID, target string, newer int64, reason string) {
@@ -370,9 +339,4 @@ func (runner *WorkspaceRunner) observeActivity(observation AgentObservation, pha
 	if err := runner.activity.Observe(observation); err != nil && runner.logger != nil {
 		runner.logger.Debug("Workspace Runner Activity observation deferred", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", observation.AgentID, "phase", phase)
 	}
-}
-
-func sha256Sum(value string) []byte {
-	sum := sha256.Sum256([]byte(value))
-	return sum[:]
 }

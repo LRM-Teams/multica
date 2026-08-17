@@ -1,11 +1,12 @@
 /**
- * Note Worker collaboration playbooks (todo N1-T1 / N1-T2).
+ * Note Worker collaboration playbooks (todo N1-T1 / N1-T2) plus Period Work
+ * Brief (`period_brief`, Slice J3).
  *
  * Templates fill the instruction textarea only — still one Worker job, no new
  * orchestration backend. `prefersChannel` drives destination UX hints.
  */
 
-export type NoteWorkerPlaybookId = "coordinate" | "hire" | "writeback";
+export type NoteWorkerPlaybookId = "coordinate" | "hire" | "writeback" | "period_brief";
 
 export type NoteWorkerPlaybook = {
   id: NoteWorkerPlaybookId;
@@ -18,6 +19,7 @@ export const NOTE_WORKER_PLAYBOOKS: readonly NoteWorkerPlaybook[] = [
   { id: "coordinate", prefersChannel: true },
   { id: "hire", prefersChannel: true },
   { id: "writeback", prefersChannel: true },
+  { id: "period_brief", prefersChannel: false },
 ] as const;
 
 export function noteWorkerPlaybookById(

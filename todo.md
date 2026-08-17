@@ -177,7 +177,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 
 **本 Slice 完成标准：** Owner 在 Notes 一键生成 Period Work Brief：汇合 Facts+Digest → Worker 筛选 → 笔记里是汇报主线，不是采集清单。
 
-- [ ] **J3-T1 Worker 剧本 `period_brief`**
+- [x] **J3-T1 Worker 剧本 `period_brief`**
+  - **已落地（2026-08-17）**：`note-worker-playbooks.ts` 增加 `period_brief`（`prefersChannel: false`）；中英 locale 含主线/本机未归类/不要罗列；组件测选剧本填 instruction 且不强制频道。
   - **目标**：instruction 锁成「给领导/同事的汇报稿」，不是协作收工，也不是 PPT。
   - **要做**：`note-worker-playbooks.ts` 增加 `period_brief`；`prefersChannel: false`（默认 Agent DM）。中英文 locale。instruction 稳定要点：一句话主张；3–7 条主线（每条≤3 要点且尽量带 Issue/PR/仓路径证据）；委派杠杆；未完成；「本机未归类」单独一节；禁止罗列原始 commit；禁止编造无证据主张。
   - **不要做**：默认发到群频道；文案再写「适合放进 PPT」。
@@ -224,7 +225,7 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
 | 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ ~~J1-T5~~ 开关（已完成） |
 | 3 | ~~J2-T1~~ Facts 包 → ~~J2-T2~~ Issue 挂 PR → ~~J2-T3~~ Digest 归仓（J2 完成） |
-| 4 | **J3-T1** 剧本 → 派发 → UI → 落笔记 |
+| 4 | ~~J3-T1~~ 剧本（已完成）→ **J3-T2** 合成派发 |
 | 5 | 仅当产品需要时再开 J4 |
 
 **当前焦点：** Slice J1。下一个 checkbox：**J1-T5**。

@@ -152,7 +152,7 @@ export function ResearchV6ReportModal({
                   {report.inputCount != null
                     ? ` · ${t(($) => $.d5.report_sandbox.input_count, {
                         count: report.inputCount,
-                      }))}`
+                      })}`
                     : ""}
                 </p>
               ) : null}

@@ -17,8 +17,8 @@ func seedV6InsightArtifactVersion(t *testing.T, run *transactionRecoveryRun, suf
 		t.Fatal(err)
 	}
 	defer tx.Rollback(run.ctx)
-	if _, err = tx.Exec(run.ctx, `INSERT INTO research_insight(id,workspace_id,session_id,title,summary,status,importance,level)
-		VALUES($1::uuid,$2::uuid,$3::uuid,'test','test','accepted',0.5,2)`, insightID, run.fixture.workspaceID, run.fixture.sessionID); err != nil {
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_insight(id,workspace_id,session_id,client_key,title,summary,status,importance,level)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'test','test','accepted',0.5,2)`, insightID, run.fixture.workspaceID, run.fixture.sessionID, "race:"+suffix); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(run.ctx, `INSERT INTO research_artifact_passport(id,workspace_id,session_id,entity_kind,current_version,lifecycle_status,provenance_completeness)

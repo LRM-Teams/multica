@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 )
+
+const doctorResidueMaxAge = 24 * time.Hour
 
 // Diagnosis is a read-only evidence report for `computer doctor`. Nothing here
 // is derived from aggregate Workspace/Runner/Agent health; connectivity reflects
@@ -99,8 +102,7 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 func (l *Lifecycle) Fix(d Diagnosis) Diagnosis {
 	v := l.view()
 	var applied []string
-	// Stale PID file with a confirmed-stopped resident is the only provably
-	// safe mutation: the PID is not running, so the file is dead weight.
+	// A stale PID file with a confirmed-stopped resident is dead weight.
 	if d.Resident == "stopped" {
 		if _, err := os.Stat(v.pidPath); err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -113,6 +115,89 @@ func (l *Lifecycle) Fix(d Diagnosis) Diagnosis {
 			}
 		}
 	}
+	now := time.Now()
+	applied = append(applied, cleanupAbandonedBindingState(RootDir(""), now)...)
+	applied = append(applied, cleanupExpiredUpgradeStaging(now)...)
 	d.FixApplied = applied
 	return d
+}
+
+func cleanupAbandonedBindingState(root string, now time.Time) []string {
+	if root == "" {
+		return nil
+	}
+	bindings, err := NewBindingsStore(root).All()
+	if err != nil {
+		return nil
+	}
+	attached := make(map[string]struct{}, len(bindings))
+	for _, binding := range bindings {
+		attached[binding.Environment+"\x00"+binding.WorkspaceID] = struct{}{}
+	}
+
+	childrenRoot := filepath.Join(root, "binding-children")
+	environments, err := os.ReadDir(childrenRoot)
+	if err != nil {
+		return nil
+	}
+	var applied []string
+	for _, environment := range environments {
+		if !environment.IsDir() {
+			continue
+		}
+		workspaces, err := os.ReadDir(filepath.Join(childrenRoot, environment.Name()))
+		if err != nil {
+			continue
+		}
+		for _, workspace := range workspaces {
+			if !workspace.IsDir() {
+				continue
+			}
+			if _, ok := attached[environment.Name()+"\x00"+workspace.Name()]; ok {
+				continue
+			}
+			info, err := workspace.Info()
+			if err != nil || now.Sub(info.ModTime()) <= doctorResidueMaxAge {
+				continue
+			}
+			source := filepath.Join(childrenRoot, environment.Name(), workspace.Name())
+			quarantineRoot := filepath.Join(root, ".quarantine")
+			if err := os.MkdirAll(quarantineRoot, 0o700); err != nil {
+				continue
+			}
+			name := now.UTC().Format("20060102T150405.000000000Z") + "-" + environment.Name() + "-" + workspace.Name()
+			destination := filepath.Join(quarantineRoot, name)
+			if os.Rename(source, destination) == nil {
+				applied = append(applied, fmt.Sprintf("quarantined abandoned Binding state %s to %s", source, destination))
+			}
+		}
+	}
+	return applied
+}
+
+func cleanupExpiredUpgradeStaging(now time.Time) []string {
+	root, err := cli.MachineStateRoot()
+	if err != nil {
+		return nil
+	}
+	stagingRoot := filepath.Join(root, "upgrade-staging")
+	entries, err := os.ReadDir(stagingRoot)
+	if err != nil {
+		return nil
+	}
+	var applied []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || now.Sub(info.ModTime()) <= doctorResidueMaxAge {
+			continue
+		}
+		path := filepath.Join(stagingRoot, entry.Name())
+		if os.RemoveAll(path) == nil {
+			applied = append(applied, fmt.Sprintf("removed expired upgrade staging %s", path))
+		}
+	}
+	return applied
 }

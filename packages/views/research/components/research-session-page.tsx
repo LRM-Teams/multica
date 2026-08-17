@@ -1615,6 +1615,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   title: directorReportDetail.data.title,
                   packageHash: directorReportDetail.data.package_hash,
                   sandboxUrl: directorReportDetail.data.sandbox_url ?? "",
+                  reportOrigin: directorReportDetail.data.report_origin ?? "",
                   plainTextFallback: directorReportDetail.data.plain_text,
                   revision: directorReportDetail.data.revision,
                   status: directorReportDetail.data.status,

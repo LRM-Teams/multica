@@ -43,6 +43,7 @@ export function ResearchV6ReportModal({
   const reportPackageHash = report?.packageHash ?? null;
   const reportSandboxUrl = report?.sandboxUrl ?? null;
 
+  // react-doctor-disable-next-line react-doctor/no-set-state-in-effect -- A short-lived server capability is external security state; validate it against the mounted app origin before an iframe can exist.
   useEffect(() => {
     if (!open) {
       setFrameUrl(null);
@@ -95,7 +96,7 @@ export function ResearchV6ReportModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="relative min-h-0 flex-1 bg-[#07111b]">
+        <div className="relative min-h-0 flex-1 bg-background">
           {frameUrl ? (
             <iframe
               key={`${report?.id ?? "report"}:${report?.packageHash ?? ""}`}
@@ -116,7 +117,7 @@ export function ResearchV6ReportModal({
 
           {phase === "loading" ? (
             <div
-              className="absolute inset-0 grid place-items-center bg-[#07111b] text-slate-200"
+              className="absolute inset-0 grid place-items-center bg-background text-foreground"
               data-testid="research-v6-report-loading"
             >
               <div className="flex items-center gap-2 text-sm">

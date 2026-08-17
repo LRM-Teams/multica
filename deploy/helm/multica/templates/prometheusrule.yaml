@@ -1,5 +1,5 @@
 {{- if .Values.monitoring.prometheusRule.enabled }}
-{{- $samplerQueryNames := "active_users|active_workspaces|task_queued|task_running|task_stuck|runtime_online|runtime_heartbeat_age|workspace_total" -}}
+{{- $samplerQueryNames := "active_users|active_workspaces|task_queued|task_running|task_stuck|runtime_online|runtime_heartbeat_age|workspace_total|research_execution|research_integrity" -}}
 {{- $samplerErrorNames := printf "acquire|%s" $samplerQueryNames -}}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -58,6 +58,26 @@ spec:
             summary: "Freshness hold resolution exceeded 30 seconds"
             description: "A freshness hold resolved after more than 30 seconds with outcome {{ "{{ $labels.outcome }}" }}."
 
+    - name: multica-research-v6-operations
+      rules:
+        - alert: MulticaResearchV6DirectorUnavailable
+          expr: multica_research_v6_health{condition=~"awaiting_director|director_unavailable"} > 0
+          for: 5m
+          labels:
+            severity: critical
+            subsystem: research_v6
+          annotations:
+            summary: "V6 Research Run requires Director recovery"
+            description: "Persisted V6 state reports {{ "{{ $labels.condition }}" }}. Reassign or restore the Director; do not decode the Run as V5."
+        - alert: MulticaResearchV6DurabilityFault
+          expr: multica_research_v6_health{condition=~"lost_attempt|report_object_missing"} > 0
+          for: 5m
+          labels:
+            severity: critical
+            subsystem: research_v6
+          annotations:
+            summary: "V6 durable research artifact needs reconciliation"
+            description: "Persisted V6 state reports {{ "{{ $labels.condition }}" }}. Pause affected Runs and use the durable recovery/reconciliation path."
     - name: multica-http-request-slo
       rules:
         # Frank report-only API p95 target: eligible served routes stay under 1s. Quantile over 5m rate window.

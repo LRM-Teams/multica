@@ -99,6 +99,11 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if result.RowsAffected() == 0 {
 		return nil
 	}
+	for _, branchID := range payload.BranchIDs {
+		if _, err = tx.Exec(ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING`, proposal.WorkspaceID, proposal.RunID, workID, branchID); err != nil {
+			return err
+		}
+	}
 	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_work_item_created", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"action_id": action.ActionID, "work_item_id": workID, "branch_ids": payload.BranchIDs}); err != nil {
 		return err
 	}

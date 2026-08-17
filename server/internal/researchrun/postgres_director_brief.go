@@ -101,14 +101,15 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		}
 		facts.Branches = append(facts.Branches, item)
 	}
-	rows, err = s.pool.Query(ctx, `SELECT id::text,kind,status,COALESCE(NULLIF(target_kind,''),kind),updated_at,COALESCE(assigned_agent_id::text,'') FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND kind IN ('research','match','discussion','integration','director','report','review') ORDER BY updated_at,id LIMIT 512`, in.WorkspaceID, in.RunID)
+	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,COALESCE(NULLIF(w.target_kind,''),w.kind),w.updated_at,COALESCE(w.assigned_agent_id::text,''),COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}') FROM research_work_item w WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
 	for rows.Next() {
 		var id, kind, state, summary, agentID string
+		var branchIDs []string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &branchIDs); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}

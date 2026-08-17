@@ -181,7 +181,6 @@ export function StarGraphCanvas({
     () => storedViewport ?? DEFAULT_CAMERA,
   );
   const [liveText, setLiveText] = useState("");
-  const previousModelRef = useRef<StarCanvasViewModel | null>(null);
   const collapseSnapshotRef = useRef<{
     sequence: string;
     ghosts: ReturnType<typeof selectStarGraphCollapseGhosts>;

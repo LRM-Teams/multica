@@ -292,10 +292,6 @@ const EMPTY_DIRECTOR_REPORT_DETAIL: ResearchV6DirectorReportDetail = {
   id: EMPTY_ID, revision: 1, status: "technical_failure", title: "Invalid response", summary: "", plain_text: "", package_hash: EMPTY_HASH, document_content_hash: EMPTY_HASH, outline: [], citations: [], input_refs: [], reviews: [],
 };
 
-function invalidRequest(name: string): never {
-  throw new Error(`${name} failed schema validation`);
-}
-
 export function parseResearchV6DirectorProjectionSnapshot(
   value: unknown,
 ): ResearchV6DirectorProjectionSnapshot {
@@ -306,8 +302,8 @@ export function parseResearchV6DirectorProjectionSnapshot(
 
 export function parseResearchV6DirectorProjectionDelta(
   value: unknown,
-): ResearchV6DirectorProjectionDelta {
-  return parseWithFallback(value, ResearchV6DirectorProjectionDeltaSchema, EMPTY_DIRECTOR_DELTA, {
+): ResearchV6DirectorProjectionDelta | null {
+  return parseWithFallback(value, ResearchV6DirectorProjectionDeltaSchema, null, {
     endpoint: "Director V6 projection delta",
   });
 }
@@ -329,24 +325,22 @@ export function parseResearchV6DirectorProjectionResumeRequest(
   value: unknown,
 ): ResearchV6DirectorProjectionResumeRequest {
   const result = ResearchV6DirectorProjectionResumeRequestSchema.safeParse(value);
-  return result.success
-    ? (result.data as ResearchV6DirectorProjectionResumeRequest)
-    : invalidRequest("Director V6 projection resume request");
+  if (!result.success) throw new Error("Director V6 projection resume request is invalid");
+  return result.data as ResearchV6DirectorProjectionResumeRequest;
 }
 
 export function parseResearchV6DirectorProjectionSliceRequest(
   value: unknown,
 ): ResearchV6DirectorProjectionSliceRequest {
   const result = ResearchV6DirectorProjectionSliceRequestSchema.safeParse(value);
-  return result.success
-    ? (result.data as ResearchV6DirectorProjectionSliceRequest)
-    : invalidRequest("Director V6 projection slice request");
+  if (!result.success) throw new Error("Director V6 projection slice request is invalid");
+  return result.data as ResearchV6DirectorProjectionSliceRequest;
 }
 
 export function parseResearchV6DirectorNodeDetail(
   value: unknown,
-): ResearchV6DirectorNodeDetail {
-  return parseWithFallback(value, ResearchV6DirectorNodeDetailSchema, EMPTY_DIRECTOR_NODE_DETAIL, {
+): ResearchV6DirectorNodeDetail | null {
+  return parseWithFallback(value, ResearchV6DirectorNodeDetailSchema, null, {
     endpoint: "GET Director V6 projection node detail",
   });
 }
@@ -366,8 +360,8 @@ export function parseResearchV6DirectorReportList(
 
 export function parseResearchV6DirectorReportDetail(
   value: unknown,
-): ResearchV6DirectorReportDetail {
-  return parseWithFallback(value, ResearchV6DirectorReportDetailSchema, EMPTY_DIRECTOR_REPORT_DETAIL, {
+): ResearchV6DirectorReportDetail | null {
+  return parseWithFallback(value, ResearchV6DirectorReportDetailSchema, null, {
     endpoint: "GET Director V6 report detail",
   });
 }

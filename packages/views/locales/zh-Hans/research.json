@@ -1336,6 +1336,16 @@
       },
       "goal_version": "目标版本 {{version}}"
     },
+    "report_sandbox": {
+      "title": "调研报告",
+      "isolated_document": "隔离的报告文档",
+      "frame_title": "调研报告文档",
+      "loading": "正在打开隔离报告…",
+      "unavailable_title": "交互报告暂不可用",
+      "unavailable_body": "报告未能在安全隔离环境中打开。你仍可在下方阅读已经校验的纯文本版本。",
+      "refresh_capability": "获取新的访问链接",
+      "plain_text_title": "纯文本报告"
+    },
     "change_receipt": {
       "title": "画布变更 · {{label}}",
       "input_count": "融合 {{count}} 个输入节点",

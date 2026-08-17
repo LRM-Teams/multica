@@ -1463,6 +1463,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/presence", h.PostAgentResearchPresence)
 						r.Post("/stage-eval", h.RequestAgentResearchStageEval)
 						r.Post("/tasks/{taskId}/attempts/{attemptId}/result", h.SubmitAgentResearchTaskResult)
+						r.Route("/work-items/{workItemId}/attempts/{attemptId}", func(r chi.Router) {
+							r.Get("/manifest", h.GetAgentResearchV6WorkManifest)
+							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)
+							r.Post("/catalog-acks", h.AcknowledgeAgentResearchV6WorkCatalog)
+							r.Post("/submission", h.SubmitAgentResearchV6Work)
+						})
 					})
 				})
 			})

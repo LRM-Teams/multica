@@ -37,3 +37,18 @@ func TestRonaldoV6StorageMigrationSlicesAreContiguousAndGuarded(t *testing.T) {
 		}
 	}
 }
+
+func TestRonaldoV6WorkItemRecoveryMigrationPersistsCASAndFrozenInputs(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "migrations", "401_research_v6_work_item_recovery.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"ADD COLUMN state_version", "ADD COLUMN manifest JSONB", "research_v6_work_submission",
+		"request_content_hash", "research_v6_submission_reconcile_idx",
+	} {
+		if !strings.Contains(string(raw), fragment) {
+			t.Errorf("recovery migration missing %q", fragment)
+		}
+	}
+}

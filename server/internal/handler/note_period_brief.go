@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,10 @@ import (
 const (
 	notePeriodBriefFolderTitle   = "工作介绍"
 	notePeriodBriefSourceJournal = "machine_work_journal"
-	notePeriodBriefDigestTimeout = 20 * time.Second
+	// Keep the HTTP path snappy: Next.js proxies abort long requests as
+	// socket hang up / opaque 500. Digests degrade into sources_empty.
+	notePeriodBriefDigestTimeout  = 4 * time.Second
+	notePeriodBriefDigestBudget   = 8 * time.Second
 )
 
 // Stable English instruction locked to the period_brief playbook (J3-T1 / J3-T4).
@@ -214,31 +218,44 @@ func (h *Handler) collectOwnerWorkDigests(
 	window noteRetrospectiveWindow,
 	workspaceRemotes []string,
 ) ([]notePeriodBriefDigestPack, bool) {
-	out := make([]notePeriodBriefDigestPack, 0, len(computerIDs))
-	journalEmpty := true
-	for _, computerID := range computerIDs {
-		digestCtx, cancel := context.WithTimeout(ctx, notePeriodBriefDigestTimeout)
-		digest, err := h.fetchComputerWorkDigest(digestCtx, computerID, protocol.ComputerWorkDigestPayload{
-			RequestID: uuid.NewString(),
-			Start:     window.Start,
-			End:       window.End,
-		})
-		cancel()
-		pack := notePeriodBriefDigestPack{ComputerID: computerID}
-		if err != nil {
-			pack.FetchError = workDigestCollectError(err)
-			out = append(out, pack)
-			continue
-		}
-		pack.Disabled = digest.Disabled
-		pack.Repos = scopeWorkDigestRepos(digest.Repos, workspaceRemotes)
-		if !digest.Disabled && len(digest.Repos) > 0 {
-			journalEmpty = false
-		}
-		out = append(out, pack)
-	}
-	if len(out) == 0 {
+	out := make([]notePeriodBriefDigestPack, len(computerIDs))
+	if len(computerIDs) == 0 {
 		return out, true
+	}
+	budgetCtx, budgetCancel := context.WithTimeout(ctx, notePeriodBriefDigestBudget)
+	defer budgetCancel()
+
+	var wg sync.WaitGroup
+	for i, computerID := range computerIDs {
+		wg.Add(1)
+		go func(i int, computerID string) {
+			defer wg.Done()
+			digestCtx, cancel := context.WithTimeout(budgetCtx, notePeriodBriefDigestTimeout)
+			defer cancel()
+			digest, err := h.fetchComputerWorkDigest(digestCtx, computerID, protocol.ComputerWorkDigestPayload{
+				RequestID: uuid.NewString(),
+				Start:     window.Start,
+				End:       window.End,
+			})
+			pack := notePeriodBriefDigestPack{ComputerID: computerID}
+			if err != nil {
+				pack.FetchError = workDigestCollectError(err)
+				out[i] = pack
+				return
+			}
+			pack.Disabled = digest.Disabled
+			pack.Repos = scopeWorkDigestRepos(digest.Repos, workspaceRemotes)
+			out[i] = pack
+		}(i, computerID)
+	}
+	wg.Wait()
+
+	journalEmpty := true
+	for _, pack := range out {
+		if pack.FetchError == "" && !pack.Disabled && len(pack.Repos) > 0 {
+			journalEmpty = false
+			break
+		}
 	}
 	return out, journalEmpty
 }
@@ -249,6 +266,9 @@ func workDigestCollectError(err error) string {
 	}
 	if errorsIsComputerOffline(err) {
 		return "computer_offline"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "computer_work_digest_timeout"
 	}
 	return err.Error()
 }

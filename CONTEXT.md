@@ -662,29 +662,35 @@ sequence or reload a snapshot when the retained delta range has expired.
 
 ### Period Work Brief
 
-A note that states what the Computer Owner accomplished in a time window, written
-for colleagues or a manager. It is a filtered narrative in Notes, not an activity
+A note that states what someone accomplished in a time window, written for
+colleagues or a manager. It is a filtered narrative in Notes, not an activity
 list and not a slide file.
 _Avoid_: retrospective as the deliverable, PPT, standup dump, weekly report file
 
-### Machine Work Journal
+### Period Work Collector
 
-The Computer-local record of work traces on that machine for its Computer Owner,
-independent of whether Multica dispatched the work. The observation boundary is
-the Owner's machine, not an Agent Workspace and not the Workspace membership.
-_Avoid_: runtime-root allowlist as the product scope, OS surveillance, keymouse,
-C2 as a single forbidden blob
+An Agent on a human-selected runtime (local or cloud) that gathers recent work
+on the OS where that runtime runs — including short diffs, file summaries, and
+key snippets within denylist bounds. Not Computer Host Digest harvest.
+_Avoid_: Host Journal as the Brief machine source, keymouse, full-repo dump
 
-### Work Digest
+### Period Brief Agent
 
-The bounded summary a Computer returns for one time window: discovered git
-repositories, commits, and dirty paths. It does not contain file bodies, diffs,
-secrets, or diagnostics.
-_Avoid_: git dump, full working tree, Daily, session transcript
+The Workspace Agent specialized to synthesize one Period Work Brief from
+platform Facts plus collector packs. Default synthesizer for「本期工作介绍」.
+_Avoid_: forcing every arbitrary Agent to be the weekly narrator
 
 ### Period Work Synthesis
 
-The Agent job that reads platform facts plus Work Digests and writes one Period
-Work Brief. Selection and grouping happen here; fact collection does not.
-_Avoid_: LLM inside the retrospective API, template-only brief, silent note overwrite
+The job that reads platform facts plus collector packs and writes one Period
+Work Brief. Selection and grouping happen here; multi-machine collection is
+done by Collectors first.
+_Avoid_: LLM inside the retrospective API, Host Digest as required input,
+silent note overwrite
+
+### Machine Work Journal / Work Digest (legacy)
+
+ADR 0018 Host-path terms. Superseded for Period Work by ADR 0019 Collectors.
+May remain in code temporarily; do not teach them as the Brief contract.
+_Avoid_: new Brief features depending on Host Digest
 

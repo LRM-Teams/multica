@@ -1,8 +1,14 @@
 ---
-status: accepted
+status: superseded
+superseded_by: docs/adr/0019-runtime-agent-collectors-period-brief.md
 ---
 
 # Computer Owner journals whole-machine work; Agent synthesizes a Period Work Brief note
+
+> **Superseded (2026-08-17).** Period Work no longer uses Computer Host Digests
+> as the machine-collection path. See ADR 0019: runtime Agents collect on the
+> OS they run on; a dedicated Brief Agent synthesizes. Host Journal code may
+> remain in-tree temporarily but is not the product contract for Briefs.
 
 A Period Work Brief is a note the Computer Owner can show colleagues or a
 manager: what they accomplished in a time window. It is not an activity dump,

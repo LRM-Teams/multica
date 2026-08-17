@@ -306,7 +306,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()
 	var ready, ack, status, inactive protocol.Message
-	var sawStartingActivity, sawOnlineActivity bool
+	var startingActivities, onlineActivities int
 	deadline := time.Now().Add(2 * time.Second)
 	for ready.Type == "" || ack.Type == "" || status.Type == "" || inactive.Type == "" {
 		if time.Now().After(deadline) {
@@ -342,9 +342,9 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				}
 				switch activity.Snapshot.DetailKind {
 				case "starting":
-					sawStartingActivity = true
+					startingActivities++
 				case "idle":
-					sawOnlineActivity = true
+					onlineActivities++
 				default:
 					t.Fatalf("managed start/stop invented unexpected Activity: %+v", activity)
 				}
@@ -353,11 +353,11 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			t.Fatal("timed out waiting for Runner frames")
 		}
 	}
-	if !sawStartingActivity {
-		t.Fatal("managed start did not emit Raft Starting… Activity")
+	if startingActivities != 1 {
+		t.Fatalf("managed start emitted %d Starting… Activities, want Raft's single spawn broadcast", startingActivities)
 	}
-	if !sawOnlineActivity {
-		t.Fatal("managed resident start did not settle Activity to Online")
+	if onlineActivities != 1 {
+		t.Fatalf("managed resident start emitted %d Online Activities, want one", onlineActivities)
 	}
 	if ready.Type != protocol.EventWorkspaceRunnerReady {
 		t.Fatalf("ready frame = %+v", ready)

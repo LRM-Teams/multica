@@ -54,9 +54,10 @@ func (p *agentActivityProducer) observeLocked(observation AgentObservation) erro
 		snapshot.DetailKind = projection.detailKind
 		snapshot.ProcessInstanceID = projection.processInstanceID
 	}
-	// Raft 1.0.16 queueTrajectoryText: same activityKind+detailKind is a
-	// progress heartbeat candidate, not another timeline fact.
-	if !projection.preserveCurrent &&
+	// Raft 1.0.16 queueTrajectoryText coalesces streaming thinking/text
+	// progress. Tool and lifecycle observations remain distinct timeline facts,
+	// even when consecutive events have the same detail kind.
+	if (observation.Kind == AgentObservationRuntimeThinking || observation.Kind == AgentObservationRuntimeWorking) &&
 		state.snapshot.ActivityKind == snapshot.ActivityKind &&
 		state.snapshot.DetailKind == snapshot.DetailKind &&
 		state.snapshot.ActivityKind != "" {

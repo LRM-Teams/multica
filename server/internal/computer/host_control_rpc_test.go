@@ -56,3 +56,32 @@ func TestHostControlRPCRejectsStaleRunnerGeneration(t *testing.T) {
 		t.Fatal("stale runner generation was accepted")
 	}
 }
+
+func TestHostControlClientUsesLocalRPCTransport(t *testing.T) {
+	root := t.TempDir()
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", RunnerGeneration: 2, PID: 1234}
+	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
+		Current: func(got BindingChildIdentity) bool { return got == identity },
+	})
+	registry := NewLocalControlRegistry()
+	control.RegisterRPCHandlers(registry)
+	endpoint := ServiceControlEndpoint(root)
+	listener, err := ListenLocalControl(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = ServeLocalControlRPC(ctx, listener, registry) }()
+	client := NewHostControlClient(endpoint, "control-token", identity)
+	grant, admitted, err := client.AcquireCapacity(context.Background(), ProcessCapacityRequest{
+		WorkspaceID: identity.WorkspaceID, AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admitted || grant.LaunchID != "launch-1" {
+		t.Fatalf("grant = %#v admitted=%v", grant, admitted)
+	}
+	_ = listener.Close()
+}

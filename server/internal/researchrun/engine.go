@@ -140,11 +140,13 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	if e == nil || e.store == nil {
 		return 0, errors.New("research run engine is unavailable")
 	}
+	steering, steeringErr := e.store.ProcessV6SteeringTriggers(ctx, limit)
+	proposals, proposalErr := e.store.ApplyReceivedV6DirectorProposals(ctx, limit)
 	applied, applyErr := e.store.ApplyReceivedV6Submissions(ctx, limit)
 	recovered, err := e.store.RecoverExpiredV6WorkItems(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
-	return recovered + applied + prepared + delivered, errors.Join(err, applyErr, prepareErr, deliveryErr)
+	return recovered + steering + proposals + applied + prepared + delivered, errors.Join(err, steeringErr, proposalErr, applyErr, prepareErr, deliveryErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {
@@ -167,6 +169,9 @@ func (e *Engine) RecordV6MatchDecision(ctx context.Context, in RecordV6MatchDeci
 }
 func (e *Engine) OpenV6Discussion(ctx context.Context, in OpenV6DiscussionInput) (V6Discussion, error) {
 	return (discussionV6Module{store: e.store}).Open(ctx, in)
+}
+func (e *Engine) ApplyV6SteeringAssessment(ctx context.Context, in ApplyV6SteeringAssessmentInput) (V6SteeringAssessment, error) {
+	return (steeringV6Module{store: e.store}).Apply(ctx, in)
 }
 func (e *Engine) DirectorBriefPage(ctx context.Context, access V6AttemptAccess, cursor string) (V6DirectorBriefPage, error) {
 	return (directorBriefModule{store: e.store}).Page(ctx, access, cursor)

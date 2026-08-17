@@ -60,6 +60,7 @@ export type {
   AgentCreationProposal,
   CreateAgentDraftRequest,
   EnsureWindyResponse,
+  EnsurePeriodBriefAgentResponse,
   AgentTemplate,
   AgentTemplateSummary,
   AgentTemplateSkillRef,

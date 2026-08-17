@@ -23,6 +23,7 @@ import {
   EMPTY_USER,
   EvolutionReviewSubmissionListSchema,
   EnsureWindyResponseSchema,
+  EnsurePeriodBriefAgentResponseSchema,
   WorkspaceMemoryCurationStatusSchema,
   MemoryCuratorProfileSchema,
   StartMemoryCurationRunResponseSchema,
@@ -927,6 +928,18 @@ describe("EnsureWindyResponseSchema", () => {
     expect(EnsureWindyResponseSchema.parse({ agent: { id: "wendy-1" } }).agent.id).toBe("wendy-1");
     expect(() => EnsureWindyResponseSchema.parse({ agent: {} })).toThrow();
     expect(() => EnsureWindyResponseSchema.parse({ dm_id: "dm-1" })).toThrow();
+  });
+});
+
+describe("EnsurePeriodBriefAgentResponseSchema", () => {
+  it("requires agent.id and created", () => {
+    expect(
+      EnsurePeriodBriefAgentResponseSchema.parse({
+        agent: { id: "weekly-1" },
+        created: true,
+      }).created,
+    ).toBe(true);
+    expect(() => EnsurePeriodBriefAgentResponseSchema.parse({ agent: { id: "weekly-1" } })).toThrow();
   });
 });
 

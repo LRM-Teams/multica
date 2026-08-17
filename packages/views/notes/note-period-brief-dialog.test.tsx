@@ -9,21 +9,25 @@ import type { Agent, ComputerConnection } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
 import { NotePeriodBriefDialog } from "./note-period-brief-dialog";
 
-const { listComputers, listAgents, createNotePeriodBrief, createNoteRetrospective, openNoteWorkerChat } =
+const { listComputers, listAgents, listRuntimes, createNotePeriodBrief, createNoteRetrospective, openNoteWorkerChat, ensurePeriodBriefAgent } =
   vi.hoisted(() => ({
     listComputers: vi.fn(),
     listAgents: vi.fn(),
+    listRuntimes: vi.fn(),
     createNotePeriodBrief: vi.fn(),
     createNoteRetrospective: vi.fn(),
     openNoteWorkerChat: vi.fn(),
+    ensurePeriodBriefAgent: vi.fn(),
   }));
 
 vi.mock("@multica/core/api", () => ({
   api: {
     listComputers: (...args: unknown[]) => listComputers(...args),
     listAgents: (...args: unknown[]) => listAgents(...args),
+    listRuntimes: (...args: unknown[]) => listRuntimes(...args),
     createNotePeriodBrief: (...args: unknown[]) => createNotePeriodBrief(...args),
     createNoteRetrospective: (...args: unknown[]) => createNoteRetrospective(...args),
+    ensurePeriodBriefAgent: (...args: unknown[]) => ensurePeriodBriefAgent(...args),
   },
 }));
 
@@ -105,11 +109,18 @@ describe("NotePeriodBriefDialog", () => {
   beforeEach(() => {
     listComputers.mockReset();
     listAgents.mockReset();
+    listRuntimes.mockReset();
     createNotePeriodBrief.mockReset();
     createNoteRetrospective.mockReset();
     openNoteWorkerChat.mockReset();
+    ensurePeriodBriefAgent.mockReset();
     listComputers.mockResolvedValue([computer()]);
     listAgents.mockResolvedValue([agent()]);
+    listRuntimes.mockResolvedValue([]);
+    ensurePeriodBriefAgent.mockResolvedValue({
+      agent: agent({ id: "weekly-1", name: "weekly-report", display_name: "周报", model: "m1" }),
+      created: true,
+    });
     createNotePeriodBrief.mockResolvedValue({
       page: { id: "page-1", title: "工作介绍 本周 · 底稿" },
       job: { id: "job-1", agent_id: "agent-1", channel_id: "dm-1" },
@@ -149,6 +160,24 @@ describe("NotePeriodBriefDialog", () => {
       expect.objectContaining({ id: "job-1", agent_id: "agent-1" }),
     );
     expect(onCreated).toHaveBeenCalled();
+  });
+
+  it("prefers the weekly-report agent as default synthesizer", async () => {
+    listAgents.mockResolvedValue([
+      agent({ id: "agent-1", name: "wendy", display_name: "Wendy" }),
+      agent({ id: "weekly-1", name: "weekly-report", display_name: "周报" }),
+    ]);
+    renderDialog("zh-Hans");
+    await waitFor(() => {
+      expect(screen.getByTestId("period-brief-default-agent")).toBeTruthy();
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /开始介绍/ }));
+    await waitFor(() => {
+      expect(createNotePeriodBrief).toHaveBeenCalledWith(
+        expect.objectContaining({ agent_id: "weekly-1" }),
+      );
+    });
   });
 
   it("hides the hint when Journal is on", async () => {

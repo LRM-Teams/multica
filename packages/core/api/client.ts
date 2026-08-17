@@ -23,6 +23,7 @@ import type {
   CreateAgentDraftRequest,
   AgentCreationDraft,
   EnsureWindyResponse,
+  EnsurePeriodBriefAgentResponse,
   AgentTemplate,
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
@@ -302,6 +303,7 @@ import {
   CloudRuntimeNodeSchema,
   CreateAgentFromTemplateResponseSchema,
   EnsureWindyResponseSchema,
+  EnsurePeriodBriefAgentResponseSchema,
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
@@ -1627,6 +1629,20 @@ export class ApiClient {
       }),
     });
     return EnsureWindyResponseSchema.parse(raw);
+  }
+
+  async ensurePeriodBriefAgent(
+    runtimeId: string,
+    model: string,
+  ): Promise<EnsurePeriodBriefAgentResponse> {
+    const raw = await this.fetch<unknown>("/api/members/agents/period-brief", {
+      method: "POST",
+      body: JSON.stringify({
+        runtime_id: runtimeId,
+        model,
+      }),
+    });
+    return EnsurePeriodBriefAgentResponseSchema.parse(raw);
   }
 
   async createAgentDraft(data: CreateAgentDraftRequest): Promise<AgentCreationDraft> {

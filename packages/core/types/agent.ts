@@ -630,6 +630,12 @@ export interface EnsureWindyResponse {
   dm_id?: string;
 }
 
+/** Idempotent Period Brief Agent (「周报」) ensure. */
+export interface EnsurePeriodBriefAgentResponse {
+  agent: Agent;
+  created: boolean;
+}
+
 /** Verified avatar write intent. The server derives and persists the URL and
  * source; clients never submit a raw agent avatar URL. */
 export type AgentAvatarSelection =

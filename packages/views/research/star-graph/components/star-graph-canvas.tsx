@@ -27,6 +27,7 @@ import {
   type GraphEdgeLike,
 } from "../../lib/canvas-keyboard-nav";
 import type { MotionDirective } from "../../motion/directives";
+import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import {
   computeClusterHiddenCounts,
@@ -61,6 +62,8 @@ export interface StarGraphCanvasProps {
   selectedNodeId?: string | null;
   onSelectNode?: (nodeId: string) => void;
   onOpenNode?: (nodeId: string) => void;
+  /** Server-declared one-layer expansion state; absent keeps legacy behavior. */
+  expansionControl?: StarGraphExpansionControl;
   summaryTitle?: string;
   summaryDetail?: string;
   filterHiddenNote?: string;
@@ -100,6 +103,7 @@ export function StarGraphCanvas({
   selectedNodeId = null,
   onSelectNode,
   onOpenNode,
+  expansionControl,
   summaryTitle,
   summaryDetail,
   filterHiddenNote,
@@ -519,7 +523,13 @@ export function StarGraphCanvas({
           return;
         }
         case "openDetail":
-          if (focusId) onOpenNode?.(focusId);
+          if (!focusId) return;
+          if (expansionControl?.expandableNodeIds.has(focusId)) {
+            onSelectNode?.(focusId);
+            expansionControl.onToggleNode(focusId);
+          } else {
+            onOpenNode?.(focusId);
+          }
           return;
         case "closeOverlay":
           keyboardNav?.onCloseOverlay?.(action.layer);
@@ -547,6 +557,7 @@ export function StarGraphCanvas({
       nodeAccessibleNames,
       onOpenNode,
       onSelectNode,
+      expansionControl,
     ],
   );
 
@@ -676,6 +687,7 @@ export function StarGraphCanvas({
           nodeAccessibleNames={nodeAccessibleNames}
           lensHints={focusedLensHints}
           motionDirectives={motionDirectives}
+          expansionControl={expansionControl}
           labels={entityLabels}
           onSelectNode={onSelectNode}
           onOpenNode={onOpenNode}

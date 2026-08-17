@@ -68,6 +68,10 @@ export function adaptResearchV6DirectorCanvas(
     merged[successorId] = [...new Set(inputIds)];
   }
 
+  const branchIds = [...new Set(
+    visibleNodes.flatMap((node) => node.branch_ids),
+  )].sort();
+
   return {
     graph: {
       session_id: projection.runId,
@@ -95,7 +99,10 @@ export function adaptResearchV6DirectorCanvas(
         // has no Goal tier token, so it uses the top-size presentation while
         // retaining canonical tier=GOAL in payload.
         level: node.tier === "GOAL" ? "xxl" : node.tier.toLowerCase(),
-        cluster_id: null,
+        // Projection branch bindings are canonical. The layout accepts one
+        // territory key, so use the first server-ordered binding while keeping
+        // every binding verbatim in payload. This is display grouping only.
+        cluster_id: node.branch_ids[0] ?? null,
         confidence: null,
         goal_version_id: null,
         derived_from: null,
@@ -119,7 +126,18 @@ export function adaptResearchV6DirectorCanvas(
         edge_type: edge.kind,
         created_at: "",
       })),
-      clusters: [],
+      clusters: branchIds.map((branchId) => ({
+        id: branchId,
+        session_id: projection.runId,
+        name: branchId,
+        label: branchId,
+        level: "branch",
+        cluster_type: "branch",
+        goal_version_id: null,
+        payload: { canonical_branch_id: branchId },
+        created_at: "",
+        updated_at: "",
+      })),
       lineage: {
         derived: {},
         merged,

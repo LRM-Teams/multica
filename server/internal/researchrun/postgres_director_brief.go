@@ -438,6 +438,7 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 			"agent_id": uuidValue, "mission_prompt": text, "model_config": jsonObject, "tool_config": jsonObject, "permission_config": jsonObject, "reason": text}},
 		"run.action.v1":    map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"reason": text}},
 		"report.review.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"report_id", "expected_revision", "reason"}, "properties": map[string]any{"report_id": uuidValue, "expected_revision": map[string]any{"type": "integer", "minimum": 1}, "reason": text}},
+		"goal.revise.v1":   map[string]any{"type": "object", "additionalProperties": false, "required": []string{"goal", "scope"}, "properties": map[string]any{"goal": text, "scope": jsonObject, "audience": text, "freshness": text, "language": text, "source_policy": jsonObject}},
 	}
 }
 

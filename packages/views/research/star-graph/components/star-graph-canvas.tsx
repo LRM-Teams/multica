@@ -211,8 +211,7 @@ export function StarGraphCanvas({
     previousModelRef.current = model;
   }, [model]);
   const [cameraTransitioning, setCameraTransitioning] = useState(false);
-  const cameraTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const framedExpansionSequenceRef = useRef<string | null>(null);
+  const [framedExpansionSequence, setFramedExpansionSequence] = useState<string | null>(null);
   const entityMotionDirectives = useMemo(() => {
     const expansionDirectives = buildStarGraphExpansionMotion(
       model,
@@ -360,25 +359,12 @@ export function StarGraphCanvas({
   );
 
   const stopCameraTransition = useCallback(() => {
-    if (cameraTransitionTimerRef.current) {
-      clearTimeout(cameraTransitionTimerRef.current);
-      cameraTransitionTimerRef.current = null;
-    }
     setCameraTransitioning(false);
   }, []);
 
   const beginCameraTransition = useCallback(() => {
-    if (cameraTransitionTimerRef.current) {
-      clearTimeout(cameraTransitionTimerRef.current);
-    }
     setCameraTransitioning(true);
-    cameraTransitionTimerRef.current = setTimeout(() => {
-      cameraTransitionTimerRef.current = null;
-      setCameraTransitioning(false);
-    }, 420);
   }, []);
-
-  useEffect(() => stopCameraTransition, [stopCameraTransition]);
 
   const bounds = useMemo(() => computeEntityBounds(model.entities), [model.entities]);
 
@@ -621,36 +607,6 @@ export function StarGraphCanvas({
     focusSelectedEntity(selectedNodeId);
   }, [focusSelectedEntity, rightPanelWidth, selectedNodeId]);
 
-  // react-doctor-disable-next-line react-doctor/no-set-state-in-effect -- A committed Projection transaction is an external event; camera continuity must follow the newly rendered geometry and remains interruptible by direct input.
-  useEffect(() => {
-    const transition = expansionControl?.transition;
-    if (!transition) {
-      framedExpansionSequenceRef.current = null;
-      return;
-    }
-    const sequence = String(transition.sequence);
-    if (framedExpansionSequenceRef.current === sequence) return;
-    const next = planExpansionTransactionCamera(
-      model,
-      transition,
-      viewport,
-      camera,
-      { rightPanelWidth },
-    );
-    if (!next) return;
-    framedExpansionSequenceRef.current = sequence;
-    beginCameraTransition();
-    setCamera(next);
-  }, [
-    beginCameraTransition,
-    camera,
-    expansionControl?.transition,
-    model,
-    rightPanelWidth,
-    setCamera,
-    viewport,
-  ]);
-
   const handleZoomIn = useCallback(() => {
     stopCameraTransition();
     setCamera((current) =>
@@ -817,6 +773,25 @@ export function StarGraphCanvas({
     };
   }, [bounds, viewport.height, viewport.width]);
 
+  const expansionTransition = expansionControl?.transition;
+  const expansionSequence = expansionTransition
+    ? String(expansionTransition.sequence)
+    : null;
+  if (expansionTransition && expansionSequence !== framedExpansionSequence) {
+    const nextCamera = planExpansionTransactionCamera(
+      model,
+      expansionTransition,
+      viewport,
+      camera,
+      { rightPanelWidth },
+    );
+    if (nextCamera) {
+      setFramedExpansionSequence(expansionSequence);
+      setCameraState(nextCamera);
+      setCameraTransitioning(true);
+    }
+  }
+
   return (
     <div
       ref={rootRef}
@@ -872,6 +847,14 @@ export function StarGraphCanvas({
           width: worldSize.width,
           height: worldSize.height,
           transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
+        }}
+        onTransitionEnd={(event) => {
+          if (
+            event.currentTarget === event.target &&
+            event.propertyName === "transform"
+          ) {
+            setCameraTransitioning(false);
+          }
         }}
       >
         <StarGraphClusterLayer

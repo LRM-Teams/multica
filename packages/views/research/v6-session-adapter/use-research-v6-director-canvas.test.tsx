@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { useResearchV6DirectorDisplayStore } from "@multica/core/research-v6/director-display-store";
+import type { ResearchV6DirectorRealtimeBus } from "@multica/core/research-v6-live/director-controller";
 import type {
   ResearchV6DirectorProjectionSnapshot,
   ResearchV6DirectorProjectionTransport,
@@ -88,5 +89,67 @@ describe("useResearchV6DirectorCanvas", () => {
     expect(result.current.expansionControl?.expandedNodeIds.has("root")).toBe(
       true,
     );
+  });
+
+  it("renders a committed realtime delta without refetching the snapshot", async () => {
+    let pushEvent = (_payload: unknown) => {};
+    const realtimeBus = {
+      subscribeEvent: (_event, handler) => {
+        pushEvent = handler;
+        return () => {
+          pushEvent = () => {};
+        };
+      },
+      onBusReconnect: () => () => {},
+      onBusConnectionStatus: () => () => {},
+    } satisfies ResearchV6DirectorRealtimeBus;
+    const initial = snapshot("default", [
+      { id: "root", tier: "L", expandable: false },
+    ]);
+    const transport = {
+      loadSnapshot: async () => initial,
+    } as Pick<
+      ResearchV6DirectorProjectionTransport,
+      "loadSnapshot"
+    > as ResearchV6DirectorProjectionTransport;
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { result } = renderHook(
+      () =>
+        useResearchV6DirectorCanvas({
+          workspaceId: WORKSPACE_ID,
+          runId: RUN_ID,
+          transport,
+          realtimeBus,
+          expansionFailureLabel: "Expansion failed",
+        }),
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() => expect(result.current.canvas?.graph.nodes).toHaveLength(1));
+    const nextNode = snapshot("default", [
+      { id: "live", tier: "S", expandable: false },
+    ]).nodes[0]!;
+    act(() => {
+      pushEvent({
+        run_id: RUN_ID,
+        delta: {
+          contract_kind: "projection_delta",
+          schema_version: 6,
+          workspace_id: WORKSPACE_ID,
+          run_id: RUN_ID,
+          snapshot_id: SNAPSHOT_ID,
+          event_sequence: 5,
+          previous_projection_hash: initial.projection_hash,
+          projection_hash: `sha256:${"e".repeat(64)}`,
+          upsert_nodes: [nextNode],
+          remove_node_ids: [],
+          upsert_edges: [],
+          remove_edge_ids: [],
+          invalidate_slice_keys: [],
+        },
+      });
+    });
+    await waitFor(() => expect(result.current.canvas?.graph.nodes).toHaveLength(2));
   });
 });

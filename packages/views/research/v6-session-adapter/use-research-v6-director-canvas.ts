@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   useInfiniteQuery,
   useQueryClient,
@@ -11,6 +11,10 @@ import {
   useResearchV6DirectorDisplayStore,
 } from "@multica/core/research-v6/director-display-store";
 import { ResearchV6DirectorExpansionController } from "@multica/core/research-v6/director-expansion-controller";
+import {
+  ResearchV6DirectorLiveController,
+  type ResearchV6DirectorRealtimeBus,
+} from "@multica/core/research-v6-live/director-controller";
 import {
   researchV6DirectorProjectionKeys,
   researchV6DirectorSnapshotOptions,
@@ -48,6 +52,7 @@ export function useResearchV6DirectorCanvas({
   enabled = true,
   expansionFailureLabel,
   lowPerformance = false,
+  realtimeBus,
 }: {
   workspaceId: string;
   runId: string;
@@ -55,6 +60,7 @@ export function useResearchV6DirectorCanvas({
   enabled?: boolean;
   expansionFailureLabel: string;
   lowPerformance?: boolean;
+  realtimeBus?: ResearchV6DirectorRealtimeBus;
 }): UseResearchV6DirectorCanvasResult {
   const queryClient = useQueryClient();
   const snapshotQuery = useInfiniteQuery({
@@ -101,17 +107,56 @@ export function useResearchV6DirectorCanvas({
   );
   useEffect(() => () => controller?.dispose(), [controller]);
 
+  const liveController = useMemo(
+    () =>
+      snapshotId && realtimeBus
+        ? new ResearchV6DirectorLiveController(
+            { workspaceId, runId },
+            transport,
+            realtimeBus,
+            {
+              onInvalidateSliceKeys: (sliceKeys) =>
+                controller?.invalidateSliceKeys(sliceKeys),
+            },
+          )
+        : null,
+    [controller, realtimeBus, runId, snapshotId, transport, workspaceId],
+  );
+  useEffect(() => {
+    if (!liveController) return;
+    for (const page of snapshotQuery.data?.pages ?? []) {
+      liveController.seedSnapshotPage(page);
+    }
+  }, [liveController, snapshotQuery.data?.pages]);
+  useEffect(() => {
+    if (!liveController) return;
+    liveController.connect();
+    return () => liveController.disconnect();
+  }, [liveController]);
+  const liveRevision = useSyncExternalStore(
+    liveController
+      ? (listener) => liveController.subscribe(listener)
+      : EMPTY_SUBSCRIBE,
+    liveController ? () => liveController.getRevision() : ZERO_SNAPSHOT,
+    ZERO_SNAPSHOT,
+  );
+
   const canvas = useMemo(() => {
     const defaultPages = snapshotQuery.data?.pages ?? [];
     if (!firstPage || defaultPages.length === 0) return null;
-    const nodes: ResearchV6DirectorProjectionNode[] = [];
-    const edges: ResearchV6DirectorProjectionEdge[] = [];
-    const densityBins: ResearchV6DirectorDensityBin[] = [];
-    for (const page of defaultPages) {
-      nodes.push(...page.nodes);
-      edges.push(...page.edges);
-      densityBins.push(...page.density_bins);
-    }
+    const liveView = liveController
+      ?.getClient()
+      .getState()
+      .views.get(firstPage.slice_key);
+    const nodes: ResearchV6DirectorProjectionNode[] = liveView
+      ? [...liveView.nodes.values()]
+      : defaultPages.flatMap((page) => page.nodes);
+    const edges: ResearchV6DirectorProjectionEdge[] = liveView
+      ? [...liveView.edges.values()]
+      : defaultPages.flatMap((page) => page.edges);
+    const densityBins: ResearchV6DirectorDensityBin[] = liveView
+      ? [...liveView.densityBins.values()]
+      : defaultPages.flatMap((page) => page.density_bins);
     if (displayMatches) {
       for (const rootNodeId of Object.keys(expandedByRoot)) {
         const pages = queryClient.getQueryData<SlicePages>(
@@ -130,7 +175,9 @@ export function useResearchV6DirectorCanvas({
     }
     return adaptResearchV6DirectorCanvas({
       runId,
-      eventSequence: firstPage.through_event_sequence,
+      eventSequence:
+        liveController?.getClient().getState().lastConfirmedSequence ??
+        firstPage.through_event_sequence,
       nodes: dedupeById(nodes),
       edges: dedupeById(edges),
       densityBins: dedupeById(densityBins),
@@ -139,6 +186,8 @@ export function useResearchV6DirectorCanvas({
     displayMatches,
     expandedByRoot,
     firstPage,
+    liveController,
+    liveRevision,
     queryClient,
     runId,
     snapshotQuery.data?.pages,
@@ -207,3 +256,6 @@ function dedupeById<T extends { id: string }>(items: readonly T[]): T[] {
   for (const item of items) byId.set(item.id, item);
   return [...byId.values()];
 }
+
+const EMPTY_SUBSCRIBE = () => () => {};
+const ZERO_SNAPSHOT = () => 0;

@@ -28,7 +28,7 @@
     "generate:reserved-slugs": "node scripts/generate-reserved-slugs.mjs",
     "fe:deadcode": "node scripts/fe-deadcode-scan.mjs",
     "fe:deadcode:strict": "node scripts/fe-deadcode-scan.mjs --strict",
-    "react:doctor": "react-doctor --yes --scope changed --base origin/dev --no-score --blocking warning"
+    "react:doctor": "react-doctor --yes --scope changed --base origin/dev --no-score --blocking warning --verbose"
   },
   "packageManager": "pnpm@10.28.2",
   "pnpm": {

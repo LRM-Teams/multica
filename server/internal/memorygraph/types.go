@@ -104,6 +104,13 @@ type Node struct {
 	SourceChannelIDs []string `yaml:"source_channel_ids,omitempty" json:"source_channel_ids,omitempty"`
 	SourceTaskIDs    []string `yaml:"source_task_ids,omitempty" json:"source_task_ids,omitempty"`
 
+	// Daily-node lifecycle (spec §6). SealedAt is set once by the seal pass
+	// (compare-and-swap: an already-sealed daily is immutable); LateForDate
+	// records the original local date of events that arrived after their
+	// own daily was sealed and landed in this open daily instead.
+	SealedAt    *time.Time `yaml:"sealed_at,omitempty" json:"sealed_at,omitempty"`
+	LateForDate string     `yaml:"late_for_date,omitempty" json:"late_for_date,omitempty"`
+
 	Body string `yaml:"-" json:"body"` // markdown body = embedding chunk
 }
 

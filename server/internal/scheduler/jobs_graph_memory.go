@@ -14,8 +14,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multica-ai/multica/server/internal/memorycuration"
 	"github.com/multica-ai/multica/server/internal/memorygraph"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/service"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -198,6 +200,13 @@ func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.Busi
 			if ok {
 				consolidated++
 			}
+			// Daily seal (spec §6): after local midnight + 10m grace, seal
+			// the prior date's daily nodes under the same graph mutation
+			// lease as updates. Runs after every successful consolidation
+			// pass so quiet days still seal.
+			if wsID, ok := graphDirWorkspaceID(dir); ok {
+				sealGraphMemoryDaily(ctx, pool, dir, wsID)
+			}
 			if in.Heartbeat != nil {
 				if err := in.Heartbeat(ctx); err != nil {
 					return HandlerResult{}, err
@@ -341,6 +350,63 @@ func consolidateOneGraphWith(ctx context.Context, dir string, store *memorygraph
 		bm.RecordGraphBacktestBypass(ratio)
 	}
 	return true, nil
+}
+
+// sealGraphMemoryDaily runs the daily seal pass for one graph directory
+// (spec §6): after local midnight plus the ten-minute grace period, the
+// prior date's daily nodes are sealed under the graph mutation lock. With
+// a nil pool (tests, DB-less deployments) the updater's process-local
+// default locker is used. Seal failures are logged, never fatal.
+func sealGraphMemoryDaily(ctx context.Context, pool *pgxpool.Pool, dir, wsID string) {
+	loc := graphMemoryTimezoneForWorkspace(ctx, pool, wsID)
+	now := time.Now().In(loc)
+	if now.Hour() == 0 && now.Minute() < 10 {
+		return // grace period: the prior day may still receive in-flight events
+	}
+	store := memorygraph.NewStore(dir)
+	updater := memorygraph.NewDailyUpdater(store, loc)
+	if pool != nil {
+		kind, owner := graphDirKindOwner(dir)
+		coordinator := service.NewGraphMutationCoordinator(pool)
+		updater.SetLocker(func(ctx context.Context, fn func() error) error {
+			return coordinator.WithGraphLock(ctx, wsID, kind, owner, func(context.Context) error { return fn() })
+		})
+	}
+	sealed, err := updater.SealPriorDay(ctx)
+	if err != nil {
+		slog.Warn("graph memory daily seal failed", "dir", dir, "error", err)
+	} else if sealed != "" {
+		slog.Info("graph memory daily node sealed", "dir", dir, "node", sealed)
+	}
+}
+
+// graphDirKindOwner parses the graph kind ("project"|"channel") and owner
+// id from a canonical dir <root>/<ws>/memory_graph/<kind>s/<owner>.
+func graphDirKindOwner(dir string) (kind, owner string) {
+	owner = filepath.Base(dir)
+	sub := filepath.Base(filepath.Dir(dir)) // "projects" | "channels"
+	return strings.TrimSuffix(sub, "s"), owner
+}
+
+// graphMemoryTimezoneForWorkspace resolves the workspace memory-profile
+// timezone via the scoped gate row, falling back to
+// memorycuration.DefaultTimezone on any error.
+func graphMemoryTimezoneForWorkspace(ctx context.Context, pool *pgxpool.Pool, workspaceID string) *time.Location {
+	if pool != nil {
+		if id, err := uuid.Parse(workspaceID); err == nil {
+			gate, err := db.New(pool).GetGraphMemoryScopedGate(ctx, pgtype.UUID{Bytes: id, Valid: true})
+			if err == nil && gate.Timezone != "" {
+				if loc, err := time.LoadLocation(gate.Timezone); err == nil {
+					return loc
+				}
+			}
+		}
+	}
+	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
+	if err != nil {
+		return time.FixedZone("CST", 8*3600)
+	}
+	return loc
 }
 
 // recordConsolidationFailure increments the consecutive failure/no-switch

@@ -9,9 +9,12 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/multica-ai/multica/server/internal/memorycuration"
 	"github.com/multica-ai/multica/server/internal/memorygraph"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -33,11 +36,12 @@ import (
 // construction failure degrades to the ingester's extractive fallback rather
 // than failing the hook.
 type GraphMemoryIngestHook struct {
-	queries *db.Queries
-	pool    *pgxpool.Pool // channel route resolution (spec §4); nil only in tests
-	root    string        // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT per call
-	bm      *obsmetrics.BusinessMetrics
-	model   string
+	queries   *db.Queries
+	pool      *pgxpool.Pool // channel route resolution (spec §4); nil only in tests
+	root      string        // workspaces root; empty resolves MULTICA_WORKSPACES_ROOT per call
+	bm        *obsmetrics.BusinessMetrics
+	model     string
+	mutations *GraphMutationCoordinator
 
 	backendOnce sync.Once
 	backend     memorygraph.AgentBackend
@@ -51,11 +55,12 @@ type GraphMemoryIngestHook struct {
 // empty, in which case MULTICA_WORKSPACES_ROOT is resolved per ingest.
 func NewGraphMemoryIngestHook(queries *db.Queries, pool *pgxpool.Pool, root string, bm *obsmetrics.BusinessMetrics) *GraphMemoryIngestHook {
 	return &GraphMemoryIngestHook{
-		queries: queries,
-		pool:    pool,
-		root:    root,
-		bm:      bm,
-		model:   strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
+		queries:   queries,
+		pool:      pool,
+		root:      root,
+		bm:        bm,
+		model:     strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
+		mutations: NewGraphMutationCoordinator(pool),
 	}
 }
 
@@ -175,7 +180,38 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 	if err := store.WriteStagingSegmentMeta(seg.SegmentID, &meta); err != nil {
 		return fmt.Errorf("graph memory ingest: segment meta: %w", err)
 	}
+
+	// Daily writer (spec §6): merge a concise outcome into the open daily
+	// node of the same graph, serialized by the graph mutation lock. A
+	// daily failure never fails the ingest.
+	if h.mutations != nil {
+		updater := memorygraph.NewDailyUpdater(store, h.timezoneFor(ctx, task.WorkspaceID))
+		updater.SetLocker(func(ctx context.Context, fn func() error) error {
+			return h.mutations.WithGraphLock(ctx, wsID, string(kind), ownerID, func(context.Context) error { return fn() })
+		})
+		if err := updater.Record(ctx, memorygraph.DailyEvent{
+			AgentID: meta.AgentID, ProjectID: meta.ProjectID, ChannelID: meta.ChannelID,
+			TaskID: meta.TaskID, Text: seg.ClosingEvent, OccurredAt: time.Now(),
+		}); err != nil {
+			slog.Warn("graph memory daily update failed", "error", err)
+		}
+	}
 	return nil
+}
+
+// timezoneFor resolves the workspace memory-profile timezone (spec §6);
+// empty/invalid falls back to memorycuration.DefaultTimezone.
+func (h *GraphMemoryIngestHook) timezoneFor(ctx context.Context, workspaceID pgtype.UUID) *time.Location {
+	if gate, err := h.queries.GetGraphMemoryScopedGate(ctx, workspaceID); err == nil && gate.Timezone != "" {
+		if loc, err := time.LoadLocation(gate.Timezone); err == nil {
+			return loc
+		}
+	}
+	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
+	if err != nil {
+		return time.FixedZone("CST", 8*3600)
+	}
+	return loc
 }
 
 // workspacesRoot returns the configured root or resolves the env default.

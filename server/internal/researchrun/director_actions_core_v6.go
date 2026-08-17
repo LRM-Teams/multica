@@ -181,7 +181,10 @@ func (s *PostgresStore) executeV6CreateReportAction(ctx context.Context, proposa
 		return ErrInvalidContract
 	}
 	for _, input := range payload.Inputs {
-		if !validV6ActionUUID(input.ArtifactVersionID) {
+		if strings.TrimSpace(input.BranchID) != "" && !validV6ActionUUID(input.BranchID) {
+			return ErrInvalidContract
+		}
+		if strings.TrimSpace(input.NodeArtifactVersionID) != "" && !validV6ActionUUID(input.NodeArtifactVersionID) {
 			return ErrInvalidContract
 		}
 	}

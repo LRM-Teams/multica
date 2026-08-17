@@ -89,6 +89,22 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     ).resolves.toMatchObject({ run_id: RUN_ID, deltas: [], resync_required: true });
   });
 
+  it("keeps node detail fallback addressable when the response changes node identity", async () => {
+    response({});
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6DirectorProjectionNodeDetail(WORKSPACE_ID, RUN_ID, "node-1"),
+    ).resolves.toMatchObject({ node: { id: "node-1" } });
+  });
+
+  it("keeps report detail fallback addressable when the response changes report identity", async () => {
+    response({});
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6DirectorReport(WORKSPACE_ID, RUN_ID, "report-1"),
+    ).resolves.toMatchObject({ id: "report-1" });
+  });
+
   it("sends the full snapshot identity when resuming", async () => {
     response({ run_id: RUN_ID, deltas: [], next_cursor: null, resync_required: true });
     const client = new ApiClient("https://api.example.test");

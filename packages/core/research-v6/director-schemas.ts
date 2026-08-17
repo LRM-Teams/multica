@@ -169,6 +169,17 @@ export const ResearchV6DirectorProjectionSliceRequestSchema = z
   })
   .strict();
 
+export const ResearchV6DirectorAssignmentSchema = z.object({
+  id: uuid,
+  workspace_id: uuid,
+  run_id: uuid,
+  director_agent_id: uuid,
+  status: z.string().min(1).max(160),
+  reason: z.string().max(32_768),
+  generation: z.number().int().positive(),
+  state_version: z.number().int().nonnegative(),
+}).strict();
+
 const entityRefs = z.array(ResearchV6DirectorEntityRefSchema).max(10_000);
 
 export const ResearchV6DirectorNodeDetailSchema = z

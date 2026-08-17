@@ -5228,6 +5228,38 @@ export class ApiClient {
     return snapshot;
   }
 
+  async replaceResearchV6Director(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorAssignmentRequest,
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorAssignment | null> {
+    const { ResearchV6DirectorAssignmentSchema } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(`/api/research/sessions/${encodeURIComponent(runId)}/director`, {
+      method: "PUT",
+      body: JSON.stringify({
+        director_agent_id: request.directorAgentId,
+        expected_state_version: request.expectedStateVersion,
+        reason: request.reason,
+        client_request_id: request.clientRequestId,
+      }),
+    });
+    const parsed = ResearchV6DirectorAssignmentSchema.safeParse(raw);
+    if (!parsed.success) return null;
+    if (parsed.data.workspace_id !== workspaceId || parsed.data.run_id !== runId) return null;
+    return {
+      id: parsed.data.id,
+      workspaceId: parsed.data.workspace_id,
+      runId: parsed.data.run_id,
+      directorAgentId: parsed.data.director_agent_id,
+      status: parsed.data.status,
+      reason: parsed.data.reason,
+      generation: parsed.data.generation,
+      stateVersion: parsed.data.state_version,
+    };
+  }
+
   async getResearchV6DirectorProjectionSlice(
     workspaceId: string,
     runId: string,

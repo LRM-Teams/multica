@@ -272,6 +272,24 @@ export interface ResearchV6DirectorSelectedRef {
   display_summary: string;
 }
 
+export interface ResearchV6DirectorAssignment {
+  id: string;
+  workspaceId: string;
+  runId: string;
+  directorAgentId: string;
+  status: string;
+  reason: string;
+  generation: number;
+  stateVersion: number;
+}
+
+export interface ResearchV6DirectorAssignmentRequest {
+  directorAgentId: string;
+  expectedStateVersion: number;
+  reason: string;
+  clientRequestId: string;
+}
+
 /** V6 derivation expansion is contractually one layer; callers cannot vary it. */
 export interface ResearchV6DirectorProjectionSliceRequest {
   root: string;

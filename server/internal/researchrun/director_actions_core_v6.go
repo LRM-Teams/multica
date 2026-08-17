@@ -73,6 +73,14 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Kind) == "" || strings.TrimSpace(payload.Mission) == "" || payload.Priority < 0 || payload.Priority > 1 || payload.MaxAttempts < 1 || payload.MaxAttempts > 100 {
 		return ErrInvalidContract
 	}
+	if !validV6ActionUUID(payload.AssigneeAgentID) {
+		return ErrInvalidContract
+	}
+	for _, branchID := range payload.BranchIDs {
+		if !validV6ActionUUID(branchID) {
+			return ErrInvalidContract
+		}
+	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -123,6 +131,9 @@ func (s *PostgresStore) executeV6CreateBranchAction(ctx context.Context, proposa
 	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Objective) == "" || payload.BudgetShare < 0 || payload.BudgetShare > 1 {
 		return ErrInvalidContract
 	}
+	if strings.TrimSpace(payload.ParentBranchID) != "" && !validV6ActionUUID(payload.ParentBranchID) {
+		return ErrInvalidContract
+	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -166,8 +177,13 @@ func (s *PostgresStore) executeV6CreateReportAction(ctx context.Context, proposa
 		Title           string             `json:"title"`
 		Inputs          []V6ReportInputRef `json:"inputs"`
 	}
-	if json.Unmarshal(action.Payload, &payload) != nil {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.AssigneeAgentID) || strings.TrimSpace(payload.Title) == "" {
 		return ErrInvalidContract
+	}
+	for _, input := range payload.Inputs {
+		if !validV6ActionUUID(input.ArtifactVersionID) {
+			return ErrInvalidContract
+		}
 	}
 	var sequence int64
 	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE session_id=$1::uuid`, proposal.RunID).Scan(&sequence); err != nil {

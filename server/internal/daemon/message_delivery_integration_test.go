@@ -404,6 +404,17 @@ func (r *recordingResidentMessage) RuntimeAlive() (bool, bool) {
 	return liveness.RuntimeAlive()
 }
 
+// ForceKill preserves the runtime-pool teardown contract when this recorder
+// wraps a real resident backend. Without forwarding the capability, the pool
+// cannot stop an in-flight provider process before TempDir cleanup.
+func (r *recordingResidentMessage) ForceKill() error {
+	killable, ok := r.Backend.(agent.ResidentRuntimeForceKillable)
+	if !ok {
+		return errors.New("recorded runtime does not support force kill")
+	}
+	return killable.ForceKill()
+}
+
 func (r *recordingResidentMessage) snapshot() [][]agent.ResidentMessage {
 	r.mu.Lock()
 	defer r.mu.Unlock()

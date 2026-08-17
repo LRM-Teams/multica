@@ -71,8 +71,8 @@ func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest
 	if len(resp.CollectorJobs) != 2 {
 		t.Fatalf("collector_jobs = %#v", resp.CollectorJobs)
 	}
-	if containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceJournal) ||
-		containsNoteRetrospectiveSource(resp.SourcesEmpty, notePeriodBriefSourceJournal) {
+	if containsNoteRetrospectiveSource(resp.SourcesUsed, "machine_work_journal") ||
+		containsNoteRetrospectiveSource(resp.SourcesEmpty, "machine_work_journal") {
 		t.Fatalf("Brief path must not use Host Digest source: used=%v empty=%v", resp.SourcesUsed, resp.SourcesEmpty)
 	}
 	if !containsNoteRetrospectiveSource(resp.SourcesEmpty, notePeriodBriefSourceCollectors) {

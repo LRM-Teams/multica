@@ -3,18 +3,15 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -22,13 +19,8 @@ import (
 )
 
 const (
-	notePeriodBriefFolderTitle     = "工作介绍"
-	notePeriodBriefSourceJournal   = "machine_work_journal" // legacy label; unused on Brief path after K1-T2
+	notePeriodBriefFolderTitle      = "工作介绍"
 	notePeriodBriefSourceCollectors = "period_work_collectors"
-	// Legacy Host Digest helpers retained until K2-T2 deletes them; keep
-	// constants so unused functions still compile.
-	notePeriodBriefDigestTimeout = 4 * time.Second
-	notePeriodBriefDigestBudget  = 8 * time.Second
 	// Keep the HTTP path snappy: Next.js proxies abort long requests as
 	// socket hang up / opaque 500. Collector wait degrades into sources_empty.
 	notePeriodBriefCollectorPollEvery  = 400 * time.Millisecond
@@ -303,103 +295,6 @@ func (h *Handler) parsePeriodBriefCollectorAgentIDs(
 		return nil, false
 	}
 	return out, true
-}
-
-type notePeriodBriefDigestPack struct {
-	ComputerID string
-	Disabled   bool
-	FetchError string
-	Repos      []scopedWorkDigestRepo
-}
-
-func (h *Handler) listOwnedComputerIDsInWorkspace(ctx context.Context, workspaceID, userID pgtype.UUID) ([]string, error) {
-	rows, err := h.DB.Query(ctx, `
-SELECT DISTINCT b.daemon_id
-FROM computer_workspace_bindings b
-JOIN computer_identity_owner o ON o.daemon_id = b.daemon_id
-WHERE b.workspace_id = $1
-  AND b.active = TRUE
-  AND b.revoked_at IS NULL
-  AND o.user_id = $2
-ORDER BY b.daemon_id`, workspaceID, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]string, 0)
-	for rows.Next() {
-		var daemonID string
-		if err := rows.Scan(&daemonID); err != nil {
-			return nil, err
-		}
-		out = append(out, daemonID)
-	}
-	return out, rows.Err()
-}
-
-func (h *Handler) collectOwnerWorkDigests(
-	ctx context.Context,
-	computerIDs []string,
-	window noteRetrospectiveWindow,
-	workspaceRemotes []string,
-) ([]notePeriodBriefDigestPack, bool) {
-	out := make([]notePeriodBriefDigestPack, len(computerIDs))
-	if len(computerIDs) == 0 {
-		return out, true
-	}
-	budgetCtx, budgetCancel := context.WithTimeout(ctx, notePeriodBriefDigestBudget)
-	defer budgetCancel()
-
-	var wg sync.WaitGroup
-	for i, computerID := range computerIDs {
-		wg.Add(1)
-		go func(i int, computerID string) {
-			defer wg.Done()
-			digestCtx, cancel := context.WithTimeout(budgetCtx, notePeriodBriefDigestTimeout)
-			defer cancel()
-			digest, err := h.fetchComputerWorkDigest(digestCtx, computerID, protocol.ComputerWorkDigestPayload{
-				RequestID: uuid.NewString(),
-				Start:     window.Start,
-				End:       window.End,
-			})
-			pack := notePeriodBriefDigestPack{ComputerID: computerID}
-			if err != nil {
-				pack.FetchError = workDigestCollectError(err)
-				out[i] = pack
-				return
-			}
-			pack.Disabled = digest.Disabled
-			pack.Repos = scopeWorkDigestRepos(digest.Repos, workspaceRemotes)
-			out[i] = pack
-		}(i, computerID)
-	}
-	wg.Wait()
-
-	journalEmpty := true
-	for _, pack := range out {
-		if pack.FetchError == "" && !pack.Disabled && len(pack.Repos) > 0 {
-			journalEmpty = false
-			break
-		}
-	}
-	return out, journalEmpty
-}
-
-func workDigestCollectError(err error) string {
-	if err == nil {
-		return ""
-	}
-	if errorsIsComputerOffline(err) {
-		return "computer_offline"
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return "computer_work_digest_timeout"
-	}
-	return err.Error()
-}
-
-func errorsIsComputerOffline(err error) bool {
-	return errors.Is(err, daemonws.ErrComputerOffline)
 }
 
 func (h *Handler) ensureNotePeriodBriefFolder(ctx context.Context, workspaceID, userID pgtype.UUID) (pgtype.UUID, error) {
@@ -719,41 +614,6 @@ func formatNotePeriodBriefFacts(facts noteRetrospectiveFacts) string {
 	return b.String()
 }
 
-func formatNotePeriodBriefDigests(packs []notePeriodBriefDigestPack) string {
-	var b strings.Builder
-	b.WriteString("## Machine Work Digest\n")
-	if len(packs) == 0 {
-		b.WriteString("disabled: true\n(no owned Computers)\n")
-		return b.String()
-	}
-	for _, pack := range packs {
-		fmt.Fprintf(&b, "\n### Computer %s\n", pack.ComputerID)
-		if pack.FetchError != "" {
-			fmt.Fprintf(&b, "fetch_error: %s\n", pack.FetchError)
-			continue
-		}
-		fmt.Fprintf(&b, "disabled: %t\n", pack.Disabled)
-		if len(pack.Repos) == 0 {
-			b.WriteString("repos: []\n")
-			continue
-		}
-		for _, repo := range pack.Repos {
-			fmt.Fprintf(&b, "- root: %s\n  scope: %s\n", repo.Root, repo.Scope)
-			if len(repo.Remotes) > 0 {
-				fmt.Fprintf(&b, "  remotes: %s\n", strings.Join(repo.Remotes, ", "))
-			}
-			fmt.Fprintf(&b, "  commits: %d dirty: %d\n", len(repo.Commits), len(repo.Dirty))
-			for _, commit := range repo.Commits {
-				fmt.Fprintf(&b, "  - %s %s (%s)\n", commit.Hash[:minInt(8, len(commit.Hash))], commit.Subject, commit.Author)
-			}
-			for _, dirty := range repo.Dirty {
-				fmt.Fprintf(&b, "  - dirty %s %s\n", dirty.Status, dirty.Path)
-			}
-		}
-	}
-	return b.String()
-}
-
 type notePeriodBriefPackResult struct {
 	AgentID string
 	PageID  string
@@ -855,13 +715,6 @@ func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
 		}
 	}
 	return b.String()
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func buildNotePeriodBriefDraftMarkdown(

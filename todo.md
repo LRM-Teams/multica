@@ -94,7 +94,7 @@
   - **依赖**：K1-T2、现有 note_write UI
   - **完成标准**：fixture 采集包 → Brief 含主线结构；sticky 仍指向文件夹而非底稿。
 
-- [ ] **K2-T2 拆除 Brief 对 Host Digest 的依赖**
+- [x] **K2-T2 拆除 Brief 对 Host Digest 的依赖**
   - **目标**：period-brief 路径不再 `fetchComputerWorkDigest`；UI/文案不再要求 Journal。
   - **不要做**：无评审大删 Journal 基础设施（可留作遗留）；只保证 Brief 主路径不依赖。
   - **完成标准**：period-brief 测无 Digest；文档/locale 与 ADR 0019 一致。
@@ -110,10 +110,10 @@
 | 3 | ~~K1-T1 采集员 Worker / 剧本~~ |
 | 4 | ~~K1-T2 编排：多采集 → 再唤醒周报 Agent~~ |
 | 5 | ~~K2-T1 周报 Agent 合成 + `--note-write`~~ |
-| 6 | **K2-T2** 拆除 Brief 对 Host Digest 的依赖 |
+| 6 | ~~K2-T2 拆除 Brief 对 Host Digest 的依赖~~ |
 
-**当前焦点：** Slice K2。下一个 checkbox：**K2-T2**。
+**当前焦点：** Slice K2 已完成。ADR 0019 Period Work Brief 主路径落地。
 
 ### 遗留说明（J1–J3）
 
-Host Digest / Journal / 旧 period-brief Digest 汇合已按 ADR 0018 落地过一轮，**产品合同已切到 0019**。实现新切片时以本文件为准，勿再把 Host Digest 当完成标准。
+Host Digest / Journal / 旧 period-brief Digest 汇合已按 ADR 0018 落地过一轮，**产品合同已切到 0019**。Journal 基础设施可保留作遗留；Brief 主路径不再调用。

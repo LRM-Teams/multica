@@ -619,6 +619,12 @@ export function ResearchConstellationWorkspace({
     ],
   );
 
+  const handleCanvasBackground = useCallback(() => {
+    closeOverlay();
+    onSelectNode(null);
+    setRailMode("chat");
+  }, [closeOverlay, onSelectNode, setRailMode]);
+
   const handleTrajectorySelect = useCallback(
     (nodeId: string | null) => {
       closeOverlay();
@@ -750,6 +756,7 @@ export function ResearchConstellationWorkspace({
             cameraSessionId={`${overlaySessionId}:d5-visual-v3`}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasFocus}
+            onClearSelection={handleCanvasBackground}
             onOpenNode={handleCanvasSelect}
             expansionControl={expansionControl}
             densityBins={densityBins}

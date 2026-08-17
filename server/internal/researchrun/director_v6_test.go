@@ -75,6 +75,7 @@ func TestV6DirectorBriefIsBoundedAndPaged(t *testing.T) {
 		AssignmentID: "00000000-0000-4000-8000-000000000003", DirectorGeneration: 1, StateVersion: 1,
 		Goal:          map[string]any{"goal_version": 1, "goal": "Research", "scope": map[string]any{}, "audience": "", "freshness": "", "language": "en", "source_policy": map[string]any{}},
 		DirectorState: "available", Team: []any{map[string]any{"agent_id": "00000000-0000-4000-8000-000000000004", "membership_id": "00000000-0000-4000-8000-000000000005", "state": "idle", "mission_summary": "Direct"}}, Branches: branches,
+		TerminalSummaries: []any{}, WorkItems: []any{}, Discussions: []any{}, Reports: []any{}, UnresolvedDisputes: []any{}, Steering: []any{},
 	}
 	brief, err := (contextCompilerModule{}).CompileDirectorBrief(facts, time.Unix(1, 0))
 	if err != nil || len(brief.Pages) != 5 {

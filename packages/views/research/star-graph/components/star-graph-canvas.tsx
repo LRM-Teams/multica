@@ -563,6 +563,7 @@ export function StarGraphCanvas({
     focusSelectedEntity(selectedNodeId);
   }, [focusSelectedEntity, rightPanelWidth, selectedNodeId]);
 
+  // react-doctor-disable-next-line react-doctor/no-set-state-in-effect -- A committed Projection transaction is an external event; camera continuity must follow the newly rendered geometry and remains interruptible by direct input.
   useEffect(() => {
     const transition = expansionControl?.transition;
     if (!transition) {

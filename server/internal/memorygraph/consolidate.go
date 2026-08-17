@@ -598,6 +598,10 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 			n.CreatedVersion = version
 		}
 		n.UpdatedVersion = version
+		// Scope stamping (spec §5): a new node derives its visibility and
+		// provenance from the source segment sidecars; an explicit
+		// Visibility (e.g. a promotion to "project") is honored as-is.
+		c.stampNewNodeScope(&n)
 		if err := g.AddNode(&n); err != nil {
 			return n.NodeID, err
 		}
@@ -629,6 +633,20 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 		if n.TemporalStatus == "" {
 			n.TemporalStatus = existing.TemporalStatus
 		}
+		// Scope immutability (spec §5): visibility/channel flips on an
+		// existing node are rejected; promotion creates a separate
+		// project-visible node instead of mutating the source.
+		if scopeMutationAttempt(existing, &n) {
+			return id, fmt.Errorf("visibility_mutation: node %q scope is immutable; add a new project-visible node to promote", id)
+		}
+		n.Visibility = existing.Visibility
+		n.ChannelID = existing.ChannelID
+		// Provenance is monotonic: union the op's refs and source segment
+		// sidecars into the stored sets; entries are never removed.
+		n.SourceAgentIDs = mergeStringSet(existing.SourceAgentIDs, n.SourceAgentIDs)
+		n.SourceChannelIDs = mergeStringSet(existing.SourceChannelIDs, n.SourceChannelIDs)
+		n.SourceTaskIDs = mergeStringSet(existing.SourceTaskIDs, n.SourceTaskIDs)
+		c.mergeSegmentProvenance(&n)
 		n.UpdatedVersion = version
 		*existing = n // same-package in-place replacement keeps incident edges
 		g.rebuild()
@@ -682,6 +700,99 @@ func (c *Consolidator) applyOne(g *Graph, version int, actor string, op Consolid
 	default:
 		return "", fmt.Errorf("unknown operation %q", op.Op)
 	}
+}
+
+// normalizedVisibility reads an empty visibility as "project" (spec §5:
+// pre-scope graphs are project-visible).
+func normalizedVisibility(v string) string {
+	if v == "" {
+		return "project"
+	}
+	return v
+}
+
+// scopeMutationAttempt reports whether the update document n tries to
+// change the existing node's visibility or channel binding (spec §5).
+// Empty fields in n mean "unchanged".
+func scopeMutationAttempt(existing, n *Node) bool {
+	if n.Visibility != "" && normalizedVisibility(n.Visibility) != normalizedVisibility(existing.Visibility) {
+		return true
+	}
+	return n.ChannelID != "" && n.ChannelID != existing.ChannelID
+}
+
+// stampNewNodeScope derives a consolidation-created node's scope from the
+// sidecars of its source segments (spec §5). The scope fails safe: only a
+// node whose sources are all channel-visible segments of one channel is
+// channel-visible; everything else (mixed sources, missing sidecars) is
+// project-visible. An agent-set Visibility is honored verbatim — promotion
+// ops set "project" explicitly and never touch the source node.
+func (c *Consolidator) stampNewNodeScope(n *Node) {
+	metas := c.segmentMetas(n.SegmentRefs)
+	if n.Visibility == "" {
+		channelID := ""
+		allChannel := len(metas) > 0
+		for _, m := range metas {
+			if m.Visibility != "channel" || m.ChannelID == "" || (channelID != "" && channelID != m.ChannelID) {
+				allChannel = false
+				break
+			}
+			channelID = m.ChannelID
+		}
+		if allChannel {
+			n.Visibility = "channel"
+			n.ChannelID = channelID
+		} else {
+			n.Visibility = "project"
+		}
+	}
+	c.mergeSegmentProvenance(n)
+}
+
+// mergeSegmentProvenance union-merges agent/channel/task ids from the
+// source segment sidecars into n's provenance sets (spec §5).
+func (c *Consolidator) mergeSegmentProvenance(n *Node) {
+	for _, m := range c.segmentMetas(n.SegmentRefs) {
+		if m.AgentID != "" {
+			n.SourceAgentIDs = mergeStringSet(n.SourceAgentIDs, []string{m.AgentID})
+		}
+		if m.ChannelID != "" {
+			n.SourceChannelIDs = mergeStringSet(n.SourceChannelIDs, []string{m.ChannelID})
+		}
+		if m.TaskID != "" {
+			n.SourceTaskIDs = mergeStringSet(n.SourceTaskIDs, []string{m.TaskID})
+		}
+	}
+}
+
+// segmentMetas loads the scope sidecars of the given staging segments.
+// Segments without a readable sidecar (legacy staging) contribute no meta.
+func (c *Consolidator) segmentMetas(segmentIDs []string) []*SegmentMeta {
+	var out []*SegmentMeta
+	for _, id := range segmentIDs {
+		meta, err := c.store.ReadStagingSegmentMeta(id)
+		if err != nil {
+			continue
+		}
+		out = append(out, meta)
+	}
+	return out
+}
+
+// mergeStringSet returns the union of base and add, preserving order.
+func mergeStringSet(base, add []string) []string {
+	seen := map[string]bool{}
+	out := append([]string{}, base...)
+	for _, s := range base {
+		seen[s] = true
+	}
+	for _, s := range add {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // edgeDefaults fills audit fields of an agent-supplied edge.

@@ -56,7 +56,7 @@ func (s *PostgresStore) executeV6CreateAgentAction(ctx context.Context, proposal
 }
 
 func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
-	if action.PayloadSchema != "work.create.v1" {
+	if action.PayloadSchema != "work.create.v1" && action.PayloadSchema != "collaboration.create.v1" {
 		return ErrInvalidContract
 	}
 	var payload struct {
@@ -72,6 +72,14 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	}
 	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Kind) == "" || strings.TrimSpace(payload.Mission) == "" || payload.Priority < 0 || payload.Priority > 1 || payload.MaxAttempts < 1 || payload.MaxAttempts > 100 {
 		return ErrInvalidContract
+	}
+	if !validV6ActionUUID(payload.AssigneeAgentID) {
+		return ErrInvalidContract
+	}
+	for _, branchID := range payload.BranchIDs {
+		if !validV6ActionUUID(branchID) {
+			return ErrInvalidContract
+		}
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
 	if err != nil {
@@ -99,6 +107,11 @@ func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal 
 	if result.RowsAffected() == 0 {
 		return nil
 	}
+	for _, branchID := range payload.BranchIDs {
+		if _, err = tx.Exec(ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING`, proposal.WorkspaceID, proposal.RunID, workID, branchID); err != nil {
+			return err
+		}
+	}
 	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_work_item_created", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"action_id": action.ActionID, "work_item_id": workID, "branch_ids": payload.BranchIDs}); err != nil {
 		return err
 	}
@@ -116,6 +129,9 @@ func (s *PostgresStore) executeV6CreateBranchAction(ctx context.Context, proposa
 		BudgetShare    float64         `json:"budget_share"`
 	}
 	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Objective) == "" || payload.BudgetShare < 0 || payload.BudgetShare > 1 {
+		return ErrInvalidContract
+	}
+	if strings.TrimSpace(payload.ParentBranchID) != "" && !validV6ActionUUID(payload.ParentBranchID) {
 		return ErrInvalidContract
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
@@ -161,8 +177,16 @@ func (s *PostgresStore) executeV6CreateReportAction(ctx context.Context, proposa
 		Title           string             `json:"title"`
 		Inputs          []V6ReportInputRef `json:"inputs"`
 	}
-	if json.Unmarshal(action.Payload, &payload) != nil {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.AssigneeAgentID) || strings.TrimSpace(payload.Title) == "" {
 		return ErrInvalidContract
+	}
+	for _, input := range payload.Inputs {
+		if strings.TrimSpace(input.BranchID) != "" && !validV6ActionUUID(input.BranchID) {
+			return ErrInvalidContract
+		}
+		if strings.TrimSpace(input.NodeArtifactVersionID) != "" && !validV6ActionUUID(input.NodeArtifactVersionID) {
+			return ErrInvalidContract
+		}
 	}
 	var sequence int64
 	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE session_id=$1::uuid`, proposal.RunID).Scan(&sequence); err != nil {

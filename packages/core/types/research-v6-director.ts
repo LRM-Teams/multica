@@ -1,10 +1,12 @@
 /**
- * Exact frontend wire types for the unreleased Ronaldo/Director V6 Projection.
+ * Frontend boundary types for the unreleased Ronaldo/Director V6 Projection.
  *
  * Authority: docs/contracts/research-run-v6-director.schema.json and
  * docs/research-run-v6-http-contract.md §5. These deliberately do not extend
  * the legacy experimental V6 graph types: mixing those contracts would make a
- * successful response look valid while changing its meaning.
+ * successful response look valid while changing its meaning. Enum-like values
+ * remain forward compatible so a newer server can render through the generic
+ * visual path instead of taking down the complete canvas.
  */
 
 export type ResearchV6DirectorEntityKind =
@@ -23,7 +25,8 @@ export type ResearchV6DirectorEntityKind =
   | "source_snapshot"
   | "observation"
   | "claim"
-  | "evidence_link";
+  | "evidence_link"
+  | (string & {});
 
 export interface ResearchV6DirectorEntityRef {
   kind: ResearchV6DirectorEntityKind;
@@ -37,7 +40,8 @@ export type ResearchV6DirectorProjectionNodeKind =
   | "goal"
   | "work_s"
   | "result_s"
-  | "insight";
+  | "insight"
+  | (string & {});
 
 export type ResearchV6DirectorProjectionTier =
   | "GOAL"
@@ -45,7 +49,8 @@ export type ResearchV6DirectorProjectionTier =
   | "M"
   | "L"
   | "XL"
-  | "XXL";
+  | "XXL"
+  | (string & {});
 
 export type ResearchV6DirectorExecutionState =
   | "pending"
@@ -53,21 +58,24 @@ export type ResearchV6DirectorExecutionState =
   | "succeeded"
   | "failed"
   | "cancelled"
-  | "lost";
+  | "lost"
+  | (string & {});
 
 export type ResearchV6DirectorConclusionState =
   | "proposed"
   | "accepted"
   | "challenged"
   | "refuted"
-  | "invalid";
+  | "invalid"
+  | (string & {});
 
 export type ResearchV6DirectorIntegrationState =
   | "unmatched"
   | "candidate"
   | "discussing"
   | "absorbed"
-  | "excluded";
+  | "excluded"
+  | (string & {});
 
 export type ResearchV6DirectorTerminationReason =
   | "invalid_direction"
@@ -79,7 +87,8 @@ export type ResearchV6DirectorTerminationReason =
   | "stopped_by_director"
   | "resource_failure"
   | "superseded"
-  | "other";
+  | "other"
+  | (string & {});
 
 export interface ResearchV6DirectorTermination {
   reason_code: ResearchV6DirectorTerminationReason;
@@ -115,7 +124,8 @@ export type ResearchV6DirectorProjectionEdgeKind =
   | "produced_by"
   | "belongs_to"
   | "challenges"
-  | "collapsed_path";
+  | "collapsed_path"
+  | (string & {});
 
 export interface ResearchV6DirectorProjectionEdge {
   id: string;
@@ -260,6 +270,24 @@ export interface ResearchV6DirectorSelectedRef {
   revision: number;
   content_hash: string;
   display_summary: string;
+}
+
+export interface ResearchV6DirectorAssignment {
+  id: string;
+  workspaceId: string;
+  runId: string;
+  directorAgentId: string;
+  status: string;
+  reason: string;
+  generation: number;
+  stateVersion: number;
+}
+
+export interface ResearchV6DirectorAssignmentRequest {
+  directorAgentId: string;
+  expectedStateVersion: number;
+  reason: string;
+  clientRequestId: string;
 }
 
 /** V6 derivation expansion is contractually one layer; callers cannot vary it. */

@@ -755,6 +755,8 @@ export interface ResearchSourceWeights {
 
 export interface CreateResearchSessionRequest {
   goal: string;
+  /** Idempotency key for create retries and V6 bootstrap replay safety. */
+  client_request_id?: string;
   title?: string;
   /** LRM-676 / LRM-838 — shallow|standard|deep product-round caps. */
   depth_tier?: ResearchDepthTier;

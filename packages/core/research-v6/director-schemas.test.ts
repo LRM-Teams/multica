@@ -74,6 +74,26 @@ describe("Director V6 projection wire schemas", () => {
     ).toBe("invalid-response");
   });
 
+  it("keeps unknown future enum values without dropping the projection", () => {
+    const value = snapshot();
+    value.nodes[0] = {
+      ...value.nodes[0]!,
+      kind: "future_result",
+      tier: "FUTURE_TIER",
+      canonical_ref: { kind: "future_artifact", id: ID },
+      state: {
+        execution: "queued_remote",
+        conclusion: "under_review",
+        integration: "awaiting_match",
+      },
+    };
+
+    const parsed = parseResearchV6DirectorProjectionSnapshot(value);
+    expect(parsed.slice_key).toBe("default");
+    expect(parsed.nodes[0]?.kind).toBe("future_result");
+    expect(parsed.nodes[0]?.state.execution).toBe("queued_remote");
+  });
+
   it("parses the HTTP delta page envelope independently of a delta", () => {
     expect(
       parseResearchV6DirectorProjectionDeltaPage({

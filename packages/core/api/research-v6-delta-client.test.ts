@@ -27,12 +27,12 @@ describe("ApiClient Research V6 Delta boundaries", () => {
     ).resolves.toBeNull();
   });
 
-  it("rejects a malformed successful Delta instead of treating it as empty", async () => {
+  it("degrades a malformed successful Delta to no available Delta", async () => {
     stubResponse({ from_sequence_exclusive: 0, through_sequence: "1" });
     const client = new ApiClient("https://api.example.test");
     await expect(
       client.getResearchV6ProjectionDeltaPage("run-1", 0),
-    ).rejects.toThrow();
+    ).resolves.toBeNull();
   });
 
   it("accepts a valid Delta response", async () => {
@@ -44,9 +44,12 @@ describe("ApiClient Research V6 Delta boundaries", () => {
     ).resolves.toMatchObject({ through_sequence: delta.through_sequence });
   });
 
-  it("rejects a malformed resume verdict instead of inventing resync_required", async () => {
+  it("degrades a malformed resume verdict to a safe resync request", async () => {
     stubResponse({ ok: false });
     const client = new ApiClient("https://api.example.test");
-    await expect(client.resumeResearchV6Projection("run-1", 0)).rejects.toThrow();
+    await expect(client.resumeResearchV6Projection("run-1", 0)).resolves.toEqual({
+      ok: false,
+      resync_required: true,
+    });
   });
 });

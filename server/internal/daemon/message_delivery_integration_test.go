@@ -404,6 +404,17 @@ func (r *recordingResidentMessage) RuntimeAlive() (bool, bool) {
 	return liveness.RuntimeAlive()
 }
 
+// ForceKill preserves the runtime-pool teardown contract when this recorder
+// wraps a real resident backend. Without forwarding the capability, the pool
+// cannot stop an in-flight provider process before TempDir cleanup.
+func (r *recordingResidentMessage) ForceKill() error {
+	killable, ok := r.Backend.(agent.ResidentRuntimeForceKillable)
+	if !ok {
+		return errors.New("recorded runtime does not support force kill")
+	}
+	return killable.ForceKill()
+}
+
 func (r *recordingResidentMessage) snapshot() [][]agent.ResidentMessage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -505,6 +516,28 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		teardown = func() {
 			stopRunner()
 			d.detachWorkspaceRunner(runner)
+			// Crash teardown must terminate any resident provider process before
+			// the workspace root is released. closeAll only closes idle backends;
+			// a late provider write can otherwise race testing.T's TempDir cleanup.
+			// A provider may be stuck in an external process. Keep teardown
+			// bounded so a wedged provider cannot hang the whole test package;
+			// the runner/process-manager closes below remains the final cleanup.
+			terminated := make(chan error, 1)
+			go func() { terminated <- d.canonicalRuntimes.forceTerminateAll() }()
+			select {
+			case err := <-terminated:
+				if err != nil {
+					t.Errorf("force terminate canonical runtime: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Errorf("force terminate canonical runtime timed out")
+			}
+			// The runner's Run defer normally closes these resources, but the
+			// crash/restart path can detach immediately after the websocket has
+			// stopped while a process-manager cleanup is still in flight. Close
+			// them explicitly so t.TempDir never races a late .multica write.
+			runner.processes.Close()
+			runner.activity.Close()
 			runner.inboxes.Close()
 			if err := d.canonicalRuntimes.closeAll(); err != nil {
 				t.Errorf("close canonical runtime: %v", err)

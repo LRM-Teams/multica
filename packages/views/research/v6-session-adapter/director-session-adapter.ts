@@ -85,6 +85,10 @@ export function adaptResearchV6DirectorCanvas(
     merged[successorId] = [...new Set(inputIds)];
   }
 
+  const branchIds = [
+    ...new Set(visibleNodes.flatMap((node) => node.branch_ids)),
+  ];
+
   return {
     graph: {
       session_id: projection.runId,
@@ -111,7 +115,7 @@ export function adaptResearchV6DirectorCanvas(
         // Unknown future tiers retain their canonical value in payload while
         // degrading to the neutral M visual instead of breaking the canvas.
         level: rendererLevel(node),
-        cluster_id: null,
+        cluster_id: node.branch_ids[0] ?? null,
         confidence: null,
         goal_version_id: null,
         derived_from: null,
@@ -135,7 +139,22 @@ export function adaptResearchV6DirectorCanvas(
         edge_type: edge.kind,
         created_at: "",
       })),
-      clusters: [],
+      clusters: branchIds.map((branchId) => ({
+        id: branchId,
+        session_id: projection.runId,
+        name: branchId,
+        label: branchId,
+        level: "m",
+        cluster_type: "branch",
+        goal_version_id: null,
+        payload: {
+          member_node_ids: visibleNodes
+            .filter((node) => node.branch_ids.includes(branchId))
+            .map((node) => node.id),
+        },
+        created_at: "",
+        updated_at: "",
+      })),
       lineage: {
         derived: {},
         merged,

@@ -156,6 +156,36 @@
 .sg-node[data-state="failed"] {
   opacity: 1;
 }
+.sg-disclosure {
+  position: absolute;
+  right: 7%;
+  bottom: 7%;
+  display: grid;
+  width: 1.35rem;
+  height: 1.35rem;
+  place-items: center;
+  border: 1px solid color-mix(in oklab, var(--sg-ring-inset) 70%, transparent);
+  border-radius: 999px;
+  background: #0a1925;
+  color: #a7f3d0;
+  box-shadow: 0 3px 10px rgb(0 0 0 / 28%);
+  pointer-events: none;
+}
+.sg-disclosure[data-disclosure-state="expanded"] {
+  border-color: #5ee39d;
+  color: #d2ffe4;
+}
+.sg-disclosure[data-disclosure-state="failed"] {
+  border-style: dashed;
+  border-color: var(--sg-state-failed);
+  color: var(--sg-state-failed);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sg-disclosure svg {
+    animation: none !important;
+    transition: none !important;
+  }
+}
 
 /* Concentric decorative rings via background layering (tier ringCount).
    We draw rings with repeating-radial-gradient so a single class inlines the

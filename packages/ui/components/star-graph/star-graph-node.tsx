@@ -19,6 +19,7 @@
  */
 
 import { cn } from "@multica/ui/lib/utils";
+import { ChevronRight, LoaderCircle, RotateCcw } from "lucide-react";
 
 import { starGraphTierToken, type StarGraphTier } from "./tier";
 import { starGraphStateToken, type StarGraphNodeState } from "./state";
@@ -204,6 +205,26 @@ export function StarGraphNode({
           {glyphChar(stateToken.glyph)}
         </span>
       )}
+      {expanded !== undefined ? (
+        <span
+          data-testid="star-graph-disclosure"
+          data-disclosure-state={
+            invalid ? "failed" : busy ? "loading" : expanded ? "expanded" : "collapsed"
+          }
+          className="sg-disclosure"
+          aria-hidden="true"
+        >
+          {invalid ? (
+            <RotateCcw className="size-3" />
+          ) : busy ? (
+            <LoaderCircle className="size-3 animate-spin" />
+          ) : (
+            <ChevronRight
+              className={cn("size-3 transition-transform", expanded && "rotate-90")}
+            />
+          )}
+        </span>
+      ) : null}
     </button>
   );
 }

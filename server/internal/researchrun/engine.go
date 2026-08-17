@@ -31,6 +31,17 @@ func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector)
 	return newEngine(store, dispatcher, projector)
 }
 
+func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {
+	store.reportStorage = reportStorage
+	return newEngine(store, dispatcher, projector)
+}
+
+func NewEngineWithReportAdapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage, renderer ReportRenderAdapter, frameAncestors []string) ResearchRun {
+	store.reportStorage, store.reportRenderer = reportStorage, renderer
+	store.reportFrameAncestors = append([]string(nil), frameAncestors...)
+	return newEngine(store, dispatcher, projector)
+}
+
 // NewEngineWithV6Adapters wires external effects without granting adapters any
 // canonical-store mutation capability. V6 remains gated by supported-version
 // policy until the activation slice.
@@ -142,11 +153,12 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	}
 	steering, steeringErr := e.store.ProcessV6SteeringTriggers(ctx, limit)
 	proposals, proposalErr := e.store.ApplyReceivedV6DirectorProposals(ctx, limit)
+	reports, reportErr := e.store.ApplyReceivedV6ReportPackages(ctx, limit)
 	applied, applyErr := e.store.ApplyReceivedV6Submissions(ctx, limit)
 	recovered, err := e.store.RecoverExpiredV6WorkItems(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
-	return recovered + steering + proposals + applied + prepared + delivered, errors.Join(err, steeringErr, proposalErr, applyErr, prepareErr, deliveryErr)
+	return recovered + steering + proposals + reports + applied + prepared + delivered, errors.Join(err, steeringErr, proposalErr, reportErr, applyErr, prepareErr, deliveryErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {

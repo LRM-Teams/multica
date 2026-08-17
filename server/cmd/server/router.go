@@ -157,6 +157,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		AllowedEmailDomains:                   splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
 		DisableWorkspaceCreation:              os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
 		PublicURL:                             strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
+		ResearchReportOrigin:                  strings.TrimRight(strings.TrimSpace(os.Getenv("RESEARCH_REPORT_ORIGIN")), "/"),
+		ResearchReportCapabilitySecret:        strings.TrimSpace(os.Getenv("RESEARCH_REPORT_CAPABILITY_SECRET")),
+		ResearchReportFrameAncestors:          splitAndTrim(os.Getenv("RESEARCH_REPORT_FRAME_ANCESTORS")),
+		ResearchReportRendererURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("RESEARCH_REPORT_RENDERER_URL")), "/"),
+		ResearchReportRendererToken:           strings.TrimSpace(os.Getenv("RESEARCH_REPORT_RENDERER_TOKEN")),
 		TrustedProxies:                        parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
 		CloudRuntimeFleetURL:                  cloudRuntimeFleetURLFromEnv(),
 		CloudRuntimeFleetTimeout:              envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
@@ -519,6 +524,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// Public API
 	r.Get("/api/config", h.GetConfig)
+	r.Get("/research/{reportId}/{packageHash}/index.html", h.ServeResearchV6ReportDocument)
 	r.With(contactSalesRL).Post("/api/contact-sales", h.CreateContactSales)
 
 	// Sticker library — embedded, non-sensitive assets. Public + unauthenticated
@@ -1051,6 +1057,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/deltas", h.GetResearchV6ProjectionDeltas)
 					r.Post("/resume", h.PostResearchV6ProjectionResume)
 				})
+				r.Get("/v6/runs/{runId}/reports", h.GetResearchV6Reports)
+				r.Get("/v6/runs/{runId}/reports/{reportId}", h.GetResearchV6Report)
 				r.Get("/fleet", h.GetResearchFleet)
 				r.Post("/fleet/ensure", h.EnsureResearchFleet)
 				r.Post("/fleet/members", h.HireResearchFleetMember)
@@ -1470,6 +1478,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)
 							r.Post("/catalog-acks", h.AcknowledgeAgentResearchV6WorkCatalog)
 							r.Post("/submission", h.SubmitAgentResearchV6Work)
+							r.Post("/report-uploads", h.CreateAgentResearchV6ReportUpload)
+							r.Put("/report-uploads/{uploadId}/content", h.PutAgentResearchV6ReportUpload)
+							r.Post("/report-uploads/{uploadId}/complete", h.CompleteAgentResearchV6ReportUpload)
 						})
 					})
 				})

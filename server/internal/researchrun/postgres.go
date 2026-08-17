@@ -17,6 +17,9 @@ import (
 
 type PostgresStore struct {
 	pool                          *pgxpool.Pool
+	reportStorage                 ReportPackageStorage
+	reportRenderer                ReportRenderAdapter
+	reportFrameAncestors          []string
 	txFaultHook                   researchTxFaultHook
 	dispatchManifestBeforeCASHook func(context.Context, *dispatchManifestPlan) error
 	dispatchManifestPlannedHook   func(context.Context, dispatchManifestPlan) error

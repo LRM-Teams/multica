@@ -1148,7 +1148,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
 					r.Post("/reset", h.ResetAgent)
-					r.Get("/reset/{operationId}", h.GetAgentRestartOperation)
 					// Workspace Runner Activity is the only public Agent Activity
 					// contract. It is a server-owned presentation read model; there is
 					// no compatibility translation from the removed event timeline.

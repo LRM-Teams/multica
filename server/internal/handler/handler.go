@@ -112,13 +112,22 @@ type cloudRuntimeProxy interface {
 }
 
 type Handler struct {
-	Queries                    *db.Queries
-	DB                         dbExecutor
-	TxStarter                  txStarter
-	Hub                        *realtime.Hub
-	DaemonHub                  *daemonws.Hub
-	RunnerPresenceSource       RunnerPresenceSource
-	RunnerPresenceMu           *sync.Mutex
+	Queries              *db.Queries
+	DB                   dbExecutor
+	TxStarter            txStarter
+	Hub                  *realtime.Hub
+	DaemonHub            *daemonws.Hub
+	RunnerPresenceSource RunnerPresenceSource
+	RunnerPresenceMu     *sync.Mutex
+	// runnerActivityCursor is the in-process sticky note for this connect:
+	// how far this Computer instance has already reported Activity. It is
+	// not durable residency and dies with the process or a new instance.
+	runnerActivityCursor *runnerActivityCursorStore
+	// runnerObservations is the live Computer process: status, launch, and
+	// session for the current socket. It is not durable.
+	runnerObservations *runnerObservationStore
+	// agentRestarts is one in-flight Agent Restart on this process.
+	agentRestarts              *agentRestartStore
 	ReminderNotifier           daemonws.ReminderNotifier
 	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
 	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
@@ -294,6 +303,9 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		DaemonHub:             daemonHub,
 		RunnerPresenceSource:  daemonHub,
 		RunnerPresenceMu:      &sync.Mutex{},
+		runnerActivityCursor:  newRunnerActivityCursorStore(),
+		runnerObservations:    newRunnerObservationStore(),
+		agentRestarts:         newAgentRestartStore(),
 		Bus:                   bus,
 		TaskService:           taskSvc,
 		AgentFleetRankService: agentFleetRankService,

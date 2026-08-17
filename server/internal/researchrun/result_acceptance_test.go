@@ -6,8 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/google/uuid"
 )
 
 func TestLegacyTaskResultBoundaryRejectsUnreleasedV6Draft(t *testing.T) {

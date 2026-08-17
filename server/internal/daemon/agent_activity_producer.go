@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -42,7 +42,6 @@ type agentActivityProducer struct {
 	mu sync.Mutex
 
 	now                 func() time.Time
-	newID               func() string
 	schedule            func(time.Duration, func()) func()
 	send                func(protocol.AgentActivityPayload)
 	daemonInstanceID    string
@@ -86,7 +85,6 @@ func newAgentActivityProducer(daemonInstanceID string, now func() time.Time, sen
 	return &agentActivityProducer{
 		daemonInstanceID: daemonInstanceID,
 		now:              now,
-		newID:            func() string { return uuid.NewString() },
 		schedule: func(delay time.Duration, callback func()) func() {
 			timer := time.AfterFunc(delay, callback)
 			return func() { timer.Stop() }
@@ -261,7 +259,7 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 		snapshot.ClientSequence = state.lastClientSequence + 1
 	}
 	if snapshot.ProducerFactID == "" {
-		snapshot.ProducerFactID = p.newID()
+		snapshot.ProducerFactID = raftActivityProducerFactID(snapshot.AgentID, snapshot.LaunchID, snapshot.DaemonInstanceID, snapshot.ClientSequence)
 	}
 	detail := ""
 	if snapshot.DetailKind == state.snapshot.DetailKind {
@@ -313,7 +311,7 @@ func (p *agentActivityProducer) Tick() {
 		}
 		heartbeat := state.snapshot
 		heartbeat.ClientSequence = state.lastClientSequence + 1
-		heartbeat.ProducerFactID = p.newID()
+		heartbeat.ProducerFactID = raftActivityProducerFactID(heartbeat.AgentID, heartbeat.LaunchID, heartbeat.DaemonInstanceID, heartbeat.ClientSequence)
 		heartbeat.ObservedAt = now
 		state.snapshot = heartbeat
 		state.lastClientSequence = heartbeat.ClientSequence
@@ -366,6 +364,21 @@ func (p *agentActivityProducer) ReconnectFrames() []agentActivityReconnectFrame 
 		}
 	}
 	return frames
+}
+
+// raftActivityProducerFactID is Raft 1.0.16's deterministic fact identity:
+// daemon_activity:{agent}:{launch}:{daemonInstance}:{clientSeq}. Same process
+// and seq replay the same fact; a new daemon instance starts a new identity.
+func raftActivityProducerFactID(agentID, launchID, daemonInstanceID string, clientSeq int64) string {
+	launch := strings.TrimSpace(launchID)
+	if launch == "" {
+		launch = "legacy"
+	}
+	generation := ""
+	if instance := strings.TrimSpace(daemonInstanceID); instance != "" {
+		generation = ":" + instance
+	}
+	return fmt.Sprintf("daemon_activity:%s:%s%s:%d", strings.TrimSpace(agentID), launch, generation, clientSeq)
 }
 
 func defaultAgentActivityDetail(detailKind string) string {

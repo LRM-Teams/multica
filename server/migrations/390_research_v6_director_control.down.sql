@@ -10,6 +10,7 @@ ALTER TABLE research_session
   DROP COLUMN IF EXISTS current_director_assignment_id,
   DROP COLUMN IF EXISTS director_state_version,
   DROP COLUMN IF EXISTS v6_projection_version;
+UPDATE research_session SET status = 'running' WHERE status = 'awaiting_director';
 ALTER TABLE research_session DROP CONSTRAINT IF EXISTS research_session_status_check;
 ALTER TABLE research_session ADD CONSTRAINT research_session_status_check
   CHECK (status IN ('drafting','running','awaiting_user_confirm','completed','archived','paused','failed','cancelled'));

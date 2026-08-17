@@ -111,11 +111,6 @@ UPDATE agent_execution
        error = 'Cancelled while sanitizing a production snapshot for test'
  WHERE status = 'running';
 
-UPDATE agent_activity_launch
-   SET status = 'inactive',
-       updated_at = now()
- WHERE status = 'active';
-
 UPDATE agent_lifecycle_operation
    SET status = 'failed',
        step = 'test_database_copy',

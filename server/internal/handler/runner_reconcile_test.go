@@ -102,12 +102,6 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&newLaunchID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (
-			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
-		) VALUES ($1, $2, $3, 'daemon-same', 'instance-same', $4, 'active')`, testWorkspaceID, agentID, oldRuntimeID, oldLaunchID); err != nil {
-		t.Fatal(err)
-	}
 
 	hub := daemonws.NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,8 +129,11 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	}
 
 	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.DaemonHub = hub
 	h.RunnerPresenceSource = hub
+	h.observations().putStatus(testWorkspaceID, "daemon-same", "instance-same", agentID, oldRuntimeID, oldLaunchID, protocol.AgentStatusActive)
 	h.reconcileConnectedRuntimes(ctx, testWorkspaceID, parseUUID(oldRuntimeID), parseUUID(newRuntimeID))
 	want := []protocol.Message{{Type: protocol.EventDaemonAgentStop}}
 	for i := range want {

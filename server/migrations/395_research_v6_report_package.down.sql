@@ -1,3 +1,5 @@
+DROP TRIGGER IF EXISTS research_v6_report_publish_guard ON research_report;
+DROP FUNCTION IF EXISTS research_v6_report_publish_guard_fn();
 DROP TABLE IF EXISTS research_report_review;
 DROP TABLE IF EXISTS research_report_resource;
 DROP TABLE IF EXISTS research_report_input;

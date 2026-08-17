@@ -113,7 +113,7 @@ func DecodeV6Contract(raw []byte, expected V6ContractKind, secondStage V6SecondS
 		return DecodedV6Contract{}, fmt.Errorf("%w: %v", ErrInvalidContract, err)
 	}
 	if err = validateV6SecondStage(root, identity.ContractKind, secondStage); err != nil {
-		return DecodedV6Contract{}, err
+		return DecodedV6Contract{}, fmt.Errorf("%w: %v", ErrInvalidContract, err)
 	}
 
 	canonical, err := marshalV6CanonicalJSON(value)

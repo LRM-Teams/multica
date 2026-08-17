@@ -209,9 +209,9 @@ flowchart LR
     PROOF --> FRESH2["agent:start\nconfig = {}"]
 ```
 
-Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action_kind`、`execution_mode` 或 scheduling mode。`AgentRestartOperation` 是 durable business record，数据库表已 hard-cut 为 `agent_restart_operation`，不保留旧 lifecycle storage contract。
+Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action_kind`、`execution_mode`、幂等键或 scheduling mode。一场 restart 只活在当前 server 进程内存里，不保留 durable restart ledger。
 
-两项有意 stronger-than-Raft 的 correctness proof：Stop 只接受 exact `launch_id` 的 inactive fact；Full Reset 必须等同 operation 的 terminal reset receipt 才能 start。断线重连重放同一 operation/launch/start-dispatch fence，不生成第二套 restart owner。Agent Restart 不产生专属 toast。
+两项有意 stronger-than-Raft 的 correctness proof：Stop 只接受 exact `launch_id` 的 inactive fact；Full Reset 必须等同 operation 的 terminal reset receipt 才能 start。当前 socket 拥有整场编排；Runner Ready 和 reconcile 都不再重投半截 restart。Agent Restart 不产生专属 toast。
 
 ## 7. Generation model / 两级任期
 
@@ -237,7 +237,7 @@ Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action
 ## 9. Architecture findings / 后续优先级
 
 1. **Agent Restart single owner — Implemented**
-   Product operation 只编排 Raft 三个离散 child command；Runner desired/observed reconcile 仅在 persisted `starting` step 重放同一 launch fence，不再存在 composite dispatch、heartbeat queue 或第二套 stop/start owner。
+   Product operation 只编排 Raft 三个离散 child command；当前 Runner socket 走完 stop → start。desired/observed reconcile 跳过仍在 running 的 restart，不再存在 composite dispatch、heartbeat queue、Ready redrive 或第二套 stop/start owner。
 
 2. **Machine lifecycle deep module — Implemented**
    Upgrade/restart phase ordering、durable journal 与 successor attestation 已归 `internal/computer`；CLI 仅保留 process-launch adapter。

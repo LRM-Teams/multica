@@ -52,12 +52,9 @@ SELECT aa.status,
        aa.channel_message_id,
        aa.result_agent_id,
        launch.runtime_id,
-       launch.launch_id,
-       observed.status AS observed_status,
-       observed.queue_state
+       launch.launch_id
 FROM agent_action aa
 LEFT JOIN agent_runner_launch_projection launch ON launch.agent_id = aa.result_agent_id
-LEFT JOIN agent_activity_launch observed ON observed.agent_id = aa.result_agent_id
 WHERE aa.action_type = 'agent:create'
 ORDER BY aa.prepared_at DESC
 LIMIT 1;

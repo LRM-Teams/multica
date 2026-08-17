@@ -4,6 +4,7 @@ ALTER TABLE research_task
   DROP COLUMN IF EXISTS work_item_id, DROP COLUMN IF EXISTS expected_result_schema_id,
   DROP COLUMN IF EXISTS required_capabilities, DROP COLUMN IF EXISTS task_payload,
   DROP COLUMN IF EXISTS task_schema_id, DROP COLUMN IF EXISTS task_type;
+UPDATE research_task SET kind = 'synthesize' WHERE kind = 'custom';
 ALTER TABLE research_task DROP CONSTRAINT IF EXISTS research_task_kind_check;
 ALTER TABLE research_task ADD CONSTRAINT research_task_kind_check CHECK (kind IN (
   'plan','discover','deep_read','verify','counter_search','replan','synthesize','quality_gate','citation_audit'
@@ -25,9 +26,16 @@ ALTER TABLE research_work_item
   DROP COLUMN IF EXISTS input_event_sequence, DROP COLUMN IF EXISTS input_state_version,
   DROP COLUMN IF EXISTS goal_version, DROP COLUMN IF EXISTS idempotency_key, DROP COLUMN IF EXISTS client_key,
   DROP COLUMN IF EXISTS target_id, DROP COLUMN IF EXISTS target_kind;
+UPDATE research_work_item SET status = CASE
+  WHEN status = 'succeeded' THEN 'done'
+  WHEN status IN ('stale') THEN 'failed'
+  ELSE 'enqueued'
+END WHERE status IN ('ready','dispatching','running','awaiting_input','succeeded','stale');
 ALTER TABLE research_work_item DROP CONSTRAINT IF EXISTS research_work_item_status_check;
 ALTER TABLE research_work_item ADD CONSTRAINT research_work_item_status_check
   CHECK (status IN ('pending','enqueued','done','cancelled','failed'));
+UPDATE research_work_item SET kind = 'advance_probe'
+  WHERE kind IN ('research','match','discussion','integration','director','report','review');
 ALTER TABLE research_work_item DROP CONSTRAINT IF EXISTS research_work_item_kind_check;
 ALTER TABLE research_work_item ADD CONSTRAINT research_work_item_kind_check
   CHECK (kind IN ('expand_subquestion','evidence_gap','resolve_conflict','advance_probe'));

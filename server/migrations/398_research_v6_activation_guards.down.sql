@@ -1,6 +1,4 @@
 DROP TABLE IF EXISTS research_v6_activation_evidence;
-DROP TRIGGER IF EXISTS research_v6_report_publish_guard ON research_report;
-DROP FUNCTION IF EXISTS research_v6_report_publish_guard_fn();
 DROP TRIGGER IF EXISTS research_v6_branch_xxl_guard ON research_branch;
 DROP FUNCTION IF EXISTS research_v6_branch_xxl_guard_fn();
 DROP TRIGGER IF EXISTS research_v6_steering_append_only ON research_steering_assessment;

@@ -53,6 +53,7 @@ export function ResearchSessionGoalCard({
   loading = false,
   error = false,
   onRetry,
+  onOpenReport,
   onConfirmSubstantive,
   confirmSubstantivePending = false,
   goalVersion = null,
@@ -70,6 +71,7 @@ export function ResearchSessionGoalCard({
   loading?: boolean;
   error?: boolean;
   onRetry?: () => void;
+  onOpenReport?: () => void;
   onConfirmSubstantive?: (proposal: string) => void | Promise<void>;
   confirmSubstantivePending?: boolean;
   goalVersion?: number | null;
@@ -392,6 +394,19 @@ export function ResearchSessionGoalCard({
               >
                 {t(($) => $.goal_card.close)}
               </Button>
+              {onOpenReport ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  data-testid="research-session-goal-open-report"
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenReport();
+                  }}
+                >
+                  {t(($) => $.goal_card.open_report)}
+                </Button>
+              ) : null}
               {model.substantiveProposal && onConfirmSubstantive ? (
                 <Button
                   type="button"

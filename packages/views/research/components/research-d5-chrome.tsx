@@ -115,6 +115,9 @@ export function ResearchD5Chrome({
             loading={goalLoading}
             error={goalError}
             onRetry={onGoalRetry}
+            onOpenReport={
+              projectionSource === "v6" ? actionProps.onOpenDelivery : undefined
+            }
             goalVersion={goalVersion}
             productRound={
               projectionSource === "v6" ? null : (session.product_round ?? null)

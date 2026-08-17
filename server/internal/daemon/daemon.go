@@ -208,12 +208,13 @@ type Daemon struct {
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 	activeCurationRuns   map[string]string // runtime id -> claimed run id
 
-	// graphMemoryOnce/graphMemoryProv hold the lazily-initialized graph
-	// memory reviewer (design §5.2). Initialization runs on the first
-	// graph-mode recall; a failure permanently falls back to legacy memory
-	// injection (graphMemoryProv stays nil) after one warn log.
-	graphMemoryOnce sync.Once
-	graphMemoryProv *graphMemoryProvider
+	// graphProvs holds the lazily-initialized graph memory providers, one per
+	// canonical graph directory (spec §3: the daemon recalls from the task's
+	// project and/or channel graph; the server owns the data plane and the
+	// daemon never creates graph dirs). A provider init failure for one dir
+	// is logged and that dir is skipped — never a legacy fallback.
+	graphProvMu sync.Mutex
+	graphProvs  map[string]*graphMemoryProvider // keyed by canonical graph dir
 
 	// canonicalRuntimes owns the one durable provider process for each
 	// Agent×runtime Message coordinator.

@@ -20,8 +20,9 @@ import (
 // GraphMemoryIngestHook is the production SegmentIngestHook (design §5.1,
 // review P0-1): the interaction-dag seams fire it on segment close and it
 // routes the segment into the memorygraph.Ingester of the workspace's
-// memory_graph store. The store location is per-workspace — the same per-dir
-// discovery the consolidation scheduler uses (graphMemoryDirForWorkspace).
+// memory_graph store. The store location is the canonical per-scope graph
+// directory (spec §3: <root>/<ws>/memory_graph/{projects,channels}/<owner>)
+// — the same layout the consolidation scheduler discovers.
 //
 // Nil-safe by design: a task whose workspace has no memory_graph directory,
 // or whose memory_type is not "graph", is skipped silently. The pi agent
@@ -51,6 +52,25 @@ func NewGraphMemoryIngestHook(queries *db.Queries, root string, bm *obsmetrics.B
 		bm:      bm,
 		model:   strings.TrimSpace(os.Getenv("MULTICA_PI_MODEL")),
 	}
+}
+
+// graphScopeForTask resolves the canonical graph scope one task writes to:
+// the owning project of the task's issue when present, else the task's
+// channel, else no scope (unscoped tasks never touch the graph, spec §2).
+func (h *GraphMemoryIngestHook) graphScopeForTask(ctx context.Context, task db.AgentInboxEvent) (memorygraph.GraphDirKind, string, error) {
+	if task.IssueID.Valid {
+		issue, err := h.queries.GetIssue(ctx, task.IssueID)
+		if err != nil {
+			return "", "", fmt.Errorf("graph memory ingest: load issue %s: %w", util.UUIDToString(task.IssueID), err)
+		}
+		if issue.ProjectID.Valid {
+			return memorygraph.GraphDirKindProject, util.UUIDToString(issue.ProjectID), nil
+		}
+	}
+	if task.ChannelID.Valid {
+		return memorygraph.GraphDirKindChannel, util.UUIDToString(task.ChannelID), nil
+	}
+	return "", "", nil
 }
 
 // Ingest implements SegmentIngestHook.
@@ -83,9 +103,21 @@ func (h *GraphMemoryIngestHook) Ingest(ctx context.Context, seg memorygraph.Segm
 	if err != nil {
 		return err
 	}
-	dir, ok := graphMemoryDirForWorkspace(root, util.UUIDToString(task.WorkspaceID))
-	if !ok {
-		return nil // no memory_graph dir for this workspace: skip silently
+	// Interim scoped resolution (refined to the route registry in the scoped
+	// writer task): issue-bound tasks write the owning project's graph (the
+	// task row carries issue_id, not project_id); channel-only tasks write
+	// the channel graph; unscoped tasks never create graphs (spec §2).
+	wsID := util.UUIDToString(task.WorkspaceID)
+	kind, ownerID, err := h.graphScopeForTask(ctx, task)
+	if err != nil {
+		return err
+	}
+	if ownerID == "" {
+		return nil
+	}
+	dir, err := memorygraph.EnsureScopedDir(root, wsID, kind, ownerID)
+	if err != nil {
+		return err
 	}
 
 	store := memorygraph.NewStore(dir)

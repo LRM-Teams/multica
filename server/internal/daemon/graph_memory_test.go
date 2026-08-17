@@ -55,7 +55,7 @@ func TestGraphExecutionMemoriesTaskOverrideBeatsEnv(t *testing.T) {
 	if out != nil {
 		t.Fatalf("graphExecutionMemories = %v, want nil under task-scoped legacy override", out)
 	}
-	if d.graphMemoryProv != nil {
+	if len(d.graphProvs) != 0 {
 		t.Fatalf("graph memory provider initialized despite the legacy override")
 	}
 }
@@ -72,7 +72,7 @@ func TestGraphExecutionMemoriesEnvDefaultApplies(t *testing.T) {
 	if out := d.graphExecutionMemories(context.Background(), Task{ChatMessage: "hello"}, d.logger); out != nil {
 		t.Fatalf("graphExecutionMemories = %v, want nil under env legacy", out)
 	}
-	if d.graphMemoryProv != nil {
+	if len(d.graphProvs) != 0 {
 		t.Fatalf("graph memory provider initialized under env legacy")
 	}
 }

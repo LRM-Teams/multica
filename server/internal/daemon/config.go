@@ -112,9 +112,6 @@ type Config struct {
 	// or "graph" (design §1 memory_type switch). Any other value is a
 	// configuration error and fails LoadConfig.
 	MemoryType string
-	// GraphMemoryDir is the root of the memorygraph.Store layout (design
-	// §4.1). Empty in env resolves to <WorkspacesRoot>/memory_graph.
-	GraphMemoryDir string
 	// GraphEmbed* configure the OpenAI-compatible embedding endpoint used by
 	// the hybrid retriever's vector channel (design §5.2). Empty BaseURL/Model
 	// silently disables embeddings and retrieval runs BM25-only.
@@ -476,10 +473,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("MULTICA_MEMORY_TYPE: invalid memory type %q (want %q or %q)", memoryType, MemoryTypeLegacy, MemoryTypeGraph)
 	}
-	graphMemoryDir := strings.TrimSpace(os.Getenv("MULTICA_GRAPH_MEMORY_DIR"))
-	if graphMemoryDir == "" {
-		graphMemoryDir = filepath.Join(workspacesRoot, "memory_graph")
-	}
 	graphExploreAgents, err := positiveIntFromEnv("MULTICA_GRAPH_EXPLORE_AGENTS", DefaultGraphExploreAgents)
 	if err != nil {
 		return Config{}, err
@@ -511,7 +504,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
 		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
 		MemoryType:                     memoryType,
-		GraphMemoryDir:                 graphMemoryDir,
 		GraphEmbedBaseURL:              strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_BASE_URL")),
 		GraphEmbedAPIKey:               strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_API_KEY")),
 		GraphEmbedModel:                strings.TrimSpace(os.Getenv("MULTICA_GRAPH_EMBED_MODEL")),

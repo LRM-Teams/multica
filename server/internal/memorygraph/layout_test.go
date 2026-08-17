@@ -1,7 +1,6 @@
 package memorygraph
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 

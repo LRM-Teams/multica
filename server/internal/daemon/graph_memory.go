@@ -113,19 +113,20 @@ func stagingSignatureOf(storeRoot string) (stagingSignature, error) {
 	return sig, nil
 }
 
-// newGraphMemoryProvider builds the provider from daemon config. A missing
-// pi CLI is a hard initialization error (the daemon then falls back to
-// legacy memory injection permanently); a missing embedding endpoint only
-// degrades retrieval to BM25-only (ErrEmbedNotConfigured, design §5.2).
+// newGraphMemoryProvider builds the provider for one canonical graph
+// directory. A missing pi CLI is a hard initialization error (recall for
+// that dir is skipped and the task continues without graph memory); a
+// missing embedding endpoint only degrades retrieval to BM25-only
+// (ErrEmbedNotConfigured, design §5.2).
 // kicker may be nil, in which case the async judge kick is skipped.
-func newGraphMemoryProvider(cfg Config, kicker graphMemoryJudgeKicker, logger *slog.Logger) (*graphMemoryProvider, error) {
+func newGraphMemoryProvider(cfg Config, dir string, kicker graphMemoryJudgeKicker, logger *slog.Logger) (*graphMemoryProvider, error) {
 	entry, ok := cfg.Agents["pi"]
 	if !ok || strings.TrimSpace(entry.Path) == "" {
 		return nil, fmt.Errorf("graph memory: no pi CLI configured (MULTICA_PI_PATH)")
 	}
-	store := memorygraph.NewStore(cfg.GraphMemoryDir)
+	store := memorygraph.NewStore(dir)
 	if err := store.Init(); err != nil {
-		return nil, fmt.Errorf("graph memory: init store %s: %w", cfg.GraphMemoryDir, err)
+		return nil, fmt.Errorf("graph memory: init store %s: %w", dir, err)
 	}
 
 	var cached *memorygraph.CachedEmbedder
@@ -151,7 +152,7 @@ func newGraphMemoryProvider(cfg Config, kicker graphMemoryJudgeKicker, logger *s
 	return &graphMemoryProvider{
 		store:    store,
 		retr:     retr,
-		explorer: memorygraph.NewExplorer(store, retr, backend, explorerCfg, "pi", memorygraph.NewTraceRecorder(cfg.GraphMemoryDir)),
+		explorer: memorygraph.NewExplorer(store, retr, backend, explorerCfg, "pi", memorygraph.NewTraceRecorder(dir)),
 		recorder: memorygraph.NewQueryRecorder(store, graphMemoryQueryLogWindow),
 		kicker:   kicker,
 		logger:   logger,
@@ -282,19 +283,54 @@ func (p *graphMemoryProvider) notifyAsyncJudge(taskID, runtimeID, query string, 
 	}()
 }
 
-// graphMemory lazily initializes the graph memory provider. Initialization
-// failure is permanent for the process lifetime (sync.Once) and falls back
-// to legacy memory injection with a single warn log.
-func (d *Daemon) graphMemory() *graphMemoryProvider {
-	d.graphMemoryOnce.Do(func() {
-		provider, err := newGraphMemoryProvider(d.cfg, d.client, d.logger)
+// graphDirsForTask resolves the canonical graph directories a task may
+// recall from (spec §3/§8): the current project graph when ProjectID is
+// set, plus the current channel graph when ChannelID is set. Only existing
+// directories with matching identity are returned — the daemon never
+// creates graph dirs (the server owns the data plane) and there is no
+// root-level fallback. Unscoped tasks recall nothing.
+func graphDirsForTask(root string, task Task) []string {
+	var dirs []string
+	add := func(kind memorygraph.GraphDirKind, ownerID string) {
+		dir, err := memorygraph.DirForScope(root, task.WorkspaceID, kind, ownerID)
 		if err != nil {
-			d.logger.Warn("graph memory provider initialization failed; using legacy memory injection", "error", err)
 			return
 		}
-		d.graphMemoryProv = provider
-	})
-	return d.graphMemoryProv
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return
+		}
+		if err := memorygraph.VerifyGraphIdentity(dir, memorygraph.GraphIdentity{
+			WorkspaceID: task.WorkspaceID, Kind: string(kind), OwnerID: ownerID,
+		}); err != nil {
+			return
+		}
+		dirs = append(dirs, dir)
+	}
+	if strings.TrimSpace(task.ProjectID) != "" {
+		add(memorygraph.GraphDirKindProject, task.ProjectID)
+	}
+	if strings.TrimSpace(task.ChannelID) != "" {
+		add(memorygraph.GraphDirKindChannel, task.ChannelID)
+	}
+	return dirs
+}
+
+func (d *Daemon) graphProviderForDir(dir string) *graphMemoryProvider {
+	d.graphProvMu.Lock()
+	defer d.graphProvMu.Unlock()
+	if d.graphProvs == nil {
+		d.graphProvs = map[string]*graphMemoryProvider{}
+	}
+	if p, ok := d.graphProvs[dir]; ok {
+		return p
+	}
+	provider, err := newGraphMemoryProvider(d.cfg, dir, d.client, d.logger)
+	if err != nil {
+		d.logger.Warn("graph memory: provider init failed", "dir", dir, "error", err)
+		return nil
+	}
+	d.graphProvs[dir] = provider
+	return provider
 }
 
 // effectiveMemoryType resolves the reviewer type for one task (design
@@ -314,28 +350,35 @@ func effectiveMemoryType(configured, taskScoped string) string {
 	return MemoryTypeLegacy
 }
 
-// graphExecutionMemories returns graph-recalled execution memory when the
-// graph reviewer is active and the recall found something, or nil — the
-// caller then keeps the legacy prepareExecutionMemory result. Graph errors
-// never break task execution: they are logged and fall back to legacy.
+// graphExecutionMemories recalls from every graph the task is scoped to
+// (project and/or channel, spec §3/§8) and returns the aggregated recall
+// blobs, or nil when nothing was found. Graph failure = no data injected:
+// errors are logged and the task continues with legacy user/agent memory
+// only — never a legacy project/channel/daily fallback (spec §13 P0-7).
 func (d *Daemon) graphExecutionMemories(ctx context.Context, task Task, log *slog.Logger) []execenv.MemoryContextForEnv {
 	if effectiveMemoryType(d.cfg.MemoryType, task.MemoryType) != MemoryTypeGraph {
-		return nil
-	}
-	provider := d.graphMemory()
-	if provider == nil {
 		return nil
 	}
 	query := graphRecallQuery(task)
 	if query == "" {
 		return nil
 	}
-	memories, err := provider.prepareGraphExecutionMemory(ctx, task.ID, task.RuntimeID, query)
-	if err != nil {
-		log.Warn("graph memory recall failed; falling back to legacy memory", "task_id", task.ID, "error", err)
-		return nil
+	var out []execenv.MemoryContextForEnv
+	for _, dir := range graphDirsForTask(d.cfg.WorkspacesRoot, task) {
+		provider := d.graphProviderForDir(dir)
+		if provider == nil {
+			continue
+		}
+		memories, err := provider.prepareGraphExecutionMemory(ctx, task.ID, task.RuntimeID, query)
+		if err != nil {
+			// Graph failure never breaks the task and never restores legacy
+			// project/channel/daily memory (spec §8, §13 P0-7).
+			log.Warn("graph memory recall failed; injecting no graph memory", "task_id", task.ID, "dir", dir, "error", err)
+			continue
+		}
+		out = append(out, memories...)
 	}
-	return memories
+	return out
 }
 
 // graphRecallQuery picks the user-authored text of the task as the recall

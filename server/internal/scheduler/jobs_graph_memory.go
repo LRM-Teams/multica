@@ -129,7 +129,8 @@ func graphMemoryProfileLookup(pool *pgxpool.Pool) graphMemoryTypeLookup {
 
 // resolveGraphMemoryType resolves memory_type for one
 // memory_graph directory (design §1/A4): the per-workspace profile row wins
-// when the directory maps to a workspace (<root>/<workspace>/memory_graph);
+// when the directory maps to a workspace (canonical layout
+// <root>/<ws>/memory_graph/<kind>s/<owner>, spec §3);
 // otherwise the MULTICA_MEMORY_TYPE env default applies, then "legacy".
 // Lookup errors (including a missing row) fail open to the env default so a
 // transient DB hiccup never flips a workspace's memory pipeline.
@@ -147,15 +148,14 @@ func resolveGraphMemoryType(ctx context.Context, dir, envType string, lookup gra
 	return "legacy"
 }
 
-// graphDirWorkspaceID extracts the workspace UUID from a per-workspace
-// <root>/<workspace>/memory_graph directory; the root-level default layout
-// maps to no workspace.
+// graphDirWorkspaceID extracts the workspace id from a canonical graph dir
+// <root>/<ws>/memory_graph/<kind>s/<owner>.
 func graphDirWorkspaceID(dir string) (string, bool) {
-	parent := filepath.Base(filepath.Dir(dir))
-	if _, err := uuid.Parse(parent); err != nil {
+	ws := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(dir))))
+	if _, err := uuid.Parse(ws); err != nil {
 		return "", false
 	}
-	return parent, true
+	return ws, true
 }
 
 func makeGraphMemoryConsolidationHandler(pool *pgxpool.Pool, bm *obsmetrics.BusinessMetrics) Handler {
@@ -451,33 +451,33 @@ func graphMemoryWorkspacesRoot() (string, error) {
 	return filepath.Abs(root)
 }
 
-// findMemoryGraphDirs locates memory_graph directories under the workspaces
-// root: the root-level default layout (<root>/memory_graph, matching the
-// daemon's default GraphMemoryDir) plus any per-workspace
-// <root>/<workspace>/memory_graph.
+// findMemoryGraphDirs walks the canonical layout
+// <root>/<ws>/memory_graph/{projects,channels}/<owner> and returns only
+// directories whose immutable identity matches their path (spec §3). The
+// legacy root-level <root>/memory_graph is never returned.
 func findMemoryGraphDirs(root string) ([]string, error) {
 	var dirs []string
-	seen := map[string]bool{}
-	add := func(dir string) {
-		if seen[dir] {
-			return
+	for _, sub := range []string{"projects", "channels"} {
+		kind := memorygraph.GraphDirKind(strings.TrimSuffix(sub, "s"))
+		glob := filepath.Join(root, "*", "memory_graph", sub, "*")
+		matches, err := filepath.Glob(glob)
+		if err != nil {
+			return nil, err
 		}
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			seen[dir] = true
+		for _, dir := range matches {
+			info, err := os.Stat(dir)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			owner := filepath.Base(dir)
+			ws := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(dir))))
+			if err := memorygraph.VerifyGraphIdentity(dir, memorygraph.GraphIdentity{
+				WorkspaceID: ws, Kind: string(kind), OwnerID: owner,
+			}); err != nil {
+				slog.Warn("graph memory: skipping graph dir with invalid identity", "dir", dir, "error", err)
+				continue
+			}
 			dirs = append(dirs, dir)
-		}
-	}
-	add(filepath.Join(root, "memory_graph"))
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read workspaces root %s: %w", root, err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			add(filepath.Join(root, entry.Name(), "memory_graph"))
 		}
 	}
 	return dirs, nil

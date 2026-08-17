@@ -117,10 +117,29 @@ func (s *GraphMemoryJudgeService) JudgeRecall(ctx context.Context, req GraphMemo
 	if err != nil {
 		return err
 	}
-	dir, ok := graphMemoryDirForWorkspace(root, util.UUIDToString(task.WorkspaceID))
-	if !ok {
-		// No memory_graph dir for this workspace: the recall was recorded
-		// nowhere the server can see; skip silently.
+	// Canonical per-scope layout (spec §3): the daemon recorded the recall
+	// in the task's project and/or channel graph. Locate the first existing,
+	// identity-verified candidate — project first, then channel; there is no
+	// root-level fallback. No candidate means the recall was recorded
+	// nowhere the server can see; skip silently.
+	wsID := util.UUIDToString(task.WorkspaceID)
+	candidates := make([]memorygraph.GraphIdentity, 0, 2)
+	if task.IssueID.Valid {
+		// The task row carries issue_id, not project_id; a missing issue
+		// simply drops the project candidate (channel may still match).
+		if issue, err := s.queries.GetIssue(ctx, task.IssueID); err == nil && issue.ProjectID.Valid {
+			candidates = append(candidates, memorygraph.GraphIdentity{
+				WorkspaceID: wsID, Kind: string(memorygraph.GraphDirKindProject), OwnerID: util.UUIDToString(issue.ProjectID),
+			})
+		}
+	}
+	if task.ChannelID.Valid {
+		candidates = append(candidates, memorygraph.GraphIdentity{
+			WorkspaceID: wsID, Kind: string(memorygraph.GraphDirKindChannel), OwnerID: util.UUIDToString(task.ChannelID),
+		})
+	}
+	dir := firstVerifiedGraphDir(root, candidates)
+	if dir == "" {
 		return nil
 	}
 	store := memorygraph.NewStore(dir)
@@ -181,6 +200,26 @@ func (s *GraphMemoryJudgeService) JudgeRecall(ctx context.Context, req GraphMemo
 		}
 	}
 	return nil
+}
+
+// firstVerifiedGraphDir returns the first candidate directory that exists
+// and passes immutable identity verification (spec §3); "" when none does.
+func firstVerifiedGraphDir(root string, candidates []memorygraph.GraphIdentity) string {
+	for _, want := range candidates {
+		dir, err := memorygraph.DirForScope(root, want.WorkspaceID, memorygraph.GraphDirKind(want.Kind), want.OwnerID)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			continue
+		}
+		if err := memorygraph.VerifyGraphIdentity(dir, want); err != nil {
+			slog.Warn("graph memory judge: skipping graph dir with invalid identity", "dir", dir, "error", err)
+			continue
+		}
+		return dir
+	}
+	return ""
 }
 
 // computeBaseline builds a retriever + graph over the store's current

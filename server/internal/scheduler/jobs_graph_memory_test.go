@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/multica-ai/multica/server/internal/memorygraph"
 )
 
@@ -32,7 +34,11 @@ func TestGraphMemoryConsolidationBelowThreshold(t *testing.T) {
 	t.Setenv("MULTICA_MEMORY_TYPE", "graph")
 	t.Setenv("MULTICA_WORKSPACES_ROOT", root)
 
-	dir := root + "/ws-1/memory_graph"
+	ws, pid := uuid.NewString(), uuid.NewString()
+	dir, err := memorygraph.EnsureScopedDir(root, ws, memorygraph.GraphDirKindProject, pid)
+	if err != nil {
+		t.Fatalf("EnsureScopedDir: %v", err)
+	}
 	store := memorygraph.NewStore(dir)
 	if err := store.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -311,7 +317,7 @@ func TestGraphConsolidationStateMigratesLegacyFormat(t *testing.T) {
 // a lookup failure fails open to the env default.
 func TestResolveGraphMemoryMemoryType(t *testing.T) {
 	ctx := context.Background()
-	wsDir := "/root/3f6b1c2e-7a8d-4e5f-9a0b-1c2d3e4f5a6b/memory_graph"
+	wsDir := "/root/3f6b1c2e-7a8d-4e5f-9a0b-1c2d3e4f5a6b/memory_graph/projects/1f2e3d4c-5b6a-4978-8c7d-6e5f4a3b2c1d"
 	rootDir := "/root/memory_graph"
 
 	profile := func(rt string, err error) graphMemoryTypeLookup {

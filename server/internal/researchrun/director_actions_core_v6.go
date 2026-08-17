@@ -56,7 +56,7 @@ func (s *PostgresStore) executeV6CreateAgentAction(ctx context.Context, proposal
 }
 
 func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
-	if action.PayloadSchema != "work.create.v1" {
+	if action.PayloadSchema != "work.create.v1" && action.PayloadSchema != "collaboration.create.v1" {
 		return ErrInvalidContract
 	}
 	var payload struct {

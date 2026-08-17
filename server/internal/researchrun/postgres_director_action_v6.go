@@ -151,9 +151,13 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			if action.PayloadSchema != "no_op.v1" || json.Unmarshal(action.Payload, &payload) != nil {
 				return ErrInvalidContract
 			}
-			_, err = s.ApplyV6SteeringAssessment(ctx, ApplyV6SteeringAssessmentInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID,
-				MessageID: payload.MessageID, DirectorCycleID: cycleID, AssessmentKind: "no_op", Interpretation: action.Reason,
-				Reason: payload.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: stateVersion, AcceptedActionIDs: []string{action.ActionID}})
+			if payload.MessageID != "" {
+				_, err = s.ApplyV6SteeringAssessment(ctx, ApplyV6SteeringAssessmentInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID,
+					MessageID: payload.MessageID, DirectorCycleID: cycleID, AssessmentKind: "no_op", Interpretation: action.Reason,
+					Reason: payload.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: stateVersion, AcceptedActionIDs: []string{action.ActionID}})
+			} else {
+				err = s.recordV6DirectorNoOp(ctx, proposal, cycleID, action, stateVersion, payload.Reason)
+			}
 		case "record_decision":
 			if action.PayloadSchema != "steering_assessment.v1" {
 				return ErrInvalidContract
@@ -185,10 +189,21 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			err = s.executeV6CreateAgentAction(ctx, proposal, cycleID, action, stateVersion)
 		case "create_work_item", "create_task":
 			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_match", "open_discussion", "create_dispute", "create_integration", "create_review":
+			action.Payload = withV6ActionKind(action.Payload, action.Kind)
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
 		case "create_branch":
 			err = s.executeV6CreateBranchAction(ctx, proposal, cycleID, action, stateVersion)
 		case "create_report":
 			err = s.executeV6CreateReportAction(ctx, proposal, cycleID, action, goalVersion, stateVersion)
+		case "cancel_work_item", "retry_work_item", "reassign_work_item":
+			err = s.executeV6WorkLifecycleAction(ctx, proposal, action, stateVersion)
+		case "update_agent", "archive_agent":
+			err = s.executeV6AgentLifecycleAction(ctx, proposal, cycleID, action, stateVersion)
+		case "update_branch", "pause_branch", "terminate_branch", "split_branch", "merge_branch":
+			err = s.executeV6BranchLifecycleAction(ctx, proposal, action, stateVersion)
+		case "pause_run", "resume_run", "complete_run", "fail_run":
+			err = s.executeV6RunLifecycleAction(ctx, proposal, action, stateVersion)
 		default:
 			return fmt.Errorf("%w: unsupported Director action %q", ErrInvalidContract, action.Kind)
 		}

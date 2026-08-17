@@ -195,7 +195,6 @@ function WendyCreateForm({
         thinkingLevel={selection.thinkingLevel}
         onThinkingChange={selection.selectThinking}
         modelRequired
-        autoSelectFirstModel
         disabled={submitting}
       />
       <div className="flex justify-end">

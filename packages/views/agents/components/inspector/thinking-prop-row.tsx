@@ -69,5 +69,5 @@ function pickModelEntry(
   model: string,
 ): RuntimeModel | undefined {
   if (model) return models.find((m) => m.id === model);
-  return models.find((m) => m.default) ?? models[0];
+  return models.find((m) => m.default);
 }

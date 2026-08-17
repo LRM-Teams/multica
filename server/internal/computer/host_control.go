@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 	bindingChildMachineActionsPath      = "/binding-child/machine-actions"
 	bindingChildRuntimeSetPath          = "/binding-child/runtime-set"
 	bindingChildPrepareUpgradePath      = "/binding-child/prepare-upgrade"
+	bindingChildWorkDigestPath          = "/binding-child/work-digest"
 	bindingChildControlBusyCode         = "control_busy"
 )
 
@@ -52,6 +54,7 @@ type HostControlCallbacks struct {
 	LifecycleDiagnostic func(context.Context, BindingChildIdentity, json.RawMessage) error
 	MachineActions      func(context.Context, BindingChildIdentity, json.RawMessage) error
 	PrepareUpgrade      func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
+	WorkDigest          func(context.Context, BindingChildIdentity, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
 	Released            func(BindingChildIdentity)
 }
 
@@ -80,6 +83,7 @@ func (control *HostControl) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(bindingChildLifecycleDiagnosticPath, control.lifecycleDiagnosticHandler())
 	mux.HandleFunc(bindingChildMachineActionsPath, control.machineActionsHandler())
 	mux.HandleFunc(bindingChildPrepareUpgradePath, control.prepareUpgradeHandler())
+	mux.HandleFunc(bindingChildWorkDigestPath, control.workDigestHandler())
 	mux.HandleFunc(bindingChildRuntimeSetPath, control.runtimeSetHandler())
 }
 
@@ -291,6 +295,33 @@ func (control *HostControl) prepareUpgradeHandler() http.HandlerFunc {
 	}
 }
 
+func (control *HostControl) workDigestHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Identity BindingChildIdentity               `json:"identity"`
+			Command  protocol.ComputerWorkDigestPayload `json:"command"`
+		}
+		if !control.begin(w, r, &request) {
+			return
+		}
+		if !control.current(request.Identity) {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if control.callbacks.WorkDigest == nil {
+			http.Error(w, "Computer work journal is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		digest, err := control.callbacks.WorkDigest(r.Context(), request.Identity, request.Command)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(digest)
+	}
+}
+
 func (control *HostControl) rawHandler(callback func(context.Context, BindingChildIdentity, json.RawMessage) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request rawControlRequest
@@ -483,6 +514,44 @@ func (client *HostControlClient) RecordLifecycleDiagnostic(ctx context.Context, 
 
 func (client *HostControlClient) ForwardMachineActions(ctx context.Context, actions any) error {
 	return client.postRaw(ctx, bindingChildMachineActionsPath, actions)
+}
+
+func (client *HostControlClient) HarvestWorkDigest(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+	if client == nil || client.baseURL == "" || client.token == "" || client.identity.Validate() != nil {
+		return protocol.WorkDigest{}, errors.New("Binding Host control client is not configured")
+	}
+	if err := command.Validate(); err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	body, err := json.Marshal(struct {
+		Identity BindingChildIdentity               `json:"identity"`
+		Command  protocol.ComputerWorkDigestPayload `json:"command"`
+	}{Identity: client.identity, Command: command})
+	if err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+bindingChildWorkDigestPath, bytes.NewReader(body))
+	if err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Multica-Control-Token", client.token)
+	response, err := (&http.Client{Timeout: 35 * time.Second}).Do(request)
+	if err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return protocol.WorkDigest{}, fmt.Errorf("Binding Host control %s returned %s: %s", bindingChildWorkDigestPath, response.Status, strings.TrimSpace(string(raw)))
+	}
+	return protocol.ParseWorkDigest(raw)
 }
 
 func (client *HostControlClient) ReportRuntimeSet(ctx context.Context, runtimes any, daemonToken, expiresAt string) error {

@@ -37,13 +37,15 @@ type Host struct {
 	reconcileInterval time.Duration
 	logger            *slog.Logger
 
-	runtimeMu         sync.RWMutex
-	runtimeSets       map[string]hostBindingRuntimeSet
-	upgrade           *hostMachineUpgrade
-	diagnosticStore   *diagnosticlog.Store
-	diagnosticMu      sync.Mutex
-	diagnosticLoggers map[string]*diagnosticlog.Logger
-	processIdentity   HostProcessIdentity
+	runtimeMu          sync.RWMutex
+	runtimeSets        map[string]hostBindingRuntimeSet
+	upgrade            *hostMachineUpgrade
+	diagnosticStore    *diagnosticlog.Store
+	diagnosticMu       sync.Mutex
+	diagnosticLoggers  map[string]*diagnosticlog.Logger
+	processIdentity    HostProcessIdentity
+	workJournalEnabled bool
+	workJournalHome    string
 }
 
 type hostBindingRuntime struct {
@@ -145,6 +147,12 @@ func NewHost(config HostConfig) (*Host, error) {
 			return external.PrepareUpgrade(ctx, identity, raw)
 		}
 		return nil, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
+	callbacks.WorkDigest = func(ctx context.Context, identity BindingChildIdentity, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+		if external.WorkDigest != nil {
+			return external.WorkDigest(ctx, identity, command)
+		}
+		return host.HarvestWorkDigest(ctx, command)
 	}
 	callbacks.Released = func(identity BindingChildIdentity) {
 		host.runtimeMu.Lock()

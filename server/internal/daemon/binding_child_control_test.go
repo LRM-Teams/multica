@@ -244,6 +244,31 @@ func TestStandaloneDaemonIgnoresConnectSocketUpgrade(t *testing.T) {
 	}
 }
 
+func TestBindingChildHarvestsWorkDigestFromHostNotUpgradePayload(t *testing.T) {
+	const controlToken = "host-control-token"
+	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
+	installLiveBindingChild(t, host, "workspace-a", 101)
+	mux := http.NewServeMux()
+	host.host.RegisterRoutes(mux)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	child.bindingHostControl = newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{
+		WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101,
+	})
+	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
+	digest, err := child.handleComputerWorkDigestCommand(context.Background(), protocol.ComputerWorkDigestPayload{
+		RequestID: "digest-1", Start: start, End: start.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("work digest command: %v", err)
+	}
+	if !digest.Disabled || len(digest.Repos) != 0 {
+		t.Fatalf("default journal digest %+v", digest)
+	}
+}
+
 func TestBindingChildExecutesConnectSocketUpgradeLocally(t *testing.T) {
 	executed := make(chan protocol.ComputerUpgradePayload, 1)
 	hostHits := make(chan struct{}, 1)

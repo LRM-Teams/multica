@@ -20,6 +20,10 @@ import (
 // watching the target runtime (the daemon is offline / not connected over WS).
 var ErrRuntimeOffline = errors.New("runtime offline")
 
+// ErrComputerOffline is returned when no current Binding socket can harvest a
+// Work Digest for that Computer.
+var ErrComputerOffline = errors.New("computer offline")
+
 const (
 	writeWait                  = 10 * time.Second
 	pongWait                   = 60 * time.Second
@@ -553,6 +557,60 @@ func (h *Hub) RequestSeedAgentContext(ctx context.Context, req protocol.SeedAgen
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// RequestComputerWorkDigest sends computer:work-digest on one current Binding
+// socket and waits for computer:work-digest:done. The digest is not stored.
+func (h *Hub) RequestComputerWorkDigest(ctx context.Context, daemonID, workspaceID string, req protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+	if err := req.Validate(); err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	raw, err := h.requestWorkspaceRunner(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerWorkDigest, req)
+	if err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	var envelope struct {
+		OK     bool            `json:"ok"`
+		Digest json.RawMessage `json:"digest"`
+		Error  string          `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	if !envelope.OK {
+		if strings.TrimSpace(envelope.Error) == "" {
+			return protocol.WorkDigest{}, errors.New("Computer work digest harvest failed")
+		}
+		return protocol.WorkDigest{}, errors.New(envelope.Error)
+	}
+	return protocol.ParseWorkDigest(envelope.Digest)
+}
+
+func (h *Hub) requestWorkspaceRunner(ctx context.Context, daemonID, workspaceID, requestID, msgType string, payload any) (json.RawMessage, error) {
+	if h == nil {
+		return nil, ErrComputerOffline
+	}
+	if requestID == "" || daemonID == "" || workspaceID == "" {
+		return nil, errors.New("request_id, computer_id, and workspace_id required")
+	}
+	ch := make(chan json.RawMessage, 1)
+	h.pendMu.Lock()
+	h.pending[requestID] = ch
+	h.pendMu.Unlock()
+	defer func() {
+		h.pendMu.Lock()
+		delete(h.pending, requestID)
+		h.pendMu.Unlock()
+	}()
+	if !h.NotifyWorkspaceRunner(daemonID, workspaceID, msgType, payload) {
+		return nil, ErrComputerOffline
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case raw := <-ch:
+		return raw, nil
+	}
 }
 
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
@@ -1478,6 +1536,16 @@ func (c *client) handleFrame(raw []byte) {
 		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil && idOnly.RequestID != "" {
 			c.hub.deliverResponse(idOnly.RequestID, msg.Payload)
 		}
+	case protocol.EventComputerWorkDigestDone:
+		var done protocol.ComputerWorkDigestDonePayload
+		if err := json.Unmarshal(msg.Payload, &done); err != nil || done.Validate() != nil {
+			return
+		}
+		if !c.hub.isCurrentWorkspaceRunner(c) {
+			return
+		}
+		c.runnerLastInbound.Store(time.Now().UnixNano())
+		c.hub.deliverResponse(done.RequestID, msg.Payload)
 	case protocol.EventReminderSnapshotRequest:
 		c.handleReminderSnapshotRequest(msg.Payload)
 	case protocol.EventReminderFireAttempt:

@@ -58,6 +58,7 @@ type workspaceRunnerDependencies struct {
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
 	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
+	handleComputerWorkDigest func(context.Context, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
 	setComputerUpgradeEmit   func(func(string, any))
 	now                      func() time.Time
 	onTransition             func(agentLifecycleTransition)
@@ -95,6 +96,7 @@ type WorkspaceRunner struct {
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
 	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
+	handleComputerWorkDigest func(context.Context, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
 	setComputerUpgradeEmit   func(func(string, any))
 
 	residency *agentResidencyStore
@@ -170,6 +172,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		controlHeartbeatAck:      dependencies.controlHeartbeatAck,
 		controlHeartbeatChanges:  dependencies.controlHeartbeatChanges,
 		handleComputerControl:    dependencies.handleComputerControl,
+		handleComputerWorkDigest: dependencies.handleComputerWorkDigest,
 		setComputerUpgradeEmit:   dependencies.setComputerUpgradeEmit,
 		residency:                newAgentResidencyStore(now),
 		life:                     life,
@@ -392,6 +395,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		controlHeartbeatAck:      d.handleWorkspaceRunnerControlAck,
 		controlHeartbeatChanges:  func() (<-chan struct{}, func()) { return nil, func() {} },
 		handleComputerControl:    d.handleComputerControlCommand,
+		handleComputerWorkDigest: d.handleComputerWorkDigestCommand,
 		setComputerUpgradeEmit:   d.setComputerUpgradeEmit,
 		now:                      time.Now,
 		onTransition:             onTransition,

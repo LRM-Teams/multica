@@ -83,6 +83,26 @@ func TestHarvestWorkJournalDisabledReturnsEmptyRepos(t *testing.T) {
 	}
 }
 
+func TestHostHarvestWorkDigestDisabledReturnsEmptyRepos(t *testing.T) {
+	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
+	host := &Host{
+		processIdentity:    HostProcessIdentity{ComputerID: "computer-1"},
+		workJournalHome:    t.TempDir(),
+		workJournalEnabled: false,
+	}
+	digest, err := host.HarvestWorkDigest(context.Background(), protocol.ComputerWorkDigestPayload{
+		RequestID: "digest-1",
+		Start:     start,
+		End:       start.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("host harvest: %v", err)
+	}
+	if !digest.Disabled || len(digest.Repos) != 0 || digest.ComputerID != "computer-1" {
+		t.Fatalf("host disabled digest %+v", digest)
+	}
+}
+
 func setupWorkJournalHome(t *testing.T) (home, appRoot string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {

@@ -21,6 +21,7 @@ func TestComputerDeleteRoutesExposeOneOperation(t *testing.T) {
 	}
 
 	for _, route := range []string{
+		http.MethodGet + " /api/computers/{daemonId}/work-digest",
 		http.MethodDelete + " /api/computers/{daemonId}",
 		http.MethodDelete + " /api/runtimes/by-daemon/{daemonId}",
 	} {

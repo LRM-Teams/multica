@@ -106,6 +106,24 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			if err := writeFrame(protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
 				return err
 			}
+		case protocol.EventComputerWorkDigest:
+			var command protocol.ComputerWorkDigestPayload
+			if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
+				continue
+			}
+			done := protocol.ComputerWorkDigestDonePayload{RequestID: command.RequestID}
+			if runner.handleComputerWorkDigest == nil {
+				done.Error = "work journal host unavailable"
+			} else if digest, err := runner.handleComputerWorkDigest(connection.ctx, command); err != nil {
+				done.Error = err.Error()
+			} else {
+				copyDigest := digest
+				done.OK = true
+				done.Digest = &copyDigest
+			}
+			if err := writeFrame(protocol.EventComputerWorkDigestDone, done); err != nil {
+				return err
+			}
 		case protocol.EventComputerUpgrade, protocol.EventComputerRestart:
 			var command protocol.ComputerUpgradePayload
 			if message.Type == protocol.EventComputerRestart {

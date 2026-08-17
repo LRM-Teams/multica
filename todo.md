@@ -125,7 +125,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
   - **依赖**：J1-T1、J1-T2
   - **完成标准**：Go 测用临时目录当 HOME：造两个仓、一个在 denylist 下；窗口内 commit + dirty 出现在 digest，denylist 仓不出现。关闭开关 → `disabled: true` 且 repos 空。
 
-- [ ] **J1-T4 Owner-only 拉取**
+- [x] **J1-T4 Owner-only 拉取**
+  - **已落地（2026-08-17）**：`GET /api/computers/{daemonId}/work-digest?start=&end=`（RFC3339 半开区间）。`authorizeComputerOwnerRequest`；`computer:work-digest` / `computer:work-digest:done` 新 payload，不复用 upgrade。离线 `503 computer_offline`。未开启 200 + `disabled` 空 repos。Digest 不入库。
   - **目标**：只有 Computer Owner 能对某台 Computer 要某一窗口的 Digest。
   - **要做**：`GET`（或等价 RPC）`/api/computers/{id}/work-digest?start=&end=`（RFC3339，半开区间）。鉴权走 `authorizeComputerOwnerRequest`（或同等「必须是该 Computer 的 Owner」）。服务端向 **该 Computer 的 resident** 要收割结果（新 Computer 控制命令，参考 upgrade 的 request/response 形态，**新 payload 类型**）。Computer 离线 → 明确错误（不要用平台 Facts 假装本机源成功）。
   - **不要做**：Workspace 成员/管理员代拉；把 digest 写入可被他人 query 的表；digest 进 Activity feed。
@@ -217,9 +218,9 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 | 顺序 | 下一步 |
 |------|--------|
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
-| 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ **J1-T4** → J1-T5 |
+| 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ **J1-T5** |
 | 3 | J2（平台包 + PR + 归仓） |
 | 4 | J3（剧本 → 派发 → UI → 落笔记） |
 | 5 | 仅当产品需要时再开 J4 |
 
-**当前焦点：** Slice J1。下一个 checkbox：**J1-T4**。
+**当前焦点：** Slice J1。下一个 checkbox：**J1-T5**。

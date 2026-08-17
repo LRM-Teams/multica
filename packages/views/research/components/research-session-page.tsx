@@ -977,6 +977,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           snapshotNodeCount={data.nodes.length}
           typedGraphSessionId={sessionId}
           typedGraphVersion={displayTypedGraph?.graph_version ?? null}
+          projectionSource={projectionGateway.source}
           typedGraphHasNextPage={canvasUsesV5 && typedGraphHasNextPage === true}
           typedGraphLoadMorePending={canvasUsesV5 && typedGraphFetchingNextPage}
           onLoadMoreTypedGraph={

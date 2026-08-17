@@ -94,6 +94,7 @@ export function ResearchConstellationWorkspace({
   snapshotNodeCount = 0,
   typedGraphSessionId,
   typedGraphVersion = null,
+  projectionSource = null,
   snapshotNodes,
   selectedNode,
   onSelectNode,
@@ -131,6 +132,7 @@ export function ResearchConstellationWorkspace({
   snapshotNodeCount?: number;
   typedGraphSessionId?: string;
   typedGraphVersion?: number | null;
+  projectionSource?: "v5" | "v6" | null;
   typedGraphHasNextPage?: boolean;
   typedGraphLoadMorePending?: boolean;
   onLoadMoreTypedGraph?: () => void;
@@ -733,6 +735,7 @@ export function ResearchConstellationWorkspace({
             rightPanelWidth={0}
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
+            hideUnselectedSTierRelations={projectionSource === "v6"}
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}

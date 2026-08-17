@@ -12,17 +12,21 @@ import { useT } from "../../i18n/use-t";
 export function ResearchDirectorChatHeader({
   director,
   activity,
+  fallbackName,
   modeChip,
   mode,
 }: {
   director: ResearchFleetMember | null;
   activity?: string | null;
+  fallbackName?: string;
   modeChip: ReactNode;
   mode?: string;
 }) {
   const { t } = useT("research");
   const name = director?.display_name || director?.name || director?.role || null;
-  const fallback = name?.trim().charAt(0).toUpperCase() || "D";
+  const resolvedName =
+    name ?? fallbackName ?? t(($) => $.d5.rail.director_fallback);
+  const fallback = resolvedName.trim().charAt(0).toUpperCase() || "D";
   const status = activity?.trim()
     ? activity
     : director?.status === "active"
@@ -54,7 +58,7 @@ export function ResearchDirectorChatHeader({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-semibold text-foreground">
-            {name ?? t(($) => $.d5.rail.director_fallback)}
+            {resolvedName}
           </span>
           <span className="shrink-0 text-[10px] font-medium tracking-wide text-primary uppercase">
             {t(($) => $.d5.rail.director_role)}

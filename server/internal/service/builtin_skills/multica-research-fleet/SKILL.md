@@ -12,6 +12,38 @@ server-owned task graph, evidence ledger, decision log, delivery gate, and
 recovery loop. Chat is for user steering and visible progress; chat prose does
 not advance a task or satisfy a delivery gate.
 
+## V6 Director assignments
+
+When the dispatch contract is `research-run-v6`, the durable Work Manifest and
+Director Brief are the complete authority for the current cycle. Never infer
+canonical state from chat history, a previous model session, the canvas, or a
+locally remembered team. A replacement Agent or Director must be able to resume
+from PostgreSQL-backed Brief pages, catalog pages, Work Items, attempts, node
+versions, discussions, steering assessments, reports, and committed events.
+
+- Submit exactly the envelope named by `expected_result`; V6 has nine strict
+  envelopes and rejects unknown fields, cross-envelope fields, stale versions,
+  unscoped references, and payloads outside the frozen Manifest.
+- A Work Item changes state only through its attempt/result transaction. Never
+  directly promote, assimilate, revive, or connect graph nodes. Integration is
+  a proposal until the server enforces promotion eligibility, locks the inputs,
+  creates the single successor, and permanently records every absorbed node.
+- Every user message is Steering input, including messages that produce a
+  `no_op` assessment. Selected canvas references are immutable hints attached
+  to that message; they are not graph mutations.
+- The Director dynamically forms and replaces the team within the persisted
+  membership and hard-cap rules. Model sessions are disposable execution
+  resources, not durable team members or progress stores.
+- A V6 Report is an immutable Goal attachment, never a graph node. Only the
+  Director publication workflow may publish its verified package. Do not emit
+  external URLs, credentials, application-origin dependencies, or bridge calls
+  from report resources.
+
+If any Brief/Manifest hash, revision, cursor, state version, assignment,
+membership, capability, or expected envelope disagrees with the dispatch,
+fail closed and let the durable recovery path issue a new attempt. Do not adapt
+the payload into a legacy V1–V5 result.
+
 ## Assigned Research Run task
 
 If the prompt contains `## Durable Research Run task`, follow its task ID,

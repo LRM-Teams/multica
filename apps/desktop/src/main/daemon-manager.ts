@@ -916,7 +916,9 @@ async function lifecycleBlockedByForeignDaemon(): Promise<boolean> {
   );
 }
 
-async function stopDaemon(): Promise<{ success: boolean; error?: string }> {
+async function stopDaemon(
+  action: "stop" | "restart" = "stop",
+): Promise<{ success: boolean; error?: string }> {
   // Central lifecycle guard: a daemon running in an environment we can't drive
   // (e.g. Linux in WSL2 behind a Windows desktop) can't be stopped by the
   // native CLI — it would act on the host process namespace and no-op, while
@@ -939,15 +941,27 @@ async function stopDaemon(): Promise<{ success: boolean; error?: string }> {
   const args = ["daemon", "stop", ...profileArgs(active)];
 
   return new Promise((resolve) => {
-    execFile(bin, args, { timeout: 15_000 }, (err) => {
-      if (err) {
-        resolve({ success: false, error: err.message });
-      } else {
-        resolve({ success: true });
-      }
-      currentState = "stopped";
-      sendStatus({ state: "stopped" });
-    });
+    execFile(
+      bin,
+      args,
+      {
+        timeout: 15_000,
+        env: {
+          ...process.env,
+          MULTICA_SHUTDOWN_SOURCE: "desktop",
+          MULTICA_SHUTDOWN_ACTION: action,
+        },
+      },
+      (err) => {
+        if (err) {
+          resolve({ success: false, error: err.message });
+        } else {
+          resolve({ success: true });
+        }
+        currentState = "stopped";
+        sendStatus({ state: "stopped" });
+      },
+    );
   });
 }
 
@@ -957,7 +971,7 @@ async function restartDaemon(): Promise<{ success: boolean; error?: string }> {
   // first-workspace, and any future restart caller all route through here).
   // #3916.
   if (await lifecycleBlockedByForeignDaemon()) return { success: true };
-  const stopResult = await stopDaemon();
+  const stopResult = await stopDaemon("restart");
   if (!stopResult.success) return stopResult;
   return startDaemon();
 }

@@ -84,6 +84,7 @@ export interface StarGraphCanvasProps {
   cameraSessionId?: string;
   selectedNodeId?: string | null;
   onSelectNode?: (nodeId: string) => void;
+  onClearSelection?: () => void;
   onOpenNode?: (nodeId: string) => void;
   /** Server-declared one-layer expansion state; absent keeps legacy behavior. */
   expansionControl?: StarGraphExpansionControl;
@@ -137,6 +138,7 @@ export function StarGraphCanvas({
   cameraSessionId,
   selectedNodeId = null,
   onSelectNode,
+  onClearSelection,
   onOpenNode,
   expansionControl,
   densityBins = [],
@@ -270,9 +272,13 @@ export function StarGraphCanvas({
     previousEntitiesRef.current = model.entities;
     previousModelRef.current = model;
   }, [model]);
-  const dragRef = useRef<{ startX: number; startY: number; cameraX: number; cameraY: number } | null>(
-    null,
-  );
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    cameraX: number;
+    cameraY: number;
+    moved: boolean;
+  } | null>(null);
   const entityLabels = useMemo<StarGraphEntityLabels>(
     () => ({
       tierHeaders: {
@@ -662,12 +668,19 @@ export function StarGraphCanvas({
       startY: event.clientY,
       cameraX: camera.x,
       cameraY: camera.y,
+      moved: false,
     };
   }, [camera.x, camera.y, stopCameraTransition]);
 
   const handlePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
+    if (
+      Math.abs(event.clientX - drag.startX) > 4 ||
+      Math.abs(event.clientY - drag.startY) > 4
+    ) {
+      drag.moved = true;
+    }
     setCamera((current) => ({
       ...current,
       x: drag.cameraX + (event.clientX - drag.startX),
@@ -676,11 +689,23 @@ export function StarGraphCanvas({
   }, [setCamera]);
 
   const handlePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
     dragRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-  }, []);
+    if (drag && !drag.moved) onClearSelection?.();
+  }, [onClearSelection]);
+
+  const handlePointerCancel = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      dragRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
+  );
 
   const applyKeyboardAction = useCallback(
     (action: CanvasKeyboardAction, focusId: string | null) => {
@@ -834,7 +859,7 @@ export function StarGraphCanvas({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       onWheel={handleWheel}
       onKeyDown={handleKeyDown}
     >

@@ -6,9 +6,24 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
+
+const (
+	shutdownSourceHeader     = "X-Multica-Shutdown-Source"
+	shutdownActionHeader     = "X-Multica-Shutdown-Action"
+	shutdownRequestPIDHeader = "X-Multica-Shutdown-Request-Pid"
+)
+
+// ShutdownRequest identifies the local process and lifecycle operation asking
+// the resident Computer to exit. It is diagnostic metadata, not authorization.
+type ShutdownRequest struct {
+	Source     string
+	Action     string
+	RequestPID int
+}
 
 // HealthProbe reports the resident Computer's health map for a loopback
 // health port, replacing the real HTTP probe in tests. It is the replaceable
@@ -86,14 +101,19 @@ func Alive(health map[string]any) bool {
 }
 
 // RequestShutdown POSTs to the resident process's /shutdown endpoint to ask
-// it to exit gracefully. Returns an error if the request could not be
-// delivered (network error, non-2xx status, or the endpoint predates this
-// change).
-func RequestShutdown(port int) error {
+// it to exit gracefully and includes non-sensitive audit metadata. Returns an
+// error if the request could not be delivered (network error, non-2xx status,
+// or the endpoint predates this change).
+func RequestShutdown(port int, audit ShutdownRequest) error {
 	url := fmt.Sprintf("http://127.0.0.1:%d/shutdown", port)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		return err
+	}
+	req.Header.Set(shutdownSourceHeader, strings.TrimSpace(audit.Source))
+	req.Header.Set(shutdownActionHeader, strings.TrimSpace(audit.Action))
+	if audit.RequestPID > 0 {
+		req.Header.Set(shutdownRequestPIDHeader, strconv.Itoa(audit.RequestPID))
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Do(req)

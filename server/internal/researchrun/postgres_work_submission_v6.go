@@ -81,7 +81,7 @@ func (s *PostgresStore) RecordV6Submission(ctx context.Context, access V6Attempt
 	}
 	if _, err = appendEvent(ctx, tx, access.WorkspaceID, access.RunID, "v6_work_submission_received",
 		"v6-submission:"+requestID, "agent", access.AgentID,
-		map[string]any{"submission_id": outcome.SubmissionID, "work_item_id": access.WorkItemID, "attempt_id": access.AttemptID, "contract_kind": decoded.Kind, "content_hash": decoded.ContentHash}); err != nil {
+		map[string]any{"submission_id": outcome.SubmissionID, "work_item_id": access.WorkItemID, "work_item_attempt_id": access.AttemptID, "contract_kind": decoded.Kind, "content_hash": decoded.ContentHash}); err != nil {
 		return V6SubmissionOutcome{}, err
 	}
 	if err = s.commitResearchTx(ctx, txOpV6SubmissionRecord, tx); err != nil {

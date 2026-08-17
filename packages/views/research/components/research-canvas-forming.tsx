@@ -6,6 +6,7 @@ import { useT } from "../../i18n/use-t";
 
 type Props = {
   mode?: "forming" | "stalled";
+  directorMode?: boolean;
   stage?: string;
   members?: ResearchFleetMember[];
   tasks?: ResearchRunTask[];
@@ -20,6 +21,7 @@ const EMPTY_MESSAGES: ResearchMessage[] = [];
 
 export function ResearchCanvasForming({
   mode = "forming",
+  directorMode = false,
   stage,
   members = EMPTY_MEMBERS,
   tasks = EMPTY_TASKS,
@@ -39,6 +41,48 @@ export function ResearchCanvasForming({
   const stageLabel = stage
     ? t(($) => $.stage[stage as keyof typeof $.stage] ?? stage)
     : t(($) => $.session_page.canvas_forming_title);
+
+  if (directorMode) {
+    return (
+      <div
+        data-testid="research-session-canvas-forming"
+        data-forming-mode={mode}
+        data-director-mode="true"
+        className="absolute inset-0 z-[5] flex flex-col items-center justify-center gap-5 bg-canvas-bg/88 px-6 py-8"
+        aria-busy={mode === "forming"}
+        aria-live="polite"
+      >
+        <div className="relative h-44 w-72 max-w-full" aria-hidden="true">
+          <span className="absolute top-1/2 left-1/2 size-20 -translate-x-1/2 -translate-y-1/2 rounded-full border border-success/55 bg-success/10 shadow-[0_0_48px_color-mix(in_oklab,var(--success)_18%,transparent)]" />
+          {[
+            "top-3 left-8",
+            "top-6 right-7",
+            "bottom-4 left-14",
+            "right-12 bottom-2",
+          ].map((position, index) => (
+            <span
+              key={position}
+              className={`absolute ${position} size-10 rounded-full border border-primary/45 bg-primary/10 motion-safe:animate-pulse`}
+              style={{ animationDelay: `${index * 180}ms` }}
+            />
+          ))}
+          <span className="absolute inset-7 rounded-[50%] border border-dashed border-primary/25 motion-safe:animate-[spin_18s_linear_infinite]" />
+        </div>
+        <div className="max-w-lg text-center">
+          <p className="text-sm font-medium text-foreground">
+            {mode === "stalled"
+              ? t(($) => $.session_page.director_canvas_stalled_title)
+              : t(($) => $.session_page.director_canvas_forming_title)}
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            {mode === "stalled"
+              ? t(($) => $.session_page.director_canvas_stalled_hint)
+              : t(($) => $.session_page.director_canvas_forming_hint)}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

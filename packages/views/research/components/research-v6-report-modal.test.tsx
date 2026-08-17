@@ -27,6 +27,7 @@ const report = {
   title: "Agent collaboration modes",
   packageHash: "sha256:abc",
   sandboxUrl: "https://reports.example.test/report-1?signature=x",
+  reportOrigin: "https://reports.example.test",
   plainTextFallback: "Verified report text",
 };
 

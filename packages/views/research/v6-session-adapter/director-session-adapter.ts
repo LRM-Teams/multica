@@ -47,6 +47,7 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
 export function adaptResearchV6DirectorCanvas(
   projection: ResearchV6DirectorCanvasProjection,
 ): ResearchV6DirectorCanvasAdapterResult {
+  const visibleNodes = projection.nodes.filter((node) => !node.absorbed);
   const absorbedInputs = new Map<string, string[]>();
   for (const edge of projection.edges) {
     if (edge.kind !== "absorbed_into") continue;
@@ -57,7 +58,7 @@ export function adaptResearchV6DirectorCanvas(
 
   const expandableNodeIds = new Set<string>();
   const hiddenChildCountByNodeId = new Map<string, number>();
-  for (const node of projection.nodes) {
+  for (const node of visibleNodes) {
     if (node.expandable) expandableNodeIds.add(node.id);
     hiddenChildCountByNodeId.set(node.id, node.hidden_child_count);
   }
@@ -71,8 +72,8 @@ export function adaptResearchV6DirectorCanvas(
     graph: {
       session_id: projection.runId,
       graph_version: projection.eventSequence,
-      total_node_count: projection.nodes.length,
-      nodes: projection.nodes.map((node) => ({
+      total_node_count: visibleNodes.length,
+      nodes: visibleNodes.map((node) => ({
         id: node.id,
         session_id: projection.runId,
         node_type: node.kind,

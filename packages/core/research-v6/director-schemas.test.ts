@@ -53,25 +53,25 @@ describe("Director V6 projection wire schemas", () => {
     );
   });
 
-  it("rejects the legacy experimental projection shape", () => {
-    expect(() =>
+  it("degrades the legacy experimental projection shape without throwing", () => {
+    expect(
       parseResearchV6DirectorProjectionSnapshot({
         snapshot_id: SNAPSHOT_ID,
         run_id: ID,
         graph_content_hash: { nodes: HASH, edges: HASH },
         nodes: [],
         edges: [],
-      }),
-    ).toThrow();
+      }).slice_key,
+    ).toBe("invalid-response");
   });
 
-  it("rejects invented fields at the production boundary", () => {
-    expect(() =>
+  it("degrades invented fields at the production boundary", () => {
+    expect(
       parseResearchV6DirectorProjectionSnapshot({
         ...snapshot(),
         direction: "both",
-      }),
-    ).toThrow();
+      }).slice_key,
+    ).toBe("invalid-response");
   });
 
   it("parses the HTTP delta page envelope independently of a delta", () => {

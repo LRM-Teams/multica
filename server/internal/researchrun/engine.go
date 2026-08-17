@@ -80,6 +80,18 @@ func NewEngineWithV6Adapters(store *PostgresStore, dispatcher Dispatcher, projec
 	return engine
 }
 
+// NewEngineWithRuntimeAdapters wires every V6 external effect while retaining
+// the report package boundary. Production uses this constructor so a process
+// restart cannot silently drop either half of the Director runtime.
+func NewEngineWithRuntimeAdapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage, renderer ReportRenderAdapter, frameAncestors []string, agents AgentLifecycleAdapter, inbox InboxDispatchAdapter) ResearchRun {
+	store.reportStorage, store.reportRenderer = reportStorage, renderer
+	store.reportFrameAncestors = append([]string(nil), frameAncestors...)
+	engine := newEngine(store, dispatcher, projector)
+	engine.v6Agents = agents
+	engine.v6Inbox = inbox
+	return engine
+}
+
 func newEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
 	return &Engine{
 		store: store, dispatcher: dispatcher, projector: projector, clock: systemClock{},
@@ -99,6 +111,28 @@ func (e *Engine) Create(ctx context.Context, in StartInput) (Run, error) {
 		if errors.Is(err, ErrRunLeaseLost) {
 			return run, nil
 		}
+		return run, err
+	}
+	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)
+}
+
+func (e *Engine) BootstrapV6(ctx context.Context, in V6BootstrapInput) (Run, error) {
+	if e == nil || e.store == nil {
+		return Run{}, errors.New("research run engine is unavailable")
+	}
+	run, sequence, err := e.store.BootstrapV6(ctx, in, DefaultRunConfig(in.DepthTier))
+	if err != nil {
+		return Run{}, err
+	}
+	if _, err = e.StartV6DirectorCycle(ctx, StartV6DirectorCycleInput{
+		WorkspaceID: in.WorkspaceID, RunID: run.SessionID, TriggerKey: "bootstrap",
+		FromSequence: sequence, ThroughSequence: sequence, ExpectedStateVersion: run.StateVersion,
+		Now: e.clock.Now(),
+	}); err != nil {
+		return run, err
+	}
+	_, err = e.ReconcileV6Work(ctx, 32)
+	if err != nil && !errors.Is(err, ErrRunLeaseLost) {
 		return run, err
 	}
 	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)

@@ -848,10 +848,16 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const isPaused = session.status === "paused";
   const completionKind = resolveCompletionGuideKind(session.status);
   const showCompletionGuide = Boolean(completionKind) && !completionDismissed;
-  const startedStages = RESEARCH_STAGE_ORDER.filter(
-    (stage) =>
-      resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
-  );
+  // Director V6 has no fixed S1-S4 lifecycle. Keep the historical markers
+  // available only for V1-V5 sessions instead of projecting legacy stages
+  // onto the server-owned Director graph.
+  const startedStages = directorV6Enabled
+    ? []
+    : RESEARCH_STAGE_ORDER.filter(
+        (stage) =>
+          resolveStageStepState(stage, session.current_stage, session.status) !==
+          "upcoming",
+      );
   const latestRound: ResearchProductRoundCard | undefined = productRounds?.rounds?.[
     (productRounds.rounds.length ?? 0) - 1
   ];
@@ -1140,9 +1146,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           formingMode={
             canvasMode === "forming" || canvasMode === "stalled" ? canvasMode : undefined
           }
-          formingStage={session.current_stage}
-          formingMembers={fleet.members}
-          formingTasks={data.run?.tasks ?? []}
+          formingStage={directorV6Enabled ? undefined : session.current_stage}
+          formingMembers={directorV6Enabled ? [] : fleet.members}
+          formingTasks={directorV6Enabled ? [] : (data.run?.tasks ?? [])}
           formingMessages={messages}
           registerReportController={(controller) => {
             reportControllerRef.current = controller;
@@ -1159,7 +1165,15 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                     selectedDirectorReference?.stable_id ===
                     `${selectedDirectorProjectionNode.canonical_ref.kind}:${selectedDirectorProjectionNode.canonical_ref.id}`
                   }
+                  projectionNodeById={
+                    directorCanvas.canvas?.projectionNodeById ?? new Map()
+                  }
                   onRetry={() => void directorNodeDetail.refetch()}
+                  onFocusNode={(nodeId) => {
+                    if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;
+                    handleD5LensChange("relations");
+                    selectSessionCanvasNode(sessionId, nodeId);
+                  }}
                   onReference={() => {
                     const reference = researchV6DirectorSelectedRefFromNode(
                       selectedDirectorProjectionNode,
@@ -1207,10 +1221,17 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             <>
             <ResearchDirectorChatHeader
               director={directorMember}
+              fallbackName={
+                directorV6Enabled
+                  ? t(($) => $.d5.rail.director_ronaldo)
+                  : undefined
+              }
               activity={
                 directorMember
                   ? presence[directorMember.agent_id]?.activity
-                  : null
+                  : directorV6Enabled && session.status === "running"
+                    ? t(($) => $.d5.rail.director_active)
+                    : null
               }
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}
@@ -1594,6 +1615,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   title: directorReportDetail.data.title,
                   packageHash: directorReportDetail.data.package_hash,
                   sandboxUrl: directorReportDetail.data.sandbox_url ?? "",
+                  reportOrigin: directorReportDetail.data.report_origin ?? "",
                   plainTextFallback: directorReportDetail.data.plain_text,
                   revision: directorReportDetail.data.revision,
                   status: directorReportDetail.data.status,

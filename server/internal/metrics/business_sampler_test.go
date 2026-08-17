@@ -89,6 +89,8 @@ func filledSnapshot(now time.Time) *samplerSnapshot {
 	snap.researchProjectionOldestAge = 14
 	snap.researchCancellationPending = 3
 	snap.researchCancellationOldestAge = 27
+	snap.researchV6Health["director_unavailable"] = 1
+	snap.researchV6Health["lost_attempt"] = 2
 	return snap
 }
 
@@ -155,6 +157,10 @@ func TestBusinessSamplerCollectorEmitsExpectedMetrics(t *testing.T) {
 		`multica_research_projection_backlog{measure="oldest_age_seconds"} 14`,
 		`multica_research_cancellation_backlog{measure="pending"} 3`,
 		`multica_research_cancellation_backlog{measure="oldest_age_seconds"} 27`,
+		`multica_research_v6_health{condition="awaiting_director"} 0`,
+		`multica_research_v6_health{condition="director_unavailable"} 1`,
+		`multica_research_v6_health{condition="lost_attempt"} 2`,
+		`multica_research_v6_health{condition="report_object_missing"} 0`,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(body, want) {

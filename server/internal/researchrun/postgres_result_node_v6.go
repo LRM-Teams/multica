@@ -83,7 +83,7 @@ func (s *PostgresStore) acceptAtomicResultV6Tx(ctx context.Context, tx pgx.Tx, s
 	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID: in.WorkspaceID, SessionID: in.RunID, EntityID: resultArtifactID,
 		Kind: ArtifactKindResultArtifact, SourceCreatedAt: &now, ProvenanceCompleteness: ArtifactProvenanceComplete,
-		GoalVersion: &goal, SchemaName: string(V6ContractAtomicResultSubmission), SchemaVersion: "6",
+		GoalVersion: &goal, SchemaVersion: "research-run-v6",
 		AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction, ContentHash: decoded.ContentHash,
 		ProducedByWorkItemID: in.WorkItemID, ProducedByWorkAttemptID: in.AttemptID, ProducedByAgentID: in.AgentID,
 	}); err != nil {
@@ -126,7 +126,7 @@ func (s *PostgresStore) acceptAtomicResultV6Tx(ctx context.Context, tx pgx.Tx, s
 	}
 	event, err := appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_result_node_accepted", "v6-result-node:"+in.ClientRequestID,
 		"agent", in.AgentID, map[string]any{"result_node_id": resultNodeID, "result_artifact_id": resultArtifactID,
-			"artifact_version_id": artifactVersionID, "work_item_id": in.WorkItemID, "attempt_id": in.AttemptID, "tier": "S", "content_hash": decoded.ContentHash})
+			"artifact_version_id": artifactVersionID, "work_item_id": in.WorkItemID, "work_item_attempt_id": in.AttemptID, "tier": "S", "content_hash": decoded.ContentHash})
 	if err != nil {
 		return V6AcceptedResultNode{}, err
 	}

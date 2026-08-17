@@ -189,6 +189,8 @@ export interface ComputerConnection {
   owner_id: string;
   connected: boolean;
   last_seen_at: string | null;
+  /** Owner-projected Machine Work Journal switch; missing on older servers. */
+  work_journal_enabled?: boolean | null;
 }
 
 /** One durable on-disk Agent workspace at `~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. */

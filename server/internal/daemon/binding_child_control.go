@@ -160,6 +160,16 @@ func (d *Daemon) handleComputerWorkDigestCommand(ctx context.Context, command pr
 	return d.bindingHostControl.client.HarvestWorkDigest(ctx, command)
 }
 
+func (d *Daemon) handleComputerWorkJournalCommand(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
+	if d == nil {
+		return false, errors.New("DaemonCore is unavailable")
+	}
+	if d.bindingHostControl == nil {
+		return false, errors.New("Computer Host callback is unavailable")
+	}
+	return d.bindingHostControl.client.SetWorkJournalEnabled(ctx, command)
+}
+
 func (client *bindingHostControlClient) reportRuntimeSet(ctx context.Context, runtimes []Runtime, daemonToken, expiresAt string) error {
 	return client.client.ReportRuntimeSet(ctx, runtimes, daemonToken, expiresAt)
 }

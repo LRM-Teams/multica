@@ -26,6 +26,7 @@ const (
 	bindingChildRuntimeSetPath          = "/binding-child/runtime-set"
 	bindingChildPrepareUpgradePath      = "/binding-child/prepare-upgrade"
 	bindingChildWorkDigestPath          = "/binding-child/work-digest"
+	bindingChildWorkJournalPath         = "/binding-child/work-journal"
 	bindingChildControlBusyCode         = "control_busy"
 )
 
@@ -55,6 +56,7 @@ type HostControlCallbacks struct {
 	MachineActions      func(context.Context, BindingChildIdentity, json.RawMessage) error
 	PrepareUpgrade      func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
 	WorkDigest          func(context.Context, BindingChildIdentity, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
+	WorkJournal         func(context.Context, BindingChildIdentity, protocol.ComputerWorkJournalPayload) (bool, error)
 	Released            func(BindingChildIdentity)
 }
 
@@ -84,6 +86,7 @@ func (control *HostControl) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(bindingChildMachineActionsPath, control.machineActionsHandler())
 	mux.HandleFunc(bindingChildPrepareUpgradePath, control.prepareUpgradeHandler())
 	mux.HandleFunc(bindingChildWorkDigestPath, control.workDigestHandler())
+	mux.HandleFunc(bindingChildWorkJournalPath, control.workJournalHandler())
 	mux.HandleFunc(bindingChildRuntimeSetPath, control.runtimeSetHandler())
 }
 
@@ -322,6 +325,33 @@ func (control *HostControl) workDigestHandler() http.HandlerFunc {
 	}
 }
 
+func (control *HostControl) workJournalHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Identity BindingChildIdentity                `json:"identity"`
+			Command  protocol.ComputerWorkJournalPayload `json:"command"`
+		}
+		if !control.begin(w, r, &request) {
+			return
+		}
+		if !control.current(request.Identity) {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if control.callbacks.WorkJournal == nil {
+			http.Error(w, "Computer work journal is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		enabled, err := control.callbacks.WorkJournal(r.Context(), request.Identity, request.Command)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": enabled})
+	}
+}
+
 func (control *HostControl) rawHandler(callback func(context.Context, BindingChildIdentity, json.RawMessage) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request rawControlRequest
@@ -552,6 +582,50 @@ func (client *HostControlClient) HarvestWorkDigest(ctx context.Context, command 
 		return protocol.WorkDigest{}, fmt.Errorf("Binding Host control %s returned %s: %s", bindingChildWorkDigestPath, response.Status, strings.TrimSpace(string(raw)))
 	}
 	return protocol.ParseWorkDigest(raw)
+}
+
+func (client *HostControlClient) SetWorkJournalEnabled(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
+	if client == nil || client.baseURL == "" || client.token == "" || client.identity.Validate() != nil {
+		return false, errors.New("Binding Host control client is not configured")
+	}
+	if err := command.Validate(); err != nil {
+		return false, err
+	}
+	body, err := json.Marshal(struct {
+		Identity BindingChildIdentity                `json:"identity"`
+		Command  protocol.ComputerWorkJournalPayload `json:"command"`
+	}{Identity: client.identity, Command: command})
+	if err != nil {
+		return false, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+bindingChildWorkJournalPath, bytes.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Multica-Control-Token", client.token)
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		return false, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+	if err != nil {
+		return false, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return false, fmt.Errorf("Binding Host control %s returned %s: %s", bindingChildWorkJournalPath, response.Status, strings.TrimSpace(string(raw)))
+	}
+	var out struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return false, err
+	}
+	return out.Enabled, nil
 }
 
 func (client *HostControlClient) ReportRuntimeSet(ctx context.Context, runtimes any, daemonToken, expiresAt string) error {

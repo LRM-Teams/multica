@@ -586,6 +586,29 @@ func (h *Hub) RequestComputerWorkDigest(ctx context.Context, daemonID, workspace
 	return protocol.ParseWorkDigest(envelope.Digest)
 }
 
+// RequestComputerWorkJournal sets the Computer-local Journal switch and waits
+// for confirmation. Local state stays authoritative.
+func (h *Hub) RequestComputerWorkJournal(ctx context.Context, daemonID, workspaceID string, req protocol.ComputerWorkJournalPayload) (bool, error) {
+	if err := req.Validate(); err != nil {
+		return false, err
+	}
+	raw, err := h.requestWorkspaceRunner(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerWorkJournal, req)
+	if err != nil {
+		return false, err
+	}
+	var done protocol.ComputerWorkJournalDonePayload
+	if err := json.Unmarshal(raw, &done); err != nil {
+		return false, err
+	}
+	if !done.OK {
+		if strings.TrimSpace(done.Error) == "" {
+			return false, errors.New("Computer work journal update failed")
+		}
+		return false, errors.New(done.Error)
+	}
+	return done.Enabled, nil
+}
+
 func (h *Hub) requestWorkspaceRunner(ctx context.Context, daemonID, workspaceID, requestID, msgType string, payload any) (json.RawMessage, error) {
 	if h == nil {
 		return nil, ErrComputerOffline
@@ -1536,9 +1559,11 @@ func (c *client) handleFrame(raw []byte) {
 		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil && idOnly.RequestID != "" {
 			c.hub.deliverResponse(idOnly.RequestID, msg.Payload)
 		}
-	case protocol.EventComputerWorkDigestDone:
-		var done protocol.ComputerWorkDigestDonePayload
-		if err := json.Unmarshal(msg.Payload, &done); err != nil || done.Validate() != nil {
+	case protocol.EventComputerWorkDigestDone, protocol.EventComputerWorkJournalDone:
+		var done struct {
+			RequestID string `json:"requestId"`
+		}
+		if err := json.Unmarshal(msg.Payload, &done); err != nil || strings.TrimSpace(done.RequestID) == "" {
 			return
 		}
 		if !c.hub.isCurrentWorkspaceRunner(c) {

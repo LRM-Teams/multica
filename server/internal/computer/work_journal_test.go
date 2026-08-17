@@ -103,6 +103,54 @@ func TestHostHarvestWorkDigestDisabledReturnsEmptyRepos(t *testing.T) {
 	}
 }
 
+func TestHostWorkJournalToggleChangesHarvestFromEmptyToFixtureRepos(t *testing.T) {
+	home, appRoot := setupWorkJournalHome(t)
+	root := t.TempDir()
+	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
+	command := protocol.ComputerWorkDigestPayload{
+		RequestID: "digest-1",
+		Start:     start,
+		End:       start.Add(7 * 24 * time.Hour),
+	}
+	host := &Host{
+		processIdentity: HostProcessIdentity{ComputerID: "computer-1"},
+		workJournalHome: home,
+		workJournalRoot: root,
+	}
+	off, err := host.HarvestWorkDigest(context.Background(), command)
+	if err != nil {
+		t.Fatalf("disabled harvest: %v", err)
+	}
+	if !off.Disabled || len(off.Repos) != 0 {
+		t.Fatalf("default journal %+v", off)
+	}
+	if err := host.SetWorkJournalEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	on, err := host.HarvestWorkDigest(context.Background(), command)
+	if err != nil {
+		t.Fatalf("enabled harvest: %v", err)
+	}
+	if on.Disabled || len(on.Repos) != 1 || on.Repos[0].Root != appRoot {
+		t.Fatalf("enabled journal %+v", on)
+	}
+	if err := host.SetWorkJournalEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	again, err := host.HarvestWorkDigest(context.Background(), command)
+	if err != nil {
+		t.Fatalf("re-disabled harvest: %v", err)
+	}
+	if !again.Disabled || len(again.Repos) != 0 {
+		t.Fatalf("re-disabled journal %+v", again)
+	}
+	reloaded := &Host{workJournalRoot: root}
+	reloaded.loadWorkJournalSetting()
+	if reloaded.WorkJournalEnabled() {
+		t.Fatal("persisted setting should be disabled after toggle off")
+	}
+}
+
 func setupWorkJournalHome(t *testing.T) (home, appRoot string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {

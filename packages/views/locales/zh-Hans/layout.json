@@ -113,6 +113,7 @@
     "retrospective_source_touched_notes_hint": "时间窗内你更新的私有笔记",
     "retrospective_source_agent_runs": "Agent runs",
     "retrospective_source_agent_runs_hint": "你发起的，或你拥有的智能体上的 run 短摘要（不含 thinking）",
+    "retrospective_local_work_uncollected": "本机工作未采集",
     "retrospective_sources_required": "请至少选择一个数据源",
     "retrospective_submit": "生成",
     "retrospective_created": "已创建「{{title}}」（{{count}} 条事实）",

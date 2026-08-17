@@ -113,6 +113,7 @@
     "retrospective_source_touched_notes_hint": "Private notes you updated in the window",
     "retrospective_source_agent_runs": "Agent runs",
     "retrospective_source_agent_runs_hint": "Runs you initiated or on agents you own (short summary only — no thinking)",
+    "retrospective_local_work_uncollected": "Local machine work is not being collected",
     "retrospective_sources_required": "Select at least one source",
     "retrospective_submit": "Generate",
     "retrospective_created": "Created «{{title}}» ({{count}} facts)",

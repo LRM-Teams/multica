@@ -35,6 +35,7 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 			Start:     time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC),
 			End:       time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC),
 		},
+		ComputerWorkJournalPayload{RequestID: "journal-1", Enabled: true},
 	}
 
 	var encoded strings.Builder

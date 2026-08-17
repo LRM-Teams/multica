@@ -1219,6 +1219,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/computers", h.ListComputers)
 			r.Delete("/api/computers/{daemonId}", h.DeleteComputer)
 			r.Get("/api/computers/{daemonId}/work-digest", h.GetComputerWorkDigest)
+			r.Patch("/api/computers/{daemonId}/work-journal", h.PatchComputerWorkJournal)
 
 			// Runtimes
 			r.Route("/api/runtimes", func(r chi.Router) {

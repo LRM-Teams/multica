@@ -44,8 +44,10 @@ type Host struct {
 	diagnosticMu       sync.Mutex
 	diagnosticLoggers  map[string]*diagnosticlog.Logger
 	processIdentity    HostProcessIdentity
+	workJournalMu      sync.Mutex
 	workJournalEnabled bool
 	workJournalHome    string
+	workJournalRoot    string
 }
 
 type hostBindingRuntime struct {
@@ -153,6 +155,15 @@ func NewHost(config HostConfig) (*Host, error) {
 			return external.WorkDigest(ctx, identity, command)
 		}
 		return host.HarvestWorkDigest(ctx, command)
+	}
+	callbacks.WorkJournal = func(ctx context.Context, identity BindingChildIdentity, command protocol.ComputerWorkJournalPayload) (bool, error) {
+		if external.WorkJournal != nil {
+			return external.WorkJournal(ctx, identity, command)
+		}
+		if err := host.SetWorkJournalEnabled(command.Enabled); err != nil {
+			return false, err
+		}
+		return host.WorkJournalEnabled(), nil
 	}
 	callbacks.Released = func(identity BindingChildIdentity) {
 		host.runtimeMu.Lock()

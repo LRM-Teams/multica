@@ -124,6 +124,23 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			if err := writeFrame(protocol.EventComputerWorkDigestDone, done); err != nil {
 				return err
 			}
+		case protocol.EventComputerWorkJournal:
+			var command protocol.ComputerWorkJournalPayload
+			if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
+				continue
+			}
+			done := protocol.ComputerWorkJournalDonePayload{RequestID: command.RequestID, Enabled: command.Enabled}
+			if runner.handleComputerWorkJournal == nil {
+				done.Error = "work journal host unavailable"
+			} else if enabled, err := runner.handleComputerWorkJournal(connection.ctx, command); err != nil {
+				done.Error = err.Error()
+			} else {
+				done.OK = true
+				done.Enabled = enabled
+			}
+			if err := writeFrame(protocol.EventComputerWorkJournalDone, done); err != nil {
+				return err
+			}
 		case protocol.EventComputerUpgrade, protocol.EventComputerRestart:
 			var command protocol.ComputerUpgradePayload
 			if message.Type == protocol.EventComputerRestart {

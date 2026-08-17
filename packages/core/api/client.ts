@@ -312,6 +312,7 @@ import {
   EMPTY_AGENT_RESTART_PREFLIGHT,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
+  EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -341,6 +342,7 @@ import {
   EMPTY_AGENT_PRESENCE_RESPONSE,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
+  ComputerWorkJournalSettingSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelGoalEnvelopeSchema,
@@ -1858,6 +1860,22 @@ export class ApiClient {
       ComputerConnectionListSchema,
       EMPTY_COMPUTER_CONNECTION_LIST,
       { endpoint: "GET /api/computers" },
+    );
+  }
+
+  async patchComputerWorkJournal(
+    daemonId: string,
+    enabled: boolean,
+  ): Promise<{ enabled: boolean }> {
+    const raw = await this.fetch<unknown>(
+      `/api/computers/${encodeURIComponent(daemonId)}/work-journal`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    );
+    return parseWithFallback(
+      raw,
+      ComputerWorkJournalSettingSchema,
+      EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
+      { endpoint: "PATCH /api/computers/:daemonId/work-journal" },
     );
   }
 

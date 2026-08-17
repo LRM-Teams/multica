@@ -635,9 +635,15 @@ export const ComputerConnectionSchema = z.object({
   owner_id: z.string().min(1),
   connected: z.boolean(),
   last_seen_at: z.string().nullable(),
+  work_journal_enabled: z.boolean().nullable().optional(),
 }).loose();
 export const ComputerConnectionListSchema = z.array(ComputerConnectionSchema);
 export const EMPTY_COMPUTER_CONNECTION_LIST: ComputerConnection[] = [];
+
+export const ComputerWorkJournalSettingSchema = z.object({
+  enabled: z.boolean(),
+}).loose();
+export const EMPTY_COMPUTER_WORK_JOURNAL_SETTING = { enabled: false };
 
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive

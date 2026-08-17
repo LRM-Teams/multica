@@ -133,7 +133,8 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
   - **依赖**：J1-T3
   - **完成标准**：Handler 测：Owner 200 + 形状符合 J1-T1；同 Workspace 非 Owner 403；未开启返回 `disabled` 空 repos 而非 500。
 
-- [ ] **J1-T5 Owner 启用开关**
+- [x] **J1-T5 Owner 启用开关**
+  - **已落地（2026-08-17）**：本机 `{resident}/work-journal.json` 为权威（缺文件=关）；Owner `PATCH /api/computers/{id}/work-journal`；列表投影 `work_journal_enabled`；Notes 回顾入口未开启时提示「本机工作未采集」，不阻断。测：Host 关→开→有仓→再关；handler 非 Owner 403、离线 503。
   - **目标**：Journal 默关；Owner 能打开/关闭自己的 Computer。
   - **要做**：Computer 本机设置 + 服务端能读到 enabled 位（本机权威即可，列表 API 可投影 `work_journal_enabled`）。Notes 入口在未开启时提示「本机工作未采集」，仍允许只用平台 Facts 继续。
   - **不要做**：Workspace 级总开关替 Owner 打开别人的机器；默认扫描未同意的机器。
@@ -218,7 +219,7 @@ Computer Owner 选定时间窗后，系统采集 **平台工作 + 整机工作�
 | 顺序 | 下一步 |
 |------|--------|
 | 1 | ~~J1-T1~~ Digest 协议（已完成） |
-| 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ **J1-T5** |
+| 2 | ~~J1-T2~~ denylist（已完成）→ ~~J1-T3~~ 收割（已完成）→ ~~J1-T4~~ Owner 拉取（已完成）→ ~~J1-T5~~ 开关（已完成） |
 | 3 | J2（平台包 + PR + 归仓） |
 | 4 | J3（剧本 → 派发 → UI → 落笔记） |
 | 5 | 仅当产品需要时再开 J4 |

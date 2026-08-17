@@ -151,6 +151,7 @@
     "./research-v6/director-schemas": "./research-v6/director-schemas.ts",
     "./research-v6-live": "./hooks/research-v6-live/index.ts",
     "./api/research-v6": "./api/research-v6.ts",
+    "./api/research-v6-director": "./api/research-v6-director.ts",
     "./api/research-v6/fixtures": "./api/research-v6-fixtures.ts"
   },
   "dependencies": {

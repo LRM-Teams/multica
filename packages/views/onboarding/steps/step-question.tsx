@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import type { OnboardingStep } from "@multica/core/onboarding";
@@ -134,23 +134,7 @@ export function StepQuestion({
   return (
     <div className="animate-onboarding-enter flex h-full min-h-0 flex-col bg-background">
       <DragStrip />
-      <header className="flex shrink-0 items-center gap-4 bg-background px-6 py-3 sm:px-10 md:px-14 lg:px-16">
-        {onBack ? (
-          <button
-            type="button"
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            {t(($) => $.common.back)}
-          </button>
-        ) : (
-          <span aria-hidden className="w-0" />
-        )}
-        <div className="flex-1">
-          <StepHeader currentStep={step} />
-        </div>
-      </header>
+      <StepHeader currentStep={step} onBack={onBack} />
 
       <main
         ref={mainRef}

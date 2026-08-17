@@ -149,6 +149,7 @@ export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation
     case "escalated_to":
     case "decompose":
     case "derived_from":
+    case "collapsed_path":
     case "deepens":
       return "decompose";
     case "supports":
@@ -161,6 +162,9 @@ export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation
     case "staffed_by":
     case "created_for":
     case "retired_after":
+    case "absorbed_into":
+    case "produced_by":
+    case "belongs_to":
       return "support";
     case "discussed_by":
     case "challenged_by":
@@ -170,6 +174,7 @@ export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation
     case "superseded_by":
     case "invalidated_by":
     case "abandons":
+    case "challenges":
       return "challenge";
     case "restart_of":
       return "newdir";

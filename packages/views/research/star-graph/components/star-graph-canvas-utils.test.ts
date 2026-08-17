@@ -119,6 +119,13 @@ describe("star-graph-canvas-utils", () => {
     expect(relationEdgeClass("challenge", "contradicts")).toBe("sg-edge-challenge");
     expect(relationEdgeClass("newdir", "restart_of")).toBe("sg-edge-newdir");
     expect(relationEdgeClass("support", "merged_from")).toBe("sg-edge-merge");
+    expect(relationEdgeClass("support", "absorbed_into")).toBe("sg-edge-merge");
+    expect(relationEdgeClass("decompose", "collapsed_path")).toBe(
+      "sg-edge-decompose",
+    );
+    expect(relationEdgeClass("challenge", "challenges")).toBe(
+      "sg-edge-challenge",
+    );
     expect(relationEdgeClass("support", "integrates")).toBe("sg-edge-merge");
     expect(relationEdgeClass("decompose", "decomposes")).toBe(
       "sg-edge-decompose",

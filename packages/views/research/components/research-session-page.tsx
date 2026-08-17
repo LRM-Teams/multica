@@ -1015,6 +1015,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       .postResearchMessage(sessionId, { body })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+      )
+      .catch((error: unknown) =>
+        mutationErrorToast(t(($) => $.panel.send_failed), error),
       );
   };
 

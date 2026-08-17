@@ -133,7 +133,7 @@ func (s *PostgresStore) executeV6BranchLifecycleAction(ctx context.Context, prop
 	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.TargetID) {
 		return ErrInvalidContract
 	}
-	status := map[string]string{"update_branch": "active", "pause_branch": "paused", "terminate_branch": "terminated", "split_branch": "active", "merge_branch": "active"}[action.Kind]
+	status := map[string]string{"update_branch": "active", "pause_branch": "paused", "terminate_branch": "terminated", "split_branch": "active", "merge_branch": "completed"}[action.Kind]
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -142,7 +142,7 @@ func (s *PostgresStore) executeV6BranchLifecycleAction(ctx context.Context, prop
 	if err = lockRunForMutation(ctx, tx, proposal.RunID, proposal.WorkspaceID); err != nil {
 		return err
 	}
-	command, err := tx.Exec(ctx, `UPDATE research_branch SET status=$4,objective=COALESCE(NULLIF($5,''),objective),scope=CASE WHEN $6::jsonb='{}'::jsonb THEN scope ELSE $6::jsonb END,state_version=state_version+1,reason_code=CASE WHEN $4='terminated' THEN 'stopped_by_director' ELSE reason_code END,reason_detail=CASE WHEN $4='terminated' THEN $7 ELSE reason_detail END,updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND status NOT IN ('terminated','obsolete')`, proposal.WorkspaceID, proposal.RunID, payload.TargetID, status, payload.Mission, normalizedV6JSON(payload.Scope, `{}`), action.Reason)
+	command, err := tx.Exec(ctx, `UPDATE research_branch SET status=$4,objective=COALESCE(NULLIF($5,''),objective),scope=CASE WHEN $6::jsonb='{}'::jsonb THEN scope ELSE $6::jsonb END,state_version=state_version+1,reason_code=CASE WHEN $4='terminated' THEN 'stopped_by_director' WHEN $4='completed' THEN 'merged_by_director' ELSE reason_code END,reason_detail=CASE WHEN $4 IN ('terminated','completed') THEN $7 ELSE reason_detail END,updated_at=now() WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND id=$3::uuid AND status NOT IN ('terminated','obsolete','completed')`, proposal.WorkspaceID, proposal.RunID, payload.TargetID, status, payload.Mission, normalizedV6JSON(payload.Scope, `{}`), action.Reason)
 	if err != nil {
 		return err
 	}

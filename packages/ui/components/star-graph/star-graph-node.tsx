@@ -66,6 +66,8 @@ export interface StarGraphNodeProps {
   busy?: boolean;
   /** Server-backed disclosure state; omitted for ordinary graph nodes. */
   expanded?: boolean;
+  /** Request-level failure; distinct from canonical node lifecycle. */
+  invalid?: boolean;
   /** Grid position on the canvas (left/top in % or px). Optional. */
   style?: React.CSSProperties;
   onOpen?: () => void;
@@ -88,6 +90,7 @@ export function StarGraphNode({
   metricText,
   busy,
   expanded,
+  invalid,
   accessibleName,
   tabIndex,
   style,
@@ -126,6 +129,7 @@ export function StarGraphNode({
       aria-label={readable}
       aria-busy={busy || undefined}
       aria-expanded={expanded}
+      aria-invalid={invalid || undefined}
       onClick={onOpen}
       data-tier={tier}
       data-state={state}

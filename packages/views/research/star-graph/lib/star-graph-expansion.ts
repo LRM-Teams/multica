@@ -9,6 +9,9 @@ export interface StarGraphExpansionControl {
   expandableNodeIds: ReadonlySet<string>;
   expandedNodeIds: ReadonlySet<string>;
   loadingNodeIds?: ReadonlySet<string>;
+  failedNodeIds?: ReadonlySet<string>;
+  /** Localized suffix announced for a failed disclosure request. */
+  failureLabel?: string;
   /** Latest server-backed disclosure result, used only for spatial motion. */
   transition?: StarGraphExpansionTransition | null;
   /** Removes blur/glow while retaining position and opacity semantics. */

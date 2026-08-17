@@ -208,6 +208,28 @@ func TestBuildPiEnvPreservesExplicitPackageDirOverride(t *testing.T) {
 	}
 }
 
+func TestBuildPiEnvPinsDefaultCodingAgentDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(piCodingAgentDirEnvKey, "")
+
+	env := buildPiEnv(nil)
+	want := piCodingAgentDirEnvKey + "=" + filepath.Join(home, ".pi", "agent")
+	if !containsEnvEntry(env, want) {
+		t.Fatalf("Pi coding agent dir was not pinned to the effective home: %v", env)
+	}
+}
+
+func TestBuildPiEnvPreservesExplicitCodingAgentDir(t *testing.T) {
+	t.Setenv(piCodingAgentDirEnvKey, filepath.Join(t.TempDir(), "inherited"))
+	explicit := filepath.Join(t.TempDir(), "explicit")
+
+	env := buildPiEnv(map[string]string{piCodingAgentDirEnvKey: explicit})
+	if !containsEnvEntry(env, piCodingAgentDirEnvKey+"="+explicit) {
+		t.Fatalf("explicit Pi coding agent dir override was not preserved: %v", env)
+	}
+}
+
 func containsEnvEntry(env []string, want string) bool {
 	for _, entry := range env {
 		if entry == want {

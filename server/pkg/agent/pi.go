@@ -54,7 +54,10 @@ var (
 	piControlTokenRE = regexp.MustCompile(`<\|[A-Za-z0-9_-]+>[A-Za-z0-9_-]*|<[A-Za-z0-9_-]+\|>`)
 )
 
-const piPackageDirEnvKey = "PI_PACKAGE_DIR"
+const (
+	piCodingAgentDirEnvKey = "PI_CODING_AGENT_DIR"
+	piPackageDirEnvKey     = "PI_PACKAGE_DIR"
+)
 
 var piInheritedEnvBlocklist = map[string]struct{}{
 	// Raft's SEA launcher uses this name for its own resource root. Pi treats it
@@ -67,7 +70,26 @@ var piInheritedEnvBlocklist = map[string]struct{}{
 // the shared child-environment boundary. A runtime custom_env value is
 // deliberate Pi configuration and must still win.
 func buildPiEnv(extra map[string]string) []string {
-	return buildProviderEnv(extra, piInheritedEnvBlocklist)
+	env := buildProviderEnv(extra, piInheritedEnvBlocklist)
+	if value, exists := extra[piCodingAgentDirEnvKey]; exists {
+		if strings.TrimSpace(value) != "" {
+			return env
+		}
+	} else if strings.TrimSpace(os.Getenv(piCodingAgentDirEnvKey)) != "" {
+		return env
+	}
+
+	home := strings.TrimSpace(extra["HOME"])
+	if home == "" {
+		home = strings.TrimSpace(os.Getenv("HOME"))
+	}
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	if home == "" {
+		return env
+	}
+	return append(env, piCodingAgentDirEnvKey+"="+filepath.Join(home, ".pi", "agent"))
 }
 
 func stripPiToolCallMarkup(s string) string {

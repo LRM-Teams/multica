@@ -5338,6 +5338,28 @@ export class ApiClient {
     return page;
   }
 
+  async getResearchV6DirectorProjectionNodeDetail(
+    workspaceId: string,
+    runId: string,
+    nodeId: string,
+    view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorNodeDetail> {
+    const { parseResearchV6DirectorNodeDetail } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?view=${encodeURIComponent(view)}`,
+      { signal: options?.signal },
+    );
+    const detail = parseResearchV6DirectorNodeDetail(raw);
+    if (detail.node.id !== nodeId) {
+      throw new Error("Director V6 node detail response changed node identity");
+    }
+    void workspaceId;
+    return detail;
+  }
+
   async getResearchV6DirectorReports(
     workspaceId: string,
     runId: string,

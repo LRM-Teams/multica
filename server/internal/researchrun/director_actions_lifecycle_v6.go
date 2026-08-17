@@ -124,7 +124,7 @@ func (s *PostgresStore) executeV6BranchLifecycleAction(ctx context.Context, prop
 	if json.Unmarshal(action.Payload, &payload) != nil || payload.TargetID == "" {
 		return ErrInvalidContract
 	}
-	status := map[string]string{"update_branch": "active", "pause_branch": "paused", "terminate_branch": "terminated", "split_branch": "active", "merge_branch": "completed"}[action.Kind]
+	status := map[string]string{"update_branch": "active", "pause_branch": "paused", "terminate_branch": "terminated", "split_branch": "active", "merge_branch": "active"}[action.Kind]
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -141,6 +141,36 @@ func (s *PostgresStore) executeV6BranchLifecycleAction(ctx context.Context, prop
 		return ErrInvalidTransition
 	}
 	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_branch_"+action.Kind, "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"branch_id": payload.TargetID, "reason": action.Reason}); err != nil {
+		return err
+	}
+	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
+}
+
+func (s *PostgresStore) executeV6SplitBranchAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
+	if action.PayloadSchema != "target.action.v1" {
+		return ErrInvalidContract
+	}
+	var payload v6TargetActionPayload
+	if json.Unmarshal(action.Payload, &payload) != nil || payload.TargetID == "" || strings.TrimSpace(payload.Mission) == "" {
+		return ErrInvalidContract
+	}
+	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, proposal.RunID, proposal.WorkspaceID); err != nil {
+		return err
+	}
+	var goalVersion int
+	if err = tx.QueryRow(ctx, `SELECT goal_version FROM research_session WHERE workspace_id=$1::uuid AND id=$2::uuid AND state_version=$3`, proposal.WorkspaceID, proposal.RunID, expectedState).Scan(&goalVersion); err != nil {
+		return err
+	}
+	branchID := uuid.NewString()
+	if _, err = tx.Exec(ctx, `INSERT INTO research_branch(id,workspace_id,session_id,parent_branch_id,objective,entry_conditions,exit_conditions,budget_share,status,goal_version,scope,state_version,created_by_director_cycle_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'[]'::jsonb,'[]'::jsonb,0.0,'active',$6,$7::jsonb,1,$8::uuid)`, branchID, proposal.WorkspaceID, proposal.RunID, payload.TargetID, payload.Mission, goalVersion, normalizedV6JSON(payload.Scope, `{}`), cycleID); err != nil {
+		return err
+	}
+	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_branch_split", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"parent_branch_id": payload.TargetID, "branch_id": branchID, "objective": payload.Mission}); err != nil {
 		return err
 	}
 	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)

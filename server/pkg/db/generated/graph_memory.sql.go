@@ -11,15 +11,167 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const appendGraphMemoryChannelLineage = `-- name: AppendGraphMemoryChannelLineage :exec
+INSERT INTO graph_memory_channel_lineage
+  (workspace_id, channel_id, generation, graph_kind, graph_owner_id)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type AppendGraphMemoryChannelLineageParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	ChannelID    pgtype.UUID `json:"channel_id"`
+	Generation   int64       `json:"generation"`
+	GraphKind    string      `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID `json:"graph_owner_id"`
+}
+
+func (q *Queries) AppendGraphMemoryChannelLineage(ctx context.Context, arg AppendGraphMemoryChannelLineageParams) error {
+	_, err := q.db.Exec(ctx, appendGraphMemoryChannelLineage,
+		arg.WorkspaceID,
+		arg.ChannelID,
+		arg.Generation,
+		arg.GraphKind,
+		arg.GraphOwnerID,
+	)
+	return err
+}
+
+const closeGraphMemoryChannelLineage = `-- name: CloseGraphMemoryChannelLineage :exec
+UPDATE graph_memory_channel_lineage SET valid_to = now()
+WHERE channel_id = $1 AND generation = $2 AND valid_to IS NULL
+`
+
+type CloseGraphMemoryChannelLineageParams struct {
+	ChannelID  pgtype.UUID `json:"channel_id"`
+	Generation int64       `json:"generation"`
+}
+
+func (q *Queries) CloseGraphMemoryChannelLineage(ctx context.Context, arg CloseGraphMemoryChannelLineageParams) error {
+	_, err := q.db.Exec(ctx, closeGraphMemoryChannelLineage, arg.ChannelID, arg.Generation)
+	return err
+}
+
+const finishGraphMemoryConsolidationRun = `-- name: FinishGraphMemoryConsolidationRun :exec
+UPDATE graph_memory_consolidation_run
+SET status = $2, error = $3, details = $4, started_at = COALESCE(started_at, now()), finished_at = now()
+WHERE id = $1
+`
+
+type FinishGraphMemoryConsolidationRunParams struct {
+	ID      pgtype.UUID `json:"id"`
+	Status  string      `json:"status"`
+	Error   string      `json:"error"`
+	Details []byte      `json:"details"`
+}
+
+func (q *Queries) FinishGraphMemoryConsolidationRun(ctx context.Context, arg FinishGraphMemoryConsolidationRunParams) error {
+	_, err := q.db.Exec(ctx, finishGraphMemoryConsolidationRun,
+		arg.ID,
+		arg.Status,
+		arg.Error,
+		arg.Details,
+	)
+	return err
+}
+
+const getGraphMemoryChannelBindingForUpdate = `-- name: GetGraphMemoryChannelBindingForUpdate :one
+SELECT project_id FROM channel
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`
+
+type GetGraphMemoryChannelBindingForUpdateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetGraphMemoryChannelBindingForUpdate(ctx context.Context, arg GetGraphMemoryChannelBindingForUpdateParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryChannelBindingForUpdate, arg.ID, arg.WorkspaceID)
+	var project_id pgtype.UUID
+	err := row.Scan(&project_id)
+	return project_id, err
+}
+
+const getGraphMemoryChannelRouteForUpdate = `-- name: GetGraphMemoryChannelRouteForUpdate :one
+SELECT workspace_id, channel_id, routing_mode, current_graph_kind, current_graph_owner_id, generation
+FROM graph_memory_channel_route
+WHERE channel_id = $1 AND workspace_id = $2
+FOR UPDATE
+`
+
+type GetGraphMemoryChannelRouteForUpdateParams struct {
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type GetGraphMemoryChannelRouteForUpdateRow struct {
+	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+	ChannelID           pgtype.UUID `json:"channel_id"`
+	RoutingMode         string      `json:"routing_mode"`
+	CurrentGraphKind    string      `json:"current_graph_kind"`
+	CurrentGraphOwnerID pgtype.UUID `json:"current_graph_owner_id"`
+	Generation          int64       `json:"generation"`
+}
+
+func (q *Queries) GetGraphMemoryChannelRouteForUpdate(ctx context.Context, arg GetGraphMemoryChannelRouteForUpdateParams) (GetGraphMemoryChannelRouteForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryChannelRouteForUpdate, arg.ChannelID, arg.WorkspaceID)
+	var i GetGraphMemoryChannelRouteForUpdateRow
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.RoutingMode,
+		&i.CurrentGraphKind,
+		&i.CurrentGraphOwnerID,
+		&i.Generation,
+	)
+	return i, err
+}
+
+const getGraphMemoryConsolidationRun = `-- name: GetGraphMemoryConsolidationRun :one
+SELECT id, workspace_id, status, trigger_kind, error, details, created_at, started_at, finished_at
+FROM graph_memory_consolidation_run
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetGraphMemoryConsolidationRunParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetGraphMemoryConsolidationRun(ctx context.Context, arg GetGraphMemoryConsolidationRunParams) (GraphMemoryConsolidationRun, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryConsolidationRun, arg.ID, arg.WorkspaceID)
+	var i GraphMemoryConsolidationRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.TriggerKind,
+		&i.Error,
+		&i.Details,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const getGraphMemoryProfile = `-- name: GetGraphMemoryProfile :one
 SELECT workspace_id, memory_type, explore_agents, explore_max_rounds, updated_at
 FROM graph_memory_profile
 WHERE workspace_id = $1
 `
 
-func (q *Queries) GetGraphMemoryProfile(ctx context.Context, workspaceID pgtype.UUID) (GraphMemoryProfile, error) {
+type GetGraphMemoryProfileRow struct {
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	MemoryType       string             `json:"memory_type"`
+	ExploreAgents    int32              `json:"explore_agents"`
+	ExploreMaxRounds int32              `json:"explore_max_rounds"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetGraphMemoryProfile(ctx context.Context, workspaceID pgtype.UUID) (GetGraphMemoryProfileRow, error) {
 	row := q.db.QueryRow(ctx, getGraphMemoryProfile, workspaceID)
-	var i GraphMemoryProfile
+	var i GetGraphMemoryProfileRow
 	err := row.Scan(
 		&i.WorkspaceID,
 		&i.MemoryType,
@@ -28,6 +180,163 @@ func (q *Queries) GetGraphMemoryProfile(ctx context.Context, workspaceID pgtype.
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getGraphMemoryScopedGate = `-- name: GetGraphMemoryScopedGate :one
+SELECT memory_type, scoped_writer_ready, timezone FROM graph_memory_profile
+WHERE workspace_id = $1
+`
+
+type GetGraphMemoryScopedGateRow struct {
+	MemoryType        string `json:"memory_type"`
+	ScopedWriterReady bool   `json:"scoped_writer_ready"`
+	Timezone          string `json:"timezone"`
+}
+
+func (q *Queries) GetGraphMemoryScopedGate(ctx context.Context, workspaceID pgtype.UUID) (GetGraphMemoryScopedGateRow, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryScopedGate, workspaceID)
+	var i GetGraphMemoryScopedGateRow
+	err := row.Scan(&i.MemoryType, &i.ScopedWriterReady, &i.Timezone)
+	return i, err
+}
+
+const insertGraphMemoryConsolidationRun = `-- name: InsertGraphMemoryConsolidationRun :one
+INSERT INTO graph_memory_consolidation_run (workspace_id, trigger_kind)
+VALUES ($1, $2)
+RETURNING id, workspace_id, status, trigger_kind, error, details, created_at, started_at, finished_at
+`
+
+type InsertGraphMemoryConsolidationRunParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	TriggerKind string      `json:"trigger_kind"`
+}
+
+func (q *Queries) InsertGraphMemoryConsolidationRun(ctx context.Context, arg InsertGraphMemoryConsolidationRunParams) (GraphMemoryConsolidationRun, error) {
+	row := q.db.QueryRow(ctx, insertGraphMemoryConsolidationRun, arg.WorkspaceID, arg.TriggerKind)
+	var i GraphMemoryConsolidationRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.TriggerKind,
+		&i.Error,
+		&i.Details,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const listGraphMemoryChannelLineage = `-- name: ListGraphMemoryChannelLineage :many
+SELECT workspace_id, channel_id, generation, graph_kind, graph_owner_id, valid_from, valid_to
+FROM graph_memory_channel_lineage
+WHERE workspace_id = $1 AND channel_id = $2
+ORDER BY generation
+`
+
+type ListGraphMemoryChannelLineageParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+}
+
+func (q *Queries) ListGraphMemoryChannelLineage(ctx context.Context, arg ListGraphMemoryChannelLineageParams) ([]GraphMemoryChannelLineage, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryChannelLineage, arg.WorkspaceID, arg.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GraphMemoryChannelLineage{}
+	for rows.Next() {
+		var i GraphMemoryChannelLineage
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.ChannelID,
+			&i.Generation,
+			&i.GraphKind,
+			&i.GraphOwnerID,
+			&i.ValidFrom,
+			&i.ValidTo,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGraphMemoryConsolidationRuns = `-- name: ListGraphMemoryConsolidationRuns :many
+SELECT id, workspace_id, status, trigger_kind, error, details, created_at, started_at, finished_at
+FROM graph_memory_consolidation_run
+WHERE workspace_id = $1
+ORDER BY created_at DESC
+LIMIT 20
+`
+
+func (q *Queries) ListGraphMemoryConsolidationRuns(ctx context.Context, workspaceID pgtype.UUID) ([]GraphMemoryConsolidationRun, error) {
+	rows, err := q.db.Query(ctx, listGraphMemoryConsolidationRuns, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GraphMemoryConsolidationRun{}
+	for rows.Next() {
+		var i GraphMemoryConsolidationRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Status,
+			&i.TriggerKind,
+			&i.Error,
+			&i.Details,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertGraphMemoryChannelRoute = `-- name: UpsertGraphMemoryChannelRoute :exec
+INSERT INTO graph_memory_channel_route
+  (workspace_id, channel_id, routing_mode, current_graph_kind, current_graph_owner_id, generation)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (channel_id) DO UPDATE SET
+  routing_mode = EXCLUDED.routing_mode,
+  current_graph_kind = EXCLUDED.current_graph_kind,
+  current_graph_owner_id = EXCLUDED.current_graph_owner_id,
+  generation = EXCLUDED.generation,
+  updated_at = now()
+`
+
+type UpsertGraphMemoryChannelRouteParams struct {
+	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+	ChannelID           pgtype.UUID `json:"channel_id"`
+	RoutingMode         string      `json:"routing_mode"`
+	CurrentGraphKind    string      `json:"current_graph_kind"`
+	CurrentGraphOwnerID pgtype.UUID `json:"current_graph_owner_id"`
+	Generation          int64       `json:"generation"`
+}
+
+func (q *Queries) UpsertGraphMemoryChannelRoute(ctx context.Context, arg UpsertGraphMemoryChannelRouteParams) error {
+	_, err := q.db.Exec(ctx, upsertGraphMemoryChannelRoute,
+		arg.WorkspaceID,
+		arg.ChannelID,
+		arg.RoutingMode,
+		arg.CurrentGraphKind,
+		arg.CurrentGraphOwnerID,
+		arg.Generation,
+	)
+	return err
 }
 
 const upsertGraphMemoryProfile = `-- name: UpsertGraphMemoryProfile :one
@@ -48,14 +357,22 @@ type UpsertGraphMemoryProfileParams struct {
 	ExploreMaxRounds int32       `json:"explore_max_rounds"`
 }
 
-func (q *Queries) UpsertGraphMemoryProfile(ctx context.Context, arg UpsertGraphMemoryProfileParams) (GraphMemoryProfile, error) {
+type UpsertGraphMemoryProfileRow struct {
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	MemoryType       string             `json:"memory_type"`
+	ExploreAgents    int32              `json:"explore_agents"`
+	ExploreMaxRounds int32              `json:"explore_max_rounds"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) UpsertGraphMemoryProfile(ctx context.Context, arg UpsertGraphMemoryProfileParams) (UpsertGraphMemoryProfileRow, error) {
 	row := q.db.QueryRow(ctx, upsertGraphMemoryProfile,
 		arg.WorkspaceID,
 		arg.MemoryType,
 		arg.ExploreAgents,
 		arg.ExploreMaxRounds,
 	)
-	var i GraphMemoryProfile
+	var i UpsertGraphMemoryProfileRow
 	err := row.Scan(
 		&i.WorkspaceID,
 		&i.MemoryType,

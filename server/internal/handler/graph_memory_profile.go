@@ -40,15 +40,15 @@ func validGraphMemoryType(t string) bool {
 	return t == "legacy" || t == "graph"
 }
 
-func graphMemoryProfileFromRow(p db.GraphMemoryProfile) graphMemoryProfileResponse {
+func graphMemoryProfileFromRow(workspaceID pgtype.UUID, memoryType string, exploreAgents, exploreMaxRounds int32, updatedAt pgtype.Timestamptz) graphMemoryProfileResponse {
 	resp := graphMemoryProfileResponse{
-		WorkspaceID:      uuidToString(p.WorkspaceID),
-		MemoryType:       p.MemoryType,
-		ExploreAgents:    p.ExploreAgents,
-		ExploreMaxRounds: p.ExploreMaxRounds,
+		WorkspaceID:      uuidToString(workspaceID),
+		MemoryType:       memoryType,
+		ExploreAgents:    exploreAgents,
+		ExploreMaxRounds: exploreMaxRounds,
 	}
-	if p.UpdatedAt.Valid {
-		resp.UpdatedAt = p.UpdatedAt.Time.UTC().Format(time.RFC3339)
+	if updatedAt.Valid {
+		resp.UpdatedAt = updatedAt.Time.UTC().Format(time.RFC3339)
 	}
 	return resp
 }
@@ -76,7 +76,7 @@ func (h *Handler) GetGraphMemoryProfile(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to load graph memory profile")
 		return
 	}
-	writeJSON(w, http.StatusOK, graphMemoryProfileFromRow(profile))
+	writeJSON(w, http.StatusOK, graphMemoryProfileFromRow(profile.WorkspaceID, profile.MemoryType, profile.ExploreAgents, profile.ExploreMaxRounds, profile.UpdatedAt))
 }
 
 func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +122,7 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to save graph memory profile")
 		return
 	}
-	writeJSON(w, http.StatusOK, graphMemoryProfileFromRow(profile))
+	writeJSON(w, http.StatusOK, graphMemoryProfileFromRow(profile.WorkspaceID, profile.MemoryType, profile.ExploreAgents, profile.ExploreMaxRounds, profile.UpdatedAt))
 }
 
 // graphMemoryProfileValues is the effective per-workspace graph memory

@@ -884,12 +884,47 @@ type GithubPullRequestCheckSuite struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GraphMemoryChannelLineage struct {
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	ChannelID    pgtype.UUID        `json:"channel_id"`
+	Generation   int64              `json:"generation"`
+	GraphKind    string             `json:"graph_kind"`
+	GraphOwnerID pgtype.UUID        `json:"graph_owner_id"`
+	ValidFrom    pgtype.Timestamptz `json:"valid_from"`
+	ValidTo      pgtype.Timestamptz `json:"valid_to"`
+}
+
+type GraphMemoryChannelRoute struct {
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	RoutingMode         string             `json:"routing_mode"`
+	CurrentGraphKind    string             `json:"current_graph_kind"`
+	CurrentGraphOwnerID pgtype.UUID        `json:"current_graph_owner_id"`
+	Generation          int64              `json:"generation"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GraphMemoryConsolidationRun struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Status      string             `json:"status"`
+	TriggerKind string             `json:"trigger_kind"`
+	Error       string             `json:"error"`
+	Details     []byte             `json:"details"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	StartedAt   pgtype.Timestamptz `json:"started_at"`
+	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+}
+
 type GraphMemoryProfile struct {
-	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
-	MemoryType       string             `json:"memory_type"`
-	ExploreAgents    int32              `json:"explore_agents"`
-	ExploreMaxRounds int32              `json:"explore_max_rounds"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	MemoryType        string             `json:"memory_type"`
+	ExploreAgents     int32              `json:"explore_agents"`
+	ExploreMaxRounds  int32              `json:"explore_max_rounds"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ScopedWriterReady bool               `json:"scoped_writer_ready"`
+	Timezone          string             `json:"timezone"`
 }
 
 type InboxItem struct {

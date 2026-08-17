@@ -9,5 +9,17 @@ export interface StarGraphExpansionControl {
   expandableNodeIds: ReadonlySet<string>;
   expandedNodeIds: ReadonlySet<string>;
   loadingNodeIds?: ReadonlySet<string>;
+  /** Latest server-backed disclosure result, used only for spatial motion. */
+  transition?: StarGraphExpansionTransition | null;
+  /** Removes blur/glow while retaining position and opacity semantics. */
+  lowPerformance?: boolean;
   onToggleNode: (nodeId: string) => void;
+}
+
+export interface StarGraphExpansionTransition {
+  sequence: string | number;
+  kind: "expand" | "collapse";
+  rootNodeId: string;
+  /** Exact node ids returned/removed by the one-layer Projection Slice. */
+  revealedNodeIds: readonly string[];
 }

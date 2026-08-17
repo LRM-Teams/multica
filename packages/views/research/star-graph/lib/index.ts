@@ -5,3 +5,4 @@ export * from "./star-graph-adapter";
 export * from "./star-canvas-view-model";
 export * from "./star-graph-visible-budget";
 export * from "./star-graph-expansion";
+export * from "./star-graph-expansion-motion";

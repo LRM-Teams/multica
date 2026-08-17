@@ -28,6 +28,7 @@ import {
 } from "../../lib/canvas-keyboard-nav";
 import type { MotionDirective } from "../../motion/directives";
 import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
+import { buildStarGraphExpansionMotion } from "../lib/star-graph-expansion-motion";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import {
   computeClusterHiddenCounts,
@@ -142,6 +143,18 @@ export function StarGraphCanvas({
     () => storedViewport ?? DEFAULT_CAMERA,
   );
   const [liveText, setLiveText] = useState("");
+  const entityMotionDirectives = useMemo(() => {
+    const expansionDirectives = buildStarGraphExpansionMotion(
+      model,
+      expansionControl?.transition,
+      expansionControl?.lowPerformance,
+    );
+    if (expansionDirectives.size === 0) return motionDirectives;
+    return new Map([
+      ...(motionDirectives?.entries() ?? []),
+      ...expansionDirectives.entries(),
+    ]);
+  }, [expansionControl?.lowPerformance, expansionControl?.transition, model, motionDirectives]);
   const dragRef = useRef<{ startX: number; startY: number; cameraX: number; cameraY: number } | null>(
     null,
   );
@@ -686,7 +699,7 @@ export function StarGraphCanvas({
           selectedNodeId={selectedNodeId}
           nodeAccessibleNames={nodeAccessibleNames}
           lensHints={focusedLensHints}
-          motionDirectives={motionDirectives}
+          motionDirectives={entityMotionDirectives}
           expansionControl={expansionControl}
           labels={entityLabels}
           onSelectNode={onSelectNode}

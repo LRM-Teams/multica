@@ -64,7 +64,9 @@ export function ResearchDirectorAssignmentPicker({
           disabled={pending || !selected || !reason.trim() || selected === currentAgentId}
           onClick={() => onAssign(selected, reason.trim())}
         >
-          {pending ? t(($) => $.d5.rail.director_standby) : t(($) => $.assignments)}
+          {pending
+            ? t(($) => $.d5.rail.director_standby)
+            : t(($) => $.home_overview.assignments)}
         </Button>
       </div>
       <input

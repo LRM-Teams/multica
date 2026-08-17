@@ -55,7 +55,7 @@ func RequestBindingComputerUpgrade(ctx context.Context, controlEndpoint, token s
 	if err != nil {
 		return err
 	}
-	return callLocalJSONAt(ctx, controlEndpoint, "upgrade-start", BindingComputerUpgradePath, 35*time.Second,
+	return callLocalJSONWithTimeout(ctx, controlEndpoint, "upgrade-start", 35*time.Second,
 		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": strings.TrimSpace(token)},
 		json.RawMessage(body), nil)
 }
@@ -72,7 +72,7 @@ func RequestBindingComputerUpgradeEvent(ctx context.Context, controlEndpoint, to
 	if err != nil {
 		return err
 	}
-	return callLocalJSONAt(ctx, controlEndpoint, "upgrade-status", BindingComputerUpgradeEventPath, 5*time.Second,
+	return callLocalJSONWithTimeout(ctx, controlEndpoint, "upgrade-status", 5*time.Second,
 		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": strings.TrimSpace(token)},
 		json.RawMessage(body), nil)
 }
@@ -97,7 +97,7 @@ func requestBindingMachineControl(ctx context.Context, controlEndpoint, token, p
 		return err
 	}
 	operation := localControlOperationForPath(path)
-	return callLocalJSONAt(ctx, controlEndpoint, operation, path, 35*time.Second,
+	return callLocalJSONWithTimeout(ctx, controlEndpoint, operation, 35*time.Second,
 		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": strings.TrimSpace(token)},
 		json.RawMessage(body), nil)
 }

@@ -3,8 +3,6 @@ package computer
 import (
 	"errors"
 	"net"
-	"net/http"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -38,10 +36,6 @@ func validLocalControlEndpoint(endpoint string) bool {
 	if endpoint == "" {
 		return false
 	}
-	if parsed, err := url.Parse(endpoint); err == nil && parsed.Scheme == "http" && parsed.Hostname() == "127.0.0.1" && parsed.Port() != "" {
-		// Loopback HTTP remains a test adapter; production endpoints are IPC.
-		return true
-	}
 	return validPlatformLocalControlEndpoint(endpoint)
 }
 
@@ -50,10 +44,7 @@ func localControlClientFor(endpoint string, timeout time.Duration) (*localContro
 	if !validLocalControlEndpoint(endpoint) {
 		return nil, "", errors.New("local control endpoint is invalid")
 	}
-	if strings.HasPrefix(endpoint, "http://") {
-		return &localControlClient{endpoint: endpoint, httpClient: &http.Client{Timeout: timeout}}, strings.TrimRight(endpoint, "/"), nil
-	}
-	return &localControlClient{endpoint: endpoint, timeout: timeout}, "http://local-control", nil
+	return &localControlClient{endpoint: endpoint, timeout: timeout}, "", nil
 }
 
 func localControlSocketDir(residentRoot string) string {

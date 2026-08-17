@@ -108,7 +108,7 @@ func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.
 		RunnerGeneration:   7,
 		Environment:        "test",
 		ServerBaseURL:      "https://test.example.com",
-		ServiceEndpoint:    "http://127.0.0.1:19514",
+		ServiceEndpoint:    "unix:///tmp/multica-test-service.sock",
 		BindingsRoot:       "/tmp/computer-a",
 		WorkspacesRoot:     "/tmp/workspaces-a",
 	}
@@ -153,7 +153,7 @@ func TestBindingChildReadyRejectsStaleGeneration(t *testing.T) {
 		RunnerGeneration:   7,
 		Environment:        "production",
 		ServerBaseURL:      "https://api.leagent.me",
-		ServiceEndpoint:    "http://127.0.0.1:19514",
+		ServiceEndpoint:    "unix:///tmp/multica-test-service.sock",
 		BindingsRoot:       "/tmp/computer-a",
 		WorkspacesRoot:     "/tmp/workspaces-a",
 	}
@@ -188,7 +188,7 @@ func TestBindingChildProtocolHelper(t *testing.T) {
 		WorkspaceID:      bootstrap.WorkspaceID,
 		RunnerGeneration: bootstrap.RunnerGeneration,
 		PID:              os.Getpid(),
-		RunnerEndpoint:   "http://127.0.0.1:19515",
+		RunnerEndpoint:   "unix:///tmp/multica-test-runner.sock",
 	}
 	if mode == "stale" {
 		ready.RunnerGeneration--

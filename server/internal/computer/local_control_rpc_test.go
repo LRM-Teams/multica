@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -91,69 +89,11 @@ func TestLocalControlRPCServerReturnsTypedResultWithoutHTTPAdapter(t *testing.T)
 	}
 }
 
-func TestLocalControlClientCallsByOperationName(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" || r.Method != http.MethodGet {
-			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
-		}
-		_, _ = w.Write([]byte(`{"status":"running"}`))
-	}))
-	defer server.Close()
-	client, _, err := localControlClientFor(server.URL, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var result map[string]string
-	if err := client.Call(context.Background(), "service-status", nil, nil, &result); err != nil {
-		t.Fatal(err)
-	}
-	if result["status"] != "running" {
-		t.Fatalf("result = %+v", result)
-	}
-}
-
-func TestLocalControlFrameDispatchesTypedOperationAndArgs(t *testing.T) {
-	left, right := net.Pipe()
-	defer left.Close()
-	defer right.Close()
-	go serveLocalControlConnection(right, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/workspace-start" {
-			t.Errorf("request = %s %s", r.Method, r.URL.Path)
-		}
-		var args struct {
-			WorkspaceID string `json:"workspace_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
-			t.Errorf("decode args: %v", err)
-		}
-		if args.WorkspaceID != "ws-1" {
-			t.Errorf("workspace_id = %q", args.WorkspaceID)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"started":true}`))
-	}))
-
-	args, err := json.Marshal(map[string]string{"workspace_id": "ws-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeLocalControlFrame(left, localControlRPCMessage{Operation: "workspace-start", Args: args}); err != nil {
-		t.Fatal(err)
-	}
-	var response localControlRPCMessage
-	if err := readLocalControlFrame(left, &response); err != nil {
-		t.Fatal(err)
-	}
-	if !response.OK || string(response.Result) != `{"started":true}` {
-		t.Fatalf("response = %+v", response)
-	}
-}
-
 func TestLocalControlUnknownOperationReturnsStructuredError(t *testing.T) {
 	left, right := net.Pipe()
 	defer left.Close()
 	defer right.Close()
-	go serveLocalControlConnection(right, http.NotFoundHandler())
+	go serveLocalControlRPCConnection(context.Background(), right, NewLocalControlRegistry())
 	if err := writeLocalControlFrame(left, localControlRPCMessage{Operation: "not-a-real-operation"}); err != nil {
 		t.Fatal(err)
 	}

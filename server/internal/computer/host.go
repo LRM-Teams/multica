@@ -47,6 +47,12 @@ type Host struct {
 	processIdentity   HostProcessIdentity
 }
 
+func (host *Host) RegisterControlRPCHandlers(registry *LocalControlRegistry) {
+	if host != nil && host.control != nil {
+		host.control.RegisterRPCHandlers(registry)
+	}
+}
+
 type hostBindingRuntime struct {
 	ID          string `json:"id"`
 	WorkspaceID string `json:"workspace_id"`

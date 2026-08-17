@@ -80,10 +80,13 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 	// Status/cancel are retained as explicit RPC operations; their journal
 	// implementation is owned by the upgrade coordinator.
 	register("upgrade-status", func(context.Context, map[string]string, json.RawMessage) (any, error) {
-		return map[string]string{"phase": "unknown"}, nil
+		return host.upgrade.status(), nil
 	})
 	register("upgrade-cancel", func(context.Context, map[string]string, json.RawMessage) (any, error) {
-		return nil, errors.New("machine upgrade cancellation is unavailable")
+		if err := host.upgrade.cancelActive(); err != nil {
+			return nil, err
+		}
+		return host.upgrade.status(), nil
 	})
 	host.control.RegisterRPCHandlers(registry)
 	return registry

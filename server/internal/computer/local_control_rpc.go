@@ -2,7 +2,6 @@ package computer
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -10,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"time"
 )
@@ -19,39 +16,19 @@ import (
 const localControlMaxFrame = 1 << 20
 
 type localControlOperationSpec struct {
-	Name   string
-	Method string
-	Path   string
+	Name string
 }
 
 var localControlOperationSpecs = []localControlOperationSpec{
-	{Name: "machine-attestation", Method: http.MethodGet, Path: MachineAttestationPath},
-	{Name: "restart-service", Method: http.MethodPost, Path: "/shutdown"},
-	{Name: "upgrade-start", Method: http.MethodPost, Path: "/machine-upgrades"},
-	{Name: "upgrade-status", Method: http.MethodGet, Path: "/machine-upgrades"},
-	{Name: "upgrade-cancel", Method: http.MethodPost, Path: "/machine-upgrades/cancel"},
-	{Name: "service-status", Method: http.MethodGet, Path: "/health"},
-	{Name: "service-start", Method: http.MethodPost, Path: "/service-start"},
-	{Name: "service-stop", Method: http.MethodPost, Path: "/shutdown"},
-	{Name: "service-diagnostics", Method: http.MethodGet, Path: "/diagnostics"},
-	{Name: "workspace-list", Method: http.MethodGet, Path: "/workspace-list"},
-	{Name: "workspace-status", Method: http.MethodGet, Path: "/health"},
-	{Name: "workspace-start", Method: http.MethodPost, Path: "/workspace-start"},
-	{Name: "workspace-stop", Method: http.MethodPost, Path: "/workspace-stop"},
-	{Name: "workspace-restart", Method: http.MethodPost, Path: "/workspace-restart"},
-	{Name: "workspace-attach", Method: http.MethodPost, Path: "/workspace-attach"},
-	{Name: "workspace-detach", Method: http.MethodPost, Path: "/workspace-detach"},
-	{Name: "workspace-environment", Method: http.MethodPost, Path: "/environment-switch/prepare"},
-	{Name: "workspace-capacity", Method: http.MethodGet, Path: bindingChildCapacityPath},
-	{Name: "workspace-diagnostics", Method: http.MethodGet, Path: bindingChildDiagnosticPath},
-	{Name: "runner-attestation", Method: http.MethodGet, Path: "/runner-attestation"},
-	{Name: "runner-status", Method: http.MethodGet, Path: "/runner-status"},
-	{Name: "runner-start", Method: http.MethodPost, Path: "/runner-start"},
-	{Name: "runner-stop", Method: http.MethodPost, Path: "/runner-stop"},
-	{Name: "runner-restart", Method: http.MethodPost, Path: "/runner-restart"},
-	{Name: "runner-drain", Method: http.MethodPost, Path: "/runner-drain"},
-	{Name: "runner-release", Method: http.MethodPost, Path: "/runner-release"},
-	{Name: "runner-ready", Method: http.MethodPost, Path: "/runner-ready"},
+	{Name: "machine-attestation"}, {Name: "restart-service"}, {Name: "upgrade-start"},
+	{Name: "upgrade-status"}, {Name: "upgrade-cancel"}, {Name: "service-status"},
+	{Name: "service-start"}, {Name: "service-stop"}, {Name: "service-diagnostics"},
+	{Name: "workspace-list"}, {Name: "workspace-status"}, {Name: "workspace-start"},
+	{Name: "workspace-stop"}, {Name: "workspace-restart"}, {Name: "workspace-attach"},
+	{Name: "workspace-detach"}, {Name: "workspace-environment"}, {Name: "workspace-capacity"},
+	{Name: "workspace-diagnostics"}, {Name: "runner-attestation"}, {Name: "runner-status"},
+	{Name: "runner-start"}, {Name: "runner-stop"}, {Name: "runner-restart"},
+	{Name: "runner-drain"}, {Name: "runner-release"}, {Name: "runner-ready"},
 }
 
 func localControlOperationSpecFor(name string) (localControlOperationSpec, bool) {
@@ -64,11 +41,6 @@ func localControlOperationSpecFor(name string) (localControlOperationSpec, bool)
 }
 
 func localControlOperationForPath(path string) string {
-	for _, spec := range localControlOperationSpecs {
-		if spec.Path == path {
-			return spec.Name
-		}
-	}
 	switch path {
 	case bindingChildCapacityPath:
 		return "workspace-capacity"
@@ -79,6 +51,8 @@ func localControlOperationForPath(path string) string {
 	case bindingChildMachineActionsPath:
 		return "runner-attestation"
 	case bindingChildPrepareUpgradePath:
+		return "runner-drain"
+	case BindingPrepareMachineUpgradePath:
 		return "runner-drain"
 	case BindingReleaseMachineUpgradePath:
 		return "runner-release"
@@ -116,9 +90,8 @@ type localControlRPCMessage struct {
 }
 
 type localControlClient struct {
-	endpoint   string
-	timeout    time.Duration
-	httpClient *http.Client
+	endpoint string
+	timeout  time.Duration
 }
 
 // LocalControlHandler is the typed boundary for Computer/Daemon control.
@@ -158,14 +131,13 @@ func (registry *LocalControlRegistry) handler(operation string) (LocalControlHan
 }
 
 func (client *localControlClient) Call(ctx context.Context, operation string, headers map[string]string, args, result any) error {
-	spec, ok := localControlOperationSpecFor(operation)
-	if !ok {
+	if _, ok := localControlOperationSpecFor(operation); !ok {
 		return fmt.Errorf("unknown local control operation %q", operation)
 	}
-	return client.callAt(ctx, operation, spec.Path, headers, args, result)
+	return client.call(ctx, operation, headers, args, result)
 }
 
-func (client *localControlClient) callAt(ctx context.Context, operation, testPath string, headers map[string]string, args, result any) error {
+func (client *localControlClient) call(ctx context.Context, operation string, headers map[string]string, args, result any) error {
 	body, err := json.Marshal(args)
 	if err != nil {
 		return err
@@ -175,33 +147,6 @@ func (client *localControlClient) callAt(ctx context.Context, operation, testPat
 	}
 	if len(body) >= localControlMaxFrame {
 		return errors.New("local control request is too large")
-	}
-	if client.httpClient != nil {
-		spec, _ := localControlOperationSpecFor(operation)
-		method := spec.Method
-		if testPath != spec.Path {
-			method = http.MethodPost
-		}
-		request, err := http.NewRequestWithContext(ctx, method, client.endpoint+testPath, bytes.NewReader(body))
-		if err != nil {
-			return err
-		}
-		for key, value := range headers {
-			request.Header.Set(key, value)
-		}
-		response, err := client.httpClient.Do(request)
-		if err != nil {
-			return err
-		}
-		defer response.Body.Close()
-		responseBody, _ := io.ReadAll(io.LimitReader(response.Body, localControlMaxFrame))
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return fmt.Errorf("local control operation %s returned %s: %s", operation, response.Status, strings.TrimSpace(string(responseBody)))
-		}
-		if result != nil && response.StatusCode != http.StatusNoContent && len(responseBody) > 0 {
-			return json.Unmarshal(responseBody, result)
-		}
-		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -248,39 +193,12 @@ func callLocalJSON(ctx context.Context, endpoint, operation string, timeout time
 	return client.Call(ctx, operation, headers, args, result)
 }
 
-func callLocalJSONAt(ctx context.Context, endpoint, operation, testPath string, timeout time.Duration, headers map[string]string, args, result any) error {
+func callLocalJSONWithTimeout(ctx context.Context, endpoint, operation string, timeout time.Duration, headers map[string]string, args, result any) error {
 	client, _, err := localControlClientFor(endpoint, timeout)
 	if err != nil {
 		return err
 	}
-	return client.callAt(ctx, operation, testPath, headers, args, result)
-}
-
-func (client *localControlClient) Do(request *http.Request) (*http.Response, error) {
-	return nil, errors.New("local control clients do not accept HTTP requests; use Call")
-}
-
-func ServeLocalControl(ctx context.Context, listener net.Listener, handler http.Handler) error {
-	if listener == nil || handler == nil {
-		return errors.New("local control listener and handler are required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
-	}()
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		go serveLocalControlConnection(conn, handler)
-	}
+	return client.Call(ctx, operation, headers, args, result)
 }
 
 // ServeLocalControlRPC serves the production operation registry. Unlike the
@@ -367,53 +285,6 @@ func localControlError(err error) (string, string) {
 		code = coded.ControlCode()
 	}
 	return code, err.Error()
-}
-
-func serveLocalControlConnection(conn net.Conn, handler http.Handler) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	for {
-		var request localControlRPCMessage
-		if err := readLocalControlFrame(reader, &request); err != nil {
-			return
-		}
-		if request.Operation != "" {
-			spec, ok := localControlOperationSpecFor(request.Operation)
-			if !ok {
-				_ = writeLocalControlFrame(conn, localControlRPCMessage{Operation: request.Operation, ErrorCode: "unknown_operation", ErrorMessage: "unknown operation"})
-				return
-			}
-			requestMethod, requestPath := spec.Method, spec.Path
-			httpRequest := httptest.NewRequest(requestMethod, "http://local-control"+requestPath, bytes.NewReader(request.Args))
-			for key, value := range request.Headers {
-				httpRequest.Header.Set(key, value)
-			}
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, httpRequest)
-			result := recorder.Result()
-			responseHeaders := make(map[string]string, len(result.Header))
-			for key, values := range result.Header {
-				if len(values) > 0 {
-					responseHeaders[key] = values[0]
-				}
-			}
-			body, err := io.ReadAll(io.LimitReader(result.Body, localControlMaxFrame))
-			result.Body.Close()
-			if err != nil || len(body) >= localControlMaxFrame {
-				return
-			}
-			response := localControlRPCMessage{Operation: request.Operation, Headers: responseHeaders, Result: body, OK: result.StatusCode >= 200 && result.StatusCode < 300}
-			if !response.OK {
-				response.ErrorCode = fmt.Sprintf("http_%d", result.StatusCode)
-				response.ErrorMessage = strings.TrimSpace(string(body))
-			}
-			if err := writeLocalControlFrame(conn, response); err != nil {
-				return
-			}
-			continue
-		}
-		return
-	}
 }
 
 func writeLocalControlFrame(writer io.Writer, message localControlRPCMessage) error {

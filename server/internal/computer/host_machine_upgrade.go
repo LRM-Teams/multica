@@ -47,6 +47,7 @@ type hostMachineUpgrade struct {
 	mu                   sync.Mutex
 	activeID             string
 	initiatorWorkspaceID string
+	activeCancel         context.CancelFunc
 	generationID         string
 	restartBinary        string
 	targetVersion        string
@@ -157,6 +158,27 @@ func (upgrade *hostMachineUpgrade) startServiceUpgrade(identity BindingChildIden
 	return nil
 }
 
+func (upgrade *hostMachineUpgrade) status() map[string]string {
+	upgrade.mu.Lock()
+	defer upgrade.mu.Unlock()
+	if upgrade.activeID == "" {
+		return map[string]string{"phase": "idle"}
+	}
+	return map[string]string{"id": upgrade.activeID, "phase": "running"}
+}
+
+func (upgrade *hostMachineUpgrade) cancelActive() error {
+	upgrade.mu.Lock()
+	cancel := upgrade.activeCancel
+	active := upgrade.activeID
+	upgrade.mu.Unlock()
+	if active == "" || cancel == nil {
+		return errors.New("no active Computer Machine Upgrade")
+	}
+	cancel()
+	return nil
+}
+
 func (upgrade *hostMachineUpgrade) executeServiceUpgrade(identity BindingChildIdentity, command protocol.ComputerUpgradePayload) {
 	operationID := command.Operation()
 	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
@@ -169,6 +191,18 @@ func (upgrade *hostMachineUpgrade) executeServiceUpgrade(identity BindingChildId
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), cli.DefaultUpdateDownloadTimeout+30*time.Second)
 	defer cancel()
+	upgrade.mu.Lock()
+	if upgrade.activeID == operationID {
+		upgrade.activeCancel = cancel
+	}
+	upgrade.mu.Unlock()
+	defer func() {
+		upgrade.mu.Lock()
+		if upgrade.activeID == operationID {
+			upgrade.activeCancel = nil
+		}
+		upgrade.mu.Unlock()
+	}()
 	prepared := false
 	defer func() {
 		if !prepared {

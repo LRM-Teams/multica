@@ -3,6 +3,7 @@ package computer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -31,16 +32,14 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 	}))
 	defer cloud.Close()
 
-	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != bindingChildPrepareUpgradePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "unexpected Host prepare", http.StatusBadRequest)
-			return
+	host := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if operation != "runner-drain" || headers["X-Multica-Control-Token"] != controlToken {
+			return nil, fmt.Errorf("unexpected Host prepare")
 		}
-		_ = json.NewEncoder(w).Encode(BindingMachineUpgradePrepared{
+		return BindingMachineUpgradePrepared{
 			RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"},
-		})
-	}))
-	defer host.Close()
+		}, nil
+	})
 
 	exited := make(chan struct{}, 1)
 	var swapped atomic.Bool
@@ -51,7 +50,7 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 			Version: "v1.0.0", ServerURL: cloud.URL,
 		},
 		ResidentRoot:    root,
-		ServiceEndpoint: host.URL,
+		ServiceEndpoint: host,
 		ControlToken:    controlToken,
 		Child:           BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
 		RuntimeID:       "runtime-a",
@@ -122,16 +121,14 @@ func TestBindingMachineUpgradeLatestUsesTestEnvironmentRelease(t *testing.T) {
 	}))
 	defer feed.Close()
 
-	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != bindingChildPrepareUpgradePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "unexpected Host prepare", http.StatusBadRequest)
-			return
+	host := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if operation != "runner-drain" || headers["X-Multica-Control-Token"] != controlToken {
+			return nil, fmt.Errorf("unexpected Host prepare")
 		}
-		_ = json.NewEncoder(w).Encode(BindingMachineUpgradePrepared{
+		return BindingMachineUpgradePrepared{
 			RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"}, ManifestURL: feed.URL,
-		})
-	}))
-	defer host.Close()
+		}, nil
+	})
 
 	var stagedTarget string
 	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
@@ -140,7 +137,7 @@ func TestBindingMachineUpgradeLatestUsesTestEnvironmentRelease(t *testing.T) {
 			Version: "v0.4.24-alpha.73", ServerURL: cloud.URL,
 		},
 		ResidentRoot:    t.TempDir(),
-		ServiceEndpoint: host.URL,
+		ServiceEndpoint: host,
 		ControlToken:    controlToken,
 		Child:           BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
 		RuntimeID:       "runtime-a",

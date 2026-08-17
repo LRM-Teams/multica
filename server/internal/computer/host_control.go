@@ -67,6 +67,12 @@ type HostControl struct {
 	grants map[BindingChildIdentity]map[string]ProcessCapacityGrant
 }
 
+// RegisterLocalControlHandlers adds the Host-owned operations to an IPC
+// registry. The process runner uses this to compose the service registry.
+func (control *HostControl) RegisterLocalControlHandlers(registry *LocalControlRegistry) {
+	control.RegisterRPCHandlers(registry)
+}
+
 func NewHostControl(token string, capacity *ProcessCapacity, callbacks HostControlCallbacks) *HostControl {
 	return &HostControl{
 		token: strings.TrimSpace(token), capacity: capacity, callbacks: callbacks,
@@ -179,7 +185,11 @@ func (control *HostControl) rpcRawCallback(_ *LocalControlRegistry, _ string, ca
 		if callback == nil || len(request.Payload) == 0 {
 			return nil, errors.New("Binding child control payload rejected")
 		}
-		return nil, callback(ctx, request.Identity, request.Payload)
+		err := callback(ctx, request.Identity, request.Payload)
+		if errors.Is(err, ErrComputerControlBusy) {
+			return nil, withLocalControlCode(bindingChildControlBusyCode, err)
+		}
+		return nil, err
 	}
 }
 
@@ -633,7 +643,7 @@ func (client *HostControlClient) post(ctx context.Context, path string, input, o
 		return fmt.Errorf("unknown Binding Host control operation for %s", path)
 	}
 	var raw json.RawMessage
-	if err := client.control.callAt(ctx, operation, path, map[string]string{
+	if err := client.control.Call(ctx, operation, map[string]string{
 		"Content-Type": "application/json", "X-Multica-Control-Token": client.token,
 	}, input, &raw); err != nil {
 		if strings.Contains(err.Error(), bindingChildControlBusyCode) {

@@ -118,7 +118,7 @@ export function StarGraphEntityLayer({
             }
             invalid={expansionFailed}
             accessibleName={[
-              nodeAccessibleNames?.get(entity.id),
+              nodeAccessibleNames?.get(entity.id) || entity.view.title,
               expansionFailed ? expansionControl?.failureLabel : null,
             ]
               .filter(Boolean)

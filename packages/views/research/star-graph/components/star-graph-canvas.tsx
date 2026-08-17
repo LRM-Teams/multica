@@ -55,6 +55,7 @@ import {
   computeEntityBoundsForIds,
   fitCameraToBounds,
   focusCameraOnEntity,
+  planExpansionTransactionCamera,
   zoomCamera,
   zoomPercent,
   type StarGraphCamera,
@@ -172,6 +173,7 @@ export function StarGraphCanvas({
   const [liveText, setLiveText] = useState("");
   const [cameraTransitioning, setCameraTransitioning] = useState(false);
   const cameraTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const framedExpansionSequenceRef = useRef<string | null>(null);
   const entityMotionDirectives = useMemo(() => {
     const expansionDirectives = buildStarGraphExpansionMotion(
       model,
@@ -560,6 +562,35 @@ export function StarGraphCanvas({
     if (!selectedNodeId) return;
     focusSelectedEntity(selectedNodeId);
   }, [focusSelectedEntity, rightPanelWidth, selectedNodeId]);
+
+  useEffect(() => {
+    const transition = expansionControl?.transition;
+    if (!transition) {
+      framedExpansionSequenceRef.current = null;
+      return;
+    }
+    const sequence = String(transition.sequence);
+    if (framedExpansionSequenceRef.current === sequence) return;
+    const next = planExpansionTransactionCamera(
+      model,
+      transition,
+      viewport,
+      camera,
+      { rightPanelWidth },
+    );
+    if (!next) return;
+    framedExpansionSequenceRef.current = sequence;
+    beginCameraTransition();
+    setCamera(next);
+  }, [
+    beginCameraTransition,
+    camera,
+    expansionControl?.transition,
+    model,
+    rightPanelWidth,
+    setCamera,
+    viewport,
+  ]);
 
   const handleZoomIn = useCallback(() => {
     stopCameraTransition();

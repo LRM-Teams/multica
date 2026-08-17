@@ -6,6 +6,7 @@ import {
   fitCameraToBounds,
   focusCameraOnEntity,
   isEdgeLabelClear,
+  planExpansionTransactionCamera,
   quadraticEdgePath,
   relationEdgeClass,
   zoomCamera,
@@ -208,5 +209,52 @@ describe("star-graph-canvas-utils", () => {
 
     expect(landmark.zoom).toBe(1.6);
     expect(workPoint.zoom).toBe(0.4);
+  });
+
+  it("frames only the root and server-declared expanded layer", () => {
+    const entity = (id: string, x: number) => ({
+      id,
+      x,
+      y: 200,
+      radius: 48,
+      tier: "m",
+      view: { tier: "m", state: "default", title: id },
+    });
+    const camera = planExpansionTransactionCamera(
+      {
+        entities: [entity("root", 200), entity("child", 900), entity("unrelated", 4000)],
+      } as unknown as import("../lib/star-canvas-view-model").StarCanvasViewModel,
+      {
+        sequence: 12,
+        kind: "expand",
+        rootNodeId: "root",
+        revealedNodeIds: ["child"],
+      },
+      { width: 1200, height: 800 },
+      { x: 0, y: 0, zoom: 1 },
+      { rightPanelWidth: 320 },
+    );
+
+    expect(camera).not.toBeNull();
+    expect(camera!.zoom).toBeGreaterThan(0.25);
+    expect(camera!.x).toBeGreaterThan(-1000);
+  });
+
+  it("waits until an explicitly revealed node is present", () => {
+    const camera = planExpansionTransactionCamera(
+      {
+        entities: [{ id: "root", x: 200, y: 200, radius: 80, tier: "xl" }],
+      } as unknown as import("../lib/star-canvas-view-model").StarCanvasViewModel,
+      {
+        sequence: 13,
+        kind: "expand",
+        rootNodeId: "root",
+        revealedNodeIds: ["not-loaded"],
+      },
+      { width: 1200, height: 800 },
+      { x: 0, y: 0, zoom: 1 },
+    );
+
+    expect(camera).toBeNull();
   });
 });

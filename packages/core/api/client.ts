@@ -5344,7 +5344,7 @@ export class ApiClient {
     nodeId: string,
     view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
     options?: { signal?: AbortSignal },
-  ): Promise<import("../types/research-v6-director").ResearchV6DirectorNodeDetail | null> {
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorNodeDetail> {
     const { parseResearchV6DirectorNodeDetail } = await import(
       "../research-v6/director-schemas"
     );
@@ -5353,7 +5353,7 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const detail = parseResearchV6DirectorNodeDetail(raw);
-    if (detail && detail.node.id !== nodeId) {
+    if (detail.node.id !== nodeId) {
       throw new Error("Director V6 node detail response changed node identity");
     }
     void workspaceId;

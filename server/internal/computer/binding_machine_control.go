@@ -81,7 +81,18 @@ func requestBindingMachineControl(ctx context.Context, controlEndpoint, token, p
 	if !validLocalControlEndpoint(controlEndpoint) || strings.TrimSpace(token) == "" || identity.Validate() != nil {
 		return fmt.Errorf("Binding child machine control is not configured")
 	}
-	body, err := json.Marshal(BindingMachineControlRequest{Identity: identity})
+	input := any(BindingMachineControlRequest{Identity: identity})
+	if path == BindingPrepareEnvironmentSwitchPath || path == BindingReleaseEnvironmentSwitchPath {
+		action := "prepare"
+		if path == BindingReleaseEnvironmentSwitchPath {
+			action = "release"
+		}
+		input = struct {
+			Identity BindingChildIdentity `json:"identity"`
+			Action   string               `json:"action"`
+		}{Identity: identity, Action: action}
+	}
+	body, err := json.Marshal(input)
 	if err != nil {
 		return err
 	}

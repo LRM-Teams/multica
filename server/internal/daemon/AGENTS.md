@@ -27,3 +27,10 @@ upgrade policy. Cloud Server HTTP/WebSocket is not part of this migration.
 Use TDD at the RPC operation seam before changing handlers or callers. Preserve
 `computer_generation` and `runner_generation`; do not restore per-Binding
 lease/attest polling or persisted lifecycle state.
+
+## Go typing
+
+Prefer concrete request and result structs at RPC operation seams. Avoid `any`
+and `interface{}` whenever the payload shape is known; define the operation's
+request/result type instead. Use a generic JSON value only at an intentionally
+open-ended boundary that cannot have a meaningful concrete type.

@@ -29,3 +29,10 @@ adapter.
 Use TDD for each RPC operation: add the failing operation-seam test first,
 then implement the smallest handler and caller change. Do not reintroduce
 per-Binding lease/attest polling or persisted lifecycle state.
+
+## Go typing
+
+Prefer concrete request and result structs at RPC operation seams. Avoid `any`
+and `interface{}` whenever the payload shape is known; define the operation's
+request/result type instead. Use a generic JSON value only at an intentionally
+open-ended boundary that cannot have a meaningful concrete type.

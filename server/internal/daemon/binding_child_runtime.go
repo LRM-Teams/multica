@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -282,12 +284,138 @@ func (d *Daemon) bindingWorkspaceRefreshLoop(ctx context.Context, workspaceID, i
 }
 
 func (d *Daemon) serveBindingMachineControlHTTP(ctx context.Context, listener net.Listener, bootstrap computer.BindingChildBootstrap) {
-	mux := http.NewServeMux()
-	d.registerBindingMachineControlRoutes(mux, bootstrap)
+	registry := d.bindingMachineControlRegistry(bootstrap)
 	d.logger.Info("Binding child IPC listening", "addr", listener.Addr().String())
-	if err := computer.ServeLocalControl(ctx, listener, mux); err != nil && d.logger != nil {
+	if err := computer.ServeLocalControlRPC(ctx, listener, registry); err != nil && d.logger != nil {
 		d.logger.Warn("Binding child IPC error", "error", err)
 	}
+}
+
+func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBootstrap) *computer.LocalControlRegistry {
+	registry := computer.NewLocalControlRegistry()
+	authorized := func(headers map[string]string) error {
+		token := strings.TrimSpace(d.cfg.LocalControlToken)
+		provided := strings.TrimSpace(headers["X-Multica-Control-Token"])
+		if token == "" || provided == "" || subtle.ConstantTimeCompare([]byte(token), []byte(provided)) != 1 {
+			return errors.New("local control authentication failed")
+		}
+		return nil
+	}
+	decodeIdentity := func(headers map[string]string, raw json.RawMessage) (computer.BindingChildIdentity, error) {
+		if err := authorized(headers); err != nil {
+			return computer.BindingChildIdentity{}, err
+		}
+		var request computer.BindingMachineControlRequest
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
+			return computer.BindingChildIdentity{}, errors.New("inactive Binding child generation")
+		}
+		return request.Identity, nil
+	}
+	register := func(operation string, handler computer.LocalControlHandler) {
+		if err := registry.Register(operation, handler); err != nil {
+			panic(err)
+		}
+	}
+	register("runner-drain", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		if _, err := decodeIdentity(headers, raw); err != nil {
+			return nil, err
+		}
+		return nil, d.beginBindingDrain(ctx)
+	})
+	register("runner-release", func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		if _, err := decodeIdentity(headers, raw); err != nil {
+			return nil, err
+		}
+		d.releaseClaimBarrier()
+		return nil, nil
+	})
+	register("upgrade-start", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		if err := authorized(headers); err != nil {
+			return nil, err
+		}
+		var request struct {
+			Identity computer.BindingChildIdentity   `json:"identity"`
+			Command  protocol.ComputerUpgradePayload `json:"command"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
+			return nil, errors.New("inactive Binding child generation")
+		}
+		return nil, d.handleComputerControlCommand(ctx, protocol.EventComputerUpgrade, request.Command)
+	})
+	register("upgrade-status", func(_ context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		if err := authorized(headers); err != nil {
+			return nil, err
+		}
+		var request struct {
+			Identity  computer.BindingChildIdentity `json:"identity"`
+			EventType string                        `json:"event_type"`
+			Payload   json.RawMessage               `json:"payload"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
+			return nil, errors.New("inactive Binding runner generation")
+		}
+		var payload any
+		if err := json.Unmarshal(request.Payload, &payload); err != nil {
+			return nil, errors.New("invalid upgrade event")
+		}
+		d.emitComputerUpgrade(request.EventType, payload)
+		return nil, nil
+	})
+	register("workspace-environment", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		identity, err := decodeIdentity(headers, raw)
+		if err != nil {
+			return nil, err
+		}
+		var request struct {
+			Identity computer.BindingChildIdentity `json:"identity"`
+			Action   string                        `json:"action"`
+		}
+		if err := json.Unmarshal(raw, &request); err != nil || request.Identity != identity {
+			return nil, errors.New("invalid environment switch request")
+		}
+		switch request.Action {
+		case "release":
+			d.releaseEnvironmentSwitchBarrier()
+			return nil, nil
+		case "prepare":
+		default:
+			return nil, errors.New("unsupported environment switch action")
+		}
+		if !d.trySetEnvironmentSwitchBarrier() {
+			return nil, errors.New("another Binding handoff is already in progress")
+		}
+		prepared := false
+		defer func() {
+			if !prepared {
+				d.releaseEnvironmentSwitchBarrier()
+			}
+		}()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for !d.claimBarrierDrained() {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-ticker.C:
+			}
+		}
+		prepared = true
+		return nil, nil
+	})
+	register("runner-ready", func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		identity, err := decodeIdentity(headers, raw)
+		if err != nil {
+			return nil, err
+		}
+		return nil, d.reregisterBindingWorkspace(ctx, identity.WorkspaceID)
+	})
+	return registry
 }
 
 func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstrap computer.BindingChildBootstrap) {

@@ -18,6 +18,7 @@ export interface ResearchV6ReportSandboxDocument {
   title: string;
   packageHash: string;
   sandboxUrl: string;
+  reportOrigin: string;
   plainTextFallback: string;
   revision?: number;
   status?: string;
@@ -34,13 +35,15 @@ export interface ResearchV6ReportHistoryItem {
 
 type FramePhase = "idle" | "loading" | "ready" | "unavailable";
 
+const EMPTY_REPORT_HISTORY: readonly ResearchV6ReportHistoryItem[] = [];
+
 export function ResearchV6ReportModal({
   open,
   report,
   appOrigin,
   onOpenChange,
   onRequestFreshCapability,
-  history = [],
+  history = EMPTY_REPORT_HISTORY,
   onSelectReport,
   selectedReportId,
   loading = false,
@@ -61,6 +64,7 @@ export function ResearchV6ReportModal({
   const verdict = validateResearchV6ReportSandboxUrl(
     report?.sandboxUrl ?? "",
     appOrigin,
+    report?.reportOrigin ?? "",
   );
   const frameIdentity = [
     open ? "open" : "closed",
@@ -152,7 +156,7 @@ export function ResearchV6ReportModal({
                   {report.inputCount != null
                     ? ` · ${t(($) => $.d5.report_sandbox.input_count, {
                         count: report.inputCount,
-                      }))}`
+                      })}`
                     : ""}
                 </p>
               ) : null}

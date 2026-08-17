@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseWithFallback } from "../api/schema";
 import type {
   ResearchV6DirectorProjectionDelta,
   ResearchV6DirectorProjectionDeltaPage,
@@ -266,6 +267,7 @@ export const ResearchV6DirectorReportMetadataSchema = z
     input_count: z.number().int().nonnegative(),
     latest_review: reportReview,
     sandbox_url: z.string().url().optional(),
+    report_origin: z.string().url().optional(),
   })
   .strict();
 
@@ -294,70 +296,103 @@ export const ResearchV6DirectorReportDetailSchema = z
     input_refs: z.array(reportInputRef).max(10_000),
     reviews: z.array(reportReview).max(10_000),
     sandbox_url: z.string().url().optional(),
+    report_origin: z.string().url().optional(),
   })
   .strict();
+
+const EMPTY_HASH = `sha256:${"0".repeat(64)}`;
+const EMPTY_ID = "00000000-0000-0000-0000-000000000000";
+const EMPTY_DIRECTOR_SNAPSHOT: ResearchV6DirectorProjectionSnapshot = {
+  contract_kind: "projection_snapshot",
+  schema_version: 6,
+  snapshot_id: EMPTY_ID,
+  workspace_id: EMPTY_ID,
+  run_id: EMPTY_ID,
+  through_event_sequence: 0,
+  projection_hash: EMPTY_HASH,
+  slice_key: "invalid-response",
+  nodes: [],
+  edges: [],
+  density_bins: [],
+  has_more: false,
+};
+
+function invalidRequest(name: string): never {
+  throw new Error(`${name} failed schema validation`);
+}
 
 export function parseResearchV6DirectorProjectionSnapshot(
   value: unknown,
 ): ResearchV6DirectorProjectionSnapshot {
-  return ResearchV6DirectorProjectionSnapshotSchema.parse(
-    value,
-  ) as ResearchV6DirectorProjectionSnapshot;
+  return parseWithFallback(value, ResearchV6DirectorProjectionSnapshotSchema, EMPTY_DIRECTOR_SNAPSHOT, {
+    endpoint: "GET Director V6 projection snapshot",
+  });
 }
 
 export function parseResearchV6DirectorProjectionDelta(
   value: unknown,
 ): ResearchV6DirectorProjectionDelta {
-  return ResearchV6DirectorProjectionDeltaSchema.parse(value) as ResearchV6DirectorProjectionDelta;
+  return parseWithFallback(value, ResearchV6DirectorProjectionDeltaSchema, null, {
+    endpoint: "Director V6 projection delta",
+  }) ?? invalidRequest("Director V6 projection delta");
 }
 
 export function parseResearchV6DirectorProjectionDeltaPage(
   value: unknown,
 ): ResearchV6DirectorProjectionDeltaPage {
-  return ResearchV6DirectorProjectionDeltaPageSchema.parse(
-    value,
-  ) as ResearchV6DirectorProjectionDeltaPage;
+  return parseWithFallback(value, ResearchV6DirectorProjectionDeltaPageSchema, {
+    run_id: EMPTY_ID,
+    deltas: [],
+    next_cursor: null,
+    resync_required: true,
+  } satisfies ResearchV6DirectorProjectionDeltaPage, {
+    endpoint: "GET Director V6 projection deltas",
+  });
 }
 
 export function parseResearchV6DirectorProjectionResumeRequest(
   value: unknown,
 ): ResearchV6DirectorProjectionResumeRequest {
-  return ResearchV6DirectorProjectionResumeRequestSchema.parse(
-    value,
-  ) as ResearchV6DirectorProjectionResumeRequest;
+  const result = ResearchV6DirectorProjectionResumeRequestSchema.safeParse(value);
+  return result.success
+    ? (result.data as ResearchV6DirectorProjectionResumeRequest)
+    : invalidRequest("Director V6 projection resume request");
 }
 
 export function parseResearchV6DirectorProjectionSliceRequest(
   value: unknown,
 ): ResearchV6DirectorProjectionSliceRequest {
-  return ResearchV6DirectorProjectionSliceRequestSchema.parse(
-    value,
-  ) as ResearchV6DirectorProjectionSliceRequest;
+  const result = ResearchV6DirectorProjectionSliceRequestSchema.safeParse(value);
+  return result.success
+    ? (result.data as ResearchV6DirectorProjectionSliceRequest)
+    : invalidRequest("Director V6 projection slice request");
 }
 
 export function parseResearchV6DirectorNodeDetail(
   value: unknown,
 ): ResearchV6DirectorNodeDetail {
-  return ResearchV6DirectorNodeDetailSchema.parse(
-    value,
-  ) as ResearchV6DirectorNodeDetail;
+  return parseWithFallback(value, ResearchV6DirectorNodeDetailSchema, null, {
+    endpoint: "GET Director V6 projection node detail",
+  }) ?? invalidRequest("Director V6 projection node detail response");
 }
 
 export function parseResearchV6DirectorReportList(
   value: unknown,
 ): ResearchV6DirectorReportMetadata[] {
-  return z
+  const envelope = parseWithFallback(value, z
     .object({
       reports: z.array(ResearchV6DirectorReportMetadataSchema).max(10_000),
     })
-    .strict()
-    .parse(value).reports as ResearchV6DirectorReportMetadata[];
+    .strict(), { reports: [] as ResearchV6DirectorReportMetadata[] }, {
+      endpoint: "GET Director V6 reports",
+    });
+  return envelope.reports;
 }
 
 export function parseResearchV6DirectorReportDetail(
   value: unknown,
 ): ResearchV6DirectorReportDetail {
-  return ResearchV6DirectorReportDetailSchema.parse(
-    value,
-  ) as ResearchV6DirectorReportDetail;
+  return parseWithFallback(value, ResearchV6DirectorReportDetailSchema, null, {
+    endpoint: "GET Director V6 report detail",
+  }) ?? invalidRequest("Director V6 report detail response");
 }

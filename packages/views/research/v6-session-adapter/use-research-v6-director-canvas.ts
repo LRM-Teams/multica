@@ -168,15 +168,12 @@ export function useResearchV6DirectorCanvas({
       ?.getClient()
       .getState()
       .views.get(firstPage.slice_key);
-    // The default Projection must never expose absorbed canonical nodes. Live
-    // delta repair may be computed from a broader canonical snapshot, so apply
-    // the explicit server `absorbed` flag at this presentation boundary. Slice
-    // pages are appended below and intentionally retain absorbed history when
-    // the user expands a successor.
-    const nodes: ResearchV6DirectorProjectionNode[] = (liveView
+    // Keep absorbed inputs long enough for the adapter to project their
+    // immutable assimilation lineage onto the visible successor. The adapter
+    // owns the final default-visibility filter.
+    const nodes: ResearchV6DirectorProjectionNode[] = liveView
       ? [...liveView.nodes.values()]
-      : defaultPages.flatMap((page) => page.nodes)
-    ).filter((node) => !node.absorbed);
+      : defaultPages.flatMap((page) => page.nodes);
     const edges: ResearchV6DirectorProjectionEdge[] = liveView
       ? [...liveView.edges.values()]
       : defaultPages.flatMap((page) => page.edges);

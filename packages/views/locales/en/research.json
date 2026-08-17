@@ -178,6 +178,7 @@
       "collapsed_path": "Collapsed path"
     },
     "history": "Version history",
+    "revision": " · Revision {{revision}}",
     "branches": "Branches",
     "reference_in_chat": "Reference in chat",
     "referenced": "Referenced in chat",

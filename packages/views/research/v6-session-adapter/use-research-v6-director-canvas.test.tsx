@@ -214,6 +214,8 @@ describe("useResearchV6DirectorCanvas", () => {
               from_node_id: "absorbed-s",
               to_node_id: "successor",
               canonical: true,
+              hidden_count: 0,
+              expandable: false,
             },
           ],
           remove_edge_ids: [],
@@ -222,13 +224,13 @@ describe("useResearchV6DirectorCanvas", () => {
       });
     });
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(result.current.canvas?.graph.nodes.map((node) => node.id)).toEqual([
         "successor",
-      ]),
-    );
-    expect(result.current.canvas?.graph.nodes[0]?.merged_from).toEqual([
-      "absorbed-s",
-    ]);
+      ]);
+      expect(result.current.canvas?.graph.nodes[0]?.merged_from).toEqual([
+        "absorbed-s",
+      ]);
+    });
   });
 });

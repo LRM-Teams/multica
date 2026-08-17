@@ -189,7 +189,8 @@ export function relationEdgeClass(_kind: string, edgeType: string): string {
   if (
     edgeType === "merged_from" ||
     edgeType === "integrates" ||
-    edgeType === "integration_formed"
+    edgeType === "integration_formed" ||
+    edgeType === "absorbed_into"
   ) {
     return "sg-edge-merge";
   }
@@ -216,9 +217,15 @@ const DECOMPOSITION_EDGE_TYPES = new Set([
   "escalated_to",
   "decompose",
   "derived_from",
+  "collapsed_path",
   "deepens",
 ]);
-const SUPPORT_EDGE_TYPES = new Set(["supports", "resolved_by"]);
+const SUPPORT_EDGE_TYPES = new Set([
+  "supports",
+  "resolved_by",
+  "produced_by",
+  "belongs_to",
+]);
 const CHALLENGE_EDGE_TYPES = new Set([
   "challenged_by",
   "contradicts",
@@ -227,6 +234,7 @@ const CHALLENGE_EDGE_TYPES = new Set([
   "superseded_by",
   "invalidated_by",
   "abandons",
+  "challenges",
 ]);
 const NEW_DIRECTION_EDGE_TYPES = new Set(["restart_of"]);
 

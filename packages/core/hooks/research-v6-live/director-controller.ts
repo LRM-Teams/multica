@@ -41,6 +41,7 @@ export class ResearchV6DirectorLiveController {
   private connection: ResearchV6DirectorConnectionStatus = "idle";
   private syncing = false;
   private malformedFrameCount = 0;
+  private revision = 0;
   private destroyed = false;
   private unsubscribeEvent: (() => void) | null = null;
   private unsubscribeReconnect: (() => void) | null = null;
@@ -123,6 +124,10 @@ export class ResearchV6DirectorLiveController {
       syncing: this.syncing,
       malformedFrameCount: this.malformedFrameCount,
     };
+  }
+
+  getRevision(): number {
+    return this.revision;
   }
 
   resumeNow(): Promise<void> {
@@ -251,6 +256,7 @@ export class ResearchV6DirectorLiveController {
   }
 
   private emit(): void {
+    this.revision += 1;
     for (const listener of this.listeners) listener();
   }
 }

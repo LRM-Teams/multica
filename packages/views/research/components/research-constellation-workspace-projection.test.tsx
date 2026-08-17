@@ -249,6 +249,79 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
 });
 
 describe("ResearchConstellationWorkspace local theme", () => {
+  it("requests server-declared expansion without opening the result report", async () => {
+    const onSelectNode = vi.fn();
+    const onToggleNode = vi.fn();
+    render(
+      <ResearchConstellationWorkspace
+        typedGraph={{
+          session_id: "s1",
+          graph_version: 1,
+          total_node_count: 1,
+          nodes: [
+            {
+              id: "goal-1",
+              session_id: "s1",
+              node_type: "insight",
+              title: "Expandable synthesis",
+              level: "XXL",
+              status: "completed",
+              summary: "",
+              actor_agent_id: null,
+              cluster_id: null,
+              confidence: null,
+              goal_version_id: null,
+              derived_from: null,
+              merged_from: [],
+              superseded_by: null,
+              restart_of: null,
+              parent_id: null,
+            },
+          ],
+          edges: [],
+          clusters: [],
+          lineage: {
+            derived: {},
+            merged: {},
+            superseded: {},
+            restarted: {},
+            invalidated: {},
+            supersedes: {},
+          },
+        } satisfies TypedGraphResponse}
+        typedLoading={false}
+        typedError={false}
+        typedGraphSessionId="s1"
+        snapshotNodes={[]}
+        selectedNode={null}
+        onSelectNode={onSelectNode}
+        executionRows={[]}
+        onOpenAgentPanel={() => {}}
+        canvasMode="ready"
+        activeLens="relations"
+        sources={[]}
+        members={[]}
+        chatPanel={<div>chat</div>}
+        detailPanel={<div>detail</div>}
+        composer={<div>composer</div>}
+        expansionControl={{
+          expandableNodeIds: new Set(["goal-1"]),
+          expandedNodeIds: new Set(),
+          onToggleNode,
+        }}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Expandable synthesis/ }),
+    );
+    expect(onSelectNode).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "goal-1" }),
+    );
+    expect(onToggleNode).toHaveBeenCalledWith("goal-1");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("keeps a cached D5 canvas mounted and retryable after refresh failure", async () => {
     const onRetry = vi.fn();
     render(

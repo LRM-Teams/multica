@@ -519,8 +519,18 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			// Crash teardown must terminate any resident provider process before
 			// the workspace root is released. closeAll only closes idle backends;
 			// a late provider write can otherwise race testing.T's TempDir cleanup.
-			if err := d.canonicalRuntimes.forceTerminateAll(); err != nil {
-				t.Errorf("force terminate canonical runtime: %v", err)
+			// A provider may be stuck in an external process. Keep teardown
+			// bounded so a wedged provider cannot hang the whole test package;
+			// the runner/process-manager closes below remains the final cleanup.
+			terminated := make(chan error, 1)
+			go func() { terminated <- d.canonicalRuntimes.forceTerminateAll() }()
+			select {
+			case err := <-terminated:
+				if err != nil {
+					t.Errorf("force terminate canonical runtime: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Errorf("force terminate canonical runtime timed out")
 			}
 			// The runner's Run defer normally closes these resources, but the
 			// crash/restart path can detach immediately after the websocket has

@@ -120,6 +120,18 @@ function fixtureModel() {
 describe("StarGraphCanvas (Slice A renderer)", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(HTMLElement.prototype, "releasePointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(HTMLElement.prototype, "hasPointerCapture", {
+      configurable: true,
+      value: vi.fn(() => true),
+    });
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
       get() {
@@ -186,6 +198,37 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Stable A/ }));
     expect(onSelectNode).toHaveBeenCalledWith("stable-a");
+  });
+
+  it("clears selection on a background tap but not after panning", () => {
+    const onClearSelection = vi.fn();
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        selectedNodeId="stable-a"
+        onClearSelection={onClearSelection}
+      />,
+    );
+    const canvas = screen.getByTestId("star-graph-canvas");
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: 20,
+      clientY: 20,
+    });
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 20, clientY: 20 });
+    expect(onClearSelection).toHaveBeenCalledOnce();
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 2,
+      clientX: 20,
+      clientY: 20,
+    });
+    fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 40, clientY: 40 });
+    fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 40, clientY: 40 });
+    expect(onClearSelection).toHaveBeenCalledOnce();
   });
 
   it("dispatches one open command when select and open handlers are both provided", () => {

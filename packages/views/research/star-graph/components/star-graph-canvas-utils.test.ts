@@ -4,6 +4,7 @@ import {
   centerCameraOnPoint,
   computeEntityBounds,
   fitCameraToBounds,
+  focusCameraOnEntity,
   isEdgeLabelClear,
   quadraticEdgePath,
   relationEdgeClass,
@@ -178,5 +179,34 @@ describe("star-graph-canvas-utils", () => {
     const safeCenterX = 56 + (1200 - 360 - 112) / 2;
     expect(camera.x).toBeCloseTo(safeCenterX - 400, 0);
     expect(camera.y).toBeCloseTo(400 - 300, 0);
+  });
+
+  it("zooms an overview camera until an M+ landmark is readable", () => {
+    const camera = focusCameraOnEntity(
+      { x: 400, y: 300, radius: 48, tier: "m" },
+      { width: 1200, height: 800 },
+      { x: 0, y: 0, zoom: 0.25 },
+      { rightPanelWidth: 360 },
+    );
+
+    expect(camera.zoom).toBeCloseTo(1.375, 3);
+    expect(camera.x).toBeCloseTo(420 - 400 * camera.zoom, 0);
+    expect(camera.y).toBeCloseTo(400 - 300 * camera.zoom, 0);
+  });
+
+  it("preserves a closer user camera and does not enlarge S points", () => {
+    const landmark = focusCameraOnEntity(
+      { x: 0, y: 0, radius: 110, tier: "xl" },
+      { width: 1000, height: 700 },
+      { x: 10, y: 20, zoom: 1.6 },
+    );
+    const workPoint = focusCameraOnEntity(
+      { x: 0, y: 0, radius: 29, tier: "s" },
+      { width: 1000, height: 700 },
+      { x: 10, y: 20, zoom: 0.4 },
+    );
+
+    expect(landmark.zoom).toBe(1.6);
+    expect(workPoint.zoom).toBe(0.4);
   });
 });

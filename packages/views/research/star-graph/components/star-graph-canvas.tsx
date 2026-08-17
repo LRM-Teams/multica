@@ -41,10 +41,10 @@ import {
 } from "../lib/star-graph-visible-budget";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import {
-  centerCameraOnPoint,
   computeEntityBounds,
   computeEntityBoundsForIds,
   fitCameraToBounds,
+  focusCameraOnEntity,
   zoomCamera,
   zoomPercent,
   type StarGraphCamera,
@@ -88,6 +88,8 @@ export interface StarGraphCanvasProps {
   hideUnselectedSTierRelations?: boolean;
   /** V6-only screen-space label selection for M+ landmarks. */
   semanticLandmarkLabels?: boolean;
+  /** V6 micro-node treatment; legacy runs retain labeled S nodes. */
+  sTierPresentation?: "label" | "point";
   /** When set and no persisted viewport exists, initial camera fits these entities only. */
   initialFitEntityIdList?: readonly string[];
   entityBudget?: number;
@@ -125,6 +127,7 @@ export function StarGraphCanvas({
   relatedNodeIds,
   hideUnselectedSTierRelations = false,
   semanticLandmarkLabels = false,
+  sTierPresentation = "label",
   initialFitEntityIdList,
   entityBudget = STAR_GRAPH_SEMANTIC_NODE_BUDGET,
   hiddenCountLabel,
@@ -150,6 +153,8 @@ export function StarGraphCanvas({
     () => storedViewport ?? DEFAULT_CAMERA,
   );
   const [liveText, setLiveText] = useState("");
+  const [cameraTransitioning, setCameraTransitioning] = useState(false);
+  const cameraTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const entityMotionDirectives = useMemo(() => {
     const expansionDirectives = buildStarGraphExpansionMotion(
       model,
@@ -256,6 +261,27 @@ export function StarGraphCanvas({
     },
     [cameraSessionId, setSessionViewport, setStoredViewport],
   );
+
+  const stopCameraTransition = useCallback(() => {
+    if (cameraTransitionTimerRef.current) {
+      clearTimeout(cameraTransitionTimerRef.current);
+      cameraTransitionTimerRef.current = null;
+    }
+    setCameraTransitioning(false);
+  }, []);
+
+  const beginCameraTransition = useCallback(() => {
+    if (cameraTransitionTimerRef.current) {
+      clearTimeout(cameraTransitionTimerRef.current);
+    }
+    setCameraTransitioning(true);
+    cameraTransitionTimerRef.current = setTimeout(() => {
+      cameraTransitionTimerRef.current = null;
+      setCameraTransitioning(false);
+    }, 420);
+  }, []);
+
+  useEffect(() => stopCameraTransition, [stopCameraTransition]);
 
   const bounds = useMemo(() => computeEntityBounds(model.entities), [model.entities]);
 
@@ -443,8 +469,9 @@ export function StarGraphCanvas({
 
   const fitToContent = useCallback(() => {
     if (!bounds || viewport.width <= 0 || viewport.height <= 0) return;
+    beginCameraTransition();
     setCamera(fitCameraToBounds(bounds, viewport));
-  }, [bounds, setCamera, viewport]);
+  }, [beginCameraTransition, bounds, setCamera, viewport]);
 
   const focusNodeButton = useCallback((nodeId: string) => {
     const buttons = rootRef.current?.querySelectorAll<HTMLElement>(
@@ -464,9 +491,15 @@ export function StarGraphCanvas({
       if (!nodeId || viewport.width <= 0 || viewport.height <= 0) return;
       const entity = model.entities.find((candidate) => candidate.id === nodeId);
       if (!entity) return;
+      if (nodeId === model.rootId) {
+        fitToContent();
+        focusNodeButton(nodeId);
+        return;
+      }
+      beginCameraTransition();
       setCamera((current) =>
-        centerCameraOnPoint(
-          { x: entity.x, y: entity.y },
+        focusCameraOnEntity(
+          entity,
           viewport,
           current,
           { rightPanelWidth },
@@ -474,7 +507,16 @@ export function StarGraphCanvas({
       );
       focusNodeButton(nodeId);
     },
-    [focusNodeButton, model.entities, rightPanelWidth, setCamera, viewport],
+    [
+      beginCameraTransition,
+      fitToContent,
+      focusNodeButton,
+      model.entities,
+      model.rootId,
+      rightPanelWidth,
+      setCamera,
+      viewport,
+    ],
   );
 
   useEffect(() => {
@@ -483,26 +525,29 @@ export function StarGraphCanvas({
   }, [focusSelectedEntity, rightPanelWidth, selectedNodeId]);
 
   const handleZoomIn = useCallback(() => {
+    stopCameraTransition();
     setCamera((current) =>
       zoomCamera(current, current.zoom * 1.12, {
         x: viewport.width / 2,
         y: viewport.height / 2,
       }),
     );
-  }, [setCamera, viewport.height, viewport.width]);
+  }, [setCamera, stopCameraTransition, viewport.height, viewport.width]);
 
   const handleZoomOut = useCallback(() => {
+    stopCameraTransition();
     setCamera((current) =>
       zoomCamera(current, current.zoom / 1.12, {
         x: viewport.width / 2,
         y: viewport.height / 2,
       }),
     );
-  }, [setCamera, viewport.height, viewport.width]);
+  }, [setCamera, stopCameraTransition, viewport.height, viewport.width]);
 
   const handleWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
       event.preventDefault();
+      stopCameraTransition();
       const rect = rootRef.current?.getBoundingClientRect();
       if (!rect) return;
       const anchor = {
@@ -512,7 +557,7 @@ export function StarGraphCanvas({
       const delta = event.deltaY > 0 ? 0.92 : 1.08;
       setCamera((current) => zoomCamera(current, current.zoom * delta, anchor));
     },
-    [setCamera],
+    [setCamera, stopCameraTransition],
   );
 
   const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -520,6 +565,7 @@ export function StarGraphCanvas({
     if ((event.target as HTMLElement).closest('[data-testid="star-graph-node"], button')) {
       return;
     }
+    stopCameraTransition();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       startX: event.clientX,
@@ -527,7 +573,7 @@ export function StarGraphCanvas({
       cameraX: camera.x,
       cameraY: camera.y,
     };
-  }, [camera.x, camera.y]);
+  }, [camera.x, camera.y, stopCameraTransition]);
 
   const handlePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
@@ -691,7 +737,10 @@ export function StarGraphCanvas({
       )}
 
       <div
-        className="sg-canvas-world"
+        className={cn(
+          "sg-canvas-world",
+          cameraTransitioning && "sg-camera-transitioning",
+        )}
         style={{
           width: worldSize.width,
           height: worldSize.height,
@@ -727,6 +776,7 @@ export function StarGraphCanvas({
           motionDirectives={entityMotionDirectives}
           expansionControl={expansionControl}
           visibleLabelNodeIds={visibleLabelNodeIds}
+          sTierPresentation={sTierPresentation}
           labels={entityLabels}
           onSelectNode={onSelectNode}
           onOpenNode={onOpenNode}

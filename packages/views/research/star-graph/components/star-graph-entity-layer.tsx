@@ -27,6 +27,7 @@ export function StarGraphEntityLayer({
   motionDirectives,
   expansionControl,
   visibleLabelNodeIds,
+  sTierPresentation,
   labels,
   onSelectNode,
   onOpenNode,
@@ -38,6 +39,7 @@ export function StarGraphEntityLayer({
   motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
   expansionControl?: StarGraphExpansionControl;
   visibleLabelNodeIds?: ReadonlySet<string>;
+  sTierPresentation?: "label" | "point";
   labels: StarGraphEntityLabels;
   onSelectNode?: (nodeId: string) => void;
   onOpenNode?: (nodeId: string) => void;
@@ -83,6 +85,7 @@ export function StarGraphEntityLayer({
                 : labels.tierHeaders[entity.view.tier]
             }
             agentBadge={entity.view.agentBadge}
+            sTierPresentation={sTierPresentation}
             metrics={entity.view.metrics}
             metricText={
               entity.view.metrics
@@ -107,6 +110,7 @@ export function StarGraphEntityLayer({
                 : undefined
             }
             busy={entity.view.state === "run" || expansionLoading}
+            selected={selected}
             expanded={
               expandable
                 ? expansionControl?.expandedNodeIds.has(entity.id) ?? false

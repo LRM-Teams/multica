@@ -218,9 +218,10 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	reports, reportErr := e.store.ApplyReceivedV6ReportPackages(ctx, limit)
 	applied, applyErr := e.store.ApplyReceivedV6Submissions(ctx, limit)
 	recovered, err := e.store.RecoverExpiredV6WorkItems(ctx, limit)
+	events, eventErr := e.store.ProcessV6EventTriggers(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
-	return recovered + steering + proposals + reports + applied + prepared + delivered, errors.Join(err, steeringErr, proposalErr, reportErr, applyErr, prepareErr, deliveryErr)
+	return recovered + steering + proposals + reports + applied + events + prepared + delivered, errors.Join(err, steeringErr, proposalErr, reportErr, applyErr, eventErr, prepareErr, deliveryErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {

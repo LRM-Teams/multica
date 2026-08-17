@@ -18,12 +18,17 @@ type v6TargetActionPayload struct {
 	Reason          string          `json:"reason"`
 }
 
+func validV6ActionUUID(value string) bool {
+	_, err := uuid.Parse(strings.TrimSpace(value))
+	return err == nil
+}
+
 func (s *PostgresStore) executeV6WorkLifecycleAction(ctx context.Context, proposal v6DirectorProposal, action v6DirectorAction, expectedState int64) error {
 	if action.PayloadSchema != "target.action.v1" {
 		return ErrInvalidContract
 	}
 	var payload v6TargetActionPayload
-	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.TargetID) == "" {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.TargetID) {
 		return ErrInvalidContract
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
@@ -85,7 +90,7 @@ func (s *PostgresStore) executeV6AgentLifecycleAction(ctx context.Context, propo
 		PermissionConfig json.RawMessage `json:"permission_config"`
 		Reason           string          `json:"reason"`
 	}
-	if json.Unmarshal(action.Payload, &payload) != nil || payload.AgentID == "" {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.AgentID) {
 		return ErrInvalidContract
 	}
 	var membershipID string
@@ -122,7 +127,7 @@ func (s *PostgresStore) executeV6BranchLifecycleAction(ctx context.Context, prop
 		return ErrInvalidContract
 	}
 	var payload v6TargetActionPayload
-	if json.Unmarshal(action.Payload, &payload) != nil || payload.TargetID == "" {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.TargetID) {
 		return ErrInvalidContract
 	}
 	status := map[string]string{"update_branch": "active", "pause_branch": "paused", "terminate_branch": "terminated", "split_branch": "active", "merge_branch": "active"}[action.Kind]
@@ -152,7 +157,7 @@ func (s *PostgresStore) executeV6SplitBranchAction(ctx context.Context, proposal
 		return ErrInvalidContract
 	}
 	var payload v6TargetActionPayload
-	if json.Unmarshal(action.Payload, &payload) != nil || payload.TargetID == "" || strings.TrimSpace(payload.Mission) == "" {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.TargetID) || strings.TrimSpace(payload.Mission) == "" {
 		return ErrInvalidContract
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
@@ -277,7 +282,7 @@ func (s *PostgresStore) executeV6NodeDecisionAction(ctx context.Context, proposa
 		return ErrInvalidContract
 	}
 	var payload v6TargetActionPayload
-	if json.Unmarshal(action.Payload, &payload) != nil || payload.TargetID == "" {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.TargetID) {
 		return ErrInvalidContract
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
@@ -330,7 +335,7 @@ func (s *PostgresStore) executeV6AssignStewardAction(ctx context.Context, propos
 		return ErrInvalidContract
 	}
 	var payload v6TargetActionPayload
-	if json.Unmarshal(action.Payload, &payload) != nil || payload.TargetID == "" || payload.AssigneeAgentID == "" {
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.TargetID) || !validV6ActionUUID(payload.AssigneeAgentID) {
 		return ErrInvalidContract
 	}
 	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})

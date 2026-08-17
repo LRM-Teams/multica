@@ -2,12 +2,11 @@
 status: accepted
 ---
 
-# Local Machine Upgrade proof completes without cloud generation CAS
+# Machine Upgrade successor completion has no cloud generation CAS
 
-Raft Computer finishes a replacement when the successor proves itself
-locally: loopback `machine-attestation`, live PID, matching version, and the
-old service gone. The cloud is not a predecessor-to-candidate CAS. After that
-local proof the new Computer just comes online (`ready` / heartbeat).
+Raft Computer treats the newly started Binding socket as successor proof. The
+cloud is not a predecessor-to-candidate generation CAS and Runtime cardinality
+is not takeover identity.
 
 Multica's detached handoff used a second cloud transaction,
 `POST /computer/machine-upgrades/{id}/takeover`, that required
@@ -16,19 +15,21 @@ successor could start. A 400 there failed an already-spawned successor
 (`complete takeover identity is required`) even when local PID+version proof
 was good.
 
-The local incumbent/candidate loopback proof stays. That is the completion
-condition. Heartbeat and register already claim a newer Computer generation
-when the successor comes online. Attest notifies the server that the upgrade
-completed. The `/takeover` HTTP route remains only as a compatibility receipt
-for older Computers that still POST it; it does not CAS generation.
+Multica now follows that boundary directly. Before swapping the PATH binary,
+the execution child writes a Raft-shaped marker containing `requestId`,
+`fromVersion`, `targetVersion`, `startedAt`, and `schemaVersion`. The successor
+waits for a current Binding, then sends correlated `computer:upgrade:done` on
+that socket. A matching target reports success; a different running version
+reports rollback. A failed socket write keeps the marker for the next startup.
+There is no takeover HTTP route, cloud receipt, accepted generation, or
+Runtime/Workspace attestation in this completion path.
 
-Operation authorization is separate from binary execution. A Web request
-creates the server operation with human authorization and sends
-`computer:upgrade` over the DaemonCore socket. The local `multica computer
-upgrade` command uses its saved human session to create the same canonical
-server operation before delivering that operation ID to Computer Host over
-authenticated loopback. Socket and loopback delivery may race; Host deduplicates
-them by operation ID. Workspace execution credentials accept, report progress,
-and attest an existing operation, but never create a human operation.
+Authorization is separate from binary execution. A Web request authorizes the
+Computer owner and sends `computer:upgrade` over one current Binding socket; it
+does not create a server operation row. The local `multica computer upgrade`
+command uses its saved human session for that same request before delivering it
+through authenticated loopback. The request ID correlates command, progress,
+successor completion, and UI; it is not a cloud operation identity.
 
-Cloud generation CAS is not upgrade completion, and it is not Raft alignment.
+Cloud generation CAS and cloud receipt tables are not upgrade completion, and
+restoring them would not be Raft alignment.

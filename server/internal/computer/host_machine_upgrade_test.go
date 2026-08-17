@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,7 +19,9 @@ import (
 
 func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{residentRoot: t.TempDir()})
-	want := hostMachineUpgradeJournal{Target: "v1.1.0"}
+	want := hostMachineUpgradeJournal{
+		RequestID: "upgrade-a", FromVersion: "v1.0.0", TargetVersion: "v1.1.0",
+	}
 	if err := upgrade.writeJournal(want); err != nil {
 		t.Fatal(err)
 	}
@@ -39,37 +40,37 @@ func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(raw, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := persisted["id"]; ok {
-		t.Fatalf("activated marker still persisted id: %s", raw)
-	}
-	if _, ok := persisted["generation"]; ok {
-		t.Fatalf("activated marker still persisted generation: %s", raw)
+	for field, value := range map[string]any{
+		"requestId": "upgrade-a", "fromVersion": "v1.0.0", "targetVersion": "v1.1.0",
+		"schemaVersion": float64(1),
+	} {
+		if persisted[field] != value {
+			t.Fatalf("activated marker %s = %v, want %v: %s", field, persisted[field], value, raw)
+		}
 	}
 	got, err := upgrade.readJournal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.Target != want.Target {
+	if got == nil || got.RequestID != want.RequestID || got.TargetVersion != want.TargetVersion {
 		t.Fatalf("Machine Upgrade journal = %+v, want %+v", got, want)
 	}
 }
 
-func TestHostMachineUpgradeAcceptanceRequiresCompleteComputerSet(t *testing.T) {
-	generation := "generation-a"
-	receipt := hostMachineUpgradeReceipt{
-		ID: "upgrade-a", AcceptedGeneration: &generation,
-		AcceptedRuntimeIDs:   []string{"runtime-b", "runtime-a"},
-		AcceptedWorkspaceIDs: []string{"workspace-b", "workspace-a"},
+func TestHostMachineUpgradeReadsLegacyTargetVersionMarker(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(machineUpgradeJournalPath(root)), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if err := validateHostMachineUpgradeReceipt(receipt, "upgrade-a",
-		[]string{"runtime-a", "runtime-b"}, []string{"workspace-a", "workspace-b"}); err != nil {
-		t.Fatalf("complete acceptance rejected: %v", err)
+	if err := os.WriteFile(machineUpgradeJournalPath(root), []byte(`{"target_version":"v1.1.0","updated_at":"2026-08-17T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	receipt.AcceptedWorkspaceIDs = []string{"workspace-a"}
-	err := validateHostMachineUpgradeReceipt(receipt, "upgrade-a",
-		[]string{"runtime-a", "runtime-b"}, []string{"workspace-a", "workspace-b"})
-	if err == nil || !strings.Contains(err.Error(), "complete Computer set") {
-		t.Fatalf("partial acceptance error = %v", err)
+	journal, err := readMachineUpgradeJournal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal == nil || journal.RequestID != "" || journal.TargetVersion != "v1.1.0" {
+		t.Fatalf("legacy Machine Upgrade journal = %+v", journal)
 	}
 }
 
@@ -105,7 +106,7 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			delivered <- request.Command.Operation()
+			delivered <- request.Command.RequestID
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -144,9 +145,9 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	}})
 	host.upgrade = upgrade
 
-	for _, operationID := range []string{"upgrade-a", "upgrade-b"} {
+	for _, requestID := range []string{"upgrade-a", "upgrade-b"} {
 		body, err := json.Marshal(protocol.ComputerUpgradePayload{
-			RequestID: "request-" + operationID, OperationID: operationID, TargetVersion: "v1.0.0",
+			RequestID: requestID, TargetVersion: "v1.0.0",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -156,15 +157,15 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 		response := httptest.NewRecorder()
 		upgrade.localRequestHandler()(response, request)
 		if response.Code != http.StatusOK {
-			t.Fatalf("local delivery %s status = %d body=%s", operationID, response.Code, response.Body.String())
+			t.Fatalf("local delivery %s status = %d body=%s", requestID, response.Code, response.Body.String())
 		}
 		select {
 		case got := <-delivered:
-			if got != operationID {
-				t.Fatalf("delivered operation = %q, want %q", got, operationID)
+			if got != requestID {
+				t.Fatalf("delivered request = %q, want %q", got, requestID)
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("local delivery did not hand off %s", operationID)
+			t.Fatalf("local delivery did not hand off %s", requestID)
 		}
 		deadline := time.Now().Add(time.Second)
 		for {
@@ -175,7 +176,7 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("active Machine Upgrade %q was not released after attesting %s", activeID, operationID)
+				t.Fatalf("active Machine Upgrade %q was not released after handing off %s", activeID, requestID)
 			}
 			time.Sleep(time.Millisecond)
 		}
@@ -412,6 +413,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	runtimeIDs := []string{"runtime-a", "runtime-b"}
 	var prepares atomic.Int32
 	var reregistrations atomic.Int32
+	donePayloads := make(chan protocol.ComputerUpgradeDonePayload, 1)
 	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Multica-Control-Token") != controlToken {
 			http.Error(w, "bad token", http.StatusUnauthorized)
@@ -422,6 +424,15 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 			prepares.Add(1)
 		case BindingReregisterRuntimePath:
 			reregistrations.Add(1)
+		case "/computer-control/computer-upgrade-done":
+			var request struct {
+				Done protocol.ComputerUpgradeDonePayload `json:"done"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			donePayloads <- request.Done
 		default:
 			http.NotFound(w, r)
 			return
@@ -430,16 +441,8 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	}))
 	defer childControl.Close()
 
-	acceptedGeneration := "generation-a"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
-			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
-				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
-				AcceptedRuntimeIDs: runtimeIDs, AcceptedWorkspaceIDs: workspaceIDs,
-			})
-		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/progress":
-			w.WriteHeader(http.StatusNoContent)
 		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
 			t.Error("successor attested over HTTP")
 			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
@@ -511,8 +514,6 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		ControlURL:   hostControl.URL,
 		ControlToken: controlToken,
 		Child:        incumbent.runtimeSets[workspaceIDs[0]].Identity,
-		RuntimeID:    runtimeIDs[0],
-		DaemonToken:  "runtime-token-workspace-a",
 		Exit: func() {
 			upgrade.observeInitiatorExit(incumbent.runtimeSets[workspaceIDs[0]].Identity)
 		},
@@ -556,7 +557,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		t.Fatal("activated Machine Upgrade did not stop incumbent Computer")
 	}
 	journal, err := upgrade.readJournal()
-	if err != nil || journal == nil || journal.Target != "v2.0.0" {
+	if err != nil || journal == nil || journal.TargetVersion != "v2.0.0" {
 		t.Fatalf("activated Machine Upgrade journal = %+v, error=%v", journal, err)
 	}
 	incumbent.Stop()
@@ -577,8 +578,59 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	if got := reregistrations.Load(); got != 0 {
 		t.Fatalf("successor re-registration calls = %d, want 0", got)
 	}
+	select {
+	case done := <-donePayloads:
+		if done.RequestID != "upgrade-a" || !done.OK || done.NewVersion != "v2.0.0" {
+			t.Fatalf("successor completion = %+v", done)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successor did not reconcile computer:upgrade:done on its new Binding socket")
+	}
 	if journal, err := successorUpgrade.readJournal(); err != nil || journal != nil {
 		t.Fatalf("successor left Machine Upgrade journal = %+v, error=%v", journal, err)
+	}
+	if err := successorUpgrade.writeJournal(hostMachineUpgradeJournal{
+		RequestID: "upgrade-b", FromVersion: "v2.0.0", TargetVersion: "v3.0.0",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := successorUpgrade.recoverSuccessor(context.Background()); err != nil {
+		t.Fatalf("recover rolled-back successor: %v", err)
+	}
+	select {
+	case done := <-donePayloads:
+		if done.RequestID != "upgrade-b" || done.OK || done.NewVersion != "v2.0.0" || !done.RolledBack {
+			t.Fatalf("rolled-back successor completion = %+v", done)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rolled-back successor did not reconcile computer:upgrade:done")
+	}
+}
+
+func TestHostMachineUpgradeKeepsJournalUntilSuccessorCompletionIsDelivered(t *testing.T) {
+	const controlToken = "owner-secret"
+	_, host := newReadyHostForChildUpgradeWithChild(t, controlToken, "workspace-a", 8299, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == BindingComputerUpgradeDonePath {
+			http.Error(w, "Binding socket is not connected", http.StatusServiceUnavailable)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	root := t.TempDir()
+	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
+		identity: HostProcessIdentity{Version: "v2.0.0"}, residentRoot: root,
+	})
+	host.upgrade = upgrade
+	if err := upgrade.writeJournal(hostMachineUpgradeJournal{
+		RequestID: "upgrade-a", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgrade.recoverSuccessor(context.Background()); err == nil {
+		t.Fatal("successor recovery succeeded without delivering computer:upgrade:done")
+	}
+	if journal, err := upgrade.readJournal(); err != nil || journal == nil || journal.RequestID != "upgrade-a" {
+		t.Fatalf("undelivered successor journal = %+v, error=%v", journal, err)
 	}
 }
 
@@ -605,12 +657,28 @@ func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
 	}
 
 	var reregistered atomic.Int32
+	donePayloads := make(chan protocol.ComputerUpgradeDonePayload, 1)
 	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
+		if r.Header.Get("X-Multica-Control-Token") != controlToken {
 			http.Error(w, "unexpected child control request", http.StatusBadRequest)
 			return
 		}
-		reregistered.Add(1)
+		switch r.URL.Path {
+		case BindingReregisterRuntimePath:
+			reregistered.Add(1)
+		case BindingComputerUpgradeDonePath:
+			var request struct {
+				Done protocol.ComputerUpgradeDonePayload `json:"done"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			donePayloads <- request.Done
+		default:
+			http.Error(w, "unexpected child control request", http.StatusBadRequest)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer childControl.Close()
@@ -662,6 +730,14 @@ func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
 	}
 	if got := reregistered.Load(); got != 0 {
 		t.Fatalf("successor re-registration calls = %d, want 0", got)
+	}
+	select {
+	case done := <-donePayloads:
+		if done.RequestID != "upgrade-a" || !done.OK || done.NewVersion != "v2.0.0" {
+			t.Fatalf("previous-package successor completion = %+v", done)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("previous-package successor did not reconcile computer:upgrade:done")
 	}
 	if _, err := os.Stat(previousJournalPath); !os.IsNotExist(err) {
 		t.Fatalf("previous-package handoff journal remains after successor start: %v", err)

@@ -191,6 +191,15 @@ export function semanticMotionCss(): string {
   from { opacity: 0; transform: translateY(var(--motion-rise-px, 8px)) scale(0.96); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
+@keyframes research-motion-anchored-appear {
+  0% {
+    opacity: 0.08;
+    transform: translate(var(--motion-anchor-x, 0), var(--motion-anchor-y, 0)) scale(0.48);
+    filter: blur(var(--motion-anchor-blur, 4px)) brightness(1.25);
+  }
+  72% { opacity: 1; filter: blur(0) brightness(1.08); }
+  100% { opacity: 1; transform: translate(0, 0) scale(1); filter: none; }
+}
 @keyframes research-motion-merge {
   0% {
     opacity: 0.32;

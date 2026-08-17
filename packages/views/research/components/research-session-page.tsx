@@ -262,6 +262,17 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   );
   const directorV6Enabled =
     data?.run?.run.orchestrator_version === "research-run-v6";
+  const { data: workspaceAgents = [] } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: directorV6Enabled,
+  });
+  const persistedDirectorAgentId = data?.session.active_assignments?.find(
+    (assignment) =>
+      assignment.role === "director" || assignment.role === "research_director",
+  )?.agent_id ?? null;
+  const persistedDirectorAgent = workspaceAgents.find(
+    (agent) => agent.id === persistedDirectorAgentId,
+  );
   const directorTransport = useMemo(
     () => createResearchV6DirectorProjectionTransport(api),
     [],

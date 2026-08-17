@@ -249,6 +249,9 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 	ref := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "id"}, "properties": map[string]any{
 		"kind": map[string]any{"type": "string"}, "id": map[string]any{"type": "string", "format": "uuid"},
 		"expected_state_version": map[string]any{"type": "integer", "minimum": 0}, "disposition": map[string]any{"type": "string"}, "reason": text}}
+	uuidValue := map[string]any{"type": "string", "format": "uuid"}
+	hashValue := map[string]any{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+	jsonObject := map[string]any{"type": "object"}
 	return map[string]any{
 		"no_op.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"message_id", "reason"}, "properties": map[string]any{"message_id": map[string]any{"type": "string", "format": "uuid"}, "reason": text}},
 		"steering_assessment.v1": map[string]any{"type": "object", "additionalProperties": false,
@@ -258,6 +261,24 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 				"revised_goal": text, "revised_scope": map[string]any{"type": "object"}, "revised_audience": map[string]any{"type": "string"},
 				"revised_freshness": map[string]any{"type": "string"}, "revised_language": map[string]any{"type": "string"},
 				"revised_source_policy": map[string]any{"type": "object"}, "revised_limits": map[string]any{"type": "object"}}},
+		"agent.create.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"name", "capability", "mission_prompt", "model_config", "tool_config", "permission_config"}, "properties": map[string]any{
+				"name": text, "capability": text, "mission_prompt": text, "capacity_reason": text,
+				"model_config": jsonObject, "tool_config": jsonObject, "permission_config": jsonObject}},
+		"work.create.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"kind", "assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
+				"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text,
+				"expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
+				"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+				"branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+		"branch.create.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
+				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},
+		"report.create.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"assignee_agent_id", "title", "inputs"}, "properties": map[string]any{
+				"assignee_agent_id": uuidValue, "title": text, "inputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 1024, "items": map[string]any{
+					"type": "object", "additionalProperties": false, "required": []string{"branch_id", "node_artifact_version_id", "input_role", "content_hash"}, "properties": map[string]any{
+						"branch_id": uuidValue, "node_artifact_version_id": uuidValue, "input_role": map[string]any{"enum": []string{"branch_xxl", "branch_maximum", "unresolved_gap"}}, "content_hash": hashValue}}}}},
 	}
 }
 

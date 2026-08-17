@@ -49,7 +49,7 @@ func (s *PostgresStore) ApplyReceivedV6DirectorProposals(ctx context.Context, li
 		err = tx.QueryRow(ctx, `SELECT sub.id::text,sub.envelope FROM research_v6_work_submission sub
 			JOIN research_work_item w ON w.id=sub.work_item_id
 			WHERE (sub.status='received' OR (sub.status='processing' AND sub.updated_at<now()-interval '1 minute'))
-			AND sub.contract_kind='director_action_proposal' AND w.client_key LIKE 'director-cycle:steering:%'
+			AND sub.contract_kind='director_action_proposal' AND w.client_key LIKE 'director-cycle:%'
 			ORDER BY sub.created_at,sub.id FOR UPDATE OF sub SKIP LOCKED LIMIT 1`).Scan(&submissionID, &envelope)
 		if errors.Is(err, pgx.ErrNoRows) {
 			_ = tx.Rollback(ctx)
@@ -181,6 +181,14 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 				AcceptedActionIDs: []string{action.ActionID}, RevisedGoal: payload.RevisedGoal, RevisedScope: payload.RevisedScope,
 				RevisedSourcePolicy: payload.RevisedSourcePolicy, RevisedLimits: payload.RevisedLimits, RevisedAudience: payload.RevisedAudience,
 				RevisedFreshness: payload.RevisedFreshness, RevisedLanguage: payload.RevisedLanguage})
+		case "create_agent":
+			err = s.executeV6CreateAgentAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_work_item", "create_task":
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_branch":
+			err = s.executeV6CreateBranchAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_report":
+			err = s.executeV6CreateReportAction(ctx, proposal, cycleID, action, goalVersion, stateVersion)
 		default:
 			return fmt.Errorf("%w: unsupported Director action %q", ErrInvalidContract, action.Kind)
 		}
@@ -196,9 +204,6 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 func validateV6DirectorActionDAG(actions []v6DirectorAction) ([]int, error) {
 	if len(actions) == 0 {
 		return nil, ErrInvalidContract
-	}
-	if len(actions) != 1 {
-		return nil, fmt.Errorf("%w: steering Director cycle requires one complete assessment", ErrInvalidContract)
 	}
 	if len(actions) > 1 {
 		for _, a := range actions {

@@ -22,13 +22,21 @@ import (
 )
 
 const (
-	notePeriodBriefFolderTitle   = "工作介绍"
-	notePeriodBriefSourceJournal = "machine_work_journal"
+	notePeriodBriefFolderTitle     = "工作介绍"
+	notePeriodBriefSourceJournal   = "machine_work_journal" // legacy label; unused on Brief path after K1-T2
+	notePeriodBriefSourceCollectors = "period_work_collectors"
+	// Legacy Host Digest helpers retained until K2-T2 deletes them; keep
+	// constants so unused functions still compile.
+	notePeriodBriefDigestTimeout = 4 * time.Second
+	notePeriodBriefDigestBudget  = 8 * time.Second
 	// Keep the HTTP path snappy: Next.js proxies abort long requests as
-	// socket hang up / opaque 500. Digests degrade into sources_empty.
-	notePeriodBriefDigestTimeout  = 4 * time.Second
-	notePeriodBriefDigestBudget   = 8 * time.Second
+	// socket hang up / opaque 500. Collector wait degrades into sources_empty.
+	notePeriodBriefCollectorPollEvery  = 400 * time.Millisecond
+	notePeriodBriefCollectorStubMarker = "Stub awaiting Agent pack"
 )
+
+// Overridable in tests so suite does not sleep the full production budget.
+var notePeriodBriefCollectorWaitBudget = 6 * time.Second
 
 // Stable English instruction locked to the period_brief playbook (J3-T1 / J3-T4).
 // folderPageID is the private 工作介绍/ folder — Brief lands as a child via human confirm.
@@ -43,8 +51,8 @@ func notePeriodBriefInstruction(folderPageID, windowLabel string) string {
 		"2) Give 3–7 main threads; each thread has at most 3 bullets and should cite Issue/PR/repo-path evidence when available.\n" +
 		"3) Call out delegated leverage (what agents or teammates carried).\n" +
 		"4) State what remains unfinished.\n" +
-		"5) Put unscoped local machine work (本机未归类) in its own section — never mix it into the team narrative.\n" +
-		"6) Do not list raw commits; do not invent claims without evidence.\n" +
+		"5) Put unscoped machine work from collector packs (本机未归类) in its own section — never mix it into the team narrative.\n" +
+		"6) Do not list raw commits; do not invent claims without evidence in Facts or collector packs.\n" +
 		"7) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
 		"`. The body must be only the Brief markdown. Title it like `工作介绍 " + label +
 		"`. The human confirms 「新建子笔记」 under 工作介绍/ — never treat the draft Facts page as the finished Brief, and never pass the draft page id to --note-page-id."
@@ -95,7 +103,7 @@ func notePeriodBriefCollectorPackStub(windowLabel, agentLabel string) string {
 	}
 	return "# 采集包 " + label + "\n\n" +
 		"Collector: " + who + "\n\n" +
-		"Stub awaiting Agent pack via `--note-write`. Replace this body with structured OS work traces " +
+		notePeriodBriefCollectorStubMarker + " via `--note-write`. Replace this body with structured OS work traces " +
 		"(repos/roots, highlights with short diffs/snippets, unscoped leftovers). Do not write the final Brief here.\n"
 }
 
@@ -121,11 +129,10 @@ type createNotePeriodBriefResponse struct {
 	CollectorJobs     []NoteWorkerJobResponse         `json:"collector_jobs"`
 }
 
-// CreateNotePeriodBrief gathers platform Facts (+ optional legacy Owner Digests),
-// dispatches collector Agents to gather OS work packs, writes a private draft
-// note, and wakes the synthesizer with the period_brief instruction. Collector
-// packs land as private child pages under 工作介绍/ via --note-write (human
-// confirm). K1-T2 will wait on collectors before synthesis. No model runs here.
+// CreateNotePeriodBrief gathers platform Facts, dispatches collector Agents to
+// gather OS work packs, waits briefly for packs (timeout → empty degrade), then
+// wakes the synthesizer with Facts + collector packs. No Host Digest. No model
+// runs here.
 func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, userIDString, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
@@ -142,11 +149,6 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 	}
 	collectorIDs, ok := h.parsePeriodBriefCollectorAgentIDs(w, r.Context(), workspaceID, req.CollectorAgentIDs)
 	if !ok {
-		return
-	}
-	ownedComputers, err := h.listOwnedComputerIDsInWorkspace(r.Context(), workspaceID, userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list Computers")
 		return
 	}
 
@@ -169,40 +171,9 @@ func (h *Handler) CreateNotePeriodBrief(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	workspaceRemotes, err := h.listWorkspaceGitRepoRemotes(r.Context(), workspaceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load workspace git remotes")
-		return
-	}
-	digestPacks, journalEmpty := h.collectOwnerWorkDigests(r.Context(), ownedComputers, window, workspaceRemotes)
-	used := append([]string(nil), bundle.SourcesUsed...)
-	empty := append([]string(nil), bundle.SourcesEmpty...)
-	skipped := append([]string(nil), bundle.SourcesSkipped...)
-	if journalEmpty {
-		if !containsNoteRetrospectiveSource(empty, notePeriodBriefSourceJournal) {
-			empty = append(empty, notePeriodBriefSourceJournal)
-		}
-	} else if !containsNoteRetrospectiveSource(used, notePeriodBriefSourceJournal) {
-		used = append(used, notePeriodBriefSourceJournal)
-	}
-
-	factsText := formatNotePeriodBriefFacts(bundle.Facts)
-	digestText := formatNotePeriodBriefDigests(digestPacks)
-	title := fmt.Sprintf("工作介绍 %s · 底稿", window.Label)
-	content := buildNotePeriodBriefDraftMarkdown(window, factsText, digestText, used, empty, skipped)
-
 	folderID, err := h.ensureNotePeriodBriefFolder(r.Context(), workspaceID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to ensure period brief folder")
-		return
-	}
-	page, err := scanNotePage(h.DB.QueryRow(r.Context(), `
-INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
-VALUES ($1, $2, $3, $4, $5, lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
-RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`,
-		workspaceID, folderID, userID, normalizeNoteTitle(title), content))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create period brief draft note")
 		return
 	}
 
@@ -228,12 +199,45 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 		collectorJobs = append(collectorJobs, job)
 	}
 
+	packResults := h.awaitPeriodBriefCollectorPacks(r.Context(), workspaceID, userID, collectorJobs)
+	packsText := formatNotePeriodBriefPacks(packResults)
+	factsText := formatNotePeriodBriefFacts(bundle.Facts)
+
+	used := append([]string(nil), bundle.SourcesUsed...)
+	empty := append([]string(nil), bundle.SourcesEmpty...)
+	skipped := append([]string(nil), bundle.SourcesSkipped...)
+	packsReady := 0
+	for _, pack := range packResults {
+		if pack.Status == "ready" {
+			packsReady++
+		}
+	}
+	if packsReady > 0 {
+		if !containsNoteRetrospectiveSource(used, notePeriodBriefSourceCollectors) {
+			used = append(used, notePeriodBriefSourceCollectors)
+		}
+	} else if !containsNoteRetrospectiveSource(empty, notePeriodBriefSourceCollectors) {
+		empty = append(empty, notePeriodBriefSourceCollectors)
+	}
+
+	title := fmt.Sprintf("工作介绍 %s · 底稿", window.Label)
+	content := buildNotePeriodBriefDraftMarkdown(window, factsText, packsText, used, empty, skipped)
+	page, err := scanNotePage(h.DB.QueryRow(r.Context(), `
+INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, $4, $5, lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
+RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`,
+		workspaceID, folderID, userID, normalizeNoteTitle(title), content))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create period brief draft note")
+		return
+	}
+
 	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
 	if err != nil || agent.ArchivedAt.Valid {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	job, ok := h.dispatchNotePeriodBriefWorker(w, r, workspaceID, userID, userIDString, folderID, page, agent, window.Label, strings.TrimSpace(req.ChannelID), factsText, digestText)
+	job, ok := h.dispatchNotePeriodBriefWorker(w, r, workspaceID, userID, userIDString, folderID, page, agent, window.Label, strings.TrimSpace(req.ChannelID), factsText, packsText)
 	if !ok {
 		return
 	}
@@ -551,7 +555,7 @@ func (h *Handler) dispatchNotePeriodBriefWorker(
 	folderID pgtype.UUID,
 	page notePageRow,
 	agent db.Agent,
-	windowLabel, channelID, factsText, digestText string,
+	windowLabel, channelID, factsText, packsText string,
 ) (NoteWorkerJobResponse, bool) {
 	ch, ok := h.resolveNoteWorkerChannel(w, r, workspaceID, userIDString, agent, channelID)
 	if !ok {
@@ -600,7 +604,7 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
 	h.publishToUsers(protocol.EventChannelMessage, uuidToString(workspaceID), "member", userIDString, recipientIDs, msg)
 
 	workerPrompt := wrapNoteWorkerChannelWakePrompt(
-		buildNotePeriodBriefPrompt(instruction, uuidToString(page.ID), folderPageID, windowLabel, page.Title, page.Content, factsText, digestText),
+		buildNotePeriodBriefPrompt(instruction, uuidToString(page.ID), folderPageID, windowLabel, page.Title, page.Content, factsText, packsText),
 		h.agentMessageTargetForPrompt(r.Context(), ch, msg),
 	)
 	task, err := h.enqueueChannelAgentPrompt(
@@ -750,6 +754,109 @@ func formatNotePeriodBriefDigests(packs []notePeriodBriefDigestPack) string {
 	return b.String()
 }
 
+type notePeriodBriefPackResult struct {
+	AgentID string
+	PageID  string
+	Title   string
+	Content string
+	Status  string // ready | empty | failed
+}
+
+// awaitPeriodBriefCollectorPacks polls pack pages / job status until ready or
+// the wait budget elapses. Timeouts degrade to empty — they never fail the
+// whole Period Brief request.
+func (h *Handler) awaitPeriodBriefCollectorPacks(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	jobs []NoteWorkerJobResponse,
+) []notePeriodBriefPackResult {
+	out := make([]notePeriodBriefPackResult, len(jobs))
+	for i, job := range jobs {
+		out[i] = notePeriodBriefPackResult{
+			AgentID: job.AgentID,
+			PageID:  job.PageID,
+			Status:  "empty",
+		}
+	}
+	if len(jobs) == 0 {
+		return out
+	}
+	deadline := time.Now().Add(notePeriodBriefCollectorWaitBudget)
+	for {
+		allSettled := true
+		for i, job := range jobs {
+			if out[i].Status == "ready" || out[i].Status == "failed" {
+				continue
+			}
+			page, err := scanNotePage(h.DB.QueryRow(ctx, `
+SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+				parseUUID(job.PageID), workspaceID))
+			if err != nil {
+				allSettled = false
+				continue
+			}
+			out[i].Title = page.Title
+			out[i].Content = page.Content
+
+			projected, _ := h.noteWorkerJobResponse(ctx, workspaceID, userID, parseUUID(job.ID))
+			status := projected.Status
+			if status == "" {
+				status = job.Status
+			}
+			stub := strings.Contains(page.Content, notePeriodBriefCollectorStubMarker)
+			switch {
+			case !stub && strings.TrimSpace(page.Content) != "":
+				out[i].Status = "ready"
+			case status == "failed" || status == "cancelled":
+				out[i].Status = "failed"
+			case status == "completed" && stub:
+				out[i].Status = "empty"
+			default:
+				allSettled = false
+			}
+		}
+		if allSettled || time.Now().After(deadline) {
+			break
+		}
+		timer := time.NewTimer(notePeriodBriefCollectorPollEvery)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return out
+		case <-timer.C:
+		}
+	}
+	return out
+}
+
+func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {
+	var b strings.Builder
+	b.WriteString("## Collector packs\n")
+	if len(packs) == 0 {
+		b.WriteString("status: empty\n(no collectors)\n")
+		return b.String()
+	}
+	for _, pack := range packs {
+		fmt.Fprintf(&b, "\n### Collector %s\n", pack.AgentID)
+		fmt.Fprintf(&b, "page_id: %s\n", pack.PageID)
+		fmt.Fprintf(&b, "status: %s\n", pack.Status)
+		if pack.Title != "" {
+			fmt.Fprintf(&b, "title: %s\n", pack.Title)
+		}
+		switch pack.Status {
+		case "ready":
+			b.WriteString(strings.TrimSpace(pack.Content))
+			b.WriteByte('\n')
+		case "failed":
+			b.WriteString("(collector job failed — treat as empty)\n")
+		default:
+			b.WriteString("(empty — pack still stub or timed out; do not invent OS work)\n")
+		}
+	}
+	return b.String()
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -759,7 +866,7 @@ func minInt(a, b int) int {
 
 func buildNotePeriodBriefDraftMarkdown(
 	window noteRetrospectiveWindow,
-	factsText, digestText string,
+	factsText, packsText string,
 	used, empty, skipped []string,
 ) string {
 	var b strings.Builder
@@ -777,6 +884,6 @@ func buildNotePeriodBriefDraftMarkdown(
 	b.WriteString("\n> 这是合成底稿，不是给领导看的 Period Work Brief。Agent 应另写 Brief 页。\n\n")
 	b.WriteString(factsText)
 	b.WriteByte('\n')
-	b.WriteString(digestText)
+	b.WriteString(packsText)
 	return b.String()
 }

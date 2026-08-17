@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/multica-ai/multica/server/internal/daemonws"
 )
 
 func TestCreateNotePeriodBriefRejectsEmptyCollectors(t *testing.T) {
@@ -35,10 +34,173 @@ func TestCreateNotePeriodBriefRejectsEmptyCollectors(t *testing.T) {
 	}
 }
 
+func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorWaitBudget
+	notePeriodBriefCollectorWaitBudget = 0
+	t.Cleanup(func() { notePeriodBriefCollectorWaitBudget = prevWait })
+
+	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
+	collectorA := createHandlerTestAgent(t, "Period Brief Collector A "+uuid.NewString()[:8], nil)
+	collectorB := createHandlerTestAgent(t, "Period Brief Collector B "+uuid.NewString()[:8], nil)
+
+	day := time.Now().UTC().Format("2006-01-02")
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorA, collectorB},
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Job.AgentID != synthID {
+		t.Fatalf("synthesizer job agent = %s, want %s", resp.Job.AgentID, synthID)
+	}
+	if len(resp.CollectorAgentIDs) != 2 {
+		t.Fatalf("collector_agent_ids = %#v", resp.CollectorAgentIDs)
+	}
+	if len(resp.CollectorJobs) != 2 {
+		t.Fatalf("collector_jobs = %#v", resp.CollectorJobs)
+	}
+	if containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceJournal) ||
+		containsNoteRetrospectiveSource(resp.SourcesEmpty, notePeriodBriefSourceJournal) {
+		t.Fatalf("Brief path must not use Host Digest source: used=%v empty=%v", resp.SourcesUsed, resp.SourcesEmpty)
+	}
+	if !containsNoteRetrospectiveSource(resp.SourcesEmpty, notePeriodBriefSourceCollectors) {
+		t.Fatalf("timed-out stubs should mark collectors empty: %v", resp.SourcesEmpty)
+	}
+	if strings.Contains(resp.Page.Content, "Machine Work Digest") || strings.Contains(resp.Page.Content, "disabled: true") {
+		t.Fatalf("draft must not include Host Digest: %s", resp.Page.Content)
+	}
+	if !strings.Contains(resp.Page.Content, "## Collector packs") {
+		t.Fatalf("draft missing collector packs: %s", resp.Page.Content)
+	}
+
+	var wake map[string]any
+	var contextRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
+		t.Fatalf("load wake context: %v", err)
+	}
+	if err := json.Unmarshal(contextRaw, &wake); err != nil {
+		t.Fatalf("unmarshal wake: %v", err)
+	}
+	prompt, _ := wake["prompt"].(string)
+	if strings.Contains(prompt, "<digest>") || strings.Contains(prompt, "Machine Work Digest") {
+		t.Fatalf("synthesizer wake must not include Host Digest: %s", prompt)
+	}
+	if !strings.Contains(prompt, "<packs>") || !strings.Contains(prompt, "</packs>") {
+		t.Fatalf("synthesizer wake missing packs partition: %s", prompt)
+	}
+	if !strings.Contains(prompt, "<facts>") {
+		t.Fatalf("synthesizer wake missing facts: %s", prompt)
+	}
+	if !strings.Contains(prompt, "collector packs") {
+		t.Fatalf("system contract should mention collector packs: %s", prompt)
+	}
+	folderID := ""
+	if resp.Page.ParentID != nil {
+		folderID = *resp.Page.ParentID
+	}
+	if folderID == "" || !strings.Contains(prompt, "--note-write --note-page-id "+folderID) {
+		t.Fatalf("wake must note-write to folder: %s", prompt)
+	}
+}
+
+func TestCreateNotePeriodBriefIncludesReadyCollectorPack(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorWaitBudget
+	notePeriodBriefCollectorWaitBudget = 2 * time.Second
+	t.Cleanup(func() { notePeriodBriefCollectorWaitBudget = prevWait })
+
+	synthID := createHandlerTestAgent(t, "Period Brief Ready Synth "+uuid.NewString()[:8], nil)
+	collectorID := createHandlerTestAgent(t, "Period Brief Ready Collector "+uuid.NewString()[:8], nil)
+
+	// First create to get pack page id is awkward; instead dispatch then
+	// simulate by writing pack content during wait via a short path:
+	// create request with wait, but update pack after collectors insert.
+	// We do a two-step: call Create with wait=0 after manually inserting ready
+	// content is hard mid-flight. Simpler: unit-test await helper separately
+	// and here only verify ready path by updating pack before await with
+	// wait budget and a goroutine.
+
+	day := time.Now().UTC().Format("2006-01-02")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			var pageID string
+			err := testPool.QueryRow(context.Background(), `
+SELECT id::text FROM note_page
+WHERE owner_user_id = $1 AND title LIKE '采集包%' AND content LIKE $2
+ORDER BY created_at DESC LIMIT 1`,
+				testUserID, "%"+notePeriodBriefCollectorStubMarker+"%").Scan(&pageID)
+			if err == nil && pageID != "" {
+				_, _ = testPool.Exec(context.Background(), `
+UPDATE note_page SET content = $1, updated_at = now() WHERE id = $2`,
+					"# 采集包 ready\n\n## Highlights\n- wired SSO login\n", pageID)
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorID},
+	}))
+	<-done
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceCollectors) {
+		t.Fatalf("ready pack should mark collectors used: %v", resp.SourcesUsed)
+	}
+	if !strings.Contains(resp.Page.Content, "wired SSO login") {
+		t.Fatalf("draft missing ready pack body: %s", resp.Page.Content)
+	}
+	var contextRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
+		t.Fatalf("load wake: %v", err)
+	}
+	var wake map[string]any
+	_ = json.Unmarshal(contextRaw, &wake)
+	prompt, _ := wake["prompt"].(string)
+	packsInner := extractBetween(t, prompt, "<packs>\n", "\n</packs>")
+	if !strings.Contains(packsInner, "wired SSO login") {
+		t.Fatalf("packs partition missing ready content: %s", packsInner)
+	}
+}
+
 func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
+	prevWait := notePeriodBriefCollectorWaitBudget
+	notePeriodBriefCollectorWaitBudget = 0
+	t.Cleanup(func() { notePeriodBriefCollectorWaitBudget = prevWait })
+
 	memberID := createRuntimeLocalSkillTestMember(t, "member")
 	agentID := createHandlerTestAgent(t, "Period Brief Member Agent "+uuid.NewString()[:8], nil)
 	collectorID := createHandlerTestAgent(t, "Period Brief Collector "+uuid.NewString()[:8], nil)
@@ -62,251 +224,7 @@ func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
 	if len(resp.CollectorAgentIDs) != 1 || resp.CollectorAgentIDs[0] != collectorID {
 		t.Fatalf("collector_agent_ids = %#v, want [%s]", resp.CollectorAgentIDs, collectorID)
 	}
-}
-
-func TestCreateNotePeriodBriefDispatchesWithDisabledDigest(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	daemonID, hub, conn := setupComputerWorkDigestLiveBinding(t, testUserID)
-	go serveComputerWorkJournalFixture(t, conn, daemonID)
-
-	agentID := createHandlerTestAgent(t, "Period Brief Agent "+uuid.NewString()[:8], nil)
-	collectorID := createHandlerTestAgent(t, "Period Brief Collector "+uuid.NewString()[:8], nil)
-	local := *testHandler
-	local.DaemonHub = hub
-
-	day := time.Now().UTC().Format("2006-01-02")
-	rec := httptest.NewRecorder()
-	local.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
-		"window":              "day",
-		"date":                day,
-		"timezone":            "UTC",
-		"agent_id":            agentID,
-		"collector_agent_ids": []string{collectorID},
-	}))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
-	}
-	var resp createNotePeriodBriefResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.CollectorAgentIDs) != 1 || resp.CollectorAgentIDs[0] != collectorID {
-		t.Fatalf("collector_agent_ids = %#v", resp.CollectorAgentIDs)
-	}
-	if len(resp.CollectorJobs) != 1 {
-		t.Fatalf("collector_jobs = %#v, want 1", resp.CollectorJobs)
-	}
-	collectorJob := resp.CollectorJobs[0]
-	if collectorJob.ID == "" || collectorJob.AgentID != collectorID || collectorJob.Status != "dispatched" {
-		t.Fatalf("collector job = %#v", collectorJob)
-	}
-	if collectorJob.PageID == "" || collectorJob.PageID == resp.Page.ID {
-		t.Fatalf("collector pack page must be distinct from synthesizer draft: %#v", collectorJob)
-	}
-	if !strings.Contains(collectorJob.Instruction, "structured Period Work collector pack") {
-		t.Fatalf("collector instruction missing pack contract: %s", collectorJob.Instruction)
-	}
-	if !strings.Contains(collectorJob.Instruction, "--note-write --note-page-id "+collectorJob.PageID) {
-		t.Fatalf("collector instruction must note-write to pack page: %s", collectorJob.Instruction)
-	}
-	if strings.Contains(collectorJob.Instruction, "Write a Period Work Brief") {
-		t.Fatalf("collector must not be asked to write the final Brief")
-	}
-	var packTitle, packContent string
-	if err := testPool.QueryRow(context.Background(), `
-SELECT title, content FROM note_page WHERE id = $1`, collectorJob.PageID).Scan(&packTitle, &packContent); err != nil {
-		t.Fatalf("load pack page: %v", err)
-	}
-	if !strings.Contains(packTitle, "采集包") {
-		t.Fatalf("pack title = %q", packTitle)
-	}
-	if !strings.Contains(packContent, "Stub awaiting Agent pack") {
-		t.Fatalf("pack stub missing: %s", packContent)
-	}
-	var collectorWake map[string]any
-	var collectorContextRaw []byte
-	if err := testPool.QueryRow(context.Background(), `
-SELECT context FROM agent_inbox_event WHERE id = $1`, *collectorJob.TaskID).Scan(&collectorContextRaw); err != nil {
-		t.Fatalf("load collector wake: %v", err)
-	}
-	if err := json.Unmarshal(collectorContextRaw, &collectorWake); err != nil {
-		t.Fatalf("unmarshal collector wake: %v", err)
-	}
-	collectorPrompt, _ := collectorWake["prompt"].(string)
-	if !strings.Contains(collectorPrompt, "Period Work Collector") {
-		t.Fatalf("collector wake missing collector contract: %s", collectorPrompt)
-	}
-	if !strings.Contains(collectorPrompt, "<window>") || !strings.Contains(collectorPrompt, "</window>") {
-		t.Fatalf("collector wake missing window partition: %s", collectorPrompt)
-	}
-	if strings.Contains(collectorPrompt, "RequestComputerWorkDigest") || strings.Contains(collectorPrompt, "Host Digest") {
-		t.Fatalf("collector wake must not teach Host Digest: %s", collectorPrompt)
-	}
-	if resp.Page.ID == "" || !strings.Contains(resp.Page.Title, "工作介绍") {
-		t.Fatalf("page = %#v", resp.Page)
-	}
-	if resp.Job.ID == "" || resp.Job.PageID != resp.Page.ID || resp.Job.Status != "dispatched" {
-		t.Fatalf("job = %#v", resp.Job)
-	}
-	if resp.Job.TaskID == nil || resp.Job.ChannelID == nil {
-		t.Fatalf("job missing task/channel: %#v", resp.Job)
-	}
-	if !containsNoteRetrospectiveSource(resp.SourcesEmpty, notePeriodBriefSourceJournal) {
-		t.Fatalf("sources_empty = %v, want machine_work_journal when journal disabled", resp.SourcesEmpty)
-	}
-	if !strings.Contains(resp.Page.Content, "disabled: true") {
-		t.Fatalf("draft missing disabled digest marker: %s", resp.Page.Content)
-	}
-	if resp.Page.ParentID == nil || *resp.Page.ParentID == "" {
-		t.Fatalf("draft must be under 工作介绍/: %#v", resp.Page)
-	}
-	folderID := *resp.Page.ParentID
-
-	if resp.Job.ChannelMessageID == nil {
-		t.Fatal("expected channel_message_id")
-	}
-	var partsRaw []byte
-	if err := testPool.QueryRow(context.Background(), `
-SELECT parts FROM channel_message WHERE id = $1`, *resp.Job.ChannelMessageID).Scan(&partsRaw); err != nil {
-		t.Fatalf("load channel parts: %v", err)
-	}
-	var parts []map[string]any
-	if err := json.Unmarshal(partsRaw, &parts); err != nil {
-		t.Fatalf("unmarshal parts: %v", err)
-	}
-	foundBrief := false
-	for _, part := range parts {
-		if part["type"] != "note_brief" {
-			continue
-		}
-		foundBrief = true
-		if part["ref_id"] != folderID {
-			t.Fatalf("note_brief sticky ref_id = %v, want folder %s (not draft %s)", part["ref_id"], folderID, resp.Page.ID)
-		}
-		if part["ref_id"] == resp.Page.ID {
-			t.Fatalf("note_brief must not sticky the draft page")
-		}
-	}
-	if !foundBrief {
-		t.Fatalf("expected note_brief part: %s", partsRaw)
-	}
-
-	var wake map[string]any
-	var contextRaw []byte
-	if err := testPool.QueryRow(context.Background(), `
-SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
-		t.Fatalf("load wake context: %v", err)
-	}
-	if err := json.Unmarshal(contextRaw, &wake); err != nil {
-		t.Fatalf("unmarshal wake: %v", err)
-	}
-	prompt, _ := wake["prompt"].(string)
-	if !strings.Contains(prompt, "<facts>") || !strings.Contains(prompt, "<digest>") {
-		t.Fatalf("wake prompt missing facts/digest partitions: %s", prompt)
-	}
-	if !strings.Contains(prompt, "--note-write --note-page-id "+folderID) {
-		t.Fatalf("wake prompt must require note-write to folder: %s", prompt)
-	}
-	if !strings.Contains(prompt, "Never pass the draft page id ("+resp.Page.ID+")") {
-		t.Fatalf("wake prompt must forbid draft write target: %s", prompt)
-	}
-	if !strings.Contains(prompt, "disabled: true") && !strings.Contains(prompt, "disabled:‹") {
-		// escaped angle brackets shouldn't apply to "disabled: true"
-		if !strings.Contains(prompt, "disabled") {
-			t.Fatalf("wake prompt missing disabled digest: %s", prompt)
-		}
-	}
-	digestInner := extractBetween(t, prompt, "<digest>\n", "\n</digest>")
-	if !strings.Contains(digestInner, "disabled: true") {
-		t.Fatalf("digest partition missing disabled marker: %s", digestInner)
-	}
-}
-
-func TestCreateNotePeriodBriefDispatchesWithHarvestedDigest(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	daemonID, hub, conn := setupComputerWorkDigestLiveBinding(t, testUserID)
-	go serveComputerWorkJournalFixture(t, conn, daemonID)
-
-	agentID := createHandlerTestAgent(t, "Period Brief On Agent "+uuid.NewString()[:8], nil)
-	collectorID := createHandlerTestAgent(t, "Period Brief Harvest Collector "+uuid.NewString()[:8], nil)
-	local := *testHandler
-	local.DaemonHub = hub
-
-	enable := httptest.NewRecorder()
-	local.PatchComputerWorkJournal(enable, computerWorkJournalRequest(testUserID, daemonID, true))
-	if enable.Code != http.StatusOK {
-		t.Fatalf("enable journal = %d: %s", enable.Code, enable.Body.String())
-	}
-
-	day := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC).Format("2006-01-02")
-	rec := httptest.NewRecorder()
-	local.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
-		"window":              "day",
-		"date":                day,
-		"timezone":            "UTC",
-		"agent_id":            agentID,
-		"collector_agent_ids": []string{collectorID},
-	}))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
-	}
-	var resp createNotePeriodBriefResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if !containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceJournal) {
-		t.Fatalf("sources_used = %v", resp.SourcesUsed)
-	}
-	if !strings.Contains(resp.Page.Content, "/home/owner/code/app") {
-		t.Fatalf("draft missing harvest root: %s", resp.Page.Content)
-	}
-
-	var contextRaw []byte
-	if err := testPool.QueryRow(context.Background(), `
-SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
-		t.Fatalf("load wake: %v", err)
-	}
-	var wake map[string]any
-	_ = json.Unmarshal(contextRaw, &wake)
-	prompt, _ := wake["prompt"].(string)
-	if !strings.Contains(prompt, "wire SSO login") {
-		t.Fatalf("wake prompt missing commit subject: %s", prompt)
-	}
-}
-
-func TestCreateNotePeriodBriefSurvivesOfflineComputer(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	_ = setupComputerWorkDigestOwner(t, testUserID)
-	agentID := createHandlerTestAgent(t, "Period Brief Offline Agent "+uuid.NewString()[:8], nil)
-	collectorID := createHandlerTestAgent(t, "Period Brief Offline Collector "+uuid.NewString()[:8], nil)
-	local := *testHandler
-	local.DaemonHub = daemonws.NewHub()
-
-	rec := httptest.NewRecorder()
-	local.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
-		"window":              "day",
-		"date":                time.Now().UTC().Format("2006-01-02"),
-		"timezone":            "UTC",
-		"agent_id":            agentID,
-		"collector_agent_ids": []string{collectorID},
-	}))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("offline computer should still dispatch: %d %s", rec.Code, rec.Body.String())
-	}
-	var resp createNotePeriodBriefResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if !containsNoteRetrospectiveSource(resp.SourcesEmpty, notePeriodBriefSourceJournal) {
-		t.Fatalf("sources_empty = %v", resp.SourcesEmpty)
-	}
-	if !strings.Contains(resp.Page.Content, "computer_offline") {
-		t.Fatalf("draft should record offline fetch: %s", resp.Page.Content)
+	if len(resp.CollectorJobs) != 1 || resp.CollectorJobs[0].AgentID != collectorID {
+		t.Fatalf("collector_jobs = %#v", resp.CollectorJobs)
 	}
 }

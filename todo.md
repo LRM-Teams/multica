@@ -79,7 +79,7 @@
   - **不要做**：让采集员直接写最终 Brief；Host `RequestComputerWorkDigest`。
   - **完成标准**：单采集员测：派发成功；回复含结构化工作痕迹而非空话。
 
-- [ ] **K1-T2 编排：多采集 → 再唤醒周报 Agent**
+- [x] **K1-T2 编排：多采集 → 再唤醒周报 Agent**
   - **目标**：采集员完成后（或超时降级），把平台 Facts + 各采集包交给周报 Agent 合成。
   - **要做**：扩展/替换 `POST /api/notes/period-briefs`：不再拉 Host Digest；写底稿或分区 prompt；`period_brief` 合成。
   - **不要做**：回顾 API 跑模型；采集失败整单失败（应降级标明 empty）。
@@ -108,9 +108,10 @@
 | 1 | ~~K0-T1 周报 Agent 供给~~ |
 | 2 | ~~K0-T2 UI 勾选采集员 + 整理员~~ |
 | 3 | ~~K1-T1 采集员 Worker / 剧本~~ |
-| 4 | **K1-T2** 编排：多采集 → 再唤醒周报 Agent |
+| 4 | ~~K1-T2 编排：多采集 → 再唤醒周报 Agent~~ |
+| 5 | **K2-T1** 周报 Agent 合成 + `--note-write` |
 
-**当前焦点：** Slice K1。下一个 checkbox：**K1-T2**。
+**当前焦点：** Slice K2。下一个 checkbox：**K2-T1**。
 
 ### 遗留说明（J1–J3）
 

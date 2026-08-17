@@ -11,7 +11,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { Copy, Loader2, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
+import { Copy, FilePlus, Loader2, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
@@ -50,6 +50,7 @@ import { MessageBody } from "./message-body";
 import { MessageInlineEditor } from "./message-inline-editor";
 import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
 import { NoteWorkerReplyActions } from "../../notes/note-worker-reply-actions";
+import { useCreateNoteFromChat } from "../../notes/use-create-note-from-chat";
 import { useMessageContentExpanded } from "../hooks/use-message-content-expanded";
 import { ThreadReplyPreview } from "./thread-reply-preview";
 import { MessageQuoteCard } from "./message-quote";
@@ -353,6 +354,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
 // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const { t } = useT("channels");
+  const { createNoteFromText, busy: createNoteBusy } = useCreateNoteFromChat();
   const {
     getActorName,
     getMemberHonor,
@@ -633,22 +635,28 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const isAgentVoiceReply = message.type === "agent" && voicePresentation !== null;
   const hidesVoiceTranscript =
     isAgentVoiceReply || voicePresentation?.source === "recording";
+  const visibleText =
+    projectReferencesToText(message.content, message.parts, resolveMentionPreview) ??
+    formatMessagePartsCopyText(effectiveParts) ??
+    unwrapStructuredPreviewContent(message.content) ??
+    message.content ??
+    "";
   const handleCopy = async () => {
     // Copy = take away what I can see (#530, Iris's ruling). The screen says
     // `@小雅`; a clipboard holding `@actor_14` disagrees with it, and that is its
     // own kind of lying. Round-trip fidelity is not a counter-argument: pasting
     // back into our own composer should go through the mention picker, and
     // anywhere else the internal handle is just noise.
-    const copyPayload =
-      projectReferencesToText(message.content, message.parts, resolveMentionPreview) ??
-      formatMessagePartsCopyText(effectiveParts) ??
-      unwrapStructuredPreviewContent(message.content) ??
-      message.content;
-    if (await copyText(copyPayload)) {
+    if (await copyText(visibleText)) {
       toast.success(t(($) => $.message.copied_toast));
     } else {
       showErrorToast(t(($) => $.message.copy_failed_toast));
     }
+  };
+  const visibleNoteText = visibleText.trim();
+  const canCreateNote = visibleNoteText.length > 0;
+  const handleCreateNote = () => {
+    void createNoteFromText(visibleNoteText);
   };
   const runMobileAction = (action: () => void | Promise<void>) => {
     setMobileOverlay("none");
@@ -970,7 +978,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             className={cn(
               // LRM-1126: solid popover chrome so icons never punch through body
               // text. Overlay — not a document-flow gutter (LRM-1331).
-              // LRM-1227/D2 chrome kept; bar measured ~154×34 with 5 keys.
+              // LRM-1227/D2 chrome kept; bar measured ~154×34 with 5 keys
+              // (reaction, copy, create-note, quote, thread; edit is dormant).
               // LRM-1331: gate on fine+≥640 — narrow fine uses long-press menu.
               // LRM-1360: literal gate classes — interpolated variants produce no
               // CSS, which left the bar (and the thread entry) permanently
@@ -1013,6 +1022,23 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             >
               <Copy className="size-4" />
             </button>
+            {canCreateNote && (
+              <button
+                type="button"
+                data-testid="message-action-create-note"
+                onClick={handleCreateNote}
+                disabled={createNoteBusy}
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                aria-label={t(($) => $.message.create_note_action)}
+                title={t(($) => $.message.create_note_action)}
+              >
+                {createNoteBusy ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                ) : (
+                  <FilePlus className="size-4" />
+                )}
+              </button>
+            )}
             {onQuote && (
               <button
                 type="button"
@@ -1236,6 +1262,18 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                   <Copy className="size-4" />
                   <span>{t(($) => $.message.copy_action)}</span>
                 </button>
+                {canCreateNote && (
+                  <button
+                    type="button"
+                    data-testid="mobile-action-create-note"
+                    disabled={createNoteBusy}
+                    onClick={() => runMobileAction(handleCreateNote)}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none disabled:opacity-50"
+                  >
+                    <FilePlus className="size-4" />
+                    <span>{t(($) => $.message.create_note_action)}</span>
+                  </button>
+                )}
                 {onQuote && (
                   <button
                     type="button"

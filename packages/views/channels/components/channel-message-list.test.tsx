@@ -202,6 +202,7 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: "Agent",
           feishu_badge: "Feishu",
           copy_action: "Copy",
+          create_note_action: "Create note",
           expand_action: "See more",
           collapse_action: "See less",
           copied_toast: "Copied",

@@ -145,6 +145,7 @@
     "./research-v6": "./hooks/research-v6/index.ts",
     "./research-v6/queries": "./hooks/research-v6/queries.ts",
     "./research-v6/projection-client": "./hooks/research-v6/projection-client.ts",
+    "./research-v6/director-projection-client": "./hooks/research-v6/director-projection-client.ts",
     "./research-v6/store": "./hooks/research-v6/store.ts",
     "./research-v6/registry": "./research-v6/registry.ts",
     "./research-v6/schemas": "./research-v6/schemas.ts",

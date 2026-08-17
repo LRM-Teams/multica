@@ -325,33 +325,11 @@ func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, ag
 	start := protocol.WorkspaceRunnerAgentStartPayload{
 		AgentID: agentID, RuntimeID: res.runtimeID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
 	}
-	ack := protocol.AgentStartAckPayload{AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID}
-	callback := agentProcessCallback{AgentID: agentID, LaunchID: res.launchID}
-	failed := false
-	defer func() {
-		if failed {
-			runner.processes.completeFailedManagedStart(callback)
-		} else {
-			runner.processes.completeManagedStart(callback)
-		}
-	}()
-	outcome, err := runner.completeManagedAgentStart(ctx, start, ack)
-	if err != nil {
-		failed = true
-		runner.publishManagedAgentStartFailure(start, outcome)
-		if runner.logger != nil && ctx.Err() == nil {
-			runner.logger.Warn("Workspace Runner idle snapshot start failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "provider_start_failed", "failed", err)...)
-		}
-		return
+	ack := protocol.AgentStartAckPayload{
+		AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
+		QueueState: protocol.AgentStartQueueStarting,
 	}
-	if err := runner.establishManagedAgentStart(start, outcome); err != nil {
-		if runner.logger != nil && ctx.Err() == nil {
-			runner.logger.Warn("Workspace Runner idle snapshot state failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "state_failed", "failed", err)...)
-		}
-		return
-	}
-	runner.publishManagedAgentStartActivity(agentID, res.runtimeID)
-	runner.flushManagedAgentStartMessages(ctx, start, ack)
+	runner.startAgentNow(ctx, start, ack, nil, nil, nil, nil)
 }
 
 func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {

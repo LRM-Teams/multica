@@ -70,6 +70,12 @@
 - **命名**：新增接口和日志使用 Computer；既有 `daemon_id` 只视为旧存储/auth adapter。拒绝码按格子拆：`rejected_no_process` / `rejected_no_inbox` / `rejected_inbox_runtime_mismatch` / `idle_restore_failed` / `provider_rejected`，禁止收回 `has not been accepted by APM`。
 - **物**：migration `340_agent_message_delivery_ack`；`docs/agent-message-delivery-contract.md` 的 1.0.16 accept table；`requiredDeliveryRouteTests`；`TestAcceptMessageDeliveryForbidsUnmanagedEarlyNack`；`make test-agent-delivery-route`。改 `acceptMessageDelivery` 必跑该 target。
 
+### 0.4 Daemon Agent 启动与 Starting Activity 对齐 Raft — `可执行`（③⑤，owner: @frankan）
+
+- **口径（2026-08-17）**：生产启动 owner 固定为 Raft v1.0.16 命名 `startAgentNow`；Starting Activity 固定由 `broadcastActivity(..., "starting")` 发布。生产代码只有一个 broadcast 调用点，位于 `startAgentNow` 的 Provider spawn 成功且 active status 发出之后。idle snapshot 唤醒复用该启动 owner；reconnect/replay/Message/runtime progress 禁止重发 Starting。
+- **不存在**：`publishManagedAgentStartActivity`、`observeRuntimeStarting`、`publishManagedProviderSpawn` 及同义 wrapper 不得恢复。
+- **物**：`server/internal/daemon/AGENTS.md`；`TestRaftStartingActivityHasOneBroadcastCallSite`；`TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus` 的恰好一次断言；`TestReplayManagedStartDoesNotRepaintStarting`。
+
 ## 1. 消息写入管道（BE）
 
 ### 1.1 destination-first 统一 finalizer — `可执行`（已落地）

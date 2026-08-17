@@ -75,6 +75,16 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 			return DirectorBriefFacts{}, err
 		}
 		item := map[string]any{"branch": map[string]any{"id": id, "state_version": version}, "objective": objective, "scope": jsonObjectOrEmpty(branchScope), "status": status, "frontier_nodes": []any{}, "has_more": false}
+		frontier, hasMore, frontierErr := s.loadV6BranchFrontierBrief(ctx, in.WorkspaceID, in.RunID, id)
+		if frontierErr != nil {
+			rows.Close()
+			return DirectorBriefFacts{}, frontierErr
+		}
+		item["frontier_nodes"] = frontier
+		item["has_more"] = hasMore
+		if hasMore {
+			item["next_cursor"] = "64"
+		}
 		if parent != "" {
 			item["parent_branch_id"] = parent
 		}
@@ -108,6 +118,9 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		return DirectorBriefFacts{}, err
 	}
 	rows.Close()
+	if err = s.loadV6DirectorControlFacts(ctx, in.WorkspaceID, in.RunID, &facts); err != nil {
+		return DirectorBriefFacts{}, err
+	}
 	rows, err = s.pool.Query(ctx, `SELECT t.event_sequence,m.body,t.selected_refs
 		FROM research_v6_steering_trigger t JOIN research_message m ON m.id=t.research_message_id
 		LEFT JOIN research_steering_assessment a ON a.research_message_id=t.research_message_id
@@ -140,6 +153,137 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	}
 	rows.Close()
 	return facts, nil
+}
+
+func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {
+	rows, err := s.pool.Query(ctx, `SELECT v.id::text,v.artifact_id::text,v.version,v.content_hash,iv.tier,iv.catalog_summary,iv.brief_summary,
+		COALESCE((SELECT steward.agent_id::text FROM research_node_steward_assignment steward WHERE steward.session_id=f.session_id AND steward.node_artifact_version_id=f.node_artifact_version_id AND steward.status='active' ORDER BY steward.generation DESC LIMIT 1),
+		         (SELECT assignment.director_agent_id::text FROM research_session session JOIN research_director_assignment assignment ON assignment.id=session.current_director_assignment_id WHERE session.id=f.session_id)),
+		CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
+		CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
+		COALESCE((SELECT array_agg(DISTINCT binding.branch_id::text ORDER BY binding.branch_id::text) FROM research_node_branch binding WHERE binding.session_id=f.session_id AND binding.node_artifact_version_id=f.node_artifact_version_id),'{}')
+		FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
+		JOIN research_insight_version iv ON iv.artifact_version_id=v.id
+		WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.branch_id=$3::uuid AND f.removed_by_event_sequence IS NULL
+		ORDER BY CASE iv.tier WHEN 'XXL' THEN 5 WHEN 'XL' THEN 4 WHEN 'L' THEN 3 WHEN 'M' THEN 2 ELSE 1 END DESC,iv.created_at DESC,iv.id LIMIT 65`, workspaceID, runID, branchID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	frontier := []any{}
+	for rows.Next() {
+		var versionID, artifactID, contentHash, tier, catalog, brief, steward, conclusion, integration string
+		var revision int
+		var branchIDs []string
+		if err = rows.Scan(&versionID, &artifactID, &revision, &contentHash, &tier, &catalog, &brief, &steward, &conclusion, &integration, &branchIDs); err != nil {
+			return nil, false, err
+		}
+		if len(frontier) == 64 {
+			return frontier, true, nil
+		}
+		frontier = append(frontier, map[string]any{
+			"node":            map[string]any{"id": artifactID, "version_id": versionID, "revision": revision, "tier": tier, "content_hash": contentHash},
+			"catalog_summary": catalog, "brief_summary": brief, "steward_agent_id": steward, "branch_ids": branchIDs,
+			"conclusion_state": conclusion, "integration_state": integration,
+		})
+	}
+	return frontier, false, rows.Err()
+}
+
+func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspaceID, runID string, facts *DirectorBriefFacts) error {
+	rows, err := s.pool.Query(ctx, `SELECT id::text,kind,status,kind||' discussion',updated_at FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY updated_at DESC,id LIMIT 256`, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, kind, state, summary string
+		var updated time.Time
+		if err = rows.Scan(&id, &kind, &state, &summary, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		facts.Discussions = append(facts.Discussions, map[string]any{"id": id, "kind": "discussion", "state": directorBriefControlState(state), "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.pool.Query(ctx, `SELECT id::text,status,COALESCE(NULLIF(title,''),'Research report'),updated_at FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY revision DESC,id LIMIT 128`, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, state, summary string
+		var updated time.Time
+		if err = rows.Scan(&id, &state, &summary, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		facts.Reports = append(facts.Reports, map[string]any{"id": id, "kind": "report", "state": directorBriefControlState(state), "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.pool.Query(ctx, `SELECT id::text,status,resolution_request,updated_at FROM research_dispute WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND status IN ('open','investigating','irreducible') ORDER BY severity DESC,materiality DESC,updated_at DESC LIMIT 256`, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, state, summary string
+		var updated time.Time
+		if err = rows.Scan(&id, &state, &summary, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		facts.UnresolvedDisputes = append(facts.UnresolvedDisputes, map[string]any{"id": id, "kind": "dispute", "state": directorBriefControlState(state), "summary": truncateV6BriefText(summary, 512), "updated_at": updated.UTC().Format(time.RFC3339Nano)})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.pool.Query(ctx, `SELECT nb.branch_id::text,COALESCE(NULLIF(rn.reason_code,''),'other'),left(COALESCE(NULLIF(rn.reason_detail,''),rn.catalog_summary),512),count(*)::int
+		FROM research_result_node rn JOIN research_node_branch nb ON nb.session_id=rn.session_id AND nb.node_artifact_version_id=rn.artifact_version_id
+		WHERE rn.workspace_id=$1::uuid AND rn.session_id=$2::uuid AND (rn.reason_code<>'' OR rn.conclusion_state IN ('refuted','invalid'))
+		GROUP BY nb.branch_id,COALESCE(NULLIF(rn.reason_code,''),'other'),left(COALESCE(NULLIF(rn.reason_detail,''),rn.catalog_summary),512) ORDER BY nb.branch_id LIMIT 256`, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var branchID, reason, summary string
+		var count int
+		if err = rows.Scan(&branchID, &reason, &summary, &count); err != nil {
+			rows.Close()
+			return err
+		}
+		facts.TerminalSummaries = append(facts.TerminalSummaries, map[string]any{"branch_id": branchID, "reason_code": normalizeProjectionReason(reason), "summary": summary, "count": count})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	return nil
+}
+
+func directorBriefControlState(state string) string {
+	switch state {
+	case "active", "draft", "proposed", "open", "investigating":
+		return "running"
+	case "completed", "published", "consensus_accept", "consensus_reject":
+		return "succeeded"
+	case "needs_research", "needs_revision", "uncertain", "escalated", "irreducible":
+		return "awaiting_input"
+	case "technical_failure":
+		return "failed"
+	case "stale_input", "obsolete":
+		return "stale"
+	default:
+		return "pending"
+	}
 }
 
 func truncateV6BriefText(value string, limit int) string {

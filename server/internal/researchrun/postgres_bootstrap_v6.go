@@ -19,7 +19,7 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 	if err != nil {
 		return Run{}, 0, err
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpV6Bootstrap, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, 0, err
 	}
@@ -68,7 +68,7 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 	if err != nil {
 		return Run{}, 0, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpV6Bootstrap, tx); err != nil {
 		return Run{}, 0, err
 	}
 	return run, event.Sequence, nil

@@ -435,7 +435,8 @@ func TestReplayManagedStartDoesNotRepaintStarting(t *testing.T) {
 	if err := producer.SetManaged(protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID}); err != nil {
 		t.Fatal(err)
 	}
-	runner.publishManagedAgentStartActivity("agent-a", "runtime-1")
+	runner.broadcastActivity("agent-a", "runtime-1", "starting")
+	runner.observeResidentRuntimeReady("agent-a", "runtime-1")
 	before := len(activities)
 	if !runner.replayManagedAgentStartPublication(protocol.WorkspaceRunnerAgentStartPayload{
 		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: ack.LaunchID, StartDispatchID: "launch-a-dispatch",

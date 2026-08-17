@@ -26,21 +26,21 @@ func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentPr
 	return launch, found && (runtimeID == "" || launch.RuntimeID == runtimeID)
 }
 
-// observeRuntimeStarting is Raft 1.0.16 spawn Activity: working / starting /
-// "Starting…". The process must already be in APM (this.agents.set).
-func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase string) {
-	launch, found := runner.managedLaunch(agentID, runtimeID)
-	if !found || runner.activity == nil || launch.ProcessInstanceID == "" {
+// broadcastActivity is Raft 1.0.16's spawn Activity boundary. Starting is
+// broadcast only after the provider process exists and active status has been
+// published; replaying a start never calls this method.
+func (runner *WorkspaceRunner) broadcastActivity(agentID, runtimeID, detailKind string) {
+	if detailKind != "starting" {
 		return
 	}
-	if launch.QueueState == protocol.AgentStartQueueRunning && phase != "Managed start" {
-		// After APM admits Running, later Messages must not repaint Starting.
+	launch, found := runner.managedLaunch(agentID, runtimeID)
+	if !found || runner.activity == nil || launch.ProcessInstanceID == "" {
 		return
 	}
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting,
 		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
-	}, phase)
+	}, detailKind)
 }
 
 // observeResidentRuntimeReady closes the resident-only gap after provider
@@ -57,14 +57,6 @@ func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID st
 		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeIdle,
 		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
 	}, "Resident runtime ready")
-}
-
-// publishManagedAgentStartActivity runs only after a new provider spawn has
-// written active status. Replayed starts must not call this: Raft's
-// rebindRunningStart republishes status/session and leaves lastActivity alone.
-func (runner *WorkspaceRunner) publishManagedAgentStartActivity(agentID, runtimeID string) {
-	runner.observeRuntimeStarting(agentID, runtimeID, "Managed start")
-	runner.observeResidentRuntimeReady(agentID, runtimeID)
 }
 
 // stopManagedAgent owns the complete Raft stop transition. The inactive

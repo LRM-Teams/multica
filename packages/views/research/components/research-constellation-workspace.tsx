@@ -56,7 +56,10 @@ import type { ExecutionRow } from "../execution-overlay";
 import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
-import { StarGraphCanvas } from "../star-graph";
+import {
+  StarGraphCanvas,
+  type StarGraphExpansionControl,
+} from "../star-graph";
 import { TrajectoryExplorer } from "../trajectory-explorer";
 import {
   STAR_GRAPH_MOBILE_DOM_BUDGET,
@@ -115,6 +118,7 @@ export function ResearchConstellationWorkspace({
   typedGraphHasNextPage = false,
   typedGraphLoadMorePending = false,
   onLoadMoreTypedGraph,
+  expansionControl,
   className,
 }: {
   typedGraph: TypedGraphResponse | undefined;
@@ -130,6 +134,8 @@ export function ResearchConstellationWorkspace({
   typedGraphHasNextPage?: boolean;
   typedGraphLoadMorePending?: boolean;
   onLoadMoreTypedGraph?: () => void;
+  /** V6 Projection-owned one-layer disclosure state. */
+  expansionControl?: StarGraphExpansionControl;
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
@@ -541,6 +547,28 @@ export function ResearchConstellationWorkspace({
     ],
   );
 
+  const handleCanvasFocus = useCallback(
+    (nodeId: string) => {
+      onSelectNode(
+        resolveResearchCanvasNode(nodeId, {
+          snapshotNodes,
+          typedGraph,
+        }),
+      );
+      setRailMode("detail");
+      setRailOpen(true);
+      closeOverlay();
+    },
+    [
+      closeOverlay,
+      onSelectNode,
+      setRailMode,
+      setRailOpen,
+      snapshotNodes,
+      typedGraph,
+    ],
+  );
+
   const handleTrajectorySelect = useCallback(
     (nodeId: string | null) => {
       closeOverlay();
@@ -671,8 +699,9 @@ export function ResearchConstellationWorkspace({
             model={canvasModel}
             cameraSessionId={`${overlaySessionId}:d5-visual-v3`}
             selectedNodeId={selectedNode?.id ?? null}
-            onSelectNode={handleCanvasSelect}
+            onSelectNode={handleCanvasFocus}
             onOpenNode={handleCanvasSelect}
+            expansionControl={expansionControl}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
             filterHiddenNote={filterHiddenNote}

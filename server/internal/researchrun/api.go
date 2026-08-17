@@ -35,6 +35,16 @@ type ResearchRunSubmission interface {
 	WorkCatalog(context.Context, V6CatalogRequest) (V6CatalogPage, error)
 	AcknowledgeWorkCatalog(context.Context, AcknowledgeV6CatalogInput) error
 	SubmitV6Work(context.Context, V6SubmissionInput) (V6SubmissionOutcome, error)
+	DirectorBriefPage(context.Context, V6AttemptAccess, string) (V6DirectorBriefPage, error)
+	AcknowledgeDirectorBrief(context.Context, AcknowledgeV6DirectorBriefInput) error
+}
+
+type ResearchRunDirectorControl interface {
+	AssignV6Director(context.Context, AssignV6DirectorInput) (V6DirectorAssignment, error)
+	MarkV6DirectorUnavailable(context.Context, MarkV6DirectorUnavailableInput) (V6DirectorAssignment, error)
+	StartV6DirectorCycle(context.Context, StartV6DirectorCycleInput) (V6DirectorCycle, error)
+	AddV6TeamMember(context.Context, AddV6TeamMemberInput) (V6TeamMember, error)
+	ArchiveV6TeamMember(context.Context, ArchiveV6TeamMemberInput) (V6TeamMember, error)
 }
 
 // ResearchRunReconciler is the scheduler-only V6 recovery boundary.
@@ -45,3 +55,4 @@ type ResearchRunReconciler interface {
 var _ ResearchRun = (*Engine)(nil)
 var _ ResearchRunSubmission = (*Engine)(nil)
 var _ ResearchRunReconciler = (*Engine)(nil)
+var _ ResearchRunDirectorControl = (*Engine)(nil)

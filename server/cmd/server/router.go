@@ -1061,6 +1061,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/sessions", h.CreateResearchSession)
 				r.Route("/sessions/{id}", func(r chi.Router) {
 					r.Get("/", h.GetResearchSessionSnapshot)
+					r.Put("/director", h.PutResearchV6Director)
 					r.Get("/presence", h.GetResearchPresence)
 					r.Delete("/", h.DeleteResearchSession)
 					r.Post("/messages", h.PostResearchMessage)
@@ -1465,6 +1466,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/tasks/{taskId}/attempts/{attemptId}/result", h.SubmitAgentResearchTaskResult)
 						r.Route("/work-items/{workItemId}/attempts/{attemptId}", func(r chi.Router) {
 							r.Get("/manifest", h.GetAgentResearchV6WorkManifest)
+							r.Get("/director-brief", h.GetAgentResearchV6DirectorBrief)
+							r.Post("/director-brief-acks", h.AcknowledgeAgentResearchV6DirectorBrief)
 							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)
 							r.Post("/catalog-acks", h.AcknowledgeAgentResearchV6WorkCatalog)
 							r.Post("/submission", h.SubmitAgentResearchV6Work)

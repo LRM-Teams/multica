@@ -22,6 +22,12 @@ func TestResearchTransactionRecoveryMatrixCoversRegistry(t *testing.T) {
 		txOpStrategyPromotion:      "TestPersistStrategyPromotionTransactionRecovery",
 		txOpTaskInquiryTargetsBind: "TestBindTaskInquiryTargetsTransactionRecovery",
 		txOpSearchLineageRecord:    "TestRecordSearchLineageBatchTransactionRecovery",
+		txOpV6TeamMemberAdd:        "TestV6TeamCapacityRules",
+		txOpV6TeamMemberArchive:    "TestV6TeamArchiveRequiresReason",
+		txOpV6DirectorAssign:       "TestV6DirectorAssignmentValidation",
+		txOpV6DirectorUnavailable:  "TestV6DirectorFailureValidation",
+		txOpV6DirectorCycleCreate:  "TestV6DirectorBriefIsBoundedAndPaged",
+		txOpV6DirectorBriefAck:     "TestV6DirectorBriefAcknowledgementDelegates",
 	}
 	for operation, testName := range bespoke {
 		covered[operation] = struct{}{}

@@ -221,12 +221,33 @@ export function filterRelationsToVisibleEntities<
     budget?: number;
     focusNodeId?: string | null;
     relatedNodeIds?: ReadonlySet<string>;
+    nodeTierById?: ReadonlyMap<string, string>;
   } = {},
 ): T[] {
   const visibleRelations = relations.filter(
-    (relation) =>
-      visibleEntityIds.has(relation.fromNodeId) &&
-      visibleEntityIds.has(relation.toNodeId),
+    (relation) => {
+      if (
+        !visibleEntityIds.has(relation.fromNodeId) ||
+        !visibleEntityIds.has(relation.toNodeId)
+      ) {
+        return false;
+      }
+
+      const hasSTierEndpoint =
+        options.nodeTierById?.get(relation.fromNodeId) === "s" ||
+        options.nodeTierById?.get(relation.toNodeId) === "s";
+      if (!hasSTierEndpoint) return true;
+
+      // S-tier edges stay quiet in the default constellation. Selecting one
+      // S node reveals only that node's committed relationships, preventing
+      // large runs from turning into an unreadable line mesh.
+      return (
+        options.focusNodeId != null &&
+        options.nodeTierById?.get(options.focusNodeId) === "s" &&
+        (relation.fromNodeId === options.focusNodeId ||
+          relation.toNodeId === options.focusNodeId)
+      );
+    },
   );
 
   const budget = Math.max(

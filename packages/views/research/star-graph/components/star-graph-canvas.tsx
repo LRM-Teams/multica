@@ -305,16 +305,23 @@ export function StarGraphCanvas({
     [displayEntities, visibleEntityIds],
   );
 
+  const nodeTierById = useMemo(
+    () => new Map(model.entities.map((entity) => [entity.id, entity.tier])),
+    [model.entities],
+  );
+
   const visibleRelations = useMemo(
     () =>
       filterRelationsToVisibleEntities(model.relations, visibleEntityIds, {
         budget: edgeBudgetForViewport(viewport.width),
         focusNodeId: selectedNodeId ?? model.rootId,
         relatedNodeIds,
+        nodeTierById,
       }),
     [
       model.relations,
       model.rootId,
+      nodeTierById,
       relatedNodeIds,
       selectedNodeId,
       viewport.width,

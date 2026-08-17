@@ -238,4 +238,34 @@ describe("filterRelationsToVisibleEntities", () => {
       }).map((relation) => relation.id),
     ).toEqual(["focused", "related"]);
   });
+
+  it("keeps S-tier relationships quiet until that S node is selected", () => {
+    const visible = new Set(["goal", "result", "work-a", "work-b"]);
+    const tiers = new Map([
+      ["goal", "xxl"],
+      ["result", "m"],
+      ["work-a", "s"],
+      ["work-b", "s"],
+    ]);
+    const relations = [
+      { id: "landmark", fromNodeId: "goal", toNodeId: "result" },
+      { id: "work-a-parent", fromNodeId: "result", toNodeId: "work-a" },
+      { id: "work-a-peer", fromNodeId: "work-a", toNodeId: "work-b" },
+      { id: "work-b-parent", fromNodeId: "result", toNodeId: "work-b" },
+    ];
+
+    expect(
+      filterRelationsToVisibleEntities(relations, visible, {
+        focusNodeId: "goal",
+        nodeTierById: tiers,
+      }).map((relation) => relation.id),
+    ).toEqual(["landmark"]);
+
+    expect(
+      filterRelationsToVisibleEntities(relations, visible, {
+        focusNodeId: "work-a",
+        nodeTierById: tiers,
+      }).map((relation) => relation.id),
+    ).toEqual(["landmark", "work-a-parent", "work-a-peer"]);
+  });
 });

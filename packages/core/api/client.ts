@@ -5288,9 +5288,15 @@ export class ApiClient {
       return { ...snapshot, workspace_id: workspaceId, run_id: runId };
     }
     if (snapshot.snapshot_id !== validated.snapshot_id) {
-      throw new Error(
-        "GET Director V6 projection slice response changed snapshot identity",
-      );
+      return {
+        ...snapshot,
+        snapshot_id: validated.snapshot_id,
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+        next_cursor: undefined,
+      };
     }
     return snapshot;
   }

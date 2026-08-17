@@ -66,6 +66,18 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     );
   });
 
+  it("degrades a slice response pinned to a different snapshot", async () => {
+    response({ ...snapshot(), snapshot_id: "00000000-0000-4000-8000-000000000699" });
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6DirectorProjectionSlice(WORKSPACE_ID, RUN_ID, {
+        root: "insight:one",
+        depth: 1,
+        snapshot_id: SNAPSHOT_ID,
+      }),
+    ).resolves.toMatchObject({ snapshot_id: SNAPSHOT_ID, nodes: [], edges: [] });
+  });
+
   it("uses after rather than the superseded delta query name", async () => {
     response({ run_id: RUN_ID, deltas: [], next_cursor: null, resync_required: false });
     const client = new ApiClient("https://api.example.test");

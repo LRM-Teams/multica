@@ -58,3 +58,23 @@ export function buildStarGraphExpansionMotion(
   });
   return directives;
 }
+
+/** Exact relations introduced by this server-declared one-layer expansion. */
+export function selectStarGraphExpansionRelationIds(
+  model: StarCanvasViewModel,
+  transition: StarGraphExpansionTransition | null | undefined,
+): ReadonlySet<string> {
+  if (!transition || transition.kind !== "expand") return new Set();
+  const revealed = new Set(transition.revealedNodeIds);
+  const disclosedLayer = new Set([transition.rootNodeId, ...revealed]);
+  return new Set(
+    model.relations
+      .filter(
+        (relation) =>
+          disclosedLayer.has(relation.fromNodeId) &&
+          disclosedLayer.has(relation.toNodeId) &&
+          (revealed.has(relation.fromNodeId) || revealed.has(relation.toNodeId)),
+      )
+      .map((relation) => relation.id),
+  );
+}

@@ -93,6 +93,26 @@
   stroke-dasharray: 3 5;
   opacity: 0.48;
 }
+.sg-edge-expansion-base {
+  animation: sg-edge-expansion-base 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sg-edge-expansion-trace {
+  fill: none;
+  stroke: color-mix(in oklab, var(--brand) 78%, white);
+  stroke-width: 2.5;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  vector-effect: non-scaling-stroke;
+  animation: sg-edge-expansion-trace 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes sg-edge-expansion-base {
+  from { opacity: 0; }
+}
+@keyframes sg-edge-expansion-trace {
+  0% { opacity: 0.9; stroke-dashoffset: 1; }
+  78% { opacity: 0.72; }
+  100% { opacity: 0; stroke-dashoffset: 0; }
+}
 .sg-cluster-boundary {
   position: absolute;
   border: 1px dashed rgb(67 113 146 / 62%);
@@ -265,6 +285,12 @@
   .sg-edge-challenge,
   .sg-edge-newdir {
     animation: none;
+  }
+  .sg-edge-expansion-base {
+    animation: none;
+  }
+  .sg-edge-expansion-trace {
+    display: none;
   }
 }
 @keyframes sg-edge-flow {

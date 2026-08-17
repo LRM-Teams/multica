@@ -28,7 +28,10 @@ import {
 } from "../../lib/canvas-keyboard-nav";
 import type { MotionDirective } from "../../motion/directives";
 import type { StarGraphExpansionControl } from "../lib/star-graph-expansion";
-import { buildStarGraphExpansionMotion } from "../lib/star-graph-expansion-motion";
+import {
+  buildStarGraphExpansionMotion,
+  selectStarGraphExpansionRelationIds,
+} from "../lib/star-graph-expansion-motion";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import {
   computeClusterHiddenCounts,
@@ -158,6 +161,14 @@ export function StarGraphCanvas({
       ...expansionDirectives.entries(),
     ]);
   }, [expansionControl?.lowPerformance, expansionControl?.transition, model, motionDirectives]);
+  const expansionRelationIds = useMemo(
+    () =>
+      selectStarGraphExpansionRelationIds(
+        model,
+        expansionControl?.transition,
+      ),
+    [expansionControl?.transition, model],
+  );
   const dragRef = useRef<{ startX: number; startY: number; cameraX: number; cameraY: number } | null>(
     null,
   );
@@ -704,6 +715,8 @@ export function StarGraphCanvas({
             challenge: mapKeyLabels.relations.challenge.label,
             newdir: mapKeyLabels.relations.newdir.label,
           }}
+          revealingRelationIds={expansionRelationIds}
+          revealLowPerformance={expansionControl?.lowPerformance}
         />
         <StarGraphEntityLayer
           entities={visibleEntities}

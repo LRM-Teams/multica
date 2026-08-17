@@ -24,6 +24,8 @@ export function StarGraphEdges({
   lensHints,
   relationLabels,
   labelObstacles = EMPTY_LABEL_OBSTACLES,
+  revealingRelationIds,
+  revealLowPerformance = false,
 }: {
   relations: readonly StarRelationView[];
   width: number;
@@ -31,6 +33,8 @@ export function StarGraphEdges({
   lensHints?: D5LensDisplayHints;
   relationLabels?: Partial<Record<StarRelationView["kind"], string>>;
   labelObstacles?: readonly { id: string; x: number; y: number; radius: number }[];
+  revealingRelationIds?: ReadonlySet<string>;
+  revealLowPerformance?: boolean;
 }) {
   const idPrefix = useId().replaceAll(":", "");
   if (relations.length === 0 || width <= 0 || height <= 0) return null;
@@ -75,6 +79,7 @@ export function StarGraphEdges({
         const pathId = `${idPrefix}-edge-${index}`;
         const path = quadraticEdgePath(relation.from, relation.to);
         const labelKind = truthfulLabelKind(relation);
+        const revealing = revealingRelationIds?.has(relation.id) ?? false;
         return (
           <g key={relation.id}>
             <path
@@ -86,9 +91,19 @@ export function StarGraphEdges({
                 relationEdgeClass(relation.kind, relation.edgeType),
                 lensHints?.dimmedRelationIds.has(relation.id) && "sg-lens-dim",
                 lensHints?.emphasizedRelationIds.has(relation.id) && "sg-lens-emphasis",
+                revealing && "sg-edge-expansion-base",
               )}
               d={path}
             />
+            {revealing && !revealLowPerformance ? (
+              <path
+                data-testid={`star-graph-edge-reveal-${relation.id}`}
+                className="sg-edge-expansion-trace"
+                d={path}
+                pathLength={1}
+                style={{ animationDelay: `${Math.min(index, 6) * 34}ms` }}
+              />
+            ) : null}
             {labelKind &&
               labelIndexes.has(index) &&
               relationLabels?.[labelKind] &&

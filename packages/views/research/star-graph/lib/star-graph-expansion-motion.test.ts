@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { StarCanvasViewModel } from "./star-canvas-view-model";
-import { buildStarGraphExpansionMotion } from "./star-graph-expansion-motion";
+import {
+  buildStarGraphExpansionMotion,
+  selectStarGraphExpansionRelationIds,
+} from "./star-graph-expansion-motion";
 
 const model = {
   entities: [
     { id: "root", x: 300, y: 240, radius: 80, view: {} },
     { id: "child", x: 120, y: 90, radius: 40, view: {} },
   ],
-  relations: [],
+  relations: [
+    { id: "root-child", fromNodeId: "root", toNodeId: "child" },
+    { id: "root-existing", fromNodeId: "root", toNodeId: "existing" },
+    { id: "outside", fromNodeId: "other", toNodeId: "child" },
+  ],
   clusters: [],
   frontiers: [],
   rootId: "root",
@@ -59,5 +66,16 @@ describe("buildStarGraphExpansionMotion", () => {
       true,
     );
     expect(directives.get("child")?.style["--expansion-blur"]).toBe("0px");
+  });
+
+  it("selects only relations inside the declared one-layer disclosure", () => {
+    expect(
+      [...selectStarGraphExpansionRelationIds(model, {
+        sequence: 6,
+        kind: "expand",
+        rootNodeId: "root",
+        revealedNodeIds: ["child"],
+      })],
+    ).toEqual(["root-child"]);
   });
 });

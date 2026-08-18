@@ -22,6 +22,7 @@ const (
 	AgentObservationRuntimeCompactionStale AgentObservationKind = "runtime_compaction_stale"
 	AgentObservationRuntimeIdle            AgentObservationKind = "runtime_idle"
 	AgentObservationRuntimeDiagnostic      AgentObservationKind = "runtime_diagnostic"
+	AgentObservationRuntimeStalled         AgentObservationKind = "runtime_stalled"
 	AgentObservationMessageBodyAccepted    AgentObservationKind = "message_body_accepted"
 	AgentObservationFreshnessHeld          AgentObservationKind = "freshness_held"
 	AgentObservationDraftSent              AgentObservationKind = "draft_sent"
@@ -57,6 +58,7 @@ type AgentRuntimeStageObservationData struct {
 	ToolName   string
 	ToolCallID string
 	ToolInput  map[string]any
+	StaleFor   time.Duration
 }
 
 func (AgentRuntimeStageObservationData) agentObservationData() {}
@@ -128,7 +130,7 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationRuntimeStarting, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
+	case AgentObservationRuntimeStarting, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic, AgentObservationRuntimeStalled:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}

@@ -59,7 +59,19 @@ ok()    { printf "${BOLD}${GREEN}✓ %s${RESET}\n" "$*"; }
 warn()  { printf "${BOLD}${YELLOW}⚠ %s${RESET}\n" "$*" >&2; }
 fail()  { printf "${BOLD}${RED}✗ %s${RESET}\n" "$*" >&2; exit 1; }
 
+install_log() { printf "${BOLD}${CYAN}[install]${RESET} %s\n" "$*"; }
+install_ok()  { printf "${BOLD}${GREEN}[install] %s ✓${RESET}\n" "$*"; }
+
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+download_file() {
+  local url="$1" destination="$2"
+  if [ -t 2 ]; then
+    curl -fL --progress-bar "$url" -o "$destination"
+  else
+    curl -fsSL "$url" -o "$destination"
+  fi
+}
 
 configure_release_selector() {
   case "$RELEASE_SELECTOR" in
@@ -268,8 +280,6 @@ detect_os() {
 # CLI Installation
 # ---------------------------------------------------------------------------
 install_cli_binary() {
-  info "Installing Multica CLI from the release feed..."
-
   local manifest_file
   manifest_file=$(mktemp)
   if ! download_selected_manifest "$manifest_file"; then
@@ -295,8 +305,9 @@ install_cli_binary() {
   local tmp_dir
   tmp_dir=$(mktemp -d)
 
-  info "Downloading $url ..."
-  if ! curl -fsSL "$url" -o "$tmp_dir/multica.tar.gz"; then
+  install_log "installing multica ${latest} (${platform})"
+  install_log "downloading $(basename "$url")..."
+  if ! download_file "$url" "$tmp_dir/multica.tar.gz"; then
     rm -rf "$tmp_dir"
     fail "Failed to download CLI binary."
   fi
@@ -305,13 +316,16 @@ install_cli_binary() {
     rm -rf "$tmp_dir"
     fail "Checksum verification failed for the downloaded archive; refusing to install a corrupted or tampered binary."
   fi
+  install_ok "archive sha256 verified"
 
+  install_log "extracting..."
   tar -xzf "$tmp_dir/multica.tar.gz" -C "$tmp_dir" multica
 
 	mkdir -p "$CLI_BIN_DIR"
 	chmod +x "$tmp_dir/multica"
 	local binary_sha256
 	binary_sha256="$(file_sha256 "$tmp_dir/multica")"
+	install_ok "binary sha256 calculated"
 	if ! "$tmp_dir/multica" installer-activate \
 		--version "$latest" \
 		--sha256 "$binary_sha256" \
@@ -323,7 +337,7 @@ install_cli_binary() {
   persist_cli_path
 
   rm -rf "$tmp_dir"
-  ok "Multica CLI installed to $CLI_PATH"
+  install_ok "installed to $CLI_PATH"
 }
 
 prepend_to_path() {
@@ -507,7 +521,7 @@ install_cli() {
     local latest_cmp="${latest_ver#v}"
 
     if [ "$current_cmp" = "$latest_cmp" ] && [ "$current_path" = "$CLI_PATH" ]; then
-      ok "Multica CLI is up to date ($current_ver)"
+      install_log "multica ${current_ver} is already up to date"
       prepend_to_path "$CLI_BIN_DIR"
       persist_cli_path
       return 0
@@ -517,9 +531,9 @@ install_cli() {
       warn "Migrating Multica CLI from $current_path to the user-owned $CLI_PATH."
       warn "The old binary is no longer managed; remove it separately if it shadows $CLI_PATH in another shell."
     elif [ "$current_cmp" != "$latest_cmp" ]; then
-      info "Multica CLI $current_ver installed, latest is $latest_ver — upgrading..."
+      install_log "upgrading multica ${current_ver} → ${latest_ver}"
     else
-      info "Reinstalling Multica CLI $current_ver at the canonical user-owned path..."
+      install_log "reinstalling multica ${current_ver} at the canonical user-owned path..."
     fi
     install_cli_binary
 
@@ -647,27 +661,10 @@ setup_server() {
 # Main: Default mode (install / upgrade CLI only)
 # ---------------------------------------------------------------------------
 run_default() {
-  printf "\n"
-  printf "${BOLD}  Multica — Installer${RESET}\n"
-  printf "\n"
-
   detect_os
   install_cli
 
-  printf "\n"
-  printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
-  printf "${BOLD}${GREEN}  ✓ Multica CLI is ready!${RESET}\n"
-  printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
-  printf "\n"
-  printf "  ${BOLD}Next: connect this Computer to Multica Cloud${RESET}\n"
-  printf "\n"
-  printf "     ${CYAN}multica setup /<workspace>${RESET}   # Connect this Computer to Multica Cloud (leagent.me)\n"
-  printf "     ${CYAN}multica computer status${RESET}      # Show Computer identity + connection\n"
-  printf "     ${CYAN}multica computer logs${RESET}        # Follow the resident Computer's service log\n"
-  printf "\n"
-  printf "  The Computer runs as one machine-wide detached resident and is NOT\n"
-  printf "  installed as an OS service; it survives terminal close on its own.\n"
-  printf "\n"
+  install_log "done — run: multica --version"
 }
 
 # ---------------------------------------------------------------------------

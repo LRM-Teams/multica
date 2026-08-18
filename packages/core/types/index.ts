@@ -1,5 +1,5 @@
 export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, IssueReviewStats, IssueSourceMessageRef, IssueSourceRefs, IssueSourceChannelRef, ProjectChannel, IssueNoteRef, IssueNoteRefListResponse } from "./issue";
-export type { NotePage, NotePageListResponse, CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, UpdateNotePageRequest, UpdateNotePageSharesRequest, NoteAIJobStatus, NoteAIEditAction, NoteAIJobFailureCode, NoteAIJobRepairCode, NoteAIEditResult, CreateNoteAIJobRequest, NoteAIJob, NoteIntent, NoteWorkerJobStatus, CreateNoteWorkerJobRequest, NoteWorkerJob, NotePageRefType, NotePageIssueRef, NotePageIssueRefListResponse, CreateNotePageIssueRefRequest, CreateNotePageAgentRefRequest, CreateNotePageRunRefRequest, CreateNotePageChannelRefRequest, CreateNotePageIssueRequest, CreateNotePageIssueResponse, NoteWritebackAction, NoteWritebackStatus, NoteWritebackEvidence, NoteWriteback, NoteWritebackListResponse, CreateNoteWritebackRequest, NoteRetrospectiveWindow, NoteRetrospectiveSource, CreateNoteRetrospectiveRequest, NoteRetrospectiveWindowInfo, CreateNoteRetrospectiveResponse } from "./note";
+export type { NotePage, NotePageListResponse, CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, UpdateNotePageRequest, UpdateNotePageSharesRequest, NoteAIJobStatus, NoteAIEditAction, NoteAIJobFailureCode, NoteAIJobRepairCode, NoteAIEditResult, CreateNoteAIJobRequest, NoteAIJob, NoteIntent, NoteWorkerJobStatus, CreateNoteWorkerJobRequest, NoteWorkerJob, NotePageRefType, NotePageIssueRef, NotePageIssueRefListResponse, CreateNotePageIssueRefRequest, CreateNotePageAgentRefRequest, CreateNotePageRunRefRequest, CreateNotePageChannelRefRequest, CreateNotePageIssueRequest, CreateNotePageIssueResponse, NoteWritebackAction, NoteWritebackStatus, NoteWritebackEvidence, NoteWriteback, NoteWritebackListResponse, CreateNoteWritebackRequest, NoteRetrospectiveWindow, NoteRetrospectiveSource, CreateNoteRetrospectiveRequest, NoteRetrospectiveWindowInfo, CreateNoteRetrospectiveResponse, CreateNotePeriodBriefRequest, CreateNotePeriodBriefResponse } from "./note";
 export type {
   FleetClassId,
   AgentFleetRank,
@@ -60,6 +60,8 @@ export type {
   AgentCreationProposal,
   CreateAgentDraftRequest,
   EnsureWindyResponse,
+  EnsurePeriodBriefAgentResponse,
+  EnsurePeriodBriefCollectorsResponse,
   AgentTemplate,
   AgentTemplateSummary,
   AgentTemplateSkillRef,

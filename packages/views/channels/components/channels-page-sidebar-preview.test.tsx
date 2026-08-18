@@ -218,6 +218,8 @@ describe("ChannelsPage — channel sidebar preview (LRM-263)", () => {
     const row = screen.getByRole("button", { name: /engineering/i });
     // LRM-767 (Slack-aligned): unread is bold name + a neutral numeric badge.
     expect(row.querySelector(".font-semibold")).not.toBeNull();
-    expect(row.querySelector(".rounded-full.bg-muted")).not.toBeNull();
+    const badge = row.querySelector("span.bg-background");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveClass("border-border/70");
   });
 });

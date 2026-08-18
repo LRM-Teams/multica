@@ -22,9 +22,10 @@ describe("ConversationUnreadAffordance", () => {
       />,
     );
     const badge = getByText("7");
-    // Neutral pill — not the brand/destructive accent reserved for @-mentions.
-    expect(badge).toHaveClass("bg-muted");
-    expect(badge).toHaveClass("text-[10px]");
+    // Subtle outlined pill — not the brand/destructive accent reserved for @-mentions.
+    expect(badge).toHaveClass("bg-background");
+    expect(badge).toHaveClass("border-border/70");
+    expect(badge).toHaveClass("text-[11px]");
     expect(badge).not.toHaveClass("bg-brand-solid");
     expect(badge).not.toHaveClass("bg-destructive");
     expect(badge).toHaveAttribute("aria-label", "7 unread messages");

@@ -23,6 +23,10 @@ const (
 	EventComputerUpgradeProgress = "computer:upgrade:progress"
 	EventComputerUpgradeDone     = "computer:upgrade:done"
 	EventComputerRestartDone     = "computer:restart:done"
+	EventComputerWorkDigest      = "computer:work-digest"
+	EventComputerWorkDigestDone  = "computer:work-digest:done"
+	EventComputerWorkJournal     = "computer:work-journal"
+	EventComputerWorkJournalDone = "computer:work-journal:done"
 	EventAgentStartAck           = "agent:start:ack"
 	EventAgentActivity           = "agent:activity"
 	EventAgentActivityProbe      = "agent:activity_probe"
@@ -179,6 +183,66 @@ func (p ComputerUpgradeDonePayload) Validate() error {
 	return validateRequiredIDs(p.RequestID)
 }
 
+// ComputerWorkDigestPayload asks the Computer Host for one windowed Work
+// Digest. It is a new control command; it must not reuse upgrade payloads.
+type ComputerWorkDigestPayload struct {
+	RequestID string    `json:"requestId"`
+	Start     time.Time `json:"start"`
+	End       time.Time `json:"end"`
+}
+
+func (p ComputerWorkDigestPayload) Validate() error {
+	if err := validateRequiredIDs(p.RequestID); err != nil {
+		return fmt.Errorf("Computer work digest request identity is required")
+	}
+	if !p.End.After(p.Start) {
+		return fmt.Errorf("Computer work digest window end must be after start")
+	}
+	return nil
+}
+
+func (p ComputerWorkDigestPayload) Window() WorkDigestWindow {
+	return WorkDigestWindow{Start: p.Start, End: p.End}
+}
+
+// ComputerWorkDigestDonePayload is the Host harvest result on the same
+// DaemonConnection that received computer:work-digest.
+type ComputerWorkDigestDonePayload struct {
+	RequestID string      `json:"requestId"`
+	OK        bool        `json:"ok"`
+	Digest    *WorkDigest `json:"digest,omitempty"`
+	Error     string      `json:"error,omitempty"`
+}
+
+func (p ComputerWorkDigestDonePayload) Validate() error {
+	return validateRequiredIDs(p.RequestID)
+}
+
+// ComputerWorkJournalPayload sets the Computer-local Machine Work Journal
+// switch. Local state is authoritative; the server only projects the bit.
+type ComputerWorkJournalPayload struct {
+	RequestID string `json:"requestId"`
+	Enabled   bool   `json:"enabled"`
+}
+
+func (p ComputerWorkJournalPayload) Validate() error {
+	if err := validateRequiredIDs(p.RequestID); err != nil {
+		return fmt.Errorf("Computer work journal request identity is required")
+	}
+	return nil
+}
+
+type ComputerWorkJournalDonePayload struct {
+	RequestID string `json:"requestId"`
+	OK        bool   `json:"ok"`
+	Enabled   bool   `json:"enabled"`
+	Error     string `json:"error,omitempty"`
+}
+
+func (p ComputerWorkJournalDonePayload) Validate() error {
+	return validateRequiredIDs(p.RequestID)
+}
+
 type WorkspaceRunnerPongPayload struct {
 	PingID string `json:"pingId"`
 }
@@ -284,12 +348,19 @@ type AgentActivityEntry struct {
 	Body json.RawMessage `json:"body"`
 }
 
-// AgentActivityNarrativeBody carries only the event-local fact. The server
-// derives its lifecycle presentation from DetailKind; the daemon must not
-// serialize a competing ActivityKind into timeline history.
-type AgentActivityNarrativeBody struct {
-	Text       string `json:"text"`
-	DetailKind string `json:"detail_kind"`
+// AgentActivityStatusBody matches Raft 1.0.17's non-tool timeline entry.
+type AgentActivityStatusBody struct {
+	Activity   string `json:"activity"`
+	Detail     string `json:"detail"`
+	DetailKind string `json:"detailKind"`
+}
+
+// AgentActivityToolStartBody matches Raft 1.0.17's tool-call timeline entry.
+// toolInput is already the bounded display summary, never the raw provider
+// input.
+type AgentActivityToolStartBody struct {
+	ToolName  string `json:"toolName"`
+	ToolInput string `json:"toolInput"`
 }
 
 // AgentActivitySystemBody is a bounded, user-visible runtime diagnostic. It

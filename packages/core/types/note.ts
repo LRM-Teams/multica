@@ -252,3 +252,30 @@ export interface CreateNoteRetrospectiveResponse {
   layers_used?: string[];
   child_pages_used?: string[];
 }
+
+/** Period Work Brief synthesis (ADR 0019 / K0). */
+export interface CreateNotePeriodBriefRequest {
+  window: NoteRetrospectiveWindow;
+  date?: string;
+  timezone?: string;
+  /** Synthesizer Agent (defaults to Period Brief Agent / 周报 in the UI). */
+  agent_id: string;
+  /** Dedicated per-Computer collector Agents (`period-collect-*`). At least one. */
+  collector_agent_ids: string[];
+  sources?: NoteRetrospectiveSource[];
+  channel_id?: string;
+}
+
+export interface CreateNotePeriodBriefResponse {
+  page: NotePage;
+  job: NoteWorkerJob;
+  window: NoteRetrospectiveWindowInfo;
+  sources_used: string[];
+  sources_empty: string[];
+  sources_skipped: string[];
+  fact_count: number;
+  /** Echo of accepted collector Agent ids (order preserved, deduped). */
+  collector_agent_ids?: string[];
+  /** One Note Worker job per collector (pack page + wake). */
+  collector_jobs?: NoteWorkerJob[];
+}

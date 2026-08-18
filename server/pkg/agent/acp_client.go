@@ -551,36 +551,27 @@ func (c *acpClient) handleToolCallStart(data json.RawMessage) {
 		rawInput = msg.Parameters
 	}
 
-	// Some ACP servers pre-populate rawInput on the initial tool_call — emit
-	// MessageToolUse immediately so the UI can show the tool invocation
-	// live. Record the emission so handleToolCallUpdate doesn't re-emit
-	// on completion.
-	if rawInput != nil {
-		c.trackTool(msg.ToolCallID, &pendingToolCall{
-			toolName: toolName,
-			input:    rawInput,
-			emitted:  true,
-		})
-		if c.onMessage != nil {
-			c.onMessage(Message{
-				Type:   MessageToolUse,
-				Tool:   toolName,
-				CallID: msg.ToolCallID,
-				Input:  rawInput,
-			})
-		}
-		return
+	// ACP's tool_call is the provider's authoritative start boundary. Emit
+	// it immediately, even when arguments are streamed separately. The
+	// initial input may be empty; later frames enrich the result, but never
+	// create a second start event.
+	if rawInput == nil {
+		rawInput = map[string]any{}
 	}
-
-	// Kimi streams args token-by-token across tool_call_update messages;
-	// the initial tool_call often carries an empty content block. Buffer
-	// the tool and defer MessageToolUse emission to avoid the UI seeing
-	// a command with `{""` as its input.
 	c.trackTool(msg.ToolCallID, &pendingToolCall{
 		toolName: toolName,
+		input:    rawInput,
 		argsText: extractACPToolCallText(msg.Content),
-		emitted:  false,
+		emitted:  true,
 	})
+	if c.onMessage != nil {
+		c.onMessage(Message{
+			Type:   MessageToolUse,
+			Tool:   toolName,
+			CallID: msg.ToolCallID,
+			Input:  rawInput,
+		})
+	}
 }
 
 func (c *acpClient) handleToolCallUpdate(data json.RawMessage) {
@@ -634,12 +625,11 @@ func (c *acpClient) handleToolCallUpdate(data json.RawMessage) {
 					Input:  rawInput,
 				})
 			}
-		} else if !pending.emitted {
-			if text := extractACPToolCallText(msg.Content); text != "" {
-				// kimi streams the full cumulative args on every frame;
-				// overwrite rather than concatenate.
-				pending.argsText = text
-			}
+		} else if text := extractACPToolCallText(msg.Content); text != "" {
+			// Kimi streams the full cumulative args on every frame; overwrite
+			// rather than concatenate. This also enriches a start emitted with
+			// an empty input without duplicating the start event.
+			pending.argsText = text
 		}
 		return
 	}

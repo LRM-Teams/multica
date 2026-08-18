@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CalendarDays, Check, ChevronDown, ChevronRight, Copy, Download, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, ChevronRight, ClipboardList, Copy, Download, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -30,6 +30,7 @@ import { NoteShareSummary } from "./note-share-summary";
 import { NoteWritebackReview } from "./note-writeback-review";
 import { NoteChannelAnchors } from "./note-channel-anchors";
 import { NoteIntentEntry, type NoteIntentKind } from "./note-intent-entry";
+import { NotePeriodBriefDialog } from "./note-period-brief-dialog";
 import { NoteRetrospectiveDialog } from "./note-retrospective-dialog";
 import { NoteWorkerRunDialog } from "./note-worker-run-dialog";
 import { NoteWorkerStatusBanner } from "./note-worker-status-banner";
@@ -52,6 +53,7 @@ type NotesPageUiState = {
   workerOpen: boolean;
   workerJobId: string | null;
   retrospectiveOpen: boolean;
+  periodBriefOpen: boolean;
   showTrash: boolean;
 };
 
@@ -1133,6 +1135,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
     workerOpen: false,
     workerJobId: null,
     retrospectiveOpen: false,
+    periodBriefOpen: false,
     showTrash: false,
   }));
   // Clear the Worker status banner when the selected note changes — during render
@@ -1195,7 +1198,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const [dragState, setDragState] = useState<NoteDragState>({ draggingId: null, dropTarget: null });
   const [aiAgentConfig, setAiAgentConfig] = useState<NoteAiAgentConfig>(() => ({ workspaceId: null, agentId: null }));
   const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
-  const { sharePage, exportOpen, aiAgentOpen, workerOpen, workerJobId, retrospectiveOpen, showTrash } = uiState;
+  const { sharePage, exportOpen, aiAgentOpen, workerOpen, workerJobId, retrospectiveOpen, periodBriefOpen, showTrash } = uiState;
   const { draggingId: draggingNoteId } = dragState;
 
   useEffect(() => {
@@ -1431,6 +1434,14 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           <CalendarDays className="size-4" />
           {t(($) => $.notes_page.retrospective_action)}
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setUiState((current) => ({ ...current, periodBriefOpen: true }))}
+        >
+          <ClipboardList className="size-4" />
+          {t(($) => $.notes_page.period_brief_action)}
+        </Button>
         {selected && !showTrash && (
           <DropdownMenu>
             <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.page_menu)} />} className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -1591,6 +1602,14 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         onCreated={async (result) => {
           await queryClient.invalidateQueries({ queryKey: noteListOptions(wsId).queryKey });
           if (result.page?.id) openPage(result.page.id);
+        }}
+      />
+      <NotePeriodBriefDialog
+        open={periodBriefOpen}
+        onOpenChange={(open) => setUiState((current) => ({ ...current, periodBriefOpen: open }))}
+        preferredAgentId={configuredAiAgentId}
+        onCreated={async () => {
+          await queryClient.invalidateQueries({ queryKey: noteListOptions(wsId).queryKey });
         }}
       />
     </div>

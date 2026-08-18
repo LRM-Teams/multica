@@ -18,8 +18,11 @@ import {
   resolveOptimisticSiblings,
 } from "./optimistic-send";
 import { dmKeys } from "../dm/queries";
-import { invalidateConversations } from "../conversations";
-import type { DMItem } from "../dm/types";
+import {
+  conversationKeys,
+  invalidateConversations,
+} from "../conversations";
+import type { ConversationListResponse } from "../conversations";
 import type {
   Channel,
   ChannelMessageQuoteInput,
@@ -350,15 +353,14 @@ export function useSendChannelThreadMessage() {
  * Fires on EVERY conversation switch (see `useEntryReadCursor`), so its cache
  * work is on the critical path of "switch → readable first paint" (LRM-1296).
  * The receipt only ever zeroes THIS row's unread, and the response carries no
- * new list data, so both lists are patched in place. Invalidating them instead
- * cost two extra full-list refetches per switch — each a server-side per-row
- * unread aggregate + last_message enrichment — racing the message page that
- * actually blocks first paint.
+ * new list data, so the unified Conversations list is patched in place. The
+ * authoritative list is invalidated after the request settles so the server's
+ * cursor and unread aggregate remain canonical.
  *
  * `last_read_seq` is deliberately NOT patched: the response echoes the PREVIOUS
  * cursor, not the new one, and the divider consumers freeze it at entry anyway
  * (`useEntryReadCursor` / `useEntryAnchor`). Anything that can raise unread
- * again — a new message — already invalidates both lists over WS, which is what
+ * again — a new message — already invalidates the list over WS, which is what
  * re-syncs the cursor. Guessing a cursor here would misplace the
  * "N new messages" divider.
  */
@@ -368,28 +370,38 @@ export function useMarkChannelRead() {
   return useMutation({
     mutationFn: (channelId: string) => api.markChannelRead(channelId),
     onMutate: async (channelId) => {
-      await qc.cancelQueries({ queryKey: dmKeys.list(wsId) });
-      await qc.cancelQueries({ queryKey: channelKeys.list(wsId) });
-      const prevDms = qc.getQueryData<DMItem[]>(dmKeys.list(wsId));
-      const prevChannels = qc.getQueryData<Channel[]>(channelKeys.list(wsId));
-      qc.setQueryData<DMItem[]>(dmKeys.list(wsId), (old) =>
-        old?.map((dm) =>
-          dm.id === channelId && dm.source === "dm_channel" ? readDmRow(dm) : dm,
-        ),
-      );
-      qc.setQueryData<Channel[]>(channelKeys.list(wsId), (old) =>
-        old?.map((channel) => (channel.id === channelId ? readChannelRow(channel) : channel)),
-      );
-      return { prevDms, prevChannels };
+      await qc.cancelQueries({ queryKey: conversationKeys.list(wsId) });
+      qc.setQueryData<{
+        pages: ConversationListResponse[];
+        pageParams: unknown[];
+      }>(conversationKeys.list(wsId), (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          pages: old.pages.map((page) => ({
+            ...page,
+            items: page.items.map((item) => {
+              if (item.kind === "dm" && item.dm?.id === channelId) {
+                return { ...item, dm: readConversationDM(item.dm) };
+              }
+              if (item.kind === "channel" && item.channel?.id === channelId) {
+                return { ...item, channel: readChannelRow(item.channel) };
+              }
+              return item;
+            }),
+          })),
+        };
+      });
     },
-    onError: (_err, _channelId, ctx) => {
-      if (ctx?.prevDms) qc.setQueryData(dmKeys.list(wsId), ctx.prevDms);
-      if (ctx?.prevChannels) qc.setQueryData(channelKeys.list(wsId), ctx.prevChannels);
+    onError: () => {
+      // Reconcile from the server instead of restoring a snapshot: another
+      // mark-read may be in flight and must not be overwritten by rollback.
+      invalidateConversations(qc, wsId);
     },
+    onSuccess: () => invalidateConversations(qc, wsId),
   });
 }
 
-/** Zero one channel row's unread projection. Cursor left to the WS resync. */
 function readChannelRow(channel: Channel): Channel {
   return {
     ...channel,
@@ -400,12 +412,8 @@ function readChannelRow(channel: Channel): Channel {
   };
 }
 
-/**
- * Zero one DM row's unread projection. DM channels (kind='dm') also clear
- * `manual_unread_at` in `dm_peer_state`, hence `manually_unread`.
- */
-function readDmRow(dm: DMItem): DMItem {
-  return { ...dm, unread: 0, real_unread: 0, manually_unread: false, has_mention: false };
+function readConversationDM<T extends { unread: number; manually_unread?: boolean }>(dm: T): T {
+  return { ...dm, unread: 0, manually_unread: false };
 }
 
 export function useMarkChannelThreadRead() {

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/internal/memorypolicy"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 // runtimeMarkerBegin and runtimeMarkerEnd delimit the Multica-managed brief
@@ -132,7 +133,10 @@ func sanitizeInlineCodeForBrief(value string) string {
 // config file so the agent discovers its environment through its native mechanism.
 //
 // For Claude:   writes {workDir}/CLAUDE.md  (skills discovered natively from .claude/skills/)
-// For Codex:    writes {workDir}/AGENTS.md  (skills discovered natively via CODEX_HOME)
+// For Codex:    writes {workDir}/AGENTS.md  (global skills via CODEX_HOME/home;
+//
+//	assigned skills via {workDir}/.agents/skills)
+//
 // For OpenCode: writes {workDir}/AGENTS.md  (skills discovered natively from .opencode/skills/)
 // For Pi:       writes {workDir}/AGENTS.md  (skills discovered natively from .pi/skills/)
 // For Cursor:   writes {workDir}/AGENTS.md  (skills discovered natively from .cursor/skills/)
@@ -494,9 +498,9 @@ func CleanupSidecarsConfined(envRoot, confineRoot string) error {
 // added to one side cannot drift past the other.
 func runtimeConfigPath(workDir, provider string) string {
 	switch provider {
-	case "claude":
+	case agent.ProviderClaude:
 		return filepath.Join(workDir, "CLAUDE.md")
-	case "codex", "opencode", "pi", "cursor", "kiro", "grok":
+	case agent.ProviderCodex, agent.ProviderOpenCode, agent.ProviderPi, agent.ProviderCursor, agent.ProviderKiro, agent.ProviderGrok:
 		return filepath.Join(workDir, "AGENTS.md")
 	default:
 		return ""
@@ -1199,9 +1203,9 @@ func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []Ski
 		b.WriteString("Installed skills (durable agent-local mirror; open the absolute path listed):\n\n")
 	} else {
 		switch provider {
-		case "claude":
+		case agent.ProviderClaude:
 			b.WriteString("Installed skills (also under `.claude/skills/`):\n\n")
-		case "codex", "opencode", "pi", "cursor", "kiro", "grok":
+		case agent.ProviderCodex, agent.ProviderOpenCode, agent.ProviderPi, agent.ProviderCursor, agent.ProviderKiro, agent.ProviderGrok:
 			b.WriteString("Installed skills (files are on disk at the listed locations):\n\n")
 		default:
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
@@ -1222,19 +1226,19 @@ func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []Ski
 		} else {
 			location = fmt.Sprintf(".agent_context/skills/%s/SKILL.md", slug)
 			switch provider {
-			case "claude":
+			case agent.ProviderClaude:
 				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", slug)
-			case "codex":
-				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", slug)
-			case "opencode":
+			case agent.ProviderCodex:
+				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", slug)
+			case agent.ProviderOpenCode:
 				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", slug)
-			case "pi":
+			case agent.ProviderPi:
 				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", slug)
-			case "cursor":
+			case agent.ProviderCursor:
 				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", slug)
-			case "kiro":
+			case agent.ProviderKiro:
 				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", slug)
-			case "grok":
+			case agent.ProviderGrok:
 				location = fmt.Sprintf(".grok/skills/%s/SKILL.md", slug)
 			}
 		}

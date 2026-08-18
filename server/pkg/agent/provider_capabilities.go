@@ -68,13 +68,13 @@ func caps(
 // ForceRestart is filled by deriveForceRestart (not by caps).
 var providerCapabilities = map[string]ProviderCapabilities{
 	//                    canonical, inlinePrompt, modelSel, customID, thinking
-	"claude":   caps(true, false, true, true, true),  // resident via claude-agent-acp adapter
-	"codex":    caps(true, false, true, true, true),  // resident app-server; chat full only
-	"opencode": caps(true, false, true, false, true), // thinking catalogs + CLI injection (#59)
-	"pi":       caps(true, false, true, true, true),
-	"cursor":   caps(true, false, true, true, false),
-	"kiro":     caps(true, true, true, false, false), // resident ACP (session/load)
-	"grok":     caps(true, false, true, false, true),
+	ProviderClaude:   caps(true, false, true, true, true),  // resident via claude-agent-acp adapter
+	ProviderCodex:    caps(true, false, true, true, true),  // resident app-server; chat full only
+	ProviderOpenCode: caps(true, false, true, false, true), // thinking catalogs + CLI injection (#59)
+	ProviderPi:       caps(true, false, true, true, true),
+	ProviderCursor:   caps(true, false, true, true, false),
+	ProviderKiro:     caps(true, true, true, false, false), // resident ACP (session/load)
+	ProviderGrok:     caps(true, false, true, false, true),
 }
 
 // forceRestartResidentConstructors maps provider → the Backend the daemon
@@ -84,13 +84,13 @@ var providerCapabilities = map[string]ProviderCapabilities{
 // (FE button stays hidden — fail closed). Removing ForceKill makes the
 // derived bit flip to false automatically.
 var forceRestartResidentConstructors = map[string]func(Config) Backend{
-	"cursor":   func(cfg Config) Backend { return newCursorACPBackend(cfg) },
-	"pi":       func(cfg Config) Backend { return newPiRPCBackend(cfg) },
-	"grok":     func(cfg Config) Backend { return newGrokACPBackend(cfg) },
-	"opencode": func(cfg Config) Backend { return newOpenCodeServeBackend(cfg) },
-	"kiro":     func(cfg Config) Backend { return newKiroACPBackend(cfg) },
-	"codex":    func(cfg Config) Backend { return newCodexAppServerBackend(cfg) },
-	"claude":   func(cfg Config) Backend { return newClaudeStreamJSONBackend(cfg) },
+	ProviderCursor:   func(cfg Config) Backend { return newCursorACPBackend(cfg) },
+	ProviderPi:       func(cfg Config) Backend { return newPiRPCBackend(cfg) },
+	ProviderGrok:     func(cfg Config) Backend { return newGrokACPBackend(cfg) },
+	ProviderOpenCode: func(cfg Config) Backend { return newOpenCodeServeBackend(cfg) },
+	ProviderKiro:     func(cfg Config) Backend { return newKiroACPBackend(cfg) },
+	ProviderCodex:    func(cfg Config) Backend { return newCodexAppServerBackend(cfg) },
+	ProviderClaude:   func(cfg Config) Backend { return newClaudeStreamJSONBackend(cfg) },
 }
 
 func init() {

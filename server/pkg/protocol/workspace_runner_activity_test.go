@@ -30,6 +30,12 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		ComputerRestartPayload{RequestID: "restart-1"},
 		ComputerUpgradeProgressPayload{RequestID: "upgrade-1", Phase: "staging"},
 		ComputerUpgradeDonePayload{RequestID: "upgrade-1", OK: true, NewVersion: "0.4.24-alpha.59"},
+		ComputerWorkDigestPayload{
+			RequestID: "digest-1",
+			Start:     time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC),
+			End:       time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC),
+		},
+		ComputerWorkJournalPayload{RequestID: "journal-1", Enabled: true},
 	}
 
 	var encoded strings.Builder
@@ -70,6 +76,20 @@ func TestComputerUpgradePayloadUsesRaftRequestIdentity(t *testing.T) {
 	}
 }
 
+func TestComputerWorkDigestPayloadRejectsEmptyAndInvertedWindow(t *testing.T) {
+	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
+	valid := ComputerWorkDigestPayload{RequestID: "digest-1", Start: start, End: start.Add(24 * time.Hour)}
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (ComputerWorkDigestPayload{Start: start, End: start.Add(time.Hour)}).Validate(); err == nil {
+		t.Fatal("work digest payload without requestId was accepted")
+	}
+	if err := (ComputerWorkDigestPayload{RequestID: "digest-1", Start: start, End: start}).Validate(); err == nil {
+		t.Fatal("inverted work digest window was accepted")
+	}
+}
+
 func TestWorkspaceRunnerStartUsesRaftSessionConfig(t *testing.T) {
 	resume, err := json.Marshal(WorkspaceRunnerAgentStartPayload{
 		AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
@@ -102,7 +122,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 			ActivityKind: ActivityKindWorking, DetailKind: "running_command", ProbeID: "probe-1",
 		},
 		Detail:      "pnpm test",
-		Entries:     []AgentActivityEntry{{Kind: "narrative", Body: json.RawMessage(`{"text":"pnpm test","detail_kind":"running_command"}`)}},
+		Entries:     []AgentActivityEntry{{Kind: "status", Body: json.RawMessage(`{"activity":"working","detail":"pnpm test","detailKind":"running_command"}`)}},
 		IsHeartbeat: true,
 	}
 

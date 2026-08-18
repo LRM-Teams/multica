@@ -147,12 +147,12 @@ func classifyResumeUnsafeTimeout(provider, errMsg string) (string, bool) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	lowered := strings.ToLower(errMsg)
 	switch provider {
-	case "codex":
+	case agent.ProviderCodex:
 		if strings.Contains(lowered, strings.ToLower(agent.CodexSemanticInactivityMarker)) ||
 			strings.Contains(lowered, strings.ToLower(agent.CodexFirstTurnNoProgressMarker)) {
 			return FailureReasonCodexSemanticInactivity, true
 		}
-	case "grok":
+	case agent.ProviderGrok:
 		if strings.Contains(lowered, strings.ToLower(agent.GrokFirstStreamEventTimeoutMarker)) ||
 			strings.Contains(lowered, strings.ToLower(agent.GrokNoStreamingJSONEventsMarker)) {
 			return FailureReasonGrokFirstTurnNoProgress, true
@@ -167,7 +167,7 @@ func classifyResumeUnsafeTimeout(provider, errMsg string) (string, bool) {
 // Multica transport command starts, so both the in-process backend and the
 // persisted resume pointer must be discarded.
 func classifyResumeUnsafeToolFailure(provider, errMsg string) (string, bool) {
-	if strings.ToLower(strings.TrimSpace(provider)) != "grok" {
+	if strings.ToLower(strings.TrimSpace(provider)) != agent.ProviderGrok {
 		return "", false
 	}
 	lowered := strings.ToLower(strings.TrimSpace(errMsg))

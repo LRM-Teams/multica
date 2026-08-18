@@ -69,7 +69,12 @@ export function useResearchV6DirectorCanvas({
     ...researchV6DirectorSnapshotOptions(transport, workspaceId, runId),
     enabled,
   });
-  const firstPage = snapshotQuery.data?.pages[0] ?? null;
+  // React Query can retain the previous successful page while a refetch is
+  // failing. Never render that cached projection after an identity/schema
+  // failure: the transport is fail-closed and the canvas must resync first.
+  const firstPage = snapshotQuery.error
+    ? null
+    : snapshotQuery.data?.pages[0] ?? null;
   const snapshotId = firstPage?.snapshot_id ?? null;
   const expectedDisplayIdentity = firstPage
     ? researchV6DirectorDisplayIdentity(
@@ -162,6 +167,7 @@ export function useResearchV6DirectorCanvas({
   );
 
   const canvas = useMemo(() => {
+    if (snapshotQuery.error) return null;
     const defaultPages = snapshotQuery.data?.pages ?? [];
     if (!firstPage || defaultPages.length === 0) return null;
     const liveView = liveController
@@ -214,6 +220,7 @@ export function useResearchV6DirectorCanvas({
     queryClient,
     runId,
     snapshotQuery.data?.pages,
+    snapshotQuery.error,
     workspaceId,
   ]);
 

@@ -69,7 +69,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "\nWorkspace selected. Setup will start the machine-wide Computer.")
+	fmt.Fprintln(os.Stderr, "\nWorkspace selected. Setup will ensure the machine-wide Computer is running.")
 	return nil
 }
 

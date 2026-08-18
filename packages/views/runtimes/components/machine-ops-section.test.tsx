@@ -85,6 +85,7 @@ vi.mock("@multica/core/api", () => ({
 }));
 
 import { ApiError } from "@multica/core/api";
+import { useComputerUpgradeStore } from "@multica/core/runtimes";
 import { MachineHeaderOps } from "./machine-header-ops";
 import { MachineDaemonUpgrade } from "./machine-daemon-upgrade";
 import { MachineDangerZone } from "./machine-danger-zone";
@@ -353,6 +354,98 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     );
     expect(screen.queryByTestId("machine-basics-daemon-target")).not.toBeInTheDocument();
     expect(screen.queryByTestId("machine-daemon-upgrade-progress")).not.toBeInTheDocument();
+  });
+
+  it("reflects active upgrade in-progress when initiated from store/toast", () => {
+    useComputerUpgradeStore.getState().reset();
+    useComputerUpgradeStore.setState({
+      upgrades: {
+        "daemon-1": {
+          daemonId: "daemon-1",
+          machineKey: "daemon-1",
+          targetVersion: "v0.4.24-alpha.93",
+          requestId: "req-1",
+          phase: "running",
+          progress: "Downloading and installing…",
+          startedAt: Date.now(),
+        },
+      },
+    });
+
+    const runtime = makeRuntime({
+      current_version: "0.4.24-alpha.91",
+      runtime_health: "update_available",
+      target_version: null,
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.4.24-alpha.91"
+        daemonTargetVersion="v0.4.24-alpha.93"
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+
+    expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute(
+      "data-state",
+      "active",
+    );
+    expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
+      "0.4.24-alpha.91",
+    );
+    expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent(
+      "v0.4.24-alpha.93",
+    );
+    expect(
+      screen.getByTestId("machine-daemon-upgrade-progress"),
+    ).toHaveTextContent("Downloading and installing…");
+    expect(
+      screen.queryByTestId("machine-daemon-upgrade-btn"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reflects failed upgrade with retry when store reports failure", () => {
+    useComputerUpgradeStore.getState().reset();
+    useComputerUpgradeStore.setState({
+      upgrades: {
+        "daemon-1": {
+          daemonId: "daemon-1",
+          machineKey: "daemon-1",
+          targetVersion: "v0.4.24-alpha.93",
+          requestId: "req-1",
+          phase: "failed",
+          error: "Connection refused",
+          startedAt: Date.now(),
+        },
+      },
+    });
+
+    const runtime = makeRuntime({
+      current_version: "0.4.24-alpha.91",
+      runtime_health: "update_available",
+      target_version: null,
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.4.24-alpha.91"
+        daemonTargetVersion="v0.4.24-alpha.93"
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+
+    expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute(
+      "data-state",
+      "failed",
+    );
+    expect(screen.getByTestId("machine-daemon-upgrade-fail")).toBeInTheDocument();
+    expect(screen.getByTestId("machine-daemon-upgrade-error")).toHaveTextContent(
+      "Connection refused",
+    );
   });
 });
 

@@ -7,6 +7,7 @@ import enRuntimes from "../../locales/en/runtimes.json";
 import { api, ApiError } from "@multica/core/api";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { configStore } from "@multica/core/config";
+import { useComputerUpgradeStore } from "@multica/core/runtimes";
 import { UpdateSection } from "./update-section";
 
 vi.mock("@multica/core/api", async (importOriginal) => {
@@ -27,6 +28,7 @@ vi.mock("@multica/ui/lib/error-toast", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useComputerUpgradeStore.getState().reset();
   configStore.getState().setDaemonConfig({ environment: "production" });
 });
 

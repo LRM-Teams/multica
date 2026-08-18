@@ -4,6 +4,7 @@ package computer
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"syscall"
@@ -11,6 +12,22 @@ import (
 
 	"golang.org/x/sys/windows"
 )
+
+func processIdentityValue(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return ""
+	}
+	defer windows.CloseHandle(handle)
+	var creation, exit, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(handle, &creation, &exit, &kernel, &user); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", creation.Nanoseconds())
+}
 
 const (
 	// detachedProcess severs the inherited console so closing the parent

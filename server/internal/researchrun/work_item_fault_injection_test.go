@@ -39,6 +39,43 @@ func seedV6RecoveryWorkItem(t *testing.T, run *transactionRecoveryRun, status st
 	return membershipID, workItemID
 }
 
+func seedV6RecoveryAttempt(t *testing.T, run *transactionRecoveryRun, membershipID, workItemID string) string {
+	t.Helper()
+	attemptID, manifestID := uuid.NewString(), uuid.NewString()
+	manifestHash, dispatchKey := "sha256:"+strings.Repeat("3", 64), "dispatch:"+uuid.NewString()
+	tx, err := run.pool.Begin(run.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(run.ctx)
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_work_item_attempt (
+		id,workspace_id,session_id,work_item_id,attempt_number,assigned_agent_id,membership_id,
+		dispatch_key,manifest_id,manifest_hash,status,manifest
+	) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,$5::uuid,$6::uuid,$7,$8::uuid,$9,'running','{}'::jsonb)`,
+		attemptID, run.fixture.workspaceID, run.fixture.sessionID, workItemID, run.fixture.agentID, membershipID, dispatchKey, manifestID, manifestHash); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := ArtifactContentHash(ArtifactKindAttempt, v6WorkAttemptArtifactContent(workItemID, 1, run.fixture.agentID, membershipID, dispatchKey, manifestID, manifestHash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goalVersion := int32(run.goalVersion)
+	planVersion := int32(run.planVersion)
+	if err = registerArtifactPassportTx(run.ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: run.fixture.workspaceID, SessionID: run.fixture.sessionID, EntityID: attemptID,
+		Kind: ArtifactKindAttempt, ProvenanceCompleteness: ArtifactProvenanceComplete,
+		GoalVersion: &goalVersion, PlanVersion: &planVersion,
+		SchemaName: string(ArtifactKindAttempt), SchemaVersion: OrchestratorVersionV6,
+		AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction, ContentHash: hash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(run.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return attemptID
+}
+
 func TestClaimV6WorkItemTransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpV6WorkItemClaim, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		_, workItemID := seedV6RecoveryWorkItem(t, run, "ready", time.Now().Add(-time.Minute))
@@ -147,21 +184,15 @@ func TestRecoverV6WorkItemTransactionRecovery(t *testing.T) {
 func TestRecordV6SubmissionTransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpV6SubmissionRecord, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
-		attemptID, manifestID, requestID := uuid.NewString(), uuid.NewString(), uuid.NewString()
-		manifestHash := "sha256:" + strings.Repeat("3", 64)
-		if _, err := run.pool.Exec(run.ctx, `
-			INSERT INTO research_work_item_attempt (
-			 id,workspace_id,session_id,work_item_id,attempt_number,assigned_agent_id,membership_id,
-			 dispatch_key,manifest_id,manifest_hash,status,manifest
-			) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,$5::uuid,$6::uuid,$7,$8::uuid,$9,'running','{}'::jsonb)
-		`, attemptID, run.fixture.workspaceID, run.fixture.sessionID, workItemID, run.fixture.agentID, membershipID, "dispatch:"+attemptID, manifestID, manifestHash); err != nil {
-			t.Fatal(err)
-		}
+		attemptID, requestID := seedV6RecoveryAttempt(t, run, membershipID, workItemID), uuid.NewString()
 		raw := withValidV6SelfHash(t, readV6Fixture(t, filepath.Join("..", "..", "..", "docs", "research", "fixtures", "atomic-result-v6.example.json")), "content_hash")
 		decoded, err := DecodeV6Contract(raw, V6ContractAtomicResultSubmission, acceptingV6SecondStage{})
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() {
+			_, _ = run.pool.Exec(context.Background(), `DELETE FROM research_v6_work_submission WHERE workspace_id=$1::uuid`, run.fixture.workspaceID)
+		})
 		access := V6AttemptAccess{WorkspaceID: run.fixture.workspaceID, RunID: run.fixture.sessionID, WorkItemID: workItemID, AttemptID: attemptID, AgentID: run.fixture.agentID}
 		invoke := func() error { _, err := run.store.RecordV6Submission(run.ctx, access, decoded, requestID); return err }
 		count := func() int {
@@ -190,16 +221,8 @@ func TestRecordV6SubmissionTransactionRecovery(t *testing.T) {
 func TestAcknowledgeV6CatalogTransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpV6CatalogAcknowledge, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		membershipID, workItemID := seedV6RecoveryWorkItem(t, run, "running", time.Now().Add(time.Minute))
-		attemptID, manifestID := uuid.NewString(), uuid.NewString()
-		manifestHash, pageHash := "sha256:"+strings.Repeat("3", 64), "sha256:"+strings.Repeat("4", 64)
-		if _, err := run.pool.Exec(run.ctx, `
-			INSERT INTO research_work_item_attempt (
-			 id,workspace_id,session_id,work_item_id,attempt_number,assigned_agent_id,membership_id,
-			 dispatch_key,manifest_id,manifest_hash,status,manifest
-			) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,$5::uuid,$6::uuid,$7,$8::uuid,$9,'running','{}'::jsonb)
-		`, attemptID, run.fixture.workspaceID, run.fixture.sessionID, workItemID, run.fixture.agentID, membershipID, "dispatch:"+attemptID, manifestID, manifestHash); err != nil {
-			t.Fatal(err)
-		}
+		attemptID := seedV6RecoveryAttempt(t, run, membershipID, workItemID)
+		pageHash := "sha256:" + strings.Repeat("4", 64)
 		if _, err := run.pool.Exec(run.ctx, `INSERT INTO research_work_catalog_page (
 			workspace_id,session_id,work_item_attempt_id,catalog_view,tier,through_event_sequence,page_key,ordinal,content_hash,page
 		) VALUES ($1::uuid,$2::uuid,$3::uuid,'same_tier','S',0,'same-tier:0:0',0,$4,'[]'::jsonb)`,

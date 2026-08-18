@@ -40,6 +40,23 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
   return "pending";
 }
 
+function rendererLevel(node: ResearchV6DirectorProjectionNode): "xxl" | "xl" | "l" | "m" | "s" {
+  switch (node.tier) {
+    case "GOAL":
+    case "XXL":
+      return "xxl";
+    case "XL":
+      return "xl";
+    case "L":
+      return "l";
+    case "S":
+      return "s";
+    case "M":
+    default:
+      return "m";
+  }
+}
+
 /**
  * Adapts only explicit Projection fields. It never calculates tier, absorption,
  * parenthood, confidence, or graph membership from text or node counts.
@@ -47,6 +64,7 @@ function rendererStatus(node: ResearchV6DirectorProjectionNode): string {
 export function adaptResearchV6DirectorCanvas(
   projection: ResearchV6DirectorCanvasProjection,
 ): ResearchV6DirectorCanvasAdapterResult {
+  const visibleNodes = projection.nodes.filter((node) => !node.absorbed);
   const absorbedInputs = new Map<string, string[]>();
   for (const edge of projection.edges) {
     if (edge.kind !== "absorbed_into") continue;
@@ -57,7 +75,7 @@ export function adaptResearchV6DirectorCanvas(
 
   const expandableNodeIds = new Set<string>();
   const hiddenChildCountByNodeId = new Map<string, number>();
-  for (const node of projection.nodes) {
+  for (const node of visibleNodes) {
     if (node.expandable) expandableNodeIds.add(node.id);
     hiddenChildCountByNodeId.set(node.id, node.hidden_child_count);
   }
@@ -67,12 +85,16 @@ export function adaptResearchV6DirectorCanvas(
     merged[successorId] = [...new Set(inputIds)];
   }
 
+  const branchIds = [
+    ...new Set(visibleNodes.flatMap((node) => node.branch_ids)),
+  ];
+
   return {
     graph: {
       session_id: projection.runId,
       graph_version: projection.eventSequence,
-      total_node_count: projection.nodes.length,
-      nodes: projection.nodes.map((node) => ({
+      total_node_count: visibleNodes.length,
+      nodes: visibleNodes.map((node) => ({
         id: node.id,
         session_id: projection.runId,
         node_type: node.kind,
@@ -90,11 +112,10 @@ export function adaptResearchV6DirectorCanvas(
           expandable: node.expandable,
           hidden_child_count: node.hidden_child_count,
         },
-        // Goal is outside the S→XXL knowledge ladder. The existing D5 renderer
-        // has no Goal tier token, so it uses the top-size presentation while
-        // retaining canonical tier=GOAL in payload.
-        level: node.tier === "GOAL" ? "xxl" : node.tier.toLowerCase(),
-        cluster_id: null,
+        // Unknown future tiers retain their canonical value in payload while
+        // degrading to the neutral M visual instead of breaking the canvas.
+        level: rendererLevel(node),
+        cluster_id: node.branch_ids[0] ?? null,
         confidence: null,
         goal_version_id: null,
         derived_from: null,
@@ -118,7 +139,22 @@ export function adaptResearchV6DirectorCanvas(
         edge_type: edge.kind,
         created_at: "",
       })),
-      clusters: [],
+      clusters: branchIds.map((branchId) => ({
+        id: branchId,
+        session_id: projection.runId,
+        name: branchId,
+        label: branchId,
+        level: "m",
+        cluster_type: "branch",
+        goal_version_id: null,
+        payload: {
+          member_node_ids: visibleNodes
+            .filter((node) => node.branch_ids.includes(branchId))
+            .map((node) => node.id),
+        },
+        created_at: "",
+        updated_at: "",
+      })),
       lineage: {
         derived: {},
         merged,

@@ -53,25 +53,45 @@ describe("Director V6 projection wire schemas", () => {
     );
   });
 
-  it("rejects the legacy experimental projection shape", () => {
-    expect(() =>
+  it("degrades the legacy experimental projection shape without throwing", () => {
+    expect(
       parseResearchV6DirectorProjectionSnapshot({
         snapshot_id: SNAPSHOT_ID,
         run_id: ID,
         graph_content_hash: { nodes: HASH, edges: HASH },
         nodes: [],
         edges: [],
-      }),
-    ).toThrow();
+      }).slice_key,
+    ).toBe("invalid-response");
   });
 
-  it("rejects invented fields at the production boundary", () => {
-    expect(() =>
+  it("degrades invented fields at the production boundary", () => {
+    expect(
       parseResearchV6DirectorProjectionSnapshot({
         ...snapshot(),
         direction: "both",
-      }),
-    ).toThrow();
+      }).slice_key,
+    ).toBe("invalid-response");
+  });
+
+  it("keeps unknown future enum values without dropping the projection", () => {
+    const value = snapshot();
+    value.nodes[0] = {
+      ...value.nodes[0]!,
+      kind: "future_result",
+      tier: "FUTURE_TIER",
+      canonical_ref: { kind: "future_artifact", id: ID },
+      state: {
+        execution: "queued_remote",
+        conclusion: "under_review",
+        integration: "awaiting_match",
+      },
+    };
+
+    const parsed = parseResearchV6DirectorProjectionSnapshot(value);
+    expect(parsed.slice_key).toBe("default");
+    expect(parsed.nodes[0]?.kind).toBe("future_result");
+    expect(parsed.nodes[0]?.state.execution).toBe("queued_remote");
   });
 
   it("parses the HTTP delta page envelope independently of a delta", () => {
@@ -83,6 +103,34 @@ describe("Director V6 projection wire schemas", () => {
         resync_required: true,
       }).resync_required,
     ).toBe(true);
+  });
+
+  it("degrades malformed detail and report payloads without throwing", async () => {
+    const schemas = await import("./director-schemas");
+    expect(schemas.parseResearchV6DirectorNodeDetail({}).node.id).toBe("invalid-response");
+    expect(schemas.parseResearchV6DirectorReportDetail({}).id).toBeTruthy();
+    expect(schemas.parseResearchV6DirectorProjectionDelta({}).event_sequence).toBe(0);
+  });
+
+  it("keeps an unknown node detail view forward-compatible", async () => {
+    const schemas = await import("./director-schemas");
+    const parsed = schemas.parseResearchV6DirectorNodeDetail({
+      snapshot_id: SNAPSHOT_ID,
+      through_event_sequence: 47,
+      projection_hash: HASH,
+      view: "future_audit_view",
+      node: snapshot().nodes[0],
+      incoming: [],
+      outgoing: [],
+      history_refs: [],
+      agent_refs: [],
+      work_item_refs: [],
+      attempt_refs: [],
+      evidence_refs: [],
+      discussion_refs: [],
+      report_refs: [],
+    });
+    expect(parsed.view).toBe("future_audit_view");
   });
 
   it("fixes derivation expansion depth to exactly one layer", () => {

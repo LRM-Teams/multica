@@ -28,6 +28,7 @@ vi.mock("../../i18n/use-t", () => ({
           previous_label: "上一版",
           substantive_label: "待确认换题",
           close: "关闭",
+          open_report: "查看报告",
           retry: "重试",
           confirm_substantive: "确认换题（substantive）",
           confirming_substantive: "正在确认换题…",
@@ -125,6 +126,21 @@ describe("ResearchSessionGoalCard (LRM-1008 / LRM-1010)", () => {
       "完整最终目标文本内容",
     );
     fireEvent.click(screen.getByTestId("research-session-goal-close"));
+  });
+
+  it("opens the Goal-attached report from the Goal panel", () => {
+    const onOpenReport = vi.fn();
+    render(
+      <ResearchSessionGoalCard
+        sessionId="s1"
+        goal="完整最终目标文本内容"
+        onOpenReport={onOpenReport}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("research-session-goal-card"));
+    fireEvent.click(screen.getByTestId("research-session-goal-open-report"));
+    expect(onOpenReport).toHaveBeenCalledOnce();
   });
 
   it("pulses on user goal change and keeps previous version", () => {

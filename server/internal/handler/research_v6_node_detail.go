@@ -38,7 +38,15 @@ func (h *Handler) GetResearchV6ProjectionNodeDetail(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusServiceUnavailable, "research V6 projection unavailable")
 		return
 	}
-	detail, err := service.ProjectionV6NodeDetail(r.Context(), h.resolveWorkspaceID(r), strings.TrimSpace(chi.URLParam(r, "runId")), strings.TrimSpace(chi.URLParam(r, "nodeId")), strings.TrimSpace(r.URL.Query().Get("view")))
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
+	nodeID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "nodeId")), "nodeId")
+	if !valid {
+		return
+	}
+	detail, err := service.ProjectionV6NodeDetail(r.Context(), h.resolveWorkspaceID(r), uuidToString(runID), uuidToString(nodeID), strings.TrimSpace(r.URL.Query().Get("view")))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "research V6 projection node not found")
 		return

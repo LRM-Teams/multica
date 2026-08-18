@@ -154,8 +154,8 @@ func (s *PostgresStore) applyIntegrationV6Tx(ctx context.Context, tx pgx.Tx, sub
 			return V6IntegrationOutcome{}, err
 		}
 	} else {
-		if _, err = tx.Exec(ctx, `INSERT INTO research_insight(id,workspace_id,session_id,title,summary,status,importance,level)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,'accepted',0.5,$6)`, insightID, in.WorkspaceID, in.RunID, in.OutputContent.Objective, in.OutputContent.BriefSummary, v6TierLevel(in.OutputTier)); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO research_insight(id,workspace_id,session_id,client_key,title,summary,status,importance,level)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,'accepted',0.5,$7)`, insightID, in.WorkspaceID, in.RunID, "v6:"+insightID, in.OutputContent.Objective, in.OutputContent.BriefSummary, v6TierLevel(in.OutputTier)); err != nil {
 			return V6IntegrationOutcome{}, err
 		}
 	}
@@ -164,7 +164,7 @@ func (s *PostgresStore) applyIntegrationV6Tx(ctx context.Context, tx pgx.Tx, sub
 	artifactVersionID := ""
 	if revision == 1 {
 		if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{WorkspaceID: in.WorkspaceID, SessionID: in.RunID, EntityID: insightID, Kind: ArtifactKindInsight, SourceCreatedAt: &now,
-			ProvenanceCompleteness: ArtifactProvenanceComplete, GoalVersion: &goal32, PlanVersion: &plan32, SchemaName: "research_insight_version", SchemaVersion: "6", AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+			ProvenanceCompleteness: ArtifactProvenanceComplete, GoalVersion: &goal32, PlanVersion: &plan32, SchemaVersion: "research-run-v6", AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
 			ContentHash: outputHash, ProducedByWorkItemID: in.WorkItemID, ProducedByWorkAttemptID: in.AttemptID, ProducedByAgentID: in.AgentID}); err != nil {
 			return V6IntegrationOutcome{}, err
 		}
@@ -174,7 +174,7 @@ func (s *PostgresStore) applyIntegrationV6Tx(ctx context.Context, tx pgx.Tx, sub
 	} else {
 		artifactVersionID = uuid.NewString()
 		if _, err = tx.Exec(ctx, `INSERT INTO research_artifact_version(id,workspace_id,session_id,artifact_id,version,schema_name,schema_version,canonicalization_version,content_hash,access_level,goal_version,plan_version,hash_origin,produced_by_work_item_id,produced_by_work_item_attempt_id,produced_by_agent_id)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'research_insight_version','6',$6,$7,'raw',$8,$9,'production',$10::uuid,$11::uuid,$12::uuid)`, artifactVersionID, in.WorkspaceID, in.RunID, insightID, revision, ArtifactCanonicalizationVersion, outputHash, goalVersion, planVersion, in.WorkItemID, in.AttemptID, in.AgentID); err != nil {
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'insight','research-run-v6',$6,$7,'raw',$8,$9,'production',$10::uuid,$11::uuid,$12::uuid)`, artifactVersionID, in.WorkspaceID, in.RunID, insightID, revision, ArtifactCanonicalizationVersion, outputHash, goalVersion, planVersion, in.WorkItemID, in.AttemptID, in.AgentID); err != nil {
 			return V6IntegrationOutcome{}, err
 		}
 	}

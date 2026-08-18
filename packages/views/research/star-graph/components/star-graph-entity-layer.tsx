@@ -84,6 +84,7 @@ export function StarGraphEntityLayer({
                 ? undefined
                 : labels.tierHeaders[entity.view.tier]
             }
+            semanticRole={entity.view.semanticRole}
             agentBadge={entity.view.agentBadge}
             sTierPresentation={sTierPresentation}
             metrics={entity.view.metrics}

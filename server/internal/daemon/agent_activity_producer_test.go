@@ -326,7 +326,7 @@ func TestResidentTextUpdatesWorkingWithoutAddingTimelineEntry(t *testing.T) {
 	}
 }
 
-func TestAgentActivityProducerRetainsOnlyLatestSnapshotWhileDisconnected(t *testing.T) {
+func TestAgentActivityProducerReplaysLatestCompleteActivityWhileDisconnected(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
@@ -336,7 +336,14 @@ func TestAgentActivityProducerRetainsOnlyLatestSnapshotWhileDisconnected(t *test
 		t.Fatalf("Observe(first): %v", err)
 	}
 	now = now.Add(time.Second)
-	if err := producer.Observe(AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}, At: now}); err != nil {
+	if err := producer.Observe(AgentObservation{
+		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool,
+		Data: AgentRuntimeStageObservationData{
+			RuntimeID: "runtime-1", ToolName: "Edit", ToolCallID: "call-1",
+			ToolInput: map[string]any{"file_path": "/repo/out.go"},
+		},
+		At: now,
+	}); err != nil {
 		t.Fatalf("Observe(second): %v", err)
 	}
 	if len(sent) != 0 {
@@ -344,11 +351,15 @@ func TestAgentActivityProducerRetainsOnlyLatestSnapshotWhileDisconnected(t *test
 	}
 	frames := producer.ReconnectFrames()
 	if len(frames) != 3 {
-		t.Fatalf("reconnect frames = %d, want status/session/latest Snapshot", len(frames))
+		t.Fatalf("reconnect frames = %d, want status/session/latest Activity", len(frames))
 	}
 	payload, ok := frames[2].Payload.(protocol.AgentActivityPayload)
-	if !ok || payload.Snapshot.ActivityKind != protocol.ActivityKindThinking || len(payload.Entries) != 0 {
+	if !ok || payload.Snapshot.DetailKind != "editing_file" || len(payload.Entries) != 1 {
 		t.Fatalf("replayed payload = %+v", frames[2].Payload)
+	}
+	var body protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.DetailKind != "editing_file" || body.Text != "/repo/out.go" {
+		t.Fatalf("replayed editing entry = %+v err=%v", body, err)
 	}
 }
 
@@ -424,7 +435,8 @@ func TestReplayManagedStartDoesNotRepaintStarting(t *testing.T) {
 	if err := producer.SetManaged(protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID}); err != nil {
 		t.Fatal(err)
 	}
-	runner.publishManagedAgentStartActivity("agent-a", "runtime-1")
+	runner.broadcastActivity("agent-a", "runtime-1", "starting")
+	runner.observeResidentRuntimeReady("agent-a", "runtime-1")
 	before := len(activities)
 	if !runner.replayManagedAgentStartPublication(protocol.WorkspaceRunnerAgentStartPayload{
 		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: ack.LaunchID, StartDispatchID: "launch-a-dispatch",

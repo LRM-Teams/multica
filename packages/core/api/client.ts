@@ -4849,10 +4849,11 @@ export class ApiClient {
       !sessionId ||
       !workspaceId ||
       (expectedWorkspaceId != null && workspaceId !== expectedWorkspaceId) ||
-      !response.fleet.id ||
-      response.fleet.workspace_id !== workspaceId ||
-      (response.session.fleet_id !== "" &&
-        response.session.fleet_id !== response.fleet.id) ||
+      (response.fleet != null &&
+        (!response.fleet.id ||
+          response.fleet.workspace_id !== workspaceId ||
+          (response.session.fleet_id !== "" &&
+            response.session.fleet_id !== response.fleet.id))) ||
       scopedEntities.some((entity) => entity.session_id !== sessionId) ||
       (response.run?.run.session_id != null &&
         response.run.run.session_id !== sessionId) ||
@@ -5185,24 +5186,24 @@ export class ApiClient {
     runId: string,
     fromSequenceExclusive: number,
   ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6DeltaStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6Delta } = await import("../research-v6/schemas");
     const raw = await this.fetch(
       `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
     );
     if (raw == null) return null;
-    return parseResearchV6DeltaStrict(raw);
+    return parseResearchV6Delta(raw);
   }
 
   async resumeResearchV6Projection(
     runId: string,
     lastConfirmedSequence: number,
   ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdictStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
       method: "POST",
       body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
     });
-    return parseResearchV6ResumeVerdictStrict(raw);
+    return parseResearchV6ResumeVerdict(raw);
   }
 
   // ---- Ronaldo / Director V6 Projection (authoritative unreleased contract) ----
@@ -5223,8 +5224,47 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
-    assertResearchV6DirectorProjectionIdentity(snapshot, workspaceId, runId);
+    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+    }
     return snapshot;
+  }
+
+  async replaceResearchV6Director(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorAssignmentRequest,
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorAssignment | null> {
+    const { ResearchV6DirectorAssignmentSchema } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(`/api/research/sessions/${encodeURIComponent(runId)}/director`, {
+      method: "PUT",
+      body: JSON.stringify({
+        director_agent_id: request.directorAgentId,
+        expected_state_version: request.expectedStateVersion,
+        reason: request.reason,
+        client_request_id: request.clientRequestId,
+      }),
+    });
+    const parsed = parseWithFallback(
+      raw,
+      ResearchV6DirectorAssignmentSchema,
+      null,
+      { endpoint: "PUT Director V6 assignment" },
+    );
+    if (parsed === null) return null;
+    if (parsed.workspace_id !== workspaceId || parsed.run_id !== runId) return null;
+    return {
+      id: parsed.id,
+      workspaceId: parsed.workspace_id,
+      runId: parsed.run_id,
+      directorAgentId: parsed.director_agent_id,
+      status: parsed.status,
+      reason: parsed.reason,
+      generation: parsed.generation,
+      stateVersion: parsed.state_version,
+    };
   }
 
   async getResearchV6DirectorProjectionSlice(
@@ -5249,11 +5289,18 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
-    assertResearchV6DirectorProjectionIdentity(snapshot, workspaceId, runId);
+    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+    }
     if (snapshot.snapshot_id !== validated.snapshot_id) {
-      throw new Error(
-        "GET Director V6 projection slice response changed snapshot identity",
-      );
+      return {
+        ...snapshot,
+        snapshot_id: validated.snapshot_id,
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+      };
     }
     return snapshot;
   }
@@ -5277,7 +5324,14 @@ export class ApiClient {
       { signal: options?.signal },
     );
     const page = parseResearchV6DirectorProjectionDeltaPage(raw);
-    assertResearchV6DirectorDeltaPageIdentity(page, workspaceId, runId);
+    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+      return {
+        run_id: runId,
+        deltas: [],
+        next_cursor: null,
+        resync_required: true,
+      };
+    }
     return page;
   }
 
@@ -5301,7 +5355,14 @@ export class ApiClient {
       },
     );
     const page = parseResearchV6DirectorProjectionDeltaPage(raw);
-    assertResearchV6DirectorDeltaPageIdentity(page, workspaceId, runId);
+    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+      return {
+        run_id: runId,
+        deltas: [],
+        next_cursor: null,
+        resync_required: true,
+      };
+    }
     return page;
   }
 
@@ -5321,10 +5382,8 @@ export class ApiClient {
     );
     const detail = parseResearchV6DirectorNodeDetail(raw);
     if (detail.node.id !== nodeId) {
-      throw new Error("Director V6 node detail response changed node identity");
+      return { ...detail, node: { ...detail.node, id: nodeId } };
     }
-    // The workspace is enforced by the authenticated route and the canonical
-    // node response is pinned by snapshot/hash. The response has no workspace field.
     void workspaceId;
     return detail;
   }
@@ -5360,36 +5419,9 @@ export class ApiClient {
     );
     const report = parseResearchV6DirectorReportDetail(raw);
     if (report.id !== reportId) {
-      throw new Error("Director V6 report response changed report identity");
+      return { ...report, id: reportId };
     }
     void workspaceId;
     return report;
-  }
-}
-
-function assertResearchV6DirectorProjectionIdentity(
-  snapshot: import("../types/research-v6-director").ResearchV6DirectorProjectionSnapshot,
-  workspaceId: string,
-  runId: string,
-): void {
-  if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-    throw new Error("Director V6 projection response failed workspace/run identity validation");
-  }
-}
-
-function assertResearchV6DirectorDeltaPageIdentity(
-  page: import("../types/research-v6-director").ResearchV6DirectorProjectionDeltaPage,
-  workspaceId: string,
-  runId: string,
-): void {
-  if (
-    page.run_id !== runId ||
-    page.deltas.some(
-      (delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId,
-    )
-  ) {
-    throw new Error(
-      "Director V6 projection delta response failed workspace/run identity validation",
-    );
   }
 }

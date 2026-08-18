@@ -54,12 +54,16 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 }
 
 func TestComputerUpgradePayloadUsesRaftRequestIdentity(t *testing.T) {
-	payload := ComputerUpgradePayload{RequestID: "upgrade-1", OperationID: "operation-1", TargetVersion: "0.4.24-alpha.59"}
+	payload := ComputerUpgradePayload{RequestID: "upgrade-1", TargetVersion: "0.4.24-alpha.59"}
 	if err := payload.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Operation() != "operation-1" {
-		t.Fatalf("Operation() = %q, want operation-1", payload.Operation())
+	wire, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), "operationId") {
+		t.Fatalf("Computer upgrade payload restored operation identity: %s", wire)
 	}
 	if err := (ComputerUpgradePayload{}).Validate(); err == nil {
 		t.Fatal("empty Computer upgrade payload was accepted")
@@ -98,7 +102,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 			ActivityKind: ActivityKindWorking, DetailKind: "running_command", ProbeID: "probe-1",
 		},
 		Detail:      "pnpm test",
-		Entries:     []AgentActivityEntry{{Kind: "narrative", Position: 0, Body: json.RawMessage(`{"text":"pnpm test","detail_kind":"running_command"}`)}},
+		Entries:     []AgentActivityEntry{{Kind: "narrative", Body: json.RawMessage(`{"text":"pnpm test","detail_kind":"running_command"}`)}},
 		IsHeartbeat: true,
 	}
 
@@ -119,6 +123,9 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 		if _, ok := envelope[forbidden]; ok {
 			t.Fatalf("Activity fact wire %s contains daemon-owned presentation field %q", wire, forbidden)
 		}
+	}
+	if strings.Contains(string(envelope["entries"]), `"position"`) {
+		t.Fatalf("Activity entries must use Raft array order without a position field: %s", envelope["entries"])
 	}
 
 	var decoded AgentActivityPayload
@@ -150,8 +157,7 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 		{name: "zero sequence", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking, DetailKind: "model_response_started"}}},
 		{name: "unknown activity kind", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: "idle", DetailKind: "idle"}}},
 		{name: "unknown activity detail kind", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ClientSequence: 1, ProducerFactID: "fact-1", ObservedAt: observedAt, DetailKind: "future_runtime_detail"}}},
-		{name: "scalar open envelope", value: AgentActivityPayload{Snapshot: validSnapshot, Entries: []AgentActivityEntry{{Kind: "provider_event", Position: 0, Body: json.RawMessage(`"not-an-object"`)}}}},
-		{name: "noncontiguous positions", value: AgentActivityPayload{Snapshot: validSnapshot, Entries: []AgentActivityEntry{{Kind: "provider_event", Position: 1, Body: json.RawMessage(`{}`)}}}},
+		{name: "scalar open envelope", value: AgentActivityPayload{Snapshot: validSnapshot, Entries: []AgentActivityEntry{{Kind: "provider_event", Body: json.RawMessage(`"not-an-object"`)}}}},
 	}
 
 	for _, tc := range cases {
@@ -191,9 +197,8 @@ func TestAgentActivityOpenEntryEnvelopePreservesUnknownKinds(t *testing.T) {
 			DetailKind: "runtime_progress",
 		},
 		Entries: []AgentActivityEntry{{
-			Kind:     "future_runtime_entry",
-			Position: 0,
-			Body:     json.RawMessage(`{"future":"shape","nested":{"still":"opaque"}}`),
+			Kind: "future_runtime_entry",
+			Body: json.RawMessage(`{"future":"shape","nested":{"still":"opaque"}}`),
 		}},
 	}
 	if err := payload.Validate(); err != nil {

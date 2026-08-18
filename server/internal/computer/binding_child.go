@@ -13,18 +13,18 @@ import (
 
 const (
 	// ResidentRunnerArg is the hidden argv for one Binding's supervised child.
-	ResidentRunnerArg = "__runner"
+	ResidentRunnerArg = "__run"
 )
 
-// BindingChild is one OS process the Computer host supervises for a Binding.
+// BindingChild is one supervised Binding execution process.
 type BindingChild interface {
 	PID() int
 	Wait() RunnerExitClass
 	Stop() error
 }
 
-// ReadyBindingChild is a Binding child whose real Workspace Runner readiness
-// can be observed through the generation-fenced parent/child process seam.
+// ReadyBindingChild exposes one Binding execution's real Workspace Runner
+// readiness through the generation-fenced supervision seam.
 type ReadyBindingChild interface {
 	BindingChild
 	AwaitReady(context.Context) (BindingChildReady, error)
@@ -35,26 +35,27 @@ func BindingRunnerArgs(workspaceID string) []string {
 	return []string{ResidentCommand, ResidentRunnerArg, "--workspace-id", strings.TrimSpace(workspaceID)}
 }
 
-// BindingRunner is the shipped OS-child adapter. Tests and production both
-// start it through StartBindingCommand / StartBindingRunner.
+// BindingRunner is the production executable child adapter.
 type BindingRunner struct {
-	cmd       *exec.Cmd
-	stopping  atomic.Bool
-	bootstrap BindingChildBootstrap
-	readyDone chan struct{}
-	readyMu   sync.Mutex
-	ready     BindingChildReady
-	readyErr  error
+	cmd          *exec.Cmd
+	stopping     atomic.Bool
+	bootstrap    BindingChildBootstrap
+	bootstrapIn  io.WriteCloser
+	readyOut     io.ReadCloser
+	activateOnce sync.Once
+	readyDone    chan struct{}
+	readyMu      sync.Mutex
+	ready        BindingChildReady
+	readyErr     error
 }
 
-// StartBindingRunner launches the Computer binary as `computer __runner`.
+// StartBindingRunner launches the Computer binary as `computer __run`.
 func StartBindingRunner(exe string, bootstrap BindingChildBootstrap) (*BindingRunner, error) {
 	return StartBindingProcess(exe, BindingRunnerArgs(bootstrap.WorkspaceID), bootstrap)
 }
 
-// StartBindingProcess launches one process with an inherited bootstrap/Ready
-// protocol over stdin/stdout. It is shared by production and process-level
-// tests so both cross the same seam.
+// StartBindingProcess launches one fallback process, which waits for Activate
+// before receiving its inherited bootstrap over stdin.
 func StartBindingProcess(exe string, args []string, bootstrap BindingChildBootstrap) (*BindingRunner, error) {
 	bootstrap, err := bootstrap.validated()
 	if err != nil {
@@ -65,6 +66,7 @@ func StartBindingProcess(exe string, args []string, bootstrap BindingChildBootst
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = SysProcAttr(true)
+	configureChildParentDeath(cmd)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -81,34 +83,52 @@ func StartBindingProcess(exe string, args []string, bootstrap BindingChildBootst
 		return nil, err
 	}
 	runner := &BindingRunner{
-		cmd:       cmd,
-		bootstrap: bootstrap,
-		readyDone: make(chan struct{}),
+		cmd:         cmd,
+		bootstrap:   bootstrap,
+		bootstrapIn: stdin,
+		readyOut:    stdout,
+		readyDone:   make(chan struct{}),
 	}
-	if err := writeBindingChildBootstrap(stdin, bootstrap); err != nil {
-		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, err
-	}
-	if err := stdin.Close(); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, fmt.Errorf("close Binding child bootstrap pipe: %w", err)
-	}
-	go runner.observeReady(stdout)
 	return runner, nil
 }
 
-// StartBindingCommand is the spawn primitive reconcile uses. Production
-// passes the Computer binary plus BindingRunnerArgs; tests pass a short-lived
-// helper command.
+// Activate releases the fallback process only after the supervisor has stored
+// its generation-fenced identity.
+func (c *BindingRunner) Activate() {
+	if c == nil || c.bootstrapIn == nil || c.readyOut == nil {
+		return
+	}
+	c.activateOnce.Do(func() {
+		if err := writeBindingChildBootstrap(c.bootstrapIn, c.bootstrap); err != nil {
+			_ = c.bootstrapIn.Close()
+			_ = c.cmd.Process.Kill()
+			c.readyMu.Lock()
+			c.readyErr = err
+			c.readyMu.Unlock()
+			close(c.readyDone)
+			return
+		}
+		if err := c.bootstrapIn.Close(); err != nil {
+			_ = c.cmd.Process.Kill()
+			c.readyMu.Lock()
+			c.readyErr = fmt.Errorf("close Binding child bootstrap pipe: %w", err)
+			c.readyMu.Unlock()
+			close(c.readyDone)
+			return
+		}
+		go c.observeReady(c.readyOut)
+	})
+}
+
+// StartBindingCommand launches a generic supervised process without the
+// Binding bootstrap/Ready protocol.
 func StartBindingCommand(exe string, args []string) (*BindingRunner, error) {
 	if strings.TrimSpace(exe) == "" {
 		return nil, fmt.Errorf("binding runner executable is required")
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = SysProcAttr(true)
+	configureChildParentDeath(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -128,8 +148,8 @@ func (c *BindingRunner) observeReady(stdout io.ReadCloser) {
 			err = fmt.Errorf("Binding child ready runner generation %d does not match bootstrap %d", ready.RunnerGeneration, c.bootstrap.RunnerGeneration)
 		case c.cmd == nil || c.cmd.Process == nil || ready.PID != c.cmd.Process.Pid:
 			err = fmt.Errorf("Binding child ready pid %d does not match process", ready.PID)
-		case !validBindingChildControlURL(ready.ControlURL):
-			err = fmt.Errorf("Binding child ready control URL is invalid")
+		case !validLocalControlEndpoint(ready.RunnerEndpoint):
+			err = fmt.Errorf("Binding runner Ready endpoint is invalid")
 		}
 	}
 	c.readyMu.Lock()

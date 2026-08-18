@@ -10,26 +10,27 @@ import (
 
 func seedV6InsightArtifactVersion(t *testing.T, run *transactionRecoveryRun, suffix string) string {
 	t.Helper()
-	insightID, artifactVersionID, insightVersionID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	insightID, insightVersionID := uuid.NewString(), uuid.NewString()
 	hash := "sha256:" + strings.Repeat(suffix, 64)
 	tx, err := run.pool.Begin(run.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(run.ctx)
-	if _, err = tx.Exec(run.ctx, `INSERT INTO research_insight(id,workspace_id,session_id,title,summary,status,importance,level)
-		VALUES($1::uuid,$2::uuid,$3::uuid,'test','test','accepted',0.5,2)`, insightID, run.fixture.workspaceID, run.fixture.sessionID); err != nil {
+	if _, err = tx.Exec(run.ctx, `INSERT INTO research_insight(id,workspace_id,session_id,client_key,title,summary,status,importance,level)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'test','test','accepted',0.5,2)`, insightID, run.fixture.workspaceID, run.fixture.sessionID, "race:"+insightID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(run.ctx, `INSERT INTO research_artifact_passport(id,workspace_id,session_id,entity_kind,current_version,lifecycle_status,provenance_completeness)
-		VALUES($1::uuid,$2::uuid,$3::uuid,'insight',NULL,'accepted','complete')`, insightID, run.fixture.workspaceID, run.fixture.sessionID); err != nil {
+	if err = registerArtifactPassportTx(run.ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: run.fixture.workspaceID, SessionID: run.fixture.sessionID, EntityID: insightID,
+		Kind: ArtifactKindInsight, ProvenanceCompleteness: ArtifactProvenanceComplete,
+		SchemaVersion: "research-run-v6", ContentHash: hash,
+		AccessLevel: ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(run.ctx, `INSERT INTO research_artifact_version(id,workspace_id,session_id,artifact_id,version,schema_name,schema_version,content_hash,access_level,hash_origin)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,1,'research_insight_version','6',$5,'raw','production')`, artifactVersionID, run.fixture.workspaceID, run.fixture.sessionID, insightID, hash); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = tx.Exec(run.ctx, `UPDATE research_artifact_passport SET current_version=1 WHERE id=$1::uuid`, insightID); err != nil {
+	var artifactVersionID string
+	if err = tx.QueryRow(run.ctx, `SELECT id::text FROM research_artifact_version WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND artifact_id=$3::uuid AND version=1`, run.fixture.workspaceID, run.fixture.sessionID, insightID).Scan(&artifactVersionID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(run.ctx, `INSERT INTO research_insight_version(id,workspace_id,session_id,insight_id,revision,artifact_version_id,tier,catalog_summary,brief_summary,objective,conclusion,content,status,content_hash)
@@ -44,6 +45,23 @@ func seedV6InsightArtifactVersion(t *testing.T, run *transactionRecoveryRun, suf
 
 func TestV6AbsorptionSingleSuccessorRace(t *testing.T) {
 	run := newTransactionRecoveryRun(t, "V6 absorption race")
+	t.Cleanup(func() {
+		ctx := context.Background()
+		if _, err := run.pool.Exec(ctx, `ALTER TABLE research_node_absorption DISABLE TRIGGER USER`); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := run.pool.Exec(ctx, `DELETE FROM research_node_absorption WHERE workspace_id=$1::uuid`, run.fixture.workspaceID); err != nil {
+			t.Error(err)
+		}
+		if _, err := run.pool.Exec(ctx, `ALTER TABLE research_node_absorption ENABLE TRIGGER USER`); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := run.pool.Exec(ctx, `DELETE FROM research_integration_round WHERE workspace_id=$1::uuid`, run.fixture.workspaceID); err != nil {
+			t.Error(err)
+		}
+	})
 	input := seedV6InsightArtifactVersion(t, run, "1")
 	left := seedV6InsightArtifactVersion(t, run, "2")
 	right := seedV6InsightArtifactVersion(t, run, "3")

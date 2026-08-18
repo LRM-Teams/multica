@@ -18,7 +18,16 @@ var spawnDetachedComputerBinary = startDetachedComputerBinary
 var probeDetachedSuccessorAttestation = func(profile string) (computer.MachineAttestation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	return computer.ProbeMachineAttestation(ctx, computer.HealthPort(profile))
+	health := computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile)))
+	if health["status"] != "running" {
+		return computer.MachineAttestation{}, fmt.Errorf("detached successor is not ready")
+	}
+	pid, ok := health["pid"].(float64)
+	if !ok {
+		return computer.MachineAttestation{}, fmt.Errorf("detached successor health did not include pid")
+	}
+	version, _ := health["cli_version"].(string)
+	return computer.MachineAttestation{ServicePID: int(pid), ComputerVersion: version}, nil
 }
 
 // startDetachedComputerBinary launches the committed target as the next Computer
@@ -34,7 +43,7 @@ func startDetachedComputerBinary(binaryPath, profile, expectedVersion string) er
 	deadline := time.Now().Add(detachedSuccessorPortReleaseTimeout)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		live := computer.Alive(computer.ProbeHealth(ctx, computer.HealthPort(profile)))
+		live := computer.Alive(computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile))))
 		cancel()
 		if !live {
 			break
@@ -78,7 +87,7 @@ func startDetachedComputerBinary(binaryPath, profile, expectedVersion string) er
 	readyDeadline := time.Now().Add(detachedSuccessorReadyTimeout)
 	for time.Now().Before(readyDeadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
+		health := computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile)))
 		cancel()
 		if health["status"] == "running" {
 			return acceptReadyDetachedCandidate(child, profile, expectedVersion, health)

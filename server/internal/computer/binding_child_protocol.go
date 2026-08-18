@@ -23,12 +23,9 @@ type BindingChildBootstrap struct {
 	Environment        string `json:"environment"`
 	Profile            string `json:"profile,omitempty"`
 	ServerBaseURL      string `json:"server_base_url"`
-	HostControlURL     string `json:"host_control_url"`
+	ServiceEndpoint    string `json:"service_endpoint"`
 	BindingsRoot       string `json:"bindings_root"`
 	WorkspacesRoot     string `json:"workspaces_root"`
-	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
-	// longer a supported direct self-upgrade source.
-	PreviousPackageUpgradeBootstrap bool `json:"previous_package_upgrade_bootstrap,omitempty"`
 }
 
 func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {
@@ -37,7 +34,7 @@ func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {
 	b.Environment = strings.TrimSpace(b.Environment)
 	b.Profile = strings.TrimSpace(b.Profile)
 	b.ServerBaseURL = strings.TrimSpace(b.ServerBaseURL)
-	b.HostControlURL = strings.TrimSpace(b.HostControlURL)
+	b.ServiceEndpoint = strings.TrimSpace(b.ServiceEndpoint)
 	b.BindingsRoot = strings.TrimSpace(b.BindingsRoot)
 	b.WorkspacesRoot = strings.TrimSpace(b.WorkspacesRoot)
 	if b.ProtocolVersion != BindingChildProtocolVersion {
@@ -65,9 +62,8 @@ func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return BindingChildBootstrap{}, fmt.Errorf("Binding child server base URL is invalid")
 	}
-	hostControl, err := url.Parse(b.HostControlURL)
-	if err != nil || hostControl.Scheme != "http" || hostControl.Hostname() != "127.0.0.1" || hostControl.Port() == "" {
-		return BindingChildBootstrap{}, fmt.Errorf("Binding child Host control URL is invalid")
+	if !validLocalControlEndpoint(b.ServiceEndpoint) {
+		return BindingChildBootstrap{}, fmt.Errorf("Binding runner service endpoint is invalid")
 	}
 	if b.BindingsRoot == "" {
 		return BindingChildBootstrap{}, errors.New("Binding child Bindings root is required")
@@ -85,7 +81,7 @@ type BindingChildReady struct {
 	WorkspaceID      string `json:"workspace_id"`
 	RunnerGeneration int64  `json:"runner_generation"`
 	PID              int    `json:"pid"`
-	ControlURL       string `json:"control_url"`
+	RunnerEndpoint   string `json:"runner_endpoint"`
 }
 
 func ReadBindingChildBootstrap(r io.Reader) (BindingChildBootstrap, error) {
@@ -125,18 +121,13 @@ func WriteBindingChildReady(w io.Writer, ready BindingChildReady) error {
 	if strings.TrimSpace(ready.WorkspaceID) == "" || ready.RunnerGeneration < 1 || ready.PID < 1 {
 		return errors.New("Binding child ready identity is incomplete")
 	}
-	if !validBindingChildControlURL(ready.ControlURL) {
-		return errors.New("Binding child Ready control URL is invalid")
+	if !validLocalControlEndpoint(ready.RunnerEndpoint) {
+		return errors.New("Binding runner Ready endpoint is invalid")
 	}
 	if err := json.NewEncoder(w).Encode(ready); err != nil {
 		return fmt.Errorf("encode Binding child ready: %w", err)
 	}
 	return nil
-}
-
-func validBindingChildControlURL(raw string) bool {
-	controlURL, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && controlURL.Scheme == "http" && controlURL.Hostname() == "127.0.0.1" && controlURL.Port() != ""
 }
 
 func readBindingChildReady(r io.Reader) (BindingChildReady, error) {

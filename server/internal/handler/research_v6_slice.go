@@ -62,7 +62,11 @@ func (h *Handler) GetResearchV6ProjectionSlice(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "depth must be 1")
 		return
 	}
-	page, err := service.ProjectionV6Slice(r.Context(), researchrun.V6ProjectionSliceRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: strings.TrimSpace(chi.URLParam(r, "runId")), SnapshotID: strings.TrimSpace(r.URL.Query().Get("snapshot_id")), RootNodeID: strings.TrimSpace(r.URL.Query().Get("root")), Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), Depth: depth, Limit: 1000})
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
+	page, err := service.ProjectionV6Slice(r.Context(), researchrun.V6ProjectionSliceRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), SnapshotID: strings.TrimSpace(r.URL.Query().Get("snapshot_id")), RootNodeID: strings.TrimSpace(r.URL.Query().Get("root")), Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), Depth: depth, Limit: 1000})
 	if errors.Is(err, researchrun.ErrProjectionResyncRequired) {
 		writeError(w, http.StatusConflict, "projection snapshot expired; resync required")
 		return

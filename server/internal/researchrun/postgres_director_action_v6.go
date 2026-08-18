@@ -49,7 +49,7 @@ func (s *PostgresStore) ApplyReceivedV6DirectorProposals(ctx context.Context, li
 		err = tx.QueryRow(ctx, `SELECT sub.id::text,sub.envelope FROM research_v6_work_submission sub
 			JOIN research_work_item w ON w.id=sub.work_item_id
 			WHERE (sub.status='received' OR (sub.status='processing' AND sub.updated_at<now()-interval '1 minute'))
-			AND sub.contract_kind='director_action_proposal' AND w.client_key LIKE 'director-cycle:steering:%'
+			AND sub.contract_kind='director_action_proposal' AND w.client_key LIKE 'director-cycle:%'
 			ORDER BY sub.created_at,sub.id FOR UPDATE OF sub SKIP LOCKED LIMIT 1`).Scan(&submissionID, &envelope)
 		if errors.Is(err, pgx.ErrNoRows) {
 			_ = tx.Rollback(ctx)
@@ -109,6 +109,11 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 	if err := json.Unmarshal(envelope, &proposal); err != nil {
 		return fmt.Errorf("%w: director proposal", ErrInvalidContract)
 	}
+	for _, value := range []string{proposal.WorkspaceID, proposal.RunID, proposal.WorkItemID, proposal.AttemptID, proposal.ManifestID, proposal.DirectorAssignmentID, proposal.BriefID} {
+		if !validV6ActionUUID(value) {
+			return fmt.Errorf("%w: director proposal UUID", ErrInvalidContract)
+		}
+	}
 	order, err := validateV6DirectorActionDAG(proposal.Actions)
 	if err != nil {
 		return err
@@ -151,9 +156,13 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 			if action.PayloadSchema != "no_op.v1" || json.Unmarshal(action.Payload, &payload) != nil {
 				return ErrInvalidContract
 			}
-			_, err = s.ApplyV6SteeringAssessment(ctx, ApplyV6SteeringAssessmentInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID,
-				MessageID: payload.MessageID, DirectorCycleID: cycleID, AssessmentKind: "no_op", Interpretation: action.Reason,
-				Reason: payload.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: stateVersion, AcceptedActionIDs: []string{action.ActionID}})
+			if payload.MessageID != "" {
+				_, err = s.ApplyV6SteeringAssessment(ctx, ApplyV6SteeringAssessmentInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID,
+					MessageID: payload.MessageID, DirectorCycleID: cycleID, AssessmentKind: "no_op", Interpretation: action.Reason,
+					Reason: payload.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: stateVersion, AcceptedActionIDs: []string{action.ActionID}})
+			} else {
+				err = s.recordV6DirectorNoOp(ctx, proposal, cycleID, action, stateVersion, payload.Reason)
+			}
 		case "record_decision":
 			if action.PayloadSchema != "steering_assessment.v1" {
 				return ErrInvalidContract
@@ -181,6 +190,41 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 				AcceptedActionIDs: []string{action.ActionID}, RevisedGoal: payload.RevisedGoal, RevisedScope: payload.RevisedScope,
 				RevisedSourcePolicy: payload.RevisedSourcePolicy, RevisedLimits: payload.RevisedLimits, RevisedAudience: payload.RevisedAudience,
 				RevisedFreshness: payload.RevisedFreshness, RevisedLanguage: payload.RevisedLanguage})
+		case "create_agent":
+			err = s.executeV6CreateAgentAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_work_item", "create_task":
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_match", "open_discussion", "create_dispute", "create_integration", "create_review":
+			collaborationKind := map[string]string{"create_match": "match", "open_discussion": "discussion", "create_dispute": "resolve_conflict", "create_integration": "integration", "create_review": "review"}[action.Kind]
+			action.Payload = withV6ActionKind(action.Payload, collaborationKind)
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_branch":
+			err = s.executeV6CreateBranchAction(ctx, proposal, cycleID, action, stateVersion)
+		case "create_report":
+			err = s.executeV6CreateReportAction(ctx, proposal, cycleID, action, goalVersion, stateVersion)
+		case "revise_report", "reject_report", "publish_report":
+			err = s.executeV6ReportReviewAction(ctx, proposal, cycleID, action, stateVersion)
+		case "challenge_node", "terminate_node":
+			err = s.executeV6NodeDecisionAction(ctx, proposal, action, stateVersion)
+		case "assign_steward":
+			err = s.executeV6AssignStewardAction(ctx, proposal, action, stateVersion)
+		case "revise_goal":
+			err = s.executeV6ReviseGoalAction(ctx, proposal, action, stateVersion)
+		case "adjudicate_discussion":
+			action.Payload = withV6ActionKind(action.Payload, "discussion")
+			err = s.executeV6CreateWorkAction(ctx, proposal, cycleID, action, stateVersion)
+		case "cancel_work_item", "retry_work_item", "reassign_work_item":
+			err = s.executeV6WorkLifecycleAction(ctx, proposal, action, stateVersion)
+		case "update_agent", "archive_agent":
+			err = s.executeV6AgentLifecycleAction(ctx, proposal, cycleID, action, stateVersion)
+		case "update_branch", "pause_branch", "terminate_branch", "split_branch", "merge_branch":
+			if action.Kind == "split_branch" {
+				err = s.executeV6SplitBranchAction(ctx, proposal, cycleID, action, stateVersion)
+			} else {
+				err = s.executeV6BranchLifecycleAction(ctx, proposal, action, stateVersion)
+			}
+		case "pause_run", "resume_run", "complete_run", "fail_run":
+			err = s.executeV6RunLifecycleAction(ctx, proposal, action, stateVersion)
 		default:
 			return fmt.Errorf("%w: unsupported Director action %q", ErrInvalidContract, action.Kind)
 		}
@@ -196,9 +240,6 @@ func (s *PostgresStore) executeV6DirectorProposal(ctx context.Context, submissio
 func validateV6DirectorActionDAG(actions []v6DirectorAction) ([]int, error) {
 	if len(actions) == 0 {
 		return nil, ErrInvalidContract
-	}
-	if len(actions) != 1 {
-		return nil, fmt.Errorf("%w: steering Director cycle requires one complete assessment", ErrInvalidContract)
 	}
 	if len(actions) > 1 {
 		for _, a := range actions {

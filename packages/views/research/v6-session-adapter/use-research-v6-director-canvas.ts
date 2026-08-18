@@ -168,6 +168,9 @@ export function useResearchV6DirectorCanvas({
       ?.getClient()
       .getState()
       .views.get(firstPage.slice_key);
+    // Keep absorbed inputs long enough for the adapter to project their
+    // immutable assimilation lineage onto the visible successor. The adapter
+    // owns the final default-visibility filter.
     const nodes: ResearchV6DirectorProjectionNode[] = liveView
       ? [...liveView.nodes.values()]
       : defaultPages.flatMap((page) => page.nodes);

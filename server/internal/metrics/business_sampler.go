@@ -131,6 +131,7 @@ type BusinessSamplerCollector struct {
 	descResearchFrontier            *prometheus.Desc
 	descResearchBacklog             *prometheus.Desc
 	descResearchCancellationBacklog *prometheus.Desc
+	descResearchV6Health            *prometheus.Desc
 
 	mu       sync.Mutex
 	snapshot *samplerSnapshot
@@ -240,6 +241,10 @@ func NewBusinessSamplerCollector(opts *BusinessSamplerOptions) *BusinessSamplerC
 			"multica_research_cancellation_backlog",
 			"Research attempt cancellations awaiting durable inbox cleanup, including oldest pending age.",
 			[]string{"measure"}, nil),
+		descResearchV6Health: prometheus.NewDesc(
+			"multica_research_v6_health",
+			"Operational conditions for persisted V6 runs. Labels are a closed, operator-actionable set.",
+			[]string{"condition"}, nil),
 	}
 	c.refreshFn = c.refreshFromDB
 	return c
@@ -277,6 +282,7 @@ func (c *BusinessSamplerCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.descResearchFrontier,
 		c.descResearchBacklog,
 		c.descResearchCancellationBacklog,
+		c.descResearchV6Health,
 	} {
 		ch <- d
 	}
@@ -402,6 +408,9 @@ func (c *BusinessSamplerCollector) emit(ch chan<- prometheus.Metric, snap *sampl
 		c.descResearchCancellationBacklog, prometheus.GaugeValue, snap.researchCancellationPending, "pending")
 	ch <- prometheus.MustNewConstMetric(
 		c.descResearchCancellationBacklog, prometheus.GaugeValue, snap.researchCancellationOldestAge, "oldest_age_seconds")
+	for _, condition := range []string{"awaiting_director", "director_unavailable", "lost_attempt", "report_object_missing"} {
+		ch <- prometheus.MustNewConstMetric(c.descResearchV6Health, prometheus.GaugeValue, snap.researchV6Health[condition], condition)
+	}
 }
 
 // knownSourceLabels enumerates the source values we always emit a zero for.
@@ -447,7 +456,7 @@ func normalizeResearchRunStatus(raw string) string {
 
 func normalizeResearchOrchestratorVersion(raw string) string {
 	switch raw {
-	case "research-run-v1", "research-run-v2", "research-run-v3", "research-run-v4", "research-run-v5", "legacy":
+	case "research-run-v1", "research-run-v2", "research-run-v3", "research-run-v4", "research-run-v5", "research-run-v6", "legacy":
 		return raw
 	default:
 		return "other"
@@ -546,6 +555,7 @@ type samplerSnapshot struct {
 	researchProjectionOldestAge   float64
 	researchCancellationPending   float64
 	researchCancellationOldestAge float64
+	researchV6Health              map[string]float64
 
 	workspaceTotal      float64
 	workspaceTotalKnown bool
@@ -569,6 +579,7 @@ func newSamplerSnapshot(t time.Time) *samplerSnapshot {
 		researchTasks:    map[researchMetricKey]float64{},
 		researchAttempts: map[researchMetricKey]float64{},
 		researchEvidence: map[researchMetricKey]float64{},
+		researchV6Health: map[string]float64{},
 	}
 }
 

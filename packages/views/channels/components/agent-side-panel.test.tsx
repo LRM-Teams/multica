@@ -266,7 +266,7 @@ const RESOURCES = {
     profile: "Profile",
     activity: "Activity",
     reminders: "Reminders",
-    files: "Files",
+    files: "Workspace",
     usage: "Usage",
     config: "Config",
   },
@@ -514,7 +514,7 @@ describe("AgentSidePanel", () => {
     renderPanel("user-other");
     expect(screen.getAllByText("Atlas").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
   });
 
   it("shows the current dynamic status under the agent handle", () => {
@@ -641,7 +641,7 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("Activity content")).toBeInTheDocument();
     // Files used to require a separate, stricter condition. One gate now covers
     // Activity / Reminders / Files / Usage — a split here would be the bug.
-    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace" })).toBeInTheDocument();
   });
 
   it("does not advertise Activity when the activity decision denies", () => {
@@ -666,7 +666,7 @@ describe("AgentSidePanel", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
   });
 
   // #656 — Reminders reuses the exact same visibility gate as Activity per
@@ -725,7 +725,7 @@ describe("AgentSidePanel", () => {
     expect(screen.getByRole("button", { name: "Profile" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reminders" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Usage" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
@@ -792,7 +792,7 @@ describe("AgentSidePanel", () => {
     expect(pageClose).toHaveAccessibleName("Close panel");
     expect(container.querySelector("aside")).toHaveClass("min-w-0", "w-full");
     expect(container.querySelector(".overflow-y-auto")).toHaveClass("min-w-0");
-    for (const tab of ["Profile", "Activity", "Reminders", "Files"]) {
+    for (const tab of ["Profile", "Activity", "Reminders", "Workspace"]) {
       expect(screen.getByRole("button", { name: tab })).toHaveClass(
         "min-h-11",
         "flex-1",

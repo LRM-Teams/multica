@@ -489,28 +489,6 @@ function AgentProfileTabContent({
           </div>
         </div>
 
-        <AgentProfileSkills
-          globalSkills={profileSkills?.global ?? []}
-          workspaceSkills={profileSkills?.workspace ?? []}
-        />
-
-        <RolesDialog
-          open={roleDialogOpen}
-          onOpenChange={setRoleDialogOpen}
-          mode="select"
-          value={agent.workspace_role}
-          allowedRoles={["member", "admin"]}
-          saving={roleSaving}
-          onSave={(role) => {
-            if (role === "owner") {
-              return Promise.resolve();
-            }
-            return updateWorkspaceRole(role);
-          }}
-          title={t(($) => $.profile_card.role_dialog_title)}
-          subtitle={t(($) => $.profile_card.role_dialog_subtitle)}
-        />
-
         {/* LRM-470 — Runtime Config is its own section (not Info misc rows).
             LRM-1351 — summary always shows effective config; edits go through
             a centered Dialog so multi-field changes restart at most once. */}
@@ -554,6 +532,27 @@ function AgentProfileTabContent({
           />
         </section>
 
+        <AgentProfileSkills
+          globalSkills={profileSkills?.global ?? []}
+          workspaceSkills={profileSkills?.workspace ?? []}
+        />
+
+        <RolesDialog
+          open={roleDialogOpen}
+          onOpenChange={setRoleDialogOpen}
+          mode="select"
+          value={agent.workspace_role}
+          allowedRoles={["member", "admin"]}
+          saving={roleSaving}
+          onSave={(role) => {
+            if (role === "owner") {
+              return Promise.resolve();
+            }
+            return updateWorkspaceRole(role);
+          }}
+          title={t(($) => $.profile_card.role_dialog_title)}
+          subtitle={t(($) => $.profile_card.role_dialog_subtitle)}
+        />
         {/* Memory growth is its own panel block, kept separated by the same
             thin divider used elsewhere in the profile. */}
         {agent.memory_growth ? (

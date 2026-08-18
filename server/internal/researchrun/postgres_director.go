@@ -26,6 +26,26 @@ func (s *PostgresStore) AssignV6Director(ctx context.Context, in AssignV6Directo
 	if orchestrator != OrchestratorVersionV6 {
 		return V6DirectorAssignment{}, ErrUnsupportedVersion
 	}
+	key := "v6-director-assigned:" + in.ClientRequestID
+	var replay V6DirectorAssignment
+	var replayActor, replayAgent, replayReason string
+	err = tx.QueryRow(ctx, `SELECT a.id::text,a.workspace_id::text,a.session_id::text,a.director_agent_id::text,a.status,a.reason,a.generation,
+		(e.payload->>'state_version')::bigint,COALESCE(e.actor_id::text,''),e.payload->>'agent_id',COALESCE(e.payload->>'reason','')
+		FROM research_run_event e
+		JOIN research_director_assignment a ON a.id=(e.payload->>'assignment_id')::uuid
+		WHERE e.workspace_id=$1::uuid AND e.session_id=$2::uuid AND e.idempotency_key=$3 AND e.event_type='v6_director_assigned'`, in.WorkspaceID, in.RunID, key).Scan(
+		&replay.ID, &replay.WorkspaceID, &replay.RunID, &replay.AgentID, &replay.Status, &replay.Reason, &replay.Generation,
+		&replay.StateVersion, &replayActor, &replayAgent, &replayReason,
+	)
+	if err == nil {
+		if replayActor != in.UserID || replayAgent != in.AgentID || replayReason != strings.TrimSpace(in.Reason) {
+			return V6DirectorAssignment{}, ErrResultConflict
+		}
+		return replay, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return V6DirectorAssignment{}, err
+	}
 	if currentVersion != in.ExpectedStateVersion {
 		return V6DirectorAssignment{}, ErrWorkItemChanged
 	}
@@ -65,7 +85,7 @@ func (s *PostgresStore) AssignV6Director(ctx context.Context, in AssignV6Directo
 			return V6DirectorAssignment{}, err
 		}
 	}
-	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_director_assigned", "v6-director-assigned:"+in.ClientRequestID, "user", in.UserID, map[string]any{"assignment_id": assignment.ID, "agent_id": in.AgentID, "generation": generation, "state_version": assignment.StateVersion}); err != nil {
+	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_director_assigned", key, "user", in.UserID, map[string]any{"assignment_id": assignment.ID, "agent_id": in.AgentID, "reason": assignment.Reason, "generation": generation, "state_version": assignment.StateVersion}); err != nil {
 		return V6DirectorAssignment{}, err
 	}
 	if err = s.commitResearchTx(ctx, txOpV6DirectorAssign, tx); err != nil {

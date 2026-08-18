@@ -205,8 +205,9 @@ make start-worktree     # Start using .env.worktree
   name; do not accept or emit multiple spellings for one field.
 - Existing messages with snake_case JSON fields (`request_id`, `runtime_id`,
   `agent_id`) are legacy wire contracts. Preserve their names rather than
-  changing them opportunistically; migrate them only as an explicit protocol
-  version change covering both daemon and computer.
+  changing them opportunistically. Migrate them incrementally, message by
+  message, with the daemon and computer changes kept in the same migration;
+  do not leave a field with two supported spellings as its long-term contract.
 - When integrating an external protocol such as Raft, keep the Go field names
   idiomatic and match the external JSON contract at the message boundary.
 

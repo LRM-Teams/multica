@@ -118,9 +118,14 @@ const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 const MESSAGE_SHELL_CLASS = "px-1";
 
 /**
- * LRM-1331 — hover action bar + geometry reserves only on fine pointer AND
- * ≥640px. Narrow fine windows fall back to the coarse long-press / context
- * menu path (360px + 162px reserve left ~9 CJK chars — not worth it).
+ * LRM-1331 — the hover action bar shows only on fine pointer AND ≥640px.
+ * Narrow fine windows fall back to the coarse long-press / context menu path.
+ *
+ * The bar is a pure hover overlay: it reserves no space in the document flow.
+ * The permanent width reserves (author-row `pr`, continuation float, leading
+ * quote-card inset) are gone — they squeezed the message body at all times to
+ * protect a bar that is only visible while hovering. Its solid chrome keeps the
+ * icons readable over the text it covers, exactly like Slack / Discord.
  *
  * LRM-1360: the gate MUST be written as a literal class on every candidate —
  * `[@media(pointer:fine)_and_(min-width:640px)]:…`. Tailwind v4 extracts
@@ -140,10 +145,10 @@ const MESSAGE_SHELL_CLASS = "px-1";
  *
  * LRM-1346 removed all three segments' visible edges (Frank lock ①), so there
  * is no per-segment class left to compute — grouping now shows up only in the
- * `data-group-start` / `data-group-end` attributes and in the LRM-1331 row
- * geometry (author-row reserve vs. continuation float). The corner radii went
- * with the borders: with the shell painted in the pane's own `bg-background`
- * they rounded nothing visible.
+ * `data-group-start` / `data-group-end` attributes and in where the hover bar
+ * anchors (shell top edge on a lead row vs. row boundary on a compact
+ * continuation). The corner radii went with the borders: with the shell painted
+ * in the pane's own `bg-background` they rounded nothing visible.
  */
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
@@ -605,7 +610,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const authorHonor =
     message.type === "user" && message.author_id ? getMemberHonor(message.author_id) : undefined;
   // LRM-1126: author name never wraps; role/desc truncates first, time stays
-  // shrink-0. Hover action bar occupies a reserved ~184px fine-pointer gutter.
+  // shrink-0. The hover action bar overlays this row — it reserves no gutter.
   const nameLabel = (
     <ActorStyledName
       displayName={displayName}
@@ -909,8 +914,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           right band that still read as Frank's "半屏空白" after the PanelGroup
           shell fix (#1154). Soft wrap stays on `.message-surface`.
           LRM-1331: drop the shell-wide fine-pointer `pr-[136px]` gutter (it ate
-          10–47% of body width and still failed to clear the 154px bar). Reserves
-          move to the author row / continuation float / leading-card inset below.
+          10–47% of body width and still failed to clear the 154px bar). No
+          reserve replaces it — the action bar is a pure hover overlay.
           LRM-1227/G: this element is also the bubble shell — see
           MESSAGE_SHELL_CLASS. LRM-1346 took its visible border away (lock ①);
           the group segments survive only as data attributes. */}
@@ -928,12 +933,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         {showAuthor && (
           <div
             data-testid="message-author-row"
-            className={cn(
-              "mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]",
-              // LRM-1331 §2: reserve only on the author line (162 = 154 bar + 8).
-              // LRM-1360: literal gate class — see the note on the gate above.
-              "[@media(pointer:fine)_and_(min-width:640px)]:pr-[162px]",
-            )}
+            className="mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]"
           >
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
@@ -976,8 +976,13 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             data-testid="message-action-bar"
             data-message-action-surface="true"
             className={cn(
-              // LRM-1126: solid popover chrome so icons never punch through body
-              // text. Overlay — not a document-flow gutter (LRM-1331).
+              // Pure hover overlay (Slack/Discord convention): the bar only
+              // appears on group-hover / group-focus-within, and content
+              // geometry is NEVER reserved for it. Hovering may cover the tail
+              // of the row's top line — the accepted tradeoff for giving the
+              // body its full width at rest.
+              // LRM-1126: solid popover chrome (bg-popover + border-line-strong
+              // + shadow-sm) so icons never punch through the text underneath.
               // LRM-1227/D2 chrome kept; bar measured ~154×34 with 5 keys
               // (reaction, copy, create-note, quote, thread; edit is dormant).
               // LRM-1331: gate on fine+≥640 — narrow fine uses long-press menu.
@@ -993,10 +998,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               // Lead row: ride the shell's top edge (bar mid-line == shell top
               // line). D2 froze `top-0 -translate-y-1/2` measured from the shell;
               // the bar is positioned against the row, whose `py-1` offsets the
-              // shell by 4px — hence `top-1`, same resulting geometry.
-              // C2: inside a joined group a compact row has no edge to ride, so
-              // the bar sits fully inside its own row and still clears the text.
-              compact ? "top-0.5" : "top-1 -translate-y-1/2",
+              // shell by 4px — hence `top-1`, same resulting geometry. The author
+              // row is a left-aligned flex line, so its right side is empty.
+              // Compact row: straddle the row's top boundary (half of the bar
+              // spills over the previous row) instead of sitting fully over the
+              // first text line, so the least possible content is covered.
+              compact ? "top-0 -translate-y-1/2" : "top-1 -translate-y-1/2",
             )}
           >
             {onReact && (
@@ -1092,12 +1099,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               isContentCollapsed && "overflow-hidden",
               isContentCollapsed ? MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",
-              // LRM-1331 §3: compact continuations — first-line float safety zone
-              // (36×158) instead of shell padding. Skip when a leading card owns
-              // its own inset (§4); block boxes slide under floats.
-              compact &&
-                !(message.quote || message.quote_message_id) &&
-                "[@media(pointer:fine)_and_(min-width:640px)]:before:float-right [@media(pointer:fine)_and_(min-width:640px)]:before:h-[36px] [@media(pointer:fine)_and_(min-width:640px)]:before:w-[158px] [@media(pointer:fine)_and_(min-width:640px)]:before:content-['']",
             )}
             data-testid="message-body"
             data-collapsed={isContentCollapsed ? "true" : undefined}
@@ -1110,12 +1111,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 currentUserId={currentUserId}
                 ownName={ownName}
                 onJump={onScrollTo}
-                // LRM-1331 §4: leading card inset on compact rows (bar overlays body).
-                className={
-                  compact
-                    ? "[@media(pointer:fine)_and_(min-width:640px)]:pr-[158px]"
-                    : undefined
-                }
               />
             )}
             <MessageBody

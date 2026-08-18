@@ -107,6 +107,13 @@ export function adaptResearchV6DirectorCanvas(
           branch_ids: node.branch_ids,
           projection_state: node.state,
           projection_tier: node.tier,
+          // Keep the Goal root semantically distinct from an XXL result. The
+          // legacy graph still uses XXL geometry for the largest circle, but
+          // downstream surfaces can now render the canonical Goal role.
+          semantic_role:
+            node.tier === "GOAL" || node.kind.toLowerCase() === "goal"
+              ? "goal"
+              : undefined,
           absorbed: node.absorbed,
           terminal: node.terminal,
           expandable: node.expandable,

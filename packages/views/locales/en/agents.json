@@ -632,7 +632,7 @@
     "avatar_err_dimensions": "Image must be at least 256×256 pixels."
   },
   "restart_modal": {
-    "trigger": "Restart…",
+    "trigger": "Restart/Reset",
     "title": "Restart agent",
     "description": "Choose how to restart {{name}}. Its identity, configuration, chat history, and Issues are always kept.",
     "tier": {

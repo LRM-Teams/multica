@@ -622,7 +622,7 @@
     "avatar_err_dimensions": "图片尺寸至少为 256×256 像素。"
   },
   "restart_modal": {
-    "trigger": "重启…",
+    "trigger": "重启/重置",
     "title": "重启智能体",
     "description": "选择如何重启 {{name}}。它的身份、配置、聊天历史和 Issue 始终保留。",
     "tier": {

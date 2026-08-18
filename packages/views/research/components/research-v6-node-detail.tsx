@@ -84,6 +84,10 @@ export function ResearchV6NodeDetail({
         ...detail.outgoing.map((edge) => ({ edge, direction: "outgoing" as const })),
       ]
     : [];
+  const relationLabel = (kind: string) => {
+    const labels = t(($) => $.v6_detail.relation_kind);
+    return labels[kind as keyof typeof labels] ?? kind;
+  };
 
   return (
     <section
@@ -284,17 +288,7 @@ export function ResearchV6NodeDetail({
                           t(($) => $.v6_detail.related_node_unavailable)}
                       </span>
                       <span className="block truncate text-[10px] text-muted-foreground">
-                        {t(($) =>
-                          $.v6_detail.relation_kind[
-                            edge.kind as
-                              | "derived_from"
-                              | "absorbed_into"
-                              | "produced_by"
-                              | "belongs_to"
-                              | "challenges"
-                              | "collapsed_path"
-                          ],
-                        )}
+                        {relationLabel(edge.kind)}
                       </span>
                     </span>
                     {relatedNode ? (

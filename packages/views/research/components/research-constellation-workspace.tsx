@@ -563,6 +563,18 @@ export function ResearchConstellationWorkspace({
       setRailMode("detail");
 
       if (projectionSource === "v6") {
+        const v6Node = typedGraph?.nodes.find((node) => node.id === nodeId);
+        const v6Level = (v6Node?.level || "").toLowerCase();
+        if (v6Level === "s" && v6Node?.actor_agent_id) {
+          setRailOpen(false);
+          openAgentInspector(v6Node.actor_agent_id);
+          return;
+        }
+        if (v6Level === "l" || v6Level === "xl" || v6Level === "xxl") {
+          if (isMobile) setRailOpen(false);
+          openReport();
+          return;
+        }
         setRailOpen(true);
         closeOverlay();
         return;

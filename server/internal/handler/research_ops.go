@@ -414,6 +414,11 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "research session not found")
 		return
 	}
+	var orchestratorVersion string
+	if err = h.DB.QueryRow(r.Context(), `SELECT orchestrator_version FROM research_session WHERE workspace_id=$1 AND id=$2`, wsUUID, sessionID).Scan(&orchestratorVersion); err != nil {
+		writeError(w, http.StatusNotFound, "research session not found")
+		return
+	}
 	var req postResearchMessageRequest
 	if !decodeResearchJSON(w, r, &req) {
 		return
@@ -430,7 +435,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ClientRequestID == "" {
-		if session.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+		if orchestratorVersion == researchrun.OrchestratorVersionV6 {
 			writeError(w, http.StatusBadRequest, "client_request_id is required")
 			return
 		}

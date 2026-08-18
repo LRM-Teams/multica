@@ -90,8 +90,8 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 			launch_id, client_sequence, producer_fact_id, entry_position,
 			entry_kind, entry_body, observed_at
 		) VALUES ($1, $2, $3, 'daemon-summary', 'instance-summary',
-			'launch-summary', 1, $4, 0, 'narrative',
-			'{"text":"payment required","activity_kind":"error","detail_kind":"runtime_error"}'::jsonb,
+			'launch-summary', 1, $4, 0, 'status',
+			'{"activity":"error","detail":"payment required","detailKind":"runtime_error"}'::jsonb,
 			now())`, testWorkspaceID, errorAgentID, handlerTestRuntimeID(t), "summary-error-entry-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}

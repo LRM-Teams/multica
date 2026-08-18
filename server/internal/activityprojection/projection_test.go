@@ -111,7 +111,7 @@ func TestProjectTimelineEntryUsesGenericFallbackAndBoundsText(t *testing.T) {
 		t.Fatalf("unknown entry = %+v", unknown)
 	}
 	long := strings.Repeat("x", maxTimelineBodyBytes+1)
-	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"` + long + `"}`)}, Summary{Label: "Working...", Tone: "info"})
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "status", Body: []byte(`{"detail":"` + long + `","detailKind":"model_response_started"}`)}, Summary{Label: "Working...", Tone: "info"})
 	if row.BodyKind != "none" || len(row.Subtext) != maxTimelineBodyBytes || row.Body != "" {
 		t.Fatalf("bounded row = %+v", row)
 	}
@@ -119,28 +119,28 @@ func TestProjectTimelineEntryUsesGenericFallbackAndBoundsText(t *testing.T) {
 
 func TestProjectTimelineEntryUsesEventLocalLifecycleInsteadOfLatestSnapshot(t *testing.T) {
 	latest := Summary{Label: "Online", Tone: "success", Visibility: "visible"}
-	message := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Message received","detail_kind":"message_received"}`)}, latest)
+	message := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "status", Body: []byte(`{"detail":"Message received","detailKind":"message_received"}`)}, latest)
 	if message.Title != "Working" || message.Subtext != "Message received" || message.Tone != "warning" || message.BodyKind != "none" {
 		t.Fatalf("message row = %+v", message)
 	}
-	errorRow := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Runtime error","detail_kind":"runtime_error"}`)}, latest)
+	errorRow := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "status", Body: []byte(`{"detail":"Runtime error","detailKind":"runtime_error"}`)}, latest)
 	if errorRow.Title != "Error" || errorRow.Subtext != "Runtime error" || errorRow.Tone != "error" {
 		t.Fatalf("error row = %+v", errorRow)
 	}
-	idle := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Idle","detail_kind":"idle"}`)}, Summary{Label: "Error", Tone: "error"})
+	idle := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "status", Body: []byte(`{"detail":"Idle","detailKind":"idle"}`)}, Summary{Label: "Error", Tone: "error"})
 	if idle.Title != "Idle" || idle.Subtext != "Idle" || idle.Tone != "success" {
 		t.Fatalf("idle row = %+v", idle)
 	}
 }
 
 func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
-	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"pnpm test","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "tool_start", Body: []byte(`{"toolName":"bash","toolInput":"pnpm test"}`)}, Summary{Label: "Online", Tone: "success"})
 	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "running" || row.BodyKind != "command" {
 		t.Fatalf("command row = %+v, want title Running command with the command as subtext", row)
 	}
-	// The generic label narrative (no command in the tool input) must not
+	// The generic label summary (no command in the tool input) must not
 	// echo the title as its own subtext.
-	plain := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Running command","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
+	plain := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "tool_start", Body: []byte(`{"toolName":"bash","toolInput":""}`)}, Summary{Label: "Online", Tone: "success"})
 	if plain.Title != "Running command" || plain.Subtext != "" || plain.Tone != "running" || plain.BodyKind != "command" {
 		t.Fatalf("generic command row = %+v, want no subtext", plain)
 	}
@@ -154,23 +154,23 @@ func TestProjectTimelineEntryShowsCompactionLifecycleUnderWorking(t *testing.T) 
 		wantSubtext string
 	}{
 		{
-			body:        `{"text":"Compacting context","activity_kind":"working","detail_kind":"compacting_context"}`,
+			body:        `{"detail":"Compacting context","detailKind":"compacting_context"}`,
 			wantTitle:   "Working",
 			wantSubtext: "Compacting context",
 		},
 		{
-			body:        `{"text":"Context compaction finished","activity_kind":"working","detail_kind":"compaction_finished"}`,
+			body:        `{"detail":"Context compaction finished","detailKind":"compaction_finished"}`,
 			wantTitle:   "Working",
 			wantSubtext: "Context compaction finished",
 		},
 		{
-			body:        `{"text":"Context compaction still running; no finish event observed","activity_kind":"working","detail_kind":"compaction_stale"}`,
+			body:        `{"detail":"Context compaction still running; no finish event observed","detailKind":"compaction_stale"}`,
 			wantTitle:   "Compaction still running",
 			wantSubtext: "Context compaction still running; no finish event observed",
 		},
 	}
 	for _, tc := range cases {
-		row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(tc.body)}, latest)
+		row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "status", Body: []byte(tc.body)}, latest)
 		if row.Title != tc.wantTitle || row.Subtext != tc.wantSubtext || row.Tone != "warning" {
 			t.Fatalf("compaction row = %+v, want title=%q subtext=%q", row, tc.wantTitle, tc.wantSubtext)
 		}
@@ -187,50 +187,50 @@ func TestProjectTimelineEntryLabelsFineGrainedToolKinds(t *testing.T) {
 	}{
 		{
 			name:        "sending message shows the target",
-			body:        `{"text":"#general","activity_kind":"working","detail_kind":"sending_message"}`,
+			body:        `{"toolName":"send_message","toolInput":"#general"}`,
 			wantTitle:   "Sending message",
 			wantSubtext: "#general",
 		},
 		{
 			name:        "reading file shows the path",
-			body:        `{"text":"/repo/main.go","activity_kind":"working","detail_kind":"reading_file"}`,
+			body:        `{"toolName":"read_file","toolInput":"/repo/main.go"}`,
 			wantTitle:   "Reading file",
 			wantSubtext: "/repo/main.go",
 		},
 		{
 			name:        "tool without a summary renders the label alone",
-			body:        `{"text":"","activity_kind":"working","detail_kind":"checking_messages"}`,
+			body:        `{"toolName":"check_messages","toolInput":""}`,
 			wantTitle:   "Checking messages",
 			wantSubtext: "",
 		},
 		{
 			name:        "issue lookup uses checking vocabulary",
-			body:        `{"text":"Fix message delivery","activity_kind":"working","detail_kind":"getting_issue"}`,
+			body:        `{"toolName":"get_issue","toolInput":"Fix message delivery"}`,
 			wantTitle:   "Checking issue",
 			wantSubtext: "Fix message delivery",
 		},
 		{
 			name:        "issue comments use checking vocabulary",
-			body:        `{"text":"Fix message delivery","activity_kind":"working","detail_kind":"listing_issue_comments"}`,
+			body:        `{"toolName":"list_issue_comments","toolInput":"Fix message delivery"}`,
 			wantTitle:   "Checking issue comments",
 			wantSubtext: "Fix message delivery",
 		},
 		{
 			name:        "unknown detail kind falls back to Working",
-			body:        `{"text":"Using cursor-agent","activity_kind":"working","detail_kind":"other"}`,
+			body:        `{"toolName":"cursor-agent","toolInput":"Using cursor-agent"}`,
 			wantTitle:   "Working",
 			wantSubtext: "Using cursor-agent",
 		},
 		{
 			name:        "updating reminder shows the reminder id on the timeline",
-			body:        `{"text":"#a291584b","activity_kind":"working","detail_kind":"updating_reminder"}`,
+			body:        `{"toolName":"update_reminder","toolInput":"#a291584b"}`,
 			wantTitle:   "Updating reminder",
 			wantSubtext: "#a291584b",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(tc.body)}, latest)
+			row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "tool_start", Body: []byte(tc.body)}, latest)
 			if row.Title != tc.wantTitle || row.Subtext != tc.wantSubtext || row.Tone != "warning" {
 				t.Fatalf("row = %+v, want title %q subtext %q", row, tc.wantTitle, tc.wantSubtext)
 			}
@@ -239,14 +239,14 @@ func TestProjectTimelineEntryLabelsFineGrainedToolKinds(t *testing.T) {
 }
 
 func TestProjectTimelineEntryKeepsComputerDisconnectOutOfAgentVocabulary(t *testing.T) {
-	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"","activity_kind":"offline","detail_kind":"machine_disconnected"}`)}, Summary{Label: "Online", Tone: "success"})
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "status", Body: []byte(`{"detail":"","detailKind":"machine_disconnected"}`)}, Summary{Label: "Online", Tone: "success"})
 	if row.Title != "Offline" || row.Tone != "neutral" {
 		t.Fatalf("computer disconnect Agent row = %+v, want Offline", row)
 	}
 }
 
 func TestProjectTimelineEntryShowsUserStopLikeRaft(t *testing.T) {
-	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Stopped","detail_kind":"stopped"}`)}, Summary{Label: "Online", Tone: "success"})
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "status", Body: []byte(`{"detail":"Stopped","detailKind":"stopped"}`)}, Summary{Label: "Online", Tone: "success"})
 	if row.Title != "Stopped" || row.Subtext != "Agent stopped by user" || row.Tone != "neutral" || row.BodyKind != "none" {
 		t.Fatalf("stopped Agent row = %+v, want Raft stop presentation", row)
 	}

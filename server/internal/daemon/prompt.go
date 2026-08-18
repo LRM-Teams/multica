@@ -7,6 +7,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/promptcontext"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -44,7 +45,7 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 			return withCurrentStateOverlay(buildAssignmentPrompt(task))
 		}
 	} else if isChatLikeTask(task) {
-		if provider == "pi" {
+		if provider == agent.ProviderPi {
 			if command, ok := piNativeSlashChatCommand(task.ChatMessage); ok {
 				// Native slash commands are handled by Pi's command router rather
 				// than a provider conversation turn. Prefixing them would make the

@@ -102,6 +102,8 @@ function playbookLabelKey(id: NoteWorkerPlaybookId) {
       return "worker_playbook_hire" as const;
     case "writeback":
       return "worker_playbook_writeback" as const;
+    case "period_brief":
+      return "worker_playbook_period_brief" as const;
   }
 }
 
@@ -113,6 +115,8 @@ function playbookInstructionKey(id: NoteWorkerPlaybookId) {
       return "worker_playbook_hire_instruction" as const;
     case "writeback":
       return "worker_playbook_writeback_instruction" as const;
+    case "period_brief":
+      return "worker_playbook_period_brief_instruction" as const;
   }
 }
 

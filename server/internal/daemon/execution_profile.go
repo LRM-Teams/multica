@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -109,7 +110,7 @@ func validateExecutionProfileProvider(profile, provider string) error {
 	if !isRestrictedExecutionProfile(profile) {
 		return nil
 	}
-	if provider != "pi" {
+	if provider != agent.ProviderPi {
 		return fmt.Errorf("execution profile %q requires a provider with enforced tool isolation; provider %q is not supported", profile, provider)
 	}
 	return nil

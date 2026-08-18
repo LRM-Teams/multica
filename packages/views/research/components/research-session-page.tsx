@@ -260,15 +260,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   );
   const directorV6Enabled =
     data?.run?.run.orchestrator_version === "research-run-v6";
-  // V6 Director identity is restored from the authoritative run projection.
-  // Never infer it from the legacy Fleet lead/member list.
-  const persistedDirectorAgentId = useMemo(
-    () =>
-      data?.session.active_assignments?.find((assignment) =>
-        ["director", "research_director"].includes(assignment.role),
-      )?.agent_id ?? null,
-    [data?.session.active_assignments],
-  );
+  const persistedDirectorAgentId = data?.run?.run.director_agent_id ?? null;
   const { data: workspaceAgents = [] } = useQuery({
     ...agentListOptions(wsId),
     enabled: directorV6Enabled,
@@ -425,6 +417,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     persistedDirectorAgentId,
   );
   useEffect(() => {
+    // react-doctor-disable-next-line react-doctor/no-derived-state -- assignment changes optimistically and is reconciled from the persisted snapshot.
     setAssignedDirectorAgentId(persistedDirectorAgentId);
   }, [persistedDirectorAgentId]);
   const assignedDirectorAgent = workspaceAgents.find(
@@ -1042,7 +1035,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
       )
       .catch((error: unknown) =>
-        mutationErrorToast(t(($) => $.panel.send_failed), error),
+        mutationErrorToast(t(($) => $.session_page.send_failed), error),
       );
   };
 

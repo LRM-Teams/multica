@@ -61,6 +61,16 @@ describe("Research V6 10k performance gate (LRM-1485) · AC1 slice transport", (
   });
 });
 
+describe("Research V6 50k acceptance gate · bounded first paint", () => {
+  it("keeps a 50k-node projection paged and cache-bounded", async () => {
+    const gate = await runSliceTransportGate({ totalNodes: 50_000 });
+    expect(gate.perPageNodes).toBeLessThanOrEqual(PER_PAGE_MAX);
+    expect(gate.retainedUniqueNodes).toBeLessThanOrEqual(CACHE_NODE_BUDGET);
+    expect(gate.wireRequests).toBeGreaterThan(1);
+    expect(gate.wireRequests).toBeLessThanOrEqual(50_000 / PER_PAGE_MAX);
+  });
+});
+
 describe("Research V6 10k performance gate (LRM-1485) · AC2 scoped layout + 20-node delta", () => {
   it("pan/expand recomputes only the affected cluster; unaffected nodes keep exact position", () => {
     const gate = runLayoutScopeGate({ nodeCount: 10_000, clusters: 40 });

@@ -26,7 +26,7 @@ const (
 )
 
 // RunnerActivityResponse is deliberately a presentation boundary. Browser and
-// desktop callers receive labels, tones and bounded narrative bodies, never a
+// desktop callers receive labels, tones and bounded summary bodies, never a
 // Runner fact envelope or provider-specific detail.
 type RunnerActivityResponse struct {
 	Summary  *activityprojection.Summary         `json:"summary"`
@@ -1042,16 +1042,28 @@ func projectRunnerActivityTimelineEntry(entry protocol.AgentActivityEntry, summa
 }
 
 func runnerActivityIssueReference(entry protocol.AgentActivityEntry) (string, bool) {
-	if entry.Kind != "narrative" {
+	if entry.Kind == "tool_start" {
+		var body protocol.AgentActivityToolStartBody
+		if json.Unmarshal(entry.Body, &body) != nil {
+			return "", false
+		}
+		switch body.ToolName {
+		case "get_issue", "list_issue_comments", "comment_issue", "delete_issue_comment":
+			return body.ToolInput, true
+		default:
+			return "", false
+		}
+	}
+	if entry.Kind != "status" {
 		return "", false
 	}
-	var body protocol.AgentActivityNarrativeBody
+	var body protocol.AgentActivityStatusBody
 	if json.Unmarshal(entry.Body, &body) != nil {
 		return "", false
 	}
 	switch body.DetailKind {
 	case "getting_issue", "listing_issue_comments", "commenting_issue", "deleting_issue_comment":
-		return body.Text, true
+		return body.Detail, true
 	default:
 		return "", false
 	}

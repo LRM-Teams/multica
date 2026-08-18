@@ -17,6 +17,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 const (
@@ -24,31 +25,13 @@ const (
 	DefaultPollInterval      = 2 * time.Second
 	DefaultHeartbeatInterval = 15 * time.Second
 	// DefaultAgentTimeout is the optional absolute wall-clock cap on a single
-	// agent run. 0 = no cap: a run is bounded only by the inactivity watchdogs
-	// (DefaultAgentIdleWatchdog / DefaultAgentToolWatchdog), so a session that keeps emitting events is
-	// never killed merely for running long (MUL-3064). Operators who want a
+	// agent run. 0 = no cap. Operators who want a
 	// hard ceiling for cost/resource control can set MULTICA_AGENT_TIMEOUT.
 	DefaultAgentTimeout                   = 0
 	DefaultCodexSemanticInactivityTimeout = 10 * time.Minute
-	// DefaultAgentIdleWatchdog is the per-task silence threshold for probing
-	// runtime liveness. A quiet provider child is not force-stopped merely
-	// because it emitted no user-facing message: the watchdog first probes the
-	// child and suppresses recovery while it remains alive, matching Raft's
-	// runtime-progress behavior. The previous 5 min default
-	// killed legitimate long assistant outputs (e.g. RFC-length writeups)
-	// where the model streams a single message for many minutes without any
-	// daemon-visible activity — see MUL-2300. 30 min leaves headroom for long
-	// writes before checking for a confirmed-dead child whose session did not
-	// close naturally.
-	// Set MULTICA_AGENT_IDLE_WATCHDOG=0 to disable.
-	DefaultAgentIdleWatchdog = 30 * time.Minute
-	// DefaultAgentToolWatchdog sets the liveness-probe threshold while a single
-	// tool call stays in flight (tool_use emitted, no tool_result and no other
-	// message). The watchdog ignores its normal
-	// window while a tool is in flight, because a real build/install/test
-	// legitimately runs silently for many minutes. Set
-	// MULTICA_AGENT_TOOL_WATCHDOG=0 to disable the in-flight probe.
-	DefaultAgentToolWatchdog        = 2 * time.Hour
+	// DefaultRuntimeProgressStale is the Raft-aligned resident runtime silence
+	// threshold. Set MULTICA_RUNTIME_PROGRESS_STALE=0 to disable.
+	DefaultRuntimeProgressStale     = 15 * time.Minute
 	DefaultRuntimeName              = "Local Agent"
 	DefaultWorkspaceSyncInterval    = 30 * time.Second
 	DefaultHealthPort               = 19514
@@ -143,8 +126,7 @@ type Config struct {
 	InboundWatchdog                time.Duration
 	AgentTimeout                   time.Duration
 	CodexSemanticInactivityTimeout time.Duration
-	AgentIdleWatchdog              time.Duration // probe a silent runtime after this long; live children are not stopped (0 = disabled)
-	AgentToolWatchdog              time.Duration // probe liveness after a tool call stays silent this long; live children are not stopped (0 = disabled)
+	RuntimeProgressStale           time.Duration // resident Message stalled threshold (0 = disabled)
 	ClaudeArgs                     []string
 	CodexArgs                      []string
 }
@@ -241,7 +223,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 				Model: strings.TrimSpace(os.Getenv(modelEnv)),
 			}, true
 		}
-		if defaultCmd == "codex" && cmd == defaultCmd {
+		if defaultCmd == agent.ProviderCodex && cmd == defaultCmd {
 			// Codex Desktop bundles its CLI inside the macOS app instead of
 			// installing it onto PATH.
 			for _, p := range codexDesktopAppBundlePaths() {
@@ -257,26 +239,26 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 
 	agents := map[string]AgentEntry{}
-	if e, ok := probe("MULTICA_CLAUDE_PATH", "claude", "MULTICA_CLAUDE_MODEL"); ok {
-		agents["claude"] = e
+	if e, ok := probe("MULTICA_CLAUDE_PATH", agent.ProviderClaude, "MULTICA_CLAUDE_MODEL"); ok {
+		agents[agent.ProviderClaude] = e
 	}
-	if e, ok := probe("MULTICA_CODEX_PATH", "codex", "MULTICA_CODEX_MODEL"); ok {
-		agents["codex"] = e
+	if e, ok := probe("MULTICA_CODEX_PATH", agent.ProviderCodex, "MULTICA_CODEX_MODEL"); ok {
+		agents[agent.ProviderCodex] = e
 	}
-	if e, ok := probe("MULTICA_OPENCODE_PATH", "opencode", "MULTICA_OPENCODE_MODEL"); ok {
-		agents["opencode"] = e
+	if e, ok := probe("MULTICA_OPENCODE_PATH", agent.ProviderOpenCode, "MULTICA_OPENCODE_MODEL"); ok {
+		agents[agent.ProviderOpenCode] = e
 	}
-	if e, ok := probe("MULTICA_PI_PATH", "pi", "MULTICA_PI_MODEL"); ok {
-		agents["pi"] = e
+	if e, ok := probe("MULTICA_PI_PATH", agent.ProviderPi, "MULTICA_PI_MODEL"); ok {
+		agents[agent.ProviderPi] = e
 	}
 	if e, ok := probe("MULTICA_CURSOR_PATH", "cursor-agent", "MULTICA_CURSOR_MODEL"); ok {
-		agents["cursor"] = e
+		agents[agent.ProviderCursor] = e
 	}
 	if e, ok := probe("MULTICA_KIRO_PATH", "kiro-cli", "MULTICA_KIRO_MODEL"); ok {
-		agents["kiro"] = e
+		agents[agent.ProviderKiro] = e
 	}
-	if e, ok := probe("MULTICA_GROK_PATH", "grok", "MULTICA_GROK_MODEL"); ok {
-		agents["grok"] = e
+	if e, ok := probe("MULTICA_GROK_PATH", agent.ProviderGrok, "MULTICA_GROK_MODEL"); ok {
+		agents[agent.ProviderGrok] = e
 	}
 	// Zero detected agent CLIs is a valid Computer. Setup and Binding child
 	// connectivity are proven by the Workspace connection, not by runtime count.
@@ -335,17 +317,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		codexSemanticInactivityTimeout = overrides.CodexSemanticInactivityTimeout
 	}
 
-	// MULTICA_AGENT_IDLE_WATCHDOG=0 disables the per-task idle watchdog. We
+	// MULTICA_RUNTIME_PROGRESS_STALE=0 disables the resident Message stalled watchdog. We
 	// route 0 through durationFromEnv so the operator can opt out without
-	// patching the binary; any positive duration overrides DefaultAgentIdleWatchdog.
-	agentIdleWatchdog, err := durationFromEnv("MULTICA_AGENT_IDLE_WATCHDOG", DefaultAgentIdleWatchdog)
-	if err != nil {
-		return Config{}, err
-	}
-
-	// MULTICA_AGENT_TOOL_WATCHDOG=0 disables the in-flight-tool backstop; any
-	// positive duration overrides DefaultAgentToolWatchdog.
-	agentToolWatchdog, err := durationFromEnv("MULTICA_AGENT_TOOL_WATCHDOG", DefaultAgentToolWatchdog)
+	// patching the binary; any positive duration overrides DefaultRuntimeProgressStale.
+	runtimeProgressStale, err := durationFromEnv("MULTICA_RUNTIME_PROGRESS_STALE", DefaultRuntimeProgressStale)
 	if err != nil {
 		return Config{}, err
 	}
@@ -525,8 +500,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		InboundWatchdog:                inboundWatchdog,
 		AgentTimeout:                   agentTimeout,
 		CodexSemanticInactivityTimeout: codexSemanticInactivityTimeout,
-		AgentIdleWatchdog:              agentIdleWatchdog,
-		AgentToolWatchdog:              agentToolWatchdog,
+		RuntimeProgressStale:           runtimeProgressStale,
 		ClaudeArgs:                     claudeArgs,
 		CodexArgs:                      codexArgs,
 	}, nil

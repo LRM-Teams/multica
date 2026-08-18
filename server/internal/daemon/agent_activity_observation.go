@@ -170,37 +170,50 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	case AgentObservationRuntimeReady:
 		data := observation.Data.(AgentRuntimeObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindOnline, "idle", data.ProcessInstanceID
-		entry, err = activityNarrativeEntry(projection.detailKind, "Online")
+		entry, err = activityStatusEntry(projection.detailKind, "Online")
 	case AgentObservationRuntimeStarting:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "starting"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Starting…")
+		entry, err = activityStatusEntry(projection.detailKind, "Starting…")
 	case AgentObservationRuntimeWorking:
 		// Runtime text advances Raft's current model-response state, but the
 		// final reply belongs to Chat and does not create a generic Timeline row.
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "model_response_started"
 	case AgentObservationRuntimeThinking:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindThinking, "thinking_started"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Thinking")
+		entry, err = activityStatusEntry(projection.detailKind, "Thinking")
 	case AgentObservationRuntimeTool:
 		data := observation.Data.(AgentRuntimeStageObservationData)
 		projection.activityKind = protocol.ActivityKindWorking
-		var narrative string
-		projection.detailKind, narrative = toolActivityFact(data.ToolName, data.ToolInput)
-		if narrative != "" {
-			entry, err = activityNarrativeEntry(projection.detailKind, narrative)
+		var summary string
+		projection.detailKind, summary = toolActivityFact(data.ToolName, data.ToolInput)
+		toolName := data.ToolName
+		toolInput := summary
+		if semantic, summary, ok := resolveMulticaCLIInvocation(data.ToolName, data.ToolInput); ok {
+			toolName, toolInput = semantic, summary
+		} else if semantic, ok := canonicalToolSemantic(data.ToolName); ok {
+			toolName = semantic
 		}
+		entry, err = activityToolStartEntry(toolName, toolInput)
 	case AgentObservationRuntimeCompacting:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compacting_context"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Compacting context")
+		entry, err = activityStatusEntry(projection.detailKind, "Compacting context")
 	case AgentObservationRuntimeCompacted:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_finished"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Context compaction finished")
+		entry, err = activityStatusEntry(projection.detailKind, "Context compaction finished")
 	case AgentObservationRuntimeCompactionStale:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_stale"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Context compaction still running; no finish event observed")
+		entry, err = activityStatusEntry(projection.detailKind, "Context compaction still running; no finish event observed")
+	case AgentObservationRuntimeStalled:
+		data := observation.Data.(AgentRuntimeStageObservationData)
+		projection.activityKind, projection.detailKind = protocol.ActivityKindError, "runtime_stalled"
+		staleMinutes := int(data.StaleFor / time.Minute)
+		if staleMinutes < 1 {
+			staleMinutes = 1
+		}
+		entry, err = activityStatusEntry(projection.detailKind, fmt.Sprintf("Runtime stalled: no runtime events for %dm", staleMinutes))
 	case AgentObservationRuntimeIdle:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Idle")
+		entry, err = activityStatusEntry(projection.detailKind, "Idle")
 	case AgentObservationRuntimeDiagnostic:
 		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
 		entry, err = activitySystemEntry("Runtime warning", "Provider reported a warning")
@@ -209,7 +222,7 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		// body is accepted. Keep the presentation detail the UI already
 		// maps; do not wait for native write completion.
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "message_received"
-		entry, err = activityNarrativeEntry(projection.detailKind, "Message received")
+		entry, err = activityStatusEntry(projection.detailKind, "Message received")
 	case AgentObservationFreshnessHeld:
 		data := observation.Data.(AgentFreshnessHoldObservationData)
 		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
@@ -221,16 +234,16 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	case AgentObservationError:
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID
-		entry, err = activityNarrativeEntry(projection.detailKind, strings.TrimSpace(data.Message))
+		entry, err = activityStatusEntry(projection.detailKind, strings.TrimSpace(data.Message))
 	case AgentObservationOffline:
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind = protocol.ActivityKindOffline
 		if data.ReasonCode == "stopped" {
 			projection.detailKind = "stopped"
-			entry, err = activityNarrativeEntry(projection.detailKind, "Agent stopped by user")
+			entry, err = activityStatusEntry(projection.detailKind, "Agent stopped by user")
 		} else {
 			projection.detailKind = "runtime_unavailable"
-			entry, err = activityNarrativeEntry(projection.detailKind, "Offline")
+			entry, err = activityStatusEntry(projection.detailKind, "Offline")
 		}
 	default:
 		return agentActivityProjection{}, fmt.Errorf("unknown Agent Observation kind %q", observation.Kind)

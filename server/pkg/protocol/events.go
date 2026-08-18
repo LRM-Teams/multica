@@ -172,6 +172,8 @@ const (
 	// Computer protocol. Correlated by RequestID. See protocol.ReadWorkdirFile*.
 	EventAgentWorkspaceRead        = "agent:workspace:read"
 	EventAgentWorkspaceFileContent = "agent:workspace:file_content"
+	EventAgentSkillsList           = "agent:skills:list"
+	EventAgentSkillsListResult     = "agent:skills:list_result"
 	// Workdir single-file write RPC: server pushes a bounded UTF-8 text write,
 	// daemon writes inside the confined workdir root and replies with a content
 	// hash or conflict/error. Correlated by RequestID.

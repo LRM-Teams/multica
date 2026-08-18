@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -2227,6 +2228,42 @@ func (h *Handler) ListAgentSkills(w http.ResponseWriter, r *http.Request) {
 		)
 		caps := filterSkillCapabilities(baseCaps, s.GrantLevel)
 		resp[i].Capabilities = &caps
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) ListAgentProfileSkills(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, id)
+	if !ok {
+		return
+	}
+	if h.DaemonHub == nil {
+		writeError(w, http.StatusServiceUnavailable, "daemon is offline")
+		return
+	}
+	if !agent.RuntimeID.Valid {
+		writeError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	runtime, err := h.Queries.GetAgentBoundRuntimeForWorkspace(r.Context(), db.GetAgentBoundRuntimeForWorkspaceParams{
+		AgentID: agent.ID, WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	requestID := uuid.NewString()
+	resp, err := h.DaemonHub.RequestAgentSkills(r.Context(), protocol.AgentSkillsListPayload{
+		AgentID: uuidToString(agent.ID), Runtime: uuidToString(runtime.ID), RequestID: requestID,
+	})
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "daemon skills discovery failed")
+		return
+	}
+	if resp.AgentID != uuidToString(agent.ID) {
+		writeError(w, http.StatusBadGateway, "daemon returned skills for a different agent")
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

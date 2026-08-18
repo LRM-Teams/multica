@@ -435,7 +435,7 @@ func startDaemonAfterSetup(cmd *cobra.Command) error {
 	// #2487/#2496: the Computer runs as one machine-wide detached resident that
 	// survives terminal close; setup does NOT install an OS supervisor
 	// (LaunchAgent/systemd/Scheduled Task).
-	fmt.Fprintln(os.Stderr, "\nStarting the resident Computer...")
+	fmt.Fprintln(os.Stderr, "\nEnsuring the resident Computer is running...")
 	if err := startResidentAfterSetup(cmd); err != nil {
 		return fmt.Errorf("Setup incomplete (start resident: %w)", err)
 	}

@@ -120,9 +120,10 @@ repair setup may omit them and reuse the saved Test origins. If setup targets a
 different environment from the active one, it asks before changing config or
 restarting; `--yes` is reserved for automation that already accepted the switch.
 A successful setup activates the target environment, establishes the selected
-Workspace connection, and starts the resident, so `config use` is not an extra
-setup step. Repeating setup for the same Computer and Workspace repairs the
-existing connection and completes without creating a duplicate.
+Workspace connection, and ensures the resident is running, so `config use` is
+not an extra setup step. Repeating setup for the same Computer and Workspace
+repairs the existing connection and completes without restarting a healthy,
+matching resident or creating a duplicate.
 
 Workspace connections are keyed locally by `(environment, workspace_id)`, so
 the same Computer can retain connections from both databases. One resident

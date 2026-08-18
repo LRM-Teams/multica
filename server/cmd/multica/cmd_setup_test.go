@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -532,6 +533,7 @@ func TestServerHostIsLocal(t *testing.T) {
 // install an OS supervisor service (LaunchAgent / systemd / Scheduled Task).
 func TestStartDaemonAfterSetupStartsDetachedResidentWithoutService(t *testing.T) {
 	var called bool
+	stderr := captureStderr(t)
 	prevEstablish := establishWorkspaceBindingAfterSetup
 	prev := startResidentAfterSetup
 	prevWait := waitForWorkspaceBindingAcceptanceAfterSetup
@@ -549,6 +551,9 @@ func TestStartDaemonAfterSetupStartsDetachedResidentWithoutService(t *testing.T)
 	}
 	if !called {
 		t.Fatal("setup must start the detached resident, not install an OS service")
+	}
+	if got := stderr.read(); !strings.Contains(got, "Ensuring the resident Computer is running...") {
+		t.Fatalf("setup progress = %q, want idempotent ensure wording", got)
 	}
 }
 

@@ -260,7 +260,7 @@ export interface CreateNotePeriodBriefRequest {
   timezone?: string;
   /** Synthesizer Agent (defaults to Period Brief Agent / 周报 in the UI). */
   agent_id: string;
-  /** Collector Agents on selected runtimes (local and/or cloud). At least one. */
+  /** Dedicated per-Computer collector Agents (`period-collect-*`). At least one. */
   collector_agent_ids: string[];
   sources?: NoteRetrospectiveSource[];
   channel_id?: string;

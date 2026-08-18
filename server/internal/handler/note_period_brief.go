@@ -31,7 +31,10 @@ const (
 // Overridable in tests so suite does not sleep the full production budget.
 // Production budget covers a typical collector agent turn; still degrade to
 // empty packs if agents never finish.
-var notePeriodBriefCollectorWaitBudget = 4 * time.Minute
+// Collectors often need several minutes of tool rounds before --note-write;
+// harvest pending proposals while the job is still running so a slow
+// note_worker_job status flip does not drop an already-written pack.
+var notePeriodBriefCollectorWaitBudget = 8 * time.Minute
 
 // When true (production default), CreateNotePeriodBrief returns after dispatching
 // collectors and finishes synthesis in a background goroutine. Waiting inline
@@ -422,6 +425,10 @@ func (h *Handler) parsePeriodBriefCollectorAgentIDs(
 			writeError(w, http.StatusBadRequest, "collector agent not found: "+trimmed)
 			return nil, false
 		}
+		if !isPeriodBriefCollectorAgentName(agent.Name) {
+			writeError(w, http.StatusBadRequest, "collector agent must be a Period Work collector: "+trimmed)
+			return nil, false
+		}
 		seen[trimmed] = struct{}{}
 		out = append(out, trimmed)
 	}
@@ -757,12 +764,14 @@ type notePeriodBriefPackResult struct {
 	Status  string // ready | empty | failed
 }
 
-// awaitPeriodBriefCollectorPacks waits until each collector Note Worker job is
-// terminal (completed / failed / cancelled) or the wait budget elapses.
-// Ready packs come from the note page (human-accepted --note-write) or, after
-// the agent finishes, from the latest pending note_write proposal targeting
-// that pack page — so synthesis does not require the human to accept packs
-// first. Timeouts still degrade to empty; they never fail the whole request.
+// awaitPeriodBriefCollectorPacks waits until each collector pack is ready /
+// failed, or the wait budget elapses. Ready packs come from:
+//  1. the note page after human-accepted --note-write, or
+//  2. the latest pending note_write proposal targeting that pack page —
+//     harvested as soon as the message exists, even while the Note Worker
+//     job is still "running" (task completion and job projection can lag
+//     the agent's --note-write by minutes).
+// Timeouts still degrade to empty; they never fail the whole request.
 func (h *Handler) awaitPeriodBriefCollectorPacks(
 	ctx context.Context,
 	workspaceID, userID pgtype.UUID,
@@ -814,18 +823,24 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 				out[i].Status = "ready"
 			case status == "failed" || status == "cancelled":
 				out[i].Status = "failed"
-			case status == "completed":
+			default:
+				// Prefer pending --note-write over waiting for job "completed".
+				// Agents often emit the proposal before the inbox task / job
+				// row flips terminal; skipping harvest here caused empty packs
+				// when the wait budget expired with status still "running".
 				if proposal := h.loadCollectorPackNoteWriteProposal(ctx, channelID, job.PageID); proposal != "" {
 					out[i].Content = proposal
 					out[i].Status = "ready"
 					break
 				}
-				if stub || strings.TrimSpace(page.Content) == "" {
-					out[i].Status = "empty"
-				} else {
-					out[i].Status = "ready"
+				if status == "completed" {
+					if stub || strings.TrimSpace(page.Content) == "" {
+						out[i].Status = "empty"
+					} else {
+						out[i].Status = "ready"
+					}
+					break
 				}
-			default:
 				allSettled = false
 			}
 		}
@@ -844,8 +859,9 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 }
 
 // loadCollectorPackNoteWriteProposal returns the latest agent message body that
-// proposed --note-write onto the pack page. Used when the job finished but the
-// human has not yet accepted the writeback into note_page.
+// proposed --note-write onto the pack page. Used whenever the page is still a
+// stub (job running or completed) so synthesis does not require the human to
+// accept the writeback into note_page first.
 func (h *Handler) loadCollectorPackNoteWriteProposal(ctx context.Context, channelID, packPageID string) string {
 	channelID = strings.TrimSpace(channelID)
 	packPageID = strings.TrimSpace(packPageID)

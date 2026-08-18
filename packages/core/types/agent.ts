@@ -636,6 +636,12 @@ export interface EnsurePeriodBriefAgentResponse {
   created: boolean;
 }
 
+/** Idempotent per-Computer Period Work collectors ensure. */
+export interface EnsurePeriodBriefCollectorsResponse {
+  agents: Agent[];
+  created: string[];
+}
+
 /** Verified avatar write intent. The server derives and persists the URL and
  * source; clients never submit a raw agent avatar URL. */
 export type AgentAvatarSelection =

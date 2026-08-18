@@ -24,6 +24,7 @@ import type {
   AgentCreationDraft,
   EnsureWindyResponse,
   EnsurePeriodBriefAgentResponse,
+  EnsurePeriodBriefCollectorsResponse,
   AgentTemplate,
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
@@ -304,6 +305,7 @@ import {
   CreateAgentFromTemplateResponseSchema,
   EnsureWindyResponseSchema,
   EnsurePeriodBriefAgentResponseSchema,
+  EnsurePeriodBriefCollectorsResponseSchema,
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
@@ -1646,6 +1648,19 @@ export class ApiClient {
       }),
     });
     return EnsurePeriodBriefAgentResponseSchema.parse(raw);
+  }
+
+  async ensurePeriodBriefCollectors(model: string): Promise<EnsurePeriodBriefCollectorsResponse> {
+    const raw = await this.fetch<unknown>("/api/members/agents/period-brief-collectors", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    });
+    return parseWithFallback(
+      raw,
+      EnsurePeriodBriefCollectorsResponseSchema,
+      { agents: [], created: [] },
+      { endpoint: "POST /api/members/agents/period-brief-collectors" },
+    );
   }
 
   async createAgentDraft(data: CreateAgentDraftRequest): Promise<AgentCreationDraft> {
@@ -5298,7 +5313,19 @@ export class ApiClient {
         client_request_id: request.clientRequestId,
       }),
     });
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<
+      | {
+          id: string;
+          workspace_id: string;
+          run_id: string;
+          director_agent_id: string;
+          status: string;
+          reason: string;
+          generation: number;
+          state_version: number;
+        }
+      | null
+    >(
       raw,
       ResearchV6DirectorAssignmentSchema,
       null,

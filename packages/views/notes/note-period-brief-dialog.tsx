@@ -16,8 +16,10 @@ import {
   resolvePeriodBriefSynthesizerId,
 } from "@multica/core/notes/period-brief-agent";
 import {
+  listPeriodBriefCollectorAgents,
   defaultPeriodBriefCollectorIds,
   isPeriodBriefCollectorOnline,
+  periodBriefCollectorLabel,
   togglePeriodBriefCollectorId,
 } from "@multica/core/notes/period-brief-collectors";
 import { runtimeListOptions } from "@multica/core/runtimes";
@@ -87,8 +89,10 @@ export function NotePeriodBriefDialog({
   const [ensuring, setEnsuring] = useState(false);
   const ensureAttemptedRef = useRef(false);
   const collectorsSeededRef = useRef(false);
+  const collectorsEnsureAttemptedRef = useRef(false);
 
   const resolvedPreferredAgentId = resolvePeriodBriefSynthesizerId(agents, preferredAgentId);
+  const collectorAgents = useMemo(() => listPeriodBriefCollectorAgents(agents), [agents]);
   const defaultCollectors = useMemo(
     () => defaultPeriodBriefCollectorIds(agents, runtimes),
     [agents, runtimes],
@@ -106,6 +110,7 @@ export function NotePeriodBriefDialog({
       setSubmitting(false);
       setEnsuring(false);
       ensureAttemptedRef.current = false;
+      collectorsEnsureAttemptedRef.current = false;
       collectorsSeededRef.current = defaultCollectors.length > 0;
     }
   } else if (open && resolvedPreferredAgentId && !agentId) {
@@ -145,6 +150,45 @@ export function NotePeriodBriefDialog({
       })
       .catch(() => {
         // Non-fatal: user can still pick any existing Agent.
+      })
+      .finally(() => {
+        if (!cancelled) setEnsuring(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, wsId, agents, runtimes, queryClient]);
+
+  useEffect(() => {
+    if (!open || !wsId || collectorsEnsureAttemptedRef.current) return;
+    const ensureModel = agents.find((agent) => agent.model?.trim())?.model?.trim();
+    if (!ensureModel) return;
+
+    collectorsEnsureAttemptedRef.current = true;
+    let cancelled = false;
+    setEnsuring(true);
+    void api
+      .ensurePeriodBriefCollectors(ensureModel)
+      .then((result) => {
+        if (cancelled) return;
+        queryClient.setQueryData(workspaceKeys.agents(wsId), (current: typeof agents = []) => {
+          const byId = new Map(current.map((agent) => [agent.id, agent]));
+          for (const agent of result.agents) {
+            byId.set(agent.id, agent);
+          }
+          return [...byId.values()];
+        });
+        void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+        const onlineIds = result.agents
+          .filter((agent) => isPeriodBriefCollectorOnline(agent, runtimes))
+          .map((agent) => agent.id);
+        if (onlineIds.length > 0) {
+          setCollectorIds((current) => (current.length > 0 ? current : onlineIds));
+          collectorsSeededRef.current = true;
+        }
+      })
+      .catch(() => {
+        // Non-fatal: empty collector list blocks submit until provisioned.
       })
       .finally(() => {
         if (!cancelled) setEnsuring(false);
@@ -201,15 +245,15 @@ export function NotePeriodBriefDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
+      <DialogContent className="flex max-h-[min(90vh,40rem)] w-full flex-col gap-4 overflow-hidden sm:max-w-md">
+        <DialogHeader className="min-w-0 shrink-0 pr-8">
           <DialogTitle>{t(($) => $.notes_page.period_brief_title)}</DialogTitle>
           <DialogDescription>{t(($) => $.notes_page.period_brief_description)}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-2">
+        <div className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden py-1">
+          <div className="min-w-0 space-y-2">
             <Label>{t(($) => $.notes_page.period_brief_window_label)}</Label>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 size="sm"
@@ -239,11 +283,12 @@ export function NotePeriodBriefDialog({
               </Button>
             </div>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label htmlFor="note-period-brief-date">{t(($) => $.notes_page.period_brief_date_label)}</Label>
             <Input
               id="note-period-brief-date"
               type="date"
+              className="w-full max-w-full"
               value={date}
               onChange={(event) => setDate(event.target.value)}
               disabled={submitting || ensuring}
@@ -252,31 +297,34 @@ export function NotePeriodBriefDialog({
               {t(($) => $.notes_page.period_brief_timezone_hint, { timezone })}
             </p>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>{t(($) => $.notes_page.period_brief_collectors_label)}</Label>
             <p className="text-xs text-muted-foreground">
               {t(($) => $.notes_page.period_brief_collectors_hint)}
             </p>
             <div
-              className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-1"
+              className="max-h-40 min-w-0 space-y-1 overflow-x-hidden overflow-y-auto rounded-md border p-1"
               data-testid="period-brief-collectors"
             >
-              {agents.length === 0 ? (
+              {collectorAgents.length === 0 ? (
                 <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-                  {t(($) => $.notes_page.ai_agent_empty)}
+                  {ensuring
+                    ? t(($) => $.notes_page.period_brief_collectors_ensuring)
+                    : t(($) => $.notes_page.period_brief_collectors_empty)}
                 </div>
               ) : (
-                agents.map((agent) => {
+                collectorAgents.map((agent) => {
                   const selected = collectorIds.includes(agent.id);
                   const online = isPeriodBriefCollectorOnline(agent, runtimes);
-                  const name = resolveActorDisplayName(agent, agent.name || agent.id);
-                  const RuntimeIcon = agent.runtime_mode === "cloud" ? Cloud : Laptop;
+                  const name = periodBriefCollectorLabel(agent);
+                  const isCloud = agent.runtime_mode === "cloud";
+                  const RuntimeIcon = isCloud ? Cloud : Laptop;
                   return (
                     <button
                       key={agent.id}
                       type="button"
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
+                        "flex w-full min-w-0 max-w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
                         selected && "bg-muted text-foreground",
                         !online && "opacity-60",
                       )}
@@ -285,10 +333,10 @@ export function NotePeriodBriefDialog({
                       data-testid={`period-brief-collector-${agent.id}`}
                     >
                       <RuntimeIcon className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {name}
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          {agent.runtime_mode === "cloud"
+                      <span className="min-w-0 flex-1 overflow-hidden">
+                        <span className="block truncate">{name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {isCloud
                             ? t(($) => $.notes_page.period_brief_collector_cloud)
                             : t(($) => $.notes_page.period_brief_collector_local)}
                           {!online
@@ -296,21 +344,21 @@ export function NotePeriodBriefDialog({
                             : ""}
                         </span>
                       </span>
-                      {selected ? <Check className="size-4 text-primary" /> : null}
+                      {selected ? <Check className="size-4 shrink-0 text-primary" /> : null}
                     </button>
                   );
                 })
               )}
             </div>
           </div>
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <Label>{t(($) => $.notes_page.period_brief_agent_label)}</Label>
             <p className="text-xs text-muted-foreground">
               {t(($) => $.notes_page.period_brief_agent_hint, {
                 name: PERIOD_BRIEF_AGENT_DISPLAY_NAME,
               })}
             </p>
-            <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-1">
+            <div className="max-h-40 min-w-0 space-y-1 overflow-x-hidden overflow-y-auto rounded-md border p-1">
               {agents.length === 0 ? (
                 <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                   {ensuring
@@ -327,7 +375,7 @@ export function NotePeriodBriefDialog({
                       key={agent.id}
                       type="button"
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
+                        "flex w-full min-w-0 max-w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
                         selected && "bg-muted text-foreground",
                       )}
                       onClick={() => setAgentId(agent.id)}
@@ -335,15 +383,15 @@ export function NotePeriodBriefDialog({
                       data-testid={isDefault ? "period-brief-default-agent" : undefined}
                     >
                       <Bot className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {name}
+                      <span className="min-w-0 flex-1 overflow-hidden">
+                        <span className="block truncate">{name}</span>
                         {isDefault ? (
-                          <span className="ml-2 text-xs text-muted-foreground">
+                          <span className="block truncate text-xs text-muted-foreground">
                             {t(($) => $.notes_page.period_brief_agent_default_badge)}
                           </span>
                         ) : null}
                       </span>
-                      {selected ? <Check className="size-4 text-primary" /> : null}
+                      {selected ? <Check className="size-4 shrink-0 text-primary" /> : null}
                     </button>
                   );
                 })
@@ -351,7 +399,7 @@ export function NotePeriodBriefDialog({
             </div>
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="min-w-0 shrink-0">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t(($) => $.notes_page.cancel)}
           </Button>

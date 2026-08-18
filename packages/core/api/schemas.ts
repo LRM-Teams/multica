@@ -55,6 +55,7 @@ import type {
   GetVoiceCallResponse,
   EnsureWindyResponse,
   EnsurePeriodBriefAgentResponse,
+  EnsurePeriodBriefCollectorsResponse,
   StartVoiceCallDuplexResponse,
   VoiceCallDuplexAudioHint,
   VoiceCallDuplexEventHint,
@@ -2501,6 +2502,11 @@ export const EnsureWindyResponseSchema: z.ZodType<EnsureWindyResponse> = z.objec
 export const EnsurePeriodBriefAgentResponseSchema: z.ZodType<EnsurePeriodBriefAgentResponse> = z.object({
   agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success),
   created: z.boolean(),
+}).loose();
+
+export const EnsurePeriodBriefCollectorsResponseSchema: z.ZodType<EnsurePeriodBriefCollectorsResponse> = z.object({
+  agents: z.array(z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success)),
+  created: z.array(z.string()),
 }).loose();
 
 // Fallback when the success response fails to parse. The agent server-side

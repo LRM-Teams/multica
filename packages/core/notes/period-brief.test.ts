@@ -70,25 +70,25 @@ describe("resolvePeriodBriefSynthesizerId", () => {
 });
 
 describe("defaultPeriodBriefCollectorIds", () => {
-  it("includes online local and cloud agents but not the synthesizer", () => {
+  it("includes only online dedicated collectors, not specialty or synthesizer agents", () => {
     const agents = [
       {
         id: "local-1",
+        name: "period-collect-laptop1",
+        runtime_id: "r1",
+        runtime_mode: "local" as const,
+        runtime_status: "online" as const,
+      },
+      {
+        id: "specialty",
         name: "coder",
         runtime_id: "r1",
         runtime_mode: "local" as const,
         runtime_status: "online" as const,
       },
       {
-        id: "cloud-1",
-        name: "cloud",
-        runtime_id: "r2",
-        runtime_mode: "cloud" as const,
-        runtime_status: "online" as const,
-      },
-      {
         id: "off-1",
-        name: "sleep",
+        name: "period-collect-offline",
         runtime_id: "r3",
         runtime_mode: "local" as const,
         runtime_status: "offline" as const,
@@ -101,9 +101,11 @@ describe("defaultPeriodBriefCollectorIds", () => {
         runtime_status: "online" as const,
       },
     ];
-    expect(defaultPeriodBriefCollectorIds(agents)).toEqual(["local-1", "cloud-1"]);
-    expect(isPeriodBriefCollectorOnline(agents[2])).toBe(false);
-    expect(togglePeriodBriefCollectorId(["local-1"], "cloud-1")).toEqual(["local-1", "cloud-1"]);
-    expect(togglePeriodBriefCollectorId(["local-1", "cloud-1"], "local-1")).toEqual(["cloud-1"]);
+    expect(defaultPeriodBriefCollectorIds(agents)).toEqual(["local-1"]);
+    const offline = agents[2];
+    if (!offline) throw new Error("expected offline collector fixture");
+    expect(isPeriodBriefCollectorOnline(offline)).toBe(false);
+    expect(togglePeriodBriefCollectorId(["local-1"], "off-1")).toEqual(["local-1", "off-1"]);
+    expect(togglePeriodBriefCollectorId(["local-1", "off-1"], "local-1")).toEqual(["off-1"]);
   });
 });

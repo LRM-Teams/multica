@@ -1138,6 +1138,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/", h.CreateAgent)
 				r.Post("/windy", h.EnsureWindy)
 				r.Post("/period-brief", h.EnsurePeriodBriefAgent)
+				r.Post("/period-brief-collectors", h.EnsurePeriodBriefCollectors)
 				r.Post("/drafts", h.CreateAgentDraft)
 				r.Get("/drafts/{draftId}", h.GetAgentDraft)
 				// Agent templates: pre-configured instructions + skill refs.

@@ -9,8 +9,9 @@ import (
 // agentRestartStore is one in-flight restart on this server process.
 // It is not durable and is not replayed after disconnect.
 type agentRestartStore struct {
-	mu    sync.Mutex
-	notes map[string]activeAgentRestartState
+	mu          sync.Mutex
+	lifecycleMu sync.Mutex
+	notes       map[string]activeAgentRestartState
 }
 
 func newAgentRestartStore() *agentRestartStore {

@@ -68,6 +68,113 @@ type createAgentRestartRequest struct {
 	Mode AgentRestartMode `json:"mode"`
 }
 
+// StartAgent allocates a fresh immutable launch and dispatch identity before
+// asking the current Workspace Runner to start it. Reusing a failed dispatch
+// would only replay Raft's original acceptance receipt without spawning.
+func (h *Handler) StartAgent(w http.ResponseWriter, r *http.Request) {
+	agent, ok := h.loadAgentRestartTarget(w, r)
+	if !ok {
+		return
+	}
+	restarts := h.restarts()
+	restarts.lifecycleMu.Lock()
+	defer restarts.lifecycleMu.Unlock()
+	if !agent.RuntimeID.Valid {
+		writeError(w, http.StatusConflict, "agent_runtime_missing")
+		return
+	}
+	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
+		ID: agent.RuntimeID, WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusConflict, "agent_runtime_missing")
+		return
+	}
+	if !runtime.DaemonID.Valid {
+		writeError(w, http.StatusConflict, "agent_runtime_offline")
+		return
+	}
+	launchID := uuid.NewString()
+	dispatchID := uuid.NewString()
+	var sessionID string
+	err = h.DB.QueryRow(r.Context(), `
+		UPDATE agent_runner_launch_projection
+		SET launch_id = $1, start_dispatch_id = $2, updated_at = now()
+		WHERE workspace_id = $3 AND agent_id = $4 AND runtime_id = $5
+		RETURNING COALESCE(provider_session_id, '')
+	`, launchID, dispatchID, agent.WorkspaceID, agent.ID, runtime.ID).Scan(&sessionID)
+	if err != nil {
+		writeError(w, http.StatusConflict, "agent_launch_unavailable")
+		return
+	}
+	h.restarts().finish(uuidToString(agent.ID))
+	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
+		uuidToString(agent.WorkspaceID), runtime.DaemonID.String, protocol.EventDaemonAgentStart, dispatchID,
+		protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: uuidToString(agent.ID), RuntimeID: uuidToString(runtime.ID), LaunchID: launchID, StartDispatchID: dispatchID,
+			Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: sessionID},
+		},
+	) {
+		// The desired launch and immutable dispatch are already recorded.
+		// Reconnect reconciliation replays that exact Start; it must not turn an
+		// unavailable first delivery into manual Stop intent.
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
+}
+
+func (h *Handler) StopAgent(w http.ResponseWriter, r *http.Request) {
+	agent, ok := h.loadAgentRestartTarget(w, r)
+	if !ok {
+		return
+	}
+	restarts := h.restarts()
+	restarts.lifecycleMu.Lock()
+	defer restarts.lifecycleMu.Unlock()
+	workspaceID := uuidToString(agent.WorkspaceID)
+	agentID := uuidToString(agent.ID)
+	if !agent.RuntimeID.Valid {
+		writeError(w, http.StatusConflict, "agent_runtime_missing")
+		return
+	}
+	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
+		ID: agent.RuntimeID, WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil || !runtime.DaemonID.Valid {
+		writeError(w, http.StatusConflict, "agent_runtime_offline")
+		return
+	}
+	var launchID string
+	if restart, active := h.restarts().get(agentID); active && restart.workspaceID == workspaceID &&
+		restart.runtimeID == uuidToString(runtime.ID) && restart.computerID == runtime.DaemonID.String {
+		if restart.step == agentRestartStepStarting {
+			launchID = restart.startLaunchID
+		} else {
+			launchID = restart.stopLaunchID
+		}
+		h.restarts().finish(agentID)
+	}
+	if launchID == "" {
+		err = h.DB.QueryRow(r.Context(), `
+			SELECT launch_id::text FROM agent_runner_launch_projection
+			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3
+		`, agent.WorkspaceID, agent.ID, runtime.ID).Scan(&launchID)
+		if err != nil || launchID == "" {
+			writeError(w, http.StatusConflict, "agent_launch_unavailable")
+			return
+		}
+	}
+	if h.AgentRestartNotifier == nil || !h.AgentRestartNotifier.NotifyAgentRestartCommand(
+		workspaceID, runtime.DaemonID.String, protocol.EventDaemonAgentStop, launchID,
+		protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: launchID},
+	) {
+		writeError(w, http.StatusConflict, "agent_runtime_offline")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+}
+
 // GetAgentRestart returns the server-authoritative capability for Raft's
 // three restart modes. Clients must not infer it from presentation state.
 func (h *Handler) GetAgentRestart(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +198,9 @@ func (h *Handler) ResetAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	restarts := h.restarts()
+	restarts.lifecycleMu.Lock()
+	defer restarts.lifecycleMu.Unlock()
 	var req createAgentRestartRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()

@@ -361,12 +361,6 @@ function AgentProfileTabContent({
   const canEditRuntime = canEdit.allowed;
   const canEditIdentity = canEdit.allowed;
 
-  const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
-  // task #22: gate the profile restart button on the bound runtime's real
-  // capability, never a hardcoded provider list. Missing capabilities object
-  // (older backend, no runtime bound) means false, not "assume supported".
-  const forceRestartSupported =
-    selectedRuntime?.provider_capabilities?.force_restart ?? false;
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
   const displayName = resolveActorDisplayName(agent, agent.id);
   const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
@@ -565,11 +559,7 @@ function AgentProfileTabContent({
         ) : null}
 
         <div className="border-t border-border pt-3">
-          <AgentProfileActions
-            agent={agent}
-            canManage={canEdit.allowed}
-            forceRestartSupported={forceRestartSupported}
-          />
+          <AgentProfileActions agent={agent} canManage={canEdit.allowed} />
         </div>
       </div>
     </div>

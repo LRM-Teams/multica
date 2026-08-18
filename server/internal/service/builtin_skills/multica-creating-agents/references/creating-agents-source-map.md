@@ -50,6 +50,8 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | Atomic provisioning | `createAgentManagedTx`, `createAgentManagedCommit`, `provisionOnboardingAgent`, migration 336 | Human, Proposal, and Onboarding creation share one transaction-scoped primitive for Agent identity, system `#general` membership, and a desired `agent_runner_launch_projection`; onboarding only adds `workspace.onboarding_agent_id` and welcome messages |
 | Durable first start | `handler/runner_reconcile.go`, `daemon/agent_process_manager.go` | the server-owned `launch_id` is retried through `agent:start` until the current Workspace Runner accepts it; setup, reconnect, daemon restart, and Runtime moves use the same desired-vs-observed reconcile |
 | Human read model | Agent Presence and Activity APIs | accepted/active/inactive residency is the current Computer process, reported independently from user-visible Message Activity |
+| Human manual Start / Stop | `handler/agent_restart.go:StartAgent/StopAgent`, `cmd/server/router.go`, `packages/core/api/client.ts`, `packages/views/agents/components/agent-profile-actions.tsx` | owner/admin Agent Panel action; Start persists fresh launch/dispatch identities, Stop targets the current launch without durable Stop intent, and the single button follows Runner process Presence |
+| Computer cancellation fence | `daemon/agent_process_manager.go`, `daemon/workspace_runner_agent_process.go`, `daemon/workspace_runner_message.go` | per-Agent numeric `stopEpoch` cancels async provider setup and idle auto-restart; `launchId` remains the exact-launch fence |
 
 See `docs/agent-creation-proposal-cutover.md` for the production migration
 preflight and post-deploy verification commands.

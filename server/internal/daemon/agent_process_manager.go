@@ -25,8 +25,12 @@ type agentProcessManager struct {
 	newID        func() string
 	onTransition func(agentLifecycleTransition)
 
-	agents        map[string]*managedAgentProcess
-	stopping      map[string]*managedAgentProcess
+	agents   map[string]*managedAgentProcess
+	stopping map[string]*managedAgentProcess
+
+	// stopEpochs is Raft's per-Agent monotonic cancellation generation. A
+	// start captures it at acceptance and rechecks it across async startup.
+	stopEpochs    map[string]uint64
 	queued        []string
 	dispatches    map[string]agentStartDispatchReceipt
 	dispatchOrder []string
@@ -94,6 +98,8 @@ type managedAgentProcess struct {
 	runtimeID       string
 	launchID        string
 	startDispatchID string
+	// startStopEpoch is the stop generation captured by this exact launch.
+	startStopEpoch uint64
 
 	queueState        string
 	processInstanceID string
@@ -130,6 +136,7 @@ func newAgentProcessManager(workspaceID string, admission agentProcessAdmission,
 		onTransition: onTransition,
 		agents:       make(map[string]*managedAgentProcess),
 		stopping:     make(map[string]*managedAgentProcess),
+		stopEpochs:   make(map[string]uint64),
 		dispatches:   make(map[string]agentStartDispatchReceipt),
 	}
 }
@@ -156,6 +163,7 @@ func (m *agentProcessManager) Close() {
 	}
 	m.agents = nil
 	m.stopping = nil
+	m.stopEpochs = nil
 	m.queued = nil
 	m.dispatches = nil
 	m.dispatchOrder = nil
@@ -207,6 +215,7 @@ func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequ
 
 	managed := &managedAgentProcess{
 		agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: request.LaunchID, startDispatchID: request.StartDispatchID, managed: true,
+		startStopEpoch:  m.stopEpochs[request.AgentID],
 		readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode,
 		admitted: make(chan struct{}), transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
 		startupOwners: map[string]int{request.LaunchID: 1}, startupOwnerCount: 1,
@@ -225,7 +234,7 @@ func (m *agentProcessManager) startWithDisposition(request agentProcessStartRequ
 // RestoreIdle re-creates a managed launch after the process is gone without a
 // new server startDispatchId. This is Computer-local idle auto-restart, not a
 // wire agent:start command.
-func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, launchID, startDispatchID string) error {
+func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, launchID, startDispatchID string, startStopEpoch uint64) error {
 	if m == nil {
 		return errors.New("agent process manager is not configured")
 	}
@@ -236,6 +245,9 @@ func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, launchID, startDis
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stopEpochs[agentID] != startStopEpoch || m.stopping[agentID] != nil {
+		return errManagedAgentStartStopped
+	}
 	if existing := m.agents[agentID]; existing != nil && existing.managed {
 		if existing.runtimeID != runtimeID {
 			return errors.New("managed Agent must stop its current Runtime before starting another")
@@ -244,6 +256,7 @@ func (m *agentProcessManager) RestoreIdle(agentID, runtimeID, launchID, startDis
 	}
 	managed := &managedAgentProcess{
 		agentID: agentID, runtimeID: runtimeID, launchID: launchID, startDispatchID: startDispatchID, managed: true,
+		startStopEpoch:  startStopEpoch,
 		readinessPolicy: agentRuntimeReadinessFirstEvent,
 		admitted:        make(chan struct{}), transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
 		startupOwners: map[string]int{launchID: 1}, startupOwnerCount: 1,
@@ -299,6 +312,7 @@ func (m *agentProcessManager) Stop(callback agentProcessCallback) error {
 	if err != nil {
 		return err
 	}
+	m.recordStopLocked(callback.AgentID)
 	m.stopLocked(managed)
 	return nil
 }
@@ -316,6 +330,7 @@ func (m *agentProcessManager) beginManagedStop(callback agentProcessCallback) (a
 		if stopping.launchID != callback.LaunchID {
 			return agentProcessManagerSnapshot{}, nil, false, errors.New("stale Agent process callback")
 		}
+		m.recordStopLocked(callback.AgentID)
 		return snapshotManagedAgentProcess(stopping), stopping.startupDone, true, nil
 	}
 	managed := m.agents[callback.AgentID]
@@ -325,9 +340,19 @@ func (m *agentProcessManager) beginManagedStop(callback agentProcessCallback) (a
 	if managed.launchID != callback.LaunchID {
 		return agentProcessManagerSnapshot{}, nil, false, errors.New("stale Agent process callback")
 	}
+	m.recordStopLocked(callback.AgentID)
 	m.stopLocked(managed)
 	m.stopping[callback.AgentID] = managed
 	return snapshotManagedAgentProcess(managed), managed.startupDone, true, nil
+}
+
+func (m *agentProcessManager) recordStop(agentID string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.recordStopLocked(agentID)
+	m.mu.Unlock()
 }
 
 func (m *agentProcessManager) completeManagedStop(callback agentProcessCallback) {
@@ -343,6 +368,37 @@ func (m *agentProcessManager) completeManagedStop(callback agentProcessCallback)
 
 func (m *agentProcessManager) completeManagedStart(callback agentProcessCallback) {
 	m.settleManagedStart(callback, false)
+}
+
+func (m *agentProcessManager) startStopEpoch(callback agentProcessCallback) (uint64, error) {
+	if m == nil {
+		return 0, errors.New("agent process manager is not configured")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.agents[callback.AgentID]
+	if managed == nil {
+		managed = m.stopping[callback.AgentID]
+	}
+	if managed == nil || managed.launchID != callback.LaunchID {
+		return 0, errors.New("managed Agent start was superseded")
+	}
+	return managed.startStopEpoch, nil
+}
+
+func (m *agentProcessManager) stopEpochChanged(agentID string, captured uint64) bool {
+	if m == nil {
+		return true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopEpochs[agentID] != captured
+}
+
+func (m *agentProcessManager) recordStopLocked(agentID string) uint64 {
+	next := m.stopEpochs[agentID] + 1
+	m.stopEpochs[agentID] = next
+	return next
 }
 
 func (m *agentProcessManager) completeFailedManagedStart(callback agentProcessCallback) {
@@ -413,6 +469,23 @@ func (m *agentProcessManager) ownsManagedProcess(callback agentProcessCallback) 
 	return managed != nil && managed.managed && managed.launchID == callback.LaunchID
 }
 
+// publishManagedStart linearizes the final Active publication with Stop. Raft
+// gets this ordering from its single-threaded event loop; the Go Runner must
+// hold APM ownership until every externally visible start fact is published.
+func (m *agentProcessManager) publishManagedStart(callback agentProcessCallback, publish func() error) error {
+	if m == nil {
+		return errors.New("agent process manager is not configured")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.agents[callback.AgentID]
+	if managed == nil || !managed.managed || managed.launchID != callback.LaunchID ||
+		m.stopEpochs[callback.AgentID] != managed.startStopEpoch {
+		return errManagedAgentStartStopped
+	}
+	return publish()
+}
+
 func (m *agentProcessManager) managedStartupDone(callback agentProcessCallback) (<-chan struct{}, bool) {
 	if m == nil {
 		return nil, false
@@ -456,6 +529,7 @@ func (m *agentProcessManager) Restart(callback agentProcessCallback, request age
 		}
 		return m.rememberAcceptanceLocked(request, m.acceptanceLocked(managed, managed.queueState)), nil
 	}
+	m.recordStopLocked(callback.AgentID)
 	m.stopLocked(managed)
 	return m.startLocked(request)
 }
@@ -629,6 +703,7 @@ func (m *agentProcessManager) RunningAgentIDs() []string {
 func (m *agentProcessManager) startLocked(request agentProcessStartRequest) (protocol.AgentStartAckPayload, error) {
 	managed := &managedAgentProcess{
 		agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: request.LaunchID, startDispatchID: request.StartDispatchID,
+		startStopEpoch:  m.stopEpochs[request.AgentID],
 		readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode, admitted: make(chan struct{}), managed: true,
 		transitions: make(map[string]*openLifecycleTransition), startupDone: make(chan struct{}),
 		startupOwners: map[string]int{request.LaunchID: 1}, startupOwnerCount: 1,
@@ -682,6 +757,7 @@ func (m *agentProcessManager) rebindLaunchLocked(managed *managedAgentProcess, l
 	managed.startupOwnerCount++
 	managed.launchID = launchID
 	managed.startDispatchID = startDispatchID
+	managed.startStopEpoch = m.stopEpochs[managed.agentID]
 	managed.admitted = make(chan struct{})
 	if wasQueued {
 		m.queued = removeQueuedAgent(m.queued, managed.agentID)

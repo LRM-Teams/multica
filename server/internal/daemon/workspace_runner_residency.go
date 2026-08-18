@@ -12,6 +12,7 @@ type agentResidency struct {
 	runtimeID       string
 	launchID        string
 	startDispatchID string
+	startStopEpoch  uint64
 	terminal        bool
 	terminalStage   managedRuntimeFailureStage
 	terminalReason  string
@@ -61,7 +62,7 @@ func (s *agentResidencyStore) rememberLaunch(agentID, runtimeID, launchID, start
 	s.byAgent[agentID] = current
 }
 
-func (s *agentResidencyStore) rememberIdle(agentID, runtimeID, launchID, startDispatchID string) {
+func (s *agentResidencyStore) rememberIdle(agentID, runtimeID, launchID, startDispatchID string, startStopEpoch uint64) {
 	if s == nil || agentID == "" {
 		return
 	}
@@ -70,11 +71,11 @@ func (s *agentResidencyStore) rememberIdle(agentID, runtimeID, launchID, startDi
 	current := s.byAgent[agentID]
 	s.byAgent[agentID] = agentResidency{
 		runtimeID: runtimeID, launchID: launchID, startDispatchID: firstNonEmpty(startDispatchID, current.startDispatchID),
-		idle: true,
+		startStopEpoch: startStopEpoch, idle: true,
 	}
 }
 
-func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reason, detail string) {
+func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, launchID string, startStopEpoch uint64, stage managedRuntimeFailureStage, reason, detail string) {
 	if s == nil || agentID == "" {
 		return
 	}
@@ -83,7 +84,8 @@ func (s *agentResidencyStore) rememberFailure(agentID, runtimeID, launchID strin
 	current := s.byAgent[agentID]
 	res := agentResidency{
 		runtimeID: runtimeID, launchID: launchID, startDispatchID: current.startDispatchID,
-		terminalStage: stage, terminalReason: reason, terminalDetail: detail,
+		startStopEpoch: startStopEpoch,
+		terminalStage:  stage, terminalReason: reason, terminalDetail: detail,
 	}
 	if stage == managedRuntimeFailureSpawn {
 		res.idle = true

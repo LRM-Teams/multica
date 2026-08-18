@@ -691,6 +691,106 @@ func TestWorkspaceRunnerProviderStartSurvivesControlConnectionClose(t *testing.T
 	}
 }
 
+func TestWorkspaceRunnerStopEpochCancelsBlockedProviderStart(t *testing.T) {
+	const (
+		workspaceID = "ws-1"
+		runtimeID   = "runtime-1"
+		agentID     = "agent-1"
+		launchID    = "launch-1"
+	)
+	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+
+	providerStarted := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		close(providerStarted)
+		<-releaseProvider
+		return nil
+	}
+	type startResult struct {
+		status protocol.AgentStatusPayload
+		err    error
+	}
+	startDone := make(chan startResult, 1)
+	go func() {
+		_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: agentID, RuntimeID: runtimeID, LaunchID: launchID, StartDispatchID: "dispatch-1",
+		})
+		startDone <- startResult{status: status, err: err}
+	}()
+	select {
+	case <-providerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("provider start did not reach the asynchronous startup seam")
+	}
+
+	statuses := make(chan protocol.AgentStatusPayload, 2)
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{
+			AgentID: agentID, LaunchID: launchID,
+		}, nil, func(eventType string, payload any) error {
+			if eventType == protocol.EventAgentStatus {
+				statuses <- payload.(protocol.AgentStatusPayload)
+			}
+			return nil
+		})
+	}()
+	select {
+	case err := <-stopDone:
+		t.Fatalf("stop settled before blocked startup released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseProvider)
+
+	result := <-startDone
+	if !errors.Is(result.err, errManagedAgentStartStopped) {
+		t.Fatalf("blocked start error = %v, want stop-epoch suppression", result.err)
+	}
+	if result.status.Status == protocol.AgentStatusActive {
+		t.Fatalf("blocked start published Active after Stop: %+v", result.status)
+	}
+	if err := <-stopDone; err != nil {
+		t.Fatalf("stop blocked start: %v", err)
+	}
+	select {
+	case status := <-statuses:
+		if status.AgentID != agentID || status.LaunchID != launchID || status.Status != protocol.AgentStatusInactive {
+			t.Fatalf("stop status = %+v", status)
+		}
+	default:
+		t.Fatal("Stop did not publish the terminal inactive status")
+	}
+	if _, found := runner.processes.Snapshot(agentID); found {
+		t.Fatal("stopped launch survived in the process manager")
+	}
+
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
+	_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+		AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-2", StartDispatchID: "dispatch-2",
+	})
+	if err != nil || status.Status != protocol.AgentStatusActive {
+		t.Fatalf("fresh start after stopped epoch = status %+v, error %v", status, err)
+	}
+}
+
+func TestWorkspaceRunnerUnknownLaunchStopDoesNotAdvanceEpoch(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	runner, _ := attachTestWorkspaceRunner(t, d, "ws-1", nil)
+	if err := runner.stopManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStopPayload{
+		AgentID: "agent-1", LaunchID: "stale-launch",
+	}, nil, func(string, any) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.processes.RestoreIdle("agent-1", "runtime-1", "launch-1", "dispatch-1", 0); err != nil {
+		t.Fatalf("unowned stale Stop advanced stop epoch: %v", err)
+	}
+}
+
 func TestWorkspaceRunnerDuplicateStartDoesNotSpawnProviderTwice(t *testing.T) {
 	// One Workspace control cycle carries a heartbeat per Runtime. Until the
 	// first start reports Active, the server can therefore replay the same

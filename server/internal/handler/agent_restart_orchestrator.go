@@ -81,23 +81,30 @@ func (h *Handler) beginAgentRestartOperation(ctx context.Context, state activeAg
 }
 
 func (h *Handler) advanceAgentRestartAfterStop(ctx context.Context, state activeAgentRestartState) error {
+	restarts := h.restarts()
+	restarts.lifecycleMu.Lock()
 	current, ok := h.restarts().get(state.agentID)
 	if !ok || current.operationID != state.operationID || current.step != agentRestartStepStopping {
+		restarts.lifecycleMu.Unlock()
 		return nil
 	}
 	if current.storageKind == agentRestartStorageSession || current.storageKind == agentRestartStorageFull {
 		if h.TxStarter == nil {
+			restarts.lifecycleMu.Unlock()
 			return errors.New("Agent restart transaction store is unavailable")
 		}
 		tx, err := h.TxStarter.Begin(ctx)
 		if err != nil {
+			restarts.lifecycleMu.Unlock()
 			return err
 		}
-		defer tx.Rollback(ctx)
 		if err := clearAgentRuntimeSessionState(ctx, tx, current.agentID, current.runtimeID); err != nil {
+			_ = tx.Rollback(ctx)
+			restarts.lifecycleMu.Unlock()
 			return err
 		}
 		if err := tx.Commit(ctx); err != nil {
+			restarts.lifecycleMu.Unlock()
 			return err
 		}
 	}
@@ -110,11 +117,15 @@ func (h *Handler) advanceAgentRestartAfterStop(ctx context.Context, state active
 			return true
 		})
 		if !ok {
+			restarts.lifecycleMu.Unlock()
 			return nil
 		}
-		return h.sendAgentRestartCommand(updated, protocol.EventDaemonAgentResetWorkspace,
+		err := h.sendAgentRestartCommand(updated, protocol.EventDaemonAgentResetWorkspace,
 			protocol.WorkspaceRunnerAgentResetWorkspacePayload{OperationID: updated.operationID, AgentID: updated.agentID})
+		restarts.lifecycleMu.Unlock()
+		return err
 	}
+	restarts.lifecycleMu.Unlock()
 	return h.dispatchAgentRestartStart(ctx, current)
 }
 
@@ -127,6 +138,13 @@ func (h *Handler) advanceAgentRestartAfterWorkspaceReset(ctx context.Context, st
 }
 
 func (h *Handler) dispatchAgentRestartStart(ctx context.Context, state activeAgentRestartState) error {
+	restarts := h.restarts()
+	restarts.lifecycleMu.Lock()
+	defer restarts.lifecycleMu.Unlock()
+	current, active := h.restarts().get(state.agentID)
+	if !active || current.operationID != state.operationID || current.step != state.step {
+		return nil
+	}
 	if h.TxStarter == nil {
 		return errors.New("Agent restart transaction store is unavailable")
 	}
@@ -219,10 +237,22 @@ func (h *Handler) advanceAgentRestartFromStatus(ctx context.Context, identity da
 	case state.step == agentRestartStepStopping && status.Status == protocol.AgentStatusInactive && status.LaunchID == state.stopLaunchID:
 		return true, h.advanceAgentRestartAfterStop(ctx, state)
 	case state.step == agentRestartStepStarting:
+		restarts := h.restarts()
+		restarts.lifecycleMu.Lock()
+		defer restarts.lifecycleMu.Unlock()
+		current, active := h.activeAgentRestartForRunner(identity, status.AgentID)
+		if !active || current.operationID != state.operationID || current.step != agentRestartStepStarting {
+			return false, nil
+		}
+		state = current
 		if state.startLaunchID != "" && state.startLaunchID != status.LaunchID {
 			return false, nil
 		}
-		if status.Status == protocol.AgentStatusActive || status.Status == protocol.AgentStatusInactive {
+		if status.Status == protocol.AgentStatusInactive {
+			h.restarts().finish(state.agentID)
+			return true, nil
+		}
+		if status.Status == protocol.AgentStatusActive {
 			h.restarts().finish(state.agentID)
 		}
 		return true, nil

@@ -22,6 +22,7 @@ removed). Use real replacements:
 |---|---|
 | List agents | `multica workspace info --agents` / `--output json` |
 | Create / edit / archive | Multica **Web UI** → `POST/PUT/DELETE /api/agents` |
+| Start / stop | Agent Panel → one Presence-driven button → `POST /api/members/agents/{id}/start|stop` |
 | Hire (agent → human) | agent-created **agent:create Proposal Message** → owner/admin opens CreateAgentDialog |
 | Skill binding | Web UI agent settings → `POST/PUT /api/agents/{id}/skills…` |
 | Env secrets (owner/admin) | Web UI → `GET/PUT /api/agents/{id}/env` (agent actors denied plaintext) |
@@ -66,6 +67,18 @@ CLI output, are what the agent runs on.
 The Workspace Onboarding Agent uses the same generic Agent creation transaction.
 Its additional role is identified only by `workspace.onboarding_agent_id`;
 `Wendy` is a default display name, not an identity or authorization predicate.
+
+## Manual lifecycle
+
+The human Agent Panel exposes one Start/Stop button to members with Agent
+management permission. It reads Runner process Presence: active means Stop;
+offline means Start. Message work/activity status is not lifecycle truth.
+
+`POST /api/members/agents/{id}/start` records a fresh `launchId` and
+`startDispatchId` before dispatch, so it never reuses an accepted Start
+receipt. `POST /api/members/agents/{id}/stop` targets the current launch and
+requires the current Workspace Runner; it does not persist manual Stop intent.
+These are human product actions, not `multica agent *` CLI commands.
 
 Two distinct text fields, often confused:
 
@@ -186,6 +199,8 @@ bindings.
 State-changing (require explicit human instruction — do not run speculatively):
 
 - Web UI / committed agent:create Proposal Message → inserts a new agent row.
+- Agent Panel Start / Stop → requests a process lifecycle transition on the
+  bound Computer; Stop is not durable Server intent.
 - Skill add / set → mutate bindings (`set` is destructive).
 - Env set → overwrites full `custom_env` and writes an audit row.
 

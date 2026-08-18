@@ -135,8 +135,8 @@ function reachableOrdered(
 
   // BFS (iterative to stay deterministic and avoid deep recursion at 10k nodes).
   const queue: string[] = [req.root];
-  while (queue.length > 0) {
-    const cur = queue.shift()!;
+  for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+    const cur = queue[queueIndex]!;
     const d = depth.get(cur)!;
     if (d >= maxDepth) continue;
     const fwd = out.get(cur)!;
@@ -191,6 +191,7 @@ export function createProjectionSliceFixture(
   const listeners = new Set<(w: SliceWireRequest) => void>();
 
   const adjacency = buildAdjacency(graph);
+  const reachableOrderCache = new Map<string, string[]>();
 
   const contentHashFor = (nodeIds: readonly string[]): string =>
     shortHash(`${snapshotId}:${nodeIds.join("|")}`);
@@ -218,7 +219,19 @@ export function createProjectionSliceFixture(
     };
     for (const l of listeners) l(wire);
 
-    const order = reachableOrdered(adjacency, graph, req);
+    const orderKey = JSON.stringify([
+      req.root,
+      req.direction,
+      req.relationTypes,
+      req.maxDepth,
+      req.status,
+      req.importanceFloor,
+    ]);
+    let order = reachableOrderCache.get(orderKey);
+    if (!order) {
+      order = reachableOrdered(adjacency, graph, req);
+      reachableOrderCache.set(orderKey, order);
+    }
     const totalNodes = order.length;
     const start = decodeCursor(req.cursor);
     const pageIds = order.slice(start, start + limit);

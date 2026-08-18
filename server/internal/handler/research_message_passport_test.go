@@ -76,8 +76,8 @@ func TestPostResearchMessageClientRequestIDValidation(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	testHandler.PostResearchMessage(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 for non-v6 message without client_request_id, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for non-v6 message without client_request_id, got %d: %s", rec.Code, rec.Body.String())
 	}
 
 	// Case 2: V6 session rejects message without client_request_id with 400 Bad Request.

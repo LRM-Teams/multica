@@ -11,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -33,6 +36,41 @@ type runtimeLocalSkillSummary struct {
 	SourcePath  string `json:"source_path"`
 	Provider    string `json:"provider"`
 	FileCount   int    `json:"file_count"`
+}
+
+func (d *Daemon) handleAgentSkillsList(req protocol.AgentSkillsListPayload, writes chan<- []byte) {
+	resp := protocol.AgentSkillsListResultPayload{AgentID: req.AgentID, RequestID: req.RequestID, Global: []protocol.AgentSkillSummary{}, Workspace: []protocol.AgentSkillSummary{}}
+	d.mu.Lock()
+	runtime, runtimeOK := d.runtimeIndex[req.Runtime]
+	d.mu.Unlock()
+	if !runtimeOK {
+		d.sendDaemonFrame(protocol.EventAgentSkillsListResult, resp, req.RequestID, writes)
+		return
+	}
+	global, _, err := listRuntimeLocalSkills(runtime.Provider)
+	if err != nil {
+		d.sendDaemonFrame(protocol.EventAgentSkillsListResult, resp, req.RequestID, writes)
+		return
+	}
+	for _, item := range global {
+		resp.Global = append(resp.Global, protocol.AgentSkillSummary{
+			Name: item.Name, Description: item.Description, Path: item.SourcePath, Source: "global",
+		})
+	}
+	if req.AgentID != "" {
+		root := agentworkspace.Root(d.cfg.WorkspacesRoot, runtime.WorkspaceID, req.AgentID)
+		workspaceSkills, _, listErr := listLocalSkillsFromRoot(runtime.Provider, execenv.SkillsDirPath(root, runtime.Provider))
+		if listErr != nil {
+			d.logger.Debug("workspace skill discovery failed", "agent_id", req.AgentID, "error", listErr)
+		} else {
+			for _, item := range workspaceSkills {
+				resp.Workspace = append(resp.Workspace, protocol.AgentSkillSummary{
+					Name: item.Name, Description: item.Description, Path: item.SourcePath, Source: "workspace",
+				})
+			}
+		}
+	}
+	d.sendDaemonFrame(protocol.EventAgentSkillsListResult, resp, req.RequestID, writes)
 }
 
 type runtimeLocalSkillBundle struct {
@@ -72,7 +110,7 @@ func localSkillRootForProvider(provider string) (string, bool, error) {
 		}
 		return filepath.Join(codexHome, "skills"), true, nil
 	case agent.ProviderOpenCode:
-		return filepath.Join(home, ".config", "opencode", "skills"), true, nil
+		return filepath.Join(home, ".config", agent.ProviderOpenCode, "skills"), true, nil
 	case agent.ProviderPi:
 		return filepath.Join(home, ".pi", "skills"), true, nil
 	case agent.ProviderCursor:

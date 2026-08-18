@@ -85,7 +85,7 @@ export function ResearchV6NodeDetail({
       ]
     : [];
   const relationLabel = (kind: string) => {
-    const labels = t(($) => $.v6_detail.relation_kind);
+    const labels = t(($) => $.v6_detail.relation_kind, { returnObjects: true });
     return labels[kind as keyof typeof labels] ?? kind;
   };
 

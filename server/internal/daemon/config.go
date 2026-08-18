@@ -17,6 +17,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 const (
@@ -241,7 +242,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 				Model: strings.TrimSpace(os.Getenv(modelEnv)),
 			}, true
 		}
-		if defaultCmd == "codex" && cmd == defaultCmd {
+		if defaultCmd == agent.ProviderCodex && cmd == defaultCmd {
 			// Codex Desktop bundles its CLI inside the macOS app instead of
 			// installing it onto PATH.
 			for _, p := range codexDesktopAppBundlePaths() {
@@ -257,26 +258,26 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 
 	agents := map[string]AgentEntry{}
-	if e, ok := probe("MULTICA_CLAUDE_PATH", "claude", "MULTICA_CLAUDE_MODEL"); ok {
-		agents["claude"] = e
+	if e, ok := probe("MULTICA_CLAUDE_PATH", agent.ProviderClaude, "MULTICA_CLAUDE_MODEL"); ok {
+		agents[agent.ProviderClaude] = e
 	}
-	if e, ok := probe("MULTICA_CODEX_PATH", "codex", "MULTICA_CODEX_MODEL"); ok {
-		agents["codex"] = e
+	if e, ok := probe("MULTICA_CODEX_PATH", agent.ProviderCodex, "MULTICA_CODEX_MODEL"); ok {
+		agents[agent.ProviderCodex] = e
 	}
-	if e, ok := probe("MULTICA_OPENCODE_PATH", "opencode", "MULTICA_OPENCODE_MODEL"); ok {
-		agents["opencode"] = e
+	if e, ok := probe("MULTICA_OPENCODE_PATH", agent.ProviderOpenCode, "MULTICA_OPENCODE_MODEL"); ok {
+		agents[agent.ProviderOpenCode] = e
 	}
-	if e, ok := probe("MULTICA_PI_PATH", "pi", "MULTICA_PI_MODEL"); ok {
-		agents["pi"] = e
+	if e, ok := probe("MULTICA_PI_PATH", agent.ProviderPi, "MULTICA_PI_MODEL"); ok {
+		agents[agent.ProviderPi] = e
 	}
 	if e, ok := probe("MULTICA_CURSOR_PATH", "cursor-agent", "MULTICA_CURSOR_MODEL"); ok {
-		agents["cursor"] = e
+		agents[agent.ProviderCursor] = e
 	}
 	if e, ok := probe("MULTICA_KIRO_PATH", "kiro-cli", "MULTICA_KIRO_MODEL"); ok {
-		agents["kiro"] = e
+		agents[agent.ProviderKiro] = e
 	}
-	if e, ok := probe("MULTICA_GROK_PATH", "grok", "MULTICA_GROK_MODEL"); ok {
-		agents["grok"] = e
+	if e, ok := probe("MULTICA_GROK_PATH", agent.ProviderGrok, "MULTICA_GROK_MODEL"); ok {
+		agents[agent.ProviderGrok] = e
 	}
 	// Zero detected agent CLIs is a valid Computer. Setup and Binding child
 	// connectivity are proven by the Workspace connection, not by runtime count.

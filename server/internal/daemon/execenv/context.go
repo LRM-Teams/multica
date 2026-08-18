@@ -120,6 +120,12 @@ func skillsDirPath(agentRoot, provider string) string {
 	}
 }
 
+// SkillsDirPath exposes the provider-native workspace skill root to the
+// daemon's profile discovery protocol without duplicating the mapping.
+func SkillsDirPath(agentRoot, provider string) string {
+	return skillsDirPath(agentRoot, provider)
+}
+
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 
 // ensureSkillFrontmatter returns SKILL.md content guaranteed to lead with a

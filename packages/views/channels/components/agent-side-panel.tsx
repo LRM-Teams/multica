@@ -19,9 +19,8 @@ import type {
   Agent,
   DashboardUsageByAgent,
   MemberWithUser,
-  RuntimeLocalSkillSummary,
 } from "@multica/core/types";
-import { runtimeListOptions, runtimeLocalSkillsOptions } from "@multica/core/runtimes";
+import { agentProfileSkillsOptions, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -349,9 +348,7 @@ function AgentProfileTabContent({
   const { t } = useT("agents");
   const wsId = agent.workspace_id;
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
-  const { data: localSkills } = useQuery(
-    runtimeLocalSkillsOptions(agent.runtime_id),
-  );
+  const { data: profileSkills } = useQuery(agentProfileSkillsOptions(agent.id));
   const handleUpdate = useUpdateAgent(wsId);
   const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
   const qc = useQueryClient();
@@ -493,8 +490,8 @@ function AgentProfileTabContent({
         </div>
 
         <AgentProfileSkills
-          globalSkills={localSkills?.skills ?? []}
-          agentSkills={agent.skills}
+          globalSkills={profileSkills?.global ?? []}
+          workspaceSkills={profileSkills?.workspace ?? []}
         />
 
         <RolesDialog
@@ -573,10 +570,10 @@ function AgentProfileTabContent({
 
 function AgentProfileSkills({
   globalSkills,
-  agentSkills,
+  workspaceSkills,
 }: {
-  globalSkills: readonly RuntimeLocalSkillSummary[];
-  agentSkills: Agent["skills"];
+  globalSkills: readonly { name: string; description?: string; path?: string }[];
+  workspaceSkills: readonly { name: string; description?: string; path?: string }[];
 }) {
   const { t } = useT("agents");
 
@@ -587,7 +584,7 @@ function AgentProfileSkills({
       data-testid="agent-profile-skills"
     >
       <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t(($) => $.side_panel.skills_section)} ({globalSkills.length + agentSkills.length})
+        {t(($) => $.side_panel.skills_section)} ({globalSkills.length + workspaceSkills.length})
       </h3>
       <SkillScopeList
         title={t(($) => $.side_panel.global_skills)}
@@ -598,7 +595,7 @@ function AgentProfileSkills({
       <SkillScopeList
         title={t(($) => $.side_panel.workspace_skills)}
         emptyLabel={t(($) => $.side_panel.no_workspace_skills)}
-        skills={agentSkills}
+        skills={workspaceSkills}
         icon={<Folder className="size-4" aria-hidden />}
       />
     </section>
@@ -617,11 +614,12 @@ function SkillScopeList({
     name: string;
     description?: string;
     source_path?: string;
+    path?: string;
   }>;
   icon: ReactNode;
 }) {
-  const rootPath = skills[0]?.source_path
-    ? skills[0].source_path.slice(0, skills[0].source_path.lastIndexOf("/"))
+  const rootPath = (skills[0]?.path ?? skills[0]?.source_path)
+    ? (skills[0]?.path ?? skills[0]?.source_path)!.slice(0, (skills[0]?.path ?? skills[0]?.source_path)!.lastIndexOf("/"))
     : null;
 
   return (
@@ -642,7 +640,7 @@ function SkillScopeList({
       ) : (
         <ul className="space-y-2">
           {skills.map((skill) => (
-            <li key={`${skill.name}:${skill.source_path ?? ""}`} className="flex min-w-0 items-start gap-3 rounded-md border-2 border-border px-3 py-3">
+            <li key={`${skill.name}:${skill.path ?? skill.source_path ?? ""}`} className="flex min-w-0 items-start gap-3 rounded-md border-2 border-border px-3 py-3">
               <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold">{skill.name}</div>

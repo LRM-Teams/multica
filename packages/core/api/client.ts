@@ -2966,6 +2966,10 @@ export class ApiClient {
     return this.fetch(`/api/members/agents/${agentId}/skills`);
   }
 
+  async listAgentProfileSkills(agentId: string): Promise<{ agentId: string; requestId?: string; global: SkillSummary[]; workspace: SkillSummary[] }> {
+    return this.fetch(`/api/agents/${agentId}/skills/profile`);
+  }
+
   async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
     return this.fetch(`/api/members/agents/${agentId}/memories`);
   }
@@ -5247,7 +5251,16 @@ export class ApiClient {
         client_request_id: request.clientRequestId,
       }),
     });
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<{
+      id: string;
+      workspace_id: string;
+      run_id: string;
+      director_agent_id: string;
+      status: string;
+      reason: string;
+      generation: number;
+      state_version: number;
+    } | null>(
       raw,
       ResearchV6DirectorAssignmentSchema,
       null,

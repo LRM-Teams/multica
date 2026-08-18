@@ -482,6 +482,18 @@ func (h *Hub) RequestWorkdirFiles(ctx context.Context, req protocol.ListWorkdirF
 	return &resp, nil
 }
 
+func (h *Hub) RequestAgentSkills(ctx context.Context, req protocol.AgentSkillsListPayload) (*protocol.AgentSkillsListResultPayload, error) {
+	raw, err := h.requestDaemon(ctx, req.Runtime, req.RequestID, protocol.EventAgentSkillsList, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp protocol.AgentSkillsListResultPayload
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // RequestReadFile pushes a read-file request to req.RuntimeID's daemon and waits
 // for the correlated response. ErrRuntimeOffline if no daemon is connected.
 func (h *Hub) RequestReadFile(ctx context.Context, req protocol.ReadWorkdirFileRequestPayload) (*protocol.ReadWorkdirFileResponsePayload, error) {
@@ -1450,6 +1462,7 @@ func (c *client) handleFrame(raw []byte) {
 		}
 	case protocol.EventAgentWorkspaceFileTree,
 		protocol.EventAgentWorkspaceFileContent,
+		protocol.EventAgentSkillsListResult,
 		protocol.EventDaemonWriteFileResponse,
 		protocol.EventDaemonDeleteDirResponse,
 		protocol.EventDaemonSeedAgentContextResponse,

@@ -27,6 +27,7 @@ const {
   usageRows,
   mockRuntimes,
   mockLocalSkills,
+  mockWorkspaceSkills,
   updateAgentWorkspaceRole,
   setQueryData,
   invalidateQueries,
@@ -54,6 +55,7 @@ const {
   // existing tests see no selected runtime; a #687 test loads a staged one.
   mockRuntimes: { current: [] as Array<Record<string, unknown>> },
   mockLocalSkills: { current: [] as Array<Record<string, unknown>> },
+  mockWorkspaceSkills: { current: [] as Array<Record<string, unknown>> },
 }));
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
@@ -224,8 +226,8 @@ vi.mock("@tanstack/react-query", () => ({
     data:
       options.kind === "usage-by-agent"
         ? usageRows
-        : options.queryKey?.[0] === "runtimes" && options.queryKey?.[1] === "local-skills"
-          ? { skills: mockLocalSkills.current, supported: true }
+        : options.queryKey?.[0] === "agents" && options.queryKey?.[1] === "profile-skills"
+          ? { global: mockLocalSkills.current, workspace: mockWorkspaceSkills.current }
           : options.queryKey?.[0] === "runtimes"
             ? mockRuntimes.current
           : [],
@@ -235,7 +237,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
-  runtimeLocalSkillsOptions: () => ({ queryKey: ["runtimes", "local-skills"] }),
+  agentProfileSkillsOptions: () => ({ queryKey: ["agents", "profile-skills"] }),
   deriveRuntimeHealth: (rt: { status?: string }) =>
     rt?.status === "online" ? "online" : "offline",
   runtimeCurrentVersion: (rt: { current_version?: string | null }) =>
@@ -402,6 +404,7 @@ describe("AgentSidePanel", () => {
     usageRows.length = 0;
     mockRuntimes.current = [];
     mockLocalSkills.current = [];
+    mockWorkspaceSkills.current = [];
   });
 
   it("shows global and workspace skills separately in the profile", () => {
@@ -409,9 +412,10 @@ describe("AgentSidePanel", () => {
       {
         name: "global-review",
         description: "Shared review rules",
-        source_path: "~/.agents/skills/global-review",
+        path: "~/.agents/skills/global-review",
       },
     ];
+    mockWorkspaceSkills.current = [{ name: "deploy", description: "Deploy safely", path: "agent/skills/deploy" }];
     const agent = { ...makeAgent("user-owner"), skills: [{ id: "skill-1", name: "deploy", description: "Deploy safely" }] };
     render(
       <AgentSidePanel

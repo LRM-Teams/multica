@@ -98,7 +98,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	env := execenv.Reuse(execenv.ReuseParams{
 		AgentRoot:    workspace.AgentRoot,
 		Provider:     runtime.Provider,
-		CodexVersion: d.agentVersion("codex"),
+		CodexVersion: d.agentVersion(agent.ProviderCodex),
 		McpConfig:    config.Agent.McpConfig,
 		Task:         taskCtx,
 	}, d.logger)
@@ -140,7 +140,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	// channel and project scoped secrets belong to product Task execution.
 	injectAgentCustomEnv(agentEnv, config.Agent, d.logger)
 	addMulticaAgentEnv(agentEnv, d.cfg, config.WorkspaceID, config.Agent.ID)
-	if runtime.Provider == "pi" {
+	if runtime.Provider == agent.ProviderPi {
 		addPiMemoryFastModeEnv(agentEnv)
 	}
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{

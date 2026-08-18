@@ -2396,7 +2396,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if err := os.MkdirAll(executionRoot, 0o755); err != nil {
 		return TaskResult{}, fmt.Errorf("create task execution root: %w", err)
 	}
-	codexVersion := d.agentVersion("codex")
+	codexVersion := d.agentVersion(agent.ProviderCodex)
 	var agentMcpConfig json.RawMessage
 	if task.Agent != nil {
 		agentMcpConfig = task.Agent.McpConfig
@@ -2571,7 +2571,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if !restrictedExecution {
 		addMulticaAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID)
-		if provider == "pi" {
+		if provider == agent.ProviderPi {
 			addPiMemoryFastModeEnv(agentEnv)
 		}
 	}
@@ -3977,9 +3977,9 @@ func isBlockedEnvKey(key string) bool {
 func defaultArgsForProvider(cfg Config, provider string) []string {
 	var args []string
 	switch provider {
-	case "claude":
+	case agent.ProviderClaude:
 		args = cfg.ClaudeArgs
-	case "codex":
+	case agent.ProviderCodex:
 		args = cfg.CodexArgs
 	default:
 		return nil

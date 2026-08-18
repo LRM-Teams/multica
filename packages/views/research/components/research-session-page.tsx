@@ -864,8 +864,22 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   }
 
   const { session, messages, report, sources } = data;
-  const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
-  const fleet = { ...data.fleet, members: fleetMembers };
+  // V6 projection responses are authoritative and may intentionally omit the
+  // legacy Fleet on the first paint. Keep all legacy-only derivation behind a
+  // V5 guard so a missing fleet can never crash or be cached into the V6 view.
+  const fleetMembers = directorV6Enabled
+    ? []
+    : dedupeResearchFleetMembers(data.fleet?.members ?? []);
+  const fleet = data.fleet
+    ? { ...data.fleet, members: fleetMembers }
+    : {
+        id: "",
+        workspace_id: wsId,
+        lead_agent_id: null,
+        members: fleetMembers,
+        created_at: "",
+        updated_at: "",
+      };
   const directorMember =
     fleet.members.find(
       (member) => member.agent_id === fleet.lead_agent_id,

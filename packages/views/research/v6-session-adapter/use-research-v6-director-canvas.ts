@@ -69,7 +69,9 @@ export function useResearchV6DirectorCanvas({
     ...researchV6DirectorSnapshotOptions(transport, workspaceId, runId),
     enabled,
   });
-  const firstPage = snapshotQuery.data?.pages[0] ?? null;
+  const firstPage = snapshotQuery.error
+    ? null
+    : snapshotQuery.data?.pages[0] ?? null;
   const snapshotId = firstPage?.snapshot_id ?? null;
   const expectedDisplayIdentity = firstPage
     ? researchV6DirectorDisplayIdentity(
@@ -143,11 +145,11 @@ export function useResearchV6DirectorCanvas({
     ],
   );
   useEffect(() => {
-    if (!liveController) return;
+    if (!liveController || snapshotQuery.error) return;
     for (const page of snapshotQuery.data?.pages ?? []) {
       liveController.seedSnapshotPage(page);
     }
-  }, [liveController, snapshotQuery.data?.pages]);
+  }, [liveController, snapshotQuery.data?.pages, snapshotQuery.error]);
   useEffect(() => {
     if (!liveController) return;
     liveController.connect();
@@ -162,6 +164,7 @@ export function useResearchV6DirectorCanvas({
   );
 
   const canvas = useMemo(() => {
+    if (snapshotQuery.error) return null;
     const defaultPages = snapshotQuery.data?.pages ?? [];
     if (!firstPage || defaultPages.length === 0) return null;
     const liveView = liveController
@@ -214,6 +217,7 @@ export function useResearchV6DirectorCanvas({
     queryClient,
     runId,
     snapshotQuery.data?.pages,
+    snapshotQuery.error,
     workspaceId,
   ]);
 

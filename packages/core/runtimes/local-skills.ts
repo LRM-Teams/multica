@@ -5,6 +5,12 @@ import type {
   RuntimeLocalSkillImportResult,
   RuntimeLocalSkillsResult,
 } from "../types";
+import type { SkillSummary } from "../types";
+
+export type AgentProfileSkill = Pick<SkillSummary, "name" | "description"> & {
+  path?: string;
+  source?: string;
+};
 
 export const runtimeLocalSkillsKeys = {
   all: () => ["runtimes", "local-skills"] as const,
@@ -97,6 +103,22 @@ export function runtimeLocalSkillsOptions(runtimeId: string | null | undefined) 
       : runtimeLocalSkillsKeys.all(),
     queryFn: () => resolveRuntimeLocalSkills(runtimeId as string),
     enabled: Boolean(runtimeId),
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export const agentProfileSkillsKeys = {
+  forAgent: (agentId: string) => ["agents", "profile-skills", agentId] as const,
+};
+
+export function agentProfileSkillsOptions(agentId: string | null | undefined) {
+  return queryOptions({
+    queryKey: agentId
+      ? agentProfileSkillsKeys.forAgent(agentId)
+      : ["agents", "profile-skills"] as const,
+    queryFn: () => api.listAgentProfileSkills(agentId as string),
+    enabled: Boolean(agentId),
     staleTime: 30_000,
     retry: false,
   });

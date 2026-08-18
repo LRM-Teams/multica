@@ -500,6 +500,7 @@ export interface ResearchRun {
   plan_version: number;
   state_version: number;
   orchestrator_version: string;
+  director_agent_id?: string;
   config: ResearchRunConfig;
   stats: ResearchRunStats;
   initialized_at?: string;

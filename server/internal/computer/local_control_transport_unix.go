@@ -25,6 +25,9 @@ func localControlEndpoint(residentRoot, name string) string {
 	if len(path) > unixControlPathLimit {
 		digest := sha256.Sum256([]byte(strings.TrimSpace(residentRoot)))
 		path = filepath.Join(os.TempDir(), fmt.Sprintf("multica-%d-%s", os.Getuid(), hex.EncodeToString(digest[:8])), filename)
+		if len(path) > unixControlPathLimit {
+			path = filepath.Join("/tmp", fmt.Sprintf("multica-%d-%s", os.Getuid(), hex.EncodeToString(digest[:8])), filename)
+		}
 	}
 	return "unix://" + filepath.ToSlash(path)
 }

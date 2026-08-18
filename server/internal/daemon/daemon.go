@@ -2396,7 +2396,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if err := os.MkdirAll(executionRoot, 0o755); err != nil {
 		return TaskResult{}, fmt.Errorf("create task execution root: %w", err)
 	}
-	codexVersion := d.agentVersion("codex")
+	codexVersion := d.agentVersion(agent.ProviderCodex)
 	var agentMcpConfig json.RawMessage
 	if task.Agent != nil {
 		agentMcpConfig = task.Agent.McpConfig
@@ -2571,7 +2571,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if !restrictedExecution {
 		addMulticaAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID)
-		if provider == "pi" {
+		if provider == agent.ProviderPi {
 			addPiMemoryFastModeEnv(agentEnv)
 		}
 	}
@@ -2621,11 +2621,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		pathDirectories = append(pathDirectories, cliBinDir, os.Getenv("PATH"))
 		agentEnv["PATH"] = strings.Join(pathDirectories, string(os.PathListSeparator))
-	}
-	// Point Codex to the Agent-scoped CODEX_HOME so it discovers skills natively
-	// without polluting the system ~/.codex/skills/.
-	if env.CodexHome != "" {
-		agentEnv["CODEX_HOME"] = env.CodexHome
 	}
 	// Inject user-configured custom_env (agent-scoped) plus claim-time
 	// scoped_secrets after channel/project filtering (LRM-953). Channel A
@@ -3982,9 +3977,9 @@ func isBlockedEnvKey(key string) bool {
 func defaultArgsForProvider(cfg Config, provider string) []string {
 	var args []string
 	switch provider {
-	case "claude":
+	case agent.ProviderClaude:
 		args = cfg.ClaudeArgs
-	case "codex":
+	case agent.ProviderCodex:
 		args = cfg.CodexArgs
 	default:
 		return nil

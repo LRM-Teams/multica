@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type {
   ChannelMemberRole,
   Issue,
@@ -3032,6 +3033,10 @@ export class ApiClient {
     return this.fetch(`/api/members/agents/${agentId}/skills`);
   }
 
+  async listAgentProfileSkills(agentId: string): Promise<{ agentId: string; requestId?: string; global: SkillSummary[]; workspace: SkillSummary[] }> {
+    return this.fetch(`/api/agents/${agentId}/skills/profile`);
+  }
+
   async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
     return this.fetch(`/api/members/agents/${agentId}/memories`);
   }
@@ -5291,7 +5296,19 @@ export class ApiClient {
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+      // Never rewrite a server response's identity into the requested scope.
+      // A mismatched projection is untrusted and must fail closed.
+      return {
+        ...snapshot,
+        workspace_id: workspaceId,
+        run_id: runId,
+        snapshot_id: "",
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+        next_cursor: undefined,
+      };
     }
     return snapshot;
   }
@@ -5314,17 +5331,7 @@ export class ApiClient {
       }),
     });
     const parsed = parseWithFallback<
-      | {
-          id: string;
-          workspace_id: string;
-          run_id: string;
-          director_agent_id: string;
-          status: string;
-          reason: string;
-          generation: number;
-          state_version: number;
-        }
-      | null
+      z.output<typeof ResearchV6DirectorAssignmentSchema> | null
     >(
       raw,
       ResearchV6DirectorAssignmentSchema,
@@ -5368,7 +5375,17 @@ export class ApiClient {
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+      return {
+        ...snapshot,
+        workspace_id: workspaceId,
+        run_id: runId,
+        snapshot_id: validated.snapshot_id,
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+        next_cursor: undefined,
+      };
     }
     if (snapshot.snapshot_id !== validated.snapshot_id) {
       return {

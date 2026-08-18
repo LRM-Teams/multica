@@ -191,7 +191,11 @@ export interface ResearchV6DirectorProjectionResumeRequest {
   projection_hash: string;
 }
 
-export type ResearchV6DirectorNodeDetailView = "brief" | "full" | "history";
+export type ResearchV6DirectorNodeDetailView =
+  | "brief"
+  | "full"
+  | "history"
+  | (string & {});
 
 export interface ResearchV6DirectorNodeDetail {
   snapshot_id: string;

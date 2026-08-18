@@ -18,21 +18,22 @@ import (
 // BindingMachineUpgradeConfig is the Computer-owned child executor for one
 // connect-socket computer:upgrade. DaemonCore only invokes it.
 type BindingMachineUpgradeConfig struct {
-	Identity       HostProcessIdentity
-	ResidentRoot   string
-	ControlURL     string
-	ControlToken   string
-	Child          BindingChildIdentity
-	ManifestURL    string
-	Drain          func(context.Context) error
-	ReleaseDrain   func()
-	Exit           func()
-	Emit           func(string, any)
-	Prepare        func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (BindingMachineUpgradePrepared, error)
-	StageRelease   func(string, time.Duration, string) (string, error)
-	VerifyBinary   func(context.Context, string, string) error
-	InstallPath    func() (string, error)
-	SwapExecutable func(string, string) error
+	Identity        HostProcessIdentity
+	ResidentRoot    string
+	ServiceEndpoint string
+	ControlToken    string
+	Child           BindingChildIdentity
+	RuntimeID       string
+	DaemonToken     string
+	ManifestURL     string
+	Drain           func(context.Context) error
+	ReleaseDrain    func()
+	Exit            func()
+	Emit            func(string, any)
+	StageRelease    func(string, time.Duration, string) (string, error)
+	VerifyBinary    func(context.Context, string, string) error
+	InstallPath     func() (string, error)
+	SwapExecutable  func(string, string) error
 }
 
 // BindingMachineUpgradeExecutor runs one machine-wide upgrade inside the
@@ -67,7 +68,7 @@ func (executor *BindingMachineUpgradeExecutor) Execute(ctx context.Context, comm
 		return errors.New("Binding child Machine Upgrade executor is unavailable")
 	}
 	pending := protocol.DaemonHeartbeatPendingMachineUpgrade{
-		ID: strings.TrimSpace(command.RequestID), TargetVersion: strings.TrimSpace(command.TargetVersion),
+		ID: command.Operation(), TargetVersion: strings.TrimSpace(command.TargetVersion),
 	}
 	if pending.ID == "" {
 		return errors.New("Computer upgrade request identity is required")
@@ -97,7 +98,6 @@ func (executor *BindingMachineUpgradeExecutor) Execute(ctx context.Context, comm
 }
 
 func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending protocol.DaemonHeartbeatPendingMachineUpgrade) error {
-	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	if executor.config.Drain != nil {
 		if err := executor.config.Drain(ctx); err != nil {
 			return err
@@ -122,7 +122,7 @@ func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending 
 		}
 		return nil
 	}
-	executor.emitUpgradeProgress(pending.ID, "downloading", "Downloading release")
+	executor.emitUpgradeProgress(pending.ID, "staging", "Downloading release")
 	staged, err := executor.config.StageRelease(target, cli.DefaultUpdateDownloadTimeout, firstNonEmpty(executor.config.ManifestURL, prepared.ManifestURL))
 	if err != nil {
 		_ = executor.reportFailure(ctx, pending.ID, "stage_failed", err)
@@ -133,26 +133,25 @@ func (executor *BindingMachineUpgradeExecutor) run(ctx context.Context, pending 
 		_ = executor.reportFailure(ctx, pending.ID, "verification_failed", err)
 		return err
 	}
+	executor.emitUpgradeProgress(pending.ID, "handoff", "Swapping binary")
 	installPath, err := executor.config.InstallPath()
 	if err != nil {
 		_ = executor.reportFailure(ctx, pending.ID, "activation_failed", err)
 		return err
 	}
-	journal := hostMachineUpgradeJournal{
-		RequestID: pending.ID, FromVersion: executor.config.Identity.Version,
-		TargetVersion: target, StartedAt: startedAt,
-	}
-	if err := writeMachineUpgradeJournal(executor.config.ResidentRoot, journal); err != nil {
-		_ = executor.reportFailure(ctx, pending.ID, "journal_persist_failed", err)
-		return err
-	}
-	executor.emitUpgradeProgress(pending.ID, "applying", "Swapping binary")
 	if err := executor.config.SwapExecutable(installPath, staged); err != nil {
-		_ = removeMachineUpgradeJournal(executor.config.ResidentRoot)
 		_ = executor.reportFailure(ctx, pending.ID, "activation_failed", err)
 		return err
 	}
-	executor.emitUpgradeProgress(pending.ID, "restarting", "Restarting Computer")
+	journal := hostMachineUpgradeJournal{
+		RequestID: pending.ID, FromVersion: executor.config.Identity.Version,
+		TargetVersion: target, StartedAt: time.Now().UTC().Format(time.RFC3339Nano), SchemaVersion: 1,
+	}
+	if err := writeMachineUpgradeJournal(executor.config.ResidentRoot, journal); err != nil {
+		_ = cli.RollbackExecutable(installPath)
+		_ = executor.reportFailure(ctx, pending.ID, "journal_persist_failed", err)
+		return err
+	}
 	if executor.config.Exit != nil {
 		executor.config.Exit()
 	}
@@ -166,10 +165,7 @@ type BindingMachineUpgradePrepared struct {
 }
 
 func (executor *BindingMachineUpgradeExecutor) prepareHost(ctx context.Context, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (BindingMachineUpgradePrepared, error) {
-	if executor.config.Prepare != nil {
-		return executor.config.Prepare(ctx, pending)
-	}
-	if strings.TrimSpace(executor.config.ControlURL) == "" || strings.TrimSpace(executor.config.ControlToken) == "" {
+	if strings.TrimSpace(executor.config.ServiceEndpoint) == "" || strings.TrimSpace(executor.config.ControlToken) == "" {
 		return BindingMachineUpgradePrepared{}, errors.New("Binding child Host control is unavailable")
 	}
 	body, err := json.Marshal(struct {
@@ -179,33 +175,13 @@ func (executor *BindingMachineUpgradeExecutor) prepareHost(ctx context.Context, 
 	if err != nil {
 		return BindingMachineUpgradePrepared{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(executor.config.ControlURL, "/")+bindingChildPrepareUpgradePath, strings.NewReader(string(body)))
-	if err != nil {
-		return BindingMachineUpgradePrepared{}, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Multica-Control-Token", executor.config.ControlToken)
-	response, err := executor.client.Do(request)
-	if err != nil {
-		return BindingMachineUpgradePrepared{}, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusConflict {
-		var failure struct {
-			Code string `json:"code"`
-		}
-		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&failure)
-		if failure.Code == bindingChildControlBusyCode {
+	var prepared BindingMachineUpgradePrepared
+	if err := callLocalJSONWithTimeout(ctx, executor.config.ServiceEndpoint, LocalControlRunnerPrepareOperation, 30*time.Second,
+		map[string]string{"Content-Type": "application/json", "X-Multica-Control-Token": executor.config.ControlToken},
+		json.RawMessage(body), &prepared); err != nil {
+		if strings.Contains(err.Error(), bindingChildControlBusyCode) {
 			return BindingMachineUpgradePrepared{}, ErrComputerControlBusy
 		}
-		return BindingMachineUpgradePrepared{}, fmt.Errorf("Computer Host prepare returned %s", response.Status)
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return BindingMachineUpgradePrepared{}, fmt.Errorf("Computer Host prepare returned %s: %s", response.Status, strings.TrimSpace(string(message)))
-	}
-	var prepared BindingMachineUpgradePrepared
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&prepared); err != nil {
 		return BindingMachineUpgradePrepared{}, err
 	}
 	return prepared, nil
@@ -235,6 +211,36 @@ func (executor *BindingMachineUpgradeExecutor) reportFailure(_ context.Context, 
 		message = failure.Error()
 	}
 	executor.emitUpgradeDone(upgradeID, false, "", message)
+	return nil
+}
+
+func (executor *BindingMachineUpgradeExecutor) postJSON(ctx context.Context, path string, body, response any) error {
+	base, err := hostHTTPBaseURL(executor.config.Identity.ServerURL)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, strings.NewReader(string(encoded)))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(executor.config.DaemonToken))
+	result, err := executor.client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer result.Body.Close()
+	if result.StatusCode < 200 || result.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(result.Body, 4096))
+		return fmt.Errorf("Computer server control returned %s: %s", result.Status, strings.TrimSpace(string(message)))
+	}
+	if response != nil {
+		return json.NewDecoder(io.LimitReader(result.Body, 1<<20)).Decode(response)
+	}
 	return nil
 }
 

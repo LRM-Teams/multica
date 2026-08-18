@@ -65,7 +65,17 @@ describe("ResearchV6NodeDetail", () => {
           expandable: false,
         },
       ],
-      outgoing: [],
+      outgoing: [
+        {
+          id: "edge-future",
+          kind: "future_relation_kind",
+          from_node_id: "current",
+          to_node_id: "input",
+          canonical: false,
+          hidden_count: 0,
+          expandable: false,
+        },
+      ],
       history_refs: [{ kind: "insight", id: "current", revision: 1 }],
       agent_refs: [{ kind: "agent", id: "agent-1", revision: 3 }],
       work_item_refs: [],
@@ -94,8 +104,15 @@ describe("ResearchV6NodeDetail", () => {
     expect(onFocusNode).toHaveBeenCalledWith("input");
     expect(screen.getByText("Version history")).toBeTruthy();
     expect(screen.getByText(/Revision 1/)).toBeTruthy();
+    expect(screen.getByText("future_relation_kind")).toBeTruthy();
     expect(screen.getByText("Canonical source")).toBeTruthy();
     expect(screen.getByText("Content hash")).toBeTruthy();
     expect(screen.getAllByText("Agents · 1")).toHaveLength(2);
+    const projectionState = screen.getByRole("region", { name: "Projection state" });
+    expect(projectionState).toHaveTextContent("Absorbed");
+    expect(projectionState).toHaveTextContent("Terminal");
+    expect(projectionState).toHaveTextContent("Expandable");
+    expect(projectionState).toHaveTextContent("Hidden children");
+    expect(projectionState).toHaveTextContent("1");
   });
 });

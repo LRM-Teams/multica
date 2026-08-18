@@ -4,11 +4,30 @@ package computer
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 )
+
+func processIdentityValue(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return ""
+	}
+	text := string(data)
+	closeName := strings.LastIndexByte(text, ')')
+	if closeName < 0 {
+		return ""
+	}
+	fields := strings.Fields(text[closeName+1:])
+	if len(fields) <= 19 {
+		return ""
+	}
+	return fields[19]
+}
 
 // SysProcAttr returns the attributes used when spawning the background
 // resident process. The withBreakaway argument exists only to share a

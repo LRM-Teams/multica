@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/multica-ai/multica/server/pkg/protocol"
-
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -125,7 +123,9 @@ Production uses stable packages and test uses preview packages. Pass
 	RunE: runComputerUpgrade,
 }
 
-var computerUpgradeControlPort = computer.HealthPort
+var computerUpgradeServiceEndpoint = func(profile string) string {
+	return computer.ServiceControlEndpoint(computer.RootDir(profile))
+}
 
 var computerIdentityCmd = &cobra.Command{
 	Use:   "identity",
@@ -226,12 +226,12 @@ func runComputerBindingRunner(cmd *cobra.Command, _ []string) error {
 	}
 	ctx, stop := notifyShutdownContext(context.Background())
 	defer stop()
-	return runInProcessBindingChild(ctx, bootstrap, func(ready computer.BindingChildReady) error {
+	return runBindingChild(ctx, bootstrap, func(ready computer.BindingChildReady) error {
 		return computer.WriteBindingChildReady(os.Stdout, ready)
-	}, nil)
+	})
 }
 
-func runInProcessBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstrap, publishReady func(computer.BindingChildReady) error, host *computer.Host) error {
+func runBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstrap, publishReady func(computer.BindingChildReady) error) error {
 	cfg, err := daemon.LoadConfig(daemon.Overrides{
 		ServerURL:      bootstrap.ServerBaseURL,
 		WorkspacesRoot: bootstrap.WorkspacesRoot,
@@ -254,21 +254,8 @@ func runInProcessBindingChild(ctx context.Context, bootstrap computer.BindingChi
 	}
 	cfg.LocalControlToken = controlToken
 	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID, "runner_generation", bootstrap.RunnerGeneration)
-	var prepareUpgrade func(context.Context, protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error)
-	if host != nil {
-		identity := computer.BindingChildIdentity{
-			WorkspaceID: bootstrap.WorkspaceID, RunnerGeneration: bootstrap.RunnerGeneration, PID: os.Getpid(),
-		}
-		prepareUpgrade = func(ctx context.Context, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (computer.BindingMachineUpgradePrepared, error) {
-			return host.PrepareChildUpgrade(ctx, identity, pending)
-		}
-	}
 	return daemon.RunBindingChild(ctx, daemon.BindingChildRunConfig{
-		Daemon:         cfg,
-		Bootstrap:      bootstrap,
-		Logger:         logger,
-		PublishReady:   publishReady,
-		PrepareUpgrade: prepareUpgrade,
+		Daemon: cfg, Bootstrap: bootstrap, Logger: logger, PublishReady: publishReady,
 	})
 }
 
@@ -283,18 +270,6 @@ func addComputerResidentFlags(cmd *cobra.Command) {
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
 	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
 	_ = f.MarkHidden("computer-generation")
-	f.Int("machine-attestation-source-pid", 0, "Incumbent PID this successor replaced")
-	_ = f.MarkHidden("machine-attestation-source-pid")
-	// v0.4.24-alpha.55 passes these two inputs when it launches an upgraded
-	// Computer. The marker gates the bounded previous-package adapter; neither
-	// value re-enters the current takeover proof or lifecycle state. The
-	// successor must accept this argv so that alpha.55 can self-upgrade.
-	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
-	// longer a supported direct self-upgrade source.
-	f.Bool("machine-upgrade-detached-candidate", false, "Previous-package Machine Upgrade bootstrap marker")
-	_ = f.MarkHidden("machine-upgrade-detached-candidate")
-	f.String("machine-upgrade-takeover-protocol", "", "Previous-package Machine Upgrade takeover protocol")
-	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 }
 
 func requireComputerStoppedForIdentityChange() error {
@@ -406,7 +381,7 @@ func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 	targetVersion, _ := cmd.Flags().GetString("target-version")
 	ctx, cancel := context.WithTimeout(cmd.Context(), cli.DefaultUpdateDownloadTimeout+30*time.Second)
 	defer cancel()
-	upgrade, err := (&computer.Lifecycle{ControlPort: computerUpgradeControlPort("")}).Upgrade(ctx, computer.UpgradeOptions{
+	upgrade, err := (&computer.Lifecycle{ServiceEndpoint: computerUpgradeServiceEndpoint("")}).Upgrade(ctx, computer.UpgradeOptions{
 		TargetVersion:    targetVersion,
 		CreateLiveIntent: createComputerUpgradeHumanIntent,
 	})

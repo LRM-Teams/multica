@@ -84,6 +84,10 @@ export function ResearchV6NodeDetail({
         ...detail.outgoing.map((edge) => ({ edge, direction: "outgoing" as const })),
       ]
     : [];
+  const relationLabel = (kind: string) => {
+    const labels = t(($) => $.v6_detail.relation_kind);
+    return labels[kind as keyof typeof labels] ?? kind;
+  };
 
   return (
     <section
@@ -117,6 +121,20 @@ export function ResearchV6NodeDetail({
           [t(($) => $.v6_detail.execution), state.execution],
           [t(($) => $.v6_detail.conclusion), state.conclusion],
           [t(($) => $.v6_detail.integration), state.integration],
+        ].map(([label, value]) => (
+          <div key={label} className="min-w-0 bg-card px-3 py-2.5">
+            <dt className="text-[10px] font-medium text-muted-foreground">{label}</dt>
+            <dd className="mt-1 truncate text-xs font-semibold">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border/70 sm:grid-cols-4">
+        {[
+          [t(($) => $.v6_detail.absorbed), node.absorbed ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.terminal), node.terminal ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.expandable), node.expandable ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.hidden_children), String(node.hidden_child_count)],
         ].map(([label, value]) => (
           <div key={label} className="min-w-0 bg-card px-3 py-2.5">
             <dt className="text-[10px] font-medium text-muted-foreground">{label}</dt>
@@ -173,6 +191,23 @@ export function ResearchV6NodeDetail({
           </p>
         </div>
       ) : null}
+
+      <section className="space-y-2" aria-label={t(($) => $.v6_detail.projection_state)}>
+        <h3 className="text-xs font-semibold">{t(($) => $.v6_detail.projection_state)}</h3>
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border/70 sm:grid-cols-4">
+        {[
+          [t(($) => $.v6_detail.absorbed), node.absorbed ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.terminal), node.terminal ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.expandable), node.expandable ? t(($) => $.v6_detail.yes) : t(($) => $.v6_detail.no)],
+          [t(($) => $.v6_detail.hidden_children), String(node.hidden_child_count)],
+        ].map(([label, value]) => (
+          <div key={label} className="min-w-0 bg-card px-3 py-2.5">
+            <dt className="text-[10px] font-medium text-muted-foreground">{label}</dt>
+            <dd className="mt-1 truncate text-xs font-semibold">{value}</dd>
+          </div>
+        ))}
+        </dl>
+      </section>
 
       {loading ? (
         <p className="text-xs text-muted-foreground" role="status">
@@ -267,17 +302,7 @@ export function ResearchV6NodeDetail({
                           t(($) => $.v6_detail.related_node_unavailable)}
                       </span>
                       <span className="block truncate text-[10px] text-muted-foreground">
-                        {t(($) =>
-                          $.v6_detail.relation_kind[
-                            edge.kind as
-                              | "derived_from"
-                              | "absorbed_into"
-                              | "produced_by"
-                              | "belongs_to"
-                              | "challenges"
-                              | "collapsed_path"
-                          ],
-                        )}
+                        {relationLabel(edge.kind)}
                       </span>
                     </span>
                     {relatedNode ? (

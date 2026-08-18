@@ -1,35 +1,36 @@
-# Daemon Agent Start and Activity Rules
+# Daemon package guidance
 
-These rules are hard alignment constraints from Raft v1.0.16. Keep the names
-and ownership boundaries exact; do not add wrapper concepts around them.
+## Computer control boundary
 
-## Agent start
+Each Binding Runner/Daemon is a separate OS process from Computer. Runner
+control uses the Raft-style local IPC endpoint supplied in its bootstrap:
 
-- The production start owner is `(*WorkspaceRunner).startAgentNow`.
-- Server-commanded starts and idle-snapshot wakeups must converge on
-  `startAgentNow`; do not create another production start-completion path.
-- Replayed or rebound starts publish current status/session only. They must not
-  re-enter `startAgentNow` or manufacture a new spawn Activity.
+- Unix domain socket on Unix;
+- Windows named pipe on Windows;
+- 4-byte big-endian length-prefixed JSON RPC frames;
+- operation + args → typed result or structured error.
 
-## Starting Activity
+Runner control handlers must be RPC handlers directly. Do not add an
+`http.Request`/`http.ResponseWriter` adapter for Computer↔Runner control.
 
-- Publish the spawn Activity through
-  `(*WorkspaceRunner).broadcastActivity(..., "starting")`.
-- Production code has exactly one `broadcastActivity` call site: inside
-  `startAgentNow`, after the provider process exists and `active` status (and a
-  present provider session) has been sent.
-- One provider spawn produces exactly one `Starting…` Activity. Reconnect,
-  replay, Message delivery, and runtime progress must not broadcast Starting.
-- Do not reintroduce `publishManagedAgentStartActivity`,
-  `observeRuntimeStarting`, `publishManagedProviderSpawn`, or an equivalent
-  wrapper under another name.
+The child-local Credential Proxy is intentionally different: it remains
+loopback HTTP for provider credential traffic and must not be routed through
+the control RPC.
 
-## Executable checks
+## Responsibility boundary
 
-- `TestRaftStartingActivityHasOneBroadcastCallSite` locks the method name and
-  sole production call site.
-- `TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus` requires
-  exactly one Starting Activity for a managed spawn.
-- `TestReplayManagedStartDoesNotRepaintStarting` locks the replay behavior.
-- Run `go test ./internal/daemon -count=1` from `server/` after changing this
-  flow.
+Daemon owns one Workspace Runner's execution behavior, drain barrier, provider
+runtimes, Runtime registration, and child-local state. Computer owns machine
+supervision, generation fencing, sibling coordination, orphan cleanup, and
+upgrade policy. Cloud Server HTTP/WebSocket is not part of this migration.
+
+Use TDD at the RPC operation seam before changing handlers or callers. Preserve
+`computer_generation` and `runner_generation`; do not restore per-Binding
+lease/attest polling or persisted lifecycle state.
+
+## Go typing
+
+Prefer concrete request and result structs at RPC operation seams. Avoid `any`
+and `interface{}` whenever the payload shape is known; define the operation's
+request/result type instead. Use a generic JSON value only at an intentionally
+open-ended boundary that cannot have a meaningful concrete type.

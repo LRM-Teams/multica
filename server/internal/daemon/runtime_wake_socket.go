@@ -431,6 +431,13 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleListFilesRequest(req, writes)
+		case protocol.EventAgentSkillsList:
+			var req protocol.AgentSkillsListPayload
+			if err := json.Unmarshal(msg.Payload, &req); err != nil {
+				d.logger.Debug("agent skills list request invalid payload", "error", err)
+				continue
+			}
+			d.handleAgentSkillsList(req, writes)
 		case protocol.EventAgentWorkspaceRead:
 			var req protocol.ReadWorkdirFileRequestPayload
 			if err := json.Unmarshal(msg.Payload, &req); err != nil {

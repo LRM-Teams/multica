@@ -1164,6 +1164,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/reminders", h.ListAgentReminders)
 					r.Get("/skills", h.ListAgentSkills)
+					r.Get("/skills/profile", h.ListAgentProfileSkills)
 					r.Put("/skills", h.SetAgentSkills)
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
 					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)

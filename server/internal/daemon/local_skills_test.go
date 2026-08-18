@@ -194,6 +194,44 @@ func TestListRuntimeLocalSkills_CodexUsesSharedCODEXHOME(t *testing.T) {
 	}
 }
 
+func TestListRuntimeLocalSkills_CodexIncludesSharedAgentsSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+
+	writeTestLocalSkill(t, filepath.Join(home, ".agents", "skills"), "shared", map[string]string{
+		"SKILL.md": "# Shared\n",
+	})
+
+	skills, supported, err := listRuntimeLocalSkills("codex")
+	if err != nil {
+		t.Fatalf("listRuntimeLocalSkills: %v", err)
+	}
+	if !supported || len(skills) != 1 || skills[0].Key != "shared" {
+		t.Fatalf("skills = %#v, supported = %v", skills, supported)
+	}
+}
+
+func TestListRuntimeLocalSkills_PiUsesCurrentGlobalPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeTestLocalSkill(t, filepath.Join(home, ".pi", "skills"), "current", map[string]string{
+		"SKILL.md": "# Current\n",
+	})
+	writeTestLocalSkill(t, filepath.Join(home, ".pi", "agent", "skills"), "legacy", map[string]string{
+		"SKILL.md": "# Legacy\n",
+	})
+
+	skills, supported, err := listRuntimeLocalSkills("pi")
+	if err != nil {
+		t.Fatalf("listRuntimeLocalSkills: %v", err)
+	}
+	if !supported || len(skills) != 1 || skills[0].Key != "current" {
+		t.Fatalf("skills = %#v, supported = %v", skills, supported)
+	}
+}
+
 // opencode (and possibly future providers) lay skills out one level deep,
 // e.g. ~/.config/opencode/skills/release/reporter/SKILL.md.
 // loadRuntimeLocalSkillBundle already accepts that nested key, so the list

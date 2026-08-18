@@ -2967,6 +2967,10 @@ export class ApiClient {
     return this.fetch(`/api/members/agents/${agentId}/skills`);
   }
 
+  async listAgentProfileSkills(agentId: string): Promise<{ agentId: string; requestId?: string; global: SkillSummary[]; workspace: SkillSummary[] }> {
+    return this.fetch(`/api/agents/${agentId}/skills/profile`);
+  }
+
   async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
     return this.fetch(`/api/members/agents/${agentId}/memories`);
   }

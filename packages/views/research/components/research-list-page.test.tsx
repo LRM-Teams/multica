@@ -6,7 +6,6 @@ import { RESEARCH_LIST_FILTER_STORAGE_KEY } from "../lib/research-list-persist";
 
 const sessionsQueryRef = vi.hoisted(() => ({
   current: {
-    data: undefined,
     isLoading: false,
     isFetching: false,
     isError: false,
@@ -24,12 +23,12 @@ const sessionsQueryRef = vi.hoisted(() => ({
 
 const fleetQueryRef = vi.hoisted(() => ({
   current: {
-    data: undefined,
     isLoading: false,
     isFetching: false,
     isError: false,
     error: null as unknown,
     refetch: vi.fn(),
+    data: undefined as Array<{ id: string; name: string; display_name: string; archived_at: null }> | undefined,
   },
 }));
 
@@ -44,6 +43,7 @@ const mutationRef = vi.hoisted(() => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: (options: unknown) => options,
   useQuery: (opts: { queryKey?: unknown[] }) =>
     opts?.queryKey?.[2] === "sessions"
       ? sessionsQueryRef.current

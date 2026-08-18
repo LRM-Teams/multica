@@ -100,7 +100,7 @@ describe("ResearchV6NodeDetail", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Supporting result/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Supporting result/i })[0]!);
     expect(onFocusNode).toHaveBeenCalledWith("input");
     expect(screen.getByText("Version history")).toBeTruthy();
     expect(screen.getByText(/Revision 1/)).toBeTruthy();

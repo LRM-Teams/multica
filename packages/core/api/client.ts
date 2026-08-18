@@ -4098,9 +4098,7 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(input),
     });
-    const parsed = parseWithFallback<
-      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
-    >(
+    const parsed = parseWithFallback<CreateVoiceCallResponse>(
       raw,
       CreateVoiceCallResponseSchema,
       EMPTY_CREATE_VOICE_CALL_RESPONSE,
@@ -5320,16 +5318,16 @@ export class ApiClient {
         client_request_id: request.clientRequestId,
       }),
     });
-    const parsed = parseWithFallback<
-      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
-    >(
+    const parsed = parseWithFallback<z.output<typeof ResearchV6DirectorAssignmentSchema> | null>(
       raw,
       ResearchV6DirectorAssignmentSchema,
       null,
       { endpoint: "PUT Director V6 assignment" },
     );
     if (parsed === null) return null;
-    if (parsed.workspace_id !== workspaceId || parsed.run_id !== runId) return null;
+    if (parsed.workspace_id !== workspaceId || parsed.run_id !== runId) {
+      throw new Error("Director V6 assignment identity mismatch");
+    }
     return {
       id: parsed.id,
       workspaceId: parsed.workspace_id,

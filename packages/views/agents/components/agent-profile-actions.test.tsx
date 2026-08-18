@@ -72,10 +72,8 @@ const RESOURCES = {
     message_opening: "Opening…",
     actions_delete: "Delete",
     actions_start_agent: "Start Agent",
-    actions_start_success: "Agent start requested",
     actions_start_failed: "Failed to start agent",
     actions_stop_agent: "Stop Agent",
-    actions_stop_agent_success: "Agent stopped",
     actions_stop_agent_failed: "Failed to stop agent",
     agent_deleted_toast: "Deleted",
     delete_failed_toast: "Delete failed",
@@ -170,6 +168,10 @@ describe("AgentProfileActions", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start Agent" })));
     expect(mocks.startAgent).toHaveBeenCalledWith("agent-1");
     expect(mocks.stopAgent).not.toHaveBeenCalled();
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["workspaces", "ws-1", "agent-presence"],
+    });
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
   it("uses active Runner presence to offer Stop", async () => {
@@ -184,6 +186,7 @@ describe("AgentProfileActions", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop Agent" })));
     expect(mocks.stopAgent).toHaveBeenCalledWith("agent-1");
     expect(mocks.startAgent).not.toHaveBeenCalled();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
   it("renders Message as primary action and opens DM", () => {

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
@@ -134,6 +135,12 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if runID == "" || workspaceID == "" {
 		return researchV6Snapshot{}, researchrun.ErrRunNotFound
 	}
+	runUUID, runErr := uuid.Parse(runID)
+	workspaceUUID, workspaceErr := uuid.Parse(strings.TrimSpace(workspaceID))
+	if runErr != nil || workspaceErr != nil {
+		return researchV6Snapshot{}, researchrun.ErrInvalidContract
+	}
+	runID, workspaceID = runUUID.String(), workspaceUUID.String()
 	snap, err := h.ResearchRun.Snapshot(r.Context(), runID, workspaceID)
 	if err != nil {
 		return researchV6Snapshot{}, err

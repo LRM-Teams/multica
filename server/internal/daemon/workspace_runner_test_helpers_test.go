@@ -31,8 +31,8 @@ func (runner *WorkspaceRunner) startManagedAgent(ctx context.Context, payload pr
 		return ack, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
 	}
 	runner.broadcastActivity(payload.AgentID, payload.RuntimeID, "starting")
-	runner.observeResidentRuntimeReady(payload.AgentID, payload.RuntimeID)
 	runner.flushManagedAgentStartMessages(ctx, payload, ack)
+	runner.observeResidentRuntimeReady(payload.AgentID, payload.RuntimeID)
 	return ack, outcome.status, outcome.session, nil
 }
 

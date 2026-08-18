@@ -273,7 +273,7 @@ func clearAgentActivityCompaction(state *agentActivityProducerState) {
 	}
 	state.compaction = agentActivityCompactionState{}
 }
-func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {
+func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, broadcast activityBroadcast) error {
 	key := agentActivityProducerKey{agentID: snapshot.AgentID, launchID: snapshot.LaunchID}
 	state := p.states[key]
 	if state == nil {
@@ -291,11 +291,13 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 	if snapshot.ProducerFactID == "" {
 		snapshot.ProducerFactID = raftActivityProducerFactID(snapshot.AgentID, snapshot.LaunchID, snapshot.DaemonInstanceID, snapshot.ClientSequence)
 	}
-	detail := ""
+	detail := broadcast.detail
 	if snapshot.DetailKind == state.snapshot.DetailKind {
-		detail = state.detail
+		if detail == "" {
+			detail = state.detail
+		}
 	}
-	for _, entry := range entries {
+	for _, entry := range broadcast.trajectory {
 		if entry.Kind != "status" {
 			continue
 		}
@@ -308,7 +310,7 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 	if detail == "" {
 		detail = defaultAgentActivityDetail(snapshot.DetailKind)
 	}
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: detail, Entries: entries}
+	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: detail, Entries: broadcast.trajectory}
 	if err := payload.Validate(); err != nil {
 		return err
 	}

@@ -100,8 +100,11 @@ func (runner *WorkspaceRunner) startAgentNow(startCtx context.Context, start pro
 		}
 	}
 	runner.broadcastActivity(start.AgentID, start.RuntimeID, "starting")
-	runner.observeResidentRuntimeReady(start.AgentID, start.RuntimeID)
 	runner.flushManagedAgentStartMessages(startCtx, start, ack)
+	// A resident provider has no initial turn to produce an idle event. Mark
+	// it ready only after buffered input has crossed the runtime boundary so
+	// synthetic Online cannot overwrite the first real Message activity.
+	runner.observeResidentRuntimeReady(start.AgentID, start.RuntimeID)
 	published = true
 }
 

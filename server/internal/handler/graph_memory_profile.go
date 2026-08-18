@@ -31,9 +31,10 @@ type graphMemoryProfileResponse struct {
 }
 
 type updateGraphMemoryProfileRequest struct {
-	MemoryType       string `json:"memory_type"`
-	ExploreAgents    int32  `json:"explore_agents"`
-	ExploreMaxRounds int32  `json:"explore_max_rounds"`
+	MemoryType        string `json:"memory_type"`
+	ExploreAgents     int32  `json:"explore_agents"`
+	ExploreMaxRounds  int32  `json:"explore_max_rounds"`
+	ConfirmEmptyStart bool   `json:"confirm_empty_start"`
 }
 
 func validGraphMemoryType(t string) bool {
@@ -110,6 +111,17 @@ func (h *Handler) UpdateGraphMemoryProfile(w http.ResponseWriter, r *http.Reques
 	if req.ExploreMaxRounds < 1 || req.ExploreMaxRounds > 20 {
 		writeError(w, http.StatusBadRequest, "explore_max_rounds must be between 1 and 20")
 		return
+	}
+
+	// Switching TO graph requires explicit admin confirmation of the
+	// empty-start and no-fallback contract (spec §11). Knob updates and
+	// graph->legacy switches do not.
+	if req.MemoryType == "graph" && !req.ConfirmEmptyStart {
+		current, err := h.Queries.GetGraphMemoryProfile(r.Context(), parseUUID(workspaceID))
+		if err != nil || current.MemoryType != "graph" {
+			writeError(w, http.StatusBadRequest, "confirm_empty_start_required: switching to graph memory starts with empty graphs and never falls back to legacy project/channel/daily memory; resend with confirm_empty_start=true")
+			return
+		}
 	}
 
 	profile, err := h.Queries.UpsertGraphMemoryProfile(r.Context(), db.UpsertGraphMemoryProfileParams{

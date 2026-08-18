@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -56,7 +57,7 @@ func TestGraphMemoryProfileRoundTrip(t *testing.T) {
 	// PUT persists the reviewer settings.
 	w = httptest.NewRecorder()
 	putReq := withURLParam(newRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/graph-memory/profile", map[string]any{
-		"memory_type": "graph", "explore_agents": 2, "explore_max_rounds": 5,
+		"memory_type": "graph", "explore_agents": 2, "explore_max_rounds": 5, "confirm_empty_start": true,
 	}), "id", workspaceID)
 	putReq.Header.Set("X-Workspace-ID", workspaceID)
 	testHandler.UpdateGraphMemoryProfile(w, putReq)
@@ -133,5 +134,34 @@ func TestGraphMemoryProfileForWorkspaceReturnsExploreValues(t *testing.T) {
 	got = testHandler.graphMemoryProfileForWorkspace(ctx, parseUUID("00000000-0000-0000-0000-000000000009"))
 	if got != (graphMemoryProfileValues{}) {
 		t.Fatalf("missing profile must yield zero values, got %+v", got)
+	}
+}
+
+// Spec §11: switching a workspace TO graph memory requires explicit admin
+// confirmation of the empty-start / no-fallback contract. Knob updates while
+// already graph need no confirmation.
+func TestUpdateGraphMemoryProfileSwitchToGraphRequiresConfirmation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("test database unavailable")
+	}
+	workspaceID := createGraphMemoryTestWorkspace(t)
+	mustGraphMemoryMember(t, workspaceID, "owner")
+	put := func(body string) *httptest.ResponseRecorder {
+		req := withURLParam(newRequest(http.MethodPut,
+			"/api/workspaces/"+workspaceID.String()+"/graph-memory/profile", json.RawMessage(body)), "id", workspaceID.String())
+		rec := httptest.NewRecorder()
+		testHandler.UpdateGraphMemoryProfile(rec, req)
+		return rec
+	}
+	if rec := put(`{"memory_type":"graph","explore_agents":4,"explore_max_rounds":3}`); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "confirm_empty_start_required") {
+		t.Fatalf("unconfirmed switch: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := put(`{"memory_type":"graph","explore_agents":4,"explore_max_rounds":3,"confirm_empty_start":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("confirmed switch: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Knob updates while already graph need no confirmation.
+	if rec := put(`{"memory_type":"graph","explore_agents":6,"explore_max_rounds":3}`); rec.Code != http.StatusOK {
+		t.Fatalf("knob update: status=%d", rec.Code)
 	}
 }

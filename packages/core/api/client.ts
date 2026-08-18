@@ -3983,7 +3983,9 @@ export class ApiClient {
     } catch {
       raw = undefined;
     }
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<
+      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
+    >(
       raw,
       VoiceTranscriptResponseSchema,
       EMPTY_VOICE_TRANSCRIPT_RESPONSE,

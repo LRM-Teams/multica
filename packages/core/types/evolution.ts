@@ -475,6 +475,66 @@ export interface UpdateGraphMemoryProfileRequest {
   memory_type: GraphMemoryType;
   explore_agents: number;
   explore_max_rounds: number;
+  confirm_empty_start?: boolean;
+}
+
+export interface GraphMemoryGraphStatus {
+  kind: "project" | "channel";
+  owner_id: string;
+  current_version: number;
+  versions: number[];
+  staging_segments: number;
+  // Backend emits an RFC3339 timestamp or omits/nulls the field when the
+  // graph was never consolidated.
+  last_consolidated_at: string | null;
+  consolidation_backoff: boolean;
+  recall_queries_24h: number;
+  recall_hit_rate_24h: number;
+}
+
+export interface GraphMemoryStatus {
+  workspace_id: string;
+  memory_type: GraphMemoryType;
+  scoped_writer_ready: boolean;
+  empty_start: boolean;
+  graphs: GraphMemoryGraphStatus[];
+}
+
+export interface GraphMemoryAuditSummary {
+  workspace_id: string;
+  queries_24h: number;
+  recall_hits_24h: number;
+  recall_hit_rate_24h: number;
+  avg_explore_rounds_24h: number;
+  judged_queries_24h: number;
+  regressions_total: number;
+}
+
+export interface GraphMemoryChannelLineageEntry {
+  generation: number;
+  graph_kind: "project" | "channel";
+  graph_owner_id: string;
+  valid_from: string;
+  valid_to: string;
+}
+
+export interface GraphMemoryChannelLineage {
+  workspace_id: string;
+  channel_id: string;
+  routing_mode: "standalone" | "project_lineage" | "";
+  current: { graph_kind: "project" | "channel"; graph_owner_id: string; generation: number } | null;
+  lineage: GraphMemoryChannelLineageEntry[];
+}
+
+export interface GraphMemoryConsolidationRun {
+  id: string;
+  workspace_id: string;
+  status: "queued" | "running" | "succeeded" | "failed" | string;
+  trigger_kind: string;
+  error: string;
+  created_at: string;
+  started_at: string;
+  finished_at: string;
 }
 
 export interface StartMemoryCurationRunRequest {

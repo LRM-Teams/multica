@@ -47,6 +47,10 @@ import type {
   UpdateMemoryCuratorProfileRequest,
   GraphMemoryProfile,
   UpdateGraphMemoryProfileRequest,
+  GraphMemoryStatus,
+  GraphMemoryAuditSummary,
+  GraphMemoryChannelLineage,
+  GraphMemoryConsolidationRun,
   StartMemoryCurationRunRequest,
   StartMemoryCurationRunResponse,
   MemoryCurationBackfillRequest,
@@ -410,6 +414,14 @@ import {
   EMPTY_MEMORY_CURATION_RUN_DETAIL,
   EMPTY_MEMORY_CURATOR_PROFILE,
   EMPTY_GRAPH_MEMORY_PROFILE,
+  GraphMemoryStatusSchema,
+  EMPTY_GRAPH_MEMORY_STATUS,
+  GraphMemoryAuditSummarySchema,
+  EMPTY_GRAPH_MEMORY_AUDIT,
+  GraphMemoryChannelLineageSchema,
+  GraphMemoryConsolidationRunSchema,
+  GraphMemoryConsolidationListSchema,
+  EMPTY_GRAPH_MEMORY_CONSOLIDATION_RUN,
   EvolutionMetricsSchema,
   EvolutionTrainingExampleListSchema,
   EvolutionTrainingExampleSchema,
@@ -3182,6 +3194,53 @@ export class ApiClient {
     return parseWithFallback(raw, GraphMemoryProfileSchema, EMPTY_GRAPH_MEMORY_PROFILE, {
       endpoint: "PUT /api/workspaces/{id}/graph-memory/profile",
     });
+  }
+
+  async getGraphMemoryStatus(workspaceId: string): Promise<GraphMemoryStatus> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/status`,
+    );
+    return parseWithFallback(raw, GraphMemoryStatusSchema, EMPTY_GRAPH_MEMORY_STATUS, {
+      endpoint: "GET /api/workspaces/{id}/graph-memory/status",
+    });
+  }
+
+  async getGraphMemoryAudit(workspaceId: string): Promise<GraphMemoryAuditSummary> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/audit`,
+    );
+    return parseWithFallback(raw, GraphMemoryAuditSummarySchema, EMPTY_GRAPH_MEMORY_AUDIT, {
+      endpoint: "GET /api/workspaces/{id}/graph-memory/audit",
+    });
+  }
+
+  async getGraphMemoryChannelLineage(workspaceId: string, channelId: string): Promise<GraphMemoryChannelLineage> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/channels/${encodeURIComponent(channelId)}/lineage`,
+    );
+    return parseWithFallback(raw, GraphMemoryChannelLineageSchema, {
+      workspace_id: workspaceId, channel_id: channelId, routing_mode: "", current: null, lineage: [],
+    }, { endpoint: "GET /api/workspaces/{id}/graph-memory/channels/{channelId}/lineage" });
+  }
+
+  async startGraphMemoryConsolidation(workspaceId: string): Promise<{ id: string; status: string }> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/consolidations`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+    return parseWithFallback(raw, GraphMemoryConsolidationRunSchema, EMPTY_GRAPH_MEMORY_CONSOLIDATION_RUN, {
+      endpoint: "POST /api/workspaces/{id}/graph-memory/consolidations",
+    });
+  }
+
+  async listGraphMemoryConsolidations(workspaceId: string): Promise<GraphMemoryConsolidationRun[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/graph-memory/consolidations`,
+    );
+    const parsed = parseWithFallback(raw, GraphMemoryConsolidationListSchema, { runs: [] }, {
+      endpoint: "GET /api/workspaces/{id}/graph-memory/consolidations",
+    });
+    return parsed.runs;
   }
 
   async startMemoryCurationRun(

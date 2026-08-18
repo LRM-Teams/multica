@@ -24,6 +24,9 @@ import type {
   EvolutionReviewSubmission,
   MemoryCurationRunDetail,
   WorkspaceMemoryCurationStatus,
+  GraphMemoryStatus,
+  GraphMemoryAuditSummary,
+  GraphMemoryConsolidationRun,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
@@ -1478,6 +1481,84 @@ export const EMPTY_GRAPH_MEMORY_PROFILE = {
   explore_agents: 4,
   explore_max_rounds: 3,
   updated_at: "",
+};
+
+export const GraphMemoryGraphStatusSchema = z.object({
+  kind: z.enum(["project", "channel"]).catch("project"),
+  owner_id: z.string().default(""),
+  current_version: z.number().int().default(0),
+  versions: z.array(z.number().int()).default([]),
+  staging_segments: z.number().int().default(0),
+  // Backend omits/nulls this when the graph was never consolidated.
+  last_consolidated_at: z.string().nullable().default(null),
+  consolidation_backoff: z.boolean().default(false),
+  recall_queries_24h: z.number().int().default(0),
+  recall_hit_rate_24h: z.number().default(0),
+}).loose();
+
+export const GraphMemoryStatusSchema = z.object({
+  workspace_id: z.string().default(""),
+  memory_type: z.enum(["legacy", "graph"]).catch("legacy"),
+  scoped_writer_ready: z.boolean().default(false),
+  empty_start: z.boolean().default(true),
+  graphs: z.array(GraphMemoryGraphStatusSchema).default([]),
+}).loose();
+
+export const EMPTY_GRAPH_MEMORY_STATUS: GraphMemoryStatus = {
+  workspace_id: "", memory_type: "legacy", scoped_writer_ready: false, empty_start: true, graphs: [],
+};
+
+export const GraphMemoryAuditSummarySchema = z.object({
+  workspace_id: z.string().default(""),
+  queries_24h: z.number().int().default(0),
+  recall_hits_24h: z.number().int().default(0),
+  recall_hit_rate_24h: z.number().default(0),
+  avg_explore_rounds_24h: z.number().default(0),
+  judged_queries_24h: z.number().int().default(0),
+  regressions_total: z.number().int().default(0),
+}).loose();
+
+export const EMPTY_GRAPH_MEMORY_AUDIT: GraphMemoryAuditSummary = {
+  workspace_id: "", queries_24h: 0, recall_hits_24h: 0, recall_hit_rate_24h: 0,
+  avg_explore_rounds_24h: 0, judged_queries_24h: 0, regressions_total: 0,
+};
+
+export const GraphMemoryChannelLineageSchema = z.object({
+  workspace_id: z.string().default(""),
+  channel_id: z.string().default(""),
+  routing_mode: z.enum(["standalone", "project_lineage", ""]).catch(""),
+  current: z.object({
+    graph_kind: z.enum(["project", "channel"]).catch("project"),
+    graph_owner_id: z.string().default(""),
+    generation: z.number().int().default(0),
+  }).loose().nullable().default(null),
+  lineage: z.array(z.object({
+    generation: z.number().int().default(0),
+    graph_kind: z.enum(["project", "channel"]).catch("project"),
+    graph_owner_id: z.string().default(""),
+    valid_from: z.string().default(""),
+    valid_to: z.string().default(""),
+  }).loose()).default([]),
+}).loose();
+
+export const GraphMemoryConsolidationRunSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  status: z.string().default("queued"),
+  trigger_kind: z.string().default("manual"),
+  error: z.string().default(""),
+  created_at: z.string().default(""),
+  started_at: z.string().default(""),
+  finished_at: z.string().default(""),
+}).loose();
+
+export const GraphMemoryConsolidationListSchema = z.object({
+  runs: z.array(GraphMemoryConsolidationRunSchema).default([]),
+}).loose();
+
+export const EMPTY_GRAPH_MEMORY_CONSOLIDATION_RUN: GraphMemoryConsolidationRun = {
+  id: "", workspace_id: "", status: "queued", trigger_kind: "manual", error: "",
+  created_at: "", started_at: "", finished_at: "",
 };
 
 export const StartMemoryCurationRunResponseSchema = z.object({

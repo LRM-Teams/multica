@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   deriveUpdateStatus,
@@ -8,10 +8,11 @@ import {
   runtimeCurrentVersion,
   runtimeLaunchedBy,
   isNewerCliVersion,
+  useComputerUpgrade,
+  useComputerUpgradeStore,
 } from "@multica/core/runtimes";
-import { api, ApiError } from "@multica/core/api";
+import { ApiError } from "@multica/core/api";
 import { useWSEvent } from "@multica/core/realtime";
-import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUpCircle, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
@@ -19,7 +20,6 @@ import type {
   AgentRuntime,
   ComputerUpgradeDonePayload,
   ComputerUpgradeProgressPayload,
-  RuntimeUpdateStatus,
 } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { formatRuntimeUpdateError } from "./update-error";
@@ -58,20 +58,12 @@ export function MachineDaemonUpgrade({
       ? (runtime as AgentRuntime & { pinned_version?: string | null }).pinned_version
       : null;
 
-  const [status, setStatus] = useState<RuntimeUpdateStatus | null>(null);
-  const [updating, setUpdating] = useState(false);
+  const computerId = runtime.daemon_id?.trim() ?? "";
+  const activeUpgrade = useComputerUpgrade(computerId);
+
   // Keep the last target we tried so a failed attempt still shows `→ target`
   // even if the server drops target_version after health flips to failed.
   const [lastAttemptTarget, setLastAttemptTarget] = useState<string | null>(null);
-  const requestIdRef = useRef<string | null>(null);
-
-  const cleanup = useCallback(() => {
-    requestIdRef.current = null;
-  }, []);
-
-  // Do NOT useEffect-clear local poll status when version catches up —
-  // react-doctor flags that. isApplying / isActive already gate chrome on
-  // versionsCaughtUp below (Frank stuck 「正在重启并切换版本…」).
 
   const refreshRuntimes = useCallback(() => {
     qc.invalidateQueries({
@@ -79,35 +71,32 @@ export function MachineDaemonUpgrade({
     });
   }, [qc]);
 
-  const computerId = runtime.daemon_id?.trim() ?? "";
   useWSEvent("computer:upgrade:progress", (raw) => {
     const payload = raw as ComputerUpgradeProgressPayload;
-    if (payload.computer_id !== computerId || payload.requestId !== requestIdRef.current) return;
-    setStatus("running");
-    setUpdating(true);
+    if (payload.computer_id !== computerId) return;
+    useComputerUpgradeStore.getState().recordProgress(payload);
   });
   useWSEvent("computer:upgrade:done", (raw) => {
     const payload = raw as ComputerUpgradeDonePayload;
-    if (payload.computer_id !== computerId || payload.requestId !== requestIdRef.current) return;
-    setUpdating(false);
-    cleanup();
-    setStatus(payload.ok ? "completed" : "failed");
+    if (payload.computer_id !== computerId) return;
+    useComputerUpgradeStore.getState().recordDone(payload);
     refreshRuntimes();
   });
 
   const handleUpdate = async () => {
-    const aim = targetVersion ?? lastAttemptTarget;
+    const aim = targetVersion ?? activeUpgrade?.targetVersion ?? lastAttemptTarget;
     if (!aim) return;
     const daemonID = runtime.daemon_id?.trim();
     if (!daemonID) return;
-    const requestId = createSafeId();
-    requestIdRef.current = requestId;
-    setUpdating(true);
     setLastAttemptTarget(aim);
-    setStatus("pending");
     try {
-      await api.initiateMachineUpgrade(daemonID, aim, requestId);
-      setStatus("running");
+      await useComputerUpgradeStore.getState().startUpgrade({
+        daemonId: daemonID,
+        targetVersion: aim,
+        machineKey: runtime.daemon_id?.trim() || `runtime:${runtime.id}`,
+        machineTitle: runtime.display_name || runtime.device_name || runtime.name || daemonID,
+        runtimeId: runtime.id,
+      });
     } catch (err) {
       if (
         err instanceof ApiError &&
@@ -121,21 +110,18 @@ export function MachineDaemonUpgrade({
             version: pinnedVersion?.trim() || t(($) => $.update.version_unknown),
           }),
         );
-        setUpdating(false);
-        setStatus(null);
         return;
       }
-      setStatus("failed");
-      setUpdating(false);
     }
   };
 
-  const projectedMachineStatus: RuntimeUpdateStatus | null = null;
-  // A runtime page is a projection: no sibling needs to have initiated the
-  // request locally to render the daemon's canonical active operation.
-  const effectiveStatus = status ?? projectedMachineStatus;
+  const status = activeUpgrade ? activeUpgrade.phase : null;
+  const updating = activeUpgrade
+    ? activeUpgrade.phase === "pending" || activeUpgrade.phase === "running"
+    : false;
+
   const derivedStatus = deriveUpdateStatus({
-    pollStatus: effectiveStatus,
+    pollStatus: status,
     updateState,
     runtimeHealth,
   });
@@ -143,7 +129,10 @@ export function MachineDaemonUpgrade({
     runtimeHealth === "update_available" &&
     !!targetVersion &&
     isNewerCliVersion(targetVersion, currentVersion);
-  const displayTarget = targetVersion ?? lastAttemptTarget;
+  const displayTarget =
+    targetVersion ??
+    (activeUpgrade?.targetVersion ? activeUpgrade.targetVersion : null) ??
+    lastAttemptTarget;
   // Poll leaves local status at "completed" after stop — keep applying chrome
   // only while the live version is still behind the target. Once caught up
   // (incl. `0.4.2` vs `v0.4.2`), drop the spinner (Frank 2026-08-04 stuck UX).
@@ -151,9 +140,15 @@ export function MachineDaemonUpgrade({
     !!displayTarget &&
     !!currentVersion &&
     !isNewerCliVersion(displayTarget, currentVersion);
+
+  if (versionsCaughtUp && activeUpgrade?.phase === "completed") {
+    useComputerUpgradeStore.getState().clearCompleted(computerId);
+  }
+
   const isApplying =
     derivedStatus === "ready_to_apply" ||
-    (derivedStatus === "completed" && !versionsCaughtUp);
+    (derivedStatus === "completed" && !versionsCaughtUp) ||
+    (activeUpgrade?.phase === "completed" && !versionsCaughtUp);
   const isActive =
     !versionsCaughtUp &&
     (updating ||
@@ -165,6 +160,7 @@ export function MachineDaemonUpgrade({
     !versionsCaughtUp &&
     (derivedStatus === "failed" ||
       derivedStatus === "timeout" ||
+      activeUpgrade?.phase === "failed" ||
       (runtimeHealth === "failed" && !!updateError?.trim()));
   const isPinned = !!pinnedVersion?.trim();
   const canStartUpdate =
@@ -194,10 +190,13 @@ export function MachineDaemonUpgrade({
   const versionLabel = currentVersion ?? t(($) => $.update.version_unknown);
 
   const progressLabel = (() => {
-    if (derivedStatus === "pending" || effectiveStatus === "pending") {
+    if (activeUpgrade?.progress) {
+      return activeUpgrade.progress;
+    }
+    if (derivedStatus === "pending" || status === "pending") {
       return t(($) => $.machine.ops.upgrade_progress_pending);
     }
-    if (derivedStatus === "running") {
+    if (derivedStatus === "running" || status === "running") {
       return t(($) => $.machine.ops.upgrade_progress_running);
     }
     if (isApplying) {
@@ -259,9 +258,13 @@ export function MachineDaemonUpgrade({
   }
 
   if (isFailed) {
+    const rawReason =
+      (activeUpgrade?.error && activeUpgrade.error !== "runtime_pinned"
+        ? activeUpgrade.error
+        : null) || updateError;
     const reason =
       formatRuntimeUpdateError({
-        rawError: updateError,
+        rawError: rawReason,
         currentVersion,
         targetVersion: displayTarget,
         t,

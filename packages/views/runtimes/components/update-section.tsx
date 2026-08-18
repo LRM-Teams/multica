@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
-import { api, ApiError } from "@multica/core/api";
+import { ApiError } from "@multica/core/api";
 import { useWSEvent } from "@multica/core/realtime";
 import type {
   ComputerUpgradeDonePayload,
@@ -28,7 +28,6 @@ import type {
 } from "@multica/core/types";
 import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { deriveUpdateStatus } from "@multica/core/runtimes";
 import { multicaInstallCommand } from "@multica/core/constants/repository";
 import { useConfigStore } from "@multica/core/config";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -41,7 +40,7 @@ import type {
 } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { formatRuntimeUpdateError } from "./update-error";
-import { isNewerCliVersion } from "@multica/core/runtimes";
+import { deriveUpdateStatus, isNewerCliVersion, useComputerUpgrade, useComputerUpgradeStore } from "@multica/core/runtimes";
 
 const statusConfig: Record<
   RuntimeUpdateStatus,
@@ -154,15 +153,20 @@ export function UpdateSection({
     [cleanup, refreshRuntimes],
   );
 
+  const activeUpgrade = useComputerUpgrade(daemonId);
+  const effectiveStatus = (activeUpgrade ? activeUpgrade.phase : null) ?? status;
+
   useWSEvent("computer:upgrade:progress", (raw) => {
     const payload = raw as ComputerUpgradeProgressPayload;
-    if (payload.computer_id !== daemonId || payload.requestId !== requestIdRef.current) return;
+    if (payload.computer_id !== daemonId) return;
+    useComputerUpgradeStore.getState().recordProgress(payload);
     setStatus("running");
     setUpdating(true);
   });
   useWSEvent("computer:upgrade:done", (raw) => {
     const payload = raw as ComputerUpgradeDonePayload;
-    if (payload.computer_id !== daemonId || payload.requestId !== requestIdRef.current) return;
+    if (payload.computer_id !== daemonId) return;
+    useComputerUpgradeStore.getState().recordDone(payload);
     if (payload.ok) {
       markCompleted(t(($) => $.update.status.completed));
       return;
@@ -184,7 +188,11 @@ export function UpdateSection({
     setOutput("");
 
     try {
-      await api.initiateMachineUpgrade(daemonId, targetVersion, requestId);
+      await useComputerUpgradeStore.getState().startUpgrade({
+        daemonId,
+        targetVersion,
+        requestId,
+      });
       setStatus("running");
     } catch (err) {
       // Task #81 (b) — the button is disabled whenever we already know the
@@ -217,7 +225,7 @@ export function UpdateSection({
   };
 
   const derivedStatus = deriveUpdateStatus({
-    pollStatus: status,
+    pollStatus: effectiveStatus,
     updateState,
     runtimeHealth,
   });

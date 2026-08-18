@@ -18,7 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
-var researchV6PackageHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var researchV6SHA256HashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func (h *Handler) researchReportCapability(reportID, packageHash string, expiry int64) string {
 	mac := hmac.New(sha256.New, []byte(h.cfg.ResearchReportCapabilitySecret))
@@ -170,7 +170,7 @@ func (h *Handler) ServeResearchV6ReportDocument(w http.ResponseWriter, r *http.R
 		return
 	}
 	id, pkg := uuidToString(reportUUID), chi.URLParam(r, "packageHash")
-	if !researchV6PackageHashPattern.MatchString(pkg) {
+	if !researchV6SHA256HashPattern.MatchString(pkg) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

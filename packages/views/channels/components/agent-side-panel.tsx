@@ -534,7 +534,16 @@ function AgentProfileTabContent({
           />
         </section>
 
-        {agent.memory_growth ? <MemoryGrowthField growth={agent.memory_growth} /> : null}
+        {/* Memory growth is its own panel block, kept separated by the same
+            thin divider used elsewhere in the profile. */}
+        {agent.memory_growth ? (
+          <div
+            className="border-t border-border pt-3"
+            data-testid="agent-profile-memory-growth"
+          >
+            <MemoryGrowthField growth={agent.memory_growth} />
+          </div>
+        ) : null}
 
         <div className="border-t border-border pt-3">
           <AgentProfileActions

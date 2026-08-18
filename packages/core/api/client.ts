@@ -5261,7 +5261,9 @@ export class ApiClient {
         client_request_id: request.clientRequestId,
       }),
     });
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<
+      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
+    >(
       raw,
       ResearchV6DirectorAssignmentSchema,
       null,

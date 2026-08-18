@@ -529,10 +529,12 @@ describe("AgentSidePanel", () => {
     );
   });
 
-  it("puts Message in vertical Actions — not between header and tabs (LRM-448)", () => {
+  it("puts the action group in the identity header and removes it from the Profile body", () => {
     renderPanel();
     expect(screen.queryByTestId("agent-profile-message-button")).not.toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();
+    const actions = screen.getByTestId("agent-profile-actions");
+    expect(screen.getByTestId("agent-profile-identity")).toContainElement(actions);
+    expect(screen.getByTestId("agent-profile-tab-content")).not.toContainElement(actions);
     expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
@@ -808,7 +810,7 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByText("Changes take effect on the next run")).not.toBeInTheDocument();
   });
 
-  it("LRM-448: Actions stack + Info field labels; Usage lives on its tab", () => {
+  it("keeps header actions visible while Info and Usage stay in their own surfaces", () => {
     activityPermission.allowed = true;
     renderPanel("user-owner");
     expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent, AgentPresence } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { agentPresenceKeys } from "@multica/core/agents";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -17,8 +18,8 @@ import { AgentRestartModal } from "./agent-restart-modal";
 import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 
 /**
- * LRM-448 · Profile v4 Actions stack (Computer IA + Multica tokens).
- * Vertical named actions — no header Message+⋯, no More overflow.
+ * Agent profile header actions. Message stays named; lifecycle, restart/reset,
+ * and delete are compact icon controls with accessible names.
  *
  * LRM-448 / Frank 2026-07-23: the destructive action is **Delete**, not
  * Archive (AC#2 "Message + Delete（非 Archive）"). The backend exposes no
@@ -32,8 +33,7 @@ import { ConfirmDeleteAgent } from "./confirm-delete-agent";
  * Agent lifecycle uses one Runner-presence-driven Start/Stop button. Restart
  * and reset remain separate operations in the existing restart modal.
  *
- * LRM-593 (Frank lock A): Delete is the only solid destructive, above a
- * `border-t` danger zone.
+ * Delete remains the only solid destructive action.
  */
 export function AgentProfileActions({
   agent,
@@ -66,22 +66,16 @@ export function AgentProfileActions({
       Date.now(),
     ) === "online";
 
-  const invalidateAgents = () => {
+  const invalidateAgentState = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
+    qc.invalidateQueries({ queryKey: agentPresenceKeys.workspace(agent.workspace_id) });
   };
 
   const handleLifecycle = async () => {
     setLifecyclePending(true);
     try {
       await (isAgentRunning ? api.stopAgent(agent.id) : api.startAgent(agent.id));
-      invalidateAgents();
-      toast.success(
-        t(($) =>
-          isAgentRunning
-            ? $.side_panel.actions_stop_agent_success
-            : $.side_panel.actions_start_success,
-        ),
-      );
+      invalidateAgentState();
     } catch (e) {
       showErrorToast(
         e instanceof Error
@@ -105,7 +99,7 @@ export function AgentProfileActions({
     setDeleting(true);
     try {
       await api.archiveAgent(agent.id);
-      invalidateAgents();
+      invalidateAgentState();
       toast.success(t(($) => $.side_panel.agent_deleted_toast));
       setConfirmDelete(false);
     } catch (e) {
@@ -118,88 +112,86 @@ export function AgentProfileActions({
   };
 
   return (
-    <section aria-label={t(($) => $.side_panel.actions_section)} data-testid="agent-profile-actions">
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t(($) => $.side_panel.actions_section)}
-      </h3>
-      <div className="flex flex-col gap-2">
-        {!isArchived ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-message"
-            disabled={openingDM}
-            onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
-          >
-            {openingDM ? (
-              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-            ) : (
-              <MessageSquare className="size-4 shrink-0" aria-hidden />
-            )}
-            {openingDM
-              ? t(($) => $.side_panel.message_opening)
-              : t(($) => $.side_panel.message_button)}
-          </Button>
-        ) : null}
+    <section
+      className="ml-auto flex shrink-0 items-center gap-1.5"
+      aria-label={t(($) => $.side_panel.actions_section)}
+      data-testid="agent-profile-actions"
+    >
+      {!isArchived ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          data-testid="agent-profile-action-message"
+          disabled={openingDM}
+          onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
+        >
+          {openingDM ? (
+            <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+          ) : (
+            <MessageSquare className="size-4 shrink-0" aria-hidden />
+          )}
+          {openingDM
+            ? t(($) => $.side_panel.message_opening)
+            : t(($) => $.side_panel.message_button)}
+        </Button>
+      ) : null}
 
-        {canManage && !isArchived ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-start"
-            disabled={lifecyclePending || !presence || (!isAgentRunning && !isRuntimeOnline)}
-            onClick={() => void handleLifecycle()}
-          >
-            {lifecyclePending ? (
-              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-            ) : isAgentRunning ? (
-              <Square className="size-4 shrink-0" aria-hidden />
-            ) : (
-              <Play className="size-4 shrink-0" aria-hidden />
-            )}
-            {t(($) =>
-              isAgentRunning ? $.side_panel.actions_stop_agent : $.side_panel.actions_start_agent,
-            )}
-          </Button>
-        ) : null}
+      {canManage && !isArchived ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          data-testid="agent-profile-action-start"
+          aria-label={t(($) =>
+            isAgentRunning ? $.side_panel.actions_stop_agent : $.side_panel.actions_start_agent,
+          )}
+          title={t(($) =>
+            isAgentRunning ? $.side_panel.actions_stop_agent : $.side_panel.actions_start_agent,
+          )}
+          disabled={lifecyclePending || !presence || (!isAgentRunning && !isRuntimeOnline)}
+          onClick={() => void handleLifecycle()}
+        >
+          {lifecyclePending ? (
+            <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+          ) : isAgentRunning ? (
+            <Square className="size-4 shrink-0" aria-hidden />
+          ) : (
+            <Play className="size-4 shrink-0" aria-hidden />
+          )}
+        </Button>
+      ) : null}
 
-        {canManage && !isArchived && isRuntimeOnline ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-restart"
-            onClick={() => setRestartOpen(true)}
-          >
-            <RotateCcw className="size-4 shrink-0" aria-hidden />
-            {t(($) => $.restart_modal.trigger)}
-          </Button>
-        ) : null}
+      {canManage && !isArchived && isRuntimeOnline ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          data-testid="agent-profile-action-restart"
+          aria-label={t(($) => $.restart_modal.trigger)}
+          title={t(($) => $.restart_modal.trigger)}
+          onClick={() => setRestartOpen(true)}
+        >
+          <RotateCcw className="size-4 shrink-0" aria-hidden />
+        </Button>
+      ) : null}
 
-        {canManage && !isArchived ? (
-          <div className="mt-1 border-t border-border pt-3">
-            <Button
-              type="button"
-              // LRM-593 lock A: Delete = the ONLY solid destructive (filled
-              // bg-destructive + white text).
-              variant="destructive"
-              size="lg"
-              className="w-full gap-2 bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"
-              data-testid="agent-profile-action-delete"
-              disabled={deleting}
-              onClick={() => setConfirmDelete(true)}
-            >
-              <Trash2 className="size-4 shrink-0" aria-hidden />
-              {t(($) => $.side_panel.actions_delete)}
-            </Button>
-          </div>
-        ) : null}
-      </div>
+      {canManage && !isArchived ? (
+        <Button
+          type="button"
+          variant="destructive"
+          size="icon-sm"
+          className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"
+          data-testid="agent-profile-action-delete"
+          aria-label={t(($) => $.side_panel.actions_delete)}
+          title={t(($) => $.side_panel.actions_delete)}
+          disabled={deleting}
+          onClick={() => setConfirmDelete(true)}
+        >
+          <Trash2 className="size-4 shrink-0" aria-hidden />
+        </Button>
+      ) : null}
 
       <ConfirmDeleteAgent
         open={confirmDelete}

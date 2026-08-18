@@ -594,10 +594,8 @@
     "actions_stop_failed": "停止任务失败",
     "actions_delete": "删除",
     "actions_start_agent": "启动智能体",
-    "actions_start_success": "已请求启动智能体",
     "actions_start_failed": "启动智能体失败",
     "actions_stop_agent": "停止智能体",
-    "actions_stop_agent_success": "已请求停止智能体",
     "actions_stop_agent_failed": "停止智能体失败",
     "delete_dialog_title": "删除智能体？",
     "delete_dialog_description": "“{{name}}” 将被删除。删除后不可被指派或 @提及，但所有历史记录都会保留，可在以后恢复。",
@@ -624,7 +622,7 @@
     "avatar_err_dimensions": "图片尺寸至少为 256×256 像素。"
   },
   "restart_modal": {
-    "trigger": "重启…",
+    "trigger": "重启/重置",
     "title": "重启智能体",
     "description": "选择如何重启 {{name}}。它的身份、配置、聊天历史和 Issue 始终保留。",
     "tier": {

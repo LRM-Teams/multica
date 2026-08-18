@@ -655,7 +655,7 @@ describe("ChannelMessageBubble", () => {
     expect(contentCol!.className).not.toMatch(/760px/);
   });
 
-  it("LRM-1331: drops shell gutter; author row reserves; bar chrome stays overlay", () => {
+  it("LRM-1331: no shell gutter, no author-row reserve; bar chrome stays overlay", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage()}
@@ -669,10 +669,9 @@ describe("ChannelMessageBubble", () => {
     expect(shell.className).not.toMatch(/pr-\[136px\]/);
     expect(shell.className).not.toMatch(/pointer:fine.*pr-/);
 
+    // The bar is a pure hover overlay — the author row reserves nothing for it.
     const authorRow = screen.getByTestId("message-author-row");
-    expect(authorRow.className).toMatch(
-      /\[@media\(pointer:fine\)_and_\(min-width:640px\)\]:pr-\[162px\]/,
-    );
+    expect(authorRow.className).not.toMatch(/pr-\[162px\]/);
 
     const actionBar = screen.getByTestId("message-action-bar");
     expect(actionBar).toHaveClass("bg-popover");
@@ -723,7 +722,7 @@ describe("ChannelMessageBubble", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("LRM-1126: compact rows align the action bar to the first body line", () => {
+  it("compact rows straddle the row's top boundary with the action bar", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({ content: "follow-up" })}
@@ -732,10 +731,13 @@ describe("ChannelMessageBubble", () => {
         onReact={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("message-action-bar")).toHaveClass("top-0.5");
+    const bar = screen.getByTestId("message-action-bar");
+    expect(bar).toHaveClass("top-0");
+    expect(bar).toHaveClass("-translate-y-1/2");
+    expect(bar.className).not.toMatch(/top-0\.5/);
   });
 
-  it("LRM-1331: compact text rows use a first-line float safety zone", () => {
+  it("compact text rows reserve no first-line float safety zone", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({ content: "follow-up line that wraps" })}
@@ -745,14 +747,13 @@ describe("ChannelMessageBubble", () => {
       />,
     );
     const body = screen.getByTestId("message-body");
-    const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
-    expect(body.className).toContain(`${gate}:before:float-right`);
-    expect(body.className).toContain(`${gate}:before:h-[36px]`);
-    expect(body.className).toContain(`${gate}:before:w-[158px]`);
+    expect(body.className).not.toMatch(/before:float-right/);
+    expect(body.className).not.toMatch(/before:h-\[36px\]/);
+    expect(body.className).not.toMatch(/before:w-\[158px\]/);
     expect(screen.getByTestId("message-shell").className).not.toMatch(/pr-\[136px\]/);
   });
 
-  it("LRM-1331: compact leading quote uses card inset instead of body float", () => {
+  it("compact leading quote reserves no card inset", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
@@ -777,9 +778,8 @@ describe("ChannelMessageBubble", () => {
     );
     const body = screen.getByTestId("message-body");
     const quote = screen.getByTestId("message-quote-card");
-    const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
-    expect(body.className).not.toContain(`${gate}:before:float-right`);
-    expect(quote.className).toContain(`${gate}:pr-[158px]`);
+    expect(body.className).not.toMatch(/before:float-right/);
+    expect(quote.className).not.toMatch(/pr-\[158px\]/);
   });
 
   describe("LRM-1227 bubble shell (① + G + C2 + D2, frozen in LRM-1233)", () => {
@@ -887,7 +887,7 @@ describe("ChannelMessageBubble", () => {
       expect(shell.className).not.toMatch(/\bbg-muted\b/);
     });
 
-    it("D2: bar rides the shell top edge on a lead row and sits inside a compact row", () => {
+    it("D2: bar rides the shell top edge on a lead row and straddles a compact row's top", () => {
       const { rerender } = render(
         <ChannelMessageBubble
           message={makeMessage()}
@@ -910,8 +910,8 @@ describe("ChannelMessageBubble", () => {
         />,
       );
       const compactBar = screen.getByTestId("message-action-bar");
-      expect(compactBar).toHaveClass("top-0.5");
-      expect(compactBar.className).not.toMatch(/-translate-y-1\/2/);
+      expect(compactBar).toHaveClass("top-0");
+      expect(compactBar).toHaveClass("-translate-y-1/2");
     });
 
     it("D2: 154x34 bar geometry — five size-7 controls, each with its own focus ring", () => {
@@ -937,7 +937,7 @@ describe("ChannelMessageBubble", () => {
       }
     });
 
-    it("LRM-1331: bar + reserves share fine+≥640 gate (no shell-wide pr gutter)", () => {
+    it("LRM-1331: the fine+≥640 gate applies to the bar only (no reserved geometry)", () => {
       render(
         <ChannelMessageBubble
           message={makeMessage()}
@@ -950,8 +950,10 @@ describe("ChannelMessageBubble", () => {
       const authorRow = screen.getByTestId("message-author-row");
       const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
       expect(shell.className).not.toMatch(/pr-\[136px\]/);
-      expect(authorRow.className).toContain(`${gate}:pr-[162px]`);
+      // No row reserves space for the overlay — the gate rides the bar itself.
+      expect(authorRow.className).not.toMatch(/pointer:fine/);
       expect(bar.className).toContain(`${gate}:flex`);
+      expect(bar.className).toContain(`${gate}:group-hover:opacity-100`);
       // Narrow fine (<640) must not get the hover bar (falls back to long-press).
       expect(bar.className).not.toMatch(/\[@media\(pointer:fine\)\]:flex\b/);
     });

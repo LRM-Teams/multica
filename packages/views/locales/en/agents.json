@@ -604,10 +604,8 @@
     "actions_stop_failed": "Failed to stop agent task",
     "actions_delete": "Delete",
     "actions_start_agent": "Start Agent",
-    "actions_start_success": "Agent start requested",
     "actions_start_failed": "Failed to start agent",
     "actions_stop_agent": "Stop Agent",
-    "actions_stop_agent_success": "Agent stop requested",
     "actions_stop_agent_failed": "Failed to stop agent",
     "delete_dialog_title": "Delete agent?",
     "delete_dialog_description": "\"{{name}}\" will be deleted. It won't be assignable or mentionable, but all history is preserved. You can restore it later.",
@@ -634,7 +632,7 @@
     "avatar_err_dimensions": "Image must be at least 256×256 pixels."
   },
   "restart_modal": {
-    "trigger": "Restart…",
+    "trigger": "Restart/Reset",
     "title": "Restart agent",
     "description": "Choose how to restart {{name}}. Its identity, configuration, chat history, and Issues are always kept.",
     "tier": {

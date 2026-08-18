@@ -300,7 +300,7 @@ export function ComputerUpdateToastListener() {
             useComputerUpgradeStore.getState().recordDone({
               computer_id: upgrade.daemonId,
               ok: true,
-              newVersion: runtime.current_version ?? upgrade.targetVersion,
+              newVersion: runtime.current_version ?? undefined,
             });
             const machineKey = upgrade.machineKey || upgrade.daemonId;
             upsertToast(machineKey, "success", {

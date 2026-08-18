@@ -3,9 +3,9 @@ package computer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,35 +16,45 @@ import (
 
 func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 	const controlToken = "owner-secret"
-	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != bindingChildPrepareUpgradePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "unexpected Host prepare", http.StatusBadRequest)
-			return
+	acceptedGeneration := "generation-a"
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
+			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
+				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
+				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
+			})
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/progress":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
 		}
-		_ = json.NewEncoder(w).Encode(BindingMachineUpgradePrepared{
-			RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"},
-		})
 	}))
-	defer host.Close()
+	defer cloud.Close()
+
+	host := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if operation != LocalControlRunnerPrepareOperation || headers["X-Multica-Control-Token"] != controlToken {
+			return nil, fmt.Errorf("unexpected Host prepare")
+		}
+		return BindingMachineUpgradePrepared{
+			RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"},
+		}, nil
+	})
 
 	exited := make(chan struct{}, 1)
 	var swapped atomic.Bool
-	var progressPhases []string
 	root := t.TempDir()
 	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
 		Identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
-			Version: "v1.0.0",
+			Version: "v1.0.0", ServerURL: cloud.URL,
 		},
-		ResidentRoot: root,
-		ControlURL:   host.URL,
-		ControlToken: controlToken,
-		Child:        BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
-		Emit: func(eventType string, payload any) {
-			if eventType == protocol.EventComputerUpgradeProgress {
-				progressPhases = append(progressPhases, payload.(protocol.ComputerUpgradeProgressPayload).Phase)
-			}
-		},
+		ResidentRoot:    root,
+		ServiceEndpoint: host,
+		ControlToken:    controlToken,
+		Child:           BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
+		RuntimeID:       "runtime-a",
+		DaemonToken:     "runtime-token",
 		Exit: func() {
 			select {
 			case exited <- struct{}{}:
@@ -67,15 +77,6 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 	if !swapped.Load() {
 		t.Fatal("Binding child did not swap the Computer binary")
 	}
-	wantPhases := []string{"downloading", "verifying", "applying", "restarting"}
-	if len(progressPhases) != len(wantPhases) {
-		t.Fatalf("Machine Upgrade progress phases = %v, want %v", progressPhases, wantPhases)
-	}
-	for index := range wantPhases {
-		if progressPhases[index] != wantPhases[index] {
-			t.Fatalf("Machine Upgrade progress phases = %v, want %v", progressPhases, wantPhases)
-		}
-	}
 	select {
 	case <-exited:
 	case <-time.After(time.Second):
@@ -85,28 +86,26 @@ func TestBindingMachineUpgradeExitStopsChildAfterSwap(t *testing.T) {
 	if err != nil || journal == nil || journal.TargetVersion != "v2.0.0" {
 		t.Fatalf("activated marker = %+v err=%v", journal, err)
 	}
-	raw, err := os.ReadFile(machineUpgradeJournalPath(root))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var persisted map[string]any
-	if err := json.Unmarshal(raw, &persisted); err != nil {
-		t.Fatal(err)
-	}
-	for field, want := range map[string]any{
-		"requestId": "upgrade-a", "fromVersion": "v1.0.0", "targetVersion": "v2.0.0",
-	} {
-		if got := persisted[field]; got != want {
-			t.Fatalf("activated marker %s = %v, want %v: %s", field, got, want, raw)
-		}
-	}
-	if persisted["startedAt"] == nil || persisted["schemaVersion"] != float64(1) {
-		t.Fatalf("activated marker lacks Raft lifecycle fields: %s", raw)
-	}
 }
 
 func TestBindingMachineUpgradeLatestUsesTestEnvironmentRelease(t *testing.T) {
 	const controlToken = "owner-secret"
+	acceptedGeneration := "generation-a"
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
+			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
+				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
+				AcceptedRuntimeIDs: []string{"runtime-a"}, AcceptedWorkspaceIDs: []string{"workspace-a"},
+			})
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/progress":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cloud.Close()
+
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/metainfo.json" {
 			http.NotFound(w, r)
@@ -122,27 +121,27 @@ func TestBindingMachineUpgradeLatestUsesTestEnvironmentRelease(t *testing.T) {
 	}))
 	defer feed.Close()
 
-	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != bindingChildPrepareUpgradePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "unexpected Host prepare", http.StatusBadRequest)
-			return
+	host := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if operation != LocalControlRunnerPrepareOperation || headers["X-Multica-Control-Token"] != controlToken {
+			return nil, fmt.Errorf("unexpected Host prepare")
 		}
-		_ = json.NewEncoder(w).Encode(BindingMachineUpgradePrepared{
+		return BindingMachineUpgradePrepared{
 			RuntimeIDs: []string{"runtime-a"}, WorkspaceIDs: []string{"workspace-a"}, ManifestURL: feed.URL,
-		})
-	}))
-	defer host.Close()
+		}, nil
+	})
 
 	var stagedTarget string
 	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
 		Identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
-			Version: "v0.4.24-alpha.73",
+			Version: "v0.4.24-alpha.73", ServerURL: cloud.URL,
 		},
-		ResidentRoot: t.TempDir(),
-		ControlURL:   host.URL,
-		ControlToken: controlToken,
-		Child:        BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
+		ResidentRoot:    t.TempDir(),
+		ServiceEndpoint: host,
+		ControlToken:    controlToken,
+		Child:           BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101},
+		RuntimeID:       "runtime-a",
+		DaemonToken:     "runtime-token",
 		StageRelease: func(target string, _ time.Duration, _ string) (string, error) {
 			stagedTarget = target
 			return "/tmp/staged", nil

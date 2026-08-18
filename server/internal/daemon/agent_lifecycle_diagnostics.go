@@ -84,12 +84,6 @@ func (d *Daemon) recordAgentLifecycleTransition(transition agentLifecycleTransit
 	if d == nil {
 		return
 	}
-	if d.bindingDiagnostics != nil {
-		if err := d.bindingDiagnostics.recordLifecycle(transition); err != nil && d.logger != nil {
-			d.logger.Debug("Host lifecycle diagnostic aggregation failed", "reason", "queue_unavailable")
-		}
-		return
-	}
 	if d.lifecycleDiagnostics == nil {
 		return
 	}

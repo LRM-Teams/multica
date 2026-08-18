@@ -194,6 +194,28 @@ func TestListRuntimeLocalSkills_CodexUsesSharedCODEXHOME(t *testing.T) {
 	}
 }
 
+func TestListRuntimeLocalSkills_CodexCustomHomeStillIncludesSharedAgentsSkills(t *testing.T) {
+	home := t.TempDir()
+	codexHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	writeTestLocalSkill(t, filepath.Join(home, ".agents", "skills"), "shared", map[string]string{
+		"SKILL.md": "# Shared\n",
+	})
+	writeTestLocalSkill(t, filepath.Join(codexHome, ".agents", "skills"), "wrong-root", map[string]string{
+		"SKILL.md": "# Wrong root\n",
+	})
+
+	skills, supported, err := listRuntimeLocalSkills("codex")
+	if err != nil {
+		t.Fatalf("listRuntimeLocalSkills: %v", err)
+	}
+	if !supported || len(skills) != 1 || skills[0].Key != "shared" {
+		t.Fatalf("skills = %#v, supported = %v", skills, supported)
+	}
+}
+
 func TestListRuntimeLocalSkills_CodexIncludesSharedAgentsSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

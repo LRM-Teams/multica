@@ -2246,7 +2246,9 @@ func (h *Handler) ListAgentProfileSkills(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
 		return
 	}
-	runtime, err := h.Queries.GetAgentRuntime(r.Context(), agent.RuntimeID)
+	runtime, err := h.Queries.GetAgentBoundRuntimeForWorkspace(r.Context(), db.GetAgentBoundRuntimeForWorkspaceParams{
+		AgentID: agent.ID, WorkspaceID: agent.WorkspaceID,
+	})
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
 		return
@@ -2259,7 +2261,10 @@ func (h *Handler) ListAgentProfileSkills(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "daemon skills discovery failed")
 		return
 	}
-	resp.AgentID = uuidToString(agent.ID)
+	if resp.AgentID != uuidToString(agent.ID) {
+		writeError(w, http.StatusBadGateway, "daemon returned skills for a different agent")
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

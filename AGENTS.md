@@ -194,6 +194,22 @@ make start-worktree     # Start using .env.worktree
 - Go code follows standard Go conventions (gofmt, go vet).
 - Keep comments in code **English only**.
 - Prefer existing patterns/components over introducing parallel abstractions.
+
+### Daemon/Computer JSON Protocol
+
+- Keep Go identifiers idiomatic (`RequestID`, `RuntimeID`, `AgentID`); the JSON
+  wire name is defined explicitly by the struct tag and is not a Go naming
+  convention.
+- New daemon/computer protocol fields use camelCase JSON (`requestId`,
+  `runtimeId`, `agentId`). Both ends of a new message must use the same wire
+  name; do not accept or emit multiple spellings for one field.
+- Existing messages with snake_case JSON fields (`request_id`, `runtime_id`,
+  `agent_id`) are legacy wire contracts. Preserve their names rather than
+  changing them opportunistically; migrate them only as an explicit protocol
+  version change covering both daemon and computer.
+- When integrating an external protocol such as Raft, keep the Go field names
+  idiomatic and match the external JSON contract at the message boundary.
+
 - Unless the user explicitly asks for backwards compatibility, do **not** add compatibility layers, fallback paths, dual-write logic, legacy adapters, or temporary shims **for internal, non-boundary code** (a function calling another function in the same package, a component reading its own state, a store helper, etc.).
 - If a flow or API is being replaced and the product is not yet live, prefer removing the old path instead of preserving both old and new behavior.
 - Avoid broad refactors unless required by the task.

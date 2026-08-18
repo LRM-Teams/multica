@@ -1,12 +1,17 @@
 "use client";
 
+/* react-doctor-disable react-doctor/prefer-useReducer, react-doctor/jsx-no-jsx-as-prop -- intentional independent UI state and stable shell slots. */
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
 import { createResearchV6DirectorProjectionTransport } from "@multica/core/api/research-v6-director";
-import { researchV6DirectorNodeDetailOptions } from "@multica/core/research-v6/director-queries";
+import {
+  researchV6DirectorNodeDetailOptions,
+  researchV6DirectorReportOptions,
+  researchV6DirectorReportsOptions,
+} from "@multica/core/research-v6/director-queries";
 import {
   researchV6DirectorSelectedRefFromNode,
   researchV6DirectorSelectionIdentity,
@@ -19,6 +24,7 @@ import type {
 } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { useWS } from "@multica/core/realtime";
 import type { WSEventType } from "@multica/core/types/events";
 import {
@@ -114,6 +120,7 @@ import {
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchDirectorChatHeader } from "./research-director-chat-header";
+import { ResearchDirectorAssignmentPicker } from "./research-director-assignment-picker";
 import { ResearchCanvasChangeCard, isCanvasChangeProcessMessage } from "./research-canvas-change-card";
 import { ResearchChatCard } from "./research-chat-card";
 import {
@@ -128,6 +135,7 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchSelectedRefChip } from "./research-selected-ref-chip";
 import { ResearchV6NodeDetail } from "./research-v6-node-detail";
+import { ResearchV6ReportModal } from "./research-v6-report-modal";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchProjectionContractNotice } from "./research-projection-contract-notice";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -207,6 +215,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const setD5RailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const setD5RailMode = useResearchUiStore((s) => s.setD5RailMode);
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
+  // react-doctor-disable-next-line react-doctor/prefer-useReducer -- these independent UI concerns are intentionally owned by their respective stores/hooks.
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
     dismissedSessionId === sessionId || isCompletionGuideDismissed(sessionId);
@@ -251,6 +260,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   );
   const directorV6Enabled =
     data?.run?.run.orchestrator_version === "research-run-v6";
+  const persistedDirectorAgentId = data?.run?.run.director_agent_id ?? null;
+  const { data: workspaceAgents = [] } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: directorV6Enabled,
+  });
   const directorTransport = useMemo(
     () => createResearchV6DirectorProjectionTransport(api),
     [],
@@ -275,7 +289,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const selectedDirectorProjectionNode = selectedNodeId
     ? directorCanvas.canvas?.projectionNodeById.get(selectedNodeId) ?? null
     : null;
-  const directorNodeDetail = useQuery({
+  const {
+    data: directorNodeDetailData,
+    isLoading: directorNodeDetailLoading,
+    isError: directorNodeDetailError,
+    refetch: refetchDirectorNodeDetail,
+  } = useQuery({
     ...researchV6DirectorNodeDetailOptions(
       directorTransport,
       wsId,
@@ -391,6 +410,66 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchSessionUiReducer,
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
+  const [selectedDirectorReportId, setSelectedDirectorReportId] = useState<
+    string | null
+  >(null);
+  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(
+    persistedDirectorAgentId,
+  );
+  useEffect(() => {
+    // react-doctor-disable-next-line react-doctor/no-derived-state -- assignment changes optimistically and is reconciled from the persisted snapshot.
+    setAssignedDirectorAgentId(persistedDirectorAgentId);
+  }, [persistedDirectorAgentId]);
+  const assignedDirectorAgent = workspaceAgents.find(
+    (agent) => agent.id === assignedDirectorAgentId,
+  );
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess updates the persisted Director assignment and the session snapshot is refreshed by the assignment flow.
+  const directorAssignment = useMutation({
+    mutationFn: ({ agentId, reason }: { agentId: string; reason: string }) =>
+      api.replaceResearchV6Director(wsId, sessionId, {
+        directorAgentId: agentId,
+        expectedStateVersion: data?.run?.run.state_version ?? 0,
+        reason,
+        clientRequestId: crypto.randomUUID(),
+      }),
+    onSuccess: (assignment) => {
+      if (assignment) {
+        setAssignedDirectorAgentId(assignment.directorAgentId);
+        void qc.invalidateQueries({
+          queryKey: researchKeys.snapshot(wsId, sessionId),
+        });
+      }
+    },
+  });
+  const {
+    data: directorReportsData,
+    isLoading: directorReportsLoading,
+    refetch: refetchDirectorReports,
+  } = useQuery({
+    ...researchV6DirectorReportsOptions(directorTransport, wsId, sessionId),
+    enabled: directorV6Enabled,
+  });
+  const directorReportId =
+    (selectedDirectorReportId &&
+    directorReportsData?.some((item) => item.id === selectedDirectorReportId)
+      ? selectedDirectorReportId
+      : null) ??
+    directorReportsData?.find((item) => item.status === "published")?.id ??
+    directorReportsData?.[0]?.id ??
+    null;
+  const {
+    data: directorReportDetailData,
+    isFetching: directorReportDetailFetching,
+    refetch: refetchDirectorReportDetail,
+  } = useQuery({
+    ...researchV6DirectorReportOptions(
+      directorTransport,
+      wsId,
+      sessionId,
+      directorReportId ?? "00000000-0000-0000-0000-000000000000",
+    ),
+    enabled: directorV6Enabled && ui.deliveryOpen && Boolean(directorReportId),
+  });
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
       selectSessionCanvasNode(sessionId, node?.id ?? null);
@@ -496,6 +575,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     onError: (err) => mutationErrorToast(t(($) => $.session_page.send_failed), err),
   });
 
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- node commands publish realtime projection events; invalidating every query here would race the authoritative event stream.
   const nodeCommand = useMutation({
     mutationFn: ({
       node,
@@ -819,10 +899,16 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const isPaused = session.status === "paused";
   const completionKind = resolveCompletionGuideKind(session.status);
   const showCompletionGuide = Boolean(completionKind) && !completionDismissed;
-  const startedStages = RESEARCH_STAGE_ORDER.filter(
-    (stage) =>
-      resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
-  );
+  // Director V6 has no fixed S1-S4 lifecycle. Keep the historical markers
+  // available only for V1-V5 sessions instead of projecting legacy stages
+  // onto the server-owned Director graph.
+  const startedStages = directorV6Enabled
+    ? []
+    : RESEARCH_STAGE_ORDER.filter(
+        (stage) =>
+          resolveStageStepState(stage, session.current_stage, session.status) !==
+          "upcoming",
+      );
   const latestRound: ResearchProductRoundCard | undefined = productRounds?.rounds?.[
     (productRounds.rounds.length ?? 0) - 1
   ];
@@ -947,6 +1033,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       .postResearchMessage(sessionId, { body })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+      )
+      .catch((error: unknown) =>
+        mutationErrorToast(t(($) => $.session_page.send_failed), error),
       );
   };
 
@@ -1016,7 +1105,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         confirmPending={confirm.isPending}
         rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}
-        onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
+        onOpenDelivery={() => {
+          dispatch({ type: "setDeliveryOpen", value: true });
+          if (directorV6Enabled) void refetchDirectorReports();
+        }}
         members={directorV6Enabled ? [] : fleet.members}
         sources={sources}
         pendingSubstantiveGoal={
@@ -1108,9 +1200,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           formingMode={
             canvasMode === "forming" || canvasMode === "stalled" ? canvasMode : undefined
           }
-          formingStage={session.current_stage}
-          formingMembers={fleet.members}
-          formingTasks={data.run?.tasks ?? []}
+          formingStage={directorV6Enabled ? undefined : session.current_stage}
+          formingMembers={directorV6Enabled ? [] : fleet.members}
+          formingTasks={directorV6Enabled ? [] : (data.run?.tasks ?? [])}
           formingMessages={messages}
           registerReportController={(controller) => {
             reportControllerRef.current = controller;
@@ -1120,14 +1212,22 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               selectedDirectorProjectionNode ? (
                 <ResearchV6NodeDetail
                   node={selectedDirectorProjectionNode}
-                  detail={directorNodeDetail.data}
-                  loading={directorNodeDetail.isLoading}
-                  error={directorNodeDetail.isError}
+                  detail={directorNodeDetailData}
+                  loading={directorNodeDetailLoading}
+                  error={directorNodeDetailError}
                   selectedForChat={
                     selectedDirectorReference?.stable_id ===
                     `${selectedDirectorProjectionNode.canonical_ref.kind}:${selectedDirectorProjectionNode.canonical_ref.id}`
                   }
-                  onRetry={() => void directorNodeDetail.refetch()}
+                  projectionNodeById={
+                    directorCanvas.canvas?.projectionNodeById ?? new Map()
+                  }
+                  onRetry={() => void refetchDirectorNodeDetail()}
+                  onFocusNode={(nodeId) => {
+                    if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;
+                    handleD5LensChange("relations");
+                    selectSessionCanvasNode(sessionId, nodeId);
+                  }}
                   onReference={() => {
                     const reference = researchV6DirectorSelectedRefFromNode(
                       selectedDirectorProjectionNode,
@@ -1175,6 +1275,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             <>
             <ResearchDirectorChatHeader
               director={directorMember}
+              fallbackName={
+                directorV6Enabled
+                  ? assignedDirectorAgent?.display_name || assignedDirectorAgent?.name
+                  : undefined
+              }
               activity={
                 directorMember
                   ? presence[directorMember.agent_id]?.activity
@@ -1183,9 +1288,20 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               modeChip={<ResearchChatModeChip mode={chatMode} />}
               mode={chatMode}
             />
+            {directorV6Enabled ? (
+              /* react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- picker is a deliberate slot in the shared chat shell and is gated by the V6 route. */
+              <ResearchDirectorAssignmentPicker
+                agents={workspaceAgents}
+                currentAgentId={assignedDirectorAgentId}
+                pending={directorAssignment.isPending}
+                error={directorAssignment.error instanceof Error ? directorAssignment.error.message : null}
+                onAssign={(agentId, reason) => directorAssignment.mutate({ agentId, reason })}
+              />
+            ) : null}
             {!directorV6Enabled ? (
               <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
                 {t(($) => $.panel.fleet)}:{" "}
+                {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- the two projections intentionally render different accessible status groups. */}
                 {fleet.members
                   .filter((m) => m.status !== "archived")
                   .map((m) => m.display_name || m.name || m.role)
@@ -1244,6 +1360,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             ) : null}
             {!directorV6Enabled && Object.keys(presence).length > 0 ? (
               <div className="flex flex-wrap gap-1.5 border-b px-3 py-2">
+                {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- the two projections intentionally render different accessible status groups. */}
                 {fleet.members
                   .filter((m) => presence[m.agent_id]?.activity)
                   .map((m) => (
@@ -1411,6 +1528,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           composer={
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
+                {/* react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- composer is a stable shell slot whose content must follow the selected Director reference. */}
                 {directorV6Enabled && selectedDirectorReference ? (
                   <ul
                     className="mb-2"
@@ -1530,6 +1648,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           onViewReport={() => {
             dismissCompletion();
             dispatch({ type: "setDeliveryOpen", value: true });
+            if (directorV6Enabled) void refetchDirectorReports();
           }}
           onNewResearch={() => {
             dismissCompletion();
@@ -1545,28 +1664,71 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
 
       {/* Portal-friendly mount: keep delivery modal outside the canvas
           `relative`/`overflow` section so it cannot collapse into a corner float. */}
-      <ResearchDeliveryDrawer
-        open={ui.deliveryOpen}
-        onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
-        report={report}
-        sources={sources}
-        titleFallback={session.title}
-        boundary={humanBoundary}
-        sessionStatus={session.status}
-        loading={
-          isFetching && deliveryContentCount(report, sources.length) <= 0
-        }
-        error={
-          isError
-            ? error instanceof Error && error.message
-              ? error.message
-              : t(($) => $.session_page.load_failed)
-            : null
-        }
-        onRetry={() => {
-          void refetch();
-        }}
-      />
+      {directorV6Enabled ? (
+        <ResearchV6ReportModal
+          open={ui.deliveryOpen}
+          onOpenChange={(open) =>
+            dispatch({ type: "setDeliveryOpen", value: open })
+          }
+          appOrigin={
+            typeof window === "undefined" ? "" : window.location.origin
+          }
+          report={
+            directorReportDetailData
+              ? {
+                  id: directorReportDetailData.id,
+                  title: directorReportDetailData.title,
+                  packageHash: directorReportDetailData.package_hash,
+                  sandboxUrl: directorReportDetailData.sandbox_url ?? "",
+                  reportOrigin: directorReportDetailData.report_origin ?? "",
+                  plainTextFallback: directorReportDetailData.plain_text,
+                  revision: directorReportDetailData.revision,
+                  status: directorReportDetailData.status,
+                  inputCount:
+                    directorReportsData?.find(
+                      (item) => item.id === directorReportDetailData.id,
+                    )?.input_count ?? directorReportDetailData.input_refs.length,
+                }
+              : null
+          }
+          history={(directorReportsData ?? []).map((item) => ({
+            id: item.id,
+            revision: item.revision,
+            status: item.status,
+            title: item.title,
+            publishedAt: item.published_at,
+          }))}
+          onSelectReport={setSelectedDirectorReportId}
+          selectedReportId={directorReportId}
+          loading={directorReportsLoading || directorReportDetailFetching}
+          onRequestFreshCapability={() => {
+            void refetchDirectorReportDetail();
+          }}
+        />
+      ) : (
+        <ResearchDeliveryDrawer
+          open={ui.deliveryOpen}
+          onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
+          report={report}
+          sources={sources}
+          titleFallback={session.title}
+          boundary={humanBoundary}
+          sessionStatus={session.status}
+          loading={
+            isFetching && deliveryContentCount(report, sources.length) <= 0
+          }
+          error={
+            isError
+              ? error instanceof Error && error.message
+                ? error.message
+                : t(($) => $.session_page.load_failed)
+              : null
+          }
+          onRetry={() => {
+            void refetch();
+          }}
+        />
+      )}
     </div>
   );
 

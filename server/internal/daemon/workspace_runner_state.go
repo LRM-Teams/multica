@@ -58,7 +58,7 @@ type workspaceRunnerDependencies struct {
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
 	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
-	setComputerUpgradeEmit   func(func(string, any))
+	setComputerUpgradeEmit   func(func(string, any) error)
 	now                      func() time.Time
 	onTransition             func(agentLifecycleTransition)
 }
@@ -95,7 +95,7 @@ type WorkspaceRunner struct {
 	controlHeartbeatAck      func(context.Context, *HeartbeatResponse)
 	controlHeartbeatChanges  func() (<-chan struct{}, func())
 	handleComputerControl    func(context.Context, string, protocol.ComputerUpgradePayload) error
-	setComputerUpgradeEmit   func(func(string, any))
+	setComputerUpgradeEmit   func(func(string, any) error)
 
 	residency *agentResidencyStore
 	life      context.Context
@@ -286,6 +286,10 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 		func(eventType string, payload any) error { return writeDaemonConnectionFrame(conn, eventType, payload) },
 		func() { _ = conn.Close() },
 	)
+	if runner.setComputerUpgradeEmit != nil {
+		runner.setComputerUpgradeEmit(connection.Write)
+		defer runner.setComputerUpgradeEmit(nil)
+	}
 	runner.replaceConnection(connection)
 	defer runner.releaseConnection(connection)
 	stopWatch := make(chan struct{})

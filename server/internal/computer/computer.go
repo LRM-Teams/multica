@@ -24,10 +24,9 @@ import (
 // or ports.
 type Lifecycle struct {
 	// Probe reports resident health; defaults to ProbeHealth.
-	Probe HealthProbe
-	// ControlPort selects the resident's loopback lifecycle port. Zero uses the
-	// machine-wide default; tests may bind an ephemeral port.
-	ControlPort int
+	Probe ServiceProbe
+	// ServiceEndpoint selects the resident's local IPC endpoint.
+	ServiceEndpoint string
 	// Sleep blocks between readiness polls; defaults to time.Sleep.
 	Sleep func(time.Duration)
 	// Executable resolves the binary to exec for a fresh resident process;
@@ -57,10 +56,10 @@ var requestShutdown = RequestShutdown
 var spawnResident = startResidentProcess
 
 type startView struct {
-	health   int
+	service  string
 	logPath  string
 	pidPath  string
-	probe    HealthProbe
+	probe    ServiceProbe
 	sleep    func(time.Duration)
 	stderr   *os.File
 	executor func() (string, error)
@@ -83,12 +82,12 @@ func (l *Lifecycle) view() *startView {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
-	healthPort := l.ControlPort
-	if healthPort <= 0 {
-		healthPort = HealthPort("")
+	serviceEndpoint := strings.TrimSpace(l.ServiceEndpoint)
+	if serviceEndpoint == "" {
+		serviceEndpoint = ServiceControlEndpoint(RootDir(""))
 	}
 	return &startView{
-		health:   healthPort,
+		service:  serviceEndpoint,
 		logPath:  LogPath(""),
 		pidPath:  PIDPath(""),
 		probe:    probe,
@@ -181,6 +180,7 @@ func startResidentProcess(exe string, args []string, log *os.File) (procHandle, 
 		child.Stdout = log
 		child.Stderr = log
 		child.SysProcAttr = SysProcAttr(breakaway)
+		configureChildParentDeath(child)
 		if err := child.Start(); err != nil {
 			return nil, err
 		}
@@ -239,7 +239,7 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	// Already-running guard.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := v.probe(ctx, v.health)
+	health := v.probe(ctx, v.service)
 	if Alive(health) {
 		pid, _ := health["pid"].(float64)
 		return StartResult{}, fmt.Errorf("already running (pid %v)", int(pid))
@@ -282,7 +282,7 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	for time.Now().Before(deadline) {
 		v.sleep(500 * time.Millisecond)
 		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
-		h := v.probe(hctx, v.health)
+		h := v.probe(hctx, v.service)
 		hcancel()
 		lastStatus, _ = h["status"].(string)
 		if lastStatus == "running" {
@@ -314,7 +314,7 @@ func (l *Lifecycle) stop(action string) StopResult {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := v.probe(ctx, v.health)
+	health := v.probe(ctx, v.service)
 	if !Alive(health) {
 		return StopResult{Running: false}
 	}
@@ -344,7 +344,7 @@ func (l *Lifecycle) stop(action string) StopResult {
 	if requestedAction := strings.TrimSpace(os.Getenv("MULTICA_SHUTDOWN_ACTION")); requestedAction != "" {
 		action = requestedAction
 	}
-	if err := requestShutdown(v.health, ShutdownRequest{
+	if err := requestShutdown(v.service, ShutdownRequest{
 		Source: source, Action: action, RequestPID: os.Getpid(),
 	}); err != nil {
 		res.GracefulFailed = true
@@ -359,7 +359,7 @@ func (l *Lifecycle) stop(action string) StopResult {
 	for i := 0; i < 10; i++ {
 		v.sleep(500 * time.Millisecond)
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Second)
-		h := v.probe(ctx2, v.health)
+		h := v.probe(ctx2, v.service)
 		cancel2()
 		if !Alive(h) {
 			_ = os.Remove(v.pidPath)
@@ -386,12 +386,12 @@ func (l *Lifecycle) Status() map[string]any {
 	v := l.view()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	raw := v.probe(ctx, v.health)
+	raw := v.probe(ctx, v.service)
 	health := map[string]any{
 		"status":           "stopped",
 		"connected":        false,
 		"canonical_origin": CanonicalCloudOrigin,
-		"health_port":      v.health,
+		"service_endpoint": v.service,
 		"log_path":         v.logPath,
 		"pid_path":         v.pidPath,
 	}

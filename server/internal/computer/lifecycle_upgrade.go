@@ -131,7 +131,7 @@ func (l *Lifecycle) upgradeHealth(ctx context.Context) map[string]any {
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	v := l.view()
-	return v.probe(probeCtx, v.health)
+	return v.probe(probeCtx, v.service)
 }
 
 func rejectLivePIDWithoutControl(path string) error {

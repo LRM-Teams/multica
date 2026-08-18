@@ -524,7 +524,7 @@ func waitForWorkspaceBindingAcceptance(cmd *cobra.Command) error {
 	deadline := time.Now().Add(bindingAcceptanceTimeout)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		health := computer.ProbeHealth(ctx, computer.HealthPort(""))
+		health := computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir("")))
 		cancel()
 		if healthProvesSetupAcceptance(health, cfg, cfg.WorkspaceID) {
 			return nil

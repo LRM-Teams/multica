@@ -3,7 +3,38 @@ package daemon
 import (
 	"context"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func (runner *WorkspaceRunner) startManagedAgent(ctx context.Context, payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, protocol.AgentStatusPayload, protocol.AgentSessionPayload, error) {
+	ack, err := runner.registerManagedAgentStart(payload)
+	if err != nil {
+		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
+	}
+	callback := agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}
+	failed := false
+	defer func() {
+		if failed {
+			runner.processes.completeFailedManagedStart(callback)
+		} else {
+			runner.processes.completeManagedStart(callback)
+		}
+	}()
+	outcome, err := runner.completeManagedAgentStart(ctx, payload, ack)
+	if err != nil {
+		failed = true
+		runner.publishManagedAgentStartFailure(payload, outcome)
+		return ack, outcome.status, outcome.session, err
+	}
+	if err := runner.establishManagedAgentStart(payload, outcome); err != nil {
+		return ack, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
+	}
+	runner.broadcastActivity(payload.AgentID, payload.RuntimeID, "starting")
+	runner.observeResidentRuntimeReady(payload.AgentID, payload.RuntimeID)
+	runner.flushManagedAgentStartMessages(ctx, payload, ack)
+	return ack, outcome.status, outcome.session, nil
+}
 
 func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send func(string, any) error) (*WorkspaceRunner, *DaemonConnection) {
 	t.Helper()

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
+
+var researchV6PackageHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func (h *Handler) researchReportCapability(reportID, packageHash string, expiry int64) string {
 	mac := hmac.New(sha256.New, []byte(h.cfg.ResearchReportCapabilitySecret))
@@ -31,10 +34,12 @@ func (h *Handler) researchReportSandboxURL(reportID, packageHash string) (string
 	if err != nil || len(ancestors) == 0 {
 		return "", fmt.Errorf("report frame policy unavailable")
 	}
-	for _, ancestor := range ancestors {
-		if strings.EqualFold(ancestor, base.Scheme+"://"+base.Host) {
-			return "", fmt.Errorf("report origin must be isolated from application origins")
-		}
+	applicationOrigins := append([]string(nil), ancestors...)
+	if strings.TrimSpace(h.cfg.PublicURL) != "" {
+		applicationOrigins = append(applicationOrigins, h.cfg.PublicURL)
+	}
+	if !researchrun.ValidateV6ReportOrigin(h.cfg.ResearchReportOrigin, applicationOrigins) {
+		return "", fmt.Errorf("report origin must be isolated from application origins")
 	}
 	exp := time.Now().Add(5 * time.Minute).Unix()
 	base.Path = "/research/" + reportID + "/" + packageHash + "/index.html"
@@ -43,7 +48,11 @@ func (h *Handler) researchReportSandboxURL(reportID, packageHash string) (string
 }
 func (h *Handler) GetResearchV6Reports(w http.ResponseWriter, r *http.Request) {
 	workspace := h.resolveWorkspaceID(r)
-	run := chi.URLParam(r, "runId")
+	runUUID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "runId"), "runId")
+	if !valid {
+		return
+	}
+	run := uuidToString(runUUID)
 	rows, err := h.DB.Query(r.Context(), `SELECT r.id::text,r.revision,r.status,r.title,r.summary,COALESCE(r.package_hash,''),COALESCE(r.document_content_hash,''),r.published_at,r.created_at,
 		COALESCE((SELECT a.assigned_agent_id::text FROM research_work_item w JOIN research_work_item_attempt a ON a.work_item_id=w.id WHERE w.target_kind='report' AND w.target_id=r.id AND a.status='succeeded' ORDER BY a.completed_at DESC LIMIT 1),''),
 		(SELECT count(*)::int FROM research_report_input i WHERE i.report_id=r.id AND i.report_revision=r.revision),
@@ -69,6 +78,7 @@ func (h *Handler) GetResearchV6Reports(w http.ResponseWriter, r *http.Request) {
 		if pkg != "" {
 			if sandbox, e := h.researchReportSandboxURL(id, pkg); e == nil {
 				item["sandbox_url"] = sandbox
+				item["report_origin"] = strings.TrimRight(h.cfg.ResearchReportOrigin, "/")
 			}
 		}
 		items = append(items, item)
@@ -77,7 +87,15 @@ func (h *Handler) GetResearchV6Reports(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) GetResearchV6Report(w http.ResponseWriter, r *http.Request) {
 	workspace := h.resolveWorkspaceID(r)
-	run, id := chi.URLParam(r, "runId"), chi.URLParam(r, "reportId")
+	runUUID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "runId"), "runId")
+	if !valid {
+		return
+	}
+	reportUUID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "reportId"), "reportId")
+	if !valid {
+		return
+	}
+	run, id := uuidToString(runUUID), uuidToString(reportUUID)
 	var revision int
 	var status, title, summary, plain, pkg, doc string
 	var outline, citations json.RawMessage
@@ -128,6 +146,7 @@ func (h *Handler) GetResearchV6Report(w http.ResponseWriter, r *http.Request) {
 	if pkg != "" {
 		if sandbox, e := h.researchReportSandboxURL(id, pkg); e == nil {
 			out["sandbox_url"] = sandbox
+			out["report_origin"] = strings.TrimRight(h.cfg.ResearchReportOrigin, "/")
 		}
 	}
 	writeJSON(w, 200, out)
@@ -137,7 +156,15 @@ func (h *Handler) ServeResearchV6ReportDocument(w http.ResponseWriter, r *http.R
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	id, pkg := chi.URLParam(r, "reportId"), chi.URLParam(r, "packageHash")
+	reportUUID, valid := parseUUIDOrBadRequest(w, chi.URLParam(r, "reportId"), "reportId")
+	if !valid {
+		return
+	}
+	id, pkg := uuidToString(reportUUID), chi.URLParam(r, "packageHash")
+	if !researchV6PackageHashPattern.MatchString(pkg) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	exp, _ := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
 	sig, decodeErr := hex.DecodeString(r.URL.Query().Get("sig"))
 	expected, _ := hex.DecodeString(h.researchReportCapability(id, pkg, exp))

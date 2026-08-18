@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
@@ -134,6 +135,12 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if runID == "" || workspaceID == "" {
 		return researchV6Snapshot{}, researchrun.ErrRunNotFound
 	}
+	runUUID, runErr := uuid.Parse(runID)
+	workspaceUUID, workspaceErr := uuid.Parse(strings.TrimSpace(workspaceID))
+	if runErr != nil || workspaceErr != nil {
+		return researchV6Snapshot{}, researchrun.ErrInvalidContract
+	}
+	runID, workspaceID = runUUID.String(), workspaceUUID.String()
 	snap, err := h.ResearchRun.Snapshot(r.Context(), runID, workspaceID)
 	if err != nil {
 		return researchV6Snapshot{}, err
@@ -512,6 +519,10 @@ func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http
 		return
 	}
 	limit := 1000
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
 	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
 		parsed, parseErr := strconv.Atoi(rawLimit)
 		if parseErr != nil {
@@ -520,7 +531,7 @@ func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http
 		}
 		limit = parsed
 	}
-	snapshot, err := service.ProjectionV6Snapshot(r.Context(), researchrun.V6ProjectionPageRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: strings.TrimSpace(chi.URLParam(r, "runId")), Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), Limit: limit})
+	snapshot, err := service.ProjectionV6Snapshot(r.Context(), researchrun.V6ProjectionPageRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), Limit: limit})
 	if errors.Is(err, researchrun.ErrProjectionResyncRequired) {
 		writeError(w, http.StatusConflict, "projection snapshot expired; resync required")
 		return
@@ -545,12 +556,16 @@ func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "projection delta cursor is not valid for this bounded page")
 		return
 	}
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
 	after, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("after")), 10, 64)
 	if err != nil || after < 0 {
 		writeError(w, http.StatusBadRequest, "after must be a non-negative integer")
 		return
 	}
-	page, err := service.ProjectionV6Deltas(r.Context(), researchrun.V6ProjectionDeltaRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: strings.TrimSpace(chi.URLParam(r, "runId")), After: after})
+	page, err := service.ProjectionV6Deltas(r.Context(), researchrun.V6ProjectionDeltaRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), After: after})
 	if err != nil {
 		writeResearchV6Error(w, err)
 		return
@@ -572,7 +587,11 @@ func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusServiceUnavailable, "research V6 projection unavailable")
 		return
 	}
-	page, err := service.ProjectionV6Deltas(r.Context(), researchrun.V6ProjectionDeltaRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: strings.TrimSpace(chi.URLParam(r, "runId")), SnapshotID: req.SnapshotID, ProjectionHash: req.ProjectionHash, After: req.LastConfirmedSequence})
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
+	page, err := service.ProjectionV6Deltas(r.Context(), researchrun.V6ProjectionDeltaRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), SnapshotID: req.SnapshotID, ProjectionHash: req.ProjectionHash, After: req.LastConfirmedSequence})
 	if err != nil {
 		writeResearchV6Error(w, err)
 		return

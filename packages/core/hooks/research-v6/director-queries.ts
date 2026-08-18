@@ -174,7 +174,7 @@ export function researchV6DirectorNodeDetailOptions(
         view,
         signal,
       );
-      if (detail.snapshot_id !== snapshotId) {
+      if (detail && detail.snapshot_id !== snapshotId) {
         throw new Error("Director V6 node detail changed snapshot identity");
       }
       return detail;

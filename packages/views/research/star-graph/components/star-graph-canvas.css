@@ -1,12 +1,24 @@
 .sg-canvas-root {
+  --sg-canvas-surface: var(--canvas-bg);
+  --sg-ambient-glow: color-mix(in oklab, var(--brand) 13%, transparent);
+  --sg-vignette: color-mix(in oklab, var(--background) 44%, transparent);
+  --sg-brand-shadow-soft: color-mix(in oklab, var(--brand) 12%, transparent);
+  --sg-brand-shadow: color-mix(in oklab, var(--brand) 16%, transparent);
+  --sg-success-shadow: color-mix(in oklab, var(--success) 18%, transparent);
+  --sg-elevation-shadow: color-mix(in oklab, var(--background) 28%, transparent);
+  --sg-floating-surface: color-mix(in oklab, var(--card) 88%, transparent);
+  --sg-cluster-border: color-mix(in oklab, var(--research-lane-3) 62%, transparent);
+  --sg-cluster-fill: color-mix(in oklab, var(--research-lane-3) 8%, transparent);
+  --sg-fusion-brand-core: color-mix(in oklab, var(--brand) 58%, var(--card));
+  --sg-fusion-success-core: color-mix(in oklab, var(--success) 46%, var(--card));
   position: relative;
   min-height: 0;
   flex: 1;
   overflow: hidden;
   isolation: isolate;
-  background-color: #07111b;
+  background-color: var(--sg-canvas-surface);
   background-image:
-    radial-gradient(circle at 54% 18%, rgb(35 108 112 / 13%), transparent 28%),
+    radial-gradient(circle at 54% 18%, var(--sg-ambient-glow), transparent 28%),
     radial-gradient(var(--canvas-dot) 1px, transparent 1px);
   background-repeat: no-repeat, repeat;
   background-size: 100% 100%, 22px 22px;
@@ -22,7 +34,7 @@
   background: radial-gradient(
     circle at 50% 45%,
     transparent 18%,
-    rgb(1 7 13 / 44%) 100%
+    var(--sg-vignette) 100%
   );
   z-index: 7;
 }
@@ -90,7 +102,7 @@
 .sg-collapse-ghost {
   pointer-events: none;
   animation: sg-collapse-ghost 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  filter: saturate(0.72) drop-shadow(0 8px 18px rgb(45 212 191 / 18%));
+  filter: saturate(0.72) drop-shadow(0 8px 18px var(--sg-success-shadow));
   will-change: transform, opacity, filter;
 }
 @keyframes sg-collapse-ghost {
@@ -126,7 +138,7 @@
 .sg-edge-layer {
   z-index: 1;
   overflow: visible;
-  filter: drop-shadow(0 0 4px rgb(72 211 228 / 12%));
+  filter: drop-shadow(0 0 4px var(--sg-brand-shadow-soft));
 }
 .sg-edge-decompose,
 .sg-edge-support,
@@ -144,7 +156,7 @@
   font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0.08em;
   paint-order: stroke;
-  stroke: #07111b;
+  stroke: var(--sg-canvas-surface);
   stroke-width: 4px;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
@@ -188,7 +200,7 @@
   border-radius: 999px;
   background: color-mix(in oklab, var(--background) 86%, transparent);
   box-shadow:
-    0 14px 38px rgb(0 0 0 / 28%),
+    0 14px 38px var(--sg-elevation-shadow),
     inset 0 0 18px color-mix(in oklab, var(--research-lane-3) 7%, transparent);
   color: color-mix(in oklab, var(--foreground) 92%, var(--research-lane-3));
   font-size: 11px;
@@ -250,7 +262,7 @@
 .sg-collapse-relation-layer {
   z-index: 3;
   overflow: visible;
-  filter: drop-shadow(0 7px 14px rgb(72 211 228 / 16%));
+  filter: drop-shadow(0 7px 14px var(--sg-brand-shadow));
 }
 .sg-collapse-relation {
   opacity: 0.8;
@@ -289,9 +301,9 @@
   border: 1px solid color-mix(in oklab, var(--research-lane-3) 72%, white);
   border-radius: 50%;
   background:
-    radial-gradient(circle at 42% 34%, rgb(34 103 112 / 82%), #091a26 72%);
+    radial-gradient(circle at 42% 34%, var(--sg-fusion-brand-core), var(--card) 72%);
   box-shadow:
-    inset 0 0 16px rgb(72 211 228 / 14%),
+    inset 0 0 16px color-mix(in oklab, var(--brand) 14%, transparent),
     0 0 18px color-mix(in oklab, var(--research-lane-3) 18%, transparent);
   transform-origin: center;
   animation: sg-fusion-converge 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -302,7 +314,7 @@
 .sg-fusion-ghost-xxl {
   border-color: color-mix(in oklab, var(--success) 70%, white);
   background:
-    radial-gradient(circle at 42% 34%, rgb(28 86 61 / 82%), #09251c 72%);
+    radial-gradient(circle at 42% 34%, var(--sg-fusion-success-core), var(--card) 72%);
 }
 .sg-fusion-ghost-low-performance {
   box-shadow: none;
@@ -340,11 +352,11 @@
 }
 .sg-cluster-boundary {
   position: absolute;
-  border: 1px dashed rgb(67 113 146 / 62%);
+  border: 1px dashed var(--sg-cluster-border);
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    rgb(32 100 118 / 8%),
+    var(--sg-cluster-fill),
     transparent 70%
   );
   z-index: 0;
@@ -410,8 +422,8 @@
   padding: 5px;
   border: 1px solid var(--border);
   border-radius: 11px;
-  background: rgb(11 22 34 / 88%);
-  box-shadow: 0 12px 30px rgb(0 0 0 / 24%);
+  background: var(--sg-floating-surface);
+  box-shadow: 0 12px 30px color-mix(in oklab, var(--background) 24%, transparent);
   backdrop-filter: blur(8px);
 }
 .sg-zoom-controls button {
@@ -443,9 +455,9 @@
   padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: 11px;
-  background: rgb(11 22 34 / 88%);
+  background: var(--sg-floating-surface);
   backdrop-filter: blur(10px);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 28%);
+  box-shadow: 0 12px 32px var(--sg-elevation-shadow);
 }
 .sg-summary-label b {
   display: block;
@@ -476,6 +488,15 @@
 .sg-node .sg-core > *,
 .sg-node .sg-document-badge {
   transition: opacity 180ms ease;
+}
+
+/* Goal is a semantic root, not an XXL synthesis. Keep the existing size
+ * contract for compatibility, but give the root its own visual treatment. */
+.sg-node[data-semantic-role="goal"] {
+  border-color: var(--research-stage-explore);
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--research-stage-explore) 42%, transparent),
+    0 0 34px color-mix(in oklab, var(--research-stage-explore) 22%, transparent);
 }
 .sg-semantic-content-hidden .sg-core > *,
 .sg-semantic-content-hidden .sg-document-badge {

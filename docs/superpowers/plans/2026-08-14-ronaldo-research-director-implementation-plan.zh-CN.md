@@ -451,3 +451,8 @@ make check
 5. 本实施计划
 
 只给主规格不足以开工：它没有固定 Schema hash、字段级数据库约束、当前冲突基线、文件所有权、Slice 退出条件和激活顺序。开发人员应先完成 Slice 0 的基线审计，再按 Slice 提交；任何需要改变产品语义的问题必须回写主规格或 ADR，不能只在代码评审评论中决定。
+
+## 19. Verification log
+
+- 2026-08-17，Slice 11：完成激活证据模型、Report origin 同源拒绝、V6 有界运维指标与告警、builtin Skill/source map 和工程原则装置映射；`gofmt` 与 `git diff --check` 已执行且无错误。
+- 按本次开发指令，未在本地运行 Go/TypeScript 测试、typecheck、lint、React Doctor、浏览器/Desktop 验证或 Docker。上述激活证据因此没有被标记为通过，生产 supported/default 继续保持 V5，V6 新建仍由 runtime fail closed。

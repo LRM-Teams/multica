@@ -65,7 +65,7 @@ describe("useResearchV6DirectorCanvas", () => {
       loadSnapshot: async () =>
         snapshot("default", [{ id: "root", tier: "L", expandable: true }]),
       loadSlice: async () =>
-        snapshot("expand:root", [{ id: "child", tier: "S", expandable: false }]),
+        snapshot("expand:root", [{ id: "child", tier: "L", expandable: false }]),
     } as Pick<
       ResearchV6DirectorProjectionTransport,
       "loadSnapshot" | "loadSlice"
@@ -128,7 +128,7 @@ describe("useResearchV6DirectorCanvas", () => {
     );
     await waitFor(() => expect(result.current.canvas?.graph.nodes).toHaveLength(1));
     const nextNode = snapshot("default", [
-      { id: "live", tier: "S", expandable: false },
+      { id: "live", tier: "L", expandable: false },
     ]).nodes[0]!;
     act(() => {
       pushEvent({
@@ -151,5 +151,86 @@ describe("useResearchV6DirectorCanvas", () => {
       });
     });
     await waitFor(() => expect(result.current.canvas?.graph.nodes).toHaveLength(2));
+  });
+
+  it("hides a canonically absorbed delta node until its successor is expanded", async () => {
+    let pushEvent = (_payload: unknown) => {};
+    const realtimeBus = {
+      subscribeEvent: (_event, handler) => {
+        pushEvent = handler;
+        return () => {
+          pushEvent = () => {};
+        };
+      },
+      onBusReconnect: () => () => {},
+      onBusConnectionStatus: () => () => {},
+    } satisfies ResearchV6DirectorRealtimeBus;
+    const initial = snapshot("default", [
+      { id: "successor", tier: "L", expandable: false },
+    ]);
+    const absorbed = snapshot("default", [
+      { id: "absorbed-s", tier: "S", expandable: false },
+    ]).nodes[0]!;
+    const transport = {
+      loadSnapshot: async () => initial,
+    } as Pick<
+      ResearchV6DirectorProjectionTransport,
+      "loadSnapshot"
+    > as ResearchV6DirectorProjectionTransport;
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { result } = renderHook(
+      () =>
+        useResearchV6DirectorCanvas({
+          workspaceId: WORKSPACE_ID,
+          runId: RUN_ID,
+          transport,
+          realtimeBus,
+          expansionFailureLabel: "Expansion failed",
+        }),
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() => expect(result.current.canvas?.graph.nodes).toHaveLength(1));
+
+    act(() => {
+      pushEvent({
+        run_id: RUN_ID,
+        delta: {
+          contract_kind: "projection_delta",
+          schema_version: 6,
+          workspace_id: WORKSPACE_ID,
+          run_id: RUN_ID,
+          snapshot_id: SNAPSHOT_ID,
+          event_sequence: 5,
+          previous_projection_hash: initial.projection_hash,
+          projection_hash: `sha256:${"e".repeat(64)}`,
+          upsert_nodes: [absorbed],
+          remove_node_ids: [],
+          upsert_edges: [
+            {
+              id: "absorbed-into",
+              kind: "absorbed_into",
+              from_node_id: "absorbed-s",
+              to_node_id: "successor",
+              canonical: true,
+              hidden_count: 0,
+              expandable: false,
+            },
+          ],
+          remove_edge_ids: [],
+          invalidate_slice_keys: [],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.canvas?.graph.nodes.map((node) => node.id)).toEqual([
+        "successor",
+      ]);
+      expect(result.current.canvas?.graph.nodes[0]?.merged_from).toEqual([
+        "absorbed-s",
+      ]);
+    });
   });
 });

@@ -83,6 +83,7 @@ const (
 	txOpTaskInquiryTargetsBind     researchTxOperation = "task_inquiry_targets.bind"
 	txOpV6WorkItemClaim            researchTxOperation = "v6_work_item.claim"
 	txOpV6WorkItemComplete         researchTxOperation = "v6_work_item.complete"
+	txOpV6Bootstrap                researchTxOperation = "v6.bootstrap"
 	txOpV6ReportWorkCreate         researchTxOperation = "v6_report_work.create"
 	txOpV6SubmissionRecord         researchTxOperation = "v6_submission.record"
 	txOpV6WorkItemRecover          researchTxOperation = "v6_work_item.recover"

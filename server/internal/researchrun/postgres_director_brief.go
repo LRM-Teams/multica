@@ -66,33 +66,50 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
+	type branchBrief struct {
+		id, parent, objective, status string
+		scope                         json.RawMessage
+		version                       int64
+	}
+	branches := []branchBrief{}
 	for rows.Next() {
-		var id, parent, objective, status string
-		var branchScope json.RawMessage
-		var version int64
-		if err = rows.Scan(&id, &parent, &objective, &branchScope, &status, &version); err != nil {
+		var branch branchBrief
+		if err = rows.Scan(&branch.id, &branch.parent, &branch.objective, &branch.scope, &branch.status, &branch.version); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
-		item := map[string]any{"branch": map[string]any{"id": id, "state_version": version}, "objective": objective, "scope": jsonObjectOrEmpty(branchScope), "status": status, "frontier_nodes": []any{}, "has_more": false}
-		if parent != "" {
-			item["parent_branch_id"] = parent
-		}
-		facts.Branches = append(facts.Branches, item)
+		branches = append(branches, branch)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
 		return DirectorBriefFacts{}, err
 	}
 	rows.Close()
-	rows, err = s.pool.Query(ctx, `SELECT id::text,kind,status,COALESCE(NULLIF(target_kind,''),kind),updated_at,COALESCE(assigned_agent_id::text,'') FROM research_work_item WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND kind IN ('research','match','discussion','integration','director','report','review') ORDER BY updated_at,id LIMIT 512`, in.WorkspaceID, in.RunID)
+	for _, branch := range branches {
+		item := map[string]any{"branch": map[string]any{"id": branch.id, "state_version": branch.version}, "objective": branch.objective, "scope": jsonObjectOrEmpty(branch.scope), "status": branch.status, "frontier_nodes": []any{}, "has_more": false}
+		frontier, hasMore, frontierErr := s.loadV6BranchFrontierBrief(ctx, in.WorkspaceID, in.RunID, branch.id)
+		if frontierErr != nil {
+			return DirectorBriefFacts{}, frontierErr
+		}
+		item["frontier_nodes"] = frontier
+		item["has_more"] = hasMore
+		if hasMore {
+			item["next_cursor"] = "64"
+		}
+		if branch.parent != "" {
+			item["parent_branch_id"] = branch.parent
+		}
+		facts.Branches = append(facts.Branches, item)
+	}
+	rows, err = s.pool.Query(ctx, `SELECT w.id::text,w.kind,w.status,COALESCE(NULLIF(w.target_kind,''),w.kind),w.updated_at,COALESCE(w.assigned_agent_id::text,''),COALESCE((SELECT array_agg(b.branch_id::text ORDER BY b.branch_id) FROM research_v6_work_item_branch b WHERE b.workspace_id=w.workspace_id AND b.session_id=w.session_id AND b.work_item_id=w.id),'{}') FROM research_work_item w WHERE w.workspace_id=$1::uuid AND w.session_id=$2::uuid AND w.kind IN ('research','match','discussion','integration','director','report','review') ORDER BY w.updated_at,w.id LIMIT 512`, in.WorkspaceID, in.RunID)
 	if err != nil {
 		return DirectorBriefFacts{}, err
 	}
 	for rows.Next() {
 		var id, kind, state, summary, agentID string
+		var branchIDs []string
 		var updated time.Time
-		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID); err != nil {
+		if err = rows.Scan(&id, &kind, &state, &summary, &updated, &agentID, &branchIDs); err != nil {
 			rows.Close()
 			return DirectorBriefFacts{}, err
 		}
@@ -108,6 +125,9 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 		return DirectorBriefFacts{}, err
 	}
 	rows.Close()
+	if err = s.loadV6DirectorControlFacts(ctx, in.WorkspaceID, in.RunID, &facts); err != nil {
+		return DirectorBriefFacts{}, err
+	}
 	rows, err = s.pool.Query(ctx, `SELECT t.event_sequence,m.body,t.selected_refs
 		FROM research_v6_steering_trigger t JOIN research_message m ON m.id=t.research_message_id
 		LEFT JOIN research_steering_assessment a ON a.research_message_id=t.research_message_id
@@ -140,6 +160,137 @@ func (s *PostgresStore) LoadDirectorBriefFacts(ctx context.Context, in StartV6Di
 	}
 	rows.Close()
 	return facts, nil
+}
+
+func (s *PostgresStore) loadV6BranchFrontierBrief(ctx context.Context, workspaceID, runID, branchID string) ([]any, bool, error) {
+	rows, err := s.pool.Query(ctx, `SELECT v.id::text,v.artifact_id::text,v.version,v.content_hash,iv.tier,iv.catalog_summary,iv.brief_summary,
+		COALESCE((SELECT steward.agent_id::text FROM research_node_steward_assignment steward WHERE steward.session_id=f.session_id AND steward.node_artifact_version_id=f.node_artifact_version_id AND steward.status='active' ORDER BY steward.generation DESC LIMIT 1),
+		         (SELECT assignment.director_agent_id::text FROM research_session session JOIN research_director_assignment assignment ON assignment.id=session.current_director_assignment_id WHERE session.id=f.session_id)),
+		CASE iv.status WHEN 'accepted' THEN 'accepted' WHEN 'challenged' THEN 'challenged' WHEN 'refuted' THEN 'refuted' ELSE 'invalid' END,
+		CASE WHEN iv.status IN ('refuted','invalid','terminal') THEN 'excluded' WHEN iv.discussion_id IS NOT NULL THEN 'discussing' WHEN iv.integration_round_id IS NOT NULL THEN 'candidate' ELSE 'unmatched' END,
+		COALESCE((SELECT array_agg(DISTINCT binding.branch_id::text ORDER BY binding.branch_id::text) FROM research_node_branch binding WHERE binding.session_id=f.session_id AND binding.node_artifact_version_id=f.node_artifact_version_id),'{}')
+		FROM research_branch_frontier f JOIN research_artifact_version v ON v.id=f.node_artifact_version_id
+		JOIN research_insight_version iv ON iv.artifact_version_id=v.id
+		WHERE f.workspace_id=$1::uuid AND f.session_id=$2::uuid AND f.branch_id=$3::uuid AND f.removed_by_event_sequence IS NULL
+		ORDER BY CASE iv.tier WHEN 'XXL' THEN 5 WHEN 'XL' THEN 4 WHEN 'L' THEN 3 WHEN 'M' THEN 2 ELSE 1 END DESC,iv.created_at DESC,iv.id LIMIT 65`, workspaceID, runID, branchID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	frontier := []any{}
+	for rows.Next() {
+		var versionID, artifactID, contentHash, tier, catalog, brief, steward, conclusion, integration string
+		var revision int
+		var branchIDs []string
+		if err = rows.Scan(&versionID, &artifactID, &revision, &contentHash, &tier, &catalog, &brief, &steward, &conclusion, &integration, &branchIDs); err != nil {
+			return nil, false, err
+		}
+		if len(frontier) == 64 {
+			return frontier, true, nil
+		}
+		frontier = append(frontier, map[string]any{
+			"node":            map[string]any{"id": artifactID, "version_id": versionID, "revision": revision, "tier": tier, "content_hash": contentHash},
+			"catalog_summary": catalog, "brief_summary": brief, "steward_agent_id": steward, "branch_ids": branchIDs,
+			"conclusion_state": conclusion, "integration_state": integration,
+		})
+	}
+	return frontier, false, rows.Err()
+}
+
+func (s *PostgresStore) loadV6DirectorControlFacts(ctx context.Context, workspaceID, runID string, facts *DirectorBriefFacts) error {
+	rows, err := s.pool.Query(ctx, `SELECT id::text,kind,status,kind||' discussion',updated_at FROM research_discussion WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY updated_at DESC,id LIMIT 256`, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, kind, state, summary string
+		var updated time.Time
+		if err = rows.Scan(&id, &kind, &state, &summary, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		facts.Discussions = append(facts.Discussions, map[string]any{"id": id, "kind": "discussion", "state": directorBriefControlState(state), "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.pool.Query(ctx, `SELECT id::text,status,COALESCE(NULLIF(title,''),'Research report'),updated_at FROM research_report WHERE workspace_id=$1::uuid AND session_id=$2::uuid ORDER BY revision DESC,id LIMIT 128`, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, state, summary string
+		var updated time.Time
+		if err = rows.Scan(&id, &state, &summary, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		facts.Reports = append(facts.Reports, map[string]any{"id": id, "kind": "report", "state": directorBriefControlState(state), "summary": summary, "updated_at": updated.UTC().Format(time.RFC3339Nano)})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.pool.Query(ctx, `SELECT id::text,status,resolution_request,updated_at FROM research_dispute WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND status IN ('open','investigating','irreducible') ORDER BY severity DESC,materiality DESC,updated_at DESC LIMIT 256`, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, state, summary string
+		var updated time.Time
+		if err = rows.Scan(&id, &state, &summary, &updated); err != nil {
+			rows.Close()
+			return err
+		}
+		facts.UnresolvedDisputes = append(facts.UnresolvedDisputes, map[string]any{"id": id, "kind": "dispute", "state": directorBriefControlState(state), "summary": truncateV6BriefText(summary, 512), "updated_at": updated.UTC().Format(time.RFC3339Nano)})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.pool.Query(ctx, `SELECT nb.branch_id::text,COALESCE(NULLIF(rn.reason_code,''),'other'),left(COALESCE(NULLIF(rn.reason_detail,''),rn.catalog_summary),512),count(*)::int
+		FROM research_result_node rn JOIN research_node_branch nb ON nb.session_id=rn.session_id AND nb.node_artifact_version_id=rn.artifact_version_id
+		WHERE rn.workspace_id=$1::uuid AND rn.session_id=$2::uuid AND (rn.reason_code<>'' OR rn.conclusion_state IN ('refuted','invalid'))
+		GROUP BY nb.branch_id,COALESCE(NULLIF(rn.reason_code,''),'other'),left(COALESCE(NULLIF(rn.reason_detail,''),rn.catalog_summary),512) ORDER BY nb.branch_id LIMIT 256`, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var branchID, reason, summary string
+		var count int
+		if err = rows.Scan(&branchID, &reason, &summary, &count); err != nil {
+			rows.Close()
+			return err
+		}
+		facts.TerminalSummaries = append(facts.TerminalSummaries, map[string]any{"branch_id": branchID, "reason_code": normalizeProjectionReason(reason), "summary": summary, "count": count})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	return nil
+}
+
+func directorBriefControlState(state string) string {
+	switch state {
+	case "active", "draft", "proposed", "open", "investigating":
+		return "running"
+	case "completed", "published", "consensus_accept", "consensus_reject":
+		return "succeeded"
+	case "needs_research", "needs_revision", "uncertain", "escalated", "irreducible":
+		return "awaiting_input"
+	case "technical_failure":
+		return "failed"
+	case "stale_input", "obsolete":
+		return "stale"
+	default:
+		return "pending"
+	}
 }
 
 func truncateV6BriefText(value string, limit int) string {
@@ -249,8 +400,11 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 	ref := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "id"}, "properties": map[string]any{
 		"kind": map[string]any{"type": "string"}, "id": map[string]any{"type": "string", "format": "uuid"},
 		"expected_state_version": map[string]any{"type": "integer", "minimum": 0}, "disposition": map[string]any{"type": "string"}, "reason": text}}
+	uuidValue := map[string]any{"type": "string", "format": "uuid"}
+	hashValue := map[string]any{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+	jsonObject := map[string]any{"type": "object"}
 	return map[string]any{
-		"no_op.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"message_id", "reason"}, "properties": map[string]any{"message_id": map[string]any{"type": "string", "format": "uuid"}, "reason": text}},
+		"no_op.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"reason"}, "properties": map[string]any{"message_id": map[string]any{"type": "string", "format": "uuid"}, "reason": text}},
 		"steering_assessment.v1": map[string]any{"type": "object", "additionalProperties": false,
 			"required": []string{"message_id", "assessment_kind", "interpretation", "reason", "impacts"}, "properties": map[string]any{
 				"message_id": map[string]any{"type": "string", "format": "uuid"}, "assessment_kind": map[string]any{"enum": []string{"no_op", "local_change", "goal_revision", "full_reassessment"}},
@@ -258,6 +412,34 @@ func v6DirectorActionPayloadSchemas() map[string]any {
 				"revised_goal": text, "revised_scope": map[string]any{"type": "object"}, "revised_audience": map[string]any{"type": "string"},
 				"revised_freshness": map[string]any{"type": "string"}, "revised_language": map[string]any{"type": "string"},
 				"revised_source_policy": map[string]any{"type": "object"}, "revised_limits": map[string]any{"type": "object"}}},
+		"agent.create.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"name", "capability", "mission_prompt", "model_config", "tool_config", "permission_config"}, "properties": map[string]any{
+				"name": text, "capability": text, "mission_prompt": text, "capacity_reason": text,
+				"model_config": jsonObject, "tool_config": jsonObject, "permission_config": jsonObject}},
+		"work.create.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"kind", "assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
+				"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text,
+				"expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
+				"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+				"branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+		"collaboration.create.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"assignee_agent_id", "mission", "expected_result_schema_id", "payload_schema_id", "payload", "priority", "max_attempts"}, "properties": map[string]any{
+			"kind": map[string]any{"type": "string"}, "assignee_agent_id": uuidValue, "mission": text, "expected_result_schema_id": map[string]any{"type": "string"}, "payload_schema_id": map[string]any{"type": "string"}, "payload": jsonObject,
+			"priority": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "max_attempts": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "branch_ids": map[string]any{"type": "array", "maxItems": 128, "items": uuidValue}}},
+		"branch.create.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"objective", "scope", "budget_share"}, "properties": map[string]any{
+				"objective": text, "scope": jsonObject, "budget_share": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "parent_branch_id": uuidValue}},
+		"report.create.v1": map[string]any{"type": "object", "additionalProperties": false,
+			"required": []string{"assignee_agent_id", "title", "inputs"}, "properties": map[string]any{
+				"assignee_agent_id": uuidValue, "title": text, "inputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 1024, "items": map[string]any{
+					"type": "object", "additionalProperties": false, "required": []string{"branch_id", "node_artifact_version_id", "input_role", "content_hash"}, "properties": map[string]any{
+						"branch_id": uuidValue, "node_artifact_version_id": uuidValue, "input_role": map[string]any{"enum": []string{"branch_xxl", "branch_maximum", "unresolved_gap"}}, "content_hash": hashValue}}}}},
+		"target.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"target_id"}, "properties": map[string]any{
+			"target_id": uuidValue, "assignee_agent_id": uuidValue, "mission": text, "scope": jsonObject, "reason": text}},
+		"agent.action.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"agent_id"}, "properties": map[string]any{
+			"agent_id": uuidValue, "mission_prompt": text, "model_config": jsonObject, "tool_config": jsonObject, "permission_config": jsonObject, "reason": text}},
+		"run.action.v1":    map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"reason": text}},
+		"report.review.v1": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"report_id", "expected_revision", "reason"}, "properties": map[string]any{"report_id": uuidValue, "expected_revision": map[string]any{"type": "integer", "minimum": 1}, "reason": text}},
+		"goal.revise.v1":   map[string]any{"type": "object", "additionalProperties": false, "required": []string{"goal", "scope"}, "properties": map[string]any{"goal": text, "scope": jsonObject, "audience": text, "freshness": text, "language": text, "source_policy": jsonObject}},
 	}
 }
 

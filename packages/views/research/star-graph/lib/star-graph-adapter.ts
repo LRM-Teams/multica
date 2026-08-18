@@ -221,6 +221,10 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
   // document_count from a pre-1505 projection without inventing it, so the
   // metrics are simply omitted until typed data exists.
   const metrics = mapMetrics(node.typed);
+  const semanticRole =
+    typeof node.node_kind === "string" && node.node_kind.trim().toLowerCase() === "goal"
+      ? ("goal" as const)
+      : undefined;
 
   const mappedState = mapNodeState(node.status);
   // The run projection uses `active` for an execution node that is currently
@@ -243,6 +247,7 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
           ? shortAgent(node.actor_agent_id)
           : undefined,
       metrics,
+      semanticRole,
     };
   }
 
@@ -254,6 +259,7 @@ export function toStarGraphNodeView(node: StarGraphNodeInput): StarGraphNodeView
     title: node.title,
     subLabel: subLabelForTier(node),
     metrics,
+    semanticRole,
   };
 }
 

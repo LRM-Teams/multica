@@ -39,6 +39,13 @@ type ResearchRunSubmission interface {
 	AcknowledgeDirectorBrief(context.Context, AcknowledgeV6DirectorBriefInput) error
 }
 
+// ResearchRunV6Bootstrap is deliberately separate from ResearchRun.Create.
+// Operators may enable this unreleased path for fixture and acceptance
+// environments without adding V6 to the supported/default production policy.
+type ResearchRunV6Bootstrap interface {
+	BootstrapV6(context.Context, V6BootstrapInput) (Run, error)
+}
+
 type ResearchRunDirectorControl interface {
 	AssignV6Director(context.Context, AssignV6DirectorInput) (V6DirectorAssignment, error)
 	MarkV6DirectorUnavailable(context.Context, MarkV6DirectorUnavailableInput) (V6DirectorAssignment, error)
@@ -57,6 +64,7 @@ type ResearchRunReconciler interface {
 
 var _ ResearchRun = (*Engine)(nil)
 var _ ResearchRunSubmission = (*Engine)(nil)
+var _ ResearchRunV6Bootstrap = (*Engine)(nil)
 var _ ResearchRunReconciler = (*Engine)(nil)
 var _ ResearchRunDirectorControl = (*Engine)(nil)
 var _ V6ProjectionReader = (*Engine)(nil)

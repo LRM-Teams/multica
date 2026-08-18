@@ -1708,19 +1708,19 @@ func (p *canonicalAgentRuntimePool) forceTerminateAll() error {
 func defaultCanonicalRuntimeFactory(provider string) canonicalRuntimeBackendFactory {
 	return func(config agent.Config) (agent.Backend, func(), error) {
 		switch provider {
-		case "pi":
+		case agent.ProviderPi:
 			return newCanonicalPiResidentBackend(config)
-		case "grok":
+		case agent.ProviderGrok:
 			return newCanonicalGrokResidentBackend(config)
-		case "cursor":
+		case agent.ProviderCursor:
 			return newCanonicalCursorResidentBackend(config)
-		case "opencode":
+		case agent.ProviderOpenCode:
 			return newCanonicalOpenCodeResidentBackend(config)
-		case "kiro":
+		case agent.ProviderKiro:
 			return newCanonicalKiroResidentBackend(config)
-		case "codex":
+		case agent.ProviderCodex:
 			return newCanonicalCodexResidentBackend(config)
-		case "claude":
+		case agent.ProviderClaude:
 			return newCanonicalClaudeResidentBackend(config)
 		default:
 			return nil, nil, fmt.Errorf("provider %q has no resident adapter", provider)

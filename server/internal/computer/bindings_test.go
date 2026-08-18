@@ -1,9 +1,9 @@
 package computer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"fmt"
 	"sync"
 	"testing"
 )

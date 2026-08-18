@@ -27,12 +27,13 @@ const report = {
   title: "Agent collaboration modes",
   packageHash: "sha256:abc",
   sandboxUrl: "https://reports.example.test/report-1?signature=x",
+  reportOrigin: "https://reports.example.test",
   plainTextFallback: "Verified report text",
 };
 
 describe("ResearchV6ReportModal", () => {
   it("mounts the capability in the exact restricted iframe sandbox", async () => {
-    render(
+    const { rerender } = render(
       <ResearchV6ReportModal
         appOrigin={location.origin}
         open
@@ -46,6 +47,16 @@ describe("ResearchV6ReportModal", () => {
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(frame).not.toHaveAttribute("srcdoc");
     expect(frame).not.toHaveAttribute("allow");
+
+    rerender(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open={false}
+        report={report}
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("research-v6-report-frame")).toBeNull();
   });
 
   it("fails closed for a same-origin capability and exposes plain text", async () => {

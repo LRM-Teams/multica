@@ -437,7 +437,8 @@ export interface ResearchThoughtStrategy {
 /** Create-session response includes a kickoff snapshot so the canvas paints immediately. */
 export interface CreateResearchSessionResponse {
   session: ResearchSession;
-  fleet: ResearchFleet;
+  /** V6 starts with a Director membership and has no legacy fixed Fleet. */
+  fleet?: ResearchFleet;
   nodes?: ResearchGraphNode[];
   edges?: ResearchGraphEdge[];
   messages?: ResearchMessage[];
@@ -499,6 +500,7 @@ export interface ResearchRun {
   plan_version: number;
   state_version: number;
   orchestrator_version: string;
+  director_agent_id?: string;
   config: ResearchRunConfig;
   stats: ResearchRunStats;
   initialized_at?: string;
@@ -754,6 +756,8 @@ export interface ResearchSourceWeights {
 
 export interface CreateResearchSessionRequest {
   goal: string;
+  /** Idempotency key for create retries and V6 bootstrap replay safety. */
+  client_request_id?: string;
   title?: string;
   /** LRM-676 / LRM-838 — shallow|standard|deep product-round caps. */
   depth_tier?: ResearchDepthTier;
@@ -761,6 +765,10 @@ export interface CreateResearchSessionRequest {
   language?: string;
   /** Source credibility preference weights (LRM-838). */
   source_weights?: ResearchSourceWeights;
+  /** Explicit unreleased bootstrap; omitted requests remain V5. */
+  orchestrator_version?: "research-run-v5" | "research-run-v6";
+  /** Required when orchestrator_version is research-run-v6. */
+  director_agent_id?: string;
 }
 
 export interface ResearchHandoffRequest {

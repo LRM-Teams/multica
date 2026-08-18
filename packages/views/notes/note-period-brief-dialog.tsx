@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Check, ClipboardList, Cloud, Laptop, Loader2 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -25,6 +25,7 @@ import {
 import { runtimeListOptions } from "@multica/core/runtimes";
 import { agentListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import type {
+  Agent,
   CreateNotePeriodBriefResponse,
   NoteRetrospectiveWindow,
 } from "@multica/core/types";
@@ -83,12 +84,11 @@ export function NotePeriodBriefDialog({
   }, [timezone]);
   const [windowKind, setWindowKind] = useState<NoteRetrospectiveWindow>("week");
   const [date, setDate] = useState(today);
-  const [agentId, setAgentId] = useState<string | null>(null);
-  const [collectorIds, setCollectorIds] = useState<string[]>([]);
+  /** null = follow derived default; set once the user (or open reset) pins a choice. */
+  const [agentOverride, setAgentOverride] = useState<string | null>(null);
+  const [collectorOverride, setCollectorOverride] = useState<string[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [ensuring, setEnsuring] = useState(false);
   const ensureAttemptedRef = useRef(false);
-  const collectorsSeededRef = useRef(false);
   const collectorsEnsureAttemptedRef = useRef(false);
 
   const resolvedPreferredAgentId = resolvePeriodBriefSynthesizerId(agents, preferredAgentId);
@@ -97,27 +97,52 @@ export function NotePeriodBriefDialog({
     () => defaultPeriodBriefCollectorIds(agents, runtimes),
     [agents, runtimes],
   );
+  const agentId = agentOverride ?? resolvedPreferredAgentId;
+  const collectorIds = collectorOverride ?? defaultCollectors;
 
-  // Reset when the dialog opens — adjust during render (prev ref), not an effect.
+  const { mutate: ensurePeriodBriefAgent, isPending: ensuringAgent } = useMutation({
+    mutationFn: ({ runtimeId, model }: { runtimeId: string; model: string }) =>
+      api.ensurePeriodBriefAgent(runtimeId, model),
+    onSuccess: (result) => {
+      if (!wsId) return;
+      queryClient.setQueryData(workspaceKeys.agents(wsId), (current: Agent[] = []) => {
+        if (current.some((agent) => agent.id === result.agent.id)) return current;
+        return [...current, result.agent];
+      });
+      void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+    },
+  });
+
+  const { mutate: ensurePeriodBriefCollectors, isPending: ensuringCollectors } = useMutation({
+    mutationFn: (model: string) => api.ensurePeriodBriefCollectors(model),
+    onSuccess: (result) => {
+      if (!wsId) return;
+      queryClient.setQueryData(workspaceKeys.agents(wsId), (current: Agent[] = []) => {
+        const byId = new Map(current.map((agent) => [agent.id, agent]));
+        for (const agent of result.agents) {
+          byId.set(agent.id, agent);
+        }
+        return [...byId.values()];
+      });
+      void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+    },
+  });
+
+  const ensuring = ensuringAgent || ensuringCollectors;
+
+  // Reset form fields when the dialog opens — adjust during render (prev ref).
   const prevOpenRef = useRef(open);
   if (open !== prevOpenRef.current) {
     prevOpenRef.current = open;
     if (open) {
-      setAgentId(resolvedPreferredAgentId);
-      setCollectorIds(defaultCollectors);
+      setAgentOverride(null);
+      setCollectorOverride(null);
       setWindowKind("week");
       setDate(today);
       setSubmitting(false);
-      setEnsuring(false);
       ensureAttemptedRef.current = false;
       collectorsEnsureAttemptedRef.current = false;
-      collectorsSeededRef.current = defaultCollectors.length > 0;
     }
-  } else if (open && resolvedPreferredAgentId && !agentId) {
-    setAgentId(resolvedPreferredAgentId);
-  } else if (open && !collectorsSeededRef.current && defaultCollectors.length > 0 && collectorIds.length === 0) {
-    setCollectorIds(defaultCollectors);
-    collectorsSeededRef.current = true;
   }
 
   useEffect(() => {
@@ -127,76 +152,17 @@ export function NotePeriodBriefDialog({
     const runtimeId = donor?.runtime_id ?? runtimes[0]?.id;
     const model = donor?.model?.trim();
     if (!runtimeId || !model) return;
-
     ensureAttemptedRef.current = true;
-    let cancelled = false;
-    setEnsuring(true);
-    void api
-      .ensurePeriodBriefAgent(runtimeId, model)
-      .then((result) => {
-        if (cancelled) return;
-        queryClient.setQueryData(workspaceKeys.agents(wsId), (current: typeof agents = []) => {
-          if (current.some((agent) => agent.id === result.agent.id)) return current;
-          return [...current, result.agent];
-        });
-        void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-        setAgentId((current) => {
-          if (!current) return result.agent.id;
-          if (!agents.some((agent) => isPeriodBriefAgent(agent) && agent.id === current)) {
-            return result.agent.id;
-          }
-          return current;
-        });
-      })
-      .catch(() => {
-        // Non-fatal: user can still pick any existing Agent.
-      })
-      .finally(() => {
-        if (!cancelled) setEnsuring(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, wsId, agents, runtimes, queryClient]);
+    ensurePeriodBriefAgent({ runtimeId, model });
+  }, [open, wsId, agents, runtimes, ensurePeriodBriefAgent]);
 
   useEffect(() => {
     if (!open || !wsId || collectorsEnsureAttemptedRef.current) return;
     const ensureModel = agents.find((agent) => agent.model?.trim())?.model?.trim();
     if (!ensureModel) return;
-
     collectorsEnsureAttemptedRef.current = true;
-    let cancelled = false;
-    setEnsuring(true);
-    void api
-      .ensurePeriodBriefCollectors(ensureModel)
-      .then((result) => {
-        if (cancelled) return;
-        queryClient.setQueryData(workspaceKeys.agents(wsId), (current: typeof agents = []) => {
-          const byId = new Map(current.map((agent) => [agent.id, agent]));
-          for (const agent of result.agents) {
-            byId.set(agent.id, agent);
-          }
-          return [...byId.values()];
-        });
-        void queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-        const onlineIds = result.agents
-          .filter((agent) => isPeriodBriefCollectorOnline(agent, runtimes))
-          .map((agent) => agent.id);
-        if (onlineIds.length > 0) {
-          setCollectorIds((current) => (current.length > 0 ? current : onlineIds));
-          collectorsSeededRef.current = true;
-        }
-      })
-      .catch(() => {
-        // Non-fatal: empty collector list blocks submit until provisioned.
-      })
-      .finally(() => {
-        if (!cancelled) setEnsuring(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, wsId, agents, runtimes, queryClient]);
+    ensurePeriodBriefCollectors(ensureModel);
+  }, [open, wsId, agents, ensurePeriodBriefCollectors]);
 
   const canSubmit =
     Boolean(agentId) && collectorIds.length > 0 && agents.length > 0 && !submitting && !ensuring;
@@ -328,7 +294,11 @@ export function NotePeriodBriefDialog({
                         selected && "bg-muted text-foreground",
                         !online && "opacity-60",
                       )}
-                      onClick={() => setCollectorIds((current) => togglePeriodBriefCollectorId(current, agent.id))}
+                      onClick={() =>
+                        setCollectorOverride((current) =>
+                          togglePeriodBriefCollectorId(current ?? defaultCollectors, agent.id),
+                        )
+                      }
                       disabled={submitting || ensuring}
                       data-testid={`period-brief-collector-${agent.id}`}
                     >
@@ -378,7 +348,7 @@ export function NotePeriodBriefDialog({
                         "flex w-full min-w-0 max-w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70",
                         selected && "bg-muted text-foreground",
                       )}
-                      onClick={() => setAgentId(agent.id)}
+                      onClick={() => setAgentOverride(agent.id)}
                       disabled={submitting || ensuring}
                       data-testid={isDefault ? "period-brief-default-agent" : undefined}
                     >

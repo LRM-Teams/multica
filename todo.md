@@ -114,6 +114,11 @@
 
 **当前焦点：** Slice K2 已完成。ADR 0019 Period Work Brief 主路径落地。
 
+### 后续增强（采集质量）
+
+- [x] **Builtin skill `multica-period-work-collect`**：always-on；采集员 wake 指向该 skill + `collect-recipes.md`（HOME/`find` + `git log/status/diff` + `--note-write`）。
+- [ ] 仍未解决：短等（~6s）+ 采集包需人确认写回 → 合成时常拿到 empty packs（编排/等待另开切片）。
+
 ### 遗留说明（J1–J3）
 
 Host Digest / Journal / 旧 period-brief Digest 汇合已按 ADR 0018 落地过一轮，**产品合同已切到 0019**。Journal 基础设施可保留作遗留；Brief 主路径不再调用。

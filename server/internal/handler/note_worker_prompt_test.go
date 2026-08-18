@@ -181,6 +181,9 @@ func TestBuildNotePeriodBriefCollectorPromptEscapesWindowAndForbidsBrief(t *test
 	if !strings.Contains(prompt, "--note-write --note-page-id "+packID) {
 		t.Fatalf("missing note-write to pack:\n%s", prompt)
 	}
+	if !strings.Contains(prompt, "multica-period-work-collect") {
+		t.Fatalf("collector instruction must point at period-work-collect skill:\n%s", prompt)
+	}
 }
 
 func TestBuildNoteWorkerPromptUntrustedBoundary(t *testing.T) {

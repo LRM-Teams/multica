@@ -38,7 +38,7 @@ type directorV6Store interface {
 type directorModule struct{ store directorV6Store }
 
 func (m directorModule) Assign(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {
-	if m.store == nil || strings.TrimSpace(in.AgentID) == "" || strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Reason) == "" || in.ExpectedStateVersion < 0 {
+	if m.store == nil || strings.TrimSpace(in.AgentID) == "" || strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Reason) == "" || strings.TrimSpace(in.ClientRequestID) == "" || in.ExpectedStateVersion < 0 {
 		return V6DirectorAssignment{}, fmt.Errorf("%w: incomplete Director assignment", ErrInvalidContract)
 	}
 	return m.store.AssignV6Director(ctx, in)

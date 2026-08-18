@@ -93,6 +93,12 @@ import {
 } from "../../dashboard/utils";
 import { MemoryCurationDailyLedger } from "./memory-curation-daily-ledger";
 import { AgentEvidencePanel } from "./agent-evidence-panel";
+import {
+  GraphMemoryAuditCard,
+  GraphMemoryConsolidationCard,
+  GraphMemoryStatusCard,
+  LegacyCurationNotApplicableCard,
+} from "./graph-memory-cards";
 
 const COPY = {
   title: "Evolution Center",
@@ -116,6 +122,31 @@ const COPY = {
   memoryTypeLegacy: "Legacy (MEMORY.md)",
   memoryTypeGraph: "Graph memory (experimental)",
   memoryTypeSaved: "Memory type updated",
+  graphStatus: "Graph memory status",
+  graphStatusHint: "Per-graph versions, staging depth, and recall for this workspace.",
+  graphEmptyStart: "Graph memory starts empty: no legacy project, channel, or daily memory was imported, and graph misses never fall back to it.",
+  graphBackoff: "backoff",
+  graphVersion: "version",
+  graphStaging: "staging",
+  graphRecall24h: "recalls (24h)",
+  graphHitRate: "hit rate",
+  graphAudit: "Graph memory audit",
+  graphQueries24h: "queries (24h)",
+  graphJudged24h: "judged (24h)",
+  graphRegressions: "regressions",
+  graphConsolidation: "Graph consolidation",
+  graphConsolidationHint: "Manually consolidate staged graph memory. Retry by running again.",
+  graphRunConsolidation: "Run consolidation",
+  graphConsolidationQueued: "Graph consolidation queued",
+  graphLastRun: "Last run",
+  legacyCurationNotApplicable: "Legacy curation is not applicable",
+  legacyCurationNotApplicableHint: "This workspace uses graph memory. Legacy L1-L4 curation, review candidates, and team-knowledge promotion do not run here; user and agent memory files are still maintained.",
+  memoryTypeAdminOnly: "Only workspace owners and admins can change the memory type",
+  memoryTypeGraphConfirmTitle: "Switch to graph memory (experimental)?",
+  memoryTypeGraphConfirmBody: "Graph memory starts empty: existing project, channel, and daily memory is NOT imported, and graph misses never fall back to legacy project/channel/daily memory. User and agent memory files are unaffected.",
+  memoryTypeGraphConfirmCheckbox: "I understand the empty start and no-fallback behavior",
+  memoryTypeGraphConfirmApply: "Switch to graph",
+  memoryTypeGraphConfirmCancel: "Cancel",
   memoryOpsHint: "Active agents self-review first; team curation then promotes clean shared knowledge. The top three stats are the workspace funnel: local proposals → DB pending → team knowledge.",
   funnelHint: "Funnel: left = latest self-review candidates; middle = DB pending candidates ({skills} skills); right = team_knowledge registry rows (not copied to every agent).",
   curatorOps: "Curator operations",
@@ -534,7 +565,8 @@ export function EvolutionCenterPage() {
   const copy = useEvolutionCopy();
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
-  const { userId } = useCurrentMember(wsId);
+  const { userId, role } = useCurrentMember(wsId);
+  const isWorkspaceAdmin = role === "owner" || role === "admin";
   const [learningFilter, setLearningFilter] = useState<"all" | "memory" | "skill">("all");
   const [selectedCurationRunId, setSelectedCurationRunId] = useState("");
   const [metricDays, setMetricDays] = useState<(typeof METRIC_DAY_OPTIONS)[number]>(30);
@@ -543,6 +575,8 @@ export function EvolutionCenterPage() {
   const { data: agentsData, isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: runtimesData } = useQuery(runtimeListOptions(wsId));
   const { data: profileData } = useQuery(memoryCuratorProfileOptions(wsId));
+  const { data: gmProfile } = useQuery(graphMemoryProfileOptions(wsId));
+  const isGraphMemory = gmProfile?.memory_type === "graph";
   const { data: usageData, isLoading: usageLoading } = useQuery(dashboardUsageByAgentOptions(wsId, DAYS, null, VIEW_TZ));
   const { data: runtimeData, isLoading: runtimeLoading } = useQuery(dashboardAgentRunTimeOptions(wsId, DAYS, null, VIEW_TZ));
   const { data: needsReviewData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "needs_review"));
@@ -744,25 +778,36 @@ export function EvolutionCenterPage() {
 
             <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]">
               <div className="grid gap-4">
-                <MemoryTypeCard wsId={wsId} />
-                <CuratorProfileCard
-                  key={`${profileData?.id ?? "new"}-${profileData?.config_version ?? 0}`}
-                  wsId={wsId}
-                  userId={userId}
-                  profile={profileData}
-                  agents={agents}
-                  runtimes={runtimes}
-                />
-                <MemoryCurationCard
-                  status={curationStatus}
-                  loading={curationStatusLoading}
-                  unavailable={curationStatusUnavailable}
-                  onSelectRun={setSelectedCurationRunId}
-                />
-                <MemoryCurationDailyLedger wsId={wsId} />
-                <CurationRunDetailCard run={selectedCurationRun} selectedRunId={selectedCurationRunId} />
+                <MemoryTypeCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
+                {isGraphMemory ? (
+                  <>
+                    <GraphMemoryStatusCard wsId={wsId} />
+                    <GraphMemoryConsolidationCard wsId={wsId} isAdmin={isWorkspaceAdmin} />
+                    <LegacyCurationNotApplicableCard />
+                  </>
+                ) : (
+                  <>
+                    <CuratorProfileCard
+                      key={`${profileData?.id ?? "new"}-${profileData?.config_version ?? 0}`}
+                      wsId={wsId}
+                      userId={userId}
+                      profile={profileData}
+                      agents={agents}
+                      runtimes={runtimes}
+                    />
+                    <MemoryCurationCard
+                      status={curationStatus}
+                      loading={curationStatusLoading}
+                      unavailable={curationStatusUnavailable}
+                      onSelectRun={setSelectedCurationRunId}
+                    />
+                    <MemoryCurationDailyLedger wsId={wsId} />
+                    <CurationRunDetailCard run={selectedCurationRun} selectedRunId={selectedCurationRunId} />
+                  </>
+                )}
               </div>
               <div className="grid gap-4">
+                {isGraphMemory && <GraphMemoryAuditCard wsId={wsId} />}
                 <EvolutionTrendCard dailyMetrics={dailyMetrics} />
                 <TaskEfficiencyCard efficiency={taskEfficiency} />
                 <UnitMetricsCard metrics={unitMetrics} />
@@ -770,6 +815,10 @@ export function EvolutionCenterPage() {
             </TabsContent>
 
             <TabsContent value="ops" className="grid gap-4 lg:grid-cols-3">
+              {isGraphMemory ? (
+                <LegacyCurationNotApplicableCard />
+              ) : (
+                <>
               <OpsCard
                 icon={RefreshCw}
                 title={copy("lastRun")}
@@ -791,6 +840,8 @@ export function EvolutionCenterPage() {
                 promotedSharedMemory={promotedSharedMemory}
                 feedbackCount={totals.memoryUsed + totals.skillUsed}
               />
+                </>
+              )}
             </TabsContent>
           </Tabs>
         </div>
@@ -1006,22 +1057,28 @@ function draftFromProfile(profile: MemoryCuratorProfile | undefined): CuratorPro
   };
 }
 
-function MemoryTypeCard({ wsId }: { wsId: string }) {
+function MemoryTypeCard({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
   const copy = useEvolutionCopy();
   const queryClient = useQueryClient();
   const { data: profile } = useQuery(graphMemoryProfileOptions(wsId));
   const memoryType: GraphMemoryType = profile?.memory_type ?? "legacy";
+  const [pendingGraphConfirm, setPendingGraphConfirm] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
 
   // The PUT endpoint validates the full profile, so the explore knobs are
   // re-sent unchanged from the current profile (or the server defaults).
+  // Switching TO graph requires the explicit empty-start confirmation.
   const update = useMutation({
     mutationFn: (next: GraphMemoryType) => api.updateGraphMemoryProfile(wsId, {
       memory_type: next,
       explore_agents: profile?.explore_agents ?? 4,
       explore_max_rounds: profile?.explore_max_rounds ?? 3,
+      ...(next === "graph" ? { confirm_empty_start: true } : {}),
     }),
     onSuccess: async () => {
       toast.success(copy("memoryTypeSaved"));
+      setPendingGraphConfirm(false);
+      setConfirmed(false);
       await queryClient.invalidateQueries({ queryKey: evolutionKeys.graphMemoryProfile(wsId) });
     },
     onError: (error) => showErrorToast(error instanceof Error ? error.message : copy("memoryType")),
@@ -1033,15 +1090,21 @@ function MemoryTypeCard({ wsId }: { wsId: string }) {
         <CardTitle className="flex items-center gap-2"><GitBranch className="h-4 w-4 text-brand" />{copy("memoryType")}</CardTitle>
         <p className="text-sm text-muted-foreground">{copy("memoryTypeHint")}</p>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
         <Select
           value={memoryType}
           onValueChange={(value) => {
-            if (value && value !== memoryType) update.mutate(value as GraphMemoryType);
+            if (!value || value === memoryType) return;
+            if (value === "graph") setPendingGraphConfirm(true);
+            else update.mutate("legacy");
           }}
-          disabled={update.isPending}
+          disabled={update.isPending || !isAdmin}
         >
-          <SelectTrigger className="w-full" aria-label={copy("memoryType")}>
+          <SelectTrigger
+            className="w-full"
+            aria-label={copy("memoryType")}
+            title={isAdmin ? undefined : copy("memoryTypeAdminOnly")}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1049,6 +1112,28 @@ function MemoryTypeCard({ wsId }: { wsId: string }) {
             <SelectItem value="graph">{copy("memoryTypeGraph")}</SelectItem>
           </SelectContent>
         </Select>
+        {pendingGraphConfirm && (
+          <div className="space-y-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-3">
+            <p className="text-sm">{copy("memoryTypeGraphConfirmTitle")}</p>
+            <p className="text-xs text-muted-foreground">{copy("memoryTypeGraphConfirmBody")}</p>
+            <label className="flex items-center gap-2 text-xs">
+              <Checkbox checked={confirmed} onCheckedChange={(v) => setConfirmed(v === true)} />
+              {copy("memoryTypeGraphConfirmCheckbox")}
+            </label>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                disabled={!confirmed || !isAdmin || update.isPending}
+                onClick={() => update.mutate("graph")}
+              >
+                {copy("memoryTypeGraphConfirmApply")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setPendingGraphConfirm(false); setConfirmed(false); }}>
+                {copy("memoryTypeGraphConfirmCancel")}
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

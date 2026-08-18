@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -57,5 +59,39 @@ func TestCreateResearchMessageWithPassportCommitsMatchingArtifact(t *testing.T) 
 	if contentHash != wantHash || hashOrigin != string(researchrun.ArtifactHashOriginProduction) ||
 		provenance != string(researchrun.ArtifactProvenanceComplete) {
 		t.Fatalf("hash=%q want=%q origin=%q provenance=%q", contentHash, wantHash, hashOrigin, provenance)
+	}
+}
+
+func TestPostResearchMessageClientRequestIDValidation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+
+	sessionID := seedInitializedResearchSessionForSnapshotTest(t)
+
+	// Case 1: Non-V6 session accepts message without client_request_id and auto-assigns one.
+	req := withURLParam(newRequest("POST", "/research/sessions/"+uuidToString(sessionID)+"/messages", map[string]any{
+		"body": "hello from user",
+	}), "id", uuidToString(sessionID))
+
+	rec := httptest.NewRecorder()
+	testHandler.PostResearchMessage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for non-v6 message without client_request_id, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Case 2: V6 session rejects message without client_request_id with 400 Bad Request.
+	if _, err := testPool.Exec(context.Background(), `UPDATE research_session SET orchestrator_version = 'research-run-v6' WHERE id = $1`, sessionID); err != nil {
+		t.Fatalf("failed to update orchestrator_version: %v", err)
+	}
+
+	reqV6 := withURLParam(newRequest("POST", "/research/sessions/"+uuidToString(sessionID)+"/messages", map[string]any{
+		"body": "hello from user",
+	}), "id", uuidToString(sessionID))
+
+	recV6 := httptest.NewRecorder()
+	testHandler.PostResearchMessage(recV6, reqV6)
+	if recV6.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for v6 message without client_request_id, got %d: %s", recV6.Code, recV6.Body.String())
 	}
 }

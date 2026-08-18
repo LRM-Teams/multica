@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/turntransport"
 )
 
@@ -16,10 +15,19 @@ import (
 // the existing per-run path below in production: publishing a single current
 // envelope before the serialization gate would cross-bind concurrent turns.
 func prepareStableAgentCLITransport(cfg Config, workspaceID, agentID, multicaBin string) (*turntransport.Transport, error) {
+	if err := validateStatePathPart("workspace", workspaceID); err != nil {
+		return nil, err
+	}
+	if err := validateWorkspaceStatePath(cfg.WorkspacesRoot, workspaceID); err != nil {
+		return nil, err
+	}
+	if err := validateStatePathPart("agent", agentID); err != nil {
+		return nil, err
+	}
 	if workspaceID == "" || agentID == "" {
 		return nil, fmt.Errorf("workspace_id and agent_id are required")
 	}
-	root := filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "cli-transport")
+	root := filepath.Join(workspaceStateRoot(cfg.WorkspacesRoot, workspaceID), "cli-transport", agentID)
 	return turntransport.Prepare(root, multicaBin)
 }
 
@@ -54,8 +62,13 @@ func splitAgentProcessEnvironment(environment map[string]string) (stable, curren
 }
 
 func prepareTaskCLITransport(cfg Config, workspaceID, agentID, runID, multicaBin, token string) (string, string, error) {
-	if workspaceID == "" || agentID == "" || runID == "" {
-		return "", "", fmt.Errorf("workspace_id, agent_id, and run_id are required")
+	for label, value := range map[string]string{"workspace": workspaceID, "agent": agentID, "run": runID} {
+		if err := validateStatePathPart(label, value); err != nil {
+			return "", "", err
+		}
+	}
+	if err := validateWorkspaceStatePath(cfg.WorkspacesRoot, workspaceID); err != nil {
+		return "", "", err
 	}
 	if strings.TrimSpace(multicaBin) == "" {
 		return "", "", fmt.Errorf("multica binary path is required")
@@ -64,7 +77,7 @@ func prepareTaskCLITransport(cfg Config, workspaceID, agentID, runID, multicaBin
 		return "", "", fmt.Errorf("task token is required")
 	}
 
-	root := filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "cli-transport", runID)
+	root := filepath.Join(workspaceStateRoot(cfg.WorkspacesRoot, workspaceID), "cli-transport", agentID, runID)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", "", fmt.Errorf("create cli transport dir: %w", err)
 	}

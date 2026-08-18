@@ -14,19 +14,20 @@ import (
 const agentCredentialRefreshBeforeExpiry = time.Hour
 
 type cachedAgentCredential struct {
-	CredentialID string `json:"credential_id"`
-	Token        string `json:"token"`
-	Prefix       string `json:"token_prefix"`
-	ExpiresAt    string `json:"expires_at,omitempty"`
-	IssuedAt     string `json:"issued_at"`
-	ServerURL    string `json:"server_url"`
-	WorkspaceID  string `json:"workspace_id"`
-	RuntimeID    string `json:"runtime_id"`
-	AgentID      string `json:"agent_id"`
+	SchemaVersion int    `json:"schemaVersion"`
+	CredentialID  string `json:"credentialId"`
+	Token         string `json:"token"`
+	Prefix        string `json:"tokenPrefix"`
+	ExpiresAt     string `json:"expiresAt,omitempty"`
+	IssuedAt      string `json:"issuedAt"`
+	ServerURL     string `json:"serverUrl"`
+	WorkspaceID   string `json:"workspaceId"`
+	RuntimeID     string `json:"runtimeId"`
+	AgentID       string `json:"agentId"`
 }
 
 func agentCredentialCachePath(cfg Config, workspaceID, agentID string) string {
-	return filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "credentials", "current.json")
+	return filepath.Join(workspaceStateRoot(cfg.WorkspacesRoot, workspaceID), "profiles", agentID, "credential.json")
 }
 
 func readCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID string, now time.Time) (cachedAgentCredential, bool) {
@@ -41,10 +42,16 @@ func readCachedAgentCredentialForMessage(cfg Config, workspaceID, agentID string
 }
 
 func readCachedAgentCredentialFor(cfg Config, workspaceID, runtimeID, agentID string, now time.Time, requireRuntime bool) (cachedAgentCredential, bool) {
+	if validateWorkspaceStatePath(cfg.WorkspacesRoot, workspaceID) != nil || validateStatePathPart("agent", agentID) != nil {
+		return cachedAgentCredential{}, false
+	}
 	path := agentCredentialCachePath(cfg, workspaceID, agentID)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return cachedAgentCredential{}, false
+		if !os.IsNotExist(err) {
+			return cachedAgentCredential{}, false
+		}
+		return readAndMigrateLegacyAgentCredential(cfg, workspaceID, runtimeID, agentID, now, requireRuntime)
 	}
 	var cached cachedAgentCredential
 	if err := json.Unmarshal(raw, &cached); err != nil {
@@ -56,19 +63,87 @@ func readCachedAgentCredentialFor(cfg Config, workspaceID, runtimeID, agentID st
 	return cached, true
 }
 
+// TODO: Remove this legacy reader after one release cycle in which all agents
+// have had a chance to migrate from runtime/credentials/current.json.
+type legacyCachedAgentCredential struct {
+	CredentialID string `json:"credential_id"`
+	Token        string `json:"token"`
+	Prefix       string `json:"token_prefix"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	IssuedAt     string `json:"issued_at"`
+	ServerURL    string `json:"server_url"`
+	WorkspaceID  string `json:"workspace_id"`
+	RuntimeID    string `json:"runtime_id"`
+	AgentID      string `json:"agent_id"`
+}
+
+func readAndMigrateLegacyAgentCredential(cfg Config, workspaceID, runtimeID, agentID string, now time.Time, requireRuntime bool) (cachedAgentCredential, bool) {
+	legacyPath := filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "credentials", "current.json")
+	raw, err := os.ReadFile(legacyPath)
+	if err != nil {
+		return cachedAgentCredential{}, false
+	}
+	var legacy legacyCachedAgentCredential
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return cachedAgentCredential{}, false
+	}
+	cached := cachedAgentCredential{
+		SchemaVersion: 1,
+		CredentialID:  legacy.CredentialID,
+		Token:         legacy.Token,
+		Prefix:        legacy.Prefix,
+		ExpiresAt:     legacy.ExpiresAt,
+		IssuedAt:      legacy.IssuedAt,
+		ServerURL:     legacy.ServerURL,
+		WorkspaceID:   legacy.WorkspaceID,
+		RuntimeID:     legacy.RuntimeID,
+		AgentID:       legacy.AgentID,
+	}
+	if !cached.validFor(cfg, workspaceID, runtimeID, agentID, now, requireRuntime) {
+		return cachedAgentCredential{}, false
+	}
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, cached.RuntimeID, agentID, AgentCredentialResponse{
+		ID:        cached.CredentialID,
+		AgentID:   cached.AgentID,
+		Prefix:    cached.Prefix,
+		ExpiresAt: stringPointer(cached.ExpiresAt),
+		Token:     cached.Token,
+	}, now); err != nil {
+		return cachedAgentCredential{}, false
+	}
+	return cached, true
+}
+
+func stringPointer(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
 func writeCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID string, resp AgentCredentialResponse, now time.Time) (cachedAgentCredential, error) {
+	if err := validateStatePathPart("workspace", workspaceID); err != nil {
+		return cachedAgentCredential{}, err
+	}
+	if err := validateWorkspaceStatePath(cfg.WorkspacesRoot, workspaceID); err != nil {
+		return cachedAgentCredential{}, err
+	}
+	if err := validateStatePathPart("agent", agentID); err != nil {
+		return cachedAgentCredential{}, err
+	}
 	if strings.TrimSpace(resp.Token) == "" {
 		return cachedAgentCredential{}, fmt.Errorf("ensure response missing token")
 	}
 	cached := cachedAgentCredential{
-		CredentialID: resp.ID,
-		Token:        resp.Token,
-		Prefix:       resp.Prefix,
-		IssuedAt:     now.UTC().Format(time.RFC3339Nano),
-		ServerURL:    cfg.ServerBaseURL,
-		WorkspaceID:  workspaceID,
-		RuntimeID:    runtimeID,
-		AgentID:      agentID,
+		SchemaVersion: 1,
+		CredentialID:  resp.ID,
+		Token:         resp.Token,
+		Prefix:        resp.Prefix,
+		IssuedAt:      now.UTC().Format(time.RFC3339Nano),
+		ServerURL:     cfg.ServerBaseURL,
+		WorkspaceID:   workspaceID,
+		RuntimeID:     runtimeID,
+		AgentID:       agentID,
 	}
 	if resp.ExpiresAt != nil {
 		cached.ExpiresAt = *resp.ExpiresAt
@@ -123,6 +198,15 @@ func writeCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID stri
 // reused if this agent is later reassigned back to this runtime. Missing
 // file is not an error (nothing to remove).
 func removeCachedAgentCredential(cfg Config, workspaceID, agentID string) error {
+	if err := validateStatePathPart("workspace", workspaceID); err != nil {
+		return err
+	}
+	if err := validateWorkspaceStatePath(cfg.WorkspacesRoot, workspaceID); err != nil {
+		return err
+	}
+	if err := validateStatePathPart("agent", agentID); err != nil {
+		return err
+	}
 	path := agentCredentialCachePath(cfg, workspaceID, agentID)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove agent credential cache: %w", err)

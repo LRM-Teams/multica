@@ -2482,6 +2482,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			agentProxyTransport, proxyErr := d.prepareAgentProxyCLITransport(
 				InboxKey{WorkspaceID: task.WorkspaceID, AgentID: agentID},
 				task.RuntimeID,
+				task.ID,
 				selfBin,
 			)
 			if proxyErr != nil {

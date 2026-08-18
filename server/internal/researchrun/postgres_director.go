@@ -83,6 +83,23 @@ func (s *PostgresStore) MarkV6DirectorUnavailable(ctx context.Context, in MarkV6
 	if err = lockRunForMutation(ctx, tx, in.RunID, in.WorkspaceID); err != nil {
 		return V6DirectorAssignment{}, err
 	}
+	key := "v6-director-unavailable:" + in.ClientRequestID
+	var replay V6DirectorAssignment
+	var replayFailure, replayDiagnostics string
+	err = tx.QueryRow(ctx, `SELECT a.id::text,a.workspace_id::text,a.session_id::text,a.director_agent_id::text,a.status,a.reason,a.generation,s.director_state_version,e.payload->>'failure_class',COALESCE(e.payload->>'diagnostics','')
+		FROM research_run_event e
+		JOIN research_director_assignment a ON a.id=(e.payload->>'assignment_id')::uuid
+		JOIN research_session s ON s.workspace_id=e.workspace_id AND s.id=e.session_id
+		WHERE e.workspace_id=$1::uuid AND e.session_id=$2::uuid AND e.idempotency_key=$3 AND e.event_type='v6_director_unavailable'`, in.WorkspaceID, in.RunID, key).Scan(&replay.ID, &replay.WorkspaceID, &replay.RunID, &replay.AgentID, &replay.Status, &replay.Reason, &replay.Generation, &replay.StateVersion, &replayFailure, &replayDiagnostics)
+	if err == nil {
+		if replay.ID != in.AssignmentID || replayFailure != in.FailureClass || replayDiagnostics != in.Diagnostics {
+			return V6DirectorAssignment{}, ErrResultConflict
+		}
+		return replay, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return V6DirectorAssignment{}, err
+	}
 	var assignment V6DirectorAssignment
 	err = tx.QueryRow(ctx, `UPDATE research_director_assignment a SET status='unavailable'
 		FROM research_session s WHERE a.workspace_id=$1::uuid AND a.session_id=$2::uuid AND a.id=$3::uuid AND a.status='active'
@@ -97,11 +114,10 @@ func (s *PostgresStore) MarkV6DirectorUnavailable(ctx context.Context, in MarkV6
 	if _, err = tx.Exec(ctx, `UPDATE research_session SET status='awaiting_director',director_state_version=director_state_version+1,updated_at=now() WHERE workspace_id=$1::uuid AND id=$2::uuid`, in.WorkspaceID, in.RunID); err != nil {
 		return V6DirectorAssignment{}, err
 	}
-	key := "v6-director-unavailable:" + assignment.ID + ":" + in.FailureClass
 	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload) VALUES($1::uuid,$2::uuid,'notify_user',$3,jsonb_build_object('assignment_id',$4,'failure_class',$5,'diagnostics',$6)) ON CONFLICT DO NOTHING`, in.WorkspaceID, in.RunID, key, assignment.ID, in.FailureClass, in.Diagnostics); err != nil {
 		return V6DirectorAssignment{}, err
 	}
-	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_director_unavailable", key, "system", "", map[string]any{"assignment_id": assignment.ID, "failure_class": in.FailureClass}); err != nil {
+	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_director_unavailable", key, "system", "", map[string]any{"assignment_id": assignment.ID, "failure_class": in.FailureClass, "diagnostics": in.Diagnostics}); err != nil {
 		return V6DirectorAssignment{}, err
 	}
 	if err = s.commitResearchTx(ctx, txOpV6DirectorUnavailable, tx); err != nil {

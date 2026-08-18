@@ -39,7 +39,7 @@ func TestAgentCredentialCacheWrites0600AndReusesValidCredential(t *testing.T) {
 	}
 
 	path := agentCredentialCachePath(cfg, "workspace-1", "agent-1")
-	wantPath := filepath.Join(agentworkspace.Root(root, "workspace-1", "agent-1"), "runtime", "credentials", "current.json")
+	wantPath := filepath.Join(workspaceStateRoot(root, "workspace-1"), "profiles", "agent-1", "credential.json")
 	if path != wantPath {
 		t.Fatalf("cache path = %q, want %q", path, wantPath)
 	}
@@ -123,6 +123,50 @@ func TestAgentCredentialCacheRejectsEmptyToken(t *testing.T) {
 	_, err := writeCachedAgentCredential(Config{WorkspacesRoot: t.TempDir()}, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{}, time.Now())
 	if err == nil {
 		t.Fatal("expected empty ensure response token to fail")
+	}
+}
+
+func TestAgentCredentialCacheMigratesLegacyWorkspaceCredential(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 7, 12, 8, 0, 0, 0, time.UTC)
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: "https://api.example.test"}
+	expiresAt := now.Add(30 * 24 * time.Hour).Format(time.RFC3339)
+	legacyPath := filepath.Join(agentworkspace.Root(root, "workspace-1", "agent-1"), "runtime", "credentials", "current.json")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatalf("create legacy credential dir: %v", err)
+	}
+	legacy := map[string]string{
+		"credential_id": "credential-legacy",
+		"token":         "mac_legacy_token",
+		"token_prefix":  "mac_legacy",
+		"expires_at":    expiresAt,
+		"issued_at":     now.Format(time.RFC3339Nano),
+		"server_url":    cfg.ServerBaseURL,
+		"workspace_id":  "workspace-1",
+		"runtime_id":    "runtime-1",
+		"agent_id":      "agent-1",
+	}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal legacy credential: %v", err)
+	}
+	if err := os.WriteFile(legacyPath, raw, 0o600); err != nil {
+		t.Fatalf("write legacy credential: %v", err)
+	}
+
+	cached, ok := readCachedAgentCredentialForMessage(cfg, "workspace-1", "agent-1", now)
+	if !ok || cached.Token != "mac_legacy_token" {
+		t.Fatalf("read legacy credential = %#v, ok=%t", cached, ok)
+	}
+	if strict, ok := readCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", now); !ok || strict.Token != cached.Token {
+		t.Fatalf("migrated credential failed strict runtime read: %#v, ok=%t", strict, ok)
+	}
+	newPath := agentCredentialCachePath(cfg, "workspace-1", "agent-1")
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("migrated credential missing: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Fatalf("legacy credential should remain after migration: %v", err)
 	}
 }
 

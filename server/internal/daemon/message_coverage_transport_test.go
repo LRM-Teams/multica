@@ -34,7 +34,7 @@ func coverageCommitTestDaemon(t *testing.T) (*Daemon, *MessageCoordinator, Cover
 
 func prepareCoverageCommitCredential(t *testing.T, d *Daemon, key InboxKey, runtimeID string) string {
 	t.Helper()
-	transport, err := d.prepareAgentProxyCLITransport(key, runtimeID, filepath.Join(t.TempDir(), "multica"))
+	transport, err := d.prepareAgentProxyCLITransport(key, runtimeID, "coverage-launch", filepath.Join(t.TempDir(), "multica"))
 	if err != nil {
 		t.Fatalf("prepare Agent Proxy credential: %v", err)
 	}

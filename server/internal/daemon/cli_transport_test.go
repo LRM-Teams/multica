@@ -6,8 +6,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 func TestPrepareTaskCLITransportWritesPerRunWrapperAndTokenFile(t *testing.T) {
@@ -32,7 +30,7 @@ func TestPrepareTaskCLITransportWritesPerRunWrapperAndTokenFile(t *testing.T) {
 		t.Fatalf("prepareTaskCLITransport: %v", err)
 	}
 
-	wantDir := filepath.Join(agentworkspace.Root(root, "workspace-1", "agent-1"), "runtime", "cli-transport", "run-1")
+	wantDir := filepath.Join(workspaceStateRoot(root, "workspace-1"), "cli-transport", "agent-1", "run-1")
 	if wrapperDir != wantDir {
 		t.Fatalf("wrapperDir = %q, want %q", wrapperDir, wantDir)
 	}
@@ -77,6 +75,23 @@ func TestPrepareTaskCLITransportWritesPerRunWrapperAndTokenFile(t *testing.T) {
 	}
 }
 
+func TestPrepareTaskCLITransportRejectsPathTraversal(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "multica")
+	for _, tc := range []struct {
+		workspaceID string
+		agentID     string
+		runID       string
+	}{
+		{workspaceID: "../workspace", agentID: "agent-1", runID: "run-1"},
+		{workspaceID: "workspace-1", agentID: "../agent", runID: "run-1"},
+		{workspaceID: "workspace-1", agentID: "agent-1", runID: "../run"},
+	} {
+		if _, _, err := prepareTaskCLITransport(Config{WorkspacesRoot: t.TempDir()}, tc.workspaceID, tc.agentID, tc.runID, bin, "token"); err == nil {
+			t.Fatalf("path traversal was accepted for %#v", tc)
+		}
+	}
+}
+
 func TestPrepareStableAgentCLITransportUsesAgentScopedFixedPath(t *testing.T) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin", "multica-real")
@@ -90,7 +105,7 @@ func TestPrepareStableAgentCLITransportUsesAgentScopedFixedPath(t *testing.T) {
 		t.Fatalf("prepareStableAgentCLITransport: %v", err)
 	}
 
-	wantRoot := filepath.Join(agentworkspace.Root(root, "workspace-1", "agent-1"), "runtime", "cli-transport")
+	wantRoot := filepath.Join(workspaceStateRoot(root, "workspace-1"), "cli-transport", "agent-1")
 	if transport.Root() != wantRoot {
 		t.Fatalf("transport root = %q, want %q", transport.Root(), wantRoot)
 	}

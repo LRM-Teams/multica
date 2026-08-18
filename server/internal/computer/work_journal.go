@@ -150,7 +150,6 @@ func harvestWorkJournalCommits(ctx context.Context, root string, window protocol
 	out, err := runWorkJournalGit(ctx, root,
 		"log",
 		"--branches",
-		"--no-patch",
 		"--after="+window.Start.UTC().Format(time.RFC3339),
 		"--before="+window.End.UTC().Format(time.RFC3339),
 		"--pretty=format:%H%x00%cI%x00%an%x00%s",

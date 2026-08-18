@@ -32,6 +32,18 @@
 - **离线态**：daemon 离线 → workspace 显示"不可访问（主机离线）"，不是空目录（边界态显式）。
 - 备选（BE 权衡）：server 侧对象存储镜像/同步——成本高，v0 不推荐；`agent_memory` 表保持现状（结构化记忆记录），与文件 workspace 并存，后续再议统一。
 
+Agent workspace 之外的本地运行时状态也按 workspace 隔离，避免不同 workspace 共享凭证或 launch transport：
+
+```text
+~/.multica/workspaces/<workspace_id>/
+├── agents/<agent_id>/
+├── profiles/<agent_id>/credential.json
+├── cli-transport/<agent_id>/<launch_id>/
+└── agent-proxy-tokens/<agent_id>/<launch_id>.token
+```
+
+旧版本写入 Agent workspace 内的 `runtime/credentials/current.json` 时，daemon 首次成功读取会将有效凭证迁移到新的 workspace-scoped profile；旧文件不会被自动删除。**TODO：经历一个完整发布周期后，删除旧凭证读取与迁移兼容逻辑。**
+
 ## 3. 读写流（动作合约）
 - **agent 写**：run 中 agent 直接在自己的持久 AgentRoot 工作。代码 checkout 也放在这个 workspace 里；先选其中的项目目录或 worktree，再跑 git。平台不代为 clone，也不把 repository URL 写入 runtime brief。
 - **agent 读附件**：附件是否落盘由 Agent 自己决定，落盘目标始终在 AgentRoot 内。

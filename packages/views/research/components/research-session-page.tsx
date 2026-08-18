@@ -509,7 +509,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       canvasChangeSessionIdRef.current = sessionId;
       lastCanvasChangeMessageIdRef.current = null;
     }
-    const latestChange = [...(messages ?? [])]
+    const latestChange = [...(data?.messages ?? [])]
       .reverse()
       .find((message) => isCanvasChangeProcessMessage(message));
     if (!latestChange) return;
@@ -523,7 +523,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     lastCanvasChangeMessageIdRef.current = latestChange.id;
     const targetNodeId = canvasChangeTargetNodeIds(latestChange)[0];
     if (targetNodeId) handleFocusCanvasChangeNode(targetNodeId);
-  }, [handleFocusCanvasChangeNode, messages, sessionId]);
+  }, [data?.messages, handleFocusCanvasChangeNode, sessionId]);
   useEffect(() => {
     if (!data) return;
     const linkedNodeId = nav.searchParams.get("node");

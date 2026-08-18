@@ -56,8 +56,9 @@ func notePeriodBriefInstruction(folderPageID, windowLabel string) string {
 		"3) Call out delegated leverage (what agents or teammates carried).\n" +
 		"4) State what remains unfinished.\n" +
 		"5) Put unscoped machine work from collector packs (本机未归类) in its own section — never mix it into the team narrative.\n" +
-		"6) Do not list raw commits; do not invent claims without evidence in Facts or collector packs.\n" +
-		"7) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
+		"6) Prefer each pack's Integrated summary and Mermaid diagrams when present; still ground claims in Highlights/Facts — do not invent.\n" +
+		"7) Do not list raw commits; do not invent claims without evidence in Facts or collector packs.\n" +
+		"8) Deliver the Brief with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + folder +
 		"`. The body must be only the Brief markdown. Title it like `工作介绍 " + label +
 		"`. The human confirms 「新建子笔记」 under 工作介绍/ — never treat the draft Facts page as the finished Brief, and never pass the draft page id to --note-page-id."
 }
@@ -79,6 +80,7 @@ func notePeriodBriefCollectorInstruction(packPageID, windowLabel, windowStart, w
 	return "Collect recent work on the OS where this runtime runs for " + rangeHint + " into a structured Period Work collector pack.\n" +
 		"Follow the built-in skill `multica-period-work-collect` (read SKILL.md and `references/collect-recipes.md`) before collecting — use its shell recipes on this machine.\n" +
 		"Scope: whole-machine HOME for local runtimes; the cloud runtime environment for cloud. Prefer git status, recent commits, dirty trees, and project dirs you can see.\n" +
+		"You see the fullest local picture on this Computer: after harvesting evidence, add a preliminary Integrated summary (themes/threads for this machine only) and, when a multi-step flow needs it, Mermaid diagrams (flowchart/sequence/state). Completeness first — Highlights and Repos stay as the evidence layer; summary and diagrams are additive, never a substitute.\n" +
 		"Allowed detail: short diffs, file summaries, and key snippets when needed to explain work. Prefer bounded excerpts over whole files.\n" +
 		"Forbidden: keymouse, screenshots, clipboard, browser history, full-repo dumps, secrets (.env / .ssh / keys / credentials), Host Digest APIs, and runtime diagnostics noise.\n" +
 		"Denylist paths (skip): .ssh, .gnupg, .aws, .env / .env.*, credential stores, and similar secret roots.\n" +
@@ -91,6 +93,10 @@ func notePeriodBriefCollectorInstruction(packPageID, windowLabel, windowStart, w
 		"- path — short summary of what changed in the window\n" +
 		"## Highlights\n" +
 		"- claim with optional short diff or snippet\n" +
+		"## Integrated summary\n" +
+		"- themes/threads for this machine; cite Highlights; do not drop evidence\n" +
+		"## Diagrams\n" +
+		"- optional Mermaid blocks when flow/dependency/state needs full local context; omit section if unused\n" +
 		"## Unscoped / unclear\n" +
 		"- leftover traces that do not map cleanly\n" +
 		"Deliver with `multica message send --target <Message target for chat transport> --note-write --note-page-id " + pack +
@@ -109,7 +115,7 @@ func notePeriodBriefCollectorPackStub(windowLabel, agentLabel string) string {
 	return "# 采集包 " + label + "\n\n" +
 		"Collector: " + who + "\n\n" +
 		notePeriodBriefCollectorStubMarker + " via `--note-write`. Replace this body with structured OS work traces " +
-		"(repos/roots, highlights with short diffs/snippets, unscoped leftovers). Do not write the final Brief here.\n"
+		"(repos/roots, highlights, integrated summary, optional Mermaid diagrams, unscoped leftovers). Do not write the final Brief here.\n"
 }
 
 type createNotePeriodBriefRequest struct {

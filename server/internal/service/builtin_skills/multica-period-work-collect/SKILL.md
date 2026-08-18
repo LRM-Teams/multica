@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-collect
-description: "Use when collecting Period Work / 本期工作介绍 / collector packs on the OS where this runtime runs. Covers HOME (local) or cloud env git discovery, recent commits, dirty trees, short diffs, denylist, pack markdown shape, and --note-write delivery. Do not use for writing the final Period Work Brief."
+description: "Use when collecting Period Work / 本期工作介绍 / collector packs on the OS where this runtime runs. Covers HOME (local) or cloud env git discovery, recent commits, dirty trees, short diffs, preliminary integration, optional Mermaid diagrams, denylist, pack markdown shape, and --note-write delivery. Do not use for writing the final Period Work Brief."
 user-invocable: false
 allowed-tools: Bash(multica *), Bash(git *), Bash(hostname *), Bash(uname *), Bash(find *), Bash(ls *), Bash(head *), Bash(tail *), Bash(wc *), Bash(date *)
 ---
@@ -11,7 +11,10 @@ When the wake asks you to build a **采集包 / collector pack**, follow this sk
 end-to-end. Read `references/collect-recipes.md` for copy-paste shell recipes.
 
 You are gathering **work traces on the machine this runtime actually runs on**
-— not platform Facts, not Host Digest APIs, not the final Brief.
+— not platform Facts, not Host Digest APIs, not the final Brief. You see the
+**fullest local picture** for this Computer: after harvesting evidence, do a
+**preliminary integration** and, when it helps, add **Mermaid** diagrams that
+only someone with full local context can draw honestly.
 
 ## Scope
 
@@ -27,6 +30,14 @@ project dirs that are not git if they clearly changed.
 ## Hard rules
 
 - **Do** use `git` + bounded file reads for short diffs / summaries / key snippets.
+- **Do** add an **Integrated summary** that groups this machine's work into
+  themes / threads — **without dropping evidence**. Highlights + Repos remain
+  the evidence layer; the summary is additive.
+- **Do** add Mermaid diagrams when a multi-step flow, dependency, or state
+  change cannot be recovered from bullets alone (flowchart / sequence / state
+  preferred). Cite which Highlights the diagram covers.
+- **Do not** replace evidence with summary-only or diagram-only content.
+- **Do not** invent work, secrets, or diagrams for decorative effect.
 - **Do not** use keymouse, screenshots, clipboard, browser history, or full-repo dumps.
 - **Do not** read or quote secrets: `.ssh`, `.gnupg`, `.aws`, `.env` / `.env.*`,
   credential stores, private keys, tokens.
@@ -48,8 +59,14 @@ project dirs that are not git if they clearly changed.
    - for the **top 3–7** most relevant changes: a **short** diff or file
      summary (`git diff --stat`, `git show --stat`, or ≤80 lines of patch /
      file head — never whole files)
-4. **Write the pack** with the exact heading shape below.
-5. **Deliver** with `--note-write` to the pack page id from the wake
+4. **Integrate (this machine only)** — write **Integrated summary**: 3–7
+   themes/threads with what changed and why it matters locally. Every claim
+   must still be backed by a Highlight or repo line.
+5. **Diagram when necessary** — if a flow/dependency/state change needs the
+   full local picture, add 1–3 Mermaid blocks under **Diagrams**. Skip if
+   bullets already suffice.
+6. **Write the pack** with the exact heading shape below.
+7. **Deliver** with `--note-write` to the pack page id from the wake
    instruction / sticky — body = pack markdown only.
 
 If a step fails, keep going: record the failure under **Unscoped / unclear**,
@@ -74,13 +91,26 @@ than inventing work.
 - <claim> — evidence: short hash / path / ≤80-line diff or snippet
 - …
 
+## Integrated summary
+- <theme/thread>: what this machine accomplished in the window (cite Highlights)
+- … keep evidence above; do not drop commits/paths just because they appear here
+
+## Diagrams
+<!-- Optional. Omit the whole section if no diagram is needed. -->
+### <short title>
+```mermaid
+flowchart TD
+  A[…] --> B[…]
+```
+- covers: <Highlight bullets / paths this diagram explains>
+
 ## Unscoped / unclear
 - leftover traces, permission errors, non-git dirs, or gaps
 ```
 
 Aim for **enough signal for a manager Brief**: at least several repo lines
-when repos exist, and Highlights that cite concrete paths or commits — not
-vague “worked on stuff”.
+when repos exist, Highlights that cite concrete paths or commits, plus an
+Integrated summary — not vague “worked on stuff”.
 
 ## Delivery
 

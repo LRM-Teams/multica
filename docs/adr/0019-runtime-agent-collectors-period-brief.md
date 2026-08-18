@@ -35,11 +35,24 @@ retrospective API still does not run a model.
 
 ## Detail level (collectors)
 
-Collectors **may** include short diffs, file summaries, and key file
-snippets when needed to explain work. They still **must not** stream
-keymouse, screenshots, clipboard, browser history, full repo dumps, secrets
-(`.env` / `.ssh` / keys), or runtime diagnostics into the model context.
-Denylist paths remain excluded. Prefer bounded excerpts over whole files.
+Collectors see the **fullest local picture** on that Computer. They **must**
+still gather evidence (repos, commits, dirty paths, short diffs / summaries /
+key snippets). In addition they **may and should**:
+
+1. **Preliminary integration** — group traces into themes / threads for *this
+   machine only* (an integrated summary section), without dropping underlying
+   evidence. Completeness beats clever compression: Highlights and repo lines
+   remain the evidence layer; the summary is additive.
+2. **Local-context diagrams** — when a multi-step flow, dependency, or state
+   change is hard to narrate from bullets alone, include a **Mermaid**
+   flowchart / sequence / state diagram in the pack. Diagrams are optional and
+   only when they clarify; never decorative, never a substitute for evidence.
+
+They still **must not** stream keymouse, screenshots, clipboard, browser
+history, full repo dumps, secrets (`.env` / `.ssh` / keys), or runtime
+diagnostics into the model context. Denylist paths remain excluded. Prefer
+bounded excerpts over whole files. Collectors still **must not** write the
+final Period Work Brief — that remains the synthesizer's job.
 
 ## Selection
 

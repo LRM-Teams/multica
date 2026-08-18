@@ -626,7 +626,7 @@
 
 ### 4.24 时段工作介绍：多 runtime 采集 + 专用周报 Agent 合成 — `仅文档`
 
-- **口径（2026-08-17，ADR 0019）**：人勾选若干 **已连接 runtime 上的 Agent**（含云端）作 **采集员**，各自在 **所在 OS** 搜集最近工作痕迹（整机 HOME / 云端环境；允许短 diff、文件摘要、关键片段；denylist 去密钥噪声）。平台 Facts 仍由服务端确定性拉取。全部采集包交给 Workspace 内 **专用周报 Agent**（可改选）做 Period Work Synthesis，产物是 Notes 里的 Period Work Brief。**废弃 Host Digest 作为 Brief 的本机源。** 不导出 PPT。
+- **口径（2026-08-17，ADR 0019；采集深度 2026-08-18 增补）**：人勾选若干 **已连接 runtime 上的 Agent**（含云端）作 **采集员**，各自在 **所在 OS** 搜集最近工作痕迹（整机 HOME / 云端环境；允许短 diff、文件摘要、关键片段；denylist 去密钥噪声）。采集员可见该机最全信息，应做 **初步整合（Integrated summary）**，并在必要时用 **Mermaid** 画流程图等；**完整性优先**——证据层（Repos/Highlights）不可被摘要/图替代。平台 Facts 仍由服务端确定性拉取。全部采集包交给 Workspace 内 **专用周报 Agent**（可改选）做 Period Work Synthesis，产物是 Notes 里的 Period Work Brief。**废弃 Host Digest 作为 Brief 的本机源。** 不导出 PPT。
 - **仍禁止**：键鼠、截屏、剪贴板、浏览器历史、全仓灌模型、Daily 当源、密钥与 runtime 诊断、回顾 API 跑模型、静默 `replace_page`。
 - **指针**：ADR `docs/adr/0019-runtime-agent-collectors-period-brief.md`（取代 0018 Host Digest 路径）；术语 `CONTEXT.md` → Period Work。
 - **欠债**：按根目录 `todo.md` 新切片落地；完成后以采集员派发测、周报 Agent 供给测、合成 prompt 分区测升级为 `可执行`。

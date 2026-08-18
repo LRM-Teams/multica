@@ -127,6 +127,11 @@
   - **保留**：`POST /api/notes/retrospectives`、Facts loader、`NoteRetrospectiveDialog` 组件与 locale（Brief 仍依赖 Facts；第二刀再议是否删 API）。
   - **不要做**：拆掉 retrospectively 后端或 period-brief 的 Facts 复用。
 
+- [x] **K3-T2 采集员深度：初步整合 + 必要 Mermaid**
+  - 采集员在证据齐全后写 Integrated summary；必要时用 Mermaid（flowchart/sequence/state）。
+  - **完整性优先**：Repos/Highlights 证据层保留；摘要与图为增量，不可替代证据。
+  - 合同：ADR 0019、skill `multica-period-work-collect`、wake instruction、采集/周报模板。
+
 ### 遗留说明（J1–J3）
 
 Host Digest / Journal / 旧 period-brief Digest 汇合已按 ADR 0018 落地过一轮，**产品合同已切到 0019**。Journal 基础设施可保留作遗留；Brief 主路径不再调用。

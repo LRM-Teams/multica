@@ -56,6 +56,18 @@ git -C "$REPO" -c safe.directory="$REPO" diff -- <path> | head -n 80
 
 Never dump an entire file or unbounded `git diff` without `head`.
 
+## Integrated summary + Diagrams (after harvest)
+
+After Repos / Highlights are filled from shell evidence:
+
+1. Write **Integrated summary** themes for *this machine only*. Every theme
+   must point back to at least one Highlight or repo line.
+2. Add **Diagrams** only when a Mermaid flowchart / sequence / state chart
+   clarifies multi-step work that bullets alone cannot. Keep diagrams small
+   (≤ ~20 nodes). Do not invent nodes without evidence.
+
+Diagrams are markdown Mermaid fenced blocks — no extra shell tools required.
+
 ## Runtime identity
 
 ```bash

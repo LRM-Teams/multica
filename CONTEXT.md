@@ -669,10 +669,14 @@ _Avoid_: retrospective as the deliverable, PPT, standup dump, weekly report file
 
 ### Period Work Collector
 
-An Agent on a human-selected runtime (local or cloud) that gathers recent work
-on the OS where that runtime runs — including short diffs, file summaries, and
-key snippets within denylist bounds. Not Computer Host Digest harvest.
-_Avoid_: Host Journal as the Brief machine source, keymouse, full-repo dump
+An Agent on a provisioned per-Computer runtime (local or cloud) that gathers
+recent work on the OS where that runtime runs — evidence (short diffs, file
+summaries, key snippets) plus a preliminary Integrated summary and optional
+Mermaid diagrams that need full local context. Completeness first: summary and
+diagrams are additive, never a substitute for Highlights. Not Computer Host
+Digest harvest.
+_Avoid_: Host Journal as the Brief machine source, keymouse, full-repo dump,
+summary-only packs that drop evidence
 
 ### Period Brief Agent
 

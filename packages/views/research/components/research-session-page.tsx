@@ -254,6 +254,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   );
   const appliedNodeLinkRef = useRef<string | null>(null);
   const lastCanvasChangeMessageIdRef = useRef<string | null>(null);
+  const canvasChangeSessionIdRef = useRef(sessionId);
   const typedGraph = useMemo(
     () =>
       typedGraphPages?.pages.length
@@ -504,6 +505,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     [handleD5LensChange, handleFocusDetailNode],
   );
   useEffect(() => {
+    if (canvasChangeSessionIdRef.current !== sessionId) {
+      canvasChangeSessionIdRef.current = sessionId;
+      lastCanvasChangeMessageIdRef.current = null;
+    }
     const latestChange = [...(messages ?? [])]
       .reverse()
       .find((message) => isCanvasChangeProcessMessage(message));
@@ -518,7 +523,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     lastCanvasChangeMessageIdRef.current = latestChange.id;
     const targetNodeId = canvasChangeTargetNodeIds(latestChange)[0];
     if (targetNodeId) handleFocusCanvasChangeNode(targetNodeId);
-  }, [handleFocusCanvasChangeNode, messages]);
+  }, [handleFocusCanvasChangeNode, messages, sessionId]);
   useEffect(() => {
     if (!data) return;
     const linkedNodeId = nav.searchParams.get("node");

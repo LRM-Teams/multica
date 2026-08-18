@@ -139,16 +139,9 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	summary := agentHealthSummary(agent, rt, events, now)
-	if operation, err := getActiveAgentRestartOperation(r.Context(), h.DB, agent.ID); err != nil {
-		slog.Warn("agent health: load restart overlay failed", "agent_id", agentID, "error", err)
-	} else if operation != nil {
+	if _, ok := h.restarts().get(agentID); ok {
 		summary.State = "restarting"
-		summary.ReasonCode = "agent_restart_" + string(operation.Mode)
-		if operation.StartedAt != nil {
-			summary.StateSince = operation.StartedAt
-		} else {
-			summary.StateSince = &operation.CreatedAt
-		}
+		summary.ReasonCode = "agent_restart"
 	}
 	events = prependCurrentAgentHealthEvent(agent, rt, summary, events)
 	if !hasInternalsAccess {

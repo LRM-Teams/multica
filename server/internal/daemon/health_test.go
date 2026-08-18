@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -159,11 +158,6 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	if got, err := d.CredentialProxy().SeenUpToSeq("agent-1", "channel:one"); err != nil || got != 7 {
 		t.Fatalf("seen boundary = %d, %v; want 7, nil", got, err)
 	}
-	boundaries, healthy, err := loadConsumedSeqs(filepath.Join(root, consumedSeqsFileName))
-	if err != nil || !healthy || boundaries["channel:one"] != 7 {
-		t.Fatalf("durable boundaries = %+v healthy=%v err=%v", boundaries, healthy, err)
-	}
-
 	invalidCoverageResponse = true
 	invalid := httptest.NewRecorder()
 	handler.ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","limit":2}`)))

@@ -89,6 +89,8 @@ func filledSnapshot(now time.Time) *samplerSnapshot {
 	snap.researchProjectionOldestAge = 14
 	snap.researchCancellationPending = 3
 	snap.researchCancellationOldestAge = 27
+	snap.researchV6Health["director_unavailable"] = 1
+	snap.researchV6Health["lost_attempt"] = 2
 	return snap
 }
 
@@ -155,6 +157,10 @@ func TestBusinessSamplerCollectorEmitsExpectedMetrics(t *testing.T) {
 		`multica_research_projection_backlog{measure="oldest_age_seconds"} 14`,
 		`multica_research_cancellation_backlog{measure="pending"} 3`,
 		`multica_research_cancellation_backlog{measure="oldest_age_seconds"} 27`,
+		`multica_research_v6_health{condition="awaiting_director"} 0`,
+		`multica_research_v6_health{condition="director_unavailable"} 1`,
+		`multica_research_v6_health{condition="lost_attempt"} 2`,
+		`multica_research_v6_health{condition="report_object_missing"} 0`,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(body, want) {
@@ -170,63 +176,6 @@ func TestBusinessSamplerCollectorEmitsExpectedMetrics(t *testing.T) {
 		if strings.Contains(body, removed) {
 			t.Errorf("metrics body still exposes removed long DB window %q\nbody:\n%s", removed, body)
 		}
-	}
-}
-
-func TestBusinessSamplerMachineUpgradeMetricsExposeBoundedPhaseAndOutcome(t *testing.T) {
-	canonical := []machineUpgradeMetricKey{
-		{phase: "queued", outcome: "none"},
-		{phase: "starting", outcome: "none"},
-		{phase: "staging", outcome: "none"},
-		{phase: "verifying", outcome: "none"},
-		{phase: "handoff", outcome: "none"},
-		{phase: "converging", outcome: "none"},
-		{phase: "rollback_pending", outcome: "none"},
-		{phase: "completed", outcome: "completed"},
-		{phase: "rolled_back", outcome: "rolled_back"},
-		{phase: "failed", outcome: "failed"},
-		{phase: "timeout", outcome: "timeout"},
-		{phase: "cancelled", outcome: "cancelled"},
-	}
-	c := newTestSampler(t, func(ctx context.Context, refreshAt time.Time) *samplerSnapshot {
-		snap := newSamplerSnapshot(refreshAt)
-		for _, key := range canonical {
-			snap.machineUpgrades[key] = 1
-		}
-		for i := 0; i < 50; i++ {
-			key := machineUpgradeMetricKey{
-				phase:   normalizeMachineUpgradePhase("operation-" + string(rune('A'+i%26))),
-				outcome: normalizeMachineUpgradeOutcome("daemon-" + string(rune('A'+i%26))),
-			}
-			snap.machineUpgrades[key]++
-		}
-		return snap
-	})
-
-	registry := prometheus.NewRegistry()
-	registry.MustRegister(c.Collectors()...)
-	rec := httptest.NewRecorder()
-	NewHandler(registry).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	body := rec.Body.String()
-
-	for _, want := range []string{
-		`multica_machine_upgrade_operations{outcome="none",phase="queued"} 1`,
-		`multica_machine_upgrade_operations{outcome="none",phase="rollback_pending"} 1`,
-		`multica_machine_upgrade_operations{outcome="completed",phase="completed"} 1`,
-		`multica_machine_upgrade_operations{outcome="failed",phase="failed"} 1`,
-		`multica_machine_upgrade_operations{outcome="other",phase="other"} 50`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("metrics body missing %q\n%s", want, body)
-		}
-	}
-	for _, forbidden := range []string{"operation-A", "daemon-A", "daemon_id", "runtime_id", "operation_id", "user_id"} {
-		if strings.Contains(body, forbidden) {
-			t.Errorf("machine upgrade metrics exposed unbounded identity %q\n%s", forbidden, body)
-		}
-	}
-	if got, want := testutil.CollectAndCount(c, "multica_machine_upgrade_operations"), len(canonical)+1; got != want {
-		t.Fatalf("machine upgrade series = %d, want %d bounded phase/outcome combinations", got, want)
 	}
 }
 

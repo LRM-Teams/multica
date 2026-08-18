@@ -101,23 +101,19 @@ func TestGetAgentPresenceReturnsFullWorkspaceRosterFromRunnerManagementTruth(t *
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM research_fleet_member WHERE agent_id = $1`, hiddenID)
 	})
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES
-			($1, $2, $5, 'daemon-1', 'instance-1', 'launch-active', 'active'),
-			($1, $3, $5, 'daemon-1', 'instance-1', 'launch-accepted', 'accepted'),
-			($1, $4, $5, 'daemon-1', 'instance-1', 'launch-inactive', 'inactive')`,
-		testWorkspaceID, activeID, acceptedID, inactiveID, runtimeID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, archivedID); err != nil {
 		t.Fatal(err)
 	}
 
 	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", activeID, runtimeID, "launch-active", protocol.AgentStatusActive)
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", acceptedID, runtimeID, "launch-accepted", "accepted")
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "instance-1", inactiveID, runtimeID, "launch-inactive", protocol.AgentStatusInactive)
 	rec := httptest.NewRecorder()
 	req := newRequestAs(testUserID, http.MethodGet, "/api/agents/presence", nil)
 	req.Header.Set("X-Workspace-ID", testWorkspaceID)
@@ -216,6 +212,8 @@ func TestRunnerStatusPublishesPresenceOnlyOnSemanticChange(t *testing.T) {
 		mu.Unlock()
 	})
 	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.Bus = bus
 	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
@@ -253,6 +251,8 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "runner-launch-"+uuid.NewString()[:8], nil)
 	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	bus := events.New()
 	var presencePayloads []AgentPresenceRealtimePayload
 	bus.Subscribe(protocol.EventAgentPresence, func(event events.Event) {
@@ -288,19 +288,15 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err != nil {
 		t.Fatalf("persist Runner session: %v", err)
 	}
-	var status, queueState, providerSession, providerTurn string
-	var queueDepth int
-	var queueAge, generation int64
-	if err := testPool.QueryRow(ctx, `
-		SELECT status, queue_state, queue_depth, queue_age_ms,
-		       provider_session_id, provider_turn_id, runtime_generation
-		FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(
-		&status, &queueState, &queueDepth, &queueAge, &providerSession, &providerTurn, &generation,
-	); err != nil {
-		t.Fatal(err)
+	obs, ok := h.observations().get(testWorkspaceID, agentID)
+	if !ok || obs.status != "accepted" || obs.launchID != launchID || obs.sessionID != "provider-session-1" {
+		t.Fatalf("observed Runner launch=%+v ok=%v", obs, ok)
 	}
-	if status != "accepted" || queueState != protocol.AgentStartQueueQueued || queueDepth != 2 || queueAge != 15 || providerSession != "provider-session-1" || providerTurn != "turn-1" || generation != 3 {
-		t.Fatalf("persisted Runner launch=%q/%q/%d/%d/%q/%q/%d", status, queueState, queueDepth, queueAge, providerSession, providerTurn, generation)
+	var persistedSessionID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT provider_session_id FROM agent_runner_launch_projection WHERE agent_id = $1
+	`, agentID).Scan(&persistedSessionID); err != nil || persistedSessionID != session.ProviderSessionID {
+		t.Fatalf("desired launch provider session = %q, %v", persistedSessionID, err)
 	}
 	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive})
 	if err != nil {
@@ -332,6 +328,8 @@ func TestRunnerStartAcknowledgementPresenceStaysOfflineUntilActive(t *testing.T)
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "runner-ack-presence-"+uuid.NewString()[:8], nil)
 	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	bus := events.New()
 	var presencePayloads []AgentPresenceRealtimePayload
 	bus.Subscribe(protocol.EventAgentPresence, func(event events.Event) {
@@ -487,20 +485,20 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 	`, testWorkspaceID, agentID, runtimeID).Scan(&launchID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (
-			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
-		) VALUES ($1, $2, $3, $4, 'instance-1', $5, 'active')`, testWorkspaceID, agentID, runtimeID, daemonID, launchID); err != nil {
-		t.Fatal(err)
-	}
 	operationID := uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_restart_operation (
-			id, workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
-			action_kind, status, execution_mode, step, started_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'restart', 'running', 'immediate', 'stopping', now())`,
-		operationID, testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
-		t.Fatal(err)
+	h := *testHandler
+	h.agentRestarts = newAgentRestartStore()
+	if _, ok := h.restarts().begin(activeAgentRestartState{
+		operationID:  operationID,
+		workspaceID:  testWorkspaceID,
+		agentID:      agentID,
+		runtimeID:    runtimeID,
+		computerID:   daemonID,
+		storageKind:  agentRestartStorageRestart,
+		step:         agentRestartStepStopping,
+		stopLaunchID: launchID,
+	}); !ok {
+		t.Fatal("seed in-flight restart")
 	}
 	hub := daemonws.NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -527,8 +525,10 @@ func TestPendingAgentLifecycleOperationDoesNotDispatchParallelRunnerStop(t *test
 		}
 		time.Sleep(time.Millisecond)
 	}
-	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.DaemonHub = hub
+	h.observations().putStatus(testWorkspaceID, daemonID, "instance-1", agentID, runtimeID, launchID, protocol.AgentStatusActive)
 	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
 		t.Fatalf("reconcile while lifecycle stop is active: %v", err)
@@ -548,13 +548,6 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "presence-disconnect-"+uuid.NewString()[:8], nil)
 	runtimeID := handlerTestRuntimeID(t)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (
-			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
-		) VALUES ($1, $2, $3, 'daemon-1', 'replacement', 'launch-new', 'active')`,
-		testWorkspaceID, agentID, runtimeID); err != nil {
-		t.Fatal(err)
-	}
 
 	bus := events.New()
 	var mu sync.Mutex
@@ -570,18 +563,18 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 		mu.Unlock()
 	})
 	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.Bus = bus
+	h.observations().putStatus(testWorkspaceID, "daemon-1", "replacement", agentID, runtimeID, "launch-new", protocol.AgentStatusActive)
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
 
 	if err := h.HandleWorkspaceRunnerDisconnect(ctx, identity, "old-instance"); err != nil {
 		t.Fatal(err)
 	}
-	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
-	if status != protocol.AgentStatusActive {
-		t.Fatalf("late old disconnect changed replacement status to %q", status)
+	obs, ok := h.observations().get(testWorkspaceID, agentID)
+	if !ok || obs.status != protocol.AgentStatusActive || obs.daemonInstanceID != "replacement" {
+		t.Fatalf("late old disconnect changed replacement observation=%+v ok=%v", obs, ok)
 	}
 
 	if err := h.HandleWorkspaceRunnerDisconnect(ctx, identity, "replacement"); err != nil {
@@ -590,11 +583,8 @@ func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 	if err := h.HandleWorkspaceRunnerDisconnect(ctx, identity, "replacement"); err != nil {
 		t.Fatal(err)
 	}
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
-	if status != protocol.AgentStatusInactive {
-		t.Fatalf("current disconnect status=%q want inactive", status)
+	if _, ok := h.observations().get(testWorkspaceID, agentID); ok {
+		t.Fatal("current disconnect left a live observation")
 	}
 
 	mu.Lock()

@@ -58,6 +58,10 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 
 	workingAgentID := createHandlerTestAgent(t, "runner-summary-working-"+uuid.NewString()[:8], nil)
 	errorAgentID := createHandlerTestAgent(t, "runner-summary-error-"+uuid.NewString()[:8], nil)
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"daemon-summary/" + testWorkspaceID + "/instance-summary": true,
+	}}
 	ctx := context.Background()
 	for _, fixture := range []struct {
 		agentID      string
@@ -86,8 +90,8 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 			launch_id, client_sequence, producer_fact_id, entry_position,
 			entry_kind, entry_body, observed_at
 		) VALUES ($1, $2, $3, 'daemon-summary', 'instance-summary',
-			'launch-summary', 1, $4, 0, 'narrative',
-			'{"text":"payment required","activity_kind":"error","detail_kind":"runtime_error"}'::jsonb,
+			'launch-summary', 1, $4, 0, 'status',
+			'{"activity":"error","detail":"payment required","detailKind":"runtime_error"}'::jsonb,
 			now())`, testWorkspaceID, errorAgentID, handlerTestRuntimeID(t), "summary-error-entry-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +99,7 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 	req := newRequestAs(testUserID, http.MethodGet, "/api/agents/runner-activity-summaries", nil)
 	req.Header.Set("X-Workspace-ID", testWorkspaceID)
 	rec := httptest.NewRecorder()
-	testHandler.ListRunnerActivitySummaries(rec, req)
+	h.ListRunnerActivitySummaries(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s want 200", rec.Code, rec.Body.String())
 	}
@@ -113,7 +117,7 @@ func TestListRunnerActivitySummariesMatchesPerAgentProjection(t *testing.T) {
 		detailReq.Header.Set("X-Workspace-ID", testWorkspaceID)
 		detailReq = withURLParam(detailReq, "id", agentID)
 		detailRec := httptest.NewRecorder()
-		testHandler.GetRunnerActivity(detailRec, detailReq)
+		h.GetRunnerActivity(detailRec, detailReq)
 		if detailRec.Code != http.StatusOK {
 			t.Fatalf("detail status=%d body=%s want 200", detailRec.Code, detailRec.Body.String())
 		}
@@ -176,6 +180,10 @@ func TestListRunnerActivitySummariesEnforcesWorkspaceAndPrincipalBoundaries(t *t
 		foreignWorkspaceID, foreignAgentID, foreignRuntimeID, "summary-boundary-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"daemon-boundary/" + foreignWorkspaceID + "/instance-boundary": true,
+	}}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, foreignWorkspaceID)
 	})
@@ -188,7 +196,7 @@ func TestListRunnerActivitySummariesEnforcesWorkspaceAndPrincipalBoundaries(t *t
 	read := func(t *testing.T, req *http.Request) (*httptest.ResponseRecorder, RunnerActivitySummariesResponse) {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		testHandler.ListRunnerActivitySummaries(rec, req)
+		h.ListRunnerActivitySummaries(rec, req)
 		var response RunnerActivitySummariesResponse
 		if rec.Code == http.StatusOK {
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {

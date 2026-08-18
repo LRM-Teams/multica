@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/uuid"
-	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 	"github.com/multica-ai/multica/server/internal/turntransport"
 )
@@ -24,9 +22,8 @@ const (
 	// AgentProxyCLIWrapperEnv carries only the launch-pinned wrapper path, not
 	// credentials. The real CLI uses it to recover when a login shell rebuilds
 	// PATH and would otherwise bypass the authenticated wrapper.
-	AgentProxyCLIWrapperEnv       = "MULTICA_AGENT_CLI_WRAPPER"
-	AgentProxyTokenHeader         = "X-Multica-Agent-Proxy-Token"
-	agentProxyCredentialTokenName = "token"
+	AgentProxyCLIWrapperEnv = "MULTICA_AGENT_CLI_WRAPPER"
+	AgentProxyTokenHeader   = "X-Multica-Agent-Proxy-Token"
 )
 
 var ErrAgentProxyCredentialInvalid = errors.New("Agent Proxy credential is invalid")
@@ -54,7 +51,7 @@ type agentProxyCLITransport struct {
 // token or its file path.
 func (d *Daemon) prepareAgentProxyCLITransport(
 	key InboxKey,
-	runtimeID, multicaBin string,
+	runtimeID, launchID, multicaBin string,
 ) (*agentProxyCLITransport, error) {
 	if d == nil {
 		return nil, errors.New("Machine Service is unavailable")
@@ -64,10 +61,23 @@ func (d *Daemon) prepareAgentProxyCLITransport(
 	if err != nil {
 		return nil, err
 	}
+	if err := validateStatePathPart("workspace", key.WorkspaceID); err != nil {
+		return nil, err
+	}
+	if err := validateWorkspaceStatePath(d.cfg.WorkspacesRoot, key.WorkspaceID); err != nil {
+		return nil, err
+	}
+	if err := validateStatePathPart("agent", key.AgentID); err != nil {
+		return nil, err
+	}
 	runtimeID = strings.TrimSpace(runtimeID)
+	launchID = strings.TrimSpace(launchID)
 	multicaBin = filepath.Clean(strings.TrimSpace(multicaBin))
 	if runtimeID == "" {
-		return nil, errors.New("Agent Proxy runtime_id is required")
+		return nil, errors.New("Agent Proxy runtime_id and launch_id are required")
+	}
+	if err := validateStatePathPart("launch", launchID); err != nil {
+		return nil, err
 	}
 	if multicaBin == "." || !filepath.IsAbs(multicaBin) {
 		return nil, errors.New("Agent Proxy multica binary path must be absolute")
@@ -80,25 +90,49 @@ func (d *Daemon) prepareAgentProxyCLITransport(
 		return nil, fmt.Errorf("create Agent Proxy credential: %w", err)
 	}
 	credentialHash := sha256.Sum256([]byte(token))
-	credentialID := uuid.NewString()
-	root := filepath.Join(agentworkspace.Root(d.cfg.WorkspacesRoot, key.WorkspaceID, key.AgentID), "runtime", "agent-proxy", credentialID)
+	stateRoot := workspaceStateRoot(d.cfg.WorkspacesRoot, key.WorkspaceID)
+	root := filepath.Join(stateRoot, "cli-transport", key.AgentID, launchID)
+	tokenDir := filepath.Join(stateRoot, "agent-proxy-tokens", key.AgentID)
 	binDir := filepath.Join(root, "bin")
-	if err := os.MkdirAll(binDir, 0o700); err != nil {
+	if _, err := os.Lstat(root); err == nil {
+		return nil, fmt.Errorf("Agent Proxy launch transport already exists: %s", launchID)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("inspect Agent Proxy launch transport: %w", err)
+	}
+	if _, err := os.Lstat(filepath.Join(tokenDir, launchID+".token")); err == nil {
+		return nil, fmt.Errorf("Agent Proxy launch token already exists: %s", launchID)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("inspect Agent Proxy launch token: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
 		return nil, fmt.Errorf("create Agent Proxy transport directory: %w", err)
+	}
+	if err := os.Mkdir(root, 0o700); err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("Agent Proxy launch transport already exists: %s", launchID)
+		}
+		return nil, fmt.Errorf("create Agent Proxy launch transport: %w", err)
+	}
+	if err := os.Mkdir(binDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create Agent Proxy transport bin directory: %w", err)
+	}
+	if err := os.MkdirAll(tokenDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create Agent Proxy token directory: %w", err)
 	}
 	cleanupOnFailure := true
 	defer func() {
 		if cleanupOnFailure {
 			_ = os.RemoveAll(root)
+			_ = os.Remove(filepath.Join(tokenDir, launchID+".token"))
 		}
 	}()
-	for _, dir := range []string{root, binDir} {
+	for _, dir := range []string{root, binDir, tokenDir} {
 		if err := os.Chmod(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("protect Agent Proxy transport directory: %w", err)
 		}
 	}
-	tokenFile := filepath.Join(root, agentProxyCredentialTokenName)
-	if err := writeAgentProxyFileAtomic(tokenFile, []byte(token), 0o600); err != nil {
+	tokenFile := filepath.Join(tokenDir, launchID+".token")
+	if err := writeAgentProxyTokenExclusive(tokenFile, []byte(token)); err != nil {
 		return nil, fmt.Errorf("write Agent Proxy token file: %w", err)
 	}
 	wrapperPath := filepath.Join(binDir, turntransport.CliWrapperFilename())
@@ -162,7 +196,13 @@ func (t *agentProxyCLITransport) Close() error {
 			delete(t.daemon.agentProxyCredentials, t.credential)
 			t.daemon.agentProxyCredentialMu.Unlock()
 		}
-		if err := os.RemoveAll(t.root); err != nil {
+		rootErr := os.RemoveAll(t.root)
+		tokenErr := os.Remove(t.tokenFile)
+		if rootErr != nil || (tokenErr != nil && !os.IsNotExist(tokenErr)) {
+			err := rootErr
+			if err == nil {
+				err = tokenErr
+			}
 			t.closeErr = fmt.Errorf("remove Agent Proxy transport: %w", err)
 			if t.daemon != nil {
 				t.daemon.recordAgentProxyCredentialLifecycle(t.inbox, t.runtimeID, "agent_proxy_credential_revoked", "degraded", "credential_file_cleanup_failed")
@@ -251,4 +291,21 @@ func writeAgentProxyFileAtomic(path string, content []byte, mode os.FileMode) er
 	}
 	cleanup = false
 	return os.Chmod(path, mode)
+}
+
+func writeAgentProxyTokenExclusive(path string, content []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(content); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }

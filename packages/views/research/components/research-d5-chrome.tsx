@@ -115,9 +115,18 @@ export function ResearchD5Chrome({
             loading={goalLoading}
             error={goalError}
             onRetry={onGoalRetry}
+            onOpenReport={
+              projectionSource === "v6" ? actionProps.onOpenDelivery : undefined
+            }
             goalVersion={goalVersion}
-            productRound={session.product_round ?? null}
-            productRoundBudget={session.product_round_budget ?? null}
+            productRound={
+              projectionSource === "v6" ? null : (session.product_round ?? null)
+            }
+            productRoundBudget={
+              projectionSource === "v6"
+                ? null
+                : (session.product_round_budget ?? null)
+            }
             goalHistory={goalHistory}
             goalImpact={goalImpact}
             panelPlacement="below"

@@ -93,6 +93,20 @@ export interface QueuedEntry {
   enqueuedMs: number;
 }
 
+export function liveTransitionForEntity(
+  queue: TransitionQueue,
+  entityId: string,
+): QueuedEntry | null {
+  return (
+    [...queue.queued.values()]
+      .flat()
+      .find(
+        (entry) =>
+          entry.state !== "settled" && entry.relatedIds.includes(entityId),
+      ) ?? null
+  );
+}
+
 export interface TransitionQueue {
   /** laneKey → not-yet-settled entries, oldest first. */
   queued: Map<string, QueuedEntry[]>;

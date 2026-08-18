@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -98,7 +99,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	env := execenv.Reuse(execenv.ReuseParams{
 		AgentRoot:    workspace.AgentRoot,
 		Provider:     runtime.Provider,
-		CodexVersion: d.agentVersion("codex"),
+		CodexVersion: d.agentVersion(agent.ProviderCodex),
 		McpConfig:    config.Agent.McpConfig,
 		Task:         taskCtx,
 	}, d.logger)
@@ -140,13 +141,10 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	// channel and project scoped secrets belong to product Task execution.
 	injectAgentCustomEnv(agentEnv, config.Agent, d.logger)
 	addMulticaAgentEnv(agentEnv, d.cfg, config.WorkspaceID, config.Agent.ID)
-	if runtime.Provider == "pi" {
+	if runtime.Provider == agent.ProviderPi {
 		addPiMemoryFastModeEnv(agentEnv)
 	}
-	if env.CodexHome != "" {
-		agentEnv["CODEX_HOME"] = env.CodexHome
-	}
-
+	residentLaunchID := "resident-" + uuid.NewString()
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:             config.Agent.ID,
 		RuntimeID:           config.RuntimeID,
@@ -167,6 +165,9 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("resident Message runtime identity: %w", err)
 	}
 
+	// Resume only the id last applied by agent:start for this DaemonCore.
+	// Do not invent a disk-backed pointer; a new process starts empty until
+	// the next start payload, same as Raft idleRestartSnapshots.
 	resumeSessionID := ""
 	if d.agentRuntimeSessions != nil {
 		if stored, err := d.agentRuntimeSessions.Get(agentID, runtimeID); err == nil {
@@ -199,6 +200,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			transport, err := d.prepareAgentProxyCLITransport(
 				InboxKey{WorkspaceID: config.WorkspaceID, AgentID: config.Agent.ID},
 				config.RuntimeID,
+				residentLaunchID,
 				selfBin,
 			)
 			if err != nil {
@@ -220,11 +222,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			return fmt.Errorf("bind resident Pi run identity: %w", err)
 		}
 	}
-	if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
-		_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
-		return fmt.Errorf("start resident provider process: %w", err)
-	}
-	return nil
+	return d.ensureResidentProviderProcess(ctx, agentID, runtimeID)
 }
 
 // ensureResidentProviderProcess keeps Raft's failed-start cleanup invariant:
@@ -243,6 +241,7 @@ func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, run
 		}
 		return startErr
 	}
+	d.recordProviderSession(agentID, runtimeID, d.canonicalRuntimes.residentProviderSession(agentID, runtimeID))
 	return nil
 }
 

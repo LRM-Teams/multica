@@ -49,7 +49,7 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | Commit idempotency | `handler/agent_action_commit.go` | action Message ID + non-secret final-payload hash returns the same Agent on a safe replay and rejects divergent payloads |
 | Atomic provisioning | `createAgentManagedTx`, `createAgentManagedCommit`, `provisionOnboardingAgent`, migration 336 | Human, Proposal, and Onboarding creation share one transaction-scoped primitive for Agent identity, system `#general` membership, and a desired `agent_runner_launch_projection`; onboarding only adds `workspace.onboarding_agent_id` and welcome messages |
 | Durable first start | `handler/runner_reconcile.go`, `daemon/agent_process_manager.go` | the server-owned `launch_id` is retried through `agent:start` until the current Workspace Runner accepts it; setup, reconnect, daemon restart, and Runtime moves use the same desired-vs-observed reconcile |
-| Human read model | `agent_activity_launch`, Agent presence and Activity APIs | accepted/active/inactive residency is reported independently from user-visible Message Activity; queue state is diagnostic lifecycle evidence, not an Agent creation status field |
+| Human read model | Agent Presence and Activity APIs | accepted/active/inactive residency is the current Computer process, reported independently from user-visible Message Activity |
 
 See `docs/agent-creation-proposal-cutover.md` for the production migration
 preflight and post-deploy verification commands.

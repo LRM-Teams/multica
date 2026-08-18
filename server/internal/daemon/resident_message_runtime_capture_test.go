@@ -266,7 +266,7 @@ func TestResidentMessageRuntimeCapture_UploadsTrustedBatchAtTurnEnd(t *testing.T
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello",
 		RunID: runID, RunAgentID: runAgentID, DeliveryID: "delivery-1",
 	}}
-	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, messages); err != nil {
+	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, messages); err != nil {
 		t.Fatalf("handoff: %v", err)
 	}
 	backend.finish(nil)
@@ -350,7 +350,7 @@ func TestResidentMessageRuntimeCapture_BindsProxyActionToProviderCallAndDrainsTu
 			return true
 		},
 	}
-	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
+	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "send a message",
 		RunID: runID, RunAgentID: runAgentID, DeliveryID: "delivery-1",
 	}}); err != nil {
@@ -421,7 +421,7 @@ func TestResidentMessageRuntimeCapture_ToolLifecycleDuringIdleInput(t *testing.T
 			return true
 		},
 	}
-	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
+	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "use a tool",
 		RunID: "run-1", RunAgentID: "run-agent-1", DeliveryID: "delivery-1",
 	}}); err != nil {
@@ -516,7 +516,7 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 			return true
 		},
 	}
-	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
+	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello",
 		RunID: runID, RunAgentID: runAgentID, DeliveryID: "delivery-1",
 	}}); err != nil {
@@ -760,7 +760,7 @@ func TestResidentMessageRuntimeCapture_NoHistoryReplayAfterNewBoundary(t *testin
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "first turn",
 		RunID: runID, RunAgentID: runAgentID,
 	}}
-	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, firstBatch); err != nil {
+	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, firstBatch); err != nil {
 		t.Fatalf("first handoff: %v", err)
 	}
 	backend.finish(<-backend.started, nil)
@@ -776,7 +776,7 @@ func TestResidentMessageRuntimeCapture_NoHistoryReplayAfterNewBoundary(t *testin
 		ID: "message-2", Target: "channel:one", Seq: 2, Content: "second turn only",
 		RunID: runID, RunAgentID: runAgentID,
 	}}
-	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, secondBatch); err != nil {
+	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, secondBatch); err != nil {
 		t.Fatalf("second handoff: %v", err)
 	}
 	backend.finish(<-backend.started, nil)

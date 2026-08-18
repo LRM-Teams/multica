@@ -74,15 +74,15 @@ type ModelListRequest struct {
 	RunStartedAt           *time.Time      `json:"-"`
 }
 
-// ModelEntry mirrors agent.Model for the wire. `Default` tags the
-// model the runtime advertises as its preferred pick (e.g. Claude
-// Code's shipped default, or an ACP runtime's currentModelId) so the UI can
-// badge it — don't drop it when marshalling.
+// ModelEntry mirrors agent.Model for the wire. `Default` tags a model only
+// when the runtime explicitly advertises it as the preferred pick (e.g.
+// Grok's default marker or an ACP runtime's currentModelId); catalog order is
+// never treated as a default. Don't drop it when marshalling.
 //
 // `Thinking` carries the per-model reasoning-effort catalog discovered
-// by the daemon for runtimes that support it (claude, codex — see
-// MUL-2339). nil means "no picker for this model"; the UI hides the
-// thinking_level selector. Older daemons (pre-2026-05) won't send this
+// by the daemon for runtimes that support it (see MUL-2339). nil means
+// "no picker for this model"; the UI hides the thinking_level selector.
+// Older daemons (pre-2026-05) won't send this
 // field, which is fine: the UI hides the selector and the agent runs
 // with the runtime default.
 type ModelEntry struct {

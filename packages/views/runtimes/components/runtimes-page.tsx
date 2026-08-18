@@ -876,11 +876,7 @@ function MachineDetailView({
       const results = await Promise.all(
         ids.map(async (id) => {
           try {
-            await api.resetAgent(
-              id,
-              "restart",
-              crypto.randomUUID(),
-            );
+            await api.resetAgent(id, "restart");
             return true;
           } catch {
             return false;

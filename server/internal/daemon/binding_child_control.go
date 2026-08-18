@@ -19,28 +19,16 @@ type bindingChildControlIdentity = computer.BindingChildIdentity
 // daemon package's Workspace execution interfaces.
 type bindingHostControlClient struct{ client *computer.HostControlClient }
 
-func newBindingHostControlClient(baseURL, token string, identity bindingChildControlIdentity) *bindingHostControlClient {
-	return &bindingHostControlClient{client: computer.NewHostControlClient(baseURL, token, identity)}
-}
-
-func (client *bindingHostControlClient) Attest(ctx context.Context) error {
-	return client.client.Attest(ctx)
-}
-
-func (client *bindingHostControlClient) AwaitAttest(ctx context.Context) error {
-	return client.client.AwaitAttest(ctx)
+func newBindingHostControlClient(endpoint, token string, identity bindingChildControlIdentity) *bindingHostControlClient {
+	return &bindingHostControlClient{client: computer.NewHostControlClient(endpoint, token, identity)}
 }
 
 func (client *bindingHostControlClient) recordDiagnostic(ctx context.Context, workspaceID string, event diagnosticlog.Event) error {
 	return client.client.RecordDiagnostic(ctx, workspaceID, event)
 }
 
-func (client *bindingHostControlClient) recordLifecycleDiagnostic(ctx context.Context, transition agentLifecycleTransition) error {
-	return client.client.RecordLifecycleDiagnostic(ctx, transition)
-}
-
 func (client *bindingHostControlClient) forwardMachineActions(ctx context.Context, ack HeartbeatResponse) error {
-	return client.client.ForwardMachineActions(ctx, ack)
+	return client.client.ForwardComputerControl(ctx, ack)
 }
 
 // handleComputerControlCommand is the Raft 1.0.16 child callback: the
@@ -101,13 +89,35 @@ func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonH
 	}
 }
 
+func (d *Daemon) setComputerUpgradeEmit(emit func(string, any) error) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.computerUpgradeEmit = emit
+	d.mu.Unlock()
+}
+
+func (d *Daemon) emitComputerUpgrade(eventType string, payload any) error {
+	if d == nil {
+		return errors.New("DaemonCore is unavailable")
+	}
+	d.mu.Lock()
+	emit := d.computerUpgradeEmit
+	d.mu.Unlock()
+	if emit == nil {
+		return errors.New("Binding socket is not connected")
+	}
+	return emit(eventType, payload)
+}
+
 func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string, command protocol.ComputerUpgradePayload) error {
 	if d == nil {
 		return errors.New("DaemonCore is unavailable")
 	}
 	switch action {
 	case protocol.EventComputerUpgrade:
-		if d.bindingMachineUpgrade == nil {
+		if d.bindingHostControl == nil {
 			// Raft 1.0.16: a DaemonCore not constructed by Computer
 			// ignores computer:upgrade instead of inventing a Host path.
 			if d.logger != nil {
@@ -115,9 +125,19 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 			}
 			return nil
 		}
-		return d.bindingMachineUpgrade(ctx, command)
+		// Drain is runner-owned and may wait for active provider work; do not
+		// hold the service IPC request open while the service claims the
+		// machine-wide operation.
+		go func() { _ = d.beginBindingDrain(ctx) }()
+		forwardCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := d.bindingHostControl.client.RequestComputerUpgrade(forwardCtx, command); err != nil {
+			d.releaseClaimBarrier()
+			return err
+		}
+		return nil
 	case protocol.EventComputerRestart:
-		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: command.Operation()}}
+		ack := HeartbeatResponse{Status: "ok", PendingRestart: &PendingRestart{ID: strings.TrimSpace(command.RequestID)}}
 		if d.bindingHostControl == nil {
 			return errors.New("Computer Host callback is unavailable")
 		}
@@ -129,6 +149,26 @@ func (d *Daemon) handleComputerControlCommand(ctx context.Context, action string
 	}
 }
 
+func (d *Daemon) handleComputerWorkDigestCommand(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+	if d == nil {
+		return protocol.WorkDigest{}, errors.New("DaemonCore is unavailable")
+	}
+	if d.bindingHostControl == nil {
+		return protocol.WorkDigest{}, errors.New("Computer Host callback is unavailable")
+	}
+	return d.bindingHostControl.client.HarvestWorkDigest(ctx, command)
+}
+
+func (d *Daemon) handleComputerWorkJournalCommand(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
+	if d == nil {
+		return false, errors.New("DaemonCore is unavailable")
+	}
+	if d.bindingHostControl == nil {
+		return false, errors.New("Computer Host callback is unavailable")
+	}
+	return d.bindingHostControl.client.SetWorkJournalEnabled(ctx, command)
+}
+
 func (client *bindingHostControlClient) reportRuntimeSet(ctx context.Context, runtimes []Runtime, daemonToken, expiresAt string) error {
 	return client.client.ReportRuntimeSet(ctx, runtimes, daemonToken, expiresAt)
 }
@@ -136,7 +176,6 @@ func (client *bindingHostControlClient) reportRuntimeSet(ctx context.Context, ru
 type bindingChildDiagnosticEnvelope struct {
 	workspaceID string
 	event       *diagnosticlog.Event
-	transition  *agentLifecycleTransition
 }
 
 type bindingChildDiagnosticForwarder struct {
@@ -173,21 +212,6 @@ func (forwarder *bindingChildDiagnosticForwarder) record(workspaceID string, eve
 	}
 }
 
-func (forwarder *bindingChildDiagnosticForwarder) recordLifecycle(transition agentLifecycleTransition) error {
-	if forwarder == nil || forwarder.client == nil {
-		return errors.New("Binding Host lifecycle diagnostic aggregation is unavailable")
-	}
-	envelope := bindingChildDiagnosticEnvelope{transition: &transition}
-	select {
-	case <-forwarder.ctx.Done():
-		return errors.New("Binding Host lifecycle diagnostic aggregation is closed")
-	case forwarder.queue <- envelope:
-		return nil
-	default:
-		return errors.New("Binding Host diagnostic aggregation queue is full")
-	}
-}
-
 func (forwarder *bindingChildDiagnosticForwarder) run() {
 	defer close(forwarder.done)
 	for {
@@ -197,9 +221,6 @@ func (forwarder *bindingChildDiagnosticForwarder) run() {
 		case envelope := <-forwarder.queue:
 			if envelope.event != nil {
 				_ = forwarder.client.recordDiagnostic(forwarder.ctx, envelope.workspaceID, *envelope.event)
-			}
-			if envelope.transition != nil {
-				_ = forwarder.client.recordLifecycleDiagnostic(forwarder.ctx, *envelope.transition)
 			}
 		}
 	}

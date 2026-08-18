@@ -163,8 +163,9 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 // seam: creating the backend is not residency; EnsureResidentProcess is.
 type residentProcessStartProbe struct {
 	canonicalRuntimeTestBackend
-	starts int
-	err    error
+	starts            int
+	err               error
+	providerSessionID string
 }
 
 func (p *residentProcessStartProbe) EnsureResidentProcess(context.Context) error {
@@ -174,6 +175,10 @@ func (p *residentProcessStartProbe) EnsureResidentProcess(context.Context) error
 
 func (p *residentProcessStartProbe) RuntimeAlive() (bool, bool) {
 	return p.err == nil && p.starts > 0, true
+}
+
+func (p *residentProcessStartProbe) ProviderSessionID() string {
+	return p.providerSessionID
 }
 
 type busyResidentProcessStartProbe struct {
@@ -197,7 +202,7 @@ func TestEnsureResidentMessageRuntimeSpawnFailureRetiresBusyBackend(t *testing.T
 	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: backend}
 	d := &Daemon{canonicalRuntimes: pool}
 
-	if err := pool.handoffIdleMessages(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
+	if err := pool.deliverIdleMessages(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:one", Seq: 1, Content: "hello",
 	}}, nil, nil, nil, nil); err != nil {
 		t.Fatalf("start resident turn: %v", err)
@@ -514,7 +519,7 @@ func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
 			var captured agent.Config
 			d := newResidentStartTestDaemon(t, workspaceID, runtimeID, agentID, func(config agent.Config) (agent.Backend, func(), error) {
 				captured = config
-				return &residentProcessStartProbe{}, func() {}, nil
+				return &residentProcessStartProbe{providerSessionID: "provider-session-after-start"}, func() {}, nil
 			})
 			sessions := newAgentRuntimeSessionStore(d.cfg.WorkspacesRoot)
 			if err := sessions.Put(agentID, runtimeID, "stale-provider-session"); err != nil {
@@ -523,7 +528,7 @@ func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
 			d.agentRuntimeSessions = sessions
 			runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
 
-			_, status, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
+			_, status, session, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{
 				AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1",
 				Config: protocol.WorkspaceRunnerAgentStartConfig{SessionID: test.sessionID},
 			})
@@ -535,6 +540,12 @@ func TestWorkspaceRunnerStartUsesExplicitProviderSession(t *testing.T) {
 			}
 			if captured.ResidentOptions.ResumeSessionID != test.sessionID {
 				t.Fatalf("provider ResumeSessionID = %q, want %q", captured.ResidentOptions.ResumeSessionID, test.sessionID)
+			}
+			if session.ProviderSessionID != "provider-session-after-start" {
+				t.Fatalf("published provider session = %q (live=%q), want provider-session-after-start", session.ProviderSessionID, d.canonicalRuntimes.residentProviderSession(agentID, runtimeID))
+			}
+			if stored, err := d.agentRuntimeSessions.Get(agentID, runtimeID); err != nil || stored != session.ProviderSessionID {
+				t.Fatalf("stored provider session = %q, %v; want %q", stored, err, session.ProviderSessionID)
 			}
 		})
 	}
@@ -697,7 +708,7 @@ func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *tes
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello",
 		RunID: "run-1", RunAgentID: "run-agent-1", DeliveryID: "delivery-1",
 	}}
-	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, messages); err != nil {
+	if err := d.deliverIdleMessageBatch(context.Background(), agentID, runtimeID, messages); err != nil {
 		t.Fatalf("handoff mixed-run message: %v", err)
 	}
 	backend.messages <- agent.Message{Type: agent.MessageToolUse, Tool: "bash", CallID: "call-1"}

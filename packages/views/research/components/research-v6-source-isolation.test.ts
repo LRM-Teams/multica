@@ -11,12 +11,12 @@ const source = readFileSync(
 describe("Research D5 canonical projection source isolation", () => {
   it("scopes V5 query state and pagination to an active V5 gateway", () => {
     expect(source).toContain(
-      'const canvasUsesV5 = projectionGateway.status === "v5"',
+      'const canvasUsesV5 = !directorV6Enabled && projectionGateway.status === "v5"',
     );
     expect(source).toContain("canvasUsesV5 && typedGraphLoading");
     expect(source).toContain("canvasUsesV5 && typedGraphError");
     expect(source).toContain(
-      "typedGraphHasNextPage={canvasUsesV5 && typedGraphHasNextPage === true}",
+      ": canvasUsesV5 && typedGraphHasNextPage === true",
     );
     expect(source).toContain("canvasUsesV5 && typedGraphHasNextPage");
   });
@@ -28,6 +28,15 @@ describe("Research D5 canonical projection source isolation", () => {
     );
     expect(source).toContain(
       "enrichResearchNodeForDetail(base, displayTypedGraph)",
+    );
+  });
+
+  it("does not derive legacy stage presentation for Director runs", () => {
+    expect(source).toMatch(
+      /const startedStages = directorV6Enabled\s*\? \[\]\s*:\s*RESEARCH_STAGE_ORDER\.filter/,
+    );
+    expect(source).toMatch(
+      /fallbackName=\{[\s\S]*directorV6Enabled[\s\S]*assignedDirectorAgent/,
     );
   });
 });

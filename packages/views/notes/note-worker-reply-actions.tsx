@@ -4,6 +4,7 @@ import { useState } from "react";
 import { FilePlus, FilePlus2, ListPlus, Loader2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import { noteKeys } from "@multica/core/notes/queries";
+import { createTopLevelNoteFromChatText } from "./create-note-from-chat";
 import {
   appendWorkerReplyBelowNote,
   deriveNoteWorkerReplyTitle,
@@ -48,12 +49,12 @@ export function NoteWorkerReplyActions({
         t(($) => $.message.note_worker_reply_title_fallback),
       );
       if (mode === "create") {
-        const created = await api.createNotePage({ title });
-        const updated = await api.updateNotePage(created.id, { content: replyText });
-        if (wsId) {
-          queryClient.setQueryData(noteKeys.detail(wsId, updated.id), updated);
-          void queryClient.invalidateQueries({ queryKey: noteKeys.list(wsId) });
-        }
+        const updated = await createTopLevelNoteFromChatText({
+          title,
+          content: replyText,
+          wsId,
+          queryClient,
+        });
         toast.success(t(($) => $.message.note_worker_create_note_success), {
           action: {
             label: t(($) => $.message.note_worker_open_note),

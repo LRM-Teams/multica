@@ -19,6 +19,7 @@ import (
 // details enter only through the child process launcher and control callbacks.
 type HostConfig struct {
 	Spawn             BindingChildSpawner
+	ResidentRoot      string
 	Now               func() time.Time
 	ReadyTimeout      time.Duration
 	ReconcileInterval time.Duration
@@ -37,13 +38,23 @@ type Host struct {
 	reconcileInterval time.Duration
 	logger            *slog.Logger
 
-	runtimeMu         sync.RWMutex
-	runtimeSets       map[string]hostBindingRuntimeSet
-	upgrade           *hostMachineUpgrade
-	diagnosticStore   *diagnosticlog.Store
-	diagnosticMu      sync.Mutex
-	diagnosticLoggers map[string]*diagnosticlog.Logger
-	processIdentity   HostProcessIdentity
+	runtimeMu          sync.RWMutex
+	runtimeSets        map[string]hostBindingRuntimeSet
+	upgrade            *hostMachineUpgrade
+	diagnosticStore    *diagnosticlog.Store
+	diagnosticMu       sync.Mutex
+	diagnosticLoggers  map[string]*diagnosticlog.Logger
+	processIdentity    HostProcessIdentity
+	workJournalMu      sync.Mutex
+	workJournalEnabled bool
+	workJournalHome    string
+	workJournalRoot    string
+}
+
+func (host *Host) RegisterControlRPCHandlers(registry *LocalControlRegistry) {
+	if host != nil && host.control != nil {
+		host.control.RegisterRPCHandlers(registry)
+	}
 }
 
 type hostBindingRuntime struct {
@@ -73,7 +84,7 @@ func NewHost(config HostConfig) (*Host, error) {
 		diagnosticLoggers: make(map[string]*diagnosticlog.Logger),
 	}
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		Spawn: config.Spawn, Now: config.Now, ReadyTimeout: config.ReadyTimeout, Logger: config.Logger,
+		Spawn: config.Spawn, StateRoot: config.ResidentRoot, Now: config.Now, ReadyTimeout: config.ReadyTimeout, Logger: config.Logger,
 		Released: func(identity BindingChildIdentity) {
 			if host.control != nil {
 				host.control.Release(identity)
@@ -120,12 +131,6 @@ func NewHost(config HostConfig) (*Host, error) {
 		}
 		return nil
 	}
-	callbacks.LifecycleDiagnostic = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
-		if external.LifecycleDiagnostic != nil {
-			return external.LifecycleDiagnostic(ctx, identity, raw)
-		}
-		return nil
-	}
 	callbacks.MachineActions = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
 		if host.upgrade != nil {
 			if err := host.upgrade.handleChildAction(ctx, identity, raw); err != nil {
@@ -145,6 +150,28 @@ func NewHost(config HostConfig) (*Host, error) {
 			return external.PrepareUpgrade(ctx, identity, raw)
 		}
 		return nil, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
+	callbacks.WorkDigest = func(ctx context.Context, identity BindingChildIdentity, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+		if external.WorkDigest != nil {
+			return external.WorkDigest(ctx, identity, command)
+		}
+		return host.HarvestWorkDigest(ctx, command)
+	}
+	callbacks.WorkJournal = func(ctx context.Context, identity BindingChildIdentity, command protocol.ComputerWorkJournalPayload) (bool, error) {
+		if external.WorkJournal != nil {
+			return external.WorkJournal(ctx, identity, command)
+		}
+		if err := host.SetWorkJournalEnabled(command.Enabled); err != nil {
+			return false, err
+		}
+		return host.WorkJournalEnabled(), nil
+	}
+	callbacks.ComputerUpgrade = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
+		var command protocol.ComputerUpgradePayload
+		if err := json.Unmarshal(raw, &command); err != nil {
+			return err
+		}
+		return host.upgrade.startServiceUpgrade(identity, command)
 	}
 	callbacks.Released = func(identity BindingChildIdentity) {
 		host.runtimeMu.Lock()

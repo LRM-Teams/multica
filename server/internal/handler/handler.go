@@ -66,10 +66,18 @@ type Config struct {
 	// invitation only. The public /api/config endpoint mirrors this flag so
 	// the UI can hide every "Create workspace" affordance — see #3433.
 	DisableWorkspaceCreation bool
+	// ResearchV6BootstrapEnabled exposes the explicit V6 creation path only in
+	// fixture/acceptance environments. It does not change supported/default versions.
+	ResearchV6BootstrapEnabled bool
 	// PublicURL is the absolute base URL the API is reachable at from the
 	// public internet, with no trailing slash (e.g. "https://app.multica.ai").
 	// Empty when unset. Not used for auth or workspace resolution.
-	PublicURL string
+	PublicURL                      string
+	ResearchReportOrigin           string
+	ResearchReportCapabilitySecret string
+	ResearchReportFrameAncestors   []string
+	ResearchReportRendererURL      string
+	ResearchReportRendererToken    string
 	// TrustedProxies are CIDRs whose source IP we trust to set
 	// X-Forwarded-For / X-Real-IP. Empty means "trust nothing": the rate
 	// limiter uses r.RemoteAddr exclusively. Populated via the
@@ -112,13 +120,22 @@ type cloudRuntimeProxy interface {
 }
 
 type Handler struct {
-	Queries                    *db.Queries
-	DB                         dbExecutor
-	TxStarter                  txStarter
-	Hub                        *realtime.Hub
-	DaemonHub                  *daemonws.Hub
-	RunnerPresenceSource       RunnerPresenceSource
-	RunnerPresenceMu           *sync.Mutex
+	Queries              *db.Queries
+	DB                   dbExecutor
+	TxStarter            txStarter
+	Hub                  *realtime.Hub
+	DaemonHub            *daemonws.Hub
+	RunnerPresenceSource RunnerPresenceSource
+	RunnerPresenceMu     *sync.Mutex
+	// runnerActivityCursor is the in-process sticky note for this connect:
+	// how far this Computer instance has already reported Activity. It is
+	// not durable residency and dies with the process or a new instance.
+	runnerActivityCursor *runnerActivityCursorStore
+	// runnerObservations is the live Computer process: status, launch, and
+	// session for the current socket. It is not durable.
+	runnerObservations *runnerObservationStore
+	// agentRestarts is one in-flight Agent Restart on this process.
+	agentRestarts              *agentRestartStore
 	ReminderNotifier           daemonws.ReminderNotifier
 	ReminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier
 	AgentDeliveryNotifier      daemonws.AgentDeliveryNotifier
@@ -145,7 +162,6 @@ type Handler struct {
 	EnvCheckpointService  EnvCheckpointServiceAPI
 	UpdateStore           UpdateStore
 	UpdateIntentStore     UpdateIntentStore
-	MachineUpgradeStore   MachineUpgradeStore
 	RestartStore          RestartStore
 	RuntimeReleaseSource  RuntimeReleaseSource
 	ModelListStore        ModelListStore
@@ -154,14 +170,15 @@ type Handler struct {
 	LivenessStore         LivenessStore
 	// MemberPresenceStore tracks human online/offline from realtime WS
 	// sessions (LRM-462). Distinct from LivenessStore (daemon heartbeats).
-	MemberPresenceStore MemberPresenceStore
-	HeartbeatScheduler  HeartbeatScheduler
-	Storage             storage.Storage
-	CFSigner            *auth.CloudFrontSigner
-	Analytics           analytics.Client
-	WendyComposer       WendyComposer
-	WorkGraph           *workgraph.Store
-	ResearchRun         researchrun.ResearchRun
+	MemberPresenceStore    MemberPresenceStore
+	HeartbeatScheduler     HeartbeatScheduler
+	Storage                storage.Storage
+	CFSigner               *auth.CloudFrontSigner
+	Analytics              analytics.Client
+	WendyComposer          WendyComposer
+	WorkGraph              *workgraph.Store
+	ResearchRun            researchrun.ResearchRun
+	ResearchReportRenderer researchrun.ReportRenderAdapter
 	// Metrics is the shared business-metrics collector built by main.go.
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
@@ -295,38 +312,41 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	taskSvc.Analytics = analyticsClient
 	agentFleetRankService := service.NewAgentFleetRankService(queries)
 	h := &Handler{
-		Queries:               queries,
-		DB:                    executor,
-		TxStarter:             txStarter,
-		Hub:                   hub,
-		DaemonHub:             daemonHub,
-		RunnerPresenceSource:  daemonHub,
-		RunnerPresenceMu:      &sync.Mutex{},
-		Bus:                   bus,
-		TaskService:           taskSvc,
-		AgentFleetRankService: agentFleetRankService,
-		GraphMemoryStatus:     service.NewGraphMemoryStatusService(queries, ""),
-		GraphMemoryAudit:      service.NewGraphMemoryAuditService(""),
-		AgentHonorService:     service.NewAgentHonorService(queries, agentFleetRankService),
-		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
-		HonorService:          service.NewHonorService(queries),
-		EmailService:          emailService,
-		UpdateStore:           NewPostgresUpdateStore(updateDB),
-		UpdateIntentStore:     NewPostgresUpdateIntentStore(updateDB),
-		MachineUpgradeStore:   NewPostgresMachineUpgradeStore(updateDB),
-		RestartStore:          NewInMemoryRestartStore(),
-		RuntimeReleaseSource:  NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
-		ModelListStore:        NewInMemoryModelListStore(),
-		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),
-		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),
-		LivenessStore:         NewNoopLivenessStore(),
-		MemberPresenceStore:   NewMemoryMemberPresenceStore(),
-		HeartbeatScheduler:    NewPassthroughHeartbeatScheduler(queries),
-		Storage:               store,
-		CFSigner:              cfSigner,
-		Analytics:             analyticsClient,
-		WebhookRateLimiter:    NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
-		WebhookIPRateLimiter:  NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
+		Queries:                queries,
+		DB:                     executor,
+		TxStarter:              txStarter,
+		Hub:                    hub,
+		DaemonHub:              daemonHub,
+		RunnerPresenceSource:   daemonHub,
+		RunnerPresenceMu:       &sync.Mutex{},
+		runnerActivityCursor:   newRunnerActivityCursorStore(),
+		runnerObservations:     newRunnerObservationStore(),
+		agentRestarts:          newAgentRestartStore(),
+		Bus:                    bus,
+		TaskService:            taskSvc,
+		AgentFleetRankService:  agentFleetRankService,
+		GraphMemoryStatus:      service.NewGraphMemoryStatusService(queries, ""),
+		GraphMemoryAudit:       service.NewGraphMemoryAuditService(""),
+		AgentHonorService:      service.NewAgentHonorService(queries, agentFleetRankService),
+		IssueService:           service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
+		HonorService:           service.NewHonorService(queries),
+		EmailService:           emailService,
+		UpdateStore:            NewPostgresUpdateStore(updateDB),
+		UpdateIntentStore:      NewPostgresUpdateIntentStore(updateDB),
+		RestartStore:           NewInMemoryRestartStore(),
+		RuntimeReleaseSource:   NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
+		ModelListStore:         NewInMemoryModelListStore(),
+		LocalSkillListStore:    NewInMemoryLocalSkillListStore(),
+		LocalSkillImportStore:  NewInMemoryLocalSkillImportStore(),
+		LivenessStore:          NewNoopLivenessStore(),
+		MemberPresenceStore:    NewMemoryMemberPresenceStore(),
+		HeartbeatScheduler:     NewPassthroughHeartbeatScheduler(queries),
+		Storage:                store,
+		CFSigner:               cfSigner,
+		Analytics:              analyticsClient,
+		WebhookRateLimiter:     NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
+		WebhookIPRateLimiter:   NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
+		ResearchReportRenderer: newResearchReportRenderer(cfg),
 		CloudRuntime: cloudruntime.NewClient(cloudruntime.Config{
 			BaseURL: cfg.CloudRuntimeFleetURL,
 			Timeout: cfg.CloudRuntimeFleetTimeout,
@@ -366,7 +386,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		}
 		h.WorkGraph.OnGraphDelta = h.wakeGoalCoordinatorForGraphDelta
 		researchStore := researchrun.NewPostgresStore(pool)
-		h.ResearchRun = researchrun.NewEngine(researchStore, &researchRunDispatcher{handler: h}, &researchRunProjector{handler: h})
+		dispatcher := &researchRunDispatcher{handler: h}
+		h.ResearchRun = researchrun.NewEngineWithRuntimeAdapters(researchStore, dispatcher, &researchRunProjector{handler: h}, researchReportStorageAdapter{store: h.Storage}, h.ResearchReportRenderer, cfg.ResearchReportFrameAncestors, &researchV6AgentLifecycleAdapter{handler: h}, &researchV6InboxDispatchAdapter{dispatcher: dispatcher})
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit

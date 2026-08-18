@@ -5,8 +5,12 @@
 
 import { useMemo, useState } from "react";
 import { CalendarDays, Loader2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
+import { useAuthStore } from "@multica/core/auth";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { computerListOptions, localMachineWorkUncollected } from "@multica/core/runtimes";
 import type {
   CreateNoteRetrospectiveResponse,
   NoteRetrospectiveSource,
@@ -41,6 +45,14 @@ export function NoteRetrospectiveDialog({
 }) {
   const { t } = useT("layout");
   const timezone = useViewingTimezone();
+  const wsId = useWorkspaceId();
+  const userId = useAuthStore((s) => s.user?.id);
+  const { data: computers, isSuccess: computersLoaded } = useQuery({
+    ...computerListOptions(wsId),
+    enabled: Boolean(wsId),
+  });
+  const machineWorkUncollected =
+    computersLoaded && localMachineWorkUncollected(computers, userId);
   const today = useMemo(() => {
     try {
       return new Intl.DateTimeFormat("en-CA", {
@@ -180,6 +192,11 @@ export function NoteRetrospectiveDialog({
               })}
             </div>
           </div>
+          {machineWorkUncollected ? (
+            <p className="text-xs text-muted-foreground" data-testid="local-machine-work-uncollected">
+              {t(($) => $.notes_page.retrospective_local_work_uncollected)}
+            </p>
+          ) : null}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>

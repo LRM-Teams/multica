@@ -14,21 +14,24 @@ import (
 )
 
 type registerArtifactPassportInput struct {
-	WorkspaceID            string
-	SessionID              string
-	EntityID               string
-	Kind                   ArtifactEntityKind
-	SourceCreatedAt        *time.Time
-	ProvenanceCompleteness ArtifactProvenanceCompleteness
-	GoalVersion            *int32
-	PlanVersion            *int32
-	SchemaName             string
-	SchemaVersion          string
-	AccessLevel            ArtifactAccessLevel
-	HashOrigin             ArtifactHashOrigin
-	ContentHash            string
-	ProducedByTaskID       string
-	ProducedByAttemptID    string
+	WorkspaceID             string
+	SessionID               string
+	EntityID                string
+	Kind                    ArtifactEntityKind
+	SourceCreatedAt         *time.Time
+	ProvenanceCompleteness  ArtifactProvenanceCompleteness
+	GoalVersion             *int32
+	PlanVersion             *int32
+	SchemaName              string
+	SchemaVersion           string
+	AccessLevel             ArtifactAccessLevel
+	HashOrigin              ArtifactHashOrigin
+	ContentHash             string
+	ProducedByTaskID        string
+	ProducedByAttemptID     string
+	ProducedByWorkItemID    string
+	ProducedByWorkAttemptID string
+	ProducedByAgentID       string
 }
 
 type mutableArtifactVersion struct {
@@ -285,14 +288,17 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 			INSERT INTO research_artifact_version (
 				workspace_id, session_id, artifact_id, version, schema_name, schema_version,
 				canonicalization_version, content_hash, access_level, goal_version, plan_version,
-				hash_origin, produced_by_task_id, produced_by_attempt_id
+				hash_origin, produced_by_task_id, produced_by_attempt_id,
+				produced_by_work_item_id, produced_by_work_item_attempt_id, produced_by_agent_id
 			) VALUES (
 				$1::uuid, $2::uuid, $3::uuid, 1, $4, $5,
-				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, NULLIF($13, '')::uuid
+				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid, NULLIF($13, '')::uuid,
+				NULLIF($14, '')::uuid, NULLIF($15, '')::uuid, NULLIF($16, '')::uuid
 			)
 		`, in.WorkspaceID, in.SessionID, in.EntityID, in.SchemaName, in.SchemaVersion,
 			ArtifactCanonicalizationVersion, contentHash, string(in.AccessLevel),
-			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByTaskID, in.ProducedByAttemptID); err != nil {
+			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByTaskID, in.ProducedByAttemptID,
+			in.ProducedByWorkItemID, in.ProducedByWorkAttemptID, in.ProducedByAgentID); err != nil {
 			return err
 		}
 	}
@@ -856,38 +862,7 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 		ContentHash: directorHash, SchemaName: string(ArtifactKindResearchDirectorIdentity), SchemaVersion: OrchestratorVersionV6}); err != nil {
 		return err
 	}
-	var contractID string
-	var contractCreatedAt time.Time
-	var contractGoalVersion int
-	var goal, audience, freshness, language, authoredBy, reason string
-	var scope, sourcePolicy, runLimits []byte
-	err = tx.QueryRow(ctx, `
-		SELECT id::text, goal_version, goal, scope, audience, freshness, language,
-		       source_policy, run_limits, authored_by::text, reason, created_at
-		FROM research_contract_revision
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND goal_version = 1
-	`, workspaceID, sessionID).Scan(
-		&contractID, &contractGoalVersion, &goal, &scope, &audience, &freshness, &language,
-		&sourcePolicy, &runLimits, &authoredBy, &reason, &contractCreatedAt,
-	)
-	if err != nil {
-		return err
-	}
-	contractHash, err := ArtifactContentHash(ArtifactKindContractRevision, contractRevisionArtifactContent(
-		contractGoalVersion, goal, scope, audience, freshness, language, sourcePolicy, runLimits, authoredBy, reason,
-	))
-	if err != nil {
-		return err
-	}
-	goalVersion := int32(1)
-	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
-		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: contractID,
-		Kind: ArtifactKindContractRevision, SourceCreatedAt: &contractCreatedAt,
-		GoalVersion:            &goalVersion,
-		ProvenanceCompleteness: ArtifactProvenanceComplete,
-		AccessLevel:            ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
-		ContentHash: contractHash,
-	}); err != nil {
+	if err = registerInitialContractRevisionArtifactTx(ctx, tx, workspaceID, sessionID); err != nil {
 		return err
 	}
 
@@ -916,6 +891,68 @@ func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspace
 		return err
 	}
 	return registerProductionTaskPassportTx(ctx, tx, workspaceID, sessionID, taskID, "", ArtifactAccessRaw)
+}
+
+func registerInitialContractRevisionArtifactTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {
+	var contractID string
+	var contractCreatedAt time.Time
+	var contractGoalVersion int
+	var goal, audience, freshness, language, authoredBy, reason string
+	var scope, sourcePolicy, runLimits []byte
+	err := tx.QueryRow(ctx, `
+		SELECT id::text, goal_version, goal, scope, audience, freshness, language,
+		       source_policy, run_limits, authored_by::text, reason, created_at
+		FROM research_contract_revision
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND goal_version = 1
+	`, workspaceID, sessionID).Scan(
+		&contractID, &contractGoalVersion, &goal, &scope, &audience, &freshness, &language,
+		&sourcePolicy, &runLimits, &authoredBy, &reason, &contractCreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	contractHash, err := ArtifactContentHash(ArtifactKindContractRevision, contractRevisionArtifactContent(
+		contractGoalVersion, goal, scope, audience, freshness, language, sourcePolicy, runLimits, authoredBy, reason,
+	))
+	if err != nil {
+		return err
+	}
+	goalVersion := int32(1)
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: contractID,
+		Kind: ArtifactKindContractRevision, SourceCreatedAt: &contractCreatedAt,
+		GoalVersion:            &goalVersion,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw, HashOrigin: ArtifactHashOriginProduction,
+		ContentHash: contractHash,
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func registerV6BranchArtifactTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, branchID string,
+	createdAt time.Time,
+	goalVersion int32,
+	content map[string]any,
+) error {
+	contentHash, err := ArtifactContentHash(ArtifactKindBranch, content)
+	if err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: branchID,
+		Kind: ArtifactKindBranch, SourceCreatedAt: &createdAt, GoalVersion: &goalVersion,
+		ProvenanceCompleteness: ArtifactProvenanceComplete,
+		AccessLevel:            ArtifactAccessRaw,
+		HashOrigin:             ArtifactHashOriginProduction,
+		ContentHash:            contentHash,
+		SchemaName:             string(ArtifactKindBranch),
+		SchemaVersion:          OrchestratorVersionV6,
+	})
 }
 
 func contractRevisionArtifactContent(

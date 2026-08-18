@@ -3,10 +3,8 @@ package execenv
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -106,7 +104,9 @@ type SkillFileContextForEnv struct {
 type Environment struct {
 	// AgentRoot is both the durable workspace and the subprocess cwd.
 	AgentRoot string
-	// CodexHome is the provider-private CODEX_HOME below AgentRoot.
+	// CodexHome is retained for environment compatibility. Raft resolves
+	// Codex home from the runtime's CODEX_HOME or its global default, so the
+	// daemon does not populate this field for ordinary agent workspaces.
 	CodexHome string
 
 	logger *slog.Logger // for cleanup logging
@@ -151,7 +151,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// via the prior manifest first and let the
 	// refresh below re-create each skill at its natural slug. This also brings
 	// the standard providers in line with the Codex path, where
-	// hydrateCodexSkills already wipes its skills dir before re-hydrating.
+	// provider skill directories are reconciled below.
 	//
 	// Two steps, in order:
 	//   1. removeReusedManagedSkillDirs reclaims the platform's own skill
@@ -186,64 +186,9 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		logger.Warn("execenv: refresh bound-skill mirror failed (non-fatal)", "error", err)
 	}
 
-	// Refresh the provider-private Codex home below AgentRoot to ensure
-	// config (especially sandbox/network access) is up to date.
-	if params.Provider == "codex" {
-		codexHome := filepath.Join(agentRoot, "codex-home")
-		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion, WritableRoots: codexWritableRoots(params.Task)}, logger); err != nil {
-			logger.Warn("execenv: refresh codex-home failed", "error", err)
-		} else {
-			env.CodexHome = codexHome
-			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, logger); err != nil {
-				logger.Warn("execenv: refresh codex skills failed", "error", err)
-			}
-		}
-	}
-
+	// Raft leaves Codex home and global skill resolution to CODEX_HOME (or
+	// Codex's defaults, including ~/.codex and ~/.agents). Assigned skills are
+	// written to AgentRoot/.agents/skills above instead.
 	logger.Info("execenv: reusing agent workspace", "agent_root", agentRoot)
 	return env
-}
-
-// hydrateCodexSkills populates the Agent-scoped CODEX_HOME/skills directory with
-// both user-installed skills (from the shared ~/.codex/skills/) and
-// workspace-assigned skills. Workspace skills win on name conflict — they are
-// written last and seedUserCodexSkills already pre-filters their names.
-//
-// The skills directory is wiped first so two stale-state classes that the
-// Reuse path would otherwise leak are gone:
-//
-//   - A name now claimed by a workspace skill that previously held only a
-//     user-seeded copy — support files from the user version would otherwise
-//     linger under the workspace skill's directory.
-//   - A user skill removed from the shared ~/.codex/skills/ since the last
-//     run — its old contents would otherwise remain visible to the codex
-//     CLI.
-//
-// Codex is the only runtime that needs this two-stage hydration because the
-// daemon sets CODEX_HOME below AgentRoot, isolating the CLI from the
-// user's real ~/.codex/. Other runtimes leave HOME untouched and discover
-// user-level skills natively (see context.go for the workdir-local paths
-// they use for workspace skills).
-func codexWritableRoots(task TaskContextForEnv) []string {
-	root := strings.TrimSpace(task.AgentRoot)
-	if root == "" {
-		return nil
-	}
-	return []string{root}
-}
-
-func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, logger *slog.Logger) error {
-	skillsDir := filepath.Join(codexHome, "skills")
-	if err := os.RemoveAll(skillsDir); err != nil {
-		return fmt.Errorf("clear codex skills dir: %w", err)
-	}
-	if err := seedUserCodexSkills(codexHome, workspaceSkills, logger); err != nil {
-		logger.Warn("execenv: seed user codex skills failed", "error", err)
-	}
-	if len(workspaceSkills) == 0 {
-		return nil
-	}
-	// Codex skills live under AgentRoot/codex-home and do not need sidecar
-	// manifest tracking because this directory is fully daemon-managed.
-	return writeSkillFiles(skillsDir, workspaceSkills, nil)
 }

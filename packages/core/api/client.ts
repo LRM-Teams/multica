@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type {
   ChannelMemberRole,
   Issue,
@@ -23,6 +24,8 @@ import type {
   CreateAgentDraftRequest,
   AgentCreationDraft,
   EnsureWindyResponse,
+  EnsurePeriodBriefAgentResponse,
+  EnsurePeriodBriefCollectorsResponse,
   AgentTemplate,
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
@@ -121,7 +124,6 @@ import type {
   DashboardUsageByAgent,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
-  MachineUpgrade,
   RuntimeRestart,
   AgentRestartMode,
   AgentRestartPreflight,
@@ -257,6 +259,8 @@ import type {
   CreateNoteWritebackRequest,
   CreateNoteRetrospectiveRequest,
   CreateNoteRetrospectiveResponse,
+  CreateNotePeriodBriefRequest,
+  CreateNotePeriodBriefResponse,
   IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
@@ -305,6 +309,8 @@ import {
   CloudRuntimeNodeSchema,
   CreateAgentFromTemplateResponseSchema,
   EnsureWindyResponseSchema,
+  EnsurePeriodBriefAgentResponseSchema,
+  EnsurePeriodBriefCollectorsResponseSchema,
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
@@ -317,6 +323,7 @@ import {
   EMPTY_AGENT_RESTART_PREFLIGHT,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
+  EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -346,6 +353,7 @@ import {
   EMPTY_AGENT_PRESENCE_RESPONSE,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
+  ComputerWorkJournalSettingSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelGoalEnvelopeSchema,
@@ -474,8 +482,6 @@ import {
   DeleteComputerResponseSchema,
   EMPTY_DELETE_COMPUTER_RESPONSE,
   type DeleteComputerResponse,
-  MachineUpgradeSchema,
-  EMPTY_MACHINE_UPGRADE,
   NotePageSchema,
   NotePageListResponseSchema,
   EMPTY_NOTE_PAGE,
@@ -495,6 +501,8 @@ import {
   EMPTY_NOTE_WRITEBACK_LIST,
   CreateNoteRetrospectiveResponseSchema,
   EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE,
+  CreateNotePeriodBriefResponseSchema,
+  EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1301,6 +1309,19 @@ export class ApiClient {
     });
   }
 
+  async createNotePeriodBrief(data: CreateNotePeriodBriefRequest): Promise<CreateNotePeriodBriefResponse> {
+    // Collectors finish in the background; this call only dispatches and
+    // returns quickly. Keep a modest timeout for proxy/network stalls.
+    const raw = await this.fetch<unknown>("/api/notes/period-briefs", {
+      method: "POST",
+      body: JSON.stringify(data),
+      signal: AbortSignal.timeout(60_000),
+    });
+    return parseWithFallback(raw, CreateNotePeriodBriefResponseSchema, EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE, {
+      endpoint: "POST /api/notes/period-briefs",
+    });
+  }
+
   async listNotePageWritebacks(pageId: string, status?: string): Promise<NoteWritebackListResponse> {
     const query = status ? `?status=${encodeURIComponent(status)}` : "";
     const raw = await this.fetch<unknown>(
@@ -1628,6 +1649,33 @@ export class ApiClient {
     return EnsureWindyResponseSchema.parse(raw);
   }
 
+  async ensurePeriodBriefAgent(
+    runtimeId: string,
+    model: string,
+  ): Promise<EnsurePeriodBriefAgentResponse> {
+    const raw = await this.fetch<unknown>("/api/members/agents/period-brief", {
+      method: "POST",
+      body: JSON.stringify({
+        runtime_id: runtimeId,
+        model,
+      }),
+    });
+    return EnsurePeriodBriefAgentResponseSchema.parse(raw);
+  }
+
+  async ensurePeriodBriefCollectors(model: string): Promise<EnsurePeriodBriefCollectorsResponse> {
+    const raw = await this.fetch<unknown>("/api/members/agents/period-brief-collectors", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    });
+    return parseWithFallback(
+      raw,
+      EnsurePeriodBriefCollectorsResponseSchema,
+      { agents: [], created: [] },
+      { endpoint: "POST /api/members/agents/period-brief-collectors" },
+    );
+  }
+
   async createAgentDraft(data: CreateAgentDraftRequest): Promise<AgentCreationDraft> {
     return this.fetch("/api/members/agents/drafts", {
       method: "POST",
@@ -1827,16 +1875,13 @@ export class ApiClient {
     );
   }
 
-  // Client sends only Raft's `mode` (never a path/force/runtime_id). The UUID
-  // Idempotency-Key makes a resend return the same operation.
+  // Client sends only Raft's `mode` (never a path/force/runtime_id).
   async resetAgent(
     id: string,
     mode: AgentRestartMode,
-    idempotencyKey: string,
   ): Promise<AgentRestartOperation> {
     const raw = await this.fetch<unknown>(`/api/members/agents/${id}/reset`, {
       method: "POST",
-      headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ mode }),
     });
     return parseWithFallback(
@@ -1844,21 +1889,6 @@ export class ApiClient {
       AgentRestartOperationSchema,
       EMPTY_AGENT_RESTART_OPERATION,
       { endpoint: "POST /api/members/agents/{id}/reset" },
-    );
-  }
-
-  async getAgentRestartOperation(
-    id: string,
-    operationId: string,
-  ): Promise<AgentRestartOperation> {
-    const raw = await this.fetch<unknown>(
-      `/api/members/agents/${id}/reset/${operationId}`,
-    );
-    return parseWithFallback(
-      raw,
-      AgentRestartOperationSchema,
-      EMPTY_AGENT_RESTART_OPERATION,
-      { endpoint: "GET /api/members/agents/{id}/reset/{operationId}" },
     );
   }
 
@@ -1891,6 +1921,22 @@ export class ApiClient {
       ComputerConnectionListSchema,
       EMPTY_COMPUTER_CONNECTION_LIST,
       { endpoint: "GET /api/computers" },
+    );
+  }
+
+  async patchComputerWorkJournal(
+    daemonId: string,
+    enabled: boolean,
+  ): Promise<{ enabled: boolean }> {
+    const raw = await this.fetch<unknown>(
+      `/api/computers/${encodeURIComponent(daemonId)}/work-journal`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    );
+    return parseWithFallback(
+      raw,
+      ComputerWorkJournalSettingSchema,
+      EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
+      { endpoint: "PATCH /api/computers/:daemonId/work-journal" },
     );
   }
 
@@ -2294,20 +2340,10 @@ export class ApiClient {
     daemonId: string,
     targetVersion: string,
     requestId: string,
-  ): Promise<MachineUpgrade> {
-    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades`, {
+  ): Promise<{ request_id: string }> {
+    return this.fetch<{ request_id: string }>(`/api/daemons/${daemonId}/upgrades`, {
       method: "POST",
       body: JSON.stringify({ target_version: targetVersion, request_id: requestId }),
-    });
-    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
-      endpoint: "POST /api/daemons/:daemonId/upgrades",
-    });
-  }
-
-  async getMachineUpgrade(daemonId: string, upgradeId: string): Promise<MachineUpgrade> {
-    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades/${upgradeId}`);
-    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
-      endpoint: "GET /api/daemons/:daemonId/upgrades/:upgradeId",
     });
   }
 
@@ -3007,6 +3043,10 @@ export class ApiClient {
 
   async listAgentSkills(agentId: string): Promise<SkillSummary[]> {
     return this.fetch(`/api/members/agents/${agentId}/skills`);
+  }
+
+  async listAgentProfileSkills(agentId: string): Promise<{ agentId: string; requestId?: string; global: SkillSummary[]; workspace: SkillSummary[] }> {
+    return this.fetch(`/api/agents/${agentId}/skills/profile`);
   }
 
   async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
@@ -4073,7 +4113,7 @@ export class ApiClient {
     } catch {
       raw = undefined;
     }
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<{ text: string }>(
       raw,
       VoiceTranscriptResponseSchema,
       EMPTY_VOICE_TRANSCRIPT_RESPONSE,
@@ -4117,7 +4157,7 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(input),
     });
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<CreateVoiceCallResponse>(
       raw,
       CreateVoiceCallResponseSchema,
       EMPTY_CREATE_VOICE_CALL_RESPONSE,
@@ -4939,10 +4979,11 @@ export class ApiClient {
       !sessionId ||
       !workspaceId ||
       (expectedWorkspaceId != null && workspaceId !== expectedWorkspaceId) ||
-      !response.fleet.id ||
-      response.fleet.workspace_id !== workspaceId ||
-      (response.session.fleet_id !== "" &&
-        response.session.fleet_id !== response.fleet.id) ||
+      (response.fleet != null &&
+        (!response.fleet.id ||
+          response.fleet.workspace_id !== workspaceId ||
+          (response.session.fleet_id !== "" &&
+            response.session.fleet_id !== response.fleet.id))) ||
       scopedEntities.some((entity) => entity.session_id !== sessionId) ||
       (response.run?.run.session_id != null &&
         response.run.run.session_id !== sessionId) ||
@@ -5068,7 +5109,7 @@ export class ApiClient {
 
   async postResearchMessage(
     id: string,
-    data: { body: string; target_agent_id?: string },
+    data: import("../types/research").PostResearchMessageRequest,
   ): Promise<import("../types/research").ResearchMessage> {
     const { ResearchMessageSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/messages`, {
@@ -5275,23 +5316,237 @@ export class ApiClient {
     runId: string,
     fromSequenceExclusive: number,
   ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6DeltaStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6Delta } = await import("../research-v6/schemas");
     const raw = await this.fetch(
       `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
     );
     if (raw == null) return null;
-    return parseResearchV6DeltaStrict(raw);
+    return parseResearchV6Delta(raw);
   }
 
   async resumeResearchV6Projection(
     runId: string,
     lastConfirmedSequence: number,
   ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdictStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
       method: "POST",
       body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
     });
-    return parseResearchV6ResumeVerdictStrict(raw);
+    return parseResearchV6ResumeVerdict(raw);
+  }
+
+  // ---- Ronaldo / Director V6 Projection (authoritative unreleased contract) ----
+
+  async getResearchV6DirectorProjectionSnapshot(
+    workspaceId: string,
+    runId: string,
+    options?: { cursor?: string; signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionSnapshot> {
+    const { parseResearchV6DirectorProjectionSnapshot } = await import(
+      "../research-v6/director-schemas"
+    );
+    const params = new URLSearchParams();
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/snapshot${query ? `?${query}` : ""}`,
+      { signal: options?.signal },
+    );
+    const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
+    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+      throw new Error("Director V6 projection snapshot identity mismatch");
+    }
+    return snapshot;
+  }
+
+  async replaceResearchV6Director(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorAssignmentRequest,
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorAssignment | null> {
+    const { ResearchV6DirectorAssignmentSchema } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(`/api/research/sessions/${encodeURIComponent(runId)}/director`, {
+      method: "PUT",
+      body: JSON.stringify({
+        director_agent_id: request.directorAgentId,
+        expected_state_version: request.expectedStateVersion,
+        reason: request.reason,
+        client_request_id: request.clientRequestId,
+      }),
+    });
+    const parsed = parseWithFallback<z.output<typeof ResearchV6DirectorAssignmentSchema> | null>(
+      raw,
+      ResearchV6DirectorAssignmentSchema,
+      null,
+      { endpoint: "PUT Director V6 assignment" },
+    );
+    if (parsed === null) return null;
+    if (parsed.workspace_id !== workspaceId || parsed.run_id !== runId) {
+      throw new Error("Director V6 assignment identity mismatch");
+    }
+    return {
+      id: parsed.id,
+      workspaceId: parsed.workspace_id,
+      runId: parsed.run_id,
+      directorAgentId: parsed.director_agent_id,
+      status: parsed.status,
+      reason: parsed.reason,
+      generation: parsed.generation,
+      stateVersion: parsed.state_version,
+    };
+  }
+
+  async getResearchV6DirectorProjectionSlice(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorProjectionSliceRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionSnapshot> {
+    const {
+      parseResearchV6DirectorProjectionSliceRequest,
+      parseResearchV6DirectorProjectionSnapshot,
+    } = await import("../research-v6/director-schemas");
+    const validated = parseResearchV6DirectorProjectionSliceRequest(request);
+    const params = new URLSearchParams({
+      root: validated.root,
+      depth: String(validated.depth),
+      snapshot_id: validated.snapshot_id,
+    });
+    if (validated.cursor) params.set("cursor", validated.cursor);
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/slice?${params.toString()}`,
+      { signal: options?.signal },
+    );
+    const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
+    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+      throw new Error("Director V6 projection slice identity mismatch");
+    }
+    if (snapshot.snapshot_id !== validated.snapshot_id) {
+      throw new Error("Director V6 projection slice snapshot mismatch");
+    }
+    return snapshot;
+  }
+
+  async getResearchV6DirectorProjectionDeltaPage(
+    workspaceId: string,
+    runId: string,
+    after: number,
+    options?: { cursor?: string; signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionDeltaPage> {
+    if (!Number.isSafeInteger(after) || after < 0) {
+      throw new Error("Director V6 projection delta 'after' must be a non-negative integer");
+    }
+    const { parseResearchV6DirectorProjectionDeltaPage } = await import(
+      "../research-v6/director-schemas"
+    );
+    const params = new URLSearchParams({ after: String(after) });
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/deltas?${params.toString()}`,
+      { signal: options?.signal },
+    );
+    const page = parseResearchV6DirectorProjectionDeltaPage(raw);
+    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+      return {
+        run_id: runId,
+        deltas: [],
+        next_cursor: null,
+        resync_required: true,
+      };
+    }
+    return page;
+  }
+
+  async resumeResearchV6DirectorProjection(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorProjectionResumeRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionDeltaPage> {
+    const {
+      parseResearchV6DirectorProjectionDeltaPage,
+      parseResearchV6DirectorProjectionResumeRequest,
+    } = await import("../research-v6/director-schemas");
+    const body = parseResearchV6DirectorProjectionResumeRequest(request);
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/resume`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      },
+    );
+    const page = parseResearchV6DirectorProjectionDeltaPage(raw);
+    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+      return {
+        run_id: runId,
+        deltas: [],
+        next_cursor: null,
+        resync_required: true,
+      };
+    }
+    return page;
+  }
+
+  async getResearchV6DirectorProjectionNodeDetail(
+    workspaceId: string,
+    runId: string,
+    nodeId: string,
+    view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorNodeDetail> {
+    const { parseResearchV6DirectorNodeDetail } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?view=${encodeURIComponent(view)}`,
+      { signal: options?.signal },
+    );
+    const detail = parseResearchV6DirectorNodeDetail(raw);
+    if (detail.node.id !== nodeId) {
+      throw new Error("Director V6 node detail identity mismatch");
+    }
+    void workspaceId;
+    return detail;
+  }
+
+  async getResearchV6DirectorReports(
+    workspaceId: string,
+    runId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportMetadata[]> {
+    const { parseResearchV6DirectorReportList } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/reports`,
+      { signal: options?.signal },
+    );
+    void workspaceId;
+    return parseResearchV6DirectorReportList(raw);
+  }
+
+  async getResearchV6DirectorReport(
+    workspaceId: string,
+    runId: string,
+    reportId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportDetail> {
+    const { parseResearchV6DirectorReportDetail } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(reportId)}`,
+      { signal: options?.signal },
+    );
+    const report = parseResearchV6DirectorReportDetail(raw);
+    if (report.id !== reportId) {
+      throw new Error("Director V6 report detail identity mismatch");
+    }
+    void workspaceId;
+    return report;
   }
 }

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -64,48 +63,6 @@ func canonicalDeliveryMessageID(deliveryID, agentID string) (string, bool) {
 		return "", false
 	}
 	return messageID, true
-}
-
-func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.AgentMessageHandoffPayload) error {
-	if strings.TrimSpace(payload.AgentID) == "" || strings.TrimSpace(payload.RuntimeID) == "" || strings.TrimSpace(payload.HandoffID) == "" || payload.Count <= 0 {
-		return errors.New("invalid agent Message handoff")
-	}
-	if err := h.requireAgentMessageDaemonScope(ctx, identity, payload.AgentID); err != nil {
-		return err
-	}
-	var boundRuntimeID pgtype.UUID
-	if err := h.DB.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1 AND workspace_id = $2`, parseUUID(payload.AgentID), parseUUID(identity.WorkspaceID)).Scan(&boundRuntimeID); err != nil {
-		return err
-	}
-	if uuidToString(boundRuntimeID) != payload.RuntimeID {
-		return errors.New("agent Message handoff runtime mismatch")
-	}
-	if h.TxStarter == nil {
-		return errors.New("agent Message handoff transaction unavailable")
-	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('agent_message_handoff'), hashtext($1))`, payload.HandoffID); err != nil {
-		return err
-	}
-	targets, err := json.Marshal(payload.Targets)
-	if err != nil {
-		return fmt.Errorf("encode Message handoff targets: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO agent_message_handoff_receipt (workspace_id, agent_id, handoff_id, message_count, targets)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (workspace_id, agent_id, handoff_id) DO NOTHING`,
-		parseUUID(identity.WorkspaceID), parseUUID(payload.AgentID), payload.HandoffID, payload.Count, targets); err != nil {
-		return fmt.Errorf("persist Message handoff receipt: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (h *Handler) requireAgentMessageDaemonScope(ctx context.Context, identity daemonws.ClientIdentity, agentID string) error {

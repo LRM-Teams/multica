@@ -149,8 +149,6 @@ export interface RuntimeDevice {
   update_state: RuntimeUpdateState;
   runtime_health: RuntimeHealthState;
   update_error?: string | null;
-  /** Canonical machine lifecycle; siblings with one daemon share this value. */
-  machine_upgrade?: MachineUpgrade | null;
   /** Daemon-resolved update truth. Null/absent means an older daemon. */
   auto_update?: DaemonUpdateStatus | null;
   owner_id: string | null;
@@ -191,6 +189,8 @@ export interface ComputerConnection {
   owner_id: string;
   connected: boolean;
   last_seen_at: string | null;
+  /** Owner-projected Machine Work Journal switch; missing on older servers. */
+  work_journal_enabled?: boolean | null;
 }
 
 /** One durable on-disk Agent workspace at `~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. */
@@ -630,6 +630,18 @@ export interface EnsureWindyResponse {
   dm_id?: string;
 }
 
+/** Idempotent Period Brief Agent (「周报」) ensure. */
+export interface EnsurePeriodBriefAgentResponse {
+  agent: Agent;
+  created: boolean;
+}
+
+/** Idempotent per-Computer Period Work collectors ensure. */
+export interface EnsurePeriodBriefCollectorsResponse {
+  agents: Agent[];
+  created: string[];
+}
+
 /** Verified avatar write intent. The server derives and persists the URL and
  * source; clients never submit a raw agent avatar URL. */
 export type AgentAvatarSelection =
@@ -1029,7 +1041,6 @@ export interface ProviderCapabilities {
 
 export interface AgentRestartPreflight {
   actions: Record<AgentRestartMode, AgentRestartModeState>;
-  active_operation?: AgentRestartOperation | null;
   /**
    * Provider capability set for this agent's runtime. Gate the profile restart
    * button on `provider_capabilities.force_restart` — do not hardcode a
@@ -1164,10 +1175,7 @@ export interface DashboardRunTimeDaily {
 }
 
 export type RuntimeUpdateStatus =
-  // Update requested but not yet delivered — the server is durably holding
-  // the request until the runtime's next heartbeat proves it reachable
-  // (2026-08-02: replaces the old one-shot 120s delivery window that a
-  // sleeping laptop could simply miss). Not terminal, not yet "running".
+  // leftover UI label for an old queued row. Create no longer parks upgrades.
   | "queued"
   | "pending"
   | "running"
@@ -1175,43 +1183,6 @@ export type RuntimeUpdateStatus =
   | "ready_to_apply"
   | "failed"
   | "timeout";
-
-export type MachineUpgradePhase =
-  | "queued"
-  | "starting"
-  | "staging"
-  | "verifying"
-  | "handoff"
-  | "converging"
-  | "rollback_pending"
-  | "completed"
-  | "failed"
-  | "rolled_back"
-  | "timeout"
-  | "cancelled";
-
-/** The daemon-scoped source of truth projected by every sibling runtime. */
-export interface MachineUpgrade {
-  id: string;
-  daemon_id: string;
-  request_id: string;
-  requested_target: string;
-  resolved_target?: string | null;
-  phase: MachineUpgradePhase;
-  result?: "completed" | "failed" | "rolled_back" | "timeout" | "cancelled" | null;
-  error_code?: string | null;
-  error_message?: string | null;
-  accepted_at?: string | null;
-  accepted_generation?: string | null;
-  accepted_runtime_ids?: string[];
-  attested_runtime_ids?: string[];
-  source_version?: string | null;
-  rollback_generation?: string | null;
-  rollback_runtime_ids?: string[];
-  completed_at?: string | null;
-  created_at: string;
-  updated_at: string;
-}
 
 export interface RuntimeUpdate {
   id: string;
@@ -1250,9 +1221,9 @@ export interface RuntimeModel {
   default?: boolean;
   /**
    * Per-model reasoning/effort catalog discovered by the daemon. Currently
-   * populated for claude, codex, opencode, and pi runtimes; omitted (or undefined)
-   * for every other provider, which the UI treats as "no thinking-level
-   * picker for this model". See MUL-2339.
+   * populated for claude, codex, grok, opencode, and pi runtimes; omitted (or
+   * undefined) for every other provider, which the UI treats as "no
+   * thinking-level picker for this model". See MUL-2339.
    */
   thinking?: RuntimeModelThinking;
 }

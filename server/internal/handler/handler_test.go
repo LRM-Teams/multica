@@ -522,6 +522,28 @@ func createHandlerTestAgentOnRuntimeWithMcpConfig(t *testing.T, displayName, run
 	return agentID
 }
 
+// createPeriodBriefCollectorTestAgent inserts an Agent whose permanent name uses
+// the Period Work collector prefix (required by CreateNotePeriodBrief).
+func createPeriodBriefCollectorTestAgent(t *testing.T, label string) string {
+	t.Helper()
+	slug := strings.ToLower(strings.ReplaceAll(uuid.NewString()[:8], "-", "a"))
+	name := periodBriefCollectorNamePrefix + slug
+	display := periodBriefCollectorDisplayLead + label
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config, model
+		) VALUES ($1, $2, $3, '', 'local', '{}'::jsonb, $4, 1, $5, '', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, 'composer-1.5')
+		RETURNING id
+	`, testWorkspaceID, name, display, handlerTestRuntimeID(t), testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("failed to create period brief collector: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+	return agentID
+}
+
 // seedMachineLockedRuntime creates a `local` runtime with the given daemon_id,
 // allowing tests to model same- and cross-computer runtime moves.
 // visibility 'public' so any workspace member can bind an agent to it.

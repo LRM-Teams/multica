@@ -10,35 +10,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (runner *WorkspaceRunner) startManagedAgent(ctx context.Context, payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, protocol.AgentStatusPayload, protocol.AgentSessionPayload, error) {
-	ack, err := runner.registerManagedAgentStart(payload)
-	if err != nil {
-		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
-	}
-	callback := agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}
-	failed := false
-	defer func() {
-		if failed {
-			runner.processes.completeFailedManagedStart(callback)
-		} else {
-			runner.processes.completeManagedStart(callback)
-		}
-	}()
-	outcome, err := runner.completeManagedAgentStart(ctx, payload, ack)
-	if err != nil {
-		failed = true
-		runner.publishManagedAgentStartFailure(payload, outcome)
-		return ack, outcome.status, outcome.session, err
-	}
-	if err := runner.establishManagedAgentStart(payload, outcome); err != nil {
-		return ack, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
-	}
-	runner.publishManagedAgentStartActivity(payload.AgentID, payload.RuntimeID)
-	runner.flushManagedAgentStartMessages(ctx, payload, ack)
-	return ack, outcome.status, outcome.session, nil
-}
-
-func (runner *WorkspaceRunner) acceptManagedAgentStart(workspaceID string, start protocol.WorkspaceRunnerAgentStartPayload, failConnection func(error)) (protocol.AgentStartAckPayload, bool, func(), <-chan struct{}, <-chan bool, error) {
+func (runner *WorkspaceRunner) acceptManagedAgentStart(start protocol.WorkspaceRunnerAgentStartPayload, failConnection func(error)) (protocol.AgentStartAckPayload, bool, func(), <-chan struct{}, <-chan bool, error) {
 	ack, replayed, err := runner.registerManagedAgentStartOnce(start)
 	if err != nil {
 		return ack, false, nil, nil, nil, err
@@ -62,16 +34,16 @@ func (runner *WorkspaceRunner) acceptManagedAgentStart(workspaceID string, start
 	publicationReady := make(chan struct{})
 	startupSettled := make(chan struct{})
 	publicationSettled := make(chan bool, 1)
-	go runner.completeAcceptedManagedAgentStart(workspaceID, start, ack, publicationReady, startupSettled, publicationSettled, failConnection)
+	go runner.startAgentNow(runner.life, start, ack, publicationReady, startupSettled, publicationSettled, failConnection)
 	var once sync.Once
 	return ack, false, func() { once.Do(func() { close(publicationReady) }) }, startupSettled, publicationSettled, nil
 }
 
-// completeAcceptedManagedAgentStart is created as soon as APM accepts a new
-// dispatch, before its wire acknowledgement is attempted. That matches Raft's
-// startPromise ownership: a broken socket may lose the ACK, but it cannot leave
-// a launch with no goroutine capable of settling startupDone.
-func (runner *WorkspaceRunner) completeAcceptedManagedAgentStart(workspaceID string, start protocol.WorkspaceRunnerAgentStartPayload, ack protocol.AgentStartAckPayload, publicationReady <-chan struct{}, startupSettled chan<- struct{}, publicationSettled chan<- bool, failConnection func(error)) {
+// startAgentNow is created as soon as APM accepts a new dispatch, before its
+// wire acknowledgement is attempted. This is Raft 1.0.16's startAgentNow
+// boundary: a broken socket may lose the ACK, but it cannot leave a launch with
+// no goroutine capable of settling startupDone.
+func (runner *WorkspaceRunner) startAgentNow(startCtx context.Context, start protocol.WorkspaceRunnerAgentStartPayload, ack protocol.AgentStartAckPayload, publicationReady <-chan struct{}, startupSettled chan<- struct{}, publicationSettled chan<- bool, failConnection func(error)) {
 	callback := agentProcessCallback{AgentID: start.AgentID, LaunchID: start.LaunchID}
 	failed := false
 	published := false
@@ -86,9 +58,11 @@ func (runner *WorkspaceRunner) completeAcceptedManagedAgentStart(workspaceID str
 			close(publicationSettled)
 		}
 	}()
-	startCtx := runner.life
 	if startCtx == nil {
-		startCtx = context.Background()
+		startCtx = runner.life
+		if startCtx == nil {
+			startCtx = context.Background()
+		}
 	}
 	outcome, err := runner.completeManagedAgentStart(startCtx, start, ack)
 	if startupSettled != nil {
@@ -118,13 +92,19 @@ func (runner *WorkspaceRunner) completeAcceptedManagedAgentStart(workspaceID str
 		return
 	}
 	if outcome.session.ProviderSessionID != "" {
-		if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, outcome.session); err != nil && failConnection != nil {
-			failConnection(err)
+		if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, outcome.session); err != nil {
+			if failConnection != nil {
+				failConnection(err)
+			}
 			return
 		}
 	}
-	runner.publishManagedAgentStartActivity(start.AgentID, start.RuntimeID)
+	runner.broadcastActivity(start.AgentID, start.RuntimeID, "starting")
 	runner.flushManagedAgentStartMessages(startCtx, start, ack)
+	// A resident provider has no initial turn to produce an idle event. Mark
+	// it ready only after buffered input has crossed the runtime boundary so
+	// synthetic Online cannot overwrite the first real Message activity.
+	runner.observeResidentRuntimeReady(start.AgentID, start.RuntimeID)
 	published = true
 }
 
@@ -151,7 +131,9 @@ func (runner *WorkspaceRunner) replayManagedAgentStartPublication(start protocol
 			}
 		}
 	}
-	runner.publishManagedAgentStartActivity(start.AgentID, start.RuntimeID)
+	// Raft 1.0.16 reconnects replay status/session/current Snapshot only.
+	// Starting… is a spawn fact; repeating it on socket replay paints a
+	// new timeline pair after every Binding child reconnect.
 	return true
 }
 
@@ -272,7 +254,7 @@ func (runner *WorkspaceRunner) flushManagedAgentStartMessages(ctx context.Contex
 func (runner *WorkspaceRunner) prepareManagedAgentStartFailure(payload protocol.WorkspaceRunnerAgentStartPayload, stage managedRuntimeFailureStage, reason string) managedAgentStartOutcome {
 	at := runner.activity.now().UTC()
 	if runner.residency != nil {
-		runner.residency.rememberFailure(payload.AgentID, payload.RuntimeID, payload.LaunchID, stage, reason)
+		runner.residency.rememberFailure(payload.AgentID, payload.RuntimeID, payload.LaunchID, stage, reason, "")
 	}
 	return managedAgentStartOutcome{
 		status:       protocol.AgentStatusPayload{AgentID: payload.AgentID, LaunchID: payload.LaunchID, Status: protocol.AgentStatusInactive},
@@ -284,7 +266,7 @@ func (runner *WorkspaceRunner) publishManagedAgentStartFailure(payload protocol.
 	if outcome.status.AgentID == "" || !runner.processes.ownsManagedProcess(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}) {
 		return
 	}
-	runner.publishManagedRuntimeFailure(outcome.status, payload.RuntimeID, outcome.failureStage, outcome.failureReason, outcome.failureAt)
+	runner.publishManagedRuntimeFailure(outcome.status, payload.RuntimeID, outcome.failureStage, outcome.failureReason, "", outcome.failureAt)
 }
 
 func (runner *WorkspaceRunner) managedStartLogAttrs(payload protocol.WorkspaceRunnerAgentStartPayload, queueState, reason, outcome string, err error) []any {

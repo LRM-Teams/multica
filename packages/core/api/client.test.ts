@@ -170,6 +170,39 @@ describe("ApiClient", () => {
     );
   });
 
+  it("patches Computer Work Journal enablement and fails closed on drift", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: "yes" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.patchComputerWorkJournal("computer-1", true)).resolves.toEqual({
+      enabled: true,
+    });
+    await expect(client.patchComputerWorkJournal("computer-1", false)).resolves.toEqual({
+      enabled: false,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.example.test/api/computers/computer-1/work-journal",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ enabled: true }),
+      }),
+    );
+  });
+
   it("transcribes PCM through the authenticated voice endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ text: " 你好 " }), {
@@ -1511,7 +1544,7 @@ describe("ApiClient", () => {
   });
 
   describe("agent reset", () => {
-    it("starts a Raft reset mode with the Idempotency-Key header", async () => {
+    it("starts a Raft reset mode", async () => {
       const op = {
         id: "op-1",
         agent_id: "a-1",
@@ -1529,11 +1562,7 @@ describe("ApiClient", () => {
       vi.stubGlobal("fetch", fetchMock);
       const client = new ApiClient("https://api.example.test");
 
-      const result = await client.resetAgent(
-        "a-1",
-        "full",
-        "idem-uuid-1",
-      );
+      const result = await client.resetAgent("a-1", "full");
 
       expect(result.id).toBe("op-1");
       expect(fetchMock).toHaveBeenCalledWith(
@@ -1541,7 +1570,6 @@ describe("ApiClient", () => {
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({ mode: "full" }),
-          headers: expect.objectContaining({ "Idempotency-Key": "idem-uuid-1" }),
         }),
       );
     });
@@ -1572,30 +1600,6 @@ describe("ApiClient", () => {
       expect(result.actions.restart.supported).toBe(true);
       expect(result.actions.full.supported).toBe(false);
       expect(result.actions.full.disabled_reason).toBe("agent_active");
-    });
-
-    it("polls a single operation by id", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            id: "op-1",
-            agent_id: "a-1",
-            runtime_id: "rt-1",
-            mode: "restart",
-            status: "succeeded",
-            created_at: "2026-07-24T00:00:00Z",
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-      const client = new ApiClient("https://api.example.test");
-
-      const op = await client.getAgentRestartOperation("a-1", "op-1");
-      expect(op.status).toBe("succeeded");
-      expect(fetchMock.mock.calls[0]?.[0]).toBe(
-        "https://api.example.test/api/members/agents/a-1/reset/op-1",
-      );
     });
 
     it("fails closed when reset preflight is malformed", async () => {
@@ -1631,7 +1635,7 @@ describe("ApiClient", () => {
       );
       const client = new ApiClient("https://api.example.test");
 
-      const result = await client.resetAgent("a-1", "restart", "idem-1");
+      const result = await client.resetAgent("a-1", "restart");
 
       expect(result).toMatchObject({
         id: "",

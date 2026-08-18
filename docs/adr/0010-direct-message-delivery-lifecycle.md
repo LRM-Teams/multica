@@ -38,28 +38,18 @@ a boundary nor produces Activity. Body delivery occurs at runtime startup, a
 successful idle or gated runtime input, explicit `message check` or `message
 read`, or freshness-hold context.
 
-Only target Context Boundaries survive coordinator restart, in:
+Target Context Boundaries live only in daemon process memory, matching Raft's
+`AgentVisibleDeliveryLedger`. Pending Message bodies are never copied into a
+machine-local durable ledger. During one daemon lifetime, the boundary prevents
+an accepted retry from entering the Provider twice. After daemon restart the
+ledger is empty; the Server's durable unacknowledged Delivery state rebuilds it
+through conservative at-least-once replay. A provider session ID may still be
+restored independently so the new provider process can resume its prior
+session.
 
-`~/.multica/workspaces/<workspace_id>/agents/<agent_id>/consumed-seqs.json`
-
-Pending Message bodies are never copied into this file or another local durable
-ledger. On startup the coordinator loads the boundary file and rebuilds Pending
-from service-side canonical Messages. Startup and every machine reconnect run an
-internal recovery sync using the locally persisted target Context Boundary map.
-The service remains stateless with respect to that map: it pages canonical
-Messages newer than each supplied boundary, including visible targets absent
-from the map, and the coordinator merges the results with concurrent live
-Deliveries by `message_id` and target-scoped `seq`. Recovery completes only
-after all advertised pages have been merged. It does not create a public cursor
-or persist `seen_up_to_seq` on the service.
-
-A missing, malformed, or unwritable boundary file is treated conservatively as
-unknown coverage: context may be delivered again, but no Message may be skipped
-because local state claimed coverage it could not prove. Boundary persistence
-happens only after the corresponding body handoff or explicit read succeeds,
-never before it. A post-handoff persistence failure is logged and may cause
-duplicate context after restart; it does not retract or block the successful
-handoff.
+A boundary advances only after the corresponding body delivery or explicit
+read succeeds, never before it. It is not a public cursor and the Server does
+not persist it as `seen_up_to_seq`.
 
 Agent CLI coverage is two-phase. The coordinator prepares an opaque,
 machine-local receipt for the exact `message check`, `message read`, or
@@ -115,7 +105,7 @@ Pending, advance a Context Boundary, or emit `Message received` Activity.
 `Message received` is the user-facing Activity label for a best-effort
 observation, not an internal event-name contract or state transition. Internal
 enums, trace keys, and wire events may keep implementation-appropriate names.
-The UI label appears once per daemon-to-runtime Message body handoff batch: one
+The UI label appears once per daemon-to-runtime Message body delivery batch: one
 for startup context, one for an idle runtime input batch, or one for a gated
 busy flush. It does not appear for a Notice. Runtime tool activity remains a
 separate projection: `message check` shows `Checking messages`, `message read`

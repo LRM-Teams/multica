@@ -20,6 +20,10 @@ import (
 // watching the target runtime (the daemon is offline / not connected over WS).
 var ErrRuntimeOffline = errors.New("runtime offline")
 
+// ErrComputerOffline is returned when no current Binding socket can harvest a
+// Work Digest for that Computer.
+var ErrComputerOffline = errors.New("computer offline")
+
 const (
 	writeWait                  = 10 * time.Second
 	pongWait                   = 60 * time.Second
@@ -111,7 +115,6 @@ type HeartbeatHandler func(ctx context.Context, identity ClientIdentity, payload
 type ReminderSnapshotHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error)
 type ReminderFireAttemptHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error)
 type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentDeliverAckPayload) error
-type AgentMessageHandoffHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentMessageHandoffPayload) error
 
 // WorkspaceRunnerHandler receives only frames from the current ready
 // connection for one daemon and Workspace. It owns no Activity semantics;
@@ -151,7 +154,6 @@ type Hub struct {
 	onReminderFire              ReminderFireAttemptHandler
 	deliveryMu                  sync.RWMutex
 	onAgentDeliveryAck          AgentDeliveryAckHandler
-	onAgentMessageHandoff       AgentMessageHandoffHandler
 	runnerMu                    sync.RWMutex
 	onWorkspaceRunner           WorkspaceRunnerHandler
 	onWorkspaceRunnerDisconnect WorkspaceRunnerDisconnectHandler
@@ -193,15 +195,6 @@ func (h *Hub) SetAgentDeliveryAckHandler(fn AgentDeliveryAckHandler) {
 	}
 	h.deliveryMu.Lock()
 	h.onAgentDeliveryAck = fn
-	h.deliveryMu.Unlock()
-}
-
-func (h *Hub) SetAgentMessageHandoffHandler(fn AgentMessageHandoffHandler) {
-	if h == nil {
-		return
-	}
-	h.deliveryMu.Lock()
-	h.onAgentMessageHandoff = fn
 	h.deliveryMu.Unlock()
 }
 
@@ -251,12 +244,6 @@ func (h *Hub) agentDeliveryAckHandler() AgentDeliveryAckHandler {
 	h.deliveryMu.RLock()
 	defer h.deliveryMu.RUnlock()
 	return h.onAgentDeliveryAck
-}
-
-func (h *Hub) agentMessageHandoffHandler() AgentMessageHandoffHandler {
-	h.deliveryMu.RLock()
-	defer h.deliveryMu.RUnlock()
-	return h.onAgentMessageHandoff
 }
 
 // NotifyAgentDelivery sends one canonical Message delivery to a daemon runtime.
@@ -499,6 +486,18 @@ func (h *Hub) RequestWorkdirFiles(ctx context.Context, req protocol.ListWorkdirF
 	return &resp, nil
 }
 
+func (h *Hub) RequestAgentSkills(ctx context.Context, req protocol.AgentSkillsListPayload) (*protocol.AgentSkillsListResultPayload, error) {
+	raw, err := h.requestDaemon(ctx, req.Runtime, req.RequestID, protocol.EventAgentSkillsList, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp protocol.AgentSkillsListResultPayload
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // RequestReadFile pushes a read-file request to req.RuntimeID's daemon and waits
 // for the correlated response. ErrRuntimeOffline if no daemon is connected.
 func (h *Hub) RequestReadFile(ctx context.Context, req protocol.ReadWorkdirFileRequestPayload) (*protocol.ReadWorkdirFileResponsePayload, error) {
@@ -553,6 +552,83 @@ func (h *Hub) RequestSeedAgentContext(ctx context.Context, req protocol.SeedAgen
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// RequestComputerWorkDigest sends computer:work-digest on one current Binding
+// socket and waits for computer:work-digest:done. The digest is not stored.
+func (h *Hub) RequestComputerWorkDigest(ctx context.Context, daemonID, workspaceID string, req protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+	if err := req.Validate(); err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	raw, err := h.requestWorkspaceRunner(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerWorkDigest, req)
+	if err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	var envelope struct {
+		OK     bool            `json:"ok"`
+		Digest json.RawMessage `json:"digest"`
+		Error  string          `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	if !envelope.OK {
+		if strings.TrimSpace(envelope.Error) == "" {
+			return protocol.WorkDigest{}, errors.New("Computer work digest harvest failed")
+		}
+		return protocol.WorkDigest{}, errors.New(envelope.Error)
+	}
+	return protocol.ParseWorkDigest(envelope.Digest)
+}
+
+// RequestComputerWorkJournal sets the Computer-local Journal switch and waits
+// for confirmation. Local state stays authoritative.
+func (h *Hub) RequestComputerWorkJournal(ctx context.Context, daemonID, workspaceID string, req protocol.ComputerWorkJournalPayload) (bool, error) {
+	if err := req.Validate(); err != nil {
+		return false, err
+	}
+	raw, err := h.requestWorkspaceRunner(ctx, daemonID, workspaceID, req.RequestID, protocol.EventComputerWorkJournal, req)
+	if err != nil {
+		return false, err
+	}
+	var done protocol.ComputerWorkJournalDonePayload
+	if err := json.Unmarshal(raw, &done); err != nil {
+		return false, err
+	}
+	if !done.OK {
+		if strings.TrimSpace(done.Error) == "" {
+			return false, errors.New("Computer work journal update failed")
+		}
+		return false, errors.New(done.Error)
+	}
+	return done.Enabled, nil
+}
+
+func (h *Hub) requestWorkspaceRunner(ctx context.Context, daemonID, workspaceID, requestID, msgType string, payload any) (json.RawMessage, error) {
+	if h == nil {
+		return nil, ErrComputerOffline
+	}
+	if requestID == "" || daemonID == "" || workspaceID == "" {
+		return nil, errors.New("request_id, computer_id, and workspace_id required")
+	}
+	ch := make(chan json.RawMessage, 1)
+	h.pendMu.Lock()
+	h.pending[requestID] = ch
+	h.pendMu.Unlock()
+	defer func() {
+		h.pendMu.Lock()
+		delete(h.pending, requestID)
+		h.pendMu.Unlock()
+	}()
+	if !h.NotifyWorkspaceRunner(daemonID, workspaceID, msgType, payload) {
+		return nil, ErrComputerOffline
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case raw := <-ch:
+		return raw, nil
+	}
 }
 
 // SetHeartbeatHandler installs the callback used for daemon:heartbeat frames.
@@ -990,6 +1066,22 @@ func (h *Hub) WorkspaceRunnerSupportsCapability(daemonID, workspaceID, capabilit
 	}
 	_, supported := c.runnerCapabilities[capability]
 	return supported
+}
+
+// CurrentWorkspaceRunnerInstance is the live Computer process on this
+// daemon/workspace socket. Observed Agent residency is only meaningful for
+// this instance; a persisted active row from a dead process is not residency.
+func (h *Hub) CurrentWorkspaceRunnerInstance(daemonID, workspaceID string) (string, bool) {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
+		return "", false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
+	if c == nil || c.runnerDaemonInstanceID == "" {
+		return "", false
+	}
+	return c.runnerDaemonInstanceID, true
 }
 
 // WorkspaceRunnerIdentity returns a copy of the current ready connection's
@@ -1459,9 +1551,30 @@ func (c *client) handleFrame(raw []byte) {
 		var idOnly struct {
 			RequestID string `json:"request_id"`
 		}
+		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil {
+			if idOnly.RequestID != "" {
+				c.hub.deliverResponse(idOnly.RequestID, msg.Payload)
+			}
+		}
+	case protocol.EventAgentSkillsListResult:
+		var idOnly struct {
+			RequestID string `json:"requestId"`
+		}
 		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil && idOnly.RequestID != "" {
 			c.hub.deliverResponse(idOnly.RequestID, msg.Payload)
 		}
+	case protocol.EventComputerWorkDigestDone, protocol.EventComputerWorkJournalDone:
+		var done struct {
+			RequestID string `json:"requestId"`
+		}
+		if err := json.Unmarshal(msg.Payload, &done); err != nil || strings.TrimSpace(done.RequestID) == "" {
+			return
+		}
+		if !c.hub.isCurrentWorkspaceRunner(c) {
+			return
+		}
+		c.runnerLastInbound.Store(time.Now().UnixNano())
+		c.hub.deliverResponse(done.RequestID, msg.Payload)
 	case protocol.EventReminderSnapshotRequest:
 		c.handleReminderSnapshotRequest(msg.Payload)
 	case protocol.EventReminderFireAttempt:
@@ -1480,18 +1593,6 @@ func (c *client) handleFrame(raw []byte) {
 			return
 		}
 		c.hub.acknowledgeAgentDelivery(c, payload)
-	case protocol.EventAgentMessageHandoff:
-		handler := c.hub.agentMessageHandoffHandler()
-		if handler == nil {
-			return
-		}
-		var payload protocol.AgentMessageHandoffPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-			return
-		}
-		if err := handler(context.Background(), c.identity, payload); err != nil {
-			slog.Warn("agent Message handoff Activity rejected", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID, "handoff_id", payload.HandoffID)
-		}
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.

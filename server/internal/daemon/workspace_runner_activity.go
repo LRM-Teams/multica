@@ -2,12 +2,8 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -30,19 +26,13 @@ func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentPr
 	return launch, found && (runtimeID == "" || launch.RuntimeID == runtimeID)
 }
 
-func (runner *WorkspaceRunner) observeMessageLifecycle(agentID, runtimeID string) {
-	launch, found := runner.managedLaunch(agentID, runtimeID)
-	if !found || launch.ProcessInstanceID == "" || launch.QueueState == protocol.AgentStartQueueRunning {
-		// Starting is spawn Activity, not a per-handoff label. After the
-		// process is admitted as Running, later Messages must not repaint it.
+// broadcastActivity is Raft 1.0.16's spawn Activity boundary. Starting is
+// broadcast only after the provider process exists and active status has been
+// published; replaying a start never calls this method.
+func (runner *WorkspaceRunner) broadcastActivity(agentID, runtimeID, detailKind string) {
+	if detailKind != "starting" {
 		return
 	}
-	runner.observeRuntimeStarting(agentID, runtimeID, "Message lifecycle")
-}
-
-// observeRuntimeStarting is Raft 1.0.16 spawn Activity: working / starting /
-// "Starting…". The process must already be in APM (this.agents.set).
-func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase string) {
 	launch, found := runner.managedLaunch(agentID, runtimeID)
 	if !found || runner.activity == nil || launch.ProcessInstanceID == "" {
 		return
@@ -50,7 +40,7 @@ func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase 
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting,
 		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
-	}, phase)
+	}, detailKind)
 }
 
 // observeResidentRuntimeReady closes the resident-only gap after provider
@@ -69,13 +59,28 @@ func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID st
 	}, "Resident runtime ready")
 }
 
-// publishManagedAgentStartActivity runs only after the active status has been
-// written on a Workspace Runner connection. The server fences Activity on an
-// active launch, so publishing these snapshots from completeManagedAgentStart
-// would put them on the wire before the status that authorizes them.
-func (runner *WorkspaceRunner) publishManagedAgentStartActivity(agentID, runtimeID string) {
-	runner.observeRuntimeStarting(agentID, runtimeID, "Managed start")
-	runner.observeResidentRuntimeReady(agentID, runtimeID)
+func (d *Daemon) observeResidentRuntimeStalled(agentID, runtimeID string, staleFor time.Duration) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	runtime, ok := d.runtimeIndex[runtimeID]
+	d.mu.Unlock()
+	if !ok {
+		return
+	}
+	runner := d.currentWorkspaceRunner(runtime.WorkspaceID)
+	if runner == nil {
+		return
+	}
+	launch, found := runner.managedLaunch(agentID, runtimeID)
+	if !found || runner.activity == nil {
+		return
+	}
+	runner.observeActivity(AgentObservation{
+		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStalled,
+		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID, StaleFor: staleFor}, At: time.Now().UTC(),
+	}, "Resident runtime stalled")
 }
 
 // stopManagedAgent owns the complete Raft stop transition. The inactive
@@ -203,6 +208,10 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	switch message.Type {
 	case agent.MessageThinking:
 		kind = AgentObservationRuntimeThinking
+	case agent.MessageText:
+		// Raft 1.0.16: runtime text is Working / model_response_started.
+		// Do not parse reply content into the timeline.
+		kind = AgentObservationRuntimeWorking
 	case agent.MessageCompactionStarted:
 		kind = AgentObservationRuntimeCompacting
 	case agent.MessageCompactionFinished:
@@ -217,7 +226,7 @@ func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID 
 	}
 	var data AgentObservationData = stage
 	if kind == AgentObservationError {
-		data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
+		data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed", Message: message.Content}
 	} else if kind == AgentObservationRuntimeTool {
 		data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID, ToolInput: message.Input}
 	}
@@ -246,7 +255,7 @@ func (runner *WorkspaceRunner) observeMessageTurnCompletion(agentID, runtimeID s
 	at := time.Now().UTC()
 	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
 	if turnErr != nil {
-		runner.failManagedRuntime(agentID, runtimeID, launch.LaunchID, managedRuntimeFailureRuntime, "provider_turn_failed", at)
+		runner.failManagedRuntime(agentID, runtimeID, launch.LaunchID, managedRuntimeFailureRuntime, "provider_turn_failed", turnErr.Error(), at)
 		return
 	}
 	_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
@@ -256,27 +265,27 @@ func (runner *WorkspaceRunner) observeMessageTurnCompletion(agentID, runtimeID s
 // failManagedRuntime owns the Raft-style runtime-error transition. Activity
 // projection remains in agentActivityProducer; this method only coordinates
 // the lifecycle facts that must change together.
-func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode string, at time.Time) protocol.AgentStatusPayload {
-	status := runner.prepareManagedRuntimeFailure(agentID, runtimeID, launchID, stage, reasonCode)
+func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) protocol.AgentStatusPayload {
+	status := runner.prepareManagedRuntimeFailure(agentID, runtimeID, launchID, stage, reasonCode, message)
 	if status.AgentID != "" {
-		runner.publishManagedRuntimeFailure(status, runtimeID, stage, reasonCode, at)
+		runner.publishManagedRuntimeFailure(status, runtimeID, stage, reasonCode, message, at)
 	}
 	return status
 }
 
-func (runner *WorkspaceRunner) prepareManagedRuntimeFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode string) protocol.AgentStatusPayload {
+func (runner *WorkspaceRunner) prepareManagedRuntimeFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string) protocol.AgentStatusPayload {
 	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: agentID, LaunchID: launchID}) {
 		// Lifecycle stop already owns this launch. Its quiescence fence is the
 		// only path allowed to publish inactive for the stop launch.
 		return protocol.AgentStatusPayload{}
 	}
 	if runner.residency != nil {
-		runner.residency.rememberFailure(agentID, runtimeID, launchID, stage, reasonCode)
+		runner.residency.rememberFailure(agentID, runtimeID, launchID, stage, reasonCode, message)
 	}
 	return protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive}
 }
 
-func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.AgentStatusPayload, runtimeID string, stage managedRuntimeFailureStage, reasonCode string, at time.Time) {
+func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.AgentStatusPayload, runtimeID string, stage managedRuntimeFailureStage, reasonCode, message string, at time.Time) {
 	runner.activity.InterruptCompactionIfActive(status.AgentID, status.LaunchID)
 	_ = runner.activity.SetManaged(status, protocol.AgentSessionPayload{AgentID: status.AgentID, LaunchID: status.LaunchID})
 	runner.sendAgentFrame(protocol.EventAgentStatus, status)
@@ -286,37 +295,23 @@ func (runner *WorkspaceRunner) publishManagedRuntimeFailure(status protocol.Agen
 	}
 	runner.observeActivity(AgentObservation{
 		AgentID: status.AgentID, LaunchID: status.LaunchID, Kind: kind,
-		Data: AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: reasonCode}, At: at,
+		Data: AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: reasonCode, Message: message}, At: at,
 	}, "Runtime failure")
 }
 
-func (runner *WorkspaceRunner) observeMessageAccepted(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
+// broadcastMessageReceivedActivity matches Raft 1.0.16's single write site:
+// the ordinary Message batch has crossed the provider runtime input boundary.
+// Pending acceptance and content-free Notices do not publish this Activity.
+func (runner *WorkspaceRunner) broadcastMessageReceivedActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
 	if len(messages) == 0 {
 		return
 	}
-	targetSet := make(map[string]struct{})
-	identity := make([]string, 0, len(messages))
-	for _, message := range messages {
-		targetSet[message.Target] = struct{}{}
-		identity = append(identity, message.ID+"\x00"+message.Target+"\x00"+strconv.FormatInt(message.Seq, 10))
-	}
-	sort.Strings(identity)
-	handoffID := hex.EncodeToString(sha256Sum(strings.Join(identity, "\x01")))
-
 	if launch, found := runner.managedLaunch(agentID, runtimeID); found && runner.activity != nil {
 		runner.observeActivity(AgentObservation{
 			AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationMessageBodyAccepted,
-			Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID, HandoffID: handoffID, MessageCount: len(messages)}, At: time.Now().UTC(),
+			Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
 		}, "Message accepted")
 	}
-	targets := make([]string, 0, len(targetSet))
-	for target := range targetSet {
-		targets = append(targets, target)
-	}
-	sort.Strings(targets)
-	runner.sendAgentFrame(protocol.EventAgentMessageHandoff, protocol.AgentMessageHandoffPayload{
-		AgentID: agentID, RuntimeID: runtimeID, HandoffID: handoffID, Count: len(messages), Targets: targets,
-	})
 }
 
 func (runner *WorkspaceRunner) observeMessageSendHold(agentID, target string, newer int64, reason string) {
@@ -360,9 +355,4 @@ func (runner *WorkspaceRunner) observeActivity(observation AgentObservation, pha
 	if err := runner.activity.Observe(observation); err != nil && runner.logger != nil {
 		runner.logger.Debug("Workspace Runner Activity observation deferred", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", observation.AgentID, "phase", phase)
 	}
-}
-
-func sha256Sum(value string) []byte {
-	sum := sha256.Sum256([]byte(value))
-	return sum[:]
 }

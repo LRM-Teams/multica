@@ -126,6 +126,35 @@ describe("buildNoteWriteConfirmationByMessageId", () => {
     });
   });
 
+  it("maps period-brief folder sticky + note_write to existing folder target", () => {
+    const folderId = "folder-work-intro";
+    const messages = [
+      {
+        id: "u1",
+        type: "user",
+        parts: [
+          {
+            type: "note_brief",
+            ref_id: folderId,
+            label: "工作介绍 本周 · 底稿",
+            text: "# draft facts",
+          },
+        ],
+      },
+      {
+        id: "a1",
+        type: "agent",
+        content: "# 工作介绍 本周\n\n## 主线\n\n- ship brief",
+        parts: [{ type: "note_write", ref_id: folderId }],
+      },
+    ] as ChannelMessage[];
+
+    expect(buildNoteWriteConfirmationByMessageId(messages).get("a1")).toEqual({
+      mode: "existing",
+      pageId: folderId,
+    });
+  });
+
   it("reads a note URL from the preceding user message when proposing a write", () => {
     const messages = [
       {

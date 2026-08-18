@@ -2,7 +2,7 @@
 
 > 目标：对齐 Raft 的 **process ownership / fault containment**，但不照搬其业务 cardinality。
 >
-> 结论：Raft 的 isolation key 是 `serverId`；Multica 的对位 isolation key 是 immutable `workspace_id`。Workspace **等同于** Raft Server，不是另一套业务实体。Multica 保留一个完整的 `Computer`，不新增 `computerhost` package。
+> 当前实现修正（2026-08-17）：Multica 只对齐 Raft 的 ownership/reconcile 语义，不再复制 OS-child boundary。生产 Binding execution 与 Host 同进程；本文出现的 `computer __runner` 仅指 executable fallback 或历史设计。
 
 ## Executive summary / 核心结论
 
@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | Machine owner | `raft-computer Service` | `internal/computer.Host` | 一个 machine-wide single writer |
 | Child cardinality | one child per attached Server | one child per Workspace Execution Binding | 对齐 ownership，不伪对齐业务实体 |
-| Child behavior | `DaemonCore + APM + RuntimeSession(s)` | `DaemonCore + Workspace Runner + APM + RuntimeSession(s)` | child 必须承载真实 behavior |
+| Execution behavior | OS child: `DaemonCore + APM + RuntimeSession(s)` | in-process: `DaemonCore + Workspace Runner + APM + RuntimeSession(s)` | 对齐真实 ownership，不复制进程边界 |
 | Generation fence | runner/process tenure semantics | `computer_generation + runner_generation + PID` | 字段名不要求一致，语义必须等价 |
 | Machine Upgrade | Service-owned orchestration | Computer-owned accept/journal/stage/verify/activation/attestation | `daemon` 不得成为第二 owner |
 | Package boundary | Service vs runner execution | `internal/computer` vs `internal/daemon` | CLI only composition/bootstrap |
@@ -28,49 +28,35 @@ flowchart LR
     H --- HP["desired Server set / reconcile + crash budget / IPC restart + upgrade"]
 ```
 
-### Multica aligned shape
+### Multica current shape
 
 ```mermaid
 flowchart LR
-    H["Computer Host / internal/computer.Host"]
-    H --> A["DaemonCore A / Workspace Runner + APM + RuntimeSession(s)"]
-    H --> B["DaemonCore B / same isolated execution owners"]
+    P["Computer process"]
+    P --> H["Host / machine owner"]
+    P --> A["Binding A / Workspace Runner + APM + RuntimeSession(s)"]
+    P --> B["Binding B / same isolated execution owners"]
 
     H --- HP["desired Binding set / generation + PID fence / capacity + upgrade + diagnostics"]
 ```
 
-Raft child 对应 attached Server；Multica child 对应 attached Workspace。二者是同一层：一台 Computer 下每个协作边界一个 DaemonCore。产品名不同，槽位语义相同。
+Raft child 对应 attached Server；Multica in-process execution 对应 attached Workspace。二者 ownership 槽位语义相同，进程隔离不同。
 
-## 2. Shallow child → deep child
-
-### Before / 旧结构
+## 2. Current process model / 当前进程模型
 
 ```text
-Computer / Daemon host process
-├── WorkspaceRunner.Run
-├── AgentProcessManager
-├── Inbox / Activity
-├── provider runtimes
-└── __runner child
-    └── waits for context cancellation
+Computer process
+├── Host / desired Binding reconcile
+├── Binding A execution
+│   ├── Workspace Runner
+│   ├── AgentProcessManager
+│   ├── Inbox / Activity / Reminder
+│   └── RuntimeSession(s) / provider processes
+└── Binding B execution
+    └── same independently cancelable owners
 ```
 
-删除 child 后，大部分 behavior 仍留在 Host 进程；OS-process seam 是 shallow / ceremonial。
-
-### After / 隔离后
-
-```text
-Computer Host
-└── DaemonCore  (computer __runner --workspace-id {workspace-id})
-    ├── Workspace Runner
-    ├── AgentProcessManager
-    ├── Inbox / MessageCoordinator
-    ├── Activity / Attachments / Reminder
-    ├── child-local durable state
-    └── RuntimeSession(s) / provider processes
-```
-
-删除 child 会同时删除完整 Binding behavior；fault containment、code locality 与 OS process boundary 对齐。
+Binding behavior 是完整的，但隔离边界是同进程 execution context，不是 OS process。`computer __runner` 只保留为 executable fallback；不能再用它推导 production orphan-child requirement。
 
 ## 3. Package responsibility / 分包边界
 
@@ -123,14 +109,13 @@ RunBindingChild
 sequenceDiagram
     participant S as Binding Store
     participant H as Computer Host
-    participant C as Binding child
+    participant C as Binding execution
     participant R as Workspace Runner
     participant API as Multica Server
 
     H->>S: derive desired Binding set
-    H->>C: spawn computer __runner with stdin immutable bootstrap
-    C->>H: attest workspace + runner_generation + PID
-    H-->>C: accept only current slot identity
+    H->>H: record workspace + runner_generation + PID
+    H->>C: activate in-process execution with immutable bootstrap
     C->>S: read scoped execution credential
     C->>API: register exact Workspace Runtime set
     C->>R: construct Runner/APM/Inbox/Activity/providers
@@ -141,11 +126,10 @@ sequenceDiagram
 
 Ready 的含义不是“child process 已启动”，而是：
 
-1. exact `(workspace_id, runner_generation, PID)` 已通过 Host fence；
-2. current Binding credential 和 `computer_generation` 有效；
-3. Runtime set 已注册并报告给 Host；
-4. child-local execution owners 已构造；
-5. real Workspace Runner transport 已发出 Ready。
+1. current Binding credential 和 `computer_generation` 有效；
+2. Runtime set 已注册并报告给 Host；
+3. execution-local owners 已构造；
+4. real Workspace Runner transport 已发出 Ready。
 
 ## 5. Message and Activity stay child-local
 
@@ -181,15 +165,15 @@ sequenceDiagram
     H->>B: prepare with generation + PID fence
     B->>B: close claim gate, cancel owned turns, bounded owned-provider termination
     B-->>H: prepared
-    H->>H: persist journal → stage → verify → activate
-    H->>N: spawn exact successor binary
+    C->>C: persist request/version marker → stage → verify → swap PATH
+    C-->>H: exit after activation
+    H->>N: restart PATH Computer
     N->>B: reconstruct desired children and wait real Ready
-    N->>B: request Runtime re-registration
-    N->>API: attest accepted generation + complete Runtime/Workspace set
-    N->>N: clear journal after convergence
+    N->>API: computer:upgrade:done on current Binding socket
+    N->>N: clear marker after frame delivery
 ```
 
-Failure rule：任一 child prepare 失败，Host 必须 release 所有已经 prepared 的 siblings；child 不得自行 swap machine binary。
+Failure rule：任一 child prepare 失败，Host 必须 release 所有已经 prepared 的 siblings。执行升级的 child 在 `internal/computer` executor 内 stage/verify/swap；successor socket 未交付 completion 时保留 marker。这里没有 cloud receipt、generation 或 Runtime/Workspace attest。
 
 ## 6.1 Agent Restart parity / 三种重启模式
 
@@ -209,9 +193,9 @@ flowchart LR
     PROOF --> FRESH2["agent:start\nconfig = {}"]
 ```
 
-Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action_kind`、`execution_mode` 或 scheduling mode。`AgentRestartOperation` 是 durable business record，数据库表已 hard-cut 为 `agent_restart_operation`，不保留旧 lifecycle storage contract。
+Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action_kind`、`execution_mode`、幂等键或 scheduling mode。一场 restart 只活在当前 server 进程内存里，不保留 durable restart ledger。
 
-两项有意 stronger-than-Raft 的 correctness proof：Stop 只接受 exact `launch_id` 的 inactive fact；Full Reset 必须等同 operation 的 terminal reset receipt 才能 start。断线重连重放同一 operation/launch/start-dispatch fence，不生成第二套 restart owner。Agent Restart 不产生专属 toast。
+两项有意 stronger-than-Raft 的 correctness proof：Stop 只接受 exact `launch_id` 的 inactive fact；Full Reset 必须等同 operation 的 terminal reset receipt 才能 start。当前 socket 拥有整场编排；Runner Ready 和 reconcile 都不再重投半截 restart。Agent Restart 不产生专属 toast。
 
 ## 7. Generation model / 两级任期
 
@@ -231,13 +215,13 @@ Multica 没有 product-level `agent:lifecycle` command，也不再暴露 `action
 | Binding A removed | 只 graceful stop child A | desired-vs-actual reconcile |
 | Stale child reports diagnostics or Runtime set | rejected | HostControl current identity |
 | Two children exceed provider process cap | machine-wide admission queues one | Computer `ProcessCapacity` lease |
-| Host process disappears | all child process groups stop | OS supervision / process group |
+| Computer process disappears abruptly | 所有 in-process Binding execution 同时结束 | same-process lifetime |
 | One child cannot drain for upgrade | prepared siblings are released | Computer-owned prepare/release transaction |
 
 ## 9. Architecture findings / 后续优先级
 
 1. **Agent Restart single owner — Implemented**
-   Product operation 只编排 Raft 三个离散 child command；Runner desired/observed reconcile 仅在 persisted `starting` step 重放同一 launch fence，不再存在 composite dispatch、heartbeat queue 或第二套 stop/start owner。
+   Product operation 只编排 Raft 三个离散 child command；当前 Runner socket 走完 stop → start。desired/observed reconcile 跳过仍在 running 的 restart，不再存在 composite dispatch、heartbeat queue、Ready redrive 或第二套 stop/start owner。
 
 2. **Machine lifecycle deep module — Implemented**
    Upgrade/restart phase ordering、durable journal 与 successor attestation 已归 `internal/computer`；CLI 仅保留 process-launch adapter。

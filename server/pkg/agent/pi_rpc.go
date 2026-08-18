@@ -196,7 +196,7 @@ type piRPCBackend struct {
 type piRPCProcess struct {
 	cmd           *exec.Cmd
 	stdin         io.WriteCloser
-	sessionPath   string
+	sessionID     string
 	mcpConfigPath string // temp file from agent.mcp_config; removed on dispose
 
 	writeMu   sync.Mutex
@@ -301,10 +301,7 @@ func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, er
 	if b.process != nil {
 		return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process starts", ErrPiRPCRunIdentityRequiresFreshSession)
 	}
-	sessionPath, err := newPiSessionPath()
-	if err != nil {
-		return PiRunBinding{}, fmt.Errorf("allocate Pi run session: %w", err)
-	}
+	sessionID := newPiSessionID()
 	captureExtPath, captureLogPath, err := newPiCaptureExtension()
 	if err != nil {
 		return PiRunBinding{}, err
@@ -312,10 +309,10 @@ func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, er
 	b.boundarySerial++
 	binding := PiRunBinding{
 		PiRunIdentity:   identity,
-		SessionID:       sessionPath,
-		CaptureBoundary: fmt.Sprintf("%s:%d", sessionPath, b.boundarySerial),
+		SessionID:       sessionID,
+		CaptureBoundary: fmt.Sprintf("%s:%d", sessionID, b.boundarySerial),
 	}
-	b.cfg.ResidentOptions.ResumeSessionID = sessionPath
+	b.cfg.ResidentOptions.ResumeSessionID = sessionID
 	b.runBinding = &binding
 	b.captureExtPath = captureExtPath
 	b.captureLogPath = captureLogPath
@@ -341,13 +338,11 @@ func (b *piRPCBackend) PrepareRun(ctx context.Context, identity PiRunIdentity) (
 			b.removeCaptureArtifactsLocked()
 		}
 		b.mu.Unlock()
-		_ = os.Remove(binding.SessionID)
 		return PiRunBinding{}, fmt.Errorf("prepare Pi run process: %w", err)
 	}
 	alive, known := b.runtimeAlive()
 	if known && !alive {
 		b.Close()
-		_ = os.Remove(binding.SessionID)
 		return PiRunBinding{}, errors.New("prepare Pi run process: native process exited during startup")
 	}
 	return binding, nil
@@ -489,6 +484,7 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 	idleInput.stream = &piRPCTurn{
 		done: idleInput.done,
 		message: func(message Message) {
+			message.SessionID = p.sessionID
 			trySend(idleInput.messages, message)
 		},
 	}
@@ -681,6 +677,15 @@ func (b *piRPCBackend) EnsureResidentProcess(ctx context.Context) error {
 	return err
 }
 
+func (b *piRPCBackend) ProviderSessionID() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.process == nil {
+		return ""
+	}
+	return b.process.sessionID
+}
+
 func (b *piRPCBackend) runtimeAlive() (bool, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -756,7 +761,7 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 			b.maybeCompactAfterTurn(p, opts.Model, msgCh)
 			stats = p.queryRuntimeStats(context.Background(), nil, opts.Model)
 		}
-		return Result{Status: "completed", Output: output.String(), SessionID: p.sessionPath, Usage: usage, RuntimeStats: stats}
+		return Result{Status: "completed", Output: output.String(), SessionID: p.sessionID, Usage: usage, RuntimeStats: stats}
 	case <-ctx.Done():
 		// A cancelled RPC turn has an unknown queue/agent state. Disposing is
 		// safer than sending abort and guessing whether a later event belongs
@@ -794,16 +799,9 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pi executable not found at %q: %w", execName, err)
 	}
-	sessionPath := piRPCSessionPath(opts)
-	if sessionPath == "" {
-		var pathErr error
-		sessionPath, pathErr = newPiSessionPath()
-		if pathErr != nil {
-			return nil, fmt.Errorf("Pi RPC session path: %w", pathErr)
-		}
-	}
-	if err := ensurePiSessionFile(sessionPath); err != nil {
-		return nil, fmt.Errorf("Pi RPC session file: %w", err)
+	sessionID := piRPCSessionID(opts)
+	if sessionID == "" {
+		sessionID = newPiSessionID()
 	}
 	var mcpConfigPath string
 	if hasManagedMcpConfig(opts.McpConfig) {
@@ -814,7 +812,7 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 		mcpConfigPath = path
 		opts.piMcpConfigPath = path
 	}
-	args := buildPiRPCArgs(sessionPath, opts, b.cfg.Logger)
+	args := buildPiRPCArgs(sessionID, opts, b.cfg.Logger)
 	argv0, cmdArgs := choosePiInvocation(execName, lookedUp, args, b.cfg.Logger)
 	cmd := exec.Command(argv0, cmdArgs...)
 	hideAgentWindow(cmd)
@@ -852,7 +850,7 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	p := &piRPCProcess{
 		cmd:           cmd,
 		stdin:         stdin,
-		sessionPath:   sessionPath,
+		sessionID:     sessionID,
 		mcpConfigPath: mcpConfigPath,
 		pending:       make(map[string]chan piRPCResponse),
 	}
@@ -1154,7 +1152,7 @@ func piRPCUsage(messages []json.RawMessage, fallbackModel string) map[string]Tok
 	return usage
 }
 
-func piRPCSessionPath(opts ExecOptions) string { return opts.ResumeSessionID }
+func piRPCSessionID(opts ExecOptions) string { return opts.ResumeSessionID }
 
 func (b *piRPCBackend) dispose(p *piRPCProcess) {
 	b.mu.Lock()
@@ -1202,8 +1200,8 @@ func trySendPiRPCCompletion(ch chan<- piRPCCompletion, completion piRPCCompletio
 	}
 }
 
-func buildPiRPCArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) []string {
-	args := []string{"--mode", "rpc", "--session", sessionPath}
+func buildPiRPCArgs(sessionID string, opts ExecOptions, logger *slog.Logger) []string {
+	args := appendPiSessionArgs([]string{"--mode", "rpc"}, sessionID, opts.Cwd)
 	if opts.Model != "" {
 		provider, model := splitPiModel(opts.Model)
 		if provider != "" {

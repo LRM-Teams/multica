@@ -185,18 +185,14 @@ func TestAgentRestartPreflightProviderCapabilitiesFollowProvider(t *testing.T) {
 // plain restart on a busy agent is immediate/running (idempotent create).
 // All three actions force-immediate when busy — see
 // TestAgentRestartAllActionsForceImmediateWhenBusy.
-func TestAgentRestartCreateIsIdempotentAndForceRestartsBusyAgent(t *testing.T) {
+func TestAgentRestartCreateForceRestartsBusyAgent(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	agentID, runtimeID := createAgentRestartFixture(t, true)
 	insertRunningAgentRestartExecution(t, agentID, runtimeID)
 
-	// #112: full_reset on busy is also immediate (no longer agent_active reject).
-	// Covered in TestAgentRestartAllActionsForceImmediateWhenBusy.
-
-	key := uuid.NewString()
-	first := invokeCreateAgentRestart(t, agentID, key, agentRestartStorageRestart)
+	first := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageRestart)
 	if first.Code != http.StatusAccepted {
 		t.Fatalf("first create status=%d body=%s", first.Code, first.Body.String())
 	}
@@ -207,32 +203,9 @@ func TestAgentRestartCreateIsIdempotentAndForceRestartsBusyAgent(t *testing.T) {
 	if firstOperation.Status != agentRestartRunning || firstOperation.StartedAt == nil {
 		t.Fatalf("restart on busy agent = %+v, want immediate/running (busy must not block plain restart)", firstOperation)
 	}
-
-	replay := invokeCreateAgentRestart(t, agentID, key, agentRestartStorageRestart)
-	if replay.Code != http.StatusAccepted {
-		t.Fatalf("replay status=%d body=%s", replay.Code, replay.Body.String())
-	}
-	var replayOperation AgentRestartOperation
-	if err := json.Unmarshal(replay.Body.Bytes(), &replayOperation); err != nil {
-		t.Fatalf("decode replay operation: %v", err)
-	}
-	if replayOperation.ID != firstOperation.ID {
-		t.Fatalf("replay operation id=%s want=%s", replayOperation.ID, firstOperation.ID)
-	}
-
-	mismatch := invokeCreateAgentRestart(t, agentID, key, agentRestartStorageSession)
-	if mismatch.Code != http.StatusConflict || !containsResponseBody(mismatch, "another operation") {
-		t.Fatalf("mismatch status=%d body=%s", mismatch.Code, mismatch.Body.String())
-	}
-
-	var count int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_restart_operation WHERE agent_id = $1
-	`, agentID).Scan(&count); err != nil {
-		t.Fatalf("count restart operations: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("operation count=%d want=1", count)
+	second := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageRestart)
+	if second.Code != http.StatusConflict {
+		t.Fatalf("second create status=%d body=%s, want conflict", second.Code, second.Body.String())
 	}
 }
 
@@ -263,56 +236,6 @@ func TestAgentRestartAllActionsForceImmediateWhenBusy(t *testing.T) {
 				t.Fatalf("%s on busy agent = %+v, want running", action, operation)
 			}
 		})
-	}
-}
-
-func TestAgentRestartConcurrentDuplicateRequestReturnsOneOperation(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	agentID, _ := createAgentRestartFixture(t, true)
-	key := uuid.NewString()
-	start := make(chan struct{})
-	responses := make(chan *httptest.ResponseRecorder, 2)
-	var workers sync.WaitGroup
-	for range 2 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			<-start
-			responses <- invokeCreateAgentRestart(
-				t, agentID, key, agentRestartStorageSession,
-			)
-		}()
-	}
-	close(start)
-	workers.Wait()
-	close(responses)
-
-	var operationID string
-	for response := range responses {
-		if response.Code != http.StatusAccepted {
-			t.Fatalf("concurrent create status=%d body=%s", response.Code, response.Body.String())
-		}
-		var operation AgentRestartOperation
-		if err := json.Unmarshal(response.Body.Bytes(), &operation); err != nil {
-			t.Fatalf("decode concurrent operation: %v", err)
-		}
-		if operationID == "" {
-			operationID = operation.ID
-		} else if operation.ID != operationID {
-			t.Fatalf("concurrent operation id=%s want=%s", operation.ID, operationID)
-		}
-	}
-
-	var count int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_restart_operation WHERE agent_id = $1
-	`, agentID).Scan(&count); err != nil {
-		t.Fatalf("count restart operations: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("operation count=%d want=1", count)
 	}
 }
 
@@ -389,17 +312,17 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&oldLaunchID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
-		VALUES ($1, $2, $3, 'agent-restart-test-daemon', 'runner-instance', $4, 'active')
-	`, testWorkspaceID, agentID, runtimeID, oldLaunchID); err != nil {
-		t.Fatal(err)
-	}
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	runnerHandler := *testHandler
+	runnerHandler.runnerObservations = newRunnerObservationStore()
+	runnerHandler.runnerActivityCursor = newRunnerActivityCursorStore()
 	runnerHandler.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
 		"agent-restart-test-daemon/" + testWorkspaceID + "/runner-instance": true,
 	}}
+	runnerHandler.observations().putStatus(testWorkspaceID, "agent-restart-test-daemon", "runner-instance", agentID, runtimeID, oldLaunchID, protocol.AgentStatusActive)
+	previousObservations := testHandler.runnerObservations
+	testHandler.runnerObservations = runnerHandler.runnerObservations
+	t.Cleanup(func() { testHandler.runnerObservations = previousObservations })
 	sessionFrame, err := json.Marshal(protocol.AgentSessionPayload{
 		AgentID: agentID, LaunchID: oldLaunchID, ProviderSessionID: providerSessionID,
 	})
@@ -439,24 +362,11 @@ func TestAgentRestartRestartAdvancesStopThenStartThenActive(t *testing.T) {
 	if !ok || eventType != protocol.EventDaemonAgentStart || commandID != operation.ID || start.AgentID != agentID || start.RuntimeID != runtimeID || start.LaunchID == oldLaunchID || start.Config.SessionID != providerSessionID {
 		t.Fatalf("replacement restart command event=%q command=%q payload=%+v", eventType, commandID, payload)
 	}
-	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reconnectActions := reduceRunnerLaunches(desired, nil)
-	if len(reconnectActions) != 1 {
-		t.Fatalf("restart reconnect actions=%+v, want one start", reconnectActions)
-	}
-	reconnectStart, ok := reconnectActions[0].payload.(protocol.WorkspaceRunnerAgentStartPayload)
-	if !ok || reconnectActions[0].eventType != protocol.EventDaemonAgentStart || reconnectStart.LaunchID != start.LaunchID || reconnectStart.StartDispatchID != operation.ID || reconnectStart.Config.SessionID != providerSessionID {
-		t.Fatalf("restart reconnect start=%+v, want persisted session %q", reconnectActions, providerSessionID)
-	}
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance active handled=%v err=%v", handled, err)
 	}
-	finished, err := getAgentRestartOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
-	if err != nil || finished == nil || finished.Status != agentRestartSucceeded || finished.FinishedAt == nil {
-		t.Fatalf("finished restart = %+v err=%v", finished, err)
+	if _, ok := currentAgentRestart(t, agentID); ok {
+		t.Fatal("finished restart left an in-flight operation")
 	}
 }
 
@@ -521,9 +431,8 @@ func TestAgentRestartSessionClearsSessionThenStartsFresh(t *testing.T) {
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance session active handled=%v err=%v", handled, err)
 	}
-	finished, err := getAgentRestartOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
-	if err != nil || finished == nil || finished.Status != agentRestartSucceeded {
-		t.Fatalf("finished session reset = %+v err=%v", finished, err)
+	if _, ok := currentAgentRestart(t, agentID); ok {
+		t.Fatal("finished session reset left an in-flight operation")
 	}
 }
 
@@ -572,9 +481,8 @@ func TestAgentRestartFullResetWaitsForWorkspaceResultBeforeFreshStart(t *testing
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusActive}); err != nil || !handled {
 		t.Fatalf("advance full reset active handled=%v err=%v", handled, err)
 	}
-	finished, err := getAgentRestartOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
-	if err != nil || finished == nil || finished.Status != agentRestartSucceeded {
-		t.Fatalf("finished full reset = %+v err=%v", finished, err)
+	if _, ok := currentAgentRestart(t, agentID); ok {
+		t.Fatal("finished full reset left an in-flight operation")
 	}
 }
 
@@ -618,13 +526,12 @@ func TestWorkspaceRunnerActiveStatusCompletesRestartOperation(t *testing.T) {
 			t.Fatalf("record active status attempt %d: %v", attempt+1, err)
 		}
 	}
-	finished, err := getAgentRestartOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
-	if err != nil || finished == nil || finished.Status != agentRestartSucceeded || finished.FinishedAt == nil {
-		t.Fatalf("finished operation = %+v, %v", finished, err)
+	if _, ok := currentAgentRestart(t, agentID); ok {
+		t.Fatal("finished restart left an in-flight operation")
 	}
 }
 
-func TestAgentRestartUnavailableRunnerRemainsResumableUntilReady(t *testing.T) {
+func TestAgentRestartUnavailableRunnerDoesNotFabricateCompletion(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -641,22 +548,20 @@ func TestAgentRestartUnavailableRunnerRemainsResumableUntilReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	if operation.Status != agentRestartRunning || operation.Step != agentRestartStepStopping || operation.FinishedAt != nil {
-		t.Fatalf("unavailable Runner operation should remain resumable = %+v", operation)
+		t.Fatalf("unavailable Runner operation should stay running = %+v", operation)
 	}
 	notifier := &capturedAgentRestartNotifier{}
 	testHandler.AgentRestartNotifier = notifier
 	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID}
-	if err := testHandler.resumeAgentRestartOperations(context.Background(), identity); err != nil {
-		t.Fatalf("resume restart operation on Runner ready: %v", err)
+	if err := testHandler.recordWorkspaceRunnerReady(context.Background(), identity, "runner-instance", nil); err != nil {
+		t.Fatalf("Runner ready after undelivered restart: %v", err)
 	}
-	_, _, eventType, commandID, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
-	if !ok || eventType != protocol.EventDaemonAgentStop || commandID != operation.ID || stop.LaunchID == "" {
-		t.Fatalf("resumed command event=%q command=%q payload=%+v", eventType, commandID, payload)
+	if _, _, eventType, _, payload := notifier.snapshot(); eventType != "" || payload != nil {
+		t.Fatalf("ready redrove undelivered restart event=%q payload=%+v", eventType, payload)
 	}
 }
 
-func TestAgentRestartReconnectRedrivesWorkspaceResetWithSameOperationID(t *testing.T) {
+func TestAgentRestartReadyDoesNotRedriveWorkspaceReset(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -686,17 +591,15 @@ func TestAgentRestartReconnectRedrivesWorkspaceResetWithSameOperationID(t *testi
 
 	redriven := &capturedAgentRestartNotifier{}
 	testHandler.AgentRestartNotifier = redriven
-	if err := testHandler.resumeAgentRestartOperations(context.Background(), identity); err != nil {
-		t.Fatalf("redrive workspace reset after reconnect: %v", err)
+	if err := testHandler.recordWorkspaceRunnerReady(context.Background(), identity, "runner-instance", nil); err != nil {
+		t.Fatalf("Runner ready during workspace reset: %v", err)
 	}
-	_, _, eventType, commandID, payload := redriven.snapshot()
-	reset, ok := payload.(protocol.WorkspaceRunnerAgentResetWorkspacePayload)
-	if !ok || eventType != protocol.EventDaemonAgentResetWorkspace || commandID != operation.ID || reset.OperationID != operation.ID || reset.AgentID != agentID {
-		t.Fatalf("redriven reset event=%q command=%q payload=%+v", eventType, commandID, payload)
+	if _, _, eventType, _, payload := redriven.snapshot(); eventType != "" || payload != nil {
+		t.Fatalf("ready redrove workspace reset event=%q payload=%+v", eventType, payload)
 	}
 }
 
-func TestAgentRestartReconnectReusesPersistedFreshStartFence(t *testing.T) {
+func TestAgentRestartReconcileDoesNotRedriveStart(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -709,10 +612,6 @@ func TestAgentRestartReconnectReusesPersistedFreshStartFence(t *testing.T) {
 	create := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageSession)
 	if create.Code != http.StatusAccepted {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
-	}
-	var operation AgentRestartOperation
-	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
-		t.Fatal(err)
 	}
 	_, _, _, _, payload := notifier.snapshot()
 	stop := payload.(protocol.WorkspaceRunnerAgentStopPayload)
@@ -720,141 +619,11 @@ func TestAgentRestartReconnectReusesPersistedFreshStartFence(t *testing.T) {
 	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
 		t.Fatalf("advance session stop handled=%v err=%v", handled, err)
 	}
-	_, _, _, _, payload = notifier.snapshot()
-	firstStart, ok := payload.(protocol.WorkspaceRunnerAgentStartPayload)
-	if !ok {
-		t.Fatalf("session replacement payload=%T, want start", payload)
+	if !testHandler.restarts().has(agentID) {
+		t.Fatal("session restart left the in-flight store")
 	}
-
-	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	actions := reduceRunnerLaunches(desired, nil)
-	if len(actions) != 1 || actions[0].eventType != protocol.EventDaemonAgentStart {
-		t.Fatalf("reconnect actions=%+v, want one start", actions)
-	}
-	redriven, ok := actions[0].payload.(protocol.WorkspaceRunnerAgentStartPayload)
-	if !ok || redriven.LaunchID != firstStart.LaunchID || redriven.StartDispatchID != operation.ID || redriven.Config.SessionID != "" {
-		t.Fatalf("redriven start=%+v, first=%+v operation=%s", actions[0].payload, firstStart, operation.ID)
-	}
-}
-
-func TestAgentRestartCommandTimeoutFailsBusinessRecordOnly(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	agentID, _ := createAgentRestartFixture(t, true)
-	create := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageRestart)
-	if create.Code != http.StatusAccepted {
-		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
-	}
-	var operation AgentRestartOperation
-	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_restart_operation SET started_at = now() - interval '3 minutes' WHERE id = $1
-	`, operation.ID); err != nil {
-		t.Fatal(err)
-	}
-	count, err := SweepTimedOutAgentRestartOperations(context.Background(), testPool)
-	if err != nil || count < 1 {
-		t.Fatalf("timeout sweep count=%d err=%v", count, err)
-	}
-	got, err := getAgentRestartOperation(context.Background(), testPool, parseUUID(agentID), parseUUID(operation.ID))
-	if err != nil || got == nil || got.Status != agentRestartFailed || got.Step != "timeout" || got.FinishedAt == nil {
-		t.Fatalf("timed-out operation = %+v, %v", got, err)
-	}
-}
-
-func TestTimedOutResetStartKeepsExplicitFreshSessionOnReconcile(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	agentID, runtimeID := createAgentRestartFixture(t, true)
-	notifier := &capturedAgentRestartNotifier{}
-	previous := testHandler.AgentRestartNotifier
-	testHandler.AgentRestartNotifier = notifier
-	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
-	create := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageSession)
-	if create.Code != http.StatusAccepted {
-		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
-	}
-	var operation AgentRestartOperation
-	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
-		t.Fatal(err)
-	}
-	_, _, _, _, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
-	if !ok {
-		t.Fatalf("first reset payload=%T, want stop", payload)
-	}
-	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
-		t.Fatalf("advance stop handled=%v err=%v", handled, err)
-	}
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_restart_operation SET started_at = now() - interval '3 minutes' WHERE id = $1`, operation.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := SweepTimedOutAgentRestartOperations(context.Background(), testPool); err != nil {
-		t.Fatal(err)
-	}
-	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, launch := range desired {
-		if launch.agentID == agentID {
-			if launch.sessionID != "" || launch.startDispatchID != operation.ID {
-				t.Fatalf("timed-out reset desired launch=%+v, want persisted explicit fresh session", launch)
-			}
-			return
-		}
-	}
-	t.Fatal("timed-out reset desired launch not found")
-}
-
-func TestTimedOutWorkspaceResetDoesNotResumePreResetDesiredLaunch(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	agentID, runtimeID := createAgentRestartFixture(t, true)
-	notifier := &capturedAgentRestartNotifier{}
-	previous := testHandler.AgentRestartNotifier
-	testHandler.AgentRestartNotifier = notifier
-	t.Cleanup(func() { testHandler.AgentRestartNotifier = previous })
-	create := invokeCreateAgentRestart(t, agentID, uuid.NewString(), agentRestartStorageFull)
-	if create.Code != http.StatusAccepted {
-		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
-	}
-	var operation AgentRestartOperation
-	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
-		t.Fatal(err)
-	}
-	_, _, _, _, payload := notifier.snapshot()
-	stop, ok := payload.(protocol.WorkspaceRunnerAgentStopPayload)
-	if !ok {
-		t.Fatalf("first full-reset payload=%T, want stop", payload)
-	}
-	identity := daemonws.ClientIdentity{DaemonID: "agent-restart-test-daemon", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
-	if handled, err := testHandler.advanceAgentRestartFromStatus(context.Background(), identity, protocol.AgentStatusPayload{AgentID: agentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil || !handled {
-		t.Fatalf("advance stop handled=%v err=%v", handled, err)
-	}
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent_restart_operation SET started_at = now() - interval '3 minutes' WHERE id = $1`, operation.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := SweepTimedOutAgentRestartOperations(context.Background(), testPool); err != nil {
-		t.Fatal(err)
-	}
-	desired, err := testHandler.loadRunnerDesiredLaunches(context.Background(), identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, launch := range desired {
-		if launch.agentID == agentID {
-			t.Fatalf("timed-out workspace reset resumed pre-reset desired launch: %+v", launch)
-		}
+	if !testHandler.restartAgentsOnActiveOperation()[agentID] {
+		t.Fatal("in-flight restart was visible to reconcile")
 	}
 }
 
@@ -882,7 +651,7 @@ func TestAgentRestartRunningOperationOverlaysExistingAgentHealth(t *testing.T) {
 		t.Fatalf("decode health: %v", err)
 	}
 	if response.Summary.State != "restarting" ||
-		response.Summary.ReasonCode != "agent_restart_session" {
+		response.Summary.ReasonCode != "agent_restart" {
 		t.Fatalf("health summary = %+v", response.Summary)
 	}
 }
@@ -951,15 +720,8 @@ func TestAgentRestartCreateRejectsStaleHeartbeatWithoutCreatingAnOperation(t *te
 	if create.Code != http.StatusConflict || !containsResponseBody(create, "agent_runtime_offline") {
 		t.Fatalf("stale-heartbeat create status=%d body=%s, want 409 agent_runtime_offline", create.Code, create.Body.String())
 	}
-
-	var count int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM agent_restart_operation WHERE agent_id = $1
-	`, agentID).Scan(&count); err != nil {
-		t.Fatalf("count operations: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("expected zero operation rows for a rejected create, got %d", count)
+	if _, ok := currentAgentRestart(t, agentID); ok {
+		t.Fatal("rejected create left an in-flight restart")
 	}
 }
 
@@ -1012,7 +774,7 @@ func createAgentRestartFixtureWithProvider(t *testing.T, capable bool, provider 
 		t.Fatalf("create restart agent: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_restart_operation WHERE agent_id = $1`, agentID)
+		testHandler.restarts().finish(agentID)
 		testPool.Exec(context.Background(), `DELETE FROM agent_execution WHERE agent_id = $1`, agentID)
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
 		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
@@ -1055,16 +817,20 @@ func createAgentRestartMember(t *testing.T, role string) string {
 	return userID
 }
 
-func invokeCreateAgentRestart(t *testing.T, agentID, idempotencyKey string, action agentRestartStorageKind) *httptest.ResponseRecorder {
+func invokeCreateAgentRestart(t *testing.T, agentID, _ string, action agentRestartStorageKind) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := newRequestAs(testUserID, http.MethodPost, "/api/agents/"+agentID+"/reset", map[string]any{
 		"mode": agentRestartModeForStorage(action),
 	})
-	req.Header.Set("Idempotency-Key", idempotencyKey)
 	req = withURLParam(req, "id", agentID)
 	testHandler.ResetAgent(rec, req)
 	return rec
+}
+
+func currentAgentRestart(t *testing.T, agentID string) (activeAgentRestartState, bool) {
+	t.Helper()
+	return testHandler.restarts().get(agentID)
 }
 
 func containsResponseBody(rec *httptest.ResponseRecorder, want string) bool {

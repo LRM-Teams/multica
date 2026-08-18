@@ -39,7 +39,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 	if runner.mixedRunActivityReplay != nil {
 		runner.mixedRunActivityReplay(writeFrame)
 	}
-	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
+	transportGeneration, _ := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && runner.logger != nil {
 			runner.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
 		}
@@ -59,11 +59,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			}
 		}
 	}()
-	for _, frame := range reconnectFrames {
-		if err := writeFrame(frame.EventType, frame.Payload); err != nil {
-			return err
-		}
-	}
 	var controlStarted bool
 	var stopControl context.CancelFunc
 	var controlDone chan struct{}
@@ -105,6 +100,41 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			if err := writeFrame(protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
 				return err
 			}
+		case protocol.EventComputerWorkDigest:
+			var command protocol.ComputerWorkDigestPayload
+			if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
+				continue
+			}
+			done := protocol.ComputerWorkDigestDonePayload{RequestID: command.RequestID}
+			if runner.handleComputerWorkDigest == nil {
+				done.Error = "work journal host unavailable"
+			} else if digest, err := runner.handleComputerWorkDigest(connection.ctx, command); err != nil {
+				done.Error = err.Error()
+			} else {
+				copyDigest := digest
+				done.OK = true
+				done.Digest = &copyDigest
+			}
+			if err := writeFrame(protocol.EventComputerWorkDigestDone, done); err != nil {
+				return err
+			}
+		case protocol.EventComputerWorkJournal:
+			var command protocol.ComputerWorkJournalPayload
+			if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
+				continue
+			}
+			done := protocol.ComputerWorkJournalDonePayload{RequestID: command.RequestID, Enabled: command.Enabled}
+			if runner.handleComputerWorkJournal == nil {
+				done.Error = "work journal host unavailable"
+			} else if enabled, err := runner.handleComputerWorkJournal(connection.ctx, command); err != nil {
+				done.Error = err.Error()
+			} else {
+				done.OK = true
+				done.Enabled = enabled
+			}
+			if err := writeFrame(protocol.EventComputerWorkJournalDone, done); err != nil {
+				return err
+			}
 		case protocol.EventComputerUpgrade, protocol.EventComputerRestart:
 			var command protocol.ComputerUpgradePayload
 			if message.Type == protocol.EventComputerRestart {
@@ -112,7 +142,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 				if json.Unmarshal(message.Payload, &restart) != nil || restart.Validate() != nil {
 					continue
 				}
-				command = protocol.ComputerUpgradePayload{RequestID: restart.RequestID, OperationID: restart.OperationID}
+				command = protocol.ComputerUpgradePayload{RequestID: restart.Operation()}
 			} else if json.Unmarshal(message.Payload, &command) != nil || command.Validate() != nil {
 				continue
 			}
@@ -149,7 +179,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *DaemonConnection, con
 			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
 				continue
 			}
-			ack, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(workspaceID, start, failConnection)
+			ack, replayed, releaseStartupPublication, _, startupPublished, err := runner.acceptManagedAgentStart(start, failConnection)
 			if err != nil {
 				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {

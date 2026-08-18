@@ -156,7 +156,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		AllowedEmails:                         splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
 		AllowedEmailDomains:                   splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
 		DisableWorkspaceCreation:              os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+		ResearchV6BootstrapEnabled:            os.Getenv("RESEARCH_V6_BOOTSTRAP_ENABLED") == "true",
 		PublicURL:                             strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
+		ResearchReportOrigin:                  strings.TrimRight(strings.TrimSpace(os.Getenv("RESEARCH_REPORT_ORIGIN")), "/"),
+		ResearchReportCapabilitySecret:        strings.TrimSpace(os.Getenv("RESEARCH_REPORT_CAPABILITY_SECRET")),
+		ResearchReportFrameAncestors:          splitAndTrim(os.Getenv("RESEARCH_REPORT_FRAME_ANCESTORS")),
+		ResearchReportRendererURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("RESEARCH_REPORT_RENDERER_URL")), "/"),
+		ResearchReportRendererToken:           strings.TrimSpace(os.Getenv("RESEARCH_REPORT_RENDERER_TOKEN")),
 		TrustedProxies:                        parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
 		CloudRuntimeFleetURL:                  cloudRuntimeFleetURLFromEnv(),
 		CloudRuntimeFleetTimeout:              envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
@@ -423,7 +429,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderFireAttempt,
 	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
-	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
 	// The current fenced Workspace Runner owns Attachment, launch, Message, and
 	// typed Activity intake for one daemon/workspace pair.
 	daemonHub.SetWorkspaceRunnerHandler(h.HandleWorkspaceRunnerFrame)
@@ -520,6 +525,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// Public API
 	r.Get("/api/config", h.GetConfig)
+	r.Get("/research/{reportId}/{packageHash}/index.html", h.ServeResearchV6ReportDocument)
 	r.With(contactSalesRL).Post("/api/contact-sales", h.CreateContactSales)
 
 	// Sticker library — embedded, non-sensitive assets. Public + unauthenticated
@@ -558,11 +564,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
 		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
-		// TODO(computer-upgrade-attest): Remove after installed Computers no
-		// longer POST /computer/machine-upgrades/{id}/attest. Completion is
-		// the current Binding socket reporting the resolved target.
-		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
-		r.Post("/computer/machine-upgrades/{upgradeId}/takeover", h.CommitComputerMachineUpgradeTakeover)
 		r.Get("/connect", h.DaemonWebSocket)
 		// TODO(computer-liveness): Remove after v0.4.24-alpha.55 is no
 		// longer a supported direct self-upgrade source.
@@ -574,9 +575,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
-		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/accept", h.AcceptMachineUpgrade)
-		r.Get("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}", h.GetDaemonMachineUpgrade)
-		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/progress", h.ReportMachineUpgradeProgress)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
@@ -892,6 +890,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Notes
 			r.Route("/api/notes", func(r chi.Router) {
 				r.Post("/retrospectives", h.CreateNoteRetrospective)
+				r.Post("/period-briefs", h.CreateNotePeriodBrief)
 				r.Route("/pages", func(r chi.Router) {
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)
@@ -1066,6 +1065,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/deltas", h.GetResearchV6ProjectionDeltas)
 					r.Post("/resume", h.PostResearchV6ProjectionResume)
 				})
+				r.Get("/v6/runs/{runId}/reports", h.GetResearchV6Reports)
+				r.Get("/v6/runs/{runId}/reports/{reportId}", h.GetResearchV6Report)
 				r.Get("/fleet", h.GetResearchFleet)
 				r.Post("/fleet/ensure", h.EnsureResearchFleet)
 				r.Post("/fleet/members", h.HireResearchFleetMember)
@@ -1075,6 +1076,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/sessions", h.CreateResearchSession)
 				r.Route("/sessions/{id}", func(r chi.Router) {
 					r.Get("/", h.GetResearchSessionSnapshot)
+					r.Put("/director", h.PutResearchV6Director)
+					r.Post("/director/unavailable", h.PostResearchV6DirectorUnavailable)
 					r.Get("/presence", h.GetResearchPresence)
 					r.Delete("/", h.DeleteResearchSession)
 					r.Post("/messages", h.PostResearchMessage)
@@ -1141,6 +1144,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/honor/audit", h.GetAgentHonorAdminAudit)
 				r.Post("/", h.CreateAgent)
 				r.Post("/windy", h.EnsureWindy)
+				r.Post("/period-brief", h.EnsurePeriodBriefAgent)
+				r.Post("/period-brief-collectors", h.EnsurePeriodBriefCollectors)
 				r.Post("/drafts", h.CreateAgentDraft)
 				r.Get("/drafts/{draftId}", h.GetAgentDraft)
 				// Agent templates: pre-configured instructions + skill refs.
@@ -1162,7 +1167,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/health", h.GetAgentHealth)
 					r.Get("/reset", h.GetAgentRestart)
 					r.Post("/reset", h.ResetAgent)
-					r.Get("/reset/{operationId}", h.GetAgentRestartOperation)
 					// Workspace Runner Activity is the only public Agent Activity
 					// contract. It is a server-owned presentation read model; there is
 					// no compatibility translation from the removed event timeline.
@@ -1170,6 +1174,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/reminders", h.ListAgentReminders)
 					r.Get("/skills", h.ListAgentSkills)
+					r.Get("/skills/profile", h.ListAgentProfileSkills)
 					r.Put("/skills", h.SetAgentSkills)
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
 					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)
@@ -1232,6 +1237,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Computers
 			r.Get("/api/computers", h.ListComputers)
 			r.Delete("/api/computers/{daemonId}", h.DeleteComputer)
+			r.Get("/api/computers/{daemonId}/work-digest", h.GetComputerWorkDigest)
+			r.Patch("/api/computers/{daemonId}/work-journal", h.PatchComputerWorkJournal)
 
 			// Runtimes
 			r.Route("/api/runtimes", func(r chi.Router) {
@@ -1248,12 +1255,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/activity", h.GetRuntimeTaskActivity)
 					r.Get("/agent-workspaces", h.ListRuntimeAgentWorkspaces)
 					r.Delete("/agent-workspaces/{dirName}", h.DeleteRuntimeAgentWorkspace)
-					// Installed clients still use these runtime-scoped paths. They
-					// delegate to the daemon-scoped Machine Upgrade record and must
-					// never recreate a runtime-owned update lineage.
-					r.Post("/update", h.InitiateUpdate)
-					r.Get("/update/{updateId}", h.GetUpdate)
-					r.Delete("/update-intent", h.CancelUpdateIntent)
 					r.Post("/restart", h.InitiateRestart)
 					r.Get("/restart/{restartId}", h.GetRestart)
 					r.Post("/models", h.InitiateListModels)
@@ -1273,12 +1274,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
-			// Canonical daemon-identity Machine Upgrade lifecycle. Runtime-scoped
-			// update routes remain compatibility adapters for installed clients.
+			// Computer upgrade dispatch. Progress and completion come back on
+			// the current Binding socket, not as HTTP receipts.
 			r.Route("/api/daemons/{daemonId}/upgrades", func(r chi.Router) {
 				r.Post("/", h.CreateMachineUpgrade)
-				r.Get("/{upgradeId}", h.GetMachineUpgrade)
-				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
 			// Public Computer Workspace-connection establishment. Deletion is
@@ -1486,6 +1485,17 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/presence", h.PostAgentResearchPresence)
 						r.Post("/stage-eval", h.RequestAgentResearchStageEval)
 						r.Post("/tasks/{taskId}/attempts/{attemptId}/result", h.SubmitAgentResearchTaskResult)
+						r.Route("/work-items/{workItemId}/attempts/{attemptId}", func(r chi.Router) {
+							r.Get("/manifest", h.GetAgentResearchV6WorkManifest)
+							r.Get("/director-brief", h.GetAgentResearchV6DirectorBrief)
+							r.Post("/director-brief-acks", h.AcknowledgeAgentResearchV6DirectorBrief)
+							r.Get("/catalog", h.GetAgentResearchV6WorkCatalog)
+							r.Post("/catalog-acks", h.AcknowledgeAgentResearchV6WorkCatalog)
+							r.Post("/submission", h.SubmitAgentResearchV6Work)
+							r.Post("/report-uploads", h.CreateAgentResearchV6ReportUpload)
+							r.Put("/report-uploads/{uploadId}/content", h.PutAgentResearchV6ReportUpload)
+							r.Post("/report-uploads/{uploadId}/complete", h.CompleteAgentResearchV6ReportUpload)
+						})
 					})
 				})
 			})

@@ -122,7 +122,7 @@ func stagingSignatureOf(storeRoot string) (stagingSignature, error) {
 // (ErrEmbedNotConfigured, design §5.2).
 // kicker may be nil, in which case the async judge kick is skipped.
 func newGraphMemoryProvider(cfg Config, dir string, kicker graphMemoryJudgeKicker, logger *slog.Logger) (*graphMemoryProvider, error) {
-	entry, ok := cfg.Agents["pi"]
+	entry, ok := cfg.Agents[agentpkg.ProviderPi]
 	if !ok || strings.TrimSpace(entry.Path) == "" {
 		return nil, fmt.Errorf("graph memory: no pi CLI configured (MULTICA_PI_PATH)")
 	}
@@ -143,7 +143,7 @@ func newGraphMemoryProvider(cfg Config, dir string, kicker graphMemoryJudgeKicke
 	}
 
 	retr := memorygraph.NewHybridRetriever(store, cached, memorygraph.DefaultRetrievalConfig())
-	backend, err := agentpkg.New("pi", agentpkg.Config{ExecutablePath: strings.TrimSpace(entry.Path), Logger: logger})
+	backend, err := agentpkg.New(agentpkg.ProviderPi, agentpkg.Config{ExecutablePath: strings.TrimSpace(entry.Path), Logger: logger})
 	if err != nil {
 		return nil, fmt.Errorf("graph memory: pi backend: %w", err)
 	}

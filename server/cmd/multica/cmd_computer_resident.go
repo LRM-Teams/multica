@@ -46,10 +46,6 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	channel, err := cli.ResolveReleaseChannel(machineConfig)
-	if err != nil {
-		return err
-	}
 	bindingsRoot := computer.RootDir("")
 	computerGeneration, _ := cmd.Flags().GetInt64("computer-generation")
 	if computerGeneration == 0 {
@@ -58,10 +54,6 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("allocate Computer generation: %w", err)
 		}
 	}
-	machineAttestationSourcePID, _ := cmd.Flags().GetInt("machine-attestation-source-pid")
-	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
-	// longer a supported direct self-upgrade source.
-	previousPackageUpgradeBootstrap, _ := cmd.Flags().GetBool("machine-upgrade-detached-candidate")
 	controlToken, err := computer.EnsureControlToken(profile)
 	if err != nil {
 		return err
@@ -78,22 +70,15 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	defer stop()
 
 	logger := logger_pkg.NewLogger("computer")
-	var host *computer.Host
+	serviceEndpoint := computer.ServiceControlEndpoint(bindingsRoot)
 	launcher := computer.BindingRunnerLauncher{
 		ComputerID: computerID, ComputerGeneration: computerGeneration,
 		Environment: string(serviceTarget.Environment), Profile: profile, ServerBaseURL: serviceTarget.Origin,
-		HostControlURL: fmt.Sprintf("http://127.0.0.1:%d", computer.HealthPort(profile)),
-		BindingsRoot:   bindingsRoot, WorkspacesRoot: workspacesRoot,
-		Run: func(ctx context.Context, bootstrap computer.BindingChildBootstrap, publishReady func(computer.BindingChildReady) error) error {
-			return runInProcessBindingChild(ctx, bootstrap, publishReady, host)
-		},
-		// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
-		// longer a supported direct self-upgrade source.
-		PreviousPackageUpgradeBootstrap: previousPackageUpgradeBootstrap,
-		PreviousPackageUpgradeSourcePID: machineAttestationSourcePID,
+		ServiceEndpoint: serviceEndpoint,
+		BindingsRoot:    bindingsRoot, WorkspacesRoot: workspacesRoot,
 	}
-	host, err = computer.NewHost(computer.HostConfig{
-		Spawn: launcher.Spawn, Logger: logger, ControlToken: controlToken,
+	host, err := computer.NewHost(computer.HostConfig{
+		Spawn: launcher.Spawn, ResidentRoot: bindingsRoot, Logger: logger, ControlToken: controlToken,
 		MaxAgentProcesses: maxAgentProcesses,
 	})
 	if err != nil {
@@ -116,15 +101,13 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 
 	bindingStore := computer.NewBindingsStore(bindingsRoot)
 	if err := host.RunProcess(ctx, computer.HostProcessConfig{
-		ControlPort: computer.HealthPort(profile), ResidentRoot: bindingsRoot,
+		ServiceEndpoint: serviceEndpoint, ResidentRoot: bindingsRoot,
 		Identity: computer.HostProcessIdentity{
 			ComputerID: computerID, ComputerGeneration: computerGeneration,
-			Environment: string(serviceTarget.Environment), ReleaseChannel: string(channel),
-			Version: version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
-			MachineAttestationFrom: machineAttestationSourcePID,
+			Environment: string(serviceTarget.Environment),
+			Version:     version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
 		},
-		ReleaseManifestURL:              os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),
-		PreviousPackageUpgradeBootstrap: previousPackageUpgradeBootstrap,
+		ReleaseManifestURL: os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),
 		DesiredWorkspaceIDs: func() ([]string, error) {
 			bindings, err := bindingStore.AllActiveForEnvironment(string(serviceTarget.Environment))
 			if err != nil {

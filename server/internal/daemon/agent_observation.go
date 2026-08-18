@@ -22,6 +22,7 @@ const (
 	AgentObservationRuntimeCompactionStale AgentObservationKind = "runtime_compaction_stale"
 	AgentObservationRuntimeIdle            AgentObservationKind = "runtime_idle"
 	AgentObservationRuntimeDiagnostic      AgentObservationKind = "runtime_diagnostic"
+	AgentObservationRuntimeStalled         AgentObservationKind = "runtime_stalled"
 	AgentObservationMessageBodyAccepted    AgentObservationKind = "message_body_accepted"
 	AgentObservationFreshnessHeld          AgentObservationKind = "freshness_held"
 	AgentObservationDraftSent              AgentObservationKind = "draft_sent"
@@ -57,14 +58,13 @@ type AgentRuntimeStageObservationData struct {
 	ToolName   string
 	ToolCallID string
 	ToolInput  map[string]any
+	StaleFor   time.Duration
 }
 
 func (AgentRuntimeStageObservationData) agentObservationData() {}
 
 type AgentMessageAcceptanceObservationData struct {
-	RuntimeID    string
-	HandoffID    string
-	MessageCount int
+	RuntimeID string
 }
 
 func (AgentMessageAcceptanceObservationData) agentObservationData() {}
@@ -90,6 +90,7 @@ type AgentErrorObservationData struct {
 	RuntimeID         string
 	ProcessInstanceID string
 	ReasonCode        string
+	Message           string
 }
 
 func (AgentErrorObservationData) agentObservationData() {}
@@ -113,7 +114,7 @@ func (observation AgentObservation) Validate() error {
 	}
 
 	switch observation.Kind {
-	case AgentObservationRuntimeReady, AgentObservationRuntimeWorking:
+	case AgentObservationRuntimeReady:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}
@@ -129,7 +130,7 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationRuntimeStarting, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
+	case AgentObservationRuntimeStarting, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic, AgentObservationRuntimeStalled:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}
@@ -153,8 +154,8 @@ func (observation AgentObservation) Validate() error {
 		if !ok {
 			return observationDataTypeError(observation.Kind)
 		}
-		if strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.HandoffID) == "" || data.MessageCount < 1 {
-			return errors.New("Agent Message acceptance Runtime, handoff, and count are required")
+		if strings.TrimSpace(data.RuntimeID) == "" {
+			return errors.New("Agent Message acceptance Runtime is required")
 		}
 		return nil
 
@@ -194,6 +195,9 @@ func (observation AgentObservation) Validate() error {
 		}
 		if strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.ReasonCode) == "" {
 			return errors.New("Agent error observation Runtime and reason are required")
+		}
+		if observation.Kind == AgentObservationError && strings.TrimSpace(data.Message) == "" {
+			return errors.New("Agent error observation message is required")
 		}
 		return nil
 

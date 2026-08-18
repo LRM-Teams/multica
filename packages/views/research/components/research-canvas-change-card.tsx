@@ -1,7 +1,9 @@
 "use client";
 
 import type { ResearchMessage } from "@multica/core/types";
+import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
+import { LocateFixed } from "lucide-react";
 import { useT } from "../../i18n/use-t";
 
 const CANVAS_CHANGE_OPS: Readonly<Record<string, string>> = {
@@ -35,6 +37,35 @@ function metaArrayLength(meta: unknown, key: string): number | null {
   return Array.isArray(value) ? value.length : null;
 }
 
+function metaStringArray(meta: unknown, key: string): string[] {
+  if (!meta || typeof meta !== "object") return [];
+  const value = (meta as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) =>
+    typeof entry === "string" && entry.trim() ? [entry.trim()] : [],
+  );
+}
+
+/**
+ * Returns only node identifiers explicitly committed by the process message.
+ * The successor/result node stays first so a merge receipt focuses the newly
+ * formed higher-tier result instead of one of its absorbed inputs.
+ */
+export function canvasChangeTargetNodeIds(message: ResearchMessage): string[] {
+  if (!isCanvasChangeProcessMessage(message)) return [];
+  const candidates = [
+    metaString(message.meta, "node_id"),
+    metaString(message.meta, "result_node_id"),
+    metaString(message.meta, "source_node_id"),
+    metaString(message.meta, "target_node_id"),
+    ...metaStringArray(message.meta, "affected_node_ids"),
+    ...metaStringArray(message.meta, "input_node_ids"),
+  ];
+  return Array.from(
+    new Set(candidates.filter((value): value is string => value != null)),
+  );
+}
+
 export function canvasChangeKind(message: ResearchMessage): string | null {
   if (message.card_kind !== "process") return null;
   const op = metaString(message.meta, "op");
@@ -48,9 +79,11 @@ export function isCanvasChangeProcessMessage(message: ResearchMessage): boolean 
 export function ResearchCanvasChangeCard({
   message,
   className,
+  onFocusNode,
 }: {
   message: ResearchMessage;
   className?: string;
+  onFocusNode?: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
   const op = metaString(message.meta, "op") ?? "process";
@@ -64,6 +97,7 @@ export function ResearchCanvasChangeCard({
   const inputCount = metaArrayLength(message.meta, "input_node_ids");
   const conclusionCount = metaNumber(message.meta, "conclusion_count");
   const graphVersion = metaNumber(message.meta, "graph_version");
+  const targetNodeId = canvasChangeTargetNodeIds(message)[0] ?? null;
   const facts = [
     inputCount == null
       ? null
@@ -88,6 +122,7 @@ export function ResearchCanvasChangeCard({
       data-canvas-change-kind={changeKind}
       className={cn(
         "rounded-xl border border-brand/25 bg-brand/5 px-3 py-2.5 text-[12px]",
+        changeKind === "integration_formed" && "motion-safe:animate-pulse",
         className,
       )}
     >
@@ -107,6 +142,18 @@ export function ResearchCanvasChangeCard({
             </span>
           ))}
         </div>
+      ) : null}
+      {targetNodeId && onFocusNode ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="mt-2 min-h-9 gap-1.5 px-2 text-[11px] text-brand hover:bg-brand/10 hover:text-brand focus-visible:ring-brand"
+          onClick={() => onFocusNode(targetNodeId)}
+        >
+          <LocateFixed className="size-3.5" aria-hidden="true" />
+          {t(($) => $.d5.change_receipt.show_on_canvas)}
+        </Button>
       ) : null}
     </div>
   );

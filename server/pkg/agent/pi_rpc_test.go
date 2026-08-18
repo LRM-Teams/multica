@@ -342,6 +342,9 @@ func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T)
 	if acceptance.Done == nil {
 		t.Fatal("AcceptMessageBatch returned no native turn completion receipt")
 	}
+	if got := b.ProviderSessionID(); got != filepath.Join(dir, "session.jsonl") {
+		t.Fatalf("resident provider session = %q, want %q", got, filepath.Join(dir, "session.jsonl"))
+	}
 	var activity []Message
 	activityDone := make(chan struct{})
 	go func() {
@@ -354,7 +357,7 @@ func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T)
 		t.Fatalf("native Message turn completion: %v", err)
 	}
 	<-activityDone
-	if len(activity) != 3 || activity[0].Type != MessageStatus || activity[1].Type != MessageToolUse || activity[1].Tool != "bash" || activity[1].Input["command"] != "pwd" || activity[2].Type != MessageToolResult {
+	if len(activity) != 3 || activity[0].Type != MessageStatus || activity[0].SessionID != filepath.Join(dir, "session.jsonl") || activity[1].Type != MessageToolUse || activity[1].Tool != "bash" || activity[1].Input["command"] != "pwd" || activity[2].Type != MessageToolResult {
 		t.Fatalf("native Message activity = %+v, want status, tool use, and tool result", activity)
 	}
 	waitForPiRPCTestPath(t, inputPath)

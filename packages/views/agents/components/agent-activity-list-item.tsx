@@ -9,16 +9,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { useT } from "../../i18n";
 import { resolveAgentLiveStatus } from "../resolve-agent-live-status";
-
-const activityToneDotClass: Record<string, string> = {
-  neutral: "bg-muted-foreground/40",
-  active: "bg-warning",
-  info: "bg-warning",
-  warning: "bg-warning",
-  running: "bg-running",
-  error: "bg-destructive",
-  success: "bg-success",
-};
+import { runnerActivityToneDotClass } from "../runner-activity-tone";
 
 /**
  * Shared list Activity mark. Labels and tones are supplied by the server-owned
@@ -112,28 +103,13 @@ function AgentActivityStatusView({
   const { data: summary } = useRunnerActivitySummary(workspaceId, agentId);
   const liveStatus = resolveAgentLiveStatus({ presence, tAgents });
   const isOnline = presence === "online";
+  const isOffline = presence === "offline";
   const hasDynamicActivity =
-    isOnline &&
     summary?.visibility === "visible" &&
     summary.tone !== "success" &&
-    summary.tone !== "neutral";
-  if (!hasDynamicActivity) {
-    if (liveStatus) {
-      return (
-        <span
-          className={cn(
-            "inline-flex min-w-0 max-w-[50%] items-center gap-1.5 text-muted-foreground",
-            alignEnd && "ml-auto shrink-0",
-            className,
-          )}
-          data-testid={testId}
-          data-activity-tone="success"
-        >
-          <span className={cn("size-1.5 shrink-0 rounded-full", liveStatus.dotClass)} aria-hidden />
-          <span className="truncate text-[13px]">{liveStatus.label}</span>
-        </span>
-      );
-    }
+    summary.tone !== "neutral" &&
+    (isOnline || (isOffline && summary.tone === "error"));
+  if (!liveStatus && !hasDynamicActivity) {
     return (
       <span
         className={cn(
@@ -148,12 +124,15 @@ function AgentActivityStatusView({
     );
   }
   const isWorkingTone =
-    summary.tone === "warning" ||
-    summary.tone === "info" ||
-    summary.tone === "active" ||
-    summary.tone === "running";
-  const dotClass = activityToneDotClass[summary.tone] ?? "bg-muted-foreground";
+    hasDynamicActivity &&
+    (summary.tone === "warning" ||
+      summary.tone === "info" ||
+      summary.tone === "active" ||
+      summary.tone === "running");
+  const activityTone = hasDynamicActivity ? summary.tone : "success";
+  const dotClass = runnerActivityToneDotClass(activityTone);
   const pulses = isWorkingTone;
+  const showLiveStatus = !!liveStatus && !hasDynamicActivity;
   return (
     <span
       className={cn(
@@ -162,15 +141,33 @@ function AgentActivityStatusView({
         className,
       )}
       data-testid={testId}
-      data-activity-tone={summary.tone}
+      data-activity-tone={activityTone}
     >
-      <span className="relative size-1.5 shrink-0" aria-hidden>
-        {pulses ? (
-          <span className={cn("absolute inset-0 animate-ping rounded-full opacity-60 motion-reduce:hidden", dotClass)} />
-        ) : null}
-        <span className={cn("absolute inset-0 rounded-full", dotClass)} />
-      </span>
-      <span className="truncate text-[13px]">{summary.label}</span>
+      {showLiveStatus ? (
+        <>
+          <span
+            className={cn("size-1.5 shrink-0 rounded-full", liveStatus.dotClass)}
+            aria-hidden
+          />
+          <span className="shrink-0 text-[13px]">{liveStatus.label}</span>
+        </>
+      ) : null}
+      {hasDynamicActivity ? (
+        <>
+          <span className="relative size-1.5 shrink-0" aria-hidden>
+            {pulses ? (
+              <span
+                className={cn(
+                  "absolute inset-0 animate-ping rounded-full opacity-60 motion-reduce:hidden",
+                  dotClass,
+                )}
+              />
+            ) : null}
+            <span className={cn("absolute inset-0 rounded-full", dotClass)} />
+          </span>
+          <span className="truncate text-[13px]">{summary.label}</span>
+        </>
+      ) : null}
     </span>
   );
 }

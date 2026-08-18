@@ -24,10 +24,12 @@ import {
   createTransitionQueue,
   transitionQueueReducer,
   liveQueueSize,
+  liveTransitionForEntity,
   settledMarkers,
   type MotionProfile,
   type ProjectionTransitionEvent,
   type TransitionQueue,
+  type QueuedEntry,
 } from "./transition-queue";
 import {
   buildMotionDirective,
@@ -55,6 +57,10 @@ export interface UseSemanticTransitionResult {
   directiveFor: (entityId: string) => MotionDirective | null;
   /** Persistent marker class for an entity (survives animation end). */
   markerFor: (entityId: string) => string | null;
+  /** Read-only spatial context for renderer-owned anchor geometry. */
+  transitionFor: (
+    entityId: string,
+  ) => Pick<QueuedEntry, "id" | "verb" | "anchorId" | "relatedIds"> | null;
   readonly profile: MotionProfile;
 }
 
@@ -149,9 +155,7 @@ export function useSemanticTransition(
   // Resolve a directive for an entity id from the current live entry.
   const directiveFor = useCallback(
     (entityId: string): MotionDirective | null => {
-      const live = [...queue.queued.values()].flat().find(
-        (e) => e.state !== "settled" && e.relatedIds.includes(entityId),
-      );
+      const live = liveTransitionForEntity(queue, entityId);
       if (!live) return null;
       const opts: MotionDirectiveOptions = {
         reducedMotion: queue.profile.reducedMotion,
@@ -177,12 +181,27 @@ export function useSemanticTransition(
     [markers],
   );
 
+  const transitionFor = useCallback(
+    (entityId: string) => {
+      const live = liveTransitionForEntity(queue, entityId);
+      if (!live) return null;
+      return {
+        id: live.id,
+        verb: live.verb,
+        anchorId: live.anchorId,
+        relatedIds: live.relatedIds,
+      };
+    },
+    [queue],
+  );
+
   return {
     enqueue,
     settleNow,
     queueSize,
     directiveFor,
     markerFor,
+    transitionFor,
     profile: queue.profile,
   };
 }

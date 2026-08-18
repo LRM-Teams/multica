@@ -89,7 +89,7 @@ func TestPublishPIDWritesCurrentPIDAndCleanupRespectsMatches(t *testing.T) {
 
 func TestStatusReportsStoppedWhenNoResident(t *testing.T) {
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{"status": "stopped"}
 	}
 	health := lc.Status()
@@ -100,7 +100,7 @@ func TestStatusReportsStoppedWhenNoResident(t *testing.T) {
 
 func TestStatusReportsRunning(t *testing.T) {
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{"status": "running", "pid": float64(1234)}
 	}
 	health := lc.Status()
@@ -123,7 +123,7 @@ func TestStatusIsRedactedReadOnlyComputerProjection(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`{"server_url":"https://leagent.me","token":"user-secret"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	lc := &Lifecycle{Probe: func(context.Context, int) map[string]any {
+	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{
 			"status": "running", "connected": true, "pid": float64(42),
 			"server_url": "https://api.leagent.me", "environment": "production", "release_channel": "latest",
@@ -163,7 +163,7 @@ func TestStatusReportsResidentConfigurationDrift(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".multica", "config.json"), []byte(`{"environment":"test","release_channel":"alpha","server_url":"https://test.leagent.me","app_url":"https://test.leagent.me"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	lc := &Lifecycle{Probe: func(context.Context, int) map[string]any {
+	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{
 			"status": "running", "server_url": "https://api.leagent.me",
 			"environment": "production", "release_channel": "latest",
@@ -179,7 +179,7 @@ func TestStatusReportsResidentConfigurationDrift(t *testing.T) {
 
 func TestStopWhenNotRunning(t *testing.T) {
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{"status": "stopped"}
 	}
 	res := lc.Stop()
@@ -190,6 +190,8 @@ func TestStopWhenNotRunning(t *testing.T) {
 
 func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SHUTDOWN_SOURCE", "")
+	t.Setenv("MULTICA_SHUTDOWN_ACTION", "")
 	lc := &Lifecycle{}
 
 	if err := os.MkdirAll(filepath.Dir(PIDPath("")), 0o755); err != nil {
@@ -197,7 +199,7 @@ func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 	}
 
 	var calls atomic.Int32
-	lc.Probe = func(_ context.Context, _ int) map[string]any {
+	lc.Probe = func(_ context.Context, _ string) map[string]any {
 		if calls.Add(1) == 1 {
 			return map[string]any{"status": "running", "pid": float64(4242)}
 		}
@@ -210,7 +212,11 @@ func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restore := setRequestShutdown(func(int) error { return nil })
+	var shutdown ShutdownRequest
+	restore := setRequestShutdown(func(_ string, audit ShutdownRequest) error {
+		shutdown = audit
+		return nil
+	})
 	defer restore()
 
 	res := lc.Stop()
@@ -226,6 +232,9 @@ func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("Stop returned error: %v", res.Err)
 	}
+	if shutdown.Source != "cli" || shutdown.Action != "stop" || shutdown.RequestPID != os.Getpid() {
+		t.Fatalf("shutdown audit = %+v", shutdown)
+	}
 	if _, err := os.Stat(PIDPath("")); !os.IsNotExist(err) {
 		t.Fatalf("Stop did not clear the PID file: %v", err)
 	}
@@ -233,12 +242,18 @@ func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 
 func TestRestartDoesNotStartSuccessorUntilResidentStopIsProven(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SHUTDOWN_SOURCE", "")
+	t.Setenv("MULTICA_SHUTDOWN_ACTION", "")
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{"status": "running", "pid": float64(os.Getpid())}
 	}
 	lc.Sleep = func(time.Duration) {}
-	restoreShutdown := setRequestShutdown(func(int) error { return nil })
+	var shutdown ShutdownRequest
+	restoreShutdown := setRequestShutdown(func(_ string, audit ShutdownRequest) error {
+		shutdown = audit
+		return nil
+	})
 	defer restoreShutdown()
 	spawnCalls := 0
 	restoreSpawn := setSpawnResident(func(string, []string, *os.File) (procHandle, error) {
@@ -253,6 +268,9 @@ func TestRestartDoesNotStartSuccessorUntilResidentStopIsProven(t *testing.T) {
 	}
 	if spawnCalls != 0 {
 		t.Fatalf("Restart spawned %d successors before stop proof", spawnCalls)
+	}
+	if shutdown.Action != "restart" {
+		t.Fatalf("shutdown action = %q, want restart", shutdown.Action)
 	}
 }
 
@@ -277,7 +295,7 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 
 	lc := &Lifecycle{}
 	var calls atomic.Int32
-	lc.Probe = func(_ context.Context, _ int) map[string]any {
+	lc.Probe = func(_ context.Context, _ string) map[string]any {
 		if calls.Add(1) == 1 {
 			return map[string]any{"status": "running", "pid": float64(pid)}
 		}
@@ -285,7 +303,7 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 	}
 	lc.Sleep = func(time.Duration) {}
 
-	restore := setRequestShutdown(func(int) error { return os.ErrClosed })
+	restore := setRequestShutdown(func(string, ShutdownRequest) error { return os.ErrClosed })
 	defer restore()
 
 	res := lc.Stop()
@@ -301,7 +319,7 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 
 func TestStartBackgroundRefusesWhenAlreadyRunning(t *testing.T) {
 	lc := &Lifecycle{}
-	lc.Probe = func(_ context.Context, _ int) map[string]any {
+	lc.Probe = func(_ context.Context, _ string) map[string]any {
 		return map[string]any{"status": "running", "pid": float64(4321)}
 	}
 	_, err := lc.StartBackground(StartOptions{})
@@ -320,7 +338,7 @@ func TestStartBackgroundRejectsAmbiguousIdentityBeforeSpawning(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(legacyRoot, "daemon.id"), []byte("019fa370-a2ab-71ad-b280-62ebe1f78f58\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	lc := &Lifecycle{Probe: func(context.Context, int) map[string]any {
+	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{"status": "stopped"}
 	}}
 	spawned := false
@@ -340,7 +358,7 @@ func TestStartBackgroundRejectsAmbiguousIdentityBeforeSpawning(t *testing.T) {
 }
 
 // setRequestShutdown temporarily replaces the graceful-shutdown transport.
-func setRequestShutdown(fn func(int) error) func() {
+func setRequestShutdown(fn func(string, ShutdownRequest) error) func() {
 	old := requestShutdown
 	requestShutdown = fn
 	return func() { requestShutdown = old }
@@ -373,7 +391,7 @@ func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	// Probe: first call (already-running guard) reports stopped; readiness
 	// polls report running.
 	var calls atomic.Int32
-	lc.Probe = func(_ context.Context, _ int) map[string]any {
+	lc.Probe = func(_ context.Context, _ string) map[string]any {
 		if calls.Add(1) == 1 {
 			return map[string]any{"status": "stopped"}
 		}

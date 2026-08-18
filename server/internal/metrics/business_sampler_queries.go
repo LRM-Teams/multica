@@ -355,39 +355,6 @@ WHERE status = 'scheduled'
 	return nil
 }
 
-// queryMachineUpgradeOperations exposes the canonical server-owned lifecycle
-// without turning machine identity into a Prometheus dimension. Database
-// constraints already bound phase/result; the normalizers remain the metric
-// boundary so compatibility rows or future enum additions collapse safely.
-func (c *BusinessSamplerCollector) queryMachineUpgradeOperations(
-	ctx context.Context, tx pgx.Tx, snap *samplerSnapshot,
-) error {
-	const stmt = `
-SELECT phase, COALESCE(result, ''), count(*) AS n
-FROM machine_upgrade
-GROUP BY 1, 2
-LIMIT 100
-`
-	rows, err := tx.Query(ctx, stmt)
-	if err != nil {
-		return fmt.Errorf("machine_upgrade_operations: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var rawPhase, rawOutcome string
-		var n int64
-		if err := rows.Scan(&rawPhase, &rawOutcome, &n); err != nil {
-			return fmt.Errorf("machine_upgrade_operations scan: %w", err)
-		}
-		key := machineUpgradeMetricKey{
-			phase:   normalizeMachineUpgradePhase(rawPhase),
-			outcome: normalizeMachineUpgradeOutcome(rawOutcome),
-		}
-		snap.machineUpgrades[key] += float64(n)
-	}
-	return rows.Err()
-}
-
 // queryResearchExecution samples the durable execution ledger. Each SELECT
 // has a statically bounded label space and its own LIMIT, so one category
 // cannot truncate another category or create user-controlled Prometheus
@@ -400,7 +367,7 @@ SELECT
   status,
   CASE
     WHEN run_initialized_at IS NULL THEN 'legacy'
-    WHEN orchestrator_version IN ('research-run-v1', 'research-run-v2', 'research-run-v3', 'research-run-v4', 'research-run-v5') THEN orchestrator_version
+    WHEN orchestrator_version IN ('research-run-v1', 'research-run-v2', 'research-run-v3', 'research-run-v4', 'research-run-v5', 'research-run-v6') THEN orchestrator_version
     ELSE 'other'
   END,
   count(*) AS n
@@ -592,6 +559,46 @@ LIMIT 100
 		return fmt.Errorf("research_integrity cancellation: %w", err)
 	}
 	snap.researchCancellationPending = float64(cancellationCount)
+
+	const v6HealthStmt = `
+SELECT condition, count(*)::bigint FROM (
+  SELECT 'awaiting_director' AS condition FROM research_session
+   WHERE orchestrator_version='research-run-v6' AND status='awaiting_director'
+  UNION ALL
+  SELECT 'director_unavailable' FROM research_director_assignment a
+   JOIN research_session s ON s.id=a.session_id
+   WHERE s.orchestrator_version='research-run-v6' AND a.status='unavailable'
+  UNION ALL
+  SELECT 'lost_attempt' FROM research_work_item_attempt a
+   JOIN research_session s ON s.id=a.session_id
+   WHERE s.orchestrator_version='research-run-v6' AND a.status='lost'
+  UNION ALL
+  SELECT 'report_object_missing' FROM research_report r
+   JOIN research_session s ON s.id=r.session_id
+   WHERE s.orchestrator_version='research-run-v6' AND r.status='published'
+     AND (r.document_storage_key IS NULL OR r.document_storage_generation IS NULL)
+) health
+GROUP BY condition
+LIMIT 4
+`
+	rows, err := tx.Query(ctx, v6HealthStmt)
+	if err != nil {
+		return fmt.Errorf("research_integrity v6 health: %w", err)
+	}
+	for rows.Next() {
+		var condition string
+		var count int64
+		if err := rows.Scan(&condition, &count); err != nil {
+			rows.Close()
+			return fmt.Errorf("research_integrity v6 health scan: %w", err)
+		}
+		snap.researchV6Health[condition] = float64(count)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("research_integrity v6 health rows: %w", err)
+	}
+	rows.Close()
 
 	return nil
 }

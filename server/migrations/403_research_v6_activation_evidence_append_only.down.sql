@@ -1,0 +1,3 @@
+DROP TRIGGER IF EXISTS research_v6_activation_evidence_append_only
+  ON research_v6_activation_evidence;
+DROP FUNCTION IF EXISTS research_v6_activation_evidence_append_only_fn();

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
@@ -93,7 +92,7 @@ const (
 // hot heartbeat path; the DB is allowed to lag up to runtimeHeartbeatDBFlushInterval).
 // When liveness is unavailable or errors, we fall back to trusting the DB
 // stale window — that is the original behavior.
-func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus, agentRestartDB *pgxpool.Pool) {
+func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 
@@ -109,22 +108,8 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, liveness handle
 			sweepQueuedTasksOnOfflineRuntimes(ctx, queries, taskSvc)
 			gcRuntimes(ctx, queries, bus)
 			gcExpiredAgentCredentials(ctx, queries)
-			sweepTimedOutAgentRestartOperations(ctx, agentRestartDB)
-		}
-	}
-}
 
-func sweepTimedOutAgentRestartOperations(ctx context.Context, exec *pgxpool.Pool) {
-	if exec == nil {
-		return
-	}
-	swept, err := handler.SweepTimedOutAgentRestartOperations(ctx, exec)
-	if err != nil {
-		slog.Warn("sweep timed-out Agent restart operations failed", "error", err)
-		return
-	}
-	if swept > 0 {
-		slog.Info("swept timed-out Agent restart operations", "count", swept)
+		}
 	}
 }
 

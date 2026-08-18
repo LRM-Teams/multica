@@ -56,7 +56,11 @@ import type { ExecutionRow } from "../execution-overlay";
 import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
-import { StarGraphCanvas } from "../star-graph";
+import {
+  StarGraphCanvas,
+  type StarGraphExpansionControl,
+  type StarGraphFusionTransition,
+} from "../star-graph";
 import { TrajectoryExplorer } from "../trajectory-explorer";
 import {
   STAR_GRAPH_MOBILE_DOM_BUDGET,
@@ -91,6 +95,7 @@ export function ResearchConstellationWorkspace({
   snapshotNodeCount = 0,
   typedGraphSessionId,
   typedGraphVersion = null,
+  projectionSource = null,
   snapshotNodes,
   selectedNode,
   onSelectNode,
@@ -115,6 +120,8 @@ export function ResearchConstellationWorkspace({
   typedGraphHasNextPage = false,
   typedGraphLoadMorePending = false,
   onLoadMoreTypedGraph,
+  expansionControl,
+  densityBins,
   className,
 }: {
   typedGraph: TypedGraphResponse | undefined;
@@ -127,9 +134,13 @@ export function ResearchConstellationWorkspace({
   snapshotNodeCount?: number;
   typedGraphSessionId?: string;
   typedGraphVersion?: number | null;
+  projectionSource?: "v5" | "v6" | null;
   typedGraphHasNextPage?: boolean;
   typedGraphLoadMorePending?: boolean;
   onLoadMoreTypedGraph?: () => void;
+  /** V6 Projection-owned one-layer disclosure state. */
+  expansionControl?: StarGraphExpansionControl;
+  densityBins?: readonly import("../star-graph").StarGraphDensityBin[];
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
@@ -226,6 +237,24 @@ export function ResearchConstellationWorkspace({
     style.textContent = semanticMotionCss();
     document.head.appendChild(style);
   }, []);
+
+  const fusionTransition = useMemo<StarGraphFusionTransition | null>(() => {
+    if (projectionSource !== "v6" || !typedGraph || !prevGraphRef.current) {
+      return null;
+    }
+    if (prevGraphRef.current.session_id !== typedGraph.session_id) return null;
+    const integration = buildTypedGraphMotionEvents(
+      prevGraphRef.current,
+      typedGraph,
+    ).find((event) => event.transition_kind === "integration_formed");
+    const [successorNodeId, ...sourceNodeIds] = integration?.related_ids ?? [];
+    if (!successorNodeId || sourceNodeIds.length === 0) return null;
+    return {
+      sequence: typedGraph.graph_version,
+      successorNodeId,
+      sourceNodeIds,
+    };
+  }, [projectionSource, typedGraph]);
 
   useEffect(() => {
     const node = hostRef.current;
@@ -350,6 +379,32 @@ export function ResearchConstellationWorkspace({
       if (onScreen) {
         const directive = motion.directiveFor(entity.id);
         if (directive) {
+          const transition = motion.transitionFor(entity.id);
+          const anchor = transition?.anchorId
+            ? canvasModel.entities.find(
+                (candidate) => candidate.id === transition.anchorId,
+              )
+            : null;
+          if (
+            transition?.verb === "appear" &&
+            anchor &&
+            anchor.id !== entity.id
+          ) {
+            map.set(entity.id, {
+              ...directive,
+              className: `${directive.className} research-motion-anchored-appear`,
+              style: {
+                ...directive.style,
+                animationName: "research-motion-anchored-appear",
+                "--motion-anchor-x": `${anchor.x - entity.x}px`,
+                "--motion-anchor-y": `${anchor.y - entity.y}px`,
+                "--motion-anchor-blur": motion.profile.lowPerformance
+                  ? "0px"
+                  : "4px",
+              },
+            });
+            continue;
+          }
           map.set(entity.id, directive);
           continue;
         }
@@ -373,6 +428,7 @@ export function ResearchConstellationWorkspace({
     motion.markerFor,
     motion.profile.lowPerformance,
     motion.queueSize,
+    motion.transitionFor,
     relatedNodeIds,
     selectedNode?.id,
   ]);
@@ -506,18 +562,29 @@ export function ResearchConstellationWorkspace({
       onSelectNode(resolved);
       setRailMode("detail");
 
+      if (projectionSource === "v6") {
+        const v6Node = typedGraph?.nodes.find((node) => node.id === nodeId);
+        const v6Level = (v6Node?.level || "").toLowerCase();
+        if (v6Level === "s" && v6Node?.actor_agent_id) {
+          setRailOpen(false);
+          openAgentInspector(v6Node.actor_agent_id);
+          return;
+        }
+        if (v6Level === "l" || v6Level === "xl" || v6Level === "xxl") {
+          if (isMobile) setRailOpen(false);
+          openReport();
+          return;
+        }
+        setRailOpen(true);
+        closeOverlay();
+        return;
+      }
+
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
-        if (isMobile) {
-          setRailOpen(false);
-          openAgentInspector(typedNode.actor_agent_id);
-        } else {
-          // The persistent desktop rail is the single detail surface. A second
-          // canvas overlay duplicates task data and obscures the constellation.
-          setRailOpen(true);
-          closeOverlay();
-        }
+        setRailOpen(false);
+        openAgentInspector(typedNode.actor_agent_id);
         return;
       }
       if (level === "l" || level === "xl" || level === "xxl") {
@@ -534,12 +601,41 @@ export function ResearchConstellationWorkspace({
       onSelectNode,
       openAgentInspector,
       openReport,
+      projectionSource,
       setRailMode,
       setRailOpen,
       snapshotNodes,
       typedGraph,
     ],
   );
+
+  const handleCanvasFocus = useCallback(
+    (nodeId: string) => {
+      onSelectNode(
+        resolveResearchCanvasNode(nodeId, {
+          snapshotNodes,
+          typedGraph,
+        }),
+      );
+      setRailMode("detail");
+      setRailOpen(true);
+      closeOverlay();
+    },
+    [
+      closeOverlay,
+      onSelectNode,
+      setRailMode,
+      setRailOpen,
+      snapshotNodes,
+      typedGraph,
+    ],
+  );
+
+  const handleCanvasBackground = useCallback(() => {
+    closeOverlay();
+    onSelectNode(null);
+    setRailMode("chat");
+  }, [closeOverlay, onSelectNode, setRailMode]);
 
   const handleTrajectorySelect = useCallback(
     (nodeId: string | null) => {
@@ -671,8 +767,13 @@ export function ResearchConstellationWorkspace({
             model={canvasModel}
             cameraSessionId={`${overlaySessionId}:d5-visual-v3`}
             selectedNodeId={selectedNode?.id ?? null}
-            onSelectNode={handleCanvasSelect}
+            onSelectNode={handleCanvasFocus}
+            onClearSelection={handleCanvasBackground}
             onOpenNode={handleCanvasSelect}
+            expansionControl={expansionControl}
+            densityBins={densityBins}
+            fusionTransition={fusionTransition}
+            fusionLowPerformance={motion.profile.lowPerformance}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
             filterHiddenNote={filterHiddenNote}
@@ -684,6 +785,9 @@ export function ResearchConstellationWorkspace({
             rightPanelWidth={0}
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
+            hideUnselectedSTierRelations={projectionSource === "v6"}
+            semanticLandmarkLabels={projectionSource === "v6"}
+            sTierPresentation={projectionSource === "v6" ? "point" : "label"}
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}
@@ -713,6 +817,7 @@ export function ResearchConstellationWorkspace({
         {showForming ? (
           <ResearchCanvasForming
             mode={formingMode ?? "forming"}
+            directorMode={projectionSource === "v6"}
             stage={formingStage}
             members={formingMembers ?? []}
             tasks={formingTasks ?? []}

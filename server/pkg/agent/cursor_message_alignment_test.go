@@ -18,7 +18,7 @@ func TestCursorImplementsCanonicalIdleMessageInput(t *testing.T) {
 
 func TestCursorAcceptsCanonicalIdleMessageAtNativePromptBoundary(t *testing.T) {
 	writer := &requestCaptureWriter{lines: make(chan []byte, 1)}
-	client := &hermesClient{stdin: writer, pending: make(map[int]*pendingRPC)}
+	client := &acpClient{stdin: writer, pending: make(map[int]*pendingRPC)}
 	process := &cursorACPProcess{client: client, sessionID: "session-cursor"}
 	backend := newCursorACPBackend(Config{})
 	backend.process.Store(process)

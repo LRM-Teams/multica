@@ -4,7 +4,9 @@ import {
   centerCameraOnPoint,
   computeEntityBounds,
   fitCameraToBounds,
+  focusCameraOnEntity,
   isEdgeLabelClear,
+  planExpansionTransactionCamera,
   quadraticEdgePath,
   relationEdgeClass,
   zoomCamera,
@@ -117,6 +119,13 @@ describe("star-graph-canvas-utils", () => {
     expect(relationEdgeClass("challenge", "contradicts")).toBe("sg-edge-challenge");
     expect(relationEdgeClass("newdir", "restart_of")).toBe("sg-edge-newdir");
     expect(relationEdgeClass("support", "merged_from")).toBe("sg-edge-merge");
+    expect(relationEdgeClass("support", "absorbed_into")).toBe("sg-edge-merge");
+    expect(relationEdgeClass("decompose", "collapsed_path")).toBe(
+      "sg-edge-decompose",
+    );
+    expect(relationEdgeClass("challenge", "challenges")).toBe(
+      "sg-edge-challenge",
+    );
     expect(relationEdgeClass("support", "integrates")).toBe("sg-edge-merge");
     expect(relationEdgeClass("decompose", "decomposes")).toBe(
       "sg-edge-decompose",
@@ -178,5 +187,81 @@ describe("star-graph-canvas-utils", () => {
     const safeCenterX = 56 + (1200 - 360 - 112) / 2;
     expect(camera.x).toBeCloseTo(safeCenterX - 400, 0);
     expect(camera.y).toBeCloseTo(400 - 300, 0);
+  });
+
+  it("zooms an overview camera until an M+ landmark is readable", () => {
+    const camera = focusCameraOnEntity(
+      { x: 400, y: 300, radius: 48, tier: "m" },
+      { width: 1200, height: 800 },
+      { x: 0, y: 0, zoom: 0.25 },
+      { rightPanelWidth: 360 },
+    );
+
+    expect(camera.zoom).toBeCloseTo(1.375, 3);
+    expect(camera.x).toBeCloseTo(420 - 400 * camera.zoom, 0);
+    expect(camera.y).toBeCloseTo(400 - 300 * camera.zoom, 0);
+  });
+
+  it("preserves a closer user camera and does not enlarge S points", () => {
+    const landmark = focusCameraOnEntity(
+      { x: 0, y: 0, radius: 110, tier: "xl" },
+      { width: 1000, height: 700 },
+      { x: 10, y: 20, zoom: 1.6 },
+    );
+    const workPoint = focusCameraOnEntity(
+      { x: 0, y: 0, radius: 29, tier: "s" },
+      { width: 1000, height: 700 },
+      { x: 10, y: 20, zoom: 0.4 },
+    );
+
+    expect(landmark.zoom).toBe(1.6);
+    expect(workPoint.zoom).toBe(0.4);
+  });
+
+  it("frames only the root and server-declared expanded layer", () => {
+    const entity = (id: string, x: number) => ({
+      id,
+      x,
+      y: 200,
+      radius: 48,
+      tier: "m",
+      view: { tier: "m", state: "default", title: id },
+    });
+    const camera = planExpansionTransactionCamera(
+      {
+        entities: [entity("root", 200), entity("child", 900), entity("unrelated", 4000)],
+      } as unknown as import("../lib/star-canvas-view-model").StarCanvasViewModel,
+      {
+        sequence: 12,
+        kind: "expand",
+        rootNodeId: "root",
+        revealedNodeIds: ["child"],
+      },
+      { width: 1200, height: 800 },
+      { x: 0, y: 0, zoom: 1 },
+      { rightPanelWidth: 320 },
+    );
+
+    expect(camera).not.toBeNull();
+    expect(camera!.zoom).toBeGreaterThan(0.25);
+    expect(camera!.x).toBeGreaterThan(-1000);
+  });
+
+  it("waits until an explicitly revealed node is present", () => {
+    const camera = planExpansionTransactionCamera(
+      {
+        entities: [{ id: "root", x: 200, y: 200, radius: 80, tier: "xl" }],
+      } as unknown as import("../lib/star-canvas-view-model").StarCanvasViewModel,
+      {
+        sequence: 13,
+        kind: "expand",
+        rootNodeId: "root",
+        revealedNodeIds: ["not-loaded"],
+      },
+      { width: 1200, height: 800 },
+      { x: 0, y: 0, zoom: 1 },
+    );
+
+    expect(camera).toBeNull();
   });
 });

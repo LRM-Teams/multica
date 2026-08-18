@@ -189,6 +189,32 @@ type TaskAvailablePayload struct {
 	TaskID    string `json:"task_id,omitempty"`
 }
 
+// AgentSkillsListPayload asks a daemon to report the skills visible to one
+// agent. Global skills come from the daemon's provider home; workspace skills
+// come from the agent workspace.
+type AgentSkillsListPayload struct {
+	AgentID   string `json:"agentId"`
+	Runtime   string `json:"runtime,omitempty"`
+	RequestID string `json:"requestId,omitempty"`
+}
+
+type AgentSkillSummary struct {
+	Name                   string `json:"name"`
+	Description            string `json:"description"`
+	Path                   string `json:"path"`
+	Source                 string `json:"source"`
+	Type                   string `json:"type,omitempty"`
+	DisableModelInvocation bool   `json:"disableModelInvocation,omitempty"`
+	IsSubSkill             bool   `json:"isSubSkill,omitempty"`
+}
+
+type AgentSkillsListResultPayload struct {
+	AgentID   string              `json:"agentId"`
+	RequestID string              `json:"requestId,omitempty"`
+	Global    []AgentSkillSummary `json:"global"`
+	Workspace []AgentSkillSummary `json:"workspace"`
+}
+
 // AgentMessageProjection is the canonical Message data the coordinator may
 // hand to a runtime. Target is the internal Context Boundary key;
 // ReplyTarget is the recipient-relative CLI target exposed to the runtime.
@@ -310,17 +336,6 @@ type AgentDeliverAckPayload struct {
 	Seq         int64  `json:"seq"`
 	DeliveryID  string `json:"deliveryId"`
 	Traceparent string `json:"traceparent,omitempty"`
-}
-
-// AgentMessageHandoffPayload is the content-free observation emitted after a
-// concrete batch crosses the runtime input boundary. Message bodies never
-// travel back to the Server through this Activity seam.
-type AgentMessageHandoffPayload struct {
-	AgentID   string   `json:"agent_id"`
-	RuntimeID string   `json:"runtime_id"`
-	HandoffID string   `json:"handoff_id"`
-	Count     int      `json:"count"`
-	Targets   []string `json:"targets"`
 }
 
 // SandboxJobAvailablePayload is sent from server to a shared sandbox node as a

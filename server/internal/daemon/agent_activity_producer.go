@@ -4,22 +4,51 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func activityNarrativeEntry(detailKind, text string) (protocol.AgentActivityEntry, error) {
-	body, err := json.Marshal(protocol.AgentActivityNarrativeBody{
-		Text:       text,
+func activityStatusEntry(detailKind, text string) (protocol.AgentActivityEntry, error) {
+	body, err := json.Marshal(protocol.AgentActivityStatusBody{
+		Activity:   activityKindFromDetail(detailKind),
+		Detail:     text,
 		DetailKind: detailKind,
 	})
 	if err != nil {
 		return protocol.AgentActivityEntry{}, err
 	}
-	return protocol.AgentActivityEntry{Kind: "narrative", Position: 0, Body: body}, nil
+	return protocol.AgentActivityEntry{Kind: "status", Body: body}, nil
+}
+
+func activityKindFromDetail(detailKind string) string {
+	if detailKind == "idle" || detailKind == "ready" {
+		return protocol.ActivityKindOnline
+	}
+	if detailKind == "thinking_started" {
+		return protocol.ActivityKindThinking
+	}
+	if detailKind == "runtime_error" || detailKind == "runtime_crashed" || detailKind == "runtime_stalled" {
+		return protocol.ActivityKindError
+	}
+	if detailKind == "runtime_unavailable" || detailKind == "stopped" {
+		return protocol.ActivityKindOffline
+	}
+	return protocol.ActivityKindWorking
+}
+
+func activityToolStartEntry(toolName, toolInput string) (protocol.AgentActivityEntry, error) {
+	toolInput = truncateRunes(toolInput, maxActivityCommandRunes)
+	body, err := json.Marshal(protocol.AgentActivityToolStartBody{
+		ToolName:  toolName,
+		ToolInput: toolInput,
+	})
+	if err != nil {
+		return protocol.AgentActivityEntry{}, err
+	}
+	return protocol.AgentActivityEntry{Kind: "tool_start", Body: body}, nil
 }
 
 func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error) {
@@ -27,7 +56,7 @@ func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error
 	if err != nil {
 		return protocol.AgentActivityEntry{}, err
 	}
-	return protocol.AgentActivityEntry{Kind: "system", Position: 0, Body: body}, nil
+	return protocol.AgentActivityEntry{Kind: "system", Body: body}, nil
 }
 
 const (
@@ -42,7 +71,6 @@ type agentActivityProducer struct {
 	mu sync.Mutex
 
 	now                 func() time.Time
-	newID               func() string
 	schedule            func(time.Duration, func()) func()
 	send                func(protocol.AgentActivityPayload)
 	daemonInstanceID    string
@@ -58,6 +86,7 @@ type agentActivityProducerKey struct {
 type agentActivityProducerState struct {
 	snapshot           protocol.AgentActivitySnapshot
 	detail             string
+	latestActivity     protocol.AgentActivityPayload
 	status             protocol.AgentStatusPayload
 	session            protocol.AgentSessionPayload
 	connected          bool
@@ -86,7 +115,6 @@ func newAgentActivityProducer(daemonInstanceID string, now func() time.Time, sen
 	return &agentActivityProducer{
 		daemonInstanceID: daemonInstanceID,
 		now:              now,
-		newID:            func() string { return uuid.NewString() },
 		schedule: func(delay time.Duration, callback func()) func() {
 			timer := time.AfterFunc(delay, callback)
 			return func() { timer.Stop() }
@@ -213,7 +241,7 @@ func (p *agentActivityProducer) AttachTransport(send func(protocol.AgentActivity
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentStatus, Payload: state.status})
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentSession, Payload: state.session})
 		if !state.snapshot.ObservedAt.IsZero() {
-			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot, Detail: state.detail}})
+			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: state.latestActivity})
 		}
 	}
 	return p.transportGeneration, frames
@@ -245,7 +273,7 @@ func clearAgentActivityCompaction(state *agentActivityProducerState) {
 	}
 	state.compaction = agentActivityCompactionState{}
 }
-func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {
+func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, broadcast activityBroadcast) error {
 	key := agentActivityProducerKey{agentID: snapshot.AgentID, launchID: snapshot.LaunchID}
 	state := p.states[key]
 	if state == nil {
@@ -261,26 +289,28 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 		snapshot.ClientSequence = state.lastClientSequence + 1
 	}
 	if snapshot.ProducerFactID == "" {
-		snapshot.ProducerFactID = p.newID()
+		snapshot.ProducerFactID = raftActivityProducerFactID(snapshot.AgentID, snapshot.LaunchID, snapshot.DaemonInstanceID, snapshot.ClientSequence)
 	}
-	detail := ""
+	detail := broadcast.detail
 	if snapshot.DetailKind == state.snapshot.DetailKind {
-		detail = state.detail
+		if detail == "" {
+			detail = state.detail
+		}
 	}
-	for _, entry := range entries {
-		if entry.Kind != "narrative" {
+	for _, entry := range broadcast.trajectory {
+		if entry.Kind != "status" {
 			continue
 		}
-		var body protocol.AgentActivityNarrativeBody
-		if json.Unmarshal(entry.Body, &body) == nil && body.Text != "" {
-			detail = body.Text
+		var body protocol.AgentActivityStatusBody
+		if json.Unmarshal(entry.Body, &body) == nil && body.Detail != "" {
+			detail = body.Detail
 			break
 		}
 	}
 	if detail == "" {
 		detail = defaultAgentActivityDetail(snapshot.DetailKind)
 	}
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: detail, Entries: entries}
+	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Detail: detail, Entries: broadcast.trajectory}
 	if err := payload.Validate(); err != nil {
 		return err
 	}
@@ -289,6 +319,7 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 	}
 	state.snapshot = snapshot
 	state.detail = detail
+	state.latestActivity = payload
 	state.lastClientSequence = snapshot.ClientSequence
 	state.lastHeartbeatAt = snapshot.ObservedAt
 	if state.connected && p.send != nil {
@@ -313,13 +344,14 @@ func (p *agentActivityProducer) Tick() {
 		}
 		heartbeat := state.snapshot
 		heartbeat.ClientSequence = state.lastClientSequence + 1
-		heartbeat.ProducerFactID = p.newID()
+		heartbeat.ProducerFactID = raftActivityProducerFactID(heartbeat.AgentID, heartbeat.LaunchID, heartbeat.DaemonInstanceID, heartbeat.ClientSequence)
 		heartbeat.ObservedAt = now
 		state.snapshot = heartbeat
 		state.lastClientSequence = heartbeat.ClientSequence
 		state.lastHeartbeatAt = now
+		state.latestActivity = protocol.AgentActivityPayload{Snapshot: heartbeat, Detail: state.detail, IsHeartbeat: true}
 		if state.connected && p.send != nil {
-			p.send(protocol.AgentActivityPayload{Snapshot: heartbeat, Detail: state.detail, IsHeartbeat: true})
+			p.send(state.latestActivity)
 		}
 	}
 }
@@ -348,8 +380,9 @@ func (p *agentActivityProducer) Probe(probe protocol.AgentActivityProbePayload) 
 	return payload, nil
 }
 
-// ReconnectFrames reports only current status, session, and Snapshot for every
-// managed Agent. It intentionally cannot replay intermediate Entries.
+// ReconnectFrames reports current status, session, and Raft's latest complete
+// Activity frame for every managed Agent. Replaying the complete frame keeps
+// its Timeline Entry attached to the Snapshot across a connection loss.
 func (p *agentActivityProducer) ReconnectFrames() []agentActivityReconnectFrame {
 	if p == nil {
 		return nil
@@ -362,10 +395,25 @@ func (p *agentActivityProducer) ReconnectFrames() []agentActivityReconnectFrame 
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentStatus, Payload: state.status})
 		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentSession, Payload: state.session})
 		if !state.snapshot.ObservedAt.IsZero() {
-			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot, Detail: state.detail}})
+			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: state.latestActivity})
 		}
 	}
 	return frames
+}
+
+// raftActivityProducerFactID is Raft 1.0.16's deterministic fact identity:
+// daemon_activity:{agent}:{launch}:{daemonInstance}:{clientSeq}. Same process
+// and seq replay the same fact; a new daemon instance starts a new identity.
+func raftActivityProducerFactID(agentID, launchID, daemonInstanceID string, clientSeq int64) string {
+	launch := strings.TrimSpace(launchID)
+	if launch == "" {
+		launch = "legacy"
+	}
+	generation := ""
+	if instance := strings.TrimSpace(daemonInstanceID); instance != "" {
+		generation = ":" + instance
+	}
+	return fmt.Sprintf("daemon_activity:%s:%s%s:%d", strings.TrimSpace(agentID), launch, generation, clientSeq)
 }
 
 func defaultAgentActivityDetail(detailKind string) string {

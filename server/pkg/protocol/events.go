@@ -144,7 +144,6 @@ const (
 	// boundary deduplicated it. It is never a provider-turn completion receipt.
 	EventAgentDeliver               = "agent:deliver"
 	EventAgentDeliverAck            = "agent:deliver:ack"
-	EventAgentMessageHandoff        = "agent:message_handoff"
 	EventMixedRunActivityTransition = "mixed_run:activity_transition"
 	EventMixedRunActivityAck        = "mixed_run:activity_transition:ack"
 	EventDaemonAgentStart           = "agent:start"
@@ -173,6 +172,8 @@ const (
 	// Computer protocol. Correlated by RequestID. See protocol.ReadWorkdirFile*.
 	EventAgentWorkspaceRead        = "agent:workspace:read"
 	EventAgentWorkspaceFileContent = "agent:workspace:file_content"
+	EventAgentSkillsList           = "agent:skills:list"
+	EventAgentSkillsListResult     = "agent:skills:list_result"
 	// Workdir single-file write RPC: server pushes a bounded UTF-8 text write,
 	// daemon writes inside the confined workdir root and replies with a content
 	// hash or conflict/error. Correlated by RequestID.

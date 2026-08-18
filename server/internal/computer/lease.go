@@ -2,17 +2,14 @@ package computer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const (
-	residentLockFile     = "resident.lock"
-	startLockFile        = "start.lock"
-	bindingChildLockFile = "runner.lock"
+	residentLockFile = "resident.lock"
+	startLockFile    = "start.lock"
 )
 
 // FileLease holds an OS advisory lock for as long as its file descriptor is
@@ -52,26 +49,6 @@ func acquireStartLease(ctx context.Context, root string) (*FileLease, error) {
 	lease, err := acquireFileLease(ctx, root, startLockFile)
 	if err != nil {
 		return nil, fmt.Errorf("acquire start lease: %w", err)
-	}
-	return lease, nil
-}
-
-// AcquireBindingChildLease is the cross-Host at-most-one execution gate for
-// one Workspace Binding. An orphaned child keeps the lease across a Host
-// crash, so a successor Host cannot start a second execution owner before the
-// orphan detects lease loss and exits. Sibling Workspaces use independent
-// lock files.
-func AcquireBindingChildLease(ctx context.Context, bindingsRoot, environment, workspaceID string) (*FileLease, error) {
-	bindingsRoot = filepath.Clean(bindingsRoot)
-	environment = strings.TrimSpace(environment)
-	workspaceID = strings.TrimSpace(workspaceID)
-	if bindingsRoot == "." || environment == "" || workspaceID == "" || strings.ContainsAny(workspaceID, "/\\") || workspaceID == "." || workspaceID == ".." {
-		return nil, errors.New("Binding child lease identity is invalid")
-	}
-	root := filepath.Join(bindingsRoot, "binding-children", environment, workspaceID)
-	lease, err := acquireFileLease(ctx, root, bindingChildLockFile)
-	if err != nil {
-		return nil, fmt.Errorf("acquire Binding child lease: %w", err)
 	}
 	return lease, nil
 }

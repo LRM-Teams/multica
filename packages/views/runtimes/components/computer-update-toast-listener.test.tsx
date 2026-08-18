@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   toastDismiss: vi.fn(),
   initiateMachineUpgrade: vi.fn(),
   invalidateQueries: vi.fn(),
+  wsHandlers: new Map<string, (payload: unknown) => void>(),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -27,10 +28,15 @@ vi.mock("sonner", () => ({
   },
 }));
 
+vi.mock("@multica/core/realtime", () => ({
+  useWSEvent: (event: string, handler: (payload: unknown) => void) => {
+    mocks.wsHandlers.set(event, handler);
+  },
+}));
+
 vi.mock("@multica/core/api", () => ({
   api: {
     initiateMachineUpgrade: mocks.initiateMachineUpgrade,
-    getMachineUpgrade: vi.fn(),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -63,17 +69,6 @@ function s143Runtime(): AgentRuntime {
     daemon_target_version: "v0.4.24-alpha.12",
     update_state: "idle",
     runtime_health: "update_available",
-    machine_upgrade: {
-      id: "machine-upgrade-alpha-11",
-      daemon_id: "1298b34b-b7de-4309-bdfb-71043265052d",
-      request_id: "request-alpha-11",
-      requested_target: "v0.4.24-alpha.11",
-      resolved_target: "v0.4.24-alpha.11",
-      phase: "completed",
-      result: "completed",
-      created_at: "2026-08-11T13:00:00Z",
-      updated_at: "2026-08-11T13:05:00Z",
-    },
     owner_id: "user-1",
     last_seen_at: new Date().toISOString(),
     created_at: "2026-08-11T12:00:00Z",
@@ -91,6 +86,7 @@ describe("ComputerUpdateToastListener", () => {
       () => new Promise(() => {}),
     );
     mocks.invalidateQueries.mockReset();
+    mocks.wsHandlers.clear();
     window.localStorage.clear();
   });
 
@@ -115,5 +111,84 @@ describe("ComputerUpdateToastListener", () => {
       "v0.4.24-alpha.12",
       expect.any(String),
     );
+  });
+
+  it("shows success when the runtime reaches the target version without a done event", async () => {
+    mocks.initiateMachineUpgrade.mockResolvedValue({});
+    const user = userEvent.setup();
+    const { rerender } = renderWithI18n(<ComputerUpdateToastListener />);
+
+    await waitFor(() => expect(mocks.toastCustom).toHaveBeenCalledTimes(1));
+    const renderPrompt = mocks.toastCustom.mock.calls[0]?.[0] as (
+      id: string | number,
+    ) => ReactNode;
+    render(renderPrompt("computer-update:s143"));
+    await user.click(screen.getByRole("button", { name: "Update now" }));
+
+    await waitFor(() => expect(mocks.toastCustom).toHaveBeenCalledTimes(3));
+
+    mocks.runtimes = [
+      {
+        ...s143Runtime(),
+        current_version: "0.4.24-alpha.12",
+        target_version: null,
+        daemon_target_version: null,
+        runtime_health: "ok",
+      },
+    ];
+    rerender(<ComputerUpdateToastListener />);
+
+    await waitFor(() => {
+      const renderToast = mocks.toastCustom.mock.lastCall?.[0] as (
+        id: string | number,
+      ) => ReactNode;
+      const view = render(renderToast("computer-update:s143"));
+      expect(view.getByText("s143 updated")).toBeInTheDocument();
+      expect(view.getByText("Now on v0.4.24-alpha.12")).toBeInTheDocument();
+      view.unmount();
+    });
+  });
+
+  it("shows the current daemon upgrade phase", async () => {
+    const user = userEvent.setup();
+    renderWithI18n(<ComputerUpdateToastListener />);
+
+    await waitFor(() => expect(mocks.toastCustom).toHaveBeenCalledTimes(1));
+    const renderPrompt = mocks.toastCustom.mock.calls[0]?.[0] as (
+      id: string | number,
+    ) => ReactNode;
+    render(renderPrompt("computer-update:s143"));
+    await user.click(screen.getByRole("button", { name: "Update now" }));
+
+    const requestId = mocks.initiateMachineUpgrade.mock.calls[0]?.[2] as string;
+    mocks.wsHandlers.get("computer:upgrade:progress")?.({
+      computer_id: "1298b34b-b7de-4309-bdfb-71043265052d",
+      requestId,
+      phase: "verifying",
+    });
+    await waitFor(() => {
+      const renderToast = mocks.toastCustom.mock.lastCall?.[0] as (
+        id: string | number,
+      ) => ReactNode;
+      const view = render(renderToast("computer-update:s143"));
+      expect(view.getByText("Verifying update…")).toBeInTheDocument();
+      view.unmount();
+    });
+
+    mocks.wsHandlers.get("computer:upgrade:progress")?.({
+      computer_id: "1298b34b-b7de-4309-bdfb-71043265052d",
+      requestId,
+      phase: "restarting",
+    });
+    await waitFor(() => {
+      const renderToast = mocks.toastCustom.mock.lastCall?.[0] as (
+        id: string | number,
+      ) => ReactNode;
+      const view = render(renderToast("computer-update:s143"));
+      expect(
+        view.getByText("Restarting Computer on the new version…"),
+      ).toBeInTheDocument();
+      view.unmount();
+    });
   });
 });

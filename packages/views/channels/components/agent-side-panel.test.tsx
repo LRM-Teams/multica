@@ -26,6 +26,8 @@ const {
   rolePermission,
   usageRows,
   mockRuntimes,
+  mockLocalSkills,
+  mockWorkspaceSkills,
   updateAgentWorkspaceRole,
   setQueryData,
   invalidateQueries,
@@ -52,6 +54,8 @@ const {
   // Runtimes returned by the mocked runtime-list query. Empty by default so the
   // existing tests see no selected runtime; a #687 test loads a staged one.
   mockRuntimes: { current: [] as Array<Record<string, unknown>> },
+  mockLocalSkills: { current: [] as Array<Record<string, unknown>> },
+  mockWorkspaceSkills: { current: [] as Array<Record<string, unknown>> },
 }));
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
@@ -222,8 +226,10 @@ vi.mock("@tanstack/react-query", () => ({
     data:
       options.kind === "usage-by-agent"
         ? usageRows
-        : options.queryKey?.[0] === "runtimes"
-          ? mockRuntimes.current
+        : options.queryKey?.[0] === "agents" && options.queryKey?.[1] === "profile-skills"
+          ? { global: mockLocalSkills.current, workspace: mockWorkspaceSkills.current }
+          : options.queryKey?.[0] === "runtimes"
+            ? mockRuntimes.current
           : [],
     isLoading: false,
   }),
@@ -231,6 +237,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
+  agentProfileSkillsOptions: () => ({ queryKey: ["agents", "profile-skills"] }),
   deriveRuntimeHealth: (rt: { status?: string }) =>
     rt?.status === "online" ? "online" : "offline",
   runtimeCurrentVersion: (rt: { current_version?: string | null }) =>
@@ -259,7 +266,7 @@ const RESOURCES = {
     profile: "Profile",
     activity: "Activity",
     reminders: "Reminders",
-    files: "Files",
+    files: "Workspace",
     usage: "Usage",
     config: "Config",
   },
@@ -284,6 +291,11 @@ const RESOURCES = {
     display_name_label: "Display name",
     description_label: "Description",
     info_section: "Info",
+    skills_section: "Skills",
+    global_skills: "Global skills",
+    workspace_skills: "Workspace skills",
+    no_global_skills: "No global skills discovered",
+    no_workspace_skills: "No workspace skills configured",
     actions_section: "Actions",
   },
   profile_card: {
@@ -391,6 +403,34 @@ describe("AgentSidePanel", () => {
     rolePermission.allowed = false;
     usageRows.length = 0;
     mockRuntimes.current = [];
+    mockLocalSkills.current = [];
+    mockWorkspaceSkills.current = [];
+  });
+
+  it("shows global and workspace skills separately in the profile", () => {
+    mockLocalSkills.current = [
+      {
+        name: "global-review",
+        description: "Shared review rules",
+        path: "~/.agents/skills/global-review",
+      },
+    ];
+    mockWorkspaceSkills.current = [{ name: "deploy", description: "Deploy safely", path: "agent/skills/deploy" }];
+    const agent = { ...makeAgent("user-owner"), skills: [{ id: "skill-1", name: "deploy", description: "Deploy safely" }] };
+    render(
+      <AgentSidePanel
+        agent={agent}
+        currentUserId="user-owner"
+        members={members}
+        onClose={() => {}}
+      />,
+    );
+
+    const skills = screen.getByTestId("agent-profile-skills");
+    expect(within(skills).getByText(/Global skills/)).toBeInTheDocument();
+    expect(within(skills).getByText("global-review")).toBeInTheDocument();
+    expect(within(skills).getByText(/Workspace skills/)).toBeInTheDocument();
+    expect(within(skills).getByText("deploy")).toBeInTheDocument();
   });
 
   it("renders no health or update status beside Runtime", () => {
@@ -474,7 +514,7 @@ describe("AgentSidePanel", () => {
     renderPanel("user-other");
     expect(screen.getAllByText("Atlas").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
   });
 
   it("shows the current dynamic status under the agent handle", () => {
@@ -601,7 +641,7 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("Activity content")).toBeInTheDocument();
     // Files used to require a separate, stricter condition. One gate now covers
     // Activity / Reminders / Files / Usage — a split here would be the bug.
-    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace" })).toBeInTheDocument();
   });
 
   it("does not advertise Activity when the activity decision denies", () => {
@@ -626,7 +666,7 @@ describe("AgentSidePanel", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workspace" })).not.toBeInTheDocument();
   });
 
   // #656 — Reminders reuses the exact same visibility gate as Activity per
@@ -685,7 +725,7 @@ describe("AgentSidePanel", () => {
     expect(screen.getByRole("button", { name: "Profile" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reminders" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspace" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Usage" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
@@ -752,7 +792,7 @@ describe("AgentSidePanel", () => {
     expect(pageClose).toHaveAccessibleName("Close panel");
     expect(container.querySelector("aside")).toHaveClass("min-w-0", "w-full");
     expect(container.querySelector(".overflow-y-auto")).toHaveClass("min-w-0");
-    for (const tab of ["Profile", "Activity", "Reminders", "Files"]) {
+    for (const tab of ["Profile", "Activity", "Reminders", "Workspace"]) {
       expect(screen.getByRole("button", { name: tab })).toHaveClass(
         "min-h-11",
         "flex-1",

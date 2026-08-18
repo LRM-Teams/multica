@@ -797,14 +797,10 @@ func TestMigration390DropsCloudComputerGenerationFence(t *testing.T) {
 	for _, required := range []string{
 		"DROP TABLE IF EXISTS computer_generation",
 		"DROP COLUMN IF EXISTS computer_generation",
-		"accepted_workspace_ids",
 	} {
 		if !strings.Contains(string(up), required) {
 			t.Errorf("migration 390 up missing %q", required)
 		}
-	}
-	if strings.Contains(string(up), "DROP COLUMN IF EXISTS accepted_workspace_ids") {
-		t.Fatal("migration 390 must not drop machine_upgrade workspace attestation columns")
 	}
 	down, err := os.ReadFile(filepath.Join(migrationsDir, "390_drop_computer_generation_fence.down.sql"))
 	if err != nil {

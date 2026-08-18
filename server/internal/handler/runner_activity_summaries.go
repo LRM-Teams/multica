@@ -33,10 +33,10 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT s.agent_id, s.activity_kind, s.detail_kind, latest_error.error_text
+		SELECT s.agent_id, s.daemon_id, s.daemon_instance_id, s.activity_kind, s.detail_kind, latest_error.error_text
 		FROM agent_activity_snapshot s
 		LEFT JOIN LATERAL (
-			SELECT recent.entry_body ->> 'text' AS error_text
+			SELECT recent.entry_body ->> 'detail' AS error_text
 			FROM (
 				SELECT e.entry_kind, e.entry_body, e.observed_at, e.id
 				FROM agent_activity_entry e
@@ -45,9 +45,9 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 				ORDER BY e.observed_at DESC, e.id DESC
 				LIMIT $2
 			) recent
-			WHERE recent.entry_kind = 'narrative'
-			  AND recent.entry_body ->> 'activity_kind' = 'error'
-			  AND btrim(COALESCE(recent.entry_body ->> 'text', '')) <> ''
+			WHERE recent.entry_kind = 'status'
+			  AND recent.entry_body ->> 'activity' = 'error'
+			  AND btrim(COALESCE(recent.entry_body ->> 'detail', '')) <> ''
 			ORDER BY recent.observed_at DESC, recent.id DESC
 			LIMIT 1
 		) latest_error ON s.activity_kind = 'error'
@@ -62,11 +62,15 @@ func (h *Handler) ListRunnerActivitySummaries(w http.ResponseWriter, r *http.Req
 	response := RunnerActivitySummariesResponse{Items: []RunnerActivitySummaryResponseItem{}}
 	for rows.Next() {
 		var agentID pgtype.UUID
+		var daemonID string
 		var snapshot protocol.AgentActivitySnapshot
 		var errorText pgtype.Text
-		if err := rows.Scan(&agentID, &snapshot.ActivityKind, &snapshot.DetailKind, &errorText); err != nil {
+		if err := rows.Scan(&agentID, &daemonID, &snapshot.DaemonInstanceID, &snapshot.ActivityKind, &snapshot.DetailKind, &errorText); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load runner activity summaries")
 			return
+		}
+		if !h.liveRunnerOwnsActivitySnapshot(daemonID, util.UUIDToString(workspaceID), snapshot) {
+			continue
 		}
 		summary := activityprojection.ProjectSummary(snapshot)
 		if errorText.Valid {

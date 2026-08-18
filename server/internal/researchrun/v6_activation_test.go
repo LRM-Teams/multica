@@ -7,51 +7,32 @@ import (
 )
 
 func completeV6ActivationEvidence() V6ActivationEvidence {
-	passed := V6GateEvidence{Passed: true, EvidenceID: "audit/result", Revision: "sha256:verified"}
+	p := V6GateEvidence{Passed: true, EvidenceID: "audit/result", Revision: "sha256:verified"}
 	return V6ActivationEvidence{
-		Inquiry:          passed,
-		Corpus:           passed,
-		Integration:      passed,
-		Dispute:          passed,
-		Portfolio:        passed,
-		TeamFormation:    passed,
-		ReportEvaluation: passed,
-		Decoder:          passed,
-		Persistence:      passed,
-		Recovery:         passed,
-		Projection:       passed,
-		SystemEvaluation: passed,
-		ShadowTraffic:    passed,
-		Rollback: V6RollbackEvidence{
-			V6GateEvidence:  passed,
-			PreviousVersion: OrchestratorVersionV5,
-		},
+		Migrations: p, SchemaHash: p, LegacyGolden: p, NineEnvelopes: p,
+		RecoveryMatrix: p, SingleSuccessorRace: p, DirectorContext: p, TeamLimit: p,
+		KnowledgeGraph: p, Discussion: p, Steering: p, ProjectionRebuild: p,
+		ProjectionScale: p, GraphClients: p, ReportSandboxWeb: p, ReportSandboxDesktop: p,
+		ReportOrigin: V6ReportOriginEvidence{V6GateEvidence: p, ReportOrigin: "https://reports.example.test", ApplicationOrigins: []string{"https://app.example.test", "https://desktop.example.test"}},
+		BuiltinDocs:  p,
+		Rollback:     V6RollbackEvidence{V6GateEvidence: p, PreviousVersion: OrchestratorVersionV5},
 	}
+}
+
+var canonicalV6ActivationRequirements = []V6ActivationRequirement{
+	V6RequirementMigrations, V6RequirementSchemaHash, V6RequirementLegacyGolden,
+	V6RequirementNineEnvelopes, V6RequirementRecoveryMatrix, V6RequirementSingleSuccessorRace,
+	V6RequirementDirectorContext, V6RequirementTeamLimit, V6RequirementKnowledgeGraph,
+	V6RequirementDiscussion, V6RequirementSteering, V6RequirementProjectionRebuild,
+	V6RequirementProjectionScale, V6RequirementGraphClients, V6RequirementReportSandboxWeb,
+	V6RequirementReportSandboxDesktop, V6RequirementReportOrigin, V6RequirementBuiltinDocs,
+	V6RequirementRollback,
 }
 
 func TestAssessV6ActivationReportsEveryMissingExitInCanonicalOrder(t *testing.T) {
 	decision := AssessV6Activation(V6ActivationEvidence{})
-	want := []V6ActivationRequirement{
-		V6RequirementInquiry,
-		V6RequirementCorpus,
-		V6RequirementIntegration,
-		V6RequirementDispute,
-		V6RequirementPortfolio,
-		V6RequirementTeamFormation,
-		V6RequirementReportEvaluation,
-		V6RequirementDecoder,
-		V6RequirementPersistence,
-		V6RequirementRecovery,
-		V6RequirementProjection,
-		V6RequirementSystemEvaluation,
-		V6RequirementShadowTraffic,
-		V6RequirementRollback,
-	}
-	if decision.ActivationAllowed {
-		t.Fatal("V6 activation allowed without evidence")
-	}
-	if !reflect.DeepEqual(decision.Missing, want) {
-		t.Fatalf("missing=%v want=%v", decision.Missing, want)
+	if decision.ActivationAllowed || !reflect.DeepEqual(decision.Missing, canonicalV6ActivationRequirements) {
+		t.Fatalf("decision=%+v", decision)
 	}
 	if decision.CurrentDefault != OrchestratorVersionV5 || decision.CandidateVersion != v6ActivationCandidate {
 		t.Fatalf("version decision=%+v", decision)
@@ -60,45 +41,78 @@ func TestAssessV6ActivationReportsEveryMissingExitInCanonicalOrder(t *testing.T)
 
 func TestAssessV6ActivationRequiresVersionedEvidenceForEveryExit(t *testing.T) {
 	complete := completeV6ActivationEvidence()
-	cases := []struct {
-		name        string
-		requirement V6ActivationRequirement
-		remove      func(*V6ActivationEvidence)
-	}{
-		{"inquiry", V6RequirementInquiry, func(e *V6ActivationEvidence) { e.Inquiry.Passed = false }},
-		{"corpus", V6RequirementCorpus, func(e *V6ActivationEvidence) { e.Corpus.EvidenceID = "" }},
-		{"integration", V6RequirementIntegration, func(e *V6ActivationEvidence) { e.Integration.Revision = "" }},
-		{"dispute", V6RequirementDispute, func(e *V6ActivationEvidence) { e.Dispute.Passed = false }},
-		{"portfolio", V6RequirementPortfolio, func(e *V6ActivationEvidence) { e.Portfolio.Passed = false }},
-		{"team formation", V6RequirementTeamFormation, func(e *V6ActivationEvidence) { e.TeamFormation.Passed = false }},
-		{"report evaluation", V6RequirementReportEvaluation, func(e *V6ActivationEvidence) { e.ReportEvaluation.Passed = false }},
-		{"decoder", V6RequirementDecoder, func(e *V6ActivationEvidence) { e.Decoder.Passed = false }},
-		{"persistence", V6RequirementPersistence, func(e *V6ActivationEvidence) { e.Persistence.Passed = false }},
-		{"recovery", V6RequirementRecovery, func(e *V6ActivationEvidence) { e.Recovery.Passed = false }},
-		{"projection", V6RequirementProjection, func(e *V6ActivationEvidence) { e.Projection.Passed = false }},
-		{"system evaluation", V6RequirementSystemEvaluation, func(e *V6ActivationEvidence) { e.SystemEvaluation.Passed = false }},
-		{"shadow traffic", V6RequirementShadowTraffic, func(e *V6ActivationEvidence) { e.ShadowTraffic.Passed = false }},
-		{"rollback", V6RequirementRollback, func(e *V6ActivationEvidence) { e.Rollback.PreviousVersion = OrchestratorVersionV4 }},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			evidence := complete
-			tc.remove(&evidence)
-			decision := AssessV6Activation(evidence)
-			if decision.ActivationAllowed || !reflect.DeepEqual(decision.Missing, []V6ActivationRequirement{tc.requirement}) {
+	for _, requirement := range canonicalV6ActivationRequirements {
+		t.Run(string(requirement), func(t *testing.T) {
+			e := complete
+			gateForV6Requirement(&e, requirement).Passed = false
+			decision := AssessV6Activation(e)
+			if decision.ActivationAllowed || !reflect.DeepEqual(decision.Missing, []V6ActivationRequirement{requirement}) {
 				t.Fatalf("decision=%+v", decision)
 			}
 		})
 	}
 }
 
+func gateForV6Requirement(e *V6ActivationEvidence, requirement V6ActivationRequirement) *V6GateEvidence {
+	switch requirement {
+	case V6RequirementMigrations:
+		return &e.Migrations
+	case V6RequirementSchemaHash:
+		return &e.SchemaHash
+	case V6RequirementLegacyGolden:
+		return &e.LegacyGolden
+	case V6RequirementNineEnvelopes:
+		return &e.NineEnvelopes
+	case V6RequirementRecoveryMatrix:
+		return &e.RecoveryMatrix
+	case V6RequirementSingleSuccessorRace:
+		return &e.SingleSuccessorRace
+	case V6RequirementDirectorContext:
+		return &e.DirectorContext
+	case V6RequirementTeamLimit:
+		return &e.TeamLimit
+	case V6RequirementKnowledgeGraph:
+		return &e.KnowledgeGraph
+	case V6RequirementDiscussion:
+		return &e.Discussion
+	case V6RequirementSteering:
+		return &e.Steering
+	case V6RequirementProjectionRebuild:
+		return &e.ProjectionRebuild
+	case V6RequirementProjectionScale:
+		return &e.ProjectionScale
+	case V6RequirementGraphClients:
+		return &e.GraphClients
+	case V6RequirementReportSandboxWeb:
+		return &e.ReportSandboxWeb
+	case V6RequirementReportSandboxDesktop:
+		return &e.ReportSandboxDesktop
+	case V6RequirementReportOrigin:
+		return &e.ReportOrigin.V6GateEvidence
+	case V6RequirementBuiltinDocs:
+		return &e.BuiltinDocs
+	case V6RequirementRollback:
+		return &e.Rollback.V6GateEvidence
+	default:
+		panic("unknown V6 activation requirement")
+	}
+}
+
+func TestAssessV6ActivationRejectsSameOrInvalidReportOrigin(t *testing.T) {
+	for _, origin := range []string{"http://reports.example.test", "https://app.example.test", "https://app.example.test:443/", "https://reports.example.test/path"} {
+		e := completeV6ActivationEvidence()
+		e.ReportOrigin.ReportOrigin = origin
+		decision := AssessV6Activation(e)
+		if !reflect.DeepEqual(decision.Missing, []V6ActivationRequirement{V6RequirementReportOrigin}) {
+			t.Fatalf("origin=%q decision=%+v", origin, decision)
+		}
+	}
+}
+
 func TestAssessV6ActivationCompleteAuditDoesNotEnableRuntimeV6(t *testing.T) {
 	decision := AssessV6Activation(completeV6ActivationEvidence())
-	if !decision.ActivationAllowed || len(decision.Missing) != 0 {
+	if !decision.ActivationAllowed || decision.RollbackVersion != OrchestratorVersionV5 {
 		t.Fatalf("decision=%+v", decision)
-	}
-	if decision.RollbackVersion != OrchestratorVersionV5 {
-		t.Fatalf("rollback=%q", decision.RollbackVersion)
 	}
 	if OrchestratorVersion != OrchestratorVersionV5 {
 		t.Fatalf("default orchestrator=%q", OrchestratorVersion)

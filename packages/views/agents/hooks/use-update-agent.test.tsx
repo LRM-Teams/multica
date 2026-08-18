@@ -237,11 +237,7 @@ describe("useUpdateAgent — restart after execution-config save", () => {
       model: "claude-opus-4-8",
     });
     expect(mockGetPreflight).toHaveBeenCalledWith("agent-1");
-    expect(mockStartLifecycle).toHaveBeenCalledWith(
-      "agent-1",
-      "restart",
-      expect.any(String),
-    );
+    expect(mockStartLifecycle).toHaveBeenCalledWith("agent-1", "restart");
     expect(mockToastSuccess).toHaveBeenCalledWith("Agent updated");
     expect(mockToastSuccess).not.toHaveBeenCalledWith("Saved. Restarting…");
   });
@@ -252,11 +248,7 @@ describe("useUpdateAgent — restart after execution-config save", () => {
 
     await result.current("agent-1", { runtime_id: "rt-2" });
 
-    expect(mockStartLifecycle).toHaveBeenCalledWith(
-      "agent-1",
-      "restart",
-      expect.any(String),
-    );
+    expect(mockStartLifecycle).toHaveBeenCalledWith("agent-1", "restart");
   });
 
   it("A1: thinking_level change also restarts", async () => {
@@ -267,11 +259,7 @@ describe("useUpdateAgent — restart after execution-config save", () => {
 
     await result.current("agent-1", { thinking_level: "high" });
 
-    expect(mockStartLifecycle).toHaveBeenCalledWith(
-      "agent-1",
-      "restart",
-      expect.any(String),
-    );
+    expect(mockStartLifecycle).toHaveBeenCalledWith("agent-1", "restart");
   });
 
   it("force_restart false → save normally, no restart-specific toast", async () => {

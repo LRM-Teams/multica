@@ -1,12 +1,26 @@
 "use client";
 
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowLeft, BarChart3, Bell, FileText, Pencil, User } from "lucide-react";
+import {
+  Activity,
+  ArrowLeft,
+  BarChart3,
+  Bell,
+  FileText,
+  Folder,
+  Globe2,
+  Pencil,
+  User,
+} from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AGENT_DESCRIPTION_MAX_LENGTH, agentDetailKeys } from "@multica/core/agents";
 import { api } from "@multica/core/api";
-import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
-import { runtimeListOptions } from "@multica/core/runtimes";
+import type {
+  Agent,
+  DashboardUsageByAgent,
+  MemberWithUser,
+} from "@multica/core/types";
+import { agentProfileSkillsOptions, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -334,6 +348,7 @@ function AgentProfileTabContent({
   const { t } = useT("agents");
   const wsId = agent.workspace_id;
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  const { data: profileSkills } = useQuery(agentProfileSkillsOptions(agent.id));
   const handleUpdate = useUpdateAgent(wsId);
   const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
   const qc = useQueryClient();
@@ -474,23 +489,6 @@ function AgentProfileTabContent({
           </div>
         </div>
 
-        <RolesDialog
-          open={roleDialogOpen}
-          onOpenChange={setRoleDialogOpen}
-          mode="select"
-          value={agent.workspace_role}
-          allowedRoles={["member", "admin"]}
-          saving={roleSaving}
-          onSave={(role) => {
-            if (role === "owner") {
-              return Promise.resolve();
-            }
-            return updateWorkspaceRole(role);
-          }}
-          title={t(($) => $.profile_card.role_dialog_title)}
-          subtitle={t(($) => $.profile_card.role_dialog_subtitle)}
-        />
-
         {/* LRM-470 — Runtime Config is its own section (not Info misc rows).
             LRM-1351 — summary always shows effective config; edits go through
             a centered Dialog so multi-field changes restart at most once. */}
@@ -534,7 +532,37 @@ function AgentProfileTabContent({
           />
         </section>
 
-        {agent.memory_growth ? <MemoryGrowthField growth={agent.memory_growth} /> : null}
+        <AgentProfileSkills
+          globalSkills={profileSkills?.global ?? []}
+          workspaceSkills={profileSkills?.workspace ?? []}
+        />
+
+        <RolesDialog
+          open={roleDialogOpen}
+          onOpenChange={setRoleDialogOpen}
+          mode="select"
+          value={agent.workspace_role}
+          allowedRoles={["member", "admin"]}
+          saving={roleSaving}
+          onSave={(role) => {
+            if (role === "owner") {
+              return Promise.resolve();
+            }
+            return updateWorkspaceRole(role);
+          }}
+          title={t(($) => $.profile_card.role_dialog_title)}
+          subtitle={t(($) => $.profile_card.role_dialog_subtitle)}
+        />
+        {/* Memory growth is its own panel block, kept separated by the same
+            thin divider used elsewhere in the profile. */}
+        {agent.memory_growth ? (
+          <div
+            className="border-t border-border pt-3"
+            data-testid="agent-profile-memory-growth"
+          >
+            <MemoryGrowthField growth={agent.memory_growth} />
+          </div>
+        ) : null}
 
         <div className="border-t border-border pt-3">
           <AgentProfileActions
@@ -544,6 +572,94 @@ function AgentProfileTabContent({
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function AgentProfileSkills({
+  globalSkills,
+  workspaceSkills,
+}: {
+  globalSkills: readonly { name: string; description?: string; path?: string }[];
+  workspaceSkills: readonly { name: string; description?: string; path?: string }[];
+}) {
+  const { t } = useT("agents");
+
+  return (
+    <section
+      className="border-t border-border pt-3"
+      aria-label={t(($) => $.side_panel.skills_section)}
+      data-testid="agent-profile-skills"
+    >
+      <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {t(($) => $.side_panel.skills_section)} ({globalSkills.length + workspaceSkills.length})
+      </h3>
+      <SkillScopeList
+        title={t(($) => $.side_panel.global_skills)}
+        emptyLabel={t(($) => $.side_panel.no_global_skills)}
+        skills={globalSkills}
+        icon={<Globe2 className="size-4" aria-hidden />}
+      />
+      <SkillScopeList
+        title={t(($) => $.side_panel.workspace_skills)}
+        emptyLabel={t(($) => $.side_panel.no_workspace_skills)}
+        skills={workspaceSkills}
+        icon={<Folder className="size-4" aria-hidden />}
+      />
+    </section>
+  );
+}
+
+function SkillScopeList({
+  title,
+  emptyLabel,
+  skills,
+  icon,
+}: {
+  title: string;
+  emptyLabel: string;
+  skills: ReadonlyArray<{
+    name: string;
+    description?: string;
+    source_path?: string;
+    path?: string;
+  }>;
+  icon: ReactNode;
+}) {
+  const rootPath = (skills[0]?.path ?? skills[0]?.source_path)
+    ? (skills[0]?.path ?? skills[0]?.source_path)!.slice(0, (skills[0]?.path ?? skills[0]?.source_path)!.lastIndexOf("/"))
+    : null;
+
+  return (
+    <div className="space-y-2 [&+&]:mt-4">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        {icon}
+        <h4 className="font-medium text-foreground">
+          {title} ({skills.length})
+        </h4>
+      </div>
+      {rootPath ? (
+        <div className="inline-flex rounded-sm border border-foreground/70 bg-amber-100 px-2 py-1 font-mono text-xs text-foreground/70 dark:bg-amber-950/30">
+          {rootPath}
+        </div>
+      ) : null}
+      {skills.length === 0 ? (
+        <p className="text-sm italic text-muted-foreground">{emptyLabel}</p>
+      ) : (
+        <ul className="space-y-2">
+          {skills.map((skill) => (
+            <li key={`${skill.name}:${skill.path ?? skill.source_path ?? ""}`} className="flex min-w-0 items-start gap-3 rounded-md border-2 border-border px-3 py-3">
+              <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold">{skill.name}</div>
+                {skill.description ? (
+                  <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{skill.description}</div>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

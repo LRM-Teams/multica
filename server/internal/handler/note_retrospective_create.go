@@ -63,51 +63,15 @@ func (h *Handler) CreateNoteRetrospective(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	enabled, skipped := normalizeNoteRetrospectiveSources(req.Sources)
-
-	var facts noteRetrospectiveFacts
-	used := make([]string, 0)
-	empty := make([]string, 0)
-	for _, source := range enabled {
-		switch source {
-		case noteRetrospectiveSourceIssue:
-			items, err := h.loadNoteRetrospectiveIssueFacts(r.Context(), workspaceID, userID, window.Start, window.End)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to load issue activity")
-				return
-			}
-			facts.Issues = items
-			if len(items) == 0 {
-				empty = append(empty, source)
-			} else {
-				used = append(used, source)
-			}
-		case noteRetrospectiveSourceNotes:
-			items, err := h.loadNoteRetrospectiveNoteFacts(r.Context(), workspaceID, userID, window.Start, window.End)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to load touched notes")
-				return
-			}
-			facts.Notes = items
-			if len(items) == 0 {
-				empty = append(empty, source)
-			} else {
-				used = append(used, source)
-			}
-		case noteRetrospectiveSourceRuns:
-			items, err := h.loadNoteRetrospectiveRunFacts(r.Context(), workspaceID, userID, window.Start, window.End)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to load agent runs")
-				return
-			}
-			facts.Runs = items
-			if len(items) == 0 {
-				empty = append(empty, source)
-			} else {
-				used = append(used, source)
-			}
-		}
+	bundle, err := h.loadNoteRetrospectiveFactsBundle(r.Context(), workspaceID, userID, window.Start, window.End, req.Sources)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load retrospective facts")
+		return
 	}
+	facts := bundle.Facts
+	used := bundle.SourcesUsed
+	empty := bundle.SourcesEmpty
+	skipped := bundle.SourcesSkipped
 
 	folderID, err := h.ensureNoteRetrospectiveFolder(r.Context(), workspaceID, userID)
 	if err != nil {
@@ -352,17 +316,18 @@ LIMIT 300`, workspaceID, userID, start, end)
 			agentName = toAgentName
 		}
 		out = append(out, noteRetrospectiveIssueFact{
-			IssueID:     uuidToString(issueID),
-			Identifier:  identifier,
-			Title:       title,
-			Action:      action,
-			Detail:      formatIssueActivityDetail(action, details),
-			At:          createdAt.UTC(),
-			ActorType:   actorType,
-			ActorID:     actorIDStr,
-			AgentID:     agentID,
-			AgentName:   agentName,
-			Attribution: attr,
+			IssueID:      uuidToString(issueID),
+			Identifier:   identifier,
+			Title:        title,
+			Action:       action,
+			Detail:       formatIssueActivityDetail(action, details),
+			At:           createdAt.UTC(),
+			ActorType:    actorType,
+			ActorID:      actorIDStr,
+			AgentID:      agentID,
+			AgentName:    agentName,
+			Attribution:  attr,
+			PullRequests: []noteRetrospectivePullRequestFact{},
 		})
 	}
 	return out, rows.Err()

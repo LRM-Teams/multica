@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,7 +19,7 @@ import (
 
 func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{residentRoot: t.TempDir()})
-	want := hostMachineUpgradeJournal{Target: "v1.1.0"}
+	want := hostMachineUpgradeJournal{RequestID: "request-a", FromVersion: "v1.0.0", TargetVersion: "v1.1.0", StartedAt: "2026-08-17T00:00:00Z", SchemaVersion: 1}
 	if err := upgrade.writeJournal(want); err != nil {
 		t.Fatal(err)
 	}
@@ -38,17 +38,16 @@ func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(raw, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := persisted["id"]; ok {
-		t.Fatalf("activated marker still persisted id: %s", raw)
-	}
-	if _, ok := persisted["generation"]; ok {
-		t.Fatalf("activated marker still persisted generation: %s", raw)
+	for _, key := range []string{"requestId", "fromVersion", "targetVersion", "startedAt", "schemaVersion"} {
+		if _, ok := persisted[key]; !ok {
+			t.Fatalf("journal missing Raft field %q: %s", key, raw)
+		}
 	}
 	got, err := upgrade.readJournal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.Target != want.Target {
+	if got == nil || got.TargetVersion != want.TargetVersion || got.RequestID != want.RequestID || got.SchemaVersion != want.SchemaVersion {
 		t.Fatalf("Machine Upgrade journal = %+v, want %+v", got, want)
 	}
 }
@@ -72,7 +71,7 @@ func TestHostMachineUpgradeAcceptanceRequiresCompleteComputerSet(t *testing.T) {
 	}
 }
 
-func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
+func TestHostMachineUpgradeLocalDeliveryRunsInService(t *testing.T) {
 	const controlToken = "owner-secret"
 	var humanIntentCalls atomic.Int32
 	delivered := make(chan string, 2)
@@ -91,35 +90,30 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	}))
 	defer cloud.Close()
 
-	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "bad token", http.StatusUnauthorized)
-			return
+	childControl := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, raw json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
 		}
-		if r.URL.Path == BindingComputerUpgradePath {
+		if operation == LocalControlUpgradeStartOperation {
 			var request struct {
 				Command protocol.ComputerUpgradePayload `json:"command"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
+			if err := json.Unmarshal(raw, &request); err != nil {
+				return nil, err
 			}
 			delivered <- request.Command.Operation()
-			w.WriteHeader(http.StatusNoContent)
-			return
+			return nil, nil
 		}
-		if r.URL.Path != BindingReregisterRuntimePath {
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
-			return
+		if operation != "runner-ready" {
+			return nil, errors.New("unexpected child control request")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer childControl.Close()
+		return nil, nil
+	})
 
 	host, err := NewHost(HostConfig{
 		ControlToken: controlToken,
 		Spawn: func(string, int64) (BindingChild, error) {
-			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(8051), controlURL: childControl.URL}, nil
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(8051), controlEndpoint: childControl}, nil
 		},
 	})
 	if err != nil {
@@ -139,7 +133,7 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	}
 	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{identity: HostProcessIdentity{
 		ComputerID: "computer-a", ComputerGeneration: 7, Environment: "test",
-		Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: cloud.URL,
+		Version: "v1.0.0", ServerURL: cloud.URL,
 	}})
 	host.upgrade = upgrade
 
@@ -159,11 +153,8 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 		}
 		select {
 		case got := <-delivered:
-			if got != operationID {
-				t.Fatalf("delivered operation = %q, want %q", got, operationID)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("local delivery did not hand off %s", operationID)
+			t.Fatalf("service-owned upgrade was incorrectly delivered to runner: %s", got)
+		default:
 		}
 		deadline := time.Now().Add(time.Second)
 		for {
@@ -181,6 +172,122 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	}
 	if got := humanIntentCalls.Load(); got != 0 {
 		t.Fatalf("Host created %d human lifecycle intents, want zero", got)
+	}
+}
+
+func TestHostMachineUpgradePrepareReleasesBusyAfterReturn(t *testing.T) {
+	const controlToken = "owner-secret"
+	identity, host := newReadyHostForChildUpgrade(t, controlToken, "workspace-a", 8301)
+	first, err := host.PrepareChildUpgrade(context.Background(), identity, protocol.DaemonHeartbeatPendingMachineUpgrade{
+		ID: "upgrade-a", TargetVersion: "v2.0.0",
+	})
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if len(first.RuntimeIDs) != 1 || first.RuntimeIDs[0] != "runtime-0" {
+		t.Fatalf("first prepare runtimes = %v, want [runtime-0]", first.RuntimeIDs)
+	}
+	if _, err := host.PrepareChildUpgrade(context.Background(), identity, protocol.DaemonHeartbeatPendingMachineUpgrade{
+		ID: "upgrade-b", TargetVersion: "v2.0.1",
+	}); err != nil {
+		t.Fatalf("second prepare after first returned: %v", err)
+	}
+}
+
+func TestHostMachineUpgradePrepareSameOperationIsIdempotent(t *testing.T) {
+	const controlToken = "owner-secret"
+	identity, host := newReadyHostForChildUpgrade(t, controlToken, "workspace-a", 8302)
+	pending := protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v2.0.0"}
+	if _, err := host.PrepareChildUpgrade(context.Background(), identity, pending); err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if _, err := host.PrepareChildUpgrade(context.Background(), identity, pending); err != nil {
+		t.Fatalf("replayed prepare: %v", err)
+	}
+}
+
+func TestHostMachineUpgradePrepareConcurrentDifferentOperationIsBusy(t *testing.T) {
+	const controlToken = "owner-secret"
+	started := make(chan struct{})
+	release := make(chan struct{})
+	identities, host := newReadyTwoBindingHostForChildUpgrade(t, controlToken, 8303, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
+		}
+		switch operation {
+		case LocalControlRunnerDrainOperation:
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+			<-release
+		case LocalControlRunnerReleaseOperation:
+		default:
+			return nil, errors.New("unexpected child control request")
+		}
+		return nil, nil
+	})
+	var released atomic.Bool
+	releaseOnce := func() {
+		if released.CompareAndSwap(false, true) {
+			close(release)
+		}
+	}
+	t.Cleanup(releaseOnce)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := host.PrepareChildUpgrade(context.Background(), identities["workspace-a"], protocol.DaemonHeartbeatPendingMachineUpgrade{
+			ID: "upgrade-a", TargetVersion: "v2.0.0",
+		})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first prepare did not reach sibling drain")
+	}
+	if _, err := host.PrepareChildUpgrade(context.Background(), identities["workspace-a"], protocol.DaemonHeartbeatPendingMachineUpgrade{
+		ID: "upgrade-b", TargetVersion: "v2.0.1",
+	}); !errors.Is(err, ErrComputerControlBusy) {
+		t.Fatalf("overlapping prepare = %v, want ErrComputerControlBusy", err)
+	}
+	releaseOnce()
+	if err := <-done; err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+}
+
+func TestHostMachineUpgradePrepareSiblingFailureReleasesBusy(t *testing.T) {
+	const controlToken = "owner-secret"
+	var refuses atomic.Bool
+	refuses.Store(true)
+	identities, host := newReadyTwoBindingHostForChildUpgrade(t, controlToken, 8304, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
+		}
+		switch operation {
+		case LocalControlRunnerDrainOperation:
+			if refuses.Load() {
+				return nil, ErrComputerControlBusy
+			}
+		case LocalControlRunnerReleaseOperation:
+		default:
+			return nil, errors.New("unexpected child control request")
+		}
+		return nil, nil
+	})
+	if _, err := host.PrepareChildUpgrade(context.Background(), identities["workspace-a"], protocol.DaemonHeartbeatPendingMachineUpgrade{
+		ID: "upgrade-a", TargetVersion: "v2.0.0",
+	}); err == nil {
+		t.Fatal("expected sibling prepare failure")
+	}
+	refuses.Store(false)
+	if _, err := host.PrepareChildUpgrade(context.Background(), identities["workspace-a"], protocol.DaemonHeartbeatPendingMachineUpgrade{
+		ID: "upgrade-b", TargetVersion: "v2.0.1",
+	}); err != nil {
+		t.Fatalf("prepare after sibling failure: %v", err)
 	}
 }
 
@@ -247,17 +354,22 @@ func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 			return ErrComputerControlBusy
 		},
 	})
-	mux := http.NewServeMux()
-	control.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	registry := NewLocalControlRegistry()
+	control.RegisterRPCHandlers(registry)
+	endpoint := localControlTestServer(t, func(ctx context.Context, operation string, headers map[string]string, raw json.RawMessage) (any, error) {
+		handler, ok := registry.handler(operation)
+		if !ok {
+			return nil, fmt.Errorf("unknown operation %s", operation)
+		}
+		return handler(ctx, headers, raw)
+	})
 
-	client := NewHostControlClient(server.URL, "owner-secret", identity)
-	err := client.ForwardMachineActions(context.Background(), protocol.DaemonHeartbeatAckPayload{
+	client := NewHostControlClient(endpoint, "owner-secret", identity)
+	err := client.ForwardComputerControl(context.Background(), protocol.DaemonHeartbeatAckPayload{
 		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-b", TargetVersion: "v10.0.0"},
 	})
 	if !errors.Is(err, ErrComputerControlBusy) {
-		t.Fatalf("ForwardMachineActions = %v, want ErrComputerControlBusy", err)
+		t.Fatalf("ForwardComputerControl = %v, want ErrComputerControlBusy", err)
 	}
 }
 
@@ -290,23 +402,18 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	runtimeIDs := []string{"runtime-a", "runtime-b"}
 	var prepares atomic.Int32
 	var reregistrations atomic.Int32
-	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "bad token", http.StatusUnauthorized)
-			return
+	childControl := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
 		}
-		switch r.URL.Path {
-		case BindingPrepareMachineUpgradePath:
+		switch operation {
+		case LocalControlRunnerDrainOperation:
 			prepares.Add(1)
-		case BindingReregisterRuntimePath:
+		case "runner-ready":
 			reregistrations.Add(1)
-		default:
-			http.NotFound(w, r)
-			return
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer childControl.Close()
+		return nil, nil
+	})
 
 	acceptedGeneration := "generation-a"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -336,7 +443,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 					pid++
 				}
 				return &readySupervisorChild{
-					supervisorTestChild: newSupervisorTestChild(pid), controlURL: childControl.URL,
+					supervisorTestChild: newSupervisorTestChild(pid), controlEndpoint: childControl,
 				}, nil
 			},
 		})
@@ -365,15 +472,20 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 
 	root := t.TempDir()
 	incumbent := newReadyHost(8101)
-	hostMux := http.NewServeMux()
-	incumbent.RegisterRoutes(hostMux)
-	hostControl := httptest.NewServer(hostMux)
-	defer hostControl.Close()
+	registry := NewLocalControlRegistry()
+	incumbent.control.RegisterRPCHandlers(registry)
+	hostControl := localControlTestServer(t, func(ctx context.Context, operation string, headers map[string]string, raw json.RawMessage) (any, error) {
+		handler, ok := registry.handler(operation)
+		if !ok {
+			return nil, fmt.Errorf("unknown operation %s", operation)
+		}
+		return handler(ctx, headers, raw)
+	})
 	upgradeCancelled := make(chan struct{}, 1)
 	upgrade := newHostMachineUpgrade(incumbent, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 31, Environment: "test",
-			Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+			Version: "v1.0.0", ServerURL: server.URL,
 		},
 		residentRoot: root,
 		cancel:       func() { upgradeCancelled <- struct{}{} },
@@ -383,14 +495,14 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	executor := NewBindingMachineUpgradeExecutor(BindingMachineUpgradeConfig{
 		Identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 31, Environment: "test",
-			Version: "v1.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+			Version: "v1.0.0", ServerURL: server.URL,
 		},
-		ResidentRoot: root,
-		ControlURL:   hostControl.URL,
-		ControlToken: controlToken,
-		Child:        incumbent.runtimeSets[workspaceIDs[0]].Identity,
-		RuntimeID:    runtimeIDs[0],
-		DaemonToken:  "runtime-token-workspace-a",
+		ResidentRoot:    root,
+		ServiceEndpoint: hostControl,
+		ControlToken:    controlToken,
+		Child:           incumbent.runtimeSets[workspaceIDs[0]].Identity,
+		RuntimeID:       runtimeIDs[0],
+		DaemonToken:     "runtime-token-workspace-a",
 		Exit: func() {
 			upgrade.observeInitiatorExit(incumbent.runtimeSets[workspaceIDs[0]].Identity)
 		},
@@ -434,7 +546,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 		t.Fatal("activated Machine Upgrade did not stop incumbent Computer")
 	}
 	journal, err := upgrade.readJournal()
-	if err != nil || journal == nil || journal.Target != "v2.0.0" {
+	if err != nil || journal == nil || journal.TargetVersion != "v2.0.0" {
 		t.Fatalf("activated Machine Upgrade journal = %+v, error=%v", journal, err)
 	}
 	incumbent.Stop()
@@ -443,7 +555,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	successorUpgrade := newHostMachineUpgrade(successor, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
 			ComputerID: "computer-a", ComputerGeneration: 32, Environment: "test",
-			Version: "v2.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
+			Version: "v2.0.0", ServerURL: server.URL,
 		},
 		residentRoot: root,
 	})
@@ -460,88 +572,71 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	}
 }
 
-func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
-	const controlToken = "owner-secret"
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	previousJournalDir := filepath.Join(home, ".local", "share", "multica", "machine-upgrades")
-	if err := os.MkdirAll(previousJournalDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	previousJournalPath := filepath.Join(previousJournalDir, "upgrade-a.json")
-	previousJournal := map[string]any{
-		"id": "upgrade-a", "generation": "generation-a", "source_version": "v1.0.0", "target_version": "v2.0.0",
-		"runtime_ids": []string{"runtime-a"}, "workspace_ids": []string{"workspace-a"}, "phase": "handoff",
-		"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	data, err := json.Marshal(previousJournal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(previousJournalPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+func newReadyHostForChildUpgrade(t *testing.T, controlToken, workspaceID string, pid int) (BindingChildIdentity, *Host) {
+	t.Helper()
+	return newReadyHostForChildUpgradeWithChild(t, controlToken, workspaceID, pid, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
+		}
+		switch operation {
+		case LocalControlRunnerDrainOperation, LocalControlRunnerReleaseOperation:
+		default:
+			return nil, errors.New("unexpected child control request")
+		}
+		return nil, nil
+	})
+}
 
-	var reregistered atomic.Int32
-	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
-			return
-		}
-		reregistered.Add(1)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer childControl.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/daemon/computer/machine-upgrades/upgrade-a/attest" {
-			t.Error("previous-package successor attested over HTTP")
-			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer server.Close()
+func newReadyHostForChildUpgradeWithChild(t *testing.T, controlToken, workspaceID string, pid int, child localControlTestHandler) (BindingChildIdentity, *Host) {
+	t.Helper()
+	identities, host := newReadyHostBindingsForChildUpgrade(t, controlToken, []string{workspaceID}, pid, child)
+	return identities[workspaceID], host
+}
+
+func newReadyTwoBindingHostForChildUpgrade(t *testing.T, controlToken string, pidBase int, child localControlTestHandler) (map[string]BindingChildIdentity, *Host) {
+	t.Helper()
+	return newReadyHostBindingsForChildUpgrade(t, controlToken, []string{"workspace-a", "workspace-b"}, pidBase, child)
+}
+
+func newReadyHostBindingsForChildUpgrade(t *testing.T, controlToken string, workspaceIDs []string, pidBase int, child localControlTestHandler) (map[string]BindingChildIdentity, *Host) {
+	t.Helper()
+	childControl := localControlTestServer(t, child)
 
 	host, err := NewHost(HostConfig{
 		ControlToken: controlToken,
-		Spawn: func(string, int64) (BindingChild, error) {
-			return &readySupervisorChild{
-				supervisorTestChild: newSupervisorTestChild(8301), controlURL: childControl.URL,
-			}, nil
+		Spawn: func(workspaceID string, _ int64) (BindingChild, error) {
+			pid := pidBase
+			for index, current := range workspaceIDs {
+				if current == workspaceID {
+					pid += index
+					break
+				}
+			}
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(pid), controlEndpoint: childControl}, nil
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	host.Reconcile(context.Background(), []string{"workspace-a"})
-	waitForSupervisorLifecycle(t, host.supervisor, "workspace-a", RunnerLifecycleRunning)
-	record, pid, ok := host.Snapshot("workspace-a")
-	if !ok {
-		t.Fatal("missing successor Binding")
+	t.Cleanup(host.Stop)
+	host.Reconcile(context.Background(), workspaceIDs)
+	identities := make(map[string]BindingChildIdentity, len(workspaceIDs))
+	host.runtimeMu.Lock()
+	for index, workspaceID := range workspaceIDs {
+		waitForSupervisorLifecycle(t, host.supervisor, workspaceID, RunnerLifecycleRunning)
+		record, livePID, ok := host.Snapshot(workspaceID)
+		if !ok {
+			t.Fatalf("missing live Binding child %s", workspaceID)
+		}
+		identity := BindingChildIdentity{WorkspaceID: workspaceID, RunnerGeneration: record.Generation(), PID: livePID}
+		identities[workspaceID] = identity
+		host.runtimeSets[workspaceID] = hostBindingRuntimeSet{
+			Identity:    identity,
+			Runtimes:    []hostBindingRuntime{{ID: fmt.Sprintf("runtime-%d", index), WorkspaceID: workspaceID, Provider: "pi"}},
+			DaemonToken: "runtime-token-" + workspaceID,
+			ExpiresAt:   time.Now().Add(time.Hour),
+		}
 	}
-	host.runtimeSets["workspace-a"] = hostBindingRuntimeSet{
-		Identity:    BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: record.Generation(), PID: pid},
-		Runtimes:    []hostBindingRuntime{{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"}},
-		DaemonToken: "runtime-token", ExpiresAt: time.Now().Add(time.Hour),
-	}
-	defer host.Stop()
-
-	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{
-			ComputerID: "computer-a", ComputerGeneration: 251, Environment: "test",
-			Version: "v2.0.0", ReleaseChannel: "latest", ServerURL: server.URL,
-		},
-		residentRoot:                    filepath.Join(home, ".multica", "computer"),
-		previousPackageUpgradeBootstrap: true,
-	})
-	host.upgrade = upgrade
-	if err := upgrade.recoverSuccessor(context.Background()); err != nil {
-		t.Fatalf("recover previous-package successor: %v", err)
-	}
-	if got := reregistered.Load(); got != 0 {
-		t.Fatalf("successor re-registration calls = %d, want 0", got)
-	}
-	if _, err := os.Stat(previousJournalPath); !os.IsNotExist(err) {
-		t.Fatalf("previous-package handoff journal remains after successor start: %v", err)
-	}
+	host.runtimeMu.Unlock()
+	return identities, host
 }

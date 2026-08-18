@@ -10,10 +10,13 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ErrPiCLIResidentUnsupported is returned when a caller asks the one-shot Pi
@@ -23,7 +26,7 @@ import (
 var ErrPiCLIResidentUnsupported = errors.New("pi CLI backend does not support resident mixed-run APIs")
 
 // piBackend implements Backend by spawning the Pi CLI in non-interactive
-// JSON mode (`pi -p --mode json --session <path>`) and parsing its event
+// JSON mode (`pi -p --mode json`) and parsing its event
 // stream on stdout.
 //
 // Interface segregation: piBackend is intentionally one-shot only. It does
@@ -52,9 +55,15 @@ var (
 	piControlTokenRE = regexp.MustCompile(`<\|[A-Za-z0-9_-]+>[A-Za-z0-9_-]*|<[A-Za-z0-9_-]+\|>`)
 )
 
-const piPackageDirEnvKey = "PI_PACKAGE_DIR"
+const (
+	piCodingAgentDirEnvKey = "PI_CODING_AGENT_DIR"
+	piPackageDirEnvKey     = "PI_PACKAGE_DIR"
+)
 
 var piInheritedEnvBlocklist = map[string]struct{}{
+	// buildPiEnv resolves this value once so custom, inherited, and default
+	// sources cannot leave duplicate entries in the child environment.
+	piCodingAgentDirEnvKey: {},
 	// Raft's SEA launcher uses this name for its own resource root. Pi treats it
 	// as an override for Pi's package root, so a host value makes Pi search the
 	// Raft stub for its bundled themes instead of Pi's installed package.
@@ -65,7 +74,30 @@ var piInheritedEnvBlocklist = map[string]struct{}{
 // the shared child-environment boundary. A runtime custom_env value is
 // deliberate Pi configuration and must still win.
 func buildPiEnv(extra map[string]string) []string {
-	return buildProviderEnv(extra, piInheritedEnvBlocklist)
+	agentDir, explicitlySet := extra[piCodingAgentDirEnvKey]
+	agentDir = strings.TrimSpace(agentDir)
+	if !explicitlySet {
+		agentDir = strings.TrimSpace(os.Getenv(piCodingAgentDirEnvKey))
+	}
+	if agentDir == "" {
+		home := ""
+		if currentUser, err := user.Current(); err == nil {
+			home = strings.TrimSpace(currentUser.HomeDir)
+		}
+		if home == "" {
+			home, _ = os.UserHomeDir()
+		}
+		if home != "" {
+			agentDir = filepath.Join(home, ".pi", "agent")
+		}
+	}
+
+	piEnv := make(map[string]string, len(extra)+1)
+	for key, value := range extra {
+		piEnv[key] = value
+	}
+	piEnv[piCodingAgentDirEnvKey] = agentDir
+	return buildProviderEnv(piEnv, piInheritedEnvBlocklist)
 }
 
 func stripPiToolCallMarkup(s string) string {
@@ -254,40 +286,28 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	earlyCompleteEnabled := getenvDefault("PI_EARLY_COMPLETE", "1") != "0"
 	earlyCompleted := false
 
-	// Pi's --session flag expects a file path where events are appended.
-	// For normal runs the path doubles as our opaque session identifier. A
-	// sidecar cognition run instead gets a temporary transcript that is deleted
-	// after the process exits and is never returned as a resumable SessionID.
-	sessionPath := opts.ResumeSessionID
+	// Durable Pi sessions use an opaque provider session ID. Pi resolves that
+	// ID within the Agent's cwd-scoped .pi-sessions directory and creates a
+	// same-ID session when no prior transcript exists.
+	sessionID := opts.ResumeSessionID
 	ephemeralSession := false
 	if opts.EphemeralSession {
-		if sessionPath != "" {
-			return nil, fmt.Errorf("Pi ephemeral session cannot resume %q", sessionPath)
+		if sessionID != "" {
+			return nil, fmt.Errorf("Pi ephemeral session cannot resume %q", sessionID)
 		}
 		f, err := os.CreateTemp("", "multica-pi-ephemeral-*.jsonl")
 		if err != nil {
 			return nil, fmt.Errorf("Pi ephemeral session path: %w", err)
 		}
-		sessionPath = f.Name()
+		sessionID = f.Name()
 		ephemeralSession = true
 		if err := f.Close(); err != nil {
-			_ = os.Remove(sessionPath)
+			_ = os.Remove(sessionID)
 			return nil, fmt.Errorf("Pi ephemeral session file: %w", err)
 		}
-	} else if sessionPath == "" {
-		p, err := newPiSessionPath()
-		if err != nil {
-			return nil, fmt.Errorf("pi session path: %w", err)
-		}
-		sessionPath = p
+	} else if sessionID == "" {
+		sessionID = newPiSessionID()
 	}
-	if err := ensurePiSessionFile(sessionPath); err != nil {
-		if ephemeralSession {
-			_ = os.Remove(sessionPath)
-		}
-		return nil, fmt.Errorf("pi session file: %w", err)
-	}
-
 	runCtx, cancel := runContext(ctx, timeout)
 
 	var mcpConfigPath string
@@ -297,7 +317,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		if err != nil {
 			cancel()
 			if ephemeralSession {
-				_ = os.Remove(sessionPath)
+				_ = os.Remove(sessionID)
 			}
 			return nil, err
 		}
@@ -311,7 +331,13 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		}
 	}()
 
-	args, stdinPrompt := buildPiArgsForExecution(prompt, sessionPath, opts, b.cfg.Logger)
+	var args []string
+	var stdinPrompt string
+	if ephemeralSession {
+		args, stdinPrompt = buildPiArgsForEphemeralExecution(prompt, sessionID, opts, b.cfg.Logger)
+	} else {
+		args, stdinPrompt = buildPiArgsForExecution(prompt, sessionID, opts, b.cfg.Logger)
+	}
 	argv0, cmdArgs := choosePiInvocation(execName, lookedUp, args, b.cfg.Logger)
 
 	cmd := exec.CommandContext(runCtx, argv0, cmdArgs...)
@@ -327,7 +353,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	if err != nil {
 		cancel()
 		if ephemeralSession {
-			_ = os.Remove(sessionPath)
+			_ = os.Remove(sessionID)
 		}
 		return nil, fmt.Errorf("pi stdout pipe: %w", err)
 	}
@@ -341,7 +367,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	if err != nil {
 		cancel()
 		if ephemeralSession {
-			_ = os.Remove(sessionPath)
+			_ = os.Remove(sessionID)
 		}
 		return nil, fmt.Errorf("pi stdin pipe: %w", err)
 	}
@@ -352,7 +378,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		_ = stdin.Close()
 		cancel()
 		if ephemeralSession {
-			_ = os.Remove(sessionPath)
+			_ = os.Remove(sessionID)
 		}
 		return nil, fmt.Errorf("start pi: %w", err)
 	}
@@ -405,8 +431,8 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		}
 		if ephemeralSession {
 			defer func() {
-				if err := os.Remove(sessionPath); err != nil && !os.IsNotExist(err) {
-					b.cfg.Logger.Warn("Pi ephemeral session cleanup failed", "path", sessionPath, "error", err)
+				if err := os.Remove(sessionID); err != nil && !os.IsNotExist(err) {
+					b.cfg.Logger.Warn("Pi ephemeral session cleanup failed", "path", sessionID, "error", err)
 				}
 			}()
 		}
@@ -559,7 +585,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 						Output:     output.String(),
 						Error:      finalError,
 						DurationMs: time.Since(startTime).Milliseconds(),
-						SessionID:  piReportedSessionID(sessionPath, ephemeralSession),
+						SessionID:  piReportedSessionID(sessionID, ephemeralSession),
 						Usage:      usage,
 					}
 				}
@@ -618,10 +644,10 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 
 		b.cfg.Logger.Info("pi finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
 
-		reportedSessionID := piReportedSessionID(sessionPath, ephemeralSession)
+		reportedSessionID := piReportedSessionID(sessionID, ephemeralSession)
 		if finalStatus == "failed" && !sessionEstablished {
 			// A resume failure before Pi announces agent_start means no usable
-			// session was established. Returning the requested path here makes
+			// session was established. Returning the requested ID here makes
 			// the daemon believe resume succeeded and suppresses its one-shot
 			// fresh-session retry.
 			reportedSessionID = ""
@@ -733,6 +759,8 @@ var piBlockedArgs = map[string]blockedArgMode{
 	"--print":       blockedStandalone, // alias for -p
 	"--mode":        blockedWithValue,  // "json" event stream protocol
 	"--session":     blockedWithValue,  // daemon manages the session path
+	"--session-id":  blockedWithValue,  // daemon manages the opaque session ID
+	"--session-dir": blockedWithValue,  // daemon scopes sessions to AgentRoot
 	"--thinking":    blockedWithValue,  // daemon owns per-agent thinking level
 	"--mcp-config":  blockedWithValue,  // daemon owns MCP from agent.mcp_config
 }
@@ -743,25 +771,29 @@ var piBlockedArgs = map[string]blockedArgMode{
 //
 //	-p                          non-interactive mode (prompt is positional)
 //	--mode json                 emit one JSON event per line on stdout
-//	--session <path>            session log file (created upfront, reused on resume)
+//	--session-id <id>           exact provider session ID (created when missing)
+//	--session-dir <cwd>         Agent-local session storage and lookup
 //	--provider <name>           provider, when Model is "provider/id"
 //	--model <id>                model identifier
 //	--append-system-prompt <s>  extra system instructions
 //
 // Custom args are passed on argv; the user prompt is returned separately for
 // stdin so platform command-line limits never constrain prompt size.
-func buildPiArgsForExecution(prompt, sessionPath string, opts ExecOptions, logger *slog.Logger) ([]string, string) {
-	return buildPiArgs("", sessionPath, opts, logger), prompt
+func buildPiArgsForExecution(prompt, sessionID string, opts ExecOptions, logger *slog.Logger) ([]string, string) {
+	return buildPiArgs("", sessionID, opts, logger), prompt
 }
 
-func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logger) []string {
+func buildPiArgsForEphemeralExecution(prompt, sessionPath string, opts ExecOptions, logger *slog.Logger) ([]string, string) {
+	args := buildPiArgs("", "", opts, logger)
+	return append(args, "--session", sessionPath), prompt
+}
+
+func buildPiArgs(prompt, sessionID string, opts ExecOptions, logger *slog.Logger) []string {
 	args := []string{
 		"-p",
 		"--mode", "json",
 	}
-	if sessionPath != "" {
-		args = append(args, "--session", sessionPath)
-	}
+	args = appendPiSessionArgs(args, sessionID, opts.Cwd)
 	if opts.Model != "" {
 		provider, model := splitPiModel(opts.Model)
 		if provider != "" {
@@ -786,12 +818,12 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 			"--no-approve",
 			"--tools", "",
 		)
-			// Load explicitly trusted extensions (application-generated only).
-			if len(opts.TrustedExtensionPaths) > 0 {
-				for _, p := range opts.TrustedExtensionPaths {
-					args = append(args, "--extension", p)
-				}
+		// Load explicitly trusted extensions (application-generated only).
+		if len(opts.TrustedExtensionPaths) > 0 {
+			for _, p := range opts.TrustedExtensionPaths {
+				args = append(args, "--extension", p)
 			}
+		}
 	}
 	if opts.piOutputLimitExtension != "" {
 		// --no-extensions disables discovery only; Pi still loads an explicit
@@ -907,11 +939,11 @@ func enforcePiOutputTokenLimit(status, errText string, usage map[string]TokenUsa
 	return "failed", fmt.Sprintf("Pi output used %d tokens; restricted limit is %d", outputTokens, limit)
 }
 
-func piReportedSessionID(sessionPath string, ephemeral bool) string {
+func piReportedSessionID(sessionID string, ephemeral bool) string {
 	if ephemeral {
 		return ""
 	}
-	return sessionPath
+	return sessionID
 }
 
 // piStopReasonAllowsEarlyComplete reports whether a turn_end stop reason
@@ -948,38 +980,17 @@ func splitPiModel(s string) (provider, model string) {
 	return "", s
 }
 
-// ── Session path ──
+// ── Session identity ──
 
-// piSessionDir returns the directory where Pi session JSONL files live.
-func piSessionDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".multica", "pi-sessions"), nil
-}
+func newPiSessionID() string { return uuid.NewString() }
 
-func newPiSessionPath() (string, error) {
-	dir, err := piSessionDir()
-	if err != nil {
-		return "", err
-	}
-	name := fmt.Sprintf("%s.jsonl", time.Now().UTC().Format("20060102T150405.000000000"))
-	return filepath.Join(dir, name), nil
-}
+func piSessionDir(cwd string) string { return filepath.Join(cwd, ".pi-sessions") }
 
-// ensurePiSessionFile creates an empty session file if one does not yet
-// exist at path. Pi refuses to start when --session points at a missing
-// file; paths that already exist (a resumed session) are left untouched.
-func ensurePiSessionFile(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+func appendPiSessionArgs(args []string, sessionID, cwd string) []string {
+	if sessionID == "" {
+		return args
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		return err
-	}
-	return f.Close()
+	return append(args, "--session-id", sessionID, "--session-dir", piSessionDir(cwd))
 }
 
 // validateTrustedExtensionPaths checks that every path in TrustedExtensionPaths

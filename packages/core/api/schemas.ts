@@ -38,7 +38,6 @@ import type {
   AgentHealthResponse,
   AgentRuntime,
   ComputerConnection,
-  MachineUpgrade,
   StickerCatalogResponse,
   ListIssuesResponse,
   TimelineEntry,
@@ -58,6 +57,8 @@ import type {
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
   EnsureWindyResponse,
+  EnsurePeriodBriefAgentResponse,
+  EnsurePeriodBriefCollectorsResponse,
   StartVoiceCallDuplexResponse,
   VoiceCallDuplexAudioHint,
   VoiceCallDuplexEventHint,
@@ -72,6 +73,7 @@ import type {
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteRetrospectiveResponse,
+  CreateNotePeriodBriefResponse,
   IssueNoteRef,
   IssueNoteRefListResponse,
 } from "../types";
@@ -114,7 +116,6 @@ export const AgentRestartPreflightSchema = z.object({
     session: AgentRestartModeStateSchema,
     full: AgentRestartModeStateSchema,
   }),
-  active_operation: AgentRestartOperationSchema.nullish(),
   provider_capabilities: z.object({
     force_restart: z.boolean().catch(false),
     custom_model_id: z.boolean().catch(false),
@@ -343,6 +344,36 @@ export const EMPTY_NOTE_WORKER_JOB: NoteWorkerJob = {
   failure_reason: null,
   created_at: "",
   updated_at: "",
+};
+
+export const CreateNotePeriodBriefResponseSchema: z.ZodType<CreateNotePeriodBriefResponse> = z.object({
+  page: NotePageSchema,
+  job: NoteWorkerJobSchema,
+  window: z.object({
+    kind: z.string().default(""),
+    timezone: z.string().default(""),
+    start: z.string().default(""),
+    end: z.string().default(""),
+    label: z.string().default(""),
+  }).loose(),
+  sources_used: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_empty: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_skipped: z.array(z.string()).nullish().transform((v) => v ?? []),
+  fact_count: z.number().default(0),
+  collector_agent_ids: z.array(z.string()).nullish().transform((v) => v ?? []),
+  collector_jobs: z.array(NoteWorkerJobSchema).nullish().transform((v) => v ?? []),
+}).loose();
+
+export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefResponse = {
+  page: EMPTY_NOTE_PAGE,
+  job: EMPTY_NOTE_WORKER_JOB,
+  window: { kind: "", timezone: "", start: "", end: "", label: "" },
+  sources_used: [],
+  sources_empty: [],
+  sources_skipped: [],
+  fact_count: 0,
+  collector_agent_ids: [],
+  collector_jobs: [],
 };
 
 export const ChannelGoalSchema = z.object({
@@ -621,32 +652,6 @@ export const AgentRuntimeSchema = z.object({
     .enum(["ok", "update_available", "updating", "failed", "offline"])
     .catch("offline"),
   update_error: z.string().nullable().optional(),
-  machine_upgrade: z
-    .object({
-      id: z.string(),
-      daemon_id: z.string(),
-      request_id: z.string(),
-      requested_target: z.string(),
-      resolved_target: z.string().nullable().optional(),
-      phase: z.string(),
-      result: z.string().nullable().optional(),
-      error_code: z.string().nullable().optional(),
-      error_message: z.string().nullable().optional(),
-      accepted_at: z.string().nullable().optional(),
-      accepted_generation: z.string().nullable().optional(),
-      accepted_runtime_ids: z.array(z.string()).optional(),
-      attested_runtime_ids: z.array(z.string()).optional(),
-      source_version: z.string().nullable().optional(),
-      rollback_generation: z.string().nullable().optional(),
-      rollback_runtime_ids: z.array(z.string()).optional(),
-      completed_at: z.string().nullable().optional(),
-      created_at: z.string(),
-      updated_at: z.string(),
-    })
-    .loose()
-    .nullable()
-    .optional()
-    .catch(null),
   // Unknown/malformed future update observations degrade only this optional
   // field. The runtime row remains usable by older installed desktop builds.
   auto_update: DaemonUpdateStatusSchema.nullable().optional().catch(null),
@@ -666,44 +671,15 @@ export const ComputerConnectionSchema = z.object({
   owner_id: z.string().min(1),
   connected: z.boolean(),
   last_seen_at: z.string().nullable(),
+  work_journal_enabled: z.boolean().nullable().optional(),
 }).loose();
 export const ComputerConnectionListSchema = z.array(ComputerConnectionSchema);
 export const EMPTY_COMPUTER_CONNECTION_LIST: ComputerConnection[] = [];
 
-export const MachineUpgradeSchema = z.object({
-  id: z.string(),
-  daemon_id: z.string(),
-  request_id: z.string(),
-  requested_target: z.string(),
-  resolved_target: z.string().nullable().optional(),
-  phase: z.string().default("failed"),
-  result: z.string().nullable().optional(),
-  error_code: z.string().nullable().optional(),
-  error_message: z.string().nullable().optional(),
-  accepted_at: z.string().nullable().optional(),
-  accepted_generation: z.string().nullable().optional(),
-  accepted_runtime_ids: z.array(z.string()).default([]),
-  attested_runtime_ids: z.array(z.string()).default([]),
-  source_version: z.string().nullable().optional(),
-  rollback_generation: z.string().nullable().optional(),
-  rollback_runtime_ids: z.array(z.string()).default([]),
-  completed_at: z.string().nullable().optional(),
-  created_at: z.string(),
-  updated_at: z.string(),
+export const ComputerWorkJournalSettingSchema = z.object({
+  enabled: z.boolean(),
 }).loose();
-
-export const EMPTY_MACHINE_UPGRADE: MachineUpgrade = {
-  id: "",
-  daemon_id: "",
-  request_id: "",
-  requested_target: "",
-  phase: "failed",
-  accepted_runtime_ids: [],
-  attested_runtime_ids: [],
-  rollback_runtime_ids: [],
-  created_at: "",
-  updated_at: "",
-};
+export const EMPTY_COMPUTER_WORK_JOURNAL_SETTING = { enabled: false };
 
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive
@@ -2602,6 +2578,16 @@ export const CreateAgentFromTemplateResponseSchema = z.object({
 export const EnsureWindyResponseSchema: z.ZodType<EnsureWindyResponse> = z.object({
   agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success),
   dm_id: z.string().optional(),
+}).loose();
+
+export const EnsurePeriodBriefAgentResponseSchema: z.ZodType<EnsurePeriodBriefAgentResponse> = z.object({
+  agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success),
+  created: z.boolean(),
+}).loose();
+
+export const EnsurePeriodBriefCollectorsResponseSchema: z.ZodType<EnsurePeriodBriefCollectorsResponse> = z.object({
+  agents: z.array(z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success)),
+  created: z.array(z.string()),
 }).loose();
 
 // Fallback when the success response fails to parse. The agent server-side

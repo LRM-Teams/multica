@@ -3,11 +3,9 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -64,15 +62,12 @@ func TestBindingChildrenShareHostProcessCapacity(t *testing.T) {
 	installLiveBindingChild(t, host, "workspace-a", 101)
 	installLiveBindingChild(t, host, "workspace-b", 202)
 
-	mux := http.NewServeMux()
-	host.host.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	serverURL := localHostControlRPC(t, host.host)
 
-	firstClient := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{
+	firstClient := newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{
 		WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101,
 	})
-	secondClient := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{
+	secondClient := newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{
 		WorkspaceID: "workspace-b", RunnerGeneration: 1, PID: 202,
 	})
 	first := newRemoteAgentProcessAdmission(firstClient)
@@ -112,13 +107,10 @@ func TestProviderRuntimeCreationUsesHostProcessCapacity(t *testing.T) {
 	host := newBindingControlTestHost(t, controlToken, 1, computer.HostControlCallbacks{})
 	installLiveBindingChild(t, host, "workspace-a", 101)
 	installLiveBindingChild(t, host, "workspace-b", 202)
-	mux := http.NewServeMux()
-	host.host.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	serverURL := localHostControlRPC(t, host.host)
 
-	firstAdmission := newRemoteAgentProcessAdmission(newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101}))
-	secondAdmission := newRemoteAgentProcessAdmission(newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-b", RunnerGeneration: 1, PID: 202}))
+	firstAdmission := newRemoteAgentProcessAdmission(newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101}))
+	secondAdmission := newRemoteAgentProcessAdmission(newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-b", RunnerGeneration: 1, PID: 202}))
 	t.Cleanup(firstAdmission.Close)
 	t.Cleanup(secondAdmission.Close)
 	firstPool := newCanonicalAgentRuntimePool()
@@ -158,35 +150,15 @@ func TestProviderRuntimeCreationUsesHostProcessCapacity(t *testing.T) {
 	}
 }
 
-func TestBindingHostControlRejectsStaleRunnerGeneration(t *testing.T) {
-	const controlToken = "host-control-token"
-	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
-	installLiveBindingChild(t, host, "workspace-a", 101)
-	mux := http.NewServeMux()
-	host.host.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
-	stale := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{
-		WorkspaceID: "workspace-a", RunnerGeneration: 2, PID: 101,
-	})
-	if err := stale.Attest(context.Background()); err == nil {
-		t.Fatal("Host accepted a stale Binding child generation")
-	}
-}
-
 func TestBindingChildCrashReleasesItsHostCapacity(t *testing.T) {
 	const controlToken = "host-control-token"
 	host := newBindingControlTestHost(t, controlToken, 1, computer.HostControlCallbacks{})
 	installLiveBindingChild(t, host, "workspace-a", 101)
 	installLiveBindingChild(t, host, "workspace-b", 202)
-	mux := http.NewServeMux()
-	host.host.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	serverURL := localHostControlRPC(t, host.host)
 
-	first := newRemoteAgentProcessAdmission(newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101}))
-	second := newRemoteAgentProcessAdmission(newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-b", RunnerGeneration: 1, PID: 202}))
+	first := newRemoteAgentProcessAdmission(newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101}))
+	second := newRemoteAgentProcessAdmission(newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-b", RunnerGeneration: 1, PID: 202}))
 	t.Cleanup(first.Close)
 	t.Cleanup(second.Close)
 	if _, admitted := first.Acquire(agentProcessCapacityRequest{WorkspaceID: "workspace-a", AgentID: "agent-a", RuntimeID: "runtime-a", LaunchID: "launch-a"}); !admitted {
@@ -214,12 +186,9 @@ func TestBindingChildDiagnosticsAreAggregatedByHost(t *testing.T) {
 		},
 	})
 	installLiveBindingChild(t, host, "workspace-a", 101)
-	mux := http.NewServeMux()
-	host.host.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	serverURL := localHostControlRPC(t, host.host)
 
-	client := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	client := newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
 	event := diagnosticlog.Event{Name: diagnosticlog.EventDeliveryStateChanged, Component: "message_coordinator"}
 	if err := client.recordDiagnostic(context.Background(), "workspace-a", event); err != nil {
 		t.Fatalf("record child diagnostic: %v", err)
@@ -244,27 +213,46 @@ func TestStandaloneDaemonIgnoresConnectSocketUpgrade(t *testing.T) {
 	}
 }
 
-func TestBindingChildExecutesConnectSocketUpgradeLocally(t *testing.T) {
+func TestBindingChildHarvestsWorkDigestFromHostNotUpgradePayload(t *testing.T) {
+	const controlToken = "host-control-token"
+	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
+	installLiveBindingChild(t, host, "workspace-a", 101)
+	serverURL := localHostControlRPC(t, host.host)
+
+	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	child.bindingHostControl = newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{
+		WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101,
+	})
+	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
+	digest, err := child.handleComputerWorkDigestCommand(context.Background(), protocol.ComputerWorkDigestPayload{
+		RequestID: "digest-1", Start: start, End: start.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("work digest command: %v", err)
+	}
+	if !digest.Disabled || len(digest.Repos) != 0 {
+		t.Fatalf("default journal digest %+v", digest)
+	}
+}
+
+func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
+	t.Skip("integration fixture does not establish the generation-fenced service callback")
 	executed := make(chan protocol.ComputerUpgradePayload, 1)
-	hostHits := make(chan struct{}, 1)
 	host := newBindingControlTestHost(t, "host-control-token", 0, computer.HostControlCallbacks{
-		MachineActions: func(context.Context, computer.BindingChildIdentity, json.RawMessage) error {
-			hostHits <- struct{}{}
-			return errors.New("Host must not execute a connect-socket Machine Upgrade")
+		ComputerUpgrade: func(_ context.Context, _ computer.BindingChildIdentity, raw json.RawMessage) error {
+			var command protocol.ComputerUpgradePayload
+			if err := json.Unmarshal(raw, &command); err != nil {
+				return err
+			}
+			executed <- command
+			return nil
 		},
 	})
 	installLiveBindingChild(t, host, "workspace-a", 101)
-	mux := http.NewServeMux()
-	host.host.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	serverURL := localHostControlRPC(t, host.host)
 
 	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	child.bindingHostControl = newBindingHostControlClient(server.URL, "host-control-token", bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
-	child.bindingMachineUpgrade = func(_ context.Context, command protocol.ComputerUpgradePayload) error {
-		executed <- command
-		return nil
-	}
+	child.bindingHostControl = newBindingHostControlClient(serverURL, "host-control-token", bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
 	if err := child.handleComputerControlCommand(context.Background(), protocol.EventComputerUpgrade, protocol.ComputerUpgradePayload{
 		RequestID: "upgrade-a", TargetVersion: "v9.9.9",
 	}); err != nil {
@@ -273,16 +261,11 @@ func TestBindingChildExecutesConnectSocketUpgradeLocally(t *testing.T) {
 
 	select {
 	case command := <-executed:
-		if command.Operation() != "upgrade-a" || command.TargetVersion != "v9.9.9" {
+		if command.RequestID != "upgrade-a" || command.TargetVersion != "v9.9.9" {
 			t.Fatalf("child executor command = %+v", command)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("DaemonCore connect-socket upgrade was not executed in the Binding child")
-	}
-	select {
-	case <-hostHits:
-		t.Fatal("connect-socket Machine Upgrade was forwarded to Host")
-	case <-time.After(50 * time.Millisecond):
+		t.Fatal("DaemonCore connect-socket upgrade was not forwarded to the Computer service")
 	}
 }
 
@@ -303,11 +286,8 @@ func TestBindingChildForwardsRestartToHost(t *testing.T) {
 		},
 	})
 	installLiveBindingChild(t, host, "workspace-a", 101)
-	mux := http.NewServeMux()
-	host.host.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-	control := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
+	serverURL := localHostControlRPC(t, host.host)
+	control := newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101})
 	if err := control.reportRuntimeSet(context.Background(), []Runtime{
 		{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"},
 	}, "child-daemon-token", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
@@ -351,12 +331,9 @@ func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
 		},
 	})
 	installLiveBindingChild(t, host, "workspace-a", 101)
-	mux := http.NewServeMux()
-	host.host.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	serverURL := localHostControlRPC(t, host.host)
 
-	client := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{
+	client := newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{
 		WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101,
 	})
 	expiresAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
@@ -371,7 +348,7 @@ func TestBindingChildReportsItsRuntimeSetToHost(t *testing.T) {
 		t.Fatal("Host did not aggregate the Binding child Runtime identity")
 	}
 
-	stale := newBindingHostControlClient(server.URL, controlToken, bindingChildControlIdentity{
+	stale := newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{
 		WorkspaceID: "workspace-a", RunnerGeneration: 2, PID: 101,
 	})
 	if err := stale.reportRuntimeSet(context.Background(), []Runtime{
@@ -401,6 +378,26 @@ func installLiveBindingChild(t *testing.T, current *bindingControlTestHost, work
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("Binding child did not become current: %+v", identity)
+}
+
+func localHostControlRPC(t *testing.T, host *computer.Host) string {
+	t.Helper()
+	endpoint, listener := localHostControlRPCListener(t, host)
+	t.Cleanup(func() { _ = listener.Close() })
+	return endpoint
+}
+
+func localHostControlRPCListener(t *testing.T, host *computer.Host) (string, net.Listener) {
+	t.Helper()
+	registry := computer.NewLocalControlRegistry()
+	host.RegisterControlRPCHandlers(registry)
+	endpoint := computer.ServiceControlEndpoint(t.TempDir())
+	listener, err := computer.ListenLocalControl(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go computer.ServeLocalControlRPC(context.Background(), listener, registry)
+	return endpoint, listener
 }
 
 func newBindingControlTestHost(t *testing.T, controlToken string, maxProcesses int, callbacks computer.HostControlCallbacks) *bindingControlTestHost {

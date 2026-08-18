@@ -83,6 +83,31 @@ func TestRunnerLaunchProjectionRotatesOnlyOnPlacementEpoch(t *testing.T) {
 	}
 }
 
+func TestLoadRunnerDesiredLaunchesRestoresProviderSession(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	runtimeID := seedMachineLockedRuntime(t, "daemon-session-resume", "session-resume")
+	agentID := createHandlerTestAgentOnRuntime(t, "runner-session-resume", runtimeID)
+	const sessionID = "provider-session-before-daemon-restart"
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runner_launch_projection SET provider_session_id = $2 WHERE agent_id = $1
+	`, agentID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	desired, err := testHandler.loadRunnerDesiredLaunches(ctx, daemonws.ClientIdentity{
+		DaemonID: "daemon-session-resume", WorkspaceID: testWorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("load desired launches: %v", err)
+	}
+	if len(desired) != 1 || desired[0].agentID != agentID || desired[0].sessionID != sessionID {
+		t.Fatalf("desired launches = %+v", desired)
+	}
+}
+
 func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -100,12 +125,6 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	}
 	var newLaunchID string
 	if err := testPool.QueryRow(ctx, `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&newLaunchID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_launch (
-			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
-		) VALUES ($1, $2, $3, 'daemon-same', 'instance-same', $4, 'active')`, testWorkspaceID, agentID, oldRuntimeID, oldLaunchID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,8 +154,11 @@ func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	}
 
 	h := *testHandler
+	h.runnerObservations = newRunnerObservationStore()
+	h.runnerActivityCursor = newRunnerActivityCursorStore()
 	h.DaemonHub = hub
 	h.RunnerPresenceSource = hub
+	h.observations().putStatus(testWorkspaceID, "daemon-same", "instance-same", agentID, oldRuntimeID, oldLaunchID, protocol.AgentStatusActive)
 	h.reconcileConnectedRuntimes(ctx, testWorkspaceID, parseUUID(oldRuntimeID), parseUUID(newRuntimeID))
 	want := []protocol.Message{{Type: protocol.EventDaemonAgentStop}}
 	for i := range want {

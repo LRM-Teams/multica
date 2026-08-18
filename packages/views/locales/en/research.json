@@ -149,6 +149,12 @@
   },
   "v6_detail": {
     "execution": "Execution",
+    "absorbed": "Absorbed",
+    "terminal": "Terminal",
+    "expandable": "Expandable",
+    "hidden_children": "Hidden children",
+    "yes": "Yes",
+    "no": "No",
     "conclusion": "Conclusion",
     "integration": "Integration",
     "projection_state": "Projection state",

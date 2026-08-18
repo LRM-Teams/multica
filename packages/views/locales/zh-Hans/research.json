@@ -149,6 +149,12 @@
   },
   "v6_detail": {
     "execution": "执行状态",
+    "absorbed": "已吸收",
+    "terminal": "终止状态",
+    "expandable": "可展开",
+    "hidden_children": "隐藏子节点",
+    "yes": "是",
+    "no": "否",
     "conclusion": "结论状态",
     "integration": "整合状态",
     "projection_state": "投影状态",

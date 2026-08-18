@@ -309,10 +309,10 @@ func (runner *WorkspaceRunner) bufferAcceptedDelivery(ctx context.Context, deliv
 }
 
 func (runner *WorkspaceRunner) restartFromIdleSnapshot(agentID string, res agentResidency) error {
-	if runner.processes == nil || res.runtimeID == "" || res.launchID == "" {
+	if runner.processes == nil || res.runtimeID == "" || res.launchID == "" || res.startDispatchID == "" {
 		return fmt.Errorf("idle snapshot for Agent %q is incomplete", agentID)
 	}
-	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID, firstNonEmpty(res.startDispatchID, res.launchID))
+	return runner.processes.RestoreIdle(agentID, res.runtimeID, res.launchID, res.startDispatchID, res.startStopEpoch)
 }
 
 func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, agentID string, res agentResidency) {
@@ -320,6 +320,7 @@ func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, ag
 		ctx = context.Background()
 	}
 	if ctx.Err() != nil {
+		runner.processes.completeFailedManagedStart(agentProcessCallback{AgentID: agentID, LaunchID: res.launchID})
 		return
 	}
 	start := protocol.WorkspaceRunnerAgentStartPayload{

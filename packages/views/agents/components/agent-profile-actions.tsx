@@ -1,24 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, MessageSquare, RotateCcw, Trash2 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2, MessageSquare, Play, Square, Trash2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
-import {
-  agentRestartModeState,
-  agentRestartPreflightOptions,
-  resolveRestartDisabledReasonKey,
-} from "@multica/core/agents";
+import { useWorkspaceAgentPresence } from "@multica/core/agents";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
-import { AgentRestartModal } from "./agent-restart-modal";
 import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 
 /**
@@ -38,9 +33,8 @@ import { ConfirmDeleteAgent } from "./confirm-delete-agent";
  * LRM-480: actions use the standard project Button variants (outline /
  * destructive) — no custom thick-bordered button style.
  *
- * LRM-909 (Frank「stop按钮删掉，留restart就行」): Profile ACTIONS no longer
- * renders Stop. Keep Message → Restart… → Delete. DM stop remains on the
- * conversation live cue, not here.
+ * Agent lifecycle uses one Runner-presence-driven Start/Stop button. Work
+ * status is intentionally not used as process lifecycle state.
  *
  * LRM-593 (Frank lock A): Delete is the only solid destructive, above a
  * `border-t` danger zone.
@@ -48,28 +42,23 @@ import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 export function AgentProfileActions({
   agent,
   canManage,
-  forceRestartSupported,
 }: {
   agent: Agent;
   canManage: boolean;
-  /**
-   * From the bound runtime's `provider_capabilities.force_restart`.
-   * Task #26 / Parker 2026-08-03: do NOT hide Restart when false — keep
-   * the button for canManage users and disable with human copy. Missing
-   * capability means false (fail closed for enablement, not visibility).
-   */
-  forceRestartSupported: boolean;
 }) {
   const { t } = useT("agents");
   const qc = useQueryClient();
   const { openDM, isPending: openingDM } = useOpenDM();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [restartOpen, setRestartOpen] = useState(false);
+  const [lifecyclePending, setLifecyclePending] = useState(false);
 
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
-  // Frank, 2026-08-01: only offer restart while the bound computer is
+  const { byAgent: presenceByAgent } = useWorkspaceAgentPresence(agent.workspace_id);
+  const presence = presenceByAgent.get(agent.id);
+  const isAgentRunning = presence === "online";
+  // Only offer lifecycle actions while the bound computer is
   // reachable — it comes back on its own once the computer reconnects.
   // Derived, staleness-aware health (#10), never the raw `runtime_status`
   // column: that field can say "online" for up to 180s after the daemon
@@ -80,31 +69,35 @@ export function AgentProfileActions({
       Date.now(),
     ) === "online";
 
-  // The provider-level gate above (forceRestartSupported) only tells us the
-  // agent's provider CAN be force-restarted in principle — not that the
-  // daemon it's actually running on is new enough to execute it right now
-  // Fetch the server-owned restart capability instead of inferring it from
-  // Agent presentation state.
-  // real preflight whenever we'd otherwise offer the button, so a stale
-  // daemon shows a standing reason instead of a click that silently no-ops.
-  // Visibility: managers always see Restart while online (Parker #26) —
-  // hiding when force_restart is false made the feature look missing.
-  const wantsRestartOffer = canManage && !isArchived && isRuntimeOnline;
-  const { data: restartPreflightData, isSuccess: restartPreflightSucceeded } = useQuery(
-    agentRestartPreflightOptions(agent.id, wantsRestartOffer && forceRestartSupported),
-  );
-  const restartState = agentRestartModeState(restartPreflightData, "restart");
-  // Only trust preflight disable once resolved — don't flash "unavailable".
-  const preflightBlocked = forceRestartSupported && restartPreflightSucceeded && !restartState.supported;
-  const restartBlocked = !forceRestartSupported || preflightBlocked;
-  const restartDisabledReason = !forceRestartSupported
-    ? t(($) => $.restart_modal.disabled_reason.no_force_capability)
-    : preflightBlocked
-      ? t(($) => $.restart_modal.disabled_reason[resolveRestartDisabledReasonKey(restartState.disabled_reason)])
-      : null;
-
   const invalidateAgents = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
+  };
+
+  const handleLifecycle = async () => {
+    setLifecyclePending(true);
+    try {
+      await (isAgentRunning ? api.stopAgent(agent.id) : api.startAgent(agent.id));
+      invalidateAgents();
+      toast.success(
+        t(($) =>
+          isAgentRunning
+            ? $.side_panel.actions_stop_agent_success
+            : $.side_panel.actions_start_success,
+        ),
+      );
+    } catch (e) {
+      showErrorToast(
+        e instanceof Error
+          ? e.message
+          : t(($) =>
+              isAgentRunning
+                ? $.side_panel.actions_stop_agent_failed
+                : $.side_panel.actions_start_failed,
+            ),
+      );
+    } finally {
+      setLifecyclePending(false);
+    }
   };
 
   // LRM-448: "Delete" = deactivate via archiveAgent (soft-delete). No
@@ -154,31 +147,27 @@ export function AgentProfileActions({
           </Button>
         ) : null}
 
-        {wantsRestartOffer ? (
-          <div className="flex flex-col gap-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              className="w-full gap-2"
-              data-testid="agent-profile-action-restart"
-              disabled={restartBlocked}
-              onClick={() => {
-                if (!restartBlocked) setRestartOpen(true);
-              }}
-            >
-              <RotateCcw className="size-4 shrink-0" aria-hidden />
-              {t(($) => $.restart_modal.trigger)}
-            </Button>
-            {restartDisabledReason && (
-              <span
-                className="text-xs text-muted-foreground"
-                data-testid="agent-profile-action-restart-reason"
-              >
-                {restartDisabledReason}
-              </span>
+        {canManage && !isArchived ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            className="w-full gap-2"
+            data-testid="agent-profile-action-start"
+            disabled={lifecyclePending || !presence || (!isAgentRunning && !isRuntimeOnline)}
+            onClick={() => void handleLifecycle()}
+          >
+            {lifecyclePending ? (
+              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+            ) : isAgentRunning ? (
+              <Square className="size-4 shrink-0" aria-hidden />
+            ) : (
+              <Play className="size-4 shrink-0" aria-hidden />
             )}
-          </div>
+            {t(($) =>
+              isAgentRunning ? $.side_panel.actions_stop_agent : $.side_panel.actions_start_agent,
+            )}
+          </Button>
         ) : null}
 
         {canManage && !isArchived ? (
@@ -208,16 +197,6 @@ export function AgentProfileActions({
         onConfirm={() => void handleDelete()}
         onOpenChange={setConfirmDelete}
       />
-
-      {canManage && !isArchived ? (
-        <AgentRestartModal
-          agentId={agent.id}
-          agentHandle={agent.name}
-          agentName={displayName}
-          open={restartOpen}
-          onOpenChange={setRestartOpen}
-        />
-      ) : null}
     </section>
   );
 }

@@ -10,6 +10,8 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+var errManagedAgentStartStopped = errors.New("managed start suppressed by stop request")
+
 func (runner *WorkspaceRunner) acceptManagedAgentStart(start protocol.WorkspaceRunnerAgentStartPayload, failConnection func(error)) (protocol.AgentStartAckPayload, bool, func(), <-chan struct{}, <-chan bool, error) {
 	ack, replayed, err := runner.registerManagedAgentStartOnce(start)
 	if err != nil {
@@ -73,31 +75,35 @@ func (runner *WorkspaceRunner) startAgentNow(startCtx context.Context, start pro
 	}
 	if err != nil {
 		failed = true
-		if runner.logger != nil {
+		if runner.logger != nil && !errors.Is(err, errManagedAgentStartStopped) {
 			runner.logger.Warn("Workspace Runner provider start failed", runner.managedStartLogAttrs(start, ack.QueueState, "provider_start_failed", "failed", err)...)
 		}
 		runner.publishManagedAgentStartFailure(start, outcome)
 		return
 	}
-	if err := runner.establishManagedAgentStart(start, outcome); err != nil {
-		if failConnection != nil {
-			failConnection(err)
+	err = runner.processes.publishManagedStart(callback, func() error {
+		if err := runner.establishManagedAgentStart(start, outcome); err != nil {
+			return err
 		}
-		return
-	}
-	if err := runner.sendOnCurrentConnection(protocol.EventAgentStatus, outcome.status); err != nil {
-		if failConnection != nil {
-			failConnection(err)
+		if err := runner.sendOnCurrentConnection(protocol.EventAgentStatus, outcome.status); err != nil {
+			return err
 		}
-		return
-	}
-	if outcome.session.ProviderSessionID != "" {
-		if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, outcome.session); err != nil {
-			if failConnection != nil {
-				failConnection(err)
+		if outcome.session.ProviderSessionID != "" {
+			if err := runner.sendOnCurrentConnection(protocol.EventAgentSession, outcome.session); err != nil {
+				return err
 			}
-			return
 		}
+		return nil
+	})
+	if errors.Is(err, errManagedAgentStartStopped) {
+		failed = true
+		return
+	}
+	if err != nil {
+		if failConnection != nil {
+			failConnection(err)
+		}
+		return
 	}
 	runner.broadcastActivity(start.AgentID, start.RuntimeID, "starting")
 	runner.flushManagedAgentStartMessages(startCtx, start, ack)
@@ -138,11 +144,12 @@ func (runner *WorkspaceRunner) replayManagedAgentStartPublication(start protocol
 }
 
 type managedAgentStartOutcome struct {
-	status        protocol.AgentStatusPayload
-	session       protocol.AgentSessionPayload
-	failureStage  managedRuntimeFailureStage
-	failureReason string
-	failureAt     time.Time
+	status         protocol.AgentStatusPayload
+	session        protocol.AgentSessionPayload
+	startStopEpoch uint64
+	failureStage   managedRuntimeFailureStage
+	failureReason  string
+	failureAt      time.Time
 }
 
 // registerManagedAgentStart runs on the socket reader before a later stop or
@@ -184,9 +191,20 @@ func (runner *WorkspaceRunner) registerManagedAgentStartOnce(payload protocol.Wo
 }
 
 func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, payload protocol.WorkspaceRunnerAgentStartPayload, ack protocol.AgentStartAckPayload) (managedAgentStartOutcome, error) {
-	if err := runner.processes.WaitForAdmission(ctx, agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}); err != nil {
-		_ = runner.processes.Stop(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
+	callback := agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID}
+	startStopEpoch, err := runner.processes.startStopEpoch(callback)
+	if err != nil {
+		return managedAgentStartOutcome{}, err
+	}
+	stopRequested := func() bool {
+		return runner.processes.stopEpochChanged(payload.AgentID, startStopEpoch)
+	}
+	if err := runner.processes.WaitForAdmission(ctx, callback); err != nil {
+		_ = runner.processes.Stop(callback)
 		return managedAgentStartOutcome{}, fmt.Errorf("wait for managed Agent capacity: %w", err)
+	}
+	if stopRequested() {
+		return managedAgentStartOutcome{}, errManagedAgentStartStopped
 	}
 	if current, ok := runner.processes.Snapshot(payload.AgentID); !ok || current.LaunchID != payload.LaunchID {
 		return managedAgentStartOutcome{}, errors.New("managed start was superseded before provider startup")
@@ -199,12 +217,21 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	if err := runner.configureProviderSession(payload.AgentID, payload.RuntimeID, payload.Config.SessionID); err != nil {
 		return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_session_failed"), fmt.Errorf("configure managed Agent provider session: %w", err)
 	}
+	if stopRequested() {
+		return managedAgentStartOutcome{}, errManagedAgentStartStopped
+	}
 	if err := runner.ensureResidentRuntime(ctx, payload.AgentID, payload.RuntimeID, nil); err != nil {
 		return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_spawn_failed"), fmt.Errorf("start managed Agent provider: %w", err)
+	}
+	if stopRequested() {
+		return managedAgentStartOutcome{}, runner.cleanupStoppedManagedAgentStart(payload)
 	}
 	if err := runner.admitManagedProviderProcess(payload); err != nil {
 		_ = runner.runtimes.forceInvalidateSession(payload.AgentID, payload.RuntimeID)
 		return runner.prepareManagedAgentStartFailure(payload, managedRuntimeFailureSpawn, "provider_spawn_failed"), fmt.Errorf("admit managed Agent process: %w", err)
+	}
+	if stopRequested() {
+		return managedAgentStartOutcome{}, runner.cleanupStoppedManagedAgentStart(payload)
 	}
 	if current, ok := runner.processes.Snapshot(payload.AgentID); !ok || current.LaunchID != payload.LaunchID {
 		if !ok || current.RuntimeID != payload.RuntimeID {
@@ -224,7 +251,17 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 			session.ProviderSessionID = payload.Config.SessionID
 		}
 	}
-	return managedAgentStartOutcome{status: status, session: session}, nil
+	if stopRequested() {
+		return managedAgentStartOutcome{}, runner.cleanupStoppedManagedAgentStart(payload)
+	}
+	return managedAgentStartOutcome{status: status, session: session, startStopEpoch: startStopEpoch}, nil
+}
+
+func (runner *WorkspaceRunner) cleanupStoppedManagedAgentStart(payload protocol.WorkspaceRunnerAgentStartPayload) error {
+	if err := runner.runtimes.forceInvalidateSession(payload.AgentID, payload.RuntimeID); err != nil {
+		return fmt.Errorf("clean up managed Agent start after Stop: %w", err)
+	}
+	return errManagedAgentStartStopped
 }
 
 func (runner *WorkspaceRunner) establishManagedAgentStart(payload protocol.WorkspaceRunnerAgentStartPayload, outcome managedAgentStartOutcome) error {
@@ -232,7 +269,7 @@ func (runner *WorkspaceRunner) establishManagedAgentStart(payload protocol.Works
 		return fmt.Errorf("record managed start: %w", err)
 	}
 	if runner.residency != nil {
-		runner.residency.rememberIdle(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID)
+		runner.residency.rememberIdle(payload.AgentID, payload.RuntimeID, payload.LaunchID, payload.StartDispatchID, outcome.startStopEpoch)
 	}
 	return nil
 }
@@ -253,8 +290,9 @@ func (runner *WorkspaceRunner) flushManagedAgentStartMessages(ctx context.Contex
 
 func (runner *WorkspaceRunner) prepareManagedAgentStartFailure(payload protocol.WorkspaceRunnerAgentStartPayload, stage managedRuntimeFailureStage, reason string) managedAgentStartOutcome {
 	at := runner.activity.now().UTC()
+	startStopEpoch, _ := runner.processes.startStopEpoch(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
 	if runner.residency != nil {
-		runner.residency.rememberFailure(payload.AgentID, payload.RuntimeID, payload.LaunchID, stage, reason, "")
+		runner.residency.rememberFailure(payload.AgentID, payload.RuntimeID, payload.LaunchID, startStopEpoch, stage, reason, "")
 	}
 	return managedAgentStartOutcome{
 		status:       protocol.AgentStatusPayload{AgentID: payload.AgentID, LaunchID: payload.LaunchID, Status: protocol.AgentStatusInactive},

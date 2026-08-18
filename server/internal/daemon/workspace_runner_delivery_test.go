@@ -305,8 +305,8 @@ func TestWorkspaceRunnerIdleSnapshotDeliveryRestartsAndAcknowledges(t *testing.T
 	}); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
 	}
-	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}); err != nil {
-		t.Fatalf("drop live process: %v", err)
+	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}) {
+		t.Fatal("drop live process")
 	}
 	delivery := protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
@@ -349,14 +349,42 @@ func TestWorkspaceRunnerIdleSnapshotCompleteRespectsCancel(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
 	}
+	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}) {
+		t.Fatal("drop live process")
+	}
+	res, ok := runner.residency.get("agent-1")
+	if !ok {
+		t.Fatal("idle residency missing")
+	}
+	if err := runner.restartFromIdleSnapshot("agent-1", res); err != nil {
+		t.Fatalf("restore idle snapshot: %v", err)
+	}
+	startupDone, found := runner.processes.managedStartupDone(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"})
+	if !found {
+		t.Fatal("restored idle startup owner missing")
+	}
 	starts := providerStarts
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	runner.completeIdleSnapshotStart(ctx, "agent-1", agentResidency{
-		runtimeID: "runtime-1", launchID: "launch-1", startDispatchID: "dispatch-1",
-	})
+	runner.completeIdleSnapshotStart(ctx, "agent-1", res)
 	if providerStarts != starts {
 		t.Fatalf("cancelled idle complete started provider %d times, want %d", providerStarts, starts)
+	}
+	select {
+	case <-startupDone:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled idle complete did not settle its startup owner")
+	}
+}
+
+func TestWorkspaceRunnerIdleSnapshotRequiresStartDispatchIdentity(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	err := runner.restartFromIdleSnapshot("agent-1", agentResidency{
+		runtimeID: "runtime-1", launchID: "launch-1",
+	})
+	if err == nil {
+		t.Fatal("idle restore synthesized a missing start dispatch identity")
 	}
 }
 
@@ -374,10 +402,13 @@ func TestWorkspaceRunnerIdleSnapshotFailureLogsLifecycleIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed managed Agent: %v", err)
 	}
-	if err := runner.processes.Stop(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}); err != nil {
-		t.Fatalf("stop seed launch: %v", err)
+	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: "agent-1", LaunchID: "launch-1"}) {
+		t.Fatal("drop seed launch")
 	}
-	res := agentResidency{runtimeID: "runtime-1", launchID: "launch-1", startDispatchID: "dispatch-1"}
+	res, ok := runner.residency.get("agent-1")
+	if !ok {
+		t.Fatal("idle residency missing")
+	}
 	if err := runner.restartFromIdleSnapshot("agent-1", res); err != nil {
 		t.Fatalf("restore idle snapshot: %v", err)
 	}

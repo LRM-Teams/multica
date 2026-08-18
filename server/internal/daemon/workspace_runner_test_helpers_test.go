@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -27,7 +28,10 @@ func (runner *WorkspaceRunner) startManagedAgent(ctx context.Context, payload pr
 		runner.publishManagedAgentStartFailure(payload, outcome)
 		return ack, outcome.status, outcome.session, err
 	}
-	if err := runner.establishManagedAgentStart(payload, outcome); err != nil {
+	if err := runner.processes.publishManagedStart(callback, func() error {
+		return runner.establishManagedAgentStart(payload, outcome)
+	}); err != nil {
+		failed = errors.Is(err, errManagedAgentStartStopped)
 		return ack, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, err
 	}
 	runner.broadcastActivity(payload.AgentID, payload.RuntimeID, "starting")

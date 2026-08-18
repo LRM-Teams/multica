@@ -104,13 +104,14 @@ func (runner *WorkspaceRunner) stopManagedAgent(ctx context.Context, payload pro
 	if !found {
 		// APM can disappear independently of a resident provider during socket
 		// recovery. Residency retains the launch fence and Runtime needed to
-		// finish that stop. A different resident launch is a stale command.
-		if resident, ok := runner.residency.get(payload.AgentID); ok {
-			if resident.launchID != "" && resident.launchID != payload.LaunchID {
-				return nil
-			}
-			runtimeID = resident.runtimeID
+		// finish that stop. Without exact ownership evidence this is a stale
+		// launch command and must not advance the Agent-level stop epoch.
+		resident, ok := runner.residency.get(payload.AgentID)
+		if !ok || resident.launchID != payload.LaunchID {
+			return nil
 		}
+		runtimeID = resident.runtimeID
+		runner.processes.recordStop(payload.AgentID)
 	}
 	if pause != nil {
 		pause()
@@ -274,13 +275,17 @@ func (runner *WorkspaceRunner) failManagedRuntime(agentID, runtimeID, launchID s
 }
 
 func (runner *WorkspaceRunner) prepareManagedRuntimeFailure(agentID, runtimeID, launchID string, stage managedRuntimeFailureStage, reasonCode, message string) protocol.AgentStatusPayload {
+	startStopEpoch, err := runner.processes.startStopEpoch(agentProcessCallback{AgentID: agentID, LaunchID: launchID})
+	if err != nil {
+		return protocol.AgentStatusPayload{}
+	}
 	if !runner.processes.failManagedProcess(agentProcessCallback{AgentID: agentID, LaunchID: launchID}) {
 		// Lifecycle stop already owns this launch. Its quiescence fence is the
 		// only path allowed to publish inactive for the stop launch.
 		return protocol.AgentStatusPayload{}
 	}
 	if runner.residency != nil {
-		runner.residency.rememberFailure(agentID, runtimeID, launchID, stage, reasonCode, message)
+		runner.residency.rememberFailure(agentID, runtimeID, launchID, startStopEpoch, stage, reasonCode, message)
 	}
 	return protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusInactive}
 }

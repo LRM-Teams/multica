@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -80,6 +81,10 @@ func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing
 	if err := manager.ProcessSpawned(process); err != nil {
 		t.Fatalf("ProcessSpawned: %v", err)
 	}
+	firstEpoch, err := manager.startStopEpoch(agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID})
+	if err != nil {
+		t.Fatalf("startStopEpoch(first): %v", err)
+	}
 	second, err := manager.Restart(agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID}, agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "dispatch-b", StartDispatchID: "dispatch-b" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("Restart: %v", err)
@@ -87,11 +92,21 @@ func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing
 	if second.LaunchID == first.LaunchID {
 		t.Fatal("explicit restart reused launch ID")
 	}
+	if !manager.stopEpochChanged("agent-a", firstEpoch) {
+		t.Fatal("explicit running restart did not advance the stop epoch")
+	}
 	if err := manager.RuntimeReady(process); err == nil {
 		t.Fatal("stale old-process callback was accepted")
 	}
+	epoch, err := manager.startStopEpoch(agentProcessCallback{AgentID: "agent-a", LaunchID: second.LaunchID})
+	if err != nil {
+		t.Fatalf("startStopEpoch(second): %v", err)
+	}
 	if err := manager.Stop(agentProcessCallback{AgentID: "agent-a", LaunchID: first.LaunchID}); err == nil {
 		t.Fatal("stale old-launch stop was accepted")
+	}
+	if manager.stopEpochChanged("agent-a", epoch) {
+		t.Fatal("stale old-launch stop advanced the replacement's stop epoch")
 	}
 }
 
@@ -130,19 +145,77 @@ func TestAgentProcessManagerStopEpochRejectsAcceptedStartReplayUntilSettled(t *t
 		t.Fatal(err)
 	}
 	callback := agentProcessCallback{AgentID: request.AgentID, LaunchID: request.LaunchID}
+	captured, err := manager.startStopEpoch(callback)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, _, found, err := manager.beginManagedStop(callback); err != nil || !found {
 		t.Fatalf("begin managed stop found=%v err=%v", found, err)
+	}
+	if !manager.stopEpochChanged(request.AgentID, captured) {
+		t.Fatal("managed Stop did not advance the per-Agent stop epoch")
 	}
 	if _, err := manager.Start(request); err == nil {
 		t.Fatal("accepted start replay crossed the active stop epoch")
 	}
 	manager.completeManagedStart(callback)
 	manager.completeManagedStop(callback)
+	replacement := agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-b", StartDispatchID: "dispatch-b"}
+	if _, err := manager.Start(replacement); err != nil {
+		t.Fatal(err)
+	}
+	replacementEpoch, err := manager.startStopEpoch(agentProcessCallback{AgentID: replacement.AgentID, LaunchID: replacement.LaunchID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.stopEpochChanged(replacement.AgentID, replacementEpoch) {
+		t.Fatal("new explicit Start captured a stale stop epoch")
+	}
+}
+
+func TestAgentProcessManagerStopCannotOvertakeActivePublication(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	start, err := manager.Start(agentProcessStartRequest{
+		AgentID: "agent-a", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	callback := agentProcessCallback{AgentID: "agent-a", LaunchID: start.LaunchID}
+	publicationEntered := make(chan struct{})
+	releasePublication := make(chan struct{})
+	publicationDone := make(chan error, 1)
+	go func() {
+		publicationDone <- manager.publishManagedStart(callback, func() error {
+			close(publicationEntered)
+			<-releasePublication
+			return nil
+		})
+	}()
+	<-publicationEntered
+
+	stopDone := make(chan error, 1)
+	go func() {
+		_, _, _, err := manager.beginManagedStop(callback)
+		stopDone <- err
+	}()
+	select {
+	case err := <-stopDone:
+		t.Fatalf("Stop overtook Active publication: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releasePublication)
+	if err := <-publicationDone; err != nil {
+		t.Fatalf("publish managed start: %v", err)
+	}
+	if err := <-stopDone; err != nil {
+		t.Fatalf("begin managed stop: %v", err)
+	}
 }
 
 func TestAgentProcessManagerStopWaitsForIdleRestoreStartupOwner(t *testing.T) {
 	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
-	if err := manager.RestoreIdle("agent-a", "runtime-1", "launch-a", "dispatch-a"); err != nil {
+	if err := manager.RestoreIdle("agent-a", "runtime-1", "launch-a", "dispatch-a", 0); err != nil {
 		t.Fatal(err)
 	}
 	callback := agentProcessCallback{AgentID: "agent-a", LaunchID: "launch-a"}
@@ -160,6 +233,24 @@ func TestAgentProcessManagerStopWaitsForIdleRestoreStartupOwner(t *testing.T) {
 	case <-startupDone:
 	case <-time.After(time.Second):
 		t.Fatal("idle restore startup fence did not close after owner settlement")
+	}
+}
+
+func TestAgentProcessManagerStopEpochRejectsStaleIdleRestore(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	manager.recordStop("agent-a")
+	if err := manager.RestoreIdle("agent-a", "runtime-1", "launch-a", "dispatch-a", 0); !errors.Is(err, errManagedAgentStartStopped) {
+		t.Fatalf("RestoreIdle after Stop = %v, want stop-epoch rejection", err)
+	}
+}
+
+func TestAgentProcessManagerMissingLaunchStopDoesNotAdvanceEpoch(t *testing.T) {
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
+	if _, _, found, err := manager.beginManagedStop(agentProcessCallback{AgentID: "agent-a", LaunchID: "stale-launch"}); err != nil || found {
+		t.Fatalf("missing Stop found=%v err=%v", found, err)
+	}
+	if err := manager.RestoreIdle("agent-a", "runtime-1", "launch-a", "dispatch-a", 0); err != nil {
+		t.Fatalf("missing stale Stop advanced epoch: %v", err)
 	}
 }
 

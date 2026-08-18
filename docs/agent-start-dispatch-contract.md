@@ -123,6 +123,32 @@ WebSocket reconnect retransmits the current unacknowledged command with the
 same IDs. Reconnect is not a reason to generate a new dispatch or reset Agent
 freshness.
 
+Raft daemon 1.0.17 establishes a narrower reconnect fact directly: a socket
+reconnect does not recreate `DaemonCore` or `AgentProcessManager`. Existing
+Agent processes continue running; `stopEpoch`, accepting/accepted dispatch
+maps, and runtime ownership remain in that Computer process. On every connect
+the daemon sends `ready.runningAgents` from the live process manager and then
+replays its current process facts. Therefore Multica must not add a second
+Server-side lifecycle-intent or manual-Stop reconnect fence and call it Raft
+behavior.
+
+The published `raft-computer`/daemon artifact does not contain the Raft Server
+handler for `ready.runningAgents`. It does not prove how Raft recovers Agents
+after the entire Computer process restarts. Any Multica desired-state behavior
+for that different boundary must be documented as Multica behavior, not
+attributed to Raft without Server source evidence.
+
+### Stop cancellation generation
+
+Raft daemon 1.0.17 directly demonstrates a per-Agent monotonic numeric
+`stopEpoch`: Start captures the current value, Stop advances it, and async
+provider setup plus automatic restart recheck it before publishing a process.
+Multica uses the same Computer-local role. `stopEpoch` never replaces
+`launchId`: the Runner first validates exact launch ownership, then advances
+the Agent cancellation generation. A fresh explicit Start receives fresh
+server identities and captures the new generation. Neither manual Stop nor
+`stopEpoch` is persisted as Server lifecycle intent.
+
 ## 5. Desired-state reconciliation
 
 The server owns desired placement. A Workspace Runner connection reports the

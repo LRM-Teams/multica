@@ -391,6 +391,7 @@ type createResearchSessionRequest struct {
 	SourceWeights       *researchSourceWeights `json:"source_weights"`
 	OrchestratorVersion string                 `json:"orchestrator_version"`
 	DirectorAgentID     string                 `json:"director_agent_id"`
+	ClientRequestID     string                 `json:"client_request_id"`
 }
 
 type researchSourceWeights struct {
@@ -469,6 +470,9 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		if !valid {
 			return
 		}
+		if _, valid = parseUUIDOrBadRequest(w, req.ClientRequestID, "client_request_id"); !valid {
+			return
+		}
 		bootstrap, available := h.ResearchRun.(researchrun.ResearchRunV6Bootstrap)
 		if !available {
 			writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.capability_unavailable", "research V6 bootstrap is unavailable", true)
@@ -477,7 +481,7 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		depthTier := normalizeResearchDepthTier(req.DepthTier)
 		createdRun, createErr := bootstrap.BootstrapV6(r.Context(), researchrun.V6BootstrapInput{
 			WorkspaceID: workspaceID, CreatedBy: userID, DirectorAgentID: uuidToString(directorID), Goal: req.Goal, Title: title,
-			DepthTier: depthTier, Language: language, SourcePolicy: sourcePolicyJSON,
+			DepthTier: depthTier, Language: language, SourcePolicy: sourcePolicyJSON, ClientRequestID: req.ClientRequestID,
 		})
 		if createErr != nil {
 			writeResearchV6DomainError(w, createErr)

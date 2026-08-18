@@ -450,7 +450,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	pool := openMessageDeliveryAcceptanceDatabase(t)
 	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
-	workspacesRoot := t.TempDir()
+	workspacesRoot := isolatedWorkspacesRoot(t)
 	root := agentworkspace.Root(workspacesRoot, workspaceID, agentID)
 	if err := ensureMulticaAgentRoot(root); err != nil {
 		t.Fatal(err)

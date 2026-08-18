@@ -1462,7 +1462,6 @@ func (c *client) handleFrame(raw []byte) {
 		}
 	case protocol.EventAgentWorkspaceFileTree,
 		protocol.EventAgentWorkspaceFileContent,
-		protocol.EventAgentSkillsListResult,
 		protocol.EventDaemonWriteFileResponse,
 		protocol.EventDaemonDeleteDirResponse,
 		protocol.EventDaemonSeedAgentContextResponse,
@@ -1470,6 +1469,15 @@ func (c *client) handleFrame(raw []byte) {
 		protocol.EventDaemonRevokePiRunResponse:
 		var idOnly struct {
 			RequestID string `json:"request_id"`
+		}
+		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil {
+			if idOnly.RequestID != "" {
+				c.hub.deliverResponse(idOnly.RequestID, msg.Payload)
+			}
+		}
+	case protocol.EventAgentSkillsListResult:
+		var idOnly struct {
+			RequestID string `json:"requestId"`
 		}
 		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil && idOnly.RequestID != "" {
 			c.hub.deliverResponse(idOnly.RequestID, msg.Payload)

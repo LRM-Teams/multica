@@ -345,10 +345,7 @@ func listRuntimeLocalSkills(provider string) ([]runtimeLocalSkillSummary, bool, 
 		roots = []string{
 			filepath.Join(codexHome, "skills"),
 			filepath.Join(codexHome, "skills", ".system"),
-			filepath.Join(codexHome, ".agents", "skills"),
-		}
-		if strings.TrimSpace(os.Getenv("CODEX_HOME")) == "" {
-			roots = append(roots, filepath.Join(home, ".agents", "skills"))
+			filepath.Join(home, ".agents", "skills"),
 		}
 	}
 

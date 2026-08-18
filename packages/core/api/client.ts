@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type {
   ChannelMemberRole,
   Issue,
@@ -5261,7 +5262,9 @@ export class ApiClient {
         client_request_id: request.clientRequestId,
       }),
     });
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<
+      z.output<typeof ResearchV6DirectorAssignmentSchema> | null
+    >(
       raw,
       ResearchV6DirectorAssignmentSchema,
       null,

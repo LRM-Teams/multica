@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type {
   ChannelMemberRole,
   Issue,
@@ -3987,7 +3988,9 @@ export class ApiClient {
     } catch {
       raw = undefined;
     }
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<
+      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
+    >(
       raw,
       VoiceTranscriptResponseSchema,
       EMPTY_VOICE_TRANSCRIPT_RESPONSE,
@@ -5229,7 +5232,19 @@ export class ApiClient {
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+      // Never rewrite a server response's identity into the requested scope.
+      // A mismatched projection is untrusted and must fail closed.
+      return {
+        ...snapshot,
+        workspace_id: workspaceId,
+        run_id: runId,
+        snapshot_id: "",
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+        next_cursor: undefined,
+      };
     }
     return snapshot;
   }
@@ -5251,16 +5266,9 @@ export class ApiClient {
         client_request_id: request.clientRequestId,
       }),
     });
-    const parsed = parseWithFallback<{
-      id: string;
-      workspace_id: string;
-      run_id: string;
-      director_agent_id: string;
-      status: string;
-      reason: string;
-      generation: number;
-      state_version: number;
-    } | null>(
+    const parsed = parseWithFallback<
+      z.output<typeof ResearchV6DirectorAssignmentSchema> | null
+    >(
       raw,
       ResearchV6DirectorAssignmentSchema,
       null,
@@ -5303,7 +5311,17 @@ export class ApiClient {
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+      return {
+        ...snapshot,
+        workspace_id: workspaceId,
+        run_id: runId,
+        snapshot_id: validated.snapshot_id,
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+        next_cursor: undefined,
+      };
     }
     if (snapshot.snapshot_id !== validated.snapshot_id) {
       return {

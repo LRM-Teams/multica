@@ -105,7 +105,7 @@ export function ConversationUnreadAffordance({
     return (
       <span
         aria-label={unreadLabel}
-        className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-semibold text-foreground"
+        className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background px-1.5 text-[11px] font-medium tabular-nums text-muted-foreground"
       >
         {realUnread > 99 ? "99+" : realUnread}
       </span>

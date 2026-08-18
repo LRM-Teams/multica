@@ -26,20 +26,22 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		entryText   string
 		processID   string
 	}{
-		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
+		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "status", entryText: "Online", processID: "process-1"},
 		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "model_response_started"},
-		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, detail: "thinking_started", entryKind: "narrative", entryText: "Thinking"},
-		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "ls -la"},
-		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
-		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compaction_finished", entryKind: "narrative", entryText: "Context compaction finished"},
-		{name: "runtime stalled", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeStalled, Data: stalledStage, At: at}, kind: protocol.ActivityKindError, detail: "runtime_stalled", entryKind: "narrative", entryText: "Runtime stalled: no runtime events for 7m"},
-		{name: "runtime idle", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Idle"},
+		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, detail: "thinking_started", entryKind: "status", entryText: "Thinking"},
+		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "tool_start", entryText: "ls -la"},
+		{name: "message check", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "check_messages", ToolCallID: "call-check"}, At: at}, kind: protocol.ActivityKindWorking, detail: "checking_messages", entryKind: "tool_start", entryText: ""},
+		{name: "message check through CLI", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "bash", ToolCallID: "call-check-cli", ToolInput: map[string]any{"command": "multica message check"}}, At: at}, kind: protocol.ActivityKindWorking, detail: "checking_messages", entryKind: "tool_start", entryText: ""},
+		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "status", entryText: "Compacting context"},
+		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compaction_finished", entryKind: "status", entryText: "Context compaction finished"},
+		{name: "runtime stalled", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeStalled, Data: stalledStage, At: at}, kind: protocol.ActivityKindError, detail: "runtime_stalled", entryKind: "status", entryText: "Runtime stalled: no runtime events for 7m"},
+		{name: "runtime idle", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "status", entryText: "Idle"},
 		{name: "runtime diagnostic", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeDiagnostic, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "Provider reported a warning"},
-		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1"}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "narrative", entryText: "Message received"},
+		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1"}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "status", entryText: "Message received"},
 		{name: "freshness held", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "2 newer messages available — review then resend"},
 		{name: "draft sent", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationDraftSent, Data: AgentDraftSentObservationData{RuntimeID: "runtime-1", Target: "#one"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "target: #one\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent"},
-		{name: "error", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed", Message: "runtime failed: upstream unavailable"}, At: at}, kind: protocol.ActivityKindError, detail: "runtime_error", entryKind: "narrative", entryText: "runtime failed: upstream unavailable", processID: "process-1"},
-		{name: "stopped by user", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationOffline, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ReasonCode: "stopped"}, At: at}, kind: protocol.ActivityKindOffline, detail: "stopped", entryKind: "narrative", entryText: "Agent stopped by user"},
+		{name: "error", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed", Message: "runtime failed: upstream unavailable"}, At: at}, kind: protocol.ActivityKindError, detail: "runtime_error", entryKind: "status", entryText: "runtime failed: upstream unavailable", processID: "process-1"},
+		{name: "stopped by user", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationOffline, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ReasonCode: "stopped"}, At: at}, kind: protocol.ActivityKindOffline, detail: "stopped", entryKind: "status", entryText: "Agent stopped by user"},
 	}
 
 	for _, test := range tests {
@@ -66,17 +68,27 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 			if len(payload.Entries) != 1 || payload.Entries[0].Kind != test.entryKind {
 				t.Fatalf("Entries = %+v", payload.Entries)
 			}
-			var body struct {
-				Text string `json:"text"`
-			}
-			if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.Text != test.entryText {
-				t.Fatalf("entry body = %+v err=%v", body, err)
+			if test.entryKind == "tool_start" {
+				var body protocol.AgentActivityToolStartBody
+				if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.ToolInput != test.entryText {
+					t.Fatalf("tool entry body = %+v err=%v", body, err)
+				}
+			} else if test.entryKind == "system" {
+				var body protocol.AgentActivitySystemBody
+				if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.Text != test.entryText {
+					t.Fatalf("system entry body = %+v err=%v", body, err)
+				}
+			} else {
+				var body protocol.AgentActivityStatusBody
+				if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.Detail != test.entryText {
+					t.Fatalf("status entry body = %+v err=%v", body, err)
+				}
 			}
 		})
 	}
 }
 
-func TestAgentActivityProducerDropsUnknownToolNonFact(t *testing.T) {
+func TestAgentActivityProducerShowsUnknownTool(t *testing.T) {
 	at := time.Date(2026, time.August, 14, 1, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) {
@@ -88,11 +100,11 @@ func TestAgentActivityProducerDropsUnknownToolNonFact(t *testing.T) {
 		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "cursor-agent", ToolCallID: "call-1"},
 		At:   at,
 	})
-	if err == nil || !strings.Contains(err.Error(), "non-fact activity detail kind") {
-		t.Fatalf("unknown tool Observe error = %v, want non-fact drop", err)
+	if err != nil {
+		t.Fatalf("unknown tool Observe error = %v", err)
 	}
-	if len(sent) != 0 {
-		t.Fatalf("unknown tool sent %d Activity facts, want none", len(sent))
+	if len(sent) != 1 {
+		t.Fatalf("unknown tool sent %d Activity facts, want one", len(sent))
 	}
 }
 
@@ -172,8 +184,8 @@ func TestAgentActivityProducerCoalescesTextStagesAndPreservesToolEvents(t *testi
 			t.Fatalf("Activity[%d] detail = %q, want %q", i, sent[i].Snapshot.DetailKind, detail)
 		}
 	}
-	if len(sent[0].Entries) != 1 || sent[0].Entries[0].Kind != "narrative" {
-		t.Fatalf("thinking Activity entries = %+v, want one narrative", sent[0].Entries)
+	if len(sent[0].Entries) != 1 || sent[0].Entries[0].Kind != "status" {
+		t.Fatalf("thinking Activity entries = %+v, want one status", sent[0].Entries)
 	}
 	if len(sent[1].Entries) != 0 {
 		t.Fatalf("working Activity entries = %+v, want current-state update only", sent[1].Entries)
@@ -359,8 +371,8 @@ func TestAgentActivityProducerReplaysLatestCompleteActivityWhileDisconnected(t *
 	if !ok || payload.Snapshot.DetailKind != "editing_file" || len(payload.Entries) != 1 {
 		t.Fatalf("replayed payload = %+v", frames[2].Payload)
 	}
-	var body protocol.AgentActivityNarrativeBody
-	if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.DetailKind != "editing_file" || body.Text != "/repo/out.go" {
+	var body protocol.AgentActivityToolStartBody
+	if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.ToolName != "edit_file" || body.ToolInput != "/repo/out.go" {
 		t.Fatalf("replayed editing entry = %+v err=%v", body, err)
 	}
 }
@@ -558,11 +570,11 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if len(activities[1].Entries) != 0 {
 		t.Fatalf("text Activity entries = %+v, want current-state update without a Timeline row", activities[1].Entries)
 	}
-	var toolBody protocol.AgentActivityNarrativeBody
+	var toolBody protocol.AgentActivityToolStartBody
 	if err := json.Unmarshal(activities[2].Entries[0].Body, &toolBody); err != nil {
 		t.Fatal(err)
 	}
-	if toolBody.Text != "ls -la" || toolBody.DetailKind != "running_command" {
+	if toolBody.ToolName != "bash" || toolBody.ToolInput != "ls -la" {
 		t.Fatalf("tool-use Activity body = %+v", toolBody)
 	}
 	var diagnostic protocol.AgentActivitySystemBody
@@ -572,11 +584,11 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if activities[3].Entries[0].Kind != "system" || diagnostic.Title != "Runtime warning" || diagnostic.Text != "Provider reported a warning" {
 		t.Fatalf("runtime diagnostic Activity = kind:%q body:%+v", activities[3].Entries[0].Kind, diagnostic)
 	}
-	var errorBody protocol.AgentActivityNarrativeBody
+	var errorBody protocol.AgentActivityStatusBody
 	if err := json.Unmarshal(activities[len(activities)-1].Entries[0].Body, &errorBody); err != nil {
 		t.Fatal(err)
 	}
-	if errorBody.Text != "sensitive provider text" || errorBody.DetailKind != "runtime_error" {
+	if errorBody.Detail != "sensitive provider text" || errorBody.DetailKind != "runtime_error" {
 		t.Fatalf("runtime error Activity = %+v, want provider error text", errorBody)
 	}
 }
@@ -761,12 +773,12 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	if got.Snapshot.ActivityKind != protocol.ActivityKindError || got.Snapshot.DetailKind != "runtime_error" || len(got.Entries) != 1 {
 		t.Fatalf("failure Activity = %+v", got)
 	}
-	var body protocol.AgentActivityNarrativeBody
+	var body protocol.AgentActivityStatusBody
 	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Text != "runtime Message handoff unavailable (simulated crash window)" {
-		t.Fatalf("failure narrative = %q", body.Text)
+	if body.Detail != "runtime Message handoff unavailable (simulated crash window)" {
+		t.Fatalf("failure status = %q", body.Detail)
 	}
 	if _, found := runner.processes.Snapshot("agent-a"); found {
 		t.Fatal("provider startup-request failure retained APM launch")

@@ -284,12 +284,19 @@ type AgentActivityEntry struct {
 	Body json.RawMessage `json:"body"`
 }
 
-// AgentActivityNarrativeBody carries only the event-local fact. The server
-// derives its lifecycle presentation from DetailKind; the daemon must not
-// serialize a competing ActivityKind into timeline history.
-type AgentActivityNarrativeBody struct {
-	Text       string `json:"text"`
-	DetailKind string `json:"detail_kind"`
+// AgentActivityStatusBody matches Raft 1.0.17's non-tool timeline entry.
+type AgentActivityStatusBody struct {
+	Activity   string `json:"activity"`
+	Detail     string `json:"detail"`
+	DetailKind string `json:"detailKind"`
+}
+
+// AgentActivityToolStartBody matches Raft 1.0.17's tool-call timeline entry.
+// toolInput is already the bounded display summary, never the raw provider
+// input.
+type AgentActivityToolStartBody struct {
+	ToolName  string `json:"toolName"`
+	ToolInput string `json:"toolInput"`
 }
 
 // AgentActivitySystemBody is a bounded, user-visible runtime diagnostic. It

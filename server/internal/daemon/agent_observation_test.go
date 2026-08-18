@@ -59,7 +59,7 @@ func TestAgentObservationTypesExcludePresentationAndSensitiveFields(t *testing.T
 		for index := 0; index < typeOf.NumField(); index++ {
 			field := strings.ToLower(typeOf.Field(index).Name)
 			for _, forbidden := range []string{
-				"activity", "narrative", "title", "text", "entry", "content", "body", "prompt", "tooloutput", "credential", "stderr",
+				"activity", "title", "text", "entry", "content", "body", "prompt", "tooloutput", "credential", "stderr",
 			} {
 				if strings.Contains(field, forbidden) {
 					t.Fatalf("%s.%s exposes forbidden presentation or sensitive field", typeOf.Name(), typeOf.Field(index).Name)

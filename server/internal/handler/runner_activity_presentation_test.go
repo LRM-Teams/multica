@@ -10,8 +10,8 @@ import (
 func TestProjectRunnerActivityTimelineEntryUsesResolvedIssueTitle(t *testing.T) {
 	const issueID = "c3128dbf-4ea9-4da2-8b39-8e69df3ced47"
 	entry := protocol.AgentActivityEntry{
-		Kind: "narrative",
-		Body: []byte(`{"text":"` + issueID + `","activity_kind":"working","detail_kind":"getting_issue"}`),
+		Kind: "tool_start",
+		Body: []byte(`{"toolName":"get_issue","toolInput":"` + issueID + `"}`),
 	}
 	row := projectRunnerActivityTimelineEntry(entry, activityprojection.Summary{Label: "Online", Tone: "success"}, map[string]string{
 		issueID: "Fix agent mention delivery",
@@ -25,8 +25,8 @@ func TestProjectRunnerActivityTimelineEntryHidesUnresolvedIssueReference(t *test
 	for _, ref := range []string{"$id", "c3128dbf-4ea9-4da2-8b39-8e69df3ced47", "guessed-key"} {
 		t.Run(ref, func(t *testing.T) {
 			entry := protocol.AgentActivityEntry{
-				Kind: "narrative",
-				Body: []byte(`{"text":"` + ref + `","activity_kind":"working","detail_kind":"listing_issue_comments"}`),
+				Kind: "tool_start",
+				Body: []byte(`{"toolName":"list_issue_comments","toolInput":"` + ref + `"}`),
 			}
 			row := projectRunnerActivityTimelineEntry(entry, activityprojection.Summary{Label: "Online", Tone: "success"}, nil)
 			if row.Title != "Checking issue comments" || row.Subtext != "" {
@@ -38,8 +38,8 @@ func TestProjectRunnerActivityTimelineEntryHidesUnresolvedIssueReference(t *test
 
 func TestProjectRunnerActivityTimelineEntryKeepsCommandText(t *testing.T) {
 	entry := protocol.AgentActivityEntry{
-		Kind: "narrative",
-		Body: []byte(`{"text":"go test ./internal/handler","activity_kind":"working","detail_kind":"running_command"}`),
+		Kind: "tool_start",
+		Body: []byte(`{"toolName":"bash","toolInput":"go test ./internal/handler"}`),
 	}
 	row := projectRunnerActivityTimelineEntry(entry, activityprojection.Summary{Label: "Online", Tone: "success"}, nil)
 	if row.Title != "Running command" || row.Subtext != "go test ./internal/handler" {

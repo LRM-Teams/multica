@@ -102,7 +102,7 @@ func TestAgentActivityPayloadUsesRaftFactOnlyWireEnvelope(t *testing.T) {
 			ActivityKind: ActivityKindWorking, DetailKind: "running_command", ProbeID: "probe-1",
 		},
 		Detail:      "pnpm test",
-		Entries:     []AgentActivityEntry{{Kind: "narrative", Body: json.RawMessage(`{"text":"pnpm test","detail_kind":"running_command"}`)}},
+		Entries:     []AgentActivityEntry{{Kind: "status", Body: json.RawMessage(`{"activity":"working","detail":"pnpm test","detailKind":"running_command"}`)}},
 		IsHeartbeat: true,
 	}
 

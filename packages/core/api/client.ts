@@ -5247,18 +5247,23 @@ export class ApiClient {
         client_request_id: request.clientRequestId,
       }),
     });
-    const parsed = ResearchV6DirectorAssignmentSchema.safeParse(raw);
-    if (!parsed.success) return null;
-    if (parsed.data.workspace_id !== workspaceId || parsed.data.run_id !== runId) return null;
+    const parsed = parseWithFallback(
+      raw,
+      ResearchV6DirectorAssignmentSchema,
+      null,
+      { endpoint: "PUT Director V6 assignment" },
+    );
+    if (parsed === null) return null;
+    if (parsed.workspace_id !== workspaceId || parsed.run_id !== runId) return null;
     return {
-      id: parsed.data.id,
-      workspaceId: parsed.data.workspace_id,
-      runId: parsed.data.run_id,
-      directorAgentId: parsed.data.director_agent_id,
-      status: parsed.data.status,
-      reason: parsed.data.reason,
-      generation: parsed.data.generation,
-      stateVersion: parsed.data.state_version,
+      id: parsed.id,
+      workspaceId: parsed.workspace_id,
+      runId: parsed.run_id,
+      directorAgentId: parsed.director_agent_id,
+      status: parsed.status,
+      reason: parsed.reason,
+      generation: parsed.generation,
+      stateVersion: parsed.state_version,
     };
   }
 

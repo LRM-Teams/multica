@@ -186,7 +186,8 @@ export function NotePeriodBriefDialog({
       );
       onOpenChange(false);
       onCreated?.(result);
-      void openNoteWorkerChat(result.job);
+      const chatJob = result.collector_jobs?.[0] ?? result.job;
+      void openNoteWorkerChat(chatJob);
     } catch (error: unknown) {
       showErrorToast(
         error instanceof Error && error.message

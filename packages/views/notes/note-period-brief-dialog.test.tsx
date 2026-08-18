@@ -134,13 +134,17 @@ describe("NotePeriodBriefDialog", () => {
     });
     createNotePeriodBrief.mockResolvedValue({
       page: { id: "page-1", title: "工作介绍 本周 · 底稿" },
-      job: { id: "job-1", agent_id: "weekly-1", channel_id: "dm-1" },
+      job: { id: "job-collector-1", agent_id: "agent-1", channel_id: "dm-c1" },
       window: { kind: "week", timezone: "UTC", start: "", end: "", label: "本周" },
       sources_used: ["issue_activity"],
       sources_empty: [],
       sources_skipped: [],
       fact_count: 3,
       collector_agent_ids: ["agent-1", "cloud-1"],
+      collector_jobs: [
+        { id: "job-collector-1", agent_id: "agent-1", channel_id: "dm-c1" },
+        { id: "job-collector-2", agent_id: "cloud-1", channel_id: "dm-c2" },
+      ],
     });
   });
 
@@ -186,7 +190,7 @@ describe("NotePeriodBriefDialog", () => {
       );
     });
     expect(openNoteWorkerChat).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "job-1", agent_id: "weekly-1" }),
+      expect.objectContaining({ id: "job-collector-1", agent_id: "agent-1" }),
     );
     expect(onCreated).toHaveBeenCalled();
   });

@@ -16,6 +16,9 @@ func TestCreateNotePeriodBriefRejectsEmptyCollectors(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() { notePeriodBriefFinishInBackground = prevBG })
 	agentID := createHandlerTestAgent(t, "Period Brief No Collector "+uuid.NewString()[:8], nil)
 
 	rec := httptest.NewRecorder()
@@ -40,7 +43,12 @@ func TestCreateNotePeriodBriefOrchestratesCollectorsThenSynthesizerWithoutDigest
 	}
 	prevWait := notePeriodBriefCollectorWaitBudget
 	notePeriodBriefCollectorWaitBudget = 0
-	t.Cleanup(func() { notePeriodBriefCollectorWaitBudget = prevWait })
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefFinishInBackground = prevBG
+	})
 
 	synthID := createHandlerTestAgent(t, "Period Brief Synth "+uuid.NewString()[:8], nil)
 	collectorA := createHandlerTestAgent(t, "Period Brief Collector A "+uuid.NewString()[:8], nil)
@@ -150,7 +158,12 @@ func TestCreateNotePeriodBriefIncludesReadyCollectorPack(t *testing.T) {
 	}
 	prevWait := notePeriodBriefCollectorWaitBudget
 	notePeriodBriefCollectorWaitBudget = 2 * time.Second
-	t.Cleanup(func() { notePeriodBriefCollectorWaitBudget = prevWait })
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefFinishInBackground = prevBG
+	})
 
 	synthID := createHandlerTestAgent(t, "Period Brief Ready Synth "+uuid.NewString()[:8], nil)
 	collectorID := createHandlerTestAgent(t, "Period Brief Ready Collector "+uuid.NewString()[:8], nil)
@@ -246,7 +259,12 @@ func TestCreateNotePeriodBriefWaitsForCompletedCollectorNoteWriteProposal(t *tes
 	}
 	prevWait := notePeriodBriefCollectorWaitBudget
 	notePeriodBriefCollectorWaitBudget = 3 * time.Second
-	t.Cleanup(func() { notePeriodBriefCollectorWaitBudget = prevWait })
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefFinishInBackground = prevBG
+	})
 
 	synthID := createHandlerTestAgent(t, "Period Brief Proposal Synth "+uuid.NewString()[:8], nil)
 	collectorID := createHandlerTestAgent(t, "Period Brief Proposal Collector "+uuid.NewString()[:8], nil)
@@ -346,7 +364,12 @@ func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
 	}
 	prevWait := notePeriodBriefCollectorWaitBudget
 	notePeriodBriefCollectorWaitBudget = 0
-	t.Cleanup(func() { notePeriodBriefCollectorWaitBudget = prevWait })
+	prevBG := notePeriodBriefFinishInBackground
+	notePeriodBriefFinishInBackground = false
+	t.Cleanup(func() {
+		notePeriodBriefCollectorWaitBudget = prevWait
+		notePeriodBriefFinishInBackground = prevBG
+	})
 
 	memberID := createRuntimeLocalSkillTestMember(t, "member")
 	agentID := createHandlerTestAgent(t, "Period Brief Member Agent "+uuid.NewString()[:8], nil)

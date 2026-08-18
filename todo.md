@@ -117,7 +117,7 @@
 ### 后续增强（采集质量）
 
 - [x] **Builtin skill `multica-period-work-collect`**：always-on；采集员 wake 指向该 skill + `collect-recipes.md`（HOME/`find` + `git log/status/diff` + `--note-write`）。
-- [x] **等采集完成再合成**：`awaitPeriodBriefCollectorPacks` 等到 collector job terminal（最长约 4m）；完成后从 pack 页或 pending `--note-write` 提案取包；客户端 timeout 5m。
+- [x] **等采集完成再合成**：后台等待 collector job terminal（最长约 4m）并 harvest pending `--note-write`；HTTP 立即返回采集员 job，避免 Next 代理超时 500。
 
 ### 遗留说明（J1–J3）
 

@@ -1,8 +1,9 @@
-ALTER TABLE research_work_item ADD COLUMN expected_result_schema_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE research_work_item ADD COLUMN IF NOT EXISTS expected_result_schema_id TEXT NOT NULL DEFAULT '';
 UPDATE research_work_item SET expected_result_schema_id=payload_schema_id
-WHERE payload_schema_id IN ('director_action_proposal','atomic_result_submission','discussion_turn_submission','integration_submission','report_package_submission');
+WHERE payload_schema_id IN ('director_action_proposal','atomic_result_submission','discussion_turn_submission','integration_submission','report_package_submission')
+  AND (expected_result_schema_id IS NULL OR expected_result_schema_id = '');
 
-CREATE TABLE research_v6_steering_trigger (
+CREATE TABLE IF NOT EXISTS research_v6_steering_trigger (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL,
   session_id UUID NOT NULL,
@@ -30,5 +31,5 @@ CREATE TABLE research_v6_steering_trigger (
     REFERENCES research_director_cycle(workspace_id,session_id,id)
 );
 
-CREATE INDEX research_v6_steering_trigger_due_idx ON research_v6_steering_trigger(next_attempt_at,created_at,id)
+CREATE INDEX IF NOT EXISTS research_v6_steering_trigger_due_idx ON research_v6_steering_trigger(next_attempt_at,created_at,id)
   WHERE status IN ('pending','processing');

@@ -54,7 +54,7 @@ func (s *PostgresStore) AcknowledgeV6WorkCatalog(ctx context.Context, in Acknowl
 	}
 	if _, err = appendEvent(ctx, tx, in.WorkspaceID, in.RunID, "v6_work_catalog_acknowledged",
 		"v6-catalog-ack:"+in.ClientRequestID, "agent", in.AgentID,
-		map[string]any{"attempt_id": in.AttemptID, "page_key": in.PageKey, "page_hash": in.PageHash}); err != nil {
+		map[string]any{"work_item_attempt_id": in.AttemptID, "page_key": in.PageKey, "page_hash": in.PageHash}); err != nil {
 		return err
 	}
 	return s.commitResearchTx(ctx, txOpV6CatalogAcknowledge, tx)

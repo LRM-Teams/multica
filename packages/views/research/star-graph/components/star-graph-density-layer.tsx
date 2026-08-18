@@ -34,15 +34,13 @@ export function StarGraphDensityLayer({
             className="sg-density-bin"
             data-execution={status}
             data-testid={`star-graph-density-${bin.id}`}
-            style={
-              {
-                left: bin.bounds.x,
-                top: bin.bounds.y,
-                width: bin.bounds.width,
-                height: bin.bounds.height,
-                "--sg-density-inverse-scale": inverseScale,
-              } as DensityStyle
-            }
+            style={{
+              left: bin.bounds.x,
+              top: bin.bounds.y,
+              width: bin.bounds.width,
+              height: bin.bounds.height,
+              "--sg-density-inverse-scale": inverseScale,
+            } as DensityStyle}
           >
             <span className="sg-density-count">{bin.total}</span>
           </div>

@@ -310,7 +310,7 @@ type rowQuerier interface {
 
 func loadRun(ctx context.Context, q rowQuerier, sessionID, workspaceID string, forUpdate bool) (Run, error) {
 	query := `
-		SELECT id::text, workspace_id::text, fleet_id::text, created_by::text,
+		SELECT id::text, workspace_id::text, COALESCE(fleet_id::text, ''), created_by::text,
 		       title, goal, status, current_stage, depth_tier,
 		       goal_version, plan_version, state_version, orchestrator_version,
 		       run_config, run_stats, run_initialized_at, last_progress_at, next_reconcile_at,

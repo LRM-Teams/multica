@@ -4849,10 +4849,11 @@ export class ApiClient {
       !sessionId ||
       !workspaceId ||
       (expectedWorkspaceId != null && workspaceId !== expectedWorkspaceId) ||
-      !response.fleet.id ||
-      response.fleet.workspace_id !== workspaceId ||
-      (response.session.fleet_id !== "" &&
-        response.session.fleet_id !== response.fleet.id) ||
+      (response.fleet != null &&
+        (!response.fleet.id ||
+          response.fleet.workspace_id !== workspaceId ||
+          (response.session.fleet_id !== "" &&
+            response.session.fleet_id !== response.fleet.id))) ||
       scopedEntities.some((entity) => entity.session_id !== sessionId) ||
       (response.run?.run.session_id != null &&
         response.run.run.session_id !== sessionId) ||
@@ -5185,24 +5186,24 @@ export class ApiClient {
     runId: string,
     fromSequenceExclusive: number,
   ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6DeltaStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6Delta } = await import("../research-v6/schemas");
     const raw = await this.fetch(
       `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
     );
     if (raw == null) return null;
-    return parseResearchV6DeltaStrict(raw);
+    return parseResearchV6Delta(raw);
   }
 
   async resumeResearchV6Projection(
     runId: string,
     lastConfirmedSequence: number,
   ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdictStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
       method: "POST",
       body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
     });
-    return parseResearchV6ResumeVerdictStrict(raw);
+    return parseResearchV6ResumeVerdict(raw);
   }
 
   // ---- Ronaldo / Director V6 Projection (authoritative unreleased contract) ----
@@ -5225,6 +5226,38 @@ export class ApiClient {
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     assertResearchV6DirectorProjectionIdentity(snapshot, workspaceId, runId);
     return snapshot;
+  }
+
+  async replaceResearchV6Director(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorAssignmentRequest,
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorAssignment | null> {
+    const { ResearchV6DirectorAssignmentSchema } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(`/api/research/sessions/${encodeURIComponent(runId)}/director`, {
+      method: "PUT",
+      body: JSON.stringify({
+        director_agent_id: request.directorAgentId,
+        expected_state_version: request.expectedStateVersion,
+        reason: request.reason,
+        client_request_id: request.clientRequestId,
+      }),
+    });
+    const parsed = ResearchV6DirectorAssignmentSchema.safeParse(raw);
+    if (!parsed.success) return null;
+    if (parsed.data.workspace_id !== workspaceId || parsed.data.run_id !== runId) return null;
+    return {
+      id: parsed.data.id,
+      workspaceId: parsed.data.workspace_id,
+      runId: parsed.data.run_id,
+      directorAgentId: parsed.data.director_agent_id,
+      status: parsed.data.status,
+      reason: parsed.data.reason,
+      generation: parsed.data.generation,
+      stateVersion: parsed.data.state_version,
+    };
   }
 
   async getResearchV6DirectorProjectionSlice(
@@ -5323,8 +5356,6 @@ export class ApiClient {
     if (detail.node.id !== nodeId) {
       throw new Error("Director V6 node detail response changed node identity");
     }
-    // The workspace is enforced by the authenticated route and the canonical
-    // node response is pinned by snapshot/hash. The response has no workspace field.
     void workspaceId;
     return detail;
   }

@@ -587,7 +587,7 @@ export const SteerResearchRunResponseSchema = z
 export const CreateResearchSessionResponseSchema = z
   .object({
     session: ResearchSessionSchema,
-    fleet: ResearchFleetSchema,
+    fleet: ResearchFleetSchema.optional(),
     nodes: z.array(ResearchGraphNodeSchema).optional().default([]),
     edges: z.array(ResearchGraphEdgeSchema).optional().default([]),
     messages: z.array(ResearchMessageSchema).optional().default([]),

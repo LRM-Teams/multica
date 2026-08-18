@@ -1,19 +1,14 @@
 "use client";
 
-import { useRef, useState, useCallback, useEffect } from "react";
 import { ArrowUp, Loader2 } from "lucide-react";
-import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay } from "../../editor";
+import { ContentEditor, FileDropOverlay } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { useFileUpload } from "@multica/core/hooks/use-file-upload";
-import { api } from "@multica/core/api";
-import type { Attachment } from "@multica/core/types";
-import { contentReferencesAttachment } from "@multica/core/types";
-import { useCommentDraftStore, type CommentDraftKey } from "@multica/core/issues/stores";
+import type { CommentDraftKey } from "@multica/core/issues/stores";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
+import { useCommentComposer } from "../hooks/use-comment-composer";
 import { CommentTriggerChips } from "./comment-trigger-chips";
-import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,97 +44,12 @@ function ReplyInput({
 }: ReplyInputProps) {
   const { t } = useT("issues");
   const placeholderText = placeholder ?? t(($) => $.reply.placeholder);
-  const editorRef = useRef<ContentEditorRef>(null);
-  // If a draft key is provided, hydrate from store on mount (defaultValue is
-  // the only injection point on ContentEditorRef) and flush on every onUpdate.
-  const initialDraft = draftKey
-    ? useCommentDraftStore.getState().getDraft(draftKey)
-    : undefined;
-  const [content, setContent] = useState(initialDraft ?? "");
-  const setDraft = useCommentDraftStore((s) => s.setDraft);
-  const clearDraft = useCommentDraftStore((s) => s.clearDraft);
-  const [isEmpty, setIsEmpty] = useState(!initialDraft?.trim());
-  const [submitting, setSubmitting] = useState(false);
-  const [suppressedAgentIds, setSuppressedAgentIds] = useState<Set<string>>(() => new Set());
-  const triggerPreview = useCommentTriggerPreview({ issueId, parentId, content });
-  // Attachments uploaded in this composer session — see CommentInput for the
-  // rationale (drives both submit-time attachment_ids and editor previews).
-  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
-  const { uploadWithToast } = useFileUpload(api);
-  const { isDragOver, dropZoneProps } = useFileDropZone({
-    onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
+  const composer = useCommentComposer({
+    issueId,
+    parentId,
+    draftKey,
+    onSubmit,
   });
-
-  // Flush on tab close / mobile background — same rationale as CommentInput.
-  useEffect(() => {
-    if (!draftKey) return;
-    const flush = () => {
-      const md = editorRef.current?.getMarkdown();
-      if (md && md.trim().length > 0) setDraft(draftKey, md);
-    };
-    const onVis = () => { if (document.visibilityState === "hidden") flush(); };
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("pagehide", flush);
-    return () => {
-      document.removeEventListener("visibilitychange", onVis);
-      window.removeEventListener("pagehide", flush);
-    };
-  }, [draftKey, setDraft]);
-
-  const handleUpload = useCallback(async (file: File) => {
-    const result = await uploadWithToast(file, { issueId });
-    if (result) {
-      setPendingAttachments((prev) => [...prev, result]);
-    }
-    return result;
-  }, [uploadWithToast, issueId]);
-
-  useEffect(() => {
-    const visible = new Set(triggerPreview.agents.map((agent) => agent.id));
-    setSuppressedAgentIds((prev) => {
-      const next = new Set([...prev].filter((id) => visible.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [triggerPreview.agents]);
-
-  const toggleSuppressedAgent = useCallback((agentId: string) => {
-    setSuppressedAgentIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(agentId)) next.delete(agentId);
-      else next.add(agentId);
-      return next;
-    });
-  }, []);
-
-  const handleSubmit = async () => {
-    const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
-    if (!content || submitting) return;
-    // Track every attachment whose stable download URL OR legacy
-    // storage URL is referenced in the markdown body. Both shapes
-    // can appear in the same comment during the MUL-3130 rollout.
-    const activeIds = pendingAttachments
-      .filter((a) => contentReferencesAttachment(content, a))
-      .map((a) => a.id);
-    const suppressAgentIds = triggerPreview.agents
-      .filter((agent) => suppressedAgentIds.has(agent.id))
-      .map((agent) => agent.id);
-    setSubmitting(true);
-    try {
-      await onSubmit(
-        content,
-        activeIds.length > 0 ? activeIds : undefined,
-        suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-      );
-      editorRef.current?.clearContent();
-      setContent("");
-      setIsEmpty(true);
-      setSuppressedAgentIds(new Set());
-      setPendingAttachments([]);
-      if (draftKey) clearDraft(draftKey);
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const avatarSize = size === "sm" ? 22 : 28;
 
@@ -152,66 +62,59 @@ function ReplyInput({
         className="mt-0.5 shrink-0"
       />
       <div
-        {...dropZoneProps}
+        {...composer.dropZone.props}
         className={cn(
           "relative min-w-0 flex-1 flex flex-col",
-          !isEmpty && "pb-9",
+          !composer.isEmpty && "pb-9",
         )}
       >
         <div className="flex-1 min-h-0 overflow-y-auto">
           <ContentEditor
-            ref={editorRef}
-            defaultValue={initialDraft}
+            ref={composer.editor.ref}
+            defaultValue={composer.editor.defaultValue}
             placeholder={placeholderText}
-            onUpdate={(md) => {
-              setContent(md);
-              setIsEmpty(!md.trim());
-              if (draftKey) {
-                if (md.trim().length > 0) setDraft(draftKey, md);
-                else clearDraft(draftKey);
-              }
-            }}
-            onSubmit={handleSubmit}
-            onUploadFile={handleUpload}
+            onUpdate={composer.editor.onUpdate}
+            onSubmit={composer.editor.onSubmit}
+            onUploadFile={composer.editor.onUploadFile}
             debounceMs={100}
             currentIssueId={issueId}
-            attachments={pendingAttachments}
+            attachments={composer.editor.attachments}
             enableSlashCommands
             slashCommandMode="command"
           />
         </div>
         <div className="absolute bottom-0 left-0 right-24 min-w-0">
           <CommentTriggerChips
-            agents={triggerPreview.agents}
-            suppressedAgentIds={suppressedAgentIds}
-            onToggle={toggleSuppressedAgent}
+            agents={composer.triggers.agents}
+            suppressedAgentIds={composer.triggers.suppressedAgentIds}
+            onToggle={composer.triggers.onToggle}
           />
         </div>
         <div className="absolute bottom-0 right-0 flex items-center gap-1">
           <FileUploadButton
             size="sm"
             multiple
-            onSelect={(file) => editorRef.current?.uploadFile(file)}
+            onSelect={(file) => composer.editor.ref.current?.uploadFile(file)}
           />
           <button
             type="button"
-            disabled={isEmpty || submitting}
-            onClick={handleSubmit}
+            disabled={composer.isEmpty || composer.submitting}
+            onClick={composer.editor.onSubmit}
             className={cn(
               "inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors disabled:pointer-events-none disabled:opacity-50",
-              isEmpty
+              composer.isEmpty
                 ? "text-muted-foreground hover:bg-accent hover:text-foreground"
                 : "bg-primary text-primary-foreground hover:bg-primary/90",
             )}
           >
-            {submitting ? (
+            {composer.submitting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <ArrowUp className="h-3.5 w-3.5" />
             )}
           </button>
         </div>
-        {isDragOver && <FileDropOverlay />}
+        {composer.dropZone.isDragOver && <FileDropOverlay />}
       </div>
     </div>
   );

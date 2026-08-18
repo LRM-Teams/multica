@@ -239,7 +239,7 @@ func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
 
 	select {
 	case command := <-executed:
-		if command.Operation() != "upgrade-a" || command.TargetVersion != "v9.9.9" {
+		if command.RequestID != "upgrade-a" || command.TargetVersion != "v9.9.9" {
 			t.Fatalf("child executor command = %+v", command)
 		}
 	case <-time.After(time.Second):

@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ArrowLeft, ArrowRight, Download } from "lucide-react";
+import { ArrowRight, Download } from "lucide-react";
 import {
   captureDownloadIntent,
   captureEvent,
@@ -152,23 +152,7 @@ export function StepPlatformFork({
       <div className="flex min-h-0 flex-col">
         <DragStrip />
 
-        <header className="flex shrink-0 items-center gap-4 bg-background px-6 py-3 sm:px-10 md:px-14 lg:px-16">
-          {onBack ? (
-            <button
-              type="button"
-              onClick={onBack}
-              className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              {t(($) => $.common.back)}
-            </button>
-          ) : (
-            <span aria-hidden className="w-0" />
-          )}
-          <div className="flex-1">
-            <StepHeader currentStep="runtime" />
-          </div>
-        </header>
+        <StepHeader currentStep="runtime" onBack={onBack} />
 
         <main
           ref={mainRef}

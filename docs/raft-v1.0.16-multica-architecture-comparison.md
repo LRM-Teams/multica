@@ -165,15 +165,15 @@ sequenceDiagram
     H->>B: prepare with generation + PID fence
     B->>B: close claim gate, cancel owned turns, bounded owned-provider termination
     B-->>H: prepared
-    H->>H: persist journal → stage → verify → activate
-    H->>N: spawn exact successor binary
+    C->>C: persist request/version marker → stage → verify → swap PATH
+    C-->>H: exit after activation
+    H->>N: restart PATH Computer
     N->>B: reconstruct desired children and wait real Ready
-    N->>B: request Runtime re-registration
-    N->>API: attest accepted generation + complete Runtime/Workspace set
-    N->>N: clear journal after convergence
+    N->>API: computer:upgrade:done on current Binding socket
+    N->>N: clear marker after frame delivery
 ```
 
-Failure rule：任一 child prepare 失败，Host 必须 release 所有已经 prepared 的 siblings；child 不得自行 swap machine binary。
+Failure rule：任一 child prepare 失败，Host 必须 release 所有已经 prepared 的 siblings。执行升级的 child 在 `internal/computer` executor 内 stage/verify/swap；successor socket 未交付 completion 时保留 marker。这里没有 cloud receipt、generation 或 Runtime/Workspace attest。
 
 ## 6.1 Agent Restart parity / 三种重启模式
 

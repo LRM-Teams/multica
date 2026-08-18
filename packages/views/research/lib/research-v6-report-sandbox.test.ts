@@ -7,6 +7,7 @@ describe("validateResearchV6ReportSandboxUrl", () => {
       validateResearchV6ReportSandboxUrl(
         "https://reports.example.test/reports/r1/hash?expires=1&signature=x",
         "https://app.example.test",
+        "https://reports.example.test",
       ),
     ).toMatchObject({ ok: true });
   });
@@ -19,7 +20,21 @@ describe("validateResearchV6ReportSandboxUrl", () => {
     "/relative/report",
   ])("rejects unsafe report location %s", (url) => {
     expect(
-      validateResearchV6ReportSandboxUrl(url, "https://app.example.test").ok,
+      validateResearchV6ReportSandboxUrl(
+        url,
+        "https://app.example.test",
+        "https://reports.example.test",
+      ).ok,
     ).toBe(false);
+  });
+
+  it("rejects a valid HTTPS capability on an unconfigured origin", () => {
+    expect(
+      validateResearchV6ReportSandboxUrl(
+        "https://attacker.example.test/research/r1/hash?exp=1&sig=x",
+        "https://app.example.test",
+        "https://reports.example.test",
+      ),
+    ).toEqual({ ok: false, reason: "origin_mismatch" });
   });
 });

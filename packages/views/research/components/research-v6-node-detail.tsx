@@ -267,7 +267,17 @@ export function ResearchV6NodeDetail({
                           t(($) => $.v6_detail.related_node_unavailable)}
                       </span>
                       <span className="block truncate text-[10px] text-muted-foreground">
-                        {t(($) => $.v6_detail.relation_kind[edge.kind])}
+                        {t(($) =>
+                          $.v6_detail.relation_kind[
+                            edge.kind as
+                              | "derived_from"
+                              | "absorbed_into"
+                              | "produced_by"
+                              | "belongs_to"
+                              | "challenges"
+                              | "collapsed_path"
+                          ],
+                        )}
                       </span>
                     </span>
                     {relatedNode ? (
@@ -298,7 +308,11 @@ export function ResearchV6NodeDetail({
               >
                 <span>{reference.kind}</span>
                 {reference.revision ? (
-                  <span>{` · r${reference.revision}`}</span>
+                  <span>
+                    {t(($) => $.v6_detail.revision, {
+                      revision: reference.revision,
+                    })}
+                  </span>
                 ) : reference.version_id ? (
                   <span> · {reference.version_id}</span>
                 ) : null}

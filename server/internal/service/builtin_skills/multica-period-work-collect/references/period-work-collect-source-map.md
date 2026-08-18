@@ -10,7 +10,7 @@ to these sources.
 | `POST /api/notes/period-briefs` orchestrates collectors then synthesizer | `server/internal/handler/note_period_brief.go` `CreateNotePeriodBrief` |
 | Collector instruction + pack stub + `--note-write` pack page id | `server/internal/handler/note_period_brief.go` `notePeriodBriefCollectorInstruction`, `notePeriodBriefCollectorPackStub`, `dispatchNotePeriodBriefCollector` |
 | Collector wake partitions (`<window>`, `<instruction>`, stub note) | `server/internal/handler/note_worker_prompt.go` `buildNotePeriodBriefCollectorPrompt` |
-| Short wait / empty degrade for packs (does not fail whole request) | `server/internal/handler/note_period_brief.go` `awaitPeriodBriefCollectorPacks` |
+| Short wait / empty degrade for packs (does not fail whole request) | `server/internal/handler/note_period_brief.go` `awaitPeriodBriefCollectorPacks` (waits for collector job terminal state up to ~4m; harvests pending `--note-write` proposals) |
 | Synthesizer must not be confused with collectors | `server/internal/agenttmpl/templates/weekly-report.json`; `notePeriodBriefInstruction` |
 | Product contract | `docs/adr/0019-runtime-agent-collectors-period-brief.md` |
 

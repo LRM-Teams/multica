@@ -1295,9 +1295,12 @@ export class ApiClient {
   }
 
   async createNotePeriodBrief(data: CreateNotePeriodBriefRequest): Promise<CreateNotePeriodBriefResponse> {
+    // Server waits for collector Agent jobs to settle (up to ~4m) before
+    // waking the synthesizer; keep the client timeout above that budget.
     const raw = await this.fetch<unknown>("/api/notes/period-briefs", {
       method: "POST",
       body: JSON.stringify(data),
+      signal: AbortSignal.timeout(5 * 60 * 1000),
     });
     return parseWithFallback(raw, CreateNotePeriodBriefResponseSchema, EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE, {
       endpoint: "POST /api/notes/period-briefs",

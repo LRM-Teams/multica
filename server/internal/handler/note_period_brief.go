@@ -21,14 +21,16 @@ import (
 const (
 	notePeriodBriefFolderTitle      = "工作介绍"
 	notePeriodBriefSourceCollectors = "period_work_collectors"
-	// Keep the HTTP path snappy: Next.js proxies abort long requests as
-	// socket hang up / opaque 500. Collector wait degrades into sources_empty.
-	notePeriodBriefCollectorPollEvery  = 400 * time.Millisecond
+	// Poll while collectors run. Production waits until jobs settle (or the
+	// budget elapses) so synthesis sees real packs — not a 6s empty degrade.
+	notePeriodBriefCollectorPollEvery  = 1 * time.Second
 	notePeriodBriefCollectorStubMarker = "Stub awaiting Agent pack"
 )
 
 // Overridable in tests so suite does not sleep the full production budget.
-var notePeriodBriefCollectorWaitBudget = 6 * time.Second
+// Production budget covers a typical collector agent turn; still degrade to
+// empty packs if agents never finish (HTTP client uses a matching timeout).
+var notePeriodBriefCollectorWaitBudget = 4 * time.Minute
 
 // Stable English instruction locked to the period_brief playbook (J3-T1 / J3-T4).
 // folderPageID is the private 工作介绍/ folder — Brief lands as a child via human confirm.
@@ -623,9 +625,12 @@ type notePeriodBriefPackResult struct {
 	Status  string // ready | empty | failed
 }
 
-// awaitPeriodBriefCollectorPacks polls pack pages / job status until ready or
-// the wait budget elapses. Timeouts degrade to empty — they never fail the
-// whole Period Brief request.
+// awaitPeriodBriefCollectorPacks waits until each collector Note Worker job is
+// terminal (completed / failed / cancelled) or the wait budget elapses.
+// Ready packs come from the note page (human-accepted --note-write) or, after
+// the agent finishes, from the latest pending note_write proposal targeting
+// that pack page — so synthesis does not require the human to accept packs
+// first. Timeouts still degrade to empty; they never fail the whole request.
 func (h *Handler) awaitPeriodBriefCollectorPacks(
 	ctx context.Context,
 	workspaceID, userID pgtype.UUID,
@@ -665,14 +670,29 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			if status == "" {
 				status = job.Status
 			}
+			channelID := ""
+			if projected.ChannelID != nil {
+				channelID = *projected.ChannelID
+			} else if job.ChannelID != nil {
+				channelID = *job.ChannelID
+			}
 			stub := strings.Contains(page.Content, notePeriodBriefCollectorStubMarker)
 			switch {
 			case !stub && strings.TrimSpace(page.Content) != "":
 				out[i].Status = "ready"
 			case status == "failed" || status == "cancelled":
 				out[i].Status = "failed"
-			case status == "completed" && stub:
-				out[i].Status = "empty"
+			case status == "completed":
+				if proposal := h.loadCollectorPackNoteWriteProposal(ctx, channelID, job.PageID); proposal != "" {
+					out[i].Content = proposal
+					out[i].Status = "ready"
+					break
+				}
+				if stub || strings.TrimSpace(page.Content) == "" {
+					out[i].Status = "empty"
+				} else {
+					out[i].Status = "ready"
+				}
 			default:
 				allSettled = false
 			}
@@ -689,6 +709,38 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 		}
 	}
 	return out
+}
+
+// loadCollectorPackNoteWriteProposal returns the latest agent message body that
+// proposed --note-write onto the pack page. Used when the job finished but the
+// human has not yet accepted the writeback into note_page.
+func (h *Handler) loadCollectorPackNoteWriteProposal(ctx context.Context, channelID, packPageID string) string {
+	channelID = strings.TrimSpace(channelID)
+	packPageID = strings.TrimSpace(packPageID)
+	if channelID == "" || packPageID == "" {
+		return ""
+	}
+	var content string
+	err := h.DB.QueryRow(ctx, `
+SELECT m.content
+FROM channel_message m
+WHERE m.channel_id = $1
+  AND m.deleted_at IS NULL
+  AND m.author_type = 'agent'
+  AND length(trim(m.content)) > 0
+  AND position($3 in m.content) = 0
+  AND EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(COALESCE(m.parts, '[]'::jsonb)) part
+    WHERE part->>'type' = 'note_write'
+      AND part->>'ref_id' = $2
+  )
+ORDER BY m.created_at DESC
+LIMIT 1`, parseUUID(channelID), packPageID, notePeriodBriefCollectorStubMarker).Scan(&content)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(content)
 }
 
 func formatNotePeriodBriefPacks(packs []notePeriodBriefPackResult) string {

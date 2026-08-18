@@ -240,6 +240,106 @@ SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&co
 	}
 }
 
+func TestCreateNotePeriodBriefWaitsForCompletedCollectorNoteWriteProposal(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	prevWait := notePeriodBriefCollectorWaitBudget
+	notePeriodBriefCollectorWaitBudget = 3 * time.Second
+	t.Cleanup(func() { notePeriodBriefCollectorWaitBudget = prevWait })
+
+	synthID := createHandlerTestAgent(t, "Period Brief Proposal Synth "+uuid.NewString()[:8], nil)
+	collectorID := createHandlerTestAgent(t, "Period Brief Proposal Collector "+uuid.NewString()[:8], nil)
+
+	packBody := "# 采集包 from note_write\n\n## Highlights\n- harvested pending proposal\n"
+	day := time.Now().UTC().Format("2006-01-02")
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			var jobID, taskID, channelID, pageID string
+			err := testPool.QueryRow(context.Background(), `
+SELECT j.id::text, j.task_id::text, j.channel_id::text, j.page_id::text
+FROM note_worker_job j
+JOIN note_page p ON p.id = j.page_id
+WHERE j.agent_id = $1
+  AND p.title LIKE '采集包%'
+  AND p.content LIKE $2
+ORDER BY j.created_at DESC
+LIMIT 1`, collectorID, "%"+notePeriodBriefCollectorStubMarker+"%").Scan(&jobID, &taskID, &channelID, &pageID)
+			if err == nil && jobID != "" && channelID != "" && pageID != "" && taskID != "" {
+				parts, _ := json.Marshal([]map[string]any{{
+					"type":   "note_write",
+					"ref_id": pageID,
+					"text":   packBody,
+				}})
+				var msgID string
+				insErr := testPool.QueryRow(context.Background(), `
+INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source)
+VALUES ($1::uuid, $2::uuid, 'agent', $3::uuid, 'collector', $4, $5::jsonb, 'multica')
+RETURNING id::text`,
+					channelID, testWorkspaceID, collectorID, packBody, string(parts)).Scan(&msgID)
+				if insErr != nil {
+					t.Logf("insert note_write proposal: %v", insErr)
+					time.Sleep(40 * time.Millisecond)
+					continue
+				}
+				if _, err := testPool.Exec(context.Background(), `
+UPDATE agent_inbox_event
+SET status = 'acked', terminal_outcome = 'completed', started_at = now(), completed_at = now(), acked_at = now()
+WHERE id = $1::uuid`, taskID); err != nil {
+					t.Logf("complete collector task: %v", err)
+					time.Sleep(40 * time.Millisecond)
+					continue
+				}
+				return
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+	}()
+
+	rec := httptest.NewRecorder()
+	testHandler.CreateNotePeriodBrief(rec, newRequest(http.MethodPost, "/api/notes/period-briefs", map[string]any{
+		"window":              "day",
+		"date":                day,
+		"timezone":            "UTC",
+		"agent_id":            synthID,
+		"collector_agent_ids": []string{collectorID},
+	}))
+	close(stop)
+	<-done
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("period brief = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp createNotePeriodBriefResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !containsNoteRetrospectiveSource(resp.SourcesUsed, notePeriodBriefSourceCollectors) {
+		t.Fatalf("pending note_write after complete should mark collectors used: %v", resp.SourcesUsed)
+	}
+	if !strings.Contains(resp.Page.Content, "harvested pending proposal") {
+		t.Fatalf("draft missing proposal pack body: %s", resp.Page.Content)
+	}
+	var contextRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT context FROM agent_inbox_event WHERE id = $1`, *resp.Job.TaskID).Scan(&contextRaw); err != nil {
+		t.Fatalf("load wake: %v", err)
+	}
+	var wake map[string]any
+	_ = json.Unmarshal(contextRaw, &wake)
+	prompt, _ := wake["prompt"].(string)
+	if !strings.Contains(prompt, "harvested pending proposal") {
+		t.Fatalf("synthesizer packs missing proposal: %s", prompt)
+	}
+}
+
 func TestCreateNotePeriodBriefAllowsMemberWithCollectors(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

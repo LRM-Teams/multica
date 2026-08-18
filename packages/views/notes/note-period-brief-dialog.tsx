@@ -356,7 +356,9 @@ export function NotePeriodBriefDialog({
           </Button>
           <Button type="button" onClick={() => void submit()} disabled={!canSubmit}>
             {submitting || ensuring ? <Loader2 className="size-4 animate-spin" /> : <ClipboardList className="size-4" />}
-            {t(($) => $.notes_page.period_brief_submit)}
+            {submitting
+              ? t(($) => $.notes_page.period_brief_submitting)
+              : t(($) => $.notes_page.period_brief_submit)}
           </Button>
         </DialogFooter>
       </DialogContent>

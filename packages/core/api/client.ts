@@ -5225,7 +5225,19 @@ export class ApiClient {
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+      // Never rewrite a server response's identity into the requested scope.
+      // A mismatched projection is untrusted and must fail closed.
+      return {
+        ...snapshot,
+        workspace_id: workspaceId,
+        run_id: runId,
+        snapshot_id: "",
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+        next_cursor: undefined,
+      };
     }
     return snapshot;
   }
@@ -5290,7 +5302,17 @@ export class ApiClient {
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+      return {
+        ...snapshot,
+        workspace_id: workspaceId,
+        run_id: runId,
+        snapshot_id: validated.snapshot_id,
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+        next_cursor: undefined,
+      };
     }
     if (snapshot.snapshot_id !== validated.snapshot_id) {
       return {

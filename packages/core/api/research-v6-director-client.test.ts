@@ -66,7 +66,7 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     );
   });
 
-  it("degrades a slice response pinned to a different snapshot", async () => {
+  it("rejects a slice response pinned to a different snapshot", async () => {
     response({ ...snapshot(), snapshot_id: "00000000-0000-4000-8000-000000000699" });
     const client = new ApiClient("https://api.example.test");
     await expect(
@@ -75,7 +75,7 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
         depth: 1,
         snapshot_id: SNAPSHOT_ID,
       }),
-    ).resolves.toMatchObject({ snapshot_id: SNAPSHOT_ID, nodes: [], edges: [] });
+    ).rejects.toThrow("projection slice snapshot mismatch");
   });
 
   it("uses after rather than the superseded delta query name", async () => {
@@ -101,20 +101,20 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     ).resolves.toMatchObject({ run_id: RUN_ID, deltas: [], resync_required: true });
   });
 
-  it("keeps node detail fallback addressable when the response changes node identity", async () => {
+  it("rejects a node detail response when the response changes node identity", async () => {
     response({});
     const client = new ApiClient("https://api.example.test");
     await expect(
       client.getResearchV6DirectorProjectionNodeDetail(WORKSPACE_ID, RUN_ID, "node-1"),
-    ).resolves.toMatchObject({ node: { id: "node-1" } });
+    ).rejects.toThrow("node detail identity mismatch");
   });
 
-  it("keeps report detail fallback addressable when the response changes report identity", async () => {
+  it("rejects a report detail response when the response changes report identity", async () => {
     response({});
     const client = new ApiClient("https://api.example.test");
     await expect(
       client.getResearchV6DirectorReport(WORKSPACE_ID, RUN_ID, "report-1"),
-    ).resolves.toMatchObject({ id: "report-1" });
+    ).rejects.toThrow("report detail identity mismatch");
   });
 
   it("sends the full snapshot identity when resuming", async () => {
@@ -138,11 +138,11 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     );
   });
 
-  it("degrades a cross-workspace response to a safe local identity", async () => {
+  it("rejects a cross-workspace response instead of rewriting its identity", async () => {
     response({ ...snapshot(), workspace_id: "00000000-0000-4000-8000-000000000099" });
     const client = new ApiClient("https://api.example.test");
     await expect(
       client.getResearchV6DirectorProjectionSnapshot(WORKSPACE_ID, RUN_ID),
-    ).resolves.toMatchObject({ workspace_id: WORKSPACE_ID, run_id: RUN_ID });
+    ).rejects.toThrow("projection snapshot identity mismatch");
   });
 });

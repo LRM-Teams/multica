@@ -5321,7 +5321,7 @@ export class ApiClient {
       }),
     });
     const parsed = parseWithFallback<
-      z.output<typeof ResearchV6DirectorAssignmentSchema> | null
+      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
     >(
       raw,
       ResearchV6DirectorAssignmentSchema,

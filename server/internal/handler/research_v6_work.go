@@ -133,6 +133,9 @@ func (h *Handler) AcknowledgeAgentResearchV6WorkCatalog(w http.ResponseWriter, r
 	if !decodeResearchJSON(w, r, &request) {
 		return
 	}
+	if _, valid := parseUUIDOrBadRequest(w, request.ClientRequestID, "client_request_id"); !valid {
+		return
+	}
 	err := service.AcknowledgeWorkCatalog(r.Context(), researchrun.AcknowledgeV6CatalogInput{
 		V6AttemptAccess: access, ClientRequestID: request.ClientRequestID, PageKey: request.PageKey, PageHash: request.PageHash,
 	})
@@ -209,6 +212,11 @@ func (h *Handler) AcknowledgeAgentResearchV6DirectorBrief(w http.ResponseWriter,
 	var request acknowledgeResearchV6DirectorBriefRequest
 	if !decodeResearchJSON(w, r, &request) {
 		return
+	}
+	for field, value := range map[string]string{"client_request_id": request.ClientRequestID, "brief_id": request.BriefID} {
+		if _, valid := parseUUIDOrBadRequest(w, value, field); !valid {
+			return
+		}
 	}
 	err := service.AcknowledgeDirectorBrief(r.Context(), researchrun.AcknowledgeV6DirectorBriefInput{
 		V6AttemptAccess: access, ClientRequestID: request.ClientRequestID,

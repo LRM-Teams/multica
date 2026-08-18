@@ -11,15 +11,44 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func activityNarrativeEntry(detailKind, text string) (protocol.AgentActivityEntry, error) {
-	body, err := json.Marshal(protocol.AgentActivityNarrativeBody{
-		Text:       text,
+func activityStatusEntry(detailKind, text string) (protocol.AgentActivityEntry, error) {
+	body, err := json.Marshal(protocol.AgentActivityStatusBody{
+		Activity:   activityKindFromDetail(detailKind),
+		Detail:     text,
 		DetailKind: detailKind,
 	})
 	if err != nil {
 		return protocol.AgentActivityEntry{}, err
 	}
-	return protocol.AgentActivityEntry{Kind: "narrative", Body: body}, nil
+	return protocol.AgentActivityEntry{Kind: "status", Body: body}, nil
+}
+
+func activityKindFromDetail(detailKind string) string {
+	if detailKind == "idle" || detailKind == "ready" {
+		return protocol.ActivityKindOnline
+	}
+	if detailKind == "thinking_started" {
+		return protocol.ActivityKindThinking
+	}
+	if detailKind == "runtime_error" || detailKind == "runtime_crashed" || detailKind == "runtime_stalled" {
+		return protocol.ActivityKindError
+	}
+	if detailKind == "runtime_unavailable" || detailKind == "stopped" {
+		return protocol.ActivityKindOffline
+	}
+	return protocol.ActivityKindWorking
+}
+
+func activityToolStartEntry(toolName, toolInput string) (protocol.AgentActivityEntry, error) {
+	toolInput = truncateRunes(toolInput, maxActivityCommandRunes)
+	body, err := json.Marshal(protocol.AgentActivityToolStartBody{
+		ToolName:  toolName,
+		ToolInput: toolInput,
+	})
+	if err != nil {
+		return protocol.AgentActivityEntry{}, err
+	}
+	return protocol.AgentActivityEntry{Kind: "tool_start", Body: body}, nil
 }
 
 func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error) {
@@ -267,12 +296,12 @@ func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySna
 		detail = state.detail
 	}
 	for _, entry := range entries {
-		if entry.Kind != "narrative" {
+		if entry.Kind != "status" {
 			continue
 		}
-		var body protocol.AgentActivityNarrativeBody
-		if json.Unmarshal(entry.Body, &body) == nil && body.Text != "" {
-			detail = body.Text
+		var body protocol.AgentActivityStatusBody
+		if json.Unmarshal(entry.Body, &body) == nil && body.Detail != "" {
+			detail = body.Detail
 			break
 		}
 	}

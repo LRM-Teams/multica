@@ -298,7 +298,7 @@ export function ResearchV6NodeDetail({
               >
                 <span>{reference.kind}</span>
                 {reference.revision ? (
-                  <span> · r{reference.revision}</span>
+                  <span>{` · r${reference.revision}`}</span>
                 ) : reference.version_id ? (
                   <span> · {reference.version_id}</span>
                 ) : null}

@@ -41,7 +41,7 @@ export function StarGraphDensityLayer({
                 width: bin.bounds.width,
                 height: bin.bounds.height,
                 "--sg-density-inverse-scale": inverseScale,
-              } satisfies DensityStyle
+              } as DensityStyle
             }
           >
             <span className="sg-density-count">{bin.total}</span>

@@ -35,7 +35,7 @@ type researchV6NodeDetailResponse struct {
 func (h *Handler) GetResearchV6ProjectionNodeDetail(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.ResearchRun.(researchrun.V6ProjectionReader)
 	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "research V6 projection unavailable")
+		writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.capability_unavailable", "research V6 projection unavailable", true)
 		return
 	}
 	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
@@ -48,11 +48,11 @@ func (h *Handler) GetResearchV6ProjectionNodeDetail(w http.ResponseWriter, r *ht
 	}
 	detail, err := service.ProjectionV6NodeDetail(r.Context(), h.resolveWorkspaceID(r), uuidToString(runID), uuidToString(nodeID), strings.TrimSpace(r.URL.Query().Get("view")))
 	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "research V6 projection node not found")
+		writeRonaldoV6Error(w, http.StatusNotFound, "research.v6.not_found", "research V6 projection node not found", false)
 		return
 	}
 	if errors.Is(err, researchrun.ErrInvalidContract) {
-		writeError(w, http.StatusBadRequest, "view must be brief, full, or history")
+		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "view must be brief, full, or history", false)
 		return
 	}
 	if err != nil {

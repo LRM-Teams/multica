@@ -88,6 +88,29 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 	}
 }
 
+func TestAgentActivityProducerSuppressesRepeatedIdleOnlineState(t *testing.T) {
+	at := time.Date(2026, time.August, 18, 5, 0, 0, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) {
+		sent = append(sent, payload)
+	})
+	installActivityProducerAgent(t, producer)
+	observation := AgentObservation{
+		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle,
+		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}, At: at,
+	}
+	if err := producer.Observe(observation); err != nil {
+		t.Fatal(err)
+	}
+	observation.At = at.Add(time.Minute)
+	if err := producer.Observe(observation); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("repeated idle state emitted %d Activity facts, want 1", len(sent))
+	}
+}
+
 func TestAgentActivityProducerShowsUnknownTool(t *testing.T) {
 	at := time.Date(2026, time.August, 14, 1, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload

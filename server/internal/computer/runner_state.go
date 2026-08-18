@@ -14,12 +14,12 @@ import (
 )
 
 type persistedRunnerState struct {
-	WorkspaceID      string    `json:"workspace_id"`
-	RunnerGeneration int64     `json:"runner_generation"`
-	OwnerPID         int       `json:"owner_pid"`
-	RunnerPID        int       `json:"runner_pid"`
-	RunnerIdentity   string    `json:"runner_identity,omitempty"`
-	StartedAt        time.Time `json:"started_at"`
+	WorkspaceID    string    `json:"workspaceId"`
+	StartIdentity  string    `json:"startIdentity"`
+	OwnerPID       int       `json:"ownerPid"`
+	RunnerPID      int       `json:"runnerPid"`
+	RunnerIdentity string    `json:"runnerIdentity,omitempty"`
+	StartedAt      time.Time `json:"startedAt"`
 }
 
 func runnerStateDir(root, workspaceID string) string {
@@ -58,8 +58,8 @@ func runnerConnectedPath(root, workspaceID string) string {
 
 type persistedRunnerConnected struct {
 	PID            int       `json:"pid"`
-	ConnectedAt    time.Time `json:"connected_at"`
-	RunnerEndpoint string    `json:"runner_endpoint,omitempty"`
+	ConnectedAt    time.Time `json:"connectedAt"`
+	RunnerEndpoint string    `json:"runnerEndpoint,omitempty"`
 }
 
 func writeRunnerState(root string, state persistedRunnerState) error {
@@ -67,7 +67,7 @@ func writeRunnerState(root string, state persistedRunnerState) error {
 	if path == "" {
 		return nil
 	}
-	if state.OwnerPID < 1 || state.RunnerGeneration < 1 {
+	if state.OwnerPID < 1 || strings.TrimSpace(state.StartIdentity) == "" {
 		return errors.New("runner state identity is incomplete")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -137,7 +137,7 @@ func writePrivateBytes(path string, data []byte) error {
 	return os.Rename(temporaryPath, path)
 }
 
-func removeRunnerState(root, workspaceID string, generation int64, pid int) error {
+func removeRunnerState(root, workspaceID, startIdentity string, pid int) error {
 	path := runnerStatePath(root, workspaceID)
 	if path == "" {
 		return nil
@@ -150,7 +150,7 @@ func removeRunnerState(root, workspaceID string, generation int64, pid int) erro
 		return err
 	}
 	storedPID, err := readRunnerPID(runnerPIDPath(root, workspaceID))
-	if err != nil || state.RunnerGeneration != generation || storedPID != pid {
+	if err != nil || state.StartIdentity != startIdentity || storedPID != pid {
 		return nil
 	}
 	for _, current := range []string{runnerConnectedPath(root, workspaceID), runnerPIDPath(root, workspaceID), path} {
@@ -161,7 +161,7 @@ func removeRunnerState(root, workspaceID string, generation int64, pid int) erro
 	return os.Remove(filepath.Dir(path))
 }
 
-func discardRunnerStateAfterSpawnFailure(root, workspaceID string, generation int64, pid int) error {
+func discardRunnerStateAfterSpawnFailure(root, workspaceID, startIdentity string, pid int) error {
 	path := runnerStatePath(root, workspaceID)
 	if path == "" {
 		return nil
@@ -170,7 +170,7 @@ func discardRunnerStateAfterSpawnFailure(root, workspaceID string, generation in
 	if os.IsNotExist(err) {
 		return nil
 	}
-	if err != nil || state.RunnerGeneration != generation || state.RunnerPID != pid {
+	if err != nil || state.StartIdentity != startIdentity || state.RunnerPID != pid {
 		return err
 	}
 	for _, current := range []string{runnerConnectedPath(root, workspaceID), runnerPIDPath(root, workspaceID), path} {

@@ -16,11 +16,11 @@ import (
 // they never construct paths or propagate sink failures into product control
 // flow.
 type runnerDiagnosticRegistry struct {
-	store              *diagnosticlog.Store
-	environment        diagnosticlog.Environment
-	runnerGeneration   string
-	computerID         string
-	computerGeneration string
+	store             *diagnosticlog.Store
+	environment       diagnosticlog.Environment
+	startIdentity     string
+	computerID        string
+	serviceGeneration string
 
 	mu      sync.Mutex
 	loggers map[string]*diagnosticlog.Logger
@@ -53,18 +53,10 @@ func (d *Daemon) initializeRunnerDiagnostics() {
 	if _, err := uuid.Parse(computerID); err != nil {
 		computerID = ""
 	}
-	computerGeneration := ""
-	if d.cfg.ComputerGeneration > 0 {
-		computerGeneration = strconv.FormatInt(d.cfg.ComputerGeneration, 10)
-	}
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store:              store,
-		environment:        environment,
-		runnerGeneration:   d.runnerInstanceID,
-		computerID:         computerID,
-		computerGeneration: computerGeneration,
-		loggers:            make(map[string]*diagnosticlog.Logger),
-		failed:             make(map[string]struct{}),
+		store: store, environment: environment,
+		startIdentity: d.runnerInstanceID, computerID: computerID,
+		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.runnerDiagnosticStore = store
 }
@@ -91,11 +83,11 @@ func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlo
 	if logger == nil && !failed {
 		var err error
 		logger, err = r.store.Runner(diagnosticlog.RunnerOptions{
-			Environment:        r.environment,
-			WorkspaceID:        workspaceID,
-			RunnerGeneration:   r.runnerGeneration,
-			ComputerID:         r.computerID,
-			ComputerGeneration: r.computerGeneration,
+			Environment:       r.environment,
+			WorkspaceID:       workspaceID,
+			StartIdentity:     r.startIdentity,
+			ComputerID:        r.computerID,
+			ServiceGeneration: r.serviceGeneration,
 		})
 		if err != nil {
 			r.failed[workspaceID] = struct{}{}

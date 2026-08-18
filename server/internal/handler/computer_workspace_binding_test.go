@@ -252,12 +252,12 @@ func TestMembershipLossRevokesZeroRuntimeConnectionAndPreservesSibling(t *testin
 	}
 }
 
-func TestComputerHeartbeat_AuthorizesConnectionWithoutGenerationFence(t *testing.T) {
+func TestComputerHeartbeatAuthorizesWorkspaceConnectionOwner(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	computerID := "computer-generation-fence-" + uuid.NewString()
+	computerID := "computer-connection-owner-" + uuid.NewString()
 	if w := createComputerWorkspaceBindingForTest(t, testUserID, computerID, testWorkspaceID); w.Code != http.StatusOK {
 		t.Fatalf("establish connection: got %d: %s", w.Code, w.Body.String())
 	}
@@ -281,7 +281,7 @@ func TestComputerHeartbeat_AuthorizesConnectionWithoutGenerationFence(t *testing
 		t.Fatalf("owner heartbeat: got %d: %s", w.Code, w.Body.String())
 	}
 
-	foreignEmail := "computer-generation-" + uuid.NewString() + "@multica.ai"
+	foreignEmail := "computer-connection-" + uuid.NewString() + "@multica.ai"
 	var foreignUserID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email) VALUES ('Generation foreign user', $1) RETURNING id

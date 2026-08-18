@@ -25,18 +25,18 @@ func TestServiceAndRunnerStreamsAreScopedAndVersioned(t *testing.T) {
 	store := openTestStore(t, root, func() time.Time { return now }, Limits{})
 
 	service, err := store.Service(ServiceOptions{
-		ComputerID:         testComputerID,
-		ComputerGeneration: "computer-generation-1",
+		ComputerID:        testComputerID,
+		ServiceGeneration: "service-generation-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner, err := store.Runner(RunnerOptions{
-		Environment:        EnvironmentProduction,
-		WorkspaceID:        testWorkspaceID,
-		RunnerGeneration:   "runner-generation-1",
-		ComputerID:         testComputerID,
-		ComputerGeneration: "computer-generation-1",
+		Environment:       EnvironmentProduction,
+		WorkspaceID:       testWorkspaceID,
+		StartIdentity:     "start-identity-1",
+		ComputerID:        testComputerID,
+		ServiceGeneration: "service-generation-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -72,17 +72,17 @@ func TestServiceAndRunnerStreamsAreScopedAndVersioned(t *testing.T) {
 	assertField(t, serviceRecord, "schema_version", float64(1))
 	assertField(t, serviceRecord, "scope", "service")
 	assertField(t, serviceRecord, "event", string(EventComputerStateChanged))
-	assertField(t, serviceRecord, "computer_id", testComputerID)
-	assertField(t, serviceRecord, "computer_generation", "computer-generation-1")
-	assertField(t, serviceRecord, "stream_seq", float64(1))
-	if _, exists := serviceRecord["workspace_id"]; exists {
-		t.Fatalf("service record unexpectedly contains workspace_id: %#v", serviceRecord)
+	assertField(t, serviceRecord, "computerId", testComputerID)
+	assertField(t, serviceRecord, "serviceGeneration", "service-generation-1")
+	assertField(t, serviceRecord, "streamSeq", float64(1))
+	if _, exists := serviceRecord["workspaceId"]; exists {
+		t.Fatalf("service record unexpectedly contains workspaceId: %#v", serviceRecord)
 	}
 
 	assertField(t, runnerRecord, "scope", "runner")
 	assertField(t, runnerRecord, "environment", string(EnvironmentProduction))
-	assertField(t, runnerRecord, "workspace_id", testWorkspaceID)
-	assertField(t, runnerRecord, "runner_generation", "runner-generation-1")
+	assertField(t, runnerRecord, "workspaceId", testWorkspaceID)
+	assertField(t, runnerRecord, "startIdentity", "start-identity-1")
 	assertField(t, runnerRecord, "source_message_id", "55555555-5555-4555-8555-555555555555")
 
 	for _, path := range []string{root, filepath.Dir(runnerPath)} {
@@ -109,11 +109,11 @@ func TestRunnerRejectsInvalidDestination(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
 	store := openTestStore(t, root, time.Now, Limits{})
 	if _, err := store.Service(ServiceOptions{}); err == nil {
-		t.Fatal("Service accepted an empty computer_generation")
+		t.Fatal("Service accepted an empty serviceGeneration")
 	}
 	tests := []RunnerOptions{
-		{Environment: "staging", WorkspaceID: testWorkspaceID, RunnerGeneration: "generation-1"},
-		{Environment: EnvironmentProduction, WorkspaceID: "../../escape", RunnerGeneration: "generation-1"},
+		{Environment: "staging", WorkspaceID: testWorkspaceID, StartIdentity: "start-1"},
+		{Environment: EnvironmentProduction, WorkspaceID: "../../escape", StartIdentity: "start-1"},
 		{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID},
 	}
 	for _, options := range tests {
@@ -121,14 +121,14 @@ func TestRunnerRejectsInvalidDestination(t *testing.T) {
 			t.Fatalf("Runner(%+v) succeeded, want validation error", options)
 		}
 	}
-	service, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	service, err := store.Service(ServiceOptions{ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Record(Event{Name: EventRunnerStateChanged, Level: LevelInfo, Component: "test"}); err == nil {
 		t.Fatal("Service accepted a Runner-scoped event")
 	}
-	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, RunnerGeneration: "generation-1"})
+	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestLimitsCannotExpandTheStorageContract(t *testing.T) {
 
 func TestLoggerDelegatesRollingPolicyToLumberjack(t *testing.T) {
 	store := openTestStore(t, filepath.Join(t.TempDir(), "logs"), time.Now, Limits{})
-	logger, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	logger, err := store.Service(ServiceOptions{ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestRecordRedactsAndBoundsUntrustedEvidence(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	root := filepath.Join(t.TempDir(), "logs")
 	store := openTestStore(t, root, func() time.Time { return now }, Limits{})
-	service, err := store.Service(ServiceOptions{ComputerID: testComputerID, ComputerGeneration: "generation-1"})
+	service, err := store.Service(ServiceOptions{ComputerID: testComputerID, ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestRotationCompressesClosedSegmentAndRespectsAge(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
 	limits := Limits{SegmentBytes: 1 << 20, SegmentAge: time.Hour, Retention: 30 * 24 * time.Hour, StreamBytes: 4 << 20, GlobalBytes: 8 << 20}
 	store := openTestStore(t, root, func() time.Time { return now }, limits)
-	service, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	service, err := store.Service(ServiceOptions{ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,11 +286,11 @@ func TestCleanupEnforcesRetentionStreamAndGlobalBudgets(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
 	limits := Limits{SegmentBytes: 500, SegmentAge: time.Hour, Retention: 24 * time.Hour, StreamBytes: 900, GlobalBytes: 1400}
 	store := openTestStore(t, root, func() time.Time { return now }, limits)
-	service, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	service, err := store.Service(ServiceOptions{ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, RunnerGeneration: "runner-generation-1"})
+	runner, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-identity-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestCleanupEnforcesRetentionStreamAndGlobalBudgets(t *testing.T) {
 func TestConcurrentLoggerWritesWholeJSONLines(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
 	store := openTestStore(t, root, time.Now, Limits{})
-	logger, err := store.Service(ServiceOptions{ComputerGeneration: "generation-a"})
+	logger, err := store.Service(ServiceOptions{ServiceGeneration: "service-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestConcurrentLoggerWritesWholeJSONLines(t *testing.T) {
 func TestPartialTailIsQuarantinedBeforeNextRecord(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
 	store := openTestStore(t, root, time.Now, Limits{})
-	logger, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	logger, err := store.Service(ServiceOptions{ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestSymlinkEscapeIsRejected(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "runners")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	if _, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, RunnerGeneration: "generation-1"}); err == nil {
+	if _, err := store.Runner(RunnerOptions{Environment: EnvironmentProduction, WorkspaceID: testWorkspaceID, StartIdentity: "start-1"}); err == nil {
 		t.Fatal("Runner succeeded through symlink, want rejection")
 	}
 	entries, err := os.ReadDir(outside)
@@ -425,7 +425,7 @@ func TestSymlinkEscapeIsRejected(t *testing.T) {
 	if err := os.WriteFile(outsideFile, []byte("unchanged"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	service, err := store.Service(ServiceOptions{ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +447,7 @@ func TestSymlinkEscapeIsRejected(t *testing.T) {
 func TestSinkFailureIsVisibleAndRecoveryIsNonFatal(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
 	store := openTestStore(t, root, time.Now, Limits{})
-	logger, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	logger, err := store.Service(ServiceOptions{ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +482,7 @@ func TestEquivalentFailuresAreSuppressedAndRecoverySummarizes(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	root := filepath.Join(t.TempDir(), "logs")
 	store := openTestStore(t, root, func() time.Time { return now }, Limits{})
-	logger, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	logger, err := store.Service(ServiceOptions{ServiceGeneration: "service-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

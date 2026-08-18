@@ -69,7 +69,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	if workspaceID == "" || strings.TrimSpace(config.Daemon.DaemonID) != strings.TrimSpace(bootstrap.ComputerID) {
 		return errors.New("Binding child identity does not match daemon config")
 	}
-	if config.Daemon.ComputerGeneration != bootstrap.ComputerGeneration || config.Daemon.Environment != bootstrap.Environment || config.Daemon.ServerBaseURL != bootstrap.ServerBaseURL || config.Daemon.BindingsRoot != bootstrap.BindingsRoot || config.Daemon.WorkspacesRoot != bootstrap.WorkspacesRoot {
+	if config.Daemon.Environment != bootstrap.Environment || config.Daemon.ServerBaseURL != bootstrap.ServerBaseURL || config.Daemon.BindingsRoot != bootstrap.BindingsRoot || config.Daemon.WorkspacesRoot != bootstrap.WorkspacesRoot {
 		return errors.New("Binding child bootstrap does not match daemon config")
 	}
 	config.Daemon.BindingStateRoot = filepath.Join(bootstrap.BindingsRoot, "binding-children", bootstrap.Environment, workspaceID)
@@ -77,9 +77,9 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	d := newDaemonForRole(config.Daemon, config.Logger, daemonProcessBindingChild)
 	d.rootCtx = ctx
 	identity := bindingChildControlIdentity{
-		WorkspaceID:      workspaceID,
-		RunnerGeneration: bootstrap.RunnerGeneration,
-		PID:              os.Getpid(),
+		WorkspaceID:   workspaceID,
+		StartIdentity: bootstrap.StartIdentity,
+		PID:           os.Getpid(),
 	}
 	hostControl := newBindingHostControlClient(bootstrap.ServiceEndpoint, config.Daemon.LocalControlToken, identity)
 	remoteAdmission := newRemoteAgentProcessAdmission(hostControl)
@@ -111,7 +111,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 	}
 	binding, ok := bindings[workspaceID]
 	if !ok {
-		return fmt.Errorf("Workspace Binding %q is not active for this Computer generation", workspaceID)
+		return fmt.Errorf("Workspace Binding %q is not active for this Computer", workspaceID)
 	}
 	if err := d.prepareBindingExecutionCredential(binding); err != nil {
 		return err
@@ -167,7 +167,7 @@ func RunBindingChild(ctx context.Context, config BindingChildRunConfig) error {
 		readyOnce.Do(func() {
 			readyErr = config.PublishReady(computer.BindingChildReady{
 				ProtocolVersion: computer.BindingChildProtocolVersion,
-				WorkspaceID:     workspaceID, RunnerGeneration: bootstrap.RunnerGeneration,
+				WorkspaceID:     workspaceID, StartIdentity: bootstrap.StartIdentity,
 				PID: os.Getpid(), RunnerEndpoint: runnerEndpoint,
 			})
 			if readyErr != nil {
@@ -308,8 +308,8 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		var request computer.BindingMachineControlRequest
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
-			return computer.BindingChildIdentity{}, errors.New("inactive Binding child generation")
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.StartIdentity != bootstrap.StartIdentity || request.Identity.PID != os.Getpid() {
+			return computer.BindingChildIdentity{}, errors.New("inactive managed runner process")
 		}
 		return request.Identity, nil
 	}
@@ -341,8 +341,8 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
-			return nil, errors.New("inactive Binding child generation")
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.StartIdentity != bootstrap.StartIdentity || request.Identity.PID != os.Getpid() {
+			return nil, errors.New("inactive managed runner process")
 		}
 		return nil, d.handleComputerControlCommand(ctx, protocol.EventComputerUpgrade, request.Command)
 	})
@@ -357,8 +357,8 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
-			return nil, errors.New("inactive Binding runner generation")
+		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.StartIdentity != bootstrap.StartIdentity || request.Identity.PID != os.Getpid() {
+			return nil, errors.New("inactive managed runner process")
 		}
 		var payload any
 		if err := json.Unmarshal(request.Payload, &payload); err != nil {
@@ -416,142 +416,6 @@ func (d *Daemon) bindingMachineControlRegistry(bootstrap computer.BindingChildBo
 		return nil, d.reregisterBindingWorkspace(ctx, identity.WorkspaceID)
 	})
 	return registry
-}
-
-func (d *Daemon) registerBindingMachineControlRoutes(mux *http.ServeMux, bootstrap computer.BindingChildBootstrap) {
-	decodeIdentity := func(w http.ResponseWriter, r *http.Request) bool {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return false
-		}
-		if !d.localControlAuthorized(r) {
-			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
-			return false
-		}
-		var request computer.BindingMachineControlRequest
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
-			http.Error(w, "inactive Binding child generation", http.StatusConflict)
-			return false
-		}
-		return true
-	}
-	handle := func(prepare bool) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if !decodeIdentity(w, r) {
-				return
-			}
-			if prepare {
-				if err := d.beginBindingDrain(r.Context()); err != nil {
-					http.Error(w, err.Error(), http.StatusConflict)
-					return
-				}
-			} else {
-				d.releaseClaimBarrier()
-			}
-			w.WriteHeader(http.StatusNoContent)
-		}
-	}
-	mux.HandleFunc(computer.BindingPrepareMachineUpgradePath, handle(true))
-	mux.HandleFunc(computer.BindingReleaseMachineUpgradePath, handle(false))
-	mux.HandleFunc(computer.BindingComputerUpgradePath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !d.localControlAuthorized(r) {
-			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
-			return
-		}
-		var request struct {
-			Identity computer.BindingChildIdentity   `json:"identity"`
-			Command  protocol.ComputerUpgradePayload `json:"command"`
-		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
-			http.Error(w, "inactive Binding child generation", http.StatusConflict)
-			return
-		}
-		if err := d.handleComputerControlCommand(r.Context(), protocol.EventComputerUpgrade, request.Command); err != nil {
-			if errors.Is(err, computer.ErrComputerControlBusy) {
-				http.Error(w, err.Error(), http.StatusConflict)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc(computer.BindingComputerUpgradeEventPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || !d.localControlAuthorized(r) {
-			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
-			return
-		}
-		var request struct {
-			Identity  computer.BindingChildIdentity `json:"identity"`
-			EventType string                        `json:"event_type"`
-			Payload   json.RawMessage               `json:"payload"`
-		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || request.Identity.WorkspaceID != bootstrap.WorkspaceID || request.Identity.RunnerGeneration != bootstrap.RunnerGeneration || request.Identity.PID != os.Getpid() {
-			http.Error(w, "inactive Binding runner generation", http.StatusConflict)
-			return
-		}
-		var payload any
-		if err := json.Unmarshal(request.Payload, &payload); err != nil {
-			http.Error(w, "invalid upgrade event", http.StatusBadRequest)
-			return
-		}
-		d.emitComputerUpgrade(request.EventType, payload)
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc(computer.BindingPrepareEnvironmentSwitchPath, func(w http.ResponseWriter, r *http.Request) {
-		if !decodeIdentity(w, r) {
-			return
-		}
-		if !d.trySetEnvironmentSwitchBarrier() {
-			http.Error(w, "another Binding handoff is already in progress", http.StatusConflict)
-			return
-		}
-		prepared := false
-		defer func() {
-			if !prepared {
-				d.releaseEnvironmentSwitchBarrier()
-			}
-		}()
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for !d.claimBarrierDrained() {
-			select {
-			case <-r.Context().Done():
-				http.Error(w, "environment switch cancelled while waiting for active work", http.StatusRequestTimeout)
-				return
-			case <-ticker.C:
-			}
-		}
-		prepared = true
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc(computer.BindingReleaseEnvironmentSwitchPath, func(w http.ResponseWriter, r *http.Request) {
-		if !decodeIdentity(w, r) {
-			return
-		}
-		d.releaseEnvironmentSwitchBarrier()
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc(computer.BindingReregisterRuntimePath, func(w http.ResponseWriter, r *http.Request) {
-		if !decodeIdentity(w, r) {
-			return
-		}
-		if err := d.reregisterBindingWorkspace(r.Context(), bootstrap.WorkspaceID); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
 }
 
 func (d *Daemon) reregisterBindingWorkspace(ctx context.Context, workspaceID string) error {

@@ -268,4 +268,3 @@ Cobra 层只负责 text/JSON presenter 和把 `AllRequiredOK=false` 映射到既
 - `server/cmd/multica/cmd_computer.go`
 - `server/internal/computer/diagnose_test.go`
 - `server/cmd/multica/cmd_computer_test.go`
-- `docs/raft-v1.0.16-multica-architecture-comparison.md`

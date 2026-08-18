@@ -211,17 +211,17 @@ func TestResidentMatchesSetupTargetRequiresEnvironmentOriginAndChannel(t *testin
 		ServerURL:   "https://test.leagent.me", AppURL: "https://test.leagent.me",
 	}
 	matching := map[string]any{
-		"server_url": "https://test.leagent.me", "environment": "test", "release_channel": "alpha",
+		"serverUrl": "https://test.leagent.me", "environment": "test", "releaseChannel": "alpha",
 	}
 	got, err := residentMatchesSetupTarget(matching, cfg)
 	if err != nil || !got {
 		t.Fatalf("matching resident: got=%v err=%v", got, err)
 	}
 	for key, value := range map[string]any{
-		"server_url": "https://other.example", "environment": "production", "release_channel": "latest",
+		"serverUrl": "https://other.example", "environment": "production", "releaseChannel": "latest",
 	} {
 		drifted := map[string]any{
-			"server_url": "https://test.leagent.me", "environment": "test", "release_channel": "alpha",
+			"serverUrl": "https://test.leagent.me", "environment": "test", "releaseChannel": "alpha",
 		}
 		drifted[key] = value
 		if got, err := residentMatchesSetupTarget(drifted, cfg); err != nil || got {
@@ -239,7 +239,7 @@ func TestSetupAcceptanceRequiresAuthenticatedConnectionNotJustLocalWorkspaceStat
 	health := map[string]any{
 		"status":      "running",
 		"connected":   true,
-		"server_url":  "https://test.leagent.me",
+		"serverUrl":   "https://test.leagent.me",
 		"environment": "test",
 		"workspaces":  []any{"ws-123"},
 	}
@@ -275,7 +275,7 @@ func TestSetupAcceptanceUsesWorkspaceIDListFromLocalControl(t *testing.T) {
 	health := map[string]any{
 		"status":      "running",
 		"connected":   true,
-		"server_url":  "https://test.leagent.me",
+		"serverUrl":   "https://test.leagent.me",
 		"environment": "test",
 		"workspaces":  []any{"ws-123"},
 	}
@@ -297,7 +297,7 @@ func TestSetupAcceptanceRequiresConnectedServerProjection(t *testing.T) {
 	health := map[string]any{
 		"status":      "running",
 		"connected":   true,
-		"server_url":  "https://test.leagent.me",
+		"serverUrl":   "https://test.leagent.me",
 		"environment": "test",
 		"workspaces":  []any{"ws-123"},
 	}

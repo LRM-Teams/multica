@@ -23,13 +23,13 @@ import (
 // HostProcessIdentity is the immutable machine identity projected by the
 // Computer resident. Binding execution identity remains inside each child.
 type HostProcessIdentity struct {
-	ComputerID             string
-	ComputerGeneration     int64
-	Environment            string
-	Version                string
-	ServerURL              string
-	DeviceName             string
-	MachineAttestationFrom int
+	ComputerID        string
+	ServiceGeneration string
+	Environment       string
+	Version           string
+	ServerURL         string
+	DeviceName        string
+	SourceServicePID  int
 }
 
 func (identity HostProcessIdentity) releaseChannel() cli.ReleaseChannel {
@@ -103,7 +103,7 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 		cancel: cancel,
 	}
 	if err := writeServiceState(config.ResidentRoot, persistedServiceState{
-		ComputerID: config.Identity.ComputerID, ComputerGeneration: config.Identity.ComputerGeneration,
+		ComputerID: config.Identity.ComputerID, ServiceGeneration: config.Identity.ServiceGeneration,
 		PID: os.Getpid(), StartedAt: state.startedAt,
 	}); err != nil && host.logger != nil {
 		host.logger.Warn("could not persist Computer Service state", "error", err)
@@ -150,12 +150,10 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	}
 
 	mux := http.NewServeMux()
-	host.RegisterRoutes(mux)
 	mux.HandleFunc("/health", host.processHealthHandler(state))
 	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
 	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
 	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
-	mux.HandleFunc("/machine-upgrades", host.upgrade.localRequestHandler())
 	registry := host.LocalControlRegistry(state)
 	var server *http.Server
 	serveControl := func() error {
@@ -277,22 +275,22 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 			record, pid, ok := host.Snapshot(workspaceID)
 			entry := map[string]any{"id": workspaceID, "runtimes": host.runtimeIDs(workspaceID)}
 			if ok {
-				entry["runner_generation"] = record.Generation()
-				entry["runner_pid"] = pid
-				entry["runner_status"] = record.Lifecycle
+				entry["startIdentity"] = record.StartIdentity()
+				entry["runnerPid"] = pid
+				entry["runnerStatus"] = record.Lifecycle
 			}
 			workspaces = append(workspaces, entry)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": status, "pid": os.Getpid(), "os": runtime.GOOS,
-			"uptime":    time.Since(startedAt).Truncate(time.Second).String(),
-			"daemon_id": identity.ComputerID, "computer_id": identity.ComputerID,
-			"computer_generation": identity.ComputerGeneration,
-			"device_name":         identity.DeviceName, "server_url": identity.ServerURL,
-			"environment": identity.Environment, "release_channel": identity.releaseChannel(),
-			"cli_version": identity.Version, "connected": ready && len(desired) > 0,
-			"active_task_count": int64(0), "agents": []string{}, "workspaces": workspaces,
+			"uptime":   time.Since(startedAt).Truncate(time.Second).String(),
+			"daemonId": identity.ComputerID, "computerId": identity.ComputerID,
+			"serviceGeneration": identity.ServiceGeneration,
+			"deviceName":        identity.DeviceName, "serverUrl": identity.ServerURL,
+			"environment": identity.Environment, "releaseChannel": identity.releaseChannel(),
+			"cliVersion": identity.Version, "connected": ready && len(desired) > 0,
+			"activeTaskCount": int64(0), "agents": []string{}, "workspaces": workspaces,
 		})
 	}
 }
@@ -318,9 +316,8 @@ func (host *Host) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID st
 	if logger == nil {
 		created, err := host.diagnosticStore.Runner(diagnosticlog.RunnerOptions{
 			Environment: diagnosticlog.Environment(host.processIdentity.Environment),
-			WorkspaceID: workspaceID, RunnerGeneration: fmt.Sprintf("computer-%d", host.processIdentity.ComputerGeneration),
-			ComputerID:         host.processIdentity.ComputerID,
-			ComputerGeneration: fmt.Sprintf("%d", host.processIdentity.ComputerGeneration),
+			WorkspaceID: workspaceID, StartIdentity: host.processIdentity.ServiceGeneration,
+			ComputerID: host.processIdentity.ComputerID, ServiceGeneration: host.processIdentity.ServiceGeneration,
 		})
 		if err == nil {
 			logger = created

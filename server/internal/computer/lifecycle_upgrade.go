@@ -162,7 +162,7 @@ func (l *Lifecycle) requestLiveUpgrade(
 	requestID, targetVersion string,
 	createIntent func(context.Context, string, string, string) (map[string]any, error),
 ) (UpgradeResult, error) {
-	daemonID, _ := health["daemon_id"].(string)
+	daemonID, _ := health["daemonId"].(string)
 	daemonID = strings.TrimSpace(daemonID)
 	if daemonID == "" {
 		return UpgradeResult{}, fmt.Errorf("upgrade_service_unreachable: live Computer did not prove its machine identity")

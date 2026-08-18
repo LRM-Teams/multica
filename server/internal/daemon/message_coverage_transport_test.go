@@ -249,9 +249,9 @@ func TestCredentialProxyCoverageCommitRecordsBoundedRunnerDiagnostic(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	d.runnerInstanceID = "runner-generation-1"
+	d.runnerInstanceID = "start-identity-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
-		store: store, environment: diagnosticlog.EnvironmentProduction, runnerGeneration: d.runnerInstanceID,
+		store: store, environment: diagnosticlog.EnvironmentProduction, startIdentity: d.runnerInstanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 

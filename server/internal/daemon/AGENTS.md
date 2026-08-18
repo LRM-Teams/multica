@@ -89,12 +89,13 @@ the control RPC.
 
 Daemon owns one Workspace Runner's execution behavior, drain barrier, provider
 runtimes, Runtime registration, and child-local state. Computer owns machine
-supervision, generation fencing, sibling coordination, orphan cleanup, and
-upgrade policy. Cloud Server HTTP/WebSocket is not part of this migration.
+supervision, process identity fencing, sibling coordination, orphan cleanup,
+and upgrade policy. Cloud Server HTTP/WebSocket is not part of this migration.
 
-Use TDD at the RPC operation seam before changing handlers or callers. Preserve
-`computer_generation` and `runner_generation`; do not restore per-Binding
-lease/attest polling or persisted lifecycle state.
+Use TDD at the RPC operation seam before changing handlers or callers. Managed
+runner identity is `pid + startIdentity + role + workspace/server identity +
+version`; do not restore numeric generation fences, per-Binding lease/attest
+polling, or persisted lifecycle state.
 
 ## Go typing
 

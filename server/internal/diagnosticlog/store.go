@@ -39,15 +39,15 @@ type Store struct {
 }
 
 type destination struct {
-	scope              Scope
-	environment        Environment
-	workspaceID        string
-	runnerGeneration   string
-	computerID         string
-	computerGeneration string
-	dir                string
-	activePath         string
-	base               string
+	scope             Scope
+	environment       Environment
+	workspaceID       string
+	startIdentity     string
+	computerID        string
+	serviceGeneration string
+	dir               string
+	activePath        string
+	base              string
 }
 
 type Logger struct {
@@ -128,16 +128,16 @@ func (s *Store) Service(options ServiceOptions) (*Logger, error) {
 	if err := validateOptionalUUID("computer_id", options.ComputerID); err != nil {
 		return nil, err
 	}
-	if err := validateRequiredToken("computer_generation", options.ComputerGeneration); err != nil {
+	if err := validateRequiredToken("serviceGeneration", options.ServiceGeneration); err != nil {
 		return nil, err
 	}
 	dest := destination{
-		scope:              ScopeService,
-		computerID:         options.ComputerID,
-		computerGeneration: options.ComputerGeneration,
-		dir:                s.root,
-		activePath:         filepath.Join(s.root, "service.log"),
-		base:               "service",
+		scope:             ScopeService,
+		computerID:        options.ComputerID,
+		serviceGeneration: options.ServiceGeneration,
+		dir:               s.root,
+		activePath:        filepath.Join(s.root, "service.log"),
+		base:              "service",
 	}
 	return s.newLogger(dest)
 }
@@ -149,26 +149,26 @@ func (s *Store) Runner(options RunnerOptions) (*Logger, error) {
 	if _, err := uuid.Parse(options.WorkspaceID); err != nil {
 		return nil, fmt.Errorf("workspace_id must be an immutable UUID: %w", err)
 	}
-	if err := validateRequiredToken("runner_generation", options.RunnerGeneration); err != nil {
+	if err := validateRequiredToken("startIdentity", options.StartIdentity); err != nil {
 		return nil, err
 	}
 	if err := validateOptionalUUID("computer_id", options.ComputerID); err != nil {
 		return nil, err
 	}
-	if err := validateOptionalToken("computer_generation", options.ComputerGeneration); err != nil {
+	if err := validateOptionalToken("serviceGeneration", options.ServiceGeneration); err != nil {
 		return nil, err
 	}
 	dir := filepath.Join(s.root, "runners", string(options.Environment))
 	dest := destination{
-		scope:              ScopeRunner,
-		environment:        options.Environment,
-		workspaceID:        options.WorkspaceID,
-		runnerGeneration:   options.RunnerGeneration,
-		computerID:         options.ComputerID,
-		computerGeneration: options.ComputerGeneration,
-		dir:                dir,
-		activePath:         filepath.Join(dir, options.WorkspaceID+".log"),
-		base:               options.WorkspaceID,
+		scope:             ScopeRunner,
+		environment:       options.Environment,
+		workspaceID:       options.WorkspaceID,
+		startIdentity:     options.StartIdentity,
+		computerID:        options.ComputerID,
+		serviceGeneration: options.ServiceGeneration,
+		dir:               dir,
+		activePath:        filepath.Join(dir, options.WorkspaceID+".log"),
+		base:              options.WorkspaceID,
 	}
 	return s.newLogger(dest)
 }
@@ -288,56 +288,56 @@ func (l *Logger) buildRecord(event Event, now time.Time) (wireRecord, error) {
 	}
 	diagnostic, stderr, truncated, evidenceRedactionFailed := sanitizeEvidence(event.Evidence)
 	return wireRecord{
-		SchemaVersion:      SchemaVersion,
-		At:                 now.Format(time.RFC3339Nano),
-		Level:              event.Level,
-		Scope:              l.dest.scope,
-		Event:              event.Name,
-		Component:          event.Component,
-		ComputerID:         l.dest.computerID,
-		ComputerGeneration: l.dest.computerGeneration,
-		Environment:        l.dest.environment,
-		WorkspaceID:        l.dest.workspaceID,
-		RunnerGeneration:   l.dest.runnerGeneration,
-		StreamSeq:          l.seq.Add(1),
-		AgentID:            identity.AgentID,
-		RuntimeID:          identity.RuntimeID,
-		TaskID:             identity.TaskID,
-		SessionID:          identity.SessionID,
-		MessageID:          identity.MessageID,
-		DeliveryID:         identity.DeliveryID,
-		RequestID:          identity.RequestID,
-		TraceID:            identity.TraceID,
-		ChannelID:          identity.ChannelID,
-		ChatSessionID:      identity.ChatSessionID,
-		ConversationID:     identity.ConversationID,
-		SourceMessageID:    identity.SourceMessageID,
-		ExecutionID:        identity.ExecutionID,
-		From:               fields.From,
-		To:                 fields.To,
-		Trigger:            fields.Trigger,
-		ReasonCode:         fields.ReasonCode,
-		Outcome:            fields.Outcome,
-		Status:             fields.Status,
-		Provider:           fields.Provider,
-		Model:              fields.Model,
-		Phase:              fields.Phase,
-		FailureReason:      fields.FailureReason,
-		ResponseMode:       fields.ResponseMode,
-		ServiceOrigin:      fields.ServiceOrigin,
-		DurationMS:         fields.DurationMS,
-		SeqFrom:            fields.SeqFrom,
-		SeqTo:              fields.SeqTo,
-		AckedSeq:           fields.AckedSeq,
-		FoldedCount:        fields.FoldedCount,
-		AttemptCount:       fields.AttemptCount,
-		SuppressedCount:    fields.SuppressedCount,
-		DroppedCount:       fields.DroppedCount,
-		OutageDurationMS:   fields.OutageDurationMS,
-		Diagnostic:         diagnostic,
-		StderrTail:         stderr,
-		RedactionFailed:    redactionFailed || evidenceRedactionFailed,
-		TruncatedFields:    truncated,
+		SchemaVersion:     SchemaVersion,
+		At:                now.Format(time.RFC3339Nano),
+		Level:             event.Level,
+		Scope:             l.dest.scope,
+		Event:             event.Name,
+		Component:         event.Component,
+		ComputerID:        l.dest.computerID,
+		ServiceGeneration: l.dest.serviceGeneration,
+		Environment:       l.dest.environment,
+		WorkspaceID:       l.dest.workspaceID,
+		StartIdentity:     l.dest.startIdentity,
+		StreamSeq:         l.seq.Add(1),
+		AgentID:           identity.AgentID,
+		RuntimeID:         identity.RuntimeID,
+		TaskID:            identity.TaskID,
+		SessionID:         identity.SessionID,
+		MessageID:         identity.MessageID,
+		DeliveryID:        identity.DeliveryID,
+		RequestID:         identity.RequestID,
+		TraceID:           identity.TraceID,
+		ChannelID:         identity.ChannelID,
+		ChatSessionID:     identity.ChatSessionID,
+		ConversationID:    identity.ConversationID,
+		SourceMessageID:   identity.SourceMessageID,
+		ExecutionID:       identity.ExecutionID,
+		From:              fields.From,
+		To:                fields.To,
+		Trigger:           fields.Trigger,
+		ReasonCode:        fields.ReasonCode,
+		Outcome:           fields.Outcome,
+		Status:            fields.Status,
+		Provider:          fields.Provider,
+		Model:             fields.Model,
+		Phase:             fields.Phase,
+		FailureReason:     fields.FailureReason,
+		ResponseMode:      fields.ResponseMode,
+		ServiceOrigin:     fields.ServiceOrigin,
+		DurationMS:        fields.DurationMS,
+		SeqFrom:           fields.SeqFrom,
+		SeqTo:             fields.SeqTo,
+		AckedSeq:          fields.AckedSeq,
+		FoldedCount:       fields.FoldedCount,
+		AttemptCount:      fields.AttemptCount,
+		SuppressedCount:   fields.SuppressedCount,
+		DroppedCount:      fields.DroppedCount,
+		OutageDurationMS:  fields.OutageDurationMS,
+		Diagnostic:        diagnostic,
+		StderrTail:        stderr,
+		RedactionFailed:   redactionFailed || evidenceRedactionFailed,
+		TruncatedFields:   truncated,
 	}, nil
 }
 

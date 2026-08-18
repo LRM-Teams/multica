@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-func TestRunnerStateRoundTripAndGenerationFence(t *testing.T) {
+func TestRunnerStateRoundTripAndStartIdentityFence(t *testing.T) {
 	root := t.TempDir()
 	state := persistedRunnerState{
-		WorkspaceID: "workspace-a", RunnerGeneration: 2, OwnerPID: 5678,
+		WorkspaceID: "workspace-a", StartIdentity: "start-2", OwnerPID: 5678,
 		StartedAt: time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC),
 	}
 	if err := writeRunnerState(root, state); err != nil {
@@ -43,16 +43,16 @@ func TestRunnerStateRoundTripAndGenerationFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.WorkspaceID != state.WorkspaceID || got.RunnerGeneration != state.RunnerGeneration || !got.StartedAt.Equal(state.StartedAt) {
+	if got.WorkspaceID != state.WorkspaceID || got.StartIdentity != state.StartIdentity || !got.StartedAt.Equal(state.StartedAt) {
 		t.Fatalf("runner state = %+v, want %+v", got, state)
 	}
-	if err := removeRunnerState(root, state.WorkspaceID, 1, 1234); err != nil {
+	if err := removeRunnerState(root, state.WorkspaceID, "stale-start", 1234); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("stale generation removed current state: %v", err)
+		t.Fatalf("stale start identity removed current state: %v", err)
 	}
-	if err := removeRunnerState(root, state.WorkspaceID, state.RunnerGeneration, 1234); err != nil {
+	if err := removeRunnerState(root, state.WorkspaceID, state.StartIdentity, 1234); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -63,7 +63,7 @@ func TestRunnerStateRoundTripAndGenerationFence(t *testing.T) {
 func TestRecoverRunnerStatesRemovesDeadOwnerState(t *testing.T) {
 	root := t.TempDir()
 	state := persistedRunnerState{
-		WorkspaceID: "workspace-a", RunnerGeneration: 1, OwnerPID: 999998,
+		WorkspaceID: "workspace-a", StartIdentity: "start-1", OwnerPID: 999998,
 		StartedAt: time.Now().UTC(),
 	}
 	if err := writeRunnerState(root, state); err != nil {
@@ -86,7 +86,7 @@ func TestRecoverRunnerStatesRemovesDeadOwnerState(t *testing.T) {
 func TestRecoverRunnerStatesRefusesMismatchedPIDIdentity(t *testing.T) {
 	root := t.TempDir()
 	state := persistedRunnerState{
-		WorkspaceID: "workspace-mismatch", RunnerGeneration: 1, OwnerPID: 999998,
+		WorkspaceID: "workspace-mismatch", StartIdentity: "start-1", OwnerPID: 999998,
 		RunnerPID: os.Getpid(), RunnerIdentity: "not-this-process",
 		StartedAt: time.Now().UTC(),
 	}

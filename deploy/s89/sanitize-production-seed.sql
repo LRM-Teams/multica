@@ -42,7 +42,6 @@ UPDATE sandbox_node_token
        token_prefix = 'test_disabled';
 
 DELETE FROM computer_workspace_bindings;
-DELETE FROM computer_generation;
 
 -- Test must establish its own Computer/runtime observations and upgrade
 -- state. Historical completed Machine Upgrade rows remain as history.

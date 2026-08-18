@@ -276,7 +276,7 @@ func TestLegacyControlPlaneRunnerCanBecomeReadyOnlyForRollingUpgrade(t *testing.
 		t.Fatalf("replay end = %s, want echoed legacy cursor", raw)
 	}
 	heartbeat, err := json.Marshal(protocol.Message{Type: protocol.EventDaemonHeartbeat, Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{
-		RuntimeID: "runtime-1", ComputerGeneration: 7,
+		RuntimeID: "runtime-1",
 	})})
 	if err != nil {
 		t.Fatal(err)
@@ -1146,7 +1146,7 @@ func TestWorkspaceRunnerControlPlaneHeartbeatRoundTrip(t *testing.T) {
 	heartbeatFrame, err := json.Marshal(protocol.Message{
 		Type: protocol.EventDaemonHeartbeat,
 		Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{
-			RuntimeID: "runtime-1", ComputerGeneration: 7,
+			RuntimeID: "runtime-1",
 		}),
 	})
 	if err != nil {

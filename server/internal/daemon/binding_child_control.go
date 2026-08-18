@@ -82,7 +82,6 @@ func (d *Daemon) handleWorkspaceRunnerControlAck(ctx context.Context, ack *Heart
 func (d *Daemon) controlPlaneHeartbeatPayload(runtimeID string) protocol.DaemonHeartbeatRequestPayload {
 	return protocol.DaemonHeartbeatRequestPayload{
 		RuntimeID:                 runtimeID,
-		ComputerGeneration:        d.cfg.ComputerGeneration,
 		SupportsBatchImport:       true,
 		SupportsMemoryCuration:    true,
 		ActiveMemoryCurationRunID: d.activeMemoryCurationRun(runtimeID),

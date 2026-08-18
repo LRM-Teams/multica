@@ -420,9 +420,9 @@ func residentMatchesSetupTarget(health map[string]any, cfg cli.CLIConfig) (bool,
 	if err != nil {
 		return false, err
 	}
-	return normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) &&
+	return normalizeAPIBaseURL(fmt.Sprint(health["serverUrl"])) == normalizeAPIBaseURL(target.Origin) &&
 		fmt.Sprint(health["environment"]) == string(target.Environment) &&
-		fmt.Sprint(health["release_channel"]) == string(channel), nil
+		fmt.Sprint(health["releaseChannel"]) == string(channel), nil
 }
 
 func startDaemonAfterSetup(cmd *cobra.Command) error {
@@ -572,7 +572,7 @@ func healthProvesSetupAcceptance(health map[string]any, cfg cli.CLIConfig, works
 	connected, _ := health["connected"].(bool)
 	return health["status"] == "running" &&
 		connected &&
-		normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) &&
+		normalizeAPIBaseURL(fmt.Sprint(health["serverUrl"])) == normalizeAPIBaseURL(target.Origin) &&
 		fmt.Sprint(health["environment"]) == string(target.Environment) &&
 		healthContainsWorkspace(health, workspaceID)
 }

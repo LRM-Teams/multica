@@ -5,7 +5,7 @@ status: accepted
 # Computer service supervises one OS runner per Binding
 
 The Computer owns the desired Binding set. Each wanted Binding has at most one
-generation-fenced, cancelable runner OS process supervised by the resident. It
+identity-fenced, cancelable runner OS process supervised by the resident. It
 is the real execution owner, not a lifetime sentinel. The executable
 `computer __run` is the production runner entrypoint.
 
@@ -22,7 +22,7 @@ Computer process
     └── same isolated execution owners
 ```
 
-This intentionally aligns only Raft v1.0.16's ownership and reconcile model.
+This aligns Raft v1.0.17's ownership, process identity, and reconcile model.
 Raft launches one child per attached Server; Multica launches one OS runner per
 execution per Workspace Binding. One machine owner still supervises N real
 execution owners, matching Raft's service/runner process boundary while
@@ -33,7 +33,7 @@ preserving Binding as Multica's domain term.
 `internal/computer` owns all machine-scoped policy:
 
 - desired Binding reconciliation and runner process start/stop;
-- Runner generation, PID fence, Ready transition, crash budget and backoff;
+- Runner `startIdentity`/PID fence, Ready transition, crash budget and backoff;
 - machine-wide provider-process capacity admission;
 - authenticated child control and diagnostic aggregation routing;
 - cross-child environment-switch and Machine Upgrade prepare/release;
@@ -66,24 +66,24 @@ Reminder cache, or Binding draft/outbox state.
 ## Bootstrap, Ready, and local control
 
 The service constructs one immutable bootstrap value for each runner
-execution. It includes `computer_generation`, `runner_generation`, Workspace
-identity, environment, roots, server URL, and the local service IPC endpoint. It
-deliberately excludes execution credentials; the Binding execution reads its
-scoped credential from the permission-restricted Binding store. The executable
-fallback serializes the same value over stdin.
+execution. It includes `startIdentity`, Workspace identity, environment, roots,
+server URL, and the local service IPC endpoint. It deliberately excludes
+execution credentials; the Binding execution reads its scoped credential from
+the permission-restricted Binding store. The executable fallback serializes the
+same value over stdin.
 
-The service records the generation-fenced execution identity before spawning the
-runner. The execution therefore does not need to poll or register
+The service generates and records the expected start identity before spawning
+the runner. The execution therefore does not need to poll or register
 back through the Unix socket or Windows named pipe. It publishes Ready only after it has:
 
-1. validated the current Binding credential and Computer generation;
+1. validated the current Binding credential and bootstrap identity;
 2. registered its provider Runtime set and reported it to the Host;
 3. constructed its child-local execution owners;
 4. opened the Workspace Runner transport and emitted the real Runner Ready
    frame.
 
 Ready returns the runner IPC endpoint. The service uses that endpoint only
-with the exact generation/PID identity and the machine control token.
+with the exact `startIdentity`/PID identity and the machine control token.
 
 ### Local control transport decision
 
@@ -108,12 +108,14 @@ the Binding child. Existing domain logic stays in `internal/computer` and
 HTTP-shaped adapters to typed RPC handlers. Tests must be written red-first at
 the operation seam before each handler migration.
 
-## Generation fence and crash policy
+## Process identity fence and crash policy
 
-`computer_generation` is the machine resident tenure. `runner_generation` is
-the independent spawn tenure of one Binding slot. Each spawn increments the
-Runner generation; an exit, control request, Runtime report, diagnostic, or
-capacity lease from a previous generation/PID is rejected or ignored.
+Each resident start generates an opaque `serviceGeneration`. Each managed
+runner spawn generates an opaque `startIdentity` before process activation. An
+exit, Ready, control request, Runtime report, diagnostic, or capacity lease
+must match the current Workspace + `startIdentity` + PID; a stale process is
+rejected or ignored. Numeric Computer and runner generations do not exist in
+the current protocol.
 
 Host reconciliation follows the Raft Computer policy:
 
@@ -137,15 +139,20 @@ prepared. Re-registration and rollback convergence are also sent to the child;
 the Host never probes provider CLIs or creates Runtime execution objects.
 
 A successful process replacement stops all Binding executions with the
-Computer process. The successor Computer reconstructs the desired set, waits
-for every real execution Ready, then performs generation/runtime attestation.
+Computer process. The successor Computer reconstructs the accepted managed
+Workspace set, waits for every real execution Ready, then performs service and
+managed-set attestation.
 
 The permission-restricted Host journal is a single Raft-style successor
 handoff marker. It records the request, source version, target version, start
-time, and schema version immediately before activation; it is not a persisted
-multi-phase state machine. A successor reads that journal after restart,
-reconciles the running version, performs the existing Computer-level recovery,
-and then clears the journal.
+time, schema version, `sourceServicePid`, old runner PIDs, and the accepted
+managed Workspace set/revision immediately before activation; it is not a
+persisted multi-phase state machine. A successor reads that journal after
+restart and proves its exact target version, target PID, source PID, non-empty
+`serviceGeneration`, and complete managed set over framed local IPC. The first
+valid proof records `observedTargetGeneration` and `targetServicePid`; a
+replacement target must be observed again. The journal is cleared only after
+the source service and every old runner PID are dead.
 An environment switch uses a distinct child barrier that waits for admitted
 work naturally; it does not reuse Machine Upgrade's terminate-and-drain path.
 
@@ -159,6 +166,6 @@ work naturally; it does not reuse Machine Upgrade's terminate-and-drain path.
   `binding-children/<environment>/<workspace-id>`; machine identity and the
   explicit Binding store remain machine-wide.
 - Normal Computer shutdown drains and stops every runner; crash recovery uses
-  generation-fenced reconciliation rather than in-process lifetime coupling.
+  process-identity-fenced reconciliation rather than in-process lifetime coupling.
 - Message delivery and Activity keep their different contracts: durable
   delivery responsibility is not inferred from best-effort Activity.

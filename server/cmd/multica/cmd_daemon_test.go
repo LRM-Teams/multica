@@ -10,12 +10,12 @@ func TestPrintDaemonStatusIncludesCLIVersion(t *testing.T) {
 	t.Parallel()
 
 	health := map[string]any{
-		"status":      "running",
-		"pid":         float64(1234),
-		"uptime":      "1h2m3s",
-		"cli_version": "v9.9.9",
-		"agents":      []any{"codex"},
-		"workspaces":  []any{"ws-1"},
+		"status":     "running",
+		"pid":        float64(1234),
+		"uptime":     "1h2m3s",
+		"cliVersion": "v9.9.9",
+		"agents":     []any{"codex"},
+		"workspaces": []any{map[string]any{"id": "ws-1"}},
 	}
 
 	var out bytes.Buffer
@@ -38,11 +38,11 @@ func TestPrintDaemonStatusOmitsVersionWhenMissing(t *testing.T) {
 			"workspaces": []any{},
 		},
 		"empty string": {
-			"status":      "running",
-			"pid":         float64(1234),
-			"uptime":      "1h2m3s",
-			"cli_version": "",
-			"workspaces":  []any{},
+			"status":     "running",
+			"pid":        float64(1234),
+			"uptime":     "1h2m3s",
+			"cliVersion": "",
+			"workspaces": []any{},
 		},
 	}
 
@@ -103,12 +103,12 @@ func TestPrintDaemonStatusAlignsValuesWithProfileLabel(t *testing.T) {
 	t.Parallel()
 
 	health := map[string]any{
-		"status":      "running",
-		"pid":         float64(1234),
-		"uptime":      "1h2m3s",
-		"cli_version": "v9.9.9",
-		"agents":      []any{"codex"},
-		"workspaces":  []any{"ws-1"},
+		"status":     "running",
+		"pid":        float64(1234),
+		"uptime":     "1h2m3s",
+		"cliVersion": "v9.9.9",
+		"agents":     []any{"codex"},
+		"workspaces": []any{map[string]any{"id": "ws-1"}},
 	}
 
 	var out bytes.Buffer

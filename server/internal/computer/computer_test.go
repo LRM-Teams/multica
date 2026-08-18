@@ -126,7 +126,7 @@ func TestStatusIsRedactedReadOnlyComputerProjection(t *testing.T) {
 	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{
 			"status": "running", "connected": true, "pid": float64(42),
-			"server_url": "https://api.leagent.me", "environment": "production", "release_channel": "latest",
+			"serverUrl": "https://api.leagent.me", "environment": "production", "releaseChannel": "latest",
 			"agents": []any{"must-not-leak"}, "workspaces": []any{"must-not-drive-status"},
 		}
 	}}
@@ -165,8 +165,8 @@ func TestStatusReportsResidentConfigurationDrift(t *testing.T) {
 	}
 	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{
-			"status": "running", "server_url": "https://api.leagent.me",
-			"environment": "production", "release_channel": "latest",
+			"status": "running", "serverUrl": "https://api.leagent.me",
+			"environment": "production", "releaseChannel": "latest",
 		}
 	}}
 	status := lc.Status()
@@ -316,6 +316,34 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 }
 
 // --- start background already-running guard ---
+
+func TestStartBackgroundRefusesPendingMachineUpgradeHandoff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := WritePendingMachineUpgradeHandoffForTest(RootDir(""), PendingMachineUpgradeHandoff{
+		RequestID: "upgrade-a", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+		SourceServicePID: 101, AcceptedManagedSetRevision: "revision-a",
+		Phase: MachineUpgradePhaseStartingTarget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
+		return map[string]any{"status": "stopped"}
+	}}
+	spawned := false
+	restore := setSpawnResident(func(string, []string, *os.File) (procHandle, error) {
+		spawned = true
+		return &fakeProc{pid: 1}, nil
+	})
+	defer restore()
+	_, err := lc.StartBackground(StartOptions{})
+	if err == nil || !strings.Contains(err.Error(), "Machine Upgrade") {
+		t.Fatalf("StartBackground = %v, want pending handoff error", err)
+	}
+	if spawned {
+		t.Fatal("resident spawned across an active Machine Upgrade handoff")
+	}
+}
 
 func TestStartBackgroundRefusesWhenAlreadyRunning(t *testing.T) {
 	lc := &Lifecycle{}

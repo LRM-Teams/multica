@@ -64,10 +64,10 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 	if value, ok := health["environment"].(string); ok {
 		d.ResidentEnvironment = value
 	}
-	if value, ok := health["server_url"].(string); ok {
+	if value, ok := health["serverUrl"].(string); ok {
 		d.ResidentServiceOrigin = value
 	}
-	if value, ok := health["release_channel"].(string); ok {
+	if value, ok := health["releaseChannel"].(string); ok {
 		d.ResidentPackageSource = packageSourceForReleaseChannel(value)
 	}
 	if d.Resident != "stopped" {

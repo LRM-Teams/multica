@@ -339,7 +339,7 @@ func newComputerUpgradeSubprocessControlServer(t *testing.T) (string, *atomic.In
 	registry := computer.NewLocalControlRegistry()
 	if err := registry.Register(computer.LocalControlServiceStatusOperation,
 		func(context.Context, map[string]string, json.RawMessage) (any, error) {
-			return map[string]string{"status": "running", "daemon_id": "daemon-1"}, nil
+			return map[string]string{"status": "running", "daemonId": "daemon-1"}, nil
 		}); err != nil {
 		t.Fatal(err)
 	}

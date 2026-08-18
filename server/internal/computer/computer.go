@@ -116,7 +116,6 @@ type StartResult struct {
 // actual compatibility command used for the resident child so Cobra/Desktop
 // adapters cannot accidentally create a profile-specific or second resident.
 type StartOptions struct {
-	Generation                     int64
 	DaemonID                       string
 	DeviceName                     string
 	RuntimeName                    string
@@ -133,6 +132,9 @@ const (
 	// ResidentServiceArg is the hidden argv that marks a spawned resident.
 	// Callers never type this; Lifecycle and the supervisor assemble it.
 	ResidentServiceArg = "__service"
+	// ResidentUpgradeArg is the hidden argv for the detached Machine Upgrade
+	// coordinator. The incumbent Computer must not own successor spawn.
+	ResidentUpgradeArg = "__upgrade"
 )
 
 // ResidentServicePrefix is the Computer-owned process contract. Workspace
@@ -158,9 +160,6 @@ func ResidentArgs(options StartOptions) []string {
 	appendString("--daemon-id", options.DaemonID)
 	appendString("--device-name", options.DeviceName)
 	appendString("--runtime-name", options.RuntimeName)
-	if options.Generation > 0 {
-		args = append(args, "--computer-generation", strconv.FormatInt(options.Generation, 10))
-	}
 	appendDuration("--poll-interval", options.PollInterval)
 	appendDuration("--heartbeat-interval", options.HeartbeatInterval)
 	if options.AgentTimeoutSet {
@@ -228,14 +227,6 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	}
 	defer startLease.Close()
 
-	if options.Generation == 0 {
-		generation, err := NewGenerationStore(RootDir("")).Next()
-		if err != nil {
-			return StartResult{}, fmt.Errorf("allocate Computer generation: %w", err)
-		}
-		options.Generation = generation
-	}
-
 	// Already-running guard.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -243,6 +234,11 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	if Alive(health) {
 		pid, _ := health["pid"].(float64)
 		return StartResult{}, fmt.Errorf("already running (pid %v)", int(pid))
+	}
+	if handoff, err := ReadPendingMachineUpgradeHandoff(RootDir("")); err != nil {
+		return StartResult{}, fmt.Errorf("read Computer Machine Upgrade journal: %w", err)
+	} else if handoff != nil {
+		return StartResult{}, fmt.Errorf("Computer Machine Upgrade is in progress")
 	}
 	if _, err := l.Identity(); err != nil {
 		return StartResult{}, fmt.Errorf("resolve Computer identity before start: %w", err)
@@ -399,18 +395,18 @@ func (l *Lifecycle) Status() map[string]any {
 		"log_path":         v.logPath,
 		"pid_path":         v.pidPath,
 	}
-	for _, key := range []string{"status", "pid", "uptime", "cli_version", "connected", "server_url", "environment"} {
+	for _, key := range []string{"status", "pid", "uptime", "cliVersion", "connected", "serverUrl", "environment", "computerId", "daemonId", "activeTaskCount"} {
 		if value, ok := raw[key]; ok {
 			health[key] = value
 		}
 	}
-	if value, ok := raw["server_url"]; ok {
+	if value, ok := raw["serverUrl"]; ok {
 		health["resident_service_origin"] = value
 	}
 	if value, ok := raw["environment"]; ok {
 		health["resident_environment"] = value
 	}
-	if value, ok := raw["release_channel"]; ok {
+	if value, ok := raw["releaseChannel"]; ok {
 		health["resident_package_source"] = packageSourceForReleaseChannel(fmt.Sprint(value))
 	}
 	store := NewIdentityStore(RootDir(""))
@@ -437,9 +433,9 @@ func (l *Lifecycle) Status() map[string]any {
 		health["environment"] = session.Environment
 		health["package_source"] = packageSourceForReleaseChannel(session.ReleaseChannel)
 		if Alive(raw) {
-			health["configuration_drift"] = strings.TrimRight(fmt.Sprint(raw["server_url"]), "/") != strings.TrimRight(session.Origin, "/") ||
+			health["configuration_drift"] = strings.TrimRight(fmt.Sprint(raw["serverUrl"]), "/") != strings.TrimRight(session.Origin, "/") ||
 				fmt.Sprint(raw["environment"]) != session.Environment ||
-				fmt.Sprint(raw["release_channel"]) != session.ReleaseChannel
+				fmt.Sprint(raw["releaseChannel"]) != session.ReleaseChannel
 		}
 	} else {
 		health["session_present"] = false

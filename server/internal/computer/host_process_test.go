@@ -54,10 +54,11 @@ func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
 func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7101)}
 	host, err := NewHost(HostConfig{
-		Spawn: func(workspaceID string, generation int64) (BindingChild, error) {
-			if workspaceID != "workspace-a" || generation != 1 {
-				t.Fatalf("spawn identity = (%q, %d)", workspaceID, generation)
+		Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
+			if workspaceID != "workspace-a" || startIdentity == "" {
+				t.Fatalf("spawn identity = (%q, %q)", workspaceID, startIdentity)
 			}
+			child.workspaceID, child.startIdentity = workspaceID, startIdentity
 			return child, nil
 		},
 		ControlToken: "owner-secret",
@@ -72,10 +73,10 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 		done <- host.RunProcess(ctx, HostProcessConfig{
 			ServiceEndpoint: endpoint,
 			Identity: HostProcessIdentity{
-				ComputerID:         "computer-a",
-				ComputerGeneration: 9,
-				Environment:        "test",
-				Version:            "v1.2.3",
+				ComputerID:        "computer-a",
+				ServiceGeneration: "service-9",
+				Environment:       "test",
+				Version:           "v1.2.3",
 			},
 			DesiredWorkspaceIDs: func() ([]string, error) { return []string{"workspace-a"}, nil },
 		})
@@ -128,7 +129,10 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7201), controlEndpoint: childControl}
 	host, err := NewHost(HostConfig{
-		Spawn: func(string, int64) (BindingChild, error) { return child, nil }, ControlToken: token,
+		Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
+			child.workspaceID, child.startIdentity = workspaceID, startIdentity
+			return child, nil
+		}, ControlToken: token,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -140,15 +144,24 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 		done <- host.RunProcess(ctx, HostProcessConfig{
 			ServiceEndpoint: endpoint,
 			Identity: HostProcessIdentity{
-				ComputerID: "computer-a", ComputerGeneration: 9, Environment: "test",
+				ComputerID: "computer-a", ServiceGeneration: "service-9", Environment: "test",
 				Version: "v1.0.0", ServerURL: upstream.URL,
 			},
 			DesiredWorkspaceIDs: func() ([]string, error) { return []string{"workspace-a"}, nil },
 		})
 	}()
-	waitForHostCurrent(t, host, BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 7201})
+	var record RunnerRecord
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if current, _, ok := host.Snapshot("workspace-a"); ok && current.StartIdentity() != "" {
+			record = current
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	waitForHostCurrent(t, host, BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: record.StartIdentity(), PID: 7201})
 	hostClient := NewHostControlClient(endpoint, token, BindingChildIdentity{
-		WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 7201,
+		WorkspaceID: "workspace-a", StartIdentity: record.StartIdentity(), PID: 7201,
 	})
 	if err := hostClient.ReportRuntimeSet(context.Background(), []map[string]string{{
 		"id": "runtime-a", "workspace_id": "workspace-a", "provider": "pi",

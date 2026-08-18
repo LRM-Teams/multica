@@ -63,6 +63,14 @@ var computerRunnerCmd = &cobra.Command{
 	RunE:   runComputerBindingRunner,
 }
 
+var computerUpgradeCoordinatorCmd = &cobra.Command{
+	Use:    computer.ResidentUpgradeArg,
+	Hidden: true,
+	Short:  "Run the detached Machine Upgrade coordinator",
+	Args:   cobra.NoArgs,
+	RunE:   runComputerUpgradeCoordinator,
+}
+
 var computerStartCmd = &cobra.Command{
 	Use:   "start [/<workspace>]",
 	Short: "Start the resident Computer",
@@ -198,6 +206,7 @@ func init() {
 
 	computerCmd.AddCommand(computerServiceCmd)
 	computerCmd.AddCommand(computerRunnerCmd)
+	computerCmd.AddCommand(computerUpgradeCoordinatorCmd)
 	computerSuperviseCmd.Hidden = true
 	computerCmd.AddCommand(computerSuperviseCmd)
 	computerCmd.AddCommand(computerStartCmd)
@@ -245,7 +254,6 @@ func runBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstr
 	cfg.Environment = bootstrap.Environment
 	cfg.ServerBaseURL = bootstrap.ServerBaseURL
 	cfg.DaemonID = bootstrap.ComputerID
-	cfg.ComputerGeneration = bootstrap.ComputerGeneration
 	cfg.BindingsRoot = bootstrap.BindingsRoot
 	cfg.WorkspacesRoot = bootstrap.WorkspacesRoot
 	controlToken, err := computer.ReadControlToken(bootstrap.Profile)
@@ -253,7 +261,7 @@ func runBindingChild(ctx context.Context, bootstrap computer.BindingChildBootstr
 		return fmt.Errorf("read Computer Host control token: %w", err)
 	}
 	cfg.LocalControlToken = controlToken
-	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID, "runner_generation", bootstrap.RunnerGeneration)
+	logger := logger_pkg.NewLogger("runner").With("workspace_id", bootstrap.WorkspaceID, "start_identity", bootstrap.StartIdentity)
 	return daemon.RunBindingChild(ctx, daemon.BindingChildRunConfig{
 		Daemon: cfg, Bootstrap: bootstrap, Logger: logger, PublishReady: publishReady,
 	})
@@ -268,8 +276,6 @@ func addComputerResidentFlags(cmd *cobra.Command) {
 	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
-	_ = f.MarkHidden("computer-generation")
 }
 
 func requireComputerStoppedForIdentityChange() error {

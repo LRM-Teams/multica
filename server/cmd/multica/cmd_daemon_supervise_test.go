@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 func TestRunningUnderSupervision_DefaultsFalse(t *testing.T) {
@@ -31,6 +33,31 @@ func TestRunningUnderSupervision_TrueOnlyWhenExactMatch(t *testing.T) {
 				t.Fatalf("runningUnderSupervision() with %s=%q = %v, want %v", superviseEnvVar, tc.value, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveSupervisedWorkerPathUsesUpgradeCoordinatorWhenJournalExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path, args, err := resolveSupervisedWorkerPath("/usr/local/bin/multica", []string{"computer", "__service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/usr/local/bin/multica" || strings.Join(args, " ") != "computer __service" {
+		t.Fatalf("idle worker = %s %v", path, args)
+	}
+	if err := computer.WritePendingMachineUpgradeHandoffForTest(computer.RootDir(""), computer.PendingMachineUpgradeHandoff{
+		RequestID: "upgrade-a", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+		SourceServicePID: 101, AcceptedManagedSetRevision: "revision-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path, args, err = resolveSupervisedWorkerPath("/usr/local/bin/multica", []string{"computer", "__service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/usr/local/bin/multica" || strings.Join(args, " ") != "computer __upgrade" {
+		t.Fatalf("handoff worker = %s %v", path, args)
 	}
 }
 

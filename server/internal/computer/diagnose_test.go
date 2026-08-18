@@ -77,11 +77,11 @@ func TestDiagnoseReportsConfigResidentDriftAndPreservedMigrationEvidence(t *test
 	lc := &Lifecycle{}
 	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{
-			"status":          "running",
-			"connected":       true,
-			"environment":     "production",
-			"server_url":      "https://api.leagent.me",
-			"release_channel": "latest",
+			"status":         "running",
+			"connected":      true,
+			"environment":    "production",
+			"serverUrl":      "https://api.leagent.me",
+			"releaseChannel": "latest",
 		}
 	}
 	d := lc.Diagnose()

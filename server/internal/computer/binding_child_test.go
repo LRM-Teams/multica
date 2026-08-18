@@ -98,25 +98,19 @@ func TestStartBindingRunnerRequiresWorkspace(t *testing.T) {
 	}
 }
 
-func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.T) {
+func TestBindingChildBootstrapRoundTripPublishesExactStartIdentity(t *testing.T) {
 	t.Setenv("MULTICA_BINDING_CHILD_HELPER", "ready")
 	bootstrap := BindingChildBootstrap{
-		ProtocolVersion:    BindingChildProtocolVersion,
-		WorkspaceID:        "workspace-a",
-		ComputerID:         "computer-a",
-		ComputerGeneration: 11,
-		RunnerGeneration:   7,
-		Environment:        "test",
-		ServerBaseURL:      "https://test.example.com",
-		ServiceEndpoint:    "unix:///tmp/multica-test-service.sock",
-		BindingsRoot:       "/tmp/computer-a",
-		WorkspacesRoot:     "/tmp/workspaces-a",
+		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: "workspace-a",
+		ComputerID: "computer-a", StartIdentity: "start-7", Environment: "test",
+		ServerBaseURL: "https://test.example.com", ServiceEndpoint: "unix:///tmp/multica-test-service.sock",
+		BindingsRoot: "/tmp/computer-a", WorkspacesRoot: "/tmp/workspaces-a",
 	}
 	raw, err := json.Marshal(bootstrap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"computer_id":"computer-a"`) || strings.Contains(string(raw), `"daemon_id"`) {
+	if !strings.Contains(string(raw), `"computerId":"computer-a"`) || strings.Contains(string(raw), `"computer_id"`) {
 		t.Fatalf("Binding bootstrap identity wire = %s", raw)
 	}
 	child, err := StartBindingProcess(os.Args[0], []string{"-test.run=TestBindingChildProtocolHelper"}, bootstrap)
@@ -132,8 +126,8 @@ func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.
 	if err != nil {
 		t.Fatalf("AwaitReady: %v", err)
 	}
-	if ready.WorkspaceID != bootstrap.WorkspaceID || ready.RunnerGeneration != bootstrap.RunnerGeneration {
-		t.Fatalf("ready identity = %#v, want workspace %q generation %d", ready, bootstrap.WorkspaceID, bootstrap.RunnerGeneration)
+	if ready.WorkspaceID != bootstrap.WorkspaceID || ready.StartIdentity != bootstrap.StartIdentity {
+		t.Fatalf("ready identity = %#v, want workspace %q start %q", ready, bootstrap.WorkspaceID, bootstrap.StartIdentity)
 	}
 	if ready.PID != child.PID() {
 		t.Fatalf("ready pid = %d, want child pid %d", ready.PID, child.PID())
@@ -143,19 +137,13 @@ func TestBindingChildBootstrapRoundTripPublishesExactReadyGeneration(t *testing.
 	}
 }
 
-func TestBindingChildReadyRejectsStaleGeneration(t *testing.T) {
+func TestBindingChildReadyRejectsStaleStartIdentity(t *testing.T) {
 	t.Setenv("MULTICA_BINDING_CHILD_HELPER", "stale")
 	bootstrap := BindingChildBootstrap{
-		ProtocolVersion:    BindingChildProtocolVersion,
-		WorkspaceID:        "workspace-a",
-		ComputerID:         "computer-a",
-		ComputerGeneration: 11,
-		RunnerGeneration:   7,
-		Environment:        "production",
-		ServerBaseURL:      "https://api.leagent.me",
-		ServiceEndpoint:    "unix:///tmp/multica-test-service.sock",
-		BindingsRoot:       "/tmp/computer-a",
-		WorkspacesRoot:     "/tmp/workspaces-a",
+		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: "workspace-a",
+		ComputerID: "computer-a", StartIdentity: "start-7", Environment: "production",
+		ServerBaseURL: "https://api.leagent.me", ServiceEndpoint: "unix:///tmp/multica-test-service.sock",
+		BindingsRoot: "/tmp/computer-a", WorkspacesRoot: "/tmp/workspaces-a",
 	}
 	child, err := StartBindingProcess(os.Args[0], []string{"-test.run=TestBindingChildProtocolHelper"}, bootstrap)
 	if err != nil {
@@ -166,8 +154,8 @@ func TestBindingChildReadyRejectsStaleGeneration(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := child.AwaitReady(ctx); err == nil || !strings.Contains(err.Error(), "runner generation") {
-		t.Fatalf("AwaitReady error = %v, want runner generation rejection", err)
+	if _, err := child.AwaitReady(ctx); err == nil || !strings.Contains(err.Error(), "start identity") {
+		t.Fatalf("AwaitReady error = %v, want start identity rejection", err)
 	}
 	if class := child.Wait(); class != RunnerExitGraceful {
 		t.Fatalf("helper exit class = %s, want graceful", class)
@@ -184,14 +172,12 @@ func TestBindingChildProtocolHelper(t *testing.T) {
 		os.Exit(2)
 	}
 	ready := BindingChildReady{
-		ProtocolVersion:  BindingChildProtocolVersion,
-		WorkspaceID:      bootstrap.WorkspaceID,
-		RunnerGeneration: bootstrap.RunnerGeneration,
-		PID:              os.Getpid(),
-		RunnerEndpoint:   "unix:///tmp/multica-test-runner.sock",
+		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: bootstrap.WorkspaceID,
+		StartIdentity: bootstrap.StartIdentity, PID: os.Getpid(),
+		RunnerEndpoint: "unix:///tmp/multica-test-runner.sock",
 	}
 	if mode == "stale" {
-		ready.RunnerGeneration--
+		ready.StartIdentity = "stale-start"
 	}
 	if err := WriteBindingChildReady(os.Stdout, ready); err != nil {
 		os.Exit(3)

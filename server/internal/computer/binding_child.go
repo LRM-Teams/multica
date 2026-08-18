@@ -24,7 +24,7 @@ type BindingChild interface {
 }
 
 // ReadyBindingChild exposes one Binding execution's real Workspace Runner
-// readiness through the generation-fenced supervision seam.
+// readiness through the identity-fenced supervision seam.
 type ReadyBindingChild interface {
 	BindingChild
 	AwaitReady(context.Context) (BindingChildReady, error)
@@ -144,8 +144,8 @@ func (c *BindingRunner) observeReady(stdout io.ReadCloser) {
 			err = fmt.Errorf("Binding child ready protocol version %d does not match bootstrap %d", ready.ProtocolVersion, c.bootstrap.ProtocolVersion)
 		case strings.TrimSpace(ready.WorkspaceID) != c.bootstrap.WorkspaceID:
 			err = fmt.Errorf("Binding child ready workspace %q does not match bootstrap %q", ready.WorkspaceID, c.bootstrap.WorkspaceID)
-		case ready.RunnerGeneration != c.bootstrap.RunnerGeneration:
-			err = fmt.Errorf("Binding child ready runner generation %d does not match bootstrap %d", ready.RunnerGeneration, c.bootstrap.RunnerGeneration)
+		case ready.StartIdentity != c.bootstrap.StartIdentity:
+			err = fmt.Errorf("Binding child ready start identity does not match bootstrap")
 		case c.cmd == nil || c.cmd.Process == nil || ready.PID != c.cmd.Process.Pid:
 			err = fmt.Errorf("Binding child ready pid %d does not match process", ready.PID)
 		case !validLocalControlEndpoint(ready.RunnerEndpoint):

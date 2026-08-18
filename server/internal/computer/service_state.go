@@ -8,10 +8,10 @@ import (
 )
 
 type persistedServiceState struct {
-	ComputerID         string    `json:"computer_id"`
-	ComputerGeneration int64     `json:"computer_generation"`
-	PID                int       `json:"pid"`
-	StartedAt          time.Time `json:"started_at"`
+	ComputerID        string    `json:"computerId"`
+	ServiceGeneration string    `json:"serviceGeneration"`
+	PID               int       `json:"pid"`
+	StartedAt         time.Time `json:"startedAt"`
 }
 
 func servicePIDPath(root string) string {

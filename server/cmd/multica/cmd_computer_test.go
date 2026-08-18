@@ -126,9 +126,6 @@ func TestComputerServiceCommandIsHiddenResidentEntry(t *testing.T) {
 	if err := computerServiceCmd.Args(computerServiceCmd, []string{"extra"}); err == nil {
 		t.Fatal("computer __service accepts extra arguments")
 	}
-	if flag := computerServiceCmd.Flags().Lookup("computer-generation"); flag == nil {
-		t.Fatal("computer __service is missing --computer-generation")
-	}
 	if !hasSubcommand(computerCmd, computer.ResidentServiceArg) {
 		t.Fatal("computer command is missing the hidden resident entry")
 	}
@@ -146,6 +143,24 @@ func TestComputerRunnerCommandIsHiddenBindingChild(t *testing.T) {
 	}
 	if !hasSubcommand(computerCmd, computer.ResidentRunnerArg) {
 		t.Fatal("computer command is missing the hidden Binding child entry")
+	}
+}
+
+func TestComputerUpgradeCoordinatorCommandIsHidden(t *testing.T) {
+	if got, want := computerUpgradeCoordinatorCmd.Use, computer.ResidentUpgradeArg; got != want {
+		t.Fatalf("computer upgrade coordinator use = %q, want %q", got, want)
+	}
+	if !computerUpgradeCoordinatorCmd.Hidden {
+		t.Fatal("computer __upgrade must stay hidden")
+	}
+	if err := computerUpgradeCoordinatorCmd.Args(computerUpgradeCoordinatorCmd, nil); err != nil {
+		t.Fatalf("computer __upgrade rejects no arguments: %v", err)
+	}
+	if err := computerUpgradeCoordinatorCmd.Args(computerUpgradeCoordinatorCmd, []string{"extra"}); err == nil {
+		t.Fatal("computer __upgrade accepts extra arguments")
+	}
+	if !hasSubcommand(computerCmd, computer.ResidentUpgradeArg) {
+		t.Fatal("computer command is missing the hidden upgrade coordinator entry")
 	}
 }
 

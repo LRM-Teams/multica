@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Agent } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
@@ -22,6 +22,9 @@ export function ResearchDirectorAssignmentPicker({
   const { t } = useT("research");
   const [agentId, setAgentId] = useState(currentAgentId ?? "");
   const [reason, setReason] = useState("");
+  useEffect(() => {
+    setAgentId(currentAgentId ?? "");
+  }, [currentAgentId]);
   const available = agents.filter((agent) => agent.archived_at == null);
   const selected = agentId || currentAgentId || "";
 

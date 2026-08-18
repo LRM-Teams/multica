@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -23,6 +24,8 @@ const (
 	bindingChildRuntimeSetPath      = "/binding-child/runtime-set"
 	bindingChildPrepareUpgradePath  = "/binding-child/prepare-upgrade"
 	bindingChildComputerUpgradePath = "/binding-child/computer-upgrade"
+	bindingChildWorkDigestPath      = "/binding-child/work-digest"
+	bindingChildWorkJournalPath     = "/binding-child/work-journal"
 	bindingChildControlBusyCode     = "control_busy"
 )
 
@@ -51,6 +54,8 @@ type HostControlCallbacks struct {
 	MachineActions  func(context.Context, BindingChildIdentity, json.RawMessage) error
 	PrepareUpgrade  func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
 	ComputerUpgrade func(context.Context, BindingChildIdentity, json.RawMessage) error
+	WorkDigest      func(context.Context, BindingChildIdentity, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
+	WorkJournal     func(context.Context, BindingChildIdentity, protocol.ComputerWorkJournalPayload) (bool, error)
 	Released        func(BindingChildIdentity)
 }
 
@@ -84,6 +89,8 @@ func (control *HostControl) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(bindingChildMachineActionsPath, control.machineActionsHandler())
 	mux.HandleFunc(bindingChildPrepareUpgradePath, control.prepareUpgradeHandler())
 	mux.HandleFunc(bindingChildComputerUpgradePath, control.rawHandler(control.callbacks.ComputerUpgrade))
+	mux.HandleFunc(bindingChildWorkDigestPath, control.workDigestHandler())
+	mux.HandleFunc(bindingChildWorkJournalPath, control.workJournalHandler())
 	mux.HandleFunc(bindingChildRuntimeSetPath, control.runtimeSetHandler())
 }
 
@@ -167,6 +174,46 @@ func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) 
 	register(LocalControlComputerControlOperation, control.rpcRawCallback(registry, LocalControlComputerControlOperation, control.callbacks.MachineActions))
 	register(LocalControlRunnerPrepareOperation, control.rpcPrepareUpgrade)
 	register(LocalControlRunnerReadyOperation, control.rpcRuntimeSet)
+	register(LocalControlWorkDigestOperation, control.rpcWorkDigest)
+	register(LocalControlWorkJournalOperation, control.rpcWorkJournal)
+}
+
+func (control *HostControl) rpcWorkDigest(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	var request struct {
+		Identity BindingChildIdentity               `json:"identity"`
+		Command  protocol.ComputerWorkDigestPayload `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return nil, err
+	}
+	if err := control.decodeRPCIdentity(headers, raw, &request.Identity); err != nil {
+		return nil, err
+	}
+	if control.callbacks.WorkDigest == nil {
+		return nil, errors.New("Computer work journal is unavailable")
+	}
+	return control.callbacks.WorkDigest(ctx, request.Identity, request.Command)
+}
+
+func (control *HostControl) rpcWorkJournal(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	var request struct {
+		Identity BindingChildIdentity                `json:"identity"`
+		Command  protocol.ComputerWorkJournalPayload `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return nil, err
+	}
+	if err := control.decodeRPCIdentity(headers, raw, &request.Identity); err != nil {
+		return nil, err
+	}
+	if control.callbacks.WorkJournal == nil {
+		return nil, errors.New("Computer work journal is unavailable")
+	}
+	enabled, err := control.callbacks.WorkJournal(ctx, request.Identity, request.Command)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]bool{"enabled": enabled}, nil
 }
 
 func (control *HostControl) rpcRawCallback(_ *LocalControlRegistry, _ string, callback func(context.Context, BindingChildIdentity, json.RawMessage) error) LocalControlHandler {
@@ -438,6 +485,60 @@ func (control *HostControl) prepareUpgradeHandler() http.HandlerFunc {
 	}
 }
 
+func (control *HostControl) workDigestHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Identity BindingChildIdentity               `json:"identity"`
+			Command  protocol.ComputerWorkDigestPayload `json:"command"`
+		}
+		if !control.begin(w, r, &request) {
+			return
+		}
+		if !control.current(request.Identity) {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if control.callbacks.WorkDigest == nil {
+			http.Error(w, "Computer work journal is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		digest, err := control.callbacks.WorkDigest(r.Context(), request.Identity, request.Command)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(digest)
+	}
+}
+
+func (control *HostControl) workJournalHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Identity BindingChildIdentity                `json:"identity"`
+			Command  protocol.ComputerWorkJournalPayload `json:"command"`
+		}
+		if !control.begin(w, r, &request) {
+			return
+		}
+		if !control.current(request.Identity) {
+			http.Error(w, "inactive Binding child generation", http.StatusConflict)
+			return
+		}
+		if control.callbacks.WorkJournal == nil {
+			http.Error(w, "Computer work journal is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		enabled, err := control.callbacks.WorkJournal(r.Context(), request.Identity, request.Command)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": enabled})
+	}
+}
+
 func (control *HostControl) rawHandler(callback func(context.Context, BindingChildIdentity, json.RawMessage) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request rawControlRequest
@@ -604,6 +705,36 @@ func (client *HostControlClient) ForwardComputerControl(ctx context.Context, act
 
 func (client *HostControlClient) RequestComputerUpgrade(ctx context.Context, command any) error {
 	return client.postRaw(ctx, bindingChildComputerUpgradePath, command)
+}
+
+func (client *HostControlClient) HarvestWorkDigest(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+	if err := command.Validate(); err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	var digest protocol.WorkDigest
+	if err := client.post(ctx, bindingChildWorkDigestPath, struct {
+		Identity BindingChildIdentity               `json:"identity"`
+		Command  protocol.ComputerWorkDigestPayload `json:"command"`
+	}{Identity: client.identity, Command: command}, &digest); err != nil {
+		return protocol.WorkDigest{}, err
+	}
+	return digest, nil
+}
+
+func (client *HostControlClient) SetWorkJournalEnabled(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
+	if err := command.Validate(); err != nil {
+		return false, err
+	}
+	var out struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := client.post(ctx, bindingChildWorkJournalPath, struct {
+		Identity BindingChildIdentity                `json:"identity"`
+		Command  protocol.ComputerWorkJournalPayload `json:"command"`
+	}{Identity: client.identity, Command: command}, &out); err != nil {
+		return false, err
+	}
+	return out.Enabled, nil
 }
 
 func (client *HostControlClient) ReportRuntimeSet(ctx context.Context, runtimes any, daemonToken, expiresAt string) error {

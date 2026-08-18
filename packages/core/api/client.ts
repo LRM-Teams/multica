@@ -24,6 +24,8 @@ import type {
   CreateAgentDraftRequest,
   AgentCreationDraft,
   EnsureWindyResponse,
+  EnsurePeriodBriefAgentResponse,
+  EnsurePeriodBriefCollectorsResponse,
   AgentTemplate,
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
@@ -253,6 +255,8 @@ import type {
   CreateNoteWritebackRequest,
   CreateNoteRetrospectiveRequest,
   CreateNoteRetrospectiveResponse,
+  CreateNotePeriodBriefRequest,
+  CreateNotePeriodBriefResponse,
   IssueNoteRefListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
@@ -301,6 +305,8 @@ import {
   CloudRuntimeNodeSchema,
   CreateAgentFromTemplateResponseSchema,
   EnsureWindyResponseSchema,
+  EnsurePeriodBriefAgentResponseSchema,
+  EnsurePeriodBriefCollectorsResponseSchema,
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
@@ -313,6 +319,7 @@ import {
   EMPTY_AGENT_RESTART_PREFLIGHT,
   EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_COMPUTER_CONNECTION_LIST,
+  EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -342,6 +349,7 @@ import {
   EMPTY_AGENT_PRESENCE_RESPONSE,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
+  ComputerWorkJournalSettingSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelGoalEnvelopeSchema,
@@ -481,6 +489,8 @@ import {
   EMPTY_NOTE_WRITEBACK_LIST,
   CreateNoteRetrospectiveResponseSchema,
   EMPTY_CREATE_NOTE_RETROSPECTIVE_RESPONSE,
+  CreateNotePeriodBriefResponseSchema,
+  EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1287,6 +1297,19 @@ export class ApiClient {
     });
   }
 
+  async createNotePeriodBrief(data: CreateNotePeriodBriefRequest): Promise<CreateNotePeriodBriefResponse> {
+    // Collectors finish in the background; this call only dispatches and
+    // returns quickly. Keep a modest timeout for proxy/network stalls.
+    const raw = await this.fetch<unknown>("/api/notes/period-briefs", {
+      method: "POST",
+      body: JSON.stringify(data),
+      signal: AbortSignal.timeout(60_000),
+    });
+    return parseWithFallback(raw, CreateNotePeriodBriefResponseSchema, EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE, {
+      endpoint: "POST /api/notes/period-briefs",
+    });
+  }
+
   async listNotePageWritebacks(pageId: string, status?: string): Promise<NoteWritebackListResponse> {
     const query = status ? `?status=${encodeURIComponent(status)}` : "";
     const raw = await this.fetch<unknown>(
@@ -1614,6 +1637,33 @@ export class ApiClient {
     return EnsureWindyResponseSchema.parse(raw);
   }
 
+  async ensurePeriodBriefAgent(
+    runtimeId: string,
+    model: string,
+  ): Promise<EnsurePeriodBriefAgentResponse> {
+    const raw = await this.fetch<unknown>("/api/members/agents/period-brief", {
+      method: "POST",
+      body: JSON.stringify({
+        runtime_id: runtimeId,
+        model,
+      }),
+    });
+    return EnsurePeriodBriefAgentResponseSchema.parse(raw);
+  }
+
+  async ensurePeriodBriefCollectors(model: string): Promise<EnsurePeriodBriefCollectorsResponse> {
+    const raw = await this.fetch<unknown>("/api/members/agents/period-brief-collectors", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    });
+    return parseWithFallback(
+      raw,
+      EnsurePeriodBriefCollectorsResponseSchema,
+      { agents: [], created: [] },
+      { endpoint: "POST /api/members/agents/period-brief-collectors" },
+    );
+  }
+
   async createAgentDraft(data: CreateAgentDraftRequest): Promise<AgentCreationDraft> {
     return this.fetch("/api/members/agents/drafts", {
       method: "POST",
@@ -1859,6 +1909,22 @@ export class ApiClient {
       ComputerConnectionListSchema,
       EMPTY_COMPUTER_CONNECTION_LIST,
       { endpoint: "GET /api/computers" },
+    );
+  }
+
+  async patchComputerWorkJournal(
+    daemonId: string,
+    enabled: boolean,
+  ): Promise<{ enabled: boolean }> {
+    const raw = await this.fetch<unknown>(
+      `/api/computers/${encodeURIComponent(daemonId)}/work-journal`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    );
+    return parseWithFallback(
+      raw,
+      ComputerWorkJournalSettingSchema,
+      EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
+      { endpoint: "PATCH /api/computers/:daemonId/work-journal" },
     );
   }
 
@@ -2965,6 +3031,10 @@ export class ApiClient {
 
   async listAgentSkills(agentId: string): Promise<SkillSummary[]> {
     return this.fetch(`/api/members/agents/${agentId}/skills`);
+  }
+
+  async listAgentProfileSkills(agentId: string): Promise<{ agentId: string; requestId?: string; global: SkillSummary[]; workspace: SkillSummary[] }> {
+    return this.fetch(`/api/agents/${agentId}/skills/profile`);
   }
 
   async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
@@ -5226,19 +5296,7 @@ export class ApiClient {
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-      // Never rewrite a server response's identity into the requested scope.
-      // A mismatched projection is untrusted and must fail closed.
-      return {
-        ...snapshot,
-        workspace_id: workspaceId,
-        run_id: runId,
-        snapshot_id: "",
-        nodes: [],
-        edges: [],
-        density_bins: [],
-        has_more: false,
-        next_cursor: undefined,
-      };
+      throw new Error("Director V6 projection snapshot identity mismatch");
     }
     return snapshot;
   }
@@ -5305,27 +5363,10 @@ export class ApiClient {
     );
     const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
     if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
-      return {
-        ...snapshot,
-        workspace_id: workspaceId,
-        run_id: runId,
-        snapshot_id: validated.snapshot_id,
-        nodes: [],
-        edges: [],
-        density_bins: [],
-        has_more: false,
-        next_cursor: undefined,
-      };
+      throw new Error("Director V6 projection slice identity mismatch");
     }
     if (snapshot.snapshot_id !== validated.snapshot_id) {
-      return {
-        ...snapshot,
-        snapshot_id: validated.snapshot_id,
-        nodes: [],
-        edges: [],
-        density_bins: [],
-        has_more: false,
-      };
+      throw new Error("Director V6 projection slice snapshot mismatch");
     }
     return snapshot;
   }
@@ -5407,7 +5448,7 @@ export class ApiClient {
     );
     const detail = parseResearchV6DirectorNodeDetail(raw);
     if (detail.node.id !== nodeId) {
-      return { ...detail, node: { ...detail.node, id: nodeId } };
+      throw new Error("Director V6 node detail identity mismatch");
     }
     void workspaceId;
     return detail;
@@ -5444,7 +5485,7 @@ export class ApiClient {
     );
     const report = parseResearchV6DirectorReportDetail(raw);
     if (report.id !== reportId) {
-      return { ...report, id: reportId };
+      throw new Error("Director V6 report detail identity mismatch");
     }
     void workspaceId;
     return report;

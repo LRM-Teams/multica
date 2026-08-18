@@ -27,7 +27,7 @@ type TimelineRow struct {
 
 // TimelineRowFromSnapshot is the server-owned presentation for the current
 // replaceable observation. It deliberately has no body: compact and header
-// surfaces must never receive provider detail merely because no narrative
+// surfaces must never receive provider detail merely because no summary
 // Entry accompanied the observation.
 func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRow {
 	summary := ProjectSummary(snapshot)
@@ -94,6 +94,21 @@ var workingDetailLabels = map[string]string{
 	"collaborating": "Collaborating...",
 }
 
+var toolStartDetailKinds = map[string]string{
+	"send_message": "sending_message", "check_messages": "checking_messages", "receive_message": "checking_messages",
+	"wait_for_message": "waiting_for_message", "read_history": "reading_history", "search_messages": "searching_messages",
+	"list_server": "listing_server", "list_tasks": "listing_tasks", "create_tasks": "creating_tasks", "claim_tasks": "claiming_task",
+	"unclaim_task": "unclaiming_task", "update_task_status": "updating_task_status", "add_channel_member": "adding_channel_member",
+	"join_channel": "joining_channel", "leave_channel": "leaving_channel", "upload_file": "uploading_file", "view_file": "viewing_file",
+	"read_file": "reading_file", "write_file": "writing_file", "edit_file": "editing_file", "bash": "running_command",
+	"glob": "searching_files", "grep": "searching_code", "web_fetch": "fetching_url", "web_search": "searching_web",
+	"todo_write": "updating_tasks", "schedule_reminder": "scheduling_reminder", "list_reminders": "listing_reminders",
+	"cancel_reminder": "canceling_reminder", "snooze_reminder": "snoozing_reminder", "update_reminder": "updating_reminder",
+	"log_reminder": "logging_reminder", "collab_tool_call": "collaborating",
+	"list_issues": "listing_issues", "get_issue": "getting_issue", "search_issues": "searching_issues",
+	"list_issue_comments": "listing_issue_comments", "comment_issue": "commenting_issue", "delete_issue_comment": "deleting_issue_comment",
+}
+
 // ActivityKindFromDetailKind is the one server-owned reduction from Raft's
 // execution fact vocabulary to Multica's compact lifecycle vocabulary. The
 // daemon may track an ActivityKind locally for heartbeat scheduling, but that
@@ -147,10 +162,35 @@ func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
 // without exposing raw provider data.
 func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) TimelineRow {
 	row := TimelineRow{Title: summary.Label, Tone: summary.Tone, BodyKind: "generic"}
-	if entry.Kind == "narrative" {
-		var body protocol.AgentActivityNarrativeBody
+	if entry.Kind == "tool_start" {
+		var body protocol.AgentActivityToolStartBody
 		if json.Unmarshal(entry.Body, &body) == nil {
-			return projectNarrativeTimelineRow(body, summary)
+			detailKind := toolStartDetailKinds[body.ToolName]
+			if detailKind == "" {
+				detailKind = "tool_started"
+			}
+			toolSummary := Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
+			if label, ok := workingDetailLabels[detailKind]; ok {
+				toolSummary.Label = label
+			}
+			if detailKind == "running_command" {
+				toolSummary.Tone = "running"
+			}
+			bodyKind := "none"
+			if body.ToolName == "bash" {
+				bodyKind = "command"
+			}
+			row = TimelineRow{Title: strings.TrimSuffix(toolSummary.Label, "..."), Tone: toolSummary.Tone, BodyKind: bodyKind}
+			if body.ToolInput != "" {
+				row.Subtext = boundedText(body.ToolInput)
+			}
+			return row
+		}
+	}
+	if entry.Kind == "status" {
+		var body protocol.AgentActivityStatusBody
+		if json.Unmarshal(entry.Body, &body) == nil {
+			return projectStatusTimelineRow(body, summary)
 		}
 	}
 	if entry.Kind == "system" {
@@ -166,8 +206,8 @@ func ProjectTimelineEntry(entry protocol.AgentActivityEntry, summary Summary) Ti
 	return row
 }
 
-func projectNarrativeTimelineRow(body protocol.AgentActivityNarrativeBody, fallback Summary) TimelineRow {
-	text := boundedText(body.Text)
+func projectStatusTimelineRow(body protocol.AgentActivityStatusBody, fallback Summary) TimelineRow {
+	text := boundedText(body.Detail)
 	if strings.TrimSpace(body.DetailKind) == "" {
 		return TimelineRow{Title: fallback.Label, Subtext: text, Tone: fallback.Tone, BodyKind: "none"}
 	}

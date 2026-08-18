@@ -19,6 +19,7 @@ func TestRaftLocalControlOperationNames(t *testing.T) {
 		LocalControlComputerControlOperation: true, "runner:start": true, "runner:stop": true,
 		"runner:restart": true, LocalControlRunnerDrainOperation: true, LocalControlRunnerReleaseOperation: true, LocalControlRunnerReadyOperation: true,
 		LocalControlRunnerPrepareOperation: true,
+		LocalControlWorkDigestOperation: true, LocalControlWorkJournalOperation: true,
 	}
 	for operation := range want {
 		if _, ok := localControlOperationSpecFor(operation); !ok {

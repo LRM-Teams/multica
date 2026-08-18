@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"gopkg.in/yaml.v3"
 )
@@ -16,7 +17,7 @@ import (
 // skills into the appropriate provider-native location.
 //
 // Claude:      skills → {agentRoot}/.claude/skills/{name}/SKILL.md  (native discovery)
-// Codex:       skills → handled separately in the Agent-scoped codex-home
+// Codex:       skills → {agentRoot}/.agents/skills/{name}/SKILL.md (workspace discovery)
 // OpenCode:    skills → {agentRoot}/.opencode/skills/{name}/SKILL.md  (native discovery)
 // Pi:          skills → {agentRoot}/.pi/skills/{name}/SKILL.md  (native discovery)
 // Cursor:      skills → {agentRoot}/.cursor/skills/{name}/SKILL.md  (native discovery)
@@ -55,11 +56,8 @@ func writeContextFiles(agentRoot, provider string, ctx TaskContextForEnv, manife
 		if err != nil {
 			return fmt.Errorf("resolve skills dir: %w", err)
 		}
-		// Codex skills are written to codex-home in Prepare; skip here.
-		if provider != "codex" {
-			if err := writeSkillFiles(skillsDir, ctx.AgentSkills, manifest); err != nil {
-				return fmt.Errorf("write skill files: %w", err)
-			}
+		if err := writeSkillFiles(skillsDir, ctx.AgentSkills, manifest); err != nil {
+			return fmt.Errorf("write skill files: %w", err)
 		}
 	}
 
@@ -85,10 +83,10 @@ func resolveSkillsDir(agentRoot, provider string, manifest *sidecarManifest) (st
 // it can match the managed skill roots the prior manifest recorded.
 func skillsDirPath(agentRoot, provider string) string {
 	switch provider {
-	case "claude":
+	case agent.ProviderClaude:
 		// Claude Code natively discovers skills from .claude/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".claude", "skills")
-	case "opencode":
+	case agent.ProviderOpenCode:
 		// OpenCode natively discovers project skills from .opencode/skills/ in
 		// the workdir. ConfigPaths.directories() walks up from the discovery
 		// root looking for a bare `.opencode` directory (no opencode.json
@@ -98,17 +96,21 @@ func skillsDirPath(agentRoot, provider string) string {
 		// without those, OpenCode walks from the daemon's inherited PWD and
 		// misses .opencode/skills + AGENTS.md entirely (MUL-2416).
 		return filepath.Join(agentRoot, ".opencode", "skills")
-	case "pi":
+	case agent.ProviderCodex:
+		// Codex follows Raft's split: CODEX_HOME and global skills remain
+		// outside the agent workspace, while assigned skills are workspace-local.
+		return filepath.Join(agentRoot, ".agents", "skills")
+	case agent.ProviderPi:
 		// Pi natively discovers skills from .pi/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".pi", "skills")
-	case "cursor":
+	case agent.ProviderCursor:
 		// Cursor natively discovers skills from .cursor/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".cursor", "skills")
-	case "kiro":
+	case agent.ProviderKiro:
 		// Kiro CLI auto-discovers project-level skills from .kiro/skills/
 		// in the workdir.
 		return filepath.Join(agentRoot, ".kiro", "skills")
-	case "grok":
+	case agent.ProviderGrok:
 		// Grok Build discovers project skills from .grok/skills/ (and
 		// .grok/commands/) under the workdir.
 		return filepath.Join(agentRoot, ".grok", "skills")
@@ -116,6 +118,12 @@ func skillsDirPath(agentRoot, provider string) string {
 		// Fallback: write to .agent_context/skills/ (referenced by meta config).
 		return filepath.Join(agentRoot, ".agent_context", "skills")
 	}
+}
+
+// SkillsDirPath exposes the provider-native workspace skill root to the
+// daemon's profile discovery protocol without duplicating the mapping.
+func SkillsDirPath(agentRoot, provider string) string {
+	return skillsDirPath(agentRoot, provider)
 }
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)

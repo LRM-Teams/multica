@@ -119,7 +119,7 @@ func stagingSignatureOf(storeRoot string) (stagingSignature, error) {
 // degrades retrieval to BM25-only (ErrEmbedNotConfigured, design §5.2).
 // kicker may be nil, in which case the async judge kick is skipped.
 func newGraphMemoryProvider(cfg Config, kicker graphMemoryJudgeKicker, logger *slog.Logger) (*graphMemoryProvider, error) {
-	entry, ok := cfg.Agents["pi"]
+	entry, ok := cfg.Agents[agentpkg.ProviderPi]
 	if !ok || strings.TrimSpace(entry.Path) == "" {
 		return nil, fmt.Errorf("graph memory: no pi CLI configured (MULTICA_PI_PATH)")
 	}
@@ -140,7 +140,7 @@ func newGraphMemoryProvider(cfg Config, kicker graphMemoryJudgeKicker, logger *s
 	}
 
 	retr := memorygraph.NewHybridRetriever(store, cached, memorygraph.DefaultRetrievalConfig())
-	backend, err := agentpkg.New("pi", agentpkg.Config{ExecutablePath: strings.TrimSpace(entry.Path), Logger: logger})
+	backend, err := agentpkg.New(agentpkg.ProviderPi, agentpkg.Config{ExecutablePath: strings.TrimSpace(entry.Path), Logger: logger})
 	if err != nil {
 		return nil, fmt.Errorf("graph memory: pi backend: %w", err)
 	}
@@ -151,7 +151,7 @@ func newGraphMemoryProvider(cfg Config, kicker graphMemoryJudgeKicker, logger *s
 	return &graphMemoryProvider{
 		store:    store,
 		retr:     retr,
-		explorer: memorygraph.NewExplorer(store, retr, backend, explorerCfg, "pi", memorygraph.NewTraceRecorder(cfg.GraphMemoryDir)),
+		explorer: memorygraph.NewExplorer(store, retr, backend, explorerCfg, agentpkg.ProviderPi, memorygraph.NewTraceRecorder(cfg.GraphMemoryDir)),
 		recorder: memorygraph.NewQueryRecorder(store, graphMemoryQueryLogWindow),
 		kicker:   kicker,
 		logger:   logger,

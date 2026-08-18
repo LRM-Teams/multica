@@ -79,7 +79,9 @@ Agent replies that **propose a write** (`note_write` part) after a Worker `note_
 
 The same two actions appear when a chat `note_write` part targets an existing page (`--note-page-id`, or a `/notes/<uuid>` link in the preceding user message).
 
-FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banner.tsx`, `note-worker-reply-actions.tsx`; helpers in `@multica/core/notes/worker-reply-actions`.
+**Period Work Brief (J3-T4):** the channel `note_brief` sticky points at the private `工作介绍/` **folder** (write parent), while the wake prompt / task `note_brief` context still names the **draft Facts** page for `notes get`. Agent `--note-write --note-page-id <folder>` + human **Create child** lands the Brief under the folder — not on the draft.
+
+FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banner.tsx`, `note-worker-reply-actions.tsx`; helpers in `@multica/core/notes/worker-reply-actions` and `@multica/core/notes/period-brief`.
 
 ## Chat → note confirmation (DM and channel)
 

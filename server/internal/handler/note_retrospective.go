@@ -50,17 +50,26 @@ const (
 )
 
 type noteRetrospectiveIssueFact struct {
-	IssueID     string
-	Identifier  string
-	Title       string
-	Action      string
-	Detail      string
-	At          time.Time
-	ActorType   string
-	ActorID     string
-	AgentID     string // for mention when delegated (actor agent or assignee target)
-	AgentName   string
-	Attribution string // hands_on | delegated | related
+	IssueID      string
+	Identifier   string
+	Title        string
+	Action       string
+	Detail       string
+	At           time.Time
+	ActorType    string
+	ActorID      string
+	AgentID      string // for mention when delegated (actor agent or assignee target)
+	AgentName    string
+	Attribution  string // hands_on | delegated | related
+	PullRequests []noteRetrospectivePullRequestFact
+}
+
+// Linked GitHub PR identity for Period Work Facts (no patch / diff body).
+type noteRetrospectivePullRequestFact struct {
+	Number int32
+	URL    string
+	State  string
+	Title  string
 }
 
 type noteRetrospectiveNoteFact struct {

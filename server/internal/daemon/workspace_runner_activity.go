@@ -59,6 +59,30 @@ func (runner *WorkspaceRunner) observeResidentRuntimeReady(agentID, runtimeID st
 	}, "Resident runtime ready")
 }
 
+func (d *Daemon) observeResidentRuntimeStalled(agentID, runtimeID string, staleFor time.Duration) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	runtime, ok := d.runtimeIndex[runtimeID]
+	d.mu.Unlock()
+	if !ok {
+		return
+	}
+	runner := d.currentWorkspaceRunner(runtime.WorkspaceID)
+	if runner == nil {
+		return
+	}
+	launch, found := runner.managedLaunch(agentID, runtimeID)
+	if !found || runner.activity == nil {
+		return
+	}
+	runner.observeActivity(AgentObservation{
+		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStalled,
+		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID, StaleFor: staleFor}, At: time.Now().UTC(),
+	}, "Resident runtime stalled")
+}
+
 // stopManagedAgent owns the complete Raft stop transition. The inactive
 // lifecycle fact must reach the server before the terminal Stopped Activity;
 // only after both have been published may the local Activity state be

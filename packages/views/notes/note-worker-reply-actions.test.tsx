@@ -6,6 +6,10 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
+import {
+  PERIOD_BRIEF_FIXTURE_MARKDOWN,
+  periodBriefLooksStructured,
+} from "@multica/core/notes/period-brief";
 import { renderWithI18n } from "../test/i18n";
 import { NoteWorkerReplyActions } from "./note-worker-reply-actions";
 
@@ -128,5 +132,51 @@ describe("NoteWorkerReplyActions", () => {
         content: "Ship it\n\nDetails here.",
       });
     });
+  });
+
+  it("lands a structured Period Work Brief as a child under 工作介绍/", async () => {
+    expect(periodBriefLooksStructured(PERIOD_BRIEF_FIXTURE_MARKDOWN)).toBe(true);
+    const user = userEvent.setup();
+    const folderId = "folder-work-intro";
+    getNotePage.mockResolvedValue({
+      id: folderId,
+      title: "工作介绍",
+      content: "",
+    });
+    createNotePage.mockResolvedValue({ id: "brief-1", title: "工作介绍 2026-W33", content: "" });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    renderWithI18n(
+      <QueryClientProvider client={qc}>
+        <NoteWorkerReplyActions
+          message={
+            {
+              id: "a1",
+              type: "agent",
+              content: PERIOD_BRIEF_FIXTURE_MARKDOWN,
+              parts: [{ type: "note_write", ref_id: folderId }],
+            } as ChannelMessage
+          }
+          pageId={folderId}
+        />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByTestId("note-worker-create-child"));
+
+    await waitFor(() => {
+      expect(createNotePage).toHaveBeenCalledWith({
+        parent_id: folderId,
+        title: "工作介绍 2026-W33",
+      });
+      expect(updateNotePage).toHaveBeenCalledWith("brief-1", {
+        content: PERIOD_BRIEF_FIXTURE_MARKDOWN.trim(),
+      });
+    });
+    const written = (updateNotePage.mock.calls.find((call) => call[0] === "brief-1")?.[1] as { content?: string })
+      ?.content;
+    expect(written).toBeTruthy();
+    expect(periodBriefLooksStructured(written!)).toBe(true);
   });
 });

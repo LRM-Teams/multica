@@ -36,7 +36,7 @@ describe("Research D5 canonical projection source isolation", () => {
       /const startedStages = directorV6Enabled\s*\? \[\]\s*:\s*RESEARCH_STAGE_ORDER\.filter/,
     );
     expect(source).toMatch(
-      /fallbackName=\{[\s\S]*directorV6Enabled[\s\S]*director_ronaldo/,
+      /fallbackName=\{[\s\S]*directorV6Enabled[\s\S]*assignedDirectorAgent/,
     );
   });
 });

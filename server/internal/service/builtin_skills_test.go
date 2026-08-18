@@ -522,6 +522,60 @@ func TestProjectsSkillCoversProjectOperations(t *testing.T) {
 	}
 }
 
+func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
+	skill, ok := findSkill(t, "multica-period-work-collect")
+	if !ok {
+		return
+	}
+	fm, body, _ := splitFrontmatter(skill.Content)
+
+	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
+		t.Errorf("user-invocable = %q, want false", got)
+	}
+	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(git *)") {
+		t.Errorf("allowed-tools = %q, want git access for OS harvest", got)
+	}
+	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
+		t.Errorf("allowed-tools = %q, want Multica CLI for --note-write", got)
+	}
+
+	mustContain := []string{
+		"collector pack",
+		"$HOME",
+		"Do not",
+		"Host Digest",
+		"--note-write",
+		"## Repos / roots",
+		"## Highlights",
+		"references/collect-recipes.md",
+		"references/period-work-collect-source-map.md",
+		"final Period Work Brief",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(body, want) {
+			t.Errorf("period-work-collect skill missing %q", want)
+		}
+	}
+	if !skillHasFile(skill, "references/collect-recipes.md") {
+		t.Errorf("period-work-collect skill missing collect-recipes.md")
+	}
+	if !skillHasFile(skill, "references/period-work-collect-source-map.md") {
+		t.Errorf("period-work-collect skill missing source map")
+	}
+	recipes := ""
+	for _, f := range skill.Files {
+		if f.Path == "references/collect-recipes.md" {
+			recipes = f.Content
+			break
+		}
+	}
+	for _, want := range []string{"find ", "git -C", "--after=", "status --porcelain", "head -n"} {
+		if !strings.Contains(recipes, want) {
+			t.Errorf("collect-recipes.md missing %q", want)
+		}
+	}
+}
+
 func findSkill(t *testing.T, name string) (AgentSkillData, bool) {
 	t.Helper()
 	for _, s := range loadBuiltinSkills() {

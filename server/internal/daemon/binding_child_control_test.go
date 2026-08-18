@@ -213,6 +213,28 @@ func TestStandaloneDaemonIgnoresConnectSocketUpgrade(t *testing.T) {
 	}
 }
 
+func TestBindingChildHarvestsWorkDigestFromHostNotUpgradePayload(t *testing.T) {
+	const controlToken = "host-control-token"
+	host := newBindingControlTestHost(t, controlToken, 0, computer.HostControlCallbacks{})
+	installLiveBindingChild(t, host, "workspace-a", 101)
+	serverURL := localHostControlRPC(t, host.host)
+
+	child := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	child.bindingHostControl = newBindingHostControlClient(serverURL, controlToken, bindingChildControlIdentity{
+		WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 101,
+	})
+	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
+	digest, err := child.handleComputerWorkDigestCommand(context.Background(), protocol.ComputerWorkDigestPayload{
+		RequestID: "digest-1", Start: start, End: start.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("work digest command: %v", err)
+	}
+	if !digest.Disabled || len(digest.Repos) != 0 {
+		t.Fatalf("default journal digest %+v", digest)
+	}
+}
+
 func TestBindingChildForwardsConnectSocketUpgradeToService(t *testing.T) {
 	t.Skip("integration fixture does not establish the generation-fenced service callback")
 	executed := make(chan protocol.ComputerUpgradePayload, 1)

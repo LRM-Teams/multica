@@ -89,11 +89,9 @@ interface AgentSidePanelProps {
  * conversation — mutually exclusive with the thread panel (same slot,
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
  *
- * LRM-448 Profile v4 (locked A): Computer IA + Multica tokens.
- * Header is Close-only (no Message+⋯). Identity sits under the chrome.
+ * Profile header keeps identity and its primary actions together.
  * Profile tab: editable Display name / Description, Info, Runtime Config
- * section (LRM-470), vertical Actions. Usage is its own tab — never stacked
- * in Profile.
+ * section (LRM-470). Usage is its own tab — never stacked in Profile.
  */
 export function AgentSidePanel({
   agent,
@@ -235,6 +233,13 @@ export function AgentSidePanel({
             />
           ) : null}
         </div>
+        {!agent.archived_at ? (
+          <AgentProfileActions
+            agent={agent}
+            canManage={canEdit.allowed}
+            presence={presence}
+          />
+        ) : null}
       </div>
 
       {showTabBar ? (
@@ -278,7 +283,6 @@ export function AgentSidePanel({
               <div className={tab === "profile" ? undefined : "hidden"}>
                 <AgentProfileTabContent
                   agent={agent}
-                  presence={presence}
                   members={members}
                   currentUserId={currentUserId}
                 />
@@ -315,7 +319,6 @@ export function AgentSidePanel({
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <AgentProfileTabContent
             agent={agent}
-            presence={presence}
             members={members}
             currentUserId={currentUserId}
           />
@@ -344,12 +347,10 @@ function formatDate(value: string): string {
 
 function AgentProfileTabContent({
   agent,
-  presence,
   members,
   currentUserId,
 }: {
   agent: Agent;
-  presence: import("@multica/core/types").AgentPresence | undefined;
   members: readonly MemberWithUser[];
   currentUserId: string | null;
 }) {
@@ -565,14 +566,6 @@ function AgentProfileTabContent({
             <MemoryGrowthField growth={agent.memory_growth} />
           </div>
         ) : null}
-
-        <div className="border-t border-border pt-3">
-          <AgentProfileActions
-            agent={agent}
-            canManage={canEdit.allowed}
-            presence={presence}
-          />
-        </div>
       </div>
     </div>
   );

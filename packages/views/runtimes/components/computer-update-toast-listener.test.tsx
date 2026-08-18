@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRuntime } from "@multica/core/types";
+import { useComputerUpgradeStore } from "@multica/core/runtimes";
 import { renderWithI18n } from "../../test/i18n";
 import { ComputerUpdateToastListener } from "./computer-update-toast-listener";
 
@@ -82,11 +83,10 @@ describe("ComputerUpdateToastListener", () => {
     mocks.toastCustom.mockReset();
     mocks.toastDismiss.mockReset();
     mocks.initiateMachineUpgrade.mockReset();
-    mocks.initiateMachineUpgrade.mockImplementation(
-      () => new Promise(() => {}),
-    );
+    mocks.initiateMachineUpgrade.mockResolvedValue({});
     mocks.invalidateQueries.mockReset();
     mocks.wsHandlers.clear();
+    useComputerUpgradeStore.getState().reset();
     window.localStorage.clear();
   });
 
@@ -125,7 +125,9 @@ describe("ComputerUpdateToastListener", () => {
     render(renderPrompt("computer-update:s143"));
     await user.click(screen.getByRole("button", { name: "Update now" }));
 
-    await waitFor(() => expect(mocks.toastCustom).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(mocks.initiateMachineUpgrade).toHaveBeenCalled(),
+    );
 
     mocks.runtimes = [
       {

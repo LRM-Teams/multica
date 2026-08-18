@@ -42,6 +42,11 @@ type ToastCopy = {
   versionUnknown: string;
   progressPending: string;
   progressRunning: string;
+  progressDownloading: string;
+  progressVerifying: string;
+  progressApplying: string;
+  progressRestarting: string;
+  progressReady: string;
   failedGeneric: string;
   pinned: string;
   promptTitle: (name: string) => string;
@@ -88,6 +93,9 @@ export function ComputerUpdateToastListener() {
     enabled: !!wsId,
   });
 
+  const runtimesRef = useRef(runtimes);
+  runtimesRef.current = runtimes;
+
   const upgrades = useAllComputerUpgrades();
 
   /** toastId → last published content key (skip identical re-push). */
@@ -121,6 +129,11 @@ export function ComputerUpdateToastListener() {
       versionUnknown: t(($) => $.computer_update.version_unknown),
       progressPending: t(($) => $.computer_update.progress_pending),
       progressRunning: t(($) => $.computer_update.progress_running),
+      progressDownloading: t(($) => $.computer_update.progress_downloading),
+      progressVerifying: t(($) => $.computer_update.progress_verifying),
+      progressApplying: t(($) => $.computer_update.progress_applying),
+      progressRestarting: t(($) => $.computer_update.progress_restarting),
+      progressReady: t(($) => $.computer_update.progress_ready),
       failedGeneric: t(($) => $.computer_update.failed_generic),
       pinned: t(($) => $.computer_update.pinned),
       promptTitle: (name) =>
@@ -270,6 +283,41 @@ export function ComputerUpdateToastListener() {
 
       for (const upgrade of Object.values(currentUpgrades)) {
         if (upgrade.phase === "pending" || upgrade.phase === "running") {
+          const runtime = runtimesRef.current?.find(
+            (r) =>
+              (r.daemon_id && r.daemon_id === upgrade.daemonId) ||
+              r.id === upgrade.runtimeId ||
+              r.name === upgrade.machineKey,
+          );
+          const reachedTarget =
+            runtime &&
+            upgrade.targetVersion &&
+            (runtime.current_version === upgrade.targetVersion ||
+              `v${runtime.current_version}` === upgrade.targetVersion ||
+              runtime.current_version === upgrade.targetVersion.replace(/^v/, ""));
+
+          if (reachedTarget) {
+            useComputerUpgradeStore.getState().recordDone({
+              computer_id: upgrade.daemonId,
+              ok: true,
+              newVersion: runtime.current_version ?? undefined,
+            });
+            const machineKey = upgrade.machineKey || upgrade.daemonId;
+            upsertToast(machineKey, "success", {
+              title: c.successTitle(upgrade.machineTitle || upgrade.daemonId),
+              versionLine: c.successBody(upgrade.targetVersion),
+            });
+            if (storage && wsId && upgrade.targetVersion) {
+              dismissComputerUpdate(
+                storage,
+                wsId,
+                machineKey,
+                upgrade.targetVersion,
+              );
+            }
+            continue;
+          }
+
           upsertToast(upgrade.machineKey, "updating", {
             title: c.updatingTitle(upgrade.machineTitle || upgrade.daemonId),
             progressLabel:
@@ -364,7 +412,37 @@ export function ComputerUpdateToastListener() {
 
   useWSEvent("computer:upgrade:progress", (raw) => {
     const payload = raw as ComputerUpgradeProgressPayload;
-    useComputerUpgradeStore.getState().recordProgress(payload);
+    let label: string | null = payload.message ?? null;
+    if (!label && payload.phase) {
+      const c = copyRef.current;
+      switch (payload.phase) {
+        case "pending":
+          label = c.progressPending;
+          break;
+        case "downloading":
+          label = c.progressDownloading;
+          break;
+        case "verifying":
+          label = c.progressVerifying;
+          break;
+        case "applying":
+          label = c.progressApplying;
+          break;
+        case "restarting":
+          label = c.progressRestarting;
+          break;
+        case "ready":
+          label = c.progressReady;
+          break;
+        default:
+          label = c.progressRunning;
+          break;
+      }
+    }
+    useComputerUpgradeStore.getState().recordProgress({
+      ...payload,
+      message: label ?? undefined,
+    });
   });
 
   useWSEvent("computer:upgrade:done", (raw) => {

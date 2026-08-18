@@ -79,7 +79,7 @@ const RESOURCES = {
     delete_failed_toast: "Delete failed",
   },
   restart_modal: {
-    trigger: "Restart…",
+    trigger: "Restart/Reset",
   },
 };
 
@@ -195,13 +195,22 @@ describe("AgentProfileActions", () => {
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
   });
 
-  it("keeps Restart and reset choices separate from the Start/Stop lifecycle action", () => {
+  it("renders Message plus compact icon-only lifecycle, Restart/Reset, and Delete controls", () => {
     render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
-    expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
-    expect(screen.getByTestId("agent-profile-action-start")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("agent-profile-action-restart"));
+    expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
+
+    const lifecycle = screen.getByRole("button", { name: "Start Agent" });
+    const restart = screen.getByRole("button", { name: "Restart/Reset" });
+    const deleteButton = screen.getByRole("button", { name: "Delete" });
+    expect(lifecycle).not.toHaveTextContent("Start Agent");
+    expect(restart).not.toHaveTextContent("Restart/Reset");
+    expect(deleteButton).not.toHaveTextContent("Delete");
+    expect(lifecycle.className).toMatch(/size-7/);
+    expect(restart.className).toMatch(/size-7/);
+    expect(deleteButton.className).toMatch(/size-7/);
+
+    fireEvent.click(restart);
     expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");
-    expect(screen.getByTestId("agent-profile-action-delete")).toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-stop")).not.toBeInTheDocument();
     expect(screen.queryByText("Stop all")).not.toBeInTheDocument();
   });
@@ -212,10 +221,10 @@ describe("AgentProfileActions", () => {
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
   });
 
-  it("Delete is the only solid destructive in a border-t danger zone (LRM-593 lock A)", () => {
+  it("keeps Delete as the only solid destructive header action", () => {
     render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     const del = screen.getByTestId("agent-profile-action-delete");
     expect(del.className).toMatch(/text-white/);
-    expect(del.parentElement?.className).toMatch(/border-t/);
+    expect(del.className).toMatch(/bg-destructive/);
   });
 });

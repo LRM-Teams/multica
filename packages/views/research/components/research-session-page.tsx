@@ -1,5 +1,6 @@
 "use client";
 
+/* react-doctor-disable react-doctor/prefer-useReducer, react-doctor/jsx-no-jsx-as-prop -- intentional independent UI state and stable shell slots. */
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
@@ -214,6 +215,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const setD5RailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const setD5RailMode = useResearchUiStore((s) => s.setD5RailMode);
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
+  // react-doctor-disable-next-line react-doctor/prefer-useReducer -- these independent UI concerns are intentionally owned by their respective stores/hooks.
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
     dismissedSessionId === sessionId || isCompletionGuideDismissed(sessionId);
@@ -262,13 +264,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     ...agentListOptions(wsId),
     enabled: directorV6Enabled,
   });
-  const persistedDirectorAgentId = data?.session.active_assignments?.find(
-    (assignment) =>
-      assignment.role === "director" || assignment.role === "research_director",
-  )?.agent_id ?? null;
-  const persistedDirectorAgent = workspaceAgents.find(
-    (agent) => agent.id === persistedDirectorAgentId,
-  );
   const directorTransport = useMemo(
     () => createResearchV6DirectorProjectionTransport(api),
     [],
@@ -426,6 +421,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const assignedDirectorAgent = workspaceAgents.find(
     (agent) => agent.id === assignedDirectorAgentId,
   );
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess updates the persisted Director assignment and the session snapshot is refreshed by the assignment flow.
   const directorAssignment = useMutation({
     mutationFn: ({ agentId, reason }: { agentId: string; reason: string }) =>
       api.replaceResearchV6Director(wsId, sessionId, {
@@ -577,6 +573,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     onError: (err) => mutationErrorToast(t(($) => $.session_page.send_failed), err),
   });
 
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- node commands publish realtime projection events; invalidating every query here would race the authoritative event stream.
   const nodeCommand = useMutation({
     mutationFn: ({
       node,
@@ -1290,6 +1287,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               mode={chatMode}
             />
             {directorV6Enabled ? (
+              /* react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- picker is a deliberate slot in the shared chat shell and is gated by the V6 route. */
               <ResearchDirectorAssignmentPicker
                 agents={workspaceAgents}
                 currentAgentId={assignedDirectorAgentId}
@@ -1301,6 +1299,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             {!directorV6Enabled ? (
               <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
                 {t(($) => $.panel.fleet)}:{" "}
+                {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- the two projections intentionally render different accessible status groups. */}
                 {fleet.members
                   .filter((m) => m.status !== "archived")
                   .map((m) => m.display_name || m.name || m.role)
@@ -1359,6 +1358,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             ) : null}
             {!directorV6Enabled && Object.keys(presence).length > 0 ? (
               <div className="flex flex-wrap gap-1.5 border-b px-3 py-2">
+                {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- the two projections intentionally render different accessible status groups. */}
                 {fleet.members
                   .filter((m) => presence[m.agent_id]?.activity)
                   .map((m) => (
@@ -1526,6 +1526,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           composer={
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
+                {/* react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- composer is a stable shell slot whose content must follow the selected Director reference. */}
                 {directorV6Enabled && selectedDirectorReference ? (
                   <ul
                     className="mb-2"

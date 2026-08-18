@@ -3,7 +3,9 @@
     "rules": [
       "react-doctor/no-barrel-import",
       "react-doctor/no-giant-component",
-      "react-doctor/nextjs-no-img-element"
+      "react-doctor/nextjs-no-img-element",
+      "react-doctor/prefer-useReducer",
+      "react-doctor/jsx-no-jsx-as-prop"
     ]
   }
 }

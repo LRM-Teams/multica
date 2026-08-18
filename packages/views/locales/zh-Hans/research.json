@@ -13,6 +13,7 @@
   "empty_cta": "开始第一次调研",
   "goal_placeholder": "你想调研什么？（只需说目标，不必指定网站）",
   "start": "开始调研",
+  "reason": "原因",
   "status": {
     "drafting": "草稿",
     "running": "进行中",

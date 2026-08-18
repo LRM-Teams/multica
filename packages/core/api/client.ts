@@ -5329,7 +5329,9 @@ export class ApiClient {
       { endpoint: "PUT Director V6 assignment" },
     );
     if (parsed === null) return null;
-    if (parsed.workspace_id !== workspaceId || parsed.run_id !== runId) return null;
+    if (parsed.workspace_id !== workspaceId || parsed.run_id !== runId) {
+      throw new Error("Director V6 assignment identity mismatch");
+    }
     return {
       id: parsed.id,
       workspaceId: parsed.workspace_id,

@@ -263,6 +263,10 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	if err != nil {
 		return StartResult{}, fmt.Errorf("open log file %s: %w", logPath, err)
 	}
+	if err := os.MkdirAll(filepath.Dir(v.pidPath), 0o700); err != nil {
+		logFile.Close()
+		return StartResult{}, fmt.Errorf("create PID directory: %w", err)
+	}
 
 	child, err := spawnResident(exePath, ResidentArgs(options), logFile)
 	logFile.Close()

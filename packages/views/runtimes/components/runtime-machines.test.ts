@@ -64,6 +64,9 @@ describe("runtime machine grouping", () => {
           owner_id: "user-1",
           connected: true,
           last_seen_at: new Date(NOW - 5_000).toISOString(),
+          deviceName: "ubuntu-build-host",
+          os: "linux",
+          cliVersion: "0.4.24-alpha.91",
         },
       ],
     });
@@ -76,6 +79,10 @@ describe("runtime machine grouping", () => {
       issueCount: 0,
       runtimes: [],
       ownerUserId: "user-1",
+      title: "ubuntu-build-host",
+      deviceName: "ubuntu-build-host",
+      os: "linux",
+      cliVersion: "0.4.24-alpha.91",
     });
     expect(isMineMachine(machines[0]!, "user-1")).toBe(true);
   });

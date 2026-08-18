@@ -1027,9 +1027,17 @@ describe("ComputerConnectionSchema", () => {
         owner_id: "user-1",
         connected: true,
         last_seen_at: "2026-08-17T00:00:00Z",
+        deviceName: "ubuntu-build-host",
+        os: "linux",
+        cliVersion: "0.4.24-alpha.91",
         work_journal_enabled: true,
-      }).work_journal_enabled,
-    ).toBe(true);
+      }),
+    ).toMatchObject({
+      deviceName: "ubuntu-build-host",
+      os: "linux",
+      cliVersion: "0.4.24-alpha.91",
+      work_journal_enabled: true,
+    });
   });
 
   it("falls back the list when the body is malformed", () => {

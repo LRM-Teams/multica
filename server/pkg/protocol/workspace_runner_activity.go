@@ -97,6 +97,9 @@ const (
 type WorkspaceRunnerReadyPayload struct {
 	WorkspaceID        string   `json:"workspaceId"`
 	DaemonInstanceID   string   `json:"daemonInstanceId"`
+	DeviceName         string   `json:"deviceName,omitempty"`
+	OS                 string   `json:"os,omitempty"`
+	CLIVersion         string   `json:"cliVersion,omitempty"`
 	ActiveCapabilities []string `json:"activeCapabilities,omitempty"`
 	RunningAgents      []string `json:"runningAgents,omitempty"`
 }

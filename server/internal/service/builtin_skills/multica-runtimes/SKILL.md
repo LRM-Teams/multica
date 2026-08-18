@@ -94,6 +94,10 @@ multica computer logs       # tail the resident service log
 multica computer doctor     # read-only diagnostics (--fix only clears a confirmed-stopped stale PID)
 ```
 
+Computer identity metadata (device name, OS, and CLI version) belongs to the
+Computer connection and remains visible even when no provider Runtime is
+installed.
+
 The service environment determines the package source: production uses stable
 packages, while test uses preview packages. Production uses `https://www.leagent.me`
 for the app and `https://api.leagent.me` for API/auth/WebSocket. Test requires
@@ -117,7 +121,8 @@ different environment from the active one, it asks before changing config or
 restarting; `--yes` is reserved for automation that already accepted the switch.
 A successful setup activates the target environment, establishes the selected
 Workspace connection, and starts the resident, so `config use` is not an extra
-setup step.
+setup step. Repeating setup for the same Computer and Workspace repairs the
+existing connection and completes without creating a duplicate.
 
 Workspace connections are keyed locally by `(environment, workspace_id)`, so
 the same Computer can retain connections from both databases. One resident

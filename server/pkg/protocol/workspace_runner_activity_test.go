@@ -12,6 +12,7 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 	values := []any{
 		WorkspaceRunnerReadyPayload{
 			WorkspaceID: "workspace-1", DaemonInstanceID: "daemon-instance-1",
+			DeviceName: "ubuntu-build-host", OS: "linux", CLIVersion: "0.4.24-alpha.91",
 			ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAgentProcess},
 			RunningAgents:      []string{"agent-1"},
 		},
@@ -47,12 +48,12 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		encoded.Write(data)
 	}
 	wire := encoded.String()
-	for _, field := range []string{`"workspaceId"`, `"daemonInstanceId"`, `"runningAgents"`, `"launchId"`, `"queueState"`, `"clientSeq"`, `"producerFactId"`, `"observedAtMs"`, `"probeId"`, `"requestId"`, `"targetVersion"`, `"newVersion"`} {
+	for _, field := range []string{`"workspaceId"`, `"daemonInstanceId"`, `"deviceName"`, `"cliVersion"`, `"runningAgents"`, `"launchId"`, `"queueState"`, `"clientSeq"`, `"producerFactId"`, `"observedAtMs"`, `"probeId"`, `"requestId"`, `"targetVersion"`, `"newVersion"`} {
 		if !strings.Contains(wire, field) {
 			t.Fatalf("runner Activity wire %s does not contain %s", wire, field)
 		}
 	}
-	for _, field := range []string{`"workspace_id"`, `"daemon_instance_id"`, `"start_dispatch_id"`, `"launch_id"`, `"client_sequence"`, `"producer_fact_id"`, `"request_id"`, `"target_version"`, `"new_version"`} {
+	for _, field := range []string{`"workspace_id"`, `"daemon_instance_id"`, `"device_name"`, `"cli_version"`, `"start_dispatch_id"`, `"launch_id"`, `"client_sequence"`, `"producer_fact_id"`, `"request_id"`, `"target_version"`, `"new_version"`} {
 		if strings.Contains(wire, field) {
 			t.Fatalf("runner Activity wire %s contains HTTP field %s", wire, field)
 		}

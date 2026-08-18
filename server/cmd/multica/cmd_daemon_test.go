@@ -15,7 +15,7 @@ func TestPrintDaemonStatusIncludesCLIVersion(t *testing.T) {
 		"uptime":      "1h2m3s",
 		"cli_version": "v9.9.9",
 		"agents":      []any{"codex"},
-		"workspaces":  []any{map[string]any{"id": "ws-1"}},
+		"workspaces":  []any{"ws-1"},
 	}
 
 	var out bytes.Buffer
@@ -108,7 +108,7 @@ func TestPrintDaemonStatusAlignsValuesWithProfileLabel(t *testing.T) {
 		"uptime":      "1h2m3s",
 		"cli_version": "v9.9.9",
 		"agents":      []any{"codex"},
-		"workspaces":  []any{map[string]any{"id": "ws-1"}},
+		"workspaces":  []any{"ws-1"},
 	}
 
 	var out bytes.Buffer

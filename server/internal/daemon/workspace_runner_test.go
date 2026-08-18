@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
@@ -81,7 +82,7 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 		observations <- observation{ready: ready, pong: pong}
 	}))
 	defer server.Close()
-	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", DeviceName: "ubuntu-build-host", CLIVersion: "0.4.24-alpha.91"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runnerInstanceID = "instance-1"
 	d.client.SetWorkspaceDaemonToken("workspace-1", "workspace-token", time.Now().Add(time.Minute))
 	runner, err := d.newWorkspaceRunner("workspace-1")
@@ -94,7 +95,7 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		select {
 		case got := <-observations:
-			if got.ready.WorkspaceID != "workspace-1" || got.ready.DaemonInstanceID != "instance-1" || got.pong.PingID != "ping-1" {
+			if got.ready.WorkspaceID != "workspace-1" || got.ready.DaemonInstanceID != "instance-1" || got.ready.DeviceName != "ubuntu-build-host" || got.ready.OS != normalizeGOOS(runtime.GOOS) || got.ready.CLIVersion != "0.4.24-alpha.91" || got.pong.PingID != "ping-1" {
 				t.Fatalf("reconnect observation = %+v", got)
 			}
 			capabilities := make(map[string]bool, len(got.ready.ActiveCapabilities))

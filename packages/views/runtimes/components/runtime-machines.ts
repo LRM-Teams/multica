@@ -538,15 +538,16 @@ function finalizeRuntimeMachine(
     isCurrent,
     localMachineName: options.localMachineName,
   });
+  const connectionDeviceName = draft.connection?.deviceName?.trim() || null;
   const title =
     runtimes.length === 0 && draft.daemonId
       ? isCurrent && options.localMachineName
         ? options.localMachineName
-        : `Computer ${shortDaemonId(draft.daemonId)}`
+        : connectionDeviceName || `Computer ${shortDaemonId(draft.daemonId)}`
       : runtimeTitle;
   const deviceInfo = first ? formatDeviceInfo(first.device_info ?? null) : null;
-  const deviceName = machineDeviceName(runtimes);
-  const os = machineOperatingSystem(runtimes);
+  const deviceName = machineDeviceName(runtimes) ?? connectionDeviceName;
+  const os = machineOperatingSystem(runtimes) ?? (draft.connection?.os?.trim() || null);
   const subtitle = machineSubtitle({
     title,
     deviceInfo,
@@ -597,7 +598,8 @@ function finalizeRuntimeMachine(
     deviceInfo,
     deviceName,
     os,
-    cliVersion: commonCliVersion(runtimes),
+    cliVersion:
+      commonCliVersion(runtimes) ?? (draft.connection?.cliVersion?.trim() || null),
     mode: draft.mode,
     section: isCurrent ? "local" : draft.mode === "cloud" ? "cloud" : "remote",
     isCurrent,

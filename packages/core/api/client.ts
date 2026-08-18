@@ -4098,7 +4098,9 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(input),
     });
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<
+      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
+    >(
       raw,
       CreateVoiceCallResponseSchema,
       EMPTY_CREATE_VOICE_CALL_RESPONSE,

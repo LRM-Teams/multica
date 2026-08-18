@@ -16,6 +16,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 func (d *Daemon) sharedSkillsSyncLoop(ctx context.Context) {
@@ -221,7 +222,7 @@ func sharedSkillScanRoot(cfg Config, provider string) (string, bool) {
 		return "", false
 	}
 	switch provider {
-	case "pi":
+	case agent.ProviderPi:
 		return filepath.Join(home, ".pi", "share", "skills"), true
 	default:
 		return "", false

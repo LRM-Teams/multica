@@ -17,7 +17,6 @@ func TestNewRejectsRemovedHermesProviderName(t *testing.T) {
 	}
 }
 
-
 // ── extractACPSessionID ──
 
 func TestExtractACPSessionID(t *testing.T) {
@@ -941,10 +940,9 @@ func TestACPClientHandleToolCallComplete(t *testing.T) {
 //     JSON character-by-character ("{", "{\"command", …)
 //  3. tool_call_update status=completed carrying the command's stdout
 //
-// The client must defer MessageToolUse until we have the full args so
-// the UI doesn't show a command like `{"comma` — and the MessageToolUse
-// must carry the parsed args as the Input map (`{"command": "echo hi"}`
-// → Input["command"] = "echo hi") rather than a raw string.
+// The client must emit MessageToolUse at the tool_call boundary, even when
+// arguments are streamed separately. Later updates must not duplicate the
+// start; completed input is still reconstructed for the result path.
 func TestACPClientKimiStreamingToolCall(t *testing.T) {
 	t.Parallel()
 
@@ -958,8 +956,8 @@ func TestACPClientKimiStreamingToolCall(t *testing.T) {
 
 	// 1. tool_call: empty content (classic kimi start frame).
 	c.handleLine(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"tool_call","toolCallId":"tc-kimi-1","title":"Shell","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":""}}]}}}`)
-	if len(got) != 0 {
-		t.Fatalf("expected nothing emitted yet (args empty), got %+v", got)
+	if len(got) != 1 || got[0].Type != MessageToolUse || len(got[0].Input) != 0 {
+		t.Fatalf("expected immediate empty ToolUse, got %+v", got)
 	}
 
 	// 2. Streaming updates — cumulative args JSON.
@@ -976,8 +974,8 @@ func TestACPClientKimiStreamingToolCall(t *testing.T) {
 		line := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-kimi-1","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":` + string(argsJSON) + `}}]}}}`
 		c.handleLine(line)
 	}
-	if len(got) != 0 {
-		t.Fatalf("expected nothing emitted mid-stream, got %+v", got)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one ToolUse mid-stream, got %+v", got)
 	}
 
 	// 3. Completed — stdout.
@@ -991,9 +989,6 @@ func TestACPClientKimiStreamingToolCall(t *testing.T) {
 	}
 	if got[0].CallID != "tc-kimi-1" {
 		t.Errorf("first.callID: got %q", got[0].CallID)
-	}
-	if cmd, _ := got[0].Input["command"].(string); cmd != "echo hi" {
-		t.Errorf("first.Input.command: got %v, want %q", got[0].Input["command"], "echo hi")
 	}
 	if got[1].Type != MessageToolResult {
 		t.Errorf("second message: got %v, want MessageToolResult", got[1].Type)
@@ -1024,8 +1019,8 @@ func TestACPClientKimiMalformedArgsFallback(t *testing.T) {
 	if len(got) < 1 {
 		t.Fatalf("expected ToolUse+ToolResult, got %+v", got)
 	}
-	if text, _ := got[0].Input["text"].(string); text != "not-json" {
-		t.Errorf("fallback Input.text: got %v", got[0].Input["text"])
+	if got[0].Type != MessageToolUse || got[1].Type != MessageToolResult {
+		t.Fatalf("expected one start followed by one result, got %+v", got)
 	}
 }
 
@@ -1376,7 +1371,6 @@ while IFS= read -r line; do
 done
 `
 }
-
 
 // fakeACPRateLimitScript impersonates an ACP server for the GitHub
 // multica#1952 scenario: the upstream LLM returns HTTP 429 (rate

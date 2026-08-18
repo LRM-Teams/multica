@@ -38,13 +38,17 @@ type Host struct {
 	reconcileInterval time.Duration
 	logger            *slog.Logger
 
-	runtimeMu         sync.RWMutex
-	runtimeSets       map[string]hostBindingRuntimeSet
-	upgrade           *hostMachineUpgrade
-	diagnosticStore   *diagnosticlog.Store
-	diagnosticMu      sync.Mutex
-	diagnosticLoggers map[string]*diagnosticlog.Logger
-	processIdentity   HostProcessIdentity
+	runtimeMu          sync.RWMutex
+	runtimeSets        map[string]hostBindingRuntimeSet
+	upgrade            *hostMachineUpgrade
+	diagnosticStore    *diagnosticlog.Store
+	diagnosticMu       sync.Mutex
+	diagnosticLoggers  map[string]*diagnosticlog.Logger
+	processIdentity    HostProcessIdentity
+	workJournalMu      sync.Mutex
+	workJournalEnabled bool
+	workJournalHome    string
+	workJournalRoot    string
 }
 
 func (host *Host) RegisterControlRPCHandlers(registry *LocalControlRegistry) {
@@ -146,6 +150,21 @@ func NewHost(config HostConfig) (*Host, error) {
 			return external.PrepareUpgrade(ctx, identity, raw)
 		}
 		return nil, errors.New("Computer Machine Upgrade coordinator is unavailable")
+	}
+	callbacks.WorkDigest = func(ctx context.Context, identity BindingChildIdentity, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
+		if external.WorkDigest != nil {
+			return external.WorkDigest(ctx, identity, command)
+		}
+		return host.HarvestWorkDigest(ctx, command)
+	}
+	callbacks.WorkJournal = func(ctx context.Context, identity BindingChildIdentity, command protocol.ComputerWorkJournalPayload) (bool, error) {
+		if external.WorkJournal != nil {
+			return external.WorkJournal(ctx, identity, command)
+		}
+		if err := host.SetWorkJournalEnabled(command.Enabled); err != nil {
+			return false, err
+		}
+		return host.WorkJournalEnabled(), nil
 	}
 	callbacks.ComputerUpgrade = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) error {
 		var command protocol.ComputerUpgradePayload

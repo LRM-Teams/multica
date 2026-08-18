@@ -884,6 +884,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Notes
 			r.Route("/api/notes", func(r chi.Router) {
 				r.Post("/retrospectives", h.CreateNoteRetrospective)
+				r.Post("/period-briefs", h.CreateNotePeriodBrief)
 				r.Route("/pages", func(r chi.Router) {
 					r.Get("/", h.ListNotePages)
 					r.Post("/", h.CreateNotePage)
@@ -1136,6 +1137,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/honor/audit", h.GetAgentHonorAdminAudit)
 				r.Post("/", h.CreateAgent)
 				r.Post("/windy", h.EnsureWindy)
+				r.Post("/period-brief", h.EnsurePeriodBriefAgent)
+				r.Post("/period-brief-collectors", h.EnsurePeriodBriefCollectors)
 				r.Post("/drafts", h.CreateAgentDraft)
 				r.Get("/drafts/{draftId}", h.GetAgentDraft)
 				// Agent templates: pre-configured instructions + skill refs.
@@ -1164,6 +1167,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/reminders", h.ListAgentReminders)
 					r.Get("/skills", h.ListAgentSkills)
+					r.Get("/skills/profile", h.ListAgentProfileSkills)
 					r.Put("/skills", h.SetAgentSkills)
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
 					r.Post("/skill-suggestions/{suggestionId}/decision", h.DecideAgentSkillSuggestion)
@@ -1226,6 +1230,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Computers
 			r.Get("/api/computers", h.ListComputers)
 			r.Delete("/api/computers/{daemonId}", h.DeleteComputer)
+			r.Get("/api/computers/{daemonId}/work-digest", h.GetComputerWorkDigest)
+			r.Patch("/api/computers/{daemonId}/work-journal", h.PatchComputerWorkJournal)
 
 			// Runtimes
 			r.Route("/api/runtimes", func(r chi.Router) {

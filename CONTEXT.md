@@ -657,3 +657,40 @@ detail data, and event-sequenced deltas so a client can render hierarchy,
 discussion, conflict, provenance, and change without parsing Agent prose. A
 snapshot is pinned to one event sequence; reconnecting clients resume after that
 sequence or reload a snapshot when the retained delta range has expired.
+
+## Period Work
+
+### Period Work Brief
+
+A note that states what someone accomplished in a time window, written for
+colleagues or a manager. It is a filtered narrative in Notes, not an activity
+list and not a slide file.
+_Avoid_: retrospective as the deliverable, PPT, standup dump, weekly report file
+
+### Period Work Collector
+
+An Agent on a human-selected runtime (local or cloud) that gathers recent work
+on the OS where that runtime runs — including short diffs, file summaries, and
+key snippets within denylist bounds. Not Computer Host Digest harvest.
+_Avoid_: Host Journal as the Brief machine source, keymouse, full-repo dump
+
+### Period Brief Agent
+
+The Workspace Agent specialized to synthesize one Period Work Brief from
+platform Facts plus collector packs. Default synthesizer for「本期工作介绍」.
+_Avoid_: forcing every arbitrary Agent to be the weekly narrator
+
+### Period Work Synthesis
+
+The job that reads platform facts plus collector packs and writes one Period
+Work Brief. Selection and grouping happen here; multi-machine collection is
+done by Collectors first.
+_Avoid_: LLM inside the retrospective API, Host Digest as required input,
+silent note overwrite
+
+### Machine Work Journal / Work Digest (legacy)
+
+ADR 0018 Host-path terms. Superseded for Period Work by ADR 0019 Collectors.
+May remain in code temporarily; do not teach them as the Brief contract.
+_Avoid_: new Brief features depending on Host Digest
+

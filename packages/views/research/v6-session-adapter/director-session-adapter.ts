@@ -107,6 +107,13 @@ export function adaptResearchV6DirectorCanvas(
           branch_ids: node.branch_ids,
           projection_state: node.state,
           projection_tier: node.tier,
+          // Goal is a semantic root, not an XXL research result. Keep the
+          // distinction explicit even though the legacy renderer uses the
+          // XXL geometry for its largest circle.
+          semantic_role:
+            node.tier === "GOAL" || node.kind.toLowerCase() === "goal"
+              ? "goal"
+              : undefined,
           absorbed: node.absorbed,
           terminal: node.terminal,
           expandable: node.expandable,

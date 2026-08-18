@@ -112,7 +112,10 @@ describe("Director V6 canvas adapter", () => {
       edges: [],
     });
     expect(result.graph.nodes[0]?.level).toBe("xxl");
-    expect(result.graph.nodes[0]?.payload).toMatchObject({ projection_tier: "GOAL" });
+    expect(result.graph.nodes[0]?.payload).toMatchObject({
+      projection_tier: "GOAL",
+      semantic_role: "goal",
+    });
   });
 
   it("derives fusion presentation only from explicit absorbed_into edges", () => {

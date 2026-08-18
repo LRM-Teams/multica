@@ -111,3 +111,33 @@ func TestFilterGraphModeLegacyMemories(t *testing.T) {
 		}
 	}
 }
+
+// Spec §8/§13 P0-7: a graph miss or failure injects no graph data AND no
+// legacy project/channel/daily data — the task proceeds with legacy
+// user/agent memory only.
+func TestGraphFailureInjectsNoLegacyProjectChannelDaily(t *testing.T) {
+	agentRoot := t.TempDir()
+	writeAgentFile(t, agentRoot, "users/"+testMember+"/USER.md", "user prefs")
+	writeAgentFile(t, agentRoot, "memory/MEMORY.md", "agent memory")
+	writeAgentFile(t, agentRoot, "projects/"+testProjID+"/MEMORY.md", "legacy project memory")
+	writeAgentFile(t, agentRoot, "channels/"+testChanID+"/CONTEXT.md", "legacy channel context")
+
+	task := Task{
+		WorkspaceID: testWSID, AgentID: "agent-1",
+		ProjectID: testProjID, ChannelID: testChanID,
+		InitiatorType: "member", InitiatorID: testMember,
+	}
+	// nil graphMemories == miss/error result of graphExecutionMemories.
+	merged := mergeGraphModeExecutionMemory(agentRoot, task, nil, nil)
+	names := memoryNames(merged)
+	if !names["Current user preferences"] || !names["Agent global memory"] {
+		t.Fatalf("legacy user/agent memory must survive graph failure: %v", names)
+	}
+	for _, forbidden := range []string{
+		"Current project memory", "Current channel context", "Today activity summary", "Graph memory recall",
+	} {
+		if names[forbidden] {
+			t.Fatalf("graph failure must not surface %q", forbidden)
+		}
+	}
+}

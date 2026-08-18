@@ -423,7 +423,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         clientRequestId: crypto.randomUUID(),
       }),
     onSuccess: (assignment) => {
-      if (assignment) setAssignedDirectorAgentId(assignment.directorAgentId);
+      if (assignment) {
+        setAssignedDirectorAgentId(assignment.directorAgentId);
+        void qc.invalidateQueries({
+          queryKey: researchKeys.snapshot(wsId, sessionId),
+        });
+      }
     },
   });
   const directorReports = useQuery({

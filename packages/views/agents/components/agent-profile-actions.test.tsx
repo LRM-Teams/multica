@@ -41,6 +41,11 @@ vi.mock("sonner", () => ({
   },
 }));
 
+vi.mock("./agent-restart-modal", () => ({
+  AgentRestartModal: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="agent-restart-modal">Restart and reset choices</div> : null,
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (selector: (r: typeof RESOURCES) => string, vars?: Record<string, unknown>) => {
@@ -74,6 +79,9 @@ const RESOURCES = {
     actions_stop_agent_failed: "Failed to stop agent",
     agent_deleted_toast: "Deleted",
     delete_failed_toast: "Delete failed",
+  },
+  restart_modal: {
+    trigger: "Restart…",
   },
 };
 
@@ -184,11 +192,12 @@ describe("AgentProfileActions", () => {
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
   });
 
-  it("renders one lifecycle action and no separate Restart control", () => {
+  it("keeps Restart and reset choices separate from the Start/Stop lifecycle action", () => {
     render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-action-start")).toBeInTheDocument();
-    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("agent-profile-action-restart"));
+    expect(screen.getByTestId("agent-restart-modal")).toHaveTextContent("Restart and reset choices");
     expect(screen.getByTestId("agent-profile-action-delete")).toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-stop")).not.toBeInTheDocument();
     expect(screen.queryByText("Stop all")).not.toBeInTheDocument();

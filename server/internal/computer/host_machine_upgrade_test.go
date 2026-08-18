@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -268,13 +269,17 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	if err != nil || journal == nil || journal.TargetVersion != "v2.0.0" {
 		t.Fatalf("activated Machine Upgrade journal = %+v, error=%v", journal, err)
 	}
+	journal.SourceServicePID = math.MaxInt32
+	if err := upgrade.writeJournal(*journal); err != nil {
+		t.Fatal(err)
+	}
 	incumbent.Stop()
 
 	successor := newReadyHost(8201)
 	successorUpgrade := newHostMachineUpgrade(successor, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
 			ComputerID: "computer-a", ServiceGeneration: "service-32", Environment: "test",
-			Version: "v2.0.0", SourceServicePID: os.Getpid(),
+			Version: "v2.0.0", SourceServicePID: math.MaxInt32,
 		},
 		residentRoot: root,
 	})
@@ -286,14 +291,145 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	if got := reregistrations.Load(); got != 0 {
 		t.Fatalf("successor re-registration calls = %d, want 0", got)
 	}
-	if journal, err := successorUpgrade.readJournal(); err != nil || journal == nil || journal.ObservedTargetGeneration != "service-32" {
-		t.Fatalf("successor did not persist observed target identity = %+v, error=%v", journal, err)
+	if journal, err := successorUpgrade.readJournal(); err != nil || journal == nil || journal.Phase != MachineUpgradePhaseTargetReady || journal.ObservedTargetGeneration != "service-32" {
+		t.Fatalf("converged successor must keep journal until coordinator finalizes = %+v, error=%v", journal, err)
 	}
-	successorUpgrade.config.identity.ServiceGeneration = "service-33"
-	if err := successorUpgrade.recoverSuccessor(context.Background()); err != nil {
-		t.Fatalf("recover replacement successor: %v", err)
+}
+
+func TestRecoverSuccessorRejectsLivePredecessor(t *testing.T) {
+	root := t.TempDir()
+	journal := hostMachineUpgradeJournal{
+		RequestID: "upgrade-live", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: os.Getpid(),
+		AcceptedManagedWorkspaceIDs: []string{"workspace-a"},
+		AcceptedManagedSetRevision:  managedSetRevision([]string{"workspace-a"}),
 	}
-	if journal, err := successorUpgrade.readJournal(); err != nil || journal == nil || journal.ObservedTargetGeneration != "service-33" {
-		t.Fatalf("replacement successor did not replace observed target identity = %+v, error=%v", journal, err)
+	if err := writeMachineUpgradeJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	host, err := NewHost(HostConfig{
+		ControlToken: "token",
+		Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
+			return &readySupervisorChild{
+				supervisorTestChild: newSupervisorTestChild(9201),
+				workspaceID:         workspaceID, startIdentity: startIdentity,
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.Reconcile(context.Background(), []string{"workspace-a"})
+	waitForSupervisorLifecycle(t, host.supervisor, "workspace-a", RunnerLifecycleRunning)
+	record, pid, ok := host.Snapshot("workspace-a")
+	if !ok {
+		t.Fatal("missing Binding workspace-a")
+	}
+	host.runtimeMu.Lock()
+	host.runtimeSets["workspace-a"] = hostBindingRuntimeSet{
+		Identity:    BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: record.StartIdentity(), PID: pid},
+		Runtimes:    []hostBindingRuntime{{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"}},
+		DaemonToken: "runtime-token", ExpiresAt: time.Now().Add(time.Hour),
+	}
+	host.runtimeMu.Unlock()
+	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
+		identity: HostProcessIdentity{
+			ComputerID: "computer-a", ServiceGeneration: "service-40",
+			Version: "v2.0.0", SourceServicePID: os.Getpid(),
+		},
+		residentRoot: root,
+	})
+	if err := upgrade.recoverSuccessor(context.Background()); err == nil {
+		t.Fatal("live predecessor must fail closed")
+	}
+	got, err := upgrade.readJournal()
+	if err != nil || got == nil || got.ObservedTargetGeneration != "" {
+		t.Fatalf("live predecessor must not record target identity = %+v, error=%v", got, err)
+	}
+}
+
+func TestRecoverSuccessorClearsAbortedActivationOnFromVersion(t *testing.T) {
+	root := t.TempDir()
+	if err := writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{
+		RequestID: "upgrade-abort", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: 101,
+		AcceptedManagedWorkspaceIDs: []string{"workspace-a"},
+		AcceptedManagedSetRevision:  managedSetRevision([]string{"workspace-a"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{
+		identity: HostProcessIdentity{
+			ComputerID: "computer-a", ServiceGeneration: "service-41",
+			Version: "v1.0.0",
+		},
+		residentRoot: root,
+	})
+	if err := upgrade.recoverSuccessor(context.Background()); err != nil {
+		t.Fatalf("from-version recovery: %v", err)
+	}
+	got, err := upgrade.readJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("aborted activation journal = %+v, want cleared", got)
+	}
+}
+
+func TestRecoverSuccessorKeepsActiveHandoffOnUnrelatedFromVersion(t *testing.T) {
+	root := t.TempDir()
+	if err := writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{
+		RequestID: "upgrade-active", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: 101,
+		AcceptedManagedWorkspaceIDs: []string{"workspace-a"},
+		AcceptedManagedSetRevision:  managedSetRevision([]string{"workspace-a"}),
+		Phase:                       MachineUpgradePhaseTargetReady,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{
+		identity: HostProcessIdentity{
+			ComputerID: "computer-a", ServiceGeneration: "service-42",
+			Version: "v1.0.0",
+		},
+		residentRoot: root,
+	})
+	if err := upgrade.recoverSuccessor(context.Background()); err == nil {
+		t.Fatal("unrelated from-version process must not steal an active handoff")
+	}
+	got, err := upgrade.readJournal()
+	if err != nil || got == nil || got.Phase != MachineUpgradePhaseTargetReady {
+		t.Fatalf("active handoff journal = %+v, error=%v", got, err)
+	}
+}
+
+func TestRecoverSuccessorClearsCoordinatorRollbackOnFromVersion(t *testing.T) {
+	root := t.TempDir()
+	if err := writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{
+		RequestID: "upgrade-rollback", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: 101,
+		AcceptedManagedWorkspaceIDs: []string{"workspace-a"},
+		AcceptedManagedSetRevision:  managedSetRevision([]string{"workspace-a"}),
+		Phase:                       MachineUpgradePhaseRollingBack,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{
+		identity: HostProcessIdentity{
+			ComputerID: "computer-a", ServiceGeneration: "service-43",
+			Version: "v1.0.0",
+		},
+		residentRoot: root,
+	})
+	if err := upgrade.recoverSuccessor(context.Background()); err != nil {
+		t.Fatalf("authorized rollback recovery: %v", err)
+	}
+	got, err := upgrade.readJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("authorized rollback journal = %+v, want cleared", got)
 	}
 }

@@ -63,6 +63,14 @@ var computerRunnerCmd = &cobra.Command{
 	RunE:   runComputerBindingRunner,
 }
 
+var computerUpgradeCoordinatorCmd = &cobra.Command{
+	Use:    computer.ResidentUpgradeArg,
+	Hidden: true,
+	Short:  "Run the detached Machine Upgrade coordinator",
+	Args:   cobra.NoArgs,
+	RunE:   runComputerUpgradeCoordinator,
+}
+
 var computerStartCmd = &cobra.Command{
 	Use:   "start [/<workspace>]",
 	Short: "Start the resident Computer",
@@ -198,6 +206,7 @@ func init() {
 
 	computerCmd.AddCommand(computerServiceCmd)
 	computerCmd.AddCommand(computerRunnerCmd)
+	computerCmd.AddCommand(computerUpgradeCoordinatorCmd)
 	computerSuperviseCmd.Hidden = true
 	computerCmd.AddCommand(computerSuperviseCmd)
 	computerCmd.AddCommand(computerStartCmd)

@@ -68,6 +68,9 @@ func buildSuperviseConfig(profile, exePath string, workerArgs []string, stdout, 
 }
 
 func resolveSupervisedWorkerPath(fallbackPath string, workerArgs []string) (string, []string, error) {
+	if handoff, err := computer.ReadPendingMachineUpgradeHandoff(computer.RootDir("")); err == nil && handoff != nil {
+		return fallbackPath, []string{computer.ResidentCommand, computer.ResidentUpgradeArg}, nil
+	}
 	return fallbackPath, workerArgs, nil
 }
 

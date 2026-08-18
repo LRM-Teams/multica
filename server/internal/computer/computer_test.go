@@ -317,6 +317,34 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 
 // --- start background already-running guard ---
 
+func TestStartBackgroundRefusesPendingMachineUpgradeHandoff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := WritePendingMachineUpgradeHandoffForTest(RootDir(""), PendingMachineUpgradeHandoff{
+		RequestID: "upgrade-a", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
+		SourceServicePID: 101, AcceptedManagedSetRevision: "revision-a",
+		Phase: MachineUpgradePhaseStartingTarget,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
+		return map[string]any{"status": "stopped"}
+	}}
+	spawned := false
+	restore := setSpawnResident(func(string, []string, *os.File) (procHandle, error) {
+		spawned = true
+		return &fakeProc{pid: 1}, nil
+	})
+	defer restore()
+	_, err := lc.StartBackground(StartOptions{})
+	if err == nil || !strings.Contains(err.Error(), "Machine Upgrade") {
+		t.Fatalf("StartBackground = %v, want pending handoff error", err)
+	}
+	if spawned {
+		t.Fatal("resident spawned across an active Machine Upgrade handoff")
+	}
+}
+
 func TestStartBackgroundRefusesWhenAlreadyRunning(t *testing.T) {
 	lc := &Lifecycle{}
 	lc.Probe = func(_ context.Context, _ string) map[string]any {

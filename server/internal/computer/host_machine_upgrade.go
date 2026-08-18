@@ -62,7 +62,15 @@ type hostMachineUpgradeJournal struct {
 	AcceptedManagedSetRevision  string   `json:"acceptedManagedSetRevision"`
 	ObservedTargetGeneration    string   `json:"observedTargetGeneration,omitempty"`
 	TargetServicePID            int      `json:"targetServicePid,omitempty"`
+	Phase                       string   `json:"phase,omitempty"`
 }
+
+const (
+	MachineUpgradePhaseAccepted       = "accepted"
+	MachineUpgradePhaseStartingTarget = "starting_target"
+	MachineUpgradePhaseTargetReady    = "target_ready"
+	MachineUpgradePhaseRollingBack    = "rolling_back"
+)
 
 func newHostMachineUpgrade(host *Host, config hostMachineUpgradeConfig) *hostMachineUpgrade {
 	return &hostMachineUpgrade{
@@ -179,13 +187,14 @@ func (upgrade *hostMachineUpgrade) executeServiceUpgrade(identity BindingChildId
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "activation_failed"})
 		return
 	}
-	_, managedWorkspaceIDs := upgrade.currentRuntimeAndWorkspaceIDs()
+	managedWorkspaceIDs := upgrade.acceptedManagedWorkspaceIDs()
 	if err := upgrade.writeJournal(hostMachineUpgradeJournal{
 		RequestID: command.RequestID, FromVersion: upgrade.config.identity.Version,
 		TargetVersion: target, StartedAt: startedAt, SchemaVersion: 1,
 		SourceServicePID: os.Getpid(), OldRunnerPIDs: upgrade.runnerPIDs(managedWorkspaceIDs),
 		AcceptedManagedWorkspaceIDs: managedWorkspaceIDs,
 		AcceptedManagedSetRevision:  managedSetRevision(managedWorkspaceIDs),
+		Phase:                       MachineUpgradePhaseAccepted,
 	}); err != nil {
 		upgrade.emitRunnerEvent(identity, protocol.EventComputerUpgradeDone, protocol.ComputerUpgradeDonePayload{RequestID: command.RequestID, OK: false, Error: "journal_persist_failed"})
 		return
@@ -293,6 +302,12 @@ func (upgrade *hostMachineUpgrade) recoverSuccessor(ctx context.Context) error {
 	if journal == nil {
 		return nil
 	}
+	if versionsMatch(upgrade.config.identity.Version, journal.FromVersion) && !versionsMatch(upgrade.config.identity.Version, journal.TargetVersion) {
+		if journal.Phase == "" || journal.Phase == MachineUpgradePhaseAccepted || journal.Phase == MachineUpgradePhaseRollingBack {
+			return upgrade.removeJournal()
+		}
+		return fmt.Errorf("Computer Machine Upgrade %s is still active", journal.Phase)
+	}
 	if !versionsMatch(upgrade.config.identity.Version, journal.TargetVersion) {
 		return fmt.Errorf("activated Machine Upgrade target %s does not match running Computer %s", journal.TargetVersion, upgrade.config.identity.Version)
 	}
@@ -302,18 +317,38 @@ func (upgrade *hostMachineUpgrade) recoverSuccessor(ctx context.Context) error {
 	if strings.TrimSpace(upgrade.config.identity.ServiceGeneration) == "" {
 		return errors.New("successor service generation is empty")
 	}
-	_, managedWorkspaceIDs := upgrade.currentRuntimeAndWorkspaceIDs()
+	if err := requirePredecessorsDead(*journal); err != nil {
+		return err
+	}
+	managedWorkspaceIDs := upgrade.acceptedManagedWorkspaceIDs()
 	if !sameHostStringSet(managedWorkspaceIDs, journal.AcceptedManagedWorkspaceIDs) || managedSetRevision(managedWorkspaceIDs) != journal.AcceptedManagedSetRevision {
 		return errors.New("successor managed runner set has not converged")
 	}
-	if journal.ObservedTargetGeneration != upgrade.config.identity.ServiceGeneration || journal.TargetServicePID != os.Getpid() {
+	if journal.ObservedTargetGeneration != upgrade.config.identity.ServiceGeneration || journal.TargetServicePID != os.Getpid() || journal.Phase != MachineUpgradePhaseTargetReady {
 		journal.ObservedTargetGeneration = upgrade.config.identity.ServiceGeneration
 		journal.TargetServicePID = os.Getpid()
+		journal.Phase = MachineUpgradePhaseTargetReady
 		if err := upgrade.writeJournal(*journal); err != nil {
 			return err
 		}
 	}
-	go upgrade.removeJournalAfterPredecessorsExit(ctx, *journal)
+	return nil
+}
+
+func predecessorPIDs(journal hostMachineUpgradeJournal) []int {
+	return append([]int{journal.SourceServicePID}, journal.OldRunnerPIDs...)
+}
+
+func requirePredecessorsDead(journal hostMachineUpgradeJournal) error {
+	for _, pid := range predecessorPIDs(journal) {
+		if pid < 1 {
+			continue
+		}
+		alive, known := processAlive(pid)
+		if !known || alive {
+			return fmt.Errorf("predecessor process %d is still live", pid)
+		}
+	}
 	return nil
 }
 
@@ -327,33 +362,6 @@ func (upgrade *hostMachineUpgrade) runnerPIDs(workspaceIDs []string) []int {
 	}
 	sort.Ints(pids)
 	return pids
-}
-
-func (upgrade *hostMachineUpgrade) removeJournalAfterPredecessorsExit(ctx context.Context, journal hostMachineUpgradeJournal) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		allDead := true
-		for _, pid := range append([]int{journal.SourceServicePID}, journal.OldRunnerPIDs...) {
-			alive, known := processAlive(pid)
-			if !known || alive {
-				allDead = false
-				break
-			}
-		}
-		if allDead {
-			current, err := upgrade.readJournal()
-			if err == nil && current != nil && current.ObservedTargetGeneration == journal.ObservedTargetGeneration && current.TargetServicePID == journal.TargetServicePID {
-				_ = upgrade.removeJournal()
-			}
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
 
 func (upgrade *hostMachineUpgrade) journalPath() string {
@@ -451,6 +459,96 @@ func PendingMachineUpgradeSourceServicePID(root string) (int, error) {
 	return journal.SourceServicePID, nil
 }
 
+// PendingMachineUpgradeHandoff is the durable predecessor/successor contract
+// the detached coordinator waits on before spawning the next Computer.
+type PendingMachineUpgradeHandoff struct {
+	RequestID                   string
+	FromVersion                 string
+	TargetVersion               string
+	SourceServicePID            int
+	OldRunnerPIDs               []int
+	AcceptedManagedWorkspaceIDs []string
+	AcceptedManagedSetRevision  string
+	Phase                       string
+	KeepOwnedProcess            bool
+}
+
+func WritePendingMachineUpgradeHandoffForTest(root string, handoff PendingMachineUpgradeHandoff) error {
+	requestID := strings.TrimSpace(handoff.RequestID)
+	if requestID == "" {
+		requestID = "test-upgrade"
+	}
+	phase := strings.TrimSpace(handoff.Phase)
+	if phase == "" {
+		phase = MachineUpgradePhaseAccepted
+	}
+	return writeMachineUpgradeJournal(root, hostMachineUpgradeJournal{
+		RequestID: requestID, FromVersion: handoff.FromVersion, TargetVersion: handoff.TargetVersion,
+		StartedAt: "2026-08-18T00:00:00Z", SchemaVersion: 1, SourceServicePID: handoff.SourceServicePID,
+		OldRunnerPIDs:               append([]int(nil), handoff.OldRunnerPIDs...),
+		AcceptedManagedWorkspaceIDs: append([]string(nil), handoff.AcceptedManagedWorkspaceIDs...),
+		AcceptedManagedSetRevision:  handoff.AcceptedManagedSetRevision,
+		Phase:                       phase,
+	})
+}
+
+func ReadPendingMachineUpgradeHandoff(root string) (*PendingMachineUpgradeHandoff, error) {
+	journal, err := readMachineUpgradeJournal(root)
+	if err != nil || journal == nil {
+		return nil, err
+	}
+	return &PendingMachineUpgradeHandoff{
+		RequestID: journal.RequestID, FromVersion: journal.FromVersion, TargetVersion: journal.TargetVersion,
+		SourceServicePID: journal.SourceServicePID, OldRunnerPIDs: append([]int(nil), journal.OldRunnerPIDs...),
+		AcceptedManagedWorkspaceIDs: append([]string(nil), journal.AcceptedManagedWorkspaceIDs...),
+		AcceptedManagedSetRevision:  journal.AcceptedManagedSetRevision,
+		Phase:                       journal.Phase,
+	}, nil
+}
+
+func MarkPendingMachineUpgradePhase(root, phase string) error {
+	journal, err := readMachineUpgradeJournal(root)
+	if err != nil {
+		return err
+	}
+	if journal == nil {
+		return errors.New("Computer Machine Upgrade journal is missing")
+	}
+	journal.Phase = strings.TrimSpace(phase)
+	return writeMachineUpgradeJournal(root, *journal)
+}
+
+func FinalizePendingMachineUpgrade(root string) error {
+	return removeMachineUpgradeJournal(root)
+}
+
+func WaitForMachineUpgradePredecessors(ctx context.Context, handoff PendingMachineUpgradeHandoff) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	journal := hostMachineUpgradeJournal{
+		SourceServicePID: handoff.SourceServicePID, OldRunnerPIDs: handoff.OldRunnerPIDs,
+	}
+	if err := requirePredecessorsDead(journal); err == nil {
+		return nil
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			if err := requirePredecessorsDead(journal); err != nil {
+				return err
+			}
+			return nil
+		case <-ticker.C:
+			if err := requirePredecessorsDead(journal); err == nil {
+				return nil
+			}
+		}
+	}
+}
+
 func removeMachineUpgradeJournal(root string) error {
 	path := machineUpgradeJournalPath(root)
 	if path == "" {
@@ -502,23 +600,11 @@ func (upgrade *hostMachineUpgrade) firstCurrentRuntime() (hostBindingRuntime, st
 	return hostBindingRuntime{}, "", false
 }
 
-func (upgrade *hostMachineUpgrade) currentRuntimeAndWorkspaceIDs() ([]string, []string) {
-	upgrade.host.runtimeMu.RLock()
-	defer upgrade.host.runtimeMu.RUnlock()
-	var runtimeIDs []string
-	var workspaceIDs []string
-	for workspaceID, report := range upgrade.host.runtimeSets {
-		if !upgrade.host.Current(report.Identity) {
-			continue
-		}
-		workspaceIDs = append(workspaceIDs, workspaceID)
-		for _, runtime := range report.Runtimes {
-			runtimeIDs = append(runtimeIDs, runtime.ID)
-		}
+func (upgrade *hostMachineUpgrade) acceptedManagedWorkspaceIDs() []string {
+	if upgrade == nil || upgrade.host == nil {
+		return nil
 	}
-	sort.Strings(runtimeIDs)
-	sort.Strings(workspaceIDs)
-	return runtimeIDs, workspaceIDs
+	return normalizedWorkspaceIDs(upgrade.host.DesiredWorkspaceIDs())
 }
 
 func (upgrade *hostMachineUpgrade) scheduleCurrentBinaryRestart() {
@@ -572,13 +658,4 @@ func (host *Host) RestartBinary() string {
 	host.upgrade.mu.Lock()
 	defer host.upgrade.mu.Unlock()
 	return host.upgrade.restartBinary
-}
-
-func (host *Host) MachineUpgradeTarget() string {
-	if host == nil || host.upgrade == nil {
-		return ""
-	}
-	host.upgrade.mu.Lock()
-	defer host.upgrade.mu.Unlock()
-	return host.upgrade.targetVersion
 }

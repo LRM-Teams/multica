@@ -329,6 +329,20 @@ func (supervisor *BindingSupervisor) Current(identity BindingChildIdentity) bool
 	return current
 }
 
+func (supervisor *BindingSupervisor) DesiredWorkspaceIDs() []string {
+	if supervisor == nil {
+		return nil
+	}
+	supervisor.mu.RLock()
+	defer supervisor.mu.RUnlock()
+	ids := make([]string, 0, len(supervisor.desired))
+	for workspaceID := range supervisor.desired {
+		ids = append(ids, workspaceID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func (supervisor *BindingSupervisor) Snapshot(workspaceID string) (RunnerRecord, int, bool) {
 	if supervisor == nil {
 		return RunnerRecord{}, 0, false

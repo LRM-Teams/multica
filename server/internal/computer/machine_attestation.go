@@ -21,15 +21,18 @@ type MachineAttestation struct {
 }
 
 // SuccessorPIDVersion is the PID+version the launcher requires of the child
-// it spawned. Source-dead is not a gate: the waiter is still the incumbent.
+// it spawned after the predecessor processes have already exited.
 type SuccessorPIDVersion struct {
-	ServicePID       int
-	SourceServicePID int
-	ComputerVersion  string
+	ServicePID                  int
+	SourceServicePID            int
+	ComputerVersion             string
+	AcceptedManagedWorkspaceIDs []string
+	AcceptedManagedSetRevision  string
 }
 
 // ValidateSuccessorPIDVersion accepts only when the control answer's PID is
-// the spawned child and its version matches the target release.
+// the spawned child, its version matches the target release, and the managed
+// Binding set matches the journalled predecessor snapshot.
 func ValidateSuccessorPIDVersion(want SuccessorPIDVersion, got MachineAttestation) error {
 	if got.ServicePID <= 0 || got.ServicePID != want.ServicePID {
 		return fmt.Errorf("service pid %d does not match child %d", got.ServicePID, want.ServicePID)
@@ -42,6 +45,9 @@ func ValidateSuccessorPIDVersion(want SuccessorPIDVersion, got MachineAttestatio
 	}
 	if got.SourceServicePID != want.SourceServicePID {
 		return fmt.Errorf("source service pid %d does not match predecessor %d", got.SourceServicePID, want.SourceServicePID)
+	}
+	if !sameHostStringSet(got.ManagedWorkspaceIDs, want.AcceptedManagedWorkspaceIDs) || got.ManagedSetRevision != want.AcceptedManagedSetRevision {
+		return fmt.Errorf("managed runner set has not converged")
 	}
 	return nil
 }

@@ -9,8 +9,14 @@ import (
 
 func TestValidateSuccessorPIDVersionMatchesPIDAndVersion(t *testing.T) {
 	pid := os.Getpid()
-	want := SuccessorPIDVersion{ServicePID: pid, SourceServicePID: 11, ComputerVersion: "v10.0.0"}
-	got := MachineAttestation{ComputerVersion: "10.0.0", ServiceGeneration: "gen-1", ServicePID: pid, SourceServicePID: 11}
+	want := SuccessorPIDVersion{
+		ServicePID: pid, SourceServicePID: 11, ComputerVersion: "v10.0.0",
+		AcceptedManagedWorkspaceIDs: []string{"workspace-a"}, AcceptedManagedSetRevision: managedSetRevision([]string{"workspace-a"}),
+	}
+	got := MachineAttestation{
+		ComputerVersion: "10.0.0", ServiceGeneration: "gen-1", ServicePID: pid, SourceServicePID: 11,
+		ManagedWorkspaceIDs: []string{"workspace-a"}, ManagedSetRevision: managedSetRevision([]string{"workspace-a"}),
+	}
 	if err := ValidateSuccessorPIDVersion(want, got); err != nil {
 		t.Fatal(err)
 	}
@@ -33,6 +39,12 @@ func TestValidateSuccessorPIDVersionMatchesPIDAndVersion(t *testing.T) {
 	wrongSource.SourceServicePID++
 	if err := ValidateSuccessorPIDVersion(want, wrongSource); err == nil {
 		t.Fatal("mismatched source service pid must fail")
+	}
+	wrongSet := got
+	wrongSet.ManagedWorkspaceIDs = []string{"workspace-b"}
+	wrongSet.ManagedSetRevision = managedSetRevision([]string{"workspace-b"})
+	if err := ValidateSuccessorPIDVersion(want, wrongSet); err == nil {
+		t.Fatal("mismatched managed set must fail")
 	}
 }
 

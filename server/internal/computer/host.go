@@ -233,6 +233,13 @@ func (host *Host) Snapshot(workspaceID string) (RunnerRecord, int, bool) {
 	return host.supervisor.Snapshot(workspaceID)
 }
 
+func (host *Host) DesiredWorkspaceIDs() []string {
+	if host == nil || host.supervisor == nil {
+		return nil
+	}
+	return host.supervisor.DesiredWorkspaceIDs()
+}
+
 // WaitReady fences Computer readiness on every desired Binding child reaching
 // its real Workspace Runner Ready seam. A degraded child is terminal for this
 // startup attempt; crash/backoff remains retryable until ctx expires.

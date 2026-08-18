@@ -146,6 +146,24 @@ func TestComputerRunnerCommandIsHiddenBindingChild(t *testing.T) {
 	}
 }
 
+func TestComputerUpgradeCoordinatorCommandIsHidden(t *testing.T) {
+	if got, want := computerUpgradeCoordinatorCmd.Use, computer.ResidentUpgradeArg; got != want {
+		t.Fatalf("computer upgrade coordinator use = %q, want %q", got, want)
+	}
+	if !computerUpgradeCoordinatorCmd.Hidden {
+		t.Fatal("computer __upgrade must stay hidden")
+	}
+	if err := computerUpgradeCoordinatorCmd.Args(computerUpgradeCoordinatorCmd, nil); err != nil {
+		t.Fatalf("computer __upgrade rejects no arguments: %v", err)
+	}
+	if err := computerUpgradeCoordinatorCmd.Args(computerUpgradeCoordinatorCmd, []string{"extra"}); err == nil {
+		t.Fatal("computer __upgrade accepts extra arguments")
+	}
+	if !hasSubcommand(computerCmd, computer.ResidentUpgradeArg) {
+		t.Fatal("computer command is missing the hidden upgrade coordinator entry")
+	}
+}
+
 func TestComputerUpgradeCommandUsesBoundComputer(t *testing.T) {
 	if got, want := computerUpgradeCmd.Use, "upgrade"; got != want {
 		t.Fatalf("computer upgrade use = %q, want %q", got, want)

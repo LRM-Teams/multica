@@ -30,10 +30,11 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 		identity := state.identity
 		desired := append([]string(nil), state.desired...)
 		state.mu.RUnlock()
+		ids := normalizedWorkspaceIDs(desired)
 		return MachineAttestation{
 			ComputerVersion: identity.Version, ServiceGeneration: identity.ServiceGeneration,
 			ServicePID: os.Getpid(), SourceServicePID: identity.SourceServicePID,
-			ManagedWorkspaceIDs: desired, ManagedSetRevision: managedSetRevision(desired),
+			ManagedWorkspaceIDs: ids, ManagedSetRevision: managedSetRevision(ids),
 		}, nil
 	})
 	register(LocalControlRestartServiceOperation, func(_ context.Context, headers map[string]string, _ json.RawMessage) (any, error) {

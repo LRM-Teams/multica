@@ -132,6 +132,9 @@ const (
 	// ResidentServiceArg is the hidden argv that marks a spawned resident.
 	// Callers never type this; Lifecycle and the supervisor assemble it.
 	ResidentServiceArg = "__service"
+	// ResidentUpgradeArg is the hidden argv for the detached Machine Upgrade
+	// coordinator. The incumbent Computer must not own successor spawn.
+	ResidentUpgradeArg = "__upgrade"
 )
 
 // ResidentServicePrefix is the Computer-owned process contract. Workspace
@@ -231,6 +234,11 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	if Alive(health) {
 		pid, _ := health["pid"].(float64)
 		return StartResult{}, fmt.Errorf("already running (pid %v)", int(pid))
+	}
+	if handoff, err := ReadPendingMachineUpgradeHandoff(RootDir("")); err != nil {
+		return StartResult{}, fmt.Errorf("read Computer Machine Upgrade journal: %w", err)
+	} else if handoff != nil {
+		return StartResult{}, fmt.Errorf("Computer Machine Upgrade is in progress")
 	}
 	if _, err := l.Identity(); err != nil {
 		return StartResult{}, fmt.Errorf("resolve Computer identity before start: %w", err)

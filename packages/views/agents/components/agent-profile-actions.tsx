@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, MessageSquare, Play, Square, Trash2 } from "lucide-react";
+import { Loader2, MessageSquare, Play, RotateCcw, Square, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -13,15 +13,12 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
+import { AgentRestartModal } from "./agent-restart-modal";
 import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 
 /**
  * LRM-448 · Profile v4 Actions stack (Computer IA + Multica tokens).
  * Vertical named actions — no header Message+⋯, no More overflow.
- *
- * LRM-468: Restart/Reset · Copy diagnostic · Report issue are out of
- * scope this period (Frank「这几个功能删掉，先不做」). Keep Message +
- * Delete (danger zone) only — do not leave empty shell buttons.
  *
  * LRM-448 / Frank 2026-07-23: the destructive action is **Delete**, not
  * Archive (AC#2 "Message + Delete（非 Archive）"). The backend exposes no
@@ -32,8 +29,8 @@ import { ConfirmDeleteAgent } from "./confirm-delete-agent";
  * LRM-480: actions use the standard project Button variants (outline /
  * destructive) — no custom thick-bordered button style.
  *
- * Agent lifecycle uses one Runner-presence-driven Start/Stop button. Work
- * status is intentionally not used as process lifecycle state.
+ * Agent lifecycle uses one Runner-presence-driven Start/Stop button. Restart
+ * and reset remain separate operations in the existing restart modal.
  *
  * LRM-593 (Frank lock A): Delete is the only solid destructive, above a
  * `border-t` danger zone.
@@ -53,6 +50,7 @@ export function AgentProfileActions({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [lifecyclePending, setLifecyclePending] = useState(false);
+  const [restartOpen, setRestartOpen] = useState(false);
 
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
@@ -169,6 +167,20 @@ export function AgentProfileActions({
           </Button>
         ) : null}
 
+        {canManage && !isArchived && isRuntimeOnline ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            className="w-full gap-2"
+            data-testid="agent-profile-action-restart"
+            onClick={() => setRestartOpen(true)}
+          >
+            <RotateCcw className="size-4 shrink-0" aria-hidden />
+            {t(($) => $.restart_modal.trigger)}
+          </Button>
+        ) : null}
+
         {canManage && !isArchived ? (
           <div className="mt-1 border-t border-border pt-3">
             <Button
@@ -196,6 +208,16 @@ export function AgentProfileActions({
         onConfirm={() => void handleDelete()}
         onOpenChange={setConfirmDelete}
       />
+
+      {canManage && !isArchived ? (
+        <AgentRestartModal
+          agentId={agent.id}
+          agentHandle={agent.name}
+          agentName={displayName}
+          open={restartOpen}
+          onOpenChange={setRestartOpen}
+        />
+      ) : null}
     </section>
   );
 }

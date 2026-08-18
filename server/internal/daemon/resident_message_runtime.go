@@ -143,10 +143,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	if runtime.Provider == "pi" {
 		addPiMemoryFastModeEnv(agentEnv)
 	}
-	if env.CodexHome != "" {
-		agentEnv["CODEX_HOME"] = env.CodexHome
-	}
-
 	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
 		AgentID:             config.Agent.ID,
 		RuntimeID:           config.RuntimeID,

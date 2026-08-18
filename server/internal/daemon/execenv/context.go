@@ -16,7 +16,7 @@ import (
 // skills into the appropriate provider-native location.
 //
 // Claude:      skills → {agentRoot}/.claude/skills/{name}/SKILL.md  (native discovery)
-// Codex:       skills → handled separately in the Agent-scoped codex-home
+// Codex:       skills → {agentRoot}/.agents/skills/{name}/SKILL.md (workspace discovery)
 // OpenCode:    skills → {agentRoot}/.opencode/skills/{name}/SKILL.md  (native discovery)
 // Pi:          skills → {agentRoot}/.pi/skills/{name}/SKILL.md  (native discovery)
 // Cursor:      skills → {agentRoot}/.cursor/skills/{name}/SKILL.md  (native discovery)
@@ -55,11 +55,8 @@ func writeContextFiles(agentRoot, provider string, ctx TaskContextForEnv, manife
 		if err != nil {
 			return fmt.Errorf("resolve skills dir: %w", err)
 		}
-		// Codex skills are written to codex-home in Prepare; skip here.
-		if provider != "codex" {
-			if err := writeSkillFiles(skillsDir, ctx.AgentSkills, manifest); err != nil {
-				return fmt.Errorf("write skill files: %w", err)
-			}
+		if err := writeSkillFiles(skillsDir, ctx.AgentSkills, manifest); err != nil {
+			return fmt.Errorf("write skill files: %w", err)
 		}
 	}
 
@@ -98,6 +95,10 @@ func skillsDirPath(agentRoot, provider string) string {
 		// without those, OpenCode walks from the daemon's inherited PWD and
 		// misses .opencode/skills + AGENTS.md entirely (MUL-2416).
 		return filepath.Join(agentRoot, ".opencode", "skills")
+	case "codex":
+		// Codex follows Raft's split: CODEX_HOME and global skills remain
+		// outside the agent workspace, while assigned skills are workspace-local.
+		return filepath.Join(agentRoot, ".agents", "skills")
 	case "pi":
 		// Pi natively discovers skills from .pi/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".pi", "skills")

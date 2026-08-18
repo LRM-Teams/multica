@@ -132,7 +132,8 @@ func sanitizeInlineCodeForBrief(value string) string {
 // config file so the agent discovers its environment through its native mechanism.
 //
 // For Claude:   writes {workDir}/CLAUDE.md  (skills discovered natively from .claude/skills/)
-// For Codex:    writes {workDir}/AGENTS.md  (skills discovered natively via CODEX_HOME)
+// For Codex:    writes {workDir}/AGENTS.md  (global skills via CODEX_HOME/home;
+//                 assigned skills via {workDir}/.agents/skills)
 // For OpenCode: writes {workDir}/AGENTS.md  (skills discovered natively from .opencode/skills/)
 // For Pi:       writes {workDir}/AGENTS.md  (skills discovered natively from .pi/skills/)
 // For Cursor:   writes {workDir}/AGENTS.md  (skills discovered natively from .cursor/skills/)
@@ -1225,7 +1226,7 @@ func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []Ski
 			case "claude":
 				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", slug)
 			case "codex":
-				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", slug)
+				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", slug)
 			case "opencode":
 				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", slug)
 			case "pi":

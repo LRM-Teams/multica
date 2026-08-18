@@ -2622,11 +2622,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		pathDirectories = append(pathDirectories, cliBinDir, os.Getenv("PATH"))
 		agentEnv["PATH"] = strings.Join(pathDirectories, string(os.PathListSeparator))
 	}
-	// Point Codex to the Agent-scoped CODEX_HOME so it discovers skills natively
-	// without polluting the system ~/.codex/skills/.
-	if env.CodexHome != "" {
-		agentEnv["CODEX_HOME"] = env.CodexHome
-	}
 	// Inject user-configured custom_env (agent-scoped) plus claim-time
 	// scoped_secrets after channel/project filtering (LRM-953). Channel A
 	// secrets must not enter channel B; project secrets require a bound

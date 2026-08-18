@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
+
+var researchV6PackageHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func (h *Handler) researchReportCapability(reportID, packageHash string, expiry int64) string {
 	mac := hmac.New(sha256.New, []byte(h.cfg.ResearchReportCapabilitySecret))
@@ -158,6 +161,10 @@ func (h *Handler) ServeResearchV6ReportDocument(w http.ResponseWriter, r *http.R
 		return
 	}
 	id, pkg := uuidToString(reportUUID), chi.URLParam(r, "packageHash")
+	if !researchV6PackageHashPattern.MatchString(pkg) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	exp, _ := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
 	sig, decodeErr := hex.DecodeString(r.URL.Query().Get("sig"))
 	expected, _ := hex.DecodeString(h.researchReportCapability(id, pkg, exp))

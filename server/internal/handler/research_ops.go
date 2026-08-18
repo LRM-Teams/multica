@@ -430,6 +430,10 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ClientRequestID == "" {
+		if session.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+			writeError(w, http.StatusBadRequest, "client_request_id is required")
+			return
+		}
 		req.ClientRequestID = uuid.NewString()
 	}
 	if _, err = uuid.Parse(req.ClientRequestID); err != nil || len(req.SelectedResearchRefs) > 256 {

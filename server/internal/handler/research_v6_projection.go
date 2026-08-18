@@ -515,7 +515,7 @@ func projectResearchV6Clusters(clusters []ResearchGraphClusterResp, typedNodes [
 func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.ResearchRun.(researchrun.V6ProjectionReader)
 	if !ok {
-		writeError(w, 503, "research run engine is unavailable")
+		writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.capability_unavailable", "research V6 projection unavailable", true)
 		return
 	}
 	limit := 1000
@@ -526,18 +526,18 @@ func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http
 	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
 		parsed, parseErr := strconv.Atoi(rawLimit)
 		if parseErr != nil {
-			writeError(w, http.StatusBadRequest, "snapshot limit must be an integer")
+			writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "snapshot limit must be an integer", false)
 			return
 		}
 		limit = parsed
 	}
 	snapshot, err := service.ProjectionV6Snapshot(r.Context(), researchrun.V6ProjectionPageRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), Limit: limit})
 	if errors.Is(err, researchrun.ErrProjectionResyncRequired) {
-		writeError(w, http.StatusConflict, "projection snapshot expired; resync required")
+		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.projection_resync_required", "projection snapshot expired; resync required", true)
 		return
 	}
 	if errors.Is(err, researchrun.ErrInvalidContract) {
-		writeError(w, http.StatusBadRequest, "invalid projection cursor or limit")
+		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "invalid projection cursor or limit", false)
 		return
 	}
 	if err != nil {
@@ -549,11 +549,11 @@ func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http
 func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.ResearchRun.(researchrun.V6ProjectionReader)
 	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "research V6 projection unavailable")
+		writeRonaldoV6Error(w, http.StatusServiceUnavailable, "research.v6.capability_unavailable", "research V6 projection unavailable", true)
 		return
 	}
 	if strings.TrimSpace(r.URL.Query().Get("cursor")) != "" {
-		writeError(w, http.StatusBadRequest, "projection delta cursor is not valid for this bounded page")
+		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "projection delta cursor is not valid for this bounded page", false)
 		return
 	}
 	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
@@ -562,7 +562,7 @@ func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.R
 	}
 	after, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("after")), 10, 64)
 	if err != nil || after < 0 {
-		writeError(w, http.StatusBadRequest, "after must be a non-negative integer")
+		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "after must be a non-negative integer", false)
 		return
 	}
 	page, err := service.ProjectionV6Deltas(r.Context(), researchrun.V6ProjectionDeltaRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), After: after})
@@ -612,8 +612,16 @@ func researchV6RootIDs(nodes []researchV6ProjectionNode) []string {
 }
 func writeResearchV6Error(w http.ResponseWriter, err error) {
 	if errors.Is(err, researchrun.ErrRunNotFound) || errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, 404, "research V6 run not found")
+		writeRonaldoV6Error(w, http.StatusNotFound, "research.v6.not_found", "research V6 run not found", false)
 		return
 	}
-	writeError(w, 500, "failed to load research V6 projection")
+	if errors.Is(err, researchrun.ErrProjectionResyncRequired) {
+		writeRonaldoV6Error(w, http.StatusConflict, "research.v6.projection_resync_required", "projection resync required", true)
+		return
+	}
+	if errors.Is(err, researchrun.ErrInvalidContract) {
+		writeRonaldoV6Error(w, http.StatusBadRequest, "research.v6.invalid_contract", "invalid research V6 projection request", false)
+		return
+	}
+	writeRonaldoV6Error(w, http.StatusInternalServerError, "research.v6.internal", "failed to load research V6 projection", true)
 }

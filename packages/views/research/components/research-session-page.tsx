@@ -121,7 +121,11 @@ import { ResearchConstellationWorkspace } from "./research-constellation-workspa
 import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchDirectorChatHeader } from "./research-director-chat-header";
 import { ResearchDirectorAssignmentPicker } from "./research-director-assignment-picker";
-import { ResearchCanvasChangeCard, isCanvasChangeProcessMessage } from "./research-canvas-change-card";
+import {
+  ResearchCanvasChangeCard,
+  canvasChangeTargetNodeIds,
+  isCanvasChangeProcessMessage,
+} from "./research-canvas-change-card";
 import { ResearchChatCard } from "./research-chat-card";
 import {
   ResearchChatModeBody,
@@ -249,6 +253,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     (s) => s.selectSessionNode,
   );
   const appliedNodeLinkRef = useRef<string | null>(null);
+  const lastCanvasChangeMessageIdRef = useRef<string | null>(null);
   const typedGraph = useMemo(
     () =>
       typedGraphPages?.pages.length
@@ -498,6 +503,22 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     },
     [handleD5LensChange, handleFocusDetailNode],
   );
+  useEffect(() => {
+    const latestChange = [...(messages ?? [])]
+      .reverse()
+      .find((message) => isCanvasChangeProcessMessage(message));
+    if (!latestChange) return;
+    // Establish a baseline from the initial feed; only newly arrived process
+    // messages should choreograph a canvas focus, never a page refresh.
+    if (lastCanvasChangeMessageIdRef.current === null) {
+      lastCanvasChangeMessageIdRef.current = latestChange.id;
+      return;
+    }
+    if (lastCanvasChangeMessageIdRef.current === latestChange.id) return;
+    lastCanvasChangeMessageIdRef.current = latestChange.id;
+    const targetNodeId = canvasChangeTargetNodeIds(latestChange)[0];
+    if (targetNodeId) handleFocusCanvasChangeNode(targetNodeId);
+  }, [handleFocusCanvasChangeNode, messages]);
   useEffect(() => {
     if (!data) return;
     const linkedNodeId = nav.searchParams.get("node");

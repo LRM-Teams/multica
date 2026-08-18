@@ -17,6 +17,7 @@ import { AGENT_DESCRIPTION_MAX_LENGTH, agentDetailKeys } from "@multica/core/age
 import { api } from "@multica/core/api";
 import type {
   Agent,
+  AgentPresence,
   DashboardUsageByAgent,
   MemberWithUser,
 } from "@multica/core/types";
@@ -66,6 +67,7 @@ const TAB_ICONS: Record<OwnerTab, typeof Activity> = {
 
 interface AgentSidePanelProps {
   agent: Agent;
+  presence?: AgentPresence;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
   onClose: () => void;
@@ -95,6 +97,7 @@ interface AgentSidePanelProps {
  */
 export function AgentSidePanel({
   agent,
+  presence,
   currentUserId,
   members,
   onClose,
@@ -226,6 +229,7 @@ export function AgentSidePanel({
           {!agent.archived_at ? (
             <AgentActivityStatus
               agentId={agent.id}
+              presence={presence}
               className="mt-0.5 max-w-none"
               testId="agent-profile-current-status"
             />
@@ -274,6 +278,7 @@ export function AgentSidePanel({
               <div className={tab === "profile" ? undefined : "hidden"}>
                 <AgentProfileTabContent
                   agent={agent}
+                  presence={presence}
                   members={members}
                   currentUserId={currentUserId}
                 />
@@ -310,6 +315,7 @@ export function AgentSidePanel({
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <AgentProfileTabContent
             agent={agent}
+            presence={presence}
             members={members}
             currentUserId={currentUserId}
           />
@@ -338,10 +344,12 @@ function formatDate(value: string): string {
 
 function AgentProfileTabContent({
   agent,
+  presence,
   members,
   currentUserId,
 }: {
   agent: Agent;
+  presence: import("@multica/core/types").AgentPresence | undefined;
   members: readonly MemberWithUser[];
   currentUserId: string | null;
 }) {
@@ -559,7 +567,11 @@ function AgentProfileTabContent({
         ) : null}
 
         <div className="border-t border-border pt-3">
-          <AgentProfileActions agent={agent} canManage={canEdit.allowed} />
+          <AgentProfileActions
+            agent={agent}
+            canManage={canEdit.allowed}
+            presence={presence}
+          />
         </div>
       </div>
     </div>

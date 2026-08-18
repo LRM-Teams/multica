@@ -34,12 +34,6 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: mocks.invalidateQueries }),
 }));
 
-vi.mock("@multica/core/agents", () => ({
-  useWorkspaceAgentPresence: () => ({
-    byAgent: new Map([["agent-1", mocks.presence]]),
-  }),
-}));
-
 vi.mock("sonner", () => ({
   toast: {
     success: (...args: unknown[]) => mocks.toastSuccess(...args),
@@ -164,7 +158,7 @@ describe("AgentProfileActions", () => {
   });
 
   it("uses Runner presence, not work status, to offer Start", async () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start Agent" })));
     expect(mocks.startAgent).toHaveBeenCalledWith("agent-1");
     expect(mocks.stopAgent).not.toHaveBeenCalled();
@@ -172,20 +166,26 @@ describe("AgentProfileActions", () => {
 
   it("uses active Runner presence to offer Stop", async () => {
     mocks.presence = "online";
-    render(<AgentProfileActions agent={{ ...agent, status: "offline" }} canManage />);
+    render(
+      <AgentProfileActions
+        agent={{ ...agent, status: "offline" }}
+        canManage
+        presence={mocks.presence}
+      />,
+    );
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop Agent" })));
     expect(mocks.stopAgent).toHaveBeenCalledWith("agent-1");
     expect(mocks.startAgent).not.toHaveBeenCalled();
   });
 
   it("renders Message as primary action and opens DM", () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     fireEvent.click(screen.getByTestId("agent-profile-action-message"));
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
   });
 
   it("renders one lifecycle action and no separate Restart control", () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-action-start")).toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
@@ -195,13 +195,13 @@ describe("AgentProfileActions", () => {
   });
 
   it("hides Delete when canManage is false; keeps Message", () => {
-    render(<AgentProfileActions agent={agent} canManage={false} />);
+    render(<AgentProfileActions agent={agent} canManage={false} presence={mocks.presence} />);
     expect(screen.queryByTestId("agent-profile-action-delete")).not.toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
   });
 
   it("Delete is the only solid destructive in a border-t danger zone (LRM-593 lock A)", () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage presence={mocks.presence} />);
     const del = screen.getByTestId("agent-profile-action-delete");
     expect(del.className).toMatch(/text-white/);
     expect(del.parentElement?.className).toMatch(/border-t/);

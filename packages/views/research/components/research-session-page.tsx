@@ -229,10 +229,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchPresenceOptions(wsId, sessionId),
   );
   const presence = presenceData ?? {};
-  const { data: workspaceAgents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: Boolean(wsId && data?.run?.run.orchestrator_version === "research-run-v6"),
-  });
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const {
     data: typedGraphPages,
@@ -262,6 +258,10 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   );
   const directorV6Enabled =
     data?.run?.run.orchestrator_version === "research-run-v6";
+  const { data: workspaceAgents = [] } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: directorV6Enabled,
+  });
   const persistedDirectorAgentId = data?.session.active_assignments?.find(
     (assignment) =>
       assignment.role === "director" || assignment.role === "research_director",
@@ -293,7 +293,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const selectedDirectorProjectionNode = selectedNodeId
     ? directorCanvas.canvas?.projectionNodeById.get(selectedNodeId) ?? null
     : null;
-  const directorNodeDetail = useQuery({
+  const {
+    data: directorNodeDetailData,
+    isLoading: directorNodeDetailLoading,
+    isError: directorNodeDetailError,
+    refetch: refetchDirectorNodeDetail,
+  } = useQuery({
     ...researchV6DirectorNodeDetailOptions(
       directorTransport,
       wsId,
@@ -412,7 +417,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const [selectedDirectorReportId, setSelectedDirectorReportId] = useState<
     string | null
   >(null);
-  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(null);
+  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(
+    persistedDirectorAgentId,
+  );
+  useEffect(() => {
+    setAssignedDirectorAgentId(persistedDirectorAgentId);
+  }, [persistedDirectorAgentId]);
   const assignedDirectorAgent = workspaceAgents.find(
     (agent) => agent.id === assignedDirectorAgentId,
   );
@@ -425,22 +435,35 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         clientRequestId: crypto.randomUUID(),
       }),
     onSuccess: (assignment) => {
-      if (assignment) setAssignedDirectorAgentId(assignment.directorAgentId);
+      if (assignment) {
+        setAssignedDirectorAgentId(assignment.directorAgentId);
+        void qc.invalidateQueries({
+          queryKey: researchKeys.snapshot(wsId, sessionId),
+        });
+      }
     },
   });
-  const directorReports = useQuery({
+  const {
+    data: directorReportsData,
+    isLoading: directorReportsLoading,
+    refetch: refetchDirectorReports,
+  } = useQuery({
     ...researchV6DirectorReportsOptions(directorTransport, wsId, sessionId),
     enabled: directorV6Enabled,
   });
   const directorReportId =
     (selectedDirectorReportId &&
-    directorReports.data?.some((item) => item.id === selectedDirectorReportId)
+    directorReportsData?.some((item) => item.id === selectedDirectorReportId)
       ? selectedDirectorReportId
       : null) ??
-    directorReports.data?.find((item) => item.status === "published")?.id ??
-    directorReports.data?.[0]?.id ??
+    directorReportsData?.find((item) => item.status === "published")?.id ??
+    directorReportsData?.[0]?.id ??
     null;
-  const directorReportDetail = useQuery({
+  const {
+    data: directorReportDetailData,
+    isFetching: directorReportDetailFetching,
+    refetch: refetchDirectorReportDetail,
+  } = useQuery({
     ...researchV6DirectorReportOptions(
       directorTransport,
       wsId,
@@ -1011,6 +1034,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       .postResearchMessage(sessionId, { body })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+      )
+      .catch((error: unknown) =>
+        mutationErrorToast(t(($) => $.panel.send_failed), error),
       );
   };
 
@@ -1082,7 +1108,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         handoffPending={handoff.isPending}
         onOpenDelivery={() => {
           dispatch({ type: "setDeliveryOpen", value: true });
-          if (directorV6Enabled) void directorReports.refetch();
+          if (directorV6Enabled) void refetchDirectorReports();
         }}
         members={directorV6Enabled ? [] : fleet.members}
         sources={sources}
@@ -1187,9 +1213,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
               selectedDirectorProjectionNode ? (
                 <ResearchV6NodeDetail
                   node={selectedDirectorProjectionNode}
-                  detail={directorNodeDetail.data}
-                  loading={directorNodeDetail.isLoading}
-                  error={directorNodeDetail.isError}
+                  detail={directorNodeDetailData}
+                  loading={directorNodeDetailLoading}
+                  error={directorNodeDetailError}
                   selectedForChat={
                     selectedDirectorReference?.stable_id ===
                     `${selectedDirectorProjectionNode.canonical_ref.kind}:${selectedDirectorProjectionNode.canonical_ref.id}`
@@ -1197,7 +1223,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                   projectionNodeById={
                     directorCanvas.canvas?.projectionNodeById ?? new Map()
                   }
-                  onRetry={() => void directorNodeDetail.refetch()}
+                  onRetry={() => void refetchDirectorNodeDetail()}
                   onFocusNode={(nodeId) => {
                     if (!directorCanvas.canvas?.projectionNodeById.has(nodeId)) return;
                     handleD5LensChange("relations");
@@ -1619,7 +1645,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           onViewReport={() => {
             dismissCompletion();
             dispatch({ type: "setDeliveryOpen", value: true });
-            if (directorV6Enabled) void directorReports.refetch();
+            if (directorV6Enabled) void refetchDirectorReports();
           }}
           onNewResearch={() => {
             dismissCompletion();
@@ -1645,24 +1671,24 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
             typeof window === "undefined" ? "" : window.location.origin
           }
           report={
-            directorReportDetail.data
+            directorReportDetailData
               ? {
-                  id: directorReportDetail.data.id,
-                  title: directorReportDetail.data.title,
-                  packageHash: directorReportDetail.data.package_hash,
-                  sandboxUrl: directorReportDetail.data.sandbox_url ?? "",
-                  reportOrigin: directorReportDetail.data.report_origin ?? "",
-                  plainTextFallback: directorReportDetail.data.plain_text,
-                  revision: directorReportDetail.data.revision,
-                  status: directorReportDetail.data.status,
+                  id: directorReportDetailData.id,
+                  title: directorReportDetailData.title,
+                  packageHash: directorReportDetailData.package_hash,
+                  sandboxUrl: directorReportDetailData.sandbox_url ?? "",
+                  reportOrigin: directorReportDetailData.report_origin ?? "",
+                  plainTextFallback: directorReportDetailData.plain_text,
+                  revision: directorReportDetailData.revision,
+                  status: directorReportDetailData.status,
                   inputCount:
-                    directorReports.data?.find(
-                      (item) => item.id === directorReportDetail.data.id,
-                    )?.input_count ?? directorReportDetail.data.input_refs.length,
+                    directorReportsData?.find(
+                      (item) => item.id === directorReportDetailData.id,
+                    )?.input_count ?? directorReportDetailData.input_refs.length,
                 }
               : null
           }
-          history={(directorReports.data ?? []).map((item) => ({
+          history={(directorReportsData ?? []).map((item) => ({
             id: item.id,
             revision: item.revision,
             status: item.status,
@@ -1671,9 +1697,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           }))}
           onSelectReport={setSelectedDirectorReportId}
           selectedReportId={directorReportId}
-          loading={directorReports.isLoading || directorReportDetail.isFetching}
+          loading={directorReportsLoading || directorReportDetailFetching}
           onRequestFreshCapability={() => {
-            void directorReportDetail.refetch();
+            void refetchDirectorReportDetail();
           }}
         />
       ) : (

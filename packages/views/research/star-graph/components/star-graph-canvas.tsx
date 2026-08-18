@@ -833,20 +833,27 @@ export function StarGraphCanvas({
   const expansionSequence = expansionTransition
     ? String(expansionTransition.sequence)
     : null;
-  if (expansionTransition && expansionSequence !== framedExpansionSequence) {
-    const nextCamera = planExpansionTransactionCamera(
-      model,
-      expansionTransition,
-      viewport,
-      camera,
-      { rightPanelWidth },
-    );
-    if (nextCamera) {
-      setFramedExpansionSequence(expansionSequence);
-      setCameraState(nextCamera);
+  const expansionCamera = useMemo(
+    () =>
+      expansionTransition
+        ? planExpansionTransactionCamera(
+            model,
+            expansionTransition,
+            viewport,
+            camera,
+            { rightPanelWidth },
+          )
+        : null,
+    [camera, expansionTransition, model, rightPanelWidth, viewport],
+  );
+  useEffect(() => {
+    if (!expansionTransition || expansionSequence === framedExpansionSequence) return;
+    setFramedExpansionSequence(expansionSequence);
+    if (expansionCamera) {
+      setCameraState(expansionCamera);
       setCameraTransitioning(true);
     }
-  }
+  }, [expansionCamera, expansionSequence, expansionTransition, framedExpansionSequence]);
 
   return (
     <div

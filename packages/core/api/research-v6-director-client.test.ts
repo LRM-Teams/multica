@@ -66,6 +66,18 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     );
   });
 
+  it("degrades a slice response pinned to a different snapshot", async () => {
+    response({ ...snapshot(), snapshot_id: "00000000-0000-4000-8000-000000000699" });
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6DirectorProjectionSlice(WORKSPACE_ID, RUN_ID, {
+        root: "insight:one",
+        depth: 1,
+        snapshot_id: SNAPSHOT_ID,
+      }),
+    ).resolves.toMatchObject({ snapshot_id: SNAPSHOT_ID, nodes: [], edges: [] });
+  });
+
   it("uses after rather than the superseded delta query name", async () => {
     response({ run_id: RUN_ID, deltas: [], next_cursor: null, resync_required: false });
     const client = new ApiClient("https://api.example.test");
@@ -74,6 +86,35 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
       expect.stringContaining("/projection/deltas?after=47"),
       expect.any(Object),
     );
+  });
+
+  it("requests resync instead of throwing for a cross-run delta page", async () => {
+    response({
+      run_id: "00000000-0000-4000-8000-000000000099",
+      deltas: [],
+      next_cursor: null,
+      resync_required: false,
+    });
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6DirectorProjectionDeltaPage(WORKSPACE_ID, RUN_ID, 47),
+    ).resolves.toMatchObject({ run_id: RUN_ID, deltas: [], resync_required: true });
+  });
+
+  it("keeps node detail fallback addressable when the response changes node identity", async () => {
+    response({});
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6DirectorProjectionNodeDetail(WORKSPACE_ID, RUN_ID, "node-1"),
+    ).resolves.toMatchObject({ node: { id: "node-1" } });
+  });
+
+  it("keeps report detail fallback addressable when the response changes report identity", async () => {
+    response({});
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6DirectorReport(WORKSPACE_ID, RUN_ID, "report-1"),
+    ).resolves.toMatchObject({ id: "report-1" });
   });
 
   it("sends the full snapshot identity when resuming", async () => {
@@ -97,11 +138,11 @@ describe("ApiClient Director V6 projection HTTP contract", () => {
     );
   });
 
-  it("rejects a cross-workspace response", async () => {
+  it("degrades a cross-workspace response to a safe local identity", async () => {
     response({ ...snapshot(), workspace_id: "00000000-0000-4000-8000-000000000099" });
     const client = new ApiClient("https://api.example.test");
     await expect(
       client.getResearchV6DirectorProjectionSnapshot(WORKSPACE_ID, RUN_ID),
-    ).rejects.toThrow("workspace/run identity");
+    ).resolves.toMatchObject({ workspace_id: WORKSPACE_ID, run_id: RUN_ID });
   });
 });

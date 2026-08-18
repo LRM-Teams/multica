@@ -21,17 +21,9 @@ type BindingRunnerLauncher struct {
 	Environment        string
 	Profile            string
 	ServerBaseURL      string
-	HostControlURL     string
+	ServiceEndpoint    string
 	BindingsRoot       string
 	WorkspacesRoot     string
-	// Run starts one Binding in this Computer process. When set, Spawn no
-	// longer execs `computer __runner`.
-	Run BindingChildRunFunc
-	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
-	// longer a supported direct self-upgrade source.
-	PreviousPackageUpgradeBootstrap bool
-	PreviousPackageUpgradeSourcePID int
-	sourceProcessAlive              func(int) (bool, bool)
 }
 
 func (launcher BindingRunnerLauncher) Spawn(workspaceID string, runnerGeneration int64) (BindingChild, error) {
@@ -39,12 +31,8 @@ func (launcher BindingRunnerLauncher) Spawn(workspaceID string, runnerGeneration
 		ProtocolVersion: BindingChildProtocolVersion, WorkspaceID: workspaceID,
 		ComputerID: launcher.ComputerID, ComputerGeneration: launcher.ComputerGeneration,
 		RunnerGeneration: runnerGeneration, Environment: launcher.Environment, Profile: launcher.Profile,
-		ServerBaseURL: launcher.ServerBaseURL, HostControlURL: launcher.HostControlURL,
+		ServerBaseURL: launcher.ServerBaseURL, ServiceEndpoint: launcher.ServiceEndpoint,
 		BindingsRoot: launcher.BindingsRoot, WorkspacesRoot: launcher.WorkspacesRoot,
-		PreviousPackageUpgradeBootstrap: launcher.previousPackageBootstrapActive(),
-	}
-	if launcher.Run != nil {
-		return StartInProcessBinding(bootstrap, launcher.Run)
 	}
 	executable := launcher.Executable
 	if executable == nil {
@@ -57,31 +45,23 @@ func (launcher BindingRunnerLauncher) Spawn(workspaceID string, runnerGeneration
 	return StartBindingRunner(exe, bootstrap)
 }
 
-func (launcher BindingRunnerLauncher) previousPackageBootstrapActive() bool {
-	if !launcher.PreviousPackageUpgradeBootstrap || launcher.PreviousPackageUpgradeSourcePID < 1 {
-		return false
-	}
-	alive := launcher.sourceProcessAlive
-	if alive == nil {
-		alive = processAlive
-	}
-	isAlive, known := alive(launcher.PreviousPackageUpgradeSourcePID)
-	return isAlive || !known
-}
-
 type BindingChildSpawner func(workspaceID string, runnerGeneration int64) (BindingChild, error)
+
+type activatableBindingChild interface {
+	Activate()
+}
 
 type BindingSupervisorConfig struct {
 	Spawn        BindingChildSpawner
+	StateRoot    string
 	Now          func() time.Time
 	ReadyTimeout time.Duration
 	Logger       *slog.Logger
 	Released     func(BindingChildIdentity)
 }
 
-// BindingSupervisor is the Computer Host's desired-vs-actual process Module.
-// It owns no Workspace execution object; its only child handle is an OS
-// process plus the immutable generation/PID fence.
+// BindingSupervisor is the Computer Host's desired-vs-actual Binding Module.
+// Production children are supervised operating-system processes.
 type BindingSupervisor struct {
 	config BindingSupervisorConfig
 
@@ -114,6 +94,9 @@ func NewBindingSupervisor(config BindingSupervisorConfig) (*BindingSupervisor, e
 	}
 	if config.ReadyTimeout <= 0 {
 		config.ReadyTimeout = 30 * time.Second
+	}
+	if err := recoverRunnerStates(config.StateRoot, config.Logger); err != nil {
+		return nil, fmt.Errorf("recover persisted Binding Runner state: %w", err)
 	}
 	return &BindingSupervisor{
 		config: config, records: make(map[string]*RunnerRecord),
@@ -184,6 +167,7 @@ func (supervisor *BindingSupervisor) Reconcile(parent context.Context, desiredWo
 	}
 	supervisor.mu.Unlock()
 	for _, stopped := range stops {
+		_ = removeRunnerState(supervisor.config.StateRoot, stopped.identity.WorkspaceID, stopped.identity.RunnerGeneration, stopped.identity.PID)
 		if stopped.identity.Validate() == nil && supervisor.config.Released != nil {
 			supervisor.config.Released(stopped.identity)
 		}
@@ -213,10 +197,33 @@ func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
 		supervisor.mu.Unlock()
 		next.cancel()
 		_ = child.Stop()
+		_ = discardRunnerStateAfterSpawnFailure(supervisor.config.StateRoot, next.workspaceID, next.generation, child.PID())
+		supervisor.observeExit(next.workspaceID, next.generation, child, RunnerExitCrash)
 		return
 	}
 	supervisor.children[next.workspaceID] = child
 	supervisor.mu.Unlock()
+	stateErr := writeRunnerState(supervisor.config.StateRoot, persistedRunnerState{
+		WorkspaceID: next.workspaceID, RunnerGeneration: next.generation,
+		OwnerPID: os.Getpid(), RunnerPID: child.PID(),
+		RunnerIdentity: processIdentityValue(child.PID()), StartedAt: supervisor.config.Now().UTC(),
+	})
+	if stateErr == nil {
+		stateErr = writeRunnerPID(supervisor.config.StateRoot, next.workspaceID, child.PID())
+	}
+	if stateErr != nil {
+		if supervisor.config.Logger != nil {
+			supervisor.config.Logger.Error("could not persist Binding Runner state", "workspace_id", next.workspaceID, "error", stateErr)
+		}
+		next.cancel()
+		_ = child.Stop()
+		_ = discardRunnerStateAfterSpawnFailure(supervisor.config.StateRoot, next.workspaceID, next.generation, child.PID())
+		supervisor.observeExit(next.workspaceID, next.generation, child, RunnerExitCrash)
+		return
+	}
+	if activatable, ok := child.(activatableBindingChild); ok {
+		activatable.Activate()
+	}
 	go supervisor.supervise(next.workspaceID, next.generation, child, next.ctx, next.cancel)
 }
 
@@ -235,7 +242,7 @@ func (supervisor *BindingSupervisor) supervise(workspaceID string, generation in
 			}
 			_ = child.Stop()
 		} else {
-			supervisor.observeReady(workspaceID, generation, child, ready.ControlURL)
+			supervisor.observeReady(workspaceID, generation, child, ready.RunnerEndpoint)
 		}
 	} else {
 		supervisor.observeReady(workspaceID, generation, child, "")
@@ -250,15 +257,29 @@ func (supervisor *BindingSupervisor) supervise(workspaceID string, generation in
 	supervisor.observeExit(workspaceID, generation, child, class)
 }
 
-func (supervisor *BindingSupervisor) observeReady(workspaceID string, generation int64, child BindingChild, controlURL string) {
+func (supervisor *BindingSupervisor) observeReady(workspaceID string, generation int64, child BindingChild, controlEndpoint string) {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	record := supervisor.records[workspaceID]
 	if record == nil || supervisor.children[workspaceID] != child {
 		return
 	}
-	if record.ObserveReady(generation) && controlURL != "" {
-		supervisor.controls[workspaceID] = controlURL
+	if record.ObserveReady(generation) && controlEndpoint != "" {
+		supervisor.controls[workspaceID] = controlEndpoint
+	}
+	if child != nil {
+		startedAt := supervisor.config.Now().UTC()
+		state := persistedRunnerState{}
+		if state, err := readRunnerState(runnerStatePath(supervisor.config.StateRoot, workspaceID)); err == nil && !state.StartedAt.IsZero() {
+			startedAt = state.StartedAt
+		}
+		state = persistedRunnerState{
+			WorkspaceID: workspaceID, RunnerGeneration: generation,
+			OwnerPID: os.Getpid(), RunnerPID: child.PID(),
+			RunnerIdentity: processIdentityValue(child.PID()), StartedAt: startedAt,
+		}
+		_ = writeRunnerState(supervisor.config.StateRoot, state)
+		_ = writeRunnerConnected(supervisor.config.StateRoot, workspaceID, persistedRunnerConnected{PID: child.PID(), ConnectedAt: supervisor.config.Now().UTC(), RunnerEndpoint: controlEndpoint})
 	}
 }
 
@@ -282,6 +303,9 @@ func (supervisor *BindingSupervisor) observeExit(workspaceID string, generation 
 	delete(supervisor.children, workspaceID)
 	delete(supervisor.controls, workspaceID)
 	supervisor.mu.Unlock()
+	if child != nil {
+		_ = removeRunnerState(supervisor.config.StateRoot, workspaceID, generation, child.PID())
+	}
 	if identity.Validate() == nil && supervisor.config.Released != nil {
 		supervisor.config.Released(identity)
 	}
@@ -407,12 +431,16 @@ func (supervisor *BindingSupervisor) DeliverComputerUpgrade(ctx context.Context,
 	return RequestBindingComputerUpgrade(ctx, targets[0].controlURL, controlToken, targets[0].identity, command)
 }
 
-func (supervisor *BindingSupervisor) DeliverComputerUpgradeDone(ctx context.Context, controlToken string, done protocol.ComputerUpgradeDonePayload) error {
-	targets := supervisor.availableMachineControlTargets()
-	if len(targets) == 0 {
-		return errors.New("Computer has no ready Binding for Machine Upgrade completion")
+func (supervisor *BindingSupervisor) DeliverComputerUpgradeEvent(ctx context.Context, controlToken string, identity BindingChildIdentity, eventType string, payload any) error {
+	supervisor.mu.RLock()
+	endpoint := supervisor.controls[identity.WorkspaceID]
+	child := supervisor.children[identity.WorkspaceID]
+	record := supervisor.records[identity.WorkspaceID]
+	supervisor.mu.RUnlock()
+	if child == nil || record == nil || record.Lifecycle != RunnerLifecycleRunning || endpoint == "" || record.Generation() != identity.RunnerGeneration || child.PID() != identity.PID {
+		return errors.New("Computer runner is unavailable for upgrade event")
 	}
-	return RequestBindingComputerUpgradeDone(ctx, targets[0].controlURL, controlToken, targets[0].identity, done)
+	return RequestBindingComputerUpgradeEvent(ctx, endpoint, controlToken, identity, eventType, payload)
 }
 
 func (supervisor *BindingSupervisor) ReregisterBindings(ctx context.Context, controlToken string, workspaceIDs []string) error {

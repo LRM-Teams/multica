@@ -254,6 +254,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   );
   const appliedNodeLinkRef = useRef<string | null>(null);
   const lastCanvasChangeMessageIdRef = useRef<string | null>(null);
+  const canvasChangeSessionIdRef = useRef(sessionId);
   const typedGraph = useMemo(
     () =>
       typedGraphPages?.pages.length
@@ -504,30 +505,25 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     [handleD5LensChange, handleFocusDetailNode],
   );
   useEffect(() => {
+    if (canvasChangeSessionIdRef.current !== sessionId) {
+      canvasChangeSessionIdRef.current = sessionId;
+      lastCanvasChangeMessageIdRef.current = null;
+    }
     const latestChange = [...(messages ?? [])]
       .reverse()
       .find((message) => isCanvasChangeProcessMessage(message));
     if (!latestChange) return;
+    // Establish a baseline from the initial feed; only newly arrived process
+    // messages should choreograph a canvas focus, never a page refresh.
     if (lastCanvasChangeMessageIdRef.current === null) {
       lastCanvasChangeMessageIdRef.current = latestChange.id;
       return;
     }
     if (lastCanvasChangeMessageIdRef.current === latestChange.id) return;
-    const targetNodeId = canvasChangeTargetNodeIds(latestChange)[0];
-    if (!targetNodeId) {
-      lastCanvasChangeMessageIdRef.current = latestChange.id;
-      return;
-    }
-    // Keep the message pending until projection data contains its target;
-    // realtime graph updates can arrive just after the chat event.
-    const targetNode = resolveResearchCanvasNode(targetNodeId, {
-      snapshotNodes: data?.nodes,
-      typedGraph: displayTypedGraph,
-    });
-    if (!targetNode) return;
     lastCanvasChangeMessageIdRef.current = latestChange.id;
-    handleFocusCanvasChangeNode(targetNodeId);
-  }, [data?.nodes, displayTypedGraph, handleFocusCanvasChangeNode, messages]);
+    const targetNodeId = canvasChangeTargetNodeIds(latestChange)[0];
+    if (targetNodeId) handleFocusCanvasChangeNode(targetNodeId);
+  }, [handleFocusCanvasChangeNode, messages, sessionId]);
   useEffect(() => {
     if (!data) return;
     const linkedNodeId = nav.searchParams.get("node");

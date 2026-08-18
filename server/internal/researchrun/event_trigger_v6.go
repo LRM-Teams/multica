@@ -30,6 +30,7 @@ func (s *PostgresStore) ProcessV6EventTriggers(ctx context.Context, limit int) (
 				'v6_match_decision_recorded','v6_discussion_open','v6_discussion_append_turn','v6_discussion_close',
 				'v6_dispute_review_tasks_created','v6_integration_commit','v6_report_work_created',
 				'v6_report_draft_accepted','v6_report_reviewed','v6_director_unavailable',
+				'v6_director_assigned',
 				'task_result_accepted','task_attempt_failed','task_blocked','budget_exhausted','run_resumed'
 			)
 			AND NOT EXISTS (SELECT 1 FROM research_director_cycle covered WHERE covered.session_id=e.session_id

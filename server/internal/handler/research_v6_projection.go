@@ -578,7 +578,10 @@ func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.
 		LastConfirmedSequence int64  `json:"last_confirmed_sequence"`
 		ProjectionHash        string `json:"projection_hash"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LastConfirmedSequence < 0 || req.SnapshotID == "" || req.ProjectionHash == "" {
+	if !decodeResearchJSON(w, r, &req) {
+		return
+	}
+	if req.LastConfirmedSequence < 0 || req.SnapshotID == "" || req.ProjectionHash == "" {
 		writeError(w, http.StatusBadRequest, "snapshot_id, projection_hash and a non-negative last_confirmed_sequence are required")
 		return
 	}

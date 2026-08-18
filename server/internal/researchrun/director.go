@@ -26,8 +26,8 @@ type AssignV6DirectorInput struct {
 }
 
 type MarkV6DirectorUnavailableInput struct {
-	WorkspaceID, RunID, AssignmentID, FailureClass, Diagnostics string
-	ExpectedStateVersion                                        int64
+	WorkspaceID, RunID, AssignmentID, FailureClass, Diagnostics, ClientRequestID string
+	ExpectedStateVersion                                                         int64
 }
 
 type directorV6Store interface {
@@ -38,14 +38,14 @@ type directorV6Store interface {
 type directorModule struct{ store directorV6Store }
 
 func (m directorModule) Assign(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {
-	if m.store == nil || strings.TrimSpace(in.AgentID) == "" || strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Reason) == "" || in.ExpectedStateVersion < 0 {
+	if m.store == nil || strings.TrimSpace(in.AgentID) == "" || strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Reason) == "" || strings.TrimSpace(in.ClientRequestID) == "" || in.ExpectedStateVersion < 0 {
 		return V6DirectorAssignment{}, fmt.Errorf("%w: incomplete Director assignment", ErrInvalidContract)
 	}
 	return m.store.AssignV6Director(ctx, in)
 }
 
 func (m directorModule) MarkUnavailable(ctx context.Context, in MarkV6DirectorUnavailableInput) (V6DirectorAssignment, error) {
-	if m.store == nil || strings.TrimSpace(in.AssignmentID) == "" || strings.TrimSpace(in.FailureClass) == "" {
+	if m.store == nil || strings.TrimSpace(in.AssignmentID) == "" || strings.TrimSpace(in.FailureClass) == "" || strings.TrimSpace(in.ClientRequestID) == "" {
 		return V6DirectorAssignment{}, fmt.Errorf("%w: Director failure is incomplete", ErrInvalidContract)
 	}
 	return m.store.MarkV6DirectorUnavailable(ctx, in)

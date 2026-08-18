@@ -430,6 +430,10 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ClientRequestID == "" {
+		if session.OrchestratorVersion == researchrun.OrchestratorVersionV6 {
+			writeError(w, http.StatusBadRequest, "client_request_id is required")
+			return
+		}
 		req.ClientRequestID = uuid.NewString()
 	}
 	if _, err = uuid.Parse(req.ClientRequestID); err != nil || len(req.SelectedResearchRefs) > 256 {
@@ -441,7 +445,7 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 			"result": true, "insight": true, "discussion": true, "dispute": true, "integration": true, "report": true,
 			"source_snapshot": true, "observation": true, "claim": true, "evidence_link": true}
 		if _, parseErr := uuid.Parse(ref.EntityID); strings.TrimSpace(ref.StableID) != ref.Kind+":"+ref.EntityID || !allowedKind[ref.Kind] || parseErr != nil || ref.Revision < 1 ||
-			!strings.HasPrefix(ref.ContentHash, "sha256:") || len(ref.DisplaySummary) > 4096 {
+			!researchV6SHA256HashPattern.MatchString(ref.ContentHash) || len(ref.DisplaySummary) > 4096 {
 			writeError(w, http.StatusBadRequest, "selected research ref is invalid")
 			return
 		}

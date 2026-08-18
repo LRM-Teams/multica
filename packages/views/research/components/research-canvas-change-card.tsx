@@ -122,6 +122,7 @@ export function ResearchCanvasChangeCard({
       data-canvas-change-kind={changeKind}
       className={cn(
         "rounded-xl border border-brand/25 bg-brand/5 px-3 py-2.5 text-[12px]",
+        changeKind === "integration_formed" && "motion-safe:animate-pulse",
         className,
       )}
     >

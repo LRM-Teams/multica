@@ -207,6 +207,30 @@ describe("ResearchListPage one-time return restoration", () => {
 });
 
 describe("ResearchListPage list states (LRM-789)", () => {
+  it("includes the selected Director when creating a V6 run", () => {
+    const mutate = vi.fn();
+    mutationRef.current = { ...mutationRef.current, mutate };
+    fleetQueryRef.current = {
+      ...fleetQueryRef.current,
+      data: [
+        { id: "director-1", name: "Director One", display_name: "Director One", archived_at: null },
+      ],
+    };
+    render(<ResearchListPage />);
+
+    fireEvent.change(screen.getByPlaceholderText(enResearch.goal_placeholder), {
+      target: { value: "Compare collaboration modes" },
+    });
+    const directorControls = screen.getAllByLabelText(enResearch.d5.rail.director_role);
+    fireEvent.change(directorControls[0]!, { target: { value: "research-run-v6" } });
+    fireEvent.change(screen.getAllByLabelText(enResearch.d5.rail.director_role)[1]!, {
+      target: { value: "director-1" },
+    });
+    fireEvent.click(screen.getByTestId("research-create-submit"));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
   it("loading paints row-shaped skeleton list, no group headers or empty state (LRM-781)", () => {
     setQuery({ isLoading: true });
     const { container } = render(<ResearchListPage />);

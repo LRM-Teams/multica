@@ -26,6 +26,7 @@ const {
   rolePermission,
   usageRows,
   mockRuntimes,
+  mockLocalSkills,
   updateAgentWorkspaceRole,
   setQueryData,
   invalidateQueries,
@@ -52,6 +53,7 @@ const {
   // Runtimes returned by the mocked runtime-list query. Empty by default so the
   // existing tests see no selected runtime; a #687 test loads a staged one.
   mockRuntimes: { current: [] as Array<Record<string, unknown>> },
+  mockLocalSkills: { current: [] as Array<Record<string, unknown>> },
 }));
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
@@ -222,8 +224,10 @@ vi.mock("@tanstack/react-query", () => ({
     data:
       options.kind === "usage-by-agent"
         ? usageRows
-        : options.queryKey?.[0] === "runtimes"
-          ? mockRuntimes.current
+        : options.queryKey?.[0] === "runtimes" && options.queryKey?.[1] === "local-skills"
+          ? { skills: mockLocalSkills.current, supported: true }
+          : options.queryKey?.[0] === "runtimes"
+            ? mockRuntimes.current
           : [],
     isLoading: false,
   }),
@@ -231,6 +235,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
+  runtimeLocalSkillsOptions: () => ({ queryKey: ["runtimes", "local-skills"] }),
   deriveRuntimeHealth: (rt: { status?: string }) =>
     rt?.status === "online" ? "online" : "offline",
   runtimeCurrentVersion: (rt: { current_version?: string | null }) =>
@@ -284,6 +289,11 @@ const RESOURCES = {
     display_name_label: "Display name",
     description_label: "Description",
     info_section: "Info",
+    skills_section: "Skills",
+    global_skills: "Global skills",
+    workspace_skills: "Workspace skills",
+    no_global_skills: "No global skills discovered",
+    no_workspace_skills: "No workspace skills configured",
     actions_section: "Actions",
   },
   profile_card: {
@@ -391,6 +401,32 @@ describe("AgentSidePanel", () => {
     rolePermission.allowed = false;
     usageRows.length = 0;
     mockRuntimes.current = [];
+    mockLocalSkills.current = [];
+  });
+
+  it("shows global and workspace skills separately in the profile", () => {
+    mockLocalSkills.current = [
+      {
+        name: "global-review",
+        description: "Shared review rules",
+        source_path: "~/.agents/skills/global-review",
+      },
+    ];
+    const agent = { ...makeAgent("user-owner"), skills: [{ id: "skill-1", name: "deploy", description: "Deploy safely" }] };
+    render(
+      <AgentSidePanel
+        agent={agent}
+        currentUserId="user-owner"
+        members={members}
+        onClose={() => {}}
+      />,
+    );
+
+    const skills = screen.getByTestId("agent-profile-skills");
+    expect(within(skills).getByText(/Global skills/)).toBeInTheDocument();
+    expect(within(skills).getByText("global-review")).toBeInTheDocument();
+    expect(within(skills).getByText(/Workspace skills/)).toBeInTheDocument();
+    expect(within(skills).getByText("deploy")).toBeInTheDocument();
   });
 
   it("renders no health or update status beside Runtime", () => {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"gopkg.in/yaml.v3"
 )
@@ -82,10 +83,10 @@ func resolveSkillsDir(agentRoot, provider string, manifest *sidecarManifest) (st
 // it can match the managed skill roots the prior manifest recorded.
 func skillsDirPath(agentRoot, provider string) string {
 	switch provider {
-	case "claude":
+	case agent.ProviderClaude:
 		// Claude Code natively discovers skills from .claude/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".claude", "skills")
-	case "opencode":
+	case agent.ProviderOpenCode:
 		// OpenCode natively discovers project skills from .opencode/skills/ in
 		// the workdir. ConfigPaths.directories() walks up from the discovery
 		// root looking for a bare `.opencode` directory (no opencode.json
@@ -95,21 +96,21 @@ func skillsDirPath(agentRoot, provider string) string {
 		// without those, OpenCode walks from the daemon's inherited PWD and
 		// misses .opencode/skills + AGENTS.md entirely (MUL-2416).
 		return filepath.Join(agentRoot, ".opencode", "skills")
-	case "codex":
+	case agent.ProviderCodex:
 		// Codex follows Raft's split: CODEX_HOME and global skills remain
 		// outside the agent workspace, while assigned skills are workspace-local.
 		return filepath.Join(agentRoot, ".agents", "skills")
-	case "pi":
+	case agent.ProviderPi:
 		// Pi natively discovers skills from .pi/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".pi", "skills")
-	case "cursor":
+	case agent.ProviderCursor:
 		// Cursor natively discovers skills from .cursor/skills/ in the workdir.
 		return filepath.Join(agentRoot, ".cursor", "skills")
-	case "kiro":
+	case agent.ProviderKiro:
 		// Kiro CLI auto-discovers project-level skills from .kiro/skills/
 		// in the workdir.
 		return filepath.Join(agentRoot, ".kiro", "skills")
-	case "grok":
+	case agent.ProviderGrok:
 		// Grok Build discovers project skills from .grok/skills/ (and
 		// .grok/commands/) under the workdir.
 		return filepath.Join(agentRoot, ".grok", "skills")

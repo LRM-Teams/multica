@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/skill"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 const (
@@ -62,23 +63,23 @@ func localSkillRootForProvider(provider string) (string, bool, error) {
 	}
 
 	switch provider {
-	case "claude":
+	case agent.ProviderClaude:
 		return filepath.Join(home, ".claude", "skills"), true, nil
-	case "codex":
+	case agent.ProviderCodex:
 		codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
 		if codexHome == "" {
 			codexHome = filepath.Join(home, ".codex")
 		}
 		return filepath.Join(codexHome, "skills"), true, nil
-	case "opencode":
+	case agent.ProviderOpenCode:
 		return filepath.Join(home, ".config", "opencode", "skills"), true, nil
-	case "pi":
-		return filepath.Join(home, ".pi", "agent", "skills"), true, nil
-	case "cursor":
+	case agent.ProviderPi:
+		return filepath.Join(home, ".pi", "skills"), true, nil
+	case agent.ProviderCursor:
 		return filepath.Join(home, ".cursor", "skills"), true, nil
-	case "kiro":
+	case agent.ProviderKiro:
 		return filepath.Join(home, ".kiro", "skills"), true, nil
-	case "grok":
+	case agent.ProviderGrok:
 		return filepath.Join(home, ".grok", "skills"), true, nil
 	default:
 		return "", false, nil
@@ -291,7 +292,45 @@ func listRuntimeLocalSkills(provider string) ([]runtimeLocalSkillSummary, bool, 
 	if err != nil || !supported {
 		return nil, supported, err
 	}
-	return listLocalSkillsFromRoot(provider, root)
+	roots := []string{root}
+	if provider == agent.ProviderCodex {
+		home, homeErr := userHomeDir()
+		if homeErr != nil {
+			return nil, false, fmt.Errorf("resolve user home: %w", homeErr)
+		}
+		codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+		if codexHome == "" {
+			codexHome = filepath.Join(home, ".codex")
+		}
+		// Raft's Codex discovery keeps CODEX_HOME and the shared user-level
+		// .agents directory separate, while still exposing both inventories.
+		roots = []string{
+			filepath.Join(codexHome, "skills"),
+			filepath.Join(codexHome, "skills", ".system"),
+			filepath.Join(codexHome, ".agents", "skills"),
+		}
+		if strings.TrimSpace(os.Getenv("CODEX_HOME")) == "" {
+			roots = append(roots, filepath.Join(home, ".agents", "skills"))
+		}
+	}
+
+	var all []runtimeLocalSkillSummary
+	seen := make(map[string]bool)
+	for _, candidate := range roots {
+		skills, _, listErr := listLocalSkillsFromRoot(provider, candidate)
+		if listErr != nil {
+			return nil, supported, listErr
+		}
+		for _, skill := range skills {
+			if seen[skill.Key] {
+				continue
+			}
+			seen[skill.Key] = true
+			all = append(all, skill)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Key < all[j].Key })
+	return all, supported, nil
 }
 
 func listLocalSkillsFromRoot(provider, root string) ([]runtimeLocalSkillSummary, bool, error) {

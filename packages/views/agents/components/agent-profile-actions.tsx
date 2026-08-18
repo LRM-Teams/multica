@@ -5,9 +5,8 @@ import { Loader2, MessageSquare, Play, Square, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import type { Agent } from "@multica/core/types";
+import type { Agent, AgentPresence } from "@multica/core/types";
 import { api } from "@multica/core/api";
-import { useWorkspaceAgentPresence } from "@multica/core/agents";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -42,9 +41,11 @@ import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 export function AgentProfileActions({
   agent,
   canManage,
+  presence,
 }: {
   agent: Agent;
   canManage: boolean;
+  presence: AgentPresence | undefined;
 }) {
   const { t } = useT("agents");
   const qc = useQueryClient();
@@ -55,8 +56,6 @@ export function AgentProfileActions({
 
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
-  const { byAgent: presenceByAgent } = useWorkspaceAgentPresence(agent.workspace_id);
-  const presence = presenceByAgent.get(agent.id);
   const isAgentRunning = presence === "online";
   // Only offer lifecycle actions while the bound computer is
   // reachable — it comes back on its own once the computer reconnects.

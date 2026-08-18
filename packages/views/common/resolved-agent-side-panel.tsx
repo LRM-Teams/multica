@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "@multica/core/api";
 import {
   agentDetailOptions,
+  agentPresenceOptions,
   memberProfileOptions,
   type AgentPanelIdentitySnapshot,
 } from "@multica/core/agents";
@@ -85,6 +86,8 @@ export function ResolvedAgentSidePanel({
     ...agentDetailOptions(wsId, agentId),
     enabled: !!agentId,
   });
+  const { data: presenceByAgent } = useQuery(agentPresenceOptions(wsId));
+  const presence = presenceByAgent?.get(agentId);
 
   const detailForbidden =
     detailIsError &&
@@ -123,6 +126,7 @@ export function ResolvedAgentSidePanel({
     return (
       <AgentSidePanel
         agent={agent}
+        presence={presence}
         currentUserId={currentUserId}
         members={members}
         onClose={onClose}

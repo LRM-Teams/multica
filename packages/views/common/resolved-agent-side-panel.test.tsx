@@ -36,6 +36,9 @@ vi.mock("@multica/core/agents", () => ({
   agentDetailOptions: (wsId: string, agentId: string) => ({
     queryKey: ["workspaces", wsId, "agent", agentId],
   }),
+  agentPresenceOptions: (wsId: string) => ({
+    queryKey: ["workspaces", wsId, "agent-presence"],
+  }),
   memberProfileOptions: (wsId: string, memberType: string, memberId: string) => ({
     queryKey: ["workspaces", wsId, "member-profile", memberType, memberId],
   }),

@@ -11,12 +11,16 @@ ALTER TABLE agent
   ADD CONSTRAINT agent_managed_role_check
   CHECK (managed_role IS NULL OR managed_role IN ('group_manager', 'research_fleet'));
 
--- The older schema has no dedicated role-change reason. Preserve the durable
--- wake rather than failing the rollback or deleting it; `ambient` is the
--- existing durable, server-generated wake category.
-UPDATE agent_inbox_event
-SET reason = 'ambient'
-WHERE reason = 'channel_role_changed';
+-- The older schema has no dedicated role-change reason. Refuse the rollback
+-- while these durable rows exist: silently remapping them would erase the
+-- reason that an operator needs to reconcile before a downgrade.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM agent_inbox_event WHERE reason = 'channel_role_changed') THEN
+    RAISE EXCEPTION 'cannot roll back migration 247 while channel_role_changed wake rows exist';
+  END IF;
+END;
+$$;
 
 ALTER TABLE agent_inbox_event
   DROP CONSTRAINT IF EXISTS agent_inbox_event_reason_check;

@@ -246,5 +246,5 @@ func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 }
 
 func writeRonaldoV6Error(w http.ResponseWriter, status int, code, message string, retryable bool) {
-	writeJSON(w, status, map[string]any{"error": map[string]any{"code": code, "message": message, "retryable": retryable}})
+	writeJSON(w, status, map[string]any{"code": code, "error": message, "retryable": retryable})
 }

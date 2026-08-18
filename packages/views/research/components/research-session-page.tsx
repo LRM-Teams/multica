@@ -260,6 +260,15 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   );
   const directorV6Enabled =
     data?.run?.run.orchestrator_version === "research-run-v6";
+  // V6 Director identity is restored from the authoritative run projection.
+  // Never infer it from the legacy Fleet lead/member list.
+  const persistedDirectorAgentId = useMemo(
+    () =>
+      data?.session.active_assignments?.find((assignment) =>
+        ["director", "research_director"].includes(assignment.role),
+      )?.agent_id ?? null,
+    [data?.session.active_assignments],
+  );
   const { data: workspaceAgents = [] } = useQuery({
     ...agentListOptions(wsId),
     enabled: directorV6Enabled,

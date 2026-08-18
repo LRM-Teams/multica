@@ -223,11 +223,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			return fmt.Errorf("bind resident Pi run identity: %w", err)
 		}
 	}
-	if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
-		_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
-		return fmt.Errorf("start resident provider process: %w", err)
-	}
-	return nil
+	return d.ensureResidentProviderProcess(ctx, agentID, runtimeID)
 }
 
 // ensureResidentProviderProcess keeps Raft's failed-start cleanup invariant:
@@ -246,6 +242,7 @@ func (d *Daemon) ensureResidentProviderProcess(ctx context.Context, agentID, run
 		}
 		return startErr
 	}
+	d.recordProviderSession(agentID, runtimeID, d.canonicalRuntimes.residentProviderSession(agentID, runtimeID))
 	return nil
 }
 

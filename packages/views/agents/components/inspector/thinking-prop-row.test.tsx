@@ -7,7 +7,8 @@ import {
   fireEvent,
   render,
   screen,
-  } from "@testing-library/react";
+  waitFor,
+} from "@testing-library/react";
 import type {
   RuntimeModel,
   RuntimeModelListRequest,
@@ -38,7 +39,6 @@ import { ThinkingPropRow } from "./thinking-prop-row";
 const CLAUDE_MODEL: RuntimeModel = {
   id: "claude-sonnet-4-6",
   label: "Claude Sonnet 4.6",
-  default: true,
   thinking: {
     supported_levels: [
       { value: "none", label: "None" },
@@ -48,6 +48,13 @@ const CLAUDE_MODEL: RuntimeModel = {
     ],
     default_level: "medium",
   },
+};
+
+const GROK_DEFAULT_MODEL: RuntimeModel = {
+  ...CLAUDE_MODEL,
+  id: "grok-4.6",
+  label: "Grok 4.6",
+  default: true,
 };
 
 // Model without thinking metadata — what the row sees when the agent's
@@ -123,6 +130,26 @@ describe("ThinkingPropRow", () => {
 
     await screen.findByText("Thinking");
     expect(mockInitiateListModels).toHaveBeenCalled();
+  });
+
+  it("does not infer thinking levels from the first model when no model or default is selected", async () => {
+    renderRow({ model: "", value: "" });
+
+    await waitFor(() => expect(mockInitiateListModels).toHaveBeenCalled());
+    expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
+  });
+
+  it("uses the catalog's explicit default model for thinking without persisting a model selection", async () => {
+    mockInitiateListModels.mockResolvedValue(
+      listResult([CLAUDE_MODEL, GROK_DEFAULT_MODEL]),
+    );
+    const { onChange } = renderRow({ model: "", value: "" });
+
+    await screen.findByText("Thinking");
+    expect(
+      (await screen.findAllByText("Follow CLI config")).length,
+    ).toBeGreaterThan(0);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("renders the row with the persisted raw token when levels are empty but value is set (stale orphan)", async () => {

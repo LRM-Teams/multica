@@ -123,6 +123,13 @@ func (p ComputerUpgradePayload) Operation() string {
 	return strings.TrimSpace(p.RequestID)
 }
 
+func (p *ComputerUpgradePayload) Canonicalize() {
+	if p == nil || strings.TrimSpace(p.RequestID) != "" {
+		return
+	}
+	p.RequestID = strings.TrimSpace(p.OperationID)
+}
+
 func (p ComputerUpgradePayload) Validate() error {
 	if p.Operation() == "" {
 		return fmt.Errorf("Computer upgrade request identity is required")
@@ -332,13 +339,13 @@ type AgentActivitySnapshot struct {
 	ProcessInstanceID string    `json:"-"`
 }
 
-// AgentActivityEntry keeps its body as an open envelope. The transport only
-// requires a bounded JSON object; server presentation owns known-kind parsing
-// and the generic fallback used for future kinds.
+// AgentActivityEntry keeps its body as an open envelope. Like Raft, its array
+// order is its position; the server derives the persistence ordinal instead of
+// carrying a duplicate position field on the wire. Server presentation owns
+// known-kind parsing and the generic fallback used for future kinds.
 type AgentActivityEntry struct {
-	Kind     string          `json:"kind"`
-	Position int             `json:"position"`
-	Body     json.RawMessage `json:"body"`
+	Kind string          `json:"kind"`
+	Body json.RawMessage `json:"body"`
 }
 
 // AgentActivityNarrativeBody carries only the event-local fact. The server
@@ -537,8 +544,8 @@ func (p AgentActivityPayload) Validate() error {
 	if len(p.Entries) > maxActivityEntriesPerFrame {
 		return fmt.Errorf("too many activity entries: %d", len(p.Entries))
 	}
-	for index, entry := range p.Entries {
-		if err := entry.Validate(index); err != nil {
+	for _, entry := range p.Entries {
+		if err := entry.Validate(); err != nil {
 			return err
 		}
 	}
@@ -570,10 +577,7 @@ func (p AgentActivitySnapshot) Validate() error {
 	return validateOptionalIDs(p.DetailKind, p.ProbeID, p.ProcessInstanceID)
 }
 
-func (e AgentActivityEntry) Validate(expectedPosition int) error {
-	if e.Position != expectedPosition {
-		return fmt.Errorf("activity entry position %d, want %d", e.Position, expectedPosition)
-	}
+func (e AgentActivityEntry) Validate() error {
 	if err := validateRequiredIDs(e.Kind); err != nil {
 		return err
 	}

@@ -1,0 +1,197 @@
+package researchrun
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+func (s *PostgresStore) executeV6CreateAgentAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
+	if action.PayloadSchema != "agent.create.v1" {
+		return ErrInvalidContract
+	}
+	var payload struct {
+		Name             string          `json:"name"`
+		Capability       string          `json:"capability"`
+		MissionPrompt    string          `json:"mission_prompt"`
+		CapacityReason   string          `json:"capacity_reason"`
+		ModelConfig      json.RawMessage `json:"model_config"`
+		ToolConfig       json.RawMessage `json:"tool_config"`
+		PermissionConfig json.RawMessage `json:"permission_config"`
+	}
+	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Name) == "" || strings.TrimSpace(payload.MissionPrompt) == "" {
+		return ErrInvalidContract
+	}
+	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, proposal.RunID, proposal.WorkspaceID); err != nil {
+		return err
+	}
+	var state int64
+	var activeCount int
+	if err = tx.QueryRow(ctx, `SELECT state_version,(SELECT count(*)::int FROM research_team_membership m WHERE m.session_id=s.id AND m.state IN ('idle','working','offline','retiring')) FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID).Scan(&state, &activeCount); err != nil {
+		return err
+	}
+	if state != expectedState || activeCount >= 50 || (activeCount >= 20 && strings.TrimSpace(payload.CapacityReason) == "") {
+		return ErrWorkItemChanged
+	}
+	outboxPayload, _ := json.Marshal(map[string]any{
+		"spec":       V6AgentSpec{Name: payload.Name, Capability: payload.Capability, MissionPrompt: payload.MissionPrompt, ModelConfig: payload.ModelConfig, ToolConfig: payload.ToolConfig},
+		"membership": AddV6TeamMemberInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, DirectorCycleID: cycleID, MissionPrompt: payload.MissionPrompt, CapacityReason: payload.CapacityReason, ModelConfig: payload.ModelConfig, ToolConfig: payload.ToolConfig, PermissionConfig: payload.PermissionConfig},
+	})
+	if _, err = tx.Exec(ctx, `INSERT INTO research_v6_outbox(workspace_id,session_id,kind,idempotency_key,payload) VALUES($1::uuid,$2::uuid,'create_agent',$3,$4::jsonb) ON CONFLICT (workspace_id,session_id,idempotency_key) DO NOTHING`, proposal.WorkspaceID, proposal.RunID, action.IdempotencyKey, outboxPayload); err != nil {
+		return err
+	}
+	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_agent_creation_requested", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"action_id": action.ActionID, "director_cycle_id": cycleID, "name": payload.Name}); err != nil {
+		return err
+	}
+	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
+}
+
+func (s *PostgresStore) executeV6CreateWorkAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
+	if action.PayloadSchema != "work.create.v1" && action.PayloadSchema != "collaboration.create.v1" {
+		return ErrInvalidContract
+	}
+	var payload struct {
+		Kind                   string          `json:"kind"`
+		AssigneeAgentID        string          `json:"assignee_agent_id"`
+		Mission                string          `json:"mission"`
+		ExpectedResultSchemaID string          `json:"expected_result_schema_id"`
+		PayloadSchemaID        string          `json:"payload_schema_id"`
+		Payload                json.RawMessage `json:"payload"`
+		Priority               float64         `json:"priority"`
+		MaxAttempts            int             `json:"max_attempts"`
+		BranchIDs              []string        `json:"branch_ids"`
+	}
+	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Kind) == "" || strings.TrimSpace(payload.Mission) == "" || payload.Priority < 0 || payload.Priority > 1 || payload.MaxAttempts < 1 || payload.MaxAttempts > 100 {
+		return ErrInvalidContract
+	}
+	if !validV6ActionUUID(payload.AssigneeAgentID) {
+		return ErrInvalidContract
+	}
+	for _, branchID := range payload.BranchIDs {
+		if !validV6ActionUUID(branchID) {
+			return ErrInvalidContract
+		}
+	}
+	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, proposal.RunID, proposal.WorkspaceID); err != nil {
+		return err
+	}
+	var goalVersion int
+	var state, sequence int64
+	var member bool
+	if err = tx.QueryRow(ctx, `SELECT goal_version,state_version,COALESCE((SELECT max(sequence) FROM research_run_event WHERE session_id=s.id),0),EXISTS(SELECT 1 FROM research_team_membership m WHERE m.session_id=s.id AND m.agent_id=$3::uuid AND m.state IN ('idle','working','offline','retiring')) FROM research_session s WHERE s.workspace_id=$1::uuid AND s.id=$2::uuid`, proposal.WorkspaceID, proposal.RunID, payload.AssigneeAgentID).Scan(&goalVersion, &state, &sequence, &member); err != nil {
+		return err
+	}
+	if state != expectedState || !member {
+		return ErrWorkItemChanged
+	}
+	workID := uuid.NewString()
+	result, err := tx.Exec(ctx, `INSERT INTO research_work_item(id,workspace_id,session_id,kind,status,target_kind,client_key,idempotency_key,goal_version,input_state_version,input_event_sequence,created_by_director_cycle_id,assigned_agent_id,priority,max_attempts,payload_schema_id,expected_result_schema_id,payload,state_version,ready_at,reason)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4,'ready','',$5,$5,$6,$7,$8,$9::uuid,$10::uuid,$11,$12,$13,$14,$15::jsonb,0,now(),$16) ON CONFLICT (session_id,goal_version,idempotency_key) WHERE goal_version IS NOT NULL AND idempotency_key<>'' DO NOTHING`, workID, proposal.WorkspaceID, proposal.RunID, payload.Kind, action.IdempotencyKey, goalVersion, state, sequence, cycleID, payload.AssigneeAgentID, payload.Priority, payload.MaxAttempts, payload.PayloadSchemaID, payload.ExpectedResultSchemaID, normalizedV6JSON(payload.Payload, `{}`), payload.Mission)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return nil
+	}
+	for _, branchID := range payload.BranchIDs {
+		if _, err = tx.Exec(ctx, `INSERT INTO research_v6_work_item_branch(workspace_id,session_id,work_item_id,branch_id) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid) ON CONFLICT DO NOTHING`, proposal.WorkspaceID, proposal.RunID, workID, branchID); err != nil {
+			return err
+		}
+	}
+	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_work_item_created", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"action_id": action.ActionID, "work_item_id": workID, "branch_ids": payload.BranchIDs}); err != nil {
+		return err
+	}
+	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
+}
+
+func (s *PostgresStore) executeV6CreateBranchAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, expectedState int64) error {
+	if action.PayloadSchema != "branch.create.v1" {
+		return ErrInvalidContract
+	}
+	var payload struct {
+		Objective      string          `json:"objective"`
+		ParentBranchID string          `json:"parent_branch_id"`
+		Scope          json.RawMessage `json:"scope"`
+		BudgetShare    float64         `json:"budget_share"`
+	}
+	if json.Unmarshal(action.Payload, &payload) != nil || strings.TrimSpace(payload.Objective) == "" || payload.BudgetShare < 0 || payload.BudgetShare > 1 {
+		return ErrInvalidContract
+	}
+	if strings.TrimSpace(payload.ParentBranchID) != "" && !validV6ActionUUID(payload.ParentBranchID) {
+		return ErrInvalidContract
+	}
+	tx, err := s.beginResearchTx(ctx, txOpV6DirectorProposalComplete, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, proposal.RunID, proposal.WorkspaceID); err != nil {
+		return err
+	}
+	var goalVersion int
+	var state int64
+	if err = tx.QueryRow(ctx, `SELECT goal_version,state_version FROM research_session WHERE workspace_id=$1::uuid AND id=$2::uuid`, proposal.WorkspaceID, proposal.RunID).Scan(&goalVersion, &state); err != nil {
+		return err
+	}
+	if state != expectedState {
+		return ErrWorkItemChanged
+	}
+	branchID := uuid.NewString()
+	createdAt := time.Now().UTC()
+	if _, err = tx.Exec(ctx, `INSERT INTO research_branch(id,workspace_id,session_id,client_key,parent_branch_id,objective,entry_conditions,exit_conditions,budget_share,status,goal_version,scope,state_version,created_by_director_cycle_id,created_at,updated_at)
+		VALUES($1::uuid,$2::uuid,$3::uuid,'director:'||$1::text,NULLIF($4,'')::uuid,$5,'[]'::jsonb,'[]'::jsonb,$6,'active',$7,$8::jsonb,1,$9::uuid,$10,$10)`, branchID, proposal.WorkspaceID, proposal.RunID, payload.ParentBranchID, payload.Objective, payload.BudgetShare, goalVersion, normalizedV6JSON(payload.Scope, `{}`), cycleID, createdAt); err != nil {
+		return err
+	}
+	if err = registerV6BranchArtifactTx(ctx, tx, proposal.WorkspaceID, proposal.RunID, branchID, createdAt, int32(goalVersion), map[string]any{
+		"parent_branch_id": payload.ParentBranchID, "objective": payload.Objective, "entry_conditions": json.RawMessage(`[]`),
+		"exit_conditions": json.RawMessage(`[]`), "budget_share": payload.BudgetShare, "status": "active",
+	}); err != nil {
+		return err
+	}
+	if _, err = appendEvent(ctx, tx, proposal.WorkspaceID, proposal.RunID, "v6_branch_created", "v6-director-action:"+action.IdempotencyKey, "director", "", map[string]any{"action_id": action.ActionID, "branch_id": branchID}); err != nil {
+		return err
+	}
+	return s.commitResearchTx(ctx, txOpV6DirectorProposalComplete, tx)
+}
+
+func (s *PostgresStore) executeV6CreateReportAction(ctx context.Context, proposal v6DirectorProposal, cycleID string, action v6DirectorAction, goalVersion int, expectedState int64) error {
+	if action.PayloadSchema != "report.create.v1" {
+		return ErrInvalidContract
+	}
+	var payload struct {
+		AssigneeAgentID string             `json:"assignee_agent_id"`
+		Title           string             `json:"title"`
+		Inputs          []V6ReportInputRef `json:"inputs"`
+	}
+	if json.Unmarshal(action.Payload, &payload) != nil || !validV6ActionUUID(payload.AssigneeAgentID) || strings.TrimSpace(payload.Title) == "" {
+		return ErrInvalidContract
+	}
+	for _, input := range payload.Inputs {
+		if strings.TrimSpace(input.BranchID) != "" && !validV6ActionUUID(input.BranchID) {
+			return ErrInvalidContract
+		}
+		if strings.TrimSpace(input.NodeArtifactVersionID) != "" && !validV6ActionUUID(input.NodeArtifactVersionID) {
+			return ErrInvalidContract
+		}
+	}
+	var sequence int64
+	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE session_id=$1::uuid`, proposal.RunID).Scan(&sequence); err != nil {
+		return err
+	}
+	_, err := s.CreateV6ReportWork(ctx, CreateV6ReportWorkInput{WorkspaceID: proposal.WorkspaceID, RunID: proposal.RunID, DirectorCycleID: cycleID, AssigneeAgentID: payload.AssigneeAgentID, IdempotencyKey: action.IdempotencyKey, Title: payload.Title, Reason: action.Reason, ExpectedGoalVersion: goalVersion, ExpectedStateVersion: expectedState, InputEventSequence: sequence, Inputs: payload.Inputs})
+	return err
+}

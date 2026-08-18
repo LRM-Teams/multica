@@ -3,6 +3,9 @@ export {
   ResearchSessionPage,
   ExplorationMap,
   ResearchExecutionPanel,
+  ResearchV6ReportModal,
+  type ResearchV6ReportSandboxDocument,
+  ResearchSelectedRefChip,
 } from "./components";
 export {
   researchExecutionPanelFixture,

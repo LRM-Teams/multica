@@ -2,38 +2,36 @@ package computer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 )
 
-// HealthProbe reports the resident Computer's health map for a loopback
-// health port, replacing the real HTTP probe in tests. It is the replaceable
-// local dependency the Lifecycle talks through.
-type HealthProbe func(ctx context.Context, port int) map[string]any
+const (
+	shutdownSourceHeader     = "X-Multica-Shutdown-Source"
+	shutdownActionHeader     = "X-Multica-Shutdown-Action"
+	shutdownRequestPIDHeader = "X-Multica-Shutdown-Request-Pid"
+)
 
-// ProbeHealth calls the local health endpoint on the given loopback port and
+// ShutdownRequest identifies the local process and lifecycle operation asking
+// the resident Computer to exit. It is diagnostic metadata, not authorization.
+type ShutdownRequest struct {
+	Source     string
+	Action     string
+	RequestPID int
+}
+
+// ServiceProbe reports the resident Computer's health map through local IPC,
+// replacing the real service probe in tests. It is the replaceable
+// local dependency the Lifecycle talks through.
+type ServiceProbe func(ctx context.Context, endpoint string) map[string]any
+
+// ProbeHealth calls the local health method on the Computer service IPC and
 // returns the decoded JSON body. Any failure (transport, non-JSON, or the
 // endpoint simply not being up) is reported as a "stopped" status.
-func ProbeHealth(ctx context.Context, port int) map[string]any {
-	addr := fmt.Sprintf("http://127.0.0.1:%d/health", port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr, nil)
-	if err != nil {
-		return map[string]any{"status": "stopped"}
-	}
-
-	httpClient := &http.Client{Timeout: 2 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return map[string]any{"status": "stopped"}
-	}
-	defer resp.Body.Close()
-
+func ProbeHealth(ctx context.Context, endpoint string) map[string]any {
 	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := callLocalJSON(ctx, endpoint, LocalControlServiceStatusOperation, 2*time.Second, nil, nil, &result); err != nil {
 		return map[string]any{"status": "stopped"}
 	}
 	return result
@@ -41,34 +39,20 @@ func ProbeHealth(ctx context.Context, port int) map[string]any {
 
 // RequestEnvironmentSwitch asks the live resident to stop taking new work
 // and waits until work admitted before that barrier finishes naturally.
-func RequestEnvironmentSwitch(ctx context.Context, port int, controlToken string) error {
-	return requestEnvironmentSwitchControl(ctx, port, controlToken, "prepare")
+func RequestEnvironmentSwitch(ctx context.Context, endpoint, controlToken string) error {
+	return requestEnvironmentSwitchControl(ctx, endpoint, controlToken, "prepare")
 }
 
 // ReleaseEnvironmentSwitch reopens claims when the caller cannot commit the
 // prepared switch. A successful switch shuts the resident down instead.
-func ReleaseEnvironmentSwitch(ctx context.Context, port int, controlToken string) error {
-	return requestEnvironmentSwitchControl(ctx, port, controlToken, "release")
+func ReleaseEnvironmentSwitch(ctx context.Context, endpoint, controlToken string) error {
+	return requestEnvironmentSwitchControl(ctx, endpoint, controlToken, "release")
 }
 
-func requestEnvironmentSwitchControl(ctx context.Context, port int, controlToken, action string) error {
-	url := fmt.Sprintf("http://127.0.0.1:%d/environment-switch/%s", port, action)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Multica-Control-Token", strings.TrimSpace(controlToken))
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("environment switch control returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
-	}
-	return nil
+func requestEnvironmentSwitchControl(ctx context.Context, endpoint, controlToken, action string) error {
+	return callLocalJSON(ctx, endpoint, LocalControlWorkspaceEnvironmentOperation, 0,
+		map[string]string{"X-Multica-Control-Token": strings.TrimSpace(controlToken)},
+		map[string]string{"action": action}, nil)
 }
 
 // Alive reports whether a health response indicates a live resident process
@@ -86,23 +70,13 @@ func Alive(health map[string]any) bool {
 }
 
 // RequestShutdown POSTs to the resident process's /shutdown endpoint to ask
-// it to exit gracefully. Returns an error if the request could not be
-// delivered (network error, non-2xx status, or the endpoint predates this
-// change).
-func RequestShutdown(port int) error {
-	url := fmt.Sprintf("http://127.0.0.1:%d/shutdown", port)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		return err
+// it to exit gracefully and includes non-sensitive audit metadata. Returns an
+// error if the request could not be delivered (network error, non-2xx status,
+// or the endpoint predates this change).
+func RequestShutdown(endpoint string, audit ShutdownRequest) error {
+	headers := map[string]string{shutdownSourceHeader: strings.TrimSpace(audit.Source), shutdownActionHeader: strings.TrimSpace(audit.Action)}
+	if audit.RequestPID > 0 {
+		headers[shutdownRequestPIDHeader] = fmt.Sprintf("%d", audit.RequestPID)
 	}
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	return nil
+	return callLocalJSON(context.Background(), endpoint, LocalControlRestartServiceOperation, 2*time.Second, headers, nil, nil)
 }

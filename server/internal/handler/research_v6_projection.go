@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
@@ -134,6 +135,12 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 	if runID == "" || workspaceID == "" {
 		return researchV6Snapshot{}, researchrun.ErrRunNotFound
 	}
+	runUUID, runErr := uuid.Parse(runID)
+	workspaceUUID, workspaceErr := uuid.Parse(strings.TrimSpace(workspaceID))
+	if runErr != nil || workspaceErr != nil {
+		return researchV6Snapshot{}, researchrun.ErrInvalidContract
+	}
+	runID, workspaceID = runUUID.String(), workspaceUUID.String()
 	snap, err := h.ResearchRun.Snapshot(r.Context(), runID, workspaceID)
 	if err != nil {
 		return researchV6Snapshot{}, err
@@ -506,122 +513,90 @@ func projectResearchV6Clusters(clusters []ResearchGraphClusterResp, typedNodes [
 }
 
 func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http.Request) {
-	if h.ResearchRun == nil {
+	service, ok := h.ResearchRun.(researchrun.V6ProjectionReader)
+	if !ok {
 		writeError(w, 503, "research run engine is unavailable")
 		return
 	}
-	snap, err := h.loadResearchV6Snapshot(r)
-	if err != nil {
-		writeResearchV6Error(w, err)
+	limit := 1000
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
 		return
 	}
 	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
-		limit, parseErr := strconv.Atoi(rawLimit)
+		parsed, parseErr := strconv.Atoi(rawLimit)
 		if parseErr != nil {
 			writeError(w, http.StatusBadRequest, "snapshot limit must be an integer")
 			return
 		}
-		snap, err = paginateResearchV6Snapshot(snap, limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
-		if err != nil {
-			if strings.Contains(err.Error(), "resync") {
-				writeError(w, http.StatusConflict, err.Error())
-			} else {
-				writeError(w, http.StatusBadRequest, err.Error())
-			}
-			return
-		}
-	} else if strings.TrimSpace(r.URL.Query().Get("cursor")) != "" {
-		writeError(w, http.StatusBadRequest, "snapshot cursor requires limit")
+		limit = parsed
+	}
+	snapshot, err := service.ProjectionV6Snapshot(r.Context(), researchrun.V6ProjectionPageRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), Limit: limit})
+	if errors.Is(err, researchrun.ErrProjectionResyncRequired) {
+		writeError(w, http.StatusConflict, "projection snapshot expired; resync required")
 		return
 	}
-	writeJSON(w, 200, snap)
+	if errors.Is(err, researchrun.ErrInvalidContract) {
+		writeError(w, http.StatusBadRequest, "invalid projection cursor or limit")
+		return
+	}
+	if err != nil {
+		writeResearchV6Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 func (h *Handler) GetResearchV6ProjectionDeltas(w http.ResponseWriter, r *http.Request) {
-	snap, err := h.loadResearchV6Snapshot(r)
+	service, ok := h.ResearchRun.(researchrun.V6ProjectionReader)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "research V6 projection unavailable")
+		return
+	}
+	if strings.TrimSpace(r.URL.Query().Get("cursor")) != "" {
+		writeError(w, http.StatusBadRequest, "projection delta cursor is not valid for this bounded page")
+		return
+	}
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
+	after, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("after")), 10, 64)
+	if err != nil || after < 0 {
+		writeError(w, http.StatusBadRequest, "after must be a non-negative integer")
+		return
+	}
+	page, err := service.ProjectionV6Deltas(r.Context(), researchrun.V6ProjectionDeltaRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), After: after})
 	if err != nil {
 		writeResearchV6Error(w, err)
 		return
 	}
-	from, err := strconv.ParseInt(r.URL.Query().Get("from_sequence_exclusive"), 10, 64)
-	if err != nil || from < 0 {
-		writeError(w, 400, "from_sequence_exclusive must be a non-negative integer")
-		return
-	}
-	if from > snap.ThroughEventSequence {
-		writeError(w, 409, "projection cursor is ahead of run")
-		return
-	}
-	if from == snap.ThroughEventSequence {
-		writeJSON(w, 200, nil)
-		return
-	}
-	rows, err := h.DB.Query(r.Context(), `
-		SELECT sequence, event_type, payload
-		FROM research_run_event
-		WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND sequence > $3
-		ORDER BY sequence
-		LIMIT $4
-	`, h.resolveWorkspaceID(r), strings.TrimSpace(chi.URLParam(r, "runId")), from, researchV6MaximumDeltaEvents+1)
-	if err != nil {
-		writeResearchV6Error(w, err)
-		return
-	}
-	defer rows.Close()
-	events := []researchV6ProjectionEvent{}
-	for rows.Next() {
-		var event researchV6ProjectionEvent
-		if err = rows.Scan(&event.Sequence, &event.Type, &event.Payload); err != nil {
-			writeResearchV6Error(w, err)
-			return
-		}
-		events = append(events, event)
-	}
-	if err = rows.Err(); err != nil {
-		writeResearchV6Error(w, err)
-		return
-	}
-	delta, safe := buildResearchV6EventDelta(snap, from, events)
-	if !safe {
-		writeError(w, http.StatusConflict, "projection delta cannot be reconstructed safely; snapshot resync required")
-		return
-	}
-	writeJSON(w, http.StatusOK, delta)
+	writeJSON(w, http.StatusOK, page)
 }
 func (h *Handler) PostResearchV6ProjectionResume(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SnapshotID            string `json:"snapshot_id,omitempty"`
 		LastConfirmedSequence int64  `json:"last_confirmed_sequence"`
+		ProjectionHash        string `json:"projection_hash"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LastConfirmedSequence < 0 {
-		writeError(w, 400, "last_confirmed_sequence must be a non-negative integer")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LastConfirmedSequence < 0 || req.SnapshotID == "" || req.ProjectionHash == "" {
+		writeError(w, http.StatusBadRequest, "snapshot_id, projection_hash and a non-negative last_confirmed_sequence are required")
 		return
 	}
-	snap, err := h.loadResearchV6Snapshot(r)
+	service, ok := h.ResearchRun.(researchrun.V6ProjectionReader)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "research V6 projection unavailable")
+		return
+	}
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
+	page, err := service.ProjectionV6Deltas(r.Context(), researchrun.V6ProjectionDeltaRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), SnapshotID: req.SnapshotID, ProjectionHash: req.ProjectionHash, After: req.LastConfirmedSequence})
 	if err != nil {
 		writeResearchV6Error(w, err)
 		return
 	}
-	var firstRetainedSequence int64
-	if err = h.DB.QueryRow(r.Context(), `
-		SELECT COALESCE(min(sequence), 0)
-		FROM research_run_event
-		WHERE workspace_id=$1::uuid AND session_id=$2::uuid
-	`, h.resolveWorkspaceID(r), strings.TrimSpace(chi.URLParam(r, "runId"))).Scan(&firstRetainedSequence); err != nil {
-		writeResearchV6Error(w, err)
-		return
-	}
-	if researchV6ResumeRequiresResync(researchV6ResumeCursor{SnapshotID: req.SnapshotID, LastConfirmedSequence: req.LastConfirmedSequence}, snap, firstRetainedSequence) {
-		writeJSON(w, 200, map[string]any{"ok": false, "resync_required": true})
-		return
-	}
-	delta := researchV6Delta{FromSequenceExclusive: req.LastConfirmedSequence, ThroughSequence: snap.ThroughEventSequence, NodeUpserts: []researchV6ProjectionNode{}, EdgeUpserts: []researchV6ProjectionEdge{}, NodeTombstones: []string{}, EdgeTombstones: []string{}, ClusterUpserts: []researchV6ProjectionCluster{}, ClusterTombstones: []string{}, AffectedRootNodeIDs: []string{}}
-	if req.LastConfirmedSequence < snap.ThroughEventSequence {
-		delta.NodeUpserts = snap.Nodes
-		delta.EdgeUpserts = snap.Edges
-		delta.ClusterUpserts = snap.Clusters
-		delta.AffectedRootNodeIDs = researchV6RootIDs(snap.Nodes)
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "delta": delta})
+	writeJSON(w, http.StatusOK, page)
 }
 func researchV6RootIDs(nodes []researchV6ProjectionNode) []string {
 	out := []string{}

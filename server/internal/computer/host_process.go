@@ -40,17 +40,14 @@ func (identity HostProcessIdentity) releaseChannel() cli.ReleaseChannel {
 // machine-wide dependencies; no daemon or Workspace execution object crosses
 // this interface.
 type HostProcessConfig struct {
-	Listener            net.Listener
-	ControlPort         int
+	Listener            net.Listener // test adapter; production binds ServiceEndpoint
+	ServiceEndpoint     string
 	ResidentRoot        string
 	Identity            HostProcessIdentity
 	DesiredWorkspaceIDs func() ([]string, error)
 	Changes             <-chan struct{}
 	ReadyTimeout        time.Duration
 	ReleaseManifestURL  string
-	// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55 is no
-	// longer a supported direct self-upgrade source.
-	PreviousPackageUpgradeBootstrap bool
 }
 
 type hostProcessState struct {
@@ -60,10 +57,6 @@ type hostProcessState struct {
 	ready     bool
 	desired   []string
 	cancel    context.CancelFunc
-	// TODO(previous-package-bootstrap): Remove these two fields with the
-	// v0.4.24-alpha.55 health projection.
-	previousPackageUpgradeBootstrap bool
-	sourceProcessAlive              func(int) (bool, bool)
 }
 
 // RunProcess owns the resident Computer control plane around Host. The
@@ -89,12 +82,12 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 		defer lease.Close()
 	}
 	if config.Listener == nil {
-		if config.ControlPort < 1 {
-			return errors.New("Computer Host control port is required")
+		if strings.TrimSpace(config.ServiceEndpoint) == "" {
+			return errors.New("Computer service endpoint is required")
 		}
-		listener, listenErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.ControlPort))
+		listener, listenErr := ListenLocalControl(config.ServiceEndpoint)
 		if listenErr != nil {
-			return fmt.Errorf("another Computer resident is already listening on 127.0.0.1:%d: %w", config.ControlPort, listenErr)
+			return fmt.Errorf("listen for Computer service IPC: %w", listenErr)
 		}
 		config.Listener = listener
 	}
@@ -107,9 +100,15 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	defer cancel()
 	state := &hostProcessState{
 		identity: config.Identity, startedAt: time.Now(), desired: append([]string(nil), initial...),
-		cancel: cancel, previousPackageUpgradeBootstrap: config.PreviousPackageUpgradeBootstrap,
-		sourceProcessAlive: processAlive,
+		cancel: cancel,
 	}
+	if err := writeServiceState(config.ResidentRoot, persistedServiceState{
+		ComputerID: config.Identity.ComputerID, ComputerGeneration: config.Identity.ComputerGeneration,
+		PID: os.Getpid(), StartedAt: state.startedAt,
+	}); err != nil && host.logger != nil {
+		host.logger.Warn("could not persist Computer Service state", "error", err)
+	}
+	defer func() { _ = removeServiceState(config.ResidentRoot, os.Getpid()) }()
 	host.processIdentity = config.Identity
 	if strings.TrimSpace(config.ResidentRoot) != "" {
 		store, storeErr := diagnosticlog.Open(diagnosticlog.Config{Root: filepath.Join(config.ResidentRoot, "logs")})
@@ -130,7 +129,6 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	host.upgrade.config.releaseManifestURL = config.ReleaseManifestURL
 	host.upgrade.config.residentRoot = config.ResidentRoot
 	host.upgrade.config.cancel = cancel
-	host.upgrade.config.previousPackageUpgradeBootstrap = config.PreviousPackageUpgradeBootstrap
 	host.workJournalRoot = config.ResidentRoot
 	host.loadWorkJournalSetting()
 
@@ -154,15 +152,22 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	mux := http.NewServeMux()
 	host.RegisterRoutes(mux)
 	mux.HandleFunc("/health", host.processHealthHandler(state))
-	mux.HandleFunc(MachineAttestationPath, host.processAttestationHandler(state))
 	mux.HandleFunc("/shutdown", host.processShutdownHandler(state))
 	mux.HandleFunc("/environment-switch/prepare", host.processEnvironmentSwitchHandler(true))
 	mux.HandleFunc("/environment-switch/release", host.processEnvironmentSwitchHandler(false))
 	mux.HandleFunc("/machine-upgrades", host.upgrade.localRequestHandler())
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	registry := host.LocalControlRegistry(state)
+	var server *http.Server
+	serveControl := func() error {
+		if strings.TrimSpace(config.ServiceEndpoint) == "" || strings.HasPrefix(config.ServiceEndpoint, "http://") {
+			server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+			return server.Serve(config.Listener)
+		}
+		return ServeLocalControlRPC(processCtx, config.Listener, registry)
+	}
 	serveErr := make(chan error, 1)
 	go func() {
-		err := server.Serve(config.Listener)
+		err := serveControl()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 			return
@@ -184,14 +189,22 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	stopReady()
 	if err != nil {
 		cancel()
-		_ = server.Close()
+		if server != nil {
+			_ = server.Close()
+		} else {
+			_ = config.Listener.Close()
+		}
 		<-hostDone
 		<-serveErr
 		return err
 	}
 	if err := host.upgrade.recoverSuccessor(processCtx); err != nil {
 		cancel()
-		_ = server.Close()
+		if server != nil {
+			_ = server.Close()
+		} else {
+			_ = config.Listener.Close()
+		}
 		<-hostDone
 		<-serveErr
 		return fmt.Errorf("recover Computer Machine Upgrade: %w", err)
@@ -200,23 +213,31 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	state.ready = true
 	state.mu.Unlock()
 
+	serveResultRead := false
 	select {
 	case <-processCtx.Done():
+		if host.logger != nil {
+			host.logger.Info("Computer shutdown context canceled", "source", "context_cancellation", "error", processCtx.Err())
+		}
 	case err = <-serveErr:
+		serveResultRead = true
 		if err != nil {
 			cancel()
 		}
 	}
 	shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = server.Shutdown(shutdownCtx)
+	if server != nil {
+		_ = server.Shutdown(shutdownCtx)
+	} else {
+		_ = config.Listener.Close()
+	}
 	stopShutdown()
 	<-hostDone
-	select {
-	case serveResult := <-serveErr:
+	if !serveResultRead {
+		serveResult := <-serveErr
 		if err == nil {
 			err = serveResult
 		}
-	default:
 	}
 	return err
 }
@@ -246,24 +267,10 @@ func (host *Host) processHealthHandler(state *hostProcessState) http.HandlerFunc
 		startedAt := state.startedAt
 		ready := state.ready
 		desired := append([]string(nil), state.desired...)
-		previousPackageUpgradeBootstrap := state.previousPackageUpgradeBootstrap
-		sourceProcessAlive := state.sourceProcessAlive
 		state.mu.RUnlock()
 		status := "starting"
 		if ready {
 			status = "running"
-			// TODO(previous-package-bootstrap): Remove after v0.4.24-alpha.55
-			// is no longer a supported direct self-upgrade source.
-			// v0.4.24-alpha.55 waits for this historical readiness spelling
-			// before it accepts the successor's machine attestation. Keep the
-			// projection only while that exact launcher process is still alive;
-			// after it releases the child and exits, normal health is "running".
-			if previousPackageUpgradeBootstrap && identity.MachineAttestationFrom > 0 && sourceProcessAlive != nil {
-				alive, known := sourceProcessAlive(identity.MachineAttestationFrom)
-				if alive || !known {
-					status = "takeover_ready"
-				}
-			}
 		}
 		workspaces := make([]map[string]any, 0, len(desired))
 		for _, workspaceID := range desired {
@@ -330,34 +337,31 @@ func (host *Host) recordBindingDiagnostic(_ BindingChildIdentity, workspaceID st
 	}
 }
 
-func (host *Host) processAttestationHandler(state *hostProcessState) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		state.mu.RLock()
-		identity := state.identity
-		startedAt := state.startedAt
-		workspaceIDs := append([]string(nil), state.desired...)
-		state.mu.RUnlock()
-		attestation := MachineAttestation{
-			ComputerVersion: identity.Version, ServiceGeneration: fmt.Sprintf("computer-%d", identity.ComputerGeneration),
-			ComputerGeneration: identity.ComputerGeneration, ServicePID: os.Getpid(),
-			ManagedWorkspaceIDs: workspaceIDs,
-			ManagedSetRevision:  startedAt.UTC().Format(time.RFC3339Nano) + ":" + strings.Join(workspaceIDs, ","),
-			SourceServicePID:    identity.MachineAttestationFrom,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(attestation)
-	}
-}
-
 func (host *Host) processShutdownHandler(state *hostProcessState) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
+		}
+		source := strings.TrimSpace(r.Header.Get(shutdownSourceHeader))
+		if source == "" {
+			source = "unknown"
+		}
+		action := strings.TrimSpace(r.Header.Get(shutdownActionHeader))
+		if action == "" {
+			action = "unknown"
+		}
+		requestPID := strings.TrimSpace(r.Header.Get(shutdownRequestPIDHeader))
+		if requestPID == "" {
+			requestPID = "unknown"
+		}
+		if host.logger != nil {
+			host.logger.Info("Computer shutdown requested",
+				"source", source,
+				"action", action,
+				"request_pid", requestPID,
+				"remote_address", r.RemoteAddr,
+			)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "shutting down"})

@@ -42,4 +42,18 @@ describe("ResearchDirectorChatHeader", () => {
     );
     expect(screen.getAllByText("Research Director").length).toBeGreaterThan(0);
   });
+
+  it("uses the product Director identity when V6 has no legacy fleet member", () => {
+    render(
+      <ResearchDirectorChatHeader
+        director={null}
+        fallbackName="Ronaldo"
+        activity="Active research lead"
+        modeChip={null}
+      />,
+    );
+
+    expect(screen.getByText("Ronaldo")).toBeTruthy();
+    expect(screen.getByText("Active research lead")).toBeTruthy();
+  });
 });

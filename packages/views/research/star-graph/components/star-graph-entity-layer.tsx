@@ -26,6 +26,8 @@ export function StarGraphEntityLayer({
   lensHints,
   motionDirectives,
   expansionControl,
+  visibleLabelNodeIds,
+  sTierPresentation,
   labels,
   onSelectNode,
   onOpenNode,
@@ -36,6 +38,8 @@ export function StarGraphEntityLayer({
   lensHints?: D5LensDisplayHints;
   motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
   expansionControl?: StarGraphExpansionControl;
+  visibleLabelNodeIds?: ReadonlySet<string>;
+  sTierPresentation?: "label" | "point";
   labels: StarGraphEntityLabels;
   onSelectNode?: (nodeId: string) => void;
   onOpenNode?: (nodeId: string) => void;
@@ -62,6 +66,10 @@ export function StarGraphEntityLayer({
           selected ? false : lensHints?.dimmedNodeIds.has(entity.id) ?? false;
         const emphasized =
           selected ? false : lensHints?.emphasizedNodeIds.has(entity.id) ?? false;
+        const contentHidden =
+          entity.view.tier !== "s" &&
+          visibleLabelNodeIds != null &&
+          !visibleLabelNodeIds.has(entity.id);
         return (
           <StarGraphNode
             key={entity.id}
@@ -76,7 +84,9 @@ export function StarGraphEntityLayer({
                 ? undefined
                 : labels.tierHeaders[entity.view.tier]
             }
+            semanticRole={entity.view.semanticRole}
             agentBadge={entity.view.agentBadge}
+            sTierPresentation={sTierPresentation}
             metrics={entity.view.metrics}
             metricText={
               entity.view.metrics
@@ -101,6 +111,7 @@ export function StarGraphEntityLayer({
                 : undefined
             }
             busy={entity.view.state === "run" || expansionLoading}
+            selected={selected}
             expanded={
               expandable
                 ? expansionControl?.expandedNodeIds.has(entity.id) ?? false
@@ -108,7 +119,7 @@ export function StarGraphEntityLayer({
             }
             invalid={expansionFailed}
             accessibleName={[
-              nodeAccessibleNames?.get(entity.id),
+              nodeAccessibleNames?.get(entity.id) || entity.view.title,
               expansionFailed ? expansionControl?.failureLabel : null,
             ]
               .filter(Boolean)
@@ -116,6 +127,7 @@ export function StarGraphEntityLayer({
             className={cn(
               dimmed && "sg-lens-dim",
               emphasized && "sg-lens-emphasis",
+              contentHidden && "sg-semantic-content-hidden",
               motion?.className,
               motion?.markerClass,
             )}

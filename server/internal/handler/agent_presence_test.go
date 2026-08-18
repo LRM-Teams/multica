@@ -292,6 +292,12 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if !ok || obs.status != "accepted" || obs.launchID != launchID || obs.sessionID != "provider-session-1" {
 		t.Fatalf("observed Runner launch=%+v ok=%v", obs, ok)
 	}
+	var persistedSessionID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT provider_session_id FROM agent_runner_launch_projection WHERE agent_id = $1
+	`, agentID).Scan(&persistedSessionID); err != nil || persistedSessionID != session.ProviderSessionID {
+		t.Fatalf("desired launch provider session = %q, %v", persistedSessionID, err)
+	}
 	active, err := json.Marshal(protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive})
 	if err != nil {
 		t.Fatal(err)

@@ -127,50 +127,116 @@ func TestBuildGrokArgsFiltersBlockedCustomArgs(t *testing.T) {
 	}
 }
 
-func TestParseGrokModels(t *testing.T) {
+func TestParseGrokACPInitializeModels(t *testing.T) {
 	t.Parallel()
 
-	out := `You are logged in with grok.com.
-
-Default model: grok-4.5
-
-Available models:
-  * grok-4.5 (default)
-  - grok-composer-2.5-fast
-  * grok-4.5 (default)
-`
-	models := parseGrokModels(out)
+	raw := json.RawMessage(`{
+  "protocolVersion": 1,
+  "agentCapabilities": {"loadSession": true},
+  "_meta": {"modelState": {
+    "currentModelId": "grok-4.6",
+    "availableModels": [
+      {
+        "modelId": "grok-4.6",
+        "name": "Grok 4.6",
+        "_meta": {
+          "reasoningEffort": "xhigh",
+          "reasoningEfforts": [
+            {"id":"xhigh","label":"Extra High Effort","description":"Highest effort","default":true},
+            {"id":"high","label":"High Effort","default":true},
+            {"id":"medium","label":"Medium Effort","default":false}
+          ]
+        }
+      },
+      {
+        "modelId": "grok-4.5",
+        "name": "Grok 4.5",
+        "_meta": {
+          "reasoningEfforts": [
+            {"id":"high","label":"High Effort","default":true},
+            {"id":"low","label":"Low Effort","default":false}
+          ]
+        }
+      }
+    ]
+  }}
+}`)
+	models := parseGrokACPInitializeModels(raw)
 	if len(models) != 2 {
 		t.Fatalf("expected 2 models, got %d: %+v", len(models), models)
 	}
-	if models[0].ID != "grok-4.5" || !models[0].Default {
-		t.Fatalf("expected first model grok-4.5 default, got %+v", models[0])
+	if models[0].ID != "grok-4.6" || !models[0].Default {
+		t.Fatalf("expected first model grok-4.6 default, got %+v", models[0])
 	}
-	if models[1].ID != "grok-composer-2.5-fast" || models[1].Default {
-		t.Fatalf("expected second model grok-composer-2.5-fast non-default, got %+v", models[1])
+	if models[1].ID != "grok-4.5" || models[1].Default {
+		t.Fatalf("expected second model grok-4.5 non-default, got %+v", models[1])
 	}
-	if models[0].Thinking == nil || len(models[0].Thinking.SupportedLevels) == 0 {
-		t.Fatal("expected thinking catalog on grok models")
+	if models[0].Thinking == nil || models[0].Thinking.DefaultLevel != "high" {
+		t.Fatalf("expected model default high rather than current user selection xhigh, got %+v", models[0].Thinking)
+	}
+	if got := models[0].Thinking.SupportedLevels[0]; got.Value != "xhigh" || got.Label != "Extra High Effort" || got.Description != "Highest effort" {
+		t.Fatalf("unexpected first reasoning level: %+v", got)
+	}
+	if models[1].Thinking == nil || models[1].Thinking.DefaultLevel != "high" {
+		t.Fatalf("expected sole marked high default, got %+v", models[1].Thinking)
 	}
 }
 
-func TestGrokStaticModelsFallback(t *testing.T) {
+func TestParseGrokACPInitializeModelsRequiresCompatibleRuntime(t *testing.T) {
 	t.Parallel()
-	models := grokStaticModels()
-	if len(models) == 0 {
-		t.Fatal("expected non-empty static catalog")
+
+	raw := json.RawMessage(`{"protocolVersion":1,"agentCapabilities":{"loadSession":false},"_meta":{"modelState":{"availableModels":[{"modelId":"grok-4.6"}]}}}`)
+	if models := parseGrokACPInitializeModels(raw); len(models) != 0 {
+		t.Fatalf("expected no models from incompatible ACP runtime, got %+v", models)
 	}
-	var hasDefault bool
-	for _, m := range models {
-		if m.Default {
-			hasDefault = true
-		}
-		if m.Provider != "grok" {
-			t.Fatalf("expected provider grok, got %q", m.Provider)
-		}
+}
+
+func TestDiscoverGrokModelsUsesACPInitialize(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	executablePath := filepath.Join(dir, "grok")
+	script := strings.ReplaceAll(`#!/bin/sh
+printf '%s\n' "$*" > "__ARGS__"
+while IFS= read -r line; do
+  case "$line" in
+    *'"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"_meta":{"modelState":{"currentModelId":"grok-4.6","availableModels":[{"modelId":"grok-4.6","name":"Grok 4.6","_meta":{"reasoningEffort":"xhigh","reasoningEfforts":[{"id":"xhigh","label":"Extra High Effort","default":true}]}}]}}}}'
+      ;;
+  esac
+done
+`, "__ARGS__", argsPath)
+	writeTestExecutable(t, executablePath, []byte(script))
+
+	models, err := discoverGrokModels(context.Background(), executablePath)
+	if err != nil {
+		t.Fatalf("discover Grok models: %v", err)
 	}
-	if !hasDefault {
-		t.Fatal("expected a default model")
+	if len(models) != 1 || models[0].ID != "grok-4.6" || !models[0].Default {
+		t.Fatalf("unexpected ACP model catalog: %+v", models)
+	}
+	if models[0].Thinking == nil || models[0].Thinking.DefaultLevel != "xhigh" {
+		t.Fatalf("unexpected ACP thinking catalog: %+v", models[0].Thinking)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read Grok probe args: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(args)), "agent --no-leader --always-approve stdio"; got != want {
+		t.Fatalf("Grok probe args = %q, want %q", got, want)
+	}
+}
+
+func TestDiscoverGrokModelsDoesNotFallBackWhenUnavailable(t *testing.T) {
+	t.Parallel()
+
+	models, err := discoverGrokModels(context.Background(), filepath.Join(t.TempDir(), "missing-grok"))
+	if err != nil {
+		t.Fatalf("discover unavailable Grok models: %v", err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("expected no models without live discovery, got %+v", models)
 	}
 }
 

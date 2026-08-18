@@ -4900,10 +4900,11 @@ export class ApiClient {
       !sessionId ||
       !workspaceId ||
       (expectedWorkspaceId != null && workspaceId !== expectedWorkspaceId) ||
-      !response.fleet.id ||
-      response.fleet.workspace_id !== workspaceId ||
-      (response.session.fleet_id !== "" &&
-        response.session.fleet_id !== response.fleet.id) ||
+      (response.fleet != null &&
+        (!response.fleet.id ||
+          response.fleet.workspace_id !== workspaceId ||
+          (response.session.fleet_id !== "" &&
+            response.session.fleet_id !== response.fleet.id))) ||
       scopedEntities.some((entity) => entity.session_id !== sessionId) ||
       (response.run?.run.session_id != null &&
         response.run.run.session_id !== sessionId) ||
@@ -5029,7 +5030,7 @@ export class ApiClient {
 
   async postResearchMessage(
     id: string,
-    data: { body: string; target_agent_id?: string },
+    data: import("../types/research").PostResearchMessageRequest,
   ): Promise<import("../types/research").ResearchMessage> {
     const { ResearchMessageSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/messages`, {
@@ -5236,23 +5237,242 @@ export class ApiClient {
     runId: string,
     fromSequenceExclusive: number,
   ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6DeltaStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6Delta } = await import("../research-v6/schemas");
     const raw = await this.fetch(
       `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
     );
     if (raw == null) return null;
-    return parseResearchV6DeltaStrict(raw);
+    return parseResearchV6Delta(raw);
   }
 
   async resumeResearchV6Projection(
     runId: string,
     lastConfirmedSequence: number,
   ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdictStrict } = await import("../research-v6/schemas");
+    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
       method: "POST",
       body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
     });
-    return parseResearchV6ResumeVerdictStrict(raw);
+    return parseResearchV6ResumeVerdict(raw);
+  }
+
+  // ---- Ronaldo / Director V6 Projection (authoritative unreleased contract) ----
+
+  async getResearchV6DirectorProjectionSnapshot(
+    workspaceId: string,
+    runId: string,
+    options?: { cursor?: string; signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionSnapshot> {
+    const { parseResearchV6DirectorProjectionSnapshot } = await import(
+      "../research-v6/director-schemas"
+    );
+    const params = new URLSearchParams();
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/snapshot${query ? `?${query}` : ""}`,
+      { signal: options?.signal },
+    );
+    const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
+    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+    }
+    return snapshot;
+  }
+
+  async replaceResearchV6Director(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorAssignmentRequest,
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorAssignment | null> {
+    const { ResearchV6DirectorAssignmentSchema } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(`/api/research/sessions/${encodeURIComponent(runId)}/director`, {
+      method: "PUT",
+      body: JSON.stringify({
+        director_agent_id: request.directorAgentId,
+        expected_state_version: request.expectedStateVersion,
+        reason: request.reason,
+        client_request_id: request.clientRequestId,
+      }),
+    });
+    const parsed = parseWithFallback(
+      raw,
+      ResearchV6DirectorAssignmentSchema,
+      null,
+      { endpoint: "PUT Director V6 assignment" },
+    );
+    if (parsed === null) return null;
+    if (parsed.workspace_id !== workspaceId || parsed.run_id !== runId) return null;
+    return {
+      id: parsed.id,
+      workspaceId: parsed.workspace_id,
+      runId: parsed.run_id,
+      directorAgentId: parsed.director_agent_id,
+      status: parsed.status,
+      reason: parsed.reason,
+      generation: parsed.generation,
+      stateVersion: parsed.state_version,
+    };
+  }
+
+  async getResearchV6DirectorProjectionSlice(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorProjectionSliceRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionSnapshot> {
+    const {
+      parseResearchV6DirectorProjectionSliceRequest,
+      parseResearchV6DirectorProjectionSnapshot,
+    } = await import("../research-v6/director-schemas");
+    const validated = parseResearchV6DirectorProjectionSliceRequest(request);
+    const params = new URLSearchParams({
+      root: validated.root,
+      depth: String(validated.depth),
+      snapshot_id: validated.snapshot_id,
+    });
+    if (validated.cursor) params.set("cursor", validated.cursor);
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/slice?${params.toString()}`,
+      { signal: options?.signal },
+    );
+    const snapshot = parseResearchV6DirectorProjectionSnapshot(raw);
+    if (snapshot.workspace_id !== workspaceId || snapshot.run_id !== runId) {
+      return { ...snapshot, workspace_id: workspaceId, run_id: runId };
+    }
+    if (snapshot.snapshot_id !== validated.snapshot_id) {
+      return {
+        ...snapshot,
+        snapshot_id: validated.snapshot_id,
+        nodes: [],
+        edges: [],
+        density_bins: [],
+        has_more: false,
+      };
+    }
+    return snapshot;
+  }
+
+  async getResearchV6DirectorProjectionDeltaPage(
+    workspaceId: string,
+    runId: string,
+    after: number,
+    options?: { cursor?: string; signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionDeltaPage> {
+    if (!Number.isSafeInteger(after) || after < 0) {
+      throw new Error("Director V6 projection delta 'after' must be a non-negative integer");
+    }
+    const { parseResearchV6DirectorProjectionDeltaPage } = await import(
+      "../research-v6/director-schemas"
+    );
+    const params = new URLSearchParams({ after: String(after) });
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/deltas?${params.toString()}`,
+      { signal: options?.signal },
+    );
+    const page = parseResearchV6DirectorProjectionDeltaPage(raw);
+    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+      return {
+        run_id: runId,
+        deltas: [],
+        next_cursor: null,
+        resync_required: true,
+      };
+    }
+    return page;
+  }
+
+  async resumeResearchV6DirectorProjection(
+    workspaceId: string,
+    runId: string,
+    request: import("../types/research-v6-director").ResearchV6DirectorProjectionResumeRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorProjectionDeltaPage> {
+    const {
+      parseResearchV6DirectorProjectionDeltaPage,
+      parseResearchV6DirectorProjectionResumeRequest,
+    } = await import("../research-v6/director-schemas");
+    const body = parseResearchV6DirectorProjectionResumeRequest(request);
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/resume`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      },
+    );
+    const page = parseResearchV6DirectorProjectionDeltaPage(raw);
+    if (page.run_id !== runId || page.deltas.some((delta) => delta.workspace_id !== workspaceId || delta.run_id !== runId)) {
+      return {
+        run_id: runId,
+        deltas: [],
+        next_cursor: null,
+        resync_required: true,
+      };
+    }
+    return page;
+  }
+
+  async getResearchV6DirectorProjectionNodeDetail(
+    workspaceId: string,
+    runId: string,
+    nodeId: string,
+    view: import("../types/research-v6-director").ResearchV6DirectorNodeDetailView = "brief",
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorNodeDetail> {
+    const { parseResearchV6DirectorNodeDetail } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/projection/nodes/${encodeURIComponent(nodeId)}?view=${encodeURIComponent(view)}`,
+      { signal: options?.signal },
+    );
+    const detail = parseResearchV6DirectorNodeDetail(raw);
+    if (detail.node.id !== nodeId) {
+      return { ...detail, node: { ...detail.node, id: nodeId } };
+    }
+    void workspaceId;
+    return detail;
+  }
+
+  async getResearchV6DirectorReports(
+    workspaceId: string,
+    runId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportMetadata[]> {
+    const { parseResearchV6DirectorReportList } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/reports`,
+      { signal: options?.signal },
+    );
+    void workspaceId;
+    return parseResearchV6DirectorReportList(raw);
+  }
+
+  async getResearchV6DirectorReport(
+    workspaceId: string,
+    runId: string,
+    reportId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<import("../types/research-v6-director").ResearchV6DirectorReportDetail> {
+    const { parseResearchV6DirectorReportDetail } = await import(
+      "../research-v6/director-schemas"
+    );
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(reportId)}`,
+      { signal: options?.signal },
+    );
+    const report = parseResearchV6DirectorReportDetail(raw);
+    if (report.id !== reportId) {
+      return { ...report, id: reportId };
+    }
+    void workspaceId;
+    return report;
   }
 }

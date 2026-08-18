@@ -313,7 +313,7 @@ func writeFakeCodexDebugModelsBinary(t *testing.T, jsonPayload string) string {
 	return path
 }
 
-func TestValidateThinkingLevel_EmptyModelResolvesToDefault(t *testing.T) {
+func TestValidateThinkingLevel_EmptyCodexModelDoesNotGuessDefault(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fake binary requires a POSIX shell")
 	}
@@ -329,24 +329,13 @@ func TestValidateThinkingLevel_EmptyModelResolvesToDefault(t *testing.T) {
 
 	ctx := context.Background()
 
-	t.Run("valid level on default model passes", func(t *testing.T) {
-		// Default = first listable (gpt-5.6-sol) supports high.
+	t.Run("non-empty level fails closed without an explicit model", func(t *testing.T) {
 		ok, err := ValidateThinkingLevel(ctx, "codex", fake, "", "high")
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
-		if !ok {
-			t.Errorf("default-model high should be valid; got false")
-		}
-	})
-
-	t.Run("invalid level on default model fails", func(t *testing.T) {
-		ok, err := ValidateThinkingLevel(ctx, "codex", fake, "", "xhigh")
-		if err != nil {
-			t.Fatalf("unexpected err: %v", err)
-		}
 		if ok {
-			t.Errorf("xhigh should be invalid on default list model; got true")
+			t.Errorf("empty Codex model must not infer the first catalog row")
 		}
 	})
 

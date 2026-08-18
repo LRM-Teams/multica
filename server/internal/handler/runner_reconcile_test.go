@@ -83,6 +83,31 @@ func TestRunnerLaunchProjectionRotatesOnlyOnPlacementEpoch(t *testing.T) {
 	}
 }
 
+func TestLoadRunnerDesiredLaunchesRestoresProviderSession(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	runtimeID := seedMachineLockedRuntime(t, "daemon-session-resume", "session-resume")
+	agentID := createHandlerTestAgentOnRuntime(t, "runner-session-resume", runtimeID)
+	const sessionID = "provider-session-before-daemon-restart"
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runner_launch_projection SET provider_session_id = $2 WHERE agent_id = $1
+	`, agentID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	desired, err := testHandler.loadRunnerDesiredLaunches(ctx, daemonws.ClientIdentity{
+		DaemonID: "daemon-session-resume", WorkspaceID: testWorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("load desired launches: %v", err)
+	}
+	if len(desired) != 1 || desired[0].agentID != agentID || desired[0].sessionID != sessionID {
+		t.Fatalf("desired launches = %+v", desired)
+	}
+}
+
 func TestReconcileConnectedRuntimesDeduplicatesSameComputerMove(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

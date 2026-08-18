@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseWithFallback } from "../api/schema";
 import type {
   ResearchV6Delta,
   ResearchV6ResumeVerdict,
@@ -161,9 +162,21 @@ export function parseResearchV6Delta(raw: unknown): ResearchV6Delta | null {
   return result.success ? (result.data as ResearchV6Delta) : null;
 }
 
-/** Strict production HTTP boundary: malformed successful responses must throw. */
+/** HTTP boundary parser: malformed deltas degrade to an empty resync delta. */
 export function parseResearchV6DeltaStrict(raw: unknown): ResearchV6Delta {
-  return ResearchV6DeltaSchema.parse(raw) as ResearchV6Delta;
+  return parseWithFallback(raw, ResearchV6DeltaSchema, {
+    from_sequence_exclusive: 0,
+    through_sequence: 0,
+    graph_content_hash: null,
+    node_upserts: [],
+    edge_upserts: [],
+    node_tombstones: [],
+    edge_tombstones: [],
+    cluster_upserts: [],
+    cluster_tombstones: [],
+    affected_root_node_ids: [],
+    transition_kind: null,
+  }, { endpoint: "GET research V6 projection delta" });
 }
 
 export function parseResearchV6Snapshot(raw: unknown): ResearchV6Snapshot {
@@ -173,7 +186,9 @@ export function parseResearchV6Snapshot(raw: unknown): ResearchV6Snapshot {
 
 /** Strict production boundary used by capability probes. */
 export function parseResearchV6SnapshotStrict(raw: unknown): ResearchV6Snapshot {
-  return ResearchV6SnapshotSchema.parse(raw) as ResearchV6Snapshot;
+  return parseWithFallback(raw, ResearchV6SnapshotSchema, EMPTY_RESEARCH_V6_SNAPSHOT, {
+    endpoint: "GET research V6 projection snapshot",
+  });
 }
 
 export function parseResearchV6ResumeVerdict(raw: unknown): ResearchV6ResumeVerdict {
@@ -182,10 +197,11 @@ export function parseResearchV6ResumeVerdict(raw: unknown): ResearchV6ResumeVerd
     ? (result.data as ResearchV6ResumeVerdict)
     : { ok: false, resync_required: true };
 }
-
 /** Strict production HTTP boundary: an invalid verdict is not a resync verdict. */
 export function parseResearchV6ResumeVerdictStrict(
   raw: unknown,
 ): ResearchV6ResumeVerdict {
-  return ResearchV6ResumeVerdictSchema.parse(raw) as ResearchV6ResumeVerdict;
+  return parseWithFallback(raw, ResearchV6ResumeVerdictSchema, { ok: false, resync_required: true }, {
+    endpoint: "POST research V6 projection resume",
+  });
 }

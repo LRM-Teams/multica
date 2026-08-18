@@ -312,6 +312,8 @@ export type {
   ResearchMatchDecisionItem,
   ResearchMessage,
   ResearchMessageCardKind,
+  ResearchSelectedReference,
+  PostResearchMessageRequest,
   ResearchClarificationLayout,
   ResearchClarificationOption,
   ResearchClarificationField,

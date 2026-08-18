@@ -261,7 +261,7 @@ func TestWorkspaceRunnerTerminalFailureDeliveryAcknowledgesAndKeepsPending(t *te
 	var activities []protocol.AgentActivityPayload
 	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
-	runner.failManagedRuntime("agent-1", "runtime-1", "test-launch-agent-1", managedRuntimeFailureRuntime, "provider_turn_failed", time.Now().UTC())
+	runner.failManagedRuntime("agent-1", "runtime-1", "test-launch-agent-1", managedRuntimeFailureRuntime, "provider_turn_failed", "provider unavailable", time.Now().UTC())
 	delivery := protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
 		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hi"},
@@ -479,7 +479,7 @@ func TestWorkspaceRunnerQueuedAPMAcceptsDeliveryWithoutStartingProvider(t *testi
 	}
 }
 
-func TestWorkspaceRunnerStartingLaunchBuffersDeliveryWithoutHandoff(t *testing.T) {
+func TestWorkspaceRunnerStartingLaunchBuffersWithoutProviderDelivery(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {

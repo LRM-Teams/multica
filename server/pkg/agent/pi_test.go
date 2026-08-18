@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -209,14 +210,17 @@ func TestBuildPiEnvPreservesExplicitPackageDirOverride(t *testing.T) {
 }
 
 func TestBuildPiEnvPinsDefaultCodingAgentDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	currentUser, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv(piCodingAgentDirEnvKey, "")
 
 	env := buildPiEnv(nil)
-	want := piCodingAgentDirEnvKey + "=" + filepath.Join(home, ".pi", "agent")
+	want := piCodingAgentDirEnvKey + "=" + filepath.Join(currentUser.HomeDir, ".pi", "agent")
 	if countEnvEntry(env, want) != 1 {
-		t.Fatalf("Pi coding agent dir was not pinned exactly once to the effective home: %v", env)
+		t.Fatalf("Pi coding agent dir was not pinned exactly once to the account home: %v", env)
 	}
 }
 

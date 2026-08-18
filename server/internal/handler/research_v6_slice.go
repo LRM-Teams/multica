@@ -5,11 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
 const researchV6SliceMaximumLimit = 500
@@ -48,23 +52,31 @@ type researchV6SliceCursor struct {
 }
 
 func (h *Handler) GetResearchV6ProjectionSlice(w http.ResponseWriter, r *http.Request) {
-	request, err := parseResearchV6SliceRequest(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	service, ok := h.ResearchRun.(researchrun.V6ProjectionReader)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "research V6 projection unavailable")
 		return
 	}
-	snapshot, err := h.loadResearchV6Snapshot(r)
+	depth, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("depth")))
+	if err != nil || depth != 1 {
+		writeError(w, http.StatusBadRequest, "depth must be 1")
+		return
+	}
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
+	page, err := service.ProjectionV6Slice(r.Context(), researchrun.V6ProjectionSliceRequest{WorkspaceID: h.resolveWorkspaceID(r), RunID: uuidToString(runID), SnapshotID: strings.TrimSpace(r.URL.Query().Get("snapshot_id")), RootNodeID: strings.TrimSpace(r.URL.Query().Get("root")), Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), Depth: depth, Limit: 1000})
+	if errors.Is(err, researchrun.ErrProjectionResyncRequired) {
+		writeError(w, http.StatusConflict, "projection snapshot expired; resync required")
+		return
+	}
+	if errors.Is(err, researchrun.ErrInvalidContract) {
+		writeError(w, http.StatusBadRequest, "invalid projection slice request")
+		return
+	}
 	if err != nil {
 		writeResearchV6Error(w, err)
-		return
-	}
-	page, err := buildResearchV6ProjectionSlice(snapshot, request)
-	if err != nil {
-		if strings.Contains(err.Error(), "resync") {
-			writeError(w, http.StatusConflict, err.Error())
-		} else {
-			writeError(w, http.StatusBadRequest, err.Error())
-		}
 		return
 	}
 	writeJSON(w, http.StatusOK, page)

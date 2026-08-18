@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -220,13 +221,13 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	case AgentObservationError:
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID
-		entry, err = activityNarrativeEntry(projection.detailKind, "Agent execution failed")
+		entry, err = activityNarrativeEntry(projection.detailKind, strings.TrimSpace(data.Message))
 	case AgentObservationOffline:
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind = protocol.ActivityKindOffline
 		if data.ReasonCode == "stopped" {
 			projection.detailKind = "stopped"
-			entry, err = activityNarrativeEntry(projection.detailKind, "Stopped")
+			entry, err = activityNarrativeEntry(projection.detailKind, "Agent stopped by user")
 		} else {
 			projection.detailKind = "runtime_unavailable"
 			entry, err = activityNarrativeEntry(projection.detailKind, "Offline")

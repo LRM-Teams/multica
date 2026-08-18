@@ -92,5 +92,6 @@ describe("ExecutionConfigFields disabled state", () => {
     await waitFor(() => {
       expect(runtimeModelsOptionsMock).toHaveBeenCalledWith("runtime-1");
     });
+    expect(screen.getByTestId("thinking")).toBeEnabled();
   });
 });

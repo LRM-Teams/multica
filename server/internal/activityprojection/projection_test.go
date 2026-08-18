@@ -245,6 +245,13 @@ func TestProjectTimelineEntryKeepsComputerDisconnectOutOfAgentVocabulary(t *test
 	}
 }
 
+func TestProjectTimelineEntryShowsUserStopLikeRaft(t *testing.T) {
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Stopped","detail_kind":"stopped"}`)}, Summary{Label: "Online", Tone: "success"})
+	if row.Title != "Stopped" || row.Subtext != "Agent stopped by user" || row.Tone != "neutral" || row.BodyKind != "none" {
+		t.Fatalf("stopped Agent row = %+v, want Raft stop presentation", row)
+	}
+}
+
 func TestProjectTimelineEntryProjectsRuntimeDiagnosticWithoutChangingLifecycle(t *testing.T) {
 	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "system", Body: []byte(`{"title":"Codex config warning","text":"User namespaces are unavailable"}`)}, Summary{Label: "Online", Tone: "success"})
 	if row.Title != "Codex config warning" || row.Subtext != "User namespaces are unavailable" || row.Tone != "warning" || row.BodyKind != "none" {

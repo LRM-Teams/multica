@@ -297,6 +297,6 @@ func canonicalMessageFailureReason(err error) string {
 	case strings.Contains(err.Error(), "resident Message runtime") || strings.Contains(err.Error(), "canonical resident runtime"):
 		return "runtime_unavailable"
 	default:
-		return "message_handoff_failed"
+		return "message_delivery_failed"
 	}
 }

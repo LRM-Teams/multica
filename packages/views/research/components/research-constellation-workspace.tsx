@@ -59,6 +59,7 @@ import { useSemanticTransition } from "../motion/use-semantic-transition";
 import {
   StarGraphCanvas,
   type StarGraphExpansionControl,
+  type StarGraphFusionTransition,
 } from "../star-graph";
 import { TrajectoryExplorer } from "../trajectory-explorer";
 import {
@@ -120,6 +121,7 @@ export function ResearchConstellationWorkspace({
   typedGraphLoadMorePending = false,
   onLoadMoreTypedGraph,
   expansionControl,
+  densityBins,
   className,
 }: {
   typedGraph: TypedGraphResponse | undefined;
@@ -138,6 +140,7 @@ export function ResearchConstellationWorkspace({
   onLoadMoreTypedGraph?: () => void;
   /** V6 Projection-owned one-layer disclosure state. */
   expansionControl?: StarGraphExpansionControl;
+  densityBins?: readonly import("../star-graph").StarGraphDensityBin[];
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
@@ -234,6 +237,24 @@ export function ResearchConstellationWorkspace({
     style.textContent = semanticMotionCss();
     document.head.appendChild(style);
   }, []);
+
+  const fusionTransition = useMemo<StarGraphFusionTransition | null>(() => {
+    if (projectionSource !== "v6" || !typedGraph || !prevGraphRef.current) {
+      return null;
+    }
+    if (prevGraphRef.current.session_id !== typedGraph.session_id) return null;
+    const integration = buildTypedGraphMotionEvents(
+      prevGraphRef.current,
+      typedGraph,
+    ).find((event) => event.transition_kind === "integration_formed");
+    const [successorNodeId, ...sourceNodeIds] = integration?.related_ids ?? [];
+    if (!successorNodeId || sourceNodeIds.length === 0) return null;
+    return {
+      sequence: typedGraph.graph_version,
+      successorNodeId,
+      sourceNodeIds,
+    };
+  }, [projectionSource, typedGraph]);
 
   useEffect(() => {
     const node = hostRef.current;
@@ -541,6 +562,12 @@ export function ResearchConstellationWorkspace({
       onSelectNode(resolved);
       setRailMode("detail");
 
+      if (projectionSource === "v6") {
+        setRailOpen(true);
+        closeOverlay();
+        return;
+      }
+
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
@@ -562,6 +589,7 @@ export function ResearchConstellationWorkspace({
       onSelectNode,
       openAgentInspector,
       openReport,
+      projectionSource,
       setRailMode,
       setRailOpen,
       snapshotNodes,
@@ -590,6 +618,12 @@ export function ResearchConstellationWorkspace({
       typedGraph,
     ],
   );
+
+  const handleCanvasBackground = useCallback(() => {
+    closeOverlay();
+    onSelectNode(null);
+    setRailMode("chat");
+  }, [closeOverlay, onSelectNode, setRailMode]);
 
   const handleTrajectorySelect = useCallback(
     (nodeId: string | null) => {
@@ -722,8 +756,12 @@ export function ResearchConstellationWorkspace({
             cameraSessionId={`${overlaySessionId}:d5-visual-v3`}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasFocus}
+            onClearSelection={handleCanvasBackground}
             onOpenNode={handleCanvasSelect}
             expansionControl={expansionControl}
+            densityBins={densityBins}
+            fusionTransition={fusionTransition}
+            fusionLowPerformance={motion.profile.lowPerformance}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
             filterHiddenNote={filterHiddenNote}
@@ -736,6 +774,8 @@ export function ResearchConstellationWorkspace({
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
             hideUnselectedSTierRelations={projectionSource === "v6"}
+            semanticLandmarkLabels={projectionSource === "v6"}
+            sTierPresentation={projectionSource === "v6" ? "point" : "label"}
             initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
             entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}
@@ -765,6 +805,7 @@ export function ResearchConstellationWorkspace({
         {showForming ? (
           <ResearchCanvasForming
             mode={formingMode ?? "forming"}
+            directorMode={projectionSource === "v6"}
             stage={formingStage}
             members={formingMembers ?? []}
             tasks={formingTasks ?? []}

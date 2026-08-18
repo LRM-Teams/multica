@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -66,7 +64,7 @@ func TestRuntimePoolRestartInterruptsNativeAcceptance(t *testing.T) {
 	}
 	handoffErr := make(chan error, 1)
 	go func() {
-		handoffErr <- pool.handoffIdleMessages(
+		handoffErr <- pool.deliverIdleMessages(
 			context.Background(), "agent-1", "runtime-1",
 			[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
 			nil, nil, nil, nil,
@@ -173,7 +171,7 @@ func TestRuntimePoolReportsStartingOnlyAfterAcceptedInputStartsConfirmedRuntime(
 			pool := newCanonicalAgentRuntimePool()
 			pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: test.backend}
 			starting := 0
-			err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}}, func() {
+			err := pool.deliverIdleMessages(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}}, func() {
 				starting++
 			}, nil, nil, nil)
 			if (err != nil) != test.wantError {
@@ -226,7 +224,7 @@ func TestRuntimePoolPreparesResidentInputOutsideNativeAcceptanceTimeout(t *testi
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		backend: backend,
 	}
-	if err := pool.handoffIdleMessages(
+	if err := pool.deliverIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
 		nil, nil, nil, nil,
@@ -295,7 +293,7 @@ func TestRuntimePoolCompactThenEmptyTurnDoesNotAcceptDelivery(t *testing.T) {
 		backend: backend,
 	}
 	accepted := false
-	err := pool.handoffIdleMessages(
+	err := pool.deliverIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
 		nil,
@@ -317,7 +315,7 @@ func TestRuntimePoolCompactionPreparationFailureDoesNotRestartResidentProcess(t 
 	slot := &canonicalAgentRuntimeSlot{backend: backend}
 	pool.slots["agent-1\x00runtime-1"] = slot
 	var observed []agent.MessageType
-	err := pool.handoffIdleMessages(
+	err := pool.deliverIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
 		nil, nil,
@@ -468,9 +466,9 @@ func commitPendingNoticeForTest(commit func()) bool {
 	return true
 }
 
-func newTestMessageCoordinator(t *testing.T, agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
+func newTestMessageCoordinator(t *testing.T, agentRoot string, deliver RuntimeMessageDelivery, activity MessageReceivedActivity) (*MessageCoordinator, error) {
 	t.Helper()
-	return NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, agentRoot, handoff, activity)
+	return NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, agentRoot, deliver, activity)
 }
 
 func (r *pendingNoticeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
@@ -497,10 +495,10 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 		backend: backend,
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"}}
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
+	if err := pool.deliverIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
 		t.Fatalf("first handoff: %v", err)
 	}
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+	if err := pool.deliverIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		t.Fatalf("overlapping handoff error = %v, want busy", err)
 	}
 	backend.done <- nil
@@ -533,7 +531,7 @@ func TestRuntimePoolSettlesPiTurnBeforeReopeningMessageAdmission(t *testing.T) {
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"}}
 	firstComplete := make(chan error, 1)
-	if err := pool.handoffIdleMessages(
+	if err := pool.deliverIdleMessages(
 		context.Background(), "agent-1", "runtime-1", messages,
 		nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) { firstComplete <- err },
 	); err != nil {
@@ -552,7 +550,7 @@ func TestRuntimePoolSettlesPiTurnBeforeReopeningMessageAdmission(t *testing.T) {
 
 	// Settlement is blocked after native completion. A racing handoff must not
 	// cross Pi's input boundary until the pool has advanced the capture boundary.
-	racingErr := pool.handoffIdleMessages(
+	racingErr := pool.deliverIdleMessages(
 		context.Background(), "agent-1", "runtime-1", messages,
 		nil, nil, nil, nil,
 	)
@@ -570,7 +568,7 @@ func TestRuntimePoolSettlesPiTurnBeforeReopeningMessageAdmission(t *testing.T) {
 	}
 
 	secondComplete := make(chan error, 1)
-	if err := pool.handoffIdleMessages(
+	if err := pool.deliverIdleMessages(
 		context.Background(), "agent-1", "runtime-1", messages,
 		nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) { secondComplete <- err },
 	); err != nil {
@@ -601,7 +599,7 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 	var mu sync.Mutex
 	var observed []string
 	completionObserved := make(chan struct{})
-	err := pool.handoffIdleMessages(
+	err := pool.deliverIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
 		func() {
@@ -649,7 +647,7 @@ func TestRuntimePoolDrainsResidentActivityWithoutObserver(t *testing.T) {
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{backend: backend}
 
 	completed := make(chan struct{})
-	if err := pool.handoffIdleMessages(
+	if err := pool.deliverIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
 		nil, nil, nil, func(error, uint64, *agent.ResidentTurnCapture) { close(completed) },
@@ -685,8 +683,8 @@ func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testin
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1}}
 	result := make(chan bool, 1)
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, func(_ error, generation uint64, _ *agent.ResidentTurnCapture) {
-		if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
+	if err := pool.deliverIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, func(_ error, generation uint64, _ *agent.ResidentTurnCapture) {
+		if err := pool.deliverIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
 			result <- true
 			return
 		}
@@ -703,11 +701,11 @@ func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testin
 	secondDone <- nil
 }
 
-// TestResidentMessageTurnCompletionDoesNotAutoHandoffPending locks Raft
-// alignment: after a turn ends, Pending must not auto body-handoff into a new
+// TestResidentMessageTurnCompletionDoesNotAutoDeliverPending locks Raft
+// alignment: after a turn ends, Pending bodies must not auto-deliver into a new
 // turn (former FlushOnTurnCompletion). Idle Accept→Flush or explicit Flush /
 // message check advances bodies later.
-func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
+func TestResidentMessageTurnCompletionDoesNotAutoDeliverPending(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-4111-8111-111111111111"
 		runtimeID   = "22222222-2222-4222-8222-222222222222"
@@ -781,7 +779,7 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	_ = activities // activity channel drained optionally; boundary is authoritative
 }
 
-func TestResidentMessageTurnErrorDoesNotAutoHandoffPending(t *testing.T) {
+func TestResidentMessageTurnErrorDoesNotAutoDeliverPending(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-4111-8111-111111111111"
 		runtimeID   = "22222222-2222-4222-8222-222222222222"
@@ -849,7 +847,7 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		backend: backend, running: true,
 	}
-	first := PendingNoticeSnapshot{
+	first := InboxNoticeSnapshot{
 		Notice: agent.ResidentPendingNotice{TotalPending: 2, ChangedTargets: []agent.ResidentPendingTarget{
 			{Target: "channel:one", PendingCount: 1},
 			{Target: "dm:two", PendingCount: 1},
@@ -859,18 +857,18 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 		CoordinatorID:      "coordinator-1",
 		PendingGeneration:  1,
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
+	if err := pool.deliverBusyInboxNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("first Notice: %v", err)
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
+	if err := pool.deliverBusyInboxNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("duplicate Notice: %v", err)
 	}
 	newGeneration := first
 	newGeneration.PendingGeneration = 2
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", newGeneration, commitPendingNoticeForTest); err != nil {
+	if err := pool.deliverBusyInboxNotice(context.Background(), "agent-1", "runtime-1", newGeneration, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("same fingerprint at new Pending generation: %v", err)
 	}
-	second := PendingNoticeSnapshot{
+	second := InboxNoticeSnapshot{
 		Notice: agent.ResidentPendingNotice{TotalPending: 3, ChangedTargets: []agent.ResidentPendingTarget{
 			{Target: "channel:one", PendingCount: 2},
 			{Target: "dm:two", PendingCount: 1},
@@ -880,7 +878,7 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 		CoordinatorID:      "coordinator-1",
 		PendingGeneration:  3,
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", second, commitPendingNoticeForTest); err != nil {
+	if err := pool.deliverBusyInboxNotice(context.Background(), "agent-1", "runtime-1", second, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("changed Notice: %v", err)
 	}
 	got := backend.snapshot()
@@ -907,7 +905,7 @@ func TestMessageCoordinatorBlockedPendingNoticeDoesNotBlockNewDelivery(t *testin
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	coordinator.ConfigurePendingNotices(func(_ context.Context, _ PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+	coordinator.ConfigurePendingNotices(func(_ context.Context, _ InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
 		startOnce.Do(func() { close(noticeStarted) })
 		<-releaseNotice
 		if !commitIfCurrent(func() {}) {
@@ -945,9 +943,9 @@ func TestMessageCoordinatorBlockedPendingNoticeDoesNotBlockNewDelivery(t *testin
 }
 
 func TestMessageCoordinatorPendingChangeDuringNoticeRetriesCurrentGeneration(t *testing.T) {
-	firstStarted := make(chan PendingNoticeSnapshot, 1)
+	firstStarted := make(chan InboxNoticeSnapshot, 1)
 	releaseFirst := make(chan struct{})
-	committed := make(chan PendingNoticeSnapshot, 1)
+	committed := make(chan InboxNoticeSnapshot, 1)
 	var (
 		attemptMu   sync.Mutex
 		attempts    int
@@ -958,7 +956,7 @@ func TestMessageCoordinatorPendingChangeDuringNoticeRetriesCurrentGeneration(t *
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
 		attemptMu.Lock()
 		attempts++
 		attempt := attempts
@@ -979,7 +977,7 @@ func TestMessageCoordinatorPendingChangeDuringNoticeRetriesCurrentGeneration(t *
 		t.Fatalf("Accept first Delivery: %v", err)
 	}
 	coordinator.NotifyPendingAfterTurn()
-	var first PendingNoticeSnapshot
+	var first InboxNoticeSnapshot
 	select {
 	case first = <-firstStarted:
 	case <-time.After(time.Second):
@@ -1004,7 +1002,7 @@ func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	slot := &canonicalAgentRuntimeSlot{backend: backend, running: true}
 	pool.slots["agent-1\x00runtime-1"] = slot
-	snapshot := PendingNoticeSnapshot{
+	snapshot := InboxNoticeSnapshot{
 		Notice:             agent.ResidentPendingNotice{TotalPending: 1, ChangedTargets: []agent.ResidentPendingTarget{{Target: "dm:one", PendingCount: 1}}},
 		Fingerprint:        "all-v1",
 		TargetFingerprints: map[string]string{"dm:one": "one-v1"},
@@ -1015,7 +1013,7 @@ func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 		apply()
 		return true
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", snapshot, commit); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+	if err := pool.deliverBusyInboxNotice(context.Background(), "agent-1", "runtime-1", snapshot, commit); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		t.Fatalf("Notice during compaction error = %v, want busy deferral", err)
 	}
 	if got := backend.snapshot(); len(got) != 0 {
@@ -1023,7 +1021,7 @@ func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 	}
 
 	pool.observeResidentRuntimeMessage(slot, agent.Message{Type: agent.MessageCompactionFinished})
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", snapshot, commit); err != nil {
+	if err := pool.deliverBusyInboxNotice(context.Background(), "agent-1", "runtime-1", snapshot, commit); err != nil {
 		t.Fatalf("Notice after compaction finish: %v", err)
 	}
 	if got := backend.snapshot(); len(got) != 1 {
@@ -1072,7 +1070,7 @@ func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *t
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
 		mu.Lock()
 		notices = append(notices, snapshot.Notice)
 		mu.Unlock()
@@ -1138,9 +1136,6 @@ func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *t
 	if got := coordinator.Boundaries(); len(got) != 0 {
 		t.Fatalf("Notice advanced Context Boundaries: %v", got)
 	}
-	if _, err := os.Stat(filepath.Join(root, consumedSeqsFileName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Notice persisted Context Boundary, stat error = %v", err)
-	}
 }
 
 func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T) {
@@ -1155,7 +1150,7 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
 		mu.Lock()
 		attempts++
 		attempt := attempts
@@ -1194,9 +1189,6 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 			t.Fatalf("Notice attempts = %d, want retry", gotAttempts)
 		}
 		runtime.Gosched()
-	}
-	if _, err := os.Stat(filepath.Join(root, consumedSeqsFileName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("boundary file after Notice retry: %v", err)
 	}
 	coordinator.mu.Lock()
 	got := coordinator.pendingBatchLocked()
@@ -1292,55 +1284,6 @@ func TestMessageCoordinatorCoverageCheckAdvancesOnlyAfterCommit(t *testing.T) {
 	}
 }
 
-func TestMessageCoordinatorCoverageCheckRetainsPendingWhenCommitWriteFails(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "agent-root")
-	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	completeCoordinatorRecovery(t, coordinator)
-	delivery := testDelivery("message-1", "channel:one", 1, "delivery-1")
-	if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
-		t.Fatalf("Accept: %v", err)
-	}
-	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck})
-	if err != nil {
-		t.Fatalf("PrepareCoverage: %v", err)
-	}
-	if err := os.WriteFile(root, []byte("blocks agent root directory"), 0o600); err != nil {
-		t.Fatalf("block agent root: %v", err)
-	}
-
-	err = coordinator.CommitCoverage(offer.ReceiptID)
-	if err == nil {
-		t.Fatal("CommitCoverage succeeded despite boundary failure")
-	}
-	coordinator.mu.Lock()
-	pending := coordinator.pendingBatchLocked()
-	coordinator.mu.Unlock()
-	if len(pending) != 1 || pending[0].ID != delivery.Message.ID {
-		t.Fatalf("Pending after boundary failure = %+v", pending)
-	}
-	if got := coordinator.Boundaries(); len(got) != 0 {
-		t.Fatalf("boundaries after failure = %+v", got)
-	}
-
-	if err := os.Remove(root); err != nil {
-		t.Fatalf("unblock agent root: %v", err)
-	}
-	if err := coordinator.CommitCoverage(offer.ReceiptID); err != nil {
-		t.Fatalf("retry CommitCoverage: %v", err)
-	}
-	coordinator.mu.Lock()
-	pending = coordinator.pendingBatchLocked()
-	coordinator.mu.Unlock()
-	if len(pending) != 0 {
-		t.Fatalf("Pending after successful retry = %+v", pending)
-	}
-}
-
 func testDelivery(id, target string, seq int64, deliveryID string) protocol.AgentDeliverPayload {
 	return protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: target, Seq: seq, DeliveryID: deliveryID,
@@ -1365,9 +1308,6 @@ func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T
 	}
 	if got := coordinator.Boundaries(); len(got) != 0 {
 		t.Fatalf("boundary advanced on acknowledgement: %v", got)
-	}
-	if _, err := os.Stat(filepath.Join(root, consumedSeqsFileName)); !os.IsNotExist(err) {
-		t.Fatalf("boundary file after acceptance: %v", err)
 	}
 }
 
@@ -1406,10 +1346,6 @@ func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
 	}
 	if handoffs != 0 || activities != 0 {
 		t.Fatalf("MarkRead caused handoffs=%d activities=%d, want neither", handoffs, activities)
-	}
-	boundaries, healthy, err := loadConsumedSeqs(filepath.Join(root, consumedSeqsFileName))
-	if err != nil || !healthy || !reflect.DeepEqual(boundaries, map[string]int64{"channel:one": 5}) {
-		t.Fatalf("durable boundaries = %v healthy=%v err=%v", boundaries, healthy, err)
 	}
 }
 
@@ -1450,7 +1386,7 @@ func TestMessageCoordinatorFlushesTargetInSequenceAndRecordsOneActivityBatch(t *
 	}
 }
 
-func TestMessageCoordinatorBlockedRuntimeHandoffDoesNotBlockNewDelivery(t *testing.T) {
+func TestMessageCoordinatorBlockedRuntimeDeliveryDoesNotBlockNewDelivery(t *testing.T) {
 	handoffStarted := make(chan struct{})
 	releaseHandoff := make(chan struct{})
 	var (
@@ -1519,18 +1455,8 @@ func TestMessageCoordinatorBlockedRuntimeHandoffDoesNotBlockNewDelivery(t *testi
 		t.Fatalf("Accept during Runtime handoff = %+v", acceptedWhileBlocked)
 	}
 	coordinator.mu.Lock()
-	reserved := coordinator.activeHandoff
 	pendingWhileBlocked := coordinator.pendingBatchLocked()
 	coordinator.mu.Unlock()
-	if reserved == nil || reserved.generation == 0 || reserved.phase != runtimeMessageHandoffReserved {
-		t.Fatalf("active handoff token = %+v, want reserved phase", reserved)
-	}
-	if want := []string{messageIdentityKey(testDelivery("message-1", "channel-1", 1, "delivery-1").Message)}; !reflect.DeepEqual(reserved.identities, want) {
-		t.Fatalf("reserved identities = %v, want %v", reserved.identities, want)
-	}
-	if got := reserved.proposedBoundaries["channel-1"]; got != 1 {
-		t.Fatalf("reserved boundary = %d, want 1", got)
-	}
 	if len(pendingWhileBlocked) != 2 {
 		t.Fatalf("Pending during blocked handoff = %+v, want two Messages", pendingWhileBlocked)
 	}
@@ -1600,84 +1526,14 @@ func TestMessageCoordinatorConcurrentFlushCannotReserveActiveBatch(t *testing.T)
 		secondErr = <-secondFlushDone
 		t.Fatalf("second Flush waited for active Runtime handoff; returned %v", secondErr)
 	}
-	if !errors.Is(secondErr, errRuntimeMessageHandoffInProgress) {
-		t.Fatalf("second Flush = %v, want active-handoff rejection", secondErr)
+	if !errors.Is(secondErr, errRuntimeMessageDeliveryInProgress) {
+		t.Fatalf("second Flush = %v, want active-delivery rejection", secondErr)
 	}
 	callMu.Lock()
 	gotCalls := calls
 	callMu.Unlock()
 	if gotCalls != 1 {
 		t.Fatalf("Runtime handoff calls = %d, want 1", gotCalls)
-	}
-}
-
-func TestMessageCoordinatorBlockedBoundaryCommitDoesNotBlockNewDelivery(t *testing.T) {
-	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	completeCoordinatorRecovery(t, coordinator)
-	commitStarted := make(chan struct{})
-	releaseCommit := make(chan struct{})
-	var (
-		writeMu        sync.Mutex
-		writeCalls     int
-		writeSnapshots []map[string]int64
-		startOnce      sync.Once
-		releaseOnce    sync.Once
-	)
-	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseCommit) }) })
-	originalWriter := coordinator.writeBoundaries
-	coordinator.writeBoundaries = func(path string, boundaries map[string]int64) error {
-		writeMu.Lock()
-		writeCalls++
-		callNumber := writeCalls
-		writeSnapshots = append(writeSnapshots, cloneBoundaries(boundaries))
-		writeMu.Unlock()
-		if callNumber == 1 {
-			startOnce.Do(func() { close(commitStarted) })
-			<-releaseCommit
-		}
-		return originalWriter(path, boundaries)
-	}
-	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
-		t.Fatalf("Accept first Delivery: %v", err)
-	}
-	flushDone := make(chan error, 1)
-	go func() { flushDone <- coordinator.Flush(context.Background()) }()
-	select {
-	case <-commitStarted:
-	case <-time.After(time.Second):
-		t.Fatal("boundary commit did not start")
-	}
-
-	acceptDone := make(chan error, 1)
-	go func() {
-		_, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel-1", 2, "delivery-2"))
-		acceptDone <- err
-	}()
-	select {
-	case err := <-acceptDone:
-		if err != nil {
-			t.Fatalf("Accept during boundary commit: %v", err)
-		}
-	case <-time.After(time.Second):
-		releaseOnce.Do(func() { close(releaseCommit) })
-		<-flushDone
-		t.Fatal("boundary filesystem I/O held the coordinator state lock")
-	}
-	releaseOnce.Do(func() { close(releaseCommit) })
-	if err := <-flushDone; err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	if got := coordinator.Boundaries()["channel-1"]; got != 2 {
-		t.Fatalf("boundary after serialized commits = %d, want 2", got)
-	}
-	writeMu.Lock()
-	gotSnapshots := append([]map[string]int64(nil), writeSnapshots...)
-	writeMu.Unlock()
-	if want := []map[string]int64{{"channel-1": 1}, {"channel-1": 2}}; !reflect.DeepEqual(gotSnapshots, want) {
-		t.Fatalf("serialized boundary snapshots = %v, want %v", gotSnapshots, want)
 	}
 }
 
@@ -1725,7 +1581,7 @@ func TestMessageCoordinatorBlockedActivityDoesNotBlockNewDelivery(t *testing.T) 
 	}
 }
 
-func TestMessageCoordinatorCloseInvalidatesAcceptedTokenBeforeBoundaryWrite(t *testing.T) {
+func TestMessageCoordinatorCloseInvalidatesAcceptedDeliveryBeforeBoundaryCommit(t *testing.T) {
 	activityStarted := make(chan struct{})
 	releaseActivity := make(chan struct{})
 	var startOnce, releaseOnce sync.Once
@@ -1738,11 +1594,6 @@ func TestMessageCoordinatorCloseInvalidatesAcceptedTokenBeforeBoundaryWrite(t *t
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
 	completeCoordinatorRecovery(t, coordinator)
-	writeCalls := 0
-	coordinator.writeBoundaries = func(string, map[string]int64) error {
-		writeCalls++
-		return nil
-	}
 	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
@@ -1765,14 +1616,11 @@ func TestMessageCoordinatorCloseInvalidatesAcceptedTokenBeforeBoundaryWrite(t *t
 		t.Fatal("Close waited for non-state Activity callback")
 	}
 	releaseOnce.Do(func() { close(releaseActivity) })
-	if err := <-flushDone; !errors.Is(err, errRuntimeMessageHandoffInvalidated) {
-		t.Fatalf("Flush after Close = %v, want invalidated token", err)
-	}
-	if writeCalls != 0 {
-		t.Fatalf("stale accepted token performed %d boundary writes", writeCalls)
+	if err := <-flushDone; !errors.Is(err, errRuntimeMessageDeliveryInvalidated) {
+		t.Fatalf("Flush after Close = %v, want invalidated delivery", err)
 	}
 	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
-		t.Fatalf("stale accepted token advanced boundary to %d", got)
+		t.Fatalf("stale accepted delivery advanced boundary to %d", got)
 	}
 }
 
@@ -1799,7 +1647,7 @@ func TestMessageCoordinatorCommitAdvancesExactTargetMaxima(t *testing.T) {
 	}
 }
 
-func TestMessageCoordinatorDeduplicatesDeliveryWithoutSecondHandoffOrActivity(t *testing.T) {
+func TestMessageCoordinatorDeduplicatesDeliveryWithoutSecondRuntimeDeliveryOrActivity(t *testing.T) {
 	var handoffs, activities int
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, func([]protocol.AgentMessageProjection) { activities++ })
 	if err != nil {
@@ -1862,7 +1710,7 @@ func TestDaemonAcceptsIdleDeliveryThroughProviderBeforeAcknowledgement(t *testin
 	}
 }
 
-func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
+func TestCoordinatorReplacementInvalidatesInFlightDelivery(t *testing.T) {
 	oldRoot := t.TempDir()
 	newRoot := t.TempDir()
 	handoffStarted := make(chan struct{})
@@ -1905,8 +1753,8 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 		t.Fatal("coordinator replacement waited for blocked Runtime handoff")
 	}
 	releaseOnce.Do(func() { close(releaseHandoff) })
-	if err := <-flushDone; !errors.Is(err, errRuntimeMessageHandoffInvalidated) {
-		t.Fatalf("old coordinator Flush = %v, want invalidated token", err)
+	if err := <-flushDone; !errors.Is(err, errRuntimeMessageDeliveryInvalidated) {
+		t.Fatalf("old coordinator Flush = %v, want invalidated delivery", err)
 	}
 	if got := oldCoordinator.Boundaries()["channel-1"]; got != 0 {
 		t.Fatalf("stale handoff advanced old coordinator boundary to %d", got)
@@ -1926,119 +1774,49 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 	}
 }
 
-func TestMessageCoordinatorTreatsMalformedBoundaryAsUnknownCoverage(t *testing.T) {
+func TestMessageCoordinatorBoundaryResetsWithCoordinator(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, consumedSeqsFileName), []byte("not-json"), 0o600); err != nil {
-		t.Fatalf("write corrupt boundary: %v", err)
-	}
-	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	if got := coordinator.Boundaries(); len(got) != 0 {
-		t.Fatalf("boundaries = %v, want unknown empty coverage", got)
-	}
-}
-
-func TestMessageCoordinatorDeletedBoundaryReplaysConservatively(t *testing.T) {
-	root := t.TempDir()
-	// A prior run had durably advanced coverage; the file is then deleted
-	// (unstable volume, manual removal, or partial restore). Deletion must be
-	// treated as unknown coverage, never as permission to skip context.
-	boundaryPath := filepath.Join(root, consumedSeqsFileName)
-	if err := os.WriteFile(boundaryPath, []byte(`{"channel-1":5}`), 0o600); err != nil {
-		t.Fatalf("write prior boundary: %v", err)
-	}
-	if err := os.Remove(boundaryPath); err != nil {
-		t.Fatalf("delete boundary: %v", err)
-	}
-	var handedOff []protocol.AgentMessageProjection
-	coordinator, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
-		handedOff = append(handedOff, messages...)
+	delivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
+	first, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	if got := coordinator.Boundaries(); len(got) != 0 {
-		t.Fatalf("boundaries after deletion = %v, want unknown empty coverage", got)
-	}
-	if boundary, ok := coordinator.ContextBoundary("channel-1"); !ok || boundary != 0 {
-		t.Fatalf("empty boundary after deletion = %d, %v; want valid zero", boundary, ok)
-	}
-	message := protocol.AgentMessageProjection{ID: "message-6", Target: "channel-1", Seq: 6, Content: "replayed-after-deletion"}
-	if _, err := coordinator.Accept(context.Background(), protocol.AgentDeliverPayload{AgentID: "agent-1", Target: message.Target, Seq: message.Seq, DeliveryID: "delivery-6", Message: message}); err != nil {
-		t.Fatalf("Accept redelivery: %v", err)
-	}
-	if err := coordinator.Flush(context.Background()); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	if len(handedOff) != 1 || handedOff[0].ID != message.ID || coordinator.Boundaries()[message.Target] != message.Seq {
-		t.Fatalf("handoff=%+v boundaries=%v after deletion recovery", handedOff, coordinator.Boundaries())
-	}
-}
-
-func TestMessageCoordinatorLowerBoundaryConservativelyReplays(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, consumedSeqsFileName), []byte(`{"channel-1":1}`), 0o600); err != nil {
-		t.Fatalf("write lower boundary: %v", err)
-	}
-	var handedOff []protocol.AgentMessageProjection
-	coordinator, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
-		handedOff = append(handedOff, messages...)
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	message := protocol.AgentMessageProjection{ID: "message-2", Target: "channel-1", Seq: 2, Content: "replayed"}
-	if _, err := coordinator.Accept(context.Background(), protocol.AgentDeliverPayload{AgentID: "agent-1", Target: message.Target, Seq: message.Seq, DeliveryID: "delivery-2", Message: message}); err != nil {
-		t.Fatalf("Accept redelivery: %v", err)
-	}
-	if err := coordinator.Flush(context.Background()); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	if len(handedOff) != 1 || handedOff[0].ID != message.ID || coordinator.Boundaries()[message.Target] != message.Seq {
-		t.Fatalf("handoff=%+v boundaries=%v", handedOff, coordinator.Boundaries())
-	}
-}
-
-func TestMessageCoordinatorRetriesBoundaryWithoutDuplicateHandoffOrActivity(t *testing.T) {
-	root := t.TempDir()
-	var handoffs, activities int
-	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
-		handoffs++
-		return nil
-	}, func([]protocol.AgentMessageProjection) { activities++ })
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
-	}
-	completeCoordinatorRecovery(t, coordinator)
-	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+	if _, err := first.Accept(context.Background(), delivery); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
-	boundaryPath := filepath.Join(root, consumedSeqsFileName)
-	if err := os.Mkdir(boundaryPath, 0o700); err != nil {
-		t.Fatalf("make boundary path unwritable: %v", err)
+	if err := first.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
-	if err := coordinator.Flush(context.Background()); err == nil {
-		t.Fatal("Flush succeeded with a directory at the boundary path")
+	if got := first.Boundaries()[delivery.Target]; got != delivery.Seq {
+		t.Fatalf("first boundary = %d, want %d", got, delivery.Seq)
 	}
-	if _, ok := coordinator.ContextBoundary("channel-1"); ok {
-		t.Fatal("Credential Proxy boundary stayed available after persistence failure")
+	first.Close()
+
+	var replayed []protocol.AgentMessageProjection
+	second, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+		replayed = append(replayed, messages...)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("replacement NewMessageCoordinator: %v", err)
 	}
-	if err := os.Remove(boundaryPath); err != nil {
-		t.Fatalf("remove boundary obstruction: %v", err)
+	if got := second.Boundaries(); len(got) != 0 {
+		t.Fatalf("replacement restored process-local boundaries: %v", got)
 	}
-	if err := coordinator.Flush(context.Background()); err != nil {
-		t.Fatalf("retry Flush: %v", err)
+	if accepted, err := second.Accept(context.Background(), delivery); err != nil || !accepted {
+		t.Fatalf("replacement Accept = %v, %v; want replay accepted", accepted, err)
 	}
-	if handoffs != 1 || activities != 1 {
-		t.Fatalf("handoffs=%d activities=%d, want one each", handoffs, activities)
+	if err := second.Flush(context.Background()); err != nil {
+		t.Fatalf("replacement Flush: %v", err)
+	}
+	if len(replayed) != 1 || replayed[0].ID != delivery.Message.ID {
+		t.Fatalf("replacement replay = %+v", replayed)
 	}
 }
 
-func TestMessageCoordinatorRetriesRuntimeHandoffSafely(t *testing.T) {
+func TestMessageCoordinatorRetriesRuntimeDeliverySafely(t *testing.T) {
 	var attempts, activities int
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		attempts++
@@ -2058,12 +1836,8 @@ func TestMessageCoordinatorRetriesRuntimeHandoffSafely(t *testing.T) {
 		t.Fatal("first Flush succeeded")
 	}
 	coordinator.mu.Lock()
-	activeAfterRejection := coordinator.activeHandoff
 	pendingAfterRejection := coordinator.pendingBatchLocked()
 	coordinator.mu.Unlock()
-	if activeAfterRejection != nil {
-		t.Fatalf("runtime rejection retained active token: %+v", activeAfterRejection)
-	}
 	if len(pendingAfterRejection) != 1 || pendingAfterRejection[0].ID != "message-1" {
 		t.Fatalf("runtime rejection consumed Pending: %+v", pendingAfterRejection)
 	}

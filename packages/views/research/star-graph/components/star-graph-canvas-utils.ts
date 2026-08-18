@@ -1,4 +1,8 @@
-import type { StarEntityView } from "../lib/star-canvas-view-model";
+import type { StarGraphExpansionTransition } from "../lib/star-graph-expansion";
+import type {
+  StarCanvasViewModel,
+  StarEntityView,
+} from "../lib/star-canvas-view-model";
 
 export interface StarGraphCamera {
   x: number;
@@ -20,6 +24,14 @@ export interface StarGraphBounds {
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
 const MAX_AUTO_FIT_ZOOM = 1;
+const MAX_SEMANTIC_FOCUS_ZOOM = 1.45;
+
+const SEMANTIC_FOCUS_DIAMETER: Readonly<Record<string, number>> = {
+  m: 132,
+  l: 160,
+  xl: 190,
+  xxl: 210,
+};
 
 export function computeEntityBounds(entities: readonly StarEntityView[]): StarGraphBounds | null {
   if (entities.length === 0) return null;
@@ -109,11 +121,76 @@ export function centerCameraOnPoint(
   };
 }
 
+/**
+ * Bring an M+ landmark to a readable screen size without undoing a closer
+ * camera chosen by the user. S nodes retain the current scale because their
+ * detail belongs in the inspector rather than inside the point itself.
+ */
+export function focusCameraOnEntity(
+  entity: Pick<StarEntityView, "x" | "y" | "radius" | "tier">,
+  viewport: { width: number; height: number },
+  camera: StarGraphCamera,
+  options: { rightPanelWidth?: number; padding?: number } = {},
+): StarGraphCamera {
+  const targetDiameter = SEMANTIC_FOCUS_DIAMETER[entity.tier];
+  const semanticZoom = targetDiameter
+    ? targetDiameter / Math.max(entity.radius * 2, 1)
+    : camera.zoom;
+  const zoom = Math.max(
+    camera.zoom,
+    clamp(semanticZoom, MIN_ZOOM, MAX_SEMANTIC_FOCUS_ZOOM),
+  );
+  return centerCameraOnPoint(
+    { x: entity.x, y: entity.y },
+    viewport,
+    { ...camera, zoom },
+    options,
+  );
+}
+
+/**
+ * Plans camera continuity for one explicit Projection disclosure transaction.
+ * It only frames ids named by the transaction and never discovers descendants.
+ */
+export function planExpansionTransactionCamera(
+  model: StarCanvasViewModel,
+  transition: StarGraphExpansionTransition | null | undefined,
+  viewport: { width: number; height: number },
+  camera: StarGraphCamera,
+  options: { rightPanelWidth?: number; padding?: number } = {},
+): StarGraphCamera | null {
+  if (!transition || viewport.width <= 0 || viewport.height <= 0) return null;
+  const root = model.entities.find(
+    (entity) => entity.id === transition.rootNodeId,
+  );
+  if (!root) return null;
+
+  if (transition.kind === "collapse") {
+    return focusCameraOnEntity(root, viewport, camera, options);
+  }
+
+  const revealedIds = new Set(transition.revealedNodeIds);
+  const disclosed = model.entities.filter(
+    (entity) => entity.id === root.id || revealedIds.has(entity.id),
+  );
+  if (disclosed.length <= 1) return null;
+  const bounds = computeEntityBounds(disclosed);
+  if (!bounds) return null;
+
+  const rightPanelWidth = Math.max(0, options.rightPanelWidth ?? 0);
+  const safeViewport = {
+    width: Math.max(viewport.width - rightPanelWidth, 1),
+    height: viewport.height,
+  };
+  return fitCameraToBounds(bounds, safeViewport, options.padding ?? 72);
+}
+
 export function relationEdgeClass(_kind: string, edgeType: string): string {
   if (
     edgeType === "merged_from" ||
     edgeType === "integrates" ||
-    edgeType === "integration_formed"
+    edgeType === "integration_formed" ||
+    edgeType === "absorbed_into"
   ) {
     return "sg-edge-merge";
   }
@@ -140,9 +217,15 @@ const DECOMPOSITION_EDGE_TYPES = new Set([
   "escalated_to",
   "decompose",
   "derived_from",
+  "collapsed_path",
   "deepens",
 ]);
-const SUPPORT_EDGE_TYPES = new Set(["supports", "resolved_by"]);
+const SUPPORT_EDGE_TYPES = new Set([
+  "supports",
+  "resolved_by",
+  "produced_by",
+  "belongs_to",
+]);
 const CHALLENGE_EDGE_TYPES = new Set([
   "challenged_by",
   "contradicts",
@@ -151,6 +234,7 @@ const CHALLENGE_EDGE_TYPES = new Set([
   "superseded_by",
   "invalidated_by",
   "abandons",
+  "challenges",
 ]);
 const NEW_DIRECTION_EDGE_TYPES = new Set(["restart_of"]);
 

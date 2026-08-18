@@ -17,12 +17,12 @@ import (
 var ErrCanonicalAgentRuntimeBusy = errors.New("canonical agent runtime busy")
 
 const (
-	// canonicalIdleAcceptTimeout bounds how long a canonical Message handoff may
+	// canonicalIdleAcceptTimeout bounds how long canonical Message delivery may
 	// wait for the resident runtime to accept an idle input batch. A busy or
 	// unresponsive runtime must never block the recovery/Flush path forever
 	// (Raft alignment: queue + content-free notice + agent pull, not a blocking
 	// hard inject). When the wait elapses or a native busy error is surfaced the
-	// handoff returns ErrCanonicalAgentRuntimeBusy so the coordinator schedules a
+	// delivery returns ErrCanonicalAgentRuntimeBusy so the coordinator schedules a
 	// pending notice and retries, keeping messages queued. Recoveries that hit a
 	// still-booting process get a generous window so they are not thrashingly
 	// disposed before the resident registers its control reader.
@@ -672,6 +672,29 @@ func (p *canonicalAgentRuntimePool) ensureResidentProcess(ctx context.Context, a
 	return starter.EnsureResidentProcess(ctx)
 }
 
+func (p *canonicalAgentRuntimePool) residentProviderSession(agentID, runtimeID string) string {
+	if p == nil {
+		return ""
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return ""
+	}
+	backend := slot.backend
+	slot.mu.Unlock()
+	session, ok := backend.(agent.ResidentRuntimeSession)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(session.ProviderSessionID())
+}
+
 func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string) bool {
 	if p == nil {
 		return false
@@ -745,7 +768,7 @@ func (p *canonicalAgentRuntimePool) bindResidentPiRunIdentity(ctx context.Contex
 	return binding, nil
 }
 
-func (p *canonicalAgentRuntimePool) handoffIdleMessages(
+func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 	ctx context.Context,
 	agentID, runtimeID string,
 	messages []protocol.AgentMessageProjection,
@@ -1088,7 +1111,7 @@ func drainResidentCapture(captures <-chan agent.ResidentTurnCapture) <-chan *age
 // isResidentAcceptBusyErr reports whether an idle Message acceptance error
 // indicates the resident runtime is busy or unresponsive to idle input and
 // should therefore be treated as a queued-and-retry (ErrCanonicalAgentRuntimeBusy)
-// condition rather than a hard handoff failure. It covers the bounded wait
+// condition rather than a hard delivery failure. It covers the bounded wait
 // elapsing (context deadline) and a native busy/active-input signal. The
 // native-busy match is by sentinel text to avoid coupling the daemon pool to
 // provider-specific error types.
@@ -1106,7 +1129,7 @@ func isResidentAcceptBusyErr(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "turn busy")
 }
 
-func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+func (p *canonicalAgentRuntimePool) deliverBusyInboxNotice(ctx context.Context, agentID, runtimeID string, snapshot InboxNoticeSnapshot, commitIfCurrent InboxNoticeCommitIfCurrent) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
 	}
@@ -1358,7 +1381,7 @@ func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID st
 	}
 	// Fence any native acceptance that races this restart. The in-flight owner
 	// keeps admission until the killed process actually finishes, then closes
-	// and detaches this backend so the next handoff creates a fresh instance.
+	// and detaches this backend so the next delivery creates a fresh instance.
 	slot.invalidationGeneration++
 	// An accepted Message turn owns a terminal Activity callback keyed by its
 	// messageInputGeneration. Lifecycle interruption is an expected boundary,

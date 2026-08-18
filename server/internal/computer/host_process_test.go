@@ -1,17 +1,55 @@
 package computer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"net"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestProcessShutdownHandlerLogsAuditMetadata(t *testing.T) {
+	var logs bytes.Buffer
+	host := &Host{logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	canceled := make(chan struct{})
+	state := &hostProcessState{cancel: func() { close(canceled) }}
+	handler := host.processShutdownHandler(state)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/shutdown", nil)
+	request.Header.Set(shutdownSourceHeader, "desktop")
+	request.Header.Set(shutdownActionHeader, "restart")
+	request.Header.Set(shutdownRequestPIDHeader, "8123")
+
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown handler did not cancel the Computer context")
+	}
+	got := logs.String()
+	for _, want := range []string{
+		"Computer shutdown requested",
+		"source=desktop",
+		"action=restart",
+		"request_pid=8123",
+		"remote_address=192.0.2.1:1234",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("shutdown log %q does not contain %q", got, want)
+		}
+	}
+}
 
 func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7101)}
@@ -27,15 +65,12 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	endpoint := ServiceControlEndpoint(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		done <- host.RunProcess(ctx, HostProcessConfig{
-			Listener: listener,
+			ServiceEndpoint: endpoint,
 			Identity: HostProcessIdentity{
 				ComputerID:         "computer-a",
 				ComputerGeneration: 9,
@@ -57,7 +92,7 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	if record, pid, ok := host.Snapshot("workspace-a"); !ok || record.Lifecycle != RunnerLifecycleRunning || pid != 7101 {
 		t.Fatalf("Binding child was not supervised by Computer Host: record=%+v pid=%d ok=%v", record, pid, ok)
 	}
-	waitForHostHealth(t, "http://"+listener.Addr().String()+"/health")
+	waitForHostHealth(t, endpoint)
 	cancel()
 	select {
 	case err := <-done:
@@ -69,53 +104,14 @@ func TestHostProcessOwnsResidentControlAndDesiredBindings(t *testing.T) {
 	}
 }
 
-func TestHostProcessProjectsPreviousPackageTakeoverUntilLauncherExits(t *testing.T) {
-	var sourceAlive atomic.Bool
-	sourceAlive.Store(true)
-	state := &hostProcessState{
-		identity: HostProcessIdentity{
-			ComputerID: "computer-a", ComputerGeneration: 251, Version: "v0.4.24-alpha.57",
-			MachineAttestationFrom: 57261,
-		},
-		startedAt: time.Now(), ready: true,
-		previousPackageUpgradeBootstrap: true,
-		sourceProcessAlive: func(pid int) (bool, bool) {
-			if pid != 57261 {
-				t.Fatalf("source pid = %d, want 57261", pid)
-			}
-			return sourceAlive.Load(), true
-		},
-	}
-	handler := (&Host{}).processHealthHandler(state)
-	readStatus := func() string {
-		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
-		var health map[string]any
-		if err := json.NewDecoder(recorder.Body).Decode(&health); err != nil {
-			t.Fatal(err)
-		}
-		status, _ := health["status"].(string)
-		return status
-	}
-	if got := readStatus(); got != "takeover_ready" {
-		t.Fatalf("previous launcher alive: status = %q, want takeover_ready", got)
-	}
-	sourceAlive.Store(false)
-	if got := readStatus(); got != "running" {
-		t.Fatalf("previous launcher exited: status = %q, want running", got)
-	}
-}
-
 func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	const token = "owner-secret"
-	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != BindingReregisterRuntimePath || r.Header.Get("X-Multica-Control-Token") != token {
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
-			return
+	childControl := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if operation != "runner-ready" || headers["X-Multica-Control-Token"] != token {
+			return nil, errors.New("unexpected child control request")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer childControl.Close()
+		return nil, nil
+	})
 
 	var acceptCount atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,22 +126,19 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7201), controlURL: childControl.URL}
+	child := &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(7201), controlEndpoint: childControl}
 	host, err := NewHost(HostConfig{
 		Spawn: func(string, int64) (BindingChild, error) { return child, nil }, ControlToken: token,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	endpoint := ServiceControlEndpoint(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		done <- host.RunProcess(ctx, HostProcessConfig{
-			Listener: listener,
+			ServiceEndpoint: endpoint,
 			Identity: HostProcessIdentity{
 				ComputerID: "computer-a", ComputerGeneration: 9, Environment: "test",
 				Version: "v1.0.0", ServerURL: upstream.URL,
@@ -154,7 +147,7 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 		})
 	}()
 	waitForHostCurrent(t, host, BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 7201})
-	hostClient := NewHostControlClient("http://"+listener.Addr().String(), token, BindingChildIdentity{
+	hostClient := NewHostControlClient(endpoint, token, BindingChildIdentity{
 		WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 7201,
 	})
 	if err := hostClient.ReportRuntimeSet(context.Background(), []map[string]string{{
@@ -162,7 +155,7 @@ func TestHostProcessOwnsMachineUpgradeAndReregistersBindingChild(t *testing.T) {
 	}}, "runtime-token", time.Now().Add(time.Hour).Format(time.RFC3339Nano)); err != nil {
 		t.Fatalf("report Runtime set: %v", err)
 	}
-	if err := hostClient.ForwardMachineActions(context.Background(), protocol.DaemonHeartbeatAckPayload{
+	if err := hostClient.ForwardComputerControl(context.Background(), protocol.DaemonHeartbeatAckPayload{
 		RuntimeID:             "runtime-a",
 		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-a", TargetVersion: "v1.0.0"},
 	}); err != nil {
@@ -196,14 +189,9 @@ func waitForHostHealth(t *testing.T, endpoint string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		response, err := http.Get(endpoint)
-		if err == nil {
-			var health map[string]any
-			decodeErr := json.NewDecoder(response.Body).Decode(&health)
-			response.Body.Close()
-			if decodeErr == nil && health["status"] == "running" {
-				return
-			}
+		health := ProbeHealth(context.Background(), endpoint)
+		if health["status"] == "running" {
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

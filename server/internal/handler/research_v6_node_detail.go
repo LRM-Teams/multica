@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
 var researchV6RequiredDetailFields = []string{"purpose", "objective", "entry_condition", "method", "input_artifacts", "actions_taken", "actor", "result", "evidence", "decision", "failure", "recovery", "upstream", "downstream"}
@@ -30,15 +33,30 @@ type researchV6NodeDetailResponse struct {
 }
 
 func (h *Handler) GetResearchV6ProjectionNodeDetail(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := h.loadResearchV6Snapshot(r)
-	if err != nil {
-		writeResearchV6Error(w, err)
+	service, ok := h.ResearchRun.(researchrun.V6ProjectionReader)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "research V6 projection unavailable")
 		return
 	}
-	nodeID := strings.TrimSpace(chi.URLParam(r, "nodeId"))
-	detail, found := buildResearchV6NodeDetail(snapshot, nodeID)
-	if !found {
+	runID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "runId")), "runId")
+	if !valid {
+		return
+	}
+	nodeID, valid := parseUUIDOrBadRequest(w, strings.TrimSpace(chi.URLParam(r, "nodeId")), "nodeId")
+	if !valid {
+		return
+	}
+	detail, err := service.ProjectionV6NodeDetail(r.Context(), h.resolveWorkspaceID(r), uuidToString(runID), uuidToString(nodeID), strings.TrimSpace(r.URL.Query().Get("view")))
+	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "research V6 projection node not found")
+		return
+	}
+	if errors.Is(err, researchrun.ErrInvalidContract) {
+		writeError(w, http.StatusBadRequest, "view must be brief, full, or history")
+		return
+	}
+	if err != nil {
+		writeResearchV6Error(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)

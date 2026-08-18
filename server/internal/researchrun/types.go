@@ -386,6 +386,12 @@ type StartInput struct {
 	ProductRoundBudget int32
 }
 
+type V6BootstrapInput struct {
+	WorkspaceID, CreatedBy, DirectorAgentID string
+	Goal, Title, DepthTier, Language        string
+	SourcePolicy                            json.RawMessage
+}
+
 type SteerInput struct {
 	SessionID            string
 	WorkspaceID          string

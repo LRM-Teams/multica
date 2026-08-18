@@ -140,8 +140,8 @@ type messageDeliveryAcceptance struct {
 }
 
 // acceptMessageDelivery is the Raft-aligned per-Agent acceptance seam. It
-// gives the current launch's durable Pending projection responsibility before
-// attempting provider handoff. A missing live launch is not a terminal NACK:
+// gives the current launch's in-memory Pending projection responsibility before
+// attempting provider delivery. A missing live launch is not a terminal NACK:
 // already-consumed, terminal, idle-snapshot, and spawn-cooldown deliveries
 // stay locally responsible. Only "no process and no snapshot" rejects.
 func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
@@ -170,11 +170,6 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 	if !accepted {
 		result.outcome = messageDeliveryDeduplicated
 	}
-	if accepted {
-		// Raft 1.0.16 broadcasts Message received when an ordinary inbox
-		// body is accepted, including the pending/busy path.
-		runner.observeMessageAccepted(delivery.AgentID, runtimeID, []protocol.AgentMessageProjection{delivery.Message}, false)
-	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
 	))
@@ -184,13 +179,13 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 	runIdentity, identityErr := residentPiRunIdentity(delivery.RunID, delivery.RunAgentID)
 	if identityErr != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "failed", canonicalMessageFailureReason(identityErr),
+			runner.config.WorkspaceID, runtimeID, delivery, "runtime_delivery_attempted", "failed", canonicalMessageFailureReason(identityErr),
 		))
 		return messageDeliveryAcceptance{}, fmt.Errorf("%w: %v", errDeliveryResidentIdentityInvalid, identityErr)
 	}
 	if err := runner.ensureResidentRuntime(ctx, delivery.AgentID, runtimeID, runIdentity); err != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "deferred", canonicalMessageFailureReason(err),
+			runner.config.WorkspaceID, runtimeID, delivery, "runtime_delivery_attempted", "deferred", canonicalMessageFailureReason(err),
 		))
 		if runner.logger != nil {
 			runner.logger.Warn("Workspace Runner resident Message Runtime unavailable before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
@@ -206,13 +201,13 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		deferred := errors.Is(err, ErrCanonicalAgentRuntimeBusy)
 		outcome := map[bool]string{true: "deferred", false: "failed"}[deferred]
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
+			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_advanced", outcome, canonicalMessageFailureReason(err),
 		))
 		if runner.logger != nil {
 			if deferred {
-				runner.logger.Debug("Workspace Runner Agent Message handoff deferred before delivery acknowledgement", "reason", "runtime_busy", "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+				runner.logger.Debug("Workspace Runner Agent Message delivery deferred before acknowledgement", "reason", "runtime_busy", "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
 			} else {
-				runner.logger.Warn("Workspace Runner Agent Message handoff incomplete before delivery acknowledgement", "error", err, "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+				runner.logger.Warn("Workspace Runner Agent Message delivery incomplete before acknowledgement", "error", err, "outcome", outcome, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
 			}
 		}
 		if deferred {
@@ -221,7 +216,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		return messageDeliveryAcceptance{}, fmt.Errorf("%w: %v", errDeliveryProviderRejected, err)
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
+		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_advanced", "accepted", "",
 	))
 	return result, nil
 }
@@ -330,33 +325,11 @@ func (runner *WorkspaceRunner) completeIdleSnapshotStart(ctx context.Context, ag
 	start := protocol.WorkspaceRunnerAgentStartPayload{
 		AgentID: agentID, RuntimeID: res.runtimeID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
 	}
-	ack := protocol.AgentStartAckPayload{AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID}
-	callback := agentProcessCallback{AgentID: agentID, LaunchID: res.launchID}
-	failed := false
-	defer func() {
-		if failed {
-			runner.processes.completeFailedManagedStart(callback)
-		} else {
-			runner.processes.completeManagedStart(callback)
-		}
-	}()
-	outcome, err := runner.completeManagedAgentStart(ctx, start, ack)
-	if err != nil {
-		failed = true
-		runner.publishManagedAgentStartFailure(start, outcome)
-		if runner.logger != nil && ctx.Err() == nil {
-			runner.logger.Warn("Workspace Runner idle snapshot start failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "provider_start_failed", "failed", err)...)
-		}
-		return
+	ack := protocol.AgentStartAckPayload{
+		AgentID: agentID, LaunchID: res.launchID, StartDispatchID: res.startDispatchID,
+		QueueState: protocol.AgentStartQueueStarting,
 	}
-	if err := runner.establishManagedAgentStart(start, outcome); err != nil {
-		if runner.logger != nil && ctx.Err() == nil {
-			runner.logger.Warn("Workspace Runner idle snapshot state failed", runner.managedStartLogAttrs(start, protocol.AgentStartQueueStarting, "state_failed", "failed", err)...)
-		}
-		return
-	}
-	runner.publishManagedAgentStartActivity(agentID, res.runtimeID)
-	runner.flushManagedAgentStartMessages(ctx, start, ack)
+	runner.startAgentNow(ctx, start, ack, nil, nil, nil, nil)
 }
 
 func (runner *WorkspaceRunner) reportProcessUnavailable(agentID string) {
@@ -404,7 +377,7 @@ func (runner *WorkspaceRunner) republishTerminalFailure(agentID string, res agen
 	}
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, LaunchID: res.launchID, Kind: kind,
-		Data: AgentErrorObservationData{RuntimeID: res.runtimeID, ReasonCode: res.terminalReason},
+		Data: AgentErrorObservationData{RuntimeID: res.runtimeID, ReasonCode: res.terminalReason, Message: res.terminalDetail},
 		At:   time.Now().UTC(),
 	}, "Runtime failure")
 }

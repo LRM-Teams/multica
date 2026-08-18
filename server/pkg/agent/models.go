@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,8 +19,8 @@ import (
 // The dropdown groups by Provider when the ID uses the
 // `provider/model` form (e.g. "openai/gpt-4o" from opencode).
 // Default is a *display* hint: the UI badges the entry the
-// runtime advertises as its preferred pick (e.g. Claude Code's
-// shipped default, or an ACP server's currentModelId). It has no effect
+// runtime explicitly advertises as its preferred pick (e.g. Grok's
+// default marker or an ACP server's currentModelId). It has no effect
 // at execution time — when agent.model is empty the daemon passes
 // "" to the backend so each provider's own CLI resolves its own
 // default, which is always closer to what the user's account /
@@ -79,30 +78,22 @@ var (
 const modelCacheTTL = 10 * time.Minute
 
 // ListModels returns the models supported by the given agent provider.
-// For providers with a known static catalog it returns the baked-in
-// list; for providers with a CLI discovery mechanism (opencode, pi,
-// openclaw) it shells out with caching and falls back to the static
-// list on failure.
+// Static providers return a baked-in list; dynamic providers query their
+// runtime-specific discovery mechanism with caching. Each provider owns its
+// failure behavior; Grok deliberately returns an empty catalog rather than a
+// static fallback.
 //
-// For claude, codex, and opencode, the catalog is augmented with per-model
-// thinking-level options discovered from the local CLI. Discovery failures
-// silently leave Thinking == nil on each entry, which the UI treats as
-// "no picker for this model" rather than blocking model selection.
+// For runtimes that advertise per-model thinking levels, the catalog carries
+// those options through to the UI. Discovery failures leave Thinking == nil,
+// which the UI treats as "no picker for this model" rather than blocking model
+// selection.
 //
 // executablePath lets the caller point at a non-default binary; pass
 // "" to use the provider's default name on PATH.
 func ListModels(ctx context.Context, providerType, executablePath string) ([]Model, error) {
 	switch providerType {
 	case "claude":
-		// Frank 2026-08-05: dynamic first, static fallback. Claude Code CLI has
-		// no models-list subcommand on current releases, but it may gain one
-		// later; when that lands, surfaced rows win. If discovery fails or is
-		// empty, fall back to the static alias lineup so the picker never goes
-		// blank (sonnet/opus/haiku are stable aliases that resolve to the
-		// latest model).
-		return cachedDiscovery(discoveryCacheKey(providerType, executablePath), func() ([]Model, error) {
-			return claudeModelsWithFallback(ctx, executablePath)
-		})
+		return claudeStaticModels(), nil
 	case "codex":
 		// Frank 2026-08-03: dynamic only from `codex debug models`.
 		// Picker rows are visibility=list; thinking catalog is filled
@@ -200,30 +191,24 @@ func discoveryCacheKey(providerType, executablePath string) string {
 
 // ── Static catalogs ──
 
-// claudeModelsWithFallback tries live CLI discovery first so a future
-// Claude Code with a models-list subcommand surfaces real account rows;
-// any failure or empty result falls back to the static alias lineup so the
-// picker always has rows.
-func claudeModelsWithFallback(ctx context.Context, executablePath string) ([]Model, error) {
-	models, err := discoverClaudeModels(ctx, executablePath)
-	if err == nil && len(models) > 0 {
-		return models, nil
-	}
-	return claudeStaticModels(), nil
-}
-
 // claudeStaticModels is the current, user-visible Claude lineup. The runtime
 // aliases stay stable so the installed Claude CLI can resolve them.
 // Compatibility IDs deliberately stay out of this picker; persisted agents
 // still resolve them through claudeCompatibilityModels below.
 func claudeStaticModels() []Model {
 	return []Model{
-		{ID: "sonnet", Label: "Sonnet 5", Provider: "anthropic", Default: true},
-		{ID: "opus", Label: "Opus 5", Provider: "anthropic"},
-		{ID: "haiku", Label: "Haiku", Provider: "anthropic"},
-		{ID: "claude-fable-5", Label: "Fable 5", Provider: "anthropic"},
-		{ID: "claude-sonnet-5", Label: "Sonnet 5 (pin)", Provider: "anthropic"},
-		{ID: "claude-opus-5", Label: "Opus 5 (pin)", Provider: "anthropic"},
+		{ID: "opus", Label: "Claude Opus", Provider: "anthropic"},
+		{ID: "fable", Label: "Claude Fable", Provider: "anthropic"},
+		{ID: "sonnet", Label: "Claude Sonnet", Provider: "anthropic"},
+		{ID: "haiku", Label: "Claude Haiku", Provider: "anthropic"},
+		{ID: "claude-opus-5", Label: "Claude Opus 5", Provider: "anthropic"},
+		{ID: "claude-opus-4-8", Label: "Claude Opus 4.8", Provider: "anthropic"},
+		{ID: "claude-opus-4-7", Label: "Claude Opus 4.7", Provider: "anthropic"},
+		{ID: "claude-opus-4-6", Label: "Claude Opus 4.6", Provider: "anthropic"},
+		{ID: "claude-fable-5", Label: "Claude Fable 5", Provider: "anthropic"},
+		{ID: "claude-sonnet-5", Label: "Claude Sonnet 5", Provider: "anthropic"},
+		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic"},
+		{ID: "claude-haiku-4-5", Label: "Claude Haiku 4.5", Provider: "anthropic"},
 	}
 }
 
@@ -252,19 +237,6 @@ func claudeModelsWithCompatibility() []Model {
 	return append(models, claudeCompatibilityModels()...)
 }
 
-func codexStaticModels() []Model {
-	return []Model{
-		{ID: "gpt-5.5", Label: "GPT-5.5", Provider: "openai", Default: true},
-		{ID: "gpt-5.5-mini", Label: "GPT-5.5 mini", Provider: "openai"},
-		{ID: "gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
-		{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Provider: "openai"},
-		{ID: "gpt-5.3-codex", Label: "GPT-5.3 Codex", Provider: "openai"},
-		{ID: "gpt-5", Label: "GPT-5", Provider: "openai"},
-		{ID: "o3", Label: "o3", Provider: "openai"},
-		{ID: "o3-mini", Label: "o3-mini", Provider: "openai"},
-	}
-}
-
 // discoverCodexModels builds the user-visible model picker from
 // `codex debug models --bundled`. Only visibility=list rows are
 // returned (hide stays out of the dropdown). Thinking levels are
@@ -285,212 +257,211 @@ func discoverCodexModels(ctx context.Context, executablePath string) ([]Model, e
 	return models, nil
 }
 
-// discoverClaudeModels attempts dynamic discovery. Claude Code currently
-// has no models-list subcommand on known CLIs, so this fails closed with
-// a human-readable error (no static sonnet/opus/haiku fallback).
-func discoverClaudeModels(ctx context.Context, executablePath string) ([]Model, error) {
-	if executablePath == "" {
-		executablePath = "claude"
-	}
-	// Probe for a future `claude models` / list subcommand without treating
-	// help-page output as a catalog.
-	cmd := exec.CommandContext(ctx, executablePath, "models", "--help")
-	hideAgentWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	combined := string(out)
-	if err == nil && looksLikeClaudeModelsHelp(combined) {
-		// Subcommand exists — try non-interactive list forms.
-		for _, args := range [][]string{
-			{"models", "--json"},
-			{"models", "list", "--json"},
-			{"models"},
-		} {
-			listCmd := exec.CommandContext(ctx, executablePath, args...)
-			hideAgentWindow(listCmd)
-			raw, listErr := listCmd.Output()
-			if listErr != nil {
-				continue
-			}
-			if models := parseClaudeModelsList(raw); len(models) > 0 {
-				return models, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("Claude Code cannot list models: no models list command on this CLI (upgrade Claude Code if a list API is available; static catalogs are disabled)")
-}
-
-func looksLikeClaudeModelsHelp(help string) bool {
-	h := strings.ToLower(help)
-	if strings.Contains(h, "unknown command") || strings.Contains(h, "invalid command") {
-		return false
-	}
-	// Real help for a models subcommand usually mentions models/list.
-	return strings.Contains(h, "models") && (strings.Contains(h, "usage") || strings.Contains(h, "list"))
-}
-
-// parseClaudeModelsList accepts a best-effort JSON array of {id,name} or
-// newline-separated model ids. Empty/unknown shapes return nil.
-func parseClaudeModelsList(raw []byte) []Model {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return nil
-	}
-	var arr []map[string]any
-	if err := json.Unmarshal(raw, &arr); err == nil {
-		out := make([]Model, 0, len(arr))
-		for _, m := range arr {
-			id, _ := m["id"].(string)
-			if id == "" {
-				id, _ = m["slug"].(string)
-			}
-			if id == "" {
-				continue
-			}
-			label, _ := m["display_name"].(string)
-			if label == "" {
-				label, _ = m["name"].(string)
-			}
-			if label == "" {
-				label = id
-			}
-			out = append(out, Model{ID: id, Label: label, Provider: "anthropic"})
-		}
-		return out
-	}
-	var obj struct {
-		Models []map[string]any `json:"models"`
-	}
-	if err := json.Unmarshal(raw, &obj); err == nil && len(obj.Models) > 0 {
-		b, _ := json.Marshal(obj.Models)
-		return parseClaudeModelsList(b)
-	}
-	return nil
-}
-
-// grokStaticModels is the fallback catalog used when `grok models` is
-// unavailable (binary missing, offline, not logged in). Verified against
-// grok 0.2.93 which advertised grok-4.5 (default) and grok-composer-2.5-fast.
-func grokStaticModels() []Model {
-	thinking := grokModelThinking()
-	return []Model{
-		{ID: "grok-4.5", Label: "Grok 4.5", Provider: "grok", Default: true, Thinking: thinking},
-		{ID: "grok-composer-2.5-fast", Label: "Grok Composer 2.5 Fast", Provider: "grok", Thinking: thinking},
-	}
-}
-
-// grokModelThinking lists --reasoning-effort values accepted by the Grok CLI.
-func grokModelThinking() *ModelThinking {
-	return &ModelThinking{
-		SupportedLevels: []ThinkingLevel{
-			{Value: "none", Label: "None"},
-			{Value: "minimal", Label: "Minimal"},
-			{Value: "low", Label: "Low"},
-			{Value: "medium", Label: "Medium"},
-			{Value: "high", Label: "High"},
-			{Value: "xhigh", Label: "Extra high"},
-			{Value: "max", Label: "Max"},
-		},
-		// Observed default on grok 0.2.93 session summaries.
-		DefaultLevel: "high",
-	}
-}
-
-// discoverGrokModels runs `grok models` and parses the human-readable catalog.
-// Falls back to grokStaticModels on any failure so the UI stays usable.
+// discoverGrokModels launches the same ACP server used for Grok execution and
+// reads its initialize-time modelState. Discovery failures return an empty
+// catalog rather than advertising models that the installed CLI or
+// authenticated account may not support.
 func discoverGrokModels(ctx context.Context, executablePath string) ([]Model, error) {
 	if executablePath == "" {
 		executablePath = "grok"
 	}
 	if _, err := exec.LookPath(executablePath); err != nil {
-		return grokStaticModels(), nil
+		return []Model{}, nil
 	}
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, executablePath, "models")
+
+	cmd := exec.CommandContext(runCtx, executablePath, "agent", "--no-leader", "--always-approve", "stdio")
 	hideAgentWindow(cmd)
-	out, err := cmd.Output()
-	if err != nil && len(out) == 0 {
-		return grokStaticModels(), nil
+	cmd.Env = buildGrokEnv(nil, userGrokHome())
+	cmd.Stderr = io.Discard
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return []Model{}, nil
 	}
-	models := parseGrokModels(string(out))
-	if len(models) == 0 {
-		return grokStaticModels(), nil
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return []Model{}, nil
 	}
-	return models, nil
+	if err := cmd.Start(); err != nil {
+		return []Model{}, nil
+	}
+	defer func() {
+		_ = stdin.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}()
+
+	type initializeResponse struct {
+		ID     int             `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	responseCh := make(chan json.RawMessage, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+		for scanner.Scan() {
+			var response initializeResponse
+			if err := json.Unmarshal(scanner.Bytes(), &response); err != nil || response.ID != 1 {
+				continue
+			}
+			if len(response.Error) > 0 {
+				responseCh <- nil
+			} else {
+				responseCh <- response.Result
+			}
+			return
+		}
+		responseCh <- nil
+	}()
+
+	request := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": 1,
+			"clientCapabilities": map[string]any{
+				"fs":       map[string]bool{"readTextFile": false, "writeTextFile": false},
+				"terminal": false,
+			},
+			"_meta": map[string]any{
+				"startupHints": map[string]bool{
+					"nonInteractive":    true,
+					"skipGitStatus":     true,
+					"skipProjectLayout": true,
+				},
+				"clientType":    "multica-daemon",
+				"clientVersion": "1.0.0",
+			},
+		},
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return []Model{}, nil
+	}
+	if _, err := stdin.Write(append(payload, '\n')); err != nil {
+		return []Model{}, nil
+	}
+
+	select {
+	case raw := <-responseCh:
+		return parseGrokACPInitializeModels(raw), nil
+	case <-runCtx.Done():
+		return []Model{}, nil
+	}
 }
 
-// parseGrokModels turns `grok models` text output into Model entries.
-// Example (grok 0.2.93):
-//
-//	Default model: grok-4.5
-//	Available models:
-//	  * grok-4.5 (default)
-//	  - grok-composer-2.5-fast
-func parseGrokModels(output string) []Model {
-	thinking := grokModelThinking()
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	var models []Model
-	seen := map[string]bool{}
-	defaultFromHeader := ""
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		lower := strings.ToLower(line)
-		if idx := strings.Index(lower, "default model:"); idx >= 0 {
-			defaultFromHeader = strings.TrimSpace(line[idx+len("default model:"):])
-			continue
-		}
-		// Rows look like: "* grok-4.5 (default)" or "- grok-composer-2.5-fast"
-		id := ""
-		isDefault := false
-		switch {
-		case strings.HasPrefix(line, "* "):
-			id = strings.TrimSpace(strings.TrimPrefix(line, "* "))
-		case strings.HasPrefix(line, "- "):
-			id = strings.TrimSpace(strings.TrimPrefix(line, "- "))
-		case strings.HasPrefix(line, "• "):
-			id = strings.TrimSpace(strings.TrimPrefix(line, "• "))
-		default:
-			continue
-		}
-		if strings.Contains(strings.ToLower(id), "(default)") {
-			isDefault = true
-		}
-		// Model id is the first whitespace-delimited token.
-		if i := strings.IndexAny(id, " \t"); i > 0 {
-			id = id[:i]
-		}
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		if defaultFromHeader != "" && id == defaultFromHeader {
-			isDefault = true
-		}
-		models = append(models, Model{
-			ID:       id,
-			Label:    id,
-			Provider: "grok",
-			Default:  isDefault,
-			Thinking: thinking,
-		})
+var grokReasoningEffortLabels = map[string]string{
+	"low":    "Low",
+	"medium": "Medium",
+	"high":   "High",
+	"xhigh":  "Extra high",
+	"max":    "Max",
+	"ultra":  "Ultra",
+}
+
+// parseGrokACPInitializeModels projects the structured modelState advertised
+// by Grok ACP. Reasoning defaults come from reasoningEfforts[].default;
+// reasoningEffort is the user's current selection and is only a fallback when
+// the catalog does not mark a default.
+func parseGrokACPInitializeModels(raw json.RawMessage) []Model {
+	var result struct {
+		ProtocolVersion   int `json:"protocolVersion"`
+		AgentCapabilities struct {
+			LoadSession bool `json:"loadSession"`
+		} `json:"agentCapabilities"`
+		Meta struct {
+			ModelState struct {
+				CurrentModelID  string `json:"currentModelId"`
+				AvailableModels []struct {
+					ModelID string `json:"modelId"`
+					Name    string `json:"name"`
+					Meta    struct {
+						ReasoningEffort  string            `json:"reasoningEffort"`
+						ReasoningEfforts []json.RawMessage `json:"reasoningEfforts"`
+					} `json:"_meta"`
+				} `json:"availableModels"`
+			} `json:"modelState"`
+		} `json:"_meta"`
 	}
-	// Ensure exactly one default when the CLI marked one.
-	hasDefault := false
-	for _, m := range models {
-		if m.Default {
-			hasDefault = true
-			break
-		}
+	if len(raw) == 0 || json.Unmarshal(raw, &result) != nil || result.ProtocolVersion != 1 || !result.AgentCapabilities.LoadSession {
+		return []Model{}
 	}
-	if !hasDefault && len(models) > 0 {
-		models[0].Default = true
+
+	currentModelID := strings.TrimSpace(result.Meta.ModelState.CurrentModelID)
+	models := make([]Model, 0, len(result.Meta.ModelState.AvailableModels))
+	seenModels := make(map[string]bool, len(result.Meta.ModelState.AvailableModels))
+	for _, advertised := range result.Meta.ModelState.AvailableModels {
+		id := strings.TrimSpace(advertised.ModelID)
+		if id == "" || seenModels[id] {
+			continue
+		}
+		seenModels[id] = true
+		label := strings.TrimSpace(advertised.Name)
+		if label == "" {
+			label = id
+		}
+		model := Model{ID: id, Label: label, Provider: "grok", Default: id == currentModelID}
+		model.Thinking = parseGrokACPThinking(advertised.Meta.ReasoningEffort, advertised.Meta.ReasoningEfforts)
+		models = append(models, model)
 	}
 	return models
+}
+
+func parseGrokACPThinking(current string, advertised []json.RawMessage) *ModelThinking {
+	levels := make([]ThinkingLevel, 0, len(advertised))
+	seen := make(map[string]bool, len(advertised))
+	defaultLevel := ""
+	for _, raw := range advertised {
+		var value string
+		var entry struct {
+			ID          string `json:"id"`
+			Value       string `json:"value"`
+			Label       string `json:"label"`
+			Description string `json:"description"`
+			Default     bool   `json:"default"`
+		}
+		if json.Unmarshal(raw, &value) != nil {
+			if json.Unmarshal(raw, &entry) != nil {
+				continue
+			}
+			value = strings.TrimSpace(entry.ID)
+			if value == "" {
+				value = strings.TrimSpace(entry.Value)
+			}
+		}
+		value = strings.TrimSpace(value)
+		fallbackLabel, known := grokReasoningEffortLabels[value]
+		if !known || seen[value] {
+			continue
+		}
+		seen[value] = true
+		label := strings.TrimSpace(entry.Label)
+		if label == "" {
+			label = fallbackLabel
+		}
+		levels = append(levels, ThinkingLevel{Value: value, Label: label, Description: strings.TrimSpace(entry.Description)})
+		if entry.Default {
+			// Grok 1.0.4 can mark both the current user selection and the
+			// model default. The model default is the last marked entry,
+			// matching the catalog order and Raft 1.0.16's projection.
+			defaultLevel = value
+		}
+	}
+	if len(levels) == 0 {
+		return nil
+	}
+	if defaultLevel == "" {
+		current = strings.TrimSpace(current)
+		if seen[current] {
+			defaultLevel = current
+		}
+	}
+	return &ModelThinking{SupportedLevels: levels, DefaultLevel: defaultLevel}
 }
 
 // cursorStaticModels is a minimal fallback used when
@@ -1230,4 +1201,3 @@ func isCatalogModelID(s string) bool {
 // codebuddyModelRe matches the `--model <model> ... Currently supported: (m1, m2, ...)`
 // line in `codebuddy --help` output.
 var codebuddyModelRe = regexp.MustCompile(`--model\s*<[^>]+>\s*.*?Currently supported:\s*\(([^)]+)\)`)
-

@@ -464,6 +464,17 @@ func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.Cli
 		if !h.observations().acceptSession(identity.WorkspaceID, identity.DaemonID, daemonInstanceID, session.AgentID, session.LaunchID, session.ProviderSessionID) {
 			return errors.New("stale or unknown Workspace Runner session")
 		}
+		command, err := h.DB.Exec(ctx, `
+			UPDATE agent_runner_launch_projection
+			SET provider_session_id = NULLIF($1, ''), updated_at = now()
+			WHERE workspace_id::text = $2 AND agent_id::text = $3 AND launch_id::text = $4
+		`, session.ProviderSessionID, identity.WorkspaceID, session.AgentID, session.LaunchID)
+		if err != nil {
+			return fmt.Errorf("persist Runner provider session: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("Runner provider session launch is no longer desired")
+		}
 		return nil
 	})
 }
@@ -575,7 +586,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		}
 		return nil
 	}
-	for _, entry := range activity.Entries {
+	for position, entry := range activity.Entries {
 		_, err := h.DB.Exec(ctx, `
 			INSERT INTO agent_activity_entry (
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
@@ -584,7 +595,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 			ON CONFLICT (workspace_id, agent_id, launch_id, producer_fact_id, entry_position) DO NOTHING`,
 			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID,
-			snapshot.ProcessInstanceID, snapshot.ClientSequence, snapshot.ProducerFactID, entry.Position,
+			snapshot.ProcessInstanceID, snapshot.ClientSequence, snapshot.ProducerFactID, position,
 			entry.Kind, entry.Body, snapshot.ObservedAt)
 		if err != nil {
 			return fmt.Errorf("insert Runner Activity entry: %w", err)
@@ -912,7 +923,7 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 		SELECT id, entry_kind, entry_body, observed_at
 		FROM agent_activity_entry
 		WHERE workspace_id = $1 AND agent_id = $2
-		ORDER BY observed_at DESC, id DESC
+		ORDER BY observed_at DESC, client_sequence DESC, entry_position DESC, id DESC
 		LIMIT $3`, workspaceID, agentID, runnerActivityTimelineLimit)
 	if err != nil {
 		return RunnerActivityResponse{}, fmt.Errorf("load Runner Activity timeline: %w", err)

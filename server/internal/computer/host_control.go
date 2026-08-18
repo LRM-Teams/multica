@@ -18,16 +18,15 @@ import (
 )
 
 const (
-	bindingChildAttestPath              = "/binding-child/attest"
-	bindingChildCapacityPath            = "/binding-child/capacity"
-	bindingChildDiagnosticPath          = "/binding-child/diagnostics"
-	bindingChildLifecycleDiagnosticPath = "/binding-child/lifecycle-diagnostics"
-	bindingChildMachineActionsPath      = "/binding-child/machine-actions"
-	bindingChildRuntimeSetPath          = "/binding-child/runtime-set"
-	bindingChildPrepareUpgradePath      = "/binding-child/prepare-upgrade"
-	bindingChildWorkDigestPath          = "/binding-child/work-digest"
-	bindingChildWorkJournalPath         = "/binding-child/work-journal"
-	bindingChildControlBusyCode         = "control_busy"
+	bindingChildCapacityPath        = "/binding-child/capacity"
+	bindingChildDiagnosticPath      = "/binding-child/diagnostics"
+	bindingChildMachineActionsPath  = "/binding-child/machine-actions"
+	bindingChildRuntimeSetPath      = "/binding-child/runtime-set"
+	bindingChildPrepareUpgradePath  = "/binding-child/prepare-upgrade"
+	bindingChildComputerUpgradePath = "/binding-child/computer-upgrade"
+	bindingChildWorkDigestPath      = "/binding-child/work-digest"
+	bindingChildWorkJournalPath     = "/binding-child/work-journal"
+	bindingChildControlBusyCode     = "control_busy"
 )
 
 // BindingChildIdentity fences every child-to-Host request by the immutable
@@ -49,15 +48,15 @@ func (identity BindingChildIdentity) Validate() error {
 // authentication, generation fencing, capacity, and request routing; it never
 // imports the Binding execution package.
 type HostControlCallbacks struct {
-	Current             func(BindingChildIdentity) bool
-	RuntimeSet          func(context.Context, BindingChildIdentity, json.RawMessage, string, time.Time) error
-	Diagnostic          func(context.Context, BindingChildIdentity, string, diagnosticlog.Event) error
-	LifecycleDiagnostic func(context.Context, BindingChildIdentity, json.RawMessage) error
-	MachineActions      func(context.Context, BindingChildIdentity, json.RawMessage) error
-	PrepareUpgrade      func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
-	WorkDigest          func(context.Context, BindingChildIdentity, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
-	WorkJournal         func(context.Context, BindingChildIdentity, protocol.ComputerWorkJournalPayload) (bool, error)
-	Released            func(BindingChildIdentity)
+	Current         func(BindingChildIdentity) bool
+	RuntimeSet      func(context.Context, BindingChildIdentity, json.RawMessage, string, time.Time) error
+	Diagnostic      func(context.Context, BindingChildIdentity, string, diagnosticlog.Event) error
+	MachineActions  func(context.Context, BindingChildIdentity, json.RawMessage) error
+	PrepareUpgrade  func(context.Context, BindingChildIdentity, json.RawMessage) (any, error)
+	ComputerUpgrade func(context.Context, BindingChildIdentity, json.RawMessage) error
+	WorkDigest      func(context.Context, BindingChildIdentity, protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error)
+	WorkJournal     func(context.Context, BindingChildIdentity, protocol.ComputerWorkJournalPayload) (bool, error)
+	Released        func(BindingChildIdentity)
 }
 
 // HostControl is the Computer-owned local control Interface shared by all
@@ -71,6 +70,12 @@ type HostControl struct {
 	grants map[BindingChildIdentity]map[string]ProcessCapacityGrant
 }
 
+// RegisterLocalControlHandlers adds the Host-owned operations to an IPC
+// registry. The process runner uses this to compose the service registry.
+func (control *HostControl) RegisterLocalControlHandlers(registry *LocalControlRegistry) {
+	control.RegisterRPCHandlers(registry)
+}
+
 func NewHostControl(token string, capacity *ProcessCapacity, callbacks HostControlCallbacks) *HostControl {
 	return &HostControl{
 		token: strings.TrimSpace(token), capacity: capacity, callbacks: callbacks,
@@ -79,15 +84,215 @@ func NewHostControl(token string, capacity *ProcessCapacity, callbacks HostContr
 }
 
 func (control *HostControl) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc(bindingChildAttestPath, control.attestHandler())
 	mux.HandleFunc(bindingChildCapacityPath, control.capacityHandler())
 	mux.HandleFunc(bindingChildDiagnosticPath, control.diagnosticHandler())
-	mux.HandleFunc(bindingChildLifecycleDiagnosticPath, control.lifecycleDiagnosticHandler())
 	mux.HandleFunc(bindingChildMachineActionsPath, control.machineActionsHandler())
 	mux.HandleFunc(bindingChildPrepareUpgradePath, control.prepareUpgradeHandler())
+	mux.HandleFunc(bindingChildComputerUpgradePath, control.rawHandler(control.callbacks.ComputerUpgrade))
 	mux.HandleFunc(bindingChildWorkDigestPath, control.workDigestHandler())
 	mux.HandleFunc(bindingChildWorkJournalPath, control.workJournalHandler())
 	mux.HandleFunc(bindingChildRuntimeSetPath, control.runtimeSetHandler())
+}
+
+// RegisterRPCHandlers exposes the same authenticated child operations on the
+// production framed transport. Payload validation and generation fencing are
+// performed before invoking the callback; the payload itself is intentionally
+// open because these callbacks own its domain schema.
+func (control *HostControl) RegisterRPCHandlers(registry *LocalControlRegistry) {
+	if control == nil || registry == nil {
+		return
+	}
+	register := func(operation string, handler LocalControlHandler) {
+		if err := registry.Register(operation, handler); err != nil && !strings.Contains(err.Error(), "already registered") {
+			panic(err)
+		}
+	}
+	decode := func(headers map[string]string, raw json.RawMessage, target any) error {
+		if !control.authorizeHeaders(headers) {
+			return errors.New("local control authentication failed")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		return decoder.Decode(target)
+	}
+	register(LocalControlWorkspaceCapacityOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		var request capacityControlRequest
+		if err := decode(headers, raw, &request); err != nil {
+			return nil, err
+		}
+		if !control.current(request.Identity) {
+			return nil, errors.New("inactive Binding child generation")
+		}
+		if request.WorkspaceID != "" && strings.TrimSpace(request.WorkspaceID) != strings.TrimSpace(request.Identity.WorkspaceID) {
+			return nil, errors.New("capacity request belongs to another Workspace")
+		}
+		if control.capacity == nil {
+			return nil, errors.New("Host capacity admission is unavailable")
+		}
+		response := capacityControlResponse{}
+		switch request.Operation {
+		case "acquire":
+			if control.launchOwnedByOther(request.Identity, strings.TrimSpace(request.LaunchID)) {
+				return nil, errors.New("capacity grant identity conflict")
+			}
+			response.Grant, response.Admitted = control.capacity.Acquire(ProcessCapacityRequest{WorkspaceID: request.Identity.WorkspaceID, AgentID: strings.TrimSpace(request.AgentID), RuntimeID: strings.TrimSpace(request.RuntimeID), LaunchID: strings.TrimSpace(request.LaunchID)})
+			if response.Grant.LaunchID == "" || !control.track(request.Identity, response.Grant) {
+				return nil, errors.New("capacity grant identity conflict")
+			}
+		case "cancel":
+			if !control.owns(request.Identity, request.Grant) {
+				return nil, errors.New("capacity grant belongs to another Binding child")
+			}
+			control.capacity.Cancel(request.Grant)
+			control.untrack(request.Identity, request.Grant)
+		case "release":
+			if !control.owns(request.Identity, request.Grant) {
+				return nil, errors.New("capacity grant belongs to another Binding child")
+			}
+			control.capacity.Release(request.Grant)
+			control.untrack(request.Identity, request.Grant)
+		case "active":
+			response.Active = control.owns(request.Identity, request.Grant) && control.capacity.Active(request.Grant)
+		default:
+			return nil, errors.New("unsupported capacity operation")
+		}
+		return response, nil
+	})
+	register(LocalControlWorkspaceDiagnosticsOperation, func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		var request diagnosticControlRequest
+		if err := decode(headers, raw, &request); err != nil {
+			return nil, err
+		}
+		if !control.current(request.Identity) || strings.TrimSpace(request.WorkspaceID) != strings.TrimSpace(request.Identity.WorkspaceID) {
+			return nil, errors.New("diagnostic identity is invalid")
+		}
+		if control.callbacks.Diagnostic == nil {
+			return nil, errors.New("Host diagnostic aggregation failed")
+		}
+		return nil, control.callbacks.Diagnostic(ctx, request.Identity, request.WorkspaceID, request.Event)
+	})
+	register(LocalControlComputerControlOperation, control.rpcRawCallback(registry, LocalControlComputerControlOperation, control.callbacks.MachineActions))
+	register(LocalControlRunnerPrepareOperation, control.rpcPrepareUpgrade)
+	register(LocalControlRunnerReadyOperation, control.rpcRuntimeSet)
+	register(LocalControlWorkDigestOperation, control.rpcWorkDigest)
+	register(LocalControlWorkJournalOperation, control.rpcWorkJournal)
+}
+
+func (control *HostControl) rpcWorkDigest(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	var request struct {
+		Identity BindingChildIdentity               `json:"identity"`
+		Command  protocol.ComputerWorkDigestPayload `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return nil, err
+	}
+	if err := control.decodeRPCIdentity(headers, raw, &request.Identity); err != nil {
+		return nil, err
+	}
+	if control.callbacks.WorkDigest == nil {
+		return nil, errors.New("Computer work journal is unavailable")
+	}
+	return control.callbacks.WorkDigest(ctx, request.Identity, request.Command)
+}
+
+func (control *HostControl) rpcWorkJournal(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	var request struct {
+		Identity BindingChildIdentity                `json:"identity"`
+		Command  protocol.ComputerWorkJournalPayload `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return nil, err
+	}
+	if err := control.decodeRPCIdentity(headers, raw, &request.Identity); err != nil {
+		return nil, err
+	}
+	if control.callbacks.WorkJournal == nil {
+		return nil, errors.New("Computer work journal is unavailable")
+	}
+	enabled, err := control.callbacks.WorkJournal(ctx, request.Identity, request.Command)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]bool{"enabled": enabled}, nil
+}
+
+func (control *HostControl) rpcRawCallback(_ *LocalControlRegistry, _ string, callback func(context.Context, BindingChildIdentity, json.RawMessage) error) LocalControlHandler {
+	return func(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+		var request rawControlRequest
+		if err := json.Unmarshal(raw, &request); err != nil {
+			return nil, err
+		}
+		if err := control.decodeRPCIdentity(headers, raw, &request.Identity); err != nil {
+			return nil, err
+		}
+		if callback == nil || len(request.Payload) == 0 {
+			return nil, errors.New("Binding child control payload rejected")
+		}
+		err := callback(ctx, request.Identity, request.Payload)
+		if errors.Is(err, ErrComputerControlBusy) {
+			return nil, withLocalControlCode(bindingChildControlBusyCode, err)
+		}
+		return nil, err
+	}
+}
+
+func (control *HostControl) decodeRPCIdentity(headers map[string]string, raw json.RawMessage, identity *BindingChildIdentity) error {
+	if !control.authorizeHeaders(headers) {
+		return errors.New("local control authentication failed")
+	}
+	if err := json.Unmarshal(raw, &struct {
+		Identity *BindingChildIdentity `json:"identity"`
+	}{Identity: identity}); err != nil || identity.Validate() != nil {
+		return errors.New("inactive Binding child generation")
+	}
+	if !control.current(*identity) {
+		return errors.New("inactive Binding child generation")
+	}
+	return nil
+}
+
+func (control *HostControl) rpcPrepareUpgrade(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	var request struct {
+		Identity BindingChildIdentity `json:"identity"`
+		Payload  json.RawMessage      `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return nil, err
+	}
+	if err := control.decodeRPCIdentity(headers, raw, &request.Identity); err != nil {
+		return nil, err
+	}
+	if control.callbacks.PrepareUpgrade == nil {
+		return nil, errors.New("Binding child control payload rejected")
+	}
+	prepared, err := control.callbacks.PrepareUpgrade(ctx, request.Identity, request.Payload)
+	if errors.Is(err, ErrComputerControlBusy) {
+		return nil, withLocalControlCode(bindingChildControlBusyCode, err)
+	}
+	return prepared, err
+}
+
+func (control *HostControl) rpcRuntimeSet(ctx context.Context, headers map[string]string, raw json.RawMessage) (any, error) {
+	var request runtimeSetControlRequest
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return nil, err
+	}
+	if err := control.decodeRPCIdentity(headers, raw, &request.Identity); err != nil {
+		return nil, err
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(request.DaemonTokenExpiresAt))
+	if err != nil || strings.TrimSpace(request.DaemonToken) == "" || !expiresAt.After(time.Now()) || len(request.Runtimes) == 0 {
+		return nil, errors.New("Binding child Runtime credential is invalid")
+	}
+	if control.callbacks.RuntimeSet == nil {
+		return nil, errors.New("Binding child Runtime set rejected")
+	}
+	return nil, control.callbacks.RuntimeSet(ctx, request.Identity, request.Runtimes, request.DaemonToken, expiresAt)
+}
+
+func (control *HostControl) authorizeHeaders(headers map[string]string) bool {
+	provided := strings.TrimSpace(headers["X-Multica-Control-Token"])
+	return control != nil && control.token != "" && provided != "" && subtle.ConstantTimeCompare([]byte(control.token), []byte(provided)) == 1
 }
 
 func (control *HostControl) Release(identity BindingChildIdentity) {
@@ -134,20 +339,6 @@ func (control *HostControl) begin(w http.ResponseWriter, r *http.Request, target
 		return false
 	}
 	return true
-}
-
-func (control *HostControl) attestHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var identity BindingChildIdentity
-		if !control.begin(w, r, &identity) {
-			return
-		}
-		if !control.current(identity) {
-			http.Error(w, "inactive Binding child generation", http.StatusConflict)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}
 }
 
 type capacityControlRequest struct {
@@ -255,10 +446,6 @@ func (control *HostControl) diagnosticHandler() http.HandlerFunc {
 type rawControlRequest struct {
 	Identity BindingChildIdentity `json:"identity"`
 	Payload  json.RawMessage      `json:"payload"`
-}
-
-func (control *HostControl) lifecycleDiagnosticHandler() http.HandlerFunc {
-	return control.rawHandler(control.callbacks.LifecycleDiagnostic)
 }
 
 func (control *HostControl) machineActionsHandler() http.HandlerFunc {
@@ -476,39 +663,13 @@ type HostControlClient struct {
 	baseURL  string
 	token    string
 	identity BindingChildIdentity
-	http     *http.Client
+	control  *localControlClient
+	initErr  error
 }
 
-func NewHostControlClient(baseURL, token string, identity BindingChildIdentity) *HostControlClient {
-	return &HostControlClient{
-		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"), token: strings.TrimSpace(token), identity: identity,
-		http: &http.Client{Timeout: 5 * time.Second},
-	}
-}
-
-func (client *HostControlClient) Attest(ctx context.Context) error {
-	return client.post(ctx, bindingChildAttestPath, client.identity, nil)
-}
-
-func (client *HostControlClient) AwaitAttest(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var lastErr error
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if err := client.Attest(ctx); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("attest Binding child to Host: %w: %v", ctx.Err(), lastErr)
-		case <-ticker.C:
-		}
-	}
+func NewHostControlClient(endpoint, token string, identity BindingChildIdentity) *HostControlClient {
+	controlClient, baseURL, err := localControlClientFor(endpoint, 5*time.Second)
+	return &HostControlClient{baseURL: baseURL, token: strings.TrimSpace(token), identity: identity, control: controlClient, initErr: err}
 }
 
 func (client *HostControlClient) AcquireCapacity(ctx context.Context, request ProcessCapacityRequest) (ProcessCapacityGrant, bool, error) {
@@ -538,91 +699,39 @@ func (client *HostControlClient) RecordDiagnostic(ctx context.Context, workspace
 	return client.post(ctx, bindingChildDiagnosticPath, diagnosticControlRequest{Identity: client.identity, WorkspaceID: workspaceID, Event: event}, nil)
 }
 
-func (client *HostControlClient) RecordLifecycleDiagnostic(ctx context.Context, transition any) error {
-	return client.postRaw(ctx, bindingChildLifecycleDiagnosticPath, transition)
-}
-
-func (client *HostControlClient) ForwardMachineActions(ctx context.Context, actions any) error {
+func (client *HostControlClient) ForwardComputerControl(ctx context.Context, actions any) error {
 	return client.postRaw(ctx, bindingChildMachineActionsPath, actions)
 }
 
+func (client *HostControlClient) RequestComputerUpgrade(ctx context.Context, command any) error {
+	return client.postRaw(ctx, bindingChildComputerUpgradePath, command)
+}
+
 func (client *HostControlClient) HarvestWorkDigest(ctx context.Context, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
-	if client == nil || client.baseURL == "" || client.token == "" || client.identity.Validate() != nil {
-		return protocol.WorkDigest{}, errors.New("Binding Host control client is not configured")
-	}
 	if err := command.Validate(); err != nil {
 		return protocol.WorkDigest{}, err
 	}
-	body, err := json.Marshal(struct {
+	var digest protocol.WorkDigest
+	if err := client.post(ctx, bindingChildWorkDigestPath, struct {
 		Identity BindingChildIdentity               `json:"identity"`
 		Command  protocol.ComputerWorkDigestPayload `json:"command"`
-	}{Identity: client.identity, Command: command})
-	if err != nil {
+	}{Identity: client.identity, Command: command}, &digest); err != nil {
 		return protocol.WorkDigest{}, err
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+bindingChildWorkDigestPath, bytes.NewReader(body))
-	if err != nil {
-		return protocol.WorkDigest{}, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Multica-Control-Token", client.token)
-	response, err := (&http.Client{Timeout: 35 * time.Second}).Do(request)
-	if err != nil {
-		return protocol.WorkDigest{}, err
-	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return protocol.WorkDigest{}, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return protocol.WorkDigest{}, fmt.Errorf("Binding Host control %s returned %s: %s", bindingChildWorkDigestPath, response.Status, strings.TrimSpace(string(raw)))
-	}
-	return protocol.ParseWorkDigest(raw)
+	return digest, nil
 }
 
 func (client *HostControlClient) SetWorkJournalEnabled(ctx context.Context, command protocol.ComputerWorkJournalPayload) (bool, error) {
-	if client == nil || client.baseURL == "" || client.token == "" || client.identity.Validate() != nil {
-		return false, errors.New("Binding Host control client is not configured")
-	}
 	if err := command.Validate(); err != nil {
 		return false, err
-	}
-	body, err := json.Marshal(struct {
-		Identity BindingChildIdentity                `json:"identity"`
-		Command  protocol.ComputerWorkJournalPayload `json:"command"`
-	}{Identity: client.identity, Command: command})
-	if err != nil {
-		return false, err
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+bindingChildWorkJournalPath, bytes.NewReader(body))
-	if err != nil {
-		return false, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Multica-Control-Token", client.token)
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
-	if err != nil {
-		return false, err
-	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 4096))
-	if err != nil {
-		return false, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return false, fmt.Errorf("Binding Host control %s returned %s: %s", bindingChildWorkJournalPath, response.Status, strings.TrimSpace(string(raw)))
 	}
 	var out struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := client.post(ctx, bindingChildWorkJournalPath, struct {
+		Identity BindingChildIdentity                `json:"identity"`
+		Command  protocol.ComputerWorkJournalPayload `json:"command"`
+	}{Identity: client.identity, Command: command}, &out); err != nil {
 		return false, err
 	}
 	return out.Enabled, nil
@@ -645,41 +754,26 @@ func (client *HostControlClient) postRaw(ctx context.Context, path string, paylo
 }
 
 func (client *HostControlClient) post(ctx context.Context, path string, input, output any) error {
-	if client == nil || client.baseURL == "" || client.token == "" || client.identity.Validate() != nil {
+	if client == nil || client.initErr != nil || client.control == nil || client.token == "" || client.identity.Validate() != nil {
 		return errors.New("Binding Host control client is not configured")
 	}
-	body, err := json.Marshal(input)
-	if err != nil {
-		return err
+	operation := localControlOperationForPath(path)
+	if operation == "" {
+		return fmt.Errorf("unknown Binding Host control operation for %s", path)
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Multica-Control-Token", client.token)
-	response, err := client.http.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		var failure struct {
-			Code string `json:"code"`
-		}
-		_ = json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&failure)
-		if response.StatusCode == http.StatusConflict && failure.Code == bindingChildControlBusyCode {
+	var raw json.RawMessage
+	if err := client.control.Call(ctx, operation, map[string]string{
+		"Content-Type": "application/json", "X-Multica-Control-Token": client.token,
+	}, input, &raw); err != nil {
+		if strings.Contains(err.Error(), bindingChildControlBusyCode) {
 			return ErrComputerControlBusy
 		}
-		return fmt.Errorf("Binding Host control %s returned %s", path, response.Status)
+		return err
 	}
-	if output == nil || response.StatusCode == http.StatusNoContent {
+	if output == nil || len(raw) == 0 {
 		return nil
 	}
-	if err := json.NewDecoder(response.Body).Decode(output); err != nil {
+	if err := json.Unmarshal(raw, output); err != nil {
 		return fmt.Errorf("decode Binding Host control %s: %w", path, err)
 	}
 	return nil

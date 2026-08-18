@@ -115,7 +115,6 @@ type HeartbeatHandler func(ctx context.Context, identity ClientIdentity, payload
 type ReminderSnapshotHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error)
 type ReminderFireAttemptHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error)
 type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentDeliverAckPayload) error
-type AgentMessageHandoffHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentMessageHandoffPayload) error
 
 // WorkspaceRunnerHandler receives only frames from the current ready
 // connection for one daemon and Workspace. It owns no Activity semantics;
@@ -155,7 +154,6 @@ type Hub struct {
 	onReminderFire              ReminderFireAttemptHandler
 	deliveryMu                  sync.RWMutex
 	onAgentDeliveryAck          AgentDeliveryAckHandler
-	onAgentMessageHandoff       AgentMessageHandoffHandler
 	runnerMu                    sync.RWMutex
 	onWorkspaceRunner           WorkspaceRunnerHandler
 	onWorkspaceRunnerDisconnect WorkspaceRunnerDisconnectHandler
@@ -197,15 +195,6 @@ func (h *Hub) SetAgentDeliveryAckHandler(fn AgentDeliveryAckHandler) {
 	}
 	h.deliveryMu.Lock()
 	h.onAgentDeliveryAck = fn
-	h.deliveryMu.Unlock()
-}
-
-func (h *Hub) SetAgentMessageHandoffHandler(fn AgentMessageHandoffHandler) {
-	if h == nil {
-		return
-	}
-	h.deliveryMu.Lock()
-	h.onAgentMessageHandoff = fn
 	h.deliveryMu.Unlock()
 }
 
@@ -255,12 +244,6 @@ func (h *Hub) agentDeliveryAckHandler() AgentDeliveryAckHandler {
 	h.deliveryMu.RLock()
 	defer h.deliveryMu.RUnlock()
 	return h.onAgentDeliveryAck
-}
-
-func (h *Hub) agentMessageHandoffHandler() AgentMessageHandoffHandler {
-	h.deliveryMu.RLock()
-	defer h.deliveryMu.RUnlock()
-	return h.onAgentMessageHandoff
 }
 
 // NotifyAgentDelivery sends one canonical Message delivery to a daemon runtime.
@@ -1589,18 +1572,6 @@ func (c *client) handleFrame(raw []byte) {
 			return
 		}
 		c.hub.acknowledgeAgentDelivery(c, payload)
-	case protocol.EventAgentMessageHandoff:
-		handler := c.hub.agentMessageHandoffHandler()
-		if handler == nil {
-			return
-		}
-		var payload protocol.AgentMessageHandoffPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-			return
-		}
-		if err := handler(context.Background(), c.identity, payload); err != nil {
-			slog.Warn("agent Message handoff Activity rejected", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID, "handoff_id", payload.HandoffID)
-		}
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.

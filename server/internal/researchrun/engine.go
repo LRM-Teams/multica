@@ -31,10 +31,61 @@ func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector)
 	return newEngine(store, dispatcher, projector)
 }
 
+func (e *Engine) ProjectionV6Snapshot(ctx context.Context, request V6ProjectionPageRequest) (V6ProjectionSnapshot, error) {
+	if e == nil || e.store == nil {
+		return V6ProjectionSnapshot{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6Snapshot(ctx, request)
+}
+
+func (e *Engine) ProjectionV6Slice(ctx context.Context, request V6ProjectionSliceRequest) (V6ProjectionSnapshot, error) {
+	if e == nil || e.store == nil {
+		return V6ProjectionSnapshot{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6Slice(ctx, request)
+}
+
+func (e *Engine) ProjectionV6Deltas(ctx context.Context, request V6ProjectionDeltaRequest) (V6ProjectionDeltaPage, error) {
+	if e == nil || e.store == nil {
+		return V6ProjectionDeltaPage{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6Deltas(ctx, request)
+}
+
+func (e *Engine) ProjectionV6NodeDetail(ctx context.Context, workspaceID, runID, nodeID, view string) (V6ProjectionNodeDetail, error) {
+	if e == nil || e.store == nil {
+		return V6ProjectionNodeDetail{}, ErrV6DirectorUnavailable
+	}
+	return e.store.ProjectionV6NodeDetail(ctx, workspaceID, runID, nodeID, view)
+}
+
+func NewEngineWithReportStorage(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage) ResearchRun {
+	store.reportStorage = reportStorage
+	return newEngine(store, dispatcher, projector)
+}
+
+func NewEngineWithReportAdapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage, renderer ReportRenderAdapter, frameAncestors []string) ResearchRun {
+	store.reportStorage, store.reportRenderer = reportStorage, renderer
+	store.reportFrameAncestors = append([]string(nil), frameAncestors...)
+	return newEngine(store, dispatcher, projector)
+}
+
 // NewEngineWithV6Adapters wires external effects without granting adapters any
 // canonical-store mutation capability. V6 remains gated by supported-version
 // policy until the activation slice.
 func NewEngineWithV6Adapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, agents AgentLifecycleAdapter, inbox InboxDispatchAdapter) ResearchRun {
+	engine := newEngine(store, dispatcher, projector)
+	engine.v6Agents = agents
+	engine.v6Inbox = inbox
+	return engine
+}
+
+// NewEngineWithRuntimeAdapters wires every V6 external effect while retaining
+// the report package boundary. Production uses this constructor so a process
+// restart cannot silently drop either half of the Director runtime.
+func NewEngineWithRuntimeAdapters(store *PostgresStore, dispatcher Dispatcher, projector Projector, reportStorage ReportPackageStorage, renderer ReportRenderAdapter, frameAncestors []string, agents AgentLifecycleAdapter, inbox InboxDispatchAdapter) ResearchRun {
+	store.reportStorage, store.reportRenderer = reportStorage, renderer
+	store.reportFrameAncestors = append([]string(nil), frameAncestors...)
 	engine := newEngine(store, dispatcher, projector)
 	engine.v6Agents = agents
 	engine.v6Inbox = inbox
@@ -60,6 +111,28 @@ func (e *Engine) Create(ctx context.Context, in StartInput) (Run, error) {
 		if errors.Is(err, ErrRunLeaseLost) {
 			return run, nil
 		}
+		return run, err
+	}
+	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)
+}
+
+func (e *Engine) BootstrapV6(ctx context.Context, in V6BootstrapInput) (Run, error) {
+	if e == nil || e.store == nil {
+		return Run{}, errors.New("research run engine is unavailable")
+	}
+	run, sequence, err := e.store.BootstrapV6(ctx, in, DefaultRunConfig(in.DepthTier))
+	if err != nil {
+		return Run{}, err
+	}
+	if _, err = e.StartV6DirectorCycle(ctx, StartV6DirectorCycleInput{
+		WorkspaceID: in.WorkspaceID, RunID: run.SessionID, TriggerKey: "bootstrap",
+		FromSequence: sequence, ThroughSequence: sequence, ExpectedStateVersion: run.StateVersion,
+		Now: e.clock.Now(),
+	}); err != nil {
+		return run, err
+	}
+	_, err = e.ReconcileV6Work(ctx, 32)
+	if err != nil && !errors.Is(err, ErrRunLeaseLost) {
 		return run, err
 	}
 	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)
@@ -140,11 +213,15 @@ func (e *Engine) ReconcileV6Work(ctx context.Context, limit int) (int, error) {
 	if e == nil || e.store == nil {
 		return 0, errors.New("research run engine is unavailable")
 	}
+	steering, steeringErr := e.store.ProcessV6SteeringTriggers(ctx, limit)
+	proposals, proposalErr := e.store.ApplyReceivedV6DirectorProposals(ctx, limit)
+	reports, reportErr := e.store.ApplyReceivedV6ReportPackages(ctx, limit)
 	applied, applyErr := e.store.ApplyReceivedV6Submissions(ctx, limit)
 	recovered, err := e.store.RecoverExpiredV6WorkItems(ctx, limit)
+	events, eventErr := e.store.ProcessV6EventTriggers(ctx, limit)
 	prepared, prepareErr := e.store.PrepareV6Dispatches(ctx, limit)
 	delivered, deliveryErr := (v6RuntimeModule{store: e.store, team: e.store, agents: e.v6Agents, inbox: e.v6Inbox, clock: e.clock}).Deliver(ctx, limit)
-	return recovered + applied + prepared + delivered, errors.Join(err, applyErr, prepareErr, deliveryErr)
+	return recovered + steering + proposals + reports + applied + events + prepared + delivered, errors.Join(err, steeringErr, proposalErr, reportErr, applyErr, eventErr, prepareErr, deliveryErr)
 }
 
 func (e *Engine) AssignV6Director(ctx context.Context, in AssignV6DirectorInput) (V6DirectorAssignment, error) {
@@ -167,6 +244,9 @@ func (e *Engine) RecordV6MatchDecision(ctx context.Context, in RecordV6MatchDeci
 }
 func (e *Engine) OpenV6Discussion(ctx context.Context, in OpenV6DiscussionInput) (V6Discussion, error) {
 	return (discussionV6Module{store: e.store}).Open(ctx, in)
+}
+func (e *Engine) ApplyV6SteeringAssessment(ctx context.Context, in ApplyV6SteeringAssessmentInput) (V6SteeringAssessment, error) {
+	return (steeringV6Module{store: e.store}).Apply(ctx, in)
 }
 func (e *Engine) DirectorBriefPage(ctx context.Context, access V6AttemptAccess, cursor string) (V6DirectorBriefPage, error) {
 	return (directorBriefModule{store: e.store}).Page(ctx, access, cursor)

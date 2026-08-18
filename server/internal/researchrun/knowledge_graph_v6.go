@@ -6,15 +6,10 @@ import (
 	"sort"
 )
 
-type V6Tier string
-
-const (
-	V6TierS   V6Tier = "S"
-	V6TierM   V6Tier = "M"
-	V6TierL   V6Tier = "L"
-	V6TierXL  V6Tier = "XL"
-	V6TierXXL V6Tier = "XXL"
-)
+// V6Tier is the knowledge-graph name for the canonical V6 node tier.
+// Keep it as an alias so graph and storage APIs cannot drift into distinct
+// string types or redeclare the shared V6Tier* constants.
+type V6Tier = V6NodeTier
 
 var (
 	ErrV6InvalidTierTransition = errors.New("invalid research V6 tier transition")

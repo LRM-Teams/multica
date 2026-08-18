@@ -240,7 +240,7 @@ func TestMachineUpgrade_DispatchesComputerUpgradeToOneLiveBinding(t *testing.T) 
 	if secondOK {
 		got = second
 	}
-	if got.Operation() == "" || got.TargetVersion != "v9.9.9" {
+	if got.RequestID == "" || got.TargetVersion != "v9.9.9" {
 		t.Fatalf("computer:upgrade payload = %+v", got)
 	}
 }

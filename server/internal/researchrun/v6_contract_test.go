@@ -13,7 +13,7 @@ import (
 const frozenV6ContractSHA256 = "2ce8b8af85c9cec5e508fa1c6b01c6963d998899d09b99d33f8110aca3b59f88"
 
 func TestV6DesignContractIsFrozenAndNotProductionEnabled(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "docs", "contracts", "research-run-v6.schema.json")
+	path := filepath.Join("..", "..", "..", "docs", "contracts", "research-run-v6-director.schema.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

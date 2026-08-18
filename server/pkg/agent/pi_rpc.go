@@ -484,6 +484,7 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 	idleInput.stream = &piRPCTurn{
 		done: idleInput.done,
 		message: func(message Message) {
+			message.SessionID = p.sessionID
 			trySend(idleInput.messages, message)
 		},
 	}
@@ -674,6 +675,15 @@ func (b *piRPCBackend) EnsureResidentProcess(ctx context.Context) error {
 	}
 	_, err := b.ensureProcess(b.cfg.ResidentOptions)
 	return err
+}
+
+func (b *piRPCBackend) ProviderSessionID() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.process == nil {
+		return ""
+	}
+	return b.process.sessionID
 }
 
 func (b *piRPCBackend) runtimeAlive() (bool, bool) {

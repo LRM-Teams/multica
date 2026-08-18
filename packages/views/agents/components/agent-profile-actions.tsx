@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent, AgentPresence } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { agentPresenceKeys } from "@multica/core/agents";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -66,22 +67,16 @@ export function AgentProfileActions({
       Date.now(),
     ) === "online";
 
-  const invalidateAgents = () => {
+  const invalidateAgentState = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
+    qc.invalidateQueries({ queryKey: agentPresenceKeys.workspace(agent.workspace_id) });
   };
 
   const handleLifecycle = async () => {
     setLifecyclePending(true);
     try {
       await (isAgentRunning ? api.stopAgent(agent.id) : api.startAgent(agent.id));
-      invalidateAgents();
-      toast.success(
-        t(($) =>
-          isAgentRunning
-            ? $.side_panel.actions_stop_agent_success
-            : $.side_panel.actions_start_success,
-        ),
-      );
+      invalidateAgentState();
     } catch (e) {
       showErrorToast(
         e instanceof Error
@@ -105,7 +100,7 @@ export function AgentProfileActions({
     setDeleting(true);
     try {
       await api.archiveAgent(agent.id);
-      invalidateAgents();
+      invalidateAgentState();
       toast.success(t(($) => $.side_panel.agent_deleted_toast));
       setConfirmDelete(false);
     } catch (e) {

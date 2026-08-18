@@ -92,6 +92,40 @@ func (q *Queries) GetGraphMemoryChannelBindingForUpdate(ctx context.Context, arg
 	return project_id, err
 }
 
+const getGraphMemoryChannelRoute = `-- name: GetGraphMemoryChannelRoute :one
+SELECT workspace_id, channel_id, routing_mode, current_graph_kind, current_graph_owner_id, generation
+FROM graph_memory_channel_route
+WHERE channel_id = $1 AND workspace_id = $2
+`
+
+type GetGraphMemoryChannelRouteParams struct {
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type GetGraphMemoryChannelRouteRow struct {
+	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+	ChannelID           pgtype.UUID `json:"channel_id"`
+	RoutingMode         string      `json:"routing_mode"`
+	CurrentGraphKind    string      `json:"current_graph_kind"`
+	CurrentGraphOwnerID pgtype.UUID `json:"current_graph_owner_id"`
+	Generation          int64       `json:"generation"`
+}
+
+func (q *Queries) GetGraphMemoryChannelRoute(ctx context.Context, arg GetGraphMemoryChannelRouteParams) (GetGraphMemoryChannelRouteRow, error) {
+	row := q.db.QueryRow(ctx, getGraphMemoryChannelRoute, arg.ChannelID, arg.WorkspaceID)
+	var i GetGraphMemoryChannelRouteRow
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.RoutingMode,
+		&i.CurrentGraphKind,
+		&i.CurrentGraphOwnerID,
+		&i.Generation,
+	)
+	return i, err
+}
+
 const getGraphMemoryChannelRouteForUpdate = `-- name: GetGraphMemoryChannelRouteForUpdate :one
 SELECT workspace_id, channel_id, routing_mode, current_graph_kind, current_graph_owner_id, generation
 FROM graph_memory_channel_route

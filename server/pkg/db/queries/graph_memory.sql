@@ -18,6 +18,11 @@ SELECT project_id FROM channel
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE;
 
+-- name: GetGraphMemoryChannelRoute :one
+SELECT workspace_id, channel_id, routing_mode, current_graph_kind, current_graph_owner_id, generation
+FROM graph_memory_channel_route
+WHERE channel_id = $1 AND workspace_id = $2;
+
 -- name: GetGraphMemoryChannelRouteForUpdate :one
 SELECT workspace_id, channel_id, routing_mode, current_graph_kind, current_graph_owner_id, generation
 FROM graph_memory_channel_route

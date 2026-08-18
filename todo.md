@@ -112,13 +112,20 @@
 | 5 | ~~K2-T1 周报 Agent 合成 + `--note-write`~~ |
 | 6 | ~~K2-T2 拆除 Brief 对 Host Digest 的依赖~~ |
 
-**当前焦点：** Slice K2 已完成。ADR 0019 Period Work Brief 主路径落地。
+**当前焦点：** Slice K2 已合入 `dev`（PR #3558）。分支 `feat/period-brief-next`：精简 Notes 入口，规范「本期工作介绍」为主路径。
 
 ### 后续增强（采集质量）
 
 - [x] **Builtin skill `multica-period-work-collect`**：always-on；采集员 wake 指向该 skill + `collect-recipes.md`（HOME/`find` + `git log/status/diff` + `--note-write`）。
 - [x] **等采集完成再合成**：后台等待采集包 ready（最长约 8m）；只要 channel 里已有 targeting 该 pack 的 pending `--note-write` 就 harvest（**不必等 job `completed`**，避免 running 投影滞后导致空包）；HTTP 立即返回采集员 job，避免 Next 代理超时 500。
 - [x] **每机固定采集员**：打开「本期工作介绍」时按本地 Computer（`daemon_id`）与每个云端 runtime ensure `period-collect-*`；云端显示名 `采集 · 云端 · <标签>`；采集栏只展示这些 Agent。
+
+### Slice K3 — 精简入口 / 规范本期工作介绍
+
+- [x] **K3-T1 下线「生成回顾」UI 入口**
+  - Notes 顶栏只保留「本期工作介绍」；不再挂载回顾对话框。
+  - **保留**：`POST /api/notes/retrospectives`、Facts loader、`NoteRetrospectiveDialog` 组件与 locale（Brief 仍依赖 Facts；第二刀再议是否删 API）。
+  - **不要做**：拆掉 retrospectively 后端或 period-brief 的 Facts 复用。
 
 ### 遗留说明（J1–J3）
 

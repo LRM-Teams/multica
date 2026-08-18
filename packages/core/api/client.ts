@@ -3983,9 +3983,7 @@ export class ApiClient {
     } catch {
       raw = undefined;
     }
-    const parsed = parseWithFallback<
-      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
-    >(
+    const parsed = parseWithFallback<{ text: string }>(
       raw,
       VoiceTranscriptResponseSchema,
       EMPTY_VOICE_TRANSCRIPT_RESPONSE,
@@ -4029,7 +4027,9 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(input),
     });
-    const parsed = parseWithFallback(
+    const parsed = parseWithFallback<
+      import("../types/research-v6-director").ResearchV6DirectorAssignment | null
+    >(
       raw,
       CreateVoiceCallResponseSchema,
       EMPTY_CREATE_VOICE_CALL_RESPONSE,

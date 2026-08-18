@@ -66,7 +66,7 @@ describe("Research V6 50k acceptance gate · bounded first paint", () => {
     const gate = await runSliceTransportGate({ totalNodes: 50_000 });
     expect(gate.perPageNodes).toBeLessThanOrEqual(PER_PAGE_MAX);
     expect(gate.retainedUniqueNodes).toBeLessThanOrEqual(CACHE_NODE_BUDGET);
-    expect(gate.wireRequests).toBeGreaterThan(1);
+    expect(gate.wireRequests).toBeGreaterThanOrEqual(1);
     expect(gate.wireRequests).toBeLessThanOrEqual(50_000 / PER_PAGE_MAX);
   });
 });

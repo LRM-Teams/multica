@@ -4,6 +4,11 @@ import {
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   AgentRuntimeSchema,
+  ComputerConnectionListSchema,
+  ComputerConnectionSchema,
+  ComputerWorkJournalSettingSchema,
+  EMPTY_COMPUTER_CONNECTION_LIST,
+  EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
   ChannelCreateErrorBodySchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
@@ -18,6 +23,7 @@ import {
   EMPTY_USER,
   EvolutionReviewSubmissionListSchema,
   EnsureWindyResponseSchema,
+  EnsurePeriodBriefAgentResponseSchema,
   WorkspaceMemoryCurationStatusSchema,
   MemoryCuratorProfileSchema,
   StartMemoryCurationRunResponseSchema,
@@ -925,6 +931,18 @@ describe("EnsureWindyResponseSchema", () => {
   });
 });
 
+describe("EnsurePeriodBriefAgentResponseSchema", () => {
+  it("requires agent.id and created", () => {
+    expect(
+      EnsurePeriodBriefAgentResponseSchema.parse({
+        agent: { id: "weekly-1" },
+        created: true,
+      }).created,
+    ).toBe(true);
+    expect(() => EnsurePeriodBriefAgentResponseSchema.parse({ agent: { id: "weekly-1" } })).toThrow();
+  });
+});
+
 describe("ConversationHandleLookupSchema", () => {
   it("accepts an authorized href", () => {
     expect(
@@ -985,5 +1003,54 @@ describe("ChannelMentionCandidatesResponseSchema", () => {
     expect(missing.in_channel).toEqual([]);
     expect(missing.not_in_channel).toEqual([]);
     expect(missing.has_more).toBe(false);
+  });
+});
+
+describe("ComputerConnectionSchema", () => {
+  it("keeps Journal enablement optional so older servers still parse", () => {
+    expect(
+      ComputerConnectionSchema.parse({
+        daemon_id: "computer-1",
+        owner_id: "user-1",
+        connected: true,
+        last_seen_at: null,
+      }),
+    ).toEqual({
+      daemon_id: "computer-1",
+      owner_id: "user-1",
+      connected: true,
+      last_seen_at: null,
+    });
+    expect(
+      ComputerConnectionSchema.parse({
+        daemon_id: "computer-1",
+        owner_id: "user-1",
+        connected: true,
+        last_seen_at: "2026-08-17T00:00:00Z",
+        work_journal_enabled: true,
+      }).work_journal_enabled,
+    ).toBe(true);
+  });
+
+  it("falls back the list when the body is malformed", () => {
+    expect(
+      parseWithFallback(null, ComputerConnectionListSchema, EMPTY_COMPUTER_CONNECTION_LIST, {
+        endpoint: "GET /api/computers",
+      }),
+    ).toEqual(EMPTY_COMPUTER_CONNECTION_LIST);
+  });
+});
+
+describe("ComputerWorkJournalSettingSchema", () => {
+  it("fails closed when enabled is missing or the wrong type", () => {
+    expect(ComputerWorkJournalSettingSchema.parse({ enabled: true })).toEqual({ enabled: true });
+    expect(
+      parseWithFallback(
+        { enabled: "yes" },
+        ComputerWorkJournalSettingSchema,
+        EMPTY_COMPUTER_WORK_JOURNAL_SETTING,
+        { endpoint: "PATCH /api/computers/:daemonId/work-journal" },
+      ),
+    ).toEqual(EMPTY_COMPUTER_WORK_JOURNAL_SETTING);
   });
 });

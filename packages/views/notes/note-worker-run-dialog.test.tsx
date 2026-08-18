@@ -216,6 +216,22 @@ describe("NoteWorkerRunDialog", () => {
     expect(input.value).toMatch(/do not edit the note body directly/i);
   });
 
+  it("fills period_brief with reporting keywords and keeps Agent DM", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: /Period work brief/i }));
+    const input = screen.getByPlaceholderText(
+      /Create issues from this brief/i,
+    ) as HTMLTextAreaElement;
+    expect(input.value).toMatch(/main threads/i);
+    expect(input.value).toMatch(/本机未归类|unscoped local/i);
+    expect(input.value).toMatch(/Do not list raw commits/i);
+    expect(input.value).not.toMatch(/PPT|slide deck copy for leadership/i);
+    expect(screen.queryByText(/works best in a group channel/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /Agent DM/i })).toBeTruthy();
+  });
+
   it("hides the channel hint after a channel is selected; still dispatches Worker only", async () => {
     const user = userEvent.setup();
     createNoteWorkerJob.mockResolvedValue(dispatchedJob({ channel_id: "ch-1" }));

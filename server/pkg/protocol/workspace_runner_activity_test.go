@@ -30,6 +30,12 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		ComputerRestartPayload{RequestID: "restart-1"},
 		ComputerUpgradeProgressPayload{RequestID: "upgrade-1", Phase: "staging"},
 		ComputerUpgradeDonePayload{RequestID: "upgrade-1", OK: true, NewVersion: "0.4.24-alpha.59"},
+		ComputerWorkDigestPayload{
+			RequestID: "digest-1",
+			Start:     time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC),
+			End:       time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC),
+		},
+		ComputerWorkJournalPayload{RequestID: "journal-1", Enabled: true},
 	}
 
 	var encoded strings.Builder
@@ -67,6 +73,20 @@ func TestComputerUpgradePayloadUsesRaftRequestIdentity(t *testing.T) {
 	}
 	if err := (ComputerUpgradePayload{}).Validate(); err == nil {
 		t.Fatal("empty Computer upgrade payload was accepted")
+	}
+}
+
+func TestComputerWorkDigestPayloadRejectsEmptyAndInvertedWindow(t *testing.T) {
+	start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
+	valid := ComputerWorkDigestPayload{RequestID: "digest-1", Start: start, End: start.Add(24 * time.Hour)}
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (ComputerWorkDigestPayload{Start: start, End: start.Add(time.Hour)}).Validate(); err == nil {
+		t.Fatal("work digest payload without requestId was accepted")
+	}
+	if err := (ComputerWorkDigestPayload{RequestID: "digest-1", Start: start, End: start}).Validate(); err == nil {
+		t.Fatal("inverted work digest window was accepted")
 	}
 }
 

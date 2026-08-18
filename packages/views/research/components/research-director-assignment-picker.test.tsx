@@ -6,14 +6,14 @@ vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (selector: (keys: Record<string, unknown>) => unknown) =>
       selector({
-        assignments: "Assign",
-        logic: { reason: "Reason" },
+        home_overview: { assignments: "Assign" },
         d5: {
           rail: {
             director_role: "Director",
             director_fallback: "Choose a Director",
             director_standby: "Saving",
           },
+          inspector: { reason: "Reason" },
         },
       } as never),
   }),

@@ -26,8 +26,8 @@ type AssignV6DirectorInput struct {
 }
 
 type MarkV6DirectorUnavailableInput struct {
-	WorkspaceID, RunID, AssignmentID, FailureClass, Diagnostics string
-	ExpectedStateVersion                                        int64
+	WorkspaceID, RunID, AssignmentID, FailureClass, Diagnostics, ClientRequestID string
+	ExpectedStateVersion                                                         int64
 }
 
 type directorV6Store interface {
@@ -45,7 +45,7 @@ func (m directorModule) Assign(ctx context.Context, in AssignV6DirectorInput) (V
 }
 
 func (m directorModule) MarkUnavailable(ctx context.Context, in MarkV6DirectorUnavailableInput) (V6DirectorAssignment, error) {
-	if m.store == nil || strings.TrimSpace(in.AssignmentID) == "" || strings.TrimSpace(in.FailureClass) == "" {
+	if m.store == nil || strings.TrimSpace(in.AssignmentID) == "" || strings.TrimSpace(in.FailureClass) == "" || strings.TrimSpace(in.ClientRequestID) == "" {
 		return V6DirectorAssignment{}, fmt.Errorf("%w: Director failure is incomplete", ErrInvalidContract)
 	}
 	return m.store.MarkV6DirectorUnavailable(ctx, in)

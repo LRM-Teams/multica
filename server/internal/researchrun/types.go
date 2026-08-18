@@ -387,9 +387,9 @@ type StartInput struct {
 }
 
 type V6BootstrapInput struct {
-	WorkspaceID, CreatedBy, DirectorAgentID string
-	Goal, Title, DepthTier, Language        string
-	SourcePolicy                            json.RawMessage
+	WorkspaceID, CreatedBy, DirectorAgentID, ClientRequestID string
+	Goal, Title, DepthTier, Language                         string
+	SourcePolicy                                             json.RawMessage
 }
 
 type SteerInput struct {

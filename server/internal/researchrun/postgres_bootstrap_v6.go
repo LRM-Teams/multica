@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,7 +13,7 @@ import (
 )
 
 func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cfg RunConfig) (Run, int64, error) {
-	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.CreatedBy) == "" || strings.TrimSpace(in.DirectorAgentID) == "" {
+	if strings.TrimSpace(in.WorkspaceID) == "" || strings.TrimSpace(in.CreatedBy) == "" || strings.TrimSpace(in.DirectorAgentID) == "" || strings.TrimSpace(in.ClientRequestID) == "" {
 		return Run{}, 0, fmt.Errorf("%w: V6 bootstrap identity is incomplete", ErrInvalidContract)
 	}
 	start := StartInput{WorkspaceID: in.WorkspaceID, CreatedBy: in.CreatedBy, LeadAgentID: in.DirectorAgentID, Goal: in.Goal, Title: in.Title, DepthTier: in.DepthTier, Language: in.Language, SourcePolicy: in.SourcePolicy}
@@ -25,6 +26,40 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 		return Run{}, 0, err
 	}
 	defer tx.Rollback(ctx)
+	requestBytes, err := MarshalArtifactCanonicalJSON(map[string]any{
+		"created_by": in.CreatedBy, "director_agent_id": in.DirectorAgentID,
+		"goal": strings.TrimSpace(in.Goal), "title": strings.TrimSpace(in.Title),
+		"depth_tier": in.DepthTier, "language": strings.TrimSpace(in.Language), "source_policy": json.RawMessage(sourcePolicy),
+	})
+	if err != nil {
+		return Run{}, 0, err
+	}
+	requestHash := ArtifactContentHashFromCanonicalJSON(requestBytes)
+	runID := uuid.NewString()
+	var reservedRunID string
+	err = tx.QueryRow(ctx, `INSERT INTO research_v6_bootstrap_request(workspace_id,client_request_id,request_hash,session_id)
+		VALUES($1::uuid,$2::uuid,$3,$4::uuid) ON CONFLICT DO NOTHING RETURNING session_id::text`, in.WorkspaceID, in.ClientRequestID, requestHash, runID).Scan(&reservedRunID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var existingHash string
+		if err = tx.QueryRow(ctx, `SELECT request_hash,session_id::text FROM research_v6_bootstrap_request WHERE workspace_id=$1::uuid AND client_request_id=$2::uuid`, in.WorkspaceID, in.ClientRequestID).Scan(&existingHash, &reservedRunID); err != nil {
+			return Run{}, 0, err
+		}
+		if existingHash != requestHash {
+			return Run{}, 0, ErrResultConflict
+		}
+		replayed, loadErr := loadRun(ctx, tx, reservedRunID, in.WorkspaceID, false)
+		if loadErr != nil {
+			return Run{}, 0, loadErr
+		}
+		var sequence int64
+		if err = tx.QueryRow(ctx, `SELECT sequence FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid AND event_type='v6_run_bootstrapped' ORDER BY sequence LIMIT 1`, in.WorkspaceID, reservedRunID).Scan(&sequence); err != nil {
+			return Run{}, 0, err
+		}
+		return replayed, sequence, nil
+	}
+	if err != nil {
+		return Run{}, 0, err
+	}
 	var directorExists bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent WHERE workspace_id=$1::uuid AND id=$2::uuid AND archived_at IS NULL)`, in.WorkspaceID, in.DirectorAgentID).Scan(&directorExists); err != nil || !directorExists {
 		if err == nil {
@@ -32,7 +67,7 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 		}
 		return Run{}, 0, err
 	}
-	runID, assignmentID, membershipID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	assignmentID, membershipID := uuid.NewString(), uuid.NewString()
 	if _, err = tx.Exec(ctx, `INSERT INTO research_session(id,workspace_id,fleet_id,created_by,title,goal,status,current_stage,depth_tier,orchestrator_version,run_config,run_initialized_at,last_progress_at,next_reconcile_at,director_state_version,state_version)
 		VALUES($1::uuid,$2::uuid,NULL,$3::uuid,$4,$5,'running','s1_plan',$6,$7,$8::jsonb,now(),now(),now(),1,1)`, runID, in.WorkspaceID, in.CreatedBy, strings.TrimSpace(in.Title), strings.TrimSpace(in.Goal), in.DepthTier, OrchestratorVersionV6, configJSON); err != nil {
 		return Run{}, 0, err
@@ -83,8 +118,9 @@ func (s *PostgresStore) BootstrapV6(ctx context.Context, in V6BootstrapInput, cf
 	if err = ensureSessionPolicyStateTx(ctx, tx, in.WorkspaceID, runID); err != nil {
 		return Run{}, 0, err
 	}
-	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap", "user", in.CreatedBy, map[string]any{
+	event, err := appendEvent(ctx, tx, in.WorkspaceID, runID, "v6_run_bootstrapped", "v6-bootstrap:"+in.ClientRequestID, "user", in.CreatedBy, map[string]any{
 		"orchestrator_version": OrchestratorVersionV6, "director_assignment_id": assignmentID, "director_agent_id": in.DirectorAgentID, "membership_id": membershipID,
+		"client_request_id": in.ClientRequestID, "request_hash": requestHash,
 	})
 	if err != nil {
 		return Run{}, 0, err

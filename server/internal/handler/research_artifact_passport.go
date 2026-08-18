@@ -112,6 +112,38 @@ func (h *Handler) createResearchMessageWithPassportAndV6Steering(
 		return db.ResearchMessage{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var orchestrator string
+	if err = tx.QueryRow(ctx, `SELECT orchestrator_version FROM research_session WHERE workspace_id=$1 AND id=$2`, params.WorkspaceID, params.SessionID).Scan(&orchestrator); err != nil {
+		return db.ResearchMessage{}, err
+	}
+	if orchestrator == researchrun.OrchestratorVersionV6 {
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, util.UUIDToString(params.WorkspaceID)+":"+util.UUIDToString(params.SessionID)+":"+clientRequestID); err != nil {
+			return db.ResearchMessage{}, err
+		}
+		var existingID string
+		err = tx.QueryRow(ctx, `SELECT t.research_message_id::text
+			FROM research_v6_steering_trigger t
+			JOIN research_message m ON m.workspace_id=t.workspace_id AND m.session_id=t.session_id AND m.id=t.research_message_id
+			WHERE t.workspace_id=$1 AND t.session_id=$2 AND t.client_request_id=$3::uuid
+			AND m.sender_type=$4 AND m.sender_id=$5 AND m.target_agent_id IS NOT DISTINCT FROM $6
+			AND m.body=$7 AND t.selected_refs=$8::jsonb`, params.WorkspaceID, params.SessionID, clientRequestID,
+			params.SenderType, params.SenderID, params.TargetAgentID, params.Body, selectedRefs).Scan(&existingID)
+		if err == nil {
+			return h.Queries.WithTx(tx).GetResearchMessage(ctx, db.GetResearchMessageParams{
+				ID: parseUUID(existingID), SessionID: params.SessionID, WorkspaceID: params.WorkspaceID,
+			})
+		}
+		if err != pgx.ErrNoRows {
+			return db.ResearchMessage{}, err
+		}
+		var requestIDUsed bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM research_v6_steering_trigger WHERE workspace_id=$1 AND session_id=$2 AND client_request_id=$3::uuid)`, params.WorkspaceID, params.SessionID, clientRequestID).Scan(&requestIDUsed); err != nil {
+			return db.ResearchMessage{}, err
+		}
+		if requestIDUsed {
+			return db.ResearchMessage{}, researchrun.ErrResultConflict
+		}
+	}
 	msg, err := h.Queries.WithTx(tx).CreateResearchMessage(ctx, params)
 	if err != nil {
 		return db.ResearchMessage{}, err

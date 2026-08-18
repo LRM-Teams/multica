@@ -133,6 +133,9 @@ func (h *Handler) AcknowledgeAgentResearchV6WorkCatalog(w http.ResponseWriter, r
 	if !decodeResearchJSON(w, r, &request) {
 		return
 	}
+	if _, valid := parseUUIDOrBadRequest(w, request.ClientRequestID, "client_request_id"); !valid {
+		return
+	}
 	err := service.AcknowledgeWorkCatalog(r.Context(), researchrun.AcknowledgeV6CatalogInput{
 		V6AttemptAccess: access, ClientRequestID: request.ClientRequestID, PageKey: request.PageKey, PageHash: request.PageHash,
 	})
@@ -166,7 +169,17 @@ func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Reque
 		writeResearchV6DomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "outcome": outcome})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"client_request_id":      outcome.ClientRequestID,
+		"outcome":                "accepted",
+		"replayed":               outcome.Replayed,
+		"state_version":          outcome.StateVersion,
+		"through_event_sequence": outcome.ThroughEventSequence,
+		"refs":                   []map[string]string{{"kind": "submission", "id": outcome.SubmissionID}},
+		"submission_kind":        outcome.Kind,
+		"submission_status":      outcome.Status,
+		"content_hash":           outcome.ContentHash,
+	})
 }
 
 func (h *Handler) GetAgentResearchV6DirectorBrief(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +223,11 @@ func (h *Handler) AcknowledgeAgentResearchV6DirectorBrief(w http.ResponseWriter,
 	if !decodeResearchJSON(w, r, &request) {
 		return
 	}
+	for field, value := range map[string]string{"client_request_id": request.ClientRequestID, "brief_id": request.BriefID} {
+		if _, valid := parseUUIDOrBadRequest(w, value, field); !valid {
+			return
+		}
+	}
 	err := service.AcknowledgeDirectorBrief(r.Context(), researchrun.AcknowledgeV6DirectorBriefInput{
 		V6AttemptAccess: access, ClientRequestID: request.ClientRequestID,
 		BriefID: request.BriefID, BriefHash: request.BriefHash,
@@ -246,5 +264,5 @@ func writeResearchV6DomainError(w http.ResponseWriter, err error) {
 }
 
 func writeRonaldoV6Error(w http.ResponseWriter, status int, code, message string, retryable bool) {
-	writeJSON(w, status, map[string]any{"error": map[string]any{"code": code, "message": message, "retryable": retryable}})
+	writeJSON(w, status, map[string]any{"code": code, "error": message, "retryable": retryable})
 }

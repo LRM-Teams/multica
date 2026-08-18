@@ -21,13 +21,13 @@ const (
 	LocalControlUpgradeStatusOperation        = "upgrade:status"
 	LocalControlUpgradeCancelOperation        = "upgrade:cancel"
 	LocalControlServiceStatusOperation        = "service:status"
+	LocalControlMachineAttestationOperation   = "machine-attestation"
 	LocalControlWorkspaceEnvironmentOperation = "workspace:environment"
 	LocalControlWorkspaceCapacityOperation    = "workspace:capacity"
 	LocalControlWorkspaceDiagnosticsOperation = "workspace:diagnostics"
 	LocalControlComputerControlOperation      = "computer:control"
 	LocalControlRunnerReadyOperation          = "runner:ready"
 	LocalControlRunnerDrainOperation          = "runner:drain"
-	LocalControlRunnerPrepareOperation        = "runner:prepare"
 	LocalControlRunnerReleaseOperation        = "runner:release"
 	LocalControlWorkDigestOperation           = "workspace:work-digest"
 	LocalControlWorkJournalOperation          = "workspace:work-journal"
@@ -39,7 +39,7 @@ type localControlOperationSpec struct {
 
 var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: LocalControlRestartServiceOperation}, {Name: LocalControlUpgradeStartOperation},
-	{Name: LocalControlUpgradeStatusOperation}, {Name: LocalControlUpgradeCancelOperation}, {Name: LocalControlServiceStatusOperation},
+	{Name: LocalControlUpgradeStatusOperation}, {Name: LocalControlUpgradeCancelOperation}, {Name: LocalControlServiceStatusOperation}, {Name: LocalControlMachineAttestationOperation},
 	{Name: "service:start"}, {Name: "service:stop"}, {Name: "service:diagnostics"},
 	{Name: "workspace:list"}, {Name: "workspace:status"}, {Name: "workspace:start"},
 	{Name: "workspace:stop"}, {Name: "workspace:restart"}, {Name: "workspace:attach"},
@@ -47,7 +47,6 @@ var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: LocalControlWorkspaceDiagnosticsOperation}, {Name: LocalControlComputerControlOperation},
 	{Name: "runner:start"}, {Name: "runner:stop"}, {Name: "runner:restart"},
 	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: LocalControlRunnerReadyOperation},
-	{Name: LocalControlRunnerPrepareOperation},
 	{Name: LocalControlWorkDigestOperation}, {Name: LocalControlWorkJournalOperation},
 }
 
@@ -58,39 +57,6 @@ func localControlOperationSpecFor(name string) (localControlOperationSpec, bool)
 		}
 	}
 	return localControlOperationSpec{}, false
-}
-
-func localControlOperationForPath(path string) string {
-	switch path {
-	case bindingChildCapacityPath:
-		return LocalControlWorkspaceCapacityOperation
-	case bindingChildDiagnosticPath:
-		return LocalControlWorkspaceDiagnosticsOperation
-	case bindingChildMachineActionsPath:
-		return LocalControlComputerControlOperation
-	case bindingChildPrepareUpgradePath:
-		return LocalControlRunnerPrepareOperation
-	case BindingPrepareMachineUpgradePath:
-		return LocalControlRunnerDrainOperation
-	case BindingReleaseMachineUpgradePath:
-		return LocalControlRunnerReleaseOperation
-	case bindingChildComputerUpgradePath:
-		return LocalControlUpgradeStartOperation
-	case BindingComputerUpgradeEventPath:
-		return LocalControlUpgradeStatusOperation
-	case BindingPrepareEnvironmentSwitchPath, BindingReleaseEnvironmentSwitchPath:
-		return LocalControlWorkspaceEnvironmentOperation
-	case BindingReregisterRuntimePath:
-		return LocalControlRunnerReadyOperation
-	case bindingChildRuntimeSetPath:
-		return LocalControlRunnerReadyOperation
-	case bindingChildWorkDigestPath:
-		return LocalControlWorkDigestOperation
-	case bindingChildWorkJournalPath:
-		return LocalControlWorkJournalOperation
-	default:
-		return ""
-	}
 }
 
 func localControlOperationSpecForMust(name string) localControlOperationSpec {
@@ -107,8 +73,8 @@ type localControlRPCMessage struct {
 	Args         []byte            `json:"args,omitempty"`
 	OK           bool              `json:"ok"`
 	Result       []byte            `json:"result,omitempty"`
-	ErrorCode    string            `json:"error_code,omitempty"`
-	ErrorMessage string            `json:"error_message,omitempty"`
+	ErrorCode    string            `json:"errorCode,omitempty"`
+	ErrorMessage string            `json:"errorMessage,omitempty"`
 }
 
 type localControlClient struct {
@@ -208,7 +174,7 @@ func (client *localControlClient) call(ctx context.Context, operation string, he
 }
 
 func callLocalJSON(ctx context.Context, endpoint, operation string, timeout time.Duration, headers map[string]string, args, result any) error {
-	client, _, err := localControlClientFor(endpoint, timeout)
+	client, err := localControlClientFor(endpoint, timeout)
 	if err != nil {
 		return err
 	}
@@ -216,7 +182,7 @@ func callLocalJSON(ctx context.Context, endpoint, operation string, timeout time
 }
 
 func callLocalJSONWithTimeout(ctx context.Context, endpoint, operation string, timeout time.Duration, headers map[string]string, args, result any) error {
-	client, _, err := localControlClientFor(endpoint, timeout)
+	client, err := localControlClientFor(endpoint, timeout)
 	if err != nil {
 		return err
 	}

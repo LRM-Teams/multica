@@ -57,7 +57,7 @@ func waitForWorkspaceReady(workspaceID string, timeout time.Duration) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		health := lifecycle.Health(ctx)
 		cancel()
-		if health["status"] == "running" && health["connected"] == true && normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) && healthContainsWorkspace(health, workspaceID) {
+		if health["status"] == "running" && health["connected"] == true && normalizeAPIBaseURL(fmt.Sprint(health["serverUrl"])) == normalizeAPIBaseURL(target.Origin) && healthContainsWorkspace(health, workspaceID) {
 			return nil
 		}
 		time.Sleep(250 * time.Millisecond)
@@ -212,7 +212,7 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 	rows := []row{
 		{label, fmt.Sprintf("running (pid %v, uptime %v)", health["pid"], health["uptime"])},
 	}
-	if id, ok := health["computer_id"].(string); ok && id != "" {
+	if id, ok := health["computerId"].(string); ok && id != "" {
 		rows = append(rows, row{"Computer ID", id})
 	}
 	if session, ok := health["session_present"].(bool); ok {
@@ -257,7 +257,7 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 			})
 		}
 	}
-	if version, ok := health["cli_version"].(string); ok && version != "" {
+	if version, ok := health["cliVersion"].(string); ok && version != "" {
 		rows = append(rows, row{"Version", version})
 	}
 

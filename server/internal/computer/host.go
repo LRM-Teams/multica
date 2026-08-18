@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +29,7 @@ type HostConfig struct {
 }
 
 // Host owns every machine-scoped Binding concern: desired-vs-actual child
-// processes, generation/PID fencing, crash policy, capacity admission, local
+// processes, start-identity/PID fencing, crash policy, capacity admission, local
 // control, and cross-child Machine Upgrade preparation.
 type Host struct {
 	supervisor        *BindingSupervisor
@@ -142,15 +141,6 @@ func NewHost(config HostConfig) (*Host, error) {
 		}
 		return nil
 	}
-	callbacks.PrepareUpgrade = func(ctx context.Context, identity BindingChildIdentity, raw json.RawMessage) (any, error) {
-		if host.upgrade != nil {
-			return host.upgrade.prepareChildUpgrade(ctx, identity, raw)
-		}
-		if external.PrepareUpgrade != nil {
-			return external.PrepareUpgrade(ctx, identity, raw)
-		}
-		return nil, errors.New("Computer Machine Upgrade coordinator is unavailable")
-	}
 	callbacks.WorkDigest = func(ctx context.Context, identity BindingChildIdentity, command protocol.ComputerWorkDigestPayload) (protocol.WorkDigest, error) {
 		if external.WorkDigest != nil {
 			return external.WorkDigest(ctx, identity, command)
@@ -179,9 +169,6 @@ func NewHost(config HostConfig) (*Host, error) {
 			delete(host.runtimeSets, identity.WorkspaceID)
 		}
 		host.runtimeMu.Unlock()
-		if host.upgrade != nil {
-			host.upgrade.observeInitiatorExit(identity)
-		}
 		if external.Released != nil {
 			external.Released(identity)
 		}
@@ -284,12 +271,6 @@ func (host *Host) WaitReady(ctx context.Context, desiredWorkspaceIDs []string) e
 	}
 }
 
-func (host *Host) RegisterRoutes(mux *http.ServeMux) {
-	if host != nil && host.control != nil {
-		host.control.RegisterRoutes(mux)
-	}
-}
-
 func (host *Host) Release(identity BindingChildIdentity) {
 	if host != nil && host.control != nil {
 		host.control.Release(identity)
@@ -343,15 +324,4 @@ func (host *Host) DeliverComputerUpgrade(ctx context.Context, command protocol.C
 		return errors.New("Computer Host is unavailable")
 	}
 	return host.supervisor.DeliverComputerUpgrade(ctx, host.control.token, command)
-}
-
-func (host *Host) PrepareChildUpgrade(ctx context.Context, identity BindingChildIdentity, pending protocol.DaemonHeartbeatPendingMachineUpgrade) (BindingMachineUpgradePrepared, error) {
-	if host == nil || host.upgrade == nil {
-		return BindingMachineUpgradePrepared{}, errors.New("Computer Machine Upgrade coordinator is unavailable")
-	}
-	raw, err := json.Marshal(pending)
-	if err != nil {
-		return BindingMachineUpgradePrepared{}, err
-	}
-	return host.upgrade.prepareChildUpgrade(ctx, identity, raw)
 }

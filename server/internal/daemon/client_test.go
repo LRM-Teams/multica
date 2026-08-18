@@ -272,9 +272,6 @@ func TestClient_PinTaskSessionUsesRuntimeDaemonTokenWithoutProfileFallback(t *te
 		if got := r.Header.Get("Authorization"); got != "Bearer mdt-runtime" {
 			t.Fatalf("Authorization = %q, want runtime daemon token", got)
 		}
-		if vals := r.Header.Values("X-Computer-Generation"); len(vals) != 0 {
-			t.Fatalf("X-Computer-Generation = %v, want omitted", vals)
-		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
@@ -307,11 +304,8 @@ func TestClient_DeregisterUsesWorkspaceDaemonTokenWithoutProfileFallback(t *test
 	}
 }
 
-func TestClient_TaskScopedCallsOmitComputerGenerationHeader(t *testing.T) {
+func TestClientTaskScopedCallsUseRuntimeToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if vals := r.Header.Values("X-Computer-Generation"); len(vals) != 0 {
-			t.Fatalf("%s sent X-Computer-Generation = %v", r.URL.Path, vals)
-		}
 		if got := r.Header.Get("Authorization"); got != "Bearer mdt-runtime" {
 			t.Fatalf("Authorization for %s = %q", r.URL.Path, got)
 		}

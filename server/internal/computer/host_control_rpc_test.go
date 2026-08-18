@@ -9,7 +9,7 @@ import (
 )
 
 func TestHostControlRPCDispatchesCapacityOperation(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", RunnerGeneration: 2, PID: 1234}
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
 	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == identity },
 	})
@@ -36,8 +36,8 @@ func TestHostControlRPCDispatchesCapacityOperation(t *testing.T) {
 	}
 }
 
-func TestHostControlRPCRejectsStaleRunnerGeneration(t *testing.T) {
-	active := BindingChildIdentity{WorkspaceID: "ws-1", RunnerGeneration: 2, PID: 1234}
+func TestHostControlRPCRejectsStaleStartIdentity(t *testing.T) {
+	active := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
 	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == active },
 	})
@@ -48,7 +48,7 @@ func TestHostControlRPCRejectsStaleRunnerGeneration(t *testing.T) {
 		t.Fatal("workspace:capacity RPC was not registered")
 	}
 	args, err := json.Marshal(capacityControlRequest{
-		Identity:  BindingChildIdentity{WorkspaceID: "ws-1", RunnerGeneration: 1, PID: 1234},
+		Identity:  BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-1", PID: 1234},
 		Operation: "active", Grant: ProcessCapacityGrant{LaunchID: "launch-1"},
 	})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestHostControlRPCRejectsStaleRunnerGeneration(t *testing.T) {
 
 func TestHostControlClientUsesLocalRPCTransport(t *testing.T) {
 	root := t.TempDir()
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", RunnerGeneration: 2, PID: 1234}
+	identity := BindingChildIdentity{WorkspaceID: "ws-1", StartIdentity: "start-2", PID: 1234}
 	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
 		Current: func(got BindingChildIdentity) bool { return got == identity },
 	})
@@ -88,36 +88,6 @@ func TestHostControlClientUsesLocalRPCTransport(t *testing.T) {
 	_ = listener.Close()
 }
 
-func TestHostControlRPCPrepareReturnsCallbackResult(t *testing.T) {
-	identity := BindingChildIdentity{WorkspaceID: "ws-1", RunnerGeneration: 2, PID: 1234}
-	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{
-		Current: func(got BindingChildIdentity) bool { return got == identity },
-		PrepareUpgrade: func(context.Context, BindingChildIdentity, json.RawMessage) (any, error) {
-			return map[string]string{"workspace_id": "ws-1", "prepared": "true"}, nil
-		},
-	})
-	registry := NewLocalControlRegistry()
-	control.RegisterRPCHandlers(registry)
-	handler, ok := registry.handler(LocalControlRunnerPrepareOperation)
-	if !ok {
-		t.Fatal("runner:prepare RPC was not registered")
-	}
-	args, err := json.Marshal(map[string]any{
-		"identity": identity,
-		"payload":  json.RawMessage(`{"target_version":"v1.2.3"}`),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := handler(context.Background(), map[string]string{"X-Multica-Control-Token": "control-token"}, args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := result.(map[string]string); !ok || got["prepared"] != "true" {
-		t.Fatalf("prepare result = %#v", result)
-	}
-}
-
 func TestHostControlRPCCancelRequiresToken(t *testing.T) {
 	control := NewHostControl("control-token", NewProcessCapacity(1), HostControlCallbacks{})
 	host := &Host{control: control}
@@ -137,15 +107,15 @@ func TestHostProcessHealthRPCPreservesLifecycleFields(t *testing.T) {
 	started := time.Now().Add(-time.Second)
 	state := &hostProcessState{
 		identity: HostProcessIdentity{
-			ComputerID: "computer-1", ComputerGeneration: 7, Environment: "test",
+			ComputerID: "computer-1", ServiceGeneration: "service-7", Environment: "test",
 			Version: "v1.2.3", ServerURL: "https://test.example", DeviceName: "laptop",
 		},
 		startedAt: started, ready: true, desired: []string{"ws-1"},
 	}
 	result := (&Host{}).processHealthResult(state)
 	for key, want := range map[string]string{
-		"daemon_id": "computer-1", "computer_id": "computer-1", "server_url": "https://test.example",
-		"device_name": "laptop", "environment": "test", "cli_version": "v1.2.3", "status": "running",
+		"daemonId": "computer-1", "computerId": "computer-1", "serverUrl": "https://test.example",
+		"deviceName": "laptop", "environment": "test", "cliVersion": "v1.2.3", "status": "running",
 	} {
 		if got, ok := result[key].(string); !ok || got != want {
 			t.Errorf("health[%q] = %#v, want %q", key, result[key], want)

@@ -11,7 +11,7 @@ func TestBootstrapV6TransactionRecovery(t *testing.T) {
 		title := "V6 bootstrap recovery " + uuid.NewString()
 		input := V6BootstrapInput{
 			WorkspaceID: run.fixture.workspaceID, CreatedBy: run.fixture.userID, DirectorAgentID: run.fixture.agentID,
-			Goal: title, Title: title, DepthTier: "standard", Language: "English",
+			Goal: title, Title: title, DepthTier: "standard", Language: "English", ClientRequestID: uuid.NewString(),
 		}
 		invoke := func() error {
 			_, _, err := run.store.BootstrapV6(run.ctx, input, DefaultRunConfig("standard"))

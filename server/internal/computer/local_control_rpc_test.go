@@ -18,7 +18,6 @@ func TestRaftLocalControlOperationNames(t *testing.T) {
 		LocalControlWorkspaceEnvironmentOperation: true, LocalControlWorkspaceCapacityOperation: true, LocalControlWorkspaceDiagnosticsOperation: true,
 		LocalControlComputerControlOperation: true, "runner:start": true, "runner:stop": true,
 		"runner:restart": true, LocalControlRunnerDrainOperation: true, LocalControlRunnerReleaseOperation: true, LocalControlRunnerReadyOperation: true,
-		LocalControlRunnerPrepareOperation: true,
 		LocalControlWorkDigestOperation: true, LocalControlWorkJournalOperation: true,
 	}
 	for operation := range want {
@@ -40,7 +39,7 @@ func TestLocalControlOperationUsesTypedResultAndStructuredError(t *testing.T) {
 func TestLocalControlRegistryDispatchesTypedHandler(t *testing.T) {
 	registry := NewLocalControlRegistry()
 	if err := registry.Register(LocalControlRunnerReadyOperation, func(_ context.Context, headers map[string]string, args json.RawMessage) (any, error) {
-		if headers["X-Test"] != "present" || string(args) != `{"workspace_id":"ws-1"}` {
+		if headers["X-Test"] != "present" || string(args) != `{"workspaceId":"ws-1"}` {
 			t.Fatalf("handler input = headers=%v args=%s", headers, args)
 		}
 		return map[string]any{"ready": true}, nil
@@ -49,6 +48,16 @@ func TestLocalControlRegistryDispatchesTypedHandler(t *testing.T) {
 	}
 	if _, ok := registry.handler(LocalControlRunnerReadyOperation); !ok {
 		t.Fatal("registered operation was not dispatchable")
+	}
+}
+
+func TestLocalControlRPCMessageJSONUsesCamelCaseErrors(t *testing.T) {
+	raw, err := json.Marshal(localControlRPCMessage{ErrorCode: "busy", ErrorMessage: "try later"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(raw); got != `{"ok":false,"errorCode":"busy","errorMessage":"try later"}` {
+		t.Fatalf("RPC error JSON = %s", got)
 	}
 }
 

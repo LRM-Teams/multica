@@ -62,21 +62,20 @@ const (
 
 // Config holds all daemon configuration.
 type Config struct {
-	ServerBaseURL      string
-	Environment        string // production or test; release channel is separate
-	ReleaseChannel     string // latest or alpha
-	DaemonID           string
-	LegacyDaemonIDs    []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
-	DeviceName         string
-	RuntimeName        string
-	CLIVersion         string                // multica CLI version (e.g. "0.1.13")
-	LaunchedBy         string                // "desktop" when spawned by the Electron app, empty for standalone
-	Profile            string                // profile name (empty = default)
-	WorkspaceID        string                // the one workspace this daemon registers for
-	BindingsRoot       string                // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
-	ComputerGeneration int64                 // local Host/child slot generation; cloud liveness is the connect socket
-	Agents             map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
-	WorkspacesRoot     string                // base path containing workspace directories (default: ~/.multica/workspaces)
+	ServerBaseURL   string
+	Environment     string // production or test; release channel is separate
+	ReleaseChannel  string // latest or alpha
+	DaemonID        string
+	LegacyDaemonIDs []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
+	DeviceName      string
+	RuntimeName     string
+	CLIVersion      string                // multica CLI version (e.g. "0.1.13")
+	LaunchedBy      string                // "desktop" when spawned by the Electron app, empty for standalone
+	Profile         string                // profile name (empty = default)
+	WorkspaceID     string                // the one workspace this daemon registers for
+	BindingsRoot    string                // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
+	Agents          map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, cursor, kiro, grok
+	WorkspacesRoot  string                // base path containing workspace directories (default: ~/.multica/workspaces)
 	// BindingStateRoot isolates durable workspace-execution coordinator state
 	// for one Binding child. Empty keeps the historical single-process paths.
 	BindingStateRoot string

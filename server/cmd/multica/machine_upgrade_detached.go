@@ -18,16 +18,7 @@ var spawnDetachedComputerBinary = startDetachedComputerBinary
 var probeDetachedSuccessorAttestation = func(profile string) (computer.MachineAttestation, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	health := computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile)))
-	if health["status"] != "running" {
-		return computer.MachineAttestation{}, fmt.Errorf("detached successor is not ready")
-	}
-	pid, ok := health["pid"].(float64)
-	if !ok {
-		return computer.MachineAttestation{}, fmt.Errorf("detached successor health did not include pid")
-	}
-	version, _ := health["cli_version"].(string)
-	return computer.MachineAttestation{ServicePID: int(pid), ComputerVersion: version}, nil
+	return computer.ProbeMachineAttestation(ctx, computer.ServiceControlEndpoint(computer.RootDir(profile)))
 }
 
 // startDetachedComputerBinary launches the committed target as the next Computer
@@ -59,11 +50,7 @@ func startDetachedComputerBinary(binaryPath, profile, expectedVersion string) er
 		return fmt.Errorf("open daemon log: %w", err)
 	}
 	defer logFile.Close()
-	generation, err := computer.NewGenerationStore(computer.RootDir(profile)).Next()
-	if err != nil {
-		return fmt.Errorf("allocate successor Computer generation: %w", err)
-	}
-	args := computer.ResidentArgs(computer.StartOptions{Generation: generation})
+	args := computer.ResidentArgs(computer.StartOptions{})
 	child := exec.Command(binaryPath, args...)
 	child.Stdout = logFile
 	child.Stderr = logFile
@@ -103,7 +90,7 @@ func acceptReadyDetachedCandidate(
 	profile, expectedVersion string,
 	health map[string]any,
 ) error {
-	actualVersion, _ := health["cli_version"].(string)
+	actualVersion, _ := health["cliVersion"].(string)
 	if expectedVersion != "" && !detachedVersionsMatch(actualVersion, expectedVersion) {
 		terminateDetachedCandidate(child)
 		return fmt.Errorf("detached successor version %q does not match target %q", actualVersion, expectedVersion)
@@ -114,7 +101,7 @@ func acceptReadyDetachedCandidate(
 		return fmt.Errorf("detached successor did not answer Computer attestation: %w", err)
 	}
 	if err := computer.ValidateSuccessorPIDVersion(computer.SuccessorPIDVersion{
-		ServicePID: child.Process.Pid, ComputerVersion: expectedVersion,
+		ServicePID: child.Process.Pid, SourceServicePID: os.Getpid(), ComputerVersion: expectedVersion,
 	}, attestation); err != nil {
 		terminateDetachedCandidate(child)
 		return err

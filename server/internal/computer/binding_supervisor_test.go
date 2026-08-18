@@ -20,6 +20,8 @@ type crashingSupervisorChild struct{ pid int }
 type readySupervisorChild struct {
 	*supervisorTestChild
 	controlEndpoint string
+	workspaceID     string
+	startIdentity   string
 }
 
 type activatingSupervisorChild struct {
@@ -32,8 +34,9 @@ func (child *activatingSupervisorChild) Activate() { child.activate() }
 func (child *readySupervisorChild) AwaitReady(context.Context) (BindingChildReady, error) {
 	return BindingChildReady{
 		ProtocolVersion: BindingChildProtocolVersion,
-		PID:             child.pid,
-		RunnerEndpoint:  child.controlEndpoint,
+		WorkspaceID:     child.workspaceID, StartIdentity: child.startIdentity,
+		PID:            child.pid,
+		RunnerEndpoint: child.controlEndpoint,
 	}, nil
 }
 
@@ -57,13 +60,13 @@ func TestBindingSupervisorRegistersChildBeforeActivation(t *testing.T) {
 	var supervisor *BindingSupervisor
 	var err error
 	supervisor, err = NewBindingSupervisor(BindingSupervisorConfig{
-		Spawn: func(workspaceID string, generation int64) (BindingChild, error) {
+		Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
 			const pid = 101
 			return &activatingSupervisorChild{
 				supervisorTestChild: newSupervisorTestChild(pid),
 				activate: func() {
 					activated <- supervisor.Current(BindingChildIdentity{
-						WorkspaceID: workspaceID, RunnerGeneration: generation, PID: pid,
+						WorkspaceID: workspaceID, StartIdentity: startIdentity, PID: pid,
 					})
 				},
 			}, nil
@@ -84,12 +87,12 @@ func TestBindingSupervisorRegistersChildBeforeActivation(t *testing.T) {
 	supervisor.Stop()
 }
 
-func TestBindingSupervisorRetainsSiblingAndFencesGenerationPID(t *testing.T) {
+func TestBindingSupervisorRetainsSiblingAndFencesStartIdentityPID(t *testing.T) {
 	var nextPID atomic.Int32
 	children := make(map[string]*supervisorTestChild)
 	var childrenMu sync.Mutex
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		Spawn: func(workspaceID string, _ int64) (BindingChild, error) {
+		Spawn: func(workspaceID, _ string) (BindingChild, error) {
 			child := newSupervisorTestChild(int(nextPID.Add(1)) + 100)
 			childrenMu.Lock()
 			children[workspaceID] = child
@@ -107,20 +110,20 @@ func TestBindingSupervisorRetainsSiblingAndFencesGenerationPID(t *testing.T) {
 	waitForSupervisorLifecycle(t, supervisor, "workspace-b", RunnerLifecycleRunning)
 	recordA, pidA, _ := supervisor.Snapshot("workspace-a")
 	recordB, pidB, _ := supervisor.Snapshot("workspace-b")
-	if !supervisor.Current(BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: recordA.Generation(), PID: pidA}) {
+	if !supervisor.Current(BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: recordA.StartIdentity(), PID: pidA}) {
 		t.Fatal("Computer rejected its current Binding child")
 	}
-	if supervisor.Current(BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: recordA.Generation() + 1, PID: pidA}) {
-		t.Fatal("Computer accepted a stale/future Runner generation")
+	if supervisor.Current(BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: "stale-start", PID: pidA}) {
+		t.Fatal("Computer accepted a stale Runner start identity")
 	}
 
 	supervisor.Reconcile(ctx, []string{"workspace-a"})
 	waitForSupervisorLifecycle(t, supervisor, "workspace-b", RunnerLifecycleStopped)
 	currentA, currentPIDA, _ := supervisor.Snapshot("workspace-a")
-	if currentA.Generation() != recordA.Generation() || currentA.Lifecycle != RunnerLifecycleRunning || currentPIDA != pidA {
+	if currentA.StartIdentity() != recordA.StartIdentity() || currentA.Lifecycle != RunnerLifecycleRunning || currentPIDA != pidA {
 		t.Fatalf("removing sibling mutated workspace-a: record=%+v pid=%d", currentA, currentPIDA)
 	}
-	if recordB.Generation() == 0 || pidB == 0 {
+	if recordB.StartIdentity() == "" || pidB == 0 {
 		t.Fatal("workspace-b never had a real supervised child identity")
 	}
 	supervisor.Stop()
@@ -133,7 +136,7 @@ func TestBindingSupervisorBacksOffThenDegradesCrashLoop(t *testing.T) {
 	var spawns atomic.Int32
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
 		Now: func() time.Time { return now.Load().(time.Time) },
-		Spawn: func(string, int64) (BindingChild, error) {
+		Spawn: func(string, string) (BindingChild, error) {
 			return crashingSupervisorChild{pid: int(spawns.Add(1)) + 200}, nil
 		},
 	})
@@ -166,10 +169,10 @@ func TestBindingSupervisorBacksOffThenDegradesCrashLoop(t *testing.T) {
 	}
 }
 
-func TestBindingSupervisorIgnoresExitFromPreviousGeneration(t *testing.T) {
+func TestBindingSupervisorIgnoresExitFromPreviousStartIdentity(t *testing.T) {
 	var nextPID atomic.Int32
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		Spawn: func(string, int64) (BindingChild, error) {
+		Spawn: func(string, string) (BindingChild, error) {
 			return newSupervisorTestChild(int(nextPID.Add(1)) + 300), nil
 		},
 	})
@@ -185,13 +188,13 @@ func TestBindingSupervisorIgnoresExitFromPreviousGeneration(t *testing.T) {
 	supervisor.Reconcile(ctx, []string{"workspace-a"})
 	waitForSupervisorLifecycle(t, supervisor, "workspace-a", RunnerLifecycleRunning)
 	second, secondPID, _ := supervisor.Snapshot("workspace-a")
-	if second.Generation() <= first.Generation() {
-		t.Fatal("re-added Binding reused a previous Runner generation")
+	if second.StartIdentity() == first.StartIdentity() {
+		t.Fatal("re-added Binding reused a previous start identity")
 	}
 
-	supervisor.observeExit("workspace-a", first.Generation(), nil, RunnerExitCrash)
+	supervisor.observeExit("workspace-a", first.StartIdentity(), nil, RunnerExitCrash)
 	current, currentPID, _ := supervisor.Snapshot("workspace-a")
-	if current.Generation() != second.Generation() || current.Lifecycle != RunnerLifecycleRunning || currentPID != secondPID {
+	if current.StartIdentity() != second.StartIdentity() || current.Lifecycle != RunnerLifecycleRunning || currentPID != secondPID {
 		t.Fatalf("stale exit mutated live child: record=%+v pid=%d", current, currentPID)
 	}
 	supervisor.Stop()
@@ -225,7 +228,7 @@ func TestBindingSupervisorPreparesEveryBindingForMachineControls(t *testing.T) {
 	})
 
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		Spawn: func(workspaceID string, _ int64) (BindingChild, error) {
+		Spawn: func(workspaceID, _ string) (BindingChild, error) {
 			pid := 401
 			if workspaceID == "workspace-b" {
 				pid = 402
@@ -284,7 +287,7 @@ func TestBindingSupervisorReleasesPreparedSiblingsWhenMachineUpgradePrepareFails
 	})
 
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		Spawn: func(workspaceID string, _ int64) (BindingChild, error) {
+		Spawn: func(workspaceID, _ string) (BindingChild, error) {
 			controlEndpoint, pid := controlA, 501
 			if workspaceID == "workspace-b" {
 				controlEndpoint, pid = controlB, 502
@@ -321,7 +324,7 @@ func TestBindingSupervisorMachineUpgradeFailsForMissingDesiredChildButReleaseIsB
 	})
 
 	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
-		Spawn: func(workspaceID string, _ int64) (BindingChild, error) {
+		Spawn: func(workspaceID, _ string) (BindingChild, error) {
 			if workspaceID == "workspace-b" {
 				return crashingSupervisorChild{pid: 702}, nil
 			}
@@ -356,8 +359,8 @@ func TestComputerHostWaitsForRealBindingReady(t *testing.T) {
 
 	host, err := NewHost(HostConfig{
 		ControlToken: "control-token",
-		Spawn: func(string, int64) (BindingChild, error) {
-			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(601), controlEndpoint: control}, nil
+		Spawn: func(workspaceID, startIdentity string) (BindingChild, error) {
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(601), controlEndpoint: control, workspaceID: workspaceID, startIdentity: startIdentity}, nil
 		},
 	})
 	if err != nil {
@@ -369,8 +372,9 @@ func TestComputerHostWaitsForRealBindingReady(t *testing.T) {
 	if err := host.WaitReady(ctx, []string{"workspace-a"}); err != nil {
 		t.Fatal(err)
 	}
-	if !host.Current(BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: 1, PID: 601}) {
-		t.Fatal("Computer Host readiness did not preserve its generation/PID fence")
+	record, _, _ := host.Snapshot("workspace-a")
+	if !host.Current(BindingChildIdentity{WorkspaceID: "workspace-a", StartIdentity: record.StartIdentity(), PID: 601}) {
+		t.Fatal("Computer Host readiness did not preserve its process identity fence")
 	}
 	host.Stop()
 }

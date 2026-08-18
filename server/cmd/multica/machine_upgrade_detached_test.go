@@ -24,9 +24,9 @@ func TestAcceptReadyDetachedComputerRequiresExactControlPIDAndVersion(t *testing
 	originalProbe := probeDetachedSuccessorAttestation
 	t.Cleanup(func() { probeDetachedSuccessorAttestation = originalProbe })
 	probeDetachedSuccessorAttestation = func(string) (computer.MachineAttestation, error) {
-		return computer.MachineAttestation{ServicePID: child.Process.Pid, ComputerVersion: "v10.0.0"}, nil
+		return computer.MachineAttestation{ServicePID: child.Process.Pid, SourceServicePID: os.Getpid(), ServiceGeneration: "service-1", ComputerVersion: "v10.0.0"}, nil
 	}
-	if err := acceptReadyDetachedCandidate(child, "", "v10.0.0", map[string]any{"cli_version": "v10.0.0"}); err != nil {
+	if err := acceptReadyDetachedCandidate(child, "", "v10.0.0", map[string]any{"cliVersion": "v10.0.0"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -51,7 +51,7 @@ func TestAcceptReadyDetachedComputerRejectsWrongControlPIDOrVersion(t *testing.T
 	probeDetachedSuccessorAttestation = func(string) (computer.MachineAttestation, error) {
 		return computer.MachineAttestation{ServicePID: wrongPID.Process.Pid + 1, ComputerVersion: "v10.0.0"}, nil
 	}
-	if err := acceptReadyDetachedCandidate(wrongPID, "", "v10.0.0", map[string]any{"cli_version": "v10.0.0"}); err == nil {
+	if err := acceptReadyDetachedCandidate(wrongPID, "", "v10.0.0", map[string]any{"cliVersion": "v10.0.0"}); err == nil {
 		t.Fatal("wrong control PID was accepted")
 	}
 	if wrongPID.ProcessState == nil || wrongPID.ProcessState.Success() {
@@ -62,7 +62,7 @@ func TestAcceptReadyDetachedComputerRejectsWrongControlPIDOrVersion(t *testing.T
 	probeDetachedSuccessorAttestation = func(string) (computer.MachineAttestation, error) {
 		return computer.MachineAttestation{ServicePID: wrongVersion.Process.Pid, ComputerVersion: "v9.9.9"}, nil
 	}
-	if err := acceptReadyDetachedCandidate(wrongVersion, "", "v10.0.0", map[string]any{"cli_version": "v10.0.0"}); err == nil {
+	if err := acceptReadyDetachedCandidate(wrongVersion, "", "v10.0.0", map[string]any{"cliVersion": "v10.0.0"}); err == nil {
 		t.Fatal("wrong control version was accepted")
 	}
 	if wrongVersion.ProcessState == nil || wrongVersion.ProcessState.Success() {

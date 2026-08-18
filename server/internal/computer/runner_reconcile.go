@@ -1,6 +1,10 @@
 package computer
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 const (
 	// RunnerReconcileInterval is Raft Computer's RECONCILE_INTERVAL_MS.
@@ -34,23 +38,23 @@ const (
 // RunnerRecord is one Binding's desired-vs-actual slot on the Computer host.
 // BindingRunner is the OS-child adapter; CanSpawn / ObserveExit stay shared.
 //
-// generation increments on each ObserveSpawn. It is the host-side equivalent
-// of Raft Computer's inactive_process_generation fence (current !== process):
-// an exit from a previous supervise generation must not mutate the live slot.
+// startIdentity is generated before each spawn. Ready and exit observations
+// must carry that exact identity, so stale process events cannot mutate the
+// replacement slot.
 type RunnerRecord struct {
 	Lifecycle    RunnerLifecycle
 	BackoffUntil time.Time
 
-	generation int64
-	child      bool
-	crashes    []time.Time
+	startIdentity string
+	child         bool
+	crashes       []time.Time
 }
 
-func (r *RunnerRecord) Generation() int64 {
+func (r *RunnerRecord) StartIdentity() string {
 	if r == nil {
-		return 0
+		return ""
 	}
-	return r.generation
+	return r.startIdentity
 }
 
 func (r *RunnerRecord) HasChild() bool {
@@ -70,18 +74,19 @@ func (r *RunnerRecord) CanSpawn(wanted bool, now time.Time) bool {
 	return !now.Before(r.BackoffUntil)
 }
 
-func (r *RunnerRecord) ObserveSpawn() {
+func (r *RunnerRecord) ObserveSpawn() string {
 	if r == nil {
-		return
+		return ""
 	}
-	r.generation++
+	r.startIdentity = uuid.NewString()
 	r.child = true
 	r.Lifecycle = RunnerLifecycleStarting
 	r.BackoffUntil = time.Time{}
+	return r.startIdentity
 }
 
-func (r *RunnerRecord) ObserveReady(generation int64) bool {
-	if r == nil || !r.child || r.generation != generation || r.Lifecycle != RunnerLifecycleStarting {
+func (r *RunnerRecord) ObserveReady(startIdentity string) bool {
+	if r == nil || !r.child || r.startIdentity != startIdentity || r.Lifecycle != RunnerLifecycleStarting {
 		return false
 	}
 	r.Lifecycle = RunnerLifecycleRunning

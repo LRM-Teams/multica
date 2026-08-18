@@ -936,7 +936,6 @@ type ChannelTypingPayload struct {
 // identical semantics.
 type DaemonHeartbeatRequestPayload struct {
 	RuntimeID                 string                   `json:"runtime_id"`
-	ComputerGeneration        int64                    `json:"computer_generation,omitempty"` // ignored; liveness is the connect socket
 	SupportsBatchImport       bool                     `json:"supports_batch_import,omitempty"`
 	SupportsMemoryCuration    bool                     `json:"supports_memory_curation,omitempty"`
 	ActiveMemoryCurationRunID string                   `json:"active_memory_curation_run_id,omitempty"`

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -47,12 +48,10 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	bindingsRoot := computer.RootDir("")
-	computerGeneration, _ := cmd.Flags().GetInt64("computer-generation")
-	if computerGeneration == 0 {
-		computerGeneration, err = computer.NewGenerationStore(bindingsRoot).Next()
-		if err != nil {
-			return fmt.Errorf("allocate Computer generation: %w", err)
-		}
+	serviceGeneration := uuid.NewString()
+	sourceServicePID, err := computer.PendingMachineUpgradeSourceServicePID(bindingsRoot)
+	if err != nil {
+		return fmt.Errorf("read Computer upgrade predecessor identity: %w", err)
 	}
 	controlToken, err := computer.EnsureControlToken(profile)
 	if err != nil {
@@ -72,7 +71,7 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	logger := logger_pkg.NewLogger("computer")
 	serviceEndpoint := computer.ServiceControlEndpoint(bindingsRoot)
 	launcher := computer.BindingRunnerLauncher{
-		ComputerID: computerID, ComputerGeneration: computerGeneration,
+		ComputerID:  computerID,
 		Environment: string(serviceTarget.Environment), Profile: profile, ServerBaseURL: serviceTarget.Origin,
 		ServiceEndpoint: serviceEndpoint,
 		BindingsRoot:    bindingsRoot, WorkspacesRoot: workspacesRoot,
@@ -103,9 +102,10 @@ func runComputerResident(cmd *cobra.Command, _ []string) error {
 	if err := host.RunProcess(ctx, computer.HostProcessConfig{
 		ServiceEndpoint: serviceEndpoint, ResidentRoot: bindingsRoot,
 		Identity: computer.HostProcessIdentity{
-			ComputerID: computerID, ComputerGeneration: computerGeneration,
-			Environment: string(serviceTarget.Environment),
-			Version:     version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
+			ComputerID: computerID, ServiceGeneration: serviceGeneration,
+			SourceServicePID: sourceServicePID,
+			Environment:      string(serviceTarget.Environment),
+			Version:          version, ServerURL: serviceTarget.Origin, DeviceName: deviceName,
 		},
 		ReleaseManifestURL: os.Getenv("MULTICA_RELEASE_MANIFEST_BASE_URL"),
 		DesiredWorkspaceIDs: func() ([]string, error) {

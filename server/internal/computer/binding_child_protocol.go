@@ -15,22 +15,22 @@ const BindingChildProtocolVersion = 1
 // supervised Binding child. Credentials are deliberately absent: the child
 // resolves the scoped credential from the permission-restricted Binding store.
 type BindingChildBootstrap struct {
-	ProtocolVersion    int    `json:"protocol_version"`
-	WorkspaceID        string `json:"workspace_id"`
-	ComputerID         string `json:"computer_id"`
-	ComputerGeneration int64  `json:"computer_generation"`
-	RunnerGeneration   int64  `json:"runner_generation"`
-	Environment        string `json:"environment"`
-	Profile            string `json:"profile,omitempty"`
-	ServerBaseURL      string `json:"server_base_url"`
-	ServiceEndpoint    string `json:"service_endpoint"`
-	BindingsRoot       string `json:"bindings_root"`
-	WorkspacesRoot     string `json:"workspaces_root"`
+	ProtocolVersion int    `json:"protocolVersion"`
+	WorkspaceID     string `json:"workspaceId"`
+	ComputerID      string `json:"computerId"`
+	StartIdentity   string `json:"startIdentity"`
+	Environment     string `json:"environment"`
+	Profile         string `json:"profile,omitempty"`
+	ServerBaseURL   string `json:"serverBaseUrl"`
+	ServiceEndpoint string `json:"serviceEndpoint"`
+	BindingsRoot    string `json:"bindingsRoot"`
+	WorkspacesRoot  string `json:"workspacesRoot"`
 }
 
 func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {
 	b.WorkspaceID = strings.TrimSpace(b.WorkspaceID)
 	b.ComputerID = strings.TrimSpace(b.ComputerID)
+	b.StartIdentity = strings.TrimSpace(b.StartIdentity)
 	b.Environment = strings.TrimSpace(b.Environment)
 	b.Profile = strings.TrimSpace(b.Profile)
 	b.ServerBaseURL = strings.TrimSpace(b.ServerBaseURL)
@@ -49,11 +49,8 @@ func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {
 	if b.ComputerID == "" {
 		return BindingChildBootstrap{}, errors.New("Binding child computer-id is required")
 	}
-	if b.ComputerGeneration < 1 {
-		return BindingChildBootstrap{}, errors.New("Binding child Computer generation is required")
-	}
-	if b.RunnerGeneration < 1 {
-		return BindingChildBootstrap{}, errors.New("Binding child Runner generation is required")
+	if b.StartIdentity == "" {
+		return BindingChildBootstrap{}, errors.New("Binding child start identity is required")
 	}
 	if b.Environment != "production" && b.Environment != "test" {
 		return BindingChildBootstrap{}, fmt.Errorf("unsupported Binding child environment %q", b.Environment)
@@ -77,11 +74,11 @@ func (b BindingChildBootstrap) validated() (BindingChildBootstrap, error) {
 // BindingChildReady is emitted only after the child owns a live Workspace
 // Runner. The host validates every identity field before publishing readiness.
 type BindingChildReady struct {
-	ProtocolVersion  int    `json:"protocol_version"`
-	WorkspaceID      string `json:"workspace_id"`
-	RunnerGeneration int64  `json:"runner_generation"`
-	PID              int    `json:"pid"`
-	RunnerEndpoint   string `json:"runner_endpoint"`
+	ProtocolVersion int    `json:"protocolVersion"`
+	WorkspaceID     string `json:"workspaceId"`
+	StartIdentity   string `json:"startIdentity"`
+	PID             int    `json:"pid"`
+	RunnerEndpoint  string `json:"runnerEndpoint"`
 }
 
 func ReadBindingChildBootstrap(r io.Reader) (BindingChildBootstrap, error) {
@@ -118,7 +115,7 @@ func WriteBindingChildReady(w io.Writer, ready BindingChildReady) error {
 	if ready.ProtocolVersion != BindingChildProtocolVersion {
 		return fmt.Errorf("unsupported Binding child ready protocol version %d", ready.ProtocolVersion)
 	}
-	if strings.TrimSpace(ready.WorkspaceID) == "" || ready.RunnerGeneration < 1 || ready.PID < 1 {
+	if strings.TrimSpace(ready.WorkspaceID) == "" || strings.TrimSpace(ready.StartIdentity) == "" || ready.PID < 1 {
 		return errors.New("Binding child ready identity is incomplete")
 	}
 	if !validLocalControlEndpoint(ready.RunnerEndpoint) {

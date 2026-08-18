@@ -25,6 +25,17 @@ func (host *Host) LocalControlRegistry(state *hostProcessState) *LocalControlReg
 	register(LocalControlServiceStatusOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
 		return host.processHealthResult(state), nil
 	})
+	register(LocalControlMachineAttestationOperation, func(context.Context, map[string]string, json.RawMessage) (any, error) {
+		state.mu.RLock()
+		identity := state.identity
+		desired := append([]string(nil), state.desired...)
+		state.mu.RUnlock()
+		return MachineAttestation{
+			ComputerVersion: identity.Version, ServiceGeneration: identity.ServiceGeneration,
+			ServicePID: os.Getpid(), SourceServicePID: identity.SourceServicePID,
+			ManagedWorkspaceIDs: desired, ManagedSetRevision: managedSetRevision(desired),
+		}, nil
+	})
 	register(LocalControlRestartServiceOperation, func(_ context.Context, headers map[string]string, _ json.RawMessage) (any, error) {
 		if !host.authorizeLocal(headers) {
 			return nil, errors.New("local control authentication failed")
@@ -102,12 +113,12 @@ func (host *Host) processHealthResult(state *hostProcessState) map[string]any {
 	}
 	return map[string]any{
 		"status": status, "pid": os.Getpid(), "os": runtime.GOOS,
-		"uptime":    time.Since(started).Truncate(time.Second).String(),
-		"daemon_id": identity.ComputerID, "computer_id": identity.ComputerID,
-		"computer_generation": identity.ComputerGeneration,
-		"device_name":         identity.DeviceName, "server_url": identity.ServerURL,
-		"environment": identity.Environment, "release_channel": identity.releaseChannel(),
-		"cli_version": identity.Version, "connected": ready && len(desired) > 0,
+		"uptime":   time.Since(started).Truncate(time.Second).String(),
+		"daemonId": identity.ComputerID, "computerId": identity.ComputerID,
+		"serviceGeneration": identity.ServiceGeneration,
+		"deviceName":        identity.DeviceName, "serverUrl": identity.ServerURL,
+		"environment": identity.Environment, "releaseChannel": identity.releaseChannel(),
+		"cliVersion": identity.Version, "connected": ready && len(desired) > 0,
 		"workspaces": desired,
 	}
 }

@@ -126,7 +126,7 @@ func TestStatusIsRedactedReadOnlyComputerProjection(t *testing.T) {
 	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{
 			"status": "running", "connected": true, "pid": float64(42),
-			"server_url": "https://api.leagent.me", "environment": "production", "release_channel": "latest",
+			"serverUrl": "https://api.leagent.me", "environment": "production", "releaseChannel": "latest",
 			"agents": []any{"must-not-leak"}, "workspaces": []any{"must-not-drive-status"},
 		}
 	}}
@@ -165,8 +165,8 @@ func TestStatusReportsResidentConfigurationDrift(t *testing.T) {
 	}
 	lc := &Lifecycle{Probe: func(context.Context, string) map[string]any {
 		return map[string]any{
-			"status": "running", "server_url": "https://api.leagent.me",
-			"environment": "production", "release_channel": "latest",
+			"status": "running", "serverUrl": "https://api.leagent.me",
+			"environment": "production", "releaseChannel": "latest",
 		}
 	}}
 	status := lc.Status()

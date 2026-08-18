@@ -126,9 +126,6 @@ func TestComputerServiceCommandIsHiddenResidentEntry(t *testing.T) {
 	if err := computerServiceCmd.Args(computerServiceCmd, []string{"extra"}); err == nil {
 		t.Fatal("computer __service accepts extra arguments")
 	}
-	if flag := computerServiceCmd.Flags().Lookup("computer-generation"); flag == nil {
-		t.Fatal("computer __service is missing --computer-generation")
-	}
 	if !hasSubcommand(computerCmd, computer.ResidentServiceArg) {
 		t.Fatal("computer command is missing the hidden resident entry")
 	}

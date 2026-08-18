@@ -167,7 +167,7 @@ func (s *environmentSwitcher) Switch(ctx context.Context, environment cli.Servic
 		if confirmInterrupt == nil {
 			return environmentSwitchResult{}, fmt.Errorf("environment switch confirmation is required while Computer is running")
 		}
-		activeTaskCount, _ := health["active_task_count"].(float64)
+		activeTaskCount, _ := health["activeTaskCount"].(float64)
 		confirmed, confirmErr := confirmInterrupt(int64(activeTaskCount))
 		if confirmErr != nil {
 			return environmentSwitchResult{}, confirmErr
@@ -281,7 +281,7 @@ func waitForSwitchedEnvironment(ctx context.Context, lifecycle *computer.Lifecyc
 		cancel()
 		if health["status"] == "running" && health["connected"] == true &&
 			fmt.Sprint(health["environment"]) == string(target.Environment) &&
-			normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) {
+			normalizeAPIBaseURL(fmt.Sprint(health["serverUrl"])) == normalizeAPIBaseURL(target.Origin) {
 			for workspaceID := range wantWorkspaces {
 				if healthContainsWorkspace(health, workspaceID) {
 					return nil

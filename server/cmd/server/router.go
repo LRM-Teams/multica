@@ -1071,6 +1071,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Route("/sessions/{id}", func(r chi.Router) {
 					r.Get("/", h.GetResearchSessionSnapshot)
 					r.Put("/director", h.PutResearchV6Director)
+					r.Post("/director/unavailable", h.PostResearchV6DirectorUnavailable)
 					r.Get("/presence", h.GetResearchPresence)
 					r.Delete("/", h.DeleteResearchSession)
 					r.Post("/messages", h.PostResearchMessage)

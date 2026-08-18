@@ -75,7 +75,7 @@ func (h *Handler) GetResearchV6Reports(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		item := map[string]any{"id": id, "revision": revision, "status": status, "title": title, "summary": summary, "package_hash": pkg, "document_content_hash": doc, "published_at": published, "created_at": created, "author_agent_id": authorAgentID, "input_count": inputCount, "latest_review": map[string]any{"decision": reviewDecision, "reason": reviewReason}}
-		if pkg != "" {
+		if pkg != "" && (status == "published" || reviewDecision == "published") {
 			if sandbox, e := h.researchReportSandboxURL(id, pkg); e == nil {
 				item["sandbox_url"] = sandbox
 				item["report_origin"] = strings.TrimRight(h.cfg.ResearchReportOrigin, "/")
@@ -143,7 +143,16 @@ func (h *Handler) GetResearchV6Report(w http.ResponseWriter, r *http.Request) {
 	reviewRows.Close()
 	out["input_refs"] = inputs
 	out["reviews"] = reviews
-	if pkg != "" {
+	approved := status == "published"
+	if !approved {
+		for _, review := range reviews {
+			if review["decision"] == "published" {
+				approved = true
+				break
+			}
+		}
+	}
+	if pkg != "" && approved {
 		if sandbox, e := h.researchReportSandboxURL(id, pkg); e == nil {
 			out["sandbox_url"] = sandbox
 			out["report_origin"] = strings.TrimRight(h.cfg.ResearchReportOrigin, "/")

@@ -173,10 +173,10 @@ func (h *Handler) ServeResearchV6ReportDocument(w http.ResponseWriter, r *http.R
 		http.Error(w, "not found", 404)
 		return
 	}
-	var key, generation, documentHash string
+	var key, generation, documentHash, status string
 	var documentSize int64
 	var scripts, styles json.RawMessage
-	err := h.DB.QueryRow(r.Context(), `SELECT document_storage_key,document_storage_generation,document_content_hash,document_byte_size,csp_script_hashes,csp_style_hashes FROM research_report WHERE id=$1::uuid AND package_hash=$2 AND status IN('draft','published')`, id, pkg).Scan(&key, &generation, &documentHash, &documentSize, &scripts, &styles)
+	err := h.DB.QueryRow(r.Context(), `SELECT document_storage_key,document_storage_generation,document_content_hash,document_byte_size,csp_script_hashes,csp_style_hashes,status FROM research_report WHERE id=$1::uuid AND package_hash=$2 AND (status='published' OR (status='draft' AND EXISTS (SELECT 1 FROM research_report_review review WHERE review.report_id=research_report.id AND review.report_revision=research_report.revision AND review.decision='published')))`, id, pkg).Scan(&key, &generation, &documentHash, &documentSize, &scripts, &styles, &status)
 	if err != nil || documentSize < 0 || documentSize > researchrun.V6ReportMaxCompiledBytes {
 		http.Error(w, "not found", 404)
 		return
@@ -205,5 +205,10 @@ func (h *Handler) ServeResearchV6ReportDocument(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Length", strconv.FormatInt(documentSize, 10))
 	w.Header().Set("ETag", `"`+documentHash+`"`)
+	if status == "published" {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	_, _ = io.Copy(w, io.LimitReader(reader, documentSize))
 }

@@ -198,6 +198,14 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	case AgentObservationRuntimeCompactionStale:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_stale"
 		entry, err = activityNarrativeEntry(projection.detailKind, "Context compaction still running; no finish event observed")
+	case AgentObservationRuntimeStalled:
+		data := observation.Data.(AgentRuntimeStageObservationData)
+		projection.activityKind, projection.detailKind = protocol.ActivityKindError, "runtime_stalled"
+		staleMinutes := int(data.StaleFor / time.Minute)
+		if staleMinutes < 1 {
+			staleMinutes = 1
+		}
+		entry, err = activityNarrativeEntry(projection.detailKind, fmt.Sprintf("Runtime stalled: no runtime events for %dm", staleMinutes))
 	case AgentObservationRuntimeIdle:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
 		entry, err = activityNarrativeEntry(projection.detailKind, "Idle")

@@ -275,6 +275,10 @@ func newDaemonForRole(cfg Config, logger *slog.Logger, role daemonProcessRole) *
 func (d *Daemon) initializeBindingExecution(bindingStateRoot string) {
 	d.workspaceRunners = make(map[string]*WorkspaceRunner)
 	d.canonicalRuntimes = newCanonicalAgentRuntimePool()
+	d.canonicalRuntimes.setResidentStallWatchdog(d.cfg.RuntimeProgressStale)
+	d.canonicalRuntimes.setResidentStallObserver(func(agentID, runtimeID string, staleFor time.Duration) {
+		d.observeResidentRuntimeStalled(agentID, runtimeID, staleFor)
+	})
 	d.canonicalRuntimes.setMaxAgentProcesses(d.cfg.MaxAgentProcesses)
 	d.processAdmission = d.canonicalRuntimes.managedProcessAdmission()
 	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
@@ -1795,8 +1799,8 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// traffic. A human clicking "cancel" on a stuck task reached CancelTask
 	// (which does exactly one thing: UPDATE ... SET status='suppressed'),
 	// but nothing ever told this goroutine to look — the daemon ran the
-	// stuck one-shot backend to completion (or its own idle-watchdog
-	// timeout) regardless. GetTaskStatus (handler/daemon.go) already maps
+	// stuck one-shot backend to completion regardless. GetTaskStatus
+	// (handler/daemon.go) already maps
 	// status="suppressed" to "cancelled" generically, with no inbox/legacy
 	// distinction, so this is safe for inbox tasks without any server-side
 	// change.
@@ -2974,25 +2978,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Usage:         usageEntries,
 			RuntimeStats:  runtimeStats,
 		}, nil
-	case "idle_watchdog":
-		// The idle watchdog force-stopped the run because the backend
-		// went silent (e.g. claude blocked on a tool call against a
-		// frozen child process). Route through the blocked path with a
-		// dedicated failure_reason so the run leaves "running" state and
-		// operators can tell idle-stop apart from a real timeout.
-		comment := result.Error
-		if comment == "" {
-			comment = idleWatchdogReason(d.cfg.AgentIdleWatchdog)
-		}
-		return TaskResult{
-			Status:        "blocked",
-			Comment:       comment,
-			SessionID:     result.SessionID,
-			WorkDir:       env.AgentRoot,
-			FailureReason: "idle_watchdog",
-			Usage:         usageEntries,
-			RuntimeStats:  runtimeStats,
-		}, nil
 	case "cancelled":
 		// Server cancelled the task (e.g. issue reassignment, user cancel).
 		// handleTask's cancelledByPoll branch already discards this result,
@@ -3163,11 +3148,9 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 // seam; this path must not Observe or overwrite that timeline.
 func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
 	taskID := task.ID
-	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
-	// the agent subprocess (via the ctx passed to backend.Execute) AND the
-	// drain loop with a single cancel. Without this layer the backend would
-	// stay tied to the parent ctx and our cancellation could only abort
-	// drain, leaving the subprocess running.
+	// Wrap the caller's ctx so the agent subprocess and drain loop share
+	// cancellation. Task execution no longer owns a stalled watchdog;
+	// resident Message delivery owns that recovery policy.
 	agentCtx, agentCancel := context.WithCancel(ctx)
 	defer agentCancel()
 
@@ -3196,34 +3179,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 	defer drainCancel()
 
 	var toolCount atomic.Int32
-	// lastActivityAt records (as unix nanos) when the drain loop most
-	// recently received a message from the backend. The idle watchdog
-	// reads this to decide whether the agent has gone silent for too long.
-	// Initialise to the start so a backend that never emits a single
-	// message also trips the watchdog.
-	var lastActivityAt atomic.Int64
-	lastActivityAt.Store(time.Now().UnixNano())
-	// activitySeq is a monotonic generation for backend messages. The idle
-	// watchdog snapshots it before each runtime probe so progress drained while
-	// the probe is blocked cannot be hidden by probe-return wall-clock timing.
-	var activitySeq atomic.Uint64
-	// inFlightTools counts tool_use messages that haven't yet been paired
-	// with a matching tool_result. A non-zero count means the agent is
-	// legitimately waiting on a tool (e.g. `npm install`, `docker build`)
-	// that may run far longer than the idle window without emitting any
-	// message — so while a tool is in flight the watchdog applies the larger
-	// AgentToolWatchdog budget instead of treating that silence as a hang.
-	var inFlightTools atomic.Int32
-	var idleWatchdogFired atomic.Bool
-	// idleWatchdogThreshold records (as nanos) which silence budget actually
-	// tripped the watchdog — the idle window or the larger in-flight-tool
-	// window — so the failure message reports the real duration.
-	var idleWatchdogThreshold atomic.Int64
-	idleWatchdogThreshold.Store(int64(d.cfg.AgentIdleWatchdog))
-	idleWindow := d.cfg.AgentIdleWatchdog
-	if idleWindow > 0 {
-		go d.runIdleWatchdog(agentCtx, idleWindow, d.cfg.AgentToolWatchdog, &lastActivityAt, &activitySeq, &inFlightTools, &idleWatchdogFired, &idleWatchdogThreshold, agentCancel, session.Messages, session.RuntimeAlive, taskLog, taskID)
-	}
 
 	go func() {
 		var seq atomic.Int32
@@ -3286,13 +3241,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				if !ok {
 					goto drainDone
 				}
-				// Stamp activity as soon as a message lands. The idle
-				// watchdog reads this to decide whether the backend has
-				// gone silent — stamping before processing makes sure a
-				// slow downstream call (mu.Lock contention, batch resize)
-				// can't be misattributed to backend silence.
-				lastActivityAt.Store(time.Now().UnixNano())
-				activitySeq.Add(1)
 				switch msg.Type {
 				case agent.MessageStatus:
 					// Pin the provider-CLI resume token the moment the backend
@@ -3321,7 +3269,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					}
 				case agent.MessageToolUse:
 					n := toolCount.Add(1)
-					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
 					if msg.CallID != "" {
 						mu.Lock()
@@ -3340,20 +3287,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					})
 					mu.Unlock()
 				case agent.MessageToolResult:
-					// Decrement only when the count would stay >= 0. A stray
-					// tool_result with no matching tool_use (backend bug or
-					// reconnect mid-stream) shouldn't push the counter
-					// negative — that would re-arm the watchdog one tool_use
-					// too early on the next call.
-					for {
-						cur := inFlightTools.Load()
-						if cur <= 0 {
-							break
-						}
-						if inFlightTools.CompareAndSwap(cur, cur-1) {
-							break
-						}
-					}
 					output := msg.Output
 					if len(output) > 8192 {
 						output = output[:8192]
@@ -3452,29 +3385,8 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 
 	select {
 	case result := <-session.Result:
-		if idleWatchdogFired.Load() {
-			// The backend's wait goroutine (e.g. claude.go) translates the
-			// SIGKILL we delivered via agentCancel into Status="aborted".
-			// Re-tag it as "idle_watchdog" so runTask routes the
-			// disposition through a dedicated failure_reason, not the
-			// generic "agent_error" bucket the aborted path falls into.
-			result.Status = "idle_watchdog"
-			if result.Error == "" {
-				result.Error = idleWatchdogReason(time.Duration(idleWatchdogThreshold.Load()))
-			}
-		}
 		return result, toolCount.Load(), nil
 	case <-drainCtx.Done():
-		// Idle watchdog cancels via agentCancel(), which propagates here as
-		// context.Canceled. Check this BEFORE the generic cancelled/timeout
-		// classifiers so a watchdog-induced stop isn't misreported as
-		// "task cancelled by server".
-		if idleWatchdogFired.Load() {
-			return agent.Result{
-				Status: "idle_watchdog",
-				Error:  idleWatchdogReason(time.Duration(idleWatchdogThreshold.Load())),
-			}, toolCount.Load(), nil
-		}
 		// Distinguish external cancellation (e.g. server-initiated cancel
 		// because the issue was reassigned, or the user invoked CancelTask)
 		// from genuine drain-deadline timeouts. context.Canceled means the
@@ -3490,206 +3402,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 			Status: "timeout",
 			Error:  "agent did not produce result within drain timeout",
 		}, toolCount.Load(), nil
-	}
-}
-
-// idleWatchdogReason formats the human-facing explanation surfaced on
-// idle_watchdog dispositions. Centralised so the result-arrival branch and the
-// drain-timeout branch in executeAndDrain emit identical wording.
-func idleWatchdogReason(window time.Duration) string {
-	return fmt.Sprintf("runtime process was no longer alive after %s without progress; stopped by idle watchdog", window)
-}
-
-const idleWatchdogMaxTerminalSettleGrace = 5 * time.Second
-
-// idleWatchdogTerminalSettleGrace leaves a bounded window for a provider to
-// synthesize and publish its terminal Result after the child process exits.
-// Short test/configured watchdog windows use twice their silence threshold;
-// production windows cap the additional wait at five seconds.
-func idleWatchdogTerminalSettleGrace(threshold time.Duration) time.Duration {
-	if threshold <= 0 || threshold >= idleWatchdogMaxTerminalSettleGrace/2 {
-		return idleWatchdogMaxTerminalSettleGrace
-	}
-	return 2 * threshold
-}
-
-// runIdleWatchdog ticks until either agentCtx is cancelled or the backend has
-// been silent past the applicable budget. Silence alone is not termination
-// evidence: once the budget is reached, the watchdog first probes the runtime
-// child. A live child suppresses recovery, matching Raft's runtime-progress
-// behavior. Only a confirmed-dead child with no buffered output can fire the
-// watchdog. On firing, it records the tripped threshold, sets fired, and calls
-// cancel, which propagates to backend.Execute and drainCtx. The silence budget
-// depends on whether a tool call is in flight:
-//
-//  1. No tool in flight — probe after `window` without progress.
-//  2. A tool in flight (tool_use with no matching tool_result yet) — a real
-//     tool (e.g. `npm install`, `docker build`) legitimately runs silently for
-//     many minutes, so the larger `toolWindow` applies instead. toolWindow <= 0
-//     disables the in-flight probe.
-//
-// In both cases the watchdog also requires the session.Messages buffer to be
-// empty — a buffered-but-undrained message means the drain loop is behind, not
-// the backend.
-//
-// The silence tick interval is window/2 (floored at 30 s in production, but
-// the floor only kicks in for windows >= 1 min so tests can pass tiny windows
-// like 50 ms). Once death is first confirmed, a separate short timer schedules
-// the second probe so recovery never waits for the next long silence tick.
-func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow time.Duration, lastActivityAt *atomic.Int64, activitySeq *atomic.Uint64, inFlightTools *atomic.Int32, fired *atomic.Bool, firedThreshold *atomic.Int64, cancel context.CancelFunc, messages <-chan agent.Message, runtimeAlive agent.RuntimeLivenessProbe, taskLog *slog.Logger, taskID string) {
-	interval := window / 2
-	if window >= time.Minute && interval < 30*time.Second {
-		interval = 30 * time.Second
-	}
-	if interval <= 0 {
-		interval = window
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	var suppressionLogged bool
-	var deadConfirmedAt time.Time
-	var deadConfirmedThreshold time.Duration
-	var deadConfirmedActivitySeq uint64
-	var settleTimer *time.Timer
-	var settleTimerC <-chan time.Time
-	defer func() {
-		if settleTimer != nil {
-			settleTimer.Stop()
-		}
-	}()
-	resetDeadObservation := func() {
-		deadConfirmedAt = time.Time{}
-		deadConfirmedThreshold = 0
-		deadConfirmedActivitySeq = 0
-		if settleTimer != nil {
-			if !settleTimer.Stop() {
-				select {
-				case <-settleTimer.C:
-				default:
-				}
-			}
-		}
-		settleTimerC = nil
-	}
-	for {
-		select {
-		case <-agentCtx.Done():
-			return
-		case <-ticker.C:
-		case <-settleTimerC:
-			settleTimerC = nil
-		}
-
-		// Pick the silence budget. A tool in flight is expected to be
-		// silent (a long build/install/test emits nothing between
-		// tool_use and tool_result), so it gets the larger toolWindow;
-		// toolWindow <= 0 disables the in-flight bound entirely.
-		threshold := window
-		toolInFlight := inFlightTools.Load() > 0
-		if toolInFlight {
-			if toolWindow <= 0 {
-				resetDeadObservation()
-				continue
-			}
-			threshold = toolWindow
-		}
-		// Snapshot before evaluating silence so the generation covers the whole
-		// decision window, not only the potentially-blocking OS probe. Progress
-		// that lands after this point must invalidate the observation.
-		activityBeforeProbe := activitySeq.Load()
-		last := time.Unix(0, lastActivityAt.Load())
-		idleFor := time.Since(last)
-		if idleFor < threshold {
-			suppressionLogged = false
-			resetDeadObservation()
-			continue
-		}
-		// A buffered-but-undrained message means the drain loop is
-		// behind, not the backend. Wait one more tick rather than
-		// killing a backend that is still producing output.
-		if len(messages) > 0 {
-			suppressionLogged = false
-			resetDeadObservation()
-			continue
-		}
-		if activitySeq.Load() != activityBeforeProbe {
-			suppressionLogged = false
-			resetDeadObservation()
-			continue
-		}
-		// Raft suppresses stale-progress recovery while the provider child is
-		// alive. An unavailable probe is also not proof that the child died,
-		// so fail open and keep the turn running instead of guessing.
-		alive, known := false, false
-		if runtimeAlive != nil {
-			alive, known = runtimeAlive()
-		}
-		// The probe may block long enough for the drain loop to consume real
-		// provider progress. Compare a monotonic generation rather than its
-		// timestamp with probe-return time; otherwise progress during the probe
-		// can look older than a newly-created dead observation and be lost.
-		if len(messages) > 0 || activitySeq.Load() != activityBeforeProbe {
-			suppressionLogged = false
-			resetDeadObservation()
-			continue
-		}
-		if !known || alive {
-			resetDeadObservation()
-			if !suppressionLogged {
-				taskLog.Info("watchdog suppressed: runtime death is not confirmed despite silent progress",
-					"task", shortID(taskID),
-					"idle_for", idleFor.Round(time.Second).String(),
-					"threshold", threshold.String(),
-					"tool_in_flight", toolInFlight,
-					"runtime_probe_available", runtimeAlive != nil,
-					"runtime_probe_known", known,
-					"runtime_alive", alive,
-				)
-				suppressionLogged = true
-			}
-			continue
-		}
-		settleGrace := idleWatchdogTerminalSettleGrace(threshold)
-		if deadConfirmedAt.IsZero() || deadConfirmedThreshold != threshold {
-			suppressionLogged = false
-			deadConfirmedAt = time.Now()
-			deadConfirmedThreshold = threshold
-			deadConfirmedActivitySeq = activityBeforeProbe
-			if settleTimer == nil {
-				settleTimer = time.NewTimer(settleGrace)
-			} else {
-				settleTimer.Reset(settleGrace)
-			}
-			settleTimerC = settleTimer.C
-			taskLog.Info("watchdog waiting for provider terminal result after runtime exit",
-				"task", shortID(taskID),
-				"idle_for", idleFor.Round(time.Second).String(),
-				"threshold", threshold.String(),
-				"terminal_settle_grace", settleGrace.String(),
-				"tool_in_flight", toolInFlight,
-			)
-			continue
-		}
-		if time.Since(deadConfirmedAt) < settleGrace {
-			continue
-		}
-		// Re-check progress after the second OS probe. A message can be
-		// buffered or drained concurrently while that probe runs; either is
-		// terminal progress and invalidates the prior dead observation.
-		if len(messages) > 0 || activitySeq.Load() != deadConfirmedActivitySeq {
-			resetDeadObservation()
-			continue
-		}
-		taskLog.Warn("watchdog firing: runtime no longer alive after silent progress",
-			"task", shortID(taskID),
-			"idle_for", idleFor.Round(time.Second).String(),
-			"threshold", threshold.String(),
-			"tool_in_flight", toolInFlight,
-		)
-		firedThreshold.Store(int64(threshold))
-		fired.Store(true)
-		cancel()
-		return
 	}
 }
 

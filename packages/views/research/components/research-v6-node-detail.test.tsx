@@ -97,5 +97,11 @@ describe("ResearchV6NodeDetail", () => {
     expect(screen.getByText("Canonical source")).toBeTruthy();
     expect(screen.getByText("Content hash")).toBeTruthy();
     expect(screen.getAllByText("Agents · 1")).toHaveLength(2);
+    const projectionState = screen.getByRole("region", { name: "Projection state" });
+    expect(projectionState).toHaveTextContent("Absorbed");
+    expect(projectionState).toHaveTextContent("Terminal");
+    expect(projectionState).toHaveTextContent("Expandable");
+    expect(projectionState).toHaveTextContent("Hidden children");
+    expect(projectionState).toHaveTextContent("1");
   });
 });

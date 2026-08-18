@@ -166,7 +166,17 @@ func (h *Handler) SubmitAgentResearchV6Work(w http.ResponseWriter, r *http.Reque
 		writeResearchV6DomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "outcome": outcome})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"client_request_id":      outcome.ClientRequestID,
+		"outcome":                "accepted",
+		"replayed":               outcome.Replayed,
+		"state_version":          outcome.StateVersion,
+		"through_event_sequence": outcome.ThroughEventSequence,
+		"refs":                   []map[string]string{{"kind": "submission", "id": outcome.SubmissionID}},
+		"submission_kind":        outcome.Kind,
+		"submission_status":      outcome.Status,
+		"content_hash":           outcome.ContentHash,
+	})
 }
 
 func (h *Handler) GetAgentResearchV6DirectorBrief(w http.ResponseWriter, r *http.Request) {

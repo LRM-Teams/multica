@@ -23,10 +23,14 @@ type V6SubmissionBinding struct {
 }
 
 type V6SubmissionOutcome struct {
-	SubmissionID, ClientRequestID, ContentHash string
-	Kind                                       V6ContractKind
-	Status                                     string
-	Replayed                                   bool
+	SubmissionID         string         `json:"submission_id"`
+	ClientRequestID      string         `json:"client_request_id"`
+	ContentHash          string         `json:"content_hash"`
+	Kind                 V6ContractKind `json:"kind"`
+	Status               string         `json:"status"`
+	Replayed             bool           `json:"replayed"`
+	StateVersion         int64          `json:"state_version"`
+	ThroughEventSequence int64          `json:"through_event_sequence"`
 }
 
 type v6SubmissionStore interface {

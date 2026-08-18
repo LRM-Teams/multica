@@ -65,7 +65,9 @@ done
 
 profile_args=()
 if [ -n "$PROFILE" ]; then
-  profile_args=(--profile "$PROFILE")
+  # Machine-wide Computer ignores --profile; keep config switch for non-computer
+  # CLI use only. Default ~/.multica/config.json is what the resident reads.
+  echo "Note: --profile $PROFILE is ignored for computer start (machine-wide resident uses ~/.multica/config.json)" >&2
 fi
 
 if ! command -v go >/dev/null 2>&1; then
@@ -84,11 +86,12 @@ if [ ! -x "$MULTICA_BIN" ]; then
 fi
 
 # Launch this checkout's binary, not ~/.local/bin/multica. Without this,
-# `daemon start` re-execs the installed Computer and agents never see the
+# `computer start` re-execs the installed Computer and agents never see the
 # brief compiled in server/bin/multica.
 export MULTICA_COMPUTER_LAUNCH_BIN="$MULTICA_BIN"
 
-daemon_cmd=( "$MULTICA_BIN" "${profile_args[@]}" daemon )
+# CLI renamed daemon → computer; keep script name for existing make/docs callers.
+daemon_cmd=( "$MULTICA_BIN" computer )
 
 stop_running_daemon() {
   # Always ask stop. `daemon/computer status` exits non-zero when the resident

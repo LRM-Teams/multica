@@ -199,6 +199,11 @@ type canonicalAgentRuntimePool struct {
 	// acquire when the caller does not pass CanonicalSessionID. An explicit
 	// empty value means "start fresh" after session reset.
 	nextResume map[string]string
+	// residentStallWatchdog is the silence budget for an accepted resident
+	// Message turn. Zero disables the recovery watchdog (used by tests and
+	// operators that opt out).
+	residentStallWatchdog time.Duration
+	residentStallObserver func(agentID, runtimeID string, staleFor time.Duration)
 }
 
 type canonicalAgentRuntimeSlot struct {
@@ -231,6 +236,20 @@ func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
 	}
 	p.capacityCond = sync.NewCond(&p.mu)
 	return p
+}
+
+func (p *canonicalAgentRuntimePool) setResidentStallWatchdog(window time.Duration) {
+	if p == nil {
+		return
+	}
+	p.residentStallWatchdog = window
+}
+
+func (p *canonicalAgentRuntimePool) setResidentStallObserver(observer func(agentID, runtimeID string, staleFor time.Duration)) {
+	if p == nil {
+		return
+	}
+	p.residentStallObserver = observer
 }
 
 // setMaxAgentProcesses configures the #35 live-resident-agent process ceiling.
@@ -830,7 +849,10 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 	slot.mu.Unlock()
 
 	compactedThisInput := false
+	var lastActivityAt atomic.Int64
+	lastActivityAt.Store(time.Now().UnixNano())
 	observeRuntimeMessage := func(message agent.Message) {
+		lastActivityAt.Store(time.Now().UnixNano())
 		if message.Type == agent.MessageCompactionStarted {
 			compactedThisInput = true
 		}
@@ -932,7 +954,14 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 		// buffered first runtime event can otherwise win the goroutine race and
 		// render Working before Message received/acceptance exists.
 		activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
-		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, onComplete)
+		turnDone := make(chan struct{})
+		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, func(turnErr error, gen uint64, capture *agent.ResidentTurnCapture) {
+			close(turnDone)
+			if onComplete != nil {
+				onComplete(turnErr, gen, capture)
+			}
+		})
+		p.startResidentStallWatchdog(agentID, runtimeID, slot, &lastActivityAt, turnDone)
 		return nil
 	}
 	// Raft: compaction does not cover inbox. After a prepare-time compact,
@@ -941,12 +970,15 @@ func (p *canonicalAgentRuntimePool) deliverIdleMessages(
 	// can be retried.
 	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
 	finished := make(chan error, 1)
+	turnDone := make(chan struct{})
 	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, func(turnErr error, gen uint64, capture *agent.ResidentTurnCapture) {
+		close(turnDone)
 		finished <- turnErr
 		if onComplete != nil {
 			onComplete(turnErr, gen, capture)
 		}
 	})
+	p.startResidentStallWatchdog(agentID, runtimeID, slot, &lastActivityAt, turnDone)
 	turnErr := <-finished
 	if turnErr != nil {
 		return turnErr
@@ -1676,19 +1708,19 @@ func (p *canonicalAgentRuntimePool) forceTerminateAll() error {
 func defaultCanonicalRuntimeFactory(provider string) canonicalRuntimeBackendFactory {
 	return func(config agent.Config) (agent.Backend, func(), error) {
 		switch provider {
-		case "pi":
+		case agent.ProviderPi:
 			return newCanonicalPiResidentBackend(config)
-		case "grok":
+		case agent.ProviderGrok:
 			return newCanonicalGrokResidentBackend(config)
-		case "cursor":
+		case agent.ProviderCursor:
 			return newCanonicalCursorResidentBackend(config)
-		case "opencode":
+		case agent.ProviderOpenCode:
 			return newCanonicalOpenCodeResidentBackend(config)
-		case "kiro":
+		case agent.ProviderKiro:
 			return newCanonicalKiroResidentBackend(config)
-		case "codex":
+		case agent.ProviderCodex:
 			return newCanonicalCodexResidentBackend(config)
-		case "claude":
+		case agent.ProviderClaude:
 			return newCanonicalClaudeResidentBackend(config)
 		default:
 			return nil, nil, fmt.Errorf("provider %q has no resident adapter", provider)

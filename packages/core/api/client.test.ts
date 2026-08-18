@@ -170,6 +170,39 @@ describe("ApiClient", () => {
     );
   });
 
+  it("patches Computer Work Journal enablement and fails closed on drift", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ enabled: "yes" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.patchComputerWorkJournal("computer-1", true)).resolves.toEqual({
+      enabled: true,
+    });
+    await expect(client.patchComputerWorkJournal("computer-1", false)).resolves.toEqual({
+      enabled: false,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.example.test/api/computers/computer-1/work-journal",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ enabled: true }),
+      }),
+    );
+  });
+
   it("transcribes PCM through the authenticated voice endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ text: " 你好 " }), {

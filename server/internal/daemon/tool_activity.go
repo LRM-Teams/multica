@@ -224,10 +224,10 @@ var toolDetailKind = map[string]string{
 const maxActivityCommandRunes = 100
 
 // toolActivityFact builds the wire fact for a tool-use observation: the
-// detail kind the projection labels, and the narrative text that becomes the
+// detail kind the projection labels, and the bounded summary that becomes the
 // timeline subtext (empty when the tool carries no displayable input — the
 // projection then renders the label alone).
-func toolActivityFact(tool string, input map[string]any) (detailKind, narrative string) {
+func toolActivityFact(tool string, input map[string]any) (detailKind, summary string) {
 	// Raft parity: a shell command that is really a `multica` CLI call
 	// (`bash -c "multica message send …"`) is reclassified to the semantic
 	// tool, never shown as a raw "Running command".
@@ -236,9 +236,11 @@ func toolActivityFact(tool string, input map[string]any) (detailKind, narrative 
 	}
 	semantic, known := canonicalToolSemantic(tool)
 	if !known {
-		// Raft v1.0.16 classifies unknown tools as `other`; the shared
-		// Activity fact boundary then drops that non-fact detail kind.
-		return "other", "Using " + truncateRunes(semantic, 40)
+		// Unknown tools remain visible in Raft's tool_start timeline entry.
+		// `other` is a display classification, not a wire fact kind, so use
+		// the protocol's generic tool-start fact and keep the tool identity in
+		// the entry body.
+		return "tool_started", "Using " + truncateRunes(semantic, 20)
 	}
 	return toolDetailKind[semantic], summarizeToolInput(semantic, input)
 }

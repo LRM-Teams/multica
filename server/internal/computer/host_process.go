@@ -129,6 +129,8 @@ func (host *Host) RunProcess(ctx context.Context, config HostProcessConfig) erro
 	host.upgrade.config.releaseManifestURL = config.ReleaseManifestURL
 	host.upgrade.config.residentRoot = config.ResidentRoot
 	host.upgrade.config.cancel = cancel
+	host.workJournalRoot = config.ResidentRoot
+	host.loadWorkJournalSetting()
 
 	loadDesired := func() []string {
 		ids, loadErr := config.DesiredWorkspaceIDs()

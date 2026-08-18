@@ -333,11 +333,13 @@ describe("DmList unread affordance (read-model)", () => {
     const { container } = renderDmList();
 
     // LRM-767 (Slack-aligned): active unread shows the real count in a neutral
-    // pill — no brand/destructive accent (reserved for @-mentions).
+    // outlined pill — no brand/destructive accent (reserved for @-mentions).
     expect(container.querySelector("span.bg-primary")).toBeNull();
-    const badge = container.querySelector("span.bg-muted");
+    expect(container.querySelector("span.bg-brand-solid")).toBeNull();
+    const badge = container.querySelector("span.bg-background");
     expect(badge).not.toBeNull();
     expect(badge).toHaveTextContent("7");
+    expect(badge).toHaveClass("border-border/70");
     // The name reads bold on unread.
     const name = container.querySelector("span.font-semibold");
     expect(name).not.toBeNull();

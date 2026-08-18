@@ -189,6 +189,8 @@ export interface ComputerConnection {
   owner_id: string;
   connected: boolean;
   last_seen_at: string | null;
+  /** Owner-projected Machine Work Journal switch; missing on older servers. */
+  work_journal_enabled?: boolean | null;
 }
 
 /** One durable on-disk Agent workspace at `~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. */
@@ -626,6 +628,18 @@ export interface CreateAgentDraftRequest {
 export interface EnsureWindyResponse {
   agent: Agent;
   dm_id?: string;
+}
+
+/** Idempotent Period Brief Agent (「周报」) ensure. */
+export interface EnsurePeriodBriefAgentResponse {
+  agent: Agent;
+  created: boolean;
+}
+
+/** Idempotent per-Computer Period Work collectors ensure. */
+export interface EnsurePeriodBriefCollectorsResponse {
+  agents: Agent[];
+  created: string[];
 }
 
 /** Verified avatar write intent. The server derives and persists the URL and

@@ -54,6 +54,8 @@ import type {
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
   EnsureWindyResponse,
+  EnsurePeriodBriefAgentResponse,
+  EnsurePeriodBriefCollectorsResponse,
   StartVoiceCallDuplexResponse,
   VoiceCallDuplexAudioHint,
   VoiceCallDuplexEventHint,
@@ -68,6 +70,7 @@ import type {
   NoteWriteback,
   NoteWritebackListResponse,
   CreateNoteRetrospectiveResponse,
+  CreateNotePeriodBriefResponse,
   IssueNoteRef,
   IssueNoteRefListResponse,
 } from "../types";
@@ -338,6 +341,36 @@ export const EMPTY_NOTE_WORKER_JOB: NoteWorkerJob = {
   failure_reason: null,
   created_at: "",
   updated_at: "",
+};
+
+export const CreateNotePeriodBriefResponseSchema: z.ZodType<CreateNotePeriodBriefResponse> = z.object({
+  page: NotePageSchema,
+  job: NoteWorkerJobSchema,
+  window: z.object({
+    kind: z.string().default(""),
+    timezone: z.string().default(""),
+    start: z.string().default(""),
+    end: z.string().default(""),
+    label: z.string().default(""),
+  }).loose(),
+  sources_used: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_empty: z.array(z.string()).nullish().transform((v) => v ?? []),
+  sources_skipped: z.array(z.string()).nullish().transform((v) => v ?? []),
+  fact_count: z.number().default(0),
+  collector_agent_ids: z.array(z.string()).nullish().transform((v) => v ?? []),
+  collector_jobs: z.array(NoteWorkerJobSchema).nullish().transform((v) => v ?? []),
+}).loose();
+
+export const EMPTY_CREATE_NOTE_PERIOD_BRIEF_RESPONSE: CreateNotePeriodBriefResponse = {
+  page: EMPTY_NOTE_PAGE,
+  job: EMPTY_NOTE_WORKER_JOB,
+  window: { kind: "", timezone: "", start: "", end: "", label: "" },
+  sources_used: [],
+  sources_empty: [],
+  sources_skipped: [],
+  fact_count: 0,
+  collector_agent_ids: [],
+  collector_jobs: [],
 };
 
 export const ChannelGoalSchema = z.object({
@@ -635,9 +668,15 @@ export const ComputerConnectionSchema = z.object({
   owner_id: z.string().min(1),
   connected: z.boolean(),
   last_seen_at: z.string().nullable(),
+  work_journal_enabled: z.boolean().nullable().optional(),
 }).loose();
 export const ComputerConnectionListSchema = z.array(ComputerConnectionSchema);
 export const EMPTY_COMPUTER_CONNECTION_LIST: ComputerConnection[] = [];
+
+export const ComputerWorkJournalSettingSchema = z.object({
+  enabled: z.boolean(),
+}).loose();
+export const EMPTY_COMPUTER_WORK_JOURNAL_SETTING = { enabled: false };
 
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive
@@ -2458,6 +2497,16 @@ export const CreateAgentFromTemplateResponseSchema = z.object({
 export const EnsureWindyResponseSchema: z.ZodType<EnsureWindyResponse> = z.object({
   agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success),
   dm_id: z.string().optional(),
+}).loose();
+
+export const EnsurePeriodBriefAgentResponseSchema: z.ZodType<EnsurePeriodBriefAgentResponse> = z.object({
+  agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success),
+  created: z.boolean(),
+}).loose();
+
+export const EnsurePeriodBriefCollectorsResponseSchema: z.ZodType<EnsurePeriodBriefCollectorsResponse> = z.object({
+  agents: z.array(z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success)),
+  created: z.array(z.string()),
 }).loose();
 
 // Fallback when the success response fails to parse. The agent server-side

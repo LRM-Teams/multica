@@ -29,6 +29,8 @@ const (
 	LocalControlRunnerDrainOperation          = "runner:drain"
 	LocalControlRunnerPrepareOperation        = "runner:prepare"
 	LocalControlRunnerReleaseOperation        = "runner:release"
+	LocalControlWorkDigestOperation           = "workspace:work-digest"
+	LocalControlWorkJournalOperation          = "workspace:work-journal"
 )
 
 type localControlOperationSpec struct {
@@ -46,6 +48,7 @@ var localControlOperationSpecs = []localControlOperationSpec{
 	{Name: "runner:start"}, {Name: "runner:stop"}, {Name: "runner:restart"},
 	{Name: LocalControlRunnerDrainOperation}, {Name: LocalControlRunnerReleaseOperation}, {Name: LocalControlRunnerReadyOperation},
 	{Name: LocalControlRunnerPrepareOperation},
+	{Name: LocalControlWorkDigestOperation}, {Name: LocalControlWorkJournalOperation},
 }
 
 func localControlOperationSpecFor(name string) (localControlOperationSpec, bool) {
@@ -81,6 +84,10 @@ func localControlOperationForPath(path string) string {
 		return LocalControlRunnerReadyOperation
 	case bindingChildRuntimeSetPath:
 		return LocalControlRunnerReadyOperation
+	case bindingChildWorkDigestPath:
+		return LocalControlWorkDigestOperation
+	case bindingChildWorkJournalPath:
+		return LocalControlWorkJournalOperation
 	default:
 		return ""
 	}

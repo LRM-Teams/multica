@@ -405,7 +405,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const [selectedDirectorReportId, setSelectedDirectorReportId] = useState<
     string | null
   >(null);
-  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(null);
+  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(
+    persistedDirectorAgentId,
+  );
+  useEffect(() => {
+    setAssignedDirectorAgentId(persistedDirectorAgentId);
+  }, [persistedDirectorAgentId]);
   const assignedDirectorAgent = workspaceAgents.find(
     (agent) => agent.id === assignedDirectorAgentId,
   );

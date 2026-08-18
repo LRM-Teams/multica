@@ -56,7 +56,7 @@ func TestV6DirectorAssignmentValidation(t *testing.T) {
 }
 
 func TestV6DirectorFailureValidation(t *testing.T) {
-	got, err := (directorModule{store: directorV6StoreStub{}}).MarkUnavailable(context.Background(), MarkV6DirectorUnavailableInput{AssignmentID: "assignment", FailureClass: "quota"})
+	got, err := (directorModule{store: directorV6StoreStub{}}).MarkUnavailable(context.Background(), MarkV6DirectorUnavailableInput{AssignmentID: "assignment", FailureClass: "quota", ClientRequestID: "request"})
 	if err != nil || got.Status != "unavailable" {
 		t.Fatalf("assignment=%+v err=%v", got, err)
 	}

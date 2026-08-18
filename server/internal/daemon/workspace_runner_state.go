@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,9 @@ type WorkspaceRunnerConfig struct {
 	DaemonID         string
 	DaemonInstanceID string
 	WorkspaceID      string
+	DeviceName       string
+	OS               string
+	CLIVersion       string
 }
 
 func (config WorkspaceRunnerConfig) validate() (WorkspaceRunnerConfig, error) {
@@ -274,15 +278,7 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 		return err
 	}
 	headers := http.Header{"Authorization": []string{"Bearer " + token}}
-	if runner.client.platform != "" {
-		headers.Set("X-Client-Platform", runner.client.platform)
-	}
-	if runner.client.version != "" {
-		headers.Set("X-Client-Version", runner.client.version)
-	}
-	if runner.client.os != "" {
-		headers.Set("X-Client-OS", runner.client.os)
-	}
+	runner.client.addIdentityHeaders(headers)
 	dialer := taskWakeupDialer()
 	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
@@ -309,6 +305,9 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	}()
 	if err := connection.Write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
 		WorkspaceID: workspaceID, DaemonInstanceID: runner.config.DaemonInstanceID,
+		DeviceName:         runner.config.DeviceName,
+		OS:                 runner.config.OS,
+		CLIVersion:         runner.config.CLIVersion,
 		RunningAgents:      runner.processes.RunningAgentIDs(),
 		ActiveCapabilities: runner.activeCapabilities(),
 	}); err != nil {
@@ -352,6 +351,9 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		DaemonID:         d.cfg.DaemonID,
 		DaemonInstanceID: d.runnerInstanceID,
 		WorkspaceID:      workspaceID,
+		DeviceName:       d.cfg.DeviceName,
+		OS:               normalizeGOOS(runtime.GOOS),
+		CLIVersion:       d.cfg.CLIVersion,
 	}, workspaceRunnerDependencies{
 		client:           d.client,
 		serverBaseURL:    d.cfg.ServerBaseURL,

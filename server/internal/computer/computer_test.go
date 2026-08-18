@@ -410,9 +410,6 @@ func setSpawnResident(fn func(string, []string, *os.File) (procHandle, error)) f
 
 func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(PIDPath("")), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	lc := &Lifecycle{}
 
@@ -428,6 +425,9 @@ func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	lc.Sleep = func(time.Duration) {}
 
 	restore := setSpawnResident(func(exe string, args []string, log *os.File) (procHandle, error) {
+		if info, err := os.Stat(filepath.Dir(PIDPath(""))); err != nil || !info.IsDir() {
+			t.Fatalf("PID directory was not created before spawn: info=%v err=%v", info, err)
+		}
 		return &fakeProc{pid: 7777}, nil
 	})
 	defer restore()

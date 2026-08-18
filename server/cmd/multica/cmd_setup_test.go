@@ -241,9 +241,7 @@ func TestSetupAcceptanceRequiresAuthenticatedConnectionNotJustLocalWorkspaceStat
 		"connected":   true,
 		"serverUrl":   "https://test.leagent.me",
 		"environment": "test",
-		"workspaces": []any{
-			map[string]any{"id": "ws-123", "runtimes": []any{}},
-		},
+		"workspaces":  []any{"ws-123"},
 	}
 	if !healthProvesSetupAcceptance(health, cfg, "ws-123") {
 		t.Fatal("authenticated zero-Agent Workspace connection should complete setup")
@@ -265,6 +263,54 @@ func TestSetupAcceptanceRequiresAuthenticatedConnectionNotJustLocalWorkspaceStat
 	wrongEnvironment["environment"] = "production"
 	if healthProvesSetupAcceptance(wrongEnvironment, cfg, "ws-123") {
 		t.Fatal("a resident from another environment must not complete setup")
+	}
+}
+
+func TestSetupAcceptanceUsesWorkspaceIDListFromLocalControl(t *testing.T) {
+	cfg := cli.CLIConfig{
+		Environment: "test",
+		ServerURL:   "https://test.leagent.me",
+		AppURL:      "https://test.leagent.me",
+	}
+	health := map[string]any{
+		"status":      "running",
+		"connected":   true,
+		"serverUrl":   "https://test.leagent.me",
+		"environment": "test",
+		"workspaces":  []any{"ws-123"},
+	}
+	if !healthProvesSetupAcceptance(health, cfg, "ws-123") {
+		t.Fatal("local control Workspace ID list should complete repeated setup")
+	}
+	health["workspaces"] = []any{map[string]any{"id": "ws-123"}}
+	if healthProvesSetupAcceptance(health, cfg, "ws-123") {
+		t.Fatal("local control object list is not part of the Workspace health contract")
+	}
+}
+
+func TestSetupAcceptanceRequiresConnectedServerProjection(t *testing.T) {
+	cfg := cli.CLIConfig{
+		Environment: "test",
+		ServerURL:   "https://test.leagent.me",
+		AppURL:      "https://test.leagent.me",
+	}
+	health := map[string]any{
+		"status":      "running",
+		"connected":   true,
+		"serverUrl":   "https://test.leagent.me",
+		"environment": "test",
+		"workspaces":  []any{"ws-123"},
+	}
+	connections := []setupComputerConnection{
+		{DaemonID: "computer-1", Connected: false},
+		{DaemonID: "computer-2", Connected: true},
+	}
+	if setupAcceptanceProven(health, cfg, "ws-123", connections, "computer-1") {
+		t.Fatal("a locally ready Computer must not complete setup while its selected Workspace projection is disconnected")
+	}
+	connections[0].Connected = true
+	if !setupAcceptanceProven(health, cfg, "ws-123", connections, "computer-1") {
+		t.Fatal("the selected Computer's authenticated connected projection should complete setup")
 	}
 }
 

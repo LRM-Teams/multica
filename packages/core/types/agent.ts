@@ -189,6 +189,10 @@ export interface ComputerConnection {
   owner_id: string;
   connected: boolean;
   last_seen_at: string | null;
+  /** Computer-level metadata, available even before any provider runtime exists. */
+  deviceName?: string | null;
+  os?: string | null;
+  cliVersion?: string | null;
   /** Owner-projected Machine Work Journal switch; missing on older servers. */
   work_journal_enabled?: boolean | null;
 }

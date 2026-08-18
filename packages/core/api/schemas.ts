@@ -668,6 +668,9 @@ export const ComputerConnectionSchema = z.object({
   owner_id: z.string().min(1),
   connected: z.boolean(),
   last_seen_at: z.string().nullable(),
+  deviceName: z.string().nullable().optional(),
+  os: z.string().nullable().optional(),
+  cliVersion: z.string().nullable().optional(),
   work_journal_enabled: z.boolean().nullable().optional(),
 }).loose();
 export const ComputerConnectionListSchema = z.array(ComputerConnectionSchema);

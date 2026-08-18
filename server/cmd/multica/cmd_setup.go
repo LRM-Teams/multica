@@ -521,17 +521,47 @@ func waitForWorkspaceBindingAcceptance(cmd *cobra.Command) error {
 	if err != nil || cfg.WorkspaceID == "" {
 		return fmt.Errorf("Setup incomplete (selected Workspace is missing)")
 	}
+	computerID, err := (&computer.Lifecycle{}).Identity()
+	if err != nil {
+		return fmt.Errorf("Setup incomplete (resolve Computer identity: %w)", err)
+	}
+	client := cli.NewAPIClient(cfg.ServerURL, cfg.WorkspaceID, cfg.Token)
 	deadline := time.Now().Add(bindingAcceptanceTimeout)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		health := computer.ProbeHealth(ctx, computer.ServiceControlEndpoint(computer.RootDir("")))
 		cancel()
 		if healthProvesSetupAcceptance(health, cfg, cfg.WorkspaceID) {
-			return nil
+			var connections []setupComputerConnection
+			ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+			err := client.GetJSON(ctx, "/api/computers", &connections)
+			cancel()
+			if err == nil && setupAcceptanceProven(health, cfg, cfg.WorkspaceID, connections, computerID) {
+				return nil
+			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("Setup incomplete (timed out waiting for the authenticated Computer and selected Workspace connection); existing session, Workspace connections, and Agent data were preserved")
+}
+
+type setupComputerConnection struct {
+	DaemonID  string `json:"daemon_id"`
+	Connected bool   `json:"connected"`
+}
+
+func setupAcceptanceProven(health map[string]any, cfg cli.CLIConfig, workspaceID string, connections []setupComputerConnection, computerID string) bool {
+	return healthProvesSetupAcceptance(health, cfg, workspaceID) &&
+		computerProjectionProvesSetupAcceptance(connections, computerID)
+}
+
+func computerProjectionProvesSetupAcceptance(connections []setupComputerConnection, computerID string) bool {
+	for _, connection := range connections {
+		if connection.DaemonID == computerID && connection.Connected {
+			return true
+		}
+	}
+	return false
 }
 
 func healthProvesSetupAcceptance(health map[string]any, cfg cli.CLIConfig, workspaceID string) bool {
@@ -553,8 +583,8 @@ func healthContainsWorkspace(health map[string]any, workspaceID string) bool {
 		return false
 	}
 	for _, raw := range workspaces {
-		workspace, ok := raw.(map[string]any)
-		if ok && fmt.Sprint(workspace["id"]) == workspaceID {
+		workspace, ok := raw.(string)
+		if ok && workspace == workspaceID {
 			return true
 		}
 	}

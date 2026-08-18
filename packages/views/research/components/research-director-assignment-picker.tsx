@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Agent } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
@@ -22,6 +22,9 @@ export function ResearchDirectorAssignmentPicker({
   const { t } = useT("research");
   const [agentId, setAgentId] = useState(currentAgentId ?? "");
   const [reason, setReason] = useState("");
+  useEffect(() => {
+    setAgentId(currentAgentId ?? "");
+  }, [currentAgentId]);
   const available = agents.filter((agent) => agent.archived_at == null);
   const selected = agentId || currentAgentId || "";
 
@@ -68,10 +71,10 @@ export function ResearchDirectorAssignmentPicker({
         </Button>
       </div>
       <input
-        aria-label={t(($) => $.reason)}
+        aria-label={t(($) => $.d5.inspector.reason)}
         value={reason}
         onChange={(event) => setReason(event.target.value)}
-        placeholder={t(($) => $.reason)}
+        placeholder={t(($) => $.d5.inspector.reason)}
         className={cn(
           "mt-2 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground",
           error && "border-destructive/70",

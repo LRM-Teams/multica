@@ -14,7 +14,7 @@ import (
 func TestDiagnoseReadOnlyAndReflectsResident(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{"status": "running", "connected": true, "daemon_id": "d1"}
 	}
 
@@ -30,7 +30,7 @@ func TestDiagnoseReadOnlyAndReflectsResident(t *testing.T) {
 func TestDiagnoseRunningButServerDisconnected(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{"status": "running", "connected": false, "agents": []any{"fresh-agent"}}
 	}
 
@@ -43,7 +43,7 @@ func TestDiagnoseRunningButServerDisconnected(t *testing.T) {
 func TestDiagnoseStoppedIsDisconnected(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any { return map[string]any{"status": "stopped"} }
+	lc.Probe = func(context.Context, string) map[string]any { return map[string]any{"status": "stopped"} }
 
 	d := lc.Diagnose()
 	if d.Resident != "stopped" || d.Connected {
@@ -75,7 +75,7 @@ func TestDiagnoseReportsConfigResidentDriftAndPreservedMigrationEvidence(t *test
 	}
 
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any {
+	lc.Probe = func(context.Context, string) map[string]any {
 		return map[string]any{
 			"status":          "running",
 			"connected":       true,
@@ -116,7 +116,7 @@ func TestFixRemovesExpiredUpgradeStagingAndKeepsRecentStaging(t *testing.T) {
 	}
 
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any { return map[string]any{"status": "running"} }
+	lc.Probe = func(context.Context, string) map[string]any { return map[string]any{"status": "running"} }
 	got := lc.Fix(Diagnosis{Resident: "running"})
 
 	if _, err := os.Stat(oldStage); !os.IsNotExist(err) {
@@ -201,7 +201,7 @@ func TestFixRemovesStaleResidentPIDOnlyWhenResidentIsStopped(t *testing.T) {
 	}
 	writePID()
 	lc := &Lifecycle{}
-	lc.Probe = func(context.Context, int) map[string]any { return map[string]any{"status": "stopped"} }
+	lc.Probe = func(context.Context, string) map[string]any { return map[string]any{"status": "stopped"} }
 	got := lc.Fix(Diagnosis{Resident: "stopped"})
 	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
 		t.Fatalf("stale resident PID still exists: %v", err)

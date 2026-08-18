@@ -84,9 +84,11 @@ export function ResearchV6ReportModal({
     identity: string;
     phase: FramePhase;
   }>({ identity: frameIdentity, phase: initialPhase });
-  if (frameState.identity !== frameIdentity) {
-    setFrameState({ identity: frameIdentity, phase: initialPhase });
-  }
+  useEffect(() => {
+    if (frameState.identity !== frameIdentity) {
+      setFrameState({ identity: frameIdentity, phase: initialPhase });
+    }
+  }, [frameState.identity, frameIdentity, initialPhase]);
   const phase =
     frameState.identity === frameIdentity ? frameState.phase : initialPhase;
   const frameUrl = open && verdict.ok && phase !== "unavailable" ? verdict.url : null;

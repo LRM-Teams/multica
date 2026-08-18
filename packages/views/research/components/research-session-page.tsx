@@ -412,7 +412,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const [selectedDirectorReportId, setSelectedDirectorReportId] = useState<
     string | null
   >(null);
-  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(null);
+  const [assignedDirectorAgentId, setAssignedDirectorAgentId] = useState<string | null>(
+    persistedDirectorAgentId,
+  );
+  useEffect(() => {
+    setAssignedDirectorAgentId(persistedDirectorAgentId);
+  }, [persistedDirectorAgentId]);
   const assignedDirectorAgent = workspaceAgents.find(
     (agent) => agent.id === assignedDirectorAgentId,
   );
@@ -426,7 +431,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         clientRequestId: crypto.randomUUID(),
       }),
     onSuccess: (assignment) => {
-      if (assignment) setAssignedDirectorAgentId(assignment.directorAgentId);
+      if (assignment) {
+        setAssignedDirectorAgentId(assignment.directorAgentId);
+        void qc.invalidateQueries({
+          queryKey: researchKeys.snapshot(wsId, sessionId),
+        });
+      }
     },
   });
   const {
@@ -1021,6 +1031,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       .postResearchMessage(sessionId, { body })
       .then(() =>
         qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+      )
+      .catch((error: unknown) =>
+        mutationErrorToast(t(($) => $.panel.send_failed), error),
       );
   };
 

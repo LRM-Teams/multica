@@ -187,7 +187,7 @@ export const ResearchV6DirectorNodeDetailSchema = z
     snapshot_id: uuid,
     through_event_sequence: sequence,
     projection_hash: hash,
-    view: z.enum(["brief", "full", "history"]),
+    view: forwardCompatibleToken,
     node: ResearchV6DirectorProjectionNodeSchema,
     incoming: z.array(ResearchV6DirectorProjectionEdgeSchema).max(20_000),
     outgoing: z.array(ResearchV6DirectorProjectionEdgeSchema).max(20_000),

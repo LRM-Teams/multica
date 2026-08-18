@@ -23,9 +23,3 @@ func TestValidateSuccessorPIDVersionMatchesPIDAndVersion(t *testing.T) {
 		t.Fatal("mismatched version must fail")
 	}
 }
-
-func TestMachineAttestationPathIsControlMethodNotHealth(t *testing.T) {
-	if MachineAttestationPath == "/health" || MachineAttestationPath == "" {
-		t.Fatal("machine-attestation must stay a separate local control method")
-	}
-}

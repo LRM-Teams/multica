@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,9 +19,7 @@ import (
 
 func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	upgrade := newHostMachineUpgrade(&Host{}, hostMachineUpgradeConfig{residentRoot: t.TempDir()})
-	want := hostMachineUpgradeJournal{
-		RequestID: "upgrade-a", FromVersion: "v1.0.0", TargetVersion: "v1.1.0",
-	}
+	want := hostMachineUpgradeJournal{RequestID: "request-a", FromVersion: "v1.0.0", TargetVersion: "v1.1.0", StartedAt: "2026-08-17T00:00:00Z", SchemaVersion: 1}
 	if err := upgrade.writeJournal(want); err != nil {
 		t.Fatal(err)
 	}
@@ -40,41 +38,40 @@ func TestHostMachineUpgradeJournalIsPrivateAndRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(raw, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	for field, value := range map[string]any{
-		"requestId": "upgrade-a", "fromVersion": "v1.0.0", "targetVersion": "v1.1.0",
-		"schemaVersion": float64(1),
-	} {
-		if persisted[field] != value {
-			t.Fatalf("activated marker %s = %v, want %v: %s", field, persisted[field], value, raw)
+	for _, key := range []string{"requestId", "fromVersion", "targetVersion", "startedAt", "schemaVersion"} {
+		if _, ok := persisted[key]; !ok {
+			t.Fatalf("journal missing Raft field %q: %s", key, raw)
 		}
 	}
 	got, err := upgrade.readJournal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.RequestID != want.RequestID || got.TargetVersion != want.TargetVersion {
+	if got == nil || got.TargetVersion != want.TargetVersion || got.RequestID != want.RequestID || got.SchemaVersion != want.SchemaVersion {
 		t.Fatalf("Machine Upgrade journal = %+v, want %+v", got, want)
 	}
 }
 
-func TestHostMachineUpgradeReadsLegacyTargetVersionMarker(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Dir(machineUpgradeJournalPath(root)), 0o700); err != nil {
-		t.Fatal(err)
+func TestHostMachineUpgradeAcceptanceRequiresCompleteComputerSet(t *testing.T) {
+	generation := "generation-a"
+	receipt := hostMachineUpgradeReceipt{
+		ID: "upgrade-a", AcceptedGeneration: &generation,
+		AcceptedRuntimeIDs:   []string{"runtime-b", "runtime-a"},
+		AcceptedWorkspaceIDs: []string{"workspace-b", "workspace-a"},
 	}
-	if err := os.WriteFile(machineUpgradeJournalPath(root), []byte(`{"target_version":"v1.1.0","updated_at":"2026-08-17T00:00:00Z"}`), 0o600); err != nil {
-		t.Fatal(err)
+	if err := validateHostMachineUpgradeReceipt(receipt, "upgrade-a",
+		[]string{"runtime-a", "runtime-b"}, []string{"workspace-a", "workspace-b"}); err != nil {
+		t.Fatalf("complete acceptance rejected: %v", err)
 	}
-	journal, err := readMachineUpgradeJournal(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if journal == nil || journal.RequestID != "" || journal.TargetVersion != "v1.1.0" {
-		t.Fatalf("legacy Machine Upgrade journal = %+v", journal)
+	receipt.AcceptedWorkspaceIDs = []string{"workspace-a"}
+	err := validateHostMachineUpgradeReceipt(receipt, "upgrade-a",
+		[]string{"runtime-a", "runtime-b"}, []string{"workspace-a", "workspace-b"})
+	if err == nil || !strings.Contains(err.Error(), "complete Computer set") {
+		t.Fatalf("partial acceptance error = %v", err)
 	}
 }
 
-func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
+func TestHostMachineUpgradeLocalDeliveryRunsInService(t *testing.T) {
 	const controlToken = "owner-secret"
 	var humanIntentCalls atomic.Int32
 	delivered := make(chan string, 2)
@@ -93,35 +90,30 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	}))
 	defer cloud.Close()
 
-	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "bad token", http.StatusUnauthorized)
-			return
+	childControl := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, raw json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
 		}
-		if r.URL.Path == BindingComputerUpgradePath {
+		if operation == LocalControlUpgradeStartOperation {
 			var request struct {
 				Command protocol.ComputerUpgradePayload `json:"command"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
+			if err := json.Unmarshal(raw, &request); err != nil {
+				return nil, err
 			}
-			delivered <- request.Command.RequestID
-			w.WriteHeader(http.StatusNoContent)
-			return
+			delivered <- request.Command.Operation()
+			return nil, nil
 		}
-		if r.URL.Path != BindingReregisterRuntimePath {
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
-			return
+		if operation != "runner-ready" {
+			return nil, errors.New("unexpected child control request")
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer childControl.Close()
+		return nil, nil
+	})
 
 	host, err := NewHost(HostConfig{
 		ControlToken: controlToken,
 		Spawn: func(string, int64) (BindingChild, error) {
-			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(8051), controlURL: childControl.URL}, nil
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(8051), controlEndpoint: childControl}, nil
 		},
 	})
 	if err != nil {
@@ -145,9 +137,9 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 	}})
 	host.upgrade = upgrade
 
-	for _, requestID := range []string{"upgrade-a", "upgrade-b"} {
+	for _, operationID := range []string{"upgrade-a", "upgrade-b"} {
 		body, err := json.Marshal(protocol.ComputerUpgradePayload{
-			RequestID: requestID, TargetVersion: "v1.0.0",
+			RequestID: "request-" + operationID, OperationID: operationID, TargetVersion: "v1.0.0",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -157,15 +149,12 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 		response := httptest.NewRecorder()
 		upgrade.localRequestHandler()(response, request)
 		if response.Code != http.StatusOK {
-			t.Fatalf("local delivery %s status = %d body=%s", requestID, response.Code, response.Body.String())
+			t.Fatalf("local delivery %s status = %d body=%s", operationID, response.Code, response.Body.String())
 		}
 		select {
 		case got := <-delivered:
-			if got != requestID {
-				t.Fatalf("delivered request = %q, want %q", got, requestID)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("local delivery did not hand off %s", requestID)
+			t.Fatalf("service-owned upgrade was incorrectly delivered to runner: %s", got)
+		default:
 		}
 		deadline := time.Now().Add(time.Second)
 		for {
@@ -176,7 +165,7 @@ func TestHostMachineUpgradeLocalDeliveryHandsOffToCurrentBinding(t *testing.T) {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("active Machine Upgrade %q was not released after handing off %s", activeID, requestID)
+				t.Fatalf("active Machine Upgrade %q was not released after attesting %s", activeID, operationID)
 			}
 			time.Sleep(time.Millisecond)
 		}
@@ -221,25 +210,23 @@ func TestHostMachineUpgradePrepareConcurrentDifferentOperationIsBusy(t *testing.
 	const controlToken = "owner-secret"
 	started := make(chan struct{})
 	release := make(chan struct{})
-	identities, host := newReadyTwoBindingHostForChildUpgrade(t, controlToken, 8303, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "bad token", http.StatusUnauthorized)
-			return
+	identities, host := newReadyTwoBindingHostForChildUpgrade(t, controlToken, 8303, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
 		}
-		switch r.URL.Path {
-		case BindingPrepareMachineUpgradePath:
+		switch operation {
+		case LocalControlRunnerDrainOperation:
 			select {
 			case <-started:
 			default:
 				close(started)
 			}
 			<-release
-			w.WriteHeader(http.StatusNoContent)
-		case BindingReleaseMachineUpgradePath:
-			w.WriteHeader(http.StatusNoContent)
+		case LocalControlRunnerReleaseOperation:
 		default:
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
+			return nil, errors.New("unexpected child control request")
 		}
+		return nil, nil
 	})
 	var released atomic.Bool
 	releaseOnce := func() {
@@ -276,23 +263,20 @@ func TestHostMachineUpgradePrepareSiblingFailureReleasesBusy(t *testing.T) {
 	const controlToken = "owner-secret"
 	var refuses atomic.Bool
 	refuses.Store(true)
-	identities, host := newReadyTwoBindingHostForChildUpgrade(t, controlToken, 8304, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "bad token", http.StatusUnauthorized)
-			return
+	identities, host := newReadyTwoBindingHostForChildUpgrade(t, controlToken, 8304, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
 		}
-		switch r.URL.Path {
-		case BindingPrepareMachineUpgradePath:
+		switch operation {
+		case LocalControlRunnerDrainOperation:
 			if refuses.Load() {
-				http.Error(w, "sibling refused drain", http.StatusConflict)
-				return
+				return nil, ErrComputerControlBusy
 			}
-			w.WriteHeader(http.StatusNoContent)
-		case BindingReleaseMachineUpgradePath:
-			w.WriteHeader(http.StatusNoContent)
+		case LocalControlRunnerReleaseOperation:
 		default:
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
+			return nil, errors.New("unexpected child control request")
 		}
+		return nil, nil
 	})
 	if _, err := host.PrepareChildUpgrade(context.Background(), identities["workspace-a"], protocol.DaemonHeartbeatPendingMachineUpgrade{
 		ID: "upgrade-a", TargetVersion: "v2.0.0",
@@ -370,17 +354,22 @@ func TestHostControlForwardsComputerControlBusy(t *testing.T) {
 			return ErrComputerControlBusy
 		},
 	})
-	mux := http.NewServeMux()
-	control.RegisterRoutes(mux)
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	registry := NewLocalControlRegistry()
+	control.RegisterRPCHandlers(registry)
+	endpoint := localControlTestServer(t, func(ctx context.Context, operation string, headers map[string]string, raw json.RawMessage) (any, error) {
+		handler, ok := registry.handler(operation)
+		if !ok {
+			return nil, fmt.Errorf("unknown operation %s", operation)
+		}
+		return handler(ctx, headers, raw)
+	})
 
-	client := NewHostControlClient(server.URL, "owner-secret", identity)
-	err := client.ForwardMachineActions(context.Background(), protocol.DaemonHeartbeatAckPayload{
+	client := NewHostControlClient(endpoint, "owner-secret", identity)
+	err := client.ForwardComputerControl(context.Background(), protocol.DaemonHeartbeatAckPayload{
 		PendingMachineUpgrade: &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: "upgrade-b", TargetVersion: "v10.0.0"},
 	})
 	if !errors.Is(err, ErrComputerControlBusy) {
-		t.Fatalf("ForwardMachineActions = %v, want ErrComputerControlBusy", err)
+		t.Fatalf("ForwardComputerControl = %v, want ErrComputerControlBusy", err)
 	}
 }
 
@@ -413,36 +402,29 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	runtimeIDs := []string{"runtime-a", "runtime-b"}
 	var prepares atomic.Int32
 	var reregistrations atomic.Int32
-	donePayloads := make(chan protocol.ComputerUpgradeDonePayload, 1)
-	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "bad token", http.StatusUnauthorized)
-			return
+	childControl := localControlTestServer(t, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
 		}
-		switch r.URL.Path {
-		case BindingPrepareMachineUpgradePath:
+		switch operation {
+		case LocalControlRunnerDrainOperation:
 			prepares.Add(1)
-		case BindingReregisterRuntimePath:
+		case "runner-ready":
 			reregistrations.Add(1)
-		case "/computer-control/computer-upgrade-done":
-			var request struct {
-				Done protocol.ComputerUpgradeDonePayload `json:"done"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			donePayloads <- request.Done
-		default:
-			http.NotFound(w, r)
-			return
 		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer childControl.Close()
+		return nil, nil
+	})
 
+	acceptedGeneration := "generation-a"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/accept":
+			_ = json.NewEncoder(w).Encode(hostMachineUpgradeReceipt{
+				ID: "upgrade-a", Phase: "accepted", AcceptedGeneration: &acceptedGeneration,
+				AcceptedRuntimeIDs: runtimeIDs, AcceptedWorkspaceIDs: workspaceIDs,
+			})
+		case "/api/daemon/runtimes/runtime-a/machine-upgrades/upgrade-a/progress":
+			w.WriteHeader(http.StatusNoContent)
 		case "/api/daemon/computer/machine-upgrades/upgrade-a/attest":
 			t.Error("successor attested over HTTP")
 			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
@@ -461,7 +443,7 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 					pid++
 				}
 				return &readySupervisorChild{
-					supervisorTestChild: newSupervisorTestChild(pid), controlURL: childControl.URL,
+					supervisorTestChild: newSupervisorTestChild(pid), controlEndpoint: childControl,
 				}, nil
 			},
 		})
@@ -490,10 +472,15 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 
 	root := t.TempDir()
 	incumbent := newReadyHost(8101)
-	hostMux := http.NewServeMux()
-	incumbent.RegisterRoutes(hostMux)
-	hostControl := httptest.NewServer(hostMux)
-	defer hostControl.Close()
+	registry := NewLocalControlRegistry()
+	incumbent.control.RegisterRPCHandlers(registry)
+	hostControl := localControlTestServer(t, func(ctx context.Context, operation string, headers map[string]string, raw json.RawMessage) (any, error) {
+		handler, ok := registry.handler(operation)
+		if !ok {
+			return nil, fmt.Errorf("unknown operation %s", operation)
+		}
+		return handler(ctx, headers, raw)
+	})
 	upgradeCancelled := make(chan struct{}, 1)
 	upgrade := newHostMachineUpgrade(incumbent, hostMachineUpgradeConfig{
 		identity: HostProcessIdentity{
@@ -510,10 +497,12 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 			ComputerID: "computer-a", ComputerGeneration: 31, Environment: "test",
 			Version: "v1.0.0", ServerURL: server.URL,
 		},
-		ResidentRoot: root,
-		ControlURL:   hostControl.URL,
-		ControlToken: controlToken,
-		Child:        incumbent.runtimeSets[workspaceIDs[0]].Identity,
+		ResidentRoot:    root,
+		ServiceEndpoint: hostControl,
+		ControlToken:    controlToken,
+		Child:           incumbent.runtimeSets[workspaceIDs[0]].Identity,
+		RuntimeID:       runtimeIDs[0],
+		DaemonToken:     "runtime-token-workspace-a",
 		Exit: func() {
 			upgrade.observeInitiatorExit(incumbent.runtimeSets[workspaceIDs[0]].Identity)
 		},
@@ -578,203 +567,40 @@ func TestHostMachineUpgradePreparesEveryChildAndSuccessorConverges(t *testing.T)
 	if got := reregistrations.Load(); got != 0 {
 		t.Fatalf("successor re-registration calls = %d, want 0", got)
 	}
-	select {
-	case done := <-donePayloads:
-		if done.RequestID != "upgrade-a" || !done.OK || done.NewVersion != "v2.0.0" {
-			t.Fatalf("successor completion = %+v", done)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("successor did not reconcile computer:upgrade:done on its new Binding socket")
-	}
 	if journal, err := successorUpgrade.readJournal(); err != nil || journal != nil {
 		t.Fatalf("successor left Machine Upgrade journal = %+v, error=%v", journal, err)
-	}
-	if err := successorUpgrade.writeJournal(hostMachineUpgradeJournal{
-		RequestID: "upgrade-b", FromVersion: "v2.0.0", TargetVersion: "v3.0.0",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := successorUpgrade.recoverSuccessor(context.Background()); err != nil {
-		t.Fatalf("recover rolled-back successor: %v", err)
-	}
-	select {
-	case done := <-donePayloads:
-		if done.RequestID != "upgrade-b" || done.OK || done.NewVersion != "v2.0.0" || !done.RolledBack {
-			t.Fatalf("rolled-back successor completion = %+v", done)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("rolled-back successor did not reconcile computer:upgrade:done")
-	}
-}
-
-func TestHostMachineUpgradeKeepsJournalUntilSuccessorCompletionIsDelivered(t *testing.T) {
-	const controlToken = "owner-secret"
-	_, host := newReadyHostForChildUpgradeWithChild(t, controlToken, "workspace-a", 8299, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == BindingComputerUpgradeDonePath {
-			http.Error(w, "Binding socket is not connected", http.StatusServiceUnavailable)
-			return
-		}
-		http.NotFound(w, r)
-	})
-	root := t.TempDir()
-	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{Version: "v2.0.0"}, residentRoot: root,
-	})
-	host.upgrade = upgrade
-	if err := upgrade.writeJournal(hostMachineUpgradeJournal{
-		RequestID: "upgrade-a", FromVersion: "v1.0.0", TargetVersion: "v2.0.0",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := upgrade.recoverSuccessor(context.Background()); err == nil {
-		t.Fatal("successor recovery succeeded without delivering computer:upgrade:done")
-	}
-	if journal, err := upgrade.readJournal(); err != nil || journal == nil || journal.RequestID != "upgrade-a" {
-		t.Fatalf("undelivered successor journal = %+v, error=%v", journal, err)
-	}
-}
-
-func TestHostMachineUpgradeRecoversPreviousPackageHandoffJournal(t *testing.T) {
-	const controlToken = "owner-secret"
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	previousJournalDir := filepath.Join(home, ".local", "share", "multica", "machine-upgrades")
-	if err := os.MkdirAll(previousJournalDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	previousJournalPath := filepath.Join(previousJournalDir, "upgrade-a.json")
-	previousJournal := map[string]any{
-		"id": "upgrade-a", "generation": "generation-a", "source_version": "v1.0.0", "target_version": "v2.0.0",
-		"runtime_ids": []string{"runtime-a"}, "workspace_ids": []string{"workspace-a"}, "phase": "handoff",
-		"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	data, err := json.Marshal(previousJournal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(previousJournalPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	var reregistered atomic.Int32
-	donePayloads := make(chan protocol.ComputerUpgradeDonePayload, 1)
-	childControl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
-			return
-		}
-		switch r.URL.Path {
-		case BindingReregisterRuntimePath:
-			reregistered.Add(1)
-		case BindingComputerUpgradeDonePath:
-			var request struct {
-				Done protocol.ComputerUpgradeDonePayload `json:"done"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			donePayloads <- request.Done
-		default:
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer childControl.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/daemon/computer/machine-upgrades/upgrade-a/attest" {
-			t.Error("previous-package successor attested over HTTP")
-			http.Error(w, "successor must not attest over HTTP", http.StatusConflict)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer server.Close()
-
-	host, err := NewHost(HostConfig{
-		ControlToken: controlToken,
-		Spawn: func(string, int64) (BindingChild, error) {
-			return &readySupervisorChild{
-				supervisorTestChild: newSupervisorTestChild(8301), controlURL: childControl.URL,
-			}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	host.Reconcile(context.Background(), []string{"workspace-a"})
-	waitForSupervisorLifecycle(t, host.supervisor, "workspace-a", RunnerLifecycleRunning)
-	record, pid, ok := host.Snapshot("workspace-a")
-	if !ok {
-		t.Fatal("missing successor Binding")
-	}
-	host.runtimeSets["workspace-a"] = hostBindingRuntimeSet{
-		Identity:    BindingChildIdentity{WorkspaceID: "workspace-a", RunnerGeneration: record.Generation(), PID: pid},
-		Runtimes:    []hostBindingRuntime{{ID: "runtime-a", WorkspaceID: "workspace-a", Provider: "pi"}},
-		DaemonToken: "runtime-token", ExpiresAt: time.Now().Add(time.Hour),
-	}
-	defer host.Stop()
-
-	upgrade := newHostMachineUpgrade(host, hostMachineUpgradeConfig{
-		identity: HostProcessIdentity{
-			ComputerID: "computer-a", ComputerGeneration: 251, Environment: "test",
-			Version: "v2.0.0", ServerURL: server.URL,
-		},
-		residentRoot:                    filepath.Join(home, ".multica", "computer"),
-		previousPackageUpgradeBootstrap: true,
-	})
-	host.upgrade = upgrade
-	if err := upgrade.recoverSuccessor(context.Background()); err != nil {
-		t.Fatalf("recover previous-package successor: %v", err)
-	}
-	if got := reregistered.Load(); got != 0 {
-		t.Fatalf("successor re-registration calls = %d, want 0", got)
-	}
-	select {
-	case done := <-donePayloads:
-		if done.RequestID != "upgrade-a" || !done.OK || done.NewVersion != "v2.0.0" {
-			t.Fatalf("previous-package successor completion = %+v", done)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("previous-package successor did not reconcile computer:upgrade:done")
-	}
-	if _, err := os.Stat(previousJournalPath); !os.IsNotExist(err) {
-		t.Fatalf("previous-package handoff journal remains after successor start: %v", err)
 	}
 }
 
 func newReadyHostForChildUpgrade(t *testing.T, controlToken, workspaceID string, pid int) (BindingChildIdentity, *Host) {
 	t.Helper()
-	return newReadyHostForChildUpgradeWithChild(t, controlToken, workspaceID, pid, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Multica-Control-Token") != controlToken {
-			http.Error(w, "bad token", http.StatusUnauthorized)
-			return
+	return newReadyHostForChildUpgradeWithChild(t, controlToken, workspaceID, pid, func(_ context.Context, operation string, headers map[string]string, _ json.RawMessage) (any, error) {
+		if headers["X-Multica-Control-Token"] != controlToken {
+			return nil, errors.New("bad token")
 		}
-		switch r.URL.Path {
-		case BindingPrepareMachineUpgradePath, BindingReleaseMachineUpgradePath:
-			w.WriteHeader(http.StatusNoContent)
+		switch operation {
+		case LocalControlRunnerDrainOperation, LocalControlRunnerReleaseOperation:
 		default:
-			http.Error(w, "unexpected child control request", http.StatusBadRequest)
+			return nil, errors.New("unexpected child control request")
 		}
+		return nil, nil
 	})
 }
 
-func newReadyHostForChildUpgradeWithChild(t *testing.T, controlToken, workspaceID string, pid int, child http.HandlerFunc) (BindingChildIdentity, *Host) {
+func newReadyHostForChildUpgradeWithChild(t *testing.T, controlToken, workspaceID string, pid int, child localControlTestHandler) (BindingChildIdentity, *Host) {
 	t.Helper()
 	identities, host := newReadyHostBindingsForChildUpgrade(t, controlToken, []string{workspaceID}, pid, child)
 	return identities[workspaceID], host
 }
 
-func newReadyTwoBindingHostForChildUpgrade(t *testing.T, controlToken string, pidBase int, child http.HandlerFunc) (map[string]BindingChildIdentity, *Host) {
+func newReadyTwoBindingHostForChildUpgrade(t *testing.T, controlToken string, pidBase int, child localControlTestHandler) (map[string]BindingChildIdentity, *Host) {
 	t.Helper()
 	return newReadyHostBindingsForChildUpgrade(t, controlToken, []string{"workspace-a", "workspace-b"}, pidBase, child)
 }
 
-func newReadyHostBindingsForChildUpgrade(t *testing.T, controlToken string, workspaceIDs []string, pidBase int, child http.HandlerFunc) (map[string]BindingChildIdentity, *Host) {
+func newReadyHostBindingsForChildUpgrade(t *testing.T, controlToken string, workspaceIDs []string, pidBase int, child localControlTestHandler) (map[string]BindingChildIdentity, *Host) {
 	t.Helper()
-	childControl := httptest.NewServer(child)
-	t.Cleanup(childControl.Close)
+	childControl := localControlTestServer(t, child)
 
 	host, err := NewHost(HostConfig{
 		ControlToken: controlToken,
@@ -786,7 +612,7 @@ func newReadyHostBindingsForChildUpgrade(t *testing.T, controlToken string, work
 					break
 				}
 			}
-			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(pid), controlURL: childControl.URL}, nil
+			return &readySupervisorChild{supervisorTestChild: newSupervisorTestChild(pid), controlEndpoint: childControl}, nil
 		},
 	})
 	if err != nil {

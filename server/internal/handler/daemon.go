@@ -698,6 +698,29 @@ func runtimeDeviceName(rt db.AgentRuntime) string {
 	return strings.TrimSpace(rt.DeviceInfo)
 }
 
+// computerMachineID resolves the Computer identity's persistent machine
+// fingerprint for a daemon, scoped to the owning user. A physical machine may
+// be shared by many OS users, each with their own identity, so the lookup is
+// always keyed on (daemon_id, user_id) — never machine_id or daemon_id alone.
+// Returns "" when the machine has no recorded fingerprint yet.
+func (h *Handler) computerMachineID(ctx context.Context, daemonID, ownerID string) string {
+	if daemonID == "" || ownerID == "" {
+		return ""
+	}
+	var id string
+	err := h.DB.QueryRow(ctx, `
+SELECT machine_id FROM computer_identity_owner
+ WHERE daemon_id = $1 AND user_id = $2 AND machine_id IS NOT NULL AND machine_id <> ''
+`, daemonID, ownerID).Scan(&id)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("machine_id lookup failed", "daemon", daemonID, "error", err)
+		}
+		return ""
+	}
+	return strings.TrimSpace(id)
+}
+
 // convergeOrphanedRuntime heals the daemon identity-reestablishment case. A
 // machine whose identity is rebuilt (e.g. `~/.multica` wiped → a fresh
 // daemon_id is minted) re-registers its runtimes under a brand-new daemon_id;
@@ -724,14 +747,17 @@ func (h *Handler) convergeOrphanedRuntime(ctx context.Context, registered db.Age
 	if newDaemon == "" || !registered.OwnerID.Valid {
 		return
 	}
-	device := runtimeDeviceName(registered)
-	if device == "" {
-		// Without a trusted device name we cannot identify the machine.
-		return
-	}
 	ownerID := uuidToString(registered.OwnerID)
 	provider := registered.Provider
 	workspaceID := registered.WorkspaceID
+	// machine_id is the authoritative same-machine proof. It is resolved from
+	// the Computer identity (computer_identity_owner), never from runtime
+	// metadata. When neither side has one we fall back to hostname+uniqueness.
+	newMachineID := h.computerMachineID(ctx, newDaemon, ownerID)
+	device := runtimeDeviceName(registered)
+	if newMachineID == "" && device == "" {
+		return
+	}
 
 	all, err := h.Queries.ListAgentRuntimes(ctx, workspaceID)
 	if err != nil {
@@ -763,12 +789,19 @@ func (h *Handler) convergeOrphanedRuntime(ctx context.Context, registered db.Age
 		if rt.Provider != provider || !rt.OwnerID.Valid || uuidToString(rt.OwnerID) != ownerID {
 			continue
 		}
-		if runtimeDeviceName(rt) != device {
-			continue
-		}
 		if _, ok := live[rtDaemon]; ok {
 			// Same-owner/same-device daemon is still alive — it is a live
 			// second machine, not a re-established predecessor.
+			continue
+		}
+		// Same-machine proof: prefer machine_id (ironclad), fall back to
+		// hostname only when there is no machine_id on either side.
+		if newMachineID != "" {
+			candidateMachineID := h.computerMachineID(ctx, rtDaemon, ownerID)
+			if candidateMachineID == "" || candidateMachineID != newMachineID {
+				continue
+			}
+		} else if runtimeDeviceName(rt) != device {
 			continue
 		}
 		candidates = append(candidates, rt)

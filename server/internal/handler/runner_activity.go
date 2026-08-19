@@ -183,12 +183,14 @@ func (h *Handler) persistComputerReadyMetadata(ctx context.Context, daemonID str
 UPDATE computer_identity_owner
    SET device_name = COALESCE(NULLIF($2, ''), device_name),
        os = COALESCE(NULLIF($3, ''), os),
-       cli_version = COALESCE(NULLIF($4, ''), cli_version)
+       cli_version = COALESCE(NULLIF($4, ''), cli_version),
+       machine_id = COALESCE(NULLIF($5, ''), machine_id)
  WHERE daemon_id = $1`,
 		strings.TrimSpace(daemonID),
 		strings.TrimSpace(ready.DeviceName),
 		strings.TrimSpace(ready.OS),
 		strings.TrimSpace(ready.CLIVersion),
+		strings.TrimSpace(ready.MachineID),
 	)
 	if err != nil {
 		return fmt.Errorf("persist Computer ready metadata: %w", err)

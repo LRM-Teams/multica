@@ -191,17 +191,10 @@ export function ResearchListPage() {
   const availableDirectors = (agentsQuery.data ?? []).filter(
     (agent) => agent.archived_at == null,
   );
-
-  useEffect(() => {
-    const firstDirector = (agentsQuery.data ?? []).find((agent) => agent.archived_at == null);
-    if (!firstDirector) return;
-    setComposer((prev) => {
-      if (prev.orchestratorVersion !== "research-run-v6" || prev.directorAgentId) {
-        return prev;
-      }
-      return { ...prev, directorAgentId: firstDirector.id };
-    });
-  }, [agentsQuery.data, orchestratorVersion, directorAgentId]);
+  const selectedDirectorId =
+    orchestratorVersion === "research-run-v6"
+      ? directorAgentId || availableDirectors[0]?.id || ""
+      : "";
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
@@ -237,7 +230,7 @@ export function ResearchListPage() {
             ? { client_request_id: createRequestIdRef.current }
             : {}),
           ...(orchestratorVersion === "research-run-v6"
-            ? { orchestrator_version: orchestratorVersion, director_agent_id: directorAgentId }
+            ? { orchestrator_version: orchestratorVersion, director_agent_id: selectedDirectorId }
             : {}),
         },
         wsId,
@@ -418,7 +411,7 @@ export function ResearchListPage() {
       params: createParams,
       uiLanguage: language,
     });
-    if (orchestratorVersion === "research-run-v6" && !directorAgentId) {
+    if (orchestratorVersion === "research-run-v6" && !selectedDirectorId) {
       setComposer((prev) => ({ ...prev, paramsOpen: true }));
       return;
     }
@@ -793,7 +786,7 @@ export function ResearchListPage() {
                 {orchestratorVersion === "research-run-v6" ? (
                   <select
                     aria-label={t(($) => $.d5.rail.director_role)}
-                    value={directorAgentId}
+                    value={selectedDirectorId}
                     onChange={(event) =>
                       setComposer((prev) => ({ ...prev, directorAgentId: event.target.value }))
                     }

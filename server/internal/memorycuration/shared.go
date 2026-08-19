@@ -1,11 +1,9 @@
 package memorycuration
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -160,15 +158,6 @@ func sharedMemoryTaskTypes(content string) []string {
 	}
 	return out
 }
-
-func recordSharedMemoryCandidate(root string, candidate sharedMemoryCandidate, dryRun bool) (bool, error) {
-	mutations, err := prepareSharedMemoryCandidateMutations(root, candidate)
-	if err != nil {
-		return false, err
-	}
-	return commitFileMutations(mutations, dryRun)
-}
-
 func prepareSharedMemoryCandidateMutations(root string, candidate sharedMemoryCandidate) ([]fileMutation, error) {
 	encoded, err := json.Marshal(candidate)
 	if err != nil {
@@ -184,60 +173,6 @@ func prepareSharedMemoryCandidateMutations(root string, candidate sharedMemoryCa
 		{path: jsonlPath, content: jsonlContent},
 	}, nil
 }
-
-func upsertSharedCandidateJSONL(path, localUnitID, encoded string, dryRun bool) (bool, error) {
-	return upsertCandidateJSONL(path, localUnitID, encoded, dryRun)
-}
-
-func syncSharedMemoryCandidate(ctx context.Context, db EvidenceDB, root agentRoot, candidate sharedMemoryCandidate) (bool, error) {
-	if db == nil || root.WorkspaceID == "" || root.AgentID == "" {
-		return false, nil
-	}
-	payload, _ := json.Marshal(candidate)
-	evidence, _ := json.Marshal(candidate.Evidence)
-	applies, _ := json.Marshal(candidate.Applies)
-	rows, err := db.Query(ctx, `
-		INSERT INTO evolution_unit_submission (
-		  workspace_id, source_agent_id, unit_type, local_unit_id, title, summary, content,
-		  payload, sanitized_payload, content_hash, sensitivity, confidence, suggested_scope,
-		  evidence, applies, tags, task_types, source_created_at
-		) VALUES (
-		  $1, $2, $3, $4, $5, $6, $7,
-		  $8::jsonb, $8::jsonb, $9, $10, $11, $12,
-		  $13::jsonb, $14::jsonb, $15, $16, $17::timestamptz
-		)
-		ON CONFLICT (workspace_id, source_agent_id, local_unit_id) DO UPDATE SET
-		  unit_type = EXCLUDED.unit_type,
-		  title = EXCLUDED.title,
-		  summary = EXCLUDED.summary,
-		  content = EXCLUDED.content,
-		  payload = EXCLUDED.payload,
-		  sanitized_payload = EXCLUDED.sanitized_payload,
-		  content_hash = EXCLUDED.content_hash,
-		  sensitivity = EXCLUDED.sensitivity,
-		  confidence = EXCLUDED.confidence,
-		  suggested_scope = EXCLUDED.suggested_scope,
-		  evidence = EXCLUDED.evidence,
-		  applies = EXCLUDED.applies,
-		  tags = EXCLUDED.tags,
-		  task_types = EXCLUDED.task_types,
-		  source_created_at = EXCLUDED.source_created_at,
-		  updated_at = now()
-		RETURNING id::text
-	`, root.WorkspaceID, root.AgentID, candidate.UnitType, candidate.LocalUnitID, candidate.Title, candidate.Summary, candidate.Content, string(payload), candidate.ContentHash, candidate.Sensitivity, candidate.Confidence, candidate.SuggestedScope, string(evidence), string(applies), candidate.Tags, candidate.TaskTypes, candidate.CreatedAt)
-	if err != nil {
-		return false, fmt.Errorf("sync shared memory candidate: %w", err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return false, err
-		}
-	}
-	return true, rows.Err()
-}
-
 func truncateSharedSummary(s string, max int) string {
 	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
 	if len([]rune(s)) <= max {

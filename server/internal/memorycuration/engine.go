@@ -630,41 +630,6 @@ func teamShareableEvidence(item EvidenceItem) bool {
 	return len(item.Metadata) > 0 && json.Unmarshal(item.Metadata, &metadata) == nil && metadata.Shareable
 }
 
-// collectSkillDraftFiles loads a bounded set of skill drafts so team curation can
-// promote shareable skills without re-reading raw chat.
-func collectSkillDraftFiles(root string, maxFiles, maxBytes int) map[string]string {
-	if maxFiles <= 0 || maxBytes <= 0 {
-		return nil
-	}
-	draftRoot := filepath.Join(root, "skills", "drafts")
-	entries, err := os.ReadDir(draftRoot)
-	if err != nil {
-		return nil
-	}
-	out := make(map[string]string)
-	used := 0
-	for _, entry := range entries {
-		if len(out) >= maxFiles || used >= maxBytes {
-			break
-		}
-		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-		rel := filepath.ToSlash(filepath.Join("skills", "drafts", entry.Name(), "SKILL.md"))
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil {
-			continue
-		}
-		content := truncateUTF8(string(data), min(maxL3ReviewInputBodyBytes, maxBytes-used))
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
-		out[rel] = content
-		used += len(content)
-	}
-	return out
-}
-
 type l2AgentEnvelope struct {
 	Candidates []struct {
 		Type                string   `json:"type"`
@@ -1402,16 +1367,6 @@ func (e *Engine) finishL3(root agentRoot, opts Options, reviewPath string, remai
 	}
 	return ar, nil
 }
-
-func promoteEntry(destPath string, entry reviewEntry, dryRun bool) (promoted bool, duplicate bool, err error) {
-	mutation, promoted, duplicate, err := preparePromoteEntry(destPath, entry)
-	if err != nil || mutation == nil {
-		return promoted, duplicate, err
-	}
-	_, err = commitFileMutations([]fileMutation{*mutation}, dryRun)
-	return promoted, duplicate, err
-}
-
 func preparePromoteEntry(destPath string, entry reviewEntry) (*fileMutation, bool, bool, error) {
 	b, err := os.ReadFile(destPath)
 	if err != nil && !os.IsNotExist(err) {

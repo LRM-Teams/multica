@@ -101,7 +101,7 @@ function emptyComposer(uiLanguage?: string): ComposerDraft {
     params: defaultCreateParams(uiLanguage),
     paramsOpen: false,
     fieldErrors: null,
-    orchestratorVersion: "research-run-v5",
+    orchestratorVersion: "research-run-v6",
     directorAgentId: "",
   };
 }
@@ -191,6 +191,17 @@ export function ResearchListPage() {
   const availableDirectors = (agentsQuery.data ?? []).filter(
     (agent) => agent.archived_at == null,
   );
+
+  useEffect(() => {
+    const firstDirector = (agentsQuery.data ?? []).find((agent) => agent.archived_at == null);
+    if (!firstDirector) return;
+    setComposer((prev) => {
+      if (prev.orchestratorVersion !== "research-run-v6" || prev.directorAgentId) {
+        return prev;
+      }
+      return { ...prev, directorAgentId: firstDirector.id };
+    });
+  }, [agentsQuery.data, orchestratorVersion, directorAgentId]);
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );

@@ -1,6 +1,7 @@
 # Research Run V6 HTTP and realtime contract
 
-Status: target transport contract frozen; production disabled.
+Status: target transport contract frozen; user-facing V6 create is open. Clients
+that omit `orchestrator_version` still create V5.
 
 Authority: [`superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md), [`research-run-v6-contract.md`](research-run-v6-contract.md), and [`research-run-v6-storage-contract.md`](research-run-v6-storage-contract.md).
 
@@ -99,7 +100,10 @@ The existing create body gains these V6 fields:
 For V6, `director_agent_id` is required and must name a non-archived Agent in the
 same Workspace. The create transaction writes the Run, initial Contract revision,
 Director assignment and exactly one Run team membership. It leaves legacy
-`fleet_id` null and creates no other Agent or fixed role.
+`fleet_id` null and creates no other Agent or fixed role. The 201 body includes
+the existing session graph fields and, when Snapshot succeeds, a `run` object so
+clients can render the V6 session without waiting for the first GET. Snapshot
+failure after a successful Bootstrap does not fail the create.
 
 ### 3.2 Replace or restore the Director
 

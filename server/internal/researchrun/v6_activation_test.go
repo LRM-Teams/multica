@@ -117,7 +117,21 @@ func TestAssessV6ActivationCompleteAuditDoesNotEnableRuntimeV6(t *testing.T) {
 	if OrchestratorVersion != OrchestratorVersionV5 {
 		t.Fatalf("default orchestrator=%q", OrchestratorVersion)
 	}
-	if err := ensureSupportedOrchestratorVersion(v6ActivationCandidate); !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("V6 runtime support changed through readiness audit: %v", err)
+	if err := ensureSupportedOrchestratorVersion(v6ActivationCandidate); err != nil {
+		t.Fatalf("V6 runtime must be supported independently of the audit: %v", err)
+	}
+}
+
+func TestEnsureSupportedOrchestratorVersionAcceptsV1ThroughV6(t *testing.T) {
+	for _, version := range []string{
+		OrchestratorVersionV1, OrchestratorVersionV2, OrchestratorVersionV3,
+		OrchestratorVersionV4, OrchestratorVersionV5, OrchestratorVersionV6,
+	} {
+		if err := ensureSupportedOrchestratorVersion(version); err != nil {
+			t.Fatalf("version %s: %v", version, err)
+		}
+	}
+	if err := ensureSupportedOrchestratorVersion("research-run-v7"); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("unknown version err=%v", err)
 	}
 }

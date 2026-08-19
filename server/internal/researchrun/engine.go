@@ -355,6 +355,10 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 			}
 		}
 	}()
+	if run.OrchestratorVersion == OrchestratorVersionV6 {
+		next = e.clock.Now().Add(time.Hour)
+		return e.projectPending(ctx, sessionID)
+	}
 	pendingCancellations, cancelErr := e.cancelPendingAttempts(ctx, run, "research_run_"+string(run.Status))
 	if cancelErr != nil {
 		next = e.clock.Now().Add(10 * time.Second)

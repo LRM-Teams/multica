@@ -905,6 +905,7 @@ func (s *PostgresStore) ListDueRunIDs(ctx context.Context, limit int) ([]string,
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text FROM research_session
 		WHERE run_initialized_at IS NOT NULL
+		  AND orchestrator_version IS DISTINCT FROM 'research-run-v6'
 		  AND (
 		    (status = 'running' AND next_reconcile_at <= now())
 		    OR EXISTS (

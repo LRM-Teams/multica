@@ -420,8 +420,8 @@
 - A1 已由 `server/internal/researchrun/canonical_state.go` 建立可执行基线：`CanonicalState` 对同一 Run 的 V1–V5 规范表做确定性哈希，排除 lease、调度时间、行维护时间和投影重试字段；`ListRunEvents` 与 `ReplayRunEvents` 按 workspace、连续 sequence 和重复一致性重放 committed Event。当前 Event 只保证投影重放，不包含从零恢复全部规范表所需的完整数据，不能宣称系统已经采用 event sourcing。
 - A2a 已由 `orchestrator_golden_test.go` 和 `testdata/golden/orchestrator_contracts.json` 冻结 V1–V5 的完整 Task Prompt 哈希、可接受 Plan Result 哈希和新 schema 拒绝行为。修改旧版本协议必须让 golden 失败；真实语义变化只能新增 orchestrator version，不能更新旧 hash 来掩盖不兼容。
 - V1–V5 Research Task Prompt 的版本选择和渲染由 `taskPromptModule` 独占；Engine 与 dispatch 只提交 Run、Task、Attempt、Snapshot 和 Fleet 输入，不能拼接或修改 Prompt。历史 builder 保持不可变，新语义只能新增 orchestrator version，并继续由完整 Prompt hash 验证。
-- 旧 V6 合同从未被生产 decoder 接受，也没有生产 Run；ADR-0017 因此允许按 [`2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md) 原位替换这一个未发布版本。替换必须同时更新 `docs/contracts/research-run-v6.schema.json`、跨对象合同、Prompt/Result golden、builtin skill 与 source map，禁止把新字段混入 V1–V5 envelope。替换期间默认版本和 supported-version 列表保持 V5/unsupported；新 V6 首次冻结后再发生不兼容 hash 变化才代表 V7。
-- V6 生产激活必须通过 `researchrun.AssessV6Activation` 的完整证据审计：每项退出证据必须有稳定 ID 和 revision，缺一项即保持禁止；回滚目标必须是已演练的 `research-run-v5` previous version。审计通过只产生允许激活的 Decision，不能隐式修改默认版本或 supported decoder。
+- 旧 V6 合同从未被生产 decoder 接受，也没有生产 Run；ADR-0017 因此允许按 [`2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md) 原位替换这一个未发布版本。替换必须同时更新 `docs/contracts/research-run-v6.schema.json`、跨对象合同、Prompt/Result golden、builtin skill 与 source map，禁止把新字段混入 V1–V5 envelope。省略 `orchestrator_version` 的创建仍默认 V5；显式 V6 + Director 创建 V6 Run，且 `research-run-v6` 是 supported runtime version。新 V6 首次冻结后再发生不兼容 hash 变化才代表 V7。
+- `AssessV6Activation` 只做剩余证据审计，不能隐式修改省略 version 时的默认值。回滚目标必须是已演练的 `research-run-v5` previous version。用户显式选择 V6 不再需要 `RESEARCH_V6_BOOTSTRAP_ENABLED`。V5 reconciler / V5 Gate 不得处理 V6 Run。
 - Research Task 的运行态同步、Ready Task 排序、能力路由、Attempt 创建、Inbox 分派、身份挂接和取消确认由 `executionModule` 独占。已挂接 Attempt 以 Inbox Task ID 为运行身份；未挂接 Attempt 以稳定 dispatch key 查找原执行，禁止因响应丢失直接复制 Task。取消只有在 Runtime 接受取消或未挂接派发超过 stale 后才能在 Store 确认；派发成功但身份挂接失败时必须撤销刚创建的 Runtime Task。Engine 只能调用该 Module，不能直接组合 Dispatcher 与 Attempt 状态变更。
 - Research Run 的确定性 dispatch 故障、预算耗尽和补救终态由 `failureModule` 处理。未知或明确可重试的 dispatch 错误不得修改 Run；能力永久缺失和不可重试 Adapter 错误才失败。Run 失败必须先提交 `MarkFailed`，再取消活动 Attempt，最后投影 committed Event；取消失败时保留待确认状态并停止本次投影。预算耗尽必须先写幂等 Decision，再评估交付 Gate，禁止先看 Gate 后补写预算事实。Engine 不得直接组合 `MarkFailed`、取消和投影。
 - Agent Inbox 的 `queued_expired` 只证明原 delivery 在 worker claim 前已终止、不可重投，不证明 Research Task 不可重试。Research policy 必须保留 Task 自己的 attempt budget，结算旧 Attempt 后重新解析健康目标；只有 Task budget 真正耗尽才允许失败 Task/Run。其他 Inbox `retryable=false` 仍按 C2a 收紧 Research disposition，不能被泛化覆盖。
@@ -447,7 +447,7 @@
   - **物**：migration `299_research_target_repair`；`server/internal/researchrun/repair.go`、`postgres_repair.go`；`TestFailureDispositionOnlyChoosesAllowedRepairActions`、`TestEveryDurableInboxFailureReasonResolvesToAllowedRepair`、`TestClassesWithoutLicensedRepairRecordNothing`、`TestRepairKeyIsStableAndMovesWithCanonicalIdentity`、`TestTargetRepairIsIdempotentPerCanonicalFailure`、`TestTargetRepairSplitsOnTargetConfigurationChange`、`TestRepairActionMatrixIsEnforcedByDatabaseAndMatchesExecutor`、`TestConcurrentWorkersConvergeOnOneTargetRepair`、`TestMigration299DownUpRestoresTargetRepairSchema`。
 - 本条在 schema、状态机、迁移、回放、故障注入和系统评测均见红并通过前保持 `仅文档`；实施 PR 必须逐项把约束升级为类型、唯一约束、事务或测试，并在本条记录具体装置。
 
-### 4.19 罗纳尔多分层调研 V6 — `可执行`（生产激活仍由证据门禁关闭）
+### 4.19 罗纳尔多分层调研 V6 — `可执行`（用户可创建 V6；省略 version 仍默认 V5）
 
 本条已从说明性设计升级为可执行合同。装置包括：`research-run-v6.schema.json` 的固定 hash 与九 envelope strict/二次 validator；390–408 migration 的 scoped FK、append-only/version/single-successor/吸收约束；`researchTxOperation` registry 与 recovery matrix；Director Brief/Manifest/Catalog 的有界分页和持久恢复；团队 20 人确认门槛与 50 人硬上限；Projection Snapshot/Delta/Slice、重建 hash 和未知类型降级；每消息 Steering Assessment；Web/Desktop 独立 Report origin、短期 capability、CSP 与精确 iframe sandbox；`AssessV6Activation` 的逐项、带 revision 证据审计。对应实现和测试指针见 builtin `research-fleet-source-map.md`。
 
@@ -456,7 +456,7 @@
 - Result/Insight 按 S/M/L/XL/XXL 压缩；promotion 需要至少两个 fresh 同级输入，assimilation 不提升等级。每个输入版本最多一个 canonical successor；已吸收节点不自动恢复，跨 Branch 只能复用 successor。每个 Branch 最多一个当前 XXL，同一 XXL 可以服务多个 Branch。
 - Director 上下文每轮从持久 Research Brief 与 Control Brief 重建；终止节点只给聚合总结。Director 不可用时进入 `awaiting_director` 并通知用户，不自动换人。每个 Run active team membership 上限 50，Research token 总量不设产品上限。
 - Report 是挂在 Goal 上的不可变 HTML 交付物，不是 graph node。JavaScript 只允许在独立 origin、`sandbox="allow-scripts"`、无同源/存储/外部网络/主应用桥接的 iframe 中运行；只有 Director 可以发布。
-- 实现存在不等于允许生产激活。migration、Schema hash、V1–V5 golden、九 envelope、恢复矩阵、single-successor race、Director context bound、50 人上限、Projection rebuild/50k S、Web/Desktop sandbox、独立 Report origin、builtin 文档和 V5 回滚演练必须各自提供稳定 evidence ID 与 revision；审计缺一即拒绝。审计本身不修改 supported decoder/default。回滚只关闭新建 V6，既有 V6 进入 paused/maintenance，禁止用 V5 decoder 读取或删除事实。
+- 用户显式选择 V6 + Director 即可创建 V6 Run；首页默认 V6 并自动选第一个未归档 Agent。省略 `orchestrator_version` 的旧客户端仍创建 V5。`AssessV6Activation` 继续只做审计，不把省略 version 的默认值改成 V6。独立 Report origin 未配置时 HTML 报告 fail closed，不得挡住创建。回滚只关闭新建 V6，既有 V6 进入 paused/maintenance，禁止用 V5 decoder 读取或删除事实。
 
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 

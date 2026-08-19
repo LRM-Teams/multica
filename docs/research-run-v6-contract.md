@@ -1,6 +1,7 @@
 # Research Run V6 Ronaldo Director contract
 
-Status: target contract frozen; production disabled.
+Status: target contract frozen; user-facing V6 create is open. Omitted
+`orchestrator_version` still defaults to V5.
 
 Normative target schema:
 [`contracts/research-run-v6-director.schema.json`](contracts/research-run-v6-director.schema.json),
@@ -12,8 +13,9 @@ The code-coupled [`contracts/research-run-v6.schema.json`](contracts/research-ru
 and its Go hash test still describe the superseded, never-enabled draft. They are
 replaced atomically in implementation slice 0 so this documentation-only change
 does not make the current V5 build fail. ADR-0017 authorizes that one in-place V6
-replacement. V1–V5 remain immutable, V5 remains the default, and production must
-continue to reject V6 until every activation gate below passes.
+replacement. V1–V5 remain immutable. Clients that omit `orchestrator_version`
+still create V5. Explicit V6 + Director creates a V6 Run. `AssessV6Activation`
+is an audit of remaining evidence; it does not flip that omitted-version default.
 
 The product and development authority is
 [`superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md`](superpowers/specs/2026-08-14-ronaldo-research-director-development-spec.zh-CN.md).
@@ -362,8 +364,9 @@ forces Snapshot reload.
 
 ## Activation evidence
 
-`AssessV6Activation` must reject activation until every item has a stable evidence
-ID and revision:
+`AssessV6Activation` is the audit of remaining evidence. It does not enable or
+disable explicit user V6 create, and it must not flip the omitted-version default
+to V6 until every item has a stable evidence ID and revision:
 
 - canonical migrations and up/down/up recovery;
 - strict schema and negative fixtures for all nine envelopes;

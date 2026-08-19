@@ -58,7 +58,7 @@ export function ConversationSidePanelShell({
   const closeControl = hideDismiss ? null : variant === "panel" ? (
       <Button
         type="button"
-        variant="ghost"
+        variant="outline"
         size="icon"
         onClick={onClose}
         aria-label={closeAriaLabel}
@@ -81,18 +81,18 @@ export function ConversationSidePanelShell({
       // does not supply a Done label used to get `closeControl = null`, so the
       // mobile actor profile (agent `header="floating"`, member bar) rendered a
       // dismiss slot with nothing in it — users read that as "there is no close
-      // button". Fall back to a 44×44 X instead of nothing; hosts that want the
-      // text control keep passing `doneLabel`.
+      // button". Match the agent chrome icon cluster (`size="icon"` / 32×32
+      // outline) so X sits in the same row as Message / Start / Restart.
       <Button
         type="button"
-        variant="ghost"
+        variant="outline"
         size="icon"
         onClick={onClose}
         aria-label={closeAriaLabel}
-        className="size-11 shrink-0"
+        className="shrink-0"
         data-testid="side-panel-page-close"
       >
-        <X className="size-5" />
+        <X className="size-4" />
       </Button>
     );
 

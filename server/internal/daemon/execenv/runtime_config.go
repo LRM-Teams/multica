@@ -170,7 +170,7 @@ const (
 	startupUserProfileMaxBytes       = 2 * 1024
 	startupWorkspaceContextMaxBytes  = 2 * 1024
 	startupSkillIndexMaxBytes        = 4 * 1024
-	memorySnapshotMaxBytes           = 8 * 1024
+	turnMemorySnapshotMaxBytes       = 8 * 1024
 )
 
 // buildStartupKernelContent renders the small process-scoped contract shared
@@ -276,10 +276,12 @@ func RenderTurnContext(ctx TaskContextForEnv) string {
 		b.WriteString("\n")
 	}
 
-	// Promoted memory is intentionally NOT rendered per-turn: it is loaded
-	// once into the startup kernel (first user message / session start) and
-	// stays stable for the session (Frank 2026-08-19). Per-wake facts that
-	// still belong here: initiator, delivery mode, and other dynamic cues.
+	if len(ctx.AgentMemories) > 0 {
+		var memories strings.Builder
+		renderPromotedMemorySnapshot(&memories, nonAgentScopeMemories(ctx.AgentMemories))
+		b.WriteString(boundedPromptText(memories.String(), turnMemorySnapshotMaxBytes, "promoted memory snapshot"))
+		b.WriteString("\n\n")
+	}
 	if strings.TrimSpace(ctx.ChatSessionID) != "" && strings.TrimSpace(ctx.ChannelID) == "" {
 		b.WriteString("## Delivery\n\n")
 		b.WriteString("This turn is Standalone Agent Chat. Final assistant output is delivered to the current chat session automatically. Do not run `multica message send` for this reply.\n\n")
@@ -932,17 +934,43 @@ func renderPromotedMemorySnapshot(b *strings.Builder, memories []MemoryContextFo
 	}
 }
 
-// RenderPromotedMemorySnapshot renders the promoted-memory block for callers
-// that load memory once into a session-stable surface (the model system
-// prompt) instead of re-injecting it into every turn's user context (Frank
-// 2026-08-19). Returns "" when no memory is selected.
-func RenderPromotedMemorySnapshot(memories []MemoryContextForEnv) string {
+// nonAgentScopeMemories filters out agent-scope memory. Agent-scope memory is
+// loaded once into the session-stable system prompt (RenderAgentScopeMemory),
+// so the per-message (pre-message) context only carries member / project /
+// channel scoped memory — preserving per-message memory isolation (Frank
+// 2026-08-19).
+func nonAgentScopeMemories(memories []MemoryContextForEnv) []MemoryContextForEnv {
+	if len(memories) == 0 {
+		return memories
+	}
+	out := make([]MemoryContextForEnv, 0, len(memories))
+	for _, m := range memories {
+		if strings.TrimSpace(m.Scope) == "agent" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// RenderAgentScopeMemory renders only agent-scope promoted memory for the
+// session-stable system prompt. Returns "" when there is no agent-scope memory.
+func RenderAgentScopeMemory(memories []MemoryContextForEnv) string {
 	if len(memories) == 0 {
 		return ""
 	}
+	var agentScoped []MemoryContextForEnv
+	for _, m := range memories {
+		if strings.TrimSpace(m.Scope) == "agent" {
+			agentScoped = append(agentScoped, m)
+		}
+	}
+	if len(agentScoped) == 0 {
+		return ""
+	}
 	var b strings.Builder
-	renderPromotedMemorySnapshot(&b, memories)
-	return boundedPromptText(b.String(), memorySnapshotMaxBytes, "promoted memory snapshot")
+	renderPromotedMemorySnapshot(&b, agentScoped)
+	return boundedPromptText(b.String(), turnMemorySnapshotMaxBytes, "agent memory snapshot")
 }
 
 func truncateMemorySnapshotContent(value string, maxBytes int) string {

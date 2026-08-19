@@ -9,7 +9,7 @@ PARALLEL SAFE
 AS $$
     SELECT format(
         'https://cdn.leagent.me/agent-avatars/v3/agent-%s.png',
-        lpad(((get_byte(decode(md5(agent_id::text), 'hex'), 0) % 15) + 1)::text, 2, '0')
+        lpad(((get_byte(decode(md5(agent_id::text), 'hex'), 0) % 6) + 1)::text, 2, '0')
     )
 $$;
 

@@ -15,7 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/agentavatar"
 )
 
-var durableAgentAvatarPattern = regexp.MustCompile(`^https://cdn\.leagent\.me/agent-avatars/v3/agent-(0[1-9]|1[0-5])\.png$`)
+var durableAgentAvatarPattern = regexp.MustCompile(`^https://cdn\.leagent\.me/agent-avatars/v3/agent-0[1-6]\.png$`)
 
 func TestAgentAvatar_DurableCreateAndVerifiedUpdateProvenance(t *testing.T) {
 	requireAvatarTestDatabase(t)

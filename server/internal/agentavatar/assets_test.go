@@ -39,7 +39,7 @@ func TestAssetsMatchPublishedCatalog(t *testing.T) {
 	if assets[0].URL != PublicBaseURL+"/agent-01.png" {
 		t.Fatalf("first URL = %q", assets[0].URL)
 	}
-	if assets[len(assets)-1].URL != PublicBaseURL+"/agent-15.png" {
+	if assets[len(assets)-1].URL != PublicBaseURL+"/agent-06.png" {
 		t.Fatalf("last URL = %q", assets[len(assets)-1].URL)
 	}
 }

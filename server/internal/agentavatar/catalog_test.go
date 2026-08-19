@@ -15,6 +15,7 @@ func TestCanonicalizeSelection(t *testing.T) {
 	}{
 		{name: "current first", raw: URL(1), want: URL(1), ok: true},
 		{name: "current last", raw: URL(PresetCount), want: URL(PresetCount), ok: true},
+		{name: "retired v3 last", raw: PublicBaseURL + "/agent-15.png", want: PublicBaseURL + "/agent-15.png", ok: true},
 		{name: "legacy first", raw: "/agent-avatars/human-01.jpg", want: LegacyURL(1), ok: true},
 		{name: "legacy last", raw: "/agent-avatars/human-24.jpg", want: LegacyURL(24), ok: true},
 		{name: "canonical legacy", raw: LegacyURL(12), want: LegacyURL(12), ok: true},
@@ -43,7 +44,7 @@ func TestURLsMatchCatalog(t *testing.T) {
 	if urls[0] != PublicBaseURL+"/agent-01.png" {
 		t.Fatalf("first URL = %q", urls[0])
 	}
-	if urls[len(urls)-1] != PublicBaseURL+"/agent-15.png" {
+	if urls[len(urls)-1] != PublicBaseURL+"/agent-06.png" {
 		t.Fatalf("last URL = %q", urls[len(urls)-1])
 	}
 }

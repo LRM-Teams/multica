@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	PresetCount         = 15
+	PresetCount         = 6
 	LegacyPresetCount   = 24
 	PublicBaseURL       = "https://cdn.leagent.me/agent-avatars/v3"
 	PriorPublicBaseURL  = "https://cdn.leagent.me/agent-avatars/v2"
@@ -24,6 +24,8 @@ const (
 )
 
 var (
+	// Current picker shows 01-06. 07-15 stay accepted so already-persisted
+	// v3 URLs keep working after the catalog shrink.
 	canonicalPreset       = regexp.MustCompile(`^https://cdn\.leagent\.me/agent-avatars/v3/agent-(0[1-9]|1[0-5])\.png$`)
 	canonicalPriorPreset  = regexp.MustCompile(`^https://cdn\.leagent\.me/agent-avatars/v2/agent-(0[1-9]|1[0-5])\.png$`)
 	canonicalLegacyPreset = regexp.MustCompile(`^https://cdn\.leagent\.me/agent-avatars/v1/human-(0[1-9]|1[0-9]|2[0-4])\.jpg$`)

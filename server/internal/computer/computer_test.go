@@ -452,6 +452,40 @@ func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	}
 }
 
+func TestStartResidentProcessDoesNotBindParentDeath(t *testing.T) {
+	body, err := os.ReadFile("computer.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	start := strings.Index(text, "func startResidentProcess(")
+	if start < 0 {
+		t.Fatal("startResidentProcess is missing")
+	}
+	rest := text[start:]
+	end := strings.Index(rest, "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not isolate startResidentProcess")
+	}
+	fn := rest[:end]
+	if !strings.Contains(fn, "SysProcAttr(breakaway)") {
+		t.Fatal("startResidentProcess must still detach with SysProcAttr/Setsid")
+	}
+	if strings.Contains(fn, "configureChildParentDeath(") || strings.Contains(fn, ".Pdeathsig") {
+		t.Fatal("startResidentProcess must not set Pdeathsig; the Computer start CLI is short-lived")
+	}
+}
+
+func TestBindingChildrenDoNotBindParentDeath(t *testing.T) {
+	body, err := os.ReadFile("binding_child.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "configureChildParentDeath(") || strings.Contains(string(body), ".Pdeathsig") {
+		t.Fatal("Binding children must not set Pdeathsig; Raft adopts a live runner after Host death")
+	}
+}
+
 func TestResidentArgsOwnedByComputerAndNeverSelectProfileOrOrigin(t *testing.T) {
 	args := ResidentArgs(StartOptions{
 		DaemonID: "computer-1", DeviceName: "Laptop", RuntimeName: "Local",

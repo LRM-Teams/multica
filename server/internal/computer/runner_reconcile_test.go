@@ -97,3 +97,18 @@ func TestRunnerUnlinkedAndGracefulExits(t *testing.T) {
 		t.Fatalf("graceful stop = %s spawn=%v", rec.Lifecycle, rec.CanSpawn(true, now))
 	}
 }
+
+func TestRunnerRecordAdoptsExternalPIDAndDoesNotSpawn(t *testing.T) {
+	now := time.Date(2026, 8, 13, 15, 0, 0, 0, time.UTC)
+	rec := &RunnerRecord{Lifecycle: RunnerLifecycleStopped}
+	rec.AdoptExternalPID(4242)
+	if rec.Lifecycle != RunnerLifecycleRunning || rec.HasChild() || rec.CanSpawn(true, now) {
+		t.Fatalf("adopted runner = %+v spawn=%v", rec, rec.CanSpawn(true, now))
+	}
+	if !rec.ClearExternalPIDIfDead(false) || rec.ExternalPID != 0 || rec.Lifecycle != RunnerLifecycleStopped {
+		t.Fatalf("dead adopted runner = %+v", rec)
+	}
+	if !rec.CanSpawn(true, now) {
+		t.Fatal("dead adopted runner must become spawnable")
+	}
+}

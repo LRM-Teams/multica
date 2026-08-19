@@ -179,9 +179,10 @@ func startResidentProcess(exe string, args []string, log *os.File) (procHandle, 
 		child.Stdout = log
 		child.Stderr = log
 		child.SysProcAttr = SysProcAttr(breakaway)
-		// Do not set Pdeathsig here. StartBackground's parent is the short-lived
-		// `multica computer start` CLI; the resident must outlive that process.
-		// Binding children keep parent-death signaling in binding_child.go.
+		// Raft 1.0.17 spawnDetachedService uses detached+unref and never binds
+		// the resident to parent death. Setsid already makes this child a new
+		// session; Pdeathsig would SIGTERM it when `multica computer start`
+		// exits. Binding children are also unlinked from parent death.
 		if err := child.Start(); err != nil {
 			return nil, err
 		}

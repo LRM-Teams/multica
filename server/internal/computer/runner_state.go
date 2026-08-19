@@ -205,19 +205,26 @@ func readRunnerPID(path string) (int, error) {
 	return pid, nil
 }
 
-func recoverRunnerStates(root string, logger *slog.Logger) error {
+type recoveredRunner struct {
+	WorkspaceID   string
+	StartIdentity string
+	PID           int
+}
+
+func recoverRunnerStates(root string, logger *slog.Logger) ([]recoveredRunner, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
-		return nil
+		return nil, nil
 	}
 	dir := filepath.Join(root, "run", "runners")
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var adopted []recoveredRunner
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -242,34 +249,23 @@ func recoverRunnerStates(root string, logger *slog.Logger) error {
 		if pidErr == nil {
 			alive, known = processAlive(pid)
 		}
-		identityMatches := false
-		if pidErr == nil && state.RunnerIdentity != "" {
-			identityMatches = processIdentityValue(pid) == state.RunnerIdentity
-		}
+		identityMatches := pidErr == nil && state.RunnerIdentity != "" && processIdentityValue(pid) == state.RunnerIdentity
 		if known && alive && identityMatches {
-			if err := terminateProcess(pid); err != nil && logger != nil {
-				logger.Warn("could not terminate orphaned Runner", "workspace_id", state.WorkspaceID, "pid", pid, "error", err)
-			}
-		} else if known && alive && logger != nil {
-			logger.Warn("refusing to terminate orphaned Runner with mismatched process identity", "workspace_id", state.WorkspaceID, "pid", pid)
+			// Raft 1.0.17 adopts a still-live runner instead of killing it.
+			adopted = append(adopted, recoveredRunner{
+				WorkspaceID: state.WorkspaceID, StartIdentity: state.StartIdentity, PID: pid,
+			})
+			continue
+		}
+		if known && alive && logger != nil {
+			logger.Warn("refusing to adopt orphaned Runner with mismatched process identity", "workspace_id", state.WorkspaceID, "pid", pid)
 		}
 		for _, current := range []string{filepath.Join(filepath.Dir(path), "runner.connected"), filepath.Join(filepath.Dir(path), "runner.pid"), path} {
 			if err := os.Remove(current); err != nil && !os.IsNotExist(err) {
-				return err
+				return adopted, err
 			}
 		}
 		_ = os.Remove(filepath.Dir(path))
 	}
-	return nil
-}
-
-func terminateProcess(pid int) error {
-	if pid < 1 {
-		return nil
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	return process.Kill()
+	return adopted, nil
 }

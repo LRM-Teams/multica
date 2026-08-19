@@ -472,6 +472,7 @@
 - **数值必须注来源**（`getComputedStyle`/file:line/设计决定）；目测（尤其 2x 截图）不准进稿。量色/量身份取真正绘制的最内层元素。
 - **验收分道**：数据/DB/投递→automation；hover/弹卡→自起 `--headless=new` Chrome（有合成器，rAF 正常）；真人只留观感与环境不可用两种情况。点击前先滚进视口。
 - **依据分级**（设计稿必备节）：`抄`（注出处）/`定`（注理由）/`实测`（注 file:line）/`目测`（禁止）。别把"我们的选择"说成"Linear 就是这么做的"。
+- **React Doctor 不是合并门**（2026-08-19）：`pnpm react:doctor` 不再进入 CI，也不再作为前端 PR 必过项。warning 挡合并会把能用的代码拦在注释位置和 effect 风格上。功能验收以 typecheck / lint / 单测为准。`cursordeadlock` 等真实并发门禁保留。
 
 ## 6. 元规矩：别拿没验证的环节当地基 — `仅文档`（本文立身之本）
 

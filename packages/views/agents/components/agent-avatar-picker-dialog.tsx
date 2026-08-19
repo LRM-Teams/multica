@@ -1,7 +1,7 @@
 "use client";
 
 import { useReducer, useRef } from "react";
-import { Check, Loader2, Upload } from "lucide-react";
+import { Check, Loader2, Shuffle, Upload } from "lucide-react";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
 import type { AgentAvatarSelection } from "@multica/core/types";
@@ -10,6 +10,7 @@ import {
   AGENT_AVATAR_PRESETS,
   resolvePublicFileUrl,
 } from "@multica/core/workspace/avatar-url";
+import { renderRandomBotlabPng } from "./botlab-avatar-file";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -30,6 +31,7 @@ const AVATAR_ACCEPT = "image/png,image/jpeg";
 type DraftState = {
   selection: AgentAvatarSelection | null;
   previewUrl: string | null;
+  generatedFile: File | null;
   saving: boolean;
   cropSrc: string | null;
 };
@@ -41,6 +43,7 @@ type DraftAction =
       selection: AgentAvatarSelection;
       previewUrl: string;
     }
+  | { type: "stageGenerated"; previewUrl: string; file: File }
   | { type: "setSaving"; saving: boolean }
   | { type: "setCropSrc"; cropSrc: string | null };
 
@@ -50,6 +53,7 @@ function draftReducer(state: DraftState, action: DraftAction): DraftState {
       return {
         selection: null,
         previewUrl: action.previewUrl,
+        generatedFile: null,
         saving: false,
         cropSrc: null,
       };
@@ -58,6 +62,15 @@ function draftReducer(state: DraftState, action: DraftAction): DraftState {
         ...state,
         selection: action.selection,
         previewUrl: action.previewUrl,
+        generatedFile: null,
+        cropSrc: null,
+      };
+    case "stageGenerated":
+      return {
+        ...state,
+        selection: null,
+        previewUrl: action.previewUrl,
+        generatedFile: action.file,
         cropSrc: null,
       };
     case "setSaving":
@@ -89,7 +102,7 @@ export interface AgentAvatarPickerDialogProps {
 }
 
 /**
- * Shared agent avatar chooser: 15 system presets + custom upload with crop.
+ * Shared agent avatar chooser: a short system preset row, random Botlab robot, or custom upload with crop.
  *
  * Interaction model (same on Create and Profile):
  * - Clicking a face only **stages** it (dialog preview / highlight).
@@ -114,6 +127,7 @@ export function AgentAvatarPickerDialog({
   const [draft, dispatch] = useReducer(draftReducer, {
     selection: null,
     previewUrl: currentUrl,
+    generatedFile: null,
     saving: false,
     cropSrc: null,
   });
@@ -152,13 +166,46 @@ export function AgentAvatarPickerDialog({
     });
   };
 
+  const handleRandom = async () => {
+    if (busy) return;
+    try {
+      const file = await renderRandomBotlabPng();
+      const url = URL.createObjectURL(file);
+      if (lastObjectUrlRef.current) URL.revokeObjectURL(lastObjectUrlRef.current);
+      lastObjectUrlRef.current = url;
+      dispatch({ type: "stageGenerated", previewUrl: url, file });
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : uploadFailedMessage ?? t(($) => $.create_dialog.avatar.upload_failed_toast),
+      );
+    }
+  };
+
   const handleSave = async () => {
-    if (busy || !draft.selection || !draft.previewUrl) return;
+    if (busy || !draft.previewUrl) return;
+    if (!draft.selection && !draft.generatedFile) return;
     dispatch({ type: "setSaving", saving: true });
     try {
-      const result = await onConfirm(draft.selection, draft.previewUrl);
+      let selection = draft.selection;
+      let previewUrl = draft.previewUrl;
+      if (draft.generatedFile) {
+        const uploaded = await upload(draft.generatedFile);
+        if (!uploaded) return;
+        selection = { kind: "uploaded", attachment_id: uploaded.id };
+        previewUrl = uploaded.link;
+      }
+      if (!selection) return;
+      const result = await onConfirm(selection, previewUrl);
       if (result === false) return;
       onOpenChange(false);
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error
+          ? err.message
+          : uploadFailedMessage ?? t(($) => $.create_dialog.avatar.upload_failed_toast),
+      );
     } finally {
       dispatch({ type: "setSaving", saving: false });
     }
@@ -275,12 +322,12 @@ export function AgentAvatarPickerDialog({
           </DialogHeader>
 
           <div
-            className="grid grid-cols-4 gap-2 sm:grid-cols-5"
+            className="grid grid-cols-3 gap-2 sm:grid-cols-6"
             aria-label={t(($) => $.side_panel.avatar_system_choices_aria)}
             data-testid="avatar-picker-presets"
           >
             {AGENT_AVATAR_PRESETS.map((presetUrl, index) => {
-              const selected = draft.previewUrl === presetUrl;
+              const selected = !draft.generatedFile && draft.previewUrl === presetUrl;
               return (
                 <button
                   key={presetUrl}
@@ -309,7 +356,7 @@ export function AgentAvatarPickerDialog({
             })}
           </div>
 
-          {draft.selection?.kind === "uploaded" && draft.previewUrl ? (
+          {(draft.generatedFile || draft.selection?.kind === "uploaded") && draft.previewUrl ? (
             <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-2">
               <span className="relative size-12 shrink-0 overflow-hidden rounded-full border-2 border-primary">
                 <img
@@ -331,6 +378,17 @@ export function AgentAvatarPickerDialog({
             type="button"
             variant="outline"
             disabled={busy}
+            onClick={() => void handleRandom()}
+            data-testid="avatar-picker-random"
+          >
+            <Shuffle aria-hidden />
+            {t(($) => $.side_panel.avatar_random)}
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
             onClick={() => fileInputRef.current?.click()}
           >
             {uploading ? (
@@ -347,7 +405,7 @@ export function AgentAvatarPickerDialog({
             </Button>
             <Button
               type="button"
-              disabled={busy || !draft.selection}
+              disabled={busy || (!draft.selection && !draft.generatedFile)}
               onClick={() => void handleSave()}
               data-testid="avatar-picker-save"
             >

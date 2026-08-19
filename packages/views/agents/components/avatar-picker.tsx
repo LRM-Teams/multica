@@ -46,7 +46,7 @@ function toPickerSelection(
 
 /**
  * Compact square trigger for the create-agent form. Opens the shared
- * {@link AgentAvatarPickerDialog} (15 system faces + upload, Cancel / Save).
+ * {@link AgentAvatarPickerDialog} (system faces, random robot, or upload).
  *
  * No avatar yet → dashed placeholder with an ImagePlus icon.
  * Has avatar    → image fills the square; hover shows Camera; × clears.

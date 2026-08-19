@@ -13,10 +13,11 @@ not an activity dump and not a PPT file. Collection and synthesis are split:
      machine share one collector). Display: `采集 · <label>`.
    - **Cloud** — one collector per cloud runtime. Display:
      `采集 · 云端 · <label>` so humans never confuse it with a laptop.
-   Opening Period Work Brief ensures collectors exist for each Computer the
-   member can bind Agents on. Collectors gather recent work on that OS
-   (whole-machine HOME locally; the cloud runtime environment for cloud).
-   The collector UI lists **only** these Agents.
+  Opening Period Work Brief ensures collectors exist for each Computer the
+  member **owns** (never another member's machine, even when that runtime is
+  visible or `public`). Collectors gather recent work on that OS
+  (whole-machine HOME locally; the cloud runtime environment for cloud).
+  The collector UI lists **only** these owned-Computer Agents.
 2. **Synthesizer** — One dedicated Workspace Agent (「周报」 / `weekly-report`)
    that reads platform Facts plus all collector packs and writes the Brief
    into Notes.
@@ -69,9 +70,15 @@ final Period Work Brief — that remains the synthesizer's job.
 
 ## Selection
 
-The human picks among the provisioned per-Computer collectors. Empty
-selection is invalid for the machine-work channel. Default: all **online**
-collectors.
+The human picks among the provisioned per-Computer collectors **on
+Computers they own**. Empty selection is invalid for the machine-work
+channel. Default: all **online** collectors on the caller's Computers.
+
+**Hard ownership boundary:** Period Work collection is Computer-owner-only.
+Seeing another member's runtime in the workspace (including `public`
+visibility) or holding workspace owner/admin does **not** authorize
+provisioning or selecting a collector for that machine. Ensure and
+`collector_agent_ids` both fail closed on foreign Computers.
 
 The human picks a **time window**: calendar day / ISO week / calendar month
 (anchor date), or a **custom inclusive** start→end date range in the viewing

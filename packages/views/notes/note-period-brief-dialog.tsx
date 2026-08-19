@@ -16,7 +16,7 @@ import {
   resolvePeriodBriefSynthesizerId,
 } from "@multica/core/notes/period-brief-agent";
 import {
-  listPeriodBriefCollectorAgents,
+  listOwnedPeriodBriefCollectorAgents,
   defaultPeriodBriefCollectorIds,
   isPeriodBriefCollectorOnline,
   periodBriefCollectorLabel,
@@ -49,6 +49,7 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../i18n/use-t";
 import { useViewingTimezone } from "../common/use-viewing-timezone";
 import { useOpenNoteWorkerChat } from "./use-open-note-worker-chat";
+import { useAuthStore } from "@multica/core/auth";
 
 export function NotePeriodBriefDialog({
   open,
@@ -66,6 +67,7 @@ export function NotePeriodBriefDialog({
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const { openNoteWorkerChat } = useOpenNoteWorkerChat();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const { data: agents = [] } = useQuery({
     ...agentListOptions(wsId),
     enabled: Boolean(wsId),
@@ -99,10 +101,13 @@ export function NotePeriodBriefDialog({
   const collectorsEnsureAttemptedRef = useRef(false);
 
   const resolvedPreferredAgentId = resolvePeriodBriefSynthesizerId(agents, preferredAgentId);
-  const collectorAgents = useMemo(() => listPeriodBriefCollectorAgents(agents), [agents]);
+  const collectorAgents = useMemo(
+    () => listOwnedPeriodBriefCollectorAgents(agents, runtimes, currentUserId),
+    [agents, runtimes, currentUserId],
+  );
   const defaultCollectors = useMemo(
-    () => defaultPeriodBriefCollectorIds(agents, runtimes),
-    [agents, runtimes],
+    () => defaultPeriodBriefCollectorIds(agents, runtimes, currentUserId),
+    [agents, runtimes, currentUserId],
   );
   const agentId = agentOverride ?? resolvedPreferredAgentId;
   const collectorIds = collectorOverride ?? defaultCollectors;

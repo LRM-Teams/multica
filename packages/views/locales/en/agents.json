@@ -552,7 +552,10 @@
     "dialog_title": "Runtime config",
     "dialog_description": "Choose Computer → Runtime → Model → Reasoning. Edits stay local until you save. Cancel discards the draft without restarting.",
     "dialog_saving": "Saving…",
-    "edit_trigger_aria": "Edit Computer, Runtime, Model, and Reasoning"
+    "edit_trigger_aria": "Edit Computer, Runtime, Model, and Reasoning",
+    "more": "More",
+    "advanced": "Advanced",
+    "env_vars_title": "Environment Variables"
   },
   "side_panel": {
     "close_aria": "Close agent panel",

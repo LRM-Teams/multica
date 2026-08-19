@@ -168,8 +168,7 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			resp.Skipped = append(resp.Skipped, notePeriodBriefRetrySkipped{AgentID: ref.AgentID, Reason: "pack page missing"})
 			continue
 		}
-		stub := strings.Contains(page.Content, notePeriodBriefCollectorStubMarker)
-		packReady := !stub && strings.TrimSpace(page.Content) != ""
+		packReady := strings.TrimSpace(page.Content) != ""
 		if !packReady {
 			chID := ref.ChannelID
 			if projected.ChannelID != nil {
@@ -209,16 +208,11 @@ FROM note_page WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
 			continue
 		}
 
-		// Reset stub so harvest does not treat stale content as ready.
-		agentLabel := strings.TrimSpace(agent.DisplayName)
-		if agentLabel == "" {
-			agentLabel = strings.TrimSpace(agent.Name)
-		}
-		stubBody := notePeriodBriefCollectorPackStub(ref.WindowLabel, agentLabel)
+		// Clear any prior pack body so harvest waits for a fresh --note-write.
 		_, _ = h.DB.Exec(ctx, `
-UPDATE note_page SET content = $1, updated_at = now(), updated_by = $2 WHERE id = $3 AND workspace_id = $4`,
-			stubBody, run.OwnerUserID, page.ID, workspaceID)
-		page.Content = stubBody
+UPDATE note_page SET content = '', updated_at = now(), updated_by = $1 WHERE id = $2 AND workspace_id = $3`,
+			run.OwnerUserID, page.ID, workspaceID)
+		page.Content = ""
 
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/notes/period-briefs/retry", nil)

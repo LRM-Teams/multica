@@ -100,7 +100,7 @@ func classifyPeriodBriefCollectorOutcome(
 		return periodBriefCollectorDisposition{
 			Status:      "empty",
 			Retryable:   true,
-			Detail:      firstNonEmpty(combined, "pack still stub"),
+			Detail:      firstNonEmpty(combined, "collector call failed without a pack --note-write"),
 			FailureKind: "empty_pack",
 		}
 	}

@@ -22,7 +22,7 @@ to these sources.
 | Claim | Source |
 |-------|--------|
 | `--note-write` to folder under 工作介绍/ | `notePeriodBriefInstruction` |
-| Group by initiative; nested sub-points; never path-as-title; carry pack Mermaid | `notePeriodBriefInstruction`; `weekly-report.json`; this skill |
-| Wake system_contract repeats grouping + Mermaid | `buildNotePeriodBriefPrompt` |
-| Platform weekly-report persona refresh on stale instructions | `EnsurePeriodBriefAgent` / `refreshPeriodBriefInstructionsIfStale` |
+| Fixed board: Summary (Work Summary + Next Steps); optional Technique / Achievements / Research | `notePeriodBriefInstruction`; `weekly-report.json`; this skill |
+| Wake system_contract repeats Summary board + Mermaid | `buildNotePeriodBriefPrompt` |
+| Platform weekly-report persona refresh on stale instructions | `EnsurePeriodBriefAgent` / `refreshPeriodBriefInstructionsIfStale` (`## Summary` marker) |
 

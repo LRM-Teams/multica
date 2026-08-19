@@ -121,8 +121,8 @@ multica message send --target <Message target for chat transport> \
 
 Body = pack markdown only. Title like `采集包 <window-label>`.
 
-Human confirmation writes the pack page. Until then the page may still show
-the stub — your job is still to send `--note-write` with real content.
+Human confirmation writes the pack page. Until then the pack page stays empty —
+your job is still to send `--note-write` with real content.
 
 ## Out of scope
 

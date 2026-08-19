@@ -87,11 +87,15 @@ are `retryable=false` — abandon and narrate gaps; do not invent OS work.
 
 The Brief is a **reporting narrative** (提纲挈领), not a pack paste:
 
-- Group by initiative/outcome; nest sub-points under one thread. Do not
-  flatten the same work into sibling bullets.
+- Fixed English sections: always `## Summary` with `### Work Summary`
+  (detailed, priority) and `### Next Steps`; optionally `## Technique`,
+  `## Achievements`, `## Research` — **omit** any of those three when
+  Facts+packs have no related work (no empty stubs).
+- Inside Work Summary: group by initiative/outcome; nest sub-points under
+  one thread. Do not flatten the same work into sibling bullets.
 - Thread titles are human reporting language — never a filesystem path or
   package directory as a heading.
-- When a ready collector pack includes Mermaid that explains a thread, the
+- When a ready collector pack includes Mermaid that explains work, the
   synthesizer **must** carry that diagram into the Brief.
 
 Skill: `multica-period-work-brief`.

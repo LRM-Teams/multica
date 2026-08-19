@@ -538,6 +538,13 @@ func TestPeriodWorkBriefSkillRequiresReportingShape(t *testing.T) {
 
 	mustContain := []string{
 		"Reporting shape",
+		"## Summary",
+		"Work Summary",
+		"Next Steps",
+		"Technique",
+		"Achievements",
+		"Research",
+		"omit",
 		"filesystem path",
 		"nested sub-points",
 		"Mermaid",

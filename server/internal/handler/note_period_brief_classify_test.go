@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -23,6 +24,29 @@ func TestPeriodBriefFailureIsPermanentRuntimeOfflineRetryable(t *testing.T) {
 	permanent, _, _ := periodBriefFailureIsPermanent("runtime went away", "runtime_offline")
 	if permanent {
 		t.Fatal("runtime_offline should be retryable")
+	}
+}
+
+func TestFormatNotePeriodBriefPacksFailedOmitsBody(t *testing.T) {
+	t.Parallel()
+	got := formatNotePeriodBriefPacks([]notePeriodBriefPackResult{{
+		AgentID:    "agent-1",
+		PageID:     "page-1",
+		Status:     "failed",
+		Retryable:  false,
+		Detail:     "No API key",
+		AbandonWhy: "missing API key",
+		Content:    "should never appear in board",
+		Title:      "采集包 leak",
+	}})
+	if !strings.Contains(got, "调用采集 Agent 失败了") {
+		t.Fatalf("expected explicit collector failure: %s", got)
+	}
+	if strings.Contains(got, "should never appear in board") {
+		t.Fatalf("failed collector must not expose pack body: %s", got)
+	}
+	if strings.Contains(got, "Stub awaiting") {
+		t.Fatalf("failed collector must not expose stub: %s", got)
 	}
 }
 

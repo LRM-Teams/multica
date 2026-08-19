@@ -1486,3 +1486,46 @@ func (q *Queries) TransitionMixedRLRunStatus(ctx context.Context, arg Transition
 	)
 	return i, err
 }
+
+const listReadyEnvDispatchChannelInstances = `-- name: ListReadyEnvDispatchChannelInstances :many
+SELECT binding.sandbox_instance_id::text AS instance_id
+FROM environment_agent_sandbox binding
+JOIN channel ON channel.id = binding.channel_id
+WHERE binding.channel_id = $1
+  AND channel.workspace_id = $2
+  AND binding.status = 'ready'
+  AND binding.sandbox_instance_id IS NOT NULL
+ORDER BY instance_id
+`
+
+type ListReadyEnvDispatchChannelInstancesParams struct {
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Every sandbox a branch of this channel would inherit. Copying a branch channel
+// copies each roster member's binding along with the sandbox it was bound to, so
+// the trigger is not the only agent that continues source state. Only ready
+// bindings have a sandbox worth capturing.
+//
+// environment_agent_sandbox carries no workspace of its own; the join is what
+// keeps a caller from reading another workspace's bindings by channel id.
+func (q *Queries) ListReadyEnvDispatchChannelInstances(ctx context.Context, arg ListReadyEnvDispatchChannelInstancesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listReadyEnvDispatchChannelInstances, arg.ChannelID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var instance_id string
+		if err := rows.Scan(&instance_id); err != nil {
+			return nil, err
+		}
+		items = append(items, instance_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

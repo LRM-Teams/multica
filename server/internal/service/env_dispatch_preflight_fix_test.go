@@ -171,9 +171,13 @@ func mixedBranchDispatchInput() EnvDispatchInput {
 	}
 }
 
+// The anchor of a mixed branch dispatch continues source state, and the
+// live sandbox clone it used to boot from is retired: every branch
+// dispatch now captures the source once through a savepoint provider,
+// so these tests install the fake provider rather than the bare service.
 func TestDispatchMixedBranchCompletesPreflightBeforeCanonicalSend(t *testing.T) {
 	deps := newMixedBranchPreflightDeps()
-	result, err := NewEnvDispatchService(deps, 1).Dispatch(context.Background(), mixedBranchDispatchInput())
+	result, err := NewEnvDispatchService(deps, 1).WithBranchSavepoints(newFakeBranchSavepointProvider()).Dispatch(context.Background(), mixedBranchDispatchInput())
 	if err != nil {
 		t.Fatalf("mixed branch dispatch: %v", err)
 	}
@@ -198,7 +202,7 @@ func TestDispatchMixedBranchFailureCompensatesFreshAReALSessionAtEveryRollbackEd
 		t.Run(stage, func(t *testing.T) {
 			deps := newMixedBranchPreflightDeps()
 			deps.failStage = stage
-			_, err := NewEnvDispatchService(deps, 1).Dispatch(context.Background(), mixedBranchDispatchInput())
+			_, err := NewEnvDispatchService(deps, 1).WithBranchSavepoints(newFakeBranchSavepointProvider()).Dispatch(context.Background(), mixedBranchDispatchInput())
 			if err == nil || !strings.Contains(err.Error(), "synthetic") {
 				t.Fatalf("dispatch error = %v, want synthetic %s failure", err, stage)
 			}
@@ -237,7 +241,7 @@ func TestDispatchMixedBranchCleanupFailuresAreAggregatedAndRetried(t *testing.T)
 		"rt-2": errors.New("injected offline cleanup failure"),
 	}
 
-	_, err := NewEnvDispatchService(deps, 1).Dispatch(context.Background(), mixedBranchDispatchInput())
+	_, err := NewEnvDispatchService(deps, 1).WithBranchSavepoints(newFakeBranchSavepointProvider()).Dispatch(context.Background(), mixedBranchDispatchInput())
 	if err == nil {
 		t.Fatal("dispatch unexpectedly succeeded")
 	}
@@ -267,7 +271,7 @@ func TestDispatchMixedBranchSiblingPreflightFailureSendsNoInitialMessage(t *test
 	input := mixedBranchDispatchInput()
 	input.GroupSize = 2
 
-	_, err := NewEnvDispatchService(deps, 1).Dispatch(context.Background(), input)
+	_, err := NewEnvDispatchService(deps, 1).WithBranchSavepoints(newFakeBranchSavepointProvider()).Dispatch(context.Background(), input)
 	if err == nil || !strings.Contains(err.Error(), "synthetic sibling provisioning failure") {
 		t.Fatalf("dispatch error = %v, want sibling provisioning failure", err)
 	}
@@ -286,7 +290,7 @@ func TestDispatchMixedBranchSiblingFailureCompensatesAlreadyStartedRollout(t *te
 	input := mixedBranchDispatchInput()
 	input.GroupSize = 2
 
-	_, err := NewEnvDispatchService(deps, 1).Dispatch(context.Background(), input)
+	_, err := NewEnvDispatchService(deps, 1).WithBranchSavepoints(newFakeBranchSavepointProvider()).Dispatch(context.Background(), input)
 	if err == nil || !strings.Contains(err.Error(), "synthetic timeout-start failure") {
 		t.Fatalf("dispatch error = %v, want sibling timeout-start failure", err)
 	}
@@ -300,7 +304,7 @@ func TestDispatchMixedBranchPostDispatchPersistenceFailureCompensatesStartedRoll
 	deps := newMixedBranchPreflightDeps()
 	deps.failStage = "post-dispatch-local-target"
 
-	_, err := NewEnvDispatchService(deps, 1).Dispatch(context.Background(), mixedBranchDispatchInput())
+	_, err := NewEnvDispatchService(deps, 1).WithBranchSavepoints(newFakeBranchSavepointProvider()).Dispatch(context.Background(), mixedBranchDispatchInput())
 	if err == nil || !strings.Contains(err.Error(), "synthetic post-dispatch local-target failure") {
 		t.Fatalf("dispatch error = %v, want post-dispatch local-target failure", err)
 	}

@@ -1436,7 +1436,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			return nil
 		}
 	} else if event.ChatSessionID.Valid {
-		if !h.populateAgentInboxChatContext(ctx, event, &resp) {
+		if !h.populateAgentInboxChatContext(ctx, runtime.ID, event, &resp) {
 			slog.Warn("agent inbox claim: exact prompt missing",
 				"inbox_event_id", uuidToString(event.ID),
 				"chat_session_id", uuidToString(event.ChatSessionID),
@@ -2001,15 +2001,22 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 			resp.ReferencedEntityOmittedCount = references.OmittedCount
 		}
 		if !event.ForceFreshSession {
-			if prior, err := h.Queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-				AgentID: event.AgentID,
-				IssueID: event.IssueID,
-			}); err == nil {
-				if prior.RuntimeID == runtime.ID && prior.SessionID.Valid {
-					resp.PriorSessionID = prior.SessionID.String
-				}
-				if prior.WorkDir.Valid {
-					resp.PriorWorkDir = prior.WorkDir.String
+			// The row's own pinned session wins. A checkpoint-resumed task is
+			// the SAME row, so its session is the interrupted one to continue,
+			// and GetLastTaskSession cannot see it: that query answers "did an
+			// earlier, terminal task leave a session behind".
+			resp.PriorSessionID, resp.PriorWorkDir = service.OwnPinnedSession(event, runtime.ID)
+			if resp.PriorSessionID == "" {
+				if prior, err := h.Queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
+					AgentID: event.AgentID,
+					IssueID: event.IssueID,
+				}); err == nil {
+					if prior.RuntimeID == runtime.ID && prior.SessionID.Valid {
+						resp.PriorSessionID = prior.SessionID.String
+					}
+					if prior.WorkDir.Valid && resp.PriorWorkDir == "" {
+						resp.PriorWorkDir = prior.WorkDir.String
+					}
 				}
 			}
 		}
@@ -2138,7 +2145,7 @@ func channelOnlyWakeReason(reason string) bool {
 	}
 }
 
-func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {
+func (h *Handler) populateAgentInboxChatContext(ctx context.Context, claimingRuntimeID pgtype.UUID, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {
 	if !event.ChatSessionID.Valid {
 		return false
 	}
@@ -2175,10 +2182,14 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 		return runtimeID.Valid && resp.RuntimeID != "" && uuidToString(runtimeID) == resp.RuntimeID
 	}
 	if !event.ForceFreshSession {
-		if runtimeMatches(cs.RuntimeID) && cs.WorkDir.Valid {
+		// Same precedence as the issue path: a resumed task's own session is on
+		// its own row, and neither the chat_session pointer nor
+		// GetLastChatTaskSession can supply it.
+		resp.PriorSessionID, resp.PriorWorkDir = service.OwnPinnedSession(event, claimingRuntimeID)
+		if runtimeMatches(cs.RuntimeID) && cs.WorkDir.Valid && resp.PriorWorkDir == "" {
 			resp.PriorWorkDir = cs.WorkDir.String
 		}
-		if runtimeMatches(cs.RuntimeID) && cs.SessionID.Valid {
+		if runtimeMatches(cs.RuntimeID) && cs.SessionID.Valid && resp.PriorSessionID == "" {
 			resp.PriorSessionID = cs.SessionID.String
 		}
 		if prior, err := h.Queries.GetLastChatTaskSession(ctx, cs.ID); err == nil {

@@ -535,6 +535,26 @@ type EnvCheckpoint struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 	ResumeTrigger  []byte             `json:"resume_trigger"`
+	SaveMode       string             `json:"save_mode"`
+}
+
+type EnvCheckpointLane struct {
+	ID              pgtype.UUID        `json:"id"`
+	CheckpointID    pgtype.UUID        `json:"checkpoint_id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	LaneKey         string             `json:"lane_key"`
+	Status          string             `json:"status"`
+	InstanceID      pgtype.UUID        `json:"instance_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	RuntimeID       pgtype.UUID        `json:"runtime_id"`
+	TaskID          pgtype.UUID        `json:"task_id"`
+	EnvID           pgtype.UUID        `json:"env_id"`
+	ChannelID       pgtype.UUID        `json:"channel_id"`
+	ChatSessionID   pgtype.UUID        `json:"chat_session_id"`
+	SourceMessageID pgtype.UUID        `json:"source_message_id"`
+	Error           pgtype.Text        `json:"error"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type EnvDispatchAuditEvent struct {
@@ -1630,6 +1650,7 @@ type SandboxSnapshot struct {
 	Metadata       []byte             `json:"metadata"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	CheckpointID   pgtype.UUID        `json:"checkpoint_id"`
 }
 
 type TrainingDispatch struct {

@@ -303,6 +303,11 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc := newEnvDispatchService(h, envDispatchConcurrency())
+	// Branch dispatch continues a running source, which it can only do from a
+	// captured savepoint now that the live clone is gone.
+	if provider := newBranchSavepointProvider(h); provider != nil {
+		svc = svc.WithBranchSavepoints(provider)
+	}
 	res, err := svc.Dispatch(r.Context(), service.EnvDispatchInput{
 		WorkspaceID: workspaceID, UserID: userID,
 		Mode: service.EnvMode(req.Mode), EnvID: req.EnvID,
@@ -1238,6 +1243,7 @@ func (a *envDispatchDepsAdapter) ProvisionEnvDispatchAgent(ctx context.Context, 
 		ChannelID:               in.ChannelID,
 		AgentID:                 in.AgentID,
 		SourceSandboxInstanceID: in.SourceSandboxInstanceID,
+		SavepointTemplate:       in.SavepointTemplate,
 		SandboxConfig:           in.SandboxConfig,
 		TrainingMode:            in.TrainingMode,
 		TargetPolicy:            in.TargetPolicy,

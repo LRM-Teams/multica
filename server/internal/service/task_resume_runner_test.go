@@ -39,13 +39,23 @@ func TestResumeAgentRunReactivatesExistingTask(t *testing.T) {
 	runtimeID := util.MustParseUUID(resumeTestRuntimeID)
 	resetter := &fakeInFlightResetter{task: db.AgentInboxEvent{ID: taskID, RuntimeID: runtimeID}}
 	waker := &fakeWaker{}
-	runner := NewTaskResumeRunner(resetter, waker)
+	runner := NewSameRuntimeContinuation(resetter, waker)
 
-	if err := runner.ResumeAgentRun(context.Background(), ResumeTrigger{
+	outcome, err := runner.ResumeAgentRun(context.Background(), ContinuationRequest{Trigger: ResumeTrigger{
 		TaskID:    resumeTestTaskID,
 		RuntimeID: resumeTestRuntimeID,
-	}); err != nil {
+	}})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome.Status != TriggerExecuted {
+		t.Fatalf("outcome status = %s, want executed", outcome.Status)
+	}
+	if outcome.TaskID != util.UUIDToString(taskID) {
+		t.Fatalf("outcome task id = %q, want %q", outcome.TaskID, util.UUIDToString(taskID))
+	}
+	if runner.Mode() != SaveModePauseInPlace {
+		t.Fatalf("mode = %s, want pause_in_place", runner.Mode())
 	}
 	if !resetter.called {
 		t.Fatal("reset not called")
@@ -62,14 +72,17 @@ func TestResumeAgentRunReactivatesExistingTask(t *testing.T) {
 func TestResumeAgentRunRejectsTerminalTask(t *testing.T) {
 	resetter := &fakeInFlightResetter{err: pgx.ErrNoRows}
 	waker := &fakeWaker{}
-	runner := NewTaskResumeRunner(resetter, waker)
+	runner := NewSameRuntimeContinuation(resetter, waker)
 
-	err := runner.ResumeAgentRun(context.Background(), ResumeTrigger{
+	outcome, err := runner.ResumeAgentRun(context.Background(), ContinuationRequest{Trigger: ResumeTrigger{
 		TaskID:    resumeTestTaskID,
 		RuntimeID: resumeTestRuntimeID,
-	})
+	}})
 	if !errors.Is(err, ErrTriggerTaskNotResumable) {
 		t.Fatalf("expected ErrTriggerTaskNotResumable, got %v", err)
+	}
+	if outcome.Status != TriggerFailed {
+		t.Fatalf("outcome status = %s, want failed", outcome.Status)
 	}
 	if len(waker.notified) != 0 {
 		t.Fatalf("terminal task must not wake runtime, got %d wakes", len(waker.notified))
@@ -78,12 +91,12 @@ func TestResumeAgentRunRejectsTerminalTask(t *testing.T) {
 
 func TestResumeAgentRunRejectsInvalidTaskID(t *testing.T) {
 	resetter := &fakeInFlightResetter{}
-	runner := NewTaskResumeRunner(resetter, &fakeWaker{})
+	runner := NewSameRuntimeContinuation(resetter, &fakeWaker{})
 
-	err := runner.ResumeAgentRun(context.Background(), ResumeTrigger{
+	_, err := runner.ResumeAgentRun(context.Background(), ContinuationRequest{Trigger: ResumeTrigger{
 		TaskID:    "not-a-uuid",
 		RuntimeID: resumeTestRuntimeID,
-	})
+	}})
 	if err == nil {
 		t.Fatal("expected error for invalid task_id, got nil")
 	}

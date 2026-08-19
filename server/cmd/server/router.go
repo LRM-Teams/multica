@@ -1345,6 +1345,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/v1/env-checkpoints", h.CreateEnvCheckpoint)
 			r.Get("/api/v1/env-checkpoints/{checkpointID}", h.GetEnvCheckpoint)
 			r.Post("/api/v1/env-checkpoints/{checkpointID}/resume", h.ResumeEnvCheckpoint)
+			r.Delete("/api/v1/env-checkpoints/{checkpointID}", h.DeleteEnvCheckpoint)
 			r.Get("/api/v1/projects/{projectID}/env-checkpoints", h.ListEnvCheckpoints)
 
 			// Tasks (user-facing, with ownership check)

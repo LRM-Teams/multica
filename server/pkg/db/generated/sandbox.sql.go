@@ -882,7 +882,7 @@ INSERT INTO sandbox_snapshot (
     cube_snapshot_id, name, description, status, metadata
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
 `
 
 type CreateSandboxSnapshotParams struct {
@@ -906,7 +906,7 @@ func (q *Queries) CreateSandboxSnapshot(ctx context.Context, arg CreateSandboxSn
 }
 
 const listSandboxSnapshotsByNode = `-- name: ListSandboxSnapshotsByNode :many
-SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
 FROM sandbox_snapshot
 WHERE workspace_id = $1 AND node_id = $2
 ORDER BY created_at DESC
@@ -938,7 +938,7 @@ func (q *Queries) ListSandboxSnapshotsByNode(ctx context.Context, arg ListSandbo
 }
 
 const getSandboxSnapshotForWorkspace = `-- name: GetSandboxSnapshotForWorkspace :one
-SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
 FROM sandbox_snapshot
 WHERE id = $1 AND workspace_id = $2
 `
@@ -957,7 +957,7 @@ const markSandboxSnapshotReady = `-- name: MarkSandboxSnapshotReady :one
 UPDATE sandbox_snapshot
 SET cube_snapshot_id = $1, status = 'ready', error = NULL, updated_at = now()
 WHERE id = $2 AND workspace_id = $3
-RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
 `
 
 type MarkSandboxSnapshotReadyParams struct {
@@ -975,7 +975,7 @@ const markSandboxSnapshotFailed = `-- name: MarkSandboxSnapshotFailed :one
 UPDATE sandbox_snapshot
 SET status = 'failed', error = $1, updated_at = now()
 WHERE id = $2 AND workspace_id = $3
-RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
 `
 
 type MarkSandboxSnapshotFailedParams struct {
@@ -993,7 +993,7 @@ const markSandboxSnapshotDeleting = `-- name: MarkSandboxSnapshotDeleting :one
 UPDATE sandbox_snapshot
 SET status = 'deleting', error = NULL, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
 `
 
 type MarkSandboxSnapshotDeletingParams struct {
@@ -1010,7 +1010,7 @@ const markSandboxSnapshotReadyAgain = `-- name: MarkSandboxSnapshotReadyAgain :o
 UPDATE sandbox_snapshot
 SET status = 'ready', error = $1, updated_at = now()
 WHERE id = $2 AND workspace_id = $3
-RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
 `
 
 type MarkSandboxSnapshotReadyAgainParams struct {
@@ -1039,12 +1039,66 @@ func (q *Queries) DeleteSandboxSnapshot(ctx context.Context, arg DeleteSandboxSn
 	return err
 }
 
+const attachSandboxSnapshotToCheckpoint = `-- name: AttachSandboxSnapshotToCheckpoint :one
+UPDATE sandbox_snapshot
+SET checkpoint_id = $1, updated_at = now()
+WHERE id = $2 AND workspace_id = $3
+  AND (checkpoint_id IS NULL OR checkpoint_id = $1)
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
+`
+
+type AttachSandboxSnapshotToCheckpointParams struct {
+	CheckpointID pgtype.UUID `json:"checkpoint_id"`
+	ID           pgtype.UUID `json:"id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+}
+
+// Binds a savepoint to its single owning checkpoint. Idempotent for the same
+// owner so a retried checkpoint create does not fail, and it refuses to steal a
+// savepoint that another checkpoint already owns.
+func (q *Queries) AttachSandboxSnapshotToCheckpoint(ctx context.Context, arg AttachSandboxSnapshotToCheckpointParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, attachSandboxSnapshotToCheckpoint, arg.CheckpointID, arg.ID, arg.WorkspaceID)
+	return scanSandboxSnapshot(row)
+}
+
+const listSandboxSnapshotsForCheckpoint = `-- name: ListSandboxSnapshotsForCheckpoint :many
+SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
+FROM sandbox_snapshot
+WHERE checkpoint_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+`
+
+type ListSandboxSnapshotsForCheckpointParams struct {
+	CheckpointID pgtype.UUID `json:"checkpoint_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListSandboxSnapshotsForCheckpoint(ctx context.Context, arg ListSandboxSnapshotsForCheckpointParams) ([]SandboxSnapshot, error) {
+	rows, err := q.db.Query(ctx, listSandboxSnapshotsForCheckpoint, arg.CheckpointID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SandboxSnapshot
+	for rows.Next() {
+		item, err := scanSandboxSnapshot(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func scanSandboxSnapshot(row interface{ Scan(...interface{}) error }) (SandboxSnapshot, error) {
 	var i SandboxSnapshot
 	err := row.Scan(
 		&i.ID, &i.WorkspaceID, &i.NodeID, &i.InstanceID, &i.CreatorUserID,
 		&i.CubeSnapshotID, &i.Name, &i.Description, &i.Status, &i.Error,
-		&i.Metadata, &i.CreatedAt, &i.UpdatedAt,
+		&i.Metadata, &i.CreatedAt, &i.UpdatedAt, &i.CheckpointID,
 	)
 	return i, err
 }
@@ -1192,4 +1246,47 @@ func scanSweLegoTemplateCache(row interface{ Scan(...interface{}) error }) (SweL
 		&item.UpdatedAt,
 	)
 	return item, err
+}
+
+const getReadySavepointForInstance = `-- name: GetReadySavepointForInstance :one
+SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id
+FROM sandbox_snapshot
+WHERE workspace_id = $1
+  AND instance_id = $2
+  AND status = 'ready'
+  AND checkpoint_id IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetReadySavepointForInstanceParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	InstanceID  pgtype.UUID `json:"instance_id"`
+}
+
+// The savepoint a branch continuation boots a peer's sandbox from. Restricted to
+// checkpoint-owned rows: an unowned snapshot has no checkpoint keeping it alive,
+// so a sandbox created from it could lose its template underneath it. Newest
+// first, because re-branching the same source captures a fresher savepoint and a
+// later mention should continue from the state the branch was actually taken at.
+func (q *Queries) GetReadySavepointForInstance(ctx context.Context, arg GetReadySavepointForInstanceParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, getReadySavepointForInstance, arg.WorkspaceID, arg.InstanceID)
+	var i SandboxSnapshot
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.NodeID,
+		&i.InstanceID,
+		&i.CreatorUserID,
+		&i.CubeSnapshotID,
+		&i.Name,
+		&i.Description,
+		&i.Status,
+		&i.Error,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CheckpointID,
+	)
+	return i, err
 }

@@ -924,3 +924,442 @@ func TestMigration313ChannelAttentionRoundSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestMigration422AddsSaveModeAndCheckpointOwnedSavepoints(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "422_env_checkpoint_save_mode.up.sql"))
+	if err != nil {
+		t.Fatalf("read 422 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"ADD COLUMN IF NOT EXISTS save_mode text NOT NULL DEFAULT 'pause_in_place'",
+		"env_checkpoint_save_mode_check",
+		"CHECK (save_mode IN ('pause_in_place', 'snapshot'))",
+		"ALTER TABLE sandbox_snapshot",
+		"ADD COLUMN IF NOT EXISTS checkpoint_id uuid",
+		"REFERENCES env_checkpoint(id) ON DELETE CASCADE",
+		"CREATE INDEX IF NOT EXISTS sandbox_snapshot_checkpoint_idx",
+		"WHERE checkpoint_id IS NOT NULL",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("422 up missing %q", required)
+		}
+	}
+	// The default carries every pre-existing row, so no data migration is
+	// needed and none may be smuggled in here.
+	for _, forbidden := range []string{
+		"UPDATE env_checkpoint",
+		"UPDATE sandbox_snapshot",
+		"DELETE FROM",
+		"DROP TABLE",
+	} {
+		if strings.Contains(contents, forbidden) {
+			t.Errorf("422 up must not backfill or destroy data; found %q", forbidden)
+		}
+	}
+	// A savepoint nobody owns must stay legal, so the ownership column cannot
+	// be NOT NULL.
+	if strings.Contains(contents, "checkpoint_id uuid NOT NULL") {
+		t.Error("422 up must leave checkpoint_id nullable for unowned snapshots")
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "422_env_checkpoint_save_mode.down.sql"))
+	if err != nil {
+		t.Fatalf("read 422 down: %v", err)
+	}
+	for _, required := range []string{
+		"DROP INDEX IF EXISTS sandbox_snapshot_checkpoint_idx",
+		"DROP COLUMN IF EXISTS checkpoint_id",
+		"DROP CONSTRAINT IF EXISTS env_checkpoint_save_mode_check",
+		"DROP COLUMN IF EXISTS save_mode",
+	} {
+		if !strings.Contains(string(down), required) {
+			t.Errorf("422 down missing %q", required)
+		}
+	}
+}
+
+func TestMigration423CreatesLaneTableWithIdempotencyAndRecoveryColumns(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "423_env_checkpoint_lane.up.sql"))
+	if err != nil {
+		t.Fatalf("read 423 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS env_checkpoint_lane",
+		"checkpoint_id UUID NOT NULL REFERENCES env_checkpoint(id) ON DELETE CASCADE",
+		"workspace_id UUID NOT NULL",
+		"lane_key TEXT NOT NULL",
+		"CHECK (status IN ('provisioning', 'ready', 'failed'))",
+		// The unique index is the idempotency mechanism, not an optimization.
+		"UNIQUE (checkpoint_id, lane_key)",
+		"CREATE INDEX IF NOT EXISTS env_checkpoint_lane_provisioning_idx",
+		"WHERE status = 'provisioning'",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("423 up missing %q", required)
+		}
+	}
+	// The lane's conversation must be its own and must be recorded, or a lane
+	// interrupted between copying its channel and starting its run would copy a
+	// second channel on recovery.
+	for _, conversation := range []string{"channel_id UUID", "chat_session_id UUID", "source_message_id UUID"} {
+		if !strings.Contains(contents, conversation) {
+			t.Errorf("423 up missing per-lane %q", conversation)
+		}
+	}
+	// The per-step ids must stay nullable: a lane interrupted partway is
+	// continued from its first unfilled step, which is impossible if they are
+	// required up front.
+	for _, step := range []string{
+		"instance_id", "project_id", "runtime_id", "task_id", "env_id",
+		"channel_id", "chat_session_id", "source_message_id",
+	} {
+		if strings.Contains(contents, step+" UUID NOT NULL") {
+			t.Errorf("423 up makes %s NOT NULL, which breaks continuing an interrupted lane", step)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "423_env_checkpoint_lane.down.sql"))
+	if err != nil {
+		t.Fatalf("read 423 down: %v", err)
+	}
+	for _, required := range []string{
+		"DROP INDEX IF EXISTS env_checkpoint_lane_provisioning_idx",
+		"DROP TABLE IF EXISTS env_checkpoint_lane",
+	} {
+		if !strings.Contains(string(down), required) {
+			t.Errorf("423 down missing %q", required)
+		}
+	}
+}
+
+func TestLaneQueriesClaimIdempotentlyAndStayWorkspaceScoped(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	body, err := os.ReadFile(filepath.Join(
+		filepath.Dir(thisFile), "..", "..", "pkg", "db", "queries", "env_checkpoint_lane.sql"))
+	if err != nil {
+		t.Fatalf("read lane queries: %v", err)
+	}
+	contents := string(body)
+	for _, required := range []string{
+		"ON CONFLICT (checkpoint_id, lane_key) DO NOTHING",
+		// The lane's workspace comes from its checkpoint, so a lane cannot land
+		// in a different workspace than the checkpoint it belongs to.
+		"SELECT c.id, c.workspace_id, @lane_key, 'provisioning'",
+		"COALESCE(sqlc.narg(instance_id), instance_id)",
+		"COALESCE(sqlc.narg(channel_id), channel_id)",
+		"COALESCE(sqlc.narg(source_message_id), source_message_id)",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("lane queries missing %q", required)
+		}
+	}
+	if strings.Contains(contents, "VALUES (@checkpoint_id, @workspace_id, @lane_key") {
+		t.Error("claim must derive workspace_id from the checkpoint, not accept it from the caller")
+	}
+	// Every lane query except the cross-workspace sweeper must be workspace
+	// scoped.
+	for _, name := range []string{
+		"GetEnvCheckpointLane",
+		"ListEnvCheckpointLanes",
+		"UpdateEnvCheckpointLaneStep",
+		"MarkEnvCheckpointLaneReady",
+		"MarkEnvCheckpointLaneFailed",
+		"CountProvisioningEnvCheckpointLanes",
+	} {
+		idx := strings.Index(contents, "-- name: "+name+" :")
+		if idx < 0 {
+			t.Errorf("lane queries missing %q", name)
+			continue
+		}
+		stmt := contents[idx:]
+		if end := strings.Index(stmt[1:], "\n-- name: "); end >= 0 {
+			stmt = stmt[:end+1]
+		}
+		if !strings.Contains(stmt, "workspace_id = @workspace_id") {
+			t.Errorf("%s is not workspace scoped", name)
+		}
+	}
+}
+
+// TestLaneSweepFailsStaleLanesInOneStatement guards the property that makes the
+// sweeper safe to run against live traffic. If the staleness test and the write
+// are ever split into a list followed by per-row updates, a lane its owner drove
+// to `ready` in between is failed while healthy — and nothing else in the suite
+// would notice, because the fakes cannot reproduce the race.
+
+func TestLaneSweepFailsStaleLanesInOneStatement(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..",
+		"pkg", "db", "queries", "env_checkpoint_lane.sql"))
+	if err != nil {
+		t.Fatalf("read lane queries: %v", err)
+	}
+	contents := string(raw)
+
+	idx := strings.Index(contents, "-- name: SweepStaleProvisioningEnvCheckpointLanes :many")
+	if idx < 0 {
+		t.Fatal("lane queries missing the sweeper")
+	}
+	stmt := contents[idx:]
+	if end := strings.Index(stmt[1:], "\n-- name: "); end >= 0 {
+		stmt = stmt[:end+1]
+	}
+	// The write itself must carry the predicate, not just the candidate subquery:
+	// Postgres re-checks the outer WHERE when the row changed underneath.
+	for _, required := range []string{
+		"UPDATE env_checkpoint_lane AS l",
+		"SET status = 'failed'",
+		"WHERE l.status = 'provisioning'",
+		"AND l.updated_at < @stale_before",
+		"LIMIT @row_limit",
+		"RETURNING *",
+	} {
+		if !strings.Contains(stmt, required) {
+			t.Errorf("sweeper missing %q", required)
+		}
+	}
+	// The sweeper is the one lane query that must span workspaces; scoping it
+	// would leave lanes stuck forever in whichever workspaces went unswept.
+	if strings.Contains(stmt, "workspace_id = @workspace_id") {
+		t.Error("the sweeper must not be workspace scoped")
+	}
+	if strings.Contains(contents, "-- name: ListStaleProvisioningEnvCheckpointLanes") {
+		t.Error("the list-then-mark sweeper query is gone; reintroducing it reopens the race")
+	}
+}
+
+func TestSavepointOwnershipQueriesStayWorkspaceScopedAndNonStealing(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	queriesDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "pkg", "db", "queries")
+
+	checkpoint, err := os.ReadFile(filepath.Join(queriesDir, "env_checkpoint.sql"))
+	if err != nil {
+		t.Fatalf("read env_checkpoint queries: %v", err)
+	}
+	for _, required := range []string{
+		"    save_mode\n",
+		"    @save_mode\n",
+		"-- name: UpdateEnvCheckpointSaveMode :one",
+		"SET save_mode = @save_mode, updated_at = now()",
+	} {
+		if !strings.Contains(string(checkpoint), required) {
+			t.Errorf("env_checkpoint queries missing %q", required)
+		}
+	}
+
+	sandbox, err := os.ReadFile(filepath.Join(queriesDir, "sandbox.sql"))
+	if err != nil {
+		t.Fatalf("read sandbox queries: %v", err)
+	}
+	for _, required := range []string{
+		"-- name: AttachSandboxSnapshotToCheckpoint :one",
+		// A savepoint has exactly one owner, so attaching must never reassign
+		// one that another checkpoint already owns.
+		"AND (checkpoint_id IS NULL OR checkpoint_id = @checkpoint_id)",
+		"-- name: ListSandboxSnapshotsForCheckpoint :many",
+		"WHERE checkpoint_id = @checkpoint_id AND workspace_id = @workspace_id",
+		"-- name: GetReadySavepointForInstance :one",
+		// A sandbox created from an unowned snapshot can lose its template
+		// underneath it: nothing keeps that snapshot alive.
+		"AND checkpoint_id IS NOT NULL",
+	} {
+		if !strings.Contains(string(sandbox), required) {
+			t.Errorf("sandbox queries missing %q", required)
+		}
+	}
+}
+
+// TestBranchSourceInstanceQueryStaysWorkspaceScoped guards the one query in this
+// change that reads a table with no workspace column of its own.
+// environment_agent_sandbox is scoped through its channel, so dropping the join
+// would let a caller enumerate another workspace's sandboxes by channel id -- and
+// then capture savepoints of them.
+
+func TestBranchSourceInstanceQueryStaysWorkspaceScoped(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	environment, err := os.ReadFile(filepath.Join(
+		filepath.Dir(thisFile), "..", "..", "pkg", "db", "queries", "environment.sql"))
+	if err != nil {
+		t.Fatalf("read environment queries: %v", err)
+	}
+	for _, required := range []string{
+		"-- name: ListReadyEnvDispatchChannelInstances :many",
+		"JOIN channel ON channel.id = binding.channel_id",
+		"AND channel.workspace_id = @workspace_id",
+		// Only a ready binding has a sandbox worth capturing.
+		"AND binding.status = 'ready'",
+	} {
+		if !strings.Contains(string(environment), required) {
+			t.Errorf("environment queries missing %q", required)
+		}
+	}
+}
+
+// TestGeneratedSnapshotScanMatchesSelectedColumns guards the hand-maintained
+// generated code in this repository: sandbox.sql.go routes every sandbox_snapshot
+// row through one shared scan helper, so a column added to the SELECT lists
+// without a matching scan target would misalign every snapshot read at runtime,
+// which no compile check would catch.
+
+func TestGeneratedSnapshotScanMatchesSelectedColumns(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	generatedDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "pkg", "db", "generated")
+
+	sandbox, err := os.ReadFile(filepath.Join(generatedDir, "sandbox.sql.go"))
+	if err != nil {
+		t.Fatalf("read generated sandbox: %v", err)
+	}
+	contents := string(sandbox)
+	const snapshotColumns = "id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at, checkpoint_id"
+	if got := strings.Count(contents, snapshotColumns); got != 10 {
+		t.Errorf("snapshot column list appears %d times, want 10 (7 pre-existing queries plus attach, list-for-checkpoint and the per-instance savepoint lookup)", got)
+	}
+	// The scan helper must end with checkpoint_id, in the same order.
+	if !strings.Contains(contents, "&i.Metadata, &i.CreatedAt, &i.UpdatedAt, &i.CheckpointID,") {
+		t.Error("scanSandboxSnapshot does not scan checkpoint_id last, so snapshot reads would misalign")
+	}
+	if strings.Count(contents, "func scanSandboxSnapshot(") != 1 {
+		t.Error("expected exactly one shared sandbox_snapshot scan helper")
+	}
+
+	checkpoint, err := os.ReadFile(filepath.Join(generatedDir, "env_checkpoint.sql.go"))
+	if err != nil {
+		t.Fatalf("read generated env_checkpoint: %v", err)
+	}
+	checkpointContents := string(checkpoint)
+	const checkpointColumns = "id, workspace_id, project_id, event_ref, checkpoint_kind, env_id_map, sandbox_refs, db_snapshot, entropy_score, save_timeout_ms, save_status, save_error, created_at, updated_at, resume_trigger, save_mode"
+	if got := strings.Count(checkpointContents, checkpointColumns); got != 5 {
+		t.Errorf("checkpoint column list appears %d times, want 5 (4 pre-existing queries plus update-save-mode)", got)
+	}
+	// Every checkpoint scan must take save_mode after resume_trigger.
+	scans := strings.Count(checkpointContents, "&i.ResumeTrigger,")
+	saveModeScans := strings.Count(checkpointContents, "&i.ResumeTrigger,\n\t\t&i.SaveMode,") +
+		strings.Count(checkpointContents, "&i.ResumeTrigger,\n\t\t\t&i.SaveMode,")
+	if scans != saveModeScans {
+		t.Errorf("%d checkpoint scans read resume_trigger but only %d follow it with save_mode", scans, saveModeScans)
+	}
+}
+
+// TestMigration424RetiresTheCloneJobType pins both halves of retiring a job type:
+// the CHECK stops accepting it, and the down migration puts it back so an older
+// server image can still insert one.
+
+func TestMigration424RetiresTheCloneJobType(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	dir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(dir, "424_sandbox_job_retire_clone.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 424 up: %v", err)
+	}
+	// Only the statement counts. The comment above it names the value it is
+	// dropping, which is worth keeping and is not part of the constraint.
+	upSQL := stripSQLComments(string(up))
+	if strings.Contains(upSQL, "'clone'") {
+		t.Error("migration 424 must drop 'clone' from sandbox_job_type_check")
+	}
+	// Dropping the value must not drop the ones 181/182/187 added alongside it;
+	// that mistake is exactly what migration 187 existed to repair.
+	for _, kept := range []string{"'create_template'", "'delete_template'", "'exec'", "'message'"} {
+		if !strings.Contains(upSQL, kept) {
+			t.Errorf("migration 424 dropped %s along with clone", kept)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(dir, "424_sandbox_job_retire_clone.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 424 down: %v", err)
+	}
+	if !strings.Contains(stripSQLComments(string(down)), "'clone'") {
+		t.Error("migration 424 down must restore 'clone'")
+	}
+}
+
+func stripSQLComments(sql string) string {
+	var kept []string
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// TestNoPathEnqueuesOrHandlesACloneJob is the other half of retiring the type:
+// the schema stops accepting 'clone', so code still producing one would fail at
+// insert with a CHECK violation rather than at compile time.
+//
+// It matches the two shapes that actually carry a job type -- the enqueue call
+// and sandboxd's dispatch switch -- rather than the bare word, which also appears
+// in git clone and agent cloning.
+
+func TestNoPathEnqueuesOrHandlesACloneJob(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..")
+
+	var offenders []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || path == thisFile {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(body), "\n") {
+			if !strings.Contains(line, `"clone"`) {
+				continue
+			}
+			if strings.Contains(line, "EnqueueSandboxJob") || strings.Contains(line, "case ") ||
+				strings.Contains(line, "JobType") || strings.Contains(line, "Type:") {
+				offenders = append(offenders, path+": "+strings.TrimSpace(line))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk server tree: %v", err)
+	}
+	if len(offenders) != 0 {
+		t.Errorf("these sites still treat 'clone' as a sandbox job type, which migration 424 makes unacceptable: %v", offenders)
+	}
+}

@@ -385,6 +385,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	taskSvc.OnTaskTerminal = h.maybeStartAutomaticSharedDiagnosis
 	h.wireHonorUnlockEvents()
 	h.wireAgentHonorEvents()
+	h.EnvCheckpointService = newEnvCheckpointService(h)
 	return h
 }
 

@@ -224,7 +224,7 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 		"name":            c.cfg.Name,
 		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
-		"capabilities":    []string{"create", "docker_create", "stop", "resume", "delete", "reconfigure", "clone", "create_template", "delete_template", "exec"},
+		"capabilities":    []string{"create", "docker_create", "stop", "resume", "delete", "reconfigure", "create_template", "delete_template", "exec"},
 		"metadata":        c.nodeMetadata(),
 	}, nil)
 }
@@ -611,8 +611,6 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 			return c.createDockerContainer(ctx, job, payload)
 		}
 		return c.createCubeSandbox(ctx, job, payload)
-	case "clone":
-		return c.cloneCubeSandbox(ctx, job, payload)
 	case "stop":
 		if dockerMode {
 			return c.dockerLifecycle(ctx, sandboxID, "stop")
@@ -1069,26 +1067,6 @@ func (c *sandboxdClient) deleteDockerContainer(ctx context.Context, containerID 
 		return nil, fmt.Errorf("docker rm: %s", msg)
 	}
 	return map[string]any{"local_ref": containerID, "result": map[string]any{"deleted": true, "container_id": containerID}}, nil
-}
-
-func (c *sandboxdClient) cloneCubeSandbox(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
-	if payload.SourceExternalID == "" {
-		return nil, fmt.Errorf("clone job missing source_external_id")
-	}
-	var snapshot map[string]any
-	if err := c.cubeJSON(ctx, http.MethodPost, "/sandboxes/"+url.PathEscape(payload.SourceExternalID)+"/snapshots", map[string]any{}, "", &snapshot); err != nil {
-		return nil, err
-	}
-	snapshotID := firstNonEmpty(stringAny(snapshot["templateID"]), stringAny(snapshot["id"]), stringAny(snapshot["snapshotID"]))
-	if snapshotID == "" {
-		return nil, fmt.Errorf("cube snapshot response missing template id")
-	}
-	defer func() {
-		_ = c.cubeJSON(context.WithoutCancel(ctx), http.MethodDelete, "/templates/"+url.PathEscape(snapshotID), nil, "", nil)
-	}()
-	create := parseSandboxJobPayload(payload.CreatePayload)
-	create.Template = snapshotID
-	return c.createCubeSandbox(ctx, job, create)
 }
 
 func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
@@ -1622,6 +1600,10 @@ func (c *sandboxdClient) startRuntimeInCube(ctx context.Context, sandboxID strin
 // re-register as the source sandbox's runtime before the new env takes effect,
 // and leftover profile-scoped daemon.id files can trigger legacy runtime merge
 // that steals the source row.
+//
+// Fan-out makes this sharper: several lanes are started from the same savepoint,
+// so they all restore the same frozen daemon.id. Without the reset they would
+// register as one runtime and their sessions would collide.
 func buildStartRuntimeInCubeCode(runtimeEnv map[string]string) string {
 	// pkill patterns use the [m]ultica trick: a `python3 -c '…pkill…'` process
 	// embeds this source in argv, so a literal `multica daemon` pattern would

@@ -489,6 +489,9 @@ func main() {
 	}
 	if err := schedulerMgr.Register(scheduler.ResearchRunReconcileJob(h)); err != nil {
 		slog.Warn("scheduler: failed to register research run reconciliation job", "error", err)
+	}
+	if err := schedulerMgr.Register(scheduler.EnvCheckpointLaneSweepJob(pool)); err != nil {
+		slog.Warn("scheduler: failed to register env checkpoint lane sweep job", "error", err)
 	} else {
 		schedulerRegistered = true
 	}

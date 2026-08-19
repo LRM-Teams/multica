@@ -170,22 +170,34 @@ LIMIT 16`, agentID, workspaceID)
 	if qerr != nil {
 		return pgtype.UUID{}, false, qerr
 	}
-	defer rows.Close()
+	type jobRoot struct {
+		creatorID pgtype.UUID
+		pageID    pgtype.UUID
+	}
+	jobs := make([]jobRoot, 0)
 	for rows.Next() {
-		var creatorID, jobPageID pgtype.UUID
-		if err := rows.Scan(&creatorID, &jobPageID); err != nil {
+		var job jobRoot
+		if err := rows.Scan(&job.creatorID, &job.pageID); err != nil {
+			rows.Close()
 			return pgtype.UUID{}, false, err
 		}
-		under, underErr := h.notePageIsUnderRoot(ctx, pageID, jobPageID, workspaceID)
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return pgtype.UUID{}, false, err
+	}
+	// Drain the list cursor before ancestry lookups so nested QueryRow
+	// cannot hold two pool connections (cursordeadlock / #1803).
+	rows.Close()
+	for _, job := range jobs {
+		under, underErr := h.notePageIsUnderRoot(ctx, pageID, job.pageID, workspaceID)
 		if underErr != nil {
 			return pgtype.UUID{}, false, underErr
 		}
 		if under {
-			return creatorID, true, nil
+			return job.creatorID, true, nil
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return pgtype.UUID{}, false, err
 	}
 
 	return h.resolveNoteChatSessionViewer(ctx, agentID, workspaceID, pageID)

@@ -218,6 +218,7 @@ export function ChatWindow({
   const wsId = useWorkspaceId();
   // react-doctor-disable-next-line react-doctor/no-event-handler -- mode flag from optional mount prop; not an event→effect handler
   const isDmBubble = Boolean(lockedAgentId) && !contextNotePageId;
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- mode flag from optional mount prop; not an event→effect handler
   const isNoteBubble = Boolean(contextNotePageId);
   const effectiveLayout: "floating" | "fullscreen" = layout;
 

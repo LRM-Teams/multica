@@ -52,22 +52,34 @@ LIMIT 32`, agentID, workspaceID)
 	if err != nil {
 		return pgtype.UUID{}, false, err
 	}
-	defer rows.Close()
+	type sessionRoot struct {
+		creatorID pgtype.UUID
+		rootID    pgtype.UUID
+	}
+	sessions := make([]sessionRoot, 0)
 	for rows.Next() {
-		var creatorID, rootID pgtype.UUID
-		if err := rows.Scan(&creatorID, &rootID); err != nil {
+		var session sessionRoot
+		if err := rows.Scan(&session.creatorID, &session.rootID); err != nil {
+			rows.Close()
 			return pgtype.UUID{}, false, err
 		}
-		under, underErr := h.notePageIsUnderRoot(ctx, pageID, rootID, workspaceID)
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return pgtype.UUID{}, false, err
+	}
+	// Drain the list cursor before ancestry lookups so nested QueryRow
+	// cannot hold two pool connections (cursordeadlock / #1803).
+	rows.Close()
+	for _, session := range sessions {
+		under, underErr := h.notePageIsUnderRoot(ctx, pageID, session.rootID, workspaceID)
 		if underErr != nil {
 			return pgtype.UUID{}, false, underErr
 		}
 		if under {
-			return creatorID, true, nil
+			return session.creatorID, true, nil
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return pgtype.UUID{}, false, err
 	}
 	return pgtype.UUID{}, false, nil
 }

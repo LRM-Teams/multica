@@ -1225,7 +1225,7 @@ func (h *Handler) GetSandboxInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to get sandbox")
 		return
 	}
-	writeJSON(w, http.StatusOK, sandboxInstanceRowToResponse(row))
+	writeJSON(w, http.StatusOK, sandboxInstanceRowToResponse(db.ListSandboxInstancesByWorkspaceRow(row)))
 }
 
 func (h *Handler) UpdateSandboxInstance(w http.ResponseWriter, r *http.Request) {

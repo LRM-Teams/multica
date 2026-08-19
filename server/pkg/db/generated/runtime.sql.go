@@ -1499,7 +1499,7 @@ INSERT INTO agent_runtime (
     owner_id,
     last_seen_at,
     pinned_version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), NULLIF($10, ''))
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), NULLIF($10::text, ''))
 ON CONFLICT (workspace_id, daemon_id, provider)
 DO UPDATE SET
     name = EXCLUDED.name,
@@ -1512,21 +1512,21 @@ DO UPDATE SET
     last_seen_at = now(),
     updated_at = now(),
     starting_since = NULL,
-    pinned_version = NULLIF($10, '')
+    pinned_version = NULLIF($10::text, '')
 RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version, custom_env, (xmax = 0) AS inserted
 `
 
 type UpsertAgentRuntimeParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	DaemonID    pgtype.Text `json:"daemon_id"`
-	Name        string      `json:"name"`
-	RuntimeMode string      `json:"runtime_mode"`
-	Provider    string      `json:"provider"`
-	Status      string      `json:"status"`
-	DeviceInfo  string      `json:"device_info"`
-	Metadata    []byte      `json:"metadata"`
-	OwnerID     pgtype.UUID `json:"owner_id"`
-	Column10    interface{} `json:"column_10"`
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	DaemonID      pgtype.Text `json:"daemon_id"`
+	Name          string      `json:"name"`
+	RuntimeMode   string      `json:"runtime_mode"`
+	Provider      string      `json:"provider"`
+	Status        string      `json:"status"`
+	DeviceInfo    string      `json:"device_info"`
+	Metadata      []byte      `json:"metadata"`
+	OwnerID       pgtype.UUID `json:"owner_id"`
+	PinnedVersion string      `json:"pinned_version"`
 }
 
 type UpsertAgentRuntimeRow struct {
@@ -1595,7 +1595,7 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 		arg.DeviceInfo,
 		arg.Metadata,
 		arg.OwnerID,
-		arg.Column10,
+		arg.PinnedVersion,
 	)
 	var i UpsertAgentRuntimeRow
 	err := row.Scan(

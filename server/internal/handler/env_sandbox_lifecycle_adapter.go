@@ -65,7 +65,7 @@ func (a *envSandboxLifecycleDepsAdapter) GetSandboxInstanceRef(ctx context.Conte
 	if err != nil {
 		return service.SandboxInstanceRef{}, fmt.Errorf("get sandbox instance: %w", err)
 	}
-	return sandboxInstanceRowToRef(row), nil
+	return sandboxInstanceRowToRef(db.ListSandboxInstancesByWorkspaceRow(row)), nil
 }
 
 // MintSandboxRuntimeEnv satisfies EnvSandboxLifecycleDeps. It mints the daemon

@@ -614,6 +614,63 @@ func taskToResponse(t db.AgentInboxEvent, workspaceID string) AgentTaskResponse 
 	return resp
 }
 
+// taskSnapshotRowToResponse adapts the lean presence snapshot row
+// (ListWorkspaceAgentTaskSnapshotRow, LRM-1261: heavy blobs omitted) to the
+// same AgentTaskResponse the full-event mapper produces. The omitted blobs
+// (execution_config / context / result / error) are NULL in the projection,
+// which matches the presence contract: consumers only get status, ids,
+// timestamps and trigger summary — never the heavy payloads.
+func taskSnapshotRowToResponse(row db.ListWorkspaceAgentTaskSnapshotRow, workspaceID string) AgentTaskResponse {
+	return taskToResponse(db.AgentInboxEvent{
+		ID:                  row.ID,
+		WorkspaceID:         row.WorkspaceID,
+		AgentSessionID:      row.AgentSessionID,
+		ConversationID:      row.ConversationID,
+		ChannelID:           row.ChannelID,
+		ChatSessionID:       row.ChatSessionID,
+		AgentID:             row.AgentID,
+		SourceMessageID:     row.SourceMessageID,
+		Reason:              row.Reason,
+		RequiresWake:        row.RequiresWake,
+		Status:              row.Status,
+		Priority:            row.Priority,
+		SeqFrom:             row.SeqFrom,
+		SeqTo:               row.SeqTo,
+		Attempt:             row.Attempt,
+		LastError:           row.LastError,
+		ClaimedAt:           row.ClaimedAt,
+		AckedAt:             row.AckedAt,
+		CreatedAt:           row.CreatedAt,
+		UpdatedAt:           row.UpdatedAt,
+		TerminalOutcome:     row.TerminalOutcome,
+		TerminalDeliveryID:  row.TerminalDeliveryID,
+		Retryable:           row.Retryable,
+		TerminalAt:          row.TerminalAt,
+		RuntimeID:           row.RuntimeID,
+		DeliveryMode:        row.DeliveryMode,
+		ResponseMode:        row.ResponseMode,
+		ChannelOnboardingID: row.ChannelOnboardingID,
+		IssueID:             row.IssueID,
+		SourceChatMessageID: row.SourceChatMessageID,
+		DispatchedAt:        row.DispatchedAt,
+		StartedAt:           row.StartedAt,
+		CompletedAt:         row.CompletedAt,
+		SessionID:           row.SessionID,
+		WorkDir:             row.WorkDir,
+		TriggerCommentID:    row.TriggerCommentID,
+		AutopilotRunID:      row.AutopilotRunID,
+		MaxAttempts:         row.MaxAttempts,
+		ParentTaskID:        row.ParentTaskID,
+		FailureReason:       row.FailureReason,
+		TriggerSummary:      row.TriggerSummary,
+		ForceFreshSession:   row.ForceFreshSession,
+		IsLeaderTask:        row.IsLeaderTask,
+		WaitReason:          row.WaitReason,
+		InitiatorUserID:     row.InitiatorUserID,
+		// ExecutionConfig / Context / Result / Error stay nil (lean projection).
+	}, workspaceID)
+}
+
 // parseSharedWorkdirEnvID extracts the shared_sandbox sample env id from a
 // task's context JSONB. It returns "" for the common case of a non-shared
 // task (no context / no shared_workdir key), for malformed JSON, and for an
@@ -2252,7 +2309,7 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		resolver := h.newAgentOnlyActorIdentityResolver(loadCtx, workspaceID, actorType, actorID, member.Role)
 		resp := make([]AgentTaskResponse, 0, len(tasks))
 		for _, t := range tasks {
-			item := taskToResponse(t, workspaceID)
+			item := taskSnapshotRowToResponse(t, workspaceID)
 			applyActorIdentityToTask(&item, resolver.resolve("agent", item.AgentID))
 			resp = append(resp, item)
 		}

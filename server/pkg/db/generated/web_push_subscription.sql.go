@@ -35,12 +35,12 @@ WHERE user_id = $1 AND endpoint = ANY($2::text[])
 `
 
 type DeleteWebPushSubscriptionsByEndpointsParams struct {
-	UserID  pgtype.UUID `json:"user_id"`
-	Column2 []string    `json:"column_2"`
+	UserID    pgtype.UUID `json:"user_id"`
+	Endpoints []string    `json:"endpoints"`
 }
 
 func (q *Queries) DeleteWebPushSubscriptionsByEndpoints(ctx context.Context, arg DeleteWebPushSubscriptionsByEndpointsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteWebPushSubscriptionsByEndpoints, arg.UserID, arg.Column2)
+	result, err := q.db.Exec(ctx, deleteWebPushSubscriptionsByEndpoints, arg.UserID, arg.Endpoints)
 	if err != nil {
 		return 0, err
 	}
@@ -59,19 +59,19 @@ JOIN channel_member cm
   ON cm.channel_id = ch.id
  AND cm.workspace_id = ch.workspace_id
  AND cm.member_type = 'user'
- AND cm.member_id = $3
+ AND cm.member_id = $1
 JOIN conversation conv ON conv.channel_id = ch.id
 LEFT JOIN conversation_member vcm
   ON vcm.conversation_id = conv.id
  AND vcm.member_type = 'user'
- AND vcm.member_id = $3
-WHERE ch.workspace_id = $1 AND ch.id = $2
+ AND vcm.member_id = $1
+WHERE ch.workspace_id = $2 AND ch.id = $3
 `
 
 type GetWebPushChannelRecipientInfoParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
 	MemberID    pgtype.UUID `json:"member_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
 }
 
 type GetWebPushChannelRecipientInfoRow struct {
@@ -82,7 +82,7 @@ type GetWebPushChannelRecipientInfoRow struct {
 
 // notify_level: NULL → default; legacy rows with muted_at but no level → mentions.
 func (q *Queries) GetWebPushChannelRecipientInfo(ctx context.Context, arg GetWebPushChannelRecipientInfoParams) (GetWebPushChannelRecipientInfoRow, error) {
-	row := q.db.QueryRow(ctx, getWebPushChannelRecipientInfo, arg.WorkspaceID, arg.ID, arg.MemberID)
+	row := q.db.QueryRow(ctx, getWebPushChannelRecipientInfo, arg.MemberID, arg.WorkspaceID, arg.ChannelID)
 	var i GetWebPushChannelRecipientInfoRow
 	err := row.Scan(&i.Name, &i.Kind, &i.NotifyLevel)
 	return i, err

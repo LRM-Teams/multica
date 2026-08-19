@@ -187,24 +187,24 @@ func (q *Queries) CompleteSandboxJob(ctx context.Context, arg CompleteSandboxJob
 
 const completeSweLegoTemplateBuild = `-- name: CompleteSweLegoTemplateBuild :one
 UPDATE swe_lego_template_cache
-SET task_template_id = $3,
+SET task_template_id = $1::text,
     status = 'ready',
     error = NULL,
     builder_instance_id = NULL,
     updated_at = now()
-WHERE node_id = $1 AND cache_key = $2 AND status = 'building'
+WHERE node_id = $2 AND cache_key = $3 AND status = 'building'
 RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
           builder_instance_id, created_at, updated_at
 `
 
 type CompleteSweLegoTemplateBuildParams struct {
+	TaskTemplateID string      `json:"task_template_id"`
 	NodeID         pgtype.UUID `json:"node_id"`
 	CacheKey       string      `json:"cache_key"`
-	TaskTemplateID pgtype.Text `json:"task_template_id"`
 }
 
 func (q *Queries) CompleteSweLegoTemplateBuild(ctx context.Context, arg CompleteSweLegoTemplateBuildParams) (SweLegoTemplateCache, error) {
-	row := q.db.QueryRow(ctx, completeSweLegoTemplateBuild, arg.NodeID, arg.CacheKey, arg.TaskTemplateID)
+	row := q.db.QueryRow(ctx, completeSweLegoTemplateBuild, arg.TaskTemplateID, arg.NodeID, arg.CacheKey)
 	var i SweLegoTemplateCache
 	err := row.Scan(
 		&i.NodeID,
@@ -405,7 +405,7 @@ func (q *Queries) CreateSandboxJob(ctx context.Context, arg CreateSandboxJobPara
 const createSandboxNode = `-- name: CreateSandboxNode :one
 INSERT INTO sandbox_node (node_key, name, owner_user_id, capabilities, max_concurrency, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at
+RETURNING id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at
 `
 
 type CreateSandboxNodeParams struct {
@@ -417,22 +417,7 @@ type CreateSandboxNodeParams struct {
 	Metadata       []byte      `json:"metadata"`
 }
 
-type CreateSandboxNodeRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) CreateSandboxNode(ctx context.Context, arg CreateSandboxNodeParams) (CreateSandboxNodeRow, error) {
+func (q *Queries) CreateSandboxNode(ctx context.Context, arg CreateSandboxNodeParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, createSandboxNode,
 		arg.NodeKey,
 		arg.Name,
@@ -441,20 +426,20 @@ func (q *Queries) CreateSandboxNode(ctx context.Context, arg CreateSandboxNodePa
 		arg.MaxConcurrency,
 		arg.Metadata,
 	)
-	var i CreateSandboxNodeRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -809,10 +794,10 @@ func (q *Queries) GetSandboxInstanceForWorkspace(ctx context.Context, arg GetSan
 
 const getSandboxJobByTokenHash = `-- name: GetSandboxJobByTokenHash :one
 SELECT id, workspace_id, initiator_user_id, node_id, instance_id, type, status, payload, result, error, lease_until, started_at, completed_at, job_token_hash, job_token_expires_at, created_at, updated_at FROM sandbox_job
-WHERE job_token_hash = $1 AND job_token_expires_at > now()
+WHERE job_token_hash = $1::text AND job_token_expires_at > now()
 `
 
-func (q *Queries) GetSandboxJobByTokenHash(ctx context.Context, jobTokenHash pgtype.Text) (SandboxJob, error) {
+func (q *Queries) GetSandboxJobByTokenHash(ctx context.Context, jobTokenHash string) (SandboxJob, error) {
 	row := q.db.QueryRow(ctx, getSandboxJobByTokenHash, jobTokenHash)
 	var i SandboxJob
 	err := row.Scan(
@@ -838,87 +823,57 @@ func (q *Queries) GetSandboxJobByTokenHash(ctx context.Context, jobTokenHash pgt
 }
 
 const getSandboxNode = `-- name: GetSandboxNode :one
-SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
+SELECT id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at FROM sandbox_node
 WHERE id = $1 AND deleted_at IS NULL
 `
 
-type GetSandboxNodeRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) GetSandboxNode(ctx context.Context, id pgtype.UUID) (GetSandboxNodeRow, error) {
+func (q *Queries) GetSandboxNode(ctx context.Context, id pgtype.UUID) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, getSandboxNode, id)
-	var i GetSandboxNodeRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getSandboxNodeByKey = `-- name: GetSandboxNodeByKey :one
-SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
+SELECT id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at FROM sandbox_node
 WHERE node_key = $1 AND deleted_at IS NULL
 `
 
-type GetSandboxNodeByKeyRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) GetSandboxNodeByKey(ctx context.Context, nodeKey string) (GetSandboxNodeByKeyRow, error) {
+func (q *Queries) GetSandboxNodeByKey(ctx context.Context, nodeKey string) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, getSandboxNodeByKey, nodeKey)
-	var i GetSandboxNodeByKeyRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getSandboxNodeForOwner = `-- name: GetSandboxNodeForOwner :one
-SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
+SELECT id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at FROM sandbox_node
 WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
 `
 
@@ -927,37 +882,22 @@ type GetSandboxNodeForOwnerParams struct {
 	OwnerUserID pgtype.UUID `json:"owner_user_id"`
 }
 
-type GetSandboxNodeForOwnerRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) GetSandboxNodeForOwner(ctx context.Context, arg GetSandboxNodeForOwnerParams) (GetSandboxNodeForOwnerRow, error) {
+func (q *Queries) GetSandboxNodeForOwner(ctx context.Context, arg GetSandboxNodeForOwnerParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, getSandboxNodeForOwner, arg.ID, arg.OwnerUserID)
-	var i GetSandboxNodeForOwnerRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -1173,48 +1113,33 @@ func (q *Queries) ListSandboxJobsByInstance(ctx context.Context, instanceID pgty
 }
 
 const listSandboxNodesByOwner = `-- name: ListSandboxNodesByOwner :many
-SELECT id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at FROM sandbox_node
+SELECT id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at FROM sandbox_node
 WHERE owner_user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at ASC
 `
 
-type ListSandboxNodesByOwnerRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) ListSandboxNodesByOwner(ctx context.Context, ownerUserID pgtype.UUID) ([]ListSandboxNodesByOwnerRow, error) {
+func (q *Queries) ListSandboxNodesByOwner(ctx context.Context, ownerUserID pgtype.UUID) ([]SandboxNode, error) {
 	rows, err := q.db.Query(ctx, listSandboxNodesByOwner, ownerUserID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListSandboxNodesByOwnerRow{}
+	items := []SandboxNode{}
 	for rows.Next() {
-		var i ListSandboxNodesByOwnerRow
+		var i SandboxNode
 		if err := rows.Scan(
 			&i.ID,
 			&i.NodeKey,
-			&i.OwnerUserID,
 			&i.Name,
 			&i.Status,
 			&i.Capabilities,
 			&i.MaxConcurrency,
 			&i.Metadata,
 			&i.LastSeenAt,
-			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerUserID,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1581,7 +1506,7 @@ func (q *Queries) MarkStaleSandboxNodesOffline(ctx context.Context, staleSeconds
 }
 
 const pickAvailableSandboxNodeForWorkspace = `-- name: PickAvailableSandboxNodeForWorkspace :one
-SELECT sn.id, sn.node_key, sn.owner_user_id, sn.name, sn.status, sn.capabilities, sn.max_concurrency, sn.metadata, sn.last_seen_at, sn.deleted_at, sn.created_at, sn.updated_at
+SELECT sn.id, sn.node_key, sn.name, sn.status, sn.capabilities, sn.max_concurrency, sn.metadata, sn.last_seen_at, sn.created_at, sn.updated_at, sn.owner_user_id, sn.deleted_at
 FROM sandbox_workspace_binding swb
 JOIN sandbox_node sn ON sn.id = swb.node_id
 WHERE swb.workspace_id = $1 AND swb.enabled = true AND sn.status = 'online' AND sn.deleted_at IS NULL
@@ -1589,43 +1514,28 @@ ORDER BY sn.last_seen_at DESC NULLS LAST, sn.created_at ASC
 LIMIT 1
 `
 
-type PickAvailableSandboxNodeForWorkspaceRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) PickAvailableSandboxNodeForWorkspace(ctx context.Context, workspaceID pgtype.UUID) (PickAvailableSandboxNodeForWorkspaceRow, error) {
+func (q *Queries) PickAvailableSandboxNodeForWorkspace(ctx context.Context, workspaceID pgtype.UUID) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, pickAvailableSandboxNodeForWorkspace, workspaceID)
-	var i PickAvailableSandboxNodeForWorkspaceRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const pickSandboxNodeForWorkspace = `-- name: PickSandboxNodeForWorkspace :one
-SELECT sn.id, sn.node_key, sn.owner_user_id, sn.name, sn.status, sn.capabilities, sn.max_concurrency, sn.metadata, sn.last_seen_at, sn.deleted_at, sn.created_at, sn.updated_at
+SELECT sn.id, sn.node_key, sn.name, sn.status, sn.capabilities, sn.max_concurrency, sn.metadata, sn.last_seen_at, sn.created_at, sn.updated_at, sn.owner_user_id, sn.deleted_at
 FROM sandbox_workspace_binding swb
 JOIN sandbox_node sn ON sn.id = swb.node_id
 WHERE swb.workspace_id = $1 AND swb.node_id = $2 AND swb.enabled = true AND sn.status = 'online' AND sn.deleted_at IS NULL
@@ -1637,37 +1547,22 @@ type PickSandboxNodeForWorkspaceParams struct {
 	NodeID      pgtype.UUID `json:"node_id"`
 }
 
-type PickSandboxNodeForWorkspaceRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) PickSandboxNodeForWorkspace(ctx context.Context, arg PickSandboxNodeForWorkspaceParams) (PickSandboxNodeForWorkspaceRow, error) {
+func (q *Queries) PickSandboxNodeForWorkspace(ctx context.Context, arg PickSandboxNodeForWorkspaceParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, pickSandboxNodeForWorkspace, arg.WorkspaceID, arg.NodeID)
-	var i PickSandboxNodeForWorkspaceRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -1765,7 +1660,7 @@ const touchSandboxNodeHeartbeat = `-- name: TouchSandboxNodeHeartbeat :one
 UPDATE sandbox_node
 SET status = 'online', last_seen_at = now(), updated_at = now(), metadata = $1
 WHERE id = $2 AND deleted_at IS NULL
-RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at
+RETURNING id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at
 `
 
 type TouchSandboxNodeHeartbeatParams struct {
@@ -1773,37 +1668,22 @@ type TouchSandboxNodeHeartbeatParams struct {
 	ID       pgtype.UUID `json:"id"`
 }
 
-type TouchSandboxNodeHeartbeatRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) TouchSandboxNodeHeartbeat(ctx context.Context, arg TouchSandboxNodeHeartbeatParams) (TouchSandboxNodeHeartbeatRow, error) {
+func (q *Queries) TouchSandboxNodeHeartbeat(ctx context.Context, arg TouchSandboxNodeHeartbeatParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, touchSandboxNodeHeartbeat, arg.Metadata, arg.ID)
-	var i TouchSandboxNodeHeartbeatRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -1896,7 +1776,7 @@ SET metadata = jsonb_set(
     ),
     updated_at = now()
 WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL
-RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at
+RETURNING id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at
 `
 
 type UpdateSandboxNodeDefaultTemplateForOwnerParams struct {
@@ -1905,37 +1785,22 @@ type UpdateSandboxNodeDefaultTemplateForOwnerParams struct {
 	OwnerUserID    pgtype.UUID `json:"owner_user_id"`
 }
 
-type UpdateSandboxNodeDefaultTemplateForOwnerRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) UpdateSandboxNodeDefaultTemplateForOwner(ctx context.Context, arg UpdateSandboxNodeDefaultTemplateForOwnerParams) (UpdateSandboxNodeDefaultTemplateForOwnerRow, error) {
+func (q *Queries) UpdateSandboxNodeDefaultTemplateForOwner(ctx context.Context, arg UpdateSandboxNodeDefaultTemplateForOwnerParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, updateSandboxNodeDefaultTemplateForOwner, arg.CubeTemplateID, arg.ID, arg.OwnerUserID)
-	var i UpdateSandboxNodeDefaultTemplateForOwnerRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -1944,7 +1809,7 @@ const updateSandboxNodeNameForOwner = `-- name: UpdateSandboxNodeNameForOwner :o
 UPDATE sandbox_node
 SET name = $1, updated_at = now()
 WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL
-RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at
+RETURNING id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at
 `
 
 type UpdateSandboxNodeNameForOwnerParams struct {
@@ -1953,37 +1818,22 @@ type UpdateSandboxNodeNameForOwnerParams struct {
 	OwnerUserID pgtype.UUID `json:"owner_user_id"`
 }
 
-type UpdateSandboxNodeNameForOwnerRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) UpdateSandboxNodeNameForOwner(ctx context.Context, arg UpdateSandboxNodeNameForOwnerParams) (UpdateSandboxNodeNameForOwnerRow, error) {
+func (q *Queries) UpdateSandboxNodeNameForOwner(ctx context.Context, arg UpdateSandboxNodeNameForOwnerParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, updateSandboxNodeNameForOwner, arg.Name, arg.ID, arg.OwnerUserID)
-	var i UpdateSandboxNodeNameForOwnerRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -2002,7 +1852,7 @@ DO UPDATE SET
     last_seen_at = now(),
     updated_at = now()
 WHERE sandbox_node.deleted_at IS NULL
-RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at
+RETURNING id, node_key, name, status, capabilities, max_concurrency, metadata, last_seen_at, created_at, updated_at, owner_user_id, deleted_at
 `
 
 type UpsertSandboxNodeRegistrationParams struct {
@@ -2014,22 +1864,7 @@ type UpsertSandboxNodeRegistrationParams struct {
 	Metadata       []byte      `json:"metadata"`
 }
 
-type UpsertSandboxNodeRegistrationRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	NodeKey        string             `json:"node_key"`
-	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`
-	Name           string             `json:"name"`
-	Status         string             `json:"status"`
-	Capabilities   []byte             `json:"capabilities"`
-	MaxConcurrency int32              `json:"max_concurrency"`
-	Metadata       []byte             `json:"metadata"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) UpsertSandboxNodeRegistration(ctx context.Context, arg UpsertSandboxNodeRegistrationParams) (UpsertSandboxNodeRegistrationRow, error) {
+func (q *Queries) UpsertSandboxNodeRegistration(ctx context.Context, arg UpsertSandboxNodeRegistrationParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, upsertSandboxNodeRegistration,
 		arg.NodeKey,
 		arg.Name,
@@ -2038,20 +1873,20 @@ func (q *Queries) UpsertSandboxNodeRegistration(ctx context.Context, arg UpsertS
 		arg.MaxConcurrency,
 		arg.Metadata,
 	)
-	var i UpsertSandboxNodeRegistrationRow
+	var i SandboxNode
 	err := row.Scan(
 		&i.ID,
 		&i.NodeKey,
-		&i.OwnerUserID,
 		&i.Name,
 		&i.Status,
 		&i.Capabilities,
 		&i.MaxConcurrency,
 		&i.Metadata,
 		&i.LastSeenAt,
-		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerUserID,
+		&i.DeletedAt,
 	)
 	return i, err
 }

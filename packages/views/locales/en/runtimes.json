@@ -206,7 +206,8 @@
       }
     },
     "section_team_public_one": "Team public ({{count}})",
-    "section_team_public_other": "Team public ({{count}})"
+    "section_team_public_other": "Team public ({{count}})",
+    "basics_version": "Version"
   },
   "health": {
     "online": {

@@ -202,7 +202,8 @@
         "private": "切换为私有"
       }
     },
-    "section_team_public_other": "团队公开 ({{count}})"
+    "section_team_public_other": "团队公开 ({{count}})",
+    "basics_version": "版本"
   },
   "health": {
     "online": {

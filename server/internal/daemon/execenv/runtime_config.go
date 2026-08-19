@@ -342,71 +342,9 @@ const (
 
 // reclaimMarkedMulticaSidecars removes Multica-owned fixed sidecars when their
 // ownership marker is present. Fail-closed on symlink paths (accident model).
-func reclaimMarkedMulticaSidecars(workDir string) error {
-	pairs := [][2]string{
-		{filepath.Join(workDir, ".agent_context", managedIssueContextMarker), filepath.Join(workDir, ".agent_context", "issue_context.md")},
-		{filepath.Join(workDir, ".multica", "project", managedResourcesMarker), filepath.Join(workDir, ".multica", "project", "resources.json")},
-	}
-	for _, pair := range pairs {
-		marker, content := pair[0], pair[1]
-		if _, err := os.Lstat(marker); err != nil {
-			continue
-		}
-		if err := validatePathUnderWorkDirNoSymlink(workDir, marker); err != nil {
-			return fmt.Errorf("refusing reclaim via unsafe marker: %w", err)
-		}
-		if err := validatePathUnderWorkDirNoSymlink(workDir, content); err != nil {
-			if err2 := validatePathUnderWorkDirNoSymlink(workDir, filepath.Dir(content)); err2 != nil {
-				return fmt.Errorf("refusing reclaim via unsafe content parent: %w", err2)
-			}
-			if strings.Contains(err.Error(), "symlink") {
-				return fmt.Errorf("refusing reclaim via symlink content: %w", err)
-			}
-		}
-		if err := os.Remove(content); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("remove marked sidecar %s: %w", content, err)
-		}
-		if err := os.Remove(marker); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("remove ownership marker %s: %w", marker, err)
-		}
-	}
-	return nil
-}
 
 // writeSidecarManifestAtomic writes the ledger via temp+rename so readers never
 // observe a partial JSON document.
-func writeSidecarManifestAtomic(envRoot string, m *sidecarManifest) error {
-	if envRoot == "" {
-		return nil
-	}
-	if m == nil {
-		m = &sidecarManifest{}
-	}
-	data, err := json.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("marshal sidecar manifest: %w", err)
-	}
-	final := filepath.Join(envRoot, sidecarManifestFile)
-	tmp, err := os.CreateTemp(envRoot, "."+sidecarManifestFile+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp ledger: %w", err)
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("write temp ledger: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("close temp ledger: %w", err)
-	}
-	if err := os.Rename(tmpName, final); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("rename ledger into place: %w", err)
-	}
-	return nil
-}
 
 // CleanupSidecarsConfined is CleanupSidecars with a hard confine: every file/dir
 // path is absolutized and must lie under confineRoot (fail closed). Escape
@@ -1173,10 +1111,6 @@ func agentSkillDirForContext(ctx TaskContextForEnv) string {
 		return ""
 	}
 	return filepath.Join(ctx.AgentRoot, "skills")
-}
-
-func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContextForEnv) {
-	renderSkillIndexWithSlugs(b, provider, skills, nil, "")
 }
 
 // renderSkillIndexWithSlugs uses actualDirSlugByName when set so brief index,

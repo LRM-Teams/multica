@@ -117,23 +117,6 @@ func DecodeAndValidateV6IntegrationResult(raw []byte) (V6IntegrationResult, erro
 	return result, nil
 }
 
-func decodeAndHashV6IntegrationResult(raw []byte) (V6IntegrationResult, string, error) {
-	result, err := DecodeAndValidateV6IntegrationResult(raw)
-	if err != nil {
-		return V6IntegrationResult{}, "", err
-	}
-	canonical, err := MarshalArtifactCanonicalJSON(json.RawMessage(raw))
-	if err != nil {
-		return V6IntegrationResult{}, "", err
-	}
-	return result, ArtifactContentHashFromCanonicalJSON(canonical), nil
-}
-
-func researchV6IntegrationEnvelope(result V6IntegrationResult) ResultEnvelope {
-	return ResultEnvelope{SchemaVersion: 6, ClientRequestID: result.ClientRequestID, Summary: result.Summary,
-		Confidence: result.Confidence, IncompleteReason: result.IncompleteReason}
-}
-
 func validateV6IntegrationRequiredShape(raw []byte) error {
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &envelope); err != nil {

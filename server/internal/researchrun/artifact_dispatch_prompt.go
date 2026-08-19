@@ -3,7 +3,6 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -196,23 +195,6 @@ func resolveDispatchRequestTx(
 		return DispatchRequest{}, nil, "", fmt.Errorf("encode dispatch request: %w", err)
 	}
 	return request, encoded, hash, nil
-}
-
-func loadAttemptManifestIDTx(
-	ctx context.Context,
-	tx pgx.Tx,
-	workspaceID, sessionID, attemptID string,
-) (string, error) {
-	var manifestID string
-	err := tx.QueryRow(ctx, `
-		SELECT id::text
-		FROM research_artifact_context_manifest
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, workspaceID, sessionID, attemptID).Scan(&manifestID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	}
-	return manifestID, err
 }
 
 // replayDispatchPromptFromManifest rebuilds the dispatch prompt from the frozen

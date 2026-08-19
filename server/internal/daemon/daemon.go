@@ -3058,18 +3058,6 @@ func transportAttemptWasRecorded(path string) (bool, error) {
 	return true, nil
 }
 
-func transportUnavailableResult(stage string, err error) TaskResult {
-	comment := "transport_unavailable: " + stage
-	if err != nil {
-		comment += ": " + err.Error()
-	}
-	return TaskResult{
-		Status:        "failed",
-		Comment:       comment,
-		FailureReason: "transport_unavailable",
-	}
-}
-
 func runtimeStatsFromAgent(stats *agent.RuntimeTokenStats) *protocol.RuntimeTokenStats {
 	if stats == nil {
 		return nil
@@ -3504,39 +3492,6 @@ func convertMemoriesForEnv(agent *AgentData) []execenv.MemoryContextForEnv {
 		})
 	}
 	return result
-}
-
-func mergeSkillsForEnv(primary, secondary []SkillData) []SkillData {
-	if len(primary) == 0 && len(secondary) == 0 {
-		return nil
-	}
-	merged := make([]SkillData, 0, len(primary)+len(secondary))
-	seen := make(map[string]struct{}, len(primary)+len(secondary))
-	for _, skill := range primary {
-		name := strings.TrimSpace(skill.Name)
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		merged = append(merged, skill)
-	}
-	for _, skill := range secondary {
-		name := strings.TrimSpace(skill.Name)
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		merged = append(merged, skill)
-	}
-	return merged
 }
 
 func resolvedTaskAgentID(task Task) string {

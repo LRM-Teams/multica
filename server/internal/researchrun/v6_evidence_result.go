@@ -182,8 +182,3 @@ func (r V6EvidenceResult) validate() error {
 	}
 	return nil
 }
-
-func researchV6EvidenceEnvelope(result V6EvidenceResult) ResultEnvelope {
-	return ResultEnvelope{SchemaVersion: 6, ClientRequestID: result.ClientRequestID, Summary: result.Summary,
-		Confidence: result.Confidence, IncompleteReason: result.IncompleteReason}
-}

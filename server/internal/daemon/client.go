@@ -59,13 +59,6 @@ func isTaskNotFoundError(err error) bool {
 // isUnauthorizedError returns true if the error is a 401 from the server.
 // Used by the token-renewal loop to surface a clear "re-login required"
 // message instead of a generic transport-level retry.
-func isUnauthorizedError(err error) bool {
-	var reqErr *requestError
-	if !errors.As(err, &reqErr) {
-		return false
-	}
-	return reqErr.StatusCode == http.StatusUnauthorized
-}
 
 // isAgentNotBoundToRuntimeError returns true if the error is a 403 with
 // "agent is not bound to this runtime" body (server/internal/handler/agent_credential.go:256).

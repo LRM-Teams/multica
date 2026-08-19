@@ -20,21 +20,29 @@ ORDER BY seq ASC;
 DELETE FROM task_message
 WHERE task_id = $1;
 
+-- name: MessagesForTaskInRange :many
+-- Returns task messages within an inclusive seq range for one task. Both sides
+-- of task_id are text so callers pass the text agent_run_id (= task.ID) without
+-- UUID parsing, matching GetMaxTaskMessageSeq.
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
+WHERE task_id::text = @task_id::text AND seq BETWEEN @start_seq AND @end_seq
+ORDER BY seq ASC;
+
 -- name: PageTaskMessagesInRange :many
 -- Keyset-paginated messages within a seq range for one task. lastSeq=0 means
 -- "start at the first message >= startSeq". Ordered by (seq, id) so the tie-
 -- breaker is stable across pages. maxDiagnosisSegmentTurns pages are bounded
 -- to 20 turns; the LIMIT here matches that cap.
 SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
-WHERE task_id::text = $1::text AND seq BETWEEN $2 AND $3 AND (seq > $4 OR (seq = $4 AND id > $5))
+WHERE task_id::text = @task_id::text AND seq BETWEEN @start_seq AND @end_seq AND (seq > @last_seq OR (seq = @last_seq AND id > @last_id))
 ORDER BY seq ASC, id ASC
-LIMIT $6;
+LIMIT @page_limit;
 
 -- name: CountTaskMessagesInRange :one
 -- Identical range predicates to PageTaskMessagesInRange so ExpectedCount cannot
 -- disagree with page membership. No cursor condition — counts the full range.
 SELECT COUNT(*)::integer AS count FROM task_message
-WHERE task_id::text = $1::text AND seq BETWEEN $2 AND $3;
+WHERE task_id::text = @task_id::text AND seq BETWEEN @start_seq AND @end_seq;
 
 -- name: GetMaxTaskMessageSeq :one
 -- Returns the highest task_message.seq for a task, or 0 when none exist. Used by

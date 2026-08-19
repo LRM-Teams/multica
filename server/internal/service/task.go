@@ -3482,7 +3482,7 @@ func agentToMap(a db.Agent) map[string]any {
 		"runtime_id":           util.UUIDToString(a.RuntimeID),
 		"name":                 a.Name,
 		"description":          a.Description,
-		"avatar_url":           util.TextToPtr(a.AvatarUrl),
+		"avatar_url":           util.StringToPtr(a.AvatarUrl),
 		"runtime_mode":         a.RuntimeMode,
 		"runtime_config":       rc,
 		"status":               a.Status,

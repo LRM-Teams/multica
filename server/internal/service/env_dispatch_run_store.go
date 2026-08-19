@@ -344,7 +344,7 @@ func (s *EnvDispatchRunStore) SettleDeliveryObligation(ctx context.Context, deli
 	row, err := s.queries.SettleMixedRLDeliveryObligation(ctx, db.SettleMixedRLDeliveryObligationParams{
 		DeliveryID: deliveryID, State: state, SettledAt: timestamptz(settledAt),
 	})
-	return deliveryObligationRecord(row), err
+	return deliveryObligationRecordFromSettleRow(row), err
 }
 
 func (s *EnvDispatchRunStore) AdjustActivity(ctx context.Context, runID pgtype.UUID, delta ActivityCounterDelta) (EnvDispatchRunRecord, error) {
@@ -458,6 +458,15 @@ func deliveryObligationRecord(row db.EnvDispatchDeliveryObligation) DeliveryObli
 }
 
 func deliveryObligationRecordFromCreateRow(row db.CreateMixedRLDeliveryObligationRow) DeliveryObligationRecord {
+	return DeliveryObligationRecord{
+		DeliveryID: row.DeliveryID, RunID: row.RunID, ChannelMessageID: row.ChannelMessageID,
+		SourceRecipientAgentID: row.SourceRecipientAgentID, RunAgentID: row.RunAgentID,
+		State: row.State, QueuedAt: timeValue(row.QueuedAt), SettledAt: timeValue(row.SettledAt),
+		CreatedAt: timeValue(row.CreatedAt),
+	}
+}
+
+func deliveryObligationRecordFromSettleRow(row db.SettleMixedRLDeliveryObligationRow) DeliveryObligationRecord {
 	return DeliveryObligationRecord{
 		DeliveryID: row.DeliveryID, RunID: row.RunID, ChannelMessageID: row.ChannelMessageID,
 		SourceRecipientAgentID: row.SourceRecipientAgentID, RunAgentID: row.RunAgentID,

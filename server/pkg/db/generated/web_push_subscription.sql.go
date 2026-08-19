@@ -35,16 +35,57 @@ WHERE user_id = $1 AND endpoint = ANY($2::text[])
 `
 
 type DeleteWebPushSubscriptionsByEndpointsParams struct {
-	UserID    pgtype.UUID `json:"user_id"`
-	Endpoints []string    `json:"endpoints"`
+	UserID  pgtype.UUID `json:"user_id"`
+	Column2 []string    `json:"column_2"`
 }
 
 func (q *Queries) DeleteWebPushSubscriptionsByEndpoints(ctx context.Context, arg DeleteWebPushSubscriptionsByEndpointsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteWebPushSubscriptionsByEndpoints, arg.UserID, arg.Endpoints)
+	result, err := q.db.Exec(ctx, deleteWebPushSubscriptionsByEndpoints, arg.UserID, arg.Column2)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getWebPushChannelRecipientInfo = `-- name: GetWebPushChannelRecipientInfo :one
+SELECT ch.name, ch.kind,
+  CASE
+    WHEN cm.notify_level IS NOT NULL THEN cm.notify_level
+    WHEN COALESCE(vcm.muted_at, cm.muted_at) IS NOT NULL THEN 'mentions'
+    ELSE 'default'
+  END::text AS notify_level
+FROM channel ch
+JOIN channel_member cm
+  ON cm.channel_id = ch.id
+ AND cm.workspace_id = ch.workspace_id
+ AND cm.member_type = 'user'
+ AND cm.member_id = $3
+JOIN conversation conv ON conv.channel_id = ch.id
+LEFT JOIN conversation_member vcm
+  ON vcm.conversation_id = conv.id
+ AND vcm.member_type = 'user'
+ AND vcm.member_id = $3
+WHERE ch.workspace_id = $1 AND ch.id = $2
+`
+
+type GetWebPushChannelRecipientInfoParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          pgtype.UUID `json:"id"`
+	MemberID    pgtype.UUID `json:"member_id"`
+}
+
+type GetWebPushChannelRecipientInfoRow struct {
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	NotifyLevel string `json:"notify_level"`
+}
+
+// notify_level: NULL → default; legacy rows with muted_at but no level → mentions.
+func (q *Queries) GetWebPushChannelRecipientInfo(ctx context.Context, arg GetWebPushChannelRecipientInfoParams) (GetWebPushChannelRecipientInfoRow, error) {
+	row := q.db.QueryRow(ctx, getWebPushChannelRecipientInfo, arg.WorkspaceID, arg.ID, arg.MemberID)
+	var i GetWebPushChannelRecipientInfoRow
+	err := row.Scan(&i.Name, &i.Kind, &i.NotifyLevel)
+	return i, err
 }
 
 const getWebPushSubscriptionByEndpoint = `-- name: GetWebPushSubscriptionByEndpoint :one
@@ -114,67 +155,6 @@ func (q *Queries) ListActiveWebPushSubscriptions(ctx context.Context, userID pgt
 	return items, nil
 }
 
-const markWebPushSubscriptionsFailed = `-- name: MarkWebPushSubscriptionsFailed :execrows
-UPDATE web_push_subscription
-SET last_error = $3, revoked_at = now(), updated_at = now()
-WHERE user_id = $1 AND endpoint = ANY($2::text[]) AND revoked_at IS NULL
-`
-
-type MarkWebPushSubscriptionsFailedParams struct {
-	UserID    pgtype.UUID `json:"user_id"`
-	Endpoints []string    `json:"endpoints"`
-	LastError string      `json:"last_error"`
-}
-
-func (q *Queries) MarkWebPushSubscriptionsFailed(ctx context.Context, arg MarkWebPushSubscriptionsFailedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markWebPushSubscriptionsFailed, arg.UserID, arg.Endpoints, arg.LastError)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const getWebPushChannelRecipientInfo = `-- name: GetWebPushChannelRecipientInfo :one
-SELECT ch.name, ch.kind,
-  CASE
-    WHEN cm.notify_level IS NOT NULL THEN cm.notify_level
-    WHEN COALESCE(vcm.muted_at, cm.muted_at) IS NOT NULL THEN 'mentions'
-    ELSE 'default'
-  END::text AS notify_level
-FROM channel ch
-JOIN channel_member cm
-  ON cm.channel_id = ch.id
- AND cm.workspace_id = ch.workspace_id
- AND cm.member_type = 'user'
- AND cm.member_id = $3
-JOIN conversation conv ON conv.channel_id = ch.id
-LEFT JOIN conversation_member vcm
-  ON vcm.conversation_id = conv.id
- AND vcm.member_type = 'user'
- AND vcm.member_id = $3
-WHERE ch.workspace_id = $1 AND ch.id = $2
-`
-
-type GetWebPushChannelRecipientInfoParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ChannelID   pgtype.UUID `json:"channel_id"`
-	MemberID    pgtype.UUID `json:"member_id"`
-}
-
-type GetWebPushChannelRecipientInfoRow struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	NotifyLevel string `json:"notify_level"`
-}
-
-// notify_level: NULL → default; legacy rows with muted_at but no level → mentions.
-func (q *Queries) GetWebPushChannelRecipientInfo(ctx context.Context, arg GetWebPushChannelRecipientInfoParams) (GetWebPushChannelRecipientInfoRow, error) {
-	row := q.db.QueryRow(ctx, getWebPushChannelRecipientInfo, arg.WorkspaceID, arg.ChannelID, arg.MemberID)
-	var i GetWebPushChannelRecipientInfoRow
-	err := row.Scan(&i.Name, &i.Kind, &i.NotifyLevel)
-	return i, err
-}
-
 const listWebPushChannelHumanMemberIDs = `-- name: ListWebPushChannelHumanMemberIDs :many
 SELECT member_id::text
 FROM channel_member
@@ -194,16 +174,36 @@ func (q *Queries) ListWebPushChannelHumanMemberIDs(ctx context.Context, arg List
 	defer rows.Close()
 	items := []string{}
 	for rows.Next() {
-		var memberID string
-		if err := rows.Scan(&memberID); err != nil {
+		var member_id string
+		if err := rows.Scan(&member_id); err != nil {
 			return nil, err
 		}
-		items = append(items, memberID)
+		items = append(items, member_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+const markWebPushSubscriptionsFailed = `-- name: MarkWebPushSubscriptionsFailed :execrows
+UPDATE web_push_subscription
+SET last_error = $3, revoked_at = now(), updated_at = now()
+WHERE user_id = $1 AND endpoint = ANY($2::text[]) AND revoked_at IS NULL
+`
+
+type MarkWebPushSubscriptionsFailedParams struct {
+	UserID    pgtype.UUID `json:"user_id"`
+	Column2   []string    `json:"column_2"`
+	LastError pgtype.Text `json:"last_error"`
+}
+
+func (q *Queries) MarkWebPushSubscriptionsFailed(ctx context.Context, arg MarkWebPushSubscriptionsFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markWebPushSubscriptionsFailed, arg.UserID, arg.Column2, arg.LastError)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertWebPushSubscription = `-- name: UpsertWebPushSubscription :one

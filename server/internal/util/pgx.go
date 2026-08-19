@@ -63,6 +63,15 @@ func TextToPtr(t pgtype.Text) *string {
 	return &t.String
 }
 
+// StringToPtr mirrors TextToPtr for plain (NOT NULL) string columns: nil for
+// empty so omitempty-style JSON surfaces keep the old nullable behaviour.
+func StringToPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 func PtrToText(s *string) pgtype.Text {
 	if s == nil {
 		return pgtype.Text{}

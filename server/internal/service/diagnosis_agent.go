@@ -15,6 +15,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/util"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Prompt-building budgets (the per-message / per-segment-byte / turn caps live
@@ -397,7 +398,7 @@ func (r *DiagnosisAgentRunner) freezeDiagnosisSegmentTargets(
 			return nil, fmt.Errorf("diagnosis on-demand: segment %s is outside project", segmentID)
 		}
 		messages, err := r.messageStore.MessagesForTaskInRange(
-			ctx, segment.AgentRunID, segment.StartSeq, segment.EndSeq,
+			ctx, db.MessagesForTaskInRangeParams{TaskID: segment.AgentRunID, StartSeq: segment.StartSeq, EndSeq: segment.EndSeq},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("diagnosis on-demand: messages for segment %s: %w", segmentID, err)

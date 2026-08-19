@@ -231,7 +231,7 @@ func (s *EvolutionService) claimCandidate(ctx context.Context, workspaceID, subm
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
 	claimToken := pgtype.UUID{Bytes: uuid.New(), Valid: true}
-	submission, err := qtx.ClaimEvolutionCandidate(ctx, db.ClaimEvolutionCandidateParams{ID: submissionID, WorkspaceID: workspaceID, ClaimToken: claimToken})
+	submission, err := qtx.ClaimEvolutionCandidate(ctx, db.ClaimEvolutionCandidateParams{ID: submissionID, WorkspaceID: workspaceID, ClaimToken: uuidString(claimToken)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		current, loadErr := qtx.GetEvolutionUnitSubmissionInWorkspace(ctx, db.GetEvolutionUnitSubmissionInWorkspaceParams{ID: submissionID, WorkspaceID: workspaceID})
 		if loadErr != nil {
@@ -547,7 +547,7 @@ func (s *EvolutionService) promoteSubmission(ctx context.Context, submission db.
 		Content:      submission.Content,
 		Metadata:     versionMetadata,
 		Applies:      submission.Applies,
-		SubmissionID: submission.ID,
+		SubmissionID: []pgtype.UUID{submission.ID},
 		ChangeReason: "initial promotion",
 	})
 	if err != nil {
@@ -598,7 +598,7 @@ func (s *EvolutionService) findSemanticDuplicate(ctx context.Context, submission
 		Content:      best.Content,
 		Metadata:     versionMetadata,
 		Applies:      best.Applies,
-		SubmissionID: submission.ID,
+		SubmissionID: []pgtype.UUID{submission.ID},
 		ChangeReason: "semantic duplicate candidate",
 	})
 	if err != nil {

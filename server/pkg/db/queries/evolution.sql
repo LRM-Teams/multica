@@ -106,7 +106,7 @@ SET status = 'candidate',
     review_metadata = review_metadata - 'candidate_claim',
     updated_at = now()
 WHERE id = @id AND workspace_id = @workspace_id AND status = 'clustered'
-  AND review_metadata->'candidate_claim'->>'token' = @claim_token;
+  AND review_metadata->'candidate_claim'->>'token' = @claim_token::text;
 
 -- name: ListEvolutionSubmissionFiles :many
 SELECT * FROM evolution_unit_submission_file
@@ -157,7 +157,7 @@ LIMIT @limit_count;
 SELECT * FROM shared_evolution_unit
 WHERE workspace_id = @workspace_id
   AND unit_type = @unit_type
-  AND metadata->>'dedupe_hash' = @dedupe_hash
+  AND metadata->>'dedupe_hash' = @dedupe_hash::text
 LIMIT 1;
 
 -- name: CreateSharedEvolutionUnit :one

@@ -143,7 +143,7 @@ func (h *Handler) createOrFindAgentDM(w http.ResponseWriter, r *http.Request, wo
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	peer := DMPeer{Type: "agent", ID: uuidToString(agent.ID), Name: agentDisplayName(agent), AvatarURL: textToPtr(agent.AvatarUrl)}
+	peer := DMPeer{Type: "agent", ID: uuidToString(agent.ID), Name: agentDisplayName(agent), AvatarURL: util.StringToPtr(agent.AvatarUrl)}
 
 	canonical := dmCanonicalName("user", userID, "agent", uuidToString(agentID))
 	if ch, found := h.findDMChannel(r.Context(), workspaceID, canonical); found {

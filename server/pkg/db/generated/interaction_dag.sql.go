@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const abortMixedRLUnfinishedProviderCalls = `-- name: AbortMixedRLUnfinishedProviderCalls :execrows
+UPDATE pi_provider_call
+SET status = 'aborted',
+    response_complete = false,
+    training_eligible = false,
+    stop_reason = NULL,
+    completed_at = COALESCE(completed_at, $1)
+WHERE run_id = $2
+  AND frozen_at IS NULL
+  AND status = 'in_progress'
+`
+
+type AbortMixedRLUnfinishedProviderCallsParams struct {
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	RunID       pgtype.UUID        `json:"run_id"`
+}
+
+// Timeout freeze marks every still-observable unfinished call aborted and
+// training-ineligible. Capture gaps cover turns whose batch never arrived.
+func (q *Queries) AbortMixedRLUnfinishedProviderCalls(ctx context.Context, arg AbortMixedRLUnfinishedProviderCallsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, abortMixedRLUnfinishedProviderCalls, arg.CompletedAt, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const advanceInteractionDAGDiagnosisSegmentFetch = `-- name: AdvanceInteractionDAGDiagnosisSegmentFetch :execrows
 UPDATE interaction_dag_diagnosis_segment
 SET next_cursor = $4, fetched_message_count = $5, updated_at = now()
@@ -308,46 +335,6 @@ func (q *Queries) FreezeMixedRLEdges(ctx context.Context, arg FreezeMixedRLEdges
 	return result.RowsAffected(), nil
 }
 
-const getChannelMessageReactionMessageID = `-- name: GetChannelMessageReactionMessageID :one
--- Resolves the reacted-to channel message for a successful reaction action.
-SELECT channel_message_id FROM channel_message_reaction
-WHERE id = $1
-`
-
-func (q *Queries) GetChannelMessageReactionMessageID(ctx context.Context, reactionID pgtype.UUID) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getChannelMessageReactionMessageID, reactionID)
-	var channelMessageID pgtype.UUID
-	err := row.Scan(&channelMessageID)
-	return channelMessageID, err
-}
-
-const abortMixedRLUnfinishedProviderCalls = `-- name: AbortMixedRLUnfinishedProviderCalls :execrows
--- Timeout freeze marks every still-observable unfinished call aborted and
--- training-ineligible. Capture gaps cover turns whose batch never arrived.
-UPDATE pi_provider_call
-SET status = 'aborted',
-    response_complete = false,
-    training_eligible = false,
-    stop_reason = NULL,
-    completed_at = COALESCE(completed_at, $1)
-WHERE run_id = $2
-  AND frozen_at IS NULL
-  AND status = 'in_progress'
-`
-
-type AbortMixedRLUnfinishedProviderCallsParams struct {
-	CompletedAt pgtype.Timestamptz `json:"completed_at"`
-	RunID       pgtype.UUID        `json:"run_id"`
-}
-
-func (q *Queries) AbortMixedRLUnfinishedProviderCalls(ctx context.Context, arg AbortMixedRLUnfinishedProviderCallsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, abortMixedRLUnfinishedProviderCalls, arg.CompletedAt, arg.RunID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const freezeMixedRLProviderCalls = `-- name: FreezeMixedRLProviderCalls :execrows
 UPDATE pi_provider_call
 SET frozen_at = $1
@@ -386,6 +373,19 @@ func (q *Queries) FreezeMixedRLSegments(ctx context.Context, arg FreezeMixedRLSe
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getChannelMessageReactionMessageID = `-- name: GetChannelMessageReactionMessageID :one
+SELECT channel_message_id FROM channel_message_reaction
+WHERE id = $1
+`
+
+// Resolves the reacted-to channel message for a successful reaction action.
+func (q *Queries) GetChannelMessageReactionMessageID(ctx context.Context, reactionID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getChannelMessageReactionMessageID, reactionID)
+	var channel_message_id pgtype.UUID
+	err := row.Scan(&channel_message_id)
+	return channel_message_id, err
 }
 
 const getInteractionDAGDiagnosisRun = `-- name: GetInteractionDAGDiagnosisRun :one
@@ -1005,6 +1005,7 @@ func (q *Queries) InsertMixedRLMessageConsumption(ctx context.Context, arg Inser
 }
 
 const insertMixedRLProviderCall = `-- name: InsertMixedRLProviderCall :one
+
 WITH allocated AS (
   UPDATE env_dispatch_run_agent
   SET next_call_ordinal = next_call_ordinal + 1
@@ -1064,6 +1065,9 @@ type InsertMixedRLProviderCallParams struct {
 	CallOrdinal           int64              `json:"call_ordinal"`
 }
 
+// Mixed-RL frozen DAG queries below are run-scoped. They must never join
+// root_task_id or require dense-per-session segment coverage; those assumptions
+// remain only on the legacy AssembleAssembledDag path above.
 func (q *Queries) InsertMixedRLProviderCall(ctx context.Context, arg InsertMixedRLProviderCallParams) (PiProviderCall, error) {
 	row := q.db.QueryRow(ctx, insertMixedRLProviderCall,
 		arg.CallID,
@@ -1668,6 +1672,46 @@ func (q *Queries) ListMixedRLProviderCallsCanonical(ctx context.Context, runID p
 	return items, nil
 }
 
+const listMixedRLRunSegmentsCanonical = `-- name: ListMixedRLRunSegmentsCanonical :many
+SELECT segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at FROM interaction_dag_run_segment
+WHERE run_id = $1
+ORDER BY segment_ordinal, segment_id
+`
+
+// Provisional plus terminal segments in the deterministic order used by the
+// freeze manifest, before snapshot_id is assigned.
+func (q *Queries) ListMixedRLRunSegmentsCanonical(ctx context.Context, runID pgtype.UUID) ([]InteractionDagRunSegment, error) {
+	rows, err := q.db.Query(ctx, listMixedRLRunSegmentsCanonical, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagRunSegment{}
+	for rows.Next() {
+		var i InteractionDagRunSegment
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.SnapshotID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.Kind,
+			&i.CanonicalActionID,
+			&i.SegmentOrdinal,
+			&i.Reward,
+			&i.RewardSource,
+			&i.ProvisionalAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMixedRLSegmentCallsCanonical = `-- name: ListMixedRLSegmentCallsCanonical :many
 SELECT association.segment_id, association.provider_call_id, association.run_id, association.run_agent_id, association.call_ordinal, association.association_kind, association.created_at
 FROM interaction_dag_segment_provider_call association
@@ -1714,44 +1758,6 @@ ORDER BY segment_ordinal, segment_id
 
 func (q *Queries) ListMixedRLSnapshotSegmentsCanonical(ctx context.Context, snapshotID pgtype.Text) ([]InteractionDagRunSegment, error) {
 	rows, err := q.db.Query(ctx, listMixedRLSnapshotSegmentsCanonical, snapshotID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []InteractionDagRunSegment{}
-	for rows.Next() {
-		var i InteractionDagRunSegment
-		if err := rows.Scan(
-			&i.SegmentID,
-			&i.SnapshotID,
-			&i.RunID,
-			&i.RunAgentID,
-			&i.Kind,
-			&i.CanonicalActionID,
-			&i.SegmentOrdinal,
-			&i.Reward,
-			&i.RewardSource,
-			&i.ProvisionalAt,
-			&i.FinalizedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listMixedRLRunSegmentsCanonical = `-- name: ListMixedRLRunSegmentsCanonical :many
-SELECT segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at FROM interaction_dag_run_segment
-WHERE run_id = $1
-ORDER BY segment_ordinal, segment_id
-`
-
-func (q *Queries) ListMixedRLRunSegmentsCanonical(ctx context.Context, runID pgtype.UUID) ([]InteractionDagRunSegment, error) {
-	rows, err := q.db.Query(ctx, listMixedRLRunSegmentsCanonical, runID)
 	if err != nil {
 		return nil, err
 	}

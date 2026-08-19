@@ -822,7 +822,7 @@ func commentAgentTriggerToResponse(trigger commentAgentTrigger) CommentTriggerAg
 	return CommentTriggerAgentResponse{
 		ID:        uuidToString(trigger.Agent.ID),
 		Name:      agentDisplayName(trigger.Agent),
-		AvatarURL: textToPtr(trigger.Agent.AvatarUrl),
+		AvatarURL: util.StringToPtr(trigger.Agent.AvatarUrl),
 		Source:    string(trigger.Source),
 		Reason:    commentAgentTriggerReason(trigger),
 	}

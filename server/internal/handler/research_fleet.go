@@ -314,7 +314,7 @@ func (h *Handler) researchFleetToResponse(ctx context.Context, fleet db.Research
 		if agent, err := h.Queries.GetAgent(ctx, m.AgentID); err == nil {
 			item.Name = agent.Name
 			item.DisplayName = agent.DisplayName
-			item.AvatarURL = textToPtr(agent.AvatarUrl)
+			item.AvatarURL = util.StringToPtr(agent.AvatarUrl)
 		}
 		out.Members = append(out.Members, item)
 	}

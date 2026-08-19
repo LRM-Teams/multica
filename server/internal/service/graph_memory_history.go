@@ -34,7 +34,7 @@ func NewGraphMemoryHistoryProvider(msgs MessageStore, taskID string) memorygraph
 // judge-visible role/content pairs. Tool outputs are appended to the
 // content so the judge sees what the downstream agent saw.
 func (p *graphMemoryHistoryProvider) DownstreamHistory(ctx context.Context, _ string) ([]memorygraph.Message, error) {
-	rows, err := p.msgs.MessagesForTaskInRange(ctx, p.taskID, 0, math.MaxInt32)
+	rows, err := p.msgs.MessagesForTaskInRange(ctx, db.MessagesForTaskInRangeParams{TaskID: p.taskID, StartSeq: 0, EndSeq: math.MaxInt32})
 	if err != nil {
 		return nil, err
 	}

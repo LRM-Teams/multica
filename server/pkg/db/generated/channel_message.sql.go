@@ -46,12 +46,38 @@ type GetChannelMessageByIDParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
+type GetChannelMessageByIDRow struct {
+	ID                     pgtype.UUID        `json:"id"`
+	ChannelID              pgtype.UUID        `json:"channel_id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	AuthorType             string             `json:"author_type"`
+	AuthorID               pgtype.UUID        `json:"author_id"`
+	AuthorName             string             `json:"author_name"`
+	Content                string             `json:"content"`
+	Source                 string             `json:"source"`
+	ExternalMessageID      pgtype.Text        `json:"external_message_id"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	ThreadID               pgtype.Text        `json:"thread_id"`
+	TriggerDepth           int32              `json:"trigger_depth"`
+	ReplyToMessageID       pgtype.UUID        `json:"reply_to_message_id"`
+	ThreadRootMessageID    pgtype.UUID        `json:"thread_root_message_id"`
+	Parts                  []byte             `json:"parts"`
+	ConversationID         pgtype.UUID        `json:"conversation_id"`
+	Seq                    int64              `json:"seq"`
+	ClientMessageID        pgtype.Text        `json:"client_message_id"`
+	EditedAt               pgtype.Timestamptz `json:"edited_at"`
+	DeletedAt              pgtype.Timestamptz `json:"deleted_at"`
+	QuoteMessageID         pgtype.UUID        `json:"quote_message_id"`
+	QuoteSnapshot          []byte             `json:"quote_snapshot"`
+	MembershipGenerationID pgtype.UUID        `json:"membership_generation_id"`
+}
+
 // Full channel_message row for sqlc → ChannelMessage (task #85 P1).
 // Column list must stay aligned with models.ChannelMessage; S4 test
 // asserts seq/parts/deleted_at flow without hand-written Scan.
-func (q *Queries) GetChannelMessageByID(ctx context.Context, arg GetChannelMessageByIDParams) (ChannelMessage, error) {
+func (q *Queries) GetChannelMessageByID(ctx context.Context, arg GetChannelMessageByIDParams) (GetChannelMessageByIDRow, error) {
 	row := q.db.QueryRow(ctx, getChannelMessageByID, arg.ID, arg.WorkspaceID)
-	var i ChannelMessage
+	var i GetChannelMessageByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.ChannelID,

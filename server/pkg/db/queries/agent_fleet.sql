@@ -15,7 +15,7 @@ JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
   AND atq.status = 'acked'
   AND atq.terminal_outcome IN ('completed', 'failed')
-  AND atq.completed_at > now() - make_interval(days => $2::int)
+  AND atq.completed_at > now() - make_interval(days => @window_days::int)
   AND COALESCE(atq.context->>'type', '') <> 'agent_radar'
 GROUP BY atq.agent_id;
 
@@ -27,7 +27,7 @@ SELECT
 FROM evolution_unit_feedback_event
 WHERE workspace_id = $1
   AND agent_id IS NOT NULL
-  AND created_at > now() - make_interval(days => $2::int)
+  AND created_at > now() - make_interval(days => @window_days::int)
 GROUP BY agent_id;
 
 -- name: GetFleetEvolutionPromotionStats :many
@@ -37,13 +37,13 @@ SELECT
 FROM evolution_unit_submission
 WHERE workspace_id = $1
   AND status = 'promoted'
-  AND updated_at > now() - make_interval(days => $2::int)
+  AND updated_at > now() - make_interval(days => @window_days::int)
 GROUP BY source_agent_id;
 
 -- name: GetFleetGrowthStats :many
 SELECT
     amwe.agent_id,
-    COUNT(*) FILTER (WHERE amwe.created_at > now() - make_interval(days => $2::int))::bigint AS writes_30d,
+    COUNT(*) FILTER (WHERE amwe.created_at > now() - make_interval(days => @window_days::int))::bigint AS writes_30d,
     COUNT(*)::bigint AS total_writes
 FROM agent_memory_write_event amwe
 JOIN agent a ON a.id = amwe.agent_id
@@ -70,7 +70,7 @@ SELECT
               AND execution.agent_id = atq.agent_id
               AND completed_event.status = 'acked'
               AND completed_event.terminal_outcome = 'completed'
-              AND completed_event.completed_at > now() - make_interval(days => $2::int)
+              AND completed_event.completed_at > now() - make_interval(days => @window_days::int)
               AND COALESCE(completed_event.context->>'type', '') <> 'agent_radar'
         ),
         0
@@ -82,7 +82,7 @@ WHERE a.workspace_id = $1
   AND atq.terminal_outcome = 'completed'
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
-  AND atq.completed_at > now() - make_interval(days => $2::int)
+  AND atq.completed_at > now() - make_interval(days => @window_days::int)
   AND COALESCE(atq.context->>'type', '') <> 'agent_radar'
 GROUP BY atq.agent_id;
 

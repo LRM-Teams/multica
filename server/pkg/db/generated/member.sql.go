@@ -122,32 +122,6 @@ func (q *Queries) ListMembers(ctx context.Context, workspaceID pgtype.UUID) ([]M
 	return items, nil
 }
 
-const touchMemberLastActiveWorkspace = `-- name: TouchMemberLastActiveWorkspace :one
-UPDATE member
-SET last_active_at = now()
-WHERE user_id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, user_id, role, created_at, last_active_at
-`
-
-type TouchMemberLastActiveWorkspaceParams struct {
-	UserID      pgtype.UUID `json:"user_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-}
-
-func (q *Queries) TouchMemberLastActiveWorkspace(ctx context.Context, arg TouchMemberLastActiveWorkspaceParams) (Member, error) {
-	row := q.db.QueryRow(ctx, touchMemberLastActiveWorkspace, arg.UserID, arg.WorkspaceID)
-	var i Member
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.UserID,
-		&i.Role,
-		&i.CreatedAt,
-		&i.LastActiveAt,
-	)
-	return i, err
-}
-
 const listMembersWithUser = `-- name: ListMembersWithUser :many
 SELECT m.id, m.workspace_id, m.user_id, m.role, m.created_at,
        u.name as user_name, u.display_name as user_display_name,
@@ -201,6 +175,32 @@ func (q *Queries) ListMembersWithUser(ctx context.Context, workspaceID pgtype.UU
 		return nil, err
 	}
 	return items, nil
+}
+
+const touchMemberLastActiveWorkspace = `-- name: TouchMemberLastActiveWorkspace :one
+UPDATE member
+SET last_active_at = now()
+WHERE user_id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, user_id, role, created_at, last_active_at
+`
+
+type TouchMemberLastActiveWorkspaceParams struct {
+	UserID      pgtype.UUID `json:"user_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) TouchMemberLastActiveWorkspace(ctx context.Context, arg TouchMemberLastActiveWorkspaceParams) (Member, error) {
+	row := q.db.QueryRow(ctx, touchMemberLastActiveWorkspace, arg.UserID, arg.WorkspaceID)
+	var i Member
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.Role,
+		&i.CreatedAt,
+		&i.LastActiveAt,
+	)
+	return i, err
 }
 
 const updateMemberRole = `-- name: UpdateMemberRole :one

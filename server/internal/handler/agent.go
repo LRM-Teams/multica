@@ -162,7 +162,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		DisplayName:        agentDisplayName(a),
 		Description:        a.Description,
 		Instructions:       a.Instructions,
-		AvatarURL:          textToPtr(a.AvatarUrl),
+		AvatarURL:          util.StringToPtr(a.AvatarUrl),
 		AvatarSource:       a.AvatarSource,
 		RuntimeMode:        a.RuntimeMode,
 		RuntimeName:        defaultAgentRuntimeName(a.RuntimeMode),

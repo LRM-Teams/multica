@@ -29,17 +29,17 @@ WHERE name = $1;
 -- rather than carrying a dedicated UpdateUserTimezone keeps the
 -- profile-patch shape uniform between Preferences fields.
 UPDATE "user" SET
-    display_name = COALESCE($2, display_name),
-    avatar_url = COALESCE($3, avatar_url),
-    language = COALESCE($4, language),
-    profile_description = COALESCE($5, profile_description),
+    display_name = COALESCE(sqlc.narg('display_name'), display_name),
+    avatar_url = COALESCE(@avatar_url, avatar_url),
+    language = COALESCE(@language, language),
+    profile_description = COALESCE(sqlc.narg('profile_description'), profile_description),
     timezone = CASE
-        WHEN $6::text IS NULL THEN timezone
-        WHEN $6::text = ''    THEN NULL
-        ELSE $6::text
+        WHEN sqlc.narg('timezone') IS NULL THEN timezone
+        WHEN @timezone = ''    THEN NULL
+        ELSE @timezone
     END,
     updated_at = now()
-WHERE id = $1
+WHERE id = @id
 RETURNING *;
 
 -- name: MarkUserOnboarded :one

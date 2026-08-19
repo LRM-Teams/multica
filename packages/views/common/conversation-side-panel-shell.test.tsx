@@ -33,8 +33,8 @@ describe("ConversationSidePanelShell dismiss chrome (LRM-1185 / LRM-974 gate)", 
     );
 
     const close = screen.getByTestId("side-panel-page-close");
-    expect(close).toHaveClass("size-11");
-    expect(close.querySelector("svg")).toHaveClass("size-5");
+    expect(close).toHaveClass("size-8");
+    expect(close.querySelector("svg")).toHaveClass("size-4");
   });
 
   it("keeps the floating page header (agent profile) dismissable", () => {

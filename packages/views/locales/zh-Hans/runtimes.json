@@ -78,6 +78,8 @@
     "basics_pinned_version": "指定版本",
     "agents_section": "本机 Agents",
     "code_agents_section": "本机 Runtime",
+    "code_agents_env": "环境变量",
+    "code_agents_env_dialog_title": "环境变量",
     "code_agents_installed": "已安装",
     "code_agents_not_installed": "未安装",
     "code_agents_installed_empty": "这台电脑上还没有检测到 Runtime。",

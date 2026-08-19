@@ -1,7 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { ExternalLink, Globe, Lock } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ExternalLink, Globe, Lock, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useAuthStore } from "@multica/core/auth";
@@ -10,11 +10,18 @@ import { useQuery } from "@tanstack/react-query";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useUpdateRuntime } from "@multica/core/runtimes/mutations";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@multica/ui/components/ui/dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type { RuntimeMachine } from "./runtime-machines";
 import { partitionMachineCodeAgents } from "./machine-code-agents";
 import { ProviderLogo } from "./provider-logo";
+import { RuntimeEnvEditor } from "./runtime-env-editor";
 
 function SectionTitle({ children }: { children: ReactNode }) {
   return (
@@ -40,6 +47,7 @@ export function MachineCodeAgentsSection({
   const user = useAuthStore((s) => s.user);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const updateRuntime = useUpdateRuntime(wsId);
+  const [envTarget, setEnvTarget] = useState<{ id: string; label: string } | null>(null);
 
   const currentMember = user
     ? members.find((m) => m.user_id === user.id)
@@ -148,7 +156,7 @@ export function MachineCodeAgentsSection({
                     <span className="min-w-0 truncate">{row.label}</span>
                   </div>
                   {isInstalled ? (
-                    <div className="mt-auto flex flex-col items-start gap-2 pt-3 md:flex-row md:items-center md:justify-between md:gap-2">
+                    <div className="mt-auto flex flex-col items-start gap-2 pt-3 md:flex-row md:flex-wrap md:items-center md:justify-between md:gap-2">
                       <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
                         <span
                           className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-online"
@@ -158,25 +166,42 @@ export function MachineCodeAgentsSection({
                           <span className="tabular-nums">{versionLabel}</span>
                         ) : null}
                       </span>
-                      {runtime && visibility ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="xs"
-                          className="h-6 shrink-0 gap-1 px-2 text-[11px]"
-                          onClick={flip}
-                          disabled={!canEdit || updateRuntime.isPending}
-                          data-testid={`machine-sharing-toggle-${runtime.id}`}
-                        >
-                          {visibility === "public" ? (
-                            <Lock className="h-3 w-3" />
-                          ) : (
-                            <Globe className="h-3 w-3" />
-                          )}
-                          {canEdit
-                            ? t(($) => $.machine.sharing.switch_to[next])
-                            : t(($) => $.machine.sharing.switch_locked)}
-                        </Button>
+                      {runtime ? (
+                        <div className="flex flex-wrap items-center justify-center gap-1.5">
+                          {canEdit ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="xs"
+                              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+                              onClick={() => setEnvTarget({ id: runtime.id, label: row.label })}
+                              data-testid={`machine-env-${runtime.id}`}
+                            >
+                              <SlidersHorizontal className="h-3 w-3" />
+                              {t(($) => $.machine.code_agents_env)}
+                            </Button>
+                          ) : null}
+                          {visibility ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="xs"
+                              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+                              onClick={flip}
+                              disabled={!canEdit || updateRuntime.isPending}
+                              data-testid={`machine-sharing-toggle-${runtime.id}`}
+                            >
+                              {visibility === "public" ? (
+                                <Lock className="h-3 w-3" />
+                              ) : (
+                                <Globe className="h-3 w-3" />
+                              )}
+                              {canEdit
+                                ? t(($) => $.machine.sharing.switch_to[next])
+                                : t(($) => $.machine.sharing.switch_locked)}
+                            </Button>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
                   ) : (
@@ -200,6 +225,28 @@ export function MachineCodeAgentsSection({
           </div>
         )}
       </div>
+
+      <Dialog
+        open={envTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setEnvTarget(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">
+              {t(($) => $.machine.code_agents_env_dialog_title)}
+              {envTarget ? ` · ${envTarget.label}` : ""}
+            </DialogTitle>
+          </DialogHeader>
+          {envTarget ? (
+            <RuntimeEnvEditor
+              runtimeId={envTarget.id}
+              onCancel={() => setEnvTarget(null)}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

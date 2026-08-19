@@ -61,6 +61,78 @@ func sortedIDStrings(ids []pgtype.UUID) []string {
 	return out
 }
 
+func sortedRowIDs(rows []db.SelectStaleOnlineRuntimesRow) []string {
+	ids := make([]pgtype.UUID, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.ID)
+	}
+	return sortedIDStrings(ids)
+}
+
+func candidateRowWithRunner(t *testing.T, id, daemonID, workspaceID string) db.SelectStaleOnlineRuntimesRow {
+	return db.SelectStaleOnlineRuntimesRow{
+		ID:          makeUUIDForFilter(t, id),
+		DaemonID:    pgtype.Text{String: daemonID, Valid: true},
+		WorkspaceID: makeUUIDForFilter(t, workspaceID),
+	}
+}
+
+// TestFilterStaleRuntimesByPresence_SkipsConnectedRunner confirms that a stale
+// DB candidate whose daemon currently has a live WorkspaceRunner socket is NOT
+// marked offline (LRM-1571: WS-connected daemons stop heartbeating; socket
+// presence is the online signal).
+func TestFilterStaleRuntimesByPresence_SkipsConnectedRunner(t *testing.T) {
+	connectedID := "11111111-1111-1111-1111-111111111111"
+	deadID := "22222222-2222-2222-2222-222222222222"
+	connectedWorkspace := "33333333-3333-3333-3333-333333333333"
+	connectedDaemon := "agent-main"
+	deadWorkspace := "44444444-4444-4444-4444-444444444444"
+	deadDaemon := "agent-worker"
+	candidates := []db.SelectStaleOnlineRuntimesRow{
+		candidateRowWithRunner(t, connectedID, connectedDaemon, connectedWorkspace),
+		candidateRowWithRunner(t, deadID, deadDaemon, deadWorkspace),
+	}
+	presence := &fakePresence{hasRunner: map[string]bool{
+		runnerKey(connectedDaemon, connectedWorkspace): true,
+	}}
+	got := filterStaleRuntimesByPresence(candidates, presence)
+	want := []string{deadID}
+	if !reflect.DeepEqual(sortedRowIDs(got), want) {
+		t.Fatalf("connected runner should be kept (stale but alive via WS); disconnected stale should stay offline: got=%v want=%v",
+			sortedRowIDs(got), want)
+	}
+}
+
+// TestFilterStaleRuntimesByPresence_NilPresencePassesThrough confirms that a
+// nil presence source (unit-test wiring, no Hub) keeps every candidate,
+// matching the pre-LRM-1571 behavior.
+func TestFilterStaleRuntimesByPresence_NilPresencePassesThrough(t *testing.T) {
+	a := "11111111-1111-1111-1111-111111111111"
+	b := "22222222-2222-2222-2222-222222222222"
+	candidates := []db.SelectStaleOnlineRuntimesRow{
+		candidateRow(t, a),
+		candidateRow(t, b),
+	}
+	got := filterStaleRuntimesByPresence(candidates, nil)
+	want := []string{a, b}
+	if !reflect.DeepEqual(sortedRowIDs(got), want) {
+		t.Fatalf("nil presence should pass every candidate through: got=%v want=%v",
+			sortedRowIDs(got), want)
+	}
+}
+
+type fakePresence struct {
+	hasRunner map[string]bool
+}
+
+func (f *fakePresence) HasWorkspaceRunner(daemonID, workspaceID string) bool {
+	return f.hasRunner[runnerKey(daemonID, workspaceID)]
+}
+
+func runnerKey(daemonID, workspaceID string) string {
+	return daemonID + "/" + workspaceID
+}
+
 // TestFilterStaleRuntimesByLiveness_NoopStorePassesThrough confirms that with
 // no Redis the filter returns every candidate — the sweeper trusts the DB
 // stale window and behaves like the legacy MarkStaleRuntimesOffline path.

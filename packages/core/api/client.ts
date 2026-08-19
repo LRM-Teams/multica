@@ -66,6 +66,8 @@ import type {
   UpdateAgentRequest,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
+  RuntimeEnvResponse,
+  UpdateRuntimeEnvRequest,
   UpdateAgentFileContentRequest,
   UpdateAgentFileContentResponse,
   AgentTask,
@@ -1806,6 +1808,27 @@ export class ApiClient {
    */
   async updateAgentEnv(id: string, data: UpdateAgentEnvRequest): Promise<AgentEnvResponse> {
     return this.fetch(`/api/members/agents/${id}/env`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  /**
+   * Returns the plaintext `custom_env` map for a runtime. Owner/admin /
+   * runtime owner only; every successful call writes a
+   * `runtime_env_revealed` activity_log row server-side.
+   */
+  async getRuntimeEnv(id: string): Promise<RuntimeEnvResponse> {
+    return this.fetch(`/api/runtimes/${id}/env`);
+  }
+
+  /**
+   * Replaces a runtime's `custom_env` wholesale. Values equal to `"****"`
+   * preserve the existing value for that key (same **** sentinel as agent
+   * env). Owner/admin / runtime owner only; every write is audited.
+   */
+  async updateRuntimeEnv(id: string, data: UpdateRuntimeEnvRequest): Promise<RuntimeEnvResponse> {
+    return this.fetch(`/api/runtimes/${id}/env`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
@@ -5501,5 +5524,27 @@ export class ApiClient {
     }
     void workspaceId;
     return report;
+  }
+
+  async getResearchV6DirectorReportCompiled(
+    workspaceId: string,
+    runId: string,
+    reportId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string> {
+    const res = await this.fetchRaw(
+      `/api/research/v6/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(reportId)}/compiled`,
+      { signal: options?.signal },
+    );
+    const mediaType = (res.headers.get("content-type") ?? "").toLowerCase();
+    if (!mediaType.startsWith("text/html")) {
+      throw new Error("Director V6 compiled report is not HTML");
+    }
+    const html = await res.text();
+    if (html.length === 0 || html.length > 24 * 1024 * 1024) {
+      throw new Error("Director V6 compiled report is empty or too large");
+    }
+    void workspaceId;
+    return html;
   }
 }

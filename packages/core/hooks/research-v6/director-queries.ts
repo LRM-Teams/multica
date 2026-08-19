@@ -61,6 +61,11 @@ export const researchV6DirectorProjectionKeys = {
       "reports",
       reportId,
     ] as const,
+  reportCompiled: (workspaceId: string, runId: string, reportId: string) =>
+    [
+      ...researchV6DirectorProjectionKeys.report(workspaceId, runId, reportId),
+      "compiled",
+    ] as const,
 };
 
 export function researchV6DirectorSlicePageRequest(
@@ -207,5 +212,22 @@ export function researchV6DirectorReportOptions(
     ),
     queryFn: ({ signal }) =>
       transport.loadReport(workspaceId, runId, reportId, signal),
+  });
+}
+
+export function researchV6DirectorReportCompiledOptions(
+  transport: ResearchV6DirectorDetailTransport,
+  workspaceId: string,
+  runId: string,
+  reportId: string,
+) {
+  return queryOptions({
+    queryKey: researchV6DirectorProjectionKeys.reportCompiled(
+      workspaceId,
+      runId,
+      reportId,
+    ),
+    queryFn: ({ signal }) =>
+      transport.loadCompiledReport(workspaceId, runId, reportId, signal),
   });
 }

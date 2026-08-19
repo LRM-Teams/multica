@@ -243,6 +243,45 @@ func TestMigration314MovesSystemAgentAvatarsToOSS(t *testing.T) {
 	}
 }
 
+func TestMigration421MovesDefaultAgentAvatarsToV3(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "421_agent_avatar_v3_presets.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 421 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE OR REPLACE FUNCTION default_agent_avatar_url(agent_id UUID)",
+		"https://cdn.leagent.me/agent-avatars/v3/agent-%s.png",
+		"% 6",
+		"avatar_source = 'assigned'",
+		"/agent-avatars/v2/",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 421 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "421_agent_avatar_v3_presets.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 421 down: %v", err)
+	}
+	downContents := string(down)
+	for _, required := range []string{
+		"https://cdn.leagent.me/agent-avatars/v2/agent-%s.png",
+		"% 15",
+	} {
+		if !strings.Contains(downContents, required) {
+			t.Errorf("migration 421 down missing %q", required)
+		}
+	}
+}
+
 func TestMigration218CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

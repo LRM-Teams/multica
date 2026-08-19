@@ -139,6 +139,8 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	}
 	// Resident Message processes accept only agent-scoped custom environment;
 	// channel and project scoped secrets belong to product Task execution.
+	// Runtime-level env is the machine-default base layer; agent env overrides.
+	injectRuntimeCustomEnv(agentEnv, config.RuntimeEnv, d.logger)
 	injectAgentCustomEnv(agentEnv, config.Agent, d.logger)
 	addMulticaAgentEnv(agentEnv, d.cfg, config.WorkspaceID, config.Agent.ID)
 	if runtime.Provider == agent.ProviderPi {

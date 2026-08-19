@@ -10,9 +10,10 @@ const RESOURCES = {
     change_avatar_aria: "Change avatar",
     avatar_updated_toast: "Avatar updated",
     avatar_picker_title: "Choose an avatar",
-    avatar_picker_description: "Choose a system avatar or upload your own image.",
+    avatar_picker_description: "Choose a system avatar, generate a random robot, or upload your own image.",
     avatar_system_choices_aria: "System avatars",
     avatar_system_choice_aria: "Choose system avatar",
+    avatar_random: "Random robot",
     avatar_upload_custom: "Upload custom avatar",
     avatar_custom_selected: "Custom avatar selected",
     avatar_picker_cancel: "Cancel",
@@ -53,8 +54,8 @@ vi.mock("@multica/core/identity", () => ({
 }));
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   AGENT_AVATAR_PRESETS: [
-    "https://cdn.leagent.me/agent-avatars/v2/agent-01.png",
-    "https://cdn.leagent.me/agent-avatars/v2/agent-02.png",
+    "https://cdn.leagent.me/agent-avatars/v3/agent-01.png",
+    "https://cdn.leagent.me/agent-avatars/v3/agent-02.png",
   ],
   resolvePublicFileUrl: () => null,
 }));
@@ -169,7 +170,7 @@ describe("AgentProfileAvatarEditor", () => {
       expect(onUpdate).toHaveBeenCalledWith("agent-1", {
         avatar_selection: {
           kind: "picked",
-          preset_url: "https://cdn.leagent.me/agent-avatars/v2/agent-02.png",
+          preset_url: "https://cdn.leagent.me/agent-avatars/v3/agent-02.png",
         },
       });
     });

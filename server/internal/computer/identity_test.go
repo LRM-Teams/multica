@@ -257,3 +257,46 @@ func TestIdentityMustIDRejectsAmbiguous(t *testing.T) {
 		t.Fatalf("MustID on ambiguous evidence should error, got nil")
 	}
 }
+
+// Reclaim restores a server-validated identity instead of minting fresh.
+func TestIdentityReclaimRestoresServerID(t *testing.T) {
+	store, _ := newTestStore(t)
+	reclaimed := uuid.NewString()
+	res, err := store.Reclaim(reclaimed)
+	if err != nil {
+		t.Fatalf("Reclaim: %v", err)
+	}
+	if res.Kind != IdentityReclaimed || res.ID != reclaimed {
+		t.Fatalf("Reclaim result = %+v, want IdentityReclaimed %q", res, reclaimed)
+	}
+	// The resident and setup now read the reclaimed id.
+	if got, ok := store.read(); !ok || got != reclaimed {
+		t.Fatalf("stored id = %q, want %q", got, reclaimed)
+	}
+}
+
+// Reclaim never replaces an existing local identity (setup on an intact
+// machine keeps its id).
+func TestIdentityReclaimRefusesToReplaceExisting(t *testing.T) {
+	store, _ := newTestStore(t)
+	existing := store.Load("").ID
+	other := uuid.NewString()
+	if _, err := store.Reclaim(other); err == nil {
+		t.Fatalf("Reclaim should refuse to replace existing id %s", existing)
+	}
+	if got, _ := store.read(); got != existing {
+		t.Fatalf("existing id changed to %q, want %q", got, existing)
+	}
+	// Reclaiming the same id is a no-op success.
+	if _, err := store.Reclaim(existing); err != nil {
+		t.Fatalf("Reclaim(same id) = %v, want no-op success", err)
+	}
+}
+
+// Reclaim validates the server-returned value before writing.
+func TestIdentityReclaimRejectsNonUUID(t *testing.T) {
+	store, _ := newTestStore(t)
+	if _, err := store.Reclaim("not-a-uuid"); err == nil {
+		t.Fatalf("Reclaim(non-UUID) should error, got nil")
+	}
+}

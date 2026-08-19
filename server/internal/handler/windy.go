@@ -35,7 +35,7 @@ const (
 	windyMaxInitialContextTotalLen = 64000
 )
 
-const windyAvatarURL = "https://cdn.leagent.me/agent-avatars/v2/agent-11.png"
+const windyAvatarURL = "https://cdn.leagent.me/agent-avatars/v3/agent-01.png"
 
 const windyInstructions = `Role
 

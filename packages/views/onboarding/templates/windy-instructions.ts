@@ -4,7 +4,7 @@ export const WINDY_DESCRIPTION =
   "Personal HR for building and updating your Multica agent team.";
 
 export const WINDY_AVATAR_URL =
-  "https://cdn.leagent.me/agent-avatars/v2/agent-11.png";
+  "https://cdn.leagent.me/agent-avatars/v3/agent-01.png";
 
 export const WINDY_INSTRUCTIONS = `Role
 

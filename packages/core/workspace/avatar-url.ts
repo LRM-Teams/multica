@@ -80,6 +80,6 @@ export function preferAuthorAvatarUrl(
  * form is deliberate: old desktop clients must not resolve it against the
  * separately-hosted API origin. */
 export const AGENT_AVATAR_PRESETS: readonly string[] = Array.from(
-  { length: 15 },
-  (_, i) => `https://cdn.leagent.me/agent-avatars/v2/agent-${String(i + 1).padStart(2, "0")}.png`,
+  { length: 6 },
+  (_, i) => `https://cdn.leagent.me/agent-avatars/v3/agent-${String(i + 1).padStart(2, "0")}.png`,
 );

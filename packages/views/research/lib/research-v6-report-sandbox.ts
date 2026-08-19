@@ -52,3 +52,32 @@ export function validateResearchV6ReportSandboxUrl(
   }
   return { ok: true, url: url.toString() };
 }
+
+export type ResearchV6ReportFrameSource =
+  | { kind: "isolated"; url: string }
+  | { kind: "compiled"; html: string }
+  | {
+      kind: "unavailable";
+      reason: Extract<ResearchV6ReportSandboxUrlVerdict, { ok: false }>["reason"];
+    };
+
+export function resolveResearchV6ReportFrameSource(input: {
+  sandboxUrl: string;
+  appOrigin: string;
+  reportOrigin: string;
+  compiledHtml?: string;
+}): ResearchV6ReportFrameSource {
+  const verdict = validateResearchV6ReportSandboxUrl(
+    input.sandboxUrl,
+    input.appOrigin,
+    input.reportOrigin,
+  );
+  if (verdict.ok) {
+    return { kind: "isolated", url: verdict.url };
+  }
+  const compiledHtml = input.compiledHtml?.trim() ?? "";
+  if (compiledHtml) {
+    return { kind: "compiled", html: compiledHtml };
+  }
+  return { kind: "unavailable", reason: verdict.reason };
+}

@@ -10,8 +10,10 @@ vi.mock("../../i18n/use-t", () => ({
           report_sandbox: {
             title: "Research report",
             isolated_document: "Isolated report document",
+            sandboxed_document: "Sandboxed report document",
             frame_title: "Research report document",
             loading: "Opening isolated report…",
+            loading_document: "Opening report…",
             unavailable_title: "Interactive report unavailable",
             unavailable_body: "Read the verified plain-text version below.",
             refresh_capability: "Request a fresh link",
@@ -73,5 +75,43 @@ describe("ResearchV6ReportModal", () => {
       expect(screen.queryByTestId("research-v6-report-frame")).toBeNull();
     });
     expect(screen.getByText("Verified report text")).toBeTruthy();
+  });
+
+  it("mounts compiled HTML as a sandboxed blob instead of unavailable", async () => {
+    const objectUrls: string[] = [];
+    const createObjectURL = vi
+      .spyOn(URL, "createObjectURL")
+      .mockImplementation(() => {
+        const url = `blob:${location.origin}/compiled-${objectUrls.length}`;
+        objectUrls.push(url);
+        return url;
+      });
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
+    const { unmount } = render(
+      <ResearchV6ReportModal
+        appOrigin={location.origin}
+        open
+        report={{
+          ...report,
+          sandboxUrl: "",
+          reportOrigin: "",
+          compiledHtml: "<html><body>compiled body</body></html>",
+        }}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    const frame = await screen.findByTestId("research-v6-report-frame");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("src")).toBe(objectUrls[0]);
+    expect(frame).not.toHaveAttribute("srcdoc");
+    expect(screen.queryByText("Interactive report unavailable")).toBeNull();
+    expect(createObjectURL).toHaveBeenCalled();
+
+    unmount();
+    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrls[0]);
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
   });
 });

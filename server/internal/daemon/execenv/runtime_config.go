@@ -278,7 +278,7 @@ func RenderTurnContext(ctx TaskContextForEnv) string {
 
 	if len(ctx.AgentMemories) > 0 {
 		var memories strings.Builder
-		renderPromotedMemorySnapshot(&memories, ctx.AgentMemories)
+		renderPromotedMemorySnapshot(&memories, nonAgentScopeMemories(ctx.AgentMemories))
 		b.WriteString(boundedPromptText(memories.String(), turnMemorySnapshotMaxBytes, "promoted memory snapshot"))
 		b.WriteString("\n\n")
 	}
@@ -932,6 +932,45 @@ func renderPromotedMemorySnapshot(b *strings.Builder, memories []MemoryContextFo
 		}
 		b.WriteString("\n")
 	}
+}
+
+// nonAgentScopeMemories filters out agent-scope memory. Agent-scope memory is
+// loaded once into the session-stable system prompt (RenderAgentScopeMemory),
+// so the per-message (pre-message) context only carries member / project /
+// channel scoped memory — preserving per-message memory isolation (Frank
+// 2026-08-19).
+func nonAgentScopeMemories(memories []MemoryContextForEnv) []MemoryContextForEnv {
+	if len(memories) == 0 {
+		return memories
+	}
+	out := make([]MemoryContextForEnv, 0, len(memories))
+	for _, m := range memories {
+		if strings.TrimSpace(m.Scope) == "agent" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// RenderAgentScopeMemory renders only agent-scope promoted memory for the
+// session-stable system prompt. Returns "" when there is no agent-scope memory.
+func RenderAgentScopeMemory(memories []MemoryContextForEnv) string {
+	if len(memories) == 0 {
+		return ""
+	}
+	var agentScoped []MemoryContextForEnv
+	for _, m := range memories {
+		if strings.TrimSpace(m.Scope) == "agent" {
+			agentScoped = append(agentScoped, m)
+		}
+	}
+	if len(agentScoped) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	renderPromotedMemorySnapshot(&b, agentScoped)
+	return boundedPromptText(b.String(), turnMemorySnapshotMaxBytes, "agent memory snapshot")
 }
 
 func truncateMemorySnapshotContent(value string, maxBytes int) string {

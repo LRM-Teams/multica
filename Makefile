@@ -292,6 +292,9 @@ build: ## Build the server, CLI, and migrate binaries into server/bin
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o bin/multica ./cmd/multica
 	cd server && go build -o bin/migrate ./cmd/migrate
 
+publish-agent-avatars: ## One-time upload of the v3 agent avatar catalog to OSS (needs S3_* env)
+	cd server && go run ./cmd/publish-agent-avatars
+
 build-prod: ## Build Go binaries and the web app for local production serving
 	@bash scripts/build-prod.sh
 

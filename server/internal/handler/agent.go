@@ -310,6 +310,10 @@ type AgentTaskResponse struct {
 	RuntimeID   string         `json:"runtime_id"`
 	IssueID     string         `json:"issue_id"`
 	WorkspaceID string         `json:"workspace_id"`
+	// RuntimeEnv is the machine-default env injected before agent custom_env.
+	// Populated on every claim from agent_runtime.custom_env so the daemon can
+	// layer runtime env + agent env at launch.
+	RuntimeEnv map[string]string `json:"runtime_env,omitempty"`
 	// WorkspaceContext is the workspace-level system prompt set in workspace
 	// settings (`workspace.context` DB column). Injected into the agent brief
 	// as `## Workspace Context` so every agent running in this workspace —

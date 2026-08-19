@@ -628,6 +628,7 @@ type AgentRuntime struct {
 	OfflineReason  pgtype.Text        `json:"offline_reason"`
 	StartingSince  pgtype.Timestamptz `json:"starting_since"`
 	PinnedVersion  pgtype.Text        `json:"pinned_version"`
+	CustomEnv      []byte             `json:"custom_env"`
 }
 
 type AgentSession struct {

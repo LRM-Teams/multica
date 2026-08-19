@@ -542,7 +542,10 @@
     "dialog_title": "运行配置",
     "dialog_description": "按 Computer → Runtime → Model → Reasoning 选择。编辑仅保存在本地草稿；点保存才落库。取消 / Esc / 点遮罩会丢弃草稿且不重启。",
     "dialog_saving": "保存中…",
-    "edit_trigger_aria": "编辑电脑、Runtime、模型与 Reasoning"
+    "edit_trigger_aria": "编辑电脑、Runtime、模型与 Reasoning",
+    "more": "更多",
+    "advanced": "高级",
+    "env_vars_title": "环境变量"
   },
   "side_panel": {
     "close_aria": "关闭 agent 面板",
@@ -606,9 +609,10 @@
     "change_avatar_aria": "更换头像",
     "avatar_updated_toast": "头像已更新",
     "avatar_picker_title": "选择头像",
-    "avatar_picker_description": "选择系统头像，或上传自己的图片。",
+    "avatar_picker_description": "选择系统头像、随机生成一个机器人，或上传自己的图片。",
     "avatar_system_choices_aria": "系统头像",
     "avatar_system_choice_aria": "选择系统头像",
+    "avatar_random": "随机机器人",
     "avatar_upload_custom": "上传自定义头像",
     "avatar_custom_selected": "已选择自定义头像",
     "avatar_picker_cancel": "取消",
@@ -954,7 +958,7 @@
     "creation_not_authorized": "仅工作区 owner 和 admin 可创建此 Agent。",
     "generated_hint": "由 Wendy 根据当前对话生成。",
     "avatar_from_draft_hint": "已带上 Wendy 草稿头像——可更换；清除后创建时用随机预设。",
-    "avatar_random_hint": "已预选系统头像——可在 15 个内置头像中更换，或上传自己的图片。",
+    "avatar_random_hint": "已预选系统头像——可更换内置头像、随机生成一个机器人，或上传自己的图片。",
     "loading_card": "正在加载提案…",
     "load_card_failed": "加载提案失败",
     "card_created": "已创建：{{name}}",

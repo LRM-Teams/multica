@@ -35,7 +35,8 @@ Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
   }),
 });
 
-const { MermaidDiagram, normalizeMermaidChart } = await import("./mermaid-diagram");
+const { MermaidDiagram } = await import("./mermaid-diagram");
+const { normalizeMermaidChart } = await import("./normalize-mermaid-chart");
 
 describe("normalizeMermaidChart", () => {
   it("restores Worker-escape lookalike arrows", () => {

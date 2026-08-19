@@ -87,42 +87,12 @@ func TestRecoverRunnerStatesRemovesDeadOwnerState(t *testing.T) {
 	}
 }
 
-func TestRecoverRunnerStatesRefusesMismatchedPIDIdentity(t *testing.T) {
-	root := t.TempDir()
-	state := persistedRunnerState{
-		WorkspaceID: "workspace-mismatch", StartIdentity: "start-1", OwnerPID: 999998,
-		RunnerPID: os.Getpid(), RunnerIdentity: "not-this-process",
-		StartedAt: time.Now().UTC(),
-	}
-	if err := writeRunnerState(root, state); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeRunnerPID(root, state.WorkspaceID, state.RunnerPID); err != nil {
-		t.Fatal(err)
-	}
-	adopted, err := recoverRunnerStates(root, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(adopted) != 0 {
-		t.Fatalf("mismatched runner was adopted: %+v", adopted)
-	}
-	if _, err := os.Stat(runnerStatePath(root, state.WorkspaceID)); !os.IsNotExist(err) {
-		t.Fatalf("mismatched runner state still exists: %v", err)
-	}
-}
-
-func TestRecoverRunnerStatesAdoptsLiveMatchingRunner(t *testing.T) {
+func TestRecoverRunnerStatesAdoptsLivePIDWithoutProcessIdentity(t *testing.T) {
 	root := t.TempDir()
 	pid := os.Getpid()
-	identity := processIdentityValue(pid)
-	if identity == "" {
-		t.Skip("process identity is unavailable on this platform")
-	}
 	state := persistedRunnerState{
 		WorkspaceID: "workspace-live", StartIdentity: "start-live", OwnerPID: 999998,
-		RunnerPID: pid, RunnerIdentity: identity,
-		StartedAt: time.Now().UTC(),
+		RunnerPID: pid, StartedAt: time.Now().UTC(),
 	}
 	if err := writeRunnerState(root, state); err != nil {
 		t.Fatal(err)
@@ -135,7 +105,7 @@ func TestRecoverRunnerStatesAdoptsLiveMatchingRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(adopted) != 1 || adopted[0].WorkspaceID != state.WorkspaceID || adopted[0].PID != pid {
-		t.Fatalf("adopted = %+v, want live matching runner", adopted)
+		t.Fatalf("adopted = %+v, want live pidfile runner", adopted)
 	}
 	if _, err := os.Stat(runnerStatePath(root, state.WorkspaceID)); err != nil {
 		t.Fatalf("live runner state was deleted: %v", err)

@@ -3,6 +3,7 @@ package computer
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -53,6 +54,44 @@ func (child *supervisorTestChild) Wait() RunnerExitClass { return <-child.wait }
 func (child *supervisorTestChild) Stop() error {
 	child.stopOnce.Do(func() { child.wait <- RunnerExitGraceful })
 	return nil
+}
+
+func TestBindingSupervisorAdoptsLivePidfileAndDoesNotSpawn(t *testing.T) {
+	root := t.TempDir()
+	pid := os.Getpid()
+	state := persistedRunnerState{
+		WorkspaceID: "workspace-a", StartIdentity: "start-live", OwnerPID: 999998,
+		RunnerPID: pid, StartedAt: time.Now().UTC(),
+	}
+	if err := writeRunnerState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRunnerPID(root, state.WorkspaceID, pid); err != nil {
+		t.Fatal(err)
+	}
+	spawned := 0
+	supervisor, err := NewBindingSupervisor(BindingSupervisorConfig{
+		StateRoot: root,
+		Spawn: func(string, string) (BindingChild, error) {
+			spawned++
+			return newSupervisorTestChild(101), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor.Reconcile(context.Background(), []string{"workspace-a"})
+	record, _, ok := supervisor.Snapshot("workspace-a")
+	if !ok || record.Lifecycle != RunnerLifecycleRunning || record.ExternalPID != pid || record.HasChild() {
+		t.Fatalf("adopted record = %+v ok=%v, want running external pid %d", record, ok, pid)
+	}
+	if spawned != 0 {
+		t.Fatalf("spawned %d children after adopting a live pidfile runner", spawned)
+	}
+	supervisor.Stop()
+	if spawned != 0 {
+		t.Fatal("shutdown spawned a replacement for an adopted runner")
+	}
 }
 
 func TestBindingSupervisorRegistersChildBeforeActivation(t *testing.T) {

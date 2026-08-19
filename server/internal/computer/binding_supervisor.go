@@ -224,8 +224,7 @@ func (supervisor *BindingSupervisor) spawn(next bindingSupervisorStart) {
 	supervisor.mu.Unlock()
 	stateErr := writeRunnerState(supervisor.config.StateRoot, persistedRunnerState{
 		WorkspaceID: next.workspaceID, StartIdentity: next.startIdentity,
-		OwnerPID: os.Getpid(), RunnerPID: child.PID(),
-		RunnerIdentity: processIdentityValue(child.PID()), StartedAt: supervisor.config.Now().UTC(),
+		OwnerPID: os.Getpid(), RunnerPID: child.PID(), StartedAt: supervisor.config.Now().UTC(),
 	})
 	if stateErr == nil {
 		stateErr = writeRunnerPID(supervisor.config.StateRoot, next.workspaceID, child.PID())
@@ -294,8 +293,7 @@ func (supervisor *BindingSupervisor) observeReady(workspaceID, startIdentity str
 		}
 		state = persistedRunnerState{
 			WorkspaceID: workspaceID, StartIdentity: startIdentity,
-			OwnerPID: os.Getpid(), RunnerPID: child.PID(),
-			RunnerIdentity: processIdentityValue(child.PID()), StartedAt: startedAt,
+			OwnerPID: os.Getpid(), RunnerPID: child.PID(), StartedAt: startedAt,
 		}
 		_ = writeRunnerState(supervisor.config.StateRoot, state)
 		_ = writeRunnerConnected(supervisor.config.StateRoot, workspaceID, persistedRunnerConnected{PID: child.PID(), ConnectedAt: supervisor.config.Now().UTC(), RunnerEndpoint: controlEndpoint})

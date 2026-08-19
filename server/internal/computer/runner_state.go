@@ -14,12 +14,11 @@ import (
 )
 
 type persistedRunnerState struct {
-	WorkspaceID    string    `json:"workspaceId"`
-	StartIdentity  string    `json:"startIdentity"`
-	OwnerPID       int       `json:"ownerPid"`
-	RunnerPID      int       `json:"runnerPid"`
-	RunnerIdentity string    `json:"runnerIdentity,omitempty"`
-	StartedAt      time.Time `json:"startedAt"`
+	WorkspaceID   string    `json:"workspaceId"`
+	StartIdentity string    `json:"startIdentity"`
+	OwnerPID      int       `json:"ownerPid"`
+	RunnerPID     int       `json:"runnerPid"`
+	StartedAt     time.Time `json:"startedAt"`
 }
 
 func runnerStateDir(root, workspaceID string) string {
@@ -249,16 +248,13 @@ func recoverRunnerStates(root string, logger *slog.Logger) ([]recoveredRunner, e
 		if pidErr == nil {
 			alive, known = processAlive(pid)
 		}
-		identityMatches := pidErr == nil && state.RunnerIdentity != "" && processIdentityValue(pid) == state.RunnerIdentity
-		if known && alive && identityMatches {
-			// Raft 1.0.17 adopts a still-live runner instead of killing it.
+		if known && alive {
+			// Raft 1.0.17 adopts the live pidfile owner. It does not compare
+			// a process-start identity; that fence is always empty on macOS.
 			adopted = append(adopted, recoveredRunner{
 				WorkspaceID: state.WorkspaceID, StartIdentity: state.StartIdentity, PID: pid,
 			})
 			continue
-		}
-		if known && alive && logger != nil {
-			logger.Warn("refusing to adopt orphaned Runner with mismatched process identity", "workspace_id", state.WorkspaceID, "pid", pid)
 		}
 		for _, current := range []string{filepath.Join(filepath.Dir(path), "runner.connected"), filepath.Join(filepath.Dir(path), "runner.pid"), path} {
 			if err := os.Remove(current); err != nil && !os.IsNotExist(err) {

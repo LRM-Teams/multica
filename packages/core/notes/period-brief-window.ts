@@ -14,7 +14,11 @@ export function isValidPeriodBriefCustomRange(startDate: string, endDate: string
 
 /** Shift a YYYY-MM-DD calendar day by `delta` days (UTC date arithmetic). */
 export function shiftPeriodBriefCalendarDay(dayYYYYMMDD: string, delta: number): string {
-  const [year, month, day] = dayYYYYMMDD.split("-").map(Number);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayYYYYMMDD.trim());
+  if (!match) return dayYYYYMMDD;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
   const utc = new Date(Date.UTC(year, month - 1, day + delta));
   return utc.toISOString().slice(0, 10);
 }

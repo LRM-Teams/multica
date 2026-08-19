@@ -259,10 +259,16 @@ func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testin
 	}
 	turn := RenderTurnContext(ctx)
 
-	for _, want := range []string{"## Current Task Initiator", "Alice", "member-1", "## Effective Promoted Memory Snapshot"} {
+	for _, want := range []string{"## Current Task Initiator", "Alice", "member-1"} {
 		if !strings.Contains(turn, want) {
 			t.Errorf("turn context missing %q", want)
 		}
+	}
+	// Promoted memory is loaded once into the session-stable system prompt
+	// (RenderPromotedMemorySnapshot), NOT re-injected into every turn's user
+	// context (Frank 2026-08-19).
+	if strings.Contains(turn, "## Effective Promoted Memory Snapshot") {
+		t.Fatal("promoted memory snapshot must NOT be re-injected into per-turn context")
 	}
 	if strings.Contains(turn, ctx.AgentInstructions) {
 		t.Fatal("stable agent instructions repeated in per-turn context")
@@ -272,6 +278,29 @@ func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testin
 	}
 	if len(turn) > 10*1024 {
 		t.Fatalf("turn context = %d bytes, want <= 10240", len(turn))
+	}
+}
+
+func TestRenderPromotedMemorySnapshotBoundedAndBackedByMemories(t *testing.T) {
+	memories := []MemoryContextForEnv{{
+		Name: "Large selected memory", Content: strings.Repeat("记", 8*1024), Scope: "user",
+	}, {
+		Name: "Second", Content: "tiny", Scope: "project", SubjectType: "project", SubjectID: "p1",
+	}}
+	out := RenderPromotedMemorySnapshot(memories)
+	if !strings.Contains(out, "## Effective Promoted Memory Snapshot") {
+		t.Fatalf("expected memory section header in %q", out)
+	}
+	if !utf8.ValidString(out) {
+		t.Fatal("memory snapshot truncation split a UTF-8 code point")
+	}
+	// boundedPromptText truncates to 8KB plus a short truncation notice, so
+	// assert a sane bound rather than the exact cap.
+	if len(out) > 12*1024 {
+		t.Fatalf("memory snapshot = %d bytes, want <= 12288", len(out))
+	}
+	if RenderPromotedMemorySnapshot(nil) != "" {
+		t.Fatal("empty memories must render empty")
 	}
 }
 

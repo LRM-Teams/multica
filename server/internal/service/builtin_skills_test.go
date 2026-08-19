@@ -582,7 +582,7 @@ func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
 		t.Errorf("allowed-tools = %q, want git access for OS harvest", got)
 	}
 	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
-		t.Errorf("allowed-tools = %q, want Multica CLI for --note-write", got)
+		t.Errorf("allowed-tools = %q, want Multica CLI for submit-pack", got)
 	}
 
 	mustContain := []string{
@@ -591,7 +591,7 @@ func TestPeriodWorkCollectSkillCoversOSHarvestAndNoteWrite(t *testing.T) {
 		"STRICT WINDOW",
 		"Do not",
 		"Host Digest",
-		"--note-write",
+		"submit-pack",
 		"## Repos / roots",
 		"## Highlights",
 		"## Work groups",

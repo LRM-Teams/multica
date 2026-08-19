@@ -1,6 +1,6 @@
 ---
 name: multica-period-work-collect
-description: "Use when collecting Period Work / 本期工作介绍 / collector packs on the OS where this runtime runs. Covers HOME (local) or cloud env git discovery, recent commits, dirty trees, short diffs, preliminary Work groups (same project + related cross-repo), optional Mermaid diagrams, denylist, pack markdown shape, and --note-write delivery. Do not use for writing the final Period Work Brief."
+description: "Use when collecting Period Work / 本期工作介绍 / collector packs on the OS where this runtime runs. Covers HOME (local) or cloud env git discovery, recent commits, dirty trees, short diffs, preliminary Work groups (same project + related cross-repo), optional Mermaid diagrams, denylist, pack markdown shape, and submit-pack delivery onto the Period Brief run. Do not use for writing the final Period Work Brief."
 user-invocable: false
 allowed-tools: Bash(multica *), Bash(git *), Bash(hostname *), Bash(uname *), Bash(find *), Bash(ls *), Bash(head *), Bash(tail *), Bash(wc *), Bash(date *)
 ---
@@ -85,8 +85,9 @@ same window**. Never pad the pack with earlier/later history.
    full local picture, add 1–3 Mermaid blocks under **Diagrams**. Skip if
    bullets already suffice.
 6. **Write the pack** with the exact heading shape below.
-7. **Deliver** with `--note-write` to the pack page id from the wake
-   instruction / sticky — body = pack markdown only.
+7. **Deliver** with `multica notes period-brief submit-pack --draft-page-id <draft>`
+   from the wake — body = pack markdown only. Do **not** `--note-write` the pack
+   into Notes; packs are ephemeral run artifacts and are purged after synthesis.
 
 If a step fails, keep going: record the failure under **Unscoped / unclear**,
 still deliver a pack with whatever you found. An empty honest pack is better
@@ -145,14 +146,16 @@ when repos exist, Highlights that cite concrete paths or commits, plus clear
 ## Delivery
 
 ```bash
-multica message send --target <Message target for chat transport> \
-  --note-write --note-page-id <pack-page-id>
+multica notes period-brief submit-pack --draft-page-id <draft-page-id>
 ```
 
-Body = pack markdown only. Title like `采集包 <window-label>`.
+Body = pack markdown only (stdin, or `--markdown`, or JSON `{"markdown":"..."}`).
 
-Human confirmation writes the pack page. Until then the pack page stays empty —
-your job is still to send `--note-write` with real content.
+Do **not** use `message send --note-write` for collector packs. Packs are stored
+on `note_period_brief_run` and deleted after the synthesizer wake — they must not
+appear as Notes pages under 工作介绍/.
+
+You may still `multica message send --target …` for a short visible status reply.
 
 ## Out of scope
 

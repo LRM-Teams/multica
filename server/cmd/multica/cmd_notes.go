@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,6 +23,7 @@ var notesCmd = &cobra.Command{
 		"`get` being the only subcommand does not mean product notes cannot be proposed. " +
 		"From a DM or channel, pipe cleaned markdown to `multica message send --target <target> --note-write`. " +
 		"Omit `--note-page-id` to create a note after human confirm. " +
+		"Period Work collectors deliver packs with `notes period-brief submit-pack` (not --note-write). " +
 		"Period Brief synthesizers may call `notes period-brief retry-collectors` to re-dispatch retryable collectors.",
 }
 
@@ -46,14 +49,27 @@ var notesPeriodBriefRetryCollectorsCmd = &cobra.Command{
 	RunE: runNotesPeriodBriefRetryCollectors,
 }
 
+var notesPeriodBriefSubmitPackCmd = &cobra.Command{
+	Use:   "submit-pack",
+	Short: "Store a Period Work collector pack on the Brief run (not a Notes page)",
+	Long: "Collector-only tool. Reads pack markdown from stdin (or --markdown) and stores it on " +
+		"note_period_brief_run.collectors[].pack_markdown for the given draft. Do not --note-write packs into Notes.",
+	Args: cobra.NoArgs,
+	RunE: runNotesPeriodBriefSubmitPack,
+}
+
 func init() {
 	notesCmd.AddCommand(notesGetCmd)
 	notesCmd.AddCommand(notesPeriodBriefCmd)
 	notesPeriodBriefCmd.AddCommand(notesPeriodBriefRetryCollectorsCmd)
+	notesPeriodBriefCmd.AddCommand(notesPeriodBriefSubmitPackCmd)
 	notesGetCmd.Flags().String("output", "json", "Output format: json (default) or table")
 	notesPeriodBriefRetryCollectorsCmd.Flags().String("draft-page-id", "", "Period Brief draft page id (required)")
 	notesPeriodBriefRetryCollectorsCmd.Flags().StringSlice("collector-agent-id", nil, "Optional collector agent ids to retry (default: all retryable)")
 	_ = notesPeriodBriefRetryCollectorsCmd.MarkFlagRequired("draft-page-id")
+	notesPeriodBriefSubmitPackCmd.Flags().String("draft-page-id", "", "Period Brief draft page id (required)")
+	notesPeriodBriefSubmitPackCmd.Flags().String("markdown", "", "Pack markdown (default: read stdin)")
+	_ = notesPeriodBriefSubmitPackCmd.MarkFlagRequired("draft-page-id")
 }
 
 func runNotesGet(cmd *cobra.Command, args []string) error {
@@ -128,6 +144,45 @@ func runNotesPeriodBriefRetryCollectors(cmd *cobra.Command, _ []string) error {
 	path := "/api/agent/notes/period-briefs/" + draftPageID + "/retry-collectors"
 	if err := client.PostJSON(ctx, path, body, &out); err != nil {
 		return fmt.Errorf("retry collectors: %w", err)
+	}
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+func runNotesPeriodBriefSubmitPack(cmd *cobra.Command, _ []string) error {
+	if !isAgentAPIToken(cmd) {
+		return fmt.Errorf("multica notes period-brief submit-pack requires an agent task token")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	draftPageID, _ := cmd.Flags().GetString("draft-page-id")
+	draftPageID = strings.TrimSpace(draftPageID)
+	if draftPageID == "" {
+		return fmt.Errorf("--draft-page-id is required")
+	}
+	markdown, _ := cmd.Flags().GetString("markdown")
+	markdown = strings.TrimSpace(markdown)
+	if markdown == "" {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("read stdin: %w", err)
+		}
+		markdown = strings.TrimSpace(string(raw))
+	}
+	if markdown == "" {
+		return fmt.Errorf("pack markdown is required (stdin or --markdown)")
+	}
+
+	var out map[string]any
+	path := "/api/agent/notes/period-briefs/" + draftPageID + "/submit-pack"
+	if err := client.PostJSON(ctx, path, map[string]any{"markdown": markdown}, &out); err != nil {
+		return fmt.Errorf("submit pack: %w", err)
 	}
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")

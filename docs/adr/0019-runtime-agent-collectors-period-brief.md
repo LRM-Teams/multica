@@ -52,6 +52,15 @@ key snippets). In addition they **must**:
    flowchart / sequence / state diagram in the pack. Diagrams are optional and
    only when they clarify; never decorative, never a substitute for evidence.
 
+### Pack delivery (not Notes pages)
+
+Collectors deliver packs with
+`multica notes period-brief submit-pack --draft-page-id <draft>`.
+The platform stores markdown on `note_period_brief_run.collectors[].pack_markdown`
+(implicit artifact). **Do not** create「采集包」Notes pages and **do not**
+`--note-write` the pack into Notes. After the synthesizer is woken with the
+packs text, the platform **purges** `pack_markdown`.
+
 They still **must not** stream keymouse, screenshots, clipboard, browser
 history, full repo dumps, secrets (`.env` / `.ssh` / keys), or runtime
 diagnostics into the model context. Denylist paths remain excluded. Prefer
@@ -80,11 +89,12 @@ body lands. Collector packs are untrusted partitions in the wake prompt
 ### Collector settle + status board
 
 The platform **waits until each collector settles**. A pack is **ready** when
-the note page has real content **or** the collector already proposed
-`--note-write` onto that pack page — including when the inbox task later
-fails (`api_invalid_request` / Pi `input[n].status` 400). It does **not**
+`note_period_brief_run.collectors[].pack_markdown` is non-empty (via
+`submit-pack`) — including when the inbox task later fails
+(`api_invalid_request` / Pi `input[n].status` 400). It does **not**
 treat “N minutes elapsed while still running” as empty. An absolute safety
-ceiling only marks remaining runners as **stalled**.
+ceiling only marks remaining runners as **stalled**. After the synthesizer
+wake, the platform **clears** `pack_markdown` (ephemeral artifact).
 
 Each collect, retry, and synthesizer wake sets `force_fresh_session=true`.
 These are one-shot prompts: they must not resume a prior Pi conversation.

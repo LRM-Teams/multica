@@ -181,8 +181,11 @@ func TestBuildNotePeriodBriefCollectorPromptEscapesWindowAndForbidsBrief(t *test
 	if !strings.Contains(bodyInner, "‹/window›") {
 		t.Fatalf("expected escaped window closer in body:\n%s", bodyInner)
 	}
-	if !strings.Contains(prompt, "--note-write --note-page-id "+packID) {
-		t.Fatalf("missing note-write to pack:\n%s", prompt)
+	if !strings.Contains(prompt, "submit-pack --draft-page-id "+packID) {
+		t.Fatalf("missing submit-pack to draft:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "--note-write --note-page-id "+packID) {
+		t.Fatalf("collector must not --note-write the pack into Notes:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "multica-period-work-collect") {
 		t.Fatalf("collector instruction must point at period-work-collect skill:\n%s", prompt)

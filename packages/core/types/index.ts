@@ -71,6 +71,8 @@ export type {
   UpdateAgentRequest,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
+  RuntimeEnvResponse,
+  UpdateRuntimeEnvRequest,
   AgentFileNode,
   AgentFilesStatus,
   ListAgentFilesParams,

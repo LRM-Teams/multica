@@ -830,6 +830,22 @@ export interface UpdateAgentEnvRequest {
   custom_env: Record<string, string>;
 }
 
+/**
+ * Wire shape for the runtime env endpoints (`GET /api/runtimes/{id}/env` and
+ * `PUT /api/runtimes/{id}/env`). Kept separate from the agent env shapes so
+ * the runtime-level (machine-default) env layer is never confused with the
+ * agent-level override layer.
+ */
+export interface RuntimeEnvResponse {
+  runtime_id: string;
+  custom_env: Record<string, string>;
+}
+
+/** Body for `PUT /api/runtimes/{id}/env`; same **** sentinel as agent env. */
+export interface UpdateRuntimeEnvRequest {
+  custom_env: Record<string, string>;
+}
+
 // Skills
 
 /**

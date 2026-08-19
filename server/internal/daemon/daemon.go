@@ -3642,6 +3642,10 @@ func arealProxyExecOverride(p *ArealProxy) (model string, extraArgs []string, en
 // configured custom_env. This prevents accidental or malicious override of
 // daemon-internal variables and critical system paths.
 func injectScopedSecrets(agentEnv map[string]string, task Task, logger *slog.Logger) {
+	// Runtime-level env is the machine-default base layer; agent and scoped
+	// secrets override it on key collision (they are more specific).
+	injectRuntimeCustomEnv(agentEnv, task.RuntimeEnv, logger)
+
 	secrets := make([]secretscoped.Secret, 0, 8)
 	if task.Agent != nil {
 		secrets = append(secrets, secretscoped.FromAgentEnv(task.Agent.CustomEnv)...)
@@ -3682,6 +3686,26 @@ func injectAgentCustomEnv(agentEnv map[string]string, agentData *AgentData, logg
 		if isBlockedEnvKey(key) {
 			if logger != nil {
 				logger.Warn("custom_env: blocked key skipped", "key", key)
+			}
+			continue
+		}
+		agentEnv[key] = value
+	}
+}
+
+// injectRuntimeCustomEnv applies the machine-default environment layer for a
+// runtime. It is deliberately agent-scoped (no channel/project filtering) so
+// every agent on the runtime inherits it; agent custom_env is injected after
+// and overrides on key collision.
+func injectRuntimeCustomEnv(agentEnv map[string]string, runtimeEnv map[string]string, logger *slog.Logger) {
+	if len(runtimeEnv) == 0 {
+		return
+	}
+	filtered := secretscoped.Filter(secretscoped.FromAgentEnv(runtimeEnv), secretscoped.TaskScope{})
+	for key, value := range filtered {
+		if isBlockedEnvKey(key) {
+			if logger != nil {
+				logger.Warn("runtime_env: blocked key skipped", "key", key)
 			}
 			continue
 		}

@@ -167,6 +167,15 @@ SET display_name = @display_name, updated_at = now()
 WHERE id = @id
 RETURNING *;
 
+-- name: UpdateAgentRuntimeCustomEnv :one
+-- Replaces a runtime's custom_env map wholesale. Used by the dedicated
+-- env-management endpoint (GET/PUT /api/runtimes/{id}/env). Runtime-level
+-- env is the machine-default layer injected before agent custom_env.
+UPDATE agent_runtime
+SET custom_env = @custom_env, updated_at = now()
+WHERE id = @id
+RETURNING *;
+
 
 -- name: TouchAgentRuntimeLastSeen :execrows
 -- Bumps last_seen_at on an already-online runtime. Deliberately does NOT

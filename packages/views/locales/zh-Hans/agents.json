@@ -542,7 +542,10 @@
     "dialog_title": "运行配置",
     "dialog_description": "按 Computer → Runtime → Model → Reasoning 选择。编辑仅保存在本地草稿；点保存才落库。取消 / Esc / 点遮罩会丢弃草稿且不重启。",
     "dialog_saving": "保存中…",
-    "edit_trigger_aria": "编辑电脑、Runtime、模型与 Reasoning"
+    "edit_trigger_aria": "编辑电脑、Runtime、模型与 Reasoning",
+    "more": "更多",
+    "advanced": "高级",
+    "env_vars_title": "环境变量"
   },
   "side_panel": {
     "close_aria": "关闭 agent 面板",
